@@ -21,6 +21,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const NAME = `crx-draw-tier-schema-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
+const barrier = path.join(ROOT, 'supabase', 'migrations', '20260816110000_draw_down_cutover_barrier.sql');
 const candidate = path.join(ROOT, 'supabase', 'migrations', '20260816120000_draw_down_split_order_lines_by_price_tier.sql');
 // The live apply was assigned version 20260816174353; B7 kept the logical
 // filename below on disk after that version was recorded in Supabase.
@@ -99,7 +100,7 @@ try {
   assert.equal(hasRollbackPass('NOTICE: SMOKE_PASS_ROLLBACK'), false, 'a notice must not satisfy the rollback pass marker');
   assert.equal(hasRollbackPass('ERROR: SMOKE_FAIL: expected SMOKE_PASS_ROLLBACK'), false, 'a failure quoting the token must not satisfy the rollback pass marker');
   assert.equal(hasRollbackPass('psql:/tmp/smoke.sql:42: ERROR:  SMOKE_PASS_ROLLBACK'), true, 'the anchored psql rollback error must satisfy the pass marker');
-  for (const file of [candidate, liveHighWater, smokeFile, ...pricedProductSmokeFiles]) assert.ok(readFileSync(file, 'utf8').length > 0, `missing required artifact ${file}`);
+  for (const file of [barrier, candidate, liveHighWater, smokeFile, ...pricedProductSmokeFiles]) assert.ok(readFileSync(file, 'utf8').length > 0, `missing required artifact ${file}`);
   docker(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
   waitForDatabase();
 
@@ -130,6 +131,10 @@ try {
 
   const migrations = selectedMigrations();
   const candidateIndex = migrations.indexOf(candidate);
+  const barrierIndex = migrations.indexOf(barrier);
+  const liveHighWaterIndex = migrations.indexOf(liveHighWater);
+  assert.equal(barrierIndex, liveHighWaterIndex + 1, 'cutover barrier must immediately follow the verified live high-water source');
+  assert.equal(candidateIndex, barrierIndex + 1, 'tier-split candidate must immediately follow the cutover barrier');
 
   // Some already-applied historical migrations open with a PREFLIGHT DO block
   // asserting the exact live base they were authored against (function body
@@ -142,7 +147,7 @@ try {
   // exception disappears or if any additional migration starts failing. Any
   // other error is fatal. The candidate's own guards are never skipped.
   const skipped = [];
-  for (const [index, migration] of migrations.slice(0, candidateIndex).entries()) {
+  for (const [index, migration] of migrations.slice(0, liveHighWaterIndex + 1).entries()) {
     const name = `migration-${index}.sql`;
     copy(migration, name);
     const applied = applyMigration(name, { allowFailure: true });
@@ -166,7 +171,7 @@ try {
     assert.equal(reason, expected.reason, `approved historical PREFLIGHT reason changed: ${file}`);
     skipped.push({ file, reason });
   }
-  console.log(`[prover] replayed ${candidateIndex - skipped.length}/${candidateIndex} post-baseline migrations up to (not including) the candidate`);
+  console.log(`[prover] replayed ${liveHighWaterIndex + 1 - skipped.length}/${liveHighWaterIndex + 1} post-baseline migrations through the verified live high-water source`);
   if (skipped.length > 0) {
     console.log(`[prover] SKIPPED ${skipped.length} migration(s) on historical live-base drift:`);
     for (const entry of skipped) console.log(`[prover]   - ${entry.file}\n[prover]     ${entry.reason}`);
@@ -210,6 +215,22 @@ try {
     ALTER TABLE public.products ENABLE TRIGGER trigger_y_require_governed_product_pricing;
   `);
 
+  // The five pricing-fixture regressions target the verified LIVE schema.
+  // Run them before either parked migration so the proof cannot accidentally
+  // validate fixtures only after the barrier has replaced draw_down_quote.
+  for (const file of pricedProductSmokeFiles) {
+    const result = runSmoke(file, 'current-live');
+    assert.notEqual(result.status, 0, `${path.basename(file)} unexpectedly committed instead of rolling back:\n${result.output}`);
+    assert.equal(hasRollbackPass(result.output), true, `${path.basename(file)} did not execute to SMOKE_PASS_ROLLBACK on the current live schema:\n${result.output}`);
+    console.log(`[prover] CURRENT-LIVE PASS ${path.basename(file)}`);
+  }
+
+  // Preserve the production apply boundary: barrier and tier-split candidate
+  // are separate transactions, with the mutation check between them.
+  copy(barrier, 'barrier.sql');
+  applyMigration('barrier.sql');
+  console.log('[prover] cutover barrier migration applied');
+
   // ---- Mutation test: the smoke must NOT pass before the candidate applies ----
   const before = runSmoke(smokeFile, 'before');
   console.log(`[prover] PRE-CANDIDATE smoke tail:\n${before.output.split('\n').slice(-6).join('\n')}`);
@@ -223,17 +244,6 @@ try {
     /SMOKE_PREREQ: 20260816120000/,
     `pre-candidate smoke did not identify the parked migration as its missing prerequisite:\n${before.output}`,
   );
-
-  // The five pricing-fixture regressions target the verified LIVE schema.
-  // Run them before the parked candidate: that candidate deliberately blocks
-  // restore-after-draw, which is still an expected scenario in the older
-  // planned-holds smoke and is not part of this fixture repair.
-  for (const file of pricedProductSmokeFiles) {
-    const result = runSmoke(file, 'current-live');
-    assert.notEqual(result.status, 0, `${path.basename(file)} unexpectedly committed instead of rolling back:\n${result.output}`);
-    assert.equal(hasRollbackPass(result.output), true, `${path.basename(file)} did not execute to SMOKE_PASS_ROLLBACK on the current live schema:\n${result.output}`);
-    console.log(`[prover] CURRENT-LIVE PASS ${path.basename(file)}`);
-  }
 
   // ---- Apply the candidate, then require a real pass ----
   copy(candidate, 'candidate.sql');
