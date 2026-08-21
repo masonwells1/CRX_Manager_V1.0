@@ -9,9 +9,11 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { validateBlendMath, type BlendMathWarning } from '../../lib/blendMathValidator';
 import { localToday } from '../../lib/dateUtils';
-import type { Customer, Product, BlendRecipe, BlendRecipeItem } from '../../types';
+import type { Customer, Product, BlendRecipe, BlendRecipeItem, UnitConversion } from '../../types';
 import { Sentry } from '../../lib/sentry';
+import { blockedUnitSaveMessage, type UnitLoadState } from '../../lib/units';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../products/ProductOptionPresentation';
+import UnitSelect from './UnitSelect';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
 
@@ -183,6 +185,8 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
   const [products, setProducts] = useState<ManualProduct[]>([]);
   const [allProducts, setAllProducts] = useState<PickerProduct[]>([]);
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+  const [unitLoad, setUnitLoad] = useState<UnitLoadState>('pending');
   const [recipes, setRecipes] = useState<(BlendRecipe & { items: BlendRecipeItem[] })[]>([]);
   const [selectedRecipeId, setSelectedRecipeId] = useState('');
   const [saving, setSaving] = useState(false);
@@ -268,6 +272,21 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
   }, [profile?.id, resetCreateKey]);
 
   useEffect(() => {
+    supabase.from('unit_conversions').select('*').order('unit').then(({ data, error }) => {
+      if (error) {
+        // The unit fields are pickers, not free text, so an empty list leaves the
+        // operator no way to enter a unit at all. Say so instead of failing quietly.
+        Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_unit_conversions' } });
+        setUnitLoad('failed');
+        setError('Failed to load Units. Retry before creating this ticket.');
+        return;
+      }
+      setUnitConversions((data || []) as UnitConversion[]);
+      setUnitLoad('loaded');
+    });
+  }, []);
+
+  useEffect(() => {
     const loadData = async () => {
       const { data: prodData, error: prodError } = await supabase
         .from('products')
@@ -303,16 +322,19 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
     const recipeProducts: ManualProduct[] = recipe.items
       .sort((a, b) => a.sort_order - b.sort_order)
-      .map((item) => ({
-        tempId: crypto.randomUUID(),
-        product_id: item.product_id,
-        product_name: item.product_name,
-        quantity: item.quantity,
-        unit: item.unit,
-        rate_per_acre: item.rate_per_acre,
-        rate_per_acre_unit: '',
-        lot_number: '',
-      }));
+      .map((item) => {
+        const catalog = allProducts.find((candidate) => candidate.id === item.product_id);
+        return {
+          tempId: crypto.randomUUID(),
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit: item.unit,
+          rate_per_acre: item.rate_per_acre,
+          rate_per_acre_unit: catalog?.rate_unit || '',
+          lot_number: '',
+        };
+      });
 
     setProducts(recipeProducts);
   }
@@ -380,6 +402,19 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
     if (!formData.customer_id) {
       setError('Please select a customer before saving.');
+      return;
+    }
+
+    // Only block when the missing list is actually costing the ticket a unit. A
+    // blank rate unit bills off the product's own rate_unit, but it should be a
+    // choice the operator made, not one a failed fetch made for them.
+    const unitBlock = blockedUnitSaveMessage(
+      unitLoad,
+      unitConversions,
+      products.some((p) => !p.unit || !p.rate_per_acre_unit),
+    );
+    if (unitBlock) {
+      setError(unitBlock);
       return;
     }
 
@@ -708,7 +743,10 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
         </div>
 
         <div className="space-y-4">
-          {products.map((product) => (
+          {products.map((product) => {
+            const catalog = allProducts.find((candidate) => candidate.id === product.product_id);
+            const productForm = catalog?.product_form ?? null;
+            return (
             <div key={product.tempId} className="grid grid-cols-12 gap-3 items-start p-4 bg-gray-50 rounded-lg">
               <div className="col-span-12 md:col-span-3">
                 <label className="block text-xs font-medium text-gray-700 mb-1">Product</label>
@@ -741,11 +779,13 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
               <div className="col-span-4 md:col-span-1">
                 <label className="block text-xs font-medium text-gray-700 mb-1">Unit</label>
-                <Input
-                  type="text"
+                <UnitSelect
+                  unitConversions={unitConversions}
+                  form={productForm}
                   value={product.unit}
-                  onChange={(e) => updateProduct(product.tempId, 'unit', e.target.value)}
-                  placeholder="gal"
+                  onChange={(value) => updateProduct(product.tempId, 'unit', value)}
+                  disabled={saving || attemptUncertain}
+                  ariaLabel={`Quantity unit for ${product.product_name || 'product'}`}
                 />
               </div>
 
@@ -760,12 +800,14 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
               </div>
 
               <div className="col-span-4 md:col-span-1">
-                <label className="block text-xs font-medium text-gray-700 mb-1">Rate Unit</label>
-                <Input
-                  type="text"
+                <label className="block text-xs font-medium text-gray-700 mb-1">Rate unit (per acre)</label>
+                <UnitSelect
+                  unitConversions={unitConversions}
+                  form={productForm}
                   value={product.rate_per_acre_unit}
-                  onChange={(e) => updateProduct(product.tempId, 'rate_per_acre_unit', e.target.value)}
-                  placeholder="oz/ac"
+                  onChange={(value) => updateProduct(product.tempId, 'rate_per_acre_unit', value)}
+                  disabled={saving || attemptUncertain}
+                  ariaLabel={`Rate unit per acre for ${product.product_name || 'product'}`}
                 />
               </div>
 
@@ -790,7 +832,8 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
                 </Button>
               </div>
             </div>
-          ))}
+            );
+          })}
 
           {products.length === 0 && (
             <p className="text-center text-gray-500 py-8">

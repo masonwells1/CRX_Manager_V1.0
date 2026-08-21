@@ -1,14 +1,19 @@
 -- ============================================================================
--- ROLLED-BACK smoke test for 20260611120100_restore_quote_version_drawn_guard
+-- ROLLED-BACK post-cutover smoke test for
+-- 20260816120000_draw_down_split_order_lines_by_price_tier
 -- ----------------------------------------------------------------------------
--- Verifies the drawn-version guard in restore_quote_version (Codex round-2
--- MED): restoring a version snapshot must never under-book the drawn ledger
--- (quote_product_draws) — the same invariant save_quote's drawn-product guard
--- enforces (20260610184230), closed for the version-restore bypass.
+-- Verifies the post-tier-split restore guard: once a draw stamps per-line
+-- billing provenance on an order, restore_quote_version must fail closed rather
+-- than mint new quote-item IDs that cannot preserve those stamps. The older
+-- fall-below/removes checks remain defense in depth inside the owner body, but
+-- the provenance refusal intentionally fires first for every drawn booking.
 --
--- HOW TO RUN: execute this whole file as a SINGLE statement (Supabase MCP
--- execute_sql, or psql -1) as postgres/service_role AFTER the migration is
--- applied. The block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
+-- HOW TO RUN: CONTAINER ONLY through
+-- prove-draw-down-quote-intent-binding.mjs after the pending cutover sequence.
+-- Do not run this chain against live before that sequence is applied: its
+-- provenance-first restore behavior does not exist there yet. The post-cutover
+-- draw wrapper is authenticated-only and service_role cannot execute it. The
+-- block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
 -- so every fixture, version, ledger row and audit row created here is rolled
 -- back — nothing persists. Any other exception text = a real failure.
 --
@@ -20,14 +25,14 @@
 --
 -- Scenarios:
 --   (a) snapshot V1 @100, raise booking to 500, draw 200; restore V1
---       (100 < 200 drawn) -> BOOKING_OVERDRAWN 'would fall below'; the
---       section DELETE inside restore must roll back too (items intact)
+--       -> QUOTE_RESTORE_BLOCKED_BY_DRAW; quote and ledger stay intact
 --   (b) snapshot V2 books only a DIFFERENT product; restore V2 (removes the
---       drawn product) -> BOOKING_OVERDRAWN 'removes'
---   (c) snapshot V3 @400 (>= 200 drawn): restore SUCCEEDS -> status revised,
---       booked 400, ledger still 200; drawing the remaining 200 then closes
---       the booking (accepted, drawn = 400) — full chain to closure
+--       drawn product) -> QUOTE_RESTORE_BLOCKED_BY_DRAW; state stays intact
+--   (c) snapshot V3 @400 (>= 200 drawn) is also refused because even a
+--       quantity-safe version cannot preserve per-line provenance; drawing the
+--       remaining 300 from the untouched 500-unit booking closes it
 --   (d) control: a quote with NO draws restores a lower-qty version freely
+--   (e) accepted limitation: the guard remains after the draw reaches closure
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION pg_temp.restore_quote_version_smoke(
@@ -43,7 +48,13 @@ AS $helper$
 DECLARE
   v_result jsonb;
 BEGIN
-  IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint)') IS NOT NULL THEN
+  IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.restore_quote_version($1, $2, $3, $4, $5, NULL)'
+      INTO v_result
+      USING p_quote_id, p_version_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  ELSIF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint)') IS NOT NULL THEN
     EXECUTE
       'SELECT public.restore_quote_version($1, $2, $3, $4, $5)'
       INTO v_result
@@ -135,6 +146,39 @@ BEGIN
   VALUES ('[SMOKE] Restore Guard B ' || v_suffix, 'gal')
   RETURNING id INTO v_prod_b;
 
+  v_res := preview_product_pricing_changes(
+    'product_page', NULL,
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_prod_a,
+        'row_version', (SELECT pricing_version FROM products WHERE id = v_prod_a),
+        'pricing_mode', 'margin_driven',
+        'new_cost', '6.00',
+        'tier1_margin_percent', '20',
+        'tier2_margin_percent', '25',
+        'tier3_margin_percent', '30',
+        'change_reason', 'Rollback smoke restore guard fixture A'
+      ),
+      jsonb_build_object(
+        'product_id', v_prod_b,
+        'row_version', (SELECT pricing_version FROM products WHERE id = v_prod_b),
+        'pricing_mode', 'margin_driven',
+        'new_cost', '6.00',
+        'tier1_margin_percent', '20',
+        'tier2_margin_percent', '25',
+        'tier3_margin_percent', '30',
+        'change_reason', 'Rollback smoke restore guard fixture B'
+      )
+    ),
+    v_admin, 'smk-rvdg-price-preview-' || v_suffix
+  );
+  PERFORM apply_product_pricing_change_set(
+    (v_res->>'change_set_id')::uuid,
+    v_res->>'request_fingerprint',
+    v_admin,
+    'smk-rvdg-price-apply-' || v_suffix
+  );
+
   INSERT INTO quotes (quote_number, customer_id, created_by, status, commission_split)
   VALUES ('[SMOKE] RVG-' || v_suffix, v_customer, v_admin, 'sent', '{"splits": []}'::jsonb)
   RETURNING id INTO v_q;
@@ -156,8 +200,10 @@ BEGIN
   END IF;
 
   -- V2: snapshot that books ONLY product B (drawn product A absent)
-  UPDATE quote_items SET product_id = v_prod_b, total_units_needed = 400
-  WHERE quote_id = v_q;
+  DELETE FROM quote_items WHERE quote_id = v_q;
+  INSERT INTO quote_items (quote_id, section_id, product_id,
+    price_per_unit, current_cost, total_units_needed, unit_size)
+  VALUES (v_q, v_sec, v_prod_b, 10, 6, 400, 'gal');
   PERFORM pg_temp.create_quote_version_smoke(
     v_q, v_admin, 'presented', NULL,
     (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
@@ -166,8 +212,10 @@ BEGIN
   ORDER BY version_number DESC LIMIT 1;
 
   -- V3: snapshot @ A=400 (legal: >= the 200 that will be drawn)
-  UPDATE quote_items SET product_id = v_prod_a, total_units_needed = 400
-  WHERE quote_id = v_q;
+  DELETE FROM quote_items WHERE quote_id = v_q;
+  INSERT INTO quote_items (quote_id, section_id, product_id,
+    price_per_unit, current_cost, total_units_needed, unit_size)
+  VALUES (v_q, v_sec, v_prod_a, 10, 6, 400, 'gal');
   PERFORM pg_temp.create_quote_version_smoke(
     v_q, v_admin, 'presented', NULL,
     (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
@@ -182,7 +230,7 @@ BEGIN
   UPDATE quote_items SET total_units_needed = 500 WHERE quote_id = v_q;
   v_res := draw_down_quote(v_q,
     jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'quantity', 200)),
-    v_admin, NULL);
+    v_admin, 'smk-rvdg-first-' || v_suffix);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'SMOKE_FAIL: setup draw 200/500 reported fully_drawn: %', v_res;
   END IF;
@@ -204,11 +252,13 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF v_err NOT LIKE 'BOOKING_OVERDRAWN: cannot restore this version — % would fall below%' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: (a) expected BOOKING_OVERDRAWN fall-below, got: %', v_err;
+    IF v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: (a) expected QUOTE_RESTORE_BLOCKED_BY_DRAW, got: %', v_err;
     END IF;
   END;
-  -- The restore's section DELETE must have rolled back with the guard
+  -- The refusal leaves the quote intact. Ordering before the section DELETE is
+  -- pinned by the migration postflight; this caught subtransaction proves only
+  -- the externally observable atomic state.
   SELECT count(*), COALESCE(SUM(total_units_needed), 0) INTO v_items, v_booked
   FROM quote_items WHERE quote_id = v_q;
   SELECT quantity_drawn INTO v_drawn FROM quote_product_draws
@@ -230,8 +280,8 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF v_err NOT LIKE 'BOOKING_OVERDRAWN: cannot restore this version — it removes%' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: (b) expected BOOKING_OVERDRAWN removes, got: %', v_err;
+    IF v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: (b) expected QUOTE_RESTORE_BLOCKED_BY_DRAW, got: %', v_err;
     END IF;
   END;
   SELECT count(*), COALESCE(SUM(total_units_needed), 0) INTO v_items, v_booked
@@ -301,7 +351,7 @@ BEGIN
   -- The booking is still fully usable: draw the remaining 300 of 500.
   v_res := draw_down_quote(v_q,
     jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'quantity', 300)),
-    v_admin, NULL);
+    v_admin, 'smk-rvdg-final-' || v_suffix);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (c) draw to 500/500 not reported fully drawn: %', v_res;
   END IF;
@@ -345,14 +395,18 @@ BEGIN
   END IF;
 
   -- --------------------------------------------------------------------
-  -- (e) ACCEPTED LIMITATION, pinned deliberately: cancelling the draw does
-  --     NOT reopen version restore.
+  -- (e) ACCEPTED LIMITATION, pinned deliberately for the exercised state: a
+  --     booking that reached full draw/accepted still cannot restore a version.
   --
   --     The guard in _restore_quote_version_owner_impl joins order_items
   --     UNFILTERED by order status. cancel_order returns the quantity to
   --     quote_product_draws and reopens the booking, but keeps the order_items
   --     rows for audit -- and those rows still carry their quote_item_id
-  --     stamp. So the guard stays true forever once a booking has been drawn.
+  --     stamp. So the source-level rule stays true forever once a booking has
+  --     been drawn, including after cancellation/void. This scenario directly
+  --     executes the post-closure case; the unfiltered join and migration
+  --     postflight pin the broader reversed-order scope described in
+  --     docs/manual/KNOWN_ISSUES.md.
   --
   --     Codex round 3 (2026-08-19) flagged this as over-broad. Mason accepted
   --     it on 2026-08-20 rather than narrow it, because narrowing means
