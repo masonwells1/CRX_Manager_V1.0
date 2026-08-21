@@ -61,24 +61,20 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // push. The risky-path anchor this transform verifies (line 410 of the lib,
   // the apply-live-testdata producer path) is untouched and still present
   // exactly once; the transform remains identity, so input == output.
-  // pushLib re-pinned again 2026-08-21 (PR #445 review round, Codex P1): the
-  // MSYS path translation above is now refused outright when Git Bash's
-  // argument-conversion controls are set, because those decide whether
-  // `/c/repo` means `C:/repo` or the literal `C:/c/repo` — a guard that reads a
-  // different repository than the push touches would be a fail-OPEN. Same
+  // pushLib re-pinned again 2026-08-21 (PR #445): `gitPushCwd` gained, and then
+  // LOST, a Git Bash path translation. Four review rounds each found the
+  // translating version wrong in a different invocation context, always the same
+  // fail-open — the guard inspecting a different repository than the push
+  // touches. It now resolves `-C` exactly as node does and REFUSES an
+  // unresolvable path with a diagnostic naming the portable spelling. What
+  // remains in the lib is detection used only to word that message. Same
   // risky-path anchor, still present exactly once, transform still identity.
-  // codexGuard re-pinned 2026-08-21 (PR #445 review round, Codex P1 follow-up):
-  // the Codex guard is a SECOND caller of the shared gitPushCwd translation, so
-  // it gained the same fail-closed refusal when MSYS argument conversion is
-  // switched off. Purely additive (+20 lines); all three transform anchors —
-  // the matcher, the PROTECTED_HARNESS_FRAGMENT_RE constant, and the
-  // maintenance execution gate — are untouched and still present exactly once.
-  codexGuard: "9d5329af45587d0ab055c4f3eee90526d41e7831",
-  pushLib: "ac824f008db016db90aeaf818e31c3aba9e56044",
+  codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
+  pushLib: "b76b650510dddf7f08df67f40bc00c65e26079fd",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "30b40bed73e035230a37e6f4f045d89fdc9dbc7d",
-  pushLib: "ac824f008db016db90aeaf818e31c3aba9e56044",
+  codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
+  pushLib: "b76b650510dddf7f08df67f40bc00c65e26079fd",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

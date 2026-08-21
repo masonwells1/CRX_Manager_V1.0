@@ -348,60 +348,27 @@ try {
     }).blocked, true, `force-style main push denied: ${command}`);
   }
 
-  // MSYS argument conversion decides whether `-C /c/repo` means `C:\repo` or
-  // the literal `C:\c\repo`. This guard is the SECOND caller of the shared
-  // gitPushCwd translation, so it needs the same refusal the Claude-side push
-  // guard got — wiring only one of the two would leave the identical fail-open
-  // here, where gateMainChange would classify remotes, risky diff and proof
-  // from a different checkout (Codex P1, PR #445).
+  // `-C` is resolved exactly as node resolves it, with no MSYS translation, so
+  // this guard's answer does not depend on which shell runs the command. An
+  // MSYS-shaped path therefore resolves to a directory that does not exist and
+  // fails closed — the deliberate trade made on PR #445 after four rounds found
+  // the translating version wrong in a different invocation context each time.
   if (process.platform === "win32") {
     const riskyMsys = `/${risky.repo[0].toLowerCase()}${risky.repo.slice(2).replace(/\\/g, "/")}`;
-    for (const name of ["MSYS2_ARG_CONV_EXCL", "MSYS_NO_PATHCONV"]) {
-      const previous = process.env[name];
-      process.env[name] = "*";
-      try {
-        // Asserting `blocked` alone would prove NOTHING here: a main-bound push
-        // in this fixture is already denied for want of a proof, so the
-        // assertion would pass with the conversion check deleted. The REASON is
-        // what distinguishes the two, so it is what gets asserted — and a
-        // feature-bound push (allowed but for this check) is used as the
-        // second, independent witness below.
-        const mainBound = evaluateProductionAction({
-          toolName: "PowerShell",
-          toolInput: { command: `git -C ${riskyMsys} push origin HEAD:main` },
-          repoDir: projectRoot,
-        });
-        assert.equal(mainBound.blocked, true, `${name} makes an MSYS-path push fail closed in the Codex guard`);
-        assert.match(mainBound.reason, new RegExp(name), `${name} must be the REASON, not an incidental proof-gate denial`);
-        // A feature-bound push is otherwise ALLOWED, so this one can only be
-        // denied by the conversion check.
-        const featureBound = evaluateProductionAction({
-          toolName: "PowerShell",
-          toolInput: { command: `git -C ${riskyMsys} push origin feature/test` },
-          repoDir: projectRoot,
-        });
-        assert.equal(featureBound.blocked, true, `${name} blocks an otherwise-allowed feature push`);
-        assert.match(featureBound.reason, new RegExp(name), "…naming the variable");
-        // Scoped: a Windows-spelled path does not depend on the conversion, so
-        // the same setting must not block it.
-        assert.equal(evaluateProductionAction({
-          toolName: "PowerShell",
-          toolInput: { command: `git -C ${risky.repo} push origin feature/test` },
-          repoDir: projectRoot,
-        }).blocked, false, `${name} must not block a Windows-path feature push`);
-      } finally {
-        if (previous === undefined) delete process.env[name];
-        else process.env[name] = previous;
-      }
-    }
-    // …and an inline assignment in the command text is caught the same way.
-    const inlineOverride = evaluateProductionAction({
+    assert.equal(evaluateProductionAction({
       toolName: "PowerShell",
-      toolInput: { command: `MSYS2_ARG_CONV_EXCL='*' git -C ${riskyMsys} push origin feature/test` },
+      toolInput: { command: `git -C ${riskyMsys} push origin HEAD:main` },
+      repoDir: projectRoot,
+    }).blocked, true, "an MSYS-shaped -C fails closed in the Codex guard");
+    // The portable spelling resolves identically in every shell, so it reaches
+    // the real gate and is denied for the REAL reason — the missing proof.
+    const portable = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: `git -C ${risky.repo.replace(/\\/g, "/")} push origin HEAD:main` },
       repoDir: projectRoot,
     });
-    assert.equal(inlineOverride.blocked, true, "an inline conversion override fails closed in the Codex guard");
-    assert.match(inlineOverride.reason, /MSYS2_ARG_CONV_EXCL/, "…naming the variable, so the denial is this check and not another");
+    assert.equal(portable.blocked, true, "the portable spelling still hits the proof gate");
+    assert.match(portable.reason, /proof/i, "…and is denied for the proof, not for the path");
   }
 
   assert.equal(evaluatePush(risky.repo, now, "git.exe push origin HEAD:main").blocked, true, "git.exe main push is gated");

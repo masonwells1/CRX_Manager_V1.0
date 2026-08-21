@@ -9,9 +9,6 @@ import {
   contentIsRisky,
   extractPatchDestinations,
   gitPushCwd,
-  msysArgConversionNamesInEnvironment,
-  commandNamesMsysArgConversion,
-  pushNamesMsysPath,
   isGitPush,
   mainPushSource,
   proofSearchDirs,
@@ -735,23 +732,6 @@ export function evaluateProductionAction({
     }
     if (pushIsForced(segment)) {
       return denied("CODEX PRODUCTION GATE: force-pushing any branch rewrites shared history and requires Mason's explicit approval.");
-    }
-    // gitPushCwd translates a Git Bash `/c/repo` into `C:\repo` so the guard
-    // reads the directory git will actually use. Git Bash can switch that
-    // conversion OFF, and then git reads the path literally as `C:\c\repo`
-    // while this guard read `C:\repo` — two different checkouts, so
-    // gateMainChange below would classify remotes, risky diff and proof from
-    // the wrong one. This guard is a SECOND caller of that shared translation
-    // and needs the same refusal as the Claude-side push guard; wiring only one
-    // of the two would leave the identical fail-open here (Codex P1, PR #445).
-    if (pushNamesMsysPath(segment)) {
-      const conversionControls = [...new Set([
-        ...msysArgConversionNamesInEnvironment(process.env),
-        ...commandNamesMsysArgConversion(command),
-      ])];
-      if (conversionControls.length > 0) {
-        return denied(`CODEX PRODUCTION GATE: this push names a Git Bash path (\`-C /c/…\`) while MSYS argument-conversion controls are set (${conversionControls.join(", ")}). Those decide whether \`/c/repo\` means \`C:/repo\` or the literal \`C:/c/repo\`, so the guard cannot prove it inspected the repository git will actually push from. Unset them, or name the repository with a Windows path: \`git -C C:/CRX_Manager push origin <branch>\`.`);
-      }
     }
     const pushRepoDir = gitPushCwd(segment, actionRepoDir);
     let currentBranch = requestedWorkingDir ? "" : normalize(branch).toLowerCase();

@@ -186,14 +186,47 @@ function splitShellArgs(value) {
 // friends depend on the MSYS mount table, which these guards cannot read and
 // must not guess at — those keep resolving as before and keep failing closed,
 // which is the right answer for a repository this guard cannot locate.
-export function msysPathToWindows(value, platform = process.platform) {
-  const text = String(value ?? "");
-  if (platform !== "win32") return text;
+// DETECTION ONLY — this deliberately does NOT resolve the path, and nothing may
+// make it do so. Four review rounds on PR #445 killed the translating version,
+// each finding the same class of defect in a different context:
+//
+//   1. Git Bash converts `/c/repo` to `C:\repo` at exec time, so translating
+//      matched git THERE …
+//   2. …but Git Bash can switch that conversion OFF (MSYS2_ARG_CONV_EXCL,
+//      MSYS_NO_PATHCONV), and then git reads `/c/repo` literally as `C:\c\repo`;
+//   3. …and a PowerShell or cmd invocation NEVER converts, so git resolves
+//      `C:\c\repo` there too — while the guard had translated to `C:\repo`;
+//   4. …and the Claude-side guard is not even told which shell invoked it, so
+//      it cannot condition the translation on the one fact that decides it.
+//
+// Every one of those is the SAME failure: the guard inspects a different
+// repository than the push touches, so an innocuous checkout's remotes, diff
+// and proof authorize a risky push from another one. A destination gate must
+// never have that property, and modelling another program's path semantics
+// correctly in every invocation context is not a thing this guard can promise.
+//
+// So it does not try. An MSYS-shaped path resolves the way node resolves it —
+// `C:\c\repo`, which does not exist — and the guard REFUSES with a message that
+// names the real cause and the one spelling that works everywhere (`C:/repo`,
+// correct in Git Bash, PowerShell and cmd alike). A refusal the reader can fix
+// in five seconds beats a translation that is right in three contexts and
+// silently wrong in a fourth.
+export function looksLikeMsysPath(value, platform = process.platform) {
+  if (platform !== "win32") return false;
   // A single leading slash only: `//server/share` is a UNC path, not a mount.
-  const match = /^\/([A-Za-z])(?:\/(.*))?$/.exec(text);
-  if (!match) return text;
-  const rest = (match[2] || "").replace(/\//g, "\\");
-  return `${match[1].toUpperCase()}:\\${rest}`;
+  return /^\/[A-Za-z](?:\/|$)/.test(String(value ?? ""));
+}
+
+// Does this push name a `-C` path in that shape? Used ONLY to make the denial
+// specific — never to change which directory is inspected.
+export function pushNamesMsysPath(cmd, platform = process.platform) {
+  const prefix = String(cmd || "").match(GIT_PUSH_PREFIX_RE)?.[1] || "";
+  const optionRe = new RegExp(`(?:^|\\s)-C\\s+(${GIT_ARG})`, "g");
+  let match;
+  while ((match = optionRe.exec(prefix)) !== null) {
+    if (looksLikeMsysPath(unquoteShellArg(match[1]), platform)) return true;
+  }
+  return false;
 }
 
 // MSYS argument conversion is the mechanism that makes `git -C /c/repo` mean
@@ -215,52 +248,24 @@ export function msysPathToWindows(value, platform = process.platform) {
 // reimplementing MSYS's matcher, so the names are REFUSED rather than
 // interpreted — but only when the push actually names a path the translation
 // would change, so an unrelated shell setting cannot block ordinary pushes.
-// DELIBERATELY ABSENT: `MSYS2_ENV_CONV_EXCL`. It excludes ENVIRONMENT VARIABLES
-// from conversion, not command-line arguments — a different mechanism that
-// cannot change how `-C /c/repo` is read (msys2.org/docs/filesystem-paths).
-// Listing it here refused pushes over a setting with no bearing on this risk,
-// which contradicts the scoping directly below; removed after CodeRabbit
-// checked it against the MSYS2 documentation on PR #445. Do not re-add it
-// without evidence that it affects ARGUMENT conversion.
-export const MSYS_ARG_CONVERSION_ENV = [
-  "MSYS2_ARG_CONV_EXCL",
-  "MSYS_ARG_CONV_EXCL",
-  "MSYS_NO_PATHCONV",
-];
-
-export function msysArgConversionNamesInEnvironment(env = process.env) {
-  return MSYS_ARG_CONVERSION_ENV.filter((name) => Object.prototype.hasOwnProperty.call(env || {}, name));
-}
-
-export function commandNamesMsysArgConversion(cmd) {
-  const text = String(cmd || "");
-  return MSYS_ARG_CONVERSION_ENV.filter((name) => new RegExp(`(?:^|[^A-Za-z0-9_])${name}(?![A-Za-z0-9_])`, "i").test(text));
-}
-
-// Does this push name a `-C` path whose meaning DEPENDS on MSYS conversion?
-// Only those pushes are sensitive to the settings above.
-export function pushNamesMsysPath(cmd, platform = process.platform) {
-  if (platform !== "win32") return false;
-  const prefix = String(cmd || "").match(GIT_PUSH_PREFIX_RE)?.[1] || "";
-  const optionRe = new RegExp(`(?:^|\\s)-C\\s+(${GIT_ARG})`, "g");
-  let match;
-  while ((match = optionRe.exec(prefix)) !== null) {
-    const raw = unquoteShellArg(match[1]);
-    if (msysPathToWindows(raw, platform) !== raw) return true;
-  }
-  return false;
-}
+// DELIBERATELY ABSENT: any check on MSYS argument-conversion controls
+// (`MSYS2_ARG_CONV_EXCL`, `MSYS_NO_PATHCONV`, …). An earlier draft refused
+// pushes when those were set, because they decided whether the translation
+// above was correct. With the translation gone there is nothing for them to
+// invalidate — the guard resolves `-C` exactly as node does, in every shell —
+// so refusing on them would be pure over-refusal. Do not re-add them unless a
+// translation comes back, which it should not.
 
 // Resolve the repository directory selected by one or more `git -C` options.
 // Git applies repeated -C values from left to right, so preserve that behavior.
 export function gitPushCwd(cmd, fallbackCwd) {
-  const base = path.resolve(msysPathToWindows(fallbackCwd || process.cwd()));
+  const base = path.resolve(fallbackCwd || process.cwd());
   const prefix = String(cmd || "").match(GIT_PUSH_PREFIX_RE)?.[1] || "";
   const optionRe = new RegExp(`(?:^|\\s)-C\\s+(${GIT_ARG})`, "g");
   let cwd = base;
   let match;
   while ((match = optionRe.exec(prefix)) !== null) {
-    cwd = path.resolve(cwd, msysPathToWindows(unquoteShellArg(match[1])));
+    cwd = path.resolve(cwd, unquoteShellArg(match[1]));
   }
   return cwd;
 }

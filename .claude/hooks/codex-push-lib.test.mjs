@@ -12,9 +12,7 @@ import {
   claudeProofValid,
   contentIsRisky,
   gitPushCwd,
-  msysPathToWindows,
-  msysArgConversionNamesInEnvironment,
-  commandNamesMsysArgConversion,
+  looksLikeMsysPath,
   pushNamesMsysPath,
   gitSubcommandIsDynamic,
   mainPushIsForced,
@@ -2285,80 +2283,57 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
 // git — `path.resolve` read `/c/CRX_Manager` as a rooted path on the current
 // drive and produced `C:\c\CRX_Manager`, which does not exist, and node reports
 // a missing cwd with the SAME ENOENT text as a missing executable.
-assert.equal(msysPathToWindows("/c/CRX_Manager", "win32"), "C:\\CRX_Manager", "drive-letter form translates");
-assert.equal(msysPathToWindows("/c/CRX_Manager/.claude/worktrees/x", "win32"), "C:\\CRX_Manager\\.claude\\worktrees\\x", "…including nested segments");
-assert.equal(msysPathToWindows("/d/repo", "win32"), "D:\\repo", "any drive letter, not just C");
-assert.equal(msysPathToWindows("/C/repo", "win32"), "C:\\repo", "an upper-case drive letter is the same mount");
-assert.equal(msysPathToWindows("/c", "win32"), "C:\\", "the bare drive is the drive root");
-assert.equal(msysPathToWindows("/c/", "win32"), "C:\\", "…with or without the trailing slash");
-// Everything below depends on the MSYS mount table, which the guard cannot read.
-// Guessing at it would make the guard inspect a DIFFERENT repository than the
-// push touches, so these are deliberately left alone and keep failing closed.
-assert.equal(msysPathToWindows("/usr/bin", "win32"), "/usr/bin", "a mount-table path is NOT guessed at");
-assert.equal(msysPathToWindows("/tmp/repo", "win32"), "/tmp/repo", "…nor is /tmp");
-assert.equal(msysPathToWindows("/", "win32"), "/", "…nor the MSYS root");
-assert.equal(msysPathToWindows("//server/share", "win32"), "//server/share", "a UNC path is not a drive mount");
-assert.equal(msysPathToWindows("C:\\already\\windows", "win32"), "C:\\already\\windows", "a Windows path is untouched");
-assert.equal(msysPathToWindows("relative/path", "win32"), "relative/path", "a relative path is untouched");
-// On a POSIX host `/c/x` is a real, ordinary absolute path and must stay one.
-assert.equal(msysPathToWindows("/c/CRX_Manager", "linux"), "/c/CRX_Manager", "no translation off Windows");
-assert.equal(msysPathToWindows("/usr/bin", "linux"), "/usr/bin", "…for any path");
+// The guard DETECTS the shape to explain itself, and deliberately does not
+// translate it. Four review rounds on PR #445 killed the translating version:
+// Git Bash converts `/c/repo` at exec time, but that conversion can be switched
+// off, a PowerShell/cmd invocation never performs it at all, and the Claude-side
+// guard is not even told which shell invoked it. Every miss was the same
+// fail-open — the guard inspecting a different repository than the push touches.
+assert.equal(looksLikeMsysPath("/c/CRX_Manager", "win32"), true, "the drive-letter form is recognised");
+assert.equal(looksLikeMsysPath("/c/CRX_Manager/.claude/worktrees/x", "win32"), true, "…with nested segments");
+assert.equal(looksLikeMsysPath("/d/repo", "win32"), true, "any drive letter, not just C");
+assert.equal(looksLikeMsysPath("/C/repo", "win32"), true, "an upper-case drive letter too");
+assert.equal(looksLikeMsysPath("/c", "win32"), true, "the bare drive");
+assert.equal(looksLikeMsysPath("/c/", "win32"), true, "…with a trailing slash");
+assert.equal(looksLikeMsysPath("/usr/bin", "win32"), false, "a mount-table path is not this shape");
+assert.equal(looksLikeMsysPath("/", "win32"), false, "…nor the MSYS root");
+assert.equal(looksLikeMsysPath("//server/share", "win32"), false, "a UNC path is not a drive mount");
+assert.equal(looksLikeMsysPath("C:/already/windows", "win32"), false, "a Windows path is not this shape");
+assert.equal(looksLikeMsysPath("relative/path", "win32"), false, "nor a relative one");
+// On a POSIX host `/c/x` is an ordinary absolute path with nothing to explain.
+assert.equal(looksLikeMsysPath("/c/CRX_Manager", "linux"), false, "off Windows the shape means nothing");
 
+// gitPushCwd resolves EXACTLY as node does, in every shell. This is the
+// property that makes the guard's answer independent of MSYS semantics.
 if (process.platform === "win32") {
   assert.equal(
     gitPushCwd("git -C /c/CRX_Manager push origin main", "C:\\anywhere"),
-    "C:\\CRX_Manager",
-    "gitPushCwd resolves an MSYS -C to the same directory the shell will hand git",
+    "C:\\c\\CRX_Manager",
+    "an MSYS-shaped -C is NOT rewritten — node's own resolution is the answer",
   );
   assert.equal(
-    gitPushCwd("git -C '/c/CRX_Manager' push origin main", "C:\\anywhere"),
+    gitPushCwd("git -C C:/CRX_Manager push origin main", "C:\\anywhere"),
     "C:\\CRX_Manager",
-    "…quoted too",
+    "the portable drive-letter spelling resolves the way every shell reads it",
   );
-  // Repeated -C still applies left to right, and a relative second hop is
-  // resolved against the TRANSLATED first hop, not against `C:\c\…`.
   assert.equal(
-    gitPushCwd("git -C /c/CRX_Manager -C sub push origin main", "C:\\anywhere"),
+    gitPushCwd("git -C C:/CRX_Manager -C sub push origin main", "C:\\anywhere"),
     "C:\\CRX_Manager\\sub",
-    "repeated -C composes on the translated path",
+    "repeated -C still composes left to right",
   );
 }
 
-// ── MSYS argument conversion can be switched OFF (Codex P1, PR #445) ────────
-// Reproduced against real git: `MSYS2_ARG_CONV_EXCL='*' git -C /c/CRX_Manager
-// rev-parse` fails with "cannot change to '/c/CRX_Manager'", while the same
-// command without it resolves to C:/CRX_Manager. With conversion off, git reads
-// the path literally as `C:\c\repo` while this library translates to `C:\repo`
-// — two different checkouts, which is the fail-open a destination gate must
-// never have. The names are refused, not interpreted.
-assert.deepEqual(msysArgConversionNamesInEnvironment({}), [], "a clean environment names none");
-assert.deepEqual(msysArgConversionNamesInEnvironment({ MSYS2_ARG_CONV_EXCL: "*" }), ["MSYS2_ARG_CONV_EXCL"], "the MSYS2 exclusion list is detected");
-assert.deepEqual(msysArgConversionNamesInEnvironment({ MSYS_NO_PATHCONV: "1" }), ["MSYS_NO_PATHCONV"], "the Git-for-Windows spelling is detected");
-// Present-but-empty still counts: an empty exclusion list is a value MSYS reads.
-assert.deepEqual(msysArgConversionNamesInEnvironment({ MSYS_ARG_CONV_EXCL: "" }), ["MSYS_ARG_CONV_EXCL"], "an empty value is still set");
-assert.deepEqual(msysArgConversionNamesInEnvironment({ PATH: "/usr/bin" }), [], "unrelated variables are ignored");
-// MSYS2_ENV_CONV_EXCL excludes ENVIRONMENT VARIABLES from conversion, not
-// command-line arguments, so it cannot change how `-C /c/repo` is read. It was
-// in the first draft of this list and refused pushes over a setting with no
-// bearing on the risk (CodeRabbit checked it against the MSYS2 docs, PR #445).
-// This assertion exists to stop it being re-added on a plausible-sounding hunch.
-assert.deepEqual(msysArgConversionNamesInEnvironment({ MSYS2_ENV_CONV_EXCL: "*" }), [], "environment-variable conversion is a different mechanism and is not refused");
-assert.deepEqual(commandNamesMsysArgConversion("MSYS2_ENV_CONV_EXCL='*' git -C /c/r push origin main"), [], "…in the command text either");
-
-assert.deepEqual(commandNamesMsysArgConversion("MSYS2_ARG_CONV_EXCL='*' git -C /c/r push origin main"), ["MSYS2_ARG_CONV_EXCL"], "an inline assignment is caught");
-assert.deepEqual(commandNamesMsysArgConversion("export MSYS_NO_PATHCONV=1; git -C /c/r push origin main"), ["MSYS_NO_PATHCONV"], "…and one set in an earlier segment");
-assert.deepEqual(commandNamesMsysArgConversion("git -C /c/r push origin main"), [], "an ordinary push names none");
-// Name-boundary check: a longer identifier that merely CONTAINS the name is not it.
-assert.deepEqual(commandNamesMsysArgConversion("MY_MSYS_NO_PATHCONV_SETTING=1 git push"), [], "a longer identifier is not a match");
-
+// pushNamesMsysPath drives the EXPLANATION in the denial, nothing else. It must
+// never be wired to a resolution decision — see the DELIBERATELY-ABSENT note in
+// codex-push-lib.mjs for the four ways that went wrong.
 if (process.platform === "win32") {
-  assert.equal(pushNamesMsysPath("git -C /c/repo push origin main"), true, "a drive-letter path depends on conversion");
+  assert.equal(pushNamesMsysPath("git -C /c/repo push origin main"), true, "a drive-letter path is recognised for the diagnostic");
   assert.equal(pushNamesMsysPath("git -C '/c/repo' push origin main"), true, "…quoted too");
-  assert.equal(pushNamesMsysPath("git -C C:/repo push origin main"), false, "a Windows path does not");
-  assert.equal(pushNamesMsysPath("git -C /usr/repo push origin main"), false, "an untranslated mount path does not");
-  assert.equal(pushNamesMsysPath("git push origin main"), false, "a push with no -C does not");
+  assert.equal(pushNamesMsysPath("git -C C:/repo push origin main"), false, "a Windows path needs no explanation");
+  assert.equal(pushNamesMsysPath("git -C /usr/repo push origin main"), false, "a mount-table path is a different shape");
+  assert.equal(pushNamesMsysPath("git push origin main"), false, "a push with no -C names nothing");
 }
-assert.equal(pushNamesMsysPath("git -C /c/repo push origin main", "linux"), false, "off Windows nothing is translated, so nothing depends on conversion");
+assert.equal(pushNamesMsysPath("git -C /c/repo push origin main", "linux"), false, "off Windows there is nothing to explain");
 
 // ── full-hook end-to-end: an MSYS -C path must not be denied ────────────────
 {
@@ -2401,50 +2376,43 @@ assert.equal(pushNamesMsysPath("git -C /c/repo push origin main", "linux"), fals
       "control: a Windows -C path is allowed",
     );
 
+    // The portable spelling — drive letter, forward slashes — is what the
+    // denial teaches, and it must genuinely work.
+    assert.equal(
+      runHook(`git -C ${work.replace(/\\/g, "/")} push origin main:refs/heads/feature`).decision,
+      "allow",
+      "the C:/… spelling the guard recommends is allowed",
+    );
+
     if (process.platform === "win32") {
-      // The regression. `C:\Users\…\Temp\x` → `/c/Users/…/Temp/x`, exactly what
-      // Git Bash passes and the MSYS runtime rewrites back at exec time.
+      // An MSYS-shaped `-C` is REFUSED, not translated. That is the deliberate
+      // trade after four review rounds: the guard cannot know whether the shell
+      // will convert it, and guessing wrong means inspecting a different
+      // repository than the push touches. A refusal the reader can fix in five
+      // seconds beats a translation that is silently wrong in one context.
       const msysWork = `/${work[0].toLowerCase()}${work.slice(2).replace(/\\/g, "/")}`;
-      const observed = runHook(`git -C ${msysWork} push origin main:refs/heads/feature`);
-      assert.equal(observed.decision, "allow", `an MSYS -C path must not be denied (got: ${observed.reason})`);
-
-      // Fail-closed is preserved. A path this guard cannot translate is still a
-      // repository it cannot read, so it is still denied — but the denial now
-      // names the real cause instead of blaming git.
-      const untranslatable = runHook("git -C /usr/definitely-not-a-repo push origin main:refs/heads/feature");
-      assert.equal(untranslatable.decision, "deny", "an untranslatable path still fails closed");
-      assert.match(untranslatable.reason, /cannot resolve to a real directory/, "…and says the directory is unusable");
-      assert.match(untranslatable.reason, /not a policy refusal/, "…and does not read as a policy refusal");
-      assert.match(untranslatable.reason, /Do NOT work around this/, "…and forbids routing around the gate");
-      // The recovery command is READ INSIDE GIT BASH, where an unquoted
-      // backslash is an escape character: `git -C C:\CRX_Manager` hands git the
-      // drive-relative `C:CRX_Manager`, so advice spelled that way fails again
-      // or acts on a different checkout (Codex + CodeRabbit, PR #445).
-      assert.match(untranslatable.reason, /git -C C:\/CRX_Manager push origin/, "…and the recovery command uses forward slashes");
-      assert.doesNotMatch(untranslatable.reason, /git -C C:\\/, "…never the backslash form Git Bash would eat");
-
-      // A main-bound push to a NON-app repo with no risky diff stays allowed —
-      // the translation must not turn ordinary work into a refusal either.
-      const mainPush = runHook(`git -C ${msysWork} push origin main`);
-      assert.equal(mainPush.decision, "allow", "a non-app-repo main push is allowed (no risky diff, not the app repo)");
-
-      // Switching MSYS conversion OFF makes `/c/…` mean `C:\c\…` to git while
-      // this guard reads `C:\…`. It cannot prove which repository the push will
-      // touch, so it refuses rather than guessing (Codex P1, PR #445).
-      for (const [name, value] of [["MSYS2_ARG_CONV_EXCL", "*"], ["MSYS_NO_PATHCONV", "1"]]) {
-        const off = runHook(`git -C ${msysWork} push origin main:refs/heads/feature`, { [name]: value });
-        assert.equal(off.decision, "deny", `${name} in the environment must fail closed`);
-        assert.match(off.reason, new RegExp(name), "…and the denial names the variable");
-      }
-      // Same setting reached via the command text rather than the environment.
-      const offInline = runHook(`MSYS2_ARG_CONV_EXCL='*' git -C ${msysWork} push origin main:refs/heads/feature`);
-      assert.equal(offInline.decision, "deny", "an inline conversion override fails closed too");
-      // …but the setting is IRRELEVANT to a push that names a Windows path, and
-      // must not block it: scoping this check is what keeps it from becoming a
-      // blanket refusal triggered by an unrelated shell setting.
-      const windowsPathUnaffected = runHook(`git -C ${work} push origin main:refs/heads/feature`, { MSYS2_ARG_CONV_EXCL: "*" });
-      assert.equal(windowsPathUnaffected.decision, "allow", "a Windows -C path does not depend on MSYS conversion");
+      const msysPush = runHook(`git -C ${msysWork} push origin main:refs/heads/feature`);
+      assert.equal(msysPush.decision, "deny", "an MSYS -C path fails closed rather than being guessed at");
+      assert.match(msysPush.reason, /cannot resolve to a real directory/, "…with the tailored diagnostic");
+      assert.match(msysPush.reason, /Git Bash path/, "…which names the Git Bash shape specifically");
+      assert.match(msysPush.reason, /does NOT rewrite it/, "…and says why it is not translated");
+      // The resolved path it reports is node's own answer, so the reader can
+      // see exactly where the guard looked.
+      assert.match(msysPush.reason, /C:\\c\\/, "…and shows the literally-resolved directory");
     }
+
+    // Fail-closed with a usable message for any unreadable repository.
+    const unreadable = runHook("git -C /usr/definitely-not-a-repo push origin main:refs/heads/feature");
+    assert.equal(unreadable.decision, "deny", "an unreadable repository fails closed");
+    assert.match(unreadable.reason, /cannot resolve to a real directory/, "…and says the directory is unusable");
+    assert.match(unreadable.reason, /not a policy refusal/, "…and does not read as a policy refusal");
+    assert.match(unreadable.reason, /Do NOT work around this/, "…and forbids routing around the gate");
+    // The recovery command is READ INSIDE GIT BASH, where an unquoted backslash
+    // is an escape character: `git -C C:\CRX_Manager` hands git the
+    // drive-relative `C:CRX_Manager`, so advice spelled that way fails again or
+    // acts on a different checkout (Codex + CodeRabbit, PR #445).
+    assert.match(unreadable.reason, /git -C C:\/CRX_Manager push origin/, "…and the recovery command uses forward slashes");
+    assert.doesNotMatch(unreadable.reason, /git -C C:\\/, "…never the backslash form Git Bash would eat");
 
     // Platform-independent, so Linux CI covers it too: a path that EXISTS but is
     // a regular FILE is not usable as `-C` either. existsSync accepts one; git
@@ -2481,14 +2449,13 @@ assert.equal(pushNamesMsysPath("git -C /c/repo push origin main", "linux"), fals
     assert.equal(git(["commit", "-qm", "risky migration"], appWork).status, 0, "app fixture risky commit");
 
     const riskyNative = runHook(`git -C ${appWork} push origin main`);
-    assert.equal(riskyNative.decision, "deny", "control: a risky app-repo main push is gated");
-
-    if (process.platform === "win32") {
-      const appMsys = `/${appWork[0].toLowerCase()}${appWork.slice(2).replace(/\\/g, "/")}`;
-      const riskyMsys = runHook(`git -C ${appMsys} push origin main`);
-      assert.equal(riskyMsys.decision, "deny", "…and is STILL gated when it arrives by the translated MSYS path");
-      assert.equal(riskyMsys.reason, riskyNative.reason, "…for the same reason — the translation changed nothing but the spelling");
-    }
+    assert.equal(riskyNative.decision, "deny", "a risky app-repo main push is gated");
+    assert.match(riskyNative.reason, /proof|codex/i, "…for want of the Codex proof, not some incidental reason");
+    // And by the portable spelling the denial recommends, which is the one an
+    // agent will actually type after reading it.
+    const riskyPortable = runHook(`git -C ${appWork.replace(/\\/g, "/")} push origin main`);
+    assert.equal(riskyPortable.decision, "deny", "…and still gated via the recommended C:/… spelling");
+    assert.equal(riskyPortable.reason, riskyNative.reason, "…for the identical reason — spelling changes nothing about the gate");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

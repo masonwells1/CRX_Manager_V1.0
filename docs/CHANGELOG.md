@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-21 — `spawnSync git ENOENT` was never about git: the push guard now reads a Git Bash path
+## 2026-08-21 — `spawnSync git ENOENT` was never about git: the push guard now diagnoses the path
 
 Every `git -C /c/CRX_Manager … push` issued from the Bash tool was denied:
 
@@ -13,82 +13,68 @@ spawnSync git ENOENT
 
 Observed 2026-08-19 and again 2026-08-20; both times the push was handed to Mason to run in
 PowerShell, and the recorded diagnosis — "`which git` returns `/mingw64/bin/git`, a POSIX path a
-Windows Node process cannot exec" — was **wrong**. That diagnosis was investigated first this round
-and disproved: `execFileSync("git", …)` resolves fine from these processes.
+Windows Node process cannot exec" — was **wrong**. It was investigated first this round and
+disproved: `execFileSync("git", …)` resolves fine from these processes.
 
-**The ENOENT was the working directory, not the executable.** Git Bash hands git an MSYS path
-(`/c/CRX_Manager`) and the MSYS runtime rewrites it to `C:\CRX_Manager` when it execs the process.
-These guards are plain Windows processes, so `gitPushCwd`'s `path.resolve` read the same text as a
-rooted path on the current drive and produced **`C:\c\CRX_Manager`** — a directory that has never
-existed. `spawnSync` reports a missing `cwd` with the **same `ENOENT` text** as a missing
-executable, so the guard blamed git, and its denial read as a policy refusal rather than a typo.
-That is the expensive part: the three obvious workarounds (an inline `PATH=` prefix, an absolute
-`git.exe`, `cd <repo> && git push`) are each independently denied by this same guard **by design**,
-so the message reads as "find a fourth way around the gate" to the next agent. Two sessions did.
+**The ENOENT was the working directory, not the executable.** `gitPushCwd`'s `path.resolve` read
+`/c/CRX_Manager` as a rooted path on the current drive and produced **`C:\c\CRX_Manager`** — note
+the extra `\c\` — a directory that has never existed. `spawnSync` reports a missing `cwd` with the
+**same `ENOENT` text** as a missing executable, so the guard blamed git and its denial read as a
+policy refusal rather than a typo. That is the expensive part: the three obvious workarounds (an
+inline `PATH=` prefix, an absolute `git.exe`, `cd <repo> && git push`) are each independently denied
+by this same guard **by design**, so the message reads as "find a fourth way around the gate" to the
+next agent. Two sessions read it that way.
 
-- **`msysPathToWindows()` in `codex-push-lib.mjs`**, applied inside `gitPushCwd` so all four call
-  sites — and the Codex-side guard that shares this library — agree by construction.
-- **Only the built-in drive-letter form is translated** (`/c/x` → `C:\x`, any letter, with or
-  without a trailing slash). `/usr/bin`, `/tmp`, `/`, and UNC `//server/share` depend on the MSYS
-  mount table, which the guard cannot read. Guessing at it would make the guard inspect a
-  **different repository than the push touches** — the one failure shape a destination guard must
-  never have — so those keep resolving as before and keep failing closed.
-- **Off Windows the function is identity**, so Linux and CI behaviour is unchanged.
-- **A directory that does not exist is now its own denial**, naming the resolved path, stating
-  plainly that it is a path-spelling problem and *not* a policy refusal, giving the Windows-path
-  spelling to use, and explicitly forbidding the workarounds. Still a denial — a repository the
-  guard cannot read is still ungated — but no longer a two-hour mystery.
-- **Proven by mutation.** Reverting the one translation call reproduces `C:\c\CRX_Manager` and the
-  exact original error; restoring it goes green. The end-to-end block drives the real hook over
-  stdin against a scratch repository with both path spellings, and asserts an untranslatable path
-  still fails closed with the new message.
-- **`scripts/apply-live-testdata-maintenance-20260812.mjs` re-pinned.** It byte-anchors
-  `codex-push-lib.mjs`; the identity transform it runs asserts the risky-path line for its own
-  producer is present exactly once, and that line is untouched.
+**What shipped: a better diagnosis, deliberately NOT a path translation.**
 
-**Review round (PR #445).** Two real defects in the new denial, both fixed and both mutation-tested:
-Codex and CodeRabbit independently flagged that the recovery command was spelled `C:\CRX_Manager`,
-and that message is read **inside Git Bash**, where an unquoted backslash is an escape character —
-pasting it hands git the drive-relative `C:CRX_Manager`, so the advice would fail again or act on a
-different checkout. It now uses `C:/CRX_Manager`, which is correct in Git Bash, PowerShell and cmd
-alike. Separately, the existence test used `existsSync`, which accepts a regular **file**; git cannot
-use one as `-C`, so that case fell straight back to the generic `spawnSync git ENOENT` denial this
-entry exists to retire. It now requires `statSync(...).isDirectory()`. A third finding — a malformed
-Markdown table row in `agent-guardrails.md` — is real but **pre-existing on `main`** (7 pipes before
-this change and 7 after, verified against `origin/main`), so it is not fixed here.
+- **The guard resolves `-C` exactly as node does, in every shell**, and refuses what it cannot
+  resolve to a real directory. The denial names the resolved path, states plainly that it is a
+  path-spelling problem and *not* a policy refusal, gives the one portable spelling
+  (`git -C C:/CRX_Manager push origin <branch>` — correct in Git Bash, PowerShell and cmd alike, with
+  forward slashes because Git Bash eats unquoted backslashes), and explicitly forbids the
+  workarounds. When the `-C` argument has the Git Bash shape it says so specifically and explains why
+  it was not rewritten.
+- **`statSync(...).isDirectory()`, not `existsSync`.** A regular file passes an existence test; git
+  cannot use one as `-C`, and that case fell straight back to the generic denial this entry retires.
 
-**Second review round (PR #445) — a real fail-open in the fix itself.** Codex raised a P1 that the
-translation can be silently wrong: Git Bash lets MSYS argument conversion be switched **off**
-(`MSYS2_ARG_CONV_EXCL`, `MSYS_ARG_CONV_EXCL`, `MSYS_NO_PATHCONV`), and then git receives `/c/repo`
-literally and resolves it as `C:\c\repo` while this guard translated it to `C:\repo`. Two different
-checkouts — the innocuous one's remotes and diff would authorize a push from the other. **Reproduced
-against real git** before fixing: `MSYS2_ARG_CONV_EXCL='*' git -C /c/CRX_Manager rev-parse` fails
-with `cannot change to '/c/CRX_Manager'`, while the same command without it resolves normally. The
-guard now **refuses** rather than interprets when any of those names appear — in its own environment
-or anywhere in the command text — because deciding what an exclusion list does to one argument would
-mean reimplementing MSYS's matcher. The check is scoped to pushes that actually name a path the
-translation would change, so an unrelated shell setting cannot block ordinary work. CodeRabbit
-separately noted the allow-cases all used a non-app repo; there is now a fixture with the guarded
-app remote and a risky `supabase/migrations/` diff asserting the translated path is **still** gated,
-for the identical reason as the native spelling.
+**A translating version was built and abandoned across four review rounds — this is the load-bearing
+history.** `msysPathToWindows()` rewrote `/c/repo` to `C:\repo` so the guard would read what Git Bash
+hands git. Each round found it wrong in a different invocation context, always the same failure:
 
-**Third review round (PR #445) — the first fix covered only half the callers.** Codex flagged that
-`.codex/hooks/production-action-guard.mjs` is a **second** caller of the now-translating
-`gitPushCwd` and had none of the conversion-control refusal, so the identical fail-open survived on
-the Codex side: `gateMainChange()` would classify remotes, risky diff and proof from the wrong
-checkout. Wiring one of two callers is not a fix. The Codex guard now applies the same refusal and
-has its own tests. Separately, CodeRabbit checked `MSYS2_ENV_CONV_EXCL` against the MSYS2
-documentation: it excludes **environment variables** from conversion, not command-line arguments, so
-it cannot affect how `-C /c/repo` is read. It was removed from the refusal list — keeping it meant
-refusing pushes over a setting with no bearing on the risk, contradicting the scoping rule one line
-below it — and a test now pins its absence so it is not re-added on a plausible-sounding hunch.
+1. Git Bash converts at exec time, so translating matched git **there**;
+2. …but Git Bash can switch that conversion **off** (`MSYS2_ARG_CONV_EXCL`, `MSYS_NO_PATHCONV`), and
+   then git reads `/c/repo` literally as `C:\c\repo` (reproduced against real git:
+   `MSYS2_ARG_CONV_EXCL='*' git -C /c/CRX_Manager rev-parse` fails with `cannot change to
+   '/c/CRX_Manager'`, while the same command without it resolves normally);
+3. …and a **PowerShell or cmd** invocation never converts at all, so git resolves `C:\c\repo` there
+   too — while the guard had translated to `C:\repo`;
+4. …and the Claude-side guard is not even passed the tool name, so it cannot condition the
+   translation on the one fact that decides it.
 
-The Codex-side test asserts the denial **reason**, not just that the push was blocked: a main-bound
-push in that fixture is already denied for want of a proof, so a `blocked === true` assertion would
-have passed with the new check deleted. It also asserts an otherwise-**allowed** feature push is
-blocked, which only this check can do.
+Every one is the same fail-open: **the guard inspecting a different repository than the push
+touches**, so an innocuous checkout's remotes, diff and proof authorize a risky push from another
+one. Two intermediate fixes (refusing when conversion controls are set; wiring that refusal into the
+Codex guard too) were themselves each found incomplete by the next round. Modelling another
+program's path semantics correctly in every invocation context is not something this guard can
+promise, so it stopped trying. A refusal the reader can fix in five seconds beats a translation that
+is right in three contexts and silently wrong in a fourth. `codex-push-lib.mjs` carries a
+DELIBERATELY-ABSENT note with this list; what remains is detection used only to word the message.
 
-Tests: `.claude/hooks/codex-push-lib.test.mjs` and `.codex/hooks/production-action-guard.test.mjs`.
+**Also from those rounds, and kept:** the recovery command uses forward slashes (Codex and CodeRabbit
+both flagged that `C:\CRX_Manager` is read *inside Git Bash*, where the unquoted backslash escapes
+and hands git the drive-relative `C:CRX_Manager`); the app-repo fixture with a risky
+`supabase/migrations/` diff proves the gate still fires for the recommended spelling, for the
+identical reason; and `MSYS2_ENV_CONV_EXCL` was checked against the MSYS2 documentation and found to
+govern **environment variables**, not arguments — an over-refusal, removed.
+
+**Not fixed here:** CodeRabbit flagged a malformed Markdown table row in `agent-guardrails.md`. It is
+real but **pre-existing on `main`** (7 pipe characters on that row before this change and 7 after,
+verified against `origin/main`), so it does not belong in a push-gate PR.
+
+Tests: `.claude/hooks/codex-push-lib.test.mjs` and `.codex/hooks/production-action-guard.test.mjs`
+(both in `test:correction-guards` / `test:agent-workflows`). `scripts/apply-live-testdata-maintenance-20260812.mjs`
+re-pinned for `codex-push-lib.mjs`; the risky-path anchor its identity transform asserts is untouched
+and still present exactly once. The Codex guard ends this round byte-identical to `origin/main`.
 
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 

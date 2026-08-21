@@ -18,8 +18,6 @@ import {
   contentIsRisky,
   eachPush,
   gitPushCwd,
-  msysArgConversionNamesInEnvironment,
-  commandNamesMsysArgConversion,
   pushNamesMsysPath,
   gitSubcommandIsDynamic,
   isGitPush,
@@ -667,22 +665,6 @@ for (const pushCmd of pushCommands) {
   }
 
   const pushRepoDir = gitPushCwd(pushCmd, projectDir);
-  // Checked BEFORE the directory test below, because these settings decide what
-  // the resolved directory even MEANS. If MSYS argument conversion is switched
-  // off, git reads `/c/repo` literally as `C:\c\repo` while this guard read
-  // `C:\repo` — two different checkouts, and the innocuous one's remotes and
-  // diff would authorize a push from the other. Refused rather than
-  // interpreted; scoped to pushes that actually name such a path, so an
-  // unrelated shell setting cannot block ordinary work (Codex P1, PR #445).
-  if (pushNamesMsysPath(pushCmd)) {
-    const conversionControls = [...new Set([
-      ...msysArgConversionNamesInEnvironment(process.env),
-      ...commandNamesMsysArgConversion(cmd),
-    ])];
-    if (conversionControls.length > 0) {
-      deny(`CODEX GATE: this push names a Git Bash path (\`-C /c/…\`) while MSYS argument-conversion controls are set (${conversionControls.join(", ")}). Those switch off the conversion that decides whether \`/c/repo\` means \`C:/repo\` or the literal \`C:/c/repo\`, so this guard cannot prove it inspected the repository git will actually push from — and inspecting the wrong repository is how an unreviewed push reaches production. Unset them, or name the repository with a Windows path: \`git -C C:/CRX_Manager push origin <branch>\`.`);
-    }
-  }
   // A directory that does not exist is a DIAGNOSABLE condition, and separating
   // it out is the whole point: node reports a missing cwd and a missing
   // executable with the same `spawnSync git ENOENT` text, so the generic denial
@@ -703,7 +685,10 @@ for (const pushCmd of pushCommands) {
     // drive-RELATIVE `C:CRX_Manager`, so the advice would fail again or act on
     // a different checkout. `C:/CRX_Manager` is correct in Git Bash, PowerShell
     // and cmd alike (Codex + CodeRabbit both flagged this on PR #445).
-    deny(`CODEX GATE: this push names a repository this guard cannot resolve to a real directory: ${pushRepoDir} — it does not exist, or is not a directory. This is a PATH-SPELLING problem, not a policy refusal, and not a problem with git. This guard runs as a Windows process, so it can only translate the drive-letter form of a Git Bash path (\`/c/repo\` becomes \`C:/repo\`); anything else depends on the MSYS mount table it cannot read. Re-run the push naming the repository with forward slashes, for example \`git -C C:/CRX_Manager push origin <branch>\` — use forward slashes, because Git Bash eats unquoted backslashes and would hand git a drive-relative path instead. Do NOT work around this with a directory change, an inline PATH=, or an environment variable — those forms are separately denied, by design.`);
+    const msysNote = pushNamesMsysPath(pushCmd)
+      ? ` The \`-C\` argument is a Git Bash path (\`/c/…\`). This guard resolves it exactly as node does — \`${pushRepoDir}\` — and deliberately does NOT rewrite it to \`C:/…\`, because whether git sees the rewritten form depends on which shell runs the command and on MSYS conversion settings the guard cannot read; a guard that guessed wrong would inspect a different repository than the push touches.`
+      : "";
+    deny(`CODEX GATE: this push names a repository this guard cannot resolve to a real directory: ${pushRepoDir} — it does not exist, or is not a directory. This is a PATH-SPELLING problem, not a policy refusal, and not a problem with git.${msysNote} Re-run the push naming the repository with a drive letter and FORWARD slashes, for example \`git -C C:/CRX_Manager push origin <branch>\` — that one spelling is correct in Git Bash, PowerShell and cmd alike, and forward slashes matter because Git Bash eats unquoted backslashes and would hand git a drive-relative path. Do NOT work around this with a directory change, an inline PATH=, or an environment variable — those forms are separately denied, by design.`);
   }
   let branch = "";
   try {
