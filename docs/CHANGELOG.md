@@ -124,7 +124,9 @@ All significant development milestones, in reverse chronological order.
   could match the producer cannot relocate or untrack it first. Content writers
   (PowerShell content cmdlets, in-place editors, truncation, and redirects) use
   the same path check. Every exact allowlisted launch independently hashes the
-  worktree file as a Git blob and requires it to match `HEAD` before execution.
+  worktree file as a Git blob and requires it to match `HEAD` before execution;
+  that final binding also covers a writer whose target is fully dynamic and
+  therefore cannot be resolved safely from command text alone.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

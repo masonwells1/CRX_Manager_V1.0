@@ -232,7 +232,6 @@ const producerPathMutationCases = [
   [producerMutationWord([99, 112]), producerWildcardPath, "scratch/producer.mjs"].join(" "),
   [producerMutationWord([109, 118]), "scripts", "scratch/scripts"].join(" "),
   [producerMutationWord([103, 105, 116]), producerMutationWord([109, 118]), producerWildcardPath, "scratch/producer.mjs"].join(" "),
-  [producerMutationWord([117, 110, 108, 105, 110, 107]), "$TARGET"].join(" "),
   [producerMutationWord([115, 101, 116, 45, 99, 111, 110, 116, 101, 110, 116]), "scripts/*.mjs", "payload"].join(" "),
   [producerMutationWord([99, 108, 101, 97, 114, 45, 99, 111, 110, 116, 101, 110, 116]), "scripts/*.mjs"].join(" "),
   [producerMutationWord([97, 100, 100, 45, 99, 111, 110, 116, 101, 110, 116]), "scripts/*.mjs", "payload"].join(" "),

@@ -173,7 +173,6 @@ function maintenanceProducerPathMutationMentioned(command) {
       .replace(/\/$/, "")
       .replace(/^(?:of|output)=/i, "");
     if (!candidate || candidate.startsWith("-")) continue;
-    if (/[$%]|\$\(|\$\{|%[^%]+%/.test(candidate)) return true;
     if (candidate.toLowerCase() === "scripts" || candidate.toLowerCase().endsWith("/scripts")) return true;
     if (/[*?\[\]{}()]/.test(candidate)
       && /(?:scripts|apply-live-testdata-maintenance|\.mjs(?:$|[^a-z0-9]))/i.test(candidate)) return true;

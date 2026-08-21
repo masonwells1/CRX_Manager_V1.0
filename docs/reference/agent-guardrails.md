@@ -123,7 +123,8 @@ and shell path operands are glob-matched against the protected repository path
 so wildcard/pathspec forms cannot target it indirectly. That includes content
 writers, in-place editors, truncation, and output redirects. An exact allowlisted
 producer launch is still denied unless an independent Git-blob hash of the
-worktree bytes matches the file recorded at `HEAD`. Alias definitions and unknown commands
+worktree bytes matches the file recorded at `HEAD`; this is the final boundary
+for fully dynamic targets that command-text inspection cannot resolve. Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed
 when `call`/`@call`, an `if` condition, or a `for … do` body precedes an explicit
