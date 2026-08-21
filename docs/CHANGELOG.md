@@ -121,7 +121,10 @@ All significant development milestones, in reverse chronological order.
   current checkout or `HEAD` presence; retiring it requires a separate reviewed
   guard change. MCP mutations of the whole `scripts` directory are denied, and
   shell pathspecs are checked with glob semantics so wildcard spellings that
-  could match the producer cannot relocate or untrack it first.
+  could match the producer cannot relocate or untrack it first. Content writers
+  (PowerShell content cmdlets, in-place editors, truncation, and redirects) use
+  the same path check. Every exact allowlisted launch independently hashes the
+  worktree file as a Git blob and requires it to match `HEAD` before execution.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

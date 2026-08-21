@@ -120,7 +120,10 @@ current checkout: removing, relocating, or untracking the file does not reopen
 process interaction or signal tools, and retirement requires a separately
 reviewed guard change. MCP whole-directory mutations of `scripts` are blocked,
 and shell path operands are glob-matched against the protected repository path
-so wildcard/pathspec forms cannot target it indirectly. Alias definitions and unknown commands
+so wildcard/pathspec forms cannot target it indirectly. That includes content
+writers, in-place editors, truncation, and output redirects. An exact allowlisted
+producer launch is still denied unless an independent Git-blob hash of the
+worktree bytes matches the file recorded at `HEAD`. Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed
 when `call`/`@call`, an `if` condition, or a `for … do` body precedes an explicit

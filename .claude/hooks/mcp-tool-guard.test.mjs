@@ -194,6 +194,15 @@ const powerShellLineBoundaryAskCases = ["\n", "\r\n"].flatMap((newline) => [
   ["Write-Output x\\", boundaryProdDeploy].join(newline),
   ["Write-Output x\\", boundaryEdgeDeploy].join(newline),
 ]);
+const producerWriterWord = (codes) => String.fromCharCode(...codes);
+const producerContentWriterCases = [
+  [producerWriterWord([115, 101, 116, 45, 99, 111, 110, 116, 101, 110, 116]), "scripts/*.mjs", "payload"].join(" "),
+  [producerWriterWord([99, 108, 101, 97, 114, 45, 99, 111, 110, 116, 101, 110, 116]), "scripts/*.mjs"].join(" "),
+  [producerWriterWord([97, 100, 100, 45, 99, 111, 110, 116, 101, 110, 116]), "scripts/*.mjs", "payload"].join(" "),
+  [producerWriterWord([115, 101, 100]), "-i", "s/x/y/", "scripts/*.mjs"].join(" "),
+  [producerWriterWord([116, 114, 117, 110, 99, 97, 116, 101]), "-s", "0", "scripts/*.mjs"].join(" "),
+  ["Write-Output", "payload", ">", "scripts/*.mjs"].join(" "),
+];
 const powerShellComputedMutationGuardCases = [
   `Set-Item ("Env:NODE-XOPTIONS".Replace("-X","_")) ("--requXire=./preload.cjs".Replace("X","")); npm --version`,
   `Set-Content ("Env:NODE_OPTIONS".ToLower()) ("--require=./preload.cjs"); npm --version`,
@@ -220,6 +229,11 @@ for (const command of powerShellLineBoundaryAskCases) {
   r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
   eq(r.status, 0, `mcp-tool-guard exits 0 after gating a PowerShell boundary deploy: ${JSON.stringify(command)}`);
   ok(isAsk(r), `DC start_process asks for a PowerShell boundary deploy: ${JSON.stringify(command)}`);
+}
+for (const command of producerContentWriterCases) {
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  eq(r.status, 0, `mcp-tool-guard exits 0 after inspecting a producer content writer: ${JSON.stringify(command)}`);
+  ok(isDeny(r), `DC start_process denies a wildcard producer content writer: ${JSON.stringify(command)}`);
 }
 for (const command of [
   "Set-Alias ll Get-ChildItem",
@@ -282,6 +296,35 @@ r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_i
 ok(isDeny(r), "the protected producer cannot run inside a persistent interactive process");
 r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: approvedProducerCommand } });
 ok(!isDeny(r), "the exact approved producer command remains allowed in a fresh process");
+{
+  const integrityRepo = mkdtempSync(path.join(os.tmpdir(), "mcp-producer-integrity-"));
+  try {
+    const integrityRelativePath = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
+    const integrityPath = path.join(integrityRepo, ...integrityRelativePath.split("/"));
+    const integrityGitEnv = { ...process.env };
+    for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete integrityGitEnv[name];
+    mkdirSync(path.dirname(integrityPath), { recursive: true });
+    writeFileSync(integrityPath, "export const reviewed = true;\n");
+    for (const args of [
+      ["init", "--quiet"],
+      ["config", "user.email", "guard-test@example.invalid"],
+      ["config", "user.name", "Guard Test"],
+      ["add", "--", integrityRelativePath],
+      ["commit", "--quiet", "-m", "test fixture"],
+    ]) {
+      const result = spawnSync("git", args, { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
+      eq(result.status, 0, `MCP producer integrity fixture command succeeds: git ${args[0]}`);
+    }
+    const integrityCommand = ["node", integrityRelativePath, "--verify"].join(" ");
+    r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: integrityCommand } }, integrityRepo);
+    ok(!isDeny(r), "MCP exact producer launch is allowed when worktree bytes match HEAD");
+    writeFileSync(integrityPath, "export const reviewed = false;\n");
+    r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: integrityCommand } }, integrityRepo);
+    ok(isDeny(r), "MCP exact producer launch is denied when worktree bytes differ from HEAD");
+  } finally {
+    rmSync(integrityRepo, { recursive: true, force: true });
+  }
+}
 
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: 123, input: "rm -rf src\n" } });
 ok(isDeny(r), "DC interact_with_process feeding rm -rf src is denied");

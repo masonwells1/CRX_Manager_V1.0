@@ -11,6 +11,8 @@
 // to .env, explicitly called for by the audit) and the npm-script-indirection helpers.
 
 import { readFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 export const SECURITY_COMMAND_CHAR_BUDGET = 16_384;
@@ -72,6 +74,50 @@ function shellGlobMatchesLiteral(pattern, literal) {
   }
 }
 
+function gitBlobHash(buffer) {
+  return createHash("sha1")
+    .update(`blob ${buffer.length}\0`)
+    .update(buffer)
+    .digest("hex");
+}
+
+export function checkMaintenanceProducerIntegrity(command, cwd) {
+  const value = String(command || "").trim();
+  if (!MAINTENANCE_PRODUCER_ALLOWED_COMMANDS.has(value)) return null;
+  const base = cwd || process.cwd();
+  const gitEnv = { ...process.env };
+  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete gitEnv[name];
+  const rootResult = spawnSync("git", ["-C", base, "rev-parse", "--show-toplevel"], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 1_500,
+    env: gitEnv,
+  });
+  if (rootResult.status !== 0 || !String(rootResult.stdout || "").trim()) {
+    return "Blocked maintenance producer invocation because the repository root could not be verified.";
+  }
+  const root = String(rootResult.stdout).trim();
+  const headResult = spawnSync("git", ["-C", root, "rev-parse", `HEAD:${MAINTENANCE_PRODUCER_REPO_PATH}`], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 1_500,
+    env: gitEnv,
+  });
+  const expectedBlob = String(headResult.stdout || "").trim().toLowerCase();
+  if (headResult.status !== 0 || !/^[a-f0-9]{40}$/.test(expectedBlob)) {
+    return "Blocked maintenance producer invocation because its committed HEAD blob could not be verified.";
+  }
+  try {
+    const worktreeBytes = readFileSync(path.join(root, ...MAINTENANCE_PRODUCER_REPO_PATH.split("/")));
+    if (gitBlobHash(worktreeBytes) !== expectedBlob) {
+      return "Blocked maintenance producer invocation because its worktree bytes do not match the committed HEAD blob.";
+    }
+  } catch {
+    return "Blocked maintenance producer invocation because its worktree file is missing or unreadable.";
+  }
+  return null;
+}
+
 function maintenanceProducerPathMutationMentioned(command) {
   const value = String(command || "");
   const word = (codes) => String.fromCharCode(...codes);
@@ -97,8 +143,26 @@ function maintenanceProducerPathMutationMentioned(command) {
     word([109, 105]),
     word([114, 101, 110]),
     word([114, 101, 110, 97, 109, 101]),
+    word([115, 101, 116, 45, 99, 111, 110, 116, 101, 110, 116]),
+    word([99, 108, 101, 97, 114, 45, 99, 111, 110, 116, 101, 110, 116]),
+    word([97, 100, 100, 45, 99, 111, 110, 116, 101, 110, 116]),
+    word([111, 117, 116, 45, 102, 105, 108, 101]),
+    word([115, 101, 116, 45, 105, 116, 101, 109]),
+    word([110, 101, 119, 45, 105, 116, 101, 109]),
+    word([116, 101, 101]),
+    word([115, 101, 100]),
+    word([112, 101, 114, 108]),
+    word([97, 119, 107]),
+    word([116, 114, 117, 110, 99, 97, 116, 101]),
+    word([100, 100]),
+    word([105, 110, 115, 116, 97, 108, 108]),
+    word([112, 97, 116, 99, 104]),
+    word([101, 100]),
+    word([101, 120]),
   ];
-  if (!new RegExp(`\\b(?:${pathMutators.join("|")})\\b`, "i").test(value)) return false;
+  const namedMutator = new RegExp(`\\b(?:${pathMutators.join("|")})\\b`, "i").test(value);
+  const redirectedWrite = /(?:^|[\s\d])>{1,2}(?![&])/.test(value);
+  if (!namedMutator && !redirectedWrite) return false;
 
   for (const token of tokenizeShellWords(value)) {
     if (token.control) continue;
@@ -106,7 +170,8 @@ function maintenanceProducerPathMutationMentioned(command) {
       .replace(/^:\([^)]*\)/, "")
       .replace(/\\/g, "/")
       .replace(/^\.\//, "")
-      .replace(/\/$/, "");
+      .replace(/\/$/, "")
+      .replace(/^(?:of|output)=/i, "");
     if (!candidate || candidate.startsWith("-")) continue;
     if (/[$%]|\$\(|\$\{|%[^%]+%/.test(candidate)) return true;
     if (candidate.toLowerCase() === "scripts" || candidate.toLowerCase().endsWith("/scripts")) return true;
@@ -1738,6 +1803,8 @@ export function readPackageScripts(cwd) {
 // (only if clean) every `npm run X` target's resolved script body, recursively.
 // Returns the first matching reason, or null.
 export function checkCommandDeep(cmd, cwd) {
+  const producerIntegrity = checkMaintenanceProducerIntegrity(cmd, cwd);
+  if (producerIntegrity) return producerIntegrity;
   const direct = checkDangerousCommand(cmd);
   if (direct) return direct;
 

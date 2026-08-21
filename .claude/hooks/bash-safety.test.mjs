@@ -233,6 +233,13 @@ const producerPathMutationCases = [
   [producerMutationWord([109, 118]), "scripts", "scratch/scripts"].join(" "),
   [producerMutationWord([103, 105, 116]), producerMutationWord([109, 118]), producerWildcardPath, "scratch/producer.mjs"].join(" "),
   [producerMutationWord([117, 110, 108, 105, 110, 107]), "$TARGET"].join(" "),
+  [producerMutationWord([115, 101, 116, 45, 99, 111, 110, 116, 101, 110, 116]), "scripts/*.mjs", "payload"].join(" "),
+  [producerMutationWord([99, 108, 101, 97, 114, 45, 99, 111, 110, 116, 101, 110, 116]), "scripts/*.mjs"].join(" "),
+  [producerMutationWord([97, 100, 100, 45, 99, 111, 110, 116, 101, 110, 116]), "scripts/*.mjs", "payload"].join(" "),
+  [producerMutationWord([115, 101, 100]), "-i", "s/x/y/", "scripts/*.mjs"].join(" "),
+  [producerMutationWord([116, 114, 117, 110, 99, 97, 116, 101]), "-s", "0", "scripts/*.mjs"].join(" "),
+  [producerMutationWord([100, 100]), "if=payload", "of=scripts/*.mjs"].join(" "),
+  ["Write-Output", "payload", ">", "scripts/*.mjs"].join(" "),
 ];
 for (const command of producerPathMutationCases) {
   ok(maintenanceProducerCommandMentioned(command), `a producer path mutation enters the protected producer gate: ${command}`);
@@ -244,6 +251,33 @@ const unrelatedScriptMutation = [
   "scripts/ordinary-tool.mjs",
 ].join(" ");
 ok(!maintenanceProducerCommandMentioned(unrelatedScriptMutation), "a specific unrelated script path stays outside the producer gate");
+{
+  const integrityRepo = mkdtempSync(path.join(os.tmpdir(), "producer-integrity-"));
+  try {
+    const integrityRelativePath = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
+    const integrityPath = path.join(integrityRepo, ...integrityRelativePath.split("/"));
+    const integrityGitEnv = { ...process.env };
+    for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete integrityGitEnv[name];
+    mkdirSync(path.dirname(integrityPath), { recursive: true });
+    writeFileSync(integrityPath, "export const reviewed = true;\n");
+    for (const args of [
+      ["init", "--quiet"],
+      ["config", "user.email", "guard-test@example.invalid"],
+      ["config", "user.name", "Guard Test"],
+      ["add", "--", integrityRelativePath],
+      ["commit", "--quiet", "-m", "test fixture"],
+    ]) {
+      const result = spawnSync("git", args, { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
+      eq(result.status, 0, `producer integrity fixture command succeeds: git ${args[0]}`);
+    }
+    const integrityCommand = ["node", integrityRelativePath, "--verify"].join(" ");
+    eq(checkCommandDeep(integrityCommand, integrityRepo), null, "an exact producer launch is allowed when worktree bytes match HEAD");
+    writeFileSync(integrityPath, "export const reviewed = false;\n");
+    ok(checkCommandDeep(integrityCommand, integrityRepo), "an exact producer launch is denied when worktree bytes differ from HEAD");
+  } finally {
+    rmSync(integrityRepo, { recursive: true, force: true });
+  }
+}
 const focusedProducerHarness = "node scripts/apply-live-testdata-maintenance-20260812.test.mjs";
 ok(!maintenanceProducerCommandMentioned(focusedProducerHarness), "focused producer test harness is not classified as the protected producer");
 eq(checkMaintenanceProducerInvocation(focusedProducerHarness), null, "focused producer test harness stays allowed by the shell guard");
