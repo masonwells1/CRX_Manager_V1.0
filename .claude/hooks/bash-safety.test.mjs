@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -327,6 +327,30 @@ for (const command of [
     const authoritativeResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
     eq(authoritativeResult.status, 0, "producer fixture authoritative main SHA resolves");
     const reviewOptions = { authoritativeMainShaForTest: authoritativeResult.stdout.trim() };
+    const injectedGitShimDir = path.join(integrityRepo, "output", "git-shim");
+    const localGitShimMarker = path.join(integrityRepo, "local-git-shim-ran.txt");
+    const pathGitShimMarker = path.join(integrityRepo, "path-git-shim-ran.txt");
+    mkdirSync(injectedGitShimDir, { recursive: true });
+    const writeGitShim = (directory, marker) => {
+      const shimPath = path.join(directory, process.platform === "win32" ? "git.cmd" : "git");
+      writeFileSync(shimPath, process.platform === "win32"
+        ? `@echo shim>"${marker}"\r\n@exit /b 99\r\n`
+        : `#!/bin/sh\nprintf shim > '${marker.replaceAll("'", "'\\''")}'\nexit 99\n`);
+      if (process.platform !== "win32") chmodSync(shimPath, 0o755);
+      return shimPath;
+    };
+    const localGitShimPath = writeGitShim(integrityRepo, localGitShimMarker);
+    const pathGitShimPath = writeGitShim(injectedGitShimDir, pathGitShimMarker);
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${injectedGitShimDir}${path.delimiter}${originalPath || ""}`;
+    eq(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions), null, "executor provenance uses fixed Git even with local and PATH shims present");
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    ok(!existsSync(localGitShimMarker), "repository-local Git shim never executes during provenance inspection");
+    ok(!existsSync(pathGitShimMarker), "PATH-injected Git shim never executes during provenance inspection");
+    rmSync(localGitShimPath, { force: true });
+    rmSync(pathGitShimPath, { force: true });
+    rmSync(injectedGitShimDir, { recursive: true, force: true });
     const integrityCommand = ["node", integrityRelativePath, "--verify"].join(" ");
     eq(checkCommandDeep(integrityCommand, integrityRepo, reviewOptions), null, "an exact producer launch is allowed when HEAD is the reviewed main commit and worktree bytes match");
     eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor is allowed when HEAD is the reviewed main commit");

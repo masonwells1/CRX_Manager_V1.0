@@ -26,6 +26,15 @@ const commandInspectionViews = (command) => [...new Set([
   normalizePosixLineContinuations(command),
 ])];
 
+export function fixedTrustedGitExecutable() {
+  const candidates = process.platform === "win32"
+    ? ["C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\bin\\git.exe"]
+    : ["/usr/bin/git", "/usr/local/bin/git"];
+  const executable = candidates.find((candidate) => existsSync(candidate));
+  if (!executable) throw new Error("A fixed trusted Git executable is required for executor provenance checks.");
+  return executable;
+}
+
 const MAINTENANCE_PRODUCER_NAME = "apply-live-testdata-maintenance-20260812.mjs";
 const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
@@ -134,12 +143,16 @@ function gitBlobHash(buffer) {
 
 function createReviewedExecutorInspector(cwd, options = {}) {
   const base = cwd || process.cwd();
-  const gitEnv = { ...process.env };
-  for (const name of [
-    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR",
-    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_REPLACE_REF_BASE",
-  ]) delete gitEnv[name];
+  let gitExecutable = "";
+  const gitEnv = {};
+  for (const name of ["SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE"]) {
+    if (process.env[name]) gitEnv[name] = process.env[name];
+  }
   gitEnv.GIT_NO_REPLACE_OBJECTS = "1";
+  gitEnv.GIT_CONFIG_NOSYSTEM = "1";
+  gitEnv.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+  gitEnv.GIT_TERMINAL_PROMPT = "0";
+  gitEnv.GCM_INTERACTIVE = "never";
   let initialized = false;
   let root = "";
   let headSha = "";
@@ -152,7 +165,18 @@ function createReviewedExecutorInspector(cwd, options = {}) {
   const initialize = () => {
     if (initialized) return;
     initialized = true;
-    const rootResult = spawnSync("git", ["-C", base, "--no-replace-objects", "rev-parse", "--show-toplevel"], {
+    try {
+      gitExecutable = fixedTrustedGitExecutable();
+    } catch {
+      initializationError = "a fixed trusted Git executable could not be resolved";
+      return;
+    }
+    const trustedGitPath = path.dirname(gitExecutable);
+    const systemPath = process.platform === "win32"
+      ? path.join(gitEnv.SystemRoot || gitEnv.WINDIR || "C:\\Windows", "System32")
+      : "/usr/bin:/bin";
+    gitEnv.PATH = `${trustedGitPath}${path.delimiter}${systemPath}`;
+    const rootResult = spawnSync(gitExecutable, ["-C", base, "--no-replace-objects", "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       windowsHide: true,
       timeout: 1_500,
@@ -163,7 +187,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       initializationError = "the repository root could not be verified";
       return;
     }
-    const headResult = spawnSync("git", ["-C", root, "--no-replace-objects", "rev-parse", "HEAD"], {
+    const headResult = spawnSync(gitExecutable, ["-C", root, "--no-replace-objects", "rev-parse", "HEAD"], {
       encoding: "utf8",
       windowsHide: true,
       timeout: 1_500,
@@ -185,19 +209,12 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       }
       baseSha = injectedMainSha;
     } else {
-      const remoteEnv = { ...gitEnv };
-      for (const name of Object.keys(remoteEnv)) {
-        if (name.startsWith("GIT_CONFIG") || name === "GIT_EXEC_PATH") delete remoteEnv[name];
-      }
-      remoteEnv.GIT_CONFIG_NOSYSTEM = "1";
-      remoteEnv.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
-      remoteEnv.GIT_TERMINAL_PROMPT = "0";
-      const remoteResult = spawnSync("git", ["ls-remote", "--exit-code", AUTHORITATIVE_REPOSITORY_URL, "refs/heads/main"], {
+      const remoteResult = spawnSync(gitExecutable, ["ls-remote", "--exit-code", AUTHORITATIVE_REPOSITORY_URL, "refs/heads/main"], {
         cwd: path.parse(root).root,
         encoding: "utf8",
         windowsHide: true,
         timeout: 5_000,
-        env: remoteEnv,
+        env: gitEnv,
       });
       const remoteMatch = /^([a-f0-9]{40})\s+refs\/heads\/main\s*$/i.exec(String(remoteResult.stdout || ""));
       baseSha = String(remoteMatch?.[1] || "").toLowerCase();
@@ -211,7 +228,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       return;
     }
     for (const [ref, entries] of [[headSha, headEntries], [baseSha, mainEntries]]) {
-      const treeResult = spawnSync("git", ["-C", root, "--no-replace-objects", "ls-tree", "-r", "--full-tree", ref], {
+      const treeResult = spawnSync(gitExecutable, ["-C", root, "--no-replace-objects", "ls-tree", "-r", "--full-tree", ref], {
         encoding: "utf8",
         windowsHide: true,
         timeout: 1_500,

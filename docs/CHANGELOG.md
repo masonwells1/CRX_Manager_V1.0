@@ -152,8 +152,11 @@ All significant development milestones, in reverse chronological order.
   store redirection variables. `git replace` and `refs/replace/**` updates are
   denied, including opaque `git update-ref --stdin` batches; a replacement-
   commit regression proves the authoritative SHA cannot be paired with a
-  substituted hostile tree. Opaque package resolvers
-  and local package executables are denied because ignored `node_modules` bytes
+  substituted hostile tree. Provenance reads invoke Git only through a fixed
+  trusted installation path with a minimal sanitized environment; regressions
+  prove repository-local and PATH-injected Git shims never execute. Opaque
+  package resolvers and local package executables are denied because ignored
+  `node_modules` bytes
   are outside exact-HEAD review and can change after manifest review. Installed-
   toolchain verification runs inside the reviewed commit/preflight gate instead.
   Hosted exact-head review then closed the remaining redirect and test-fixture

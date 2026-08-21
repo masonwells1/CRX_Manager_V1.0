@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { existsSync, mkdtempSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { checkCommandDeep, SECURITY_COMMAND_CHAR_BUDGET } from "./bash-safety-lib.mjs";
@@ -662,12 +662,35 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     const ignoredMarkerPath = path.join(tmp, "output", "wrapper-executed.txt");
     mkdirSync(path.dirname(ignoredMarkerPath), { recursive: true });
     writeFileSync(path.join(tmp, ignoredWrapperRelative), wrapperSource);
+    const injectedGitShimDir = path.join(tmp, "output", "git-shim");
+    const localGitShimMarker = path.join(tmp, "local-git-shim-ran.txt");
+    const pathGitShimMarker = path.join(tmp, "path-git-shim-ran.txt");
+    mkdirSync(injectedGitShimDir, { recursive: true });
+    const writeGitShim = (directory, marker) => {
+      const shimPath = path.join(directory, process.platform === "win32" ? "git.cmd" : "git");
+      writeFileSync(shimPath, process.platform === "win32"
+        ? `@echo shim>"${marker}"\r\n@exit /b 99\r\n`
+        : `#!/bin/sh\nprintf shim > '${marker.replaceAll("'", "'\\''")}'\nexit 99\n`);
+      if (process.platform !== "win32") chmodSync(shimPath, 0o755);
+      return shimPath;
+    };
+    const localGitShimPath = writeGitShim(tmp, localGitShimMarker);
+    const pathGitShimPath = writeGitShim(injectedGitShimDir, pathGitShimMarker);
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${injectedGitShimDir}${path.delimiter}${originalPath || ""}`;
     r = runHook({
       tool_name: "mcp__Desktop_Commander__start_process",
       tool_input: { command: `node -- ${ignoredWrapperRelative}` },
     }, tmp);
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
     ok(isDeny(r), "MCP start_process denies an ignored wrapper before it can spawn the producer");
     ok(r.stdout.includes("Blocked file-backed interpreter"), "the MCP denial comes from the HEAD-bound executor check");
+    ok(!existsSync(localGitShimMarker), "MCP provenance inspection never executes a repository-local Git shim");
+    ok(!existsSync(pathGitShimMarker), "MCP provenance inspection never executes a PATH-injected Git shim");
+    rmSync(localGitShimPath, { force: true });
+    rmSync(pathGitShimPath, { force: true });
+    rmSync(injectedGitShimDir, { recursive: true, force: true });
     ok(!existsSync(ignoredMarkerPath), "the MCP-denied ignored wrapper never executes");
     const ignoredDirectRelative = "output/ignored-wrapper.bat";
     writeFileSync(path.join(tmp, ignoredDirectRelative), "@echo ignored direct wrapper\n");

@@ -147,6 +147,9 @@ alternate-object environment redirects, and deny both `git replace` and
 `refs/replace/**` updates, including opaque `git update-ref --stdin` batches. A
 replacement-commit regression proves an attacker cannot keep the authoritative
 SHA while substituting a hostile wrapper tree.
+Every provenance read invokes Git through a fixed trusted installation path and
+a minimal sanitized environment. Repository-local and PATH-injected Git shims
+are planted in regressions and proven not to execute before trust is established.
 Package execution is recognized only in command position, so read-only
 arguments that mention `npx`, `npm exec`, or `vite` remain ordinary data. A real
 local package executable fails closed because ignored `node_modules` bytes are
