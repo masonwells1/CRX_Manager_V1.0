@@ -16,8 +16,9 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 captured trigger/FK/rule/view/event-trigger evidence is trusted for at most 24 hours.
 **Why:** A matching project name on an arbitrary host can fabricate evidence or receive credentials,
 and old live-catalog evidence cannot prove what an apply will execute today.
-**What this forbids/implies:** never weaken the endpoint allowlist or apply with an expired manifest;
-rerun `node scripts/generate-trigger-fanout.mjs` before the apply and review the regenerated artifact.
+**What this forbids/implies:** never weaken the endpoint allowlist or apply with expired evidence;
+from the applying checkout, rerun `node scripts/refresh-applied-migrations.mjs` and
+`node scripts/generate-trigger-fanout.mjs` before the apply, then review both regenerated artifacts.
 
 ---
 
