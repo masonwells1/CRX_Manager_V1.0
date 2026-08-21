@@ -434,6 +434,18 @@ for (const command of [
     ok(checkCommandDeep("cmd /c evil", integrityRepo, reviewOptions)?.includes("ignored or untracked"), "cmd current-directory PATHEXT resolution cannot hide a bare ignored wrapper");
     const bareCmdHookResult = runHook({ tool_name: "Bash", tool_input: { command: "cmd /c evil" } }, integrityRepo);
     ok(bareCmdHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denies a bare current-directory CMD wrapper");
+    writeFileSync(path.join(integrityRepo, "output", "evil.cmd"), "@echo PATH-resolved ignored wrapper\n");
+    for (const pathMutationCommand of [
+      'cmd /c "set PATH=output&&evil"',
+      "cmd /c set PATH=output&&evil",
+      "PATH=output evil",
+      "env PATH=output evil",
+      "$env:PATH='output'; evil",
+    ]) {
+      ok(checkCommandDeep(pathMutationCommand, integrityRepo, reviewOptions)?.includes("PATH or PATHEXT mutation"), "a command-local PATH change cannot hide an ignored bare executable: " + pathMutationCommand);
+      const pathMutationHookResult = runHook({ tool_name: "Bash", tool_input: { command: pathMutationCommand } }, integrityRepo);
+      ok(pathMutationHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies command-local PATH executable dispatch: " + pathMutationCommand);
+    }
     ok(checkCommandDeep(`& .\\${ignoredPowerShellRelative.replaceAll("/", "\\")}`, integrityRepo, reviewOptions)?.includes("ignored or untracked"), "the PowerShell invocation operator cannot hide a directly executed ignored script");
     const powerShellAliasCommand = `Set-Alias x .\\${ignoredPowerShellRelative.replaceAll("/", "\\")}; x`;
     ok(checkCommandDeep(powerShellAliasCommand, integrityRepo, reviewOptions)?.includes("ignored or untracked"), "a static PowerShell alias cannot hide a directly executed ignored script");

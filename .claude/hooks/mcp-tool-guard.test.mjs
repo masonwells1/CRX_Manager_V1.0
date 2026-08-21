@@ -682,6 +682,20 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       tool_input: { command: "cmd /c evil" },
     }, tmp);
     ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP denies a bare current-directory CMD wrapper resolved through PATHEXT");
+    writeFileSync(path.join(tmp, "output", "evil.cmd"), "@echo PATH-resolved ignored wrapper\n");
+    for (const pathMutationCommand of [
+      'cmd /c "set PATH=output&&evil"',
+      "cmd /c set PATH=output&&evil",
+      "PATH=output evil",
+      "env PATH=output evil",
+      "$env:PATH='output'; evil",
+    ]) {
+      r = runHook({
+        tool_name: "mcp__Desktop_Commander__start_process",
+        tool_input: { command: pathMutationCommand },
+      }, tmp);
+      ok(isDeny(r) && r.stdout.includes("PATH or PATHEXT mutation"), "MCP denies command-local PATH executable dispatch: " + pathMutationCommand);
+    }
     const ignoredPowerShellRelative = "output/ignored-wrapper.ps1";
     writeFileSync(path.join(tmp, ignoredPowerShellRelative), "Write-Output ignored\n");
     r = runHook({

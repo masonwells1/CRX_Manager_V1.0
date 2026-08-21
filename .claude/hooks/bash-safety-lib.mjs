@@ -2237,6 +2237,17 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     "python", "python2", "python3", "py", "perl", "ruby", "php",
     "bash", "sh", "dash", "zsh", "ksh", "powershell", "pwsh", "cmd",
   ]);
+  const pathMutationShells = new Set([
+    "cmd", "powershell", "pwsh", "bash", "sh", "dash", "zsh", "ksh",
+    "env", "set", "setx", "export", "declare", "typeset", "local", "readonly",
+    "set-item", "si", "sudo", "doas", "exec", "wsl",
+  ]);
+  const pathMutationMentioned = (words) => {
+    const text = words.map((token) => token.value).join(" ");
+    return /(?:^|[\s;&|])(?:@?set(?:x)?\s+["']?|(?:export|env)\s+)?(?:path|pathext)\s*\+?=/i.test(text)
+      || /\$env\s*:\s*(?:path|pathext)\s*\+?=/i.test(text)
+      || /(?:set-item|si)\s+(?:-path\s+)?["']?env\s*:\s*(?:path|pathext)\b/i.test(text);
+  };
   const gitBuiltinCommands = new Set([
     "add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bugreport", "bundle",
     "cat-file", "check-attr", "check-ignore", "check-mailmap", "check-ref-format", "checkout", "checkout-index",
@@ -2386,6 +2397,12 @@ function executionContextShiftReason(command, cwd, depth = 0) {
       while (words[cursor]?.value?.startsWith("-")) cursor += 1;
     }
     const commandName = executableName(words[cursor]);
+    const leadingPathAssignment = words.slice(0, cursor)
+      .some((token) => /^(?:path|pathext)\+?=/i.test(token.value));
+    const directPowerShellPathAssignment = /^\$env\s*:\s*(?:path|pathext)\b/i.test(words[0]?.value || "");
+    if ((leadingPathAssignment || directPowerShellPathAssignment || pathMutationShells.has(commandName)) && pathMutationMentioned(words)) {
+      return "Blocked executable dispatch after a PATH or PATHEXT mutation; command-local search paths can resolve an ignored or unreviewed executable.";
+    }
     const gitReason = gitExecutionReason(words, cursor);
     if (gitReason) return gitReason;
     if (locationCommands.has(commandName)) {

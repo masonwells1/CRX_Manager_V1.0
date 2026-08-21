@@ -167,6 +167,9 @@ All significant development milestones, in reverse chronological order.
   That lookup intentionally fails closed for a real file-backed/package executor
   when GitHub cannot be reached; it is not persisted in a mutable local cache,
   which would recreate the local trust-forgery boundary this change removes.
+  Bare executable dispatch also fails closed after a command-local `PATH` or
+  `PATHEXT` mutation, including nested and unescaped CMD forms; ignored
+  subdirectories therefore cannot replace the reviewed executable resolution.
   A final exact-SHA review found that path identity also depends on the shell's
   effective directory: a preceding location change could verify the root script
   but execute an ignored shadow below the new directory. The shared Bash/MCP
