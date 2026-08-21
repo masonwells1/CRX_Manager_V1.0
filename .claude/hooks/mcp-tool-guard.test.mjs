@@ -300,8 +300,6 @@ const approvedProducerCommand = [
 ].join(" ");
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: approvedProducerCommand } });
 ok(isDeny(r), "the protected producer cannot run inside a persistent interactive process");
-r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: approvedProducerCommand } });
-ok(!isDeny(r), "the exact approved producer command remains allowed in a fresh process");
 {
   const integrityRepo = mkdtempSync(path.join(os.tmpdir(), "mcp-producer-integrity-"));
   try {
@@ -317,16 +315,17 @@ ok(!isDeny(r), "the exact approved producer command remains allowed in a fresh p
       ["config", "user.name", "Guard Test"],
       ["add", "--", integrityRelativePath],
       ["commit", "--quiet", "-m", "test fixture"],
+      ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ]) {
       const result = spawnSync("git", args, { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
       eq(result.status, 0, `MCP producer integrity fixture command succeeds: git ${args[0]}`);
     }
     const integrityCommand = ["node", integrityRelativePath, "--verify"].join(" ");
     r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: integrityCommand } }, integrityRepo);
-    ok(!isDeny(r), "MCP exact producer launch is allowed when worktree bytes match HEAD");
+    ok(!isDeny(r), "MCP exact producer launch is allowed when HEAD is the reviewed main commit and worktree bytes match");
     writeFileSync(integrityPath, "export const reviewed = false;\n");
     r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: integrityCommand } }, integrityRepo);
-    ok(isDeny(r), "MCP exact producer launch is denied when worktree bytes differ from HEAD");
+    ok(isDeny(r), "MCP exact producer launch is denied when worktree bytes differ from exact HEAD");
   } finally {
     rmSync(integrityRepo, { recursive: true, force: true });
   }
@@ -492,7 +491,7 @@ eq(r.stdout.trim(), "", "DC write_file to an ordinary source file is silent (all
   }
 }
 
-// ── process signals are denied while the producer is tracked at HEAD ───────
+// ── process signals are denied while producer protection is latched ────────
 r = runHook({ tool_name: "mcp__Desktop_Commander__kill_process", tool_input: { pid: 123 } });
 ok(isDeny(r), "kill_process cannot trigger a persistent-shell signal trap while the producer is tracked");
 for (const signalTool of ["send_signal", "signal_process", "terminate_process", "stop_process"]) {
@@ -567,6 +566,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
   const producerRelative = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
   const alternateRelative = "scripts/ignored-maintenance-copy.mjs";
   const trackedWrapperRelative = "scripts/reviewed-wrapper.mjs";
+  const reviewedWrapperSource = "console.log('reviewed wrapper');\n";
   const wrapperSource = [
     'import { spawnSync } from "node:child_process";',
     'import { writeFileSync } from "node:fs";',
@@ -577,7 +577,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
   try {
     mkdirSync(path.join(tmp, "scripts"), { recursive: true });
     writeFileSync(path.join(tmp, producerRelative), "console.log('tracked producer');\n");
-    writeFileSync(path.join(tmp, trackedWrapperRelative), wrapperSource);
+    writeFileSync(path.join(tmp, trackedWrapperRelative), reviewedWrapperSource);
     writeFileSync(path.join(tmp, ".gitignore"), "output/\n");
     const isolatedGitEnv = { ...process.env };
     for (const variableName of [
@@ -591,6 +591,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       ["config", "commit.gpgsign", "false"],
       ["add", producerRelative, trackedWrapperRelative, ".gitignore"],
       ["commit", "-m", "track producer"],
+      ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ]) {
       const gitResult = spawnSync("git", args, { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true });
       eq(gitResult.status, 0, `temporary producer repository setup succeeds: git ${args[0]}`);
@@ -612,8 +613,20 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       tool_name: "mcp__Desktop_Commander__start_process",
       tool_input: { command: `node -- ${trackedWrapperRelative}` },
     }, tmp);
-    ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP HEAD-binds a worktree-divergent executor after --");
-    writeFileSync(path.join(tmp, trackedWrapperRelative), wrapperSource);
+    ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP origin/main-binds a worktree-divergent executor after --");
+    for (const args of [
+      ["add", trackedWrapperRelative],
+      ["commit", "-m", "local-only malicious wrapper"],
+    ]) {
+      const gitResult = spawnSync("git", args, { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true });
+      eq(gitResult.status, 0, `local-only malicious wrapper commit succeeds for the MCP regression: git ${args[0]}`);
+    }
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__start_process",
+      tool_input: { command: `node -- ${trackedWrapperRelative}` },
+    }, tmp);
+    ok(isDeny(r) && r.stdout.includes("fresh exact-SHA independent review proof"), "MCP denies a locally committed wrapper without independent review proof");
+    writeFileSync(path.join(tmp, trackedWrapperRelative), reviewedWrapperSource);
     const externalExecutorPath = path.join(externalExecutorDir, "external-wrapper.mjs");
     writeFileSync(externalExecutorPath, wrapperSource);
     r = runHook({

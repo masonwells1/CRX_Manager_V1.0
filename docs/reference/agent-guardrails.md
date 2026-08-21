@@ -126,14 +126,20 @@ wildcard runs from consuming the hook timeout; actual Bash and MCP hook timing
 regressions enforce that boundary. That includes content
 writers, in-place editors, truncation, and output redirects. An exact allowlisted
 producer launch is still denied unless an independent Git-blob hash of the
-worktree bytes matches the file recorded at `HEAD`; this is the final boundary
+worktree bytes matches exact `HEAD`. On a feature branch it also requires the
+fresh exact-head Sol review proof used by the production gate; this is the final boundary
 for fully dynamic targets that command-text inspection cannot resolve.
 File-backed interpreters also require their entry script to be repository-local,
-tracked at `HEAD`, and byte-identical to that blob. This blocks ignored,
-external, untracked, and worktree-divergent wrappers before they can launch the
+tracked and byte-identical at exact `HEAD`, plus that same independent proof when
+the head differs from protected `origin/main`. This blocks ignored, external,
+untracked, worktree-divergent, and unreviewed wrappers before they can launch the
 producer or a preload as an uninspected child; both Bash and MCP regressions use
 a real ignored spawning wrapper and cover Node's `--` option terminator before
-the script operand. Alias definitions and unknown commands
+the script operand. A local commit alone remains denied; a regression proves the
+wrapper does not become trusted without fresh independent exact-SHA review. The
+proof producer is the only bootstrap exception and must still byte-match its
+protected-main blob.
+Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed
 when `call`/`@call`, an `if` condition, or a `for … do` body precedes an explicit
@@ -176,8 +182,8 @@ Runs on Claude's `mcp__.*` PreToolUse matcher (narrowed 2026-08-18; still the `*
 |------|----------------|
 | `mcp-tool-guard.mjs` (+ shared `bash-safety-lib.mjs`) | Desktop Commander `start_process`/`interact_with_process`: the extracted command/input text against the SAME dangerous-command + migration-modify patterns `bash-safety.mjs` enforces (shared table, so a fix landed in one hook is a fix landed in both). Desktop Commander `write_file`/`edit_block`/`move_file`/`create_directory`: denies a target path that is `.env*`, an EXISTING file under `supabase/migrations/`, `.claude/settings.json`, or any `.claude/hooks/*.mjs` file — message: "use the native Edit/Write tools so the guard hooks can inspect this change." `kill_process`/`set_config_value` are matched by the tool-name regex but not specifically gated (no command/path signal to check against these patterns; `set_config_value` already requires "ask" approval in `settings.json`) — a deliberate, documented judgment call, not an oversight |
 
-> **2026-08-20 correction:** while the reviewed maintenance executor is tracked
-> at `HEAD`, persistent-process input and process-signal tools are denied even
+> **2026-08-20 correction:** while the reviewed maintenance-executor protection
+> is latched, persistent-process input and process-signal tools are denied even
 > when its worktree path is absent. File tools also deny that executor path and
 > repository ignore controls. This supersedes the older `kill_process`
 > pass-through judgment in the table above.

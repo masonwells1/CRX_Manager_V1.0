@@ -131,13 +131,16 @@ function gitBlobHash(buffer) {
     .digest("hex");
 }
 
-function createHeadBoundExecutorInspector(cwd) {
+function createReviewedExecutorInspector(cwd) {
   const base = cwd || process.cwd();
   const gitEnv = { ...process.env };
   for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete gitEnv[name];
   let initialized = false;
   let root = "";
-  let headEntries = new Map();
+  let headSha = "";
+  let baseSha = "";
+  const headEntries = new Map();
+  const mainEntries = new Map();
   let initializationError = "";
   let reason = "";
 
@@ -155,21 +158,34 @@ function createHeadBoundExecutorInspector(cwd) {
       initializationError = "the repository root could not be verified";
       return;
     }
-    const treeResult = spawnSync("git", ["-C", root, "ls-tree", "-r", "--full-tree", "HEAD"], {
+    const refResult = spawnSync("git", ["-C", root, "rev-parse", "HEAD", "origin/main"], {
       encoding: "utf8",
       windowsHide: true,
       timeout: 1_500,
       env: gitEnv,
     });
-    if (treeResult.status !== 0) {
-      initializationError = "the committed HEAD tree could not be verified";
+    [headSha, baseSha] = String(refResult.stdout || "").trim().split(/\r?\n/).map((value) => value.toLowerCase());
+    if (refResult.status !== 0 || !/^[a-f0-9]{40}$/.test(headSha) || !/^[a-f0-9]{40}$/.test(baseSha)) {
+      initializationError = "the exact HEAD and protected origin/main refs could not be verified";
       return;
     }
-    for (const line of String(treeResult.stdout || "").split(/\r?\n/)) {
-      const match = /^\d+\s+blob\s+([a-f0-9]{40})\t(.+)$/.exec(line);
-      if (!match) continue;
-      const key = process.platform === "win32" ? match[2].toLowerCase() : match[2];
-      headEntries.set(key, match[1].toLowerCase());
+    for (const [ref, entries] of [[headSha, headEntries], [baseSha, mainEntries]]) {
+      const treeResult = spawnSync("git", ["-C", root, "ls-tree", "-r", "--full-tree", ref], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 1_500,
+        env: gitEnv,
+      });
+      if (treeResult.status !== 0) {
+        initializationError = `the committed tree ${ref} could not be verified`;
+        return;
+      }
+      for (const line of String(treeResult.stdout || "").split(/\r?\n/)) {
+        const match = /^\d+\s+blob\s+([a-f0-9]{40})\t(.+)$/.exec(line);
+        if (!match) continue;
+        const key = process.platform === "win32" ? match[2].toLowerCase() : match[2];
+        entries.set(key, match[1].toLowerCase());
+      }
     }
   };
 
@@ -193,27 +209,48 @@ function createHeadBoundExecutorInspector(cwd) {
     }
     const repoPath = relative.split(path.sep).join("/");
     const key = process.platform === "win32" ? repoPath.toLowerCase() : repoPath;
-    const expectedBlob = headEntries.get(key);
-    if (!expectedBlob) {
-      reason = "the file-backed executor is ignored or untracked at HEAD";
+    const expectedHeadBlob = headEntries.get(key);
+    if (!expectedHeadBlob) {
+      reason = "the file-backed executor is ignored or untracked at exact HEAD";
       return true;
     }
     try {
-      if (gitBlobHash(readFileSync(resolved)) !== expectedBlob) {
-        reason = "the file-backed executor worktree bytes differ from HEAD";
+      if (gitBlobHash(readFileSync(resolved)) !== expectedHeadBlob) {
+        reason = "the file-backed executor worktree bytes differ from exact HEAD";
         return true;
       }
     } catch {
       reason = "the file-backed executor is missing or unreadable";
       return true;
     }
-    return false;
+    if (headSha === baseSha) return false;
+    const bootstrapPath = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
+    if (repoPath === bootstrapPath && mainEntries.get(key) === expectedHeadBlob) return false;
+    try {
+      const proofName = [["codex", "review", headSha].join("-"), "json"].join(".");
+      const proof = JSON.parse(readFileSync(path.join(root, ".claude", "session-state", proofName), "utf8"));
+      const timestamp = Date.parse(proof?.timestamp);
+      const age = Date.now() - timestamp;
+      if (proof?.codex_ran === true
+        && proof?.verdict === "clean"
+        && proof?.model === "gpt-5.6-sol"
+        && proof?.reasoning_effort === "high"
+        && proof?.head_sha === headSha
+        && proof?.base_sha === baseSha
+        && Number.isFinite(timestamp)
+        && age >= 0
+        && age <= 30 * 60 * 1_000) return false;
+    } catch {
+      // Missing, malformed, stale, or inaccessible proof is handled below.
+    }
+    reason = "the feature-branch HEAD lacks a fresh exact-SHA independent review proof";
+    return true;
   };
 
   return {
     inspect,
     getReason: () => reason
-      ? `Blocked file-backed interpreter while the maintenance producer is protected because ${reason}. Commit and review the executor first; ignored, external, untracked, and worktree-divergent wrappers are denied.`
+      ? `Blocked file-backed interpreter while the maintenance producer is protected because ${reason}. Run the protected exact-head review producer first; ignored, external, untracked, worktree-divergent, and unreviewed feature-branch wrappers are denied.`
       : null,
   };
 }
@@ -221,38 +258,9 @@ function createHeadBoundExecutorInspector(cwd) {
 export function checkMaintenanceProducerIntegrity(command, cwd) {
   const value = String(command || "").trim();
   if (!MAINTENANCE_PRODUCER_ALLOWED_COMMANDS.has(value)) return null;
-  const base = cwd || process.cwd();
-  const gitEnv = { ...process.env };
-  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete gitEnv[name];
-  const rootResult = spawnSync("git", ["-C", base, "rev-parse", "--show-toplevel"], {
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: 1_500,
-    env: gitEnv,
-  });
-  if (rootResult.status !== 0 || !String(rootResult.stdout || "").trim()) {
-    return "Blocked maintenance producer invocation because the repository root could not be verified.";
-  }
-  const root = String(rootResult.stdout).trim();
-  const headResult = spawnSync("git", ["-C", root, "rev-parse", `HEAD:${MAINTENANCE_PRODUCER_REPO_PATH}`], {
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: 1_500,
-    env: gitEnv,
-  });
-  const expectedBlob = String(headResult.stdout || "").trim().toLowerCase();
-  if (headResult.status !== 0 || !/^[a-f0-9]{40}$/.test(expectedBlob)) {
-    return "Blocked maintenance producer invocation because its committed HEAD blob could not be verified.";
-  }
-  try {
-    const worktreeBytes = readFileSync(path.join(root, ...MAINTENANCE_PRODUCER_REPO_PATH.split("/")));
-    if (gitBlobHash(worktreeBytes) !== expectedBlob) {
-      return "Blocked maintenance producer invocation because its worktree bytes do not match the committed HEAD blob.";
-    }
-  } catch {
-    return "Blocked maintenance producer invocation because its worktree file is missing or unreadable.";
-  }
-  return null;
+  const inspector = createReviewedExecutorInspector(cwd);
+  inspector.inspect(MAINTENANCE_PRODUCER_REPO_PATH);
+  return inspector.getReason();
 }
 
 function maintenanceProducerPathMutationMentioned(command) {
@@ -1947,7 +1955,7 @@ export function readPackageScripts(cwd) {
 export function checkCommandDeep(cmd, cwd) {
   const producerIntegrity = checkMaintenanceProducerIntegrity(cmd, cwd);
   if (producerIntegrity) return producerIntegrity;
-  const fileExecutorInspector = createHeadBoundExecutorInspector(cwd);
+  const fileExecutorInspector = createReviewedExecutorInspector(cwd);
   maintenanceProducerCommandMentioned(cmd, 0, fileExecutorInspector.inspect);
   const directExecutorReason = fileExecutorInspector.getReason();
   if (directExecutorReason) return directExecutorReason;

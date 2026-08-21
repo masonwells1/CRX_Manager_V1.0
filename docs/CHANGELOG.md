@@ -4,9 +4,9 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-20 — Close the remaining PR #402 maintenance-command guard gaps
 
-- Stateful MCP protection now follows the reviewed executor tracked at `HEAD`
-  instead of mutable worktree existence. File tools cannot relocate that
-  executor or edit repository ignore controls, and process-signal tools cannot
+- Stateful MCP protection is latched independently of mutable checkout or ref
+  state. File tools cannot relocate the reviewed executor or edit repository
+  ignore controls, and process-signal tools cannot
   trigger a trap assembled across earlier interactive inputs.
 - The shared shell-safety classifier now treats `awk`, `gawk`, `mawk`, and
   `nawk` programs as opaque launchers while the protected maintenance producer
@@ -127,15 +127,22 @@ All significant development milestones, in reverse chronological order.
   points have an actual-process timing regression. Content writers
   (PowerShell content cmdlets, in-place editors, truncation, and redirects) use
   the same path check. Every exact allowlisted launch independently hashes the
-  worktree file as a Git blob and requires it to match `HEAD` before execution;
+  worktree file as a Git blob and requires it to match exact `HEAD` before
+  execution. On a feature branch, execution additionally requires the fresh,
+  exact-head independent Sol review proof used by the production gate;
   that final binding also covers a writer whose target is fully dynamic and
   therefore cannot be resolved safely from command text alone. File-backed
-  interpreter entry points are bound the same way while protection is active:
-  ignored, external, untracked, or worktree-divergent wrappers are denied before
+  interpreter entry points are bound to that same exact-head proof while
+  protection is active: ignored, external, untracked, worktree-divergent, or
+  unreviewed feature-branch wrappers are denied before
   they can spawn the producer as an uninspected child process. Bash and MCP
   regressions use a real ignored wrapper that would otherwise add a preload and
   launch the approved producer command, including Node's `--` option-terminator
-  form so it cannot skip inspection of the following script operand.
+  form so it cannot skip inspection of the following script operand. A dedicated
+  regression commits the malicious wrapper locally and proves that commit remains
+  denied without independent exact-SHA review. The already-reviewed proof
+  producer is the only bootstrap exception, and only while its blob still matches
+  protected `origin/main`.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

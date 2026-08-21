@@ -265,9 +265,12 @@ ok(!maintenanceProducerCommandMentioned(unrelatedScriptMutation), "a specific un
     const integrityPath = path.join(integrityRepo, ...integrityRelativePath.split("/"));
     const trackedWrapperRelative = "scripts/reviewed-wrapper.mjs";
     const trackedWrapperPath = path.join(integrityRepo, ...trackedWrapperRelative.split("/"));
+    const bootstrapRelative = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
+    const bootstrapPath = path.join(integrityRepo, ...bootstrapRelative.split("/"));
     const ignoredWrapperRelative = "output/ignored-wrapper.mjs";
     const ignoredWrapperPath = path.join(integrityRepo, ...ignoredWrapperRelative.split("/"));
     const ignoredMarkerPath = path.join(integrityRepo, "output", "wrapper-executed.txt");
+    const reviewedWrapperSource = "console.log('reviewed wrapper');\n";
     const wrapperSource = [
       'import { spawnSync } from "node:child_process";',
       'import { writeFileSync } from "node:fs";',
@@ -280,28 +283,41 @@ ok(!maintenanceProducerCommandMentioned(unrelatedScriptMutation), "a specific un
     mkdirSync(path.dirname(integrityPath), { recursive: true });
     mkdirSync(path.dirname(ignoredWrapperPath), { recursive: true });
     writeFileSync(integrityPath, "export const reviewed = true;\n");
-    writeFileSync(trackedWrapperPath, wrapperSource);
+    writeFileSync(trackedWrapperPath, reviewedWrapperSource);
+    writeFileSync(bootstrapPath, "console.log('review bootstrap');\n");
     writeFileSync(path.join(integrityRepo, ".gitignore"), "output/\n");
     for (const args of [
       ["init", "--quiet"],
       ["config", "user.email", "guard-test@example.invalid"],
       ["config", "user.name", "Guard Test"],
-      ["add", "--", integrityRelativePath, trackedWrapperRelative, ".gitignore"],
+      ["add", "--", integrityRelativePath, trackedWrapperRelative, bootstrapRelative, ".gitignore"],
       ["commit", "--quiet", "-m", "test fixture"],
+      ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ]) {
       const result = spawnSync("git", args, { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
       eq(result.status, 0, `producer integrity fixture command succeeds: git ${args[0]}`);
     }
     const integrityCommand = ["node", integrityRelativePath, "--verify"].join(" ");
-    eq(checkCommandDeep(integrityCommand, integrityRepo), null, "an exact producer launch is allowed when worktree bytes match HEAD");
-    eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo), null, "a reviewed file-backed executor is allowed when its bytes match HEAD");
-    eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), null, "a reviewed file-backed executor after -- is allowed when its bytes match HEAD");
+    eq(checkCommandDeep(integrityCommand, integrityRepo), null, "an exact producer launch is allowed when HEAD is the reviewed main commit and worktree bytes match");
+    eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo), null, "a reviewed file-backed executor is allowed when HEAD is the reviewed main commit");
+    eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), null, "a reviewed file-backed executor after -- is allowed on the reviewed main commit");
     writeFileSync(trackedWrapperPath, `${wrapperSource}// worktree divergence\n`);
     ok(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo), "a worktree-divergent file-backed executor is denied");
     ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), "a worktree-divergent file-backed executor after -- is denied");
     const divergentHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${trackedWrapperRelative}` } }, integrityRepo);
-    ok(divergentHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook HEAD-binds a worktree-divergent executor after --");
-    writeFileSync(trackedWrapperPath, wrapperSource);
+    ok(divergentHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook origin/main-binds a worktree-divergent executor after --");
+    for (const args of [
+      ["add", "--", trackedWrapperRelative],
+      ["commit", "--quiet", "-m", "unreviewed malicious wrapper"],
+    ]) {
+      const result = spawnSync("git", args, { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
+      eq(result.status, 0, `local-only malicious wrapper commit succeeds for the regression: git ${args[0]}`);
+    }
+    ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), "a local commit does not make a malicious wrapper independently reviewed");
+    const localCommitHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${trackedWrapperRelative}` } }, integrityRepo);
+    ok(localCommitHookResult.stdout.includes("fresh exact-SHA independent review proof"), "the Bash hook denies a locally committed wrapper without independent review proof");
+    eq(checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo), null, "the reviewed byte-identical proof producer remains available to bootstrap feature-branch review");
+    writeFileSync(trackedWrapperPath, reviewedWrapperSource);
     writeFileSync(ignoredWrapperPath, wrapperSource);
     ok(checkCommandDeep(`node ${ignoredWrapperRelative}`, integrityRepo), "an ignored file-backed executor that spawns the producer is denied");
     ok(checkCommandDeep(`node -- ${ignoredWrapperRelative}`, integrityRepo), "an ignored file-backed executor after -- is denied");
@@ -316,7 +332,7 @@ ok(!maintenanceProducerCommandMentioned(unrelatedScriptMutation), "a specific un
     const externalHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${JSON.stringify(externalExecutorPath)}` } }, integrityRepo);
     ok(externalHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denies an external executor after --");
     writeFileSync(integrityPath, "export const reviewed = false;\n");
-    ok(checkCommandDeep(integrityCommand, integrityRepo), "an exact producer launch is denied when worktree bytes differ from HEAD");
+    ok(checkCommandDeep(integrityCommand, integrityRepo), "an exact producer launch is denied when worktree bytes differ from exact HEAD");
   } finally {
     rmSync(integrityRepo, { recursive: true, force: true });
     rmSync(externalExecutorDir, { recursive: true, force: true });
