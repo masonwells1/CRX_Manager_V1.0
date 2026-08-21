@@ -53,6 +53,10 @@ migration safety harness; no app source, migration SQL, live database, or produc
   replacing, altering, or dropping the enabled routine behind a captured event trigger also fails
   closed against its exact schema/name/OID/body-hash identity, including routines under
   `extensions`.
+- Routine catalog changes now propagate from executable dynamic SQL and invoked helper bodies, not
+  only from the migration's outer text. A migration cannot dynamically replace a captured enabled
+  event-trigger routine and then fire it with DDL; unparseable nested routine DDL is unresolved and
+  fails closed.
 - Persistent sequence changes are no longer classified as read-only. Executable `nextval(...)` and
   `setval(...)` calls plus `ALTER SEQUENCE ... RESTART`, identity-column restarts, and
   `TRUNCATE ... RESTART IDENTITY` fail closed; stored defaults, views, and uninvoked routine bodies
@@ -167,7 +171,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
 
 Focused proof: snapshot producer 23 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
-286 assertions; apply-time guard 327 assertions; approved-set validator 205 mutation cases;
+288 assertions; apply-time guard 328 assertions; approved-set validator 205 mutation cases;
 one-shot override writer 25 assertions.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.

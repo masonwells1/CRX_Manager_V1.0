@@ -843,7 +843,10 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       // rather than waving the migration through.
       submitted = { targets: new Set(), dynamicWrites: [], unresolved: true, searchPathChange: true };
     }
-    const routineCatalog = routineIdentityChanges(migQuery);
+    // applyTimeWriteTargets recursively includes routine DDL executed from
+    // dynamic SQL literals and invoked helper bodies. Falling back preserves
+    // fail-closed behavior if an older/failed analyzer result reaches here.
+    const routineCatalog = submitted.routineCatalog || routineIdentityChanges(migQuery);
     const changedEventRoutines = fanoutEvidence.allEnabledEventTriggers.filter((trigger) =>
       routineCatalog.changes.some((change) =>
         change.name === trigger.routine_name &&

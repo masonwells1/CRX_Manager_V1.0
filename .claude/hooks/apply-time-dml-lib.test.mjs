@@ -1313,6 +1313,30 @@ eq(T(null), [], "a null body does not throw");
     'round-50 MUTANT: routine names in metadata strings are not catalog changes');
 }
 
+// ----- ROUND 61: executable nested SQL preserves routine catalog mutations
+{
+  const dynamicReplacement = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round61_money_fix() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; END $$; ' +
+    'DO $do$ BEGIN EXECUTE \'CREATE OR REPLACE FUNCTION extensions.grant_pg_cron_access() ' +
+    'RETURNS event_trigger LANGUAGE plpgsql AS $fn$ BEGIN PERFORM public.round61_money_fix(); ' +
+    'END $fn$\'; END $do$; COMMENT ON TABLE public.orders IS \'fires\';',
+  );
+  ok(dynamicReplacement.routineCatalog.changes.some((change) =>
+    change.schema === 'extensions' && change.name === 'grant_pg_cron_access'),
+  'round-61: dynamic SQL exposes the captured event-trigger routine identity it replaces');
+
+  const invokedInstaller = applyTimeWriteTargets(
+    'CREATE PROCEDURE public.round61_install() LANGUAGE plpgsql AS $outer$ BEGIN ' +
+    'CREATE OR REPLACE FUNCTION extensions.grant_pg_cron_access() RETURNS event_trigger ' +
+    'LANGUAGE plpgsql AS $inner$ BEGIN NULL; END $inner$; END $outer$; ' +
+    'CALL public.round61_install();',
+  );
+  ok(invokedInstaller.routineCatalog.changes.some((change) =>
+    change.schema === 'extensions' && change.name === 'grant_pg_cron_access'),
+  'round-61: routine DDL inside an invoked installer remains an apply-time catalog change');
+}
+
 // ---------------- ROUND 51: persistent sequence mutations
 {
   const cases = [

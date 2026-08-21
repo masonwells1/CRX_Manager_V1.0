@@ -1594,6 +1594,19 @@ export function applyTimeWriteTargets(
   const { code, literals, routines, unsupportedDoBody } = applyTimeCode(sql || "");
   const top = targetsFromCode(code, literals);
   if (unsupportedDoBody) top.unresolved = true;
+  const routineCatalogChanges = new Map();
+  let routineCatalogUnparsed = false;
+  const recordRoutineCatalog = (sourceCode) => {
+    const catalog = routineIdentityChanges(sourceCode);
+    if (catalog.unparsed) {
+      routineCatalogUnparsed = true;
+      top.unresolved = true;
+    }
+    for (const change of catalog.changes) {
+      routineCatalogChanges.set(`${change.schema}\0${change.name}`, change);
+    }
+  };
+  recordRoutineCatalog(code);
 
   // ROUND 25. A name maps to a LIST of bodies, not one. PostgreSQL allows any
   // number of routines to share a name and differ only by argument types, and a
@@ -1718,6 +1731,7 @@ export function applyTimeWriteTargets(
       if (inner.searchPathChange) top.searchPathChange = true;
       if (inner.unsupportedRoutineIdentity) top.unsupportedRoutineIdentity = true;
       if (parsed.unsupportedDoBody) top.unresolved = true;
+      recordRoutineCatalog(parsed.code);
       defineRoutines(parsed.routines);
       defineOperators(operatorDefinitions(parsed.code));
       defineCasts(castDefinitions(parsed.code));
@@ -1850,6 +1864,10 @@ export function applyTimeWriteTargets(
         // if a default can call code, the invocation is unresolved rather than
         // silently treating the deferred header expression as inert.
         if (r.unresolved || r.callableDefault) top.unresolved = true;
+        // Creating/replacing/altering/dropping a routine from an invoked body
+        // mutates the catalog at apply time. Preserve the identity so callers
+        // can compare it with captured enabled event-trigger routines.
+        recordRoutineCatalog(r.code);
         // Defaults live in the routine header, not its body, but omitted
         // arguments evaluate them at invocation time. Feed that executable
         // expression through the same routine/operator/cast/view dispatch
@@ -1913,6 +1931,10 @@ export function applyTimeWriteTargets(
     sequenceMutation: top.sequenceMutation,
     searchPathChange: top.searchPathChange,
     unsupportedRoutineIdentity: top.unsupportedRoutineIdentity,
+    routineCatalog: {
+      changes: [...routineCatalogChanges.values()],
+      unparsed: routineCatalogUnparsed,
+    },
     unknownCalls,
     definedRoutines: [...byName.keys()],
     invokedRoutines: [...seen],

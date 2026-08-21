@@ -2031,6 +2031,16 @@ function armAutopilot(stateDir, hoursFromNow) {
         r.stdout.includes("extensions.grant_pg_cron_access") && r.stdout.includes("OID 16547"),
       `round-50: ${verb.toUpperCase()} of a captured enabled event-trigger routine is identity-bound and refused`);
     }
+    r = apply("20990601000061_dynamic_event_routine_replace",
+      "CREATE FUNCTION public.tmp_dynamic_event_money_fix() RETURNS void LANGUAGE plpgsql AS $$ BEGIN " +
+      "UPDATE public.orders SET total_profit = total_profit; END $$; " +
+      "DO $do$ BEGIN EXECUTE 'CREATE OR REPLACE FUNCTION extensions.grant_pg_cron_access() " +
+      "RETURNS event_trigger LANGUAGE plpgsql AS $fn$ BEGIN PERFORM " +
+      "public.tmp_dynamic_event_money_fix(); END $fn$'; END $do$; " +
+      "COMMENT ON TABLE public.orders IS 'fires';");
+    ok(isDeny(r) && r.stdout.includes("enabled PostgreSQL event-trigger routine") &&
+      r.stdout.includes("extensions.grant_pg_cron_access") && r.stdout.includes("OID 16547"),
+    "round-61: dynamic replacement of a captured event-trigger routine is identity-bound and refused");
     r = apply("20990601000050_unrelated_extension_routine",
       "CREATE OR REPLACE FUNCTION extensions.unrelated_metadata_helper() RETURNS void " +
       "LANGUAGE plpgsql AS $$ BEGIN NULL; END $$;");
