@@ -108,6 +108,31 @@ if (pushUsesConfigEnv(cmd)) {
 const projectDir = path.resolve(
   payload?.cwd || payload?.tool_input?.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd(),
 );
+
+// A Git Bash `-C` spelling is refused here, BEFORE the first repository lookup
+// of any kind — earlier than the per-push checks below, and deliberately earlier
+// than the inherited-GIT_CONFIG* proof, which resolves the same `-C` value and
+// would otherwise deny FIRST with `could not read C:\c\… spawnSync git ENOENT`:
+// the exact misleading message this change exists to retire. That is not an
+// exotic environment — Claude Code on the web sets GIT_CONFIG_* to install a
+// credential-proxy rewrite, so the whole fix would have looked inert in a web
+// session while the focused tests passed, because they scrub those variables
+// (Codex P2, PR #445 round 8).
+//
+// Refused UNCONDITIONALLY, and never resolved: relying on `C:\c\repo` not
+// existing would be an accident, not a guarantee — if a checkout does live
+// there, Git Bash converts and pushes from `C:\repo` while this guard reads
+// branch, remotes, diff and proof from the other one, an innocuous checkout
+// authorizing a risky push from the real one. That is the same fail-open the
+// abandoned translation kept producing (Codex P1, round 5). EVERY slash-rooted
+// spelling counts, not just `/c/…`: MSYS maps `/tmp` and `/usr` elsewhere, and
+// unlike `C:\c\…` those literals are ordinary writable directories, so nothing
+// makes them fail loudly (Codex P1, round 7).
+for (const segment of shellSegments(cmd).map((text) => text.trim()).filter((text) => isGitPush(text))) {
+  if (!pushNamesMsysPath(segment)) continue;
+  deny(`CODEX GATE: this push names the repository with a Git Bash path (\`-C /…\`), which this guard does not accept. What a slash-rooted path means depends on which shell runs the command and on MSYS conversion settings the guard cannot read: Git Bash maps \`/c/repo\` to \`C:/repo\`, \`/tmp\` into your Windows temp folder and \`/usr\` inside the Git installation, while PowerShell, cmd, and this guard all read the literal \`${gitPushCwd(segment, projectDir)}\`. Since those can be two different checkouts, resolving it either way risks inspecting a different repository than the push touches — so it is refused, not guessed at. Re-run naming the repository with a drive letter and FORWARD slashes: \`git -C C:/CRX_Manager push origin <branch>\`. That one spelling means the same thing in Git Bash, PowerShell and cmd alike. Do NOT work around this with a directory change, an inline PATH=, or an environment variable — those forms are separately denied, by design.`);
+}
+
 function gitIn(args, cwd, { keepConfigOverrides = false } = {}) {
   const env = { ...process.env };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
@@ -665,20 +690,14 @@ for (const pushCmd of pushCommands) {
   }
 
   const pushRepoDir = gitPushCwd(pushCmd, projectDir);
-  // Refused UNCONDITIONALLY, and deliberately BEFORE the existence check below.
-  // Relying on `C:\c\repo` not existing would be an accident, not a guarantee:
-  // if some checkout does live there, a Git Bash invocation converts and pushes
-  // from `C:\repo` while this guard reads branch, remotes, diff and proof from
-  // `C:\c\repo` — the innocuous one authorizing a risky push from the real one.
-  // That is the same fail-open the abandoned translation kept producing, so the
-  // shape is rejected outright rather than resolved (Codex P1, PR #445 round 5).
-  // EVERY slash-rooted spelling is refused, not just `/c/…`: MSYS maps `/tmp`
-  // and `/usr` somewhere else entirely, and unlike `C:\c\…` those literals are
-  // ordinary writable directories, so "it happens not to exist" protects
-  // nothing there (Codex P1, round 7).
-  if (pushNamesMsysPath(pushCmd)) {
-    deny(`CODEX GATE: this push names the repository with a Git Bash path (\`-C /…\`), which this guard does not accept. What a slash-rooted path means depends on which shell runs the command and on MSYS conversion settings the guard cannot read: Git Bash maps \`/c/repo\` to \`C:/repo\`, \`/tmp\` into your Windows temp folder and \`/usr\` inside the Git installation, while PowerShell, cmd, and this guard all read the literal \`${pushRepoDir}\`. Since those can be two different checkouts, resolving it either way risks inspecting a different repository than the push touches — so it is refused, not guessed at. Re-run naming the repository with a drive letter and FORWARD slashes: \`git -C C:/CRX_Manager push origin <branch>\`. That one spelling means the same thing in Git Bash, PowerShell and cmd alike. Do NOT work around this with a directory change, an inline PATH=, or an environment variable — those forms are separately denied, by design.`);
-  }
+  // The Git Bash `-C` refusal used to sit HERE, which reads as its natural home
+  // — one per-push check among the others. It now runs at the TOP of this file
+  // instead, above every repository lookup, because at this point the
+  // inherited-GIT_CONFIG* proof has already run a git lookup on the same
+  // misresolved directory and denied with the old misleading message (Codex P2,
+  // round 8). It is not duplicated here: the hoisted loop filters `cmd` with the
+  // same `shellSegments`/`isGitPush` pair that builds `pushCommands`, so it has
+  // already seen this exact segment and a copy could only drift out of step.
   // A directory that does not exist is a DIAGNOSABLE condition, and separating
   // it out is the whole point: node reports a missing cwd and a missing
   // executable with the same `spawnSync git ENOENT` text, so the generic denial

@@ -41,6 +41,16 @@ next agent. Two sessions read it that way.
   the same fail-open the translation kept producing, arriving by a different route (Codex P1, round
   5). A test asserts the "does not exist" diagnostic is **absent** from that denial, which is what
   proves the refusal ran before the filesystem was ever consulted.
+- **That refusal runs above every repository lookup in the file** (Codex P2, round 8). Placed among
+  the per-push checks, it was reached *after* the inherited-`GIT_CONFIG*` proof — which resolves the
+  same `-C` value and runs a git lookup in it, so a Git Bash push denied with `could not read
+  C:\c\… spawnSync git ENOENT`, the exact message this entry retires. Claude Code on the web sets
+  `GIT_CONFIG_*` to install a credential-proxy rewrite, so that is the ordinary web/mobile session,
+  not an exotic one — and every focused test scrubbed those variables, so the fix looked complete
+  while being inert where it was most needed. The check is not duplicated at the old site: the
+  hoisted loop filters `cmd` with the same `shellSegments`/`isGitPush` pair that builds
+  `pushCommands`, so a second copy could only drift. The Codex-side guard was checked for the same
+  ordering hazard and is already correct — its first push-derived lookup follows its refusal.
 - **Every slash-rooted `-C` is refused, not only the `/c/…` drive form** (Codex P1, round 7). MSYS
   maps its whole mount table, and the non-drive entries diverge *further* from what these guards
   resolve — measured on this machine: `/tmp/x` reaches git as `C:\Users\<user>\AppData\Local\Temp\x`

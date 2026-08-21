@@ -2431,6 +2431,24 @@ assert.equal(pushNamesMsysPath("git -C /c/repo push origin main", "linux"), fals
         assert.match(nonDrivePush.reason, /Git Bash path/, `…for the spelling (${nonDrive}), not for the missing directory`);
         assert.doesNotMatch(nonDrivePush.reason, /does not exist, or is not a directory/, `…still before any existence check (${nonDrive})`);
       }
+      // …and before the inherited-GIT_CONFIG* proof, not merely before the
+      // existence check. That proof resolves the SAME `-C` value and runs a git
+      // lookup in it, so with the refusal placed among the per-push checks it
+      // denied first with `could not read C:\c\… spawnSync git ENOENT` — the
+      // exact message this change exists to retire. Claude Code on the web sets
+      // GIT_CONFIG_* to install a credential-proxy rewrite, so that is the
+      // ordinary web/mobile session, and every other test here scrubs those
+      // variables and would never have noticed (Codex P2, PR #445 round 8).
+      const proxyEnv = {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "url.https://github.com/.insteadOf",
+        GIT_CONFIG_VALUE_0: "git@github.com:",
+      };
+      const msysUnderProxy = runHook(`git -C ${msysWork} push origin main:refs/heads/feature`, proxyEnv);
+      assert.equal(msysUnderProxy.decision, "deny", "an MSYS -C path still fails closed under a credential proxy");
+      assert.match(msysUnderProxy.reason, /Git Bash path/, "…and says so, instead of blaming GIT_CONFIG* or git");
+      assert.doesNotMatch(msysUnderProxy.reason, /spawnSync/, "…never the raw spawn error again");
+      assert.doesNotMatch(msysUnderProxy.reason, /GIT_CONFIG\* variables set/, "…nor the inherited-override diagnostic, which fired first before the hoist");
     }
 
     // Fail-closed with a usable message for any unreadable repository. Spelled
