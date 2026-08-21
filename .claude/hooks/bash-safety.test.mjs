@@ -302,6 +302,10 @@ for (const command of [
     const reviewedPythonPath = path.join(integrityRepo, ...reviewedPythonRelative.split("/"));
     const childRunnerRelative = "scripts/reviewed-child-runner.mjs";
     const childRunnerPath = path.join(integrityRepo, ...childRunnerRelative.split("/"));
+    const builtinEscapeRelative = "scripts/reviewed-builtin-escape.mjs";
+    const builtinEscapePath = path.join(integrityRepo, ...builtinEscapeRelative.split("/"));
+    const commentLoaderRelative = "scripts/reviewed-comment-loader.mjs";
+    const commentLoaderPath = path.join(integrityRepo, ...commentLoaderRelative.split("/"));
     const trackedDirectRelative = "scripts/reviewed-direct.bat";
     const trackedDirectPath = path.join(integrityRepo, ...trackedDirectRelative.split("/"));
     const bootstrapRelative = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
@@ -328,6 +332,8 @@ for (const command of [
     writeFileSync(importedHelperPath, 'export const reviewed = true;\n');
     writeFileSync(reviewedPythonPath, 'print("reviewed python")\n');
     writeFileSync(childRunnerPath, 'import { spawnSync } from "node:child_process";\nspawnSync("npx", ["vitest", "run"]);\n');
+    writeFileSync(builtinEscapePath, 'process.getBuiltinModule("node:child_process");\n');
+    writeFileSync(commentLoaderPath, 'import /* loader gap */ ("../output/ignored-wrapper.mjs");\n');
     writeFileSync(trackedDirectPath, "@echo reviewed direct wrapper\n");
     writeFileSync(bootstrapPath, "console.log('review bootstrap');\n");
     const packageManifest = ["package", "json"].join(".");
@@ -341,7 +347,7 @@ for (const command of [
       ["init", "--quiet"],
       ["config", "user.email", "guard-test@example.invalid"],
       ["config", "user.name", "Guard Test"],
-      ["add", "--", integrityRelativePath, trackedWrapperRelative, importingWrapperRelative, importedHelperRelative, reviewedPythonRelative, childRunnerRelative, trackedDirectRelative, bootstrapRelative, packageManifest, ".gitignore"],
+      ["add", "--", integrityRelativePath, trackedWrapperRelative, importingWrapperRelative, importedHelperRelative, reviewedPythonRelative, childRunnerRelative, builtinEscapeRelative, commentLoaderRelative, trackedDirectRelative, bootstrapRelative, packageManifest, ".gitignore"],
       ["commit", "--quiet", "-m", "test fixture"],
       ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ]) {
@@ -368,7 +374,7 @@ for (const command of [
     const pathGitShimPath = writeGitShim(injectedGitShimDir, pathGitShimMarker);
     const originalPath = process.env.PATH;
     process.env.PATH = `${injectedGitShimDir}${path.delimiter}${originalPath || ""}`;
-    eq(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions), null, "executor provenance uses fixed Git even with local and PATH shims present");
+    eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "executor provenance uses fixed Git even with local and PATH shims present");
     if (originalPath === undefined) delete process.env.PATH;
     else process.env.PATH = originalPath;
     ok(!existsSync(localGitShimMarker), "repository-local Git shim never executes during provenance inspection");
@@ -380,7 +386,9 @@ for (const command of [
     eq(checkCommandDeep(integrityCommand, integrityRepo, reviewOptions), null, "an exact producer launch is allowed when HEAD is the reviewed main commit and worktree bytes match");
     eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor is allowed when HEAD is the reviewed main commit");
     eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor after -- is allowed on the reviewed main commit");
-    eq(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions), null, "a directly executed tracked script is allowed when exact HEAD is reviewed");
+    ok(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions)?.includes("not auditable JavaScript"), "a non-JavaScript wrapper is denied even when tracked because it can launch a mutable child runtime");
+    ok(checkCommandDeep(`node ${builtinEscapeRelative}`, integrityRepo, reviewOptions)?.includes("dynamic code or native-process escape"), "process.getBuiltinModule cannot bypass reviewed runtime closure");
+    ok(checkCommandDeep(`node ${commentLoaderRelative}`, integrityRepo, reviewOptions)?.includes("ignored or untracked code"), "comment-separated dynamic imports cannot bypass reviewed runtime closure");
     eq(checkCommandDeep(`node ${importingWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed importer is allowed while its tracked dependency tree exactly matches HEAD");
     writeFileSync(importedHelperPath, 'throw new Error("hostile imported helper executed");\n');
     ok(
@@ -399,6 +407,15 @@ for (const command of [
       const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
       ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies npm startup configuration injection: " + command);
     }
+    const priorNodeOptions = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = "--require=output/ignored-wrapper.mjs";
+    ok(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions)?.includes("inherited NODE_OPTIONS"), "an indirect tracked wrapper cannot inherit a Node preload");
+    if (priorNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = priorNodeOptions;
+    const indirectPreloadCommand = `NODE_OPTIONS=--require=output/ignored-wrapper.mjs ${trackedDirectRelative.replaceAll("/", "\\")}`;
+    ok(checkCommandDeep(indirectPreloadCommand, integrityRepo, reviewOptions)?.includes("runtime preload/search-path mutation"), "a command-local Node preload cannot hide behind a tracked wrapper");
+    const indirectPreloadHookResult = runHook({ tool_name: "Bash", tool_input: { command: indirectPreloadCommand } }, integrityRepo);
+    ok(indirectPreloadHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies a command-local preload behind an indirect wrapper");
     const alternateHome = path.join(integrityRepo, "output", "alternate-home");
     const alternateHomeMarker = path.join(integrityRepo, "output", "alternate-home-shell-executed.txt");
     mkdirSync(alternateHome, { recursive: true });
@@ -420,7 +437,7 @@ for (const command of [
     writeFileSync(path.join(integrityRepo, "output", "sitecustomize.py"), 'raise RuntimeError("sitecustomize executed")\n');
     ok(checkCommandDeep(`PYTHONPATH=output python ${reviewedPythonRelative}`, integrityRepo, reviewOptions)?.includes("runtime preload/search-path mutation"), "PYTHONPATH cannot preload an unreviewed sitecustomize module");
     ok(checkCommandDeep(`python ${reviewedPythonRelative}`, integrityRepo, reviewOptions)?.includes("non-isolated Python startup"), "reviewed Python scripts require isolated startup");
-    eq(checkCommandDeep(`python -I -S ${reviewedPythonRelative}`, integrityRepo, reviewOptions), null, "an exact-HEAD Python script is allowed with isolated startup flags");
+    ok(checkCommandDeep(`python -I -S ${reviewedPythonRelative}`, integrityRepo, reviewOptions)?.includes("not auditable JavaScript"), "an isolated Python script remains denied because its child-runtime closure is not statically auditable");
     const pythonHookResult = runHook({ tool_name: "Bash", tool_input: { command: `PYTHONPATH=output python ${reviewedPythonRelative}` } }, integrityRepo);
     ok(pythonHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies Python sitecustomize preloading");
     const ignoredPackageMarker = path.join(integrityRepo, "output", "ignored-package-executed.txt");
@@ -429,7 +446,7 @@ for (const command of [
     const childRunnerHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node ${childRunnerRelative}` } }, integrityRepo);
     ok(childRunnerHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies a reviewed script that can spawn ignored package code");
     ok(!existsSync(ignoredPackageMarker), "the denied reviewed child runner never executes the ignored package shim");
-    ok(checkCommandDeep("npm run build", integrityRepo, reviewOptions)?.includes("mutable local package executable"), "a mutable ignored package shim is denied even when manifests are reviewed");
+    ok(checkCommandDeep("npm run build", integrityRepo, reviewOptions), "a mutable ignored package shim is denied even when manifests are reviewed");
     eq(checkCommandDeep("npm test", integrityRepo, reviewOptions), null, "an exact-HEAD npm lifecycle alias is allowed only after its package manifest and pre/post scripts are reviewed");
     writeFileSync(path.join(integrityRepo, packageManifest), JSON.stringify({ scripts: { test: "node output/ignored-wrapper.mjs" } }));
     ok(checkCommandDeep("npm test", integrityRepo, reviewOptions)?.includes("exact HEAD"), "a modified npm lifecycle script is denied before execution");
@@ -461,6 +478,8 @@ for (const command of [
     for (const [key, value, expected] of [
       ["core.fsmonitor", hostileFsmonitor, "core.fsmonitor"],
       ["diff.external", hostileFsmonitor, "diff.external"],
+      ["filter.review.process", hostileFsmonitor, "filter clean, smudge, or process"],
+      ["core.attributesfile", hostileFsmonitor, "core.attributesfile"],
     ]) {
       eq(runIntegrityGit(["config", key, value]).status, 0, `hostile local ${key} fixture is installed`);
       ok(
@@ -469,6 +488,13 @@ for (const command of [
       );
       eq(runIntegrityGit(["config", "--unset-all", key]).status, 0, `hostile local ${key} fixture is removed`);
     }
+    const infoAttributesResult = runIntegrityGit(["rev-parse", "--git-path", "info/attributes"]);
+    eq(infoAttributesResult.status, 0, "Git info attributes path resolves");
+    const infoAttributesPath = path.resolve(integrityRepo, infoAttributesResult.stdout.trim());
+    mkdirSync(path.dirname(infoAttributesPath), { recursive: true });
+    writeFileSync(infoAttributesPath, "* filter=review\n");
+    ok(checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions)?.includes("info/attributes"), "the bootstrap denies unreviewed repository-local attribute overrides");
+    rmSync(infoAttributesPath, { force: true });
     const hostileGlobalHome = path.join(integrityRepo, "output", "hostile-git-home");
     mkdirSync(hostileGlobalHome, { recursive: true });
     writeFileSync(path.join(hostileGlobalHome, ".gitconfig"), `[core]\n\tfsmonitor = ${hostileFsmonitor.replaceAll("\\", "/")}\n`);

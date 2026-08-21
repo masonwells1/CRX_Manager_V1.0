@@ -10,7 +10,7 @@
 // table — this is a pure extraction, plus one net-new pattern (shell-redirect writes
 // to .env, explicitly called for by the audit) and the npm-script-indirection helpers.
 
-import { readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, realpathSync, lstatSync, readlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { builtinModules } from "node:module";
@@ -85,6 +85,35 @@ function bootstrapGitSafetyReason(root, gitExecutable, gitEnv) {
   const externalDiff = readConfig("diff.external");
   if (externalDiff.error || ![0, 1].includes(externalDiff.status)) return "effective Git diff.external configuration could not be verified";
   if (externalDiff.status === 0 && String(externalDiff.stdout || "").trim()) return "effective Git diff.external can execute code before review";
+  const executableFilters = spawnSync(
+    gitExecutable,
+    ["-C", root, "--no-replace-objects", "config", "--local", "--includes", "--get-regexp", "^filter\\..*\\.(clean|smudge|process)$"],
+    { encoding: "utf8", windowsHide: true, timeout: 5_000, env: configInspectionEnv },
+  );
+  if (executableFilters.error || ![0, 1].includes(executableFilters.status)) return "effective Git executable filters could not be verified";
+  if (executableFilters.status === 0 && String(executableFilters.stdout || "").trim()) return "effective Git filter clean, smudge, or process configuration can execute code before review";
+  const attributesFile = spawnSync(
+    gitExecutable,
+    ["-C", root, "--no-replace-objects", "config", "--local", "--includes", "--get-all", "core.attributesfile"],
+    { encoding: "utf8", windowsHide: true, timeout: 5_000, env: configInspectionEnv },
+  );
+  if (attributesFile.error || ![0, 1].includes(attributesFile.status)) return "effective Git attributes override could not be verified";
+  if (attributesFile.status === 0 && String(attributesFile.stdout || "").trim()) return "effective Git core.attributesfile can activate unreviewed filters before review";
+  const gitInfoAttributes = spawnSync(
+    gitExecutable,
+    ["-C", root, "--no-replace-objects", "rev-parse", "--git-path", "info/attributes"],
+    { encoding: "utf8", windowsHide: true, timeout: 5_000, env: gitEnv },
+  );
+  if (gitInfoAttributes.error || gitInfoAttributes.status !== 0) return "Git info attributes path could not be verified";
+  const rawInfoAttributesPath = String(gitInfoAttributes.stdout || "").trim();
+  const infoAttributesPath = path.isAbsolute(rawInfoAttributesPath) ? rawInfoAttributesPath : path.resolve(root, rawInfoAttributesPath);
+  if (infoAttributesPath && existsSync(infoAttributesPath)) {
+    try {
+      if (readFileSync(infoAttributesPath, "utf8").trim()) return "unreviewed Git info/attributes can activate executable filters before review";
+    } catch {
+      return "Git info/attributes could not be verified inert";
+    }
+  }
   const replacements = spawnSync(
     gitExecutable,
     ["-C", root, "--no-replace-objects", "for-each-ref", "--format=%(refname)", "refs/replace"],
@@ -148,7 +177,9 @@ function runtimeExecutionSegments(command) {
 function runtimePreloadControlReason(command) {
   const segments = runtimeExecutionSegments(command);
   const runtimeNames = new Set(["node", "nodejs", "bun", "npm", "npx", "pnpm", "yarn", "corepack", "python", "python2", "python3", "py"]);
-  if (!segments.some((segment) => runtimeNames.has(segment.executable))) return null;
+  const indirectRuntimeHosts = new Set(["pwsh", "powershell", "bash", "sh", "dash", "zsh", "ksh", "cmd", "cscript", "wscript"]);
+  const pathBackedWrapper = commandInspectionViews(command).some((text) => /(?:^|[\s;&|])(?:["']?[^\s;&|"']+["']?)\.(?:ps1|bat|cmd|sh|py|js|mjs|cjs)\b/i.test(text));
+  if (!segments.some((segment) => runtimeNames.has(segment.executable) || indirectRuntimeHosts.has(segment.executable)) && !pathBackedWrapper) return null;
   const inherited = Object.keys(process.env).find((name) => DANGEROUS_RUNTIME_ENV_NAME_RE.test(name));
   if (inherited) return `Blocked runtime preload/search-path control because inherited ${inherited} is present.`;
   const names = "(?:NODE_OPTIONS|NPM_CONFIG_(?:USERCONFIG|GLOBALCONFIG|NODE_OPTIONS|SCRIPT_SHELL)|PYTHON(?:PATH|HOME|STARTUP|USERBASE|INSPECT)|HOME|USERPROFILE|XDG_CONFIG_HOME|COMSPEC|SHELL)";
@@ -325,6 +356,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
   gitEnv.GIT_TERMINAL_PROMPT = "0";
   gitEnv.GCM_INTERACTIVE = "never";
   gitEnv.GIT_OPTIONAL_LOCKS = "0";
+  gitEnv.GIT_ATTR_NOSYSTEM = "1";
   let initialized = false;
   let root = "";
   let headSha = "";
@@ -424,29 +456,60 @@ function createReviewedExecutorInspector(cwd, options = {}) {
   const verifyTrackedTreeExact = () => {
     if (trackedTreeChecked) return trackedTreeError;
     trackedTreeChecked = true;
-    const sharedArgs = [
-      "-C", root, "--no-replace-objects",
-      "-c", "core.autocrlf=true",
-      "-c", "core.fsmonitor=false",
-      "-c", "diff.external=",
-    ];
-    for (const args of [
-      [...sharedArgs, "diff-files", "--quiet", "--no-ext-diff", "--ignore-submodules=all", "--"],
-      [...sharedArgs, "diff-index", "--cached", "--quiet", "--no-ext-diff", "--ignore-submodules=all", headSha, "--"],
-    ]) {
-      const result = spawnSync(gitExecutable, args, {
-        encoding: "utf8",
-        windowsHide: true,
-        timeout: 5_000,
-        env: gitEnv,
-      });
-      if (result.error || ![0, 1].includes(result.status)) {
-        trackedTreeError = "the complete tracked dependency tree could not be verified";
-        break;
+    const indexResult = spawnSync(
+      gitExecutable,
+      ["-C", root, "--no-replace-objects", "ls-files", "--stage", "-z"],
+      { windowsHide: true, timeout: 5_000, env: gitEnv, maxBuffer: 16 * 1024 * 1024 },
+    );
+    if (indexResult.error || indexResult.status !== 0 || !Buffer.isBuffer(indexResult.stdout)) {
+      trackedTreeError = "the exact index could not be verified without worktree filters";
+      return trackedTreeError;
+    }
+    const indexEntries = new Map();
+    for (const record of indexResult.stdout.toString("utf8").split("\0").filter(Boolean)) {
+      const match = /^(\d+)\s+([a-f0-9]{40})\s+(\d)\t([\s\S]+)$/i.exec(record);
+      if (!match || match[3] !== "0") {
+        trackedTreeError = "the index contains an unparseable or conflicted entry";
+        return trackedTreeError;
       }
-      if (result.status === 1) {
-        trackedTreeError = "the tracked dependency tree or index differs from exact HEAD";
-        break;
+      const key = process.platform === "win32" ? match[4].toLowerCase() : match[4];
+      if (indexEntries.has(key)) {
+        trackedTreeError = "the index contains duplicate path identities";
+        return trackedTreeError;
+      }
+      indexEntries.set(key, { mode: match[1], blob: match[2].toLowerCase(), repoPath: match[4] });
+    }
+    if (indexEntries.size !== headEntries.size) {
+      trackedTreeError = "the index path set differs from exact HEAD";
+      return trackedTreeError;
+    }
+    for (const [key, expectedBlob] of headEntries) {
+      const entry = indexEntries.get(key);
+      if (!entry || entry.blob !== expectedBlob) {
+        trackedTreeError = "the index differs from exact HEAD";
+        return trackedTreeError;
+      }
+      const diskPath = path.join(root, ...entry.repoPath.split("/"));
+      let diskBytes;
+      try {
+        const stat = lstatSync(diskPath);
+        if (entry.mode === "120000") {
+          if (!stat.isSymbolicLink()) throw new Error("symlink mode mismatch");
+          diskBytes = Buffer.from(readlinkSync(diskPath), "utf8");
+        } else {
+          if (!stat.isFile()) throw new Error("tracked path is not a regular file");
+          diskBytes = readFileSync(diskPath);
+        }
+      } catch {
+        trackedTreeError = "the tracked worktree file set is missing or has a mode mismatch";
+        return trackedTreeError;
+      }
+      const rawHash = gitBlobHash(diskBytes);
+      const normalizedBytes = Buffer.from(diskBytes.toString("latin1").replace(/\r\n/g, "\n"), "latin1");
+      const normalizedHash = gitBlobHash(normalizedBytes);
+      if (rawHash !== expectedBlob && normalizedHash !== expectedBlob) {
+        trackedTreeError = "the tracked dependency tree worktree bytes differ from exact HEAD";
+        return trackedTreeError;
       }
     }
     return trackedTreeError;
@@ -454,7 +517,10 @@ function createReviewedExecutorInspector(cwd, options = {}) {
 
   const reviewedRuntimeClosureReason = (entryRepoPath) => {
     const extension = path.posix.extname(entryRepoPath).toLowerCase();
-    if (![".js", ".mjs", ".cjs"].includes(extension)) return null;
+    if ([".json", ".toml", ".yaml", ".yml"].includes(extension)) return null;
+    if (![".js", ".mjs", ".cjs"].includes(extension)) {
+      return `the reviewed runtime entry ${entryRepoPath} is not auditable JavaScript and could launch an unreviewed child runtime`;
+    }
     const safeBuiltins = new Set(builtinModules.map((name) => name.replace(/^node:/, "").split("/")[0]));
     const unsafeBuiltins = new Set(["child_process", "cluster", "module", "vm", "worker_threads"]);
     const queued = [entryRepoPath];
@@ -470,7 +536,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       } catch {
         return `the reviewed runtime dependency ${repoPath} is unreadable`;
       }
-      if (/\b(?:eval|Function)\s*\(|\bprocess\.(?:binding|_linkedBinding|dlopen)\s*\(|\b(?:Bun\.spawn|Deno\.Command)\b/.test(source)) {
+      if (/\b(?:eval|Function)\s*\(|\bprocess\.(?:binding|_linkedBinding|dlopen)\s*\(|\b(?:Bun\.spawn|Deno\.Command)\b|\b(?:getBuiltinModule|mainModule|createRequire)\b/.test(source)) {
         return `the reviewed runtime dependency ${repoPath} contains a dynamic code or native-process escape`;
       }
       const specifiers = [];
@@ -480,7 +546,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       ]) {
         for (const match of source.matchAll(pattern)) specifiers.push(match[1]);
       }
-      for (const match of source.matchAll(/\b(import|require)\s*\(\s*([^\r\n)]*)\)/g)) {
+      for (const match of source.matchAll(/\b(import|require)(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*\((?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*([^\r\n)]*)\)/g)) {
         const argument = match[2].trim();
         const literal = /^(?:["'])([^"']+)(?:["'])$/.exec(argument);
         if (!literal) return `the reviewed runtime dependency ${repoPath} contains a dynamic module loader`;

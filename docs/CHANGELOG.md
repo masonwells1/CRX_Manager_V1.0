@@ -43,6 +43,14 @@ All significant development milestones, in reverse chronological order.
   extra arguments. Node startup routes such as test reporters, environment
   files, snapshot blobs, and snapshot-build configuration cannot load ignored
   code before the reviewed proof producer.
+- Bootstrap tree verification now compares the exact index and worktree bytes
+  directly, without invoking Git's worktree conversion/filter pipeline. It
+  rejects executable clean/smudge/process filters, external attribute files,
+  and repository-local `info/attributes` before review. Non-JavaScript tracked
+  wrappers fail closed because they can launch child runtimes outside the
+  JavaScript closure audit; indirect wrapper commands also inherit the runtime
+  preload/search-path deny rules. Dynamic builtin access and comment-separated
+  module loaders are pinned by Bash and MCP regressions.
 
 ## 2026-08-20 — Close the remaining PR #402 maintenance-command guard gaps
 

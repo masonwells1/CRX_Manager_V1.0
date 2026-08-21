@@ -207,6 +207,12 @@ overrides. Git cannot use those settings to dispatch an ignored wrapper.
 The exact-review bootstrap itself has a one-command grammar: repository-relative
 `node` plus the proof producer path, with no runtime options or extra arguments.
 This prevents Node startup loaders from executing ignored code before review.
+Its complete-tree comparison reads index metadata and worktree bytes directly;
+it never invokes Git's clean/smudge/process pipeline. Effective executable
+filters and unreviewed attribute overrides fail closed first. Tracked PowerShell,
+batch, shell, and other non-JavaScript wrappers remain denied because their
+child-runtime closure cannot be proven; preload controls apply to indirect
+wrapper commands as well as literal Node/npm/Python commands.
 The provenance check also applies when a path-backed script or binary is the
 command itself rather than an interpreter operand. Direct `.bat`, `.cmd`,
 `.ps1`, shebang/executable paths, and nested shell dispatches must be tracked,
