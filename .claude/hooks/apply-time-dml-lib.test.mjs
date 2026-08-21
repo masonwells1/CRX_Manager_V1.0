@@ -628,6 +628,40 @@ eq(T(null), [], "a null body does not throw");
     "round-59 MUTANT: defining an escape-string routine without invoking it remains deferred");
 }
 
+// ---- ROUND 60: string mode and parameter defaults cannot confuse body trust
+{
+  const escapedPlain = applyTimeWriteTargets(
+    "SET standard_conforming_strings = off; " +
+    "CREATE FUNCTION public.round60_plain() RETURNS void LANGUAGE plpgsql AS " +
+    "'BEGIN UPD\\101TE public.order_items SET total_price = total_price; END'; " +
+    "SELECT public.round60_plain();",
+  );
+  ok(escapedPlain.unresolved,
+    "round-60: disabling standard strings makes an invoked plain-quoted body fail closed");
+
+  const escapedDefinitionOnly = applyTimeWriteTargets(
+    "SET LOCAL standard_conforming_strings TO 'off'; " +
+    "CREATE FUNCTION public.round60_deferred() RETURNS void LANGUAGE plpgsql AS " +
+    "'BEGIN UPD\\101TE public.order_items SET total_price = total_price; END';",
+  );
+  ok(!escapedDefinitionOnly.unresolved,
+    "round-60 MUTANT: the same plain-quoted body remains deferred until invocation");
+
+  for (const [label, defaultSql] of [
+    ["escape-string", "E'plain'"],
+    ["dollar-quoted", "$q$plain$q$"],
+  ]) {
+    const name = `round60_${label.replace('-', '_')}`;
+    const result = applyTimeWriteTargets(
+      `CREATE FUNCTION public.${name}(p text DEFAULT ${defaultSql}) RETURNS void LANGUAGE plpgsql AS $$ ` +
+      "BEGIN UPDATE public.orders SET total_profit = total_profit; END $$; " +
+      `SELECT public.${name}();`,
+    );
+    ok(result.targets.has("orders.total_profit") && !result.unresolved,
+      `round-60: a ${label} parameter default is not misclassified as the routine body`);
+  }
+}
+
 // ------------------------------------- ROUND 33: rules and quoted routines
 {
   const quoted = applyTimeWriteTargets(

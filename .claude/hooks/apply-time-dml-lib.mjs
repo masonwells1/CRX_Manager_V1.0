@@ -53,6 +53,10 @@ const IDENT_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
 // two legal body syntaxes from drifting apart.
 const ROUTINE_CREATE_HEAD = /^create\s+(?:or\s+replace\s+)?(?:function|procedure)\b/;
 const ROUTINE_NAME_CAPTURE = /\b(?:function|procedure)\s+((?:[A-Za-z0-9_]+\s*\.\s*)*[A-Za-z0-9_]+)/;
+const DOLLAR_ROUTINE_BODY_HEAD = /\bas\s*$/;
+const QUOTED_ROUTINE_BODY_HEAD = /\bas\s*(?:e|u&)?$/;
+const DISABLES_STANDARD_CONFORMING_STRINGS =
+  /\bset\s+(?:(?:local|session)\s+)?standard_conforming_strings\s*(?:=|to)\s*(?:off|false|0|''(?=\s|;|$))/i;
 
 function routineParameterDefaults(statement) {
   const named = ROUTINE_NAME_CAPTURE.exec(statement);
@@ -261,7 +265,20 @@ export function applyTimeCode(sql, depth = 0) {
         // body does not. Anything else unrecognized is treated as running now,
         // which is the over-reporting direction.
         const stmt = code.slice(stmtStart).trim().toLowerCase();
-        const deferred = ROUTINE_CREATE_HEAD.test(stmt);
+        // A CREATE head alone is not enough: parameter defaults can themselves
+        // be dollar-quoted strings. Only the literal introduced by the
+        // routine's AS clause is its stored body.
+        const routineHead = ROUTINE_CREATE_HEAD.test(stmt);
+        const deferred = routineHead && DOLLAR_ROUTINE_BODY_HEAD.test(stmt);
+        if (routineHead && !deferred) {
+          // This is a dollar-quoted value inside the signature or another
+          // pre-body clause, not executable SQL. Keep a literal placeholder so
+          // the surrounding default expression remains structurally intact.
+          literals.push(body);
+          code += "''";
+          i = close === -1 ? n : close + tag.length;
+          continue;
+        }
         const inner = applyTimeCode(body, depth + 1);
         if (deferred) {
           // Keep a placeholder so the statement still parses, and contribute no
@@ -352,7 +369,10 @@ export function applyTimeCode(sql, depth = 0) {
         code += "''";
         continue;
       }
-      if (ROUTINE_CREATE_HEAD.test(head)) {
+      // E'...' and U&'...' parameter defaults also appear beneath a CREATE
+      // head. Require the body's AS introducer so a harmless default cannot
+      // leave a second, falsely opaque definition under the routine's name.
+      if (ROUTINE_CREATE_HEAD.test(head) && QUOTED_ROUTINE_BODY_HEAD.test(head)) {
         const named = ROUTINE_NAME_CAPTURE.exec(head);
         const identity = canonicalRoutineIdentity(named?.[1]);
         if (identity) {
@@ -366,6 +386,7 @@ export function applyTimeCode(sql, depth = 0) {
             // their stored body is safe only while deferred; invocation must
             // fail closed rather than trust the raw literal bytes.
             unresolved: unsafeRoutineLiteral || inner.unsupportedDoBody,
+            plainQuotedBody: !unsafeRoutineLiteral,
             callableDefault: routineHasCallableParameterDefault(head),
             defaultCode: routineParameterDefaults(head).map((expression) => `SELECT ${expression}`).join(";\n"),
           });
@@ -404,6 +425,17 @@ export function applyTimeCode(sql, depth = 0) {
 
     code += ch;
     i += 1;
+  }
+
+  // PostgreSQL can reinterpret backslashes in an otherwise plain '...'
+  // routine body after this session setting is disabled. We do not attempt to
+  // decode that alternate grammar: keep definitions deferred, but make any
+  // same-migration invocation opaque. Quoted setting values become '' in the
+  // sanitized stream, so they are conservatively included as well.
+  if (DISABLES_STANDARD_CONFORMING_STRINGS.test(code)) {
+    for (const routine of routines) {
+      if (routine.plainQuotedBody) routine.unresolved = true;
+    }
   }
 
   return { code, literals, routines, unsupportedDoBody };

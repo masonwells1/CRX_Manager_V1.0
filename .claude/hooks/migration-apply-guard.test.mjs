@@ -1026,6 +1026,16 @@ function armAutopilot(stateDir, hoursFromNow) {
         r = apply(`20990601${String(56 + idx++).padStart(6, "0")}_r59`, sql);
         ok(isDeny(r) && isOneShotDeny(r), `round-59: ${label} → denied`);
       }
+
+      r = apply(
+        "20990601000059_r60_standard_strings_off",
+        "SET standard_conforming_strings = off; " +
+        "CREATE FUNCTION public.tmp_plain_escape_fix() RETURNS void LANGUAGE plpgsql AS " +
+        "'BEGIN UPD\\101TE public.orders SET total_profit = total_profit; END'; " +
+        "SELECT public.tmp_plain_escape_fix();",
+      );
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-60: disabled standard strings cannot hide an invoked plain-body replay");
     }
 
     // …while the ordinary shape stays free. Every RPC migration in this
