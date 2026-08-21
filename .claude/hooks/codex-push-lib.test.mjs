@@ -13,6 +13,9 @@ import {
   contentIsRisky,
   gitPushCwd,
   msysPathToWindows,
+  msysArgConversionNamesInEnvironment,
+  commandNamesMsysArgConversion,
+  pushNamesMsysPath,
   gitSubcommandIsDynamic,
   mainPushIsForced,
   mainPushSource,
@@ -2321,6 +2324,35 @@ if (process.platform === "win32") {
   );
 }
 
+// ── MSYS argument conversion can be switched OFF (Codex P1, PR #445) ────────
+// Reproduced against real git: `MSYS2_ARG_CONV_EXCL='*' git -C /c/CRX_Manager
+// rev-parse` fails with "cannot change to '/c/CRX_Manager'", while the same
+// command without it resolves to C:/CRX_Manager. With conversion off, git reads
+// the path literally as `C:\c\repo` while this library translates to `C:\repo`
+// — two different checkouts, which is the fail-open a destination gate must
+// never have. The names are refused, not interpreted.
+assert.deepEqual(msysArgConversionNamesInEnvironment({}), [], "a clean environment names none");
+assert.deepEqual(msysArgConversionNamesInEnvironment({ MSYS2_ARG_CONV_EXCL: "*" }), ["MSYS2_ARG_CONV_EXCL"], "the MSYS2 exclusion list is detected");
+assert.deepEqual(msysArgConversionNamesInEnvironment({ MSYS_NO_PATHCONV: "1" }), ["MSYS_NO_PATHCONV"], "the Git-for-Windows spelling is detected");
+// Present-but-empty still counts: an empty exclusion list is a value MSYS reads.
+assert.deepEqual(msysArgConversionNamesInEnvironment({ MSYS_ARG_CONV_EXCL: "" }), ["MSYS_ARG_CONV_EXCL"], "an empty value is still set");
+assert.deepEqual(msysArgConversionNamesInEnvironment({ PATH: "/usr/bin" }), [], "unrelated variables are ignored");
+
+assert.deepEqual(commandNamesMsysArgConversion("MSYS2_ARG_CONV_EXCL='*' git -C /c/r push origin main"), ["MSYS2_ARG_CONV_EXCL"], "an inline assignment is caught");
+assert.deepEqual(commandNamesMsysArgConversion("export MSYS_NO_PATHCONV=1; git -C /c/r push origin main"), ["MSYS_NO_PATHCONV"], "…and one set in an earlier segment");
+assert.deepEqual(commandNamesMsysArgConversion("git -C /c/r push origin main"), [], "an ordinary push names none");
+// Name-boundary check: a longer identifier that merely CONTAINS the name is not it.
+assert.deepEqual(commandNamesMsysArgConversion("MY_MSYS_NO_PATHCONV_SETTING=1 git push"), [], "a longer identifier is not a match");
+
+if (process.platform === "win32") {
+  assert.equal(pushNamesMsysPath("git -C /c/repo push origin main"), true, "a drive-letter path depends on conversion");
+  assert.equal(pushNamesMsysPath("git -C '/c/repo' push origin main"), true, "…quoted too");
+  assert.equal(pushNamesMsysPath("git -C C:/repo push origin main"), false, "a Windows path does not");
+  assert.equal(pushNamesMsysPath("git -C /usr/repo push origin main"), false, "an untranslated mount path does not");
+  assert.equal(pushNamesMsysPath("git push origin main"), false, "a push with no -C does not");
+}
+assert.equal(pushNamesMsysPath("git -C /c/repo push origin main", "linux"), false, "off Windows nothing is translated, so nothing depends on conversion");
+
 // ── full-hook end-to-end: an MSYS -C path must not be denied ────────────────
 {
   const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "codex-push-guard.mjs");
@@ -2329,11 +2361,11 @@ if (process.platform === "win32") {
   const dest = path.join(tmp, "dest.git");
   const git = (args, cwd) => spawnSync("git", args, { cwd, encoding: "utf8", env: scratchHookEnvironment(cwd, process.env) });
 
-  const runHook = (command) => {
+  const runHook = (command, extraEnv = {}) => {
     const res = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({ cwd: work, tool_input: { command } }),
       encoding: "utf8",
-      env: scratchHookEnvironment(work, process.env),
+      env: { ...scratchHookEnvironment(work, process.env), ...extraEnv },
     });
     assert.equal(res.status, 0, `guard exited ${res.status}: ${res.stderr}`);
     const out = (res.stdout || "").trim();
@@ -2384,10 +2416,27 @@ if (process.platform === "win32") {
       assert.match(untranslatable.reason, /git -C C:\/CRX_Manager push origin/, "…and the recovery command uses forward slashes");
       assert.doesNotMatch(untranslatable.reason, /git -C C:\\/, "…never the backslash form Git Bash would eat");
 
-      // And a genuinely risky main-bound push spelled the MSYS way is still
-      // gated: translating the path must not become a way past the proof gate.
+      // A main-bound push to a NON-app repo with no risky diff stays allowed —
+      // the translation must not turn ordinary work into a refusal either.
       const mainPush = runHook(`git -C ${msysWork} push origin main`);
       assert.equal(mainPush.decision, "allow", "a non-app-repo main push is allowed (no risky diff, not the app repo)");
+
+      // Switching MSYS conversion OFF makes `/c/…` mean `C:\c\…` to git while
+      // this guard reads `C:\…`. It cannot prove which repository the push will
+      // touch, so it refuses rather than guessing (Codex P1, PR #445).
+      for (const [name, value] of [["MSYS2_ARG_CONV_EXCL", "*"], ["MSYS_NO_PATHCONV", "1"]]) {
+        const off = runHook(`git -C ${msysWork} push origin main:refs/heads/feature`, { [name]: value });
+        assert.equal(off.decision, "deny", `${name} in the environment must fail closed`);
+        assert.match(off.reason, new RegExp(name), "…and the denial names the variable");
+      }
+      // Same setting reached via the command text rather than the environment.
+      const offInline = runHook(`MSYS2_ARG_CONV_EXCL='*' git -C ${msysWork} push origin main:refs/heads/feature`);
+      assert.equal(offInline.decision, "deny", "an inline conversion override fails closed too");
+      // …but the setting is IRRELEVANT to a push that names a Windows path, and
+      // must not block it: scoping this check is what keeps it from becoming a
+      // blanket refusal triggered by an unrelated shell setting.
+      const windowsPathUnaffected = runHook(`git -C ${work} push origin main:refs/heads/feature`, { MSYS2_ARG_CONV_EXCL: "*" });
+      assert.equal(windowsPathUnaffected.decision, "allow", "a Windows -C path does not depend on MSYS conversion");
     }
 
     // Platform-independent, so Linux CI covers it too: a path that EXISTS but is
@@ -2399,6 +2448,40 @@ if (process.platform === "win32") {
     assert.equal(notADirectory.decision, "deny", "a file named as the repository fails closed");
     assert.match(notADirectory.reason, /cannot resolve to a real directory/, "…with the tailored diagnostic, not the generic one");
     assert.doesNotMatch(notADirectory.reason, /spawnSync/, "…and never the raw spawn error");
+
+    // ── the translation must not become a way PAST the proof gate ───────────
+    // The allow-cases above all use a non-app repo, so on their own they prove
+    // only that ordinary pushes still work — not that a risky one is still
+    // gated when it arrives by the translated path (CodeRabbit, PR #445).
+    // This fixture is the app repo (guarded remote URL) with a risky diff
+    // (`supabase/migrations/…`) and no Codex proof, so it MUST be denied.
+    const appWork = path.join(tmp, "app");
+    mkdirSync(path.join(appWork, "supabase", "migrations"), { recursive: true });
+    git(["init", "-q", "-b", "main"], appWork);
+    git(["config", "user.email", "test@example.com"], appWork);
+    git(["config", "user.name", "test"], appWork);
+    writeFileSync(path.join(appWork, "seed.txt"), "seed\n");
+    git(["add", "--", "."], appWork);
+    assert.equal(git(["commit", "-qm", "seed"], appWork).status, 0, "app fixture seed commit");
+    // `origin/main` is created directly so the guard's `origin/main...HEAD`
+    // diff resolves with no network, while `origin` still points at the
+    // guarded app URL that makes this repository the real thing.
+    const appBase = git(["rev-parse", "HEAD"], appWork).stdout.trim();
+    git(["update-ref", "refs/remotes/origin/main", appBase], appWork);
+    git(["remote", "add", "origin", CRX_URL], appWork);
+    writeFileSync(path.join(appWork, "supabase", "migrations", "20260101000000_risky.sql"), "-- risky\n");
+    git(["add", "--", "."], appWork);
+    assert.equal(git(["commit", "-qm", "risky migration"], appWork).status, 0, "app fixture risky commit");
+
+    const riskyNative = runHook(`git -C ${appWork} push origin main`);
+    assert.equal(riskyNative.decision, "deny", "control: a risky app-repo main push is gated");
+
+    if (process.platform === "win32") {
+      const appMsys = `/${appWork[0].toLowerCase()}${appWork.slice(2).replace(/\\/g, "/")}`;
+      const riskyMsys = runHook(`git -C ${appMsys} push origin main`);
+      assert.equal(riskyMsys.decision, "deny", "…and is STILL gated when it arrives by the translated MSYS path");
+      assert.equal(riskyMsys.reason, riskyNative.reason, "…for the same reason — the translation changed nothing but the spelling");
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

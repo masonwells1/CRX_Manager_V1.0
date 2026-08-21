@@ -18,6 +18,9 @@ import {
   contentIsRisky,
   eachPush,
   gitPushCwd,
+  msysArgConversionNamesInEnvironment,
+  commandNamesMsysArgConversion,
+  pushNamesMsysPath,
   gitSubcommandIsDynamic,
   isGitPush,
   pushUsesExecPathOption,
@@ -664,6 +667,22 @@ for (const pushCmd of pushCommands) {
   }
 
   const pushRepoDir = gitPushCwd(pushCmd, projectDir);
+  // Checked BEFORE the directory test below, because these settings decide what
+  // the resolved directory even MEANS. If MSYS argument conversion is switched
+  // off, git reads `/c/repo` literally as `C:\c\repo` while this guard read
+  // `C:\repo` — two different checkouts, and the innocuous one's remotes and
+  // diff would authorize a push from the other. Refused rather than
+  // interpreted; scoped to pushes that actually name such a path, so an
+  // unrelated shell setting cannot block ordinary work (Codex P1, PR #445).
+  if (pushNamesMsysPath(pushCmd)) {
+    const conversionControls = [...new Set([
+      ...msysArgConversionNamesInEnvironment(process.env),
+      ...commandNamesMsysArgConversion(cmd),
+    ])];
+    if (conversionControls.length > 0) {
+      deny(`CODEX GATE: this push names a Git Bash path (\`-C /c/…\`) while MSYS argument-conversion controls are set (${conversionControls.join(", ")}). Those switch off the conversion that decides whether \`/c/repo\` means \`C:/repo\` or the literal \`C:/c/repo\`, so this guard cannot prove it inspected the repository git will actually push from — and inspecting the wrong repository is how an unreviewed push reaches production. Unset them, or name the repository with a Windows path: \`git -C C:/CRX_Manager push origin <branch>\`.`);
+    }
+  }
   // A directory that does not exist is a DIAGNOSABLE condition, and separating
   // it out is the whole point: node reports a missing cwd and a missing
   // executable with the same `spawnSync git ENOENT` text, so the generic denial

@@ -61,12 +61,18 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // push. The risky-path anchor this transform verifies (line 410 of the lib,
   // the apply-live-testdata producer path) is untouched and still present
   // exactly once; the transform remains identity, so input == output.
+  // pushLib re-pinned again 2026-08-21 (PR #445 review round, Codex P1): the
+  // MSYS path translation above is now refused outright when Git Bash's
+  // argument-conversion controls are set, because those decide whether
+  // `/c/repo` means `C:/repo` or the literal `C:/c/repo` — a guard that reads a
+  // different repository than the push touches would be a fail-OPEN. Same
+  // risky-path anchor, still present exactly once, transform still identity.
   codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
-  pushLib: "2045ab3b62075c2099ab7c55b79ae4e5d390c100",
+  pushLib: "b14b00a42325d772c808111104c726901b386c0f",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
-  pushLib: "2045ab3b62075c2099ab7c55b79ae4e5d390c100",
+  pushLib: "b14b00a42325d772c808111104c726901b386c0f",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

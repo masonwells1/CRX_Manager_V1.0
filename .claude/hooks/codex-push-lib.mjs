@@ -196,6 +196,55 @@ export function msysPathToWindows(value, platform = process.platform) {
   return `${match[1].toUpperCase()}:\\${rest}`;
 }
 
+// MSYS argument conversion is the mechanism that makes `git -C /c/repo` mean
+// `C:\repo`, and msysPathToWindows above mirrors it so the guard reads the
+// directory git will actually use. Git Bash lets that conversion be switched
+// OFF — `MSYS2_ARG_CONV_EXCL`, `MSYS_ARG_CONV_EXCL`, `MSYS_NO_PATHCONV` — and
+// then git receives `/c/repo` LITERALLY and resolves it as a rooted path on the
+// current drive, i.e. `C:\c\repo`. The guard's translation and git's behaviour
+// would disagree, and a guard that inspects a DIFFERENT repository than the
+// push touches is the one failure shape a destination gate must never have.
+//
+// Reproduced 2026-08-21 (Codex P1 on PR #445):
+//   MSYS2_ARG_CONV_EXCL='*' git -C /c/CRX_Manager rev-parse --show-toplevel
+//     → fatal: cannot change to '/c/CRX_Manager': No such file or directory
+//   git -C /c/CRX_Manager rev-parse --show-toplevel
+//     → C:/CRX_Manager
+//
+// Deciding what an exclusion list does to one specific argument would mean
+// reimplementing MSYS's matcher, so the names are REFUSED rather than
+// interpreted — but only when the push actually names a path the translation
+// would change, so an unrelated shell setting cannot block ordinary pushes.
+export const MSYS_ARG_CONVERSION_ENV = [
+  "MSYS2_ARG_CONV_EXCL",
+  "MSYS_ARG_CONV_EXCL",
+  "MSYS2_ENV_CONV_EXCL",
+  "MSYS_NO_PATHCONV",
+];
+
+export function msysArgConversionNamesInEnvironment(env = process.env) {
+  return MSYS_ARG_CONVERSION_ENV.filter((name) => Object.prototype.hasOwnProperty.call(env || {}, name));
+}
+
+export function commandNamesMsysArgConversion(cmd) {
+  const text = String(cmd || "");
+  return MSYS_ARG_CONVERSION_ENV.filter((name) => new RegExp(`(?:^|[^A-Za-z0-9_])${name}(?![A-Za-z0-9_])`, "i").test(text));
+}
+
+// Does this push name a `-C` path whose meaning DEPENDS on MSYS conversion?
+// Only those pushes are sensitive to the settings above.
+export function pushNamesMsysPath(cmd, platform = process.platform) {
+  if (platform !== "win32") return false;
+  const prefix = String(cmd || "").match(GIT_PUSH_PREFIX_RE)?.[1] || "";
+  const optionRe = new RegExp(`(?:^|\\s)-C\\s+(${GIT_ARG})`, "g");
+  let match;
+  while ((match = optionRe.exec(prefix)) !== null) {
+    const raw = unquoteShellArg(match[1]);
+    if (msysPathToWindows(raw, platform) !== raw) return true;
+  }
+  return false;
+}
+
 // Resolve the repository directory selected by one or more `git -C` options.
 // Git applies repeated -C values from left to right, so preserve that behavior.
 export function gitPushCwd(cmd, fallbackCwd) {

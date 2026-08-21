@@ -57,6 +57,21 @@ entry exists to retire. It now requires `statSync(...).isDirectory()`. A third f
 Markdown table row in `agent-guardrails.md` — is real but **pre-existing on `main`** (7 pipes before
 this change and 7 after, verified against `origin/main`), so it is not fixed here.
 
+**Second review round (PR #445) — a real fail-open in the fix itself.** Codex raised a P1 that the
+translation can be silently wrong: Git Bash lets MSYS argument conversion be switched **off**
+(`MSYS2_ARG_CONV_EXCL`, `MSYS_ARG_CONV_EXCL`, `MSYS_NO_PATHCONV`), and then git receives `/c/repo`
+literally and resolves it as `C:\c\repo` while this guard translated it to `C:\repo`. Two different
+checkouts — the innocuous one's remotes and diff would authorize a push from the other. **Reproduced
+against real git** before fixing: `MSYS2_ARG_CONV_EXCL='*' git -C /c/CRX_Manager rev-parse` fails
+with `cannot change to '/c/CRX_Manager'`, while the same command without it resolves normally. The
+guard now **refuses** rather than interprets when any of those names appear — in its own environment
+or anywhere in the command text — because deciding what an exclusion list does to one argument would
+mean reimplementing MSYS's matcher. The check is scoped to pushes that actually name a path the
+translation would change, so an unrelated shell setting cannot block ordinary work. CodeRabbit
+separately noted the allow-cases all used a non-app repo; there is now a fixture with the guarded
+app remote and a risky `supabase/migrations/` diff asserting the translated path is **still** gated,
+for the identical reason as the native spelling.
+
 Tests: `.claude/hooks/codex-push-lib.test.mjs` (in `test:correction-guards`).
 
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
