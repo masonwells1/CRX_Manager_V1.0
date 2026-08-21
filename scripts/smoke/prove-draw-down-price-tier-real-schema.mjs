@@ -89,8 +89,16 @@ function runSmoke(file, tag) {
   const result = psql(`\\i /tmp/${tag}-${path.basename(file)}`, { allowFailure: true });
   return { status: result.status, output: `${result.stdout}\n${result.stderr}`.trim() };
 }
+function hasRollbackPass(output) {
+  return output
+    .split(/\r?\n/)
+    .some((line) => /^(?:psql:[^:\r\n]+:\d+:\s+)?ERROR:\s+SMOKE_PASS_ROLLBACK\b/.test(line));
+}
 
 try {
+  assert.equal(hasRollbackPass('NOTICE: SMOKE_PASS_ROLLBACK'), false, 'a notice must not satisfy the rollback pass marker');
+  assert.equal(hasRollbackPass('ERROR: SMOKE_FAIL: expected SMOKE_PASS_ROLLBACK'), false, 'a failure quoting the token must not satisfy the rollback pass marker');
+  assert.equal(hasRollbackPass('psql:/tmp/smoke.sql:42: ERROR:  SMOKE_PASS_ROLLBACK'), true, 'the anchored psql rollback error must satisfy the pass marker');
   for (const file of [candidate, liveHighWater, smokeFile, ...pricedProductSmokeFiles]) assert.ok(readFileSync(file, 'utf8').length > 0, `missing required artifact ${file}`);
   docker(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
   waitForDatabase();
@@ -205,9 +213,9 @@ try {
   // ---- Mutation test: the smoke must NOT pass before the candidate applies ----
   const before = runSmoke(smokeFile, 'before');
   console.log(`[prover] PRE-CANDIDATE smoke tail:\n${before.output.split('\n').slice(-6).join('\n')}`);
-  assert.doesNotMatch(
-    before.output,
-    /SMOKE_PASS_ROLLBACK/,
+  assert.equal(
+    hasRollbackPass(before.output),
+    false,
     `smoke reached SMOKE_PASS_ROLLBACK BEFORE the candidate applied — it does not actually prove the new guard:\n${before.output}`,
   );
   assert.match(
@@ -223,7 +231,7 @@ try {
   for (const file of pricedProductSmokeFiles) {
     const result = runSmoke(file, 'current-live');
     assert.notEqual(result.status, 0, `${path.basename(file)} unexpectedly committed instead of rolling back:\n${result.output}`);
-    assert.match(result.output, /SMOKE_PASS_ROLLBACK/, `${path.basename(file)} did not execute to SMOKE_PASS_ROLLBACK on the current live schema:\n${result.output}`);
+    assert.equal(hasRollbackPass(result.output), true, `${path.basename(file)} did not execute to SMOKE_PASS_ROLLBACK on the current live schema:\n${result.output}`);
     console.log(`[prover] CURRENT-LIVE PASS ${path.basename(file)}`);
   }
 
@@ -234,7 +242,7 @@ try {
 
   const after = runSmoke(smokeFile, 'after');
   assert.notEqual(after.status, 0, `smoke unexpectedly committed instead of rolling back:\n${after.output}`);
-  assert.match(after.output, /SMOKE_PASS_ROLLBACK/, `smoke did not execute to SMOKE_PASS_ROLLBACK after the candidate applied:\n${after.output}`);
+  assert.equal(hasRollbackPass(after.output), true, `smoke did not execute to SMOKE_PASS_ROLLBACK after the candidate applied:\n${after.output}`);
 
   console.log(`[prover] current-live source replay plus parked candidate reached ${path.basename(migrations.at(-1))}`);
 
