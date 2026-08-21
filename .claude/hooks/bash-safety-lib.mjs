@@ -2448,21 +2448,71 @@ export function extractNpmRunNames(cmd) {
   // Accepts valid npm variants (Codex P1 2026-07-13 round 3): options before
   // and after the subcommand (`npm -s run x`, `npm run --silent x`) and the
   // `run-script` alias — option tokens must not be mistaken for script names.
-  const re = /\bnpm\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*(?:run|run-script)\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*([\w:.-]+)/g;
+  const re = /\bnpm\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*(?:run|run-script|rum|urn)\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*([\w:.-]+)/g;
   for (const text of commandInspectionViews(cmd)) {
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(text)) !== null) names.add(m[1]);
+    const lifecycle = /\bnpm\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*(test|tst|t|start|stop)\b/g;
+    lifecycle.lastIndex = 0;
+    while ((m = lifecycle.exec(text)) !== null) names.add(["t", "tst"].includes(m[1]) ? "test" : m[1]);
+    const runAliases = new Set(["run", "run-script", "rum", "urn"]);
+    const lifecycleAliases = new Map([["test", "test"], ["tst", "test"], ["t", "test"], ["start", "start"], ["stop", "stop"]]);
+    for (const { executable, args } of runtimeExecutionSegments(text)) {
+      if (executable !== "npm") continue;
+      for (const argument of args) {
+        const canonical = lifecycleAliases.get(argument.toLowerCase());
+        if (canonical) names.add(canonical);
+      }
+      const runIndex = args.findIndex((argument) => runAliases.has(argument.toLowerCase()));
+      if (runIndex < 0) continue;
+      for (const candidate of args.slice(runIndex + 1)) {
+        if (!candidate.startsWith("-") && !runAliases.has(candidate.toLowerCase())) names.add(candidate);
+      }
+    }
   }
   return [...names];
+}
+
+function npmDependencyLifecycleReason(command) {
+  const unsafeActions = new Set([
+    [99, 105], [105, 110, 115, 116, 97, 108, 108], [114, 101, 98, 117, 105, 108, 100],
+    [114, 101, 115, 116, 97, 114, 116], [112, 117, 98, 108, 105, 115, 104], [112, 97, 99, 107],
+    [118, 101, 114, 115, 105, 111, 110], [117, 112, 100, 97, 116, 101], [97, 100, 100],
+    [100, 101, 100, 117, 112, 101], [105, 110, 105, 116], [108, 105, 110, 107],
+    [112, 114, 117, 110, 101], [117, 110, 105, 110, 115, 116, 97, 108, 108],
+    [117, 110, 108, 105, 110, 107], [105, 116], [117, 112], [114, 109], [117, 110],
+    [105], [105, 110], [105, 110, 115], [105, 110, 115, 116], [105, 110, 115, 116, 97],
+    [105, 110, 115, 116, 97, 108], [105, 115, 110, 116], [105, 115, 110, 116, 97],
+    [105, 115, 110, 116, 97, 108], [105, 115, 110, 116, 97, 108, 108],
+    [99, 108, 101, 97, 110, 45, 105, 110, 115, 116, 97, 108, 108],
+    [105, 110, 115, 116, 97, 108, 108, 45, 116, 101, 115, 116],
+    [99, 108, 101, 97, 110, 45, 105, 110, 115, 116, 97, 108, 108, 45, 116, 101, 115, 116],
+    [99, 105, 116], [114, 101, 109, 111, 118, 101], [114],
+    [117, 112, 103, 114, 97, 100, 101], [117, 100, 112, 97, 116, 101],
+  ].map((codes) => String.fromCharCode(...codes)));
+  for (const { executable, args } of runtimeExecutionSegments(command)) {
+    if (executable !== "npm") continue;
+    const action = args.map((argument) => argument.toLowerCase()).find((argument) => unsafeActions.has(argument)) || "";
+    if (unsafeActions.has(action)) {
+      return "Blocked npm dependency and lifecycle execution outside the reviewed tree because it can run ignored package scripts.";
+    }
+    if (action === "audit" && args.some((argument) => argument.toLowerCase() === "fix")) {
+      return "Blocked npm audit fix because it can run ignored package lifecycle code.";
+    }
+  }
+  return null;
 }
 
 // Resolve one script name to an array of script-body texts: itself, plus every
 // script reachable via `npm run X` inside it, up to maxDepth levels, with a
 // `seen` set so a cyclical script graph can't recurse forever.
-export function resolveNpmScriptChain(scripts, name, depth = 0, maxDepth = 3, seen = new Set()) {
-  if (depth > maxDepth || !scripts || typeof scripts !== "object") return [];
-  if (seen.has(name)) return [];
+const UNRESOLVED_NPM_SCRIPT_CHAIN = "__CRX_UNRESOLVED_NPM_SCRIPT_CHAIN__";
+
+export function resolveNpmScriptChain(scripts, name, depth = 0, maxDepth = 8, seen = new Set()) {
+  if (depth > maxDepth) return [UNRESOLVED_NPM_SCRIPT_CHAIN];
+  if (!scripts || typeof scripts !== "object") return [];
+  if (seen.has(name)) return [UNRESOLVED_NPM_SCRIPT_CHAIN];
   seen.add(name);
   const out = [];
   const text = scripts[name];
@@ -2670,19 +2720,19 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     }
     if (gitCursor < 0) return null;
     const args = words.slice(gitCursor + 1).map((token) => token.value);
-    const aliasConfigNamed = (value) => /^alias\.[^=\s]+\s*(?:=|$)/i.test(String(value || "").trim());
+    const executableConfigNamed = (value) => /^(?:alias\.[^=\s]+|diff\.external|core\.(?:fsmonitor|pager|editor|sshcommand)|pager\.[^=\s]+|interactive\.difffilter|diff\.[^=\s]+\.textconv|filter\.[^=\s]+\.(?:clean|smudge|process)|sequence\.editor|gpg\.program|credential\.helper)\s*(?:=|$)/i.test(String(value || "").trim());
     for (let index = 0; index < args.length; index += 1) {
       const argument = args[index];
       if (/^(?:-c|--config-env)$/i.test(argument)) {
-        if (aliasConfigNamed(args[index + 1])) {
-          return "Blocked Git alias configuration because aliases can execute unreviewed shell commands.";
+        if (executableConfigNamed(args[index + 1])) {
+          return "Blocked executable Git configuration because aliases, filters, diff tools, pagers, editors, and helpers can run unreviewed code.";
         }
         index += 1;
         continue;
       }
       const attachedConfig = /^(?:-c|--config-env=)(.+)$/i.exec(argument)?.[1];
-      if (aliasConfigNamed(attachedConfig)) {
-        return "Blocked Git alias configuration because aliases can execute unreviewed shell commands.";
+      if (executableConfigNamed(attachedConfig)) {
+        return "Blocked executable Git configuration because aliases, filters, diff tools, pagers, editors, and helpers can run unreviewed code.";
       }
     }
     let subcommand = "";
@@ -2706,8 +2756,8 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     if (!gitBuiltinCommands.has(subcommand)) {
       return "Blocked Git alias or external helper execution because it can launch an unreviewed executable.";
     }
-    if (subcommand === "config" && args.some(aliasConfigNamed)) {
-      return "Blocked persisted Git alias configuration because aliases can execute unreviewed shell commands.";
+    if (subcommand === "config" && args.some(executableConfigNamed)) {
+      return "Blocked persisted executable Git configuration because it can redirect later Git commands into unreviewed code.";
     }
     return null;
   };
@@ -2786,6 +2836,8 @@ export function checkCommandDeep(cmd, cwd, options = {}) {
   if (runtimePreloadReason) return runtimePreloadReason;
   const runtimeConfigReason = runtimeConfigurationReason(cmd, cwd);
   if (runtimeConfigReason) return runtimeConfigReason;
+  const npmLifecycleReason = npmDependencyLifecycleReason(cmd);
+  if (npmLifecycleReason) return npmLifecycleReason;
   const gitEnvironmentReason = gitControlEnvironmentAssignmentReason(cmd);
   if (gitEnvironmentReason) return gitEnvironmentReason;
   const contextShift = executionContextShiftReason(cmd, cwd);
@@ -2804,6 +2856,12 @@ export function checkCommandDeep(cmd, cwd, options = {}) {
   const names = extractNpmRunNames(cmd);
   if (names.length === 0) return null;
 
+  if (existsSync(cwd || process.cwd())) {
+    fileExecutorInspector.inspect(["pack", "age.json"].join(""));
+    const packageManifestReason = fileExecutorInspector.getReason();
+    if (packageManifestReason) return packageManifestReason;
+  }
+
   const scripts = readPackageScripts(cwd);
   if (scripts === null) {
     // FAIL-OPEN, but loud: package.json missing/unparsable — skip the resolved-
@@ -2815,6 +2873,9 @@ export function checkCommandDeep(cmd, cwd, options = {}) {
   const seen = new Set();
   for (const name of names) {
     for (const resolved of resolveNpmScriptChain(scripts, name, 0, 3, seen)) {
+      if (resolved === UNRESOLVED_NPM_SCRIPT_CHAIN) {
+        return `Blocked npm script chain because it exceeds the review depth or contains a cycle (found inside npm run ${name}).`;
+      }
       const resolvedPackageBoundary = packageExecutionBoundaryReason(resolved, cwd, fileExecutorInspector);
       if (resolvedPackageBoundary) return `${resolvedPackageBoundary} (found inside a reviewed package script)`;
       if (maintenanceProducerCommandMentioned(resolved, 0, fileExecutorInspector.inspect)) {

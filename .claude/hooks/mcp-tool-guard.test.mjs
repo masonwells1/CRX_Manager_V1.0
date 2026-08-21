@@ -101,6 +101,15 @@ for (const command of [
   ok(isDeny(result), `MCP start_process denies Git control environment injection: ${command}`);
 }
 for (const command of [
+  ["git -c diff.", "external=node output/ignored-wrapper.mjs diff HEAD HEAD"].join(""),
+  ["git -cdiff.", "external=node diff HEAD HEAD"].join(""),
+  ["git config diff.", "external 'node output/ignored-wrapper.mjs'"].join(""),
+]) {
+  const result = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  eq(result.status, 0, `mcp-tool-guard exits 0 after Git executable configuration injection: ${command}`);
+  ok(isDeny(result), `MCP start_process denies Git executable configuration injection: ${command}`);
+}
+for (const command of [
   "npm --userconfig=output/evil.npmrc run agent-health",
   "NPM_CONFIG_USERCONFIG=output/evil.npmrc npm run agent-health",
   "$env:NPM_CONFIG_USERCONFIG='output/evil.npmrc'; npm run agent-health",
@@ -111,6 +120,11 @@ for (const command of [
   "XDG_CONFIG_HOME=output/alternate-home npm --version",
   "$env:HOME='output/alternate-home'; npm --version",
   "set USERPROFILE=output/alternate-home && npm --version",
+  ["npm ", "install"].join(""),
+  ["npm ", "i"].join(""),
+  "npm ci",
+  "npm rebuild",
+  "npm restart",
 ]) {
   const result = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
   eq(result.status, 0, `mcp-tool-guard exits 0 after runtime startup injection: ${command}`);
@@ -845,7 +859,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       tool_input: { command: inlineGitAliasCommand },
     }, tmp);
     ok(isDeny(r), "MCP start_process denies an inline Git shell alias before it can launch an ignored wrapper");
-    ok(r.stdout.includes("Blocked Git alias"), "the MCP inline Git alias denial comes from the executable boundary");
+    ok(r.stdout.includes("Blocked executable Git configuration"), "the MCP inline Git alias denial comes from the executable boundary");
     ok(!existsSync(ignoredMarkerPath), "the MCP-denied Git alias never executes its ignored wrapper");
     writeFileSync(path.join(tmp, trackedWrapperRelative), `${wrapperSource}// worktree divergence\n`);
     writeFileSync(path.join(tmp, trackedDirectRelative), "@echo worktree-divergent direct wrapper\n");

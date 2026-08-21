@@ -31,6 +31,13 @@ All significant development milestones, in reverse chronological order.
   `XDG_CONFIG_HOME`, `COMSPEC`, or `SHELL`) is denied before package execution,
   including POSIX, PowerShell, CMD, `env`, and `command env` forms. Alternate
   ignored `.npmrc` regressions prove a redirected `script-shell` never runs.
+- Git executable configuration routes now fail closed for inline, attached, and
+  persisted aliases, external diffs, filters, text converters, pagers, editors,
+  credential helpers, and related process settings. npm `test`/`start`/`stop`
+  aliases bind the package manifest, pre/post scripts, and tracked tree to exact
+  HEAD; dependency lifecycle flows such as CI, install, rebuild, and restart are
+  denied because ignored package scripts are outside the reviewed tree. Cyclic
+  or over-depth npm script chains also fail closed.
 
 ## 2026-08-20 — Close the remaining PR #402 maintenance-command guard gaps
 

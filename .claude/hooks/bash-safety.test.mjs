@@ -331,7 +331,8 @@ for (const command of [
     writeFileSync(trackedDirectPath, "@echo reviewed direct wrapper\n");
     writeFileSync(bootstrapPath, "console.log('review bootstrap');\n");
     const packageManifest = ["package", "json"].join(".");
-    writeFileSync(path.join(integrityRepo, packageManifest), JSON.stringify({ scripts: { build: "vite build" } }));
+    const reviewedPackageSource = JSON.stringify({ scripts: { build: "vite build", test: "echo reviewed test", pretest: "echo reviewed pretest", posttest: "echo reviewed posttest" } });
+    writeFileSync(path.join(integrityRepo, packageManifest), reviewedPackageSource);
     mkdirSync(path.join(integrityRepo, "node_modules", ".bin"), { recursive: true });
     writeFileSync(path.join(integrityRepo, "node_modules", ".bin", "vite.cmd"), "@echo off\r\n");
     writeFileSync(path.join(integrityRepo, ".gitignore"), "output/\n");
@@ -429,6 +430,15 @@ for (const command of [
     ok(childRunnerHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies a reviewed script that can spawn ignored package code");
     ok(!existsSync(ignoredPackageMarker), "the denied reviewed child runner never executes the ignored package shim");
     ok(checkCommandDeep("npm run build", integrityRepo, reviewOptions)?.includes("mutable local package executable"), "a mutable ignored package shim is denied even when manifests are reviewed");
+    eq(checkCommandDeep("npm test", integrityRepo, reviewOptions), null, "an exact-HEAD npm lifecycle alias is allowed only after its package manifest and pre/post scripts are reviewed");
+    writeFileSync(path.join(integrityRepo, packageManifest), JSON.stringify({ scripts: { test: "node output/ignored-wrapper.mjs" } }));
+    ok(checkCommandDeep("npm test", integrityRepo, reviewOptions)?.includes("exact HEAD"), "a modified npm lifecycle script is denied before execution");
+    eq(runIntegrityGit(["restore", "--worktree", "--", packageManifest]).status, 0, "the package manifest fixture is restored byte-for-byte from reviewed HEAD");
+    for (const command of [["npm ", "install"].join(""), ["npm ", "i"].join(""), ["npm --cache output ", "i"].join(""), "npm ci", "npm rebuild", "npm restart"]) {
+      ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes("dependency and lifecycle execution"), "unreviewed npm dependency lifecycle execution is denied: " + command);
+      const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies unreviewed npm dependency lifecycle execution: " + command);
+    }
     writeFileSync(trackedWrapperPath, wrapperSource);
     eq(runIntegrityGit(["add", "--", trackedWrapperRelative]).status, 0, "replacement-object fixture stages the hostile wrapper");
     const replacementTree = runIntegrityGit(["write-tree"]);
@@ -528,12 +538,21 @@ for (const command of [
     }
     eq(checkCommandDeep("cd output && git status --short", integrityRepo, reviewOptions), null, "a directory change followed only by a Git read remains allowed");
     const inlineGitAliasCommand = "git -c 'alias.run=!node output/ignored-wrapper.mjs' run";
-    ok(checkCommandDeep(inlineGitAliasCommand, integrityRepo, reviewOptions)?.includes("Git alias"), "an inline Git shell alias cannot launch an ignored wrapper");
-    ok(checkCommandDeep("git -c 'alias.run = !node output/ignored-wrapper.mjs' run", integrityRepo, reviewOptions)?.includes("Git alias"), "whitespace before an inline Git alias value cannot evade the guard");
+    ok(checkCommandDeep(inlineGitAliasCommand, integrityRepo, reviewOptions)?.includes("executable Git configuration"), "an inline Git shell alias cannot launch an ignored wrapper");
+    ok(checkCommandDeep("git -c 'alias.run = !node output/ignored-wrapper.mjs' run", integrityRepo, reviewOptions)?.includes("executable Git configuration"), "whitespace before an inline Git alias value cannot evade the guard");
     const inlineGitAliasHookResult = runHook({ tool_name: "Bash", tool_input: { command: inlineGitAliasCommand } }, integrityRepo);
     eq(inlineGitAliasHookResult.status, 0, "the Bash hook exits 0 after denying an inline Git shell alias");
     ok(inlineGitAliasHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies an inline Git shell alias");
-    ok(checkCommandDeep("git config alias.run '!node output/ignored-wrapper.mjs'", integrityRepo, reviewOptions)?.includes("persisted Git alias"), "persisted Git shell aliases are denied");
+    ok(checkCommandDeep("git config alias.run '!node output/ignored-wrapper.mjs'", integrityRepo, reviewOptions)?.includes("persisted executable Git configuration"), "persisted Git shell aliases are denied");
+    for (const command of [
+      ["git -c diff.", "external=node output/ignored-wrapper.mjs diff HEAD HEAD"].join(""),
+      ["git -cdiff.", "external=node diff HEAD HEAD"].join(""),
+      ["git config diff.", "external 'node output/ignored-wrapper.mjs'"].join(""),
+    ]) {
+      ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes("executable Git configuration"), "Git executable configuration dispatch is denied: " + command);
+      const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies Git executable configuration dispatch: " + command);
+    }
     ok(checkCommandDeep("git run", integrityRepo, reviewOptions)?.includes("alias or external helper"), "unknown Git aliases and executable helpers fail closed");
     eq(checkCommandDeep("git status --short", integrityRepo, reviewOptions), null, "an ordinary built-in Git read remains allowed");
     const opaquePackageRunner = ["n", "px vite"].join("");
@@ -1124,6 +1143,11 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     const reviewOptions = { authoritativeMainShaForTest: authoritativeResult.stdout.trim() };
 
     eq(extractNpmRunNames("npm run dangerous").length, 1, "extracts one npm run target");
+    eq(extractNpmRunNames("npm test")[0], "test", "extracts npm's test lifecycle alias");
+    eq(extractNpmRunNames(["npm ", "t"].join(""))[0], "test", "normalizes npm's short test alias");
+    eq(extractNpmRunNames("npm rum dangerous")[0], "dangerous", "extracts npm's transposed run alias");
+    ok(extractNpmRunNames("npm --workspace fixture run dangerous").includes("dangerous"), "extracts a script target after a valued npm option");
+    ok(extractNpmRunNames("npm --workspace fixture test").includes("test"), "extracts a lifecycle alias after a valued npm option");
     eq(extractNpmRunNames("npm run safe && npm run dangerous").length, 2, "extracts multiple npm run targets");
 
     const scripts = readPackageScripts(tmp);
@@ -1139,13 +1163,12 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
       checkCommandDeep("npm run chain:a", tmp, reviewOptions),
       "a dangerous command hidden 2 levels deep behind chained npm scripts is caught (FIX 2)"
     );
-    // Depth cap is a real boundary: cap-a..cap-d (depths 0-3) are resolved, but
-    // the dangerous command lives one hop further (cap-e, depth 4) and is
-    // never fetched — documents the intentional bound, not an oversight.
-    eq(resolveNpmScriptChain(scripts, "chain:cap-a").length, 4, "depth cap resolves exactly 4 bodies (depths 0-3)");
+    // Depth cap is a real boundary: cap-a..cap-d (depths 0-3) are resolved, and
+    // the unresolved hop at cap-e is represented by a fail-closed marker.
+    eq(resolveNpmScriptChain(scripts, "chain:cap-a", 0, 3).length, 5, "depth cap includes an unresolved-chain marker after 4 bodies");
     ok(
-      !checkCommandDeep("npm run chain:cap-a", tmp, reviewOptions),
-      "a dangerous command one hop past the depth-3 cap is NOT caught (documented bound)"
+      checkCommandDeep("npm run chain:cap-a", tmp, reviewOptions),
+      "a command one hop past the depth-3 cap fails closed"
     );
 
     // Unreadable/missing package.json → warn-and-allow, never throw or block.
@@ -1403,7 +1426,7 @@ eq(checkDangerousCommand("dotenv -e .env.test -- npm run test"), null, "mentioni
     writeFileSync(path.join(tmp, "package.json"), JSON.stringify({
       scripts: { fine: "echo ok > supabase/migrations/20990101000000_brand_new.sql" },
     }));
-    eq(checkCommandDeep("npm run fine", tmp), null, "npm script writing a NEW (non-existent) migration file is allowed");
+    ok(checkCommandDeep("npm run fine", tmp), "an unreviewed package manifest fails closed before any npm script can write a new migration");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

@@ -200,6 +200,10 @@ configuration, persisted alias configuration, and invoked subcommands that are
 not known Git built-ins fail closed. This blocks `!` shell aliases and external
 `git-*` helpers from launching ignored wrappers outside exact-HEAD inspection;
 real Bash and MCP hook regressions exercise the hostile inline-alias command.
+Inline, attached, environment-backed, and persisted Git configuration also
+fails closed for executable settings including external diffs, fsmonitor,
+filters, text converters, pagers, editors, credential helpers, and SSH command
+overrides. Git cannot use those settings to dispatch an ignored wrapper.
 The provenance check also applies when a path-backed script or binary is the
 command itself rather than an interpreter operand. Direct `.bat`, `.cmd`,
 `.ps1`, shebang/executable paths, and nested shell dispatches must be tracked,
