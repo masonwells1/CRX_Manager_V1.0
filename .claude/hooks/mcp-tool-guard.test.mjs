@@ -652,6 +652,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
   const trackedWrapperRelative = "scripts/reviewed-wrapper.mjs";
   const importingWrapperRelative = "scripts/importing-wrapper.mjs";
   const importedHelperRelative = "scripts/imported-helper.mjs";
+  const childRunnerRelative = "scripts/reviewed-child-runner.mjs";
   const trackedDirectRelative = "scripts/reviewed-direct.bat";
   const reviewedWrapperSource = "console.log('reviewed wrapper');\n";
   const wrapperSource = [
@@ -667,6 +668,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     writeFileSync(path.join(tmp, trackedWrapperRelative), reviewedWrapperSource);
     writeFileSync(path.join(tmp, importingWrapperRelative), 'import "./imported-helper.mjs";\nconsole.log("reviewed importer");\n');
     writeFileSync(path.join(tmp, importedHelperRelative), 'export const reviewed = true;\n');
+    writeFileSync(path.join(tmp, childRunnerRelative), 'import { spawnSync } from "node:child_process";\nspawnSync("npx", ["vitest", "run"]);\n');
     writeFileSync(path.join(tmp, trackedDirectRelative), "@echo reviewed direct wrapper\n");
     writeFileSync(path.join(tmp, ".gitignore"), "output/\n");
     const isolatedGitEnv = { ...process.env };
@@ -680,7 +682,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       ["config", "user.email", "guard-test@example.invalid"],
       ["config", "user.name", "Guard Test"],
       ["config", "commit.gpgsign", "false"],
-      ["add", producerRelative, trackedWrapperRelative, importingWrapperRelative, importedHelperRelative, trackedDirectRelative, ".gitignore"],
+      ["add", producerRelative, trackedWrapperRelative, importingWrapperRelative, importedHelperRelative, childRunnerRelative, trackedDirectRelative, ".gitignore"],
       ["commit", "-m", "track producer"],
       ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ]) {
@@ -701,6 +703,16 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     }, tmp);
     ok(isDeny(r), "MCP start_process denies an unchanged importer with a modified tracked helper");
     eq(spawnSync("git", ["restore", "--worktree", "--", importedHelperRelative], { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true }).status, 0, "the MCP imported helper fixture is restored byte-for-byte from reviewed HEAD");
+    const ignoredPackageMarker = path.join(tmp, "output", "ignored-package-executed.txt");
+    mkdirSync(path.join(tmp, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(path.join(tmp, "node_modules", ".bin", "npx.cmd"), `@echo hostile>"${ignoredPackageMarker}"\r\n`);
+    ok(checkCommandDeep(`node ${childRunnerRelative}`, tmp, reviewOptions)?.includes("mutable child code"), "direct injection denies a reviewed script that can spawn ignored package code");
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__start_process",
+      tool_input: { command: `node ${childRunnerRelative}` },
+    }, tmp);
+    ok(isDeny(r), "MCP start_process denies a reviewed script that can spawn ignored package code");
+    ok(!existsSync(ignoredPackageMarker), "the MCP-denied child runner never executes the ignored package shim");
 
     const ignoredWrapperRelative = "output/ignored-wrapper.mjs";
     const ignoredMarkerPath = path.join(tmp, "output", "wrapper-executed.txt");

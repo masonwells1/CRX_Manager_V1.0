@@ -159,6 +159,16 @@ SHA while substituting a hostile wrapper tree.
 Every provenance read invokes Git through a fixed trusted installation path and
 a minimal sanitized environment. Repository-local and PATH-injected Git shims
 are planted in regressions and proven not to execute before trust is established.
+After provenance succeeds, ordinary Node entrypoints receive a transitive static
+runtime-closure audit. Relative JavaScript dependencies must resolve to tracked
+exact-HEAD files; bare package imports, ignored or untracked dependencies,
+dynamic module/code loaders, native binding escapes, and process/evaluation
+builtins such as `child_process`, `worker_threads`, and `vm` fail closed. This
+prevents a reviewed script such as an area runner from delegating execution to
+modified ignored `node_modules` bytes. The exact maintenance producer and its
+exact-review proof bootstrap are the two explicit audited exceptions. Bash and
+MCP regressions plant a hostile ignored package shim and prove a tracked child
+runner is denied before that shim executes.
 Package execution is recognized only in command position, so read-only
 arguments that mention `npx`, `npm exec`, or `vite` remain ordinary data. A real
 local package executable fails closed because ignored `node_modules` bytes are

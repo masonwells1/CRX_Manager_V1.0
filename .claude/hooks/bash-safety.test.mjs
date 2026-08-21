@@ -300,6 +300,8 @@ for (const command of [
     const importedHelperPath = path.join(integrityRepo, ...importedHelperRelative.split("/"));
     const reviewedPythonRelative = "scripts/reviewed.py";
     const reviewedPythonPath = path.join(integrityRepo, ...reviewedPythonRelative.split("/"));
+    const childRunnerRelative = "scripts/reviewed-child-runner.mjs";
+    const childRunnerPath = path.join(integrityRepo, ...childRunnerRelative.split("/"));
     const trackedDirectRelative = "scripts/reviewed-direct.bat";
     const trackedDirectPath = path.join(integrityRepo, ...trackedDirectRelative.split("/"));
     const bootstrapRelative = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
@@ -325,6 +327,7 @@ for (const command of [
     writeFileSync(importingWrapperPath, 'import "./imported-helper.mjs";\nconsole.log("reviewed importer");\n');
     writeFileSync(importedHelperPath, 'export const reviewed = true;\n');
     writeFileSync(reviewedPythonPath, 'print("reviewed python")\n');
+    writeFileSync(childRunnerPath, 'import { spawnSync } from "node:child_process";\nspawnSync("npx", ["vitest", "run"]);\n');
     writeFileSync(trackedDirectPath, "@echo reviewed direct wrapper\n");
     writeFileSync(bootstrapPath, "console.log('review bootstrap');\n");
     const packageManifest = ["package", "json"].join(".");
@@ -337,7 +340,7 @@ for (const command of [
       ["init", "--quiet"],
       ["config", "user.email", "guard-test@example.invalid"],
       ["config", "user.name", "Guard Test"],
-      ["add", "--", integrityRelativePath, trackedWrapperRelative, importingWrapperRelative, importedHelperRelative, reviewedPythonRelative, trackedDirectRelative, bootstrapRelative, packageManifest, ".gitignore"],
+      ["add", "--", integrityRelativePath, trackedWrapperRelative, importingWrapperRelative, importedHelperRelative, reviewedPythonRelative, childRunnerRelative, trackedDirectRelative, bootstrapRelative, packageManifest, ".gitignore"],
       ["commit", "--quiet", "-m", "test fixture"],
       ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ]) {
@@ -402,6 +405,12 @@ for (const command of [
     eq(checkCommandDeep(`python -I -S ${reviewedPythonRelative}`, integrityRepo, reviewOptions), null, "an exact-HEAD Python script is allowed with isolated startup flags");
     const pythonHookResult = runHook({ tool_name: "Bash", tool_input: { command: `PYTHONPATH=output python ${reviewedPythonRelative}` } }, integrityRepo);
     ok(pythonHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies Python sitecustomize preloading");
+    const ignoredPackageMarker = path.join(integrityRepo, "output", "ignored-package-executed.txt");
+    writeFileSync(path.join(integrityRepo, "node_modules", ".bin", "npx.cmd"), `@echo hostile>"${ignoredPackageMarker}"\r\n`);
+    ok(checkCommandDeep(`node ${childRunnerRelative}`, integrityRepo, reviewOptions)?.includes("mutable child code"), "a reviewed script cannot spawn an ignored package executable");
+    const childRunnerHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node ${childRunnerRelative}` } }, integrityRepo);
+    ok(childRunnerHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies a reviewed script that can spawn ignored package code");
+    ok(!existsSync(ignoredPackageMarker), "the denied reviewed child runner never executes the ignored package shim");
     ok(checkCommandDeep("npm run build", integrityRepo, reviewOptions)?.includes("mutable local package executable"), "a mutable ignored package shim is denied even when manifests are reviewed");
     writeFileSync(trackedWrapperPath, wrapperSource);
     eq(runIntegrityGit(["add", "--", trackedWrapperRelative]).status, 0, "replacement-object fixture stages the hostile wrapper");

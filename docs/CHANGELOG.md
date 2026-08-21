@@ -21,6 +21,12 @@ All significant development milestones, in reverse chronological order.
   Node/npm/Python preload and search-path environment mutation is denied, and
   reviewed Python scripts require `-I -S`. Bash and MCP regressions exercise a
   modified imported helper, npm `--userconfig`, and Python `sitecustomize`.
+- Ordinary reviewed Node entrypoints now receive a static transitive import
+  audit after exact-HEAD proof. Child-process and dynamic-code APIs, bare
+  package imports, dynamic module loaders, and ignored/untracked relative
+  dependencies fail closed, preventing a clean tracked wrapper from launching
+  modified ignored `node_modules` code. The exact maintenance producer and its
+  exact-review proof bootstrap remain the only explicit audited exceptions.
 
 ## 2026-08-20 — Close the remaining PR #402 maintenance-command guard gaps
 

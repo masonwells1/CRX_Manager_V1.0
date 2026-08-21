@@ -13,6 +13,7 @@
 import { readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { builtinModules } from "node:module";
 import path from "node:path";
 
 export const SECURITY_COMMAND_CHAR_BUDGET = 16_384;
@@ -449,6 +450,69 @@ function createReviewedExecutorInspector(cwd, options = {}) {
     return trackedTreeError;
   };
 
+  const reviewedRuntimeClosureReason = (entryRepoPath) => {
+    const extension = path.posix.extname(entryRepoPath).toLowerCase();
+    if (![".js", ".mjs", ".cjs"].includes(extension)) return null;
+    const safeBuiltins = new Set(builtinModules.map((name) => name.replace(/^node:/, "").split("/")[0]));
+    const unsafeBuiltins = new Set(["child_process", "cluster", "module", "vm", "worker_threads"]);
+    const queued = [entryRepoPath];
+    const visited = new Set();
+    while (queued.length > 0) {
+      const repoPath = queued.pop();
+      const key = process.platform === "win32" ? repoPath.toLowerCase() : repoPath;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      let source = "";
+      try {
+        source = readFileSync(path.join(root, ...repoPath.split("/")), "utf8");
+      } catch {
+        return `the reviewed runtime dependency ${repoPath} is unreadable`;
+      }
+      if (/\b(?:eval|Function)\s*\(|\bprocess\.(?:binding|_linkedBinding|dlopen)\s*\(|\b(?:Bun\.spawn|Deno\.Command)\b/.test(source)) {
+        return `the reviewed runtime dependency ${repoPath} contains a dynamic code or native-process escape`;
+      }
+      const specifiers = [];
+      for (const pattern of [
+        /\bimport\s*["']([^"']+)["']/g,
+        /\b(?:import|export)\s+[\s\S]*?\s+from\s*["']([^"']+)["']/g,
+      ]) {
+        for (const match of source.matchAll(pattern)) specifiers.push(match[1]);
+      }
+      for (const match of source.matchAll(/\b(import|require)\s*\(\s*([^\r\n)]*)\)/g)) {
+        const argument = match[2].trim();
+        const literal = /^(?:["'])([^"']+)(?:["'])$/.exec(argument);
+        if (!literal) return `the reviewed runtime dependency ${repoPath} contains a dynamic module loader`;
+        specifiers.push(literal[1]);
+      }
+      for (const specifier of specifiers) {
+        const normalizedBuiltin = specifier.replace(/^node:/, "").split("/")[0];
+        if (unsafeBuiltins.has(normalizedBuiltin)) {
+          return `the reviewed runtime dependency ${repoPath} can launch or evaluate mutable child code through ${specifier}`;
+        }
+        if (specifier.startsWith("node:") || safeBuiltins.has(normalizedBuiltin)) continue;
+        if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+          return `the reviewed runtime dependency ${repoPath} imports mutable package code through ${specifier}`;
+        }
+        const unresolved = path.posix.normalize(path.posix.join(path.posix.dirname(repoPath), specifier));
+        if (unresolved === ".." || unresolved.startsWith("../") || path.posix.isAbsolute(unresolved)) {
+          return `the reviewed runtime dependency ${repoPath} resolves outside the repository`;
+        }
+        const candidates = path.posix.extname(unresolved)
+          ? [unresolved]
+          : [unresolved, ...[".mjs", ".js", ".cjs", ".json"].map((suffix) => `${unresolved}${suffix}`), ...["index.mjs", "index.js", "index.cjs", "index.json"].map((name) => path.posix.join(unresolved, name))];
+        const dependency = candidates.find((candidate) => headEntries.has(process.platform === "win32" ? candidate.toLowerCase() : candidate));
+        if (!dependency) return `the reviewed runtime dependency ${repoPath} resolves ${specifier} to ignored or untracked code`;
+        const dependencyExtension = path.posix.extname(dependency).toLowerCase();
+        if (dependencyExtension === ".json") continue;
+        if (![".js", ".mjs", ".cjs"].includes(dependencyExtension)) {
+          return `the reviewed runtime dependency ${repoPath} loads unsupported executable content from ${dependency}`;
+        }
+        queued.push(dependency);
+      }
+    }
+    return null;
+  };
+
   const inspect = (scriptPath) => {
     if (reason) return true;
     const rawPath = String(scriptPath || "");
@@ -519,7 +583,19 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       if (repoPath === bootstrapPath && mainEntries.get(key) === expectedHeadBlob) {
         continue;
       }
-      if (headSha === baseSha) continue;
+      const verifyRuntimeClosure = () => {
+        if (repoPath === MAINTENANCE_PRODUCER_REPO_PATH) return null;
+        return reviewedRuntimeClosureReason(repoPath);
+      };
+      if (headSha === baseSha) {
+        const runtimeClosureReason = verifyRuntimeClosure();
+        if (runtimeClosureReason) {
+          reason = runtimeClosureReason;
+          return true;
+        }
+        continue;
+      }
+      let proofValid = false;
       try {
         const proofName = [["codex", "review", headSha].join("-"), "json"].join(".");
         const proof = JSON.parse(readFileSync(path.join(root, ".claude", "session-state", proofName), "utf8"));
@@ -533,12 +609,19 @@ function createReviewedExecutorInspector(cwd, options = {}) {
           && proof?.base_sha === baseSha
           && Number.isFinite(timestamp)
           && age >= 0
-          && age <= 30 * 60 * 1_000) continue;
+          && age <= 30 * 60 * 1_000) proofValid = true;
       } catch {
         // Missing, malformed, stale, or inaccessible proof is handled below.
       }
-      reason = "the feature-branch HEAD lacks a fresh exact-SHA independent review proof";
-      return true;
+      if (!proofValid) {
+        reason = "the feature-branch HEAD lacks a fresh exact-SHA independent review proof";
+        return true;
+      }
+      const runtimeClosureReason = verifyRuntimeClosure();
+      if (runtimeClosureReason) {
+        reason = runtimeClosureReason;
+        return true;
+      }
     }
     return false;
   };
