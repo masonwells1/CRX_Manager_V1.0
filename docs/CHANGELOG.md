@@ -134,7 +134,8 @@ All significant development milestones, in reverse chronological order.
   ignored, external, untracked, or worktree-divergent wrappers are denied before
   they can spawn the producer as an uninspected child process. Bash and MCP
   regressions use a real ignored wrapper that would otherwise add a preload and
-  launch the approved producer command.
+  launch the approved producer command, including Node's `--` option-terminator
+  form so it cannot skip inspection of the following script operand.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

@@ -703,7 +703,10 @@ export function maintenanceProducerCommandMentioned(command, depth = 0, fileExec
       if (argument === "--") {
         const operand = list[cursor + 1];
         if (shell) return true;
-        return !operand || operand.control || operand.value === "-";
+        if (!operand || operand.control || operand.value === "-") return true;
+        return fileExecutorInspector
+          ? fileExecutorInspector(normalizeShellToken(operand.value))
+          : false;
       }
       if (python && /^(?:-W|-X)$/.test(argument)) {
         cursor += 1;

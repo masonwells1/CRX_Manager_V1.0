@@ -132,7 +132,8 @@ File-backed interpreters also require their entry script to be repository-local,
 tracked at `HEAD`, and byte-identical to that blob. This blocks ignored,
 external, untracked, and worktree-divergent wrappers before they can launch the
 producer or a preload as an uninspected child; both Bash and MCP regressions use
-a real ignored spawning wrapper. Alias definitions and unknown commands
+a real ignored spawning wrapper and cover Node's `--` option terminator before
+the script operand. Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed
 when `call`/`@call`, an `if` condition, or a `for … do` body precedes an explicit

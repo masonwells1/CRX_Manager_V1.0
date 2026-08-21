@@ -295,18 +295,26 @@ ok(!maintenanceProducerCommandMentioned(unrelatedScriptMutation), "a specific un
     const integrityCommand = ["node", integrityRelativePath, "--verify"].join(" ");
     eq(checkCommandDeep(integrityCommand, integrityRepo), null, "an exact producer launch is allowed when worktree bytes match HEAD");
     eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo), null, "a reviewed file-backed executor is allowed when its bytes match HEAD");
+    eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), null, "a reviewed file-backed executor after -- is allowed when its bytes match HEAD");
     writeFileSync(trackedWrapperPath, `${wrapperSource}// worktree divergence\n`);
     ok(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo), "a worktree-divergent file-backed executor is denied");
+    ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), "a worktree-divergent file-backed executor after -- is denied");
+    const divergentHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${trackedWrapperRelative}` } }, integrityRepo);
+    ok(divergentHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook HEAD-binds a worktree-divergent executor after --");
     writeFileSync(trackedWrapperPath, wrapperSource);
     writeFileSync(ignoredWrapperPath, wrapperSource);
     ok(checkCommandDeep(`node ${ignoredWrapperRelative}`, integrityRepo), "an ignored file-backed executor that spawns the producer is denied");
-    const ignoredHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node ${ignoredWrapperRelative}` } }, integrityRepo);
+    ok(checkCommandDeep(`node -- ${ignoredWrapperRelative}`, integrityRepo), "an ignored file-backed executor after -- is denied");
+    const ignoredHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${ignoredWrapperRelative}` } }, integrityRepo);
     ok(ignoredHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies an ignored wrapper before it can spawn the producer");
     ok(ignoredHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denial comes from the HEAD-bound executor check");
     ok(!existsSync(ignoredMarkerPath), "the denied ignored wrapper never executes");
     const externalExecutorPath = path.join(externalExecutorDir, "external-wrapper.mjs");
     writeFileSync(externalExecutorPath, wrapperSource);
     ok(checkCommandDeep(`node ${JSON.stringify(externalExecutorPath)}`, integrityRepo), "an external file-backed executor is denied");
+    ok(checkCommandDeep(`node -- ${JSON.stringify(externalExecutorPath)}`, integrityRepo), "an external file-backed executor after -- is denied");
+    const externalHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${JSON.stringify(externalExecutorPath)}` } }, integrityRepo);
+    ok(externalHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denies an external executor after --");
     writeFileSync(integrityPath, "export const reviewed = false;\n");
     ok(checkCommandDeep(integrityCommand, integrityRepo), "an exact producer launch is denied when worktree bytes differ from HEAD");
   } finally {

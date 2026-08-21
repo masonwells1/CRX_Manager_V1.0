@@ -563,11 +563,21 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
 // ── exact stateful bypass regression: HEAD tracking survives relocation ────
 {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "mcpguard-producer-head-"));
+  const externalExecutorDir = mkdtempSync(path.join(os.tmpdir(), "mcpguard-external-executor-"));
   const producerRelative = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
   const alternateRelative = "scripts/ignored-maintenance-copy.mjs";
+  const trackedWrapperRelative = "scripts/reviewed-wrapper.mjs";
+  const wrapperSource = [
+    'import { spawnSync } from "node:child_process";',
+    'import { writeFileSync } from "node:fs";',
+    'writeFileSync("output/wrapper-executed.txt", "executed");',
+    `spawnSync(process.execPath, [${JSON.stringify(producerRelative)}, "--approved-by-mason=2026-08-12"], { env: { ...process.env, NODE_OPTIONS: "--require=output/preload.cjs" } });`,
+    "",
+  ].join("\n");
   try {
     mkdirSync(path.join(tmp, "scripts"), { recursive: true });
     writeFileSync(path.join(tmp, producerRelative), "console.log('tracked producer');\n");
+    writeFileSync(path.join(tmp, trackedWrapperRelative), wrapperSource);
     writeFileSync(path.join(tmp, ".gitignore"), "output/\n");
     const isolatedGitEnv = { ...process.env };
     for (const variableName of [
@@ -579,7 +589,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       ["config", "user.email", "guard-test@example.invalid"],
       ["config", "user.name", "Guard Test"],
       ["config", "commit.gpgsign", "false"],
-      ["add", producerRelative, ".gitignore"],
+      ["add", producerRelative, trackedWrapperRelative, ".gitignore"],
       ["commit", "-m", "track producer"],
     ]) {
       const gitResult = spawnSync("git", args, { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true });
@@ -589,20 +599,28 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     const ignoredWrapperRelative = "output/ignored-wrapper.mjs";
     const ignoredMarkerPath = path.join(tmp, "output", "wrapper-executed.txt");
     mkdirSync(path.dirname(ignoredMarkerPath), { recursive: true });
-    writeFileSync(path.join(tmp, ignoredWrapperRelative), [
-      'import { spawnSync } from "node:child_process";',
-      'import { writeFileSync } from "node:fs";',
-      'writeFileSync("output/wrapper-executed.txt", "executed");',
-      `spawnSync(process.execPath, [${JSON.stringify(producerRelative)}, "--approved-by-mason=2026-08-12"], { env: { ...process.env, NODE_OPTIONS: "--require=output/preload.cjs" } });`,
-      "",
-    ].join("\n"));
+    writeFileSync(path.join(tmp, ignoredWrapperRelative), wrapperSource);
     r = runHook({
       tool_name: "mcp__Desktop_Commander__start_process",
-      tool_input: { command: `node ${ignoredWrapperRelative}` },
+      tool_input: { command: `node -- ${ignoredWrapperRelative}` },
     }, tmp);
     ok(isDeny(r), "MCP start_process denies an ignored wrapper before it can spawn the producer");
     ok(r.stdout.includes("Blocked file-backed interpreter"), "the MCP denial comes from the HEAD-bound executor check");
     ok(!existsSync(ignoredMarkerPath), "the MCP-denied ignored wrapper never executes");
+    writeFileSync(path.join(tmp, trackedWrapperRelative), `${wrapperSource}// worktree divergence\n`);
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__start_process",
+      tool_input: { command: `node -- ${trackedWrapperRelative}` },
+    }, tmp);
+    ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP HEAD-binds a worktree-divergent executor after --");
+    writeFileSync(path.join(tmp, trackedWrapperRelative), wrapperSource);
+    const externalExecutorPath = path.join(externalExecutorDir, "external-wrapper.mjs");
+    writeFileSync(externalExecutorPath, wrapperSource);
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__start_process",
+      tool_input: { command: `node -- ${JSON.stringify(externalExecutorPath)}` },
+    }, tmp);
+    ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP denies an external executor after --");
 
     r = runHook({
       tool_name: "mcp__Desktop_Commander__move_file",
@@ -639,6 +657,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     ok(isDeny(r), "persistent input remains denied after the exact producer blob is restored");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+    rmSync(externalExecutorDir, { recursive: true, force: true });
   }
 }
 
