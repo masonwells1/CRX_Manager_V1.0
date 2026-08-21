@@ -129,7 +129,12 @@ All significant development milestones, in reverse chronological order.
   the same path check. Every exact allowlisted launch independently hashes the
   worktree file as a Git blob and requires it to match `HEAD` before execution;
   that final binding also covers a writer whose target is fully dynamic and
-  therefore cannot be resolved safely from command text alone.
+  therefore cannot be resolved safely from command text alone. File-backed
+  interpreter entry points are bound the same way while protection is active:
+  ignored, external, untracked, or worktree-divergent wrappers are denied before
+  they can spawn the producer as an uninspected child process. Bash and MCP
+  regressions use a real ignored wrapper that would otherwise add a preload and
+  launch the approved producer command.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

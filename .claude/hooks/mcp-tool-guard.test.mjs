@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SECURITY_COMMAND_CHAR_BUDGET } from "./bash-safety-lib.mjs";
@@ -568,6 +568,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
   try {
     mkdirSync(path.join(tmp, "scripts"), { recursive: true });
     writeFileSync(path.join(tmp, producerRelative), "console.log('tracked producer');\n");
+    writeFileSync(path.join(tmp, ".gitignore"), "output/\n");
     const isolatedGitEnv = { ...process.env };
     for (const variableName of [
       "GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_PREFIX",
@@ -578,12 +579,30 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       ["config", "user.email", "guard-test@example.invalid"],
       ["config", "user.name", "Guard Test"],
       ["config", "commit.gpgsign", "false"],
-      ["add", producerRelative],
+      ["add", producerRelative, ".gitignore"],
       ["commit", "-m", "track producer"],
     ]) {
       const gitResult = spawnSync("git", args, { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true });
       eq(gitResult.status, 0, `temporary producer repository setup succeeds: git ${args[0]}`);
     }
+
+    const ignoredWrapperRelative = "output/ignored-wrapper.mjs";
+    const ignoredMarkerPath = path.join(tmp, "output", "wrapper-executed.txt");
+    mkdirSync(path.dirname(ignoredMarkerPath), { recursive: true });
+    writeFileSync(path.join(tmp, ignoredWrapperRelative), [
+      'import { spawnSync } from "node:child_process";',
+      'import { writeFileSync } from "node:fs";',
+      'writeFileSync("output/wrapper-executed.txt", "executed");',
+      `spawnSync(process.execPath, [${JSON.stringify(producerRelative)}, "--approved-by-mason=2026-08-12"], { env: { ...process.env, NODE_OPTIONS: "--require=output/preload.cjs" } });`,
+      "",
+    ].join("\n"));
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__start_process",
+      tool_input: { command: `node ${ignoredWrapperRelative}` },
+    }, tmp);
+    ok(isDeny(r), "MCP start_process denies an ignored wrapper before it can spawn the producer");
+    ok(r.stdout.includes("Blocked file-backed interpreter"), "the MCP denial comes from the HEAD-bound executor check");
+    ok(!existsSync(ignoredMarkerPath), "the MCP-denied ignored wrapper never executes");
 
     r = runHook({
       tool_name: "mcp__Desktop_Commander__move_file",

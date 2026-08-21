@@ -127,7 +127,12 @@ regressions enforce that boundary. That includes content
 writers, in-place editors, truncation, and output redirects. An exact allowlisted
 producer launch is still denied unless an independent Git-blob hash of the
 worktree bytes matches the file recorded at `HEAD`; this is the final boundary
-for fully dynamic targets that command-text inspection cannot resolve. Alias definitions and unknown commands
+for fully dynamic targets that command-text inspection cannot resolve.
+File-backed interpreters also require their entry script to be repository-local,
+tracked at `HEAD`, and byte-identical to that blob. This blocks ignored,
+external, untracked, and worktree-divergent wrappers before they can launch the
+producer or a preload as an uninspected child; both Bash and MCP regressions use
+a real ignored spawning wrapper. Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed
 when `call`/`@call`, an `if` condition, or a `for … do` body precedes an explicit

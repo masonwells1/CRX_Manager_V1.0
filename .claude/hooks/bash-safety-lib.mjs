@@ -131,6 +131,93 @@ function gitBlobHash(buffer) {
     .digest("hex");
 }
 
+function createHeadBoundExecutorInspector(cwd) {
+  const base = cwd || process.cwd();
+  const gitEnv = { ...process.env };
+  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete gitEnv[name];
+  let initialized = false;
+  let root = "";
+  let headEntries = new Map();
+  let initializationError = "";
+  let reason = "";
+
+  const initialize = () => {
+    if (initialized) return;
+    initialized = true;
+    const rootResult = spawnSync("git", ["-C", base, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 1_500,
+      env: gitEnv,
+    });
+    root = String(rootResult.stdout || "").trim();
+    if (rootResult.status !== 0 || !root) {
+      initializationError = "the repository root could not be verified";
+      return;
+    }
+    const treeResult = spawnSync("git", ["-C", root, "ls-tree", "-r", "--full-tree", "HEAD"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 1_500,
+      env: gitEnv,
+    });
+    if (treeResult.status !== 0) {
+      initializationError = "the committed HEAD tree could not be verified";
+      return;
+    }
+    for (const line of String(treeResult.stdout || "").split(/\r?\n/)) {
+      const match = /^\d+\s+blob\s+([a-f0-9]{40})\t(.+)$/.exec(line);
+      if (!match) continue;
+      const key = process.platform === "win32" ? match[2].toLowerCase() : match[2];
+      headEntries.set(key, match[1].toLowerCase());
+    }
+  };
+
+  const inspect = (scriptPath) => {
+    if (reason) return true;
+    initialize();
+    if (initializationError) {
+      reason = initializationError;
+      return true;
+    }
+    const rawPath = String(scriptPath || "");
+    if (!rawPath || /[*?\[\]{}$`]|[<>]\(|\$\(|\$\{|![^!\r\n]+!|%[^%\r\n]+%/.test(rawPath)) {
+      reason = "the file-backed executor path is dynamic or missing";
+      return true;
+    }
+    const resolved = path.resolve(base, rawPath);
+    const relative = path.relative(root, resolved);
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      reason = "the file-backed executor is outside the repository";
+      return true;
+    }
+    const repoPath = relative.split(path.sep).join("/");
+    const key = process.platform === "win32" ? repoPath.toLowerCase() : repoPath;
+    const expectedBlob = headEntries.get(key);
+    if (!expectedBlob) {
+      reason = "the file-backed executor is ignored or untracked at HEAD";
+      return true;
+    }
+    try {
+      if (gitBlobHash(readFileSync(resolved)) !== expectedBlob) {
+        reason = "the file-backed executor worktree bytes differ from HEAD";
+        return true;
+      }
+    } catch {
+      reason = "the file-backed executor is missing or unreadable";
+      return true;
+    }
+    return false;
+  };
+
+  return {
+    inspect,
+    getReason: () => reason
+      ? `Blocked file-backed interpreter while the maintenance producer is protected because ${reason}. Commit and review the executor first; ignored, external, untracked, and worktree-divergent wrappers are denied.`
+      : null,
+  };
+}
+
 export function checkMaintenanceProducerIntegrity(command, cwd) {
   const value = String(command || "").trim();
   if (!MAINTENANCE_PRODUCER_ALLOWED_COMMANDS.has(value)) return null;
@@ -235,16 +322,16 @@ function maintenanceProducerPathMutationMentioned(command) {
   return false;
 }
 
-export function maintenanceProducerCommandMentioned(command, depth = 0) {
+export function maintenanceProducerCommandMentioned(command, depth = 0, fileExecutorInspector = null) {
   const rawValue = String(command || "");
   if (commandExceedsSecurityBudget(rawValue)) return true;
   const powerShellLineView = preservePowerShellLineBoundaries(rawValue);
   if (powerShellLineView !== rawValue
-    && (depth >= 4 || maintenanceProducerCommandMentioned(powerShellLineView, depth + 1))) return true;
+    && (depth >= 4 || maintenanceProducerCommandMentioned(powerShellLineView, depth + 1, fileExecutorInspector))) return true;
   const value = normalizePosixLineContinuations(rawValue);
   const powerShellBoundaryVariant = value.replace(/\\([;&|])/g, "$1");
   if (powerShellBoundaryVariant !== value
-    && (depth >= 4 || maintenanceProducerCommandMentioned(powerShellBoundaryVariant, depth + 1))) return true;
+    && (depth >= 4 || maintenanceProducerCommandMentioned(powerShellBoundaryVariant, depth + 1, fileExecutorInspector))) return true;
   const hasDynamicSyntax = (text) => /[*?\[\]{}$`@]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|\s-join(?:\s|$)|![^!\r\n]+!|%[^%\r\n]+%/i.test(text);
   const dynamicSyntax = hasDynamicSyntax(value);
   const tokenize = (text) => {
@@ -622,7 +709,10 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
         cursor += 1;
         continue;
       }
-      if (!argument.startsWith("-")) return shell;
+      if (!argument.startsWith("-")) {
+        if (shell) return true;
+        return fileExecutorInspector ? fileExecutorInspector(argument) : false;
+      }
     }
     return true;
   };
@@ -637,11 +727,11 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
     if (optionTokens.some((entry) => /^--(?:help|version)$/.test(normalizeShellOption(entry.value)))) return false;
     const bodyTokens = terminator >= 0 ? remaining.slice(terminator + 1) : remaining;
     for (const entry of bodyTokens.filter((candidate) => candidate.sawQuoted)) {
-      if (depth >= 4 || maintenanceProducerCommandMentioned(entry.value, depth + 1)) return true;
+      if (depth >= 4 || maintenanceProducerCommandMentioned(entry.value, depth + 1, fileExecutorInspector)) return true;
     }
     if (terminator < 0) return false;
     const body = bodyTokens.map((entry) => entry.value).join(" ");
-    return Boolean(body) && (depth >= 4 || maintenanceProducerCommandMentioned(body, depth + 1));
+    return Boolean(body) && (depth >= 4 || maintenanceProducerCommandMentioned(body, depth + 1, fileExecutorInspector));
   };
   if (tokens.some(nestedParallelCommand)) return true;
   const nestedWatchCommand = (token, index, list) => {
@@ -653,7 +743,7 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
     if (parsed.opaque) return true;
     const body = list.slice(parsed.cursor, segmentEnd).map((entry) => entry.value).join(" ");
     if (!body) return false;
-    return depth >= 4 || maintenanceProducerCommandMentioned(body, depth + 1);
+    return depth >= 4 || maintenanceProducerCommandMentioned(body, depth + 1, fileExecutorInspector);
   };
   if (tokens.some(nestedWatchCommand)) return true;
   const powerShellValueOption = (argument) => /^(?:--?|\/)(?:configuration(?:name|file)|config|cus(?:t(?:o(?:m(?:p(?:i(?:p(?:e(?:n(?:a(?:m(?:e)?)?)?)?)?)?)?)?)?)?)?|settings(?:f(?:i(?:l(?:e)?)?)?)?|executionpolicy|ex|ep|inputformat|inp|input|if|outputformat|o|of|out|windowstyle|w|workingdirectory|wd)(?::|=)?/i.test(argument);
@@ -703,7 +793,7 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
       // Re-enter the complete policy for nested command bodies. Calling only
       // analyzeTokens here omits top-level runner checks such as PowerShell
       // process launchers, watch, and GNU Parallel.
-      return maintenanceProducerCommandMentioned(text, depth);
+      return maintenanceProducerCommandMentioned(text, depth, fileExecutorInspector);
     }
     function analyzeTokens(candidateTokens, depth) {
       if (dynamicSyntax && candidateTokens.some(nodeExecutable)) return true;
@@ -1854,6 +1944,10 @@ export function readPackageScripts(cwd) {
 export function checkCommandDeep(cmd, cwd) {
   const producerIntegrity = checkMaintenanceProducerIntegrity(cmd, cwd);
   if (producerIntegrity) return producerIntegrity;
+  const fileExecutorInspector = createHeadBoundExecutorInspector(cwd);
+  maintenanceProducerCommandMentioned(cmd, 0, fileExecutorInspector.inspect);
+  const directExecutorReason = fileExecutorInspector.getReason();
+  if (directExecutorReason) return directExecutorReason;
   const direct = checkDangerousCommand(cmd);
   if (direct) return direct;
 
@@ -1871,7 +1965,9 @@ export function checkCommandDeep(cmd, cwd) {
   const seen = new Set();
   for (const name of names) {
     for (const resolved of resolveNpmScriptChain(scripts, name, 0, 3, seen)) {
-      if (maintenanceProducerCommandMentioned(resolved)) {
+      if (maintenanceProducerCommandMentioned(resolved, 0, fileExecutorInspector.inspect)) {
+        const resolvedExecutorReason = fileExecutorInspector.getReason();
+        if (resolvedExecutorReason) return resolvedExecutorReason;
         return "Blocked indirect maintenance producer invocation. Run the exact repository-relative node command directly; npm scripts and lifecycle wrappers are denied.";
       }
       // Run BOTH check families on the resolved body — a script that rewrites an

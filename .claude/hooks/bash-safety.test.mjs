@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -28,6 +28,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
+function runHook(payload, cwd) {
+  return spawnSync(process.execPath, [path.join(__dirname, "bash-safety.mjs")], {
+    input: JSON.stringify(payload),
+    encoding: "utf8",
+    cwd: cwd || process.cwd(),
+  });
+}
 
 // ── direct dangerous-command patterns (unchanged behavior) ────────────────
 ok(checkDangerousCommand("git push --force origin main"), "force push blocked");
@@ -252,18 +259,34 @@ const unrelatedScriptMutation = [
 ok(!maintenanceProducerCommandMentioned(unrelatedScriptMutation), "a specific unrelated script path stays outside the producer gate");
 {
   const integrityRepo = mkdtempSync(path.join(os.tmpdir(), "producer-integrity-"));
+  const externalExecutorDir = mkdtempSync(path.join(os.tmpdir(), "producer-external-executor-"));
   try {
     const integrityRelativePath = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
     const integrityPath = path.join(integrityRepo, ...integrityRelativePath.split("/"));
+    const trackedWrapperRelative = "scripts/reviewed-wrapper.mjs";
+    const trackedWrapperPath = path.join(integrityRepo, ...trackedWrapperRelative.split("/"));
+    const ignoredWrapperRelative = "output/ignored-wrapper.mjs";
+    const ignoredWrapperPath = path.join(integrityRepo, ...ignoredWrapperRelative.split("/"));
+    const ignoredMarkerPath = path.join(integrityRepo, "output", "wrapper-executed.txt");
+    const wrapperSource = [
+      'import { spawnSync } from "node:child_process";',
+      'import { writeFileSync } from "node:fs";',
+      'writeFileSync("output/wrapper-executed.txt", "executed");',
+      `spawnSync(process.execPath, [${JSON.stringify(integrityRelativePath)}, "--approved-by-mason=2026-08-12"], { env: { ...process.env, NODE_OPTIONS: "--require=output/preload.cjs" } });`,
+      "",
+    ].join("\n");
     const integrityGitEnv = { ...process.env };
     for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete integrityGitEnv[name];
     mkdirSync(path.dirname(integrityPath), { recursive: true });
+    mkdirSync(path.dirname(ignoredWrapperPath), { recursive: true });
     writeFileSync(integrityPath, "export const reviewed = true;\n");
+    writeFileSync(trackedWrapperPath, wrapperSource);
+    writeFileSync(path.join(integrityRepo, ".gitignore"), "output/\n");
     for (const args of [
       ["init", "--quiet"],
       ["config", "user.email", "guard-test@example.invalid"],
       ["config", "user.name", "Guard Test"],
-      ["add", "--", integrityRelativePath],
+      ["add", "--", integrityRelativePath, trackedWrapperRelative, ".gitignore"],
       ["commit", "--quiet", "-m", "test fixture"],
     ]) {
       const result = spawnSync("git", args, { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
@@ -271,10 +294,24 @@ ok(!maintenanceProducerCommandMentioned(unrelatedScriptMutation), "a specific un
     }
     const integrityCommand = ["node", integrityRelativePath, "--verify"].join(" ");
     eq(checkCommandDeep(integrityCommand, integrityRepo), null, "an exact producer launch is allowed when worktree bytes match HEAD");
+    eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo), null, "a reviewed file-backed executor is allowed when its bytes match HEAD");
+    writeFileSync(trackedWrapperPath, `${wrapperSource}// worktree divergence\n`);
+    ok(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo), "a worktree-divergent file-backed executor is denied");
+    writeFileSync(trackedWrapperPath, wrapperSource);
+    writeFileSync(ignoredWrapperPath, wrapperSource);
+    ok(checkCommandDeep(`node ${ignoredWrapperRelative}`, integrityRepo), "an ignored file-backed executor that spawns the producer is denied");
+    const ignoredHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node ${ignoredWrapperRelative}` } }, integrityRepo);
+    ok(ignoredHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies an ignored wrapper before it can spawn the producer");
+    ok(ignoredHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denial comes from the HEAD-bound executor check");
+    ok(!existsSync(ignoredMarkerPath), "the denied ignored wrapper never executes");
+    const externalExecutorPath = path.join(externalExecutorDir, "external-wrapper.mjs");
+    writeFileSync(externalExecutorPath, wrapperSource);
+    ok(checkCommandDeep(`node ${JSON.stringify(externalExecutorPath)}`, integrityRepo), "an external file-backed executor is denied");
     writeFileSync(integrityPath, "export const reviewed = false;\n");
     ok(checkCommandDeep(integrityCommand, integrityRepo), "an exact producer launch is denied when worktree bytes differ from HEAD");
   } finally {
     rmSync(integrityRepo, { recursive: true, force: true });
+    rmSync(externalExecutorDir, { recursive: true, force: true });
   }
 }
 const focusedProducerHarness = "node scripts/apply-live-testdata-maintenance-20260812.test.mjs";
@@ -765,12 +802,6 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
 }
 
 // ── LIVE: bash-safety.mjs itself — benign allowed, dangerous denied ────────
-function runHook(payload) {
-  return spawnSync(process.execPath, [path.join(__dirname, "bash-safety.mjs")], {
-    input: JSON.stringify(payload),
-    encoding: "utf8",
-  });
-}
 let r = runHook({ tool_name: "Bash", tool_input: { command: "npm run build" } });
 eq(r.status, 0, "bash-safety.mjs exits 0 on benign command");
 ok(!r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs allows npm run build");
