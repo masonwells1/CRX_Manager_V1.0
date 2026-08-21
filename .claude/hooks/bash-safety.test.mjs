@@ -591,6 +591,16 @@ for (const command of [
     );
     rmSync(featureBranchGitShim, { force: true });
     eq(checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions), null, "the reviewed byte-identical proof producer remains available to bootstrap feature-branch review");
+    for (const command of [
+      ["node --test --test-reporter=output/ignored-wrapper.mjs", bootstrapRelative].join(" "),
+      ["node --env-file=output/ignored.env", bootstrapRelative].join(" "),
+      ["node --snapshot-blob=output/ignored.blob", bootstrapRelative].join(" "),
+      ["node --build-snapshot-config=output/ignored.json", bootstrapRelative].join(" "),
+    ]) {
+      ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes("exact-review bootstrap was invoked"), "the review bootstrap denies every option-bearing Node startup route: " + command);
+      const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies an option-bearing review bootstrap: " + command);
+    }
     writeFileSync(trackedWrapperPath, reviewedWrapperSource);
     writeFileSync(ignoredWrapperPath, wrapperSource);
     const ignoredDirectRelative = "output/ignored-wrapper.bat";

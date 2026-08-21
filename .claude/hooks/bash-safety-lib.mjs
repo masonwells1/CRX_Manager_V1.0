@@ -213,6 +213,8 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
 ]);
 
 const MAINTENANCE_PRODUCER_REPO_PATH = `scripts/${MAINTENANCE_PRODUCER_NAME}`;
+const REVIEW_BOOTSTRAP_REPO_PATH = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
+const REVIEW_BOOTSTRAP_EXACT_COMMAND = ["node", REVIEW_BOOTSTRAP_REPO_PATH].join(" ");
 
 function shellGlobMatchesLiteral(pattern, literal) {
   const normalized = String(pattern || "")
@@ -567,7 +569,11 @@ function createReviewedExecutorInspector(cwd, options = {}) {
         reason = "the file-backed executor is missing or unreadable";
         return true;
       }
-      const bootstrapPath = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
+      const bootstrapPath = REVIEW_BOOTSTRAP_REPO_PATH;
+      if (repoPath === bootstrapPath && options.exactReviewBootstrapInvocation !== true) {
+        reason = "the exact-review bootstrap was invoked with runtime options, wrappers, chaining, alternate spelling, or extra arguments instead of its one exact Node command";
+        return true;
+      }
       if (repoPath === bootstrapPath && mainEntries.get(key) === expectedHeadBlob) {
         const bootstrapReason = bootstrapGitSafetyReason(root, gitExecutable, gitEnv);
         if (bootstrapReason) {
@@ -2842,7 +2848,10 @@ export function checkCommandDeep(cmd, cwd, options = {}) {
   if (gitEnvironmentReason) return gitEnvironmentReason;
   const contextShift = executionContextShiftReason(cmd, cwd);
   if (contextShift) return contextShift;
-  const fileExecutorInspector = createReviewedExecutorInspector(cwd, options);
+  const fileExecutorInspector = createReviewedExecutorInspector(cwd, {
+    ...options,
+    exactReviewBootstrapInvocation: String(cmd || "").trim() === REVIEW_BOOTSTRAP_EXACT_COMMAND,
+  });
   const producerIntegrity = maintenanceProducerIntegrityReason(cmd, fileExecutorInspector);
   if (producerIntegrity) return producerIntegrity;
   const packageBoundaryReason = packageExecutionBoundaryReason(cmd, cwd, fileExecutorInspector);

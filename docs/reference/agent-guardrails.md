@@ -204,6 +204,9 @@ Inline, attached, environment-backed, and persisted Git configuration also
 fails closed for executable settings including external diffs, fsmonitor,
 filters, text converters, pagers, editors, credential helpers, and SSH command
 overrides. Git cannot use those settings to dispatch an ignored wrapper.
+The exact-review bootstrap itself has a one-command grammar: repository-relative
+`node` plus the proof producer path, with no runtime options or extra arguments.
+This prevents Node startup loaders from executing ignored code before review.
 The provenance check also applies when a path-backed script or binary is the
 command itself rather than an interpreter operand. Direct `.bat`, `.cmd`,
 `.ps1`, shebang/executable paths, and nested shell dispatches must be tracked,

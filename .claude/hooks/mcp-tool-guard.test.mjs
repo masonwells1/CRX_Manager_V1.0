@@ -109,6 +109,17 @@ for (const command of [
   eq(result.status, 0, `mcp-tool-guard exits 0 after Git executable configuration injection: ${command}`);
   ok(isDeny(result), `MCP start_process denies Git executable configuration injection: ${command}`);
 }
+const reviewBootstrap = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
+for (const command of [
+  ["node --test --test-reporter=output/ignored-wrapper.mjs", reviewBootstrap].join(" "),
+  ["node --env-file=output/ignored.env", reviewBootstrap].join(" "),
+  ["node --snapshot-blob=output/ignored.blob", reviewBootstrap].join(" "),
+  ["node --build-snapshot-config=output/ignored.json", reviewBootstrap].join(" "),
+]) {
+  const result = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  eq(result.status, 0, `mcp-tool-guard exits 0 after an option-bearing review bootstrap: ${command}`);
+  ok(isDeny(result), `MCP start_process denies an option-bearing review bootstrap: ${command}`);
+}
 for (const command of [
   "npm --userconfig=output/evil.npmrc run agent-health",
   "NPM_CONFIG_USERCONFIG=output/evil.npmrc npm run agent-health",

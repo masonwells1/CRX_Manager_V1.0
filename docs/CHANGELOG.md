@@ -38,6 +38,11 @@ All significant development milestones, in reverse chronological order.
   HEAD; dependency lifecycle flows such as CI, install, rebuild, and restart are
   denied because ignored package scripts are outside the reviewed tree. Cyclic
   or over-depth npm script chains also fail closed.
+- The exact-review bootstrap accepts only its one repository-relative Node
+  command with no runtime flags, wrappers, chaining, alternate spelling, or
+  extra arguments. Node startup routes such as test reporters, environment
+  files, snapshot blobs, and snapshot-build configuration cannot load ignored
+  code before the reviewed proof producer.
 
 ## 2026-08-20 — Close the remaining PR #402 maintenance-command guard gaps
 
