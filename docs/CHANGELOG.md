@@ -43,6 +43,13 @@ All significant development milestones, in reverse chronological order.
   extra arguments. Node startup routes such as test reporters, environment
   files, snapshot blobs, and snapshot-build configuration cannot load ignored
   code before the reviewed proof producer.
+- The same startup boundary now protects every ordinary reviewed Node
+  entrypoint: only a narrow non-loading option allowlist is accepted, while
+  custom test reporters, env files, snapshots, SEA configuration, and unknown
+  future flags fail closed. Exact-tree verification also binds Git modes as
+  well as blob IDs and validates filesystem types from the reviewed mode, so a
+  regular tracked script cannot be staged as a same-blob symlink and redirected
+  to unreviewed bytes. Bash and MCP regressions cover both bypasses.
 - Bootstrap tree verification now compares the exact index and worktree bytes
   directly, without invoking Git's worktree conversion/filter pipeline. It
   rejects executable clean/smudge/process filters, external attribute files,

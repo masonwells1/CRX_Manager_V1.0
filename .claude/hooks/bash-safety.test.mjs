@@ -386,6 +386,7 @@ for (const command of [
     eq(checkCommandDeep(integrityCommand, integrityRepo, reviewOptions), null, "an exact producer launch is allowed when HEAD is the reviewed main commit and worktree bytes match");
     eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor is allowed when HEAD is the reviewed main commit");
     eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor after -- is allowed on the reviewed main commit");
+    eq(checkCommandDeep(`node --no-warnings ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed Node entrypoint remains available with an explicitly safe startup flag");
     ok(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions)?.includes("not auditable JavaScript"), "a non-JavaScript wrapper is denied even when tracked because it can launch a mutable child runtime");
     ok(checkCommandDeep(`node ${builtinEscapeRelative}`, integrityRepo, reviewOptions)?.includes("dynamic code or native-process escape"), "process.getBuiltinModule cannot bypass reviewed runtime closure");
     ok(checkCommandDeep(`node ${commentLoaderRelative}`, integrityRepo, reviewOptions)?.includes("ignored or untracked code"), "comment-separated dynamic imports cannot bypass reviewed runtime closure");
@@ -456,6 +457,17 @@ for (const command of [
       const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
       ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies unreviewed npm dependency lifecycle execution: " + command);
     }
+    const trackedWrapperBlob = runIntegrityGit(["rev-parse", `HEAD:${trackedWrapperRelative}`]);
+    eq(trackedWrapperBlob.status, 0, "the tracked-wrapper blob resolves for the mode-substitution regression");
+    eq(
+      runIntegrityGit(["update-index", "--add", "--cacheinfo", `120000,${trackedWrapperBlob.stdout.trim()},${trackedWrapperRelative}`]).status,
+      0,
+      "the regression stages the reviewed regular-file blob as a symlink",
+    );
+    ok(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions)?.includes("index differs from exact HEAD"), "a regular-file-to-symlink index substitution is denied even when the blob ID is unchanged");
+    const modeSubstitutionHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node ${trackedWrapperRelative}` } }, integrityRepo);
+    ok(modeSubstitutionHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies a same-blob symlink substitution");
+    eq(runIntegrityGit(["reset", "--", trackedWrapperRelative]).status, 0, "the mode-substitution regression restores the exact HEAD index mode");
     writeFileSync(trackedWrapperPath, wrapperSource);
     eq(runIntegrityGit(["add", "--", trackedWrapperRelative]).status, 0, "replacement-object fixture stages the hostile wrapper");
     const replacementTree = runIntegrityGit(["write-tree"]);
@@ -623,9 +635,22 @@ for (const command of [
       ["node --snapshot-blob=output/ignored.blob", bootstrapRelative].join(" "),
       ["node --build-snapshot-config=output/ignored.json", bootstrapRelative].join(" "),
     ]) {
-      ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes("exact-review bootstrap was invoked"), "the review bootstrap denies every option-bearing Node startup route: " + command);
+      const reason = checkCommandDeep(command, integrityRepo, reviewOptions);
+      ok(reason, "the review bootstrap denies every option-bearing Node startup route: " + command);
       const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
       ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies an option-bearing review bootstrap: " + command);
+    }
+    for (const command of [
+      `node --test --test-reporter=output/ignored-wrapper.mjs ${trackedWrapperRelative}`,
+      `node --env-file=output/ignored.env ${trackedWrapperRelative}`,
+      `node --snapshot-blob=output/ignored.blob ${trackedWrapperRelative}`,
+      `node --experimental-sea-config=output/ignored.json ${trackedWrapperRelative}`,
+      `node --conditions=ignored ${trackedWrapperRelative}`,
+      `node --future-code-loader=output/ignored-wrapper.mjs ${trackedWrapperRelative}`,
+    ]) {
+      ok(checkCommandDeep(command, integrityRepo, reviewOptions), "ordinary Node entrypoints fail closed on code-loading or unknown startup options: " + command);
+      const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies a code-loading or unknown Node startup option: " + command);
     }
     writeFileSync(trackedWrapperPath, reviewedWrapperSource);
     writeFileSync(ignoredWrapperPath, wrapperSource);

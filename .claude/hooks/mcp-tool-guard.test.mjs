@@ -122,6 +122,18 @@ for (const command of [
   ok(isDeny(result), `MCP start_process denies an option-bearing review bootstrap: ${command}`);
 }
 for (const command of [
+  "node --test --test-reporter=output/ignored-wrapper.mjs .claude/hooks/bash-safety.test.mjs",
+  "node --env-file=output/ignored.env .claude/hooks/bash-safety.test.mjs",
+  "node --snapshot-blob=output/ignored.blob .claude/hooks/bash-safety.test.mjs",
+  "node --experimental-sea-config=output/ignored.json .claude/hooks/bash-safety.test.mjs",
+  "node --conditions=ignored .claude/hooks/bash-safety.test.mjs",
+  "node --future-code-loader=output/ignored-wrapper.mjs .claude/hooks/bash-safety.test.mjs",
+]) {
+  const result = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  eq(result.status, 0, `mcp-tool-guard exits 0 after a code-loading or unknown Node startup option: ${command}`);
+  ok(isDeny(result), `MCP start_process denies a code-loading or unknown Node startup option: ${command}`);
+}
+for (const command of [
   "npm --userconfig=output/evil.npmrc run agent-health",
   "NPM_CONFIG_USERCONFIG=output/evil.npmrc npm run agent-health",
   "$env:NPM_CONFIG_USERCONFIG='output/evil.npmrc'; npm run agent-health",
@@ -895,6 +907,23 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     ok(isDeny(r), "MCP start_process denies an inline Git shell alias before it can launch an ignored wrapper");
     ok(r.stdout.includes("Blocked executable Git configuration"), "the MCP inline Git alias denial comes from the executable boundary");
     ok(!existsSync(ignoredMarkerPath), "the MCP-denied Git alias never executes its ignored wrapper");
+    const trackedWrapperBlob = spawnSync("git", ["rev-parse", `HEAD:${trackedWrapperRelative}`], { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true });
+    eq(trackedWrapperBlob.status, 0, "the MCP tracked-wrapper blob resolves for the mode-substitution regression");
+    eq(
+      spawnSync("git", ["update-index", "--add", "--cacheinfo", `120000,${trackedWrapperBlob.stdout.trim()},${trackedWrapperRelative}`], { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true }).status,
+      0,
+      "the MCP regression stages the reviewed regular-file blob as a symlink",
+    );
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__start_process",
+      tool_input: { command: `node ${trackedWrapperRelative}` },
+    }, tmp);
+    ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP denies a same-blob regular-file-to-symlink index substitution");
+    eq(
+      spawnSync("git", ["reset", "--", trackedWrapperRelative], { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true }).status,
+      0,
+      "the MCP mode-substitution regression restores the exact HEAD index mode",
+    );
     writeFileSync(path.join(tmp, trackedWrapperRelative), `${wrapperSource}// worktree divergence\n`);
     writeFileSync(path.join(tmp, trackedDirectRelative), "@echo worktree-divergent direct wrapper\n");
     r = runHook({

@@ -169,6 +169,11 @@ modified ignored `node_modules` bytes. The exact maintenance producer and its
 exact-review proof bootstrap are the two explicit audited exceptions. Bash and
 MCP regressions plant a hostile ignored package shim and prove a tracked child
 runner is denied before that shim executes.
+Node startup options also fail closed against a small explicit non-loading
+allowlist for every entrypoint. Custom test reporters, environment files,
+snapshot/SEA inputs, and unknown future options cannot load ignored code before
+the exact-HEAD script operand; Bash and MCP regressions exercise both known and
+unknown option shapes.
 Package execution is recognized only in command position, so read-only
 arguments that mention `npx`, `npm exec`, or `vite` remain ordinary data. A real
 local package executable fails closed because ignored `node_modules` bytes are
@@ -213,6 +218,11 @@ filters and unreviewed attribute overrides fail closed first. Tracked PowerShell
 batch, shell, and other non-JavaScript wrappers remain denied because their
 child-runtime closure cannot be proven; preload controls apply to indirect
 wrapper commands as well as literal Node/npm/Python commands.
+Index entries must match both the exact-HEAD blob ID and Git mode, and disk
+object types are validated from the reviewed HEAD mode rather than the mutable
+index. Runtime entrypoints and their JavaScript dependency closure reject
+symlinks, preventing a same-blob regular-file-to-symlink substitution from
+redirecting the closure reader to unreviewed external bytes.
 The provenance check also applies when a path-backed script or binary is the
 command itself rather than an interpreter operand. Direct `.bat`, `.cmd`,
 `.ps1`, shebang/executable paths, and nested shell dispatches must be tracked,

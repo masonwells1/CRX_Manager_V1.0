@@ -445,10 +445,10 @@ function createReviewedExecutorInspector(cwd, options = {}) {
         return;
       }
       for (const line of String(treeResult.stdout || "").split(/\r?\n/)) {
-        const match = /^\d+\s+blob\s+([a-f0-9]{40})\t(.+)$/.exec(line);
+        const match = /^(\d+)\s+blob\s+([a-f0-9]{40})\t(.+)$/.exec(line);
         if (!match) continue;
-        const key = process.platform === "win32" ? match[2].toLowerCase() : match[2];
-        entries.set(key, match[1].toLowerCase());
+        const key = process.platform === "win32" ? match[3].toLowerCase() : match[3];
+        entries.set(key, { mode: match[1], blob: match[2].toLowerCase(), repoPath: match[3] });
       }
     }
   };
@@ -483,9 +483,9 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       trackedTreeError = "the index path set differs from exact HEAD";
       return trackedTreeError;
     }
-    for (const [key, expectedBlob] of headEntries) {
+    for (const [key, expectedEntry] of headEntries) {
       const entry = indexEntries.get(key);
-      if (!entry || entry.blob !== expectedBlob) {
+      if (!entry || entry.mode !== expectedEntry.mode || entry.blob !== expectedEntry.blob) {
         trackedTreeError = "the index differs from exact HEAD";
         return trackedTreeError;
       }
@@ -493,7 +493,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       let diskBytes;
       try {
         const stat = lstatSync(diskPath);
-        if (entry.mode === "120000") {
+        if (expectedEntry.mode === "120000") {
           if (!stat.isSymbolicLink()) throw new Error("symlink mode mismatch");
           diskBytes = Buffer.from(readlinkSync(diskPath), "utf8");
         } else {
@@ -507,7 +507,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       const rawHash = gitBlobHash(diskBytes);
       const normalizedBytes = Buffer.from(diskBytes.toString("latin1").replace(/\r\n/g, "\n"), "latin1");
       const normalizedHash = gitBlobHash(normalizedBytes);
-      if (rawHash !== expectedBlob && normalizedHash !== expectedBlob) {
+      if (rawHash !== expectedEntry.blob && normalizedHash !== expectedEntry.blob) {
         trackedTreeError = "the tracked dependency tree worktree bytes differ from exact HEAD";
         return trackedTreeError;
       }
@@ -570,6 +570,10 @@ function createReviewedExecutorInspector(cwd, options = {}) {
           : [unresolved, ...[".mjs", ".js", ".cjs", ".json"].map((suffix) => `${unresolved}${suffix}`), ...["index.mjs", "index.js", "index.cjs", "index.json"].map((name) => path.posix.join(unresolved, name))];
         const dependency = candidates.find((candidate) => headEntries.has(process.platform === "win32" ? candidate.toLowerCase() : candidate));
         if (!dependency) return `the reviewed runtime dependency ${repoPath} resolves ${specifier} to ignored or untracked code`;
+        const dependencyKey = process.platform === "win32" ? dependency.toLowerCase() : dependency;
+        if (headEntries.get(dependencyKey)?.mode === "120000") {
+          return `the reviewed runtime dependency ${dependency} is a symlink and could resolve outside exact HEAD`;
+        }
         const dependencyExtension = path.posix.extname(dependency).toLowerCase();
         if (dependencyExtension === ".json") continue;
         if (![".js", ".mjs", ".cjs"].includes(dependencyExtension)) {
@@ -621,13 +625,18 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       }
       const repoPath = relative.split(path.sep).join("/");
       const key = process.platform === "win32" ? repoPath.toLowerCase() : repoPath;
-      const expectedHeadBlob = headEntries.get(key);
-      if (!expectedHeadBlob) {
+      const expectedHeadEntry = headEntries.get(key);
+      if (!expectedHeadEntry) {
         reason = "the file-backed executor is ignored or untracked at exact HEAD";
         return true;
       }
       try {
-        if (gitBlobHash(readFileSync(resolved)) !== expectedHeadBlob) {
+        const stat = lstatSync(resolved);
+        if (expectedHeadEntry.mode === "120000" || !stat.isFile() || stat.isSymbolicLink()) {
+          reason = "the file-backed executor type differs from a regular file at exact HEAD";
+          return true;
+        }
+        if (gitBlobHash(readFileSync(resolved)) !== expectedHeadEntry.blob) {
           reason = "the file-backed executor worktree bytes differ from exact HEAD";
           return true;
         }
@@ -640,7 +649,10 @@ function createReviewedExecutorInspector(cwd, options = {}) {
         reason = "the exact-review bootstrap was invoked with runtime options, wrappers, chaining, alternate spelling, or extra arguments instead of its one exact Node command";
         return true;
       }
-      if (repoPath === bootstrapPath && mainEntries.get(key) === expectedHeadBlob) {
+      const expectedMainEntry = mainEntries.get(key);
+      const bootstrapMatchesMain = expectedMainEntry?.mode === expectedHeadEntry.mode
+        && expectedMainEntry?.blob === expectedHeadEntry.blob;
+      if (repoPath === bootstrapPath && bootstrapMatchesMain) {
         const bootstrapReason = bootstrapGitSafetyReason(root, gitExecutable, gitEnv);
         if (bootstrapReason) {
           reason = bootstrapReason;
@@ -652,7 +664,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
         reason = dependencyTreeReason;
         return true;
       }
-      if (repoPath === bootstrapPath && mainEntries.get(key) === expectedHeadBlob) {
+      if (repoPath === bootstrapPath && bootstrapMatchesMain) {
         continue;
       }
       const verifyRuntimeClosure = () => {
@@ -1296,7 +1308,8 @@ export function maintenanceProducerCommandMentioned(command, depth = 0, fileExec
   const opaqueInlineInterpreterInvocation = (token, index, list) => {
     if (!invocationPosition(list, index)) return false;
     const python = ["python", "python2", "python3", "py"].some((name) => executableNamed(token, name, true));
-    const nodeLike = ["node", "nodejs", "bun"].some((name) => executableNamed(token, name, true));
+    const nodeRuntime = ["node", "nodejs"].some((name) => executableNamed(token, name, true));
+    const nodeLike = nodeRuntime || executableNamed(token, "bun", true);
     const shortEval = ["perl", "ruby"].some((name) => executableNamed(token, name, true));
     const php = executableNamed(token, "php", true);
     const deno = executableNamed(token, "deno", true);
@@ -1321,6 +1334,23 @@ export function maintenanceProducerCommandMentioned(command, depth = 0, fileExec
       if ((nodeLike || deno) && dynamicArgument(argument)) return true;
       if (python && argument === "-c") return true;
       if (nodeLike && /^(?:-e|--eval|-p|--print)(?:=|$)/i.test(argument)) return true;
+      if (nodeRuntime && argument.startsWith("-")) {
+        // Fail closed on Node startup flags. Node periodically adds options
+        // that load code before the script operand (reporters, env files,
+        // snapshots, loaders). Only this small non-loading set is accepted;
+        // every unknown or code-bearing startup option is denied.
+        if (/^(?:--|--check|-c|--no-warnings|--trace-warnings|--use-strict|--enable-source-maps|--test|--test-only|--test-force-exit)$/.test(argument)) continue;
+        const safeValueOption = /^(--test-(?:name-pattern|skip-pattern|concurrency|timeout|shard))(?:=(.*))?$/.exec(argument);
+        if (safeValueOption) {
+          if (safeValueOption[2] === undefined) {
+            const value = list[cursor + 1];
+            if (!value || value.control) return true;
+            cursor += 1;
+          }
+          continue;
+        }
+        return true;
+      }
       if (shortEval && /^-[eE](?:$|.)/.test(argument)) return true;
       if (php && /^-r(?:$|.)/i.test(argument)) return true;
       if (deno && /^eval$/i.test(argument)) return true;
@@ -2364,7 +2394,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
 // original bash-safety.mjs inline table (2026-07 extraction), plus one addition
 // marked below.
 export const DANGEROUS_CMD_CHECKS = [
-  [/\bnode(?:js)?(?:\.exe)?\b[^\r\n;&|]*(?:--require(?:=|\s)|(?:^|\s)-r(?:\s|\S)|--import(?:=|\s)|--(?:experimental-)?loader(?:=|\s))/i, "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks."],
+  [/\bnode(?:js)?(?:\.exe)?\b[^\r\n;&|]*(?:--require(?:=|\s)|(?:^|\s)-r(?:\s|\S)|--import(?:=|\s)|--(?:experimental-)?loader(?:=|\s)|--test-reporter(?:=|\s)|--env-file(?:-if-exists)?(?:=|\s)|--snapshot-blob(?:=|\s)|--build-snapshot-config(?:=|\s)|--experimental-sea-config(?:=|\s))/i, "Blocked Node pre-execution loading. Startup loaders, reporters, env files, and snapshots can run unreviewed code before a reviewed script's own safety checks."],
   [/\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--force(?:-with-lease)?(?:=\S+)?\b|--force-if-includes\b|(?:^|\s)-[A-Za-z]*f[A-Za-z]*\b|(?:^|\s)\+\S+)/, "Blocked force push. Force pushing any branch requires Mason's explicit approval."],
   // Tolerate intervening git options (`git -C <path> reset --hard`, `git -c x=y clean -fd`)
   // — the adjacent-words-only spellings were bypassable (Codex P1, PR #352).
