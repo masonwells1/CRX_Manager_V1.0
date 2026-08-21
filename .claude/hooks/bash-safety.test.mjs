@@ -133,6 +133,7 @@ for (const command of [
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); timeout 5 node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); taskset -c 0 node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); ionice -c 3 node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); unshare -Ur node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); setsid node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); stdbuf -o0 node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); (node --no-warnings "$F" "$P" "$S" "$T")',
@@ -522,7 +523,7 @@ const decoderToShellAsData = "rg -n 'base64 -d | sh' docs";
 ok(!maintenanceProducerCommandMentioned(decoderToShellAsData), "decoder-to-shell spelling used as quoted search data is not classified as an invocation");
 eq(checkMaintenanceProducerInvocation(decoderToShellAsData), null, "decoder-to-shell search data stays outside the producer gate");
 ok(!checkDangerousCommand(decoderToShellAsData), "ordinary decoder-to-shell text search stays allowed");
-for (const terminalWrapperCommand of ["env --help pwsh /EncodedCommand", "timeout --help pwsh /EncodedCommand", "taskset --help env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs", "ionice --help env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"]) {
+for (const terminalWrapperCommand of ["env --help pwsh /EncodedCommand", "timeout --help pwsh /EncodedCommand", "taskset --help env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs", "ionice --help env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs", "unshare --help env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"]) {
   ok(!maintenanceProducerCommandMentioned(terminalWrapperCommand), `terminal wrapper mode is not classified as execution: ${terminalWrapperCommand}`);
   eq(checkMaintenanceProducerInvocation(terminalWrapperCommand), null, `terminal wrapper mode stays outside the producer gate: ${terminalWrapperCommand}`);
   ok(!checkDangerousCommand(terminalWrapperCommand), `terminal wrapper mode stays allowed: ${terminalWrapperCommand}`);
@@ -551,6 +552,11 @@ for (const command of [
   "ionice -c 3 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "ionice --class idle env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "ionice -c3 -n7 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "unshare env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "unshare -Ur env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "unshare --mount=/tmp env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "unshare --map-user 0 --map-group=0 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  'unshare --unknown bash -c "export NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs"',
   'taskset --unknown bash -c "export NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs"',
   'ionice --unknown bash -c "export NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs"',
   "setsid env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",

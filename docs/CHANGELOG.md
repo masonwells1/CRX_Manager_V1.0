@@ -107,6 +107,8 @@ All significant development milestones, in reverse chronological order.
   direct `NODE_OPTIONS` across Bash, PowerShell, CMD, and MCP process routes.
   Unknown `taskset` and `ionice` options also inspect their remaining nested
   command bodies instead of opening a fail-open shell-wrapper path.
+  Linux `unshare` namespace options are parsed and its child program is
+  traversed as well, preventing namespace wrappers from hiding Node preloads.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

@@ -150,7 +150,7 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
         cursor += 1;
         const directCommandNames = [
           "command", "time", "exec", "env", "find", "xargs", "parallel", "sudo", "doas",
-          "wsl", "busybox", "toybox", "nohup", "nice", "timeout", "taskset", "ionice", "setsid", "stdbuf",
+          "wsl", "busybox", "toybox", "nohup", "nice", "timeout", "taskset", "ionice", "unshare", "setsid", "stdbuf",
         ];
         const directCommand = directCommandNames.some((name) => executableNamed(list[cursor], name, true));
         if (cursor < index && !directCommand && /^[A-Za-z_]\w*$/.test(normalizeShellToken(list[cursor].value))) cursor += 1;
@@ -252,6 +252,17 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
         cursor += 1;
         if (cursor < index && /^(?:--help|--version|--list|--list-full|--install)$/.test(normalizeShellOption(list[cursor].value))) return false;
         if (cursor < index && list[cursor].value === "--") cursor += 1;
+      } else if (named("unshare")) {
+        cursor += 1;
+        while (cursor < index && list[cursor].value.startsWith("-")) {
+          const argument = normalizeShellOption(list[cursor].value);
+          if (/^(?:--help|--version|-h|-V)$/.test(argument) || /^-[fmuinpCTUrc]*[hV][fmuinpCTUrc]*$/.test(argument)) return false;
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-R|-w|-S|-G|-l|--map-user|--map-users|--map-group|--map-groups|--owner|--propagation|--setgroups|--setuid|--setgid|--root|--wd|--monotonic|--boottime|--load-interp|--whitelist-env)$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-[RwSGl].+|--(?:map-user|map-users|map-group|map-groups|owner|propagation|setgroups|setuid|setgid|root|wd|monotonic|boottime|load-interp|whitelist-env)=.+)$/.test(argument)) { cursor += 1; continue; }
+          if (/^(?:-[fmuinpCTUrc]+|--(?:fork|forward-signals|map-root-user|map-current-user|map-auto|map-subids|keep-caps|clear-env)|--(?:mount|uts|ipc|net|pid|user|cgroup|time|kill-child|mount-proc|mount-binfmt)(?:=.*)?)$/.test(argument)) { cursor += 1; continue; }
+          return true;
+        }
       } else if (named("ionice")) {
         cursor += 1;
         let processMode = false;
@@ -662,7 +673,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   };
   const recognizedExecutables = new Set([
     "command", "builtin", "env", "wsl", "busybox", "toybox", "find", "xargs",
-    "parallel", "sudo", "doas", "coproc", "time", "watch", "exec", "nohup", "nice", "timeout", "taskset", "ionice", "setsid", "stdbuf",
+    "parallel", "sudo", "doas", "coproc", "time", "watch", "exec", "nohup", "nice", "timeout", "taskset", "ionice", "unshare", "setsid", "stdbuf",
     "cmd", "powershell", "pwsh", "bash", "sh", "dash", "zsh", "ksh",
     "eval", "source", ".", "node", "nodejs", "export", "declare", "typeset",
     "local", "readonly", "set", "setx", "printf", "read",
@@ -724,7 +735,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const nodeBackedExecutables = new Set(["node", "nodejs", "npm", "npx", "pnpm", "yarn", "bun", "corepack"]);
   const nodeBackedRunnerWrappers = new Set([
     "command", "builtin", "env", "wsl", "busybox", "toybox", "find", "xargs", "parallel",
-    "sudo", "doas", "coproc", "time", "watch", "exec", "nohup", "nice", "timeout", "taskset", "ionice", "setsid", "stdbuf",
+    "sudo", "doas", "coproc", "time", "watch", "exec", "nohup", "nice", "timeout", "taskset", "ionice", "unshare", "setsid", "stdbuf",
   ]);
   const tokenListMentionsNodeBackedCommand = (list) => {
     for (let start = 0; start < list.length;) {
@@ -1172,6 +1183,28 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
         }
         if (terminalMode || cursor >= segmentEnd) break;
         cursor += 1;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === "unshare") {
+        cursor += 1;
+        let terminalMode = false;
+        while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) {
+          const argument = tokens[cursor].value;
+          if (/^(?:--help|--version|-h|-V)$/.test(argument) || /^-[fmuinpCTUrc]*[hV][fmuinpCTUrc]*$/.test(argument)) { terminalMode = true; break; }
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-R|-w|-S|-G|-l|--map-user|--map-users|--map-group|--map-groups|--owner|--propagation|--setgroups|--setuid|--setgid|--root|--wd|--monotonic|--boottime|--load-interp|--whitelist-env)$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-[RwSGl].+|--(?:map-user|map-users|map-group|map-groups|owner|propagation|setgroups|setuid|setgid|root|wd|monotonic|boottime|load-interp|whitelist-env)=.+)$/.test(argument)) { cursor += 1; continue; }
+          if (/^(?:-[fmuinpCTUrc]+|--(?:fork|forward-signals|map-root-user|map-current-user|map-auto|map-subids|keep-caps|clear-env)|--(?:mount|uts|ipc|net|pid|user|cgroup|time|kill-child|mount-proc|mount-binfmt)(?:=.*)?)$/.test(argument)) { cursor += 1; continue; }
+          const remaining = tokens.slice(cursor + 1, segmentEnd).map((token) => token.value).join(" ");
+          const remainingAfterValue = tokens.slice(cursor + 2, segmentEnd).map((token) => token.value).join(" ");
+          if (tokens.slice(cursor + 1, segmentEnd).some(hasNodeOptionsAssignment)
+            || inspectNestedCommand(remaining)
+            || inspectNestedCommand(remainingAfterValue)) return true;
+          terminalMode = true;
+          break;
+        }
+        if (terminalMode || cursor >= segmentEnd) break;
         if (skipAssignments()) return true;
         continue;
       }

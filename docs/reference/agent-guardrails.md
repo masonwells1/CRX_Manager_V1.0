@@ -82,6 +82,8 @@ when nested through WSL. CMD caret escapes are normalized before assignment
 matching, and named Bash coprocesses are followed into their launched command.
 The `watch` runner is inspected recursively through WSL and BusyBox/Toybox;
 unknown option shapes fail closed and terminal help/version modes remain data.
+Linux `unshare` required-value, optional-value, and flag options are consumed
+before its child program is inspected, including compact short-flag clusters.
 Bash `declare`/`typeset`/`local`/`readonly` variable mutations and the `builtin`
 wrapper are also parsed, so alternate builtin export forms cannot hide a
 `NODE_OPTIONS` preload.
