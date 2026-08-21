@@ -26,7 +26,7 @@ import {
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom, localCandidateMigrationPathsFromHistory,
   supersededDraftPathsFrom,
-  ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
+  originMainParkedMigrationGrepArgs, originMainParkedMigrationPrefilter,
   ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap as parseOriginMainSqlBlobMap,
   originMainForwardBlobPaths,
 } from "../.claude/hooks/worktree-awareness-lib.mjs";
@@ -53,7 +53,8 @@ function originMainSqlBlobMap(paths) {
       stdio: ["pipe", "pipe", "ignore"],
     });
     return result.status === 0 ? result.stdout : null;
-  });
+    // `originMainRev` is read at call time, long after it is resolved below (line ~132).
+  }, ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainRev);
 }
 
 function listDir(dir) {
@@ -120,12 +121,23 @@ try {
   process.exit(1);
 }
 
+// Pin origin/main to ONE object id for this entire run. Codex P1 on PR #437: the ref is
+// shared with every other session, so a concurrent `git fetch` can advance it between two
+// phases of one scan. If the fetch adds a SHA-pinned LOCAL CANDIDATE whose SQL carries no
+// parked header, the old history does not name it, the new tree contains it, and the grep
+// never sees it — mainline discovery returns "known" while omitting a pending migration.
+// Every mainline read below (history, tree, grep, blobs, mtime, merge-base, fallback diff)
+// names `originMainRev`, never the moving `origin/main`, so the phases cannot disagree.
 let hasOriginMain = false;
-try { git(["rev-parse", "--verify", "--quiet", "origin/main"]); hasOriginMain = true; } catch { hasOriginMain = false; }
+let originMainRev = "origin/main";
+try {
+  originMainRev = String(git(["rev-parse", "--verify", "--quiet", "origin/main"]) || "").trim() || "origin/main";
+  hasOriginMain = true;
+} catch { hasOriginMain = false; }
 if (!hasOriginMain) notes.push("origin/main not found locally — merge-state is unknown and any degraded parked scan uses conservative all-disk discovery (inherited historical files may appear; try --fetch).");
 const originMainDraftPaths = hasOriginMain ? originMainDraftPathSet((args) => {
   try { return git(args, repoRoot, 5000).split("\n"); } catch { return null; }
-}) : null;
+}, originMainRev) : null;
 if (hasOriginMain && !originMainDraftPaths) notes.push("origin/main exists but its draft tree could not be read — degraded parked scans use conservative all-disk discovery and may include inherited historical files.");
 
 // Which worktree is "this window"? The one containing cwd, else the script's own repo.
@@ -138,7 +150,11 @@ for (const e of entries) {
 
 function mergedLabel(sha) {
   if (!hasOriginMain || !sha) return mergedLabelFromStatus(null, false);
-  const r = spawnSync("git", ["merge-base", "--is-ancestor", sha, "origin/main"], {
+  // Pinned like every other mainline read: `--is-ancestor <sha> <rev>` tests sha against rev,
+  // so leaving rev symbolic lets a concurrent fetch label one worktree against a newer main
+  // than the rest of the same snapshot — and the merge labels against a newer main than the
+  // parked scan. Codex P2 on PR #437; the SessionStart hook already pinned its copy.
+  const r = spawnSync("git", ["merge-base", "--is-ancestor", sha, originMainRev], {
     encoding: "utf8", timeout: 5000, cwd: repoRoot,
   });
   return mergedLabelFromStatus(r.status, true);
@@ -153,9 +169,33 @@ function mergedLabel(sha) {
 //
 // The rule itself lives in the shared lib, not here, so this report and the SessionStart
 // banner cannot drift apart — the whole point of the 2026-07-29 fix is that they agree.
+
+// ONE read of origin/main's shared history for this whole run, shared by the per-worktree
+// exemption below and the mainline discovery pass further down. Codex HIGH on PR #437:
+// when those two phases each resolved `origin/main` independently, a concurrent fetch
+// between them let mainline inspect commit A and report nothing while the exemption saw a
+// candidate registered in commit B and suppressed reconciliation — a confident zero over a
+// pending migration. Reading once removes the divergence rather than narrowing the window.
+let originMainHistoryText; // undefined = not read yet, null = unavailable
+function originMainHistory() {
+  if (originMainHistoryText !== undefined) return originMainHistoryText;
+  if (!hasOriginMain) {
+    originMainHistoryText = null;
+    return originMainHistoryText;
+  }
+  try {
+    originMainHistoryText = git(["show", `${originMainRev}:docs/reference/migration-history.md`], repoRoot, 5000);
+  } catch {
+    originMainHistoryText = null;
+  }
+  return originMainHistoryText;
+}
+
 const ownDraftPaths = createOwnDraftPathsReader({
   repoRoot,
   hasOriginMain,
+  readOriginMainHistory: originMainHistory,
+  originMainRev,
   dirtyCount,
   exists: (wtPath, rel) => existsSync(path.join(wtPath, ...rel.split("/"))),
   readText: (wtPath, rel) => readTextSafe(path.join(wtPath, ...rel.split("/"))),
@@ -267,7 +307,7 @@ for (const e of entries) {
     );
     if (originMainDraftPaths) {
       try {
-        fallbackChangedPaths = git(["diff", "--name-only", "origin/main", "--", ...draftPathspec()], e.path, 5000).split("\n");
+        fallbackChangedPaths = git(["diff", "--name-only", originMainRev, "--", ...draftPathspec()], e.path, 5000).split("\n");
       } catch { /* the comparison below becomes PARKED STATE UNKNOWN */ }
     }
     notes.push(`${label}: could not read its branch point, so it uses a degraded disk scan${originMainDraftPaths ? " with an exact origin/main content comparison" : " with no inherited-path filter"}.`);
@@ -323,10 +363,13 @@ let mainlineParkedState = hasOriginMain ? "known" : "unknown";
 let mainlineParkedReason = hasOriginMain ? "" : "origin/main is unavailable";
 if (hasOriginMain) {
   try {
-    const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()], repoRoot, 5000);
-    const history = git(["show", "origin/main:docs/reference/migration-history.md"], repoRoot, 5000);
+    const tree = git(["ls-tree", "-r", "--name-only", originMainRev, "--", ...draftPathspec()], repoRoot, 5000);
+    // The SAME bytes the per-worktree exemption used — see originMainHistory() above.
+    const history = originMainHistory();
+    if (history === null) throw new Error("origin/main migration history is unreadable");
     const parkedPrefilter = originMainParkedMigrationPrefilter(
-      () => git(ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, repoRoot, 5000),
+      () => git(originMainParkedMigrationGrepArgs(originMainRev), repoRoot, 5000),
+      originMainRev,
     );
     const mainlinePaths = tree.split("\n");
     for (const rel of supersededDraftPathsFrom(mainlinePaths, () => true).values()) {
@@ -358,13 +401,13 @@ if (hasOriginMain) {
       let text = mainlineBlobCache.get(key);
       if (text === undefined) {
         try {
-          text = git(["show", `origin/main:${p}`], repoRoot, 5000);
+          text = git(["show", `${originMainRev}:${p}`], repoRoot, 5000);
           mainlineBlobCache.set(key, text);
         } catch { text = ""; }
       }
       let mtime = null;
       try {
-        const parsed = new Date(git(["log", "-1", "--format=%aI", "origin/main", "--", p], repoRoot, 5000).trim());
+        const parsed = new Date(git(["log", "-1", "--format=%aI", originMainRev, "--", p], repoRoot, 5000).trim());
         if (!Number.isNaN(parsed.valueOf())) mtime = parsed;
       } catch { /* report the source path even if its Git date is unavailable */ }
       parked.set(key, { name: p, where: ["origin/main"], mtime, comment: firstCommentLine(text, 120) });
