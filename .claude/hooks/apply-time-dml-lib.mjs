@@ -63,15 +63,55 @@ function routineParameterDefaults(statement) {
   const parameters = [];
   let start = open + 1;
   let depth = 0;
+  let bracketDepth = 0;
   for (let i = start; i < statement.length; i += 1) {
     const ch = statement[i];
-    if (ch === "(") { depth += 1; continue; }
-    if (ch === ")") {
-      if (depth === 0) { parameters.push(statement.slice(start, i)); break; }
-      depth -= 1;
+    // Commas and parentheses inside literal/comment text are not parameter
+    // delimiters. Skip each construct with PostgreSQL's real doubling/nesting
+    // rules before updating the structural depths below.
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      for (i += 1; i < statement.length; i += 1) {
+        if (statement[i] !== quote) continue;
+        if (statement[i + 1] === quote) { i += 1; continue; }
+        break;
+      }
       continue;
     }
-    if (ch === "," && depth === 0) {
+    if (ch === "-" && statement[i + 1] === "-") {
+      const end = statement.indexOf("\n", i + 2);
+      i = end < 0 ? statement.length : end;
+      continue;
+    }
+    if (ch === "/" && statement[i + 1] === "*") {
+      let commentDepth = 1;
+      i += 2;
+      while (i < statement.length && commentDepth > 0) {
+        if (statement[i] === "/" && statement[i + 1] === "*") { commentDepth += 1; i += 2; continue; }
+        if (statement[i] === "*" && statement[i + 1] === "/") { commentDepth -= 1; i += 2; continue; }
+        i += 1;
+      }
+      i -= 1;
+      continue;
+    }
+    if (ch === "$" && !IDENT_CHAR.test(statement[i - 1] || "")) {
+      const tag = /^\$(?:[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_$\u0080-\uFFFF]*)?\$/.exec(statement.slice(i))?.[0];
+      if (tag) {
+        const end = statement.indexOf(tag, i + tag.length);
+        if (end < 0) break;
+        i = end + tag.length - 1;
+        continue;
+      }
+    }
+    if (ch === "[") { bracketDepth += 1; continue; }
+    if (ch === "]") { bracketDepth = Math.max(0, bracketDepth - 1); continue; }
+    if (ch === "(") { depth += 1; continue; }
+    if (ch === ")") {
+      if (depth === 0 && bracketDepth === 0) { parameters.push(statement.slice(start, i)); break; }
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (ch === "," && depth === 0 && bracketDepth === 0) {
       parameters.push(statement.slice(start, i));
       start = i + 1;
     }

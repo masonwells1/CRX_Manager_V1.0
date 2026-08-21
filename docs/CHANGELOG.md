@@ -76,6 +76,9 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - Invoked parameter defaults now pass through the ordinary PostgreSQL coercion graph too. A custom
   cast such as `DEFAULT 1::money_box` follows its backing routine and exposes any protected write;
   an uninvoked default remains deferred and ordinary built-in casts remain analyzable.
+- Parameter-default splitting now understands array brackets plus quoted and commented text. A
+  callable expression after the comma in `DEFAULT ARRAY[1, money_fix()]` stays inside the invoked
+  default instead of being mistaken for the next parameter and disappearing from analysis.
 - Crossing the nested-body analysis depth now propagates explicit unresolved evidence instead of
   returning empty code. Resource limits are denial boundaries throughout the apply-time analyzer.
 - The Bash approved-set validator now treats functions and procedures as one routine graph,
@@ -84,7 +87,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
   array is also treated as a possible `OUT`/`INOUT` write-back, so a procedure cannot replace the
   hashed ids with an unapproved same-length set before the protected write. `FOR` and `FOREACH`
   loop targets now count as assignments too, so a loop cannot replace the captured array after the
-  digest. Its 205-case mutation suite and the 270-assertion
+  digest. Its 205-case mutation suite and the 275-assertion
   apply-time analyzer suite are both wired into a required CI step.
 - Non-ASCII PostgreSQL routine identities now fail closed through one shared analyzer boundary.
   A valid define/call/drop sequence such as `public.修復()` can no longer be truncated out of the

@@ -1446,4 +1446,41 @@ eq(T(null), [], "a null body does not throw");
     'round-57 MUTANT: an invoked builtin cast default remains statically analyzable');
 }
 
+// ------- ROUND 58: commas inside array defaults are not parameter separators
+{
+  const arrayDefault = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round58_array_fix() RETURNS integer LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; RETURN 2; END $$; ' +
+    'CREATE FUNCTION public.round58_array_wrapper(' +
+    "p integer[] DEFAULT ARRAY[1, public.round58_array_fix()]) " +
+    'RETURNS integer LANGUAGE sql AS $$ SELECT p[1] $$; ' +
+    'SELECT public.round58_array_wrapper();',
+  );
+  ok(arrayDefault.unresolved,
+    'round-58: a callable expression after an array-default comma fails closed');
+
+  for (const [label, expression] of [
+    ["single-quoted", "'a,b' || public.resident_money_fix()::text"],
+    ["dollar-quoted", "$q$a,b$q$ || public.resident_money_fix()::text"],
+    ["block-commented", "1 /* comma, stays inert */ + public.resident_money_fix()"],
+  ]) {
+    const routineName = `round58_${label.replace('-', '_')}_wrapper`;
+    const result = applyTimeWriteTargets(
+      `CREATE FUNCTION public.${routineName}(p text DEFAULT ${expression}) ` +
+      'RETURNS text LANGUAGE sql AS $$ SELECT p $$; ' +
+      `SELECT public.${routineName}();`,
+    );
+    ok(result.unresolved,
+      `round-58: a ${label} comma cannot split away the callable remainder of a default`);
+  }
+
+  const definitionOnly = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round58_deferred_array_wrapper(' +
+    "p text[] DEFAULT ARRAY['a,b', public.resident_money_fix()]) " +
+    'RETURNS text LANGUAGE sql AS $$ SELECT p[1] $$;',
+  );
+  ok(!definitionOnly.unresolved && definitionOnly.targets.size === 0,
+    'round-58 MUTANT: a quoted comma and callable array default remain deferred until invocation');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);
