@@ -186,6 +186,21 @@ export function settledSuccess(firstPoll, secondPoll, elapsedMs) {
   return a.state === "success" && b.state === "success" && a.created_at === b.created_at;
 }
 
+// The pre-merge re-read is not "is it success now" — that would pass on a
+// DIFFERENT run that started and finished after the settle window. It must be the
+// same status: success at the identical created_at the settle pair agreed on.
+// (CodeRabbit, PR #441.)
+export function finalPollConfirms(settledPoll, finalPoll) {
+  const settled = newestStatus(settledPoll);
+  const final = newestStatus(finalPoll);
+  if (!settled || !final) return false;
+  return (
+    settled.state === "success" &&
+    final.state === "success" &&
+    settled.created_at === final.created_at
+  );
+}
+
 const S = (state, created_at) => ({ context: "CodeRabbit", state, created_at });
 
 // The real 5a12433f timeline, newest-first at two moments.
@@ -210,6 +225,24 @@ ok(
   "success at a DIFFERENT created_at is REJECTED (a new run finished in between)",
 );
 ok(settledSuccess([], [], 120_000) === false, "no CodeRabbit status at all is REJECTED (fail closed)");
+
+// Third poll, immediately before the merge.
+const laterRunFinished = [S("success", "2026-08-21T00:10:00Z"), S("pending", "2026-08-21T00:05:00Z")];
+const resumedAgain = [S("pending", "2026-08-21T00:05:00Z"), S("success", "2026-08-20T22:59:14Z")];
+
+ok(
+  finalPollConfirms(atFinalSuccess, atFinalSuccess) === true,
+  "final poll matching the settled status exactly is ACCEPTED",
+);
+ok(
+  finalPollConfirms(atFinalSuccess, laterRunFinished) === false,
+  "final poll showing a DIFFERENT run's success is REJECTED (new created_at)",
+);
+ok(
+  finalPollConfirms(atFinalSuccess, resumedAgain) === false,
+  "final poll showing a resumed pending is REJECTED",
+);
+ok(finalPollConfirms(atFinalSuccess, []) === false, "final poll with no status is REJECTED (fail closed)");
 
 // The skill must actually document the settle requirement, not just the query.
 for (const [name, file] of SKILLS) {

@@ -228,6 +228,12 @@ that logic as executable regressions over the real recorded `5a12433f` timeline 
 success followed by a resumed `pending` is rejected, two polls inside the 4-second window are
 rejected, a differing `created_at` is rejected, and only a stable final success is accepted.
 
+The pre-merge re-read is bound to that same status, not to "success now": the final poll must show
+`success` at the **identical `created_at`** the settle pair agreed on. Otherwise a *different* run
+that started and finished between the settle window and the merge would satisfy it, and its findings
+would never have been read. `finalPollConfirms()` covers this with four more regressions — exact
+match accepted; a later run's success, a resumed `pending`, and an absent status all rejected.
+
 **Stated plainly because it matters: this is a stability heuristic, not a terminal artifact.**
 CodeRabbit publishes no SHA-bound "review finished" marker — the walkthrough's HTML markers are
 structural and present throughout, which was checked rather than assumed. Closing the race properly

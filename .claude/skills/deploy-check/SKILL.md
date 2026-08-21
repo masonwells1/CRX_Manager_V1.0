@@ -293,7 +293,12 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    ```
 
    Run it, wait 90s, run it again; identical `success <timestamp>` on both is the settled signal.
-   Then re-read it once more immediately before merging.
+   **Write that timestamp down.**
+
+   Then re-read it once more immediately before merging — and the final read must show `success` at
+   **that same `created_at`**, not merely "success now". A bare success check would pass on a
+   *different* run that started and completed between your settle window and the merge, whose
+   findings you have never read. Same state **and** same timestamp, or the merge does not proceed.
 
    **Known limitation, tracked.** This is a stability heuristic, not a terminal artifact — CodeRabbit
    publishes no "review finished" marker bound to a SHA, and the walkthrough's HTML markers
