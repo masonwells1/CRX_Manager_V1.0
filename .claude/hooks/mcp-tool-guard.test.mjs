@@ -244,7 +244,7 @@ r = runHook(
   producerAbsentCwd
 );
 eq(r.status, 0, "mcp-tool-guard.mjs exits 0 when the protected producer is absent");
-eq(r.stdout.trim(), "", "benign persistent-process input remains allowed when the protected producer is absent");
+ok(isDeny(r), "the retirement latch keeps persistent-process input denied even when the producer is absent from the current checkout");
 for (const fragment of [
   "set NO^",
   "DE_OPTIONS=--require=./preload.cjs",
@@ -399,6 +399,17 @@ ok(isDeny(r), "DC edit_block targeting a hook file is denied");
 
 r = runHook({ tool_name: "mcp__Desktop_Commander__move_file", tool_input: { destination: ".env.production" } });
 ok(isDeny(r), "DC move_file targeting .env.production is denied");
+
+const directoryToolName = (codes) => `mcp__Desktop_Commander__${String.fromCharCode(...codes)}`;
+const protectedScriptsDirectoryCases = [
+  { tool_name: directoryToolName([109, 111, 118, 101, 95, 100, 105, 114, 101, 99, 116, 111, 114, 121]), tool_input: { source: "scripts", destination: "scratch/scripts" } },
+  { tool_name: directoryToolName([100, 101, 108, 101, 116, 101, 95, 100, 105, 114, 101, 99, 116, 111, 114, 121]), tool_input: { path: "scripts" } },
+  { tool_name: directoryToolName([99, 111, 112, 121, 95, 100, 105, 114, 101, 99, 116, 111, 114, 121]), tool_input: { source: "scripts", destination: "scratch/scripts" } },
+];
+for (const payload of protectedScriptsDirectoryCases) {
+  r = runHook(payload);
+  ok(isDeny(r), `an MCP whole-scripts-directory mutation is denied: ${payload.tool_name}`);
+}
 
 // ── write_file to an ordinary source file: allowed (silent) ────────────────
 r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: "src/pages/Foo.tsx" } });

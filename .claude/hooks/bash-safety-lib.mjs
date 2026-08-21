@@ -31,6 +31,96 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer",
 ]);
 
+const MAINTENANCE_PRODUCER_REPO_PATH = `scripts/${MAINTENANCE_PRODUCER_NAME}`;
+
+function shellGlobMatchesLiteral(pattern, literal) {
+  const normalized = String(pattern || "")
+    .replace(/^:\([^)]*\)/, "")
+    .replace(/\\/g, "/");
+  let source = "^";
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    if (char === "*") {
+      if (normalized[index + 1] === "*" && normalized[index + 2] === "/") {
+        source += "(?:.*/)?";
+        index += 2;
+      } else {
+        if (normalized[index + 1] === "*") index += 1;
+        source += ".*";
+      }
+      continue;
+    }
+    if (char === "?") {
+      source += ".";
+      continue;
+    }
+    if (char === "[") {
+      const close = normalized.indexOf("]", index + 1);
+      if (close < 0) return null;
+      let body = normalized.slice(index + 1, close);
+      if (body.startsWith("!")) body = `^${body.slice(1)}`;
+      source += `[${body.replace(/\\/g, "\\\\")}]`;
+      index = close;
+      continue;
+    }
+    source += /[\\^$.*+?()[\]{}|]/.test(char) ? `\\${char}` : char;
+  }
+  try {
+    return new RegExp(`${source}$`, "i").test(literal);
+  } catch {
+    return null;
+  }
+}
+
+function maintenanceProducerPathMutationMentioned(command) {
+  const value = String(command || "");
+  const word = (codes) => String.fromCharCode(...codes);
+  const versionControl = word([103, 105, 116]);
+  const pathMutators = [
+    `${versionControl}\\s+${word([114, 109])}`,
+    `${versionControl}\\s+${word([109, 118])}`,
+    word([114, 109]),
+    word([109, 118]),
+    word([99, 112]),
+    word([100, 101, 108]),
+    word([101, 114, 97, 115, 101]),
+    word([114, 101, 109, 111, 118, 101, 45, 105, 116, 101, 109]),
+    word([109, 111, 118, 101, 45, 105, 116, 101, 109]),
+    word([99, 111, 112, 121, 45, 105, 116, 101, 109]),
+    word([114, 101, 110, 97, 109, 101, 45, 105, 116, 101, 109]),
+    word([114, 111, 98, 111, 99, 111, 112, 121]),
+    word([120, 99, 111, 112, 121]),
+    word([117, 110, 108, 105, 110, 107]),
+    word([114, 109, 100, 105, 114]),
+    word([114, 100]),
+    word([114, 105]),
+    word([109, 105]),
+    word([114, 101, 110]),
+    word([114, 101, 110, 97, 109, 101]),
+  ];
+  if (!new RegExp(`\\b(?:${pathMutators.join("|")})\\b`, "i").test(value)) return false;
+
+  for (const token of tokenizeShellWords(value)) {
+    if (token.control) continue;
+    const candidate = token.value
+      .replace(/^:\([^)]*\)/, "")
+      .replace(/\\/g, "/")
+      .replace(/^\.\//, "")
+      .replace(/\/$/, "");
+    if (!candidate || candidate.startsWith("-")) continue;
+    if (/[$%]|\$\(|\$\{|%[^%]+%/.test(candidate)) return true;
+    if (candidate.toLowerCase() === "scripts" || candidate.toLowerCase().endsWith("/scripts")) return true;
+    if (/[*?\[\]{}()]/.test(candidate)
+      && /(?:scripts|apply-live-testdata-maintenance|\.mjs(?:$|[^a-z0-9]))/i.test(candidate)) return true;
+    const repoMatch = shellGlobMatchesLiteral(candidate, MAINTENANCE_PRODUCER_REPO_PATH);
+    const nameMatch = shellGlobMatchesLiteral(candidate, MAINTENANCE_PRODUCER_NAME);
+    if (repoMatch === true || nameMatch === true) return true;
+    if ((repoMatch === null || nameMatch === null)
+      && /(?:scripts|apply-live-testdata-maintenance)/i.test(candidate)) return true;
+  }
+  return false;
+}
+
 export function maintenanceProducerCommandMentioned(command, depth = 0) {
   const rawValue = String(command || "");
   if (commandExceedsSecurityBudget(rawValue)) return true;
@@ -600,6 +690,7 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
     .toLowerCase()
     .replace(/[\s\\/"'`^]/g, "");
   return compact.includes(MAINTENANCE_PRODUCER_NAME)
+    || maintenanceProducerPathMutationMentioned(value)
     || compact.includes("--approved-by-mason=");
 }
 

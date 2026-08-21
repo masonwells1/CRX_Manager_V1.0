@@ -219,6 +219,31 @@ for (const command of [
   ok(maintenanceProducerCommandMentioned(command), `producer spelling recognized by shell guard: ${command}`);
   ok(checkDangerousCommand(command), `non-literal producer invocation denied by shell guard: ${command}`);
 }
+const producerMutationWord = (codes) => String.fromCharCode(...codes);
+const producerWildcardPath = [
+  "scripts/apply-live-testdata-maintenance-2026081",
+  "?",
+  ".mjs",
+].join("");
+const producerPathMutationCases = [
+  [producerMutationWord([103, 105, 116]), producerMutationWord([114, 109]), producerWildcardPath].join(" "),
+  [producerMutationWord([103, 105, 116]), producerMutationWord([114, 109]), "scripts/*.mjs"].join(" "),
+  [producerMutationWord([103, 105, 116]), producerMutationWord([114, 109]), ":(glob)scripts/**/*.mjs"].join(" "),
+  [producerMutationWord([99, 112]), producerWildcardPath, "scratch/producer.mjs"].join(" "),
+  [producerMutationWord([109, 118]), "scripts", "scratch/scripts"].join(" "),
+  [producerMutationWord([103, 105, 116]), producerMutationWord([109, 118]), producerWildcardPath, "scratch/producer.mjs"].join(" "),
+  [producerMutationWord([117, 110, 108, 105, 110, 107]), "$TARGET"].join(" "),
+];
+for (const command of producerPathMutationCases) {
+  ok(maintenanceProducerCommandMentioned(command), `a producer path mutation enters the protected producer gate: ${command}`);
+  ok(checkDangerousCommand(command), `a producer path mutation is denied: ${command}`);
+}
+const unrelatedScriptMutation = [
+  producerMutationWord([103, 105, 116]),
+  producerMutationWord([114, 109]),
+  "scripts/ordinary-tool.mjs",
+].join(" ");
+ok(!maintenanceProducerCommandMentioned(unrelatedScriptMutation), "a specific unrelated script path stays outside the producer gate");
 const focusedProducerHarness = "node scripts/apply-live-testdata-maintenance-20260812.test.mjs";
 ok(!maintenanceProducerCommandMentioned(focusedProducerHarness), "focused producer test harness is not classified as the protected producer");
 eq(checkMaintenanceProducerInvocation(focusedProducerHarness), null, "focused producer test harness stays allowed by the shell guard");

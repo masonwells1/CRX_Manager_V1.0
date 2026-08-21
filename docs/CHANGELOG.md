@@ -117,6 +117,11 @@ All significant development milestones, in reverse chronological order.
   command bodies instead of opening a fail-open shell-wrapper path.
   Linux `unshare` namespace options are parsed and its child program is
   traversed as well, preventing namespace wrappers from hiding Node preloads.
+  Protection for the maintenance producer is latched independently of its
+  current checkout or `HEAD` presence; retiring it requires a separate reviewed
+  guard change. MCP mutations of the whole `scripts` directory are denied, and
+  shell pathspecs are checked with glob semantics so wildcard spellings that
+  could match the producer cannot relocate or untrack it first.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

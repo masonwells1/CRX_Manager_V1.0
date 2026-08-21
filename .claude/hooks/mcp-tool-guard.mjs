@@ -26,8 +26,7 @@
 // FAIL-OPEN, LOUD: any internal error here → allow, with a stderr warning. A
 // broken guard must never brick a session.
 
-import { existsSync, readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   checkCommandDeep,
@@ -73,19 +72,13 @@ const input = payload?.tool_input && typeof payload.tool_input === "object" ? pa
 const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const protectedProducerName = ["apply-live-testdata-maintenance-", "20260812.mjs"].join("");
 const protectedProducerRepoPath = `scripts/${protectedProducerName}`;
-const protectedProducerPath = path.join(cwd, "scripts", protectedProducerName);
-
-function producerTrackedAtHead() {
-  const result = spawnSync(
-    "git",
-    ["-C", cwd, "cat-file", "-e", `HEAD:${protectedProducerRepoPath}`],
-    { stdio: "ignore", windowsHide: true, timeout: 1_500 }
-  );
-  return result.status === 0;
-}
+// LATCHED safety boundary. Retirement requires an explicit reviewed change to
+// this guard and its regressions; producer tracking state cannot reopen the
+// persistent-process or signal routes by itself.
+const protectedProducerRetired = false;
 
 try {
-  const producerProtectionActive = producerTrackedAtHead() || existsSync(protectedProducerPath);
+  const producerProtectionActive = !protectedProducerRetired;
 
   if (DC_SIGNAL_RE.test(toolName) && producerProtectionActive) {
     out(
@@ -162,7 +155,7 @@ try {
       // DIRECTORY relocates every protected file inside it in one call — the
       // per-file patterns above never match a bare directory path.
       const isProtectedDir = surfaces.some((s) =>
-        /(^|\/)(supabase(\/migrations)?|\.claude(\/hooks)?)\/?$/i.test(s)
+        /(^|\/)(scripts|supabase(\/migrations)?|\.claude(\/hooks)?)\/?$/i.test(s)
       );
 
       if (isEnv || isSettings || isHookFile || isMigrationPath || isProtectedProducer || isGitExclusionControl || isProtectedDir) {
