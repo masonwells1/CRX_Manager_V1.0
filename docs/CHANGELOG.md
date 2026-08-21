@@ -175,6 +175,10 @@ All significant development milestones, in reverse chronological order.
   persisted `alias.*` configuration is denied, and invoked subcommands must be
   known Git built-ins rather than aliases or external `git-*` helpers. Bash and
   MCP regressions prove an inline `!node` alias cannot launch the ignored wrapper.
+  Direct path-backed scripts and binaries now enter exact-HEAD provenance checks
+  too, including `.bat`, `.cmd`, `.ps1`, shebang-style paths, and nested shell
+  dispatch. Bash and MCP regressions cover ignored, worktree-modified, and
+  locally committed but independently unreviewed direct executables.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

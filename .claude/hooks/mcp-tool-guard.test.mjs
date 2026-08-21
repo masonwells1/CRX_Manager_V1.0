@@ -619,6 +619,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
   const producerRelative = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
   const alternateRelative = "scripts/ignored-maintenance-copy.mjs";
   const trackedWrapperRelative = "scripts/reviewed-wrapper.mjs";
+  const trackedDirectRelative = "scripts/reviewed-direct.bat";
   const reviewedWrapperSource = "console.log('reviewed wrapper');\n";
   const wrapperSource = [
     'import { spawnSync } from "node:child_process";',
@@ -631,6 +632,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     mkdirSync(path.join(tmp, "scripts"), { recursive: true });
     writeFileSync(path.join(tmp, producerRelative), "console.log('tracked producer');\n");
     writeFileSync(path.join(tmp, trackedWrapperRelative), reviewedWrapperSource);
+    writeFileSync(path.join(tmp, trackedDirectRelative), "@echo reviewed direct wrapper\n");
     writeFileSync(path.join(tmp, ".gitignore"), "output/\n");
     const isolatedGitEnv = { ...process.env };
     for (const variableName of [
@@ -643,7 +645,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       ["config", "user.email", "guard-test@example.invalid"],
       ["config", "user.name", "Guard Test"],
       ["config", "commit.gpgsign", "false"],
-      ["add", producerRelative, trackedWrapperRelative, ".gitignore"],
+      ["add", producerRelative, trackedWrapperRelative, trackedDirectRelative, ".gitignore"],
       ["commit", "-m", "track producer"],
       ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ]) {
@@ -654,6 +656,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     const authoritativeResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true });
     eq(authoritativeResult.status, 0, "MCP wrapper fixture authoritative main SHA resolves");
     const reviewOptions = { authoritativeMainShaForTest: authoritativeResult.stdout.trim() };
+    eq(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), tmp, reviewOptions), null, "direct injection allows a directly executed tracked script at reviewed HEAD");
 
     const ignoredWrapperRelative = "output/ignored-wrapper.mjs";
     const ignoredMarkerPath = path.join(tmp, "output", "wrapper-executed.txt");
@@ -666,6 +669,13 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     ok(isDeny(r), "MCP start_process denies an ignored wrapper before it can spawn the producer");
     ok(r.stdout.includes("Blocked file-backed interpreter"), "the MCP denial comes from the HEAD-bound executor check");
     ok(!existsSync(ignoredMarkerPath), "the MCP-denied ignored wrapper never executes");
+    const ignoredDirectRelative = "output/ignored-wrapper.bat";
+    writeFileSync(path.join(tmp, ignoredDirectRelative), "@echo ignored direct wrapper\n");
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__start_process",
+      tool_input: { command: ignoredDirectRelative.replaceAll("/", "\\") },
+    }, tmp);
+    ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP denies a directly executed ignored script");
     const inlineGitAliasCommand = "git -c 'alias.run=!node output/ignored-wrapper.mjs' run";
     r = runHook({
       tool_name: "mcp__Desktop_Commander__start_process",
@@ -675,13 +685,19 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     ok(r.stdout.includes("Blocked Git alias"), "the MCP inline Git alias denial comes from the executable boundary");
     ok(!existsSync(ignoredMarkerPath), "the MCP-denied Git alias never executes its ignored wrapper");
     writeFileSync(path.join(tmp, trackedWrapperRelative), `${wrapperSource}// worktree divergence\n`);
+    writeFileSync(path.join(tmp, trackedDirectRelative), "@echo worktree-divergent direct wrapper\n");
     r = runHook({
       tool_name: "mcp__Desktop_Commander__start_process",
       tool_input: { command: `node -- ${trackedWrapperRelative}` },
     }, tmp);
     ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP origin/main-binds a worktree-divergent executor after --");
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__start_process",
+      tool_input: { command: trackedDirectRelative.replaceAll("/", "\\") },
+    }, tmp);
+    ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP denies a directly executed modified script");
     for (const args of [
-      ["add", trackedWrapperRelative],
+      ["add", trackedWrapperRelative, trackedDirectRelative],
       ["commit", "-m", "local-only malicious wrapper"],
       localRefMoveArgs,
     ]) {
@@ -689,6 +705,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       eq(gitResult.status, 0, `local-only malicious wrapper commit succeeds for the MCP regression: git ${args[0]}`);
     }
     ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, tmp, reviewOptions)?.includes("fresh exact-SHA independent review proof"), "direct injection proves a moved local tracking ref cannot replace the authoritative main SHA");
+    ok(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), tmp, reviewOptions)?.includes("fresh exact-SHA independent review proof"), "a directly executed script from an unreviewed local HEAD is denied");
     r = runHook({
       tool_name: "mcp__Desktop_Commander__start_process",
       tool_input: { command: `node -- ${trackedWrapperRelative}` },

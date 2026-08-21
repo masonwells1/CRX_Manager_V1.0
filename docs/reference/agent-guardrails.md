@@ -158,6 +158,12 @@ configuration, persisted alias configuration, and invoked subcommands that are
 not known Git built-ins fail closed. This blocks `!` shell aliases and external
 `git-*` helpers from launching ignored wrappers outside exact-HEAD inspection;
 real Bash and MCP hook regressions exercise the hostile inline-alias command.
+The provenance check also applies when a path-backed script or binary is the
+command itself rather than an interpreter operand. Direct `.bat`, `.cmd`,
+`.ps1`, shebang/executable paths, and nested shell dispatches must be tracked,
+byte-identical to exact HEAD, and independently reviewed on feature branches.
+Real Bash and MCP regressions deny ignored, worktree-modified, and locally
+committed but unreviewed direct executables.
 Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed

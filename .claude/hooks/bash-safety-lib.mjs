@@ -720,6 +720,16 @@ export function maintenanceProducerCommandMentioned(command, depth = 0, fileExec
   };
   const dynamicArgument = (argument) => /^(?:[$`@*?\[<{(]|![^!\r\n]+!|%[^%\r\n]+%)/.test(argument)
     || /^(?:--?|\/).*(?:[$`@*?\[<{(]|![^!\r\n]+!|%[^%\r\n]+%)/.test(argument);
+  const directPathBackedInvocation = (token, index, list) => {
+    if (!fileExecutorInspector || token.control || !invocationPosition(list, index)) return false;
+    if (list[index - 1]?.control && /^[<>]$/.test(list[index - 1].value)) return false;
+    const candidate = String(token.value || "").replace(/^&/, "");
+    if (!candidate
+      || !(/[\\/]/.test(candidate) || /\.(?:bat|cmd|ps1|sh|bash|zsh|ksh|exe|com|mjs|cjs|js|py|pl|rb|php)$/i.test(candidate))
+      || /^(?:https?|file):/i.test(candidate)) return false;
+    return fileExecutorInspector(candidate);
+  };
+  if (tokens.some(directPathBackedInvocation)) return true;
   if (tokens.some((token, index, list) => token.control
     && token.value === "&"
     && list[index + 1]?.control

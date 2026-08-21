@@ -282,6 +282,8 @@ for (const command of [
     const integrityPath = path.join(integrityRepo, ...integrityRelativePath.split("/"));
     const trackedWrapperRelative = "scripts/reviewed-wrapper.mjs";
     const trackedWrapperPath = path.join(integrityRepo, ...trackedWrapperRelative.split("/"));
+    const trackedDirectRelative = "scripts/reviewed-direct.bat";
+    const trackedDirectPath = path.join(integrityRepo, ...trackedDirectRelative.split("/"));
     const bootstrapRelative = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
     const bootstrapPath = path.join(integrityRepo, ...bootstrapRelative.split("/"));
     const ignoredWrapperRelative = "output/ignored-wrapper.mjs";
@@ -302,6 +304,7 @@ for (const command of [
     mkdirSync(path.dirname(ignoredWrapperPath), { recursive: true });
     writeFileSync(integrityPath, "export const reviewed = true;\n");
     writeFileSync(trackedWrapperPath, reviewedWrapperSource);
+    writeFileSync(trackedDirectPath, "@echo reviewed direct wrapper\n");
     writeFileSync(bootstrapPath, "console.log('review bootstrap');\n");
     const packageManifest = ["package", "json"].join(".");
     writeFileSync(path.join(integrityRepo, packageManifest), JSON.stringify({ scripts: { build: "vite build" } }));
@@ -313,7 +316,7 @@ for (const command of [
       ["init", "--quiet"],
       ["config", "user.email", "guard-test@example.invalid"],
       ["config", "user.name", "Guard Test"],
-      ["add", "--", integrityRelativePath, trackedWrapperRelative, bootstrapRelative, packageManifest, ".gitignore"],
+      ["add", "--", integrityRelativePath, trackedWrapperRelative, trackedDirectRelative, bootstrapRelative, packageManifest, ".gitignore"],
       ["commit", "--quiet", "-m", "test fixture"],
       ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ]) {
@@ -328,6 +331,7 @@ for (const command of [
     eq(checkCommandDeep(integrityCommand, integrityRepo, reviewOptions), null, "an exact producer launch is allowed when HEAD is the reviewed main commit and worktree bytes match");
     eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor is allowed when HEAD is the reviewed main commit");
     eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor after -- is allowed on the reviewed main commit");
+    eq(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions), null, "a directly executed tracked script is allowed when exact HEAD is reviewed");
     eq(checkCommandDeep("npm run build", integrityRepo, reviewOptions), null, "a reviewed package script is allowed on authoritative main");
     const shadowBootstrapPath = path.join(integrityRepo, "output", ...bootstrapRelative.split("/"));
     mkdirSync(path.dirname(shadowBootstrapPath), { recursive: true });
@@ -370,12 +374,16 @@ for (const command of [
     ok(checkCommandDeep(["vite -", "c ", untrackedConfig].join(""), integrityRepo, reviewOptions), "a short-form untracked package config is denied");
     rmSync(path.join(integrityRepo, untrackedConfig), { force: true });
     writeFileSync(trackedWrapperPath, `${wrapperSource}// worktree divergence\n`);
+    writeFileSync(trackedDirectPath, "@echo worktree-divergent direct wrapper\n");
     ok(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), "a worktree-divergent file-backed executor is denied");
     ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions), "a worktree-divergent file-backed executor after -- is denied");
+    ok(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions)?.includes("worktree bytes differ"), "a directly executed modified script is denied");
+    const divergentDirectHookResult = runHook({ tool_name: "Bash", tool_input: { command: trackedDirectRelative.replaceAll("/", "\\") } }, integrityRepo);
+    ok(divergentDirectHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denies a directly executed modified script");
     const divergentHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${trackedWrapperRelative}` } }, integrityRepo);
     ok(divergentHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook origin/main-binds a worktree-divergent executor after --");
     for (const args of [
-      ["add", "--", trackedWrapperRelative],
+      ["add", "--", trackedWrapperRelative, trackedDirectRelative],
       ["commit", "--quiet", "-m", "unreviewed malicious wrapper"],
       localRefMoveArgs,
     ]) {
@@ -383,13 +391,27 @@ for (const command of [
       eq(result.status, 0, `local-only malicious wrapper commit succeeds for the regression: git ${args[0]}`);
     }
     ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions)?.includes("fresh exact-SHA independent review proof"), "a local commit plus a moved local tracking ref cannot forge authoritative provenance");
+    ok(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions)?.includes("fresh exact-SHA independent review proof"), "a directly executed script from an unreviewed local HEAD is denied");
     const localCommitHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${trackedWrapperRelative}` } }, integrityRepo);
     ok(localCommitHookResult.stdout.includes("Blocked file-backed interpreter"), "the production Bash hook refuses a test environment local main substitution");
     eq(checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions), null, "the reviewed byte-identical proof producer remains available to bootstrap feature-branch review");
     writeFileSync(trackedWrapperPath, reviewedWrapperSource);
     writeFileSync(ignoredWrapperPath, wrapperSource);
+    const ignoredDirectRelative = "output/ignored-wrapper.bat";
+    writeFileSync(path.join(integrityRepo, ...ignoredDirectRelative.split("/")), "@echo ignored direct wrapper\n");
+    const ignoredPowerShellRelative = "output/ignored-wrapper.ps1";
+    writeFileSync(path.join(integrityRepo, ...ignoredPowerShellRelative.split("/")), "Write-Output ignored\n");
+    const ignoredShebangRelative = "output/ignored-shebang";
+    writeFileSync(path.join(integrityRepo, ...ignoredShebangRelative.split("/")), "#!/bin/sh\necho ignored\n");
     ok(checkCommandDeep(`node ${ignoredWrapperRelative}`, integrityRepo, reviewOptions), "an ignored file-backed executor that spawns the producer is denied");
     ok(checkCommandDeep(`node -- ${ignoredWrapperRelative}`, integrityRepo, reviewOptions), "an ignored file-backed executor after -- is denied");
+    ok(checkCommandDeep(ignoredDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions)?.includes("ignored or untracked"), "a directly executed ignored script is denied");
+    ok(checkCommandDeep(`cmd /c ${ignoredDirectRelative.replaceAll("/", "\\")}`, integrityRepo, reviewOptions)?.includes("ignored or untracked"), "cmd dispatch cannot hide a directly executed ignored script");
+    ok(checkCommandDeep(`& .\\${ignoredPowerShellRelative.replaceAll("/", "\\")}`, integrityRepo, reviewOptions)?.includes("ignored or untracked"), "the PowerShell invocation operator cannot hide a directly executed ignored script");
+    ok(checkCommandDeep(`./${ignoredShebangRelative}`, integrityRepo, reviewOptions)?.includes("ignored or untracked"), "a directly executed ignored shebang path is denied");
+    ok(checkCommandDeep(`bash -c ${JSON.stringify(`./${ignoredShebangRelative}`)}`, integrityRepo, reviewOptions), "nested shell dispatch cannot hide a directly executed ignored shebang path");
+    const ignoredDirectHookResult = runHook({ tool_name: "Bash", tool_input: { command: ignoredDirectRelative.replaceAll("/", "\\") } }, integrityRepo);
+    ok(ignoredDirectHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denies a directly executed ignored script");
     const ignoredHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${ignoredWrapperRelative}` } }, integrityRepo);
     ok(ignoredHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies an ignored wrapper before it can spawn the producer");
     ok(ignoredHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denial comes from the HEAD-bound executor check");
