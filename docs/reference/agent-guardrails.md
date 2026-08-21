@@ -177,7 +177,11 @@ installed toolchain runs inside the repository's reviewed commit/preflight gate.
 Package-manager `--userconfig`/`--globalconfig` and startup-setting overrides
 are denied, as are inherited or command-local Node/npm/Python preload and
 search-path environment controls. Default npm config files fail closed when
-they contain executable `node-options` or `script-shell` settings. Reviewed
+they contain executable `node-options` or `script-shell` settings. Command-local
+npm home/config and shell relocation through `HOME`,
+`USERPROFILE`, `XDG_CONFIG_HOME`, `COMSPEC`, or `SHELL` is also denied across
+POSIX, PowerShell, CMD, `env`, and `command env` spellings, so an ignored
+alternate-home `.npmrc` cannot redirect lifecycle execution. Reviewed
 Python script launches require both `-I` and `-S`, excluding environment search
 paths, user-site modules, and automatic site initialization before exact-HEAD
 code runs. Bash and MCP regressions cover npm user-config injection and an

@@ -27,6 +27,10 @@ All significant development milestones, in reverse chronological order.
   dependencies fail closed, preventing a clean tracked wrapper from launching
   modified ignored `node_modules` code. The exact maintenance producer and its
   exact-review proof bootstrap remain the only explicit audited exceptions.
+- Command-local npm home/config and shell relocation (`HOME`, `USERPROFILE`,
+  `XDG_CONFIG_HOME`, `COMSPEC`, or `SHELL`) is denied before package execution,
+  including POSIX, PowerShell, CMD, `env`, and `command env` forms. Alternate
+  ignored `.npmrc` regressions prove a redirected `script-shell` never runs.
 
 ## 2026-08-20 — Close the remaining PR #402 maintenance-command guard gaps
 

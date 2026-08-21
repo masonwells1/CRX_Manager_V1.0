@@ -134,10 +134,10 @@ function runtimeExecutionSegments(command) {
     while (end < tokens.length && !hardBoundary(tokens[end])) end += 1;
     const words = tokens.slice(start, end).filter((token) => !token.control);
     let cursor = 0;
-    while (/^[A-Za-z_]\w*\+?=/.test(words[cursor]?.value || "")) cursor += 1;
+    while (/^(?:[A-Za-z_]\w*\+?=|\$env:[A-Za-z_]\w*\s*=)/i.test(words[cursor]?.value || "")) cursor += 1;
     while (wrappers.has(executableName(words[cursor]))) {
       cursor += 1;
-      while (/^(?:-|[A-Za-z_]\w*\+?=)/.test(words[cursor]?.value || "")) cursor += 1;
+      while (/^(?:-|[A-Za-z_]\w*\+?=|\$env:[A-Za-z_]\w*\s*=)/i.test(words[cursor]?.value || "")) cursor += 1;
     }
     if (words[cursor]) segments.push({ executable: executableName(words[cursor]), args: words.slice(cursor + 1).map((token) => token.value) });
     start = end + 1;
@@ -151,7 +151,7 @@ function runtimePreloadControlReason(command) {
   if (!segments.some((segment) => runtimeNames.has(segment.executable))) return null;
   const inherited = Object.keys(process.env).find((name) => DANGEROUS_RUNTIME_ENV_NAME_RE.test(name));
   if (inherited) return `Blocked runtime preload/search-path control because inherited ${inherited} is present.`;
-  const names = "(?:NODE_OPTIONS|NPM_CONFIG_(?:USERCONFIG|GLOBALCONFIG|NODE_OPTIONS|SCRIPT_SHELL)|PYTHON(?:PATH|HOME|STARTUP|USERBASE|INSPECT))";
+  const names = "(?:NODE_OPTIONS|NPM_CONFIG_(?:USERCONFIG|GLOBALCONFIG|NODE_OPTIONS|SCRIPT_SHELL)|PYTHON(?:PATH|HOME|STARTUP|USERBASE|INSPECT)|HOME|USERPROFILE|XDG_CONFIG_HOME|COMSPEC|SHELL)";
   const itemWriterNames = [[115, 101, 116], [110, 101, 119], [99, 111, 112, 121], [109, 111, 118, 101]]
     .map((codes) => String.fromCharCode(...codes)).join("|");
   const environmentSetterName = String.fromCharCode(83, 101, 116, 69, 110, 118, 105, 114, 111, 110, 109, 101, 110, 116, 86, 97, 114, 105, 97, 98, 108, 101);

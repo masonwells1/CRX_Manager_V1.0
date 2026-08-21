@@ -398,6 +398,23 @@ for (const command of [
       const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
       ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies npm startup configuration injection: " + command);
     }
+    const alternateHome = path.join(integrityRepo, "output", "alternate-home");
+    const alternateHomeMarker = path.join(integrityRepo, "output", "alternate-home-shell-executed.txt");
+    mkdirSync(alternateHome, { recursive: true });
+    writeFileSync(path.join(alternateHome, ".npmrc"), `script-shell=${path.join(alternateHome, "evil.cmd")}\n`);
+    writeFileSync(path.join(alternateHome, "evil.cmd"), `@echo hostile>"${alternateHomeMarker}"\r\n`);
+    for (const command of [
+      "env HOME=output/alternate-home npm --version",
+      "command env USERPROFILE=output/alternate-home npm --version",
+      "XDG_CONFIG_HOME=output/alternate-home npm --version",
+      "$env:HOME='output/alternate-home'; npm --version",
+      "set USERPROFILE=output/alternate-home && npm --version",
+    ]) {
+      ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes("runtime preload/search-path mutation"), "alternate npm home/config relocation is denied: " + command);
+      const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies alternate npm home/config relocation: " + command);
+    }
+    ok(!existsSync(alternateHomeMarker), "the denied alternate-home npm configuration never executes its ignored shell");
     mkdirSync(path.join(integrityRepo, "output"), { recursive: true });
     writeFileSync(path.join(integrityRepo, "output", "sitecustomize.py"), 'raise RuntimeError("sitecustomize executed")\n');
     ok(checkCommandDeep(`PYTHONPATH=output python ${reviewedPythonRelative}`, integrityRepo, reviewOptions)?.includes("runtime preload/search-path mutation"), "PYTHONPATH cannot preload an unreviewed sitecustomize module");

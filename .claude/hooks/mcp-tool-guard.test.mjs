@@ -106,6 +106,11 @@ for (const command of [
   "$env:NPM_CONFIG_USERCONFIG='output/evil.npmrc'; npm run agent-health",
   "PYTHONPATH=output python scripts/backup-via-rest.py",
   "python scripts/backup-via-rest.py",
+  "env HOME=output/alternate-home npm --version",
+  "command env USERPROFILE=output/alternate-home npm --version",
+  "XDG_CONFIG_HOME=output/alternate-home npm --version",
+  "$env:HOME='output/alternate-home'; npm --version",
+  "set USERPROFILE=output/alternate-home && npm --version",
 ]) {
   const result = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
   eq(result.status, 0, `mcp-tool-guard exits 0 after runtime startup injection: ${command}`);
@@ -713,6 +718,23 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     }, tmp);
     ok(isDeny(r), "MCP start_process denies a reviewed script that can spawn ignored package code");
     ok(!existsSync(ignoredPackageMarker), "the MCP-denied child runner never executes the ignored package shim");
+    const alternateHome = path.join(tmp, "output", "alternate-home");
+    const alternateHomeMarker = path.join(tmp, "output", "alternate-home-shell-executed.txt");
+    mkdirSync(alternateHome, { recursive: true });
+    writeFileSync(path.join(alternateHome, ".npmrc"), `script-shell=${path.join(alternateHome, "evil.cmd")}\n`);
+    writeFileSync(path.join(alternateHome, "evil.cmd"), `@echo hostile>"${alternateHomeMarker}"\r\n`);
+    for (const command of [
+      "env HOME=output/alternate-home npm --version",
+      "command env USERPROFILE=output/alternate-home npm --version",
+      "XDG_CONFIG_HOME=output/alternate-home npm --version",
+    ]) {
+      r = runHook({
+        tool_name: "mcp__Desktop_Commander__start_process",
+        tool_input: { command },
+      }, tmp);
+      ok(isDeny(r), "MCP denies alternate npm home/config relocation: " + command);
+    }
+    ok(!existsSync(alternateHomeMarker), "the MCP-denied alternate-home npm configuration never executes its ignored shell");
 
     const ignoredWrapperRelative = "output/ignored-wrapper.mjs";
     const ignoredMarkerPath = path.join(tmp, "output", "wrapper-executed.txt");
