@@ -1,7 +1,7 @@
 {
   "_meta": {
     "format_version": 5,
-    "captured_at": "2026-08-21T13:04:35.582061Z",
+    "captured_at": "2026-08-22T15:20:43.057198Z",
     "generator": "scripts/generate-trigger-fanout.mjs",
     "capture_method": "supabase-cli-db-query-linked",
     "source_project": "rhyzpcqhnizqbxphqdkr",
