@@ -57,7 +57,9 @@ requires Mason's scheduling approval before any separately authorized live apply
 **Decision:** Keep the pending draw-down intent migration's fail-closed requirement that no
 unexpired legacy draw receipt exists before cutover; because receipts live for 24 hours, schedule a
 deliberate 24-hour no-successful-draw window before any separately authorized apply.
-**Why:** The shared retry helper would refuse each legacy receipt safely, but a planned off-season or
+**Why:** The shared retry helper would handle each legacy receipt safely — an exact retry refuses the
+duplicate business write and returns the already-committed receipt, rather than erroring or returning
+nothing (`scripts/smoke/smoke-draw-down-quote-intent-binding.sql`) — but a planned off-season or
 weekend freeze gives the wrapper a clean invariant and removes ambiguity from a money/inventory cutover.
 **What this forbids/implies:** do not weaken the zero-receipt preflight to avoid the wait. Verify zero
 read-only, keep draws paused through commit, and obtain separate live-apply authority; this PR applies nothing.
