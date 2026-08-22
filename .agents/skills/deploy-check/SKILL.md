@@ -165,8 +165,25 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    All three checks must print their marker:
 
    ```bash
-   test "$(git rev-parse <HEAD>^1)" = "<REVIEWED_SHA>" && echo PARENT1_IS_REVIEWED_COMMIT
+   git rev-parse <HEAD>^1
    ```
+
+   **Do not compare that to a SHA you typed in.** Take the value this prints and run the *full*
+   review gate against it — the canonical walkthrough stamp naming it, plus its own settled
+   `commits/<PARENT1>/statuses` success, or a submitted review object stamped with it. The exception
+   is then "a no-op merge of a parent that independently passes the normal gate", which is
+   fail-closed, rather than "a no-op merge of whatever the operator calls reviewed".
+
+   ```bash
+   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | select(.body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) | select((.body | contains("auto-generated reply by CodeRabbit")) | not) | .body' | grep -oE "and <PARENT1>"
+   ```
+
+   An earlier revision wrote this as `test "$(git rev-parse <HEAD>^1)" = "<REVIEWED_SHA>"`, with
+   `<REVIEWED_SHA>` supplied by whoever ran the procedure. Codex flagged that as High on PR #441 and
+   was right: an unreviewed parent labelled `<REVIEWED_SHA>` passes all three tree checks, and since
+   the merge commit itself deliberately carries no stamp, that path lands unreviewed code on `main`
+   while looking like deterministic proof. A check whose input is an unverified human claim is not a
+   proof — it is the claim, restated in shell.
 
    ```bash
    git merge-base --is-ancestor <HEAD>^2 <BASE_SHA> && echo ANCESTOR_OF_BASE

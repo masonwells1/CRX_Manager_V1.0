@@ -138,9 +138,17 @@ for (const [name, file] of SKILLS) {
   );
 
   // ── No-op-merge fallback must assert, not print ───────────────────────────
+  // The parent must be PROVEN reviewed, never asserted equal to a SHA the
+  // operator supplied — an unreviewed parent labelled <REVIEWED_SHA> would pass
+  // all three tree checks, and the merge commit itself carries no stamp by
+  // design. (Codex CRX-SEC-001, High, PR #441.)
   ok(
-    hasCommandWithAll(cmds, ["git rev-parse <HEAD>^1", "<REVIEWED_SHA>", "PARENT1_IS_REVIEWED_COMMIT"]),
-    `${name}: parent-1 identity is asserted against the reviewed SHA, not printed`,
+    noCommandWithAll(cmds, ["<REVIEWED_SHA>"]),
+    `${name}: no check compares HEAD^1 to an operator-supplied "reviewed" SHA`,
+  );
+  ok(
+    hasCommandWithAll(cmds, ["issues/<n>/comments", 'grep -oE "and <PARENT1>"']),
+    `${name}: HEAD^1 is itself run through the canonical-stamp review gate`,
   );
   ok(
     hasCommandWithAll(cmds, ["git merge-tree --write-tree", "<HEAD>^{tree}", "MERGE_ADDED_NOTHING"]),

@@ -234,6 +234,27 @@ that started and finished between the settle window and the merge would satisfy 
 would never have been read. `finalPollConfirms()` covers this with four more regressions — exact
 match accepted; a later run's success, a resumed `pending`, and an absent status all rejected.
 
+**The merge-only exception must prove its parent, not be told about it.** Codex returned High on
+`b3330c85`: the fallback compared `git rev-parse <HEAD>^1` against a `<REVIEWED_SHA>` supplied by
+whoever ran the procedure, and nothing tied that value to a real CodeRabbit review. An unreviewed
+parent labelled `<REVIEWED_SHA>` passes all three tree checks — and since the merge commit carries no
+stamp by design, that path lands unreviewed code on `main` while presenting as deterministic proof. A
+check whose input is an unverified human claim is not a proof; it is the claim restated in shell.
+The operator-supplied value is gone: the procedure prints `<HEAD>^1` and runs the **full** review gate
+against that parent (canonical stamp naming it plus its own settled status, or a submitted review
+object stamped with it). The exception is now "a no-op merge of a parent that independently passes the
+normal gate". Two command-scoped regressions enforce it — no command may mention `<REVIEWED_SHA>`, and
+`HEAD^1` must appear in the canonical-stamp query.
+
+**Open, and Mason's call: whether `auto_pause_after_reviewed_commits: 2` may stand before enforcement
+exists.** Codex's CRX-SEC-002 (Medium) argues it should not — fewer automatic reviews put more weight
+on a final check that is still prose. The counter-weight is that `2` is precisely what stopped the
+review allowance being spent on half-finished commits, the problem this PR was opened to solve;
+restoring `5` re-creates the throttle. This is a cost/risk trade-off for the owner, not an engineering
+call, and it is recorded here undecided rather than settled quietly in either direction. Recommended
+path: keep `2` and land the `pr-merge-guard.mjs` enforcement follow-up, which removes the objection at
+its root instead of paying for it in review budget.
+
 **Stated plainly because it matters: this is a stability heuristic, not a terminal artifact.**
 CodeRabbit publishes no SHA-bound "review finished" marker — the walkthrough's HTML markers are
 structural and present throughout, which was checked rather than assumed. Closing the race properly
