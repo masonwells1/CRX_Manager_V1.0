@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-19 UTC, read-only live re-read.** **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
+**Last verified: 2026-08-22 UTC, read-only live re-read of the ledger and of every `job_chemicals` row.** The ledger figures below are unchanged from the 2026-08-19 pass; issue entries not named in the 2026-08-22 changes were not individually re-verified in this pass. **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
 of the stored ledger name), and `docs/reference/migration-history.md` uses the 14-digit definition, so this file now matches it. A plain `max(name)` returns the slug `year_end_summary`. The ordering claim holds over the prefixed subset, not over the raw column.) Two things this pass corrected in this file: (1) the header below claimed `20260812003315` / 962 rows, **nine applies** and six days of ledger staleness out of date — the six 2026-08-12 recoveries listed below, then `20260812212323`, `20260813011751` and `20260816174353`, which is 962 + 9 = 971; (2) CRX-SEC-1 **applied live on 2026-08-16** — see the new CLOSED entry immediately below — while `docs/reference/migration-history.md` row 886 still called it an unapplied local candidate. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, matching this ledger; it was **not** re-derived in this pass. **The 2026-08-10 money figures quoted further down this file are stale** — a read-only re-measure on 2026-08-18 finds `order_items.total_price`, `order_items.profit`, `commissions.commission_amount` and `commissions.order_profit` all at **0** sub-cent rows, with only `quotes.total_cost` still holding **2**; the "43 dirty rows" and "49 rows" figures below are superseded by that measurement (recorded in full in `docs/manual/CURRENT_STATE.md` section 2). Everything else below was left as separately dated historical evidence and was not re-verified in this pass.
 
 **Superseded 2026-08-17 header, kept for provenance — ledger high-water only.** Live ledger high-water is **`20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc`. This pass re-read the live ledger and nothing else: it corrects a high-water this document was stating wrongly, and it does **not** re-certify the issue narrative below, which keeps its own older dates. **The schema registry is NOT refreshed to this high-water** — it is still stamped to the 962-row mark and is now nine migrations behind. Beyond the six migrations named in the next paragraph, three more have landed since: ledger versions `20260812212323`, `20260813011751`, `20260816174353`, carrying submitted names `20260812130145_bind_return_receipts_to_intent_and_restore_overdue`, `20260813070000_pin_return_idempotency_helper_contract`, `20260813080000_lock_quote_versions_writes_to_rpc`. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded **name** when reconciling an apply.
@@ -264,7 +264,25 @@ non-acre denominator has **not** been checked, so the real-world exposure is unk
 `blendMathValidator.ts` deliberately does its own suffix stripping rather than reuse this helper, and
 documents why at `rateBaseUnit`. That sidesteps the problem for blend tickets only.
 
-**Not started.** Investigate live `rate_unit` values first; a fix without that is speculative.
+**Live `rate_unit` values checked 2026-08-22 (read-only).** All four `job_chemicals` rows carry
+`pt/ac`, `oz`, `oz`, and the junk string `32`. **None has a non-acre denominator**, so the
+real-world exposure on the job path is currently zero — but that is a fact about today's four rows,
+not a guarantee, and free-text entry can produce one at any time.
+
+**Half closed, PARKED.** Migration `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
+(history row 891, branch `claude/save-job-server-side-chem-unit`, **written and proven, NOT applied
+to live**) makes `save_job` refuse a chemical line whose rate unit has a non-acre denominator, with
+`CHEM_RATE_DENOMINATOR_NOT_ACRES`. That turns the dangerous direction — nothing on screen, hard
+failure at billing — into a refusal at save time, naming the product and the offending unit. Proven
+in a throwaway container: an `oz/cwt` line is refused and leaves no `jobs` or `job_chemicals` row.
+
+**Still open after that migration applies:** (a) `baseUnitOfRate` itself still collapses `oz/cwt` to
+`oz` on the client — the guard that stops such a row reaching `save_job` (`rateDenominatorIsUnrecognized`
+in `chemRowDefects`) rides on PR #436 and is **not on `main`**, so until that PR lands the operator
+still sees "convertible, priced fine" and only learns otherwise when the save is rejected; and (b)
+the blend-ticket path is untouched — `create_invoice_from_blend_ticket` still raises
+`BLEND_TICKET_UNIT_UNCONVERTIBLE` at billing time, and `blendMathValidator.ts` still does its own
+suffix stripping.
 
 ---
 

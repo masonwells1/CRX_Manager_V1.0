@@ -2,6 +2,58 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-22 — The chemical-unit and job-money invariants move out of React and into `save_job` (parked)
+
+`EXECUTE` on `save_job` is granted to `authenticated`. Every logged-in user can therefore call it
+directly, and the old body took `total_cost_cents` / `total_price_cents` straight out of the
+caller's payload with `COALESCE` and inserted `job_chemicals` rows without ever comparing `unit`
+against `rate_unit`. The Dry-oz/Lb 16x billing guard shipped on PR #436 lives entirely in
+`JobDetail.tsx`, so a stale browser tab, a replayed request, or a hand-built RPC call walked past
+it. That is the standing adversarial-review finding — *the financial/unit invariant is enforced
+only in React* — and a client-side check is early warning, not a boundary.
+
+One new migration, `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
+(authored 2026-08-22; the file keeps a 2026-08-20 sequence stamp, which is what the disk ordering
+guard keys on, and it still sorts after every existing candidate). `CREATE OR REPLACE` on the
+**identical six-argument signature** — a body replacement, never a new overload, so the frozen
+contract `JobDetail.tsx:2351` depends on is untouched and the existing grants are preserved.
+
+- **A line whose units provably disagree is refused** (`CHEM_UNIT_MISMATCH`), naming the product
+  and both units. The predicate mirrors `chemLineBillingHazard` condition for condition, so nothing
+  the page accepts today becomes unsaveable: it skips a row with no product, skips when either
+  normalized unit is blank or unrecognised, skips when they are equal, skips a NaN or non-positive
+  quantity, and treats `quantity = rate x acres` carried into the price's unit as the *only* proof
+  of safety, at the client's own tolerance. Acreage is summed from `p_fields`, mirroring
+  `sumAcres(fieldRows)` — deliberately not the caller-supplied `total_acres`.
+- **A rate measured per anything but an acre is refused** (`CHEM_RATE_DENOMINATOR_NOT_ACRES`),
+  matching the page's `rateDenominatorIsUnrecognized`. This one step goes beyond the literal plan
+  and is called out rather than slipped in: leaving it client-only would let the review gate
+  legitimately re-raise the very finding this migration exists to close.
+- **The money totals are derived here**, from `p_chemicals` via `safe_cents_qty`, rounded per line
+  then summed — the same order the page's `centsTimesQuantity` uses — and the caller's totals are
+  ignored outright. That is what makes a stale tab harmless.
+
+The live unit tables are **reused, not reimplemented** (`normalize_rate_unit`,
+`field_app_priced_quantity`, `safe_cents_qty`). Divergence between the client's copy of the unit
+table and the server's is the original 16x bug; a second server-side copy would repeat it.
+
+**Blast radius measured before writing, not estimated.** All four `job_chemicals` rows in the live
+database pass the new predicate — one has a NULL `unit`, two have `rate_unit = unit = 'oz'`, one has
+`quantity = 0` — and the derived totals reproduce every stored total to the cent.
+
+**Proof.** The file installs cleanly on stock PostgreSQL 15, and eight behaviour tests ran against
+it in a throwaway container over a real-shape schema whose three helper bodies were copied verbatim
+from the live catalog: the three live row shapes save with totals matching live exactly (including
+`55 x 3752.64 = 206395.2`, pinning ROUND-half-away-from-zero against the page's BigInt math), a
+legitimate oz-rate/lb-price conversion saves, the 16x shape is refused, an `oz/cwt` rate is refused,
+a caller claiming totals of 1 cent still stores the derived `187632` / `206395`, and the two refused
+saves leave no `jobs` or `job_chemicals` row behind. Both halves are mutation-pinned — disabling the
+unit comparison lets the 16x line save, and restoring the caller-supplied cost total turns the money
+assertions red — restored after.
+
+No frontend change; the React guard stays as early warning. **Parked: not applied to production.**
+An interactive session still needs Mason's explicit in-chat approval for a live apply.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —

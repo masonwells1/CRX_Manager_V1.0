@@ -97,6 +97,11 @@ supabase/migrations/20260819232000_bind_draw_down_receipts_to_intent.sql text eo
 scripts/smoke/smoke-draw-down-quote-intent-binding.sql text eol=lf
 scripts/smoke/prove-draw-down-quote-intent-binding.mjs text eol=lf
 
+# save_job server-side chemical-unit invariant + derived money totals. History row 891
+# records a SQL sha256 over this file's LF bytes, so a CRLF checkout would hash to a
+# different value than the one the apply proof binds.
+supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql text eol=lf
+
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf
 supabase/baselines/*.json text eol=lf
