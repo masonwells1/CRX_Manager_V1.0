@@ -11,6 +11,7 @@ import { scratchHookEnvironment } from "./git-test-env.mjs";
 import {
   claudeProofValid,
   contentIsRisky,
+  gitPushArgumentsUnbindable,
   gitPushCwd,
   looksLikeMsysPath,
   pushNamesMsysPath,
@@ -2351,6 +2352,53 @@ if (process.platform === "win32") {
 }
 assert.equal(pushNamesMsysPath("git -C /c/repo push origin main", "linux"), false, "off Windows there is nothing to explain");
 
+// ── an argument the shell joins across a space (2026-08-21, round 9) ─────────
+// This was a fail-OPEN, not an over-refusal. `-C /c/My\ Repo` is ONE argument to
+// the shell and two to this file's tokenizer, so the literal parser found a bare
+// word where `push` or a global option belongs, decided the command was not a
+// push, and the guard exited through its early non-push path — allowing a
+// `HEAD:main` push with no destination, force, refspec or proof check at all.
+// Platform-independent: it is shell quoting, not MSYS, and `C:/My\ Repo` breaks
+// identically.
+// Plain strings, not String.raw: a raw template cannot END in a backslash — it
+// would escape its own closing backtick — and the expected fragment does.
+assert.deepEqual(
+  gitPushArgumentsUnbindable("git -C /c/My\\ Repo push origin HEAD:main"),
+  ["/c/My\\"],
+  "an escaped space in a -C value is caught, naming the fragment",
+);
+assert.deepEqual(
+  gitPushArgumentsUnbindable("git -C C:/My\\ Repo push origin HEAD:main"),
+  ["C:/My\\"],
+  "…and it is not an MSYS-only problem — a native path escapes the same way",
+);
+assert.equal(
+  gitPushArgumentsUnbindable(`git -C /c/My" "Repo push origin HEAD:main`).length,
+  2,
+  "adjacent quoted spans the shell concatenates are caught too",
+);
+// The other half of the rule: it must not refuse ordinary commands. Each of
+// these once broke, or would break, a plausible real invocation.
+for (const clean of [
+  "git stash push -m 'wip'",
+  "git status",
+  `git commit -m "it's fine, will push later"`,
+  `git commit -m "it's fine" && git push origin feature/x`,
+  `git -C "C:/Mason's Repo" push origin feature/x`,
+  "git -C C:/CRX_Manager push origin feature/x",
+  "git push origin feature/x",
+  String.raw`git -C C:\CRX_Manager push origin feature/x`,
+]) {
+  assert.deepEqual(gitPushArgumentsUnbindable(clean), [], `no hazard in an ordinary command: ${clean}`);
+}
+// Spelled out, because each is a distinct near-miss:
+//  - `git stash push` is a subcommand named push, not a network push;
+//  - a commit MESSAGE containing "push" is inside a quoted token, so `push` is
+//    never a token of its own and the rule does not engage;
+//  - an apostrophe inside a double-quoted path (`"C:/Mason's Repo"`) is a
+//    literal, not an operator — counting quotes without first removing complete
+//    quoted spans refused that command, which is a real Windows folder shape.
+
 // ── full-hook end-to-end: an MSYS -C path must not be denied ────────────────
 {
   const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "codex-push-guard.mjs");
@@ -2449,7 +2497,46 @@ assert.equal(pushNamesMsysPath("git -C /c/repo push origin main", "linux"), fals
       assert.match(msysUnderProxy.reason, /Git Bash path/, "…and says so, instead of blaming GIT_CONFIG* or git");
       assert.doesNotMatch(msysUnderProxy.reason, /spawnSync/, "…never the raw spawn error again");
       assert.doesNotMatch(msysUnderProxy.reason, /GIT_CONFIG\* variables set/, "…nor the inherited-override diagnostic, which fired first before the hoist");
+      // The NATIVE path diagnostic needed the same hoist. Under the proxy, a
+      // `-C` naming a missing directory or a file was answered by the
+      // inherited-override proof's generic ENOENT denial, so fixing only the
+      // MSYS half left the identical hole one spelling over (Codex P2, round 9).
+      for (const [label, target] of [
+        ["missing directory", path.join(work, "definitely-not-a-repo").replace(/\\/g, "/")],
+        ["a regular file", path.join(work, "seed.txt").replace(/\\/g, "/")],
+      ]) {
+        const nativeUnderProxy = runHook(`git -C ${target} push origin main:refs/heads/feature`, proxyEnv);
+        assert.equal(nativeUnderProxy.decision, "deny", `a native unusable -C still fails closed under the proxy (${label})`);
+        assert.match(nativeUnderProxy.reason, /cannot resolve to a real directory/, `…with the tailored diagnostic (${label})`);
+        assert.doesNotMatch(nativeUnderProxy.reason, /GIT_CONFIG\* variables set/, `…not the inherited-override one (${label})`);
+        assert.doesNotMatch(nativeUnderProxy.reason, /spawnSync/, `…and never the raw spawn error (${label})`);
+      }
     }
+
+    // ── the fail-OPEN: an argument the shell joins across a space ────────────
+    // Platform-independent, so Linux CI covers it. Before this fix the hook
+    // exited through its early non-push path and returned NO output at all —
+    // `main` reached with every check skipped. Asserting "deny" is therefore
+    // meaningful on its own here: the pre-fix behaviour was allow, not a
+    // different denial (Codex P1, round 9).
+    for (const [label, command] of [
+      ["escaped space", String.raw`git -C /c/My\ Repo push origin main:refs/heads/main`],
+      ["escaped space, native path", String.raw`git -C C:/My\ Repo push origin main:refs/heads/main`],
+      ["adjacent quoted spans", `git -C /c/My" "Repo push origin main:refs/heads/main`],
+    ]) {
+      const unbindable = runHook(command);
+      assert.equal(unbindable.decision, "deny", `an unbindable push argument fails closed (${label})`);
+      assert.match(unbindable.reason, /join to the next one/, `…naming the real cause (${label})`);
+      assert.match(unbindable.reason, /Quote the whole value/, `…and the fix (${label})`);
+    }
+    // The control that makes the three above meaningful: the same push, with the
+    // value quoted, is NOT refused by this rule. Without it the assertions would
+    // also pass if the guard had simply started denying everything.
+    assert.equal(
+      runHook(`git -C "${work.replace(/\\/g, "/")}" push origin main:refs/heads/feature`).decision,
+      "allow",
+      "the quoted spelling the denial recommends is allowed",
+    );
 
     // Fail-closed with a usable message for any unreadable repository. Spelled
     // natively, since every slash-rooted spelling is refused earlier on Windows.

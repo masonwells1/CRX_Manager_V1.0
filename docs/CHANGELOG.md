@@ -41,6 +41,23 @@ next agent. Two sessions read it that way.
   the same fail-open the translation kept producing, arriving by a different route (Codex P1, round
   5). A test asserts the "does not exist" diagnostic is **absent** from that denial, which is what
   proves the refusal ran before the filesystem was ever consulted.
+- **An argument the shell joins across a space is now refused — this one was a fail-OPEN** (Codex P1,
+  round 9). `git -C /c/My\ Repo push origin HEAD:main` is ONE argument to the shell and two to the
+  literal parser, which then found a bare word where `push` or a global option belongs and concluded
+  the command was **not a push at all**. Verified against the real hook: it exited through the early
+  non-push path and **allowed a `HEAD:main` push with no destination, force, refspec or proof check**.
+  Neither existing backstop could see it — `unknownGitGlobalOptions` only fires on a token starting
+  with `-`, and `pushHiddenByShellComposition` strips the escape to `/c/My Repo`, whose space breaks
+  the parse identically, so both readings agreed there was no push. Nothing about it is MSYS-specific;
+  `C:/My\ Repo` fails open the same way. `gitPushArgumentsUnbindable()` refuses any git invocation
+  whose pre-`push` arguments the shell would join — an unmatched trailing backslash, or an unmatched
+  quote once complete quoted spans are removed — and **both** guards call it before their non-push
+  exit and push filter. Deliberately narrow: `git stash push`, a commit message containing the word
+  push, and `git -C "C:/Mason's Repo" push` are all untouched, the last because an apostrophe inside a
+  quoted span is a literal, not an operator.
+- **The unresolvable-directory diagnostic was hoisted too** (Codex P2, round 9) — under the credential
+  proxy, a NATIVE `-C` naming a missing path or a file was still answered by the inherited-config
+  proof's generic ENOENT denial. Fixing only the MSYS half left the same hole one spelling over.
 - **That refusal runs above every repository lookup in the file** (Codex P2, round 8). Placed among
   the per-push checks, it was reached *after* the inherited-`GIT_CONFIG*` proof — which resolves the
   same `-C` value and runs a git lookup in it, so a Git Bash push denied with `could not read
@@ -106,8 +123,9 @@ Tests: `.claude/hooks/codex-push-lib.test.mjs` and `.codex/hooks/production-acti
 
 **Both protected guard sources changed, and both are re-pinned in
 `scripts/apply-live-testdata-maintenance-20260812.mjs`.** `.claude/hooks/codex-push-lib.mjs` moves to
-`e5a7dc2e…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 8618556b…` (input) and
-`0f3a62cf… → 9b920c59…` (transformed output) because it gained the same outright MSYS-path refusal —
+`9513a05d…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 608194f2…` (input) and
+`0f3a62cf… → e343e9b1…` (transformed output) because it gained the same outright MSYS-path refusal
+and the same unbindable-argument refusal —
 it is a **second caller** of the shared resolution, and a security-relevant change in its own right,
 not an incidental edit. Both changes are purely additive and leave every transform anchor untouched
 and present exactly once: the risky-path line in the push library, and the matcher, the

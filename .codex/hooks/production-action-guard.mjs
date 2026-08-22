@@ -8,6 +8,7 @@ import path from "node:path";
 import {
   contentIsRisky,
   extractPatchDestinations,
+  gitPushArgumentsUnbindable,
   gitPushCwd,
   pushNamesMsysPath,
   isGitPush,
@@ -722,6 +723,17 @@ export function evaluateProductionAction({
     if (ghApiMutates(segment)) {
       return denied("CODEX PRODUCTION GATE: unrecognized mutating `gh api` calls are blocked because they can bypass the reviewed branch/push workflow.");
     }
+  }
+
+  // Checked BEFORE the isGitPush filter below, because that filter is exactly
+  // what the hazard defeats: an escaped space in a `-C` value (`-C /c/My\ Repo`)
+  // makes the literal parser read the command as a non-push, so every segment
+  // falls out of the filter and this gate never runs at all. Verified against
+  // the real Claude-side hook, which allowed a `HEAD:main` push outright
+  // (Codex P1, PR #445 round 9). Both guards share the parser, so both need it.
+  const unbindableArgs = gitPushArgumentsUnbindable(command);
+  if (unbindableArgs.length > 0) {
+    return denied(`CODEX PRODUCTION GATE: this push has an argument the shell will join to the next one (${unbindableArgs.join(", ")}), so the guard cannot tell which repository or refspec it names — and a push it cannot bind is a push it cannot check. That happens when a path with a space is escaped rather than quoted. Quote the whole value instead: \`git -C "C:/My Repo" push origin <branch>\`.`);
   }
 
   for (const segment of commandSegments.filter((part) => isGitPush(part))) {

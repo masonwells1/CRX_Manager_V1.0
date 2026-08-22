@@ -80,6 +80,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // slash-rooted `-C` is now refused, with `//server/share` kept out because
   // MSYS and node resolve a UNC path identically. Both changes are additive,
   // both risky-path anchors untouched and still present exactly once.
+  // BOTH re-pinned once more 2026-08-21 (PR #445 round 9), and this one closed a
+  // fail-OPEN rather than a diagnostic: `git -C /c/My\ Repo push origin
+  // HEAD:main` is one argument to the shell and two to the literal parser, so
+  // the command read as a NON-push and both guards skipped every destination,
+  // force, refspec and proof check. Verified against the real hook before
+  // fixing. `gitPushArgumentsUnbindable` now refuses any git invocation whose
+  // pre-`push` arguments the shell would join across a space, and both guards
+  // call it BEFORE their non-push exit / push filter. Additive in both files;
+  // all four transform anchors verified present exactly once.
   // codexGuard re-pinned 2026-08-21 (PR #445 round 5): it shares gitPushCwd
   // with the Claude push guard, so it gained the same outright refusal of a Git
   // Bash `-C /c/…` spelling — whose meaning depends on the invoking shell, and
@@ -88,12 +97,12 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // additive (+11 lines); all three transform anchors — the matcher, the
   // PROTECTED_HARNESS_FRAGMENT_RE constant, and the maintenance execution gate
   // — are untouched and still present exactly once.
-  codexGuard: "8618556b5b8886c6a74e2f8163dc814acc628601",
-  pushLib: "e5a7dc2ec988f309f31a0a81ec851214ca04595f",
+  codexGuard: "608194f2034d1142bf4edc47c3ed59b621d4dd81",
+  pushLib: "9513a05db41e1c9fe6e1d3f9cb1f771b2dc85713",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "9b920c59652dfccd2a5b727351bf833534a9e2ec",
-  pushLib: "e5a7dc2ec988f309f31a0a81ec851214ca04595f",
+  codexGuard: "e343e9b17ae265aa7b9cb161862e987caed5450c",
+  pushLib: "9513a05db41e1c9fe6e1d3f9cb1f771b2dc85713",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

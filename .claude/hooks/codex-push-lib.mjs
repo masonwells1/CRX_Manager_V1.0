@@ -88,6 +88,73 @@ export function unknownGitGlobalOptions(cmd) {
   return [...offenders];
 }
 
+// The same stop-at-the-option failure, arriving through an option VALUE instead
+// of an option NAME — and this one is a fail-OPEN, not an over-refusal.
+//
+// `git -C /c/My\ Repo push origin HEAD:main` is one `-C` value to the shell: the
+// backslash escapes the space. To this file's tokenizer it is two tokens, so the
+// value is `/c/My`, the next token is the bare word `Repo`, and the literal push
+// parser — which expects `push` or a known global option there — decides the
+// command is NOT A PUSH AT ALL. `unknownGitGlobalOptions` above cannot catch it,
+// because `Repo` does not start with `-`, and `pushHiddenByShellComposition`
+// cannot either: stripping the escape yields `/c/My Repo`, whose space breaks
+// the parse in exactly the same way, so both readings agree there is no push.
+// Verified against the real hook (Codex P1, PR #445 round 9): the guard exited
+// through its early non-push path and ALLOWED a `HEAD:main` push with no
+// destination, force, refspec or proof check.
+//
+// Nothing about this is MSYS-specific — `git -C C:/My\ Repo push` fails open the
+// same way — so it is not folded into the Git Bash refusal.
+//
+// The rule is deliberately about SHELL CONTINUATION, not about paths: a token
+// that ends in an unmatched backslash, or that carries an odd number of quotes,
+// is one the shell will join to the next token, which is precisely when this
+// file's reading and the shell's reading diverge. Anything else is left alone,
+// so `git stash push`, `git status`, and a commit message containing the word
+// push are all untouched — the last because `push` must be its own token here,
+// not text inside a quoted one.
+// Read RAW tokens here, NOT `splitShellArgs`: that helper unquotes, and a
+// path like `"C:/Mason's Repo"` would then arrive as `C:/Mason's Repo`, whose
+// lone apostrophe reads as an unmatched quote. That spelling is perfectly
+// unambiguous — the wrapping quotes bind it — so flagging it would refuse a
+// legitimate push. Keeping the quotes lets a fully-wrapped token balance, while
+// the genuinely ambiguous `/c/My" "Repo` (adjacent quoted spans the shell
+// concatenates) still shows an odd count and is caught.
+export function gitPushArgumentsUnbindable(cmd) {
+  const hazards = new Set();
+  const shellJoinsToNextToken = (token) => {
+    if ((token.match(/\\*$/)?.[0].length ?? 0) % 2 === 1) return true;
+    // Complete quoted spans are removed before counting, because a quote INSIDE
+    // one is a literal character and not an operator. Without this,
+    // `git -C "C:/Mason's Repo" push` is refused over the apostrophe — a
+    // perfectly unambiguous command, and exactly the shape a Windows folder
+    // name produces. What survives the strip is an unmatched quote, which is
+    // what actually makes the shell continue into the next token.
+    const outsideQuotes = token.replace(/"[^"]*"/g, "").replace(/'[^']*'/g, "");
+    return (outsideQuotes.split('"').length - 1) % 2 === 1 ||
+      (outsideQuotes.split("'").length - 1) % 2 === 1;
+  };
+  for (const segment of shellSegments(String(cmd || ""))) {
+    const tokens = segment.match(/"[^"]*"|'[^']*'|\S+/g) || [];
+    for (let index = 0; index < tokens.length; index += 1) {
+      const binary = tokens[index].replace(/["']/g, "").replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+      if (binary !== "git" && binary !== "git.exe") continue;
+      const rest = tokens.slice(index + 1);
+      // Only when `push` is a token of its OWN in this git invocation. Without
+      // that condition `git commit -m "it's fine"` trips the quote-parity rule —
+      // the apostrophe inside the message is odd — and a commit gets refused by
+      // the push gate. It also keeps a commit message that merely CONTAINS the
+      // word push harmless, since that word is inside a quoted token, not one.
+      if (!rest.includes("push")) continue;
+      for (const token of rest) {
+        if (token === "push") break;
+        if (shellJoinsToNextToken(token)) hazards.add(token);
+      }
+    }
+  }
+  return [...hazards];
+}
+
 // `git --exec-path=<dir> push ...` replaces Git's own transport helpers before
 // the push starts. The destination can still look harmless while a planted
 // git-remote-https sends the objects elsewhere, so this executable selector is
