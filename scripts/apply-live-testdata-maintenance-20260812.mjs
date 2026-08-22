@@ -97,6 +97,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // `git commit -m fix\ push`. It now walks the global options to find the real
   // subcommand and scans only that option region. Risky-path anchor untouched
   // and still present exactly once; transform still identity.
+  // pushLib re-pinned once more 2026-08-22 (PR #445 round 11) — again only this
+  // file. Both prior versions asked a question about the RAW token list, and a
+  // split option value pushes every later token out of position, so
+  // `git -C C:/My\ Repo commit -m push` was refused as if it were a hidden push.
+  // The helper now REASSEMBLES the split fragments, reads the real subcommand,
+  // and refuses only a DIVERGENCE — reassembled push, literal parser blind to
+  // it. Risky-path anchor untouched, still present exactly once, transform
+  // still identity.
   // codexGuard re-pinned 2026-08-21 (PR #445 round 5): it shares gitPushCwd
   // with the Claude push guard, so it gained the same outright refusal of a Git
   // Bash `-C /c/…` spelling — whose meaning depends on the invoking shell, and
@@ -106,11 +114,11 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // PROTECTED_HARNESS_FRAGMENT_RE constant, and the maintenance execution gate
   // — are untouched and still present exactly once.
   codexGuard: "608194f2034d1142bf4edc47c3ed59b621d4dd81",
-  pushLib: "8c144b54c0217a731c43b533ece2787642f18c8d",
+  pushLib: "ade30dfcb569587d51d79481caa07de4b4160322",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "e343e9b17ae265aa7b9cb161862e987caed5450c",
-  pushLib: "8c144b54c0217a731c43b533ece2787642f18c8d",
+  pushLib: "ade30dfcb569587d51d79481caa07de4b4160322",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

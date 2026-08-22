@@ -141,47 +141,67 @@ export function gitPushArgumentsUnbindable(cmd) {
     return (outsideQuotes.split('"').length - 1) % 2 === 1 ||
       (outsideQuotes.split("'").length - 1) % 2 === 1;
   };
-  for (const segment of shellSegments(String(cmd || ""))) {
-    const tokens = segment.match(/"[^"]*"|'[^']*'|\S+/g) || [];
+  // REASSEMBLE first, then classify. Two earlier versions asked a question about
+  // the raw token list — "is `push` a later token?" (round 10) and then "…after
+  // the option region?" (round 11) — and both refused ordinary commands, because
+  // a split option value pushes every later token out of position:
+  // `git -C C:/My\ Repo commit -m push` is a COMMIT, but the raw list shows
+  // `Repo` where the subcommand belongs and a standalone `push` after it.
+  //
+  // Joining the fragments back together removes the guesswork. What the shell
+  // will actually run is then plain to read, and the only thing worth refusing
+  // is a DIVERGENCE: the reassembled command is a push while the literal parser
+  // — which every other check in this file uses — cannot see one. That is
+  // exactly the fail-open condition, and nothing else is refused.
+  const joinFragments = (tokens) => {
+    const joined = [];
     for (let index = 0; index < tokens.length; index += 1) {
-      const binary = tokens[index].replace(/["']/g, "").replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+      let value = tokens[index];
+      let fragment = null;
+      while (shellJoinsToNextToken(value) && index + 1 < tokens.length) {
+        if (fragment === null) fragment = value;
+        value = `${value} ${tokens[index + 1]}`;
+        index += 1;
+      }
+      joined.push({ value, fragment });
+    }
+    return joined;
+  };
+  const takesValue = new Set(["-c", "-C", "--config-env", "--git-dir", "--work-tree"]);
+  const valueless = new Set(["--no-pager", "--literal-pathspecs", "--%"]);
+  for (const segment of shellSegments(String(cmd || ""))) {
+    const tokens = joinFragments(segment.match(/"[^"]*"|'[^']*'|\S+/g) || []);
+    for (let index = 0; index < tokens.length; index += 1) {
+      const binary = tokens[index].value.replace(/["']/g, "").replace(/\\/g, "/").split("/").pop()?.toLowerCase();
       if (binary !== "git" && binary !== "git.exe") continue;
-      // Walk the GLOBAL OPTIONS to find where the subcommand actually begins,
-      // exactly as `gitSubcommandIsDynamic` does, and consider only the tokens
-      // consumed on the way. An earlier version asked the much cruder question
-      // "is `push` a later token?", which refused `git commit -m fix\ push`: in
-      // Bash that is one commit message, `fix push`, but the raw token list
-      // holds a standalone `push` and a trailing-backslash token, so a perfectly
-      // ordinary COMMIT was denied by the push gate (Codex P2, round 10).
-      // Scoping to the option region separates the two cases by construction —
-      // a hazard that could hide the subcommand is before it; anything after
-      // belongs to a subcommand already identified as something other than push.
-      const takesValue = new Set(["-c", "-C", "--config-env", "--git-dir", "--work-tree"]);
-      const valueless = new Set(["--no-pager", "--literal-pathspecs", "--%"]);
+      // Walk the global options on the REASSEMBLED list to reach the subcommand,
+      // the same walk `gitSubcommandIsDynamic` performs.
       const optionRegion = [];
       let cursor = index + 1;
       while (cursor < tokens.length) {
-        const token = tokens[cursor];
+        const token = tokens[cursor].value;
         if (takesValue.has(token)) {
-          optionRegion.push(token, tokens[cursor + 1] ?? "");
+          optionRegion.push(tokens[cursor + 1]);
           cursor += 2;
           continue;
         }
         if (valueless.has(token) || /^--(?:config-env|git-dir|work-tree|exec-path)=/.test(token)) {
-          optionRegion.push(token);
           cursor += 1;
           continue;
         }
         break;
       }
-      // The subcommand parsed cleanly as `push`: this helper has nothing to add,
-      // and every ordinary destination/force/refspec/proof check owns it.
-      if (tokens[cursor] === "push") continue;
-      // No `push` anywhere after the option region means nothing is being
-      // hidden, whatever the tokens look like.
-      if (!tokens.slice(cursor).includes("push")) continue;
-      for (const token of optionRegion) {
-        if (shellJoinsToNextToken(token)) hazards.add(token);
+      // Not a push once reassembled — `commit`, `status`, `stash push`, anything
+      // else — so this helper has nothing to say about it, no matter how its
+      // arguments happen to tokenize.
+      if (tokens[cursor]?.value !== "push") continue;
+      // It IS a push. If the literal parser agrees, the ordinary destination,
+      // force, refspec and proof checks own it and there is no divergence.
+      if (isGitPush(segment)) continue;
+      // A push the shell will run and the parser cannot see. Name the fragment
+      // that split it, which is what the reader has to fix.
+      for (const option of optionRegion) {
+        if (option?.fragment) hazards.add(option.fragment);
       }
     }
   }

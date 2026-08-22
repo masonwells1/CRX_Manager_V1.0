@@ -2406,6 +2406,14 @@ for (const clean of [
   // rule denied this COMMIT (Codex P2, round 10).
   "git commit -m fix\\ push",
   "git stash push -m wip\\ later",
+  // A split option value pushes every later token out of position, so asking
+  // anything about the RAW list — "is `push` later?", "…after the option
+  // region?" — refused these three ordinary commands. Reassembling the
+  // fragments first is what tells them apart from a hidden push (Codex P2,
+  // round 11).
+  "git -C C:/My\\ Repo commit -m push",
+  "git -C C:/My\\ Repo status -- push",
+  "git -C C:/My\\ Repo stash push -m wip",
 ]) {
   assert.deepEqual(gitPushArgumentsUnbindable(clean), [], `no hazard in an ordinary command: ${clean}`);
 }
@@ -2417,9 +2425,14 @@ for (const clean of [
 //    literal, not an operator — counting quotes without first removing complete
 //    quoted spans refused that command, which is a real Windows folder shape;
 //  - an escape AFTER the subcommand belongs to that subcommand's arguments, not
-//    to anything that could hide a push, which is why the hazard scan is scoped
-//    to the global-option region rather than to "any token before a later
-//    `push`". That cruder question denied `git commit -m fix\ push`.
+//    to anything that could hide a push. That is why the helper REASSEMBLES the
+//    split fragments and then reads the subcommand, rather than asking a
+//    question about the raw token list. Two cruder versions each refused real
+//    commands: "is `push` a later token?" denied `git commit -m fix\ push`
+//    (round 10), and "…after the option region?" denied
+//    `git -C C:/My\ Repo commit -m push` (round 11). Once reassembled, the
+//    subcommand is plainly `commit` in both, and only a reassembled `push` that
+//    the literal parser cannot see is refused.
 
 // ── full-hook end-to-end: an MSYS -C path must not be denied ────────────────
 {
@@ -2565,11 +2578,18 @@ for (const clean of [
     // this gate: it is not a push, and the first version of the rule denied it
     // (Codex P2, round 10). Driven through the real hook, since that is where
     // the over-refusal would actually bite Mason.
-    assert.equal(
-      runHook("git commit -m fix\\ push").decision,
-      "allow",
-      "an ordinary commit is not refused by the push gate",
-    );
+    for (const [label, command] of [
+      ["escaped space in the message", "git commit -m fix\\ push"],
+      ["escaped space in -C, on a commit", "git -C C:/My\\ Repo commit -m push"],
+      ["escaped space in -C, on a status", "git -C C:/My\\ Repo status -- push"],
+      ["escaped space in -C, on a stash push", "git -C C:/My\\ Repo stash push -m wip"],
+    ]) {
+      assert.equal(
+        runHook(command).decision,
+        "allow",
+        `an ordinary non-push command is not refused by the push gate (${label})`,
+      );
+    }
 
     // Fail-closed with a usable message for any unreadable repository. Spelled
     // natively, since every slash-rooted spelling is refused earlier on Windows.

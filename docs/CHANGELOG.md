@@ -64,6 +64,13 @@ next agent. Two sessions read it that way.
   global options to find the **real subcommand**, scanning only that option region — so a hazard that
   could hide the subcommand is caught, while anything after a subcommand already identified as
   something other than `push` is left alone.
+- **Round 11 replaced the question entirely.** Both earlier versions asked something about the *raw*
+  token list, and a split option value pushes every later token out of position — so
+  `git -C C:/My\ Repo commit -m push` (a commit), `… status -- push`, and `… stash push -m wip` were
+  all refused as hidden pushes. The helper now **reassembles the split fragments first**, reads the
+  real subcommand from the reassembled command, and refuses exactly one thing: a **divergence** —
+  the reassembled command is a `push` while the literal parser every other check uses cannot see one.
+  That is precisely the fail-open condition and nothing else, so guessing is out of the loop.
 - **The unresolvable-directory diagnostic was hoisted too** (Codex P2, round 9) — under the credential
   proxy, a NATIVE `-C` naming a missing path or a file was still answered by the inherited-config
   proof's generic ENOENT denial. Fixing only the MSYS half left the same hole one spelling over.
@@ -132,7 +139,7 @@ Tests: `.claude/hooks/codex-push-lib.test.mjs` and `.codex/hooks/production-acti
 
 **Both protected guard sources changed, and both are re-pinned in
 `scripts/apply-live-testdata-maintenance-20260812.mjs`.** `.claude/hooks/codex-push-lib.mjs` moves to
-`8c144b54…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 608194f2…` (input) and
+`ade30dfc…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 608194f2…` (input) and
 `0f3a62cf… → e343e9b1…` (transformed output) because it gained the same outright MSYS-path refusal
 and the same unbindable-argument refusal —
 it is a **second caller** of the shared resolution, and a security-relevant change in its own right,
