@@ -156,6 +156,17 @@ function manifestWeakeningSources(before, after) {
       weakened.add('__rewrite_rule_state_changed__');
     }
   }
+  // Persisted table CHECK expressions can dispatch custom routines on later
+  // writes. Removing or changing a bound dependency is a graph weakening just
+  // like erasing a trigger edge or rewrite rule.
+  if (Array.isArray(before.check_constraints)) {
+    const afterChecks = new Set((after.check_constraints || []).map((constraint) =>
+      JSON.stringify(constraint)));
+    if (before.check_constraints.some((constraint) =>
+      !afterChecks.has(JSON.stringify(constraint)))) {
+      weakened.add('__check_constraint_state_changed__');
+    }
+  }
   return weakened;
 }
 
@@ -187,6 +198,20 @@ export function staleTriggerSources(before, after, changed) {
         changed.changedRoutineIdentities?.has(`*\0${name}`)) {
       add('__event_trigger_routine_changed__',
         `${schema}.${name}:${trigger.routine_oid || 'unknown'}:${trigger.routine_hash || 'unknown'}`);
+    }
+  }
+  for (const constraint of before.check_constraints || []) {
+    const schema = canonicalManifestIdentity(constraint.routine_schema);
+    const name = canonicalManifestIdentity(constraint.routine_name);
+    const relation = canonicalManifestIdentity(constraint.relation);
+    if (!schema || !name || !relation) {
+      add('__check_constraint_routine_identity_unreadable__', 'unknown');
+      continue;
+    }
+    if (changed.changedRoutineIdentities?.has(`${schema}\0${name}`) ||
+        changed.changedRoutineIdentities?.has(`*\0${name}`)) {
+      add(relation,
+        `${schema}.${name}:${constraint.routine_oid || 'unknown'}:${constraint.definition_hash || 'unknown'}`);
     }
   }
   if (changed.unparsedTriggerDefinition) add('__unparsed_trigger_definition__', 'unknown');

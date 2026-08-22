@@ -31,7 +31,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
 const OUT = path.join(HERE, 'trigger-fanout.json');
 const ATTESTATION = path.join(REPO_ROOT, '.claude', 'session-state', 'trigger-fanout-attestation.json');
-export const TRIGGER_FANOUT_FORMAT = 5;
+export const TRIGGER_FANOUT_FORMAT = 6;
 export const TRIGGER_FANOUT_ATTESTATION_FORMAT = 1;
 export const TRIGGER_FANOUT_PRODUCER_SOURCES = Object.freeze([
   'scripts/generate-trigger-fanout.mjs',
@@ -222,7 +222,8 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
     fail('linked query returned an invalid trigger_fanout_capture envelope');
   }
   const expectedKeys = [
-    'captured_at', 'event_triggers', 'foreign_keys', 'routines', 'rules', 'tables_scanned', 'triggers',
+    'captured_at', 'check_constraints', 'event_triggers', 'foreign_keys', 'routines', 'rules',
+    'tables_scanned', 'triggers',
   ];
   if (JSON.stringify(Object.keys(payload).sort()) !== JSON.stringify(expectedKeys)) {
     fail('linked query returned an unexpected trigger_fanout_capture shape');
@@ -240,8 +241,9 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
   const tableSet = new Set(tablesScanned);
   if (!Array.isArray(payload.routines) || !Array.isArray(payload.triggers) ||
       !Array.isArray(payload.event_triggers) ||
-      !Array.isArray(payload.foreign_keys) || !Array.isArray(payload.rules)) {
-    fail('routines, triggers, event_triggers, rules, and foreign_keys must be arrays');
+      !Array.isArray(payload.foreign_keys) || !Array.isArray(payload.rules) ||
+      !Array.isArray(payload.check_constraints)) {
+    fail('routines, triggers, event_triggers, rules, check_constraints, and foreign_keys must be arrays');
   }
 
   const routines = payload.routines.map((routine) => {
@@ -422,6 +424,46 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
   }).sort((a, b) => a.relation.localeCompare(b.relation) ||
     a.event.localeCompare(b.event) || a.name.localeCompare(b.name) || a.oid.localeCompare(b.oid));
 
+  // Table CHECK expressions are persisted executable catalog state. PostgreSQL
+  // reevaluates them on later INSERT/UPDATE statements, and a user-defined
+  // routine referenced by the expression can itself mutate authoritative rows.
+  // Bind each constraint-to-routine dependency and keep its table opaque.
+  const checkConstraints = payload.check_constraints.map((constraint) => {
+    if (!constraint || typeof constraint !== 'object' || Array.isArray(constraint) ||
+        JSON.stringify(Object.keys(constraint).sort()) !==
+          JSON.stringify([
+            'definition', 'name', 'oid', 'relation', 'routine_name', 'routine_oid', 'routine_schema',
+          ])) {
+      fail('check constraint has an unexpected shape');
+    }
+    if (typeof constraint.oid !== 'string' || !/^\d+$/.test(constraint.oid) ||
+        typeof constraint.routine_oid !== 'string' || !/^\d+$/.test(constraint.routine_oid) ||
+        typeof constraint.definition !== 'string' || !constraint.definition.trim()) {
+      fail('check constraint identity, routine, or definition is invalid');
+    }
+    if (typeof constraint.name !== 'string' ||
+        !/^[A-Za-z_][A-Za-z0-9_$]*$/.test(constraint.name)) {
+      fail('check constraint name is invalid');
+    }
+    const relation = capturedRelationName(constraint.relation, 'check constraint relation');
+    if (relation.includes('.') || !tableSet.has(relation)) {
+      fail(`check constraint ${constraint.name} is outside the captured public table universe`);
+    }
+    const routineSchema = bareName(constraint.routine_schema, 'check constraint routine schema');
+    const routineName = bareName(constraint.routine_name, 'check constraint routine name');
+    return {
+      oid: constraint.oid,
+      name: constraint.name,
+      relation,
+      routine_schema: routineSchema,
+      routine_name: routineName,
+      routine_oid: constraint.routine_oid,
+      definition_hash: sha256(constraint.definition),
+    };
+  }).sort((a, b) => a.relation.localeCompare(b.relation) ||
+    a.name.localeCompare(b.name) || a.oid.localeCompare(b.oid) ||
+    a.routine_oid.localeCompare(b.routine_oid));
+
   const writeAction = new Set(['c', 'n', 'd']);
   const foreignKeys = payload.foreign_keys.map((foreignKey) => {
     if (!foreignKey || typeof foreignKey !== 'object' || Array.isArray(foreignKey)) {
@@ -553,6 +595,7 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
   const bootstrapOpaque = [...new Set([
     ...tablesScanned,
     ...Object.keys(sorted),
+    ...checkConstraints.map((constraint) => constraint.relation),
   ])].sort();
 
   return {
@@ -563,13 +606,14 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       capture_method: 'supabase-cli-db-query-linked',
       source_project: projectId,
       scope:
-        'Transitive trigger and FK writes plus bound event-trigger and rewrite-rule state; unresolved effects are opaque.',
+        'Transitive trigger and FK writes plus bound event-trigger, rewrite-rule, and CHECK-routine state; unresolved effects are opaque.',
       bootstrap_policy: 'all-captured-sources-opaque-until-independent-attestation',
       regenerate: 'node scripts/generate-trigger-fanout.mjs',
     },
     tables_scanned: tablesScanned,
     event_triggers: eventTriggers,
     rules,
+    check_constraints: checkConstraints,
     opaque_on_tables: bootstrapOpaque,
     reachable_routines: Object.fromEntries(
       Object.entries(reachableRoutines).sort(([a], [b]) => a.localeCompare(b)),
@@ -639,7 +683,8 @@ function main() {
   process.stdout.write(
     `generate-trigger-fanout: wrote ${outPath}\n  ${manifest.tables_scanned.length} tables, ` +
     `${edgeCount} cascade edges, ${manifest.opaque_on_tables.length} opaque source tables, ` +
-    `${manifest.event_triggers.length} event triggers\n`,
+    `${manifest.event_triggers.length} event triggers, ` +
+    `${manifest.check_constraints.length} custom-routine CHECK dependencies\n`,
   );
 }
 

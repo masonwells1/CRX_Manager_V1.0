@@ -56,9 +56,10 @@ private query workdir accepts only the exact CRX direct-database identity or an 
 pooler identity, with no embedded password, unexpected port/database, unsafe query parameter, or
 lookalike/arbitrary host. Validation and private-workdir creation use one immutable in-memory read of
 each metadata file, so a concurrent relink cannot replace the source between a checked read and a
-second copy. Live trigger/FK/rule/view/event-trigger evidence expires after 24 hours;
-stale or materially future-dated manifests are skipped, and an apply requires at least one fresh
-capture regenerated with `node scripts/generate-trigger-fanout.mjs`. That no-argument producer is
+second copy. Live trigger/FK/rule/view/event-trigger/CHECK-routine evidence expires after 24 hours;
+any stale, materially future-dated, malformed, unsigned, or rejected manifest in a verified
+evidence checkout blocks the apply, even when another checkout has a fresh copy. Regenerate each
+copy with `node scripts/generate-trigger-fanout.mjs`. That no-argument producer is
 also the only attestation wrapper: it refuses dirty/uncommitted producer sources, then binds the
 exact manifest SHA-256, production project, database capture time, and committed generator/query/
 parser blobs into protected session state. The apply guard ignores unsigned evidence and rejects
@@ -335,6 +336,11 @@ value is cast into the domain, so same-file and checked-in domain definitions jo
 catalog and any apply-time `CAST(... AS domain)` or `::domain` is treated as opaque execution. Merely
 defining the domain remains deferred.
 
+Table `CHECK` constraints are persisted executable state too. Manifest format 6 binds every public
+table constraint that depends on a non-system routine by relation, routine identity,
+constraint/routine OIDs, and definition hash. A later `INSERT` or `UPDATE` on that relation stays opaque because the stored
+routine executes without appearing in the submitted SQL.
+
 **A trigger rewrite is still a rewrite (round 31).** Every rule above proves a repair
 rewrote exactly the rows it hashed — for the table the `UPDATE` names. Triggers were
 invisible to all of them, so a repair on `order_items` that captured an id set, hashed
@@ -349,7 +355,8 @@ also requires the wrapper-owned exact-byte/source-blob attestation described abo
 walks every trigger through public helper routines and trigger-to-trigger cascades, and includes
 foreign-key `CASCADE`, `SET NULL`, and `SET DEFAULT` actions—including schema-qualified
 non-public parents such as `auth.users` when their action writes a public child—before folding the transitive rewrite
-set into the migration proof — so a cascade target picks
+set into the migration proof. It also captures persisted table `CHECK` constraints with custom
+routine dependencies and keeps those relations opaque — so a cascade target picks
 up material-column binding, the per-table captured set, and the one-table-per-repair
 rule with no new machinery. `UPDATE`/`DELETE`/`MERGE` only: an `INSERT` creates rows no
 before-state digest could have covered. Fan-out is refused per table when unknown, not

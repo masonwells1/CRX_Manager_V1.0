@@ -233,7 +233,7 @@ const m = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
 const registry = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const ok = (n) => typeof n === 'string' && /^[a-z0-9_]+\$/.test(n);
 const sourceOk = (n) => typeof n === 'string' && /^[a-z0-9_]+(?:\.[a-z0-9_]+)?\$/.test(n);
-if (!m._meta || m._meta.format_version !== 5 ||
+if (!m._meta || m._meta.format_version !== 6 ||
     m._meta.generator !== 'scripts/generate-trigger-fanout.mjs' ||
     m._meta.capture_method !== 'supabase-cli-db-query-linked' ||
     m._meta.source_project !== 'rhyzpcqhnizqbxphqdkr' ||
@@ -316,6 +316,25 @@ for (const trigger of m.event_triggers) {
 if (!Array.isArray(m.rules)) {
   throw new Error('trigger fan-out manifest has no rewrite-rule state');
 }
+if (!Array.isArray(m.check_constraints)) {
+  throw new Error('trigger fan-out manifest has no persisted CHECK-routine state');
+}
+for (const constraint of m.check_constraints) {
+  const keys = Object.keys(constraint || {}).sort();
+  if (JSON.stringify(keys) !== JSON.stringify([
+    'definition_hash', 'name', 'oid', 'relation', 'routine_name', 'routine_oid',
+    'routine_schema',
+  ]) || typeof constraint.oid !== 'string' || !/^\d+$/.test(constraint.oid) ||
+      typeof constraint.routine_oid !== 'string' || !/^\d+$/.test(constraint.routine_oid) ||
+      typeof constraint.name !== 'string' ||
+        !/^[A-Za-z_][A-Za-z0-9_$]*$/.test(constraint.name) ||
+      !ok(constraint.relation) || !capturedSources.has(constraint.relation) ||
+      !ok(constraint.routine_schema) || !ok(constraint.routine_name) ||
+      typeof constraint.definition_hash !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(constraint.definition_hash)) {
+    throw new Error('trigger fan-out manifest has invalid persisted CHECK-routine evidence');
+  }
+}
 for (const rule of m.rules) {
   const keys = Object.keys(rule || {}).sort();
   if (JSON.stringify(keys) !== JSON.stringify([
@@ -340,6 +359,7 @@ for (const trigger of m.event_triggers) {
 }
 for (const n of capturedSources) out.push('s:' + n);
 for (const n of opaque) out.push('o:' + n);
+for (const constraint of m.check_constraints) out.push('o:' + constraint.relation);
 for (const rule of m.rules) out.push('q:' + rule.event + ' ' + rule.relation);
 for (const [src, rows] of Object.entries(m.fanout || {})) {
   if (!sourceOk(src)) continue;

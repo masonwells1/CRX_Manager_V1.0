@@ -2808,6 +2808,27 @@ function runTriggerFanoutFailsClosed() {
     expect('an unreadable manifest refuses every table',
       'not json at all\n', orders, 'does not cover orders');
 
+    const persistedCheck = structuredClone(live);
+    persistedCheck.opaque_on_tables = persistedCheck.opaque_on_tables.filter(
+      (table) => table !== 'accounting_periods',
+    );
+    persistedCheck.check_constraints = [{
+      oid: '99101',
+      name: 'accounting_periods_custom_check',
+      relation: 'accounting_periods',
+      routine_oid: '99102',
+      routine_schema: 'public',
+      routine_name: 'accounting_periods_check_fn',
+      definition_hash: 'c'.repeat(64),
+    }];
+    const checkInsert = 'INSERT INTO public.accounting_periods(id) VALUES (1);\n';
+    expect('a persisted custom CHECK routine keeps its write relation opaque',
+      json(persistedCheck), checkInsert, 'does not cover accounting_periods');
+
+    persistedCheck.check_constraints = [];
+    expect('MUTANT: removing the CHECK dependency lets the unrelated INSERT survive',
+      json(persistedCheck), checkInsert, null);
+
     const gutted = structuredClone(live);
     // Keep every captured source identity (including auth.users) so the
     // manifest remains structurally valid; remove only its effects. Otherwise
@@ -2842,7 +2863,8 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
     const manifestPath = join(dir, 'scripts', 'trigger-fanout.json');
     const baseManifest = JSON.parse(readFileSync(join(HERE, 'trigger-fanout.json'), 'utf8'));
     const noChanges = {
-      changedRoutines: new Set(), changedTriggerRoutines: new Set(), triggerTables: new Set(),
+      changedRoutines: new Set(), changedRoutineIdentities: new Set(),
+      changedTriggerRoutines: new Set(), triggerTables: new Set(),
       foreignKeyParents: new Set(), unparsedTriggerDefinition: false,
       eventTriggerChange: false, unparsedRoutineDefinition: false,
       unparsedForeignKeyDefinition: false,
@@ -2866,6 +2888,33 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
     if (!staleTriggerSources(baseManifest, removedRule, noChanges)
       .includes('__rewrite_rule_state_changed__')) {
       failures.push('  round-57 removing captured rewrite-rule evidence was not rejected');
+    }
+    const checkBase = structuredClone(baseManifest);
+    checkBase.check_constraints = [{
+      oid: '99101',
+      name: 'accounting_periods_custom_check',
+      relation: 'accounting_periods',
+      routine_oid: '99102',
+      routine_schema: 'public',
+      routine_name: 'accounting_periods_check_fn',
+      definition_hash: 'c'.repeat(64),
+    }];
+    const removedCheck = structuredClone(checkBase);
+    removedCheck.check_constraints = [];
+    if (!staleTriggerSources(checkBase, removedCheck, noChanges)
+      .includes('__check_constraint_state_changed__')) {
+      failures.push('  round-61 removing captured CHECK-routine evidence was not rejected');
+    }
+    checkBase.opaque_on_tables = checkBase.opaque_on_tables.filter(
+      (table) => table !== 'accounting_periods',
+    );
+    const changedCheckRoutine = {
+      ...noChanges,
+      changedRoutineIdentities: new Set(['public\0accounting_periods_check_fn']),
+    };
+    if (!staleTriggerSources(checkBase, checkBase, changedCheckRoutine)
+      .includes('accounting_periods')) {
+      failures.push('  round-61 changing a captured CHECK routine did not stale its relation');
     }
     // This fixture has a committed base manifest, so it is testing ordinary
     // post-bootstrap weakening/refresh behavior rather than the all-opaque
@@ -3373,7 +3422,7 @@ function run() {
     console.error(out);
     process.exit(1);
   }
-  console.log(`✅ approved-set guard: ${CASES.length + 18} mutation cases behaved correctly`);
+  console.log(`✅ approved-set guard: ${CASES.length + 20} mutation cases behaved correctly`);
 }
 
 if (process.argv.includes('--bootstrap-pins-only')) {

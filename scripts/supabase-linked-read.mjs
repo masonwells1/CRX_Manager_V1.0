@@ -104,6 +104,30 @@ WITH tables AS (
     AND n.nspname <> 'information_schema'
     AND r.ev_type IN ('1', '2', '3', '4')
   ORDER BY r.oid
+), check_constraints AS (
+  SELECT
+    con.oid::text AS oid,
+    con.conname AS name,
+    c.relname AS relation,
+    p.oid::text AS routine_oid,
+    pn.nspname AS routine_schema,
+    p.proname AS routine_name,
+    pg_get_expr(con.conbin, con.conrelid, true) AS definition
+  FROM pg_constraint con
+  JOIN pg_class c ON c.oid = con.conrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_depend d
+    ON d.classid = 'pg_constraint'::regclass
+   AND d.objid = con.oid
+   AND d.refclassid = 'pg_proc'::regclass
+   AND d.deptype = 'n'
+  JOIN pg_proc p ON p.oid = d.refobjid
+  JOIN pg_namespace pn ON pn.oid = p.pronamespace
+  WHERE con.contype = 'c'
+    AND n.nspname = 'public'
+    AND pn.nspname !~ '^pg_'
+    AND pn.nspname <> 'information_schema'
+  ORDER BY con.oid, p.oid
 ), foreign_keys AS (
   SELECT
     con.oid::text AS oid,
@@ -132,6 +156,7 @@ SELECT jsonb_build_object(
   'triggers', COALESCE((SELECT jsonb_agg(to_jsonb(triggers)) FROM triggers), '[]'::jsonb),
   'event_triggers', COALESCE((SELECT jsonb_agg(to_jsonb(event_triggers)) FROM event_triggers), '[]'::jsonb),
   'rules', COALESCE((SELECT jsonb_agg(to_jsonb(rules)) FROM rules), '[]'::jsonb),
+  'check_constraints', COALESCE((SELECT jsonb_agg(to_jsonb(check_constraints)) FROM check_constraints), '[]'::jsonb),
   'foreign_keys', COALESCE((SELECT jsonb_agg(to_jsonb(foreign_keys)) FROM foreign_keys), '[]'::jsonb)
 ) AS trigger_fanout_capture;
 `.trim();

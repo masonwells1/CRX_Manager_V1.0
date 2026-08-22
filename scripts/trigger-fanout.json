@@ -1,11 +1,11 @@
 {
   "_meta": {
-    "format_version": 5,
+    "format_version": 6,
     "captured_at": "2026-08-22T15:20:43.057198Z",
     "generator": "scripts/generate-trigger-fanout.mjs",
     "capture_method": "supabase-cli-db-query-linked",
     "source_project": "rhyzpcqhnizqbxphqdkr",
-    "scope": "Transitive trigger and FK writes plus bound event-trigger and rewrite-rule state; unresolved effects are opaque.",
+    "scope": "Transitive trigger and FK writes plus bound event-trigger, rewrite-rule, and CHECK-routine state; unresolved effects are opaque.",
     "bootstrap_policy": "all-captured-sources-opaque-until-independent-attestation",
     "regenerate": "node scripts/generate-trigger-fanout.mjs"
   },
@@ -380,6 +380,7 @@
       "definition_hash": "ec941aac5c7a6d0fe8532ede0c4580693bbe1f7f5dfe022b593448f0c66e12ce"
     }
   ],
+  "check_constraints": [],
   "opaque_on_tables": [
     "accounting_periods",
     "activity_feed",

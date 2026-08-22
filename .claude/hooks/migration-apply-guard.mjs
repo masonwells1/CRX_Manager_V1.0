@@ -180,6 +180,7 @@ function loadTrustedFanout(evidenceRoots) {
   const sessionDependentEventTriggers = new Map();
   const allEnabledEventTriggers = new Map();
   const persistedRules = new Map();
+  const persistedCheckConstraints = new Map();
   const manifests = [];
   const expiredManifests = [];
   const rejectedManifests = [];
@@ -193,11 +194,12 @@ function loadTrustedFanout(evidenceRoots) {
       rejectedManifests.push(`${manifestPath}: ${err?.message || err}`);
       continue;
     }
-    if (parsed?._meta?.format_version !== 5 ||
+    if (parsed?._meta?.format_version !== 6 ||
         parsed?._meta?.source_project !== CRX_PRODUCTION_REF ||
         typeof parsed?._meta?.captured_at !== "string" ||
         !Array.isArray(parsed?.tables_scanned) || !Array.isArray(parsed?.opaque_on_tables) ||
         !Array.isArray(parsed?.event_triggers) || !Array.isArray(parsed?.rules) ||
+        !Array.isArray(parsed?.check_constraints) ||
         !parsed?.fanout || typeof parsed.fanout !== "object" || Array.isArray(parsed.fanout)) {
       throw new Error(`${manifestPath}: invalid or unbound trigger fan-out manifest`);
     }
@@ -283,6 +285,36 @@ function loadTrustedFanout(evidenceRoots) {
         { table: rule.relation, event: rule.event },
       );
     }
+    const manifestTables = new Set(parsed.tables_scanned.map((table) => String(table).toLowerCase()));
+    for (const constraint of parsed.check_constraints) {
+      const keys = Object.keys(constraint || {}).sort();
+      if (JSON.stringify(keys) !== JSON.stringify([
+        "definition_hash", "name", "oid", "relation", "routine_name", "routine_oid",
+        "routine_schema",
+      ]) ||
+          typeof constraint.oid !== "string" || !/^\d+$/.test(constraint.oid) ||
+          typeof constraint.routine_oid !== "string" || !/^\d+$/.test(constraint.routine_oid) ||
+          typeof constraint.name !== "string" ||
+            !/^[A-Za-z_][A-Za-z0-9_$]*$/.test(constraint.name) ||
+          typeof constraint.relation !== "string" ||
+            !/^[a-z_][a-z0-9_$]*$/.test(constraint.relation) ||
+          typeof constraint.routine_schema !== "string" ||
+            !/^[a-z_][a-z0-9_$]*$/.test(constraint.routine_schema) ||
+          typeof constraint.routine_name !== "string" ||
+            !/^[a-z_][a-z0-9_$]*$/.test(constraint.routine_name) ||
+          !manifestTables.has(constraint.relation) ||
+          typeof constraint.definition_hash !== "string" ||
+            !/^[0-9a-f]{64}$/.test(constraint.definition_hash)) {
+        throw new Error(`${manifestPath}: invalid persisted CHECK-routine evidence`);
+      }
+      const key = `${constraint.relation}\0${constraint.oid}\0${constraint.routine_schema}` +
+        `\0${constraint.routine_name}\0${constraint.routine_oid}\0${constraint.definition_hash}`;
+      persistedCheckConstraints.set(key, constraint);
+      // A table CHECK executes on later INSERT/UPDATE. Its custom routine body
+      // is database-resident, so treat writes to this relation as opaque even
+      // if the broad bootstrap opacity policy is narrowed in a future format.
+      opaque.add(constraint.relation);
+    }
     for (const table of parsed.tables_scanned) {
       if (typeof table !== "string" || !table.trim()) throw new Error(`${manifestPath}: invalid scanned table`);
       scanned.add(table.toLowerCase());
@@ -309,20 +341,22 @@ function loadTrustedFanout(evidenceRoots) {
     }
     manifests.push(manifestPath);
   }
+  if (expiredManifests.length) {
+    throw new Error(
+      `trigger-fanout.json evidence includes a manifest not captured within the last 24 hours ` +
+      `(expired or future-dated) ` +
+      `(${expiredManifests.join(", ")}); run node scripts/generate-trigger-fanout.mjs ` +
+      `in every evidence checkout and retry`,
+    );
+  }
+  if (rejectedManifests.length) {
+    throw new Error(
+      `trigger-fanout.json evidence includes a rejected wrapper attestation ` +
+      `(${rejectedManifests.join(", ")}); run node scripts/generate-trigger-fanout.mjs ` +
+      `in every evidence checkout and retry`,
+    );
+  }
   if (manifests.length === 0) {
-    if (expiredManifests.length) {
-      throw new Error(
-        `no trigger-fanout.json captured within the last 24 hours ` +
-        `(expired or future-dated: ${expiredManifests.join(", ")}); ` +
-        `run node scripts/generate-trigger-fanout.mjs and retry`,
-      );
-    }
-    if (rejectedManifests.length) {
-      throw new Error(
-        `no wrapper-attested trigger-fanout.json was accepted (${rejectedManifests.join(", ")}); ` +
-        `run node scripts/generate-trigger-fanout.mjs and retry`,
-      );
-    }
     throw new Error("no trigger-fanout.json in any verified checkout");
   }
   return {
@@ -333,6 +367,7 @@ function loadTrustedFanout(evidenceRoots) {
     sessionDependentEventTriggers: [...sessionDependentEventTriggers.values()],
     allEnabledEventTriggers: [...allEnabledEventTriggers.values()],
     rules: [...persistedRules.values()],
+    checkConstraints: [...persistedCheckConstraints.values()],
     manifests,
   };
 }

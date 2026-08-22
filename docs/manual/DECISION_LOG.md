@@ -9,6 +9,21 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-22 — Stored table CHECK routines are apply-time effects
+
+**Source:** CodeRabbit exact-head review of PR #364, confirmed against PostgreSQL catalog behavior.
+**Decision:** The linked fan-out manifest must capture public table `CHECK` constraints that depend
+on non-system routines, and migration writes to those relations remain fail-closed/opaque.
+**Why:** PostgreSQL reevaluates a stored `CHECK` expression on a later `INSERT` or `UPDATE`; its
+routine can rewrite authoritative rows without the routine call appearing in the submitted SQL.
+**What this forbids/implies:** never treat the candidate statement's direct targets as the whole
+effect surface. Format-6 manifests bind constraint identity, relation, routine name/schema/OID, and
+definition hash. Any missing, malformed, stale, future-dated, unsigned, or rejected evidence root blocks the
+apply even if another checkout has a valid copy; regenerate every verified checkout with
+`node scripts/generate-trigger-fanout.mjs`.
+
+---
+
 ## 2026-08-21 — Migration evidence is endpoint-bound and expires before apply
 
 **Source:** Exact-commit adversarial review of PR #364, 2026-08-21.

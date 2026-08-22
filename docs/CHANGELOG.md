@@ -2,6 +2,19 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-22 — Persisted CHECK-routine effects added to migration evidence
+
+- The linked production fan-out capture now binds every public table `CHECK` constraint that
+  depends on a non-system routine: relation, routine identity, constraint/routine OIDs, and an
+  exact definition hash.
+  Later `INSERT`/`UPDATE` statements on those relations are treated as opaque because PostgreSQL
+  executes the stored expression even though its routine call is absent from the candidate SQL.
+- Fan-out manifest format 6 is enforced by both migration validators. Missing, malformed, stale,
+  future-dated, unsigned, or rejected evidence in any verified checkout now fails closed instead of
+  being silently discarded when another checkout happens to carry a fresh manifest.
+- Focused proof: generator 29 assertions; migration apply guard 341 assertions; approved-set
+  validator 209 mutation cases.
+
 ## 2026-08-20 — PR #364 final replay-guard findings repaired
 
 Closed the original three exact-commit findings and the follow-up hidden-dispatch findings in the
@@ -183,8 +196,8 @@ migration safety harness; no app source, migration SQL, live database, or produc
   behind a subsequent `DROP FUNCTION`; analyzer and apply-guard mutants cover both spellings.
 
 Focused proof: snapshot producer 23 assertions; applied-source containment pass (including forced
-worktree-enumeration failure); trigger fan-out producer 27 assertions; apply-time analyzer
-293 assertions; apply-time guard 338 assertions; approved-set validator 207 mutation cases;
+worktree-enumeration failure); trigger fan-out producer 29 assertions; apply-time analyzer
+293 assertions; apply-time guard 341 assertions; approved-set validator 209 mutation cases;
 one-shot override writer 25 assertions.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.

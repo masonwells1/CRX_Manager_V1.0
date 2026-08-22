@@ -68,6 +68,13 @@ const payload = {
       definition: 'CREATE RULE "_RETURN" AS ON SELECT TO public.rule_probe DO INSTEAD SELECT 1;',
     },
   ],
+  check_constraints: [
+    {
+      oid: '8101', name: 'orders_custom_check', relation: 'orders',
+      routine_oid: '3', routine_schema: 'public', routine_name: 'recompute_order',
+      definition: 'CHECK (public.recompute_order())',
+    },
+  ],
   foreign_keys: [
     {
       oid: '501', parent_schema: 'public', parent_table: 'fk_parent',
@@ -180,6 +187,16 @@ check('manifest binds persisted rewrite-rule identity and definition', () => {
   });
   assert.match(manifest.rules[0].definition_hash, /^[0-9a-f]{64}$/);
 });
+check('manifest binds table CHECK routine dependencies and keeps their relations opaque', () => {
+  const manifest = buildTriggerFanoutManifest(payload);
+  assert.deepEqual(manifest.check_constraints[0], {
+    oid: '8101', name: 'orders_custom_check', relation: 'orders',
+    routine_oid: '3', routine_schema: 'public', routine_name: 'recompute_order',
+    definition_hash: manifest.check_constraints[0].definition_hash,
+  });
+  assert.match(manifest.check_constraints[0].definition_hash, /^[0-9a-f]{64}$/);
+  assert(manifest.opaque_on_tables.includes('orders'));
+});
 check('persisted rewrite rules retain non-public schema identity', () => {
   const changed = structuredClone(payload);
   changed.rules[0].relation = 'auth.rule_probe';
@@ -237,6 +254,9 @@ check('fixed capture includes event-trigger catalog and routine configuration', 
   assert.match(TRIGGER_FANOUT_SQL, /\bp\.proconfig\b/);
   assert.match(TRIGGER_FANOUT_SQL, /\bFROM pg_rewrite\b/);
   assert.match(TRIGGER_FANOUT_SQL, /\bpg_get_ruledef\b/);
+  assert.match(TRIGGER_FANOUT_SQL, /\bFROM pg_constraint\b/);
+  assert.match(TRIGGER_FANOUT_SQL, /\bJOIN pg_depend\b/);
+  assert.match(TRIGGER_FANOUT_SQL, /d\.refclassid = 'pg_proc'::regclass/);
   assert.match(TRIGGER_FANOUT_SQL,
     /rules AS \([\s\S]*?WHERE n\.nspname !~ '\^pg_'[\s\S]*?information_schema/);
 });
@@ -244,6 +264,11 @@ check('invalid persisted rule capture is refused', () => {
   const changed = structuredClone(payload);
   changed.rules[0].definition = '';
   assert.throws(() => buildTriggerFanoutManifest(changed), /rule identity or definition is invalid/);
+});
+check('invalid persisted CHECK routine capture is refused', () => {
+  const changed = structuredClone(payload);
+  changed.check_constraints[0].routine_oid = 'not-an-oid';
+  assert.throws(() => buildTriggerFanoutManifest(changed), /check constraint identity/);
 });
 check('unsupported or unreadable event-trigger bodies fail closed', () => {
   const unsupported = structuredClone(payload);

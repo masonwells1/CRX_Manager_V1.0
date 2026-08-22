@@ -697,7 +697,7 @@ function armAutopilot(stateDir, hoursFromNow) {
 
     rmSync(attestationPath, { force: true });
     r = apply("20990601000007_unsigned_fanout", BENIGN_SQL);
-    ok(isOneShotDeny(r) && r.stdout.includes("no wrapper-attested trigger-fanout.json"),
+    ok(isOneShotDeny(r) && r.stdout.includes("rejected wrapper attestation"),
       "round-63: an unsigned fan-out manifest is refused");
     writeFanoutManifest(tmp, FANOUT_FIXTURE);
 
@@ -1563,7 +1563,39 @@ function armAutopilot(stateDir, hoursFromNow) {
         "SELECT * FROM auth.live_rule_probe;");
       ok(isDeny(r) && isOneShotDeny(r),
         "round-57: a linked-live non-public rule retains its schema and fires → denied");
+
+      // ROUND 61. A table CHECK expression is stored catalog code and runs on
+      // every later INSERT/UPDATE. If it depends on a custom routine, that
+      // routine can replay a registered money repair without appearing in the
+      // candidate SQL. The linked manifest therefore keeps the relation opaque.
+      const liveCheckManifest = structuredClone(FANOUT_FIXTURE);
+      liveCheckManifest.check_constraints.push({
+        oid: "99101",
+        name: "accounting_periods_custom_check",
+        relation: "accounting_periods",
+        routine_oid: "99102",
+        routine_schema: "public",
+        routine_name: "accounting_periods_check_fn",
+        definition_hash: "c".repeat(64),
+      });
+      writeFanoutManifest(tmp, liveCheckManifest);
+      r = apply("20990601000192_r61_live_check",
+        "INSERT INTO public.accounting_periods(id) VALUES (1);");
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-61: a write that executes a persisted custom CHECK routine fails closed");
+
+      liveCheckManifest.check_constraints[0].routine_oid = "not-an-oid";
+      writeFanoutManifest(tmp, liveCheckManifest);
+      r = apply("20990601000193_r61_invalid_check",
+        "INSERT INTO public.accounting_periods(id) VALUES (1);");
+      ok(isDeny(r) && isOneShotDeny(r) && r.stdout.includes("invalid persisted CHECK-routine evidence"),
+        "round-61: malformed persisted CHECK evidence invalidates the whole manifest");
+
       writeFanoutManifest(tmp, FANOUT_FIXTURE);
+      r = apply("20990601000194_r61_check_mutant",
+        "INSERT INTO public.accounting_periods(id) VALUES (1);");
+      ok(!isOneShotDeny(r),
+        "round-61 MUTANT: removing the persisted CHECK dependency removes the hidden effect");
 
       // ROUND 29 (Codex High). A string handed to EXECUTE is SQL, and the
       // analyzer only ever scanned one for a bare DML verb. A call is not a DML
