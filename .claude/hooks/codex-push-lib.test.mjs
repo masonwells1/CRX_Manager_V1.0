@@ -2372,10 +2372,23 @@ assert.deepEqual(
   ["C:/My\\"],
   "…and it is not an MSYS-only problem — a native path escapes the same way",
 );
-assert.equal(
-  gitPushArgumentsUnbindable(`git -C /c/My" "Repo push origin HEAD:main`).length,
-  2,
-  "adjacent quoted spans the shell concatenates are caught too",
+assert.deepEqual(
+  gitPushArgumentsUnbindable(`git -C /c/My" "Repo push origin HEAD:main`),
+  [`/c/My"`],
+  "adjacent quoted spans the shell concatenates are caught too — one hazard, from the option region",
+);
+// PowerShell and cmd escape spaces with their OWN characters, and this repo is
+// driven from both. Checking only the POSIX backslash left the identical
+// fail-open two shells over (Codex P1, round 10).
+assert.deepEqual(
+  gitPushArgumentsUnbindable(`git -C C:/My${String.fromCharCode(96)} Repo push origin HEAD:main`),
+  [`C:/My${String.fromCharCode(96)}`],
+  "a PowerShell backtick-escaped space is caught",
+);
+assert.deepEqual(
+  gitPushArgumentsUnbindable("git -C C:/My^ Repo push origin HEAD:main"),
+  ["C:/My^"],
+  "…and a cmd caret-escaped space",
 );
 // The other half of the rule: it must not refuse ordinary commands. Each of
 // these once broke, or would break, a plausible real invocation.
@@ -2388,6 +2401,11 @@ for (const clean of [
   "git -C C:/CRX_Manager push origin feature/x",
   "git push origin feature/x",
   String.raw`git -C C:\CRX_Manager push origin feature/x`,
+  // Bash passes ONE message, `fix push`, but the raw token list holds a
+  // standalone `push` and a trailing-backslash token. The first version of this
+  // rule denied this COMMIT (Codex P2, round 10).
+  "git commit -m fix\\ push",
+  "git stash push -m wip\\ later",
 ]) {
   assert.deepEqual(gitPushArgumentsUnbindable(clean), [], `no hazard in an ordinary command: ${clean}`);
 }
@@ -2397,7 +2415,11 @@ for (const clean of [
 //    never a token of its own and the rule does not engage;
 //  - an apostrophe inside a double-quoted path (`"C:/Mason's Repo"`) is a
 //    literal, not an operator — counting quotes without first removing complete
-//    quoted spans refused that command, which is a real Windows folder shape.
+//    quoted spans refused that command, which is a real Windows folder shape;
+//  - an escape AFTER the subcommand belongs to that subcommand's arguments, not
+//    to anything that could hide a push, which is why the hazard scan is scoped
+//    to the global-option region rather than to "any token before a later
+//    `push`". That cruder question denied `git commit -m fix\ push`.
 
 // ── full-hook end-to-end: an MSYS -C path must not be denied ────────────────
 {
@@ -2523,19 +2545,30 @@ for (const clean of [
       ["escaped space", String.raw`git -C /c/My\ Repo push origin main:refs/heads/main`],
       ["escaped space, native path", String.raw`git -C C:/My\ Repo push origin main:refs/heads/main`],
       ["adjacent quoted spans", `git -C /c/My" "Repo push origin main:refs/heads/main`],
+      // The two Windows shells this repo is actually driven from (round 10).
+      ["PowerShell backtick", `git -C C:/My${String.fromCharCode(96)} Repo push origin main:refs/heads/main`],
+      ["cmd caret", "git -C C:/My^ Repo push origin main:refs/heads/main"],
     ]) {
       const unbindable = runHook(command);
       assert.equal(unbindable.decision, "deny", `an unbindable push argument fails closed (${label})`);
       assert.match(unbindable.reason, /join to the next one/, `…naming the real cause (${label})`);
       assert.match(unbindable.reason, /Quote the whole value/, `…and the fix (${label})`);
     }
-    // The control that makes the three above meaningful: the same push, with the
-    // value quoted, is NOT refused by this rule. Without it the assertions would
-    // also pass if the guard had simply started denying everything.
+    // The controls that make the cases above meaningful: without them the block
+    // would also pass if the guard had simply started denying everything.
     assert.equal(
       runHook(`git -C "${work.replace(/\\/g, "/")}" push origin main:refs/heads/feature`).decision,
       "allow",
       "the quoted spelling the denial recommends is allowed",
+    );
+    // A COMMIT carrying an escaped space in its message must still get through
+    // this gate: it is not a push, and the first version of the rule denied it
+    // (Codex P2, round 10). Driven through the real hook, since that is where
+    // the over-refusal would actually bite Mason.
+    assert.equal(
+      runHook("git commit -m fix\\ push").decision,
+      "allow",
+      "an ordinary commit is not refused by the push gate",
     );
 
     // Fail-closed with a usable message for any unreadable repository. Spelled

@@ -55,6 +55,15 @@ next agent. Two sessions read it that way.
   exit and push filter. Deliberately narrow: `git stash push`, a commit message containing the word
   push, and `git -C "C:/Mason's Repo" push` are all untouched, the last because an apostrophe inside a
   quoted span is a literal, not an operator.
+- **Round 10 corrected that rule in both directions.** It had checked only the POSIX `\` escape, so
+  the identical fail-open survived in **PowerShell** (backtick) and **cmd** (caret) — the two shells
+  this repo is actually driven from; reproduced against the real hook, both were allowed outright. And
+  it asked the crude question "is `push` a later token?", which **denied an ordinary commit**:
+  `git commit -m fix\ push` is one message to Bash, but the raw token list holds a standalone `push`
+  and a trailing-backslash token. It now recognises all three shells' escape characters, and walks the
+  global options to find the **real subcommand**, scanning only that option region — so a hazard that
+  could hide the subcommand is caught, while anything after a subcommand already identified as
+  something other than `push` is left alone.
 - **The unresolvable-directory diagnostic was hoisted too** (Codex P2, round 9) — under the credential
   proxy, a NATIVE `-C` naming a missing path or a file was still answered by the inherited-config
   proof's generic ENOENT denial. Fixing only the MSYS half left the same hole one spelling over.
@@ -123,7 +132,7 @@ Tests: `.claude/hooks/codex-push-lib.test.mjs` and `.codex/hooks/production-acti
 
 **Both protected guard sources changed, and both are re-pinned in
 `scripts/apply-live-testdata-maintenance-20260812.mjs`.** `.claude/hooks/codex-push-lib.mjs` moves to
-`9513a05d…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 608194f2…` (input) and
+`8c144b54…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 608194f2…` (input) and
 `0f3a62cf… → e343e9b1…` (transformed output) because it gained the same outright MSYS-path refusal
 and the same unbindable-argument refusal —
 it is a **second caller** of the shared resolution, and a security-relevant change in its own right,

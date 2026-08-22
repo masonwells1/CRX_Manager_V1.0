@@ -123,7 +123,14 @@ export function unknownGitGlobalOptions(cmd) {
 export function gitPushArgumentsUnbindable(cmd) {
   const hazards = new Set();
   const shellJoinsToNextToken = (token) => {
-    if ((token.match(/\\*$/)?.[0].length ?? 0) % 2 === 1) return true;
+    // Three escape characters, because three shells run these commands: `\` in
+    // Git Bash, a BACKTICK in PowerShell, `^` in cmd. Checking only the POSIX
+    // one left the same fail-open for the two Windows shells this repo is
+    // driven from — `git -C C:/My<backtick> Repo push` was allowed outright
+    // (Codex P1, PR #445 round 10, reproduced against the real hook). An even
+    // run is a literal escaped escape and does not continue the token.
+    const trailingEscapes = token.match(/([\\`^])\1*$/)?.[0];
+    if (trailingEscapes && trailingEscapes.length % 2 === 1) return true;
     // Complete quoted spans are removed before counting, because a quote INSIDE
     // one is a literal character and not an operator. Without this,
     // `git -C "C:/Mason's Repo" push` is refused over the apostrophe — a
@@ -139,15 +146,41 @@ export function gitPushArgumentsUnbindable(cmd) {
     for (let index = 0; index < tokens.length; index += 1) {
       const binary = tokens[index].replace(/["']/g, "").replace(/\\/g, "/").split("/").pop()?.toLowerCase();
       if (binary !== "git" && binary !== "git.exe") continue;
-      const rest = tokens.slice(index + 1);
-      // Only when `push` is a token of its OWN in this git invocation. Without
-      // that condition `git commit -m "it's fine"` trips the quote-parity rule —
-      // the apostrophe inside the message is odd — and a commit gets refused by
-      // the push gate. It also keeps a commit message that merely CONTAINS the
-      // word push harmless, since that word is inside a quoted token, not one.
-      if (!rest.includes("push")) continue;
-      for (const token of rest) {
-        if (token === "push") break;
+      // Walk the GLOBAL OPTIONS to find where the subcommand actually begins,
+      // exactly as `gitSubcommandIsDynamic` does, and consider only the tokens
+      // consumed on the way. An earlier version asked the much cruder question
+      // "is `push` a later token?", which refused `git commit -m fix\ push`: in
+      // Bash that is one commit message, `fix push`, but the raw token list
+      // holds a standalone `push` and a trailing-backslash token, so a perfectly
+      // ordinary COMMIT was denied by the push gate (Codex P2, round 10).
+      // Scoping to the option region separates the two cases by construction —
+      // a hazard that could hide the subcommand is before it; anything after
+      // belongs to a subcommand already identified as something other than push.
+      const takesValue = new Set(["-c", "-C", "--config-env", "--git-dir", "--work-tree"]);
+      const valueless = new Set(["--no-pager", "--literal-pathspecs", "--%"]);
+      const optionRegion = [];
+      let cursor = index + 1;
+      while (cursor < tokens.length) {
+        const token = tokens[cursor];
+        if (takesValue.has(token)) {
+          optionRegion.push(token, tokens[cursor + 1] ?? "");
+          cursor += 2;
+          continue;
+        }
+        if (valueless.has(token) || /^--(?:config-env|git-dir|work-tree|exec-path)=/.test(token)) {
+          optionRegion.push(token);
+          cursor += 1;
+          continue;
+        }
+        break;
+      }
+      // The subcommand parsed cleanly as `push`: this helper has nothing to add,
+      // and every ordinary destination/force/refspec/proof check owns it.
+      if (tokens[cursor] === "push") continue;
+      // No `push` anywhere after the option region means nothing is being
+      // hidden, whatever the tokens look like.
+      if (!tokens.slice(cursor).includes("push")) continue;
+      for (const token of optionRegion) {
         if (shellJoinsToNextToken(token)) hazards.add(token);
       }
     }

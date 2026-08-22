@@ -89,6 +89,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // pre-`push` arguments the shell would join across a space, and both guards
   // call it BEFORE their non-push exit / push filter. Additive in both files;
   // all four transform anchors verified present exactly once.
+  // pushLib re-pinned again 2026-08-22 (PR #445 round 10) — the round-9 rule was
+  // wrong in both directions and only this file changed. It checked the POSIX
+  // `\` escape alone, so the SAME fail-open survived in PowerShell (backtick)
+  // and cmd (caret), the two shells this repo is actually driven from; and it
+  // asked "is `push` a later token?", which denied the ordinary Bash commit
+  // `git commit -m fix\ push`. It now walks the global options to find the real
+  // subcommand and scans only that option region. Risky-path anchor untouched
+  // and still present exactly once; transform still identity.
   // codexGuard re-pinned 2026-08-21 (PR #445 round 5): it shares gitPushCwd
   // with the Claude push guard, so it gained the same outright refusal of a Git
   // Bash `-C /c/…` spelling — whose meaning depends on the invoking shell, and
@@ -98,11 +106,11 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // PROTECTED_HARNESS_FRAGMENT_RE constant, and the maintenance execution gate
   // — are untouched and still present exactly once.
   codexGuard: "608194f2034d1142bf4edc47c3ed59b621d4dd81",
-  pushLib: "9513a05db41e1c9fe6e1d3f9cb1f771b2dc85713",
+  pushLib: "8c144b54c0217a731c43b533ece2787642f18c8d",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "e343e9b17ae265aa7b9cb161862e987caed5450c",
-  pushLib: "9513a05db41e1c9fe6e1d3f9cb1f771b2dc85713",
+  pushLib: "8c144b54c0217a731c43b533ece2787642f18c8d",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
