@@ -8,8 +8,15 @@
 // unreadable bodies, or writes outside the scanned public tables make the source
 // table opaque so the validator refuses it instead of assuming no fan-out.
 
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyTimeCode, applyTimeWriteTargets } from '../.claude/hooks/apply-time-dml-lib.mjs';
@@ -21,8 +28,16 @@ import {
 } from './supabase-linked-read.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(HERE, '..');
 const OUT = path.join(HERE, 'trigger-fanout.json');
+const ATTESTATION = path.join(REPO_ROOT, '.claude', 'session-state', 'trigger-fanout-attestation.json');
 export const TRIGGER_FANOUT_FORMAT = 5;
+export const TRIGGER_FANOUT_ATTESTATION_FORMAT = 1;
+export const TRIGGER_FANOUT_PRODUCER_SOURCES = Object.freeze([
+  'scripts/generate-trigger-fanout.mjs',
+  'scripts/supabase-linked-read.mjs',
+  '.claude/hooks/apply-time-dml-lib.mjs',
+]);
 export { TRIGGER_FANOUT_SQL };
 
 function fail(message) {
@@ -118,6 +133,88 @@ function routineDefinition(routine, index) {
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function git(args, cwd) {
+  try {
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) {
+      if (key.toUpperCase().startsWith('GIT_')) delete env[key];
+    }
+    return execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env,
+      timeout: 10_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch (error) {
+    const detail = String(error?.stderr || error?.message || error).trim();
+    fail(`git ${args[0]} failed${detail ? `: ${detail}` : ''}`);
+  }
+}
+
+function samePath(a, b) {
+  const normalize = (value) => process.platform === 'win32'
+    ? path.resolve(value).toLowerCase()
+    : path.resolve(value);
+  return normalize(a) === normalize(b);
+}
+
+export function committedProducerSources(projectRoot = REPO_ROOT) {
+  const root = path.resolve(projectRoot);
+  const topLevel = git(['rev-parse', '--show-toplevel'], root);
+  if (!samePath(topLevel, root)) {
+    fail(`producer root ${root} is not the active Git worktree root ${topLevel}`);
+  }
+  const dirty = git([
+    'status', '--porcelain=v1', '--untracked-files=all', '--', ...TRIGGER_FANOUT_PRODUCER_SOURCES,
+  ], root);
+  if (dirty) {
+    fail('producer sources are dirty or untracked; commit the reviewed generator and helpers first');
+  }
+  return TRIGGER_FANOUT_PRODUCER_SOURCES.map((relativePath) => {
+    const absolutePath = path.join(root, ...relativePath.split('/'));
+    const bytes = readFileSync(absolutePath);
+    const headBlob = git(['rev-parse', `HEAD:${relativePath}`], root);
+    const currentBlob = git(['hash-object', absolutePath], root);
+    if (!/^[0-9a-f]{40,64}$/.test(headBlob) || currentBlob !== headBlob) {
+      fail(`${relativePath} does not match its committed HEAD blob`);
+    }
+    return {
+      path: relativePath,
+      git_blob: headBlob,
+      sha256: sha256(bytes),
+    };
+  });
+}
+
+function writeAtomically(filePath, text) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.tmp-${process.pid}`;
+  try {
+    writeFileSync(tempPath, text, { encoding: 'utf8', flag: 'wx' });
+    renameSync(tempPath, filePath);
+  } finally {
+    rmSync(tempPath, { force: true });
+  }
+}
+
+export function buildTriggerFanoutAttestation({ manifestBytes, manifest, producerSources }) {
+  return {
+    format_version: TRIGGER_FANOUT_ATTESTATION_FORMAT,
+    kind: 'crx-trigger-fanout-attestation',
+    manifest: {
+      path: 'scripts/trigger-fanout.json',
+      sha256: sha256(manifestBytes),
+    },
+    source_project: manifest._meta.source_project,
+    captured_at: manifest._meta.captured_at,
+    producer: {
+      wrapper: 'scripts/generate-trigger-fanout.mjs',
+      sources: producerSources,
+    },
+  };
 }
 
 export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PROJECT_ID) {
@@ -501,15 +598,43 @@ export function captureTriggerFanout({
     fail('linked query returned an unexpected row shape');
   }
   const manifest = buildTriggerFanoutManifest(row.trigger_fanout_capture, capture.projectId);
-  writeFileSync(outPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  writeAtomically(outPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return { manifest, outPath };
+}
+
+export function mintTriggerFanoutEvidence({
+  projectRoot = REPO_ROOT,
+  linkedRoot,
+  run,
+  outPath = path.join(projectRoot, 'scripts', 'trigger-fanout.json'),
+  attestationPath = path.join(projectRoot, '.claude', 'session-state', 'trigger-fanout-attestation.json'),
+} = {}) {
+  const producerSources = committedProducerSources(projectRoot);
+  const result = captureTriggerFanout({
+    projectDir: projectRoot,
+    linkedRoot,
+    run,
+    outPath,
+  });
+  const manifestBytes = readFileSync(result.outPath);
+  const attestation = buildTriggerFanoutAttestation({
+    manifestBytes,
+    manifest: result.manifest,
+    producerSources,
+  });
+  writeAtomically(attestationPath, `${JSON.stringify(attestation, null, 2)}\n`);
+  return { ...result, attestation, attestationPath };
 }
 
 function main() {
   if (process.argv.slice(2).length) {
     fail('usage: node scripts/generate-trigger-fanout.mjs (no arguments or stdin)');
   }
-  const { manifest, outPath } = captureTriggerFanout();
+  const { manifest, outPath } = mintTriggerFanoutEvidence({
+    projectRoot: REPO_ROOT,
+    outPath: OUT,
+    attestationPath: ATTESTATION,
+  });
   const edgeCount = Object.values(manifest.fanout).reduce((count, rows) => count + rows.length, 0);
   process.stdout.write(
     `generate-trigger-fanout: wrote ${outPath}\n  ${manifest.tables_scanned.length} tables, ` +

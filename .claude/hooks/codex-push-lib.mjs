@@ -386,6 +386,10 @@ const RISKY_PATH_RES = [
   // would let a live-apply alarm be cleared without review, so its diff gets the
   // same independent verdict (Opus review 2026-08-19, round 3).
   /(^|\/)scripts\/remove-applied-ledger-entry\.mjs$/i,
+  /(^|\/)scripts\/[^/]*(?:migration|sql|trigger-fanout|one-shot|applied|supabase-linked-read|unsupported-routine)[^/]*$/i,
+  /(^|\/)scripts\/[^/]*\.test\.mjs$/i,
+  /(^|\/)scripts\/approved-set-grandfathered\.txt$/i,
+  /(^|\/)supabase\/baselines\/one-shot-migrations\.json$/i,
   /(^|\/)package\.json$/i,
   // Reviewer charters are executable review instructions for the migration
   // proof gate (write-apply-proofs runs each .claude/agents/<reviewer>.md as a

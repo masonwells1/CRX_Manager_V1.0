@@ -174,9 +174,50 @@ function writeOneShotRegistry(projectDir, oneShot = {}) {
   const dir = path.join(projectDir, "supabase", "baselines");
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, "one-shot-migrations.json"), JSON.stringify({ one_shot: oneShot }));
+  writeFanoutManifest(projectDir, FANOUT_FIXTURE);
+}
+const FANOUT_PRODUCER_SOURCES = [
+  "scripts/generate-trigger-fanout.mjs",
+  "scripts/supabase-linked-read.mjs",
+  ".claude/hooks/apply-time-dml-lib.mjs",
+];
+function gitBlob(bytes) {
+  return createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+}
+function writeFanoutManifest(projectDir, manifest, mutateAttestation) {
   const manifestDir = path.join(projectDir, "scripts");
   mkdirSync(manifestDir, { recursive: true });
-  writeFileSync(path.join(manifestDir, "trigger-fanout.json"), JSON.stringify(FANOUT_FIXTURE));
+  const manifestBytes = Buffer.from(JSON.stringify(manifest));
+  writeFileSync(path.join(manifestDir, "trigger-fanout.json"), manifestBytes);
+  const sources = FANOUT_PRODUCER_SOURCES.map((relativePath) => {
+    const sourcePath = path.join(projectDir, ...relativePath.split("/"));
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    const bytes = Buffer.from(`fixture source: ${relativePath}\n`);
+    writeFileSync(sourcePath, bytes);
+    return {
+      path: relativePath,
+      git_blob: gitBlob(bytes),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+  });
+  const attestation = {
+    format_version: 1,
+    kind: "crx-trigger-fanout-attestation",
+    manifest: {
+      path: "scripts/trigger-fanout.json",
+      sha256: createHash("sha256").update(manifestBytes).digest("hex"),
+    },
+    source_project: manifest._meta.source_project,
+    captured_at: manifest._meta.captured_at,
+    producer: {
+      wrapper: "scripts/generate-trigger-fanout.mjs",
+      sources,
+    },
+  };
+  if (mutateAttestation) mutateAttestation(attestation);
+  const stateDir = path.join(projectDir, ".claude", "session-state");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(path.join(stateDir, "trigger-fanout-attestation.json"), JSON.stringify(attestation));
 }
 function armAutopilot(stateDir, hoursFromNow) {
   writeFileSync(path.join(stateDir, "AUTOPILOT.on"), JSON.stringify({
@@ -279,10 +320,7 @@ function armAutopilot(stateDir, hoursFromNow) {
 
     const staleFanout = structuredClone(FANOUT_FIXTURE);
     staleFanout._meta.captured_at = new Date(Date.now() - 25 * 3600_000).toISOString();
-    writeFileSync(
-      path.join(tmp, "scripts", "trigger-fanout.json"),
-      JSON.stringify(staleFanout),
-    );
+    writeFanoutManifest(tmp, staleFanout);
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r) && r.stdout.includes("captured within the last 24 hours"),
       "stale trigger/event-trigger capture → apply denied");
@@ -652,11 +690,51 @@ function armAutopilot(stateDir, hoursFromNow) {
       }, tmp);
     };
 
+    const attestationPath = path.join(stateDir, "trigger-fanout-attestation.json");
+    const manifestPath = path.join(tmp, "scripts", "trigger-fanout.json");
+    let r = apply("20990601000006_attested_control", BENIGN_SQL);
+    ok(!isOneShotDeny(r), "round-63 control: wrapper-attested fan-out evidence is accepted");
+
+    rmSync(attestationPath, { force: true });
+    r = apply("20990601000007_unsigned_fanout", BENIGN_SQL);
+    ok(isOneShotDeny(r) && r.stdout.includes("no wrapper-attested trigger-fanout.json"),
+      "round-63: an unsigned fan-out manifest is refused");
+    writeFanoutManifest(tmp, FANOUT_FIXTURE);
+
+    writeFileSync(manifestPath, `${readFileSync(manifestPath, "utf8")}\n`);
+    r = apply("20990601000008_dirty_fanout", BENIGN_SQL);
+    ok(isOneShotDeny(r) && r.stdout.includes("manifest bytes do not match"),
+      "round-63: editing the manifest after capture invalidates its exact SHA-256 attestation");
+    writeFanoutManifest(tmp, FANOUT_FIXTURE);
+
+    writeFileSync(
+      path.join(tmp, ...FANOUT_PRODUCER_SOURCES[0].split("/")),
+      "exit 0; // weakened after capture\n",
+    );
+    r = apply("20990601000012_dirty_generator", BENIGN_SQL);
+    ok(isOneShotDeny(r) && r.stdout.includes("dirty or does not match its reviewed blob"),
+      "round-63: a dirty producer source invalidates the evidence");
+    writeFanoutManifest(tmp, FANOUT_FIXTURE);
+
+    writeFanoutManifest(tmp, FANOUT_FIXTURE, (attestation) => {
+      attestation.source_project = "abcdefghijklmnopqrst";
+    });
+    r = apply("20990601000013_wrong_project_attestation", BENIGN_SQL);
+    ok(isOneShotDeny(r) && r.stdout.includes("project or capture time does not match"),
+      "round-63: an attestation for a different project is refused");
+    writeFanoutManifest(tmp, FANOUT_FIXTURE, (attestation) => {
+      attestation.captured_at = "2099-01-01T00:00:00.000Z";
+    });
+    r = apply("20990601000014_wrong_time_attestation", BENIGN_SQL);
+    ok(isOneShotDeny(r) && r.stdout.includes("project or capture time does not match"),
+      "round-63: capture time is bound identically in the manifest and attestation");
+    writeFanoutManifest(tmp, FANOUT_FIXTURE);
+
     // 0. The registry is only enforceable while its tracked source exists. A
     // missing source used to mean "no body match", allowing the same repair
     // under a new name. Invalid evidence now blocks every apply until restored.
     rmSync(oneShotPath, { force: true });
-    let r = apply("20990601000009_renamed_while_source_missing", ONE_SHOT_SQL);
+    r = apply("20990601000009_renamed_while_source_missing", ONE_SHOT_SQL);
     ok(isOneShotDeny(r), "round-33: a registered one-shot with no readable source denies closed");
     ok(r.stdout.includes("missing from every verified checkout"),
       "round-33: the missing-source refusal names the evidence defect");
@@ -1289,13 +1367,12 @@ function armAutopilot(stateDir, hoursFromNow) {
       writeOneShotRegistry(tmp, {
         [REAL_STEM]: "fixture mirror of the live population-bound line-profit repair",
       });
-      const fanoutPath = path.join(tmp, "scripts", "trigger-fanout.json");
       const edgeManifest = structuredClone(FANOUT_FIXTURE);
       edgeManifest.opaque_on_tables = [];
       edgeManifest.fanout = {
         orders: [{ target: "order_items", via: "foreign_key_fixture" }],
       };
-      writeFileSync(fanoutPath, `${JSON.stringify(edgeManifest, null, 2)}\n`);
+      writeFanoutManifest(tmp, edgeManifest);
       r = apply("20990601000173_r27_fanout",
         "UPDATE public.orders SET id = id WHERE id = 7;");
       ok(isDeny(r) && isOneShotDeny(r),
@@ -1305,7 +1382,7 @@ function armAutopilot(stateDir, hoursFromNow) {
 
       const edgeMutant = structuredClone(edgeManifest);
       edgeMutant.fanout = {};
-      writeFileSync(fanoutPath, `${JSON.stringify(edgeMutant, null, 2)}\n`);
+      writeFanoutManifest(tmp, edgeMutant);
       r = apply("20990601000174_r27_fanout_mutant",
         "UPDATE public.orders SET id = id WHERE id = 7;");
       ok(!isOneShotDeny(r),
@@ -1313,7 +1390,7 @@ function armAutopilot(stateDir, hoursFromNow) {
 
       const opaqueManifest = structuredClone(edgeMutant);
       opaqueManifest.opaque_on_tables = ["orders"];
-      writeFileSync(fanoutPath, `${JSON.stringify(opaqueManifest, null, 2)}\n`);
+      writeFanoutManifest(tmp, opaqueManifest);
       r = apply("20990601000175_r27_fanout_opaque",
         "UPDATE public.orders SET id = id WHERE id = 7;");
       ok(isDeny(r) && isOneShotDeny(r),
@@ -1329,7 +1406,7 @@ function armAutopilot(stateDir, hoursFromNow) {
           { target: "order_items", via: "foreign_key_auth_profiles_fixture" },
         ],
       };
-      writeFileSync(fanoutPath, `${JSON.stringify(crossSchemaManifest, null, 2)}\n`);
+      writeFanoutManifest(tmp, crossSchemaManifest);
       r = apply("20990601000176_r27_cross_schema_fanout",
         "DELETE FROM auth.users WHERE id = '00000000-0000-0000-0000-000000000001';");
       ok(isDeny(r) && isOneShotDeny(r),
@@ -1341,7 +1418,7 @@ function armAutopilot(stateDir, hoursFromNow) {
           { target: "activity_feed", via: "foreign_key_auth_activity_fixture" },
         ],
       };
-      writeFileSync(fanoutPath, `${JSON.stringify(crossSchemaMutant, null, 2)}\n`);
+      writeFanoutManifest(tmp, crossSchemaMutant);
       r = apply("20990601000177_r27_cross_schema_mutant",
         "DELETE FROM auth.users WHERE id = '00000000-0000-0000-0000-000000000001';");
       ok(!isOneShotDeny(r),
@@ -1349,7 +1426,7 @@ function armAutopilot(stateDir, hoursFromNow) {
 
       // The cases below prove their own analyzers. Do not let this round's
       // deliberately opaque/fan-out fixtures become an unrelated deny reason.
-      writeFileSync(fanoutPath, `${JSON.stringify(FANOUT_FIXTURE, null, 2)}\n`);
+      writeFanoutManifest(tmp, FANOUT_FIXTURE);
 
       writeOneShotRegistry(tmp, { [STEM]: REASON });
       rmSync(path.join(tmp, "supabase", "migrations", `${REAL_STEM}.sql`), { force: true });
@@ -1470,10 +1547,7 @@ function armAutopilot(stateDir, hoursFromNow) {
         event: "select",
         definition_hash: "a".repeat(64),
       });
-      writeFileSync(
-        path.join(tmp, "scripts", "trigger-fanout.json"),
-        `${JSON.stringify(liveRuleManifest, null, 2)}\n`,
-      );
+      writeFanoutManifest(tmp, liveRuleManifest);
       r = apply("20990601000190_r57_live_select", "SELECT * FROM public.live_rule_probe;");
       ok(isDeny(r) && isOneShotDeny(r),
         "round-57: a linked-live persisted rule fires in the candidate apply → denied");
@@ -1484,18 +1558,12 @@ function armAutopilot(stateDir, hoursFromNow) {
         event: "select",
         definition_hash: "b".repeat(64),
       });
-      writeFileSync(
-        path.join(tmp, "scripts", "trigger-fanout.json"),
-        `${JSON.stringify(liveRuleManifest, null, 2)}\n`,
-      );
+      writeFanoutManifest(tmp, liveRuleManifest);
       r = apply("20990601000191_r57_cross_schema_live_select",
         "SELECT * FROM auth.live_rule_probe;");
       ok(isDeny(r) && isOneShotDeny(r),
         "round-57: a linked-live non-public rule retains its schema and fires → denied");
-      writeFileSync(
-        path.join(tmp, "scripts", "trigger-fanout.json"),
-        `${JSON.stringify(FANOUT_FIXTURE, null, 2)}\n`,
-      );
+      writeFanoutManifest(tmp, FANOUT_FIXTURE);
 
       // ROUND 29 (Codex High). A string handed to EXECUTE is SQL, and the
       // analyzer only ever scanned one for a bare DML verb. A call is not a DML
@@ -1970,7 +2038,7 @@ function armAutopilot(stateDir, hoursFromNow) {
       routine_oid: "9001",
       routine_schema: "public",
     }];
-    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(enabledEventManifest));
+    writeFanoutManifest(tmp, enabledEventManifest);
     r = apply("20990601000044_live_event_trigger", "COMMENT ON TABLE public.orders IS 'fires';");
     ok(isDeny(r) && r.stdout.includes("enabled PostgreSQL event trigger"),
       "round-46: an enabled event trigger without no-write proof blocks migration apply");
@@ -1992,7 +2060,7 @@ function armAutopilot(stateDir, hoursFromNow) {
       routine_hash: "b".repeat(64),
       routine_name: "resident_ddl_metadata_watch_fn",
     }];
-    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(safeEventManifest));
+    writeFanoutManifest(tmp, safeEventManifest);
     r = apply("20990601000045_safe_live_event_trigger", "COMMENT ON TABLE public.orders IS 'safe';");
     ok(!r.stdout.includes("enabled PostgreSQL event trigger"),
       "round-46 MUTANT: an enabled trigger with bound no-write proof does not wedge migrations");
@@ -2009,12 +2077,12 @@ function armAutopilot(stateDir, hoursFromNow) {
       routine_config: [],
       routine_hash: "c".repeat(64),
     }];
-    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(conditionalEventManifest));
+    writeFanoutManifest(tmp, conditionalEventManifest);
     r = apply("20990601000046_event_session_path",
       "SET LOCAL search_path = public, pg_catalog; COMMENT ON TABLE public.orders IS 'fires';");
     ok(isDeny(r) && r.stdout.includes("applying session's search_path"),
       "round-47: session-dependent event helper plus search_path mutation is refused");
-    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(FANOUT_FIXTURE));
+    writeFanoutManifest(tmp, FANOUT_FIXTURE);
 
     // ROUND 48. Dollar-quoted metadata after COMMENT ON FUNCTION used to be
     // mistaken for a replacement body. That false definition shadowed the
@@ -2078,7 +2146,7 @@ function armAutopilot(stateDir, hoursFromNow) {
       routine_oid: "16547",
       routine_schema: "extensions",
     }];
-    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(protectedEventManifest));
+    writeFanoutManifest(tmp, protectedEventManifest);
     const eventRoutineChanges = [
       ["create", "CREATE FUNCTION extensions.grant_pg_cron_access() RETURNS event_trigger " +
         "LANGUAGE plpgsql AS $$ BEGIN UPDATE public.orders SET total_profit = total_profit; END $$;"],
@@ -2116,7 +2184,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // the analyzer surfaced the effect.
     const noEventManifest = structuredClone(FANOUT_FIXTURE);
     noEventManifest.event_triggers = [];
-    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(noEventManifest));
+    writeFanoutManifest(tmp, noEventManifest);
     const sequenceMutations = [
       "SELECT pg_catalog.nextval('public.invoice_number_seq');",
       "SELECT setval('public.invoice_number_seq', 1, false);",
@@ -2133,7 +2201,7 @@ function armAutopilot(stateDir, hoursFromNow) {
       "SET DEFAULT nextval('public.invoice_number_seq');");
     ok(!isOneShotDeny(r),
       "round-51 MUTANT: a deferred sequence default does not claim the counter changed at apply time");
-    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(FANOUT_FIXTURE));
+    writeFanoutManifest(tmp, FANOUT_FIXTURE);
 
     // ROUND 52. The tracked registry is candidate-controlled input to a
     // security boundary. Keys may never become path fragments or executable

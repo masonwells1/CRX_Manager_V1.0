@@ -332,8 +332,36 @@ assert.deepEqual(riskyFiles(["scripts/write-codex-push-proof.mjs"]), ["scripts/w
 // --i-verified-against-live gate must itself require the second-model verdict
 // (Opus review 2026-08-19, round 3).
 assert.deepEqual(riskyFiles(["scripts/remove-applied-ledger-entry.mjs"]), ["scripts/remove-applied-ledger-entry.mjs"]);
+const migrationSafetySurfaces = [
+  "scripts/approved-set-grandfathered.txt",
+  "scripts/check-trigger-fanout-staleness.mjs",
+  "scripts/find-unsupported-routine-identities.mjs",
+  "scripts/generate-trigger-fanout.mjs",
+  "scripts/generate-trigger-fanout.test.mjs",
+  "scripts/refresh-applied-migrations.mjs",
+  "scripts/refresh-applied-migrations.test.mjs",
+  "scripts/sql-audit-hash-exemptions.txt",
+  "scripts/supabase-linked-read.mjs",
+  "scripts/trigger-fanout.json",
+  "scripts/validate-sql-migrations-approved-set.test.mjs",
+  "scripts/validate-sql-migrations.sh",
+  "scripts/write-one-shot-replay-override.mjs",
+  "scripts/write-one-shot-replay-override.test.mjs",
+  "supabase/baselines/one-shot-migrations.json",
+];
+assert.deepEqual(
+  riskyFiles(migrationSafetySurfaces),
+  migrationSafetySurfaces,
+  "every migration-safety helper, test, evidence file, exemption, and registry requires exact-head review",
+);
+assert.deepEqual(
+  riskyFiles(["scripts/validate-sql-migrations.sh"]),
+  ["scripts/validate-sql-migrations.sh"],
+  "an exit 0 weakening in the SQL validator cannot avoid exact-head review",
+);
 assert.equal(contentIsRisky("+ const total_cents = 100"), true);
 assert.equal(contentIsRisky("+ const title = 'ordinary'"), false);
+assert.equal(contentIsRisky("+ exit 0"), false);
 
 // 2026-07-29: the risky-file gate reasons about THIS app's migrations, RLS and
 // money code, so it only applies to THIS repo. It used to run against any repo

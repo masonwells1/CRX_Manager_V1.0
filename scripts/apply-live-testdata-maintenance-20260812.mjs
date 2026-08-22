@@ -52,12 +52,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // joined RISKY_PATH_RES so a Codex push touching it needs an exact-head
   // proof. The apply-live-testdata risky-path anchor this transform verifies is
   // still present exactly once; the transform is identity, so input == output.
+  // pushLib re-pinned 2026-08-22 (PR #364 exact-SHA repair): migration-safety
+  // helpers, tests, manifests, exemptions, and the one-shot registry now join
+  // the risky-path set. The protected transform remains an identity operation.
   codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
-  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
+  pushLib: "6cc49038af588b0c6911e93ed64cb140ca9acd25",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
-  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
+  pushLib: "6cc49038af588b0c6911e93ed64cb140ca9acd25",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

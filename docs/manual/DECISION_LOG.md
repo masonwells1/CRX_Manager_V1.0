@@ -19,6 +19,12 @@ and old live-catalog evidence cannot prove what an apply will execute today.
 **What this forbids/implies:** never weaken the endpoint allowlist or apply with expired evidence;
 from the applying checkout, rerun `node scripts/refresh-applied-migrations.mjs` and
 `node scripts/generate-trigger-fanout.mjs` before the apply, then review both regenerated artifacts.
+The generator is the only sanctioned attestation wrapper: it refuses dirty or uncommitted producer
+sources and writes a protected session artifact binding the manifest's exact SHA-256, production
+project, database capture time, and committed blobs for itself plus its query/parser helpers. The
+apply guard rejects unsigned or post-capture-edited evidence. All migration-safety producers,
+validators, tests, evidence/exemption files, and the one-shot registry are risky-path surfaces that
+require an exact-head Sol/high verdict even when a weakening contains no money or RLS keyword.
 Rewrite rules are executable persisted catalog state: the live capture and every earlier checked-in
 migration must seed their schema-qualified rule attachments into the candidate analysis. The linked
 capture covers non-system schemas, an already captured rule cannot be removed or changed silently,

@@ -58,7 +58,13 @@ lookalike/arbitrary host. Validation and private-workdir creation use one immuta
 each metadata file, so a concurrent relink cannot replace the source between a checked read and a
 second copy. Live trigger/FK/rule/view/event-trigger evidence expires after 24 hours;
 stale or materially future-dated manifests are skipped, and an apply requires at least one fresh
-capture regenerated with `node scripts/generate-trigger-fanout.mjs`. The one-shot registry is untrusted input: stems, metadata values,
+capture regenerated with `node scripts/generate-trigger-fanout.mjs`. That no-argument producer is
+also the only attestation wrapper: it refuses dirty/uncommitted producer sources, then binds the
+exact manifest SHA-256, production project, database capture time, and committed generator/query/
+parser blobs into protected session state. The apply guard ignores unsigned evidence and rejects
+manifest or producer edits made after capture. Every migration-safety helper, test, evidence or
+exemption file, and one-shot registry path is classified as risky by the push/merge proof gate.
+The one-shot registry is untrusted input: stems, metadata values,
 contained migration paths, override fields, and target project refs are strictly validated, registry
 prose is never reflected, and the only copy-ready authorization command is the fixed
 `scripts/write-one-shot-replay-override.mjs --migration <registered-stem> --query-migration <current-query-stem> --project <ref>`
@@ -338,7 +344,8 @@ captured, never hashed, not counted. A text scanner cannot know the live trigger
 so the graph is checked in as `scripts/trigger-fanout.json` (158 opaque source relations and
 399 transitive trigger/foreign-key cascade edges in the 2026-08-20 linked-production capture), generated from the live
 catalog by `scripts/generate-trigger-fanout.mjs`. The producer verifies the linked CRX
-project itself; pasted JSON and a caller-supplied project label are not provenance. It
+project itself; pasted JSON and a caller-supplied project label are not provenance. The consumer
+also requires the wrapper-owned exact-byte/source-blob attestation described above. It
 walks every trigger through public helper routines and trigger-to-trigger cascades, and includes
 foreign-key `CASCADE`, `SET NULL`, and `SET DEFAULT` actions—including schema-qualified
 non-public parents such as `auth.users` when their action writes a public child—before folding the transitive rewrite

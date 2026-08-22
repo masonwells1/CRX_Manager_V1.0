@@ -49,6 +49,12 @@ const REQUIRED_CODEX_EFFORT = "high";
 const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
 const TRIGGER_FANOUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const TRIGGER_FANOUT_FUTURE_SKEW_MS = 5 * 60 * 1000;
+const TRIGGER_FANOUT_ATTESTATION_FORMAT = 1;
+const TRIGGER_FANOUT_PRODUCER_SOURCES = Object.freeze([
+  "scripts/generate-trigger-fanout.mjs",
+  "scripts/supabase-linked-read.mjs",
+  ".claude/hooks/apply-time-dml-lib.mjs",
+]);
 
 function migrationSourcePath(root, stem) {
   if (!validMigrationStem(stem)) throw new Error("invalid migration stem");
@@ -75,6 +81,97 @@ function targetTable(target) {
   return parts.length >= 3 ? `${parts[0]}.${parts[1]}` : (parts[0] || "");
 }
 
+function exactKeys(value, expected) {
+  return value && typeof value === "object" && !Array.isArray(value) &&
+    JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...expected].sort());
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function gitBlobFor(filePath, root) {
+  try {
+    const blob = execFileSync("git", ["hash-object", filePath], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!/^[0-9a-f]{40,64}$/.test(blob)) throw new Error("invalid blob identity");
+    return blob;
+  } catch {
+    throw new Error("producer source blob identity could not be verified");
+  }
+}
+
+function loadAttestedFanout(root) {
+  const manifestPath = path.join(root, "scripts", "trigger-fanout.json");
+  const attestationPath = path.join(
+    root, ".claude", "session-state", "trigger-fanout-attestation.json",
+  );
+  if (!existsSync(attestationPath)) {
+    throw new Error("manifest has no wrapper-minted attestation");
+  }
+
+  let manifestBytes;
+  let parsed;
+  let attestation;
+  try {
+    manifestBytes = readFileSync(manifestPath);
+    parsed = JSON.parse(manifestBytes.toString("utf8"));
+    attestation = JSON.parse(readFileSync(attestationPath, "utf8"));
+  } catch {
+    throw new Error("manifest or attestation is unreadable or invalid JSON");
+  }
+
+  if (!exactKeys(attestation, [
+    "format_version", "kind", "manifest", "source_project", "captured_at", "producer",
+  ]) ||
+      attestation.format_version !== TRIGGER_FANOUT_ATTESTATION_FORMAT ||
+      attestation.kind !== "crx-trigger-fanout-attestation" ||
+      !exactKeys(attestation.manifest, ["path", "sha256"]) ||
+      attestation.manifest.path !== "scripts/trigger-fanout.json" ||
+      !/^[0-9a-f]{64}$/.test(attestation.manifest.sha256) ||
+      !exactKeys(attestation.producer, ["wrapper", "sources"]) ||
+      attestation.producer.wrapper !== "scripts/generate-trigger-fanout.mjs" ||
+      !Array.isArray(attestation.producer.sources) ||
+      attestation.producer.sources.length !== TRIGGER_FANOUT_PRODUCER_SOURCES.length) {
+    throw new Error("attestation failed strict shape validation");
+  }
+  if (attestation.manifest.sha256 !== sha256(manifestBytes)) {
+    throw new Error("manifest bytes do not match the wrapper attestation");
+  }
+  if (attestation.source_project !== CRX_PRODUCTION_REF ||
+      attestation.source_project !== parsed?._meta?.source_project ||
+      typeof attestation.captured_at !== "string" ||
+      attestation.captured_at !== parsed?._meta?.captured_at) {
+    throw new Error("attestation project or capture time does not match the manifest");
+  }
+
+  for (let index = 0; index < TRIGGER_FANOUT_PRODUCER_SOURCES.length; index += 1) {
+    const expectedPath = TRIGGER_FANOUT_PRODUCER_SOURCES[index];
+    const source = attestation.producer.sources[index];
+    if (!exactKeys(source, ["path", "git_blob", "sha256"]) ||
+        source.path !== expectedPath ||
+        !/^[0-9a-f]{40,64}$/.test(source.git_blob) ||
+        !/^[0-9a-f]{64}$/.test(source.sha256)) {
+      throw new Error("attestation producer source list is invalid");
+    }
+    const sourcePath = path.join(root, ...expectedPath.split("/"));
+    let bytes;
+    try {
+      bytes = readFileSync(sourcePath);
+    } catch {
+      throw new Error("an attested producer source is missing or unreadable");
+    }
+    if (sha256(bytes) !== source.sha256 || gitBlobFor(sourcePath, root) !== source.git_blob) {
+      throw new Error("an attested producer source is dirty or does not match its reviewed blob");
+    }
+  }
+  return { manifestPath, parsed };
+}
+
 function loadTrustedFanout(evidenceRoots) {
   const scanned = new Set();
   const opaque = new Set();
@@ -85,14 +182,16 @@ function loadTrustedFanout(evidenceRoots) {
   const persistedRules = new Map();
   const manifests = [];
   const expiredManifests = [];
+  const rejectedManifests = [];
   for (const root of evidenceRoots) {
     const manifestPath = path.join(root, "scripts", "trigger-fanout.json");
     if (!existsSync(manifestPath)) continue;
     let parsed;
     try {
-      parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+      ({ parsed } = loadAttestedFanout(root));
     } catch (err) {
-      throw new Error(`${manifestPath}: ${err?.message || err}`);
+      rejectedManifests.push(`${manifestPath}: ${err?.message || err}`);
+      continue;
     }
     if (parsed?._meta?.format_version !== 5 ||
         parsed?._meta?.source_project !== CRX_PRODUCTION_REF ||
@@ -215,6 +314,12 @@ function loadTrustedFanout(evidenceRoots) {
       throw new Error(
         `no trigger-fanout.json captured within the last 24 hours ` +
         `(expired or future-dated: ${expiredManifests.join(", ")}); ` +
+        `run node scripts/generate-trigger-fanout.mjs and retry`,
+      );
+    }
+    if (rejectedManifests.length) {
+      throw new Error(
+        `no wrapper-attested trigger-fanout.json was accepted (${rejectedManifests.join(", ")}); ` +
         `run node scripts/generate-trigger-fanout.mjs and retry`,
       );
     }

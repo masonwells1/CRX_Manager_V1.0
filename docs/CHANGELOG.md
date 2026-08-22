@@ -26,6 +26,12 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - Trigger, FK, rule, view, and event-trigger evidence now expires after 24 hours. The apply guard
   skips stale or materially future-dated manifests and requires at least one fresh linked-production
   capture, with the fixed no-argument regeneration command in its denial message.
+- That live capture is now accepted only with a wrapper-owned session attestation binding the exact
+  manifest SHA-256, CRX project, database capture time, and committed Git blobs for the generator
+  plus both parsing/query helpers. Missing attestations, edited manifest bytes, or dirty producer
+  sources fail closed. Every migration-safety helper, test, evidence manifest, exemption list, and
+  one-shot registry is also an exact-head Sol/high review surface, including a one-line `exit 0`
+  weakening that contains no ordinary money/RLS keyword.
 - Persisted PostgreSQL rewrite rules now cross migration boundaries instead of disappearing after
   their defining file. The linked capture binds every live non-system rule relation—including its
   schema—event, OID, and definition hash; the apply guard also catalogs rules from earlier
@@ -177,8 +183,8 @@ migration safety harness; no app source, migration SQL, live database, or produc
   behind a subsequent `DROP FUNCTION`; analyzer and apply-guard mutants cover both spellings.
 
 Focused proof: snapshot producer 23 assertions; applied-source containment pass (including forced
-worktree-enumeration failure); trigger fan-out producer 25 assertions; apply-time analyzer
-293 assertions; apply-time guard 332 assertions; approved-set validator 207 mutation cases;
+worktree-enumeration failure); trigger fan-out producer 27 assertions; apply-time analyzer
+293 assertions; apply-time guard 338 assertions; approved-set validator 207 mutation cases;
 one-shot override writer 25 assertions.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.

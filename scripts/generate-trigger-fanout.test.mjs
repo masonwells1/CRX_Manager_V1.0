@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   buildTriggerFanoutManifest,
+  buildTriggerFanoutAttestation,
   captureTriggerFanout,
+  committedProducerSources,
   routineDelimiter,
+  TRIGGER_FANOUT_ATTESTATION_FORMAT,
   TRIGGER_FANOUT_FORMAT,
+  TRIGGER_FANOUT_PRODUCER_SOURCES,
   TRIGGER_FANOUT_SQL,
 } from './generate-trigger-fanout.mjs';
 import { CRX_SUPABASE_PROJECT_ID } from './supabase-linked-read.mjs';
@@ -102,6 +107,17 @@ function linkedFixture(projectRef = CRX_SUPABASE_PROJECT_ID) {
   mkdirSync(path.join(dir, 'supabase', '.temp'), { recursive: true });
   writeFileSync(path.join(dir, 'supabase', '.temp', 'project-ref'), projectRef);
   return dir;
+}
+
+// Git exports repository selectors such as GIT_INDEX_FILE while a hook runs.
+// This suite is itself invoked by pre-commit, so fixture Git commands must not
+// inherit selectors that point at the real worktree's index.
+function hermeticGitEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase().startsWith('GIT_')) delete env[key];
+  }
+  return env;
 }
 
 check('routine delimiter advances on every source collision', () => {
@@ -301,6 +317,58 @@ check('capture invokes one fixed linked query and writes its result', () => {
     const result = captureTriggerFanout({ projectDir: dir, linkedRoot: dir, run, outPath });
     assert.equal(calls, 1);
     assert.deepEqual(JSON.parse(readFileSync(outPath, 'utf8')), result.manifest);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+check('attestation binds the exact manifest bytes, production project, time, and producer blobs', () => {
+  const manifest = buildTriggerFanoutManifest(payload);
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
+  const producerSources = TRIGGER_FANOUT_PRODUCER_SOURCES.map((sourcePath, index) => ({
+    path: sourcePath,
+    git_blob: String(index + 1).repeat(40),
+    sha256: String(index + 4).repeat(64),
+  }));
+  const attestation = buildTriggerFanoutAttestation({ manifestBytes, manifest, producerSources });
+  assert.equal(attestation.format_version, TRIGGER_FANOUT_ATTESTATION_FORMAT);
+  assert.equal(attestation.source_project, CRX_SUPABASE_PROJECT_ID);
+  assert.equal(attestation.captured_at, CAPTURED_AT);
+  assert.match(attestation.manifest.sha256, /^[0-9a-f]{64}$/);
+  assert.deepEqual(attestation.producer.sources, producerSources);
+});
+check('the wrapper refuses dirty or uncommitted producer sources', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'trigger-fanout-producer-'));
+  const git = (args) => spawnSync('git', args, {
+    cwd: dir,
+    encoding: 'utf8',
+    env: hermeticGitEnv(),
+  });
+  try {
+    for (const relativePath of TRIGGER_FANOUT_PRODUCER_SOURCES) {
+      const filePath = path.join(dir, ...relativePath.split('/'));
+      mkdirSync(path.dirname(filePath), { recursive: true });
+      writeFileSync(filePath, `fixture for ${relativePath}\n`);
+    }
+    assert.equal(git(['init', '-q', '-b', 'main']).status, 0);
+    assert.equal(git(['-c', 'user.email=test@example.com', '-c', 'user.name=test', 'add', '.']).status, 0);
+    assert.equal(git([
+      '-c', 'user.email=test@example.com',
+      '-c', 'user.name=test',
+      '-c', `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`,
+      'commit', '-qm', 'fixture',
+    ]).status, 0);
+    const sources = committedProducerSources(dir);
+    assert.deepEqual(sources.map((source) => source.path), TRIGGER_FANOUT_PRODUCER_SOURCES);
+    assert.ok(sources.every((source) => /^[0-9a-f]{40,64}$/.test(source.git_blob)));
+
+    writeFileSync(
+      path.join(dir, ...TRIGGER_FANOUT_PRODUCER_SOURCES[0].split('/')),
+      'exit 0; // dirty weakening\n',
+    );
+    assert.throws(
+      () => committedProducerSources(dir),
+      /dirty or untracked/,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
