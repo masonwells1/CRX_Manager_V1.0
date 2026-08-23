@@ -299,6 +299,12 @@ BEGIN
   SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
   IF c = 0 THEN RAISE NOTICE 'T18 PASS  a blank-unit line that bills nothing still saves; price=%', c;
   ELSE RAISE EXCEPTION 'T18 FAIL  price=%', c; END IF;
+-- A handler so that losing the exemption reports as "T18 FAIL" rather than as a raw psql
+-- error. Without it a mutant that deletes the exemption is detected only as "the suite went
+-- red", which the mutation phases explicitly refuse to accept as a detection.
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T18 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T18 FAIL  the save was refused, so the zero-cost/zero-price exemption is gone: %', SQLERRM;
 END $$;
 
 -- T19: a CUSTOMER-SUPPLIED line with a blank unit still saves. It contributes 0 to both
@@ -314,6 +320,95 @@ BEGIN
   SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
   IF c = 0 THEN RAISE NOTICE 'T19 PASS  a customer-supplied blank-unit line still saves and bills 0; price=%', c;
   ELSE RAISE EXCEPTION 'T19 FAIL  price=%', c; END IF;
+-- A handler so that LOSING the exemption reports as "T19 FAIL" rather than as a raw psql
+-- error. Without it a mutant that deletes the exemption is detected only as "the suite went
+-- red", which the mutation phases explicitly refuse to accept as a detection.
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T19 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T19 FAIL  the save was refused, so the customer-supplied exemption is gone: %', SQLERRM;
+END $$;
+
+-- T20: a blank unit with a PRICE but quantity 0 must still SAVE. It bills
+-- safe_cents_qty(price, 0) = 0, so by the stated rule -- a line that cannot bill cannot
+-- bill wrongly -- it is exempt. The zero-quantity skip sat BELOW the blank-unit refusal
+-- when the refusal was first written, so this shape was refused, and refusing it blocks the
+-- whole job. It is reachable from the ordinary UI: reconcileChemAutofillUnits leaves `unit`
+-- blank on its fallback path while the tier price is already filled in, so a product picked
+-- before any acreage is entered lands exactly here. Found by the security review of the
+-- commit that introduced the refusal.
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"3333333e-3333-3333-3333-333333333340","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":0,"unit":"","rate_per_acre":1.5,"rate_unit":"pt/ac","cost_per_unit_cents":1250,"price_per_unit_cents":1800}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 0 THEN RAISE NOTICE 'T20 PASS  a zero-quantity blank-unit line still saves and bills 0; price=%', c;
+  ELSE RAISE EXCEPTION 'T20 FAIL  price=%', c; END IF;
+-- A handler so that losing the skip reports as "T20 FAIL" rather than as a raw psql error.
+-- Without it a mutant that moves the zero-quantity skip back below the blank-unit refusal is
+-- detected only as "the suite went red", which the mutation phases refuse to accept.
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T20 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T20 FAIL  the save was refused, so the zero-quantity skip no longer runs before the blank-unit refusal: %', SQLERRM;
+END $$;
+
+-- T21: the OTHER half of the refusal -- a blank RATE unit while the stock Unit is filled.
+-- Every earlier blank-unit test blanked only `unit`, so this branch and its distinct error
+-- wording had never executed once.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"3333333e-3333-3333-3333-333333333341","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":15,"unit":"gal","rate_per_acre":1.5,"rate_unit":"","cost_per_unit_cents":1250,"price_per_unit_cents":1800}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_UNSPECIFIED%' AND msg LIKE '%its rate unit is blank%'
+    THEN RAISE NOTICE 'T21 PASS  refused a blank RATE unit, with the right wording: %', msg;
+  ELSE RAISE EXCEPTION 'T21 FAIL  (refused=% msg=%)', ok, msg; END IF;
+END $$;
+
+-- T22: both sides blank -- the third arm of the message, also never previously executed.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"3333333e-3333-3333-3333-333333333342","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":15,"unit":"","rate_per_acre":1.5,"rate_unit":"","cost_per_unit_cents":1250,"price_per_unit_cents":1800}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE '%neither its rate unit nor its Unit is filled in%'
+    THEN RAISE NOTICE 'T22 PASS  refused with the both-blank wording: %', msg;
+  ELSE RAISE EXCEPTION 'T22 FAIL  (refused=% msg=%)', ok, msg; END IF;
+END $$;
+
+-- T23: blank unit with a COST but NO price. This is the case that actually distinguishes
+-- the rule as built from the "refuse only when there is a price" softening that was
+-- considered and rejected: cost feeds total_cost_cents and therefore margin, not just the
+-- customer bill. Every other blank-unit test carries either both or neither, so nothing
+-- was holding the cost half of the claim up.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"3333333e-3333-3333-3333-333333333343","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":15,"unit":"","rate_per_acre":1.5,"rate_unit":"pt/ac","cost_per_unit_cents":1250,"price_per_unit_cents":0}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_UNSPECIFIED%' THEN RAISE NOTICE 'T23 PASS  a cost with no price is still refused: %', msg;
+  ELSE RAISE EXCEPTION 'T23 FAIL  (refused=% msg=%)  -- the cost side of the rule is not enforced', ok, msg; END IF;
 END $$;
 
 -- T8: every refused save must have left NOTHING behind.
@@ -322,6 +417,6 @@ DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 10 AND n_chem = 10 THEN RAISE NOTICE 'T8 PASS  10 jobs / 10 chemical rows -- the 8 refused saves wrote nothing';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 10/10)', n_jobs, n_chem; END IF;
+  IF n_jobs = 11 AND n_chem = 11 THEN RAISE NOTICE 'T8 PASS  11 jobs / 11 chemical rows -- the 11 refused saves wrote nothing';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 11/11)', n_jobs, n_chem; END IF;
 END $$;

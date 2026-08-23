@@ -16,9 +16,16 @@
 //      left the next run free to overwrite an unvalidated body (Codex P1, round 3);
 //   4. against the reviewed body it applies and its postflight assertions pass;
 //   5. re-applying it is a no-op, so it is safe to replay;
-//   6. fourteen behaviour tests;
-//   7. five mutation phases, each of which must turn a NAMED test red. A mutation phase
-//      that goes red for any other reason is treated as a failure of this prover.
+//   6. twenty-three behaviour tests;
+//   7. mutation phases in TWO shapes, because two different kinds of guard live in this
+//      file. Most mutants must let the migration install and then turn a NAMED behaviour
+//      test red; a mutant that goes red for any OTHER reason is treated as a failure of
+//      this prover, not as a detection. The security mutants must instead make the APPLY
+//      ITSELF abort, with the specific postflight assertion written to catch them -- those
+//      assertions cannot fail against a correct file, so a behaviour test could never
+//      exercise them. The exact counts are derived from the arrays below and printed in the
+//      final line rather than restated here, because every earlier version of this comment
+//      went stale within a round.
 //
 // Runs on PostgreSQL 17 to match production (17.6). Requires Docker. Touches NOTHING
 // outside its own throwaway container -- it never connects to Supabase, never reads
@@ -47,7 +54,8 @@ const HARNESS = join(HERE, "fixtures", "save-job-chem-unit-harness.sql");
 const TESTS = join(HERE, "fixtures", "save-job-chem-unit-tests.sql");
 
 const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
-                  "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19"];
+                  "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19",
+                  "T20", "T21", "T22", "T23"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -347,6 +355,47 @@ const MUTANTS = [
     // from-scratch-replay shape this statement exists for.
     stage: "GRANT EXECUTE ON FUNCTION public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text) TO anon;",
     expectApplyAbort: "POSTFLIGHT_ANON_EXECUTE",
+  },
+  {
+    name: "PUBLIC left holding EXECUTE",
+    from: "REVOKE EXECUTE ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) FROM PUBLIC;",
+    to: "",
+    stage: "GRANT EXECUTE ON FUNCTION public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text) TO PUBLIC;",
+    expectApplyAbort: "POSTFLIGHT_PUBLIC_EXECUTE",
+  },
+  {
+    name: "service_role grant dropped",
+    from: "TO authenticated, service_role;",
+    to: "TO authenticated;",
+    stage: "REVOKE EXECUTE ON FUNCTION public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text) FROM service_role;",
+    expectApplyAbort: "POSTFLIGHT_GRANT_LOST",
+  },
+  {
+    name: "search_path pin removed",
+    from: "SECURITY DEFINER\nSET search_path TO 'public', 'pg_temp'",
+    to: "SECURITY DEFINER",
+    expectApplyAbort: "POSTFLIGHT_SEARCH_PATH",
+  },
+  {
+    name: "customer-supplied exemption removed",
+    from: "      CONTINUE WHEN COALESCE((v_chem->>'customer_supplied')::boolean, false);\n",
+    to: "",
+    expect: "T19",
+  },
+  {
+    // The round-7 defect itself, reproduced as a mutant: put the zero-quantity skip back
+    // BELOW the blank-unit refusal. That is exactly how the code shipped when the refusal
+    // was first written, and it falsely refused an ordinary UI shape. Without this mutant
+    // the ordering is asserted only by a comment.
+    name: "zero-quantity skip moved back below the blank-unit refusal",
+    edits: [
+      { from: "    CONTINUE WHEN v_qty = 0;\n\n    -- A BLANK unit", to: "    -- A BLANK unit" },
+      {
+        from: "    -- (the zero-quantity skip moved ABOVE the blank-unit refusal -- see the comment there)",
+        to: "    CONTINUE WHEN v_qty = 0;",
+      },
+    ],
+    expect: "T20",
   },
 ];
 

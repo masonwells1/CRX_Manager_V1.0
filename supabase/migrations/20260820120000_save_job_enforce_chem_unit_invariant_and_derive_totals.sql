@@ -64,25 +64,36 @@
 -- abbreviations. Review flagged the divergence and it is kept on purpose, because
 -- narrowing it does not remove the disagreement -- it converts it into a FALSE REFUSAL of
 -- an ordinary spelling such as `pt per ac`, and a refusal blocks the entire job, not the
--- one line. The divergence runs in the permissive direction and cannot mis-bill: nothing
--- downstream multiplies money by rate_unit. Billing and inventory both read
--- job_chemicals.unit, and the stripped value is used here only to pick which unit the
--- quantity is counted in. Aligning normalize_rate_unit and the client baseUnitOfRate to
+-- one line. The divergence runs in the permissive direction and cannot mis-bill, and the
+-- containment argument is stronger than "nothing reads rate_unit" -- which is not true:
+-- transfer_job_to_invoice does read jc.rate_unit, passing it to convert_to_gl_lb and
+-- stamping it onto invoice_lines.rate_unit. What holds is narrower and sufficient: the
+-- STRIPPED value never leaves this function. The INSERT below stores the caller's raw
+-- rate_unit verbatim, so the wider stripper cannot change a stored value or any downstream
+-- computation; it is used only to choose which unit the quantity is counted in for the
+-- comparison right here. And the money itself is safe_cents_qty(price_per_unit_cents,
+-- quantity) -- no multiply anywhere takes rate_unit as an operand.
+-- Aligning normalize_rate_unit and the client baseUnitOfRate to
 -- this wider form is the correct follow-up and is deliberately NOT bundled into a money
 -- migration, because that helper is called from paths this change does not touch.
 --
--- APPLY CHANNEL: Supabase MCP `apply_migration` ONLY. This file is four top-level
--- statements -- the preflight pin, the replacement, the postflight, and the COMMENT.
--- `execute_sql` returns only the LAST statement, so applied through that channel the pin,
--- the replacement and the postflight would all be silently skipped and the COMMENT alone
--- would run. Every atomicity claim in this header assumes the whole file executes as one
--- unit.
+-- APPLY CHANNEL: Supabase MCP `apply_migration` ONLY. This file is SEVEN top-level
+-- statements -- the preflight pin, the replacement, two REVOKEs, a GRANT, the postflight,
+-- and the COMMENT. `execute_sql` returns only the LAST statement, so applied through that
+-- channel everything except the COMMENT would be silently skipped. Every atomicity claim
+-- in this header assumes the whole file executes as one unit. (The count said "four"
+-- until the ACL statements were added; a reviewer counting statements to check that claim
+-- would have been misled, so it is kept current deliberately.)
 --
 -- BLAST RADIUS, re-verified read-only on 2026-08-23 against every job_chemicals row:
--- 4 rows, none negative, none NaN or Infinity, so nothing live is refused by the new
--- step-3 check. The derived totals reproduce every stored total to the cent. One row
--- carries quantity = 0; the invariant skips it, which is correct, because it bills
--- nothing.
+-- 4 rows total. None negative, none NaN or Infinity, so the step-3 finiteness refusal
+-- touches nothing live. The derived totals reproduce every stored total to the cent.
+--
+-- ONE of the four IS refused, by step 0 -- see the pre-apply obligation below. A second
+-- row carries quantity = 0 and is exempt; note that exemption is what makes it safe, NOT
+-- the older claim that "the invariant skips it", which stopped being the reason once the
+-- blank-unit refusal was added ahead of the zero-quantity skip. That ordering was itself a
+-- defect and is fixed; the sentence is restated here so the two do not drift apart again.
 --
 -- PRE-APPLY DATA OBLIGATION -- ONE live row, and it must be corrected FIRST.
 -- Exactly one job_chemicals row carries a BLANK unit against a pt/ac rate while holding
@@ -93,10 +104,38 @@
 -- Re-run this read-only check IMMEDIATELY BEFORE the apply and require ZERO rows. It is
 -- the whole obligation, and it is cheap:
 --
---   SELECT count(*) FROM job_chemicals
---    WHERE coalesce(btrim(unit), '') = ''
+--   WITH n AS (
+--     SELECT jc.quantity, jc.customer_supplied, jc.cost_per_unit_cents, jc.price_per_unit_cents,
+--            lower(btrim(coalesce(jc.unit, '')))      AS u_raw,
+--            lower(btrim(coalesce(jc.rate_unit, ''))) AS r_raw
+--       FROM job_chemicals jc)
+--   SELECT count(*) FROM n
+--    WHERE (u_raw = ''
+--           OR (u_raw ~ '\s*/\s*(ac|acre|acres|a)\s*$'
+--               AND btrim(regexp_replace(u_raw, '\s*/\s*(ac|acre|acres|a)\s*$', '')) = '')
+--           OR btrim(regexp_replace(btrim(split_part(r_raw, '/', 1)),
+--                                   '[\s-]+per[\s-]+(acres|acre|ac|a)$', '')) = '')
+--      AND quantity <> 0
 --      AND coalesce(customer_supplied, false) = false
 --      AND (coalesce(cost_per_unit_cents, 0) <> 0 OR coalesce(price_per_unit_cents, 0) <> 0);
+--
+-- Every term mirrors a term of the refusal, and it took THREE review rounds to get right --
+-- worth recording, because each wrong version failed in the same direction, reporting ZERO
+-- while a live row was still refused. That gap is the difference between "no operational
+-- impact on apply day" and a job nobody can save.
+--   v1 tested only a blank `unit`, ignoring `rate_unit` -- but the refusal fires on EITHER.
+--   v2 added `rate_unit` but tested it with btrim = '', which misses the case where a
+--      non-blank value STRIPS to empty. normalize_rate_unit returns NULL not only for
+--      blank input but for anything whose base is empty after its own acre-stripping, so
+--      `unit = '/ac'` and `rate_unit = '/ac'` are both refused while btrim finds them
+--      non-blank. The query above reproduces that stripping instead of approximating it.
+--   Every version also had to gain `quantity <> 0` once the zero-quantity exemption landed,
+--      or it would OVER-count and demand a data fix that is not needed.
+-- normalize_rate_unit() is deliberately NOT called here: the repo LIVE-DATA GUARD refuses
+-- to run a read-only statement that invokes it, so the query inlines the one rule that
+-- matters (it returns NULL exactly when its base is empty), which was read from the
+-- installed definition in migration 20260630170000 rather than assumed.
+-- Run read-only 2026-08-23 with every term in place: 1 row, the one described below.
 --
 -- Mitigating context, recorded so the risk is not overstated: the affected row belongs to
 -- a TEST product on a job that is already `invoiced`, not to live customer work. The
@@ -169,7 +208,10 @@ BEGIN
   -- stored -- do NOT normalise line endings before comparing, which manufactures a
   -- false drift alarm.
   --
-  -- The second arm makes a re-apply a no-op instead of a failure. It keys on the body
+  -- The second arm lets a re-apply REINSTALL THE IDENTICAL BODY instead of failing. Not a
+  -- no-op -- that wording was retracted in review, because it invites a reader to assume
+  -- the second run touches nothing, when in fact the replacement, the grants, the
+  -- postflight and the COMMENT all still execute. It keys on the body
   -- MARKER below, not on the operator-visible error text: keying on the error string
   -- meant ANY later body still raising CHEM_UNIT_MISMATCH satisfied the pin, so
   -- replaying this migration would silently revert that later work. A version marker
@@ -376,6 +418,18 @@ BEGIN
     -- must not bill), but it also means a metric pair such as 'g/ac' against 'kg' is
     -- refused even though the conversion is arithmetically well defined, because the
     -- live size tables carry no metric entries. Widening them is a separate change.
+    -- A ZERO quantity bills nothing, so there is nothing to prove or disprove and nothing
+    -- that can be billed wrongly. This skip has to sit ABOVE the blank-unit refusal, not
+    -- below it: with it below, a line carrying a blank unit, a price, and quantity 0 was
+    -- REFUSED even though transfer_job_to_invoice bills it as safe_cents_qty(price, 0) = 0.
+    -- That contradicted the exemption rule stated below, and it was reachable from the
+    -- ordinary UI -- reconcileChemAutofillUnits leaves `unit` blank on its fallback path
+    -- while the tier price is already filled in, so a product picked before any acreage is
+    -- entered produces exactly that shape and would have blocked the WHOLE job save.
+    -- Found by the security review of this very change; T20 pins it.
+    -- Negative and non-finite quantities were refused outright at the top of the loop.
+    CONTINUE WHEN v_qty = 0;
+
     -- A BLANK unit on either side proves nothing -- and until Mason settled it on
     -- 2026-08-23 such a row was simply SKIPPED. That was the largest remaining hole, and
     -- the security review was right to call it out: transfer_job_to_invoice goes on to
@@ -399,17 +453,16 @@ BEGIN
       RAISE EXCEPTION
         'CHEM_UNIT_UNSPECIFIED: % is priced per unit but %, so the amount to bill cannot be checked. Fill in both the rate unit and the stock Unit, then re-enter the cost and price for that unit.',
         COALESCE(v_product_name, 'This product'),
-        CASE WHEN v_qty_unit IS NULL AND v_price_unit IS NULL THEN 'neither its rate unit nor its Unit is filled in'
-             WHEN v_qty_unit IS NULL                          THEN 'its rate unit is blank'
-             ELSE                                                  'its Unit is blank'
+        CASE WHEN v_qty_unit IS NULL AND v_raw_rate_unit <> '' THEN 'its rate unit names no unit to count the quantity in'
+             WHEN v_qty_unit IS NULL AND v_price_unit IS NULL  THEN 'neither its rate unit nor its Unit is filled in'
+             WHEN v_qty_unit IS NULL                           THEN 'its rate unit is blank'
+             ELSE                                                   'its Unit is blank'
         END;
     END IF;
 
     CONTINUE WHEN v_qty_unit = v_price_unit;
 
-    -- A zero quantity bills nothing, so there is nothing here to prove or disprove.
-    -- Negative and non-finite quantities were refused outright at the top of the loop.
-    CONTINUE WHEN v_qty = 0;
+    -- (the zero-quantity skip moved ABOVE the blank-unit refusal -- see the comment there)
 
     SELECT p.product_name, lower(COALESCE(p.product_form, ''))
       INTO v_product_name, v_form
@@ -691,15 +744,25 @@ $function$;
 -- exactly `postgres=X/postgres | authenticated=X/postgres | service_role=X/postgres`,
 -- with `anon` holding nothing.
 --
--- They are here for the FROM-SCRATCH REBUILD path, which is where the postflight
--- below would otherwise abort. No migration in this repository has ever REVOKEd
--- this function from `anon` or `PUBLIC`, and the only grant it has ever received
--- is `TO authenticated` (migration 20260624120000). So a database replayed from
--- migrations alone carries whatever Supabase default privileges left at creation
--- time and no `service_role` grant at all -- and the postflight would then refuse
--- a migration that is perfectly correct, or, worse, the assertion would be the
--- only thing standing between an inherited `anon` grant and a SECURITY DEFINER
--- write path. A file that asserts a security property should also establish it;
+-- The reason they are here is simply that A FILE WHICH ASSERTS A SECURITY PROPERTY
+-- SHOULD ALSO ESTABLISH IT. No migration in this repository has ever REVOKEd this
+-- function from `anon` or `PUBLIC`, and the only grant it has ever received is
+-- `TO authenticated` (migration 20260624120000), so the postflight below was
+-- asserting a state nothing in the repo sets.
+--
+-- An earlier version of this comment justified them by a specific FROM-SCRATCH
+-- REBUILD scenario. That narrative is withdrawn as unproven: review pointed out
+-- that migration 20260215200000 creates a FIVE-argument save_job which nothing
+-- ever drops, so a true replay of the migration chain would end up with two
+-- overloads and abort at PREFLIGHT_OVERLOAD long before these statements mattered.
+-- The prover does not replay the chain either -- it builds a real-shape schema and
+-- installs the reviewed pre-change body directly. What IS proven is narrower and
+-- enough: prover phase 4 stages a deliberately bad ACL (anon granted, service_role
+-- revoked) and requires the apply to correct it, and five mutation phases require
+-- the apply to ABORT when the SECURITY DEFINER declaration, the pinned search_path,
+-- the anon REVOKE, the PUBLIC REVOKE or the service_role GRANT is removed. Claim
+-- only that.
+--
 -- asserting alone was the round-3 review finding.
 --
 -- caller-analysis: save_job :: the one live caller is the authenticated job-save
@@ -717,11 +780,27 @@ REVOKE EXECUTE ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text
 GRANT  EXECUTE ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) TO authenticated, service_role;
 
 -- =============================================================================
--- POSTFLIGHT. Assert that the replacement kept every security property the
--- pre-change function had. CREATE OR REPLACE preserves owner and ACLs, but that
--- is a property to VERIFY, not to assume -- rows 888-890 assert the same set for
--- the same reason. The three statements above make these assertions reachable on
--- a rebuilt database as well as on live.
+-- POSTFLIGHT. Assert that the function ended up with every security property it is
+-- supposed to have.
+--
+-- BE HONEST ABOUT WHAT THESE NOW PROVE. Before the ACL statements above existed, the four
+-- grant assertions were independent evidence about state this file did not set. They are
+-- not that any more: the REVOKEs and the GRANT execute in this same transaction three
+-- statements earlier, so the ACL checks can no longer fail, and the SECDEF and search_path
+-- checks restate what the CREATE OR REPLACE literally declares. That is the right trade --
+-- establishing a security property beats asserting one, and a file that only asserted
+-- would abort on a rebuilt database rather than fix it -- but it does mean the postflight
+-- is now a belt-and-braces restatement rather than a probe.
+--
+-- What still makes them worth keeping: they are the tripwire the MUTATION PHASES fire.
+-- prove-save-job-chem-unit-invariant.mjs installs five mutants -- downgrade to SECURITY
+-- INVOKER, delete the search_path pin, delete the anon REVOKE, delete the PUBLIC REVOKE,
+-- drop the service_role GRANT -- and requires the apply to abort with
+-- POSTFLIGHT_NOT_SECURITY_DEFINER, POSTFLIGHT_SEARCH_PATH, POSTFLIGHT_ANON_EXECUTE,
+-- POSTFLIGHT_PUBLIC_EXECUTE and POSTFLIGHT_GRANT_LOST respectively. So the assertions are
+-- exercised against a broken file even though they cannot fail against a correct one.
+-- That is not a formality: the PUBLIC mutant is what exposed the assertion-ORDERING bug
+-- fixed below, where a PUBLIC grant reported itself under the anon message.
 -- =============================================================================
 DO $postflight$
 DECLARE
@@ -770,14 +849,22 @@ BEGIN
 
   -- anon must never reach a SECURITY DEFINER write path, and the default PUBLIC
   -- grant must stay revoked. A bare "=X/" entry in the ACL is the PUBLIC grant.
+  --
+  -- PUBLIC is tested FIRST, and the order is load-bearing rather than cosmetic. A grant to
+  -- PUBLIC reaches every role, so has_function_privilege('anon', ...) is TRUE whenever
+  -- PUBLIC holds EXECUTE. With the anon test first, a PUBLIC grant reported itself as
+  -- POSTFLIGHT_ANON_EXECUTE -- naming one role while every role was in fact exposed, and
+  -- pointing a reader at the wrong REVOKE. The mutation phase caught this: the mutant that
+  -- stages a PUBLIC grant aborted the apply, but with the anon message, so it proved
+  -- nothing about the assertion it was written for. Broadest grant, reported first.
+  IF v_acl ~ '(^|,)=X/' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_PUBLIC_EXECUTE: PUBLIC holds EXECUTE, so every role reaches this SECURITY DEFINER write path (acl=%)', v_acl;
+  END IF;
   IF has_function_privilege('anon', v_oid, 'EXECUTE') THEN
     RAISE EXCEPTION 'POSTFLIGHT_ANON_EXECUTE: anon holds EXECUTE on a SECURITY DEFINER write path.';
-  END IF;
-  IF v_acl ~ '(^|,)=X/' THEN
-    RAISE EXCEPTION 'POSTFLIGHT_PUBLIC_EXECUTE: PUBLIC holds EXECUTE (acl=%)', v_acl;
   END IF;
 END
 $postflight$;
 
 COMMENT ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) IS
-  'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side (a line whose rate unit and price unit provably disagree is refused, as is a rate measured per anything but acres, as is a negative or non-finite quantity) and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. As of this migration there is NO save-blocking unit guard in JobDetail.tsx on the main branch, so this is the only boundary and nothing warns on screen before it refuses. PR #436 adds a partial client-side early warning only: its rateDenominatorIsUnrecognized tests for a slash, so it does not flag the spelled-out or hyphenated denominator, and it has no counterpart for the non-finite-quantity refusal. Those refusals reach the operator with no prior on-screen warning even after that PR lands.';
+  'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. Four refusals, all raised before any write: CHEM_UNIT_MISMATCH (the rate unit and the price unit provably disagree), CHEM_RATE_DENOMINATOR_NOT_ACRES (a rate measured per anything but acres, in slash, spelled-out or hyphenated form), CHEM_QUANTITY_NOT_FINITE (a negative, NaN or Infinity quantity) and CHEM_UNIT_UNSPECIFIED (a line that BILLS while its rate unit or its stock unit is blank, so the amount cannot be checked; customer-supplied lines, zero-quantity lines and lines with neither a cost nor a price are exempt because they bill nothing). As of this migration there is NO save-blocking unit guard in JobDetail.tsx on the main branch, so this is the only boundary and nothing warns on screen before it refuses. PR #436 adds a partial client-side early warning only: its rateDenominatorIsUnrecognized tests for a slash, so it does not flag the spelled-out or hyphenated denominator, and it has no counterpart for either the non-finite-quantity or the unspecified-unit refusal. Those reach the operator with no prior on-screen warning even after that PR lands.';

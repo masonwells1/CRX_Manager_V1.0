@@ -47,9 +47,9 @@ what it was handed. Re-tested with a balanced fragment, the pin is accepted exac
 belongs, and idempotency inspection stays fully armed.
 
 - **A line whose units provably disagree is refused** (`CHEM_UNIT_MISMATCH`), naming the product
-  and both units. It skips a row with no product, skips when either normalized unit is blank,
-  skips when they are equal, skips a zero quantity, and treats `quantity = rate x acres` carried
-  into the price's unit as the *only* proof of safety. Note what it does **not** do: an
+  and both units. It skips a row with no product, skips a zero quantity, *refuses* a billing line
+  whose unit is blank (see below — that used to be a skip), skips when the two units are equal, and
+  treats `quantity = rate x acres` carried into the price's unit as the *only* proof of safety. Note what it does **not** do: an
   *unrecognised* unit is not skipped — it cannot be sized, so the line is refused. That is
   deliberate (an unpriceable unit must not bill), but it also means a metric pair such as `g/ac`
   against `kg` is refused even though the conversion is well defined, because the live size tables
@@ -90,15 +90,19 @@ The live unit tables are **reused, not reimplemented** (`normalize_rate_unit`,
 table and the server's is the original 16x bug; a second server-side copy would repeat it.
 
 **Blast radius measured, not estimated**, re-verified read-only on 2026-08-23. All four
-`job_chemicals` rows in the live database pass the new predicate — none negative, none non-finite —
-and the derived totals reproduce every stored total to the cent.
+`job_chemicals` rows in the live database clear the *mismatch*, *denominator* and *finiteness*
+refusals — none negative, none non-finite, no unit disagreement — and the derived totals reproduce
+every stored total to the cent. The blank-unit refusal added below is the one exception, and it is
+tracked separately as a pre-apply data obligation rather than folded into this sentence: exactly one
+of those four rows would be refused by it.
 
 **A blank unit is refused too, and that one is Mason's call rather than a review finding.** A blank
 `unit` used to be skipped — nothing can be disproved about it — while `transfer_job_to_invoice`
 billed the line anyway. An unprovable line that still bills is the same hazard as a provably wrong
-one, so it now raises `CHEM_UNIT_UNSPECIFIED`. Exempt, deliberately: customer-supplied lines and
-lines with neither a cost nor a price, because a line that cannot bill cannot bill wrongly. The test
-covers the cost side as well as the price, since cost drives margin and not just the customer bill.
+one, so it now raises `CHEM_UNIT_UNSPECIFIED`. Exempt, deliberately, and all three for the same
+reason — a line that cannot bill cannot bill *wrongly*: customer-supplied lines, lines with neither
+a cost nor a price, and zero-quantity lines. The test covers the cost side as well as the price,
+since cost drives margin and not just the customer bill.
 
 **Pre-apply data obligation — one live row, corrected first.** Exactly one `job_chemicals` row is in
 the refused shape: a pint-per-acre rate, no Unit, and both a cost and a price. Mason chose to fix
@@ -132,9 +136,9 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Nineteen behaviour tests pass; and eight mutation phases each fail in a **named** way — six turn a
-named behaviour test red, and two must abort the apply with the specific security assertion that
-exists to catch them.
+Twenty-three behaviour tests pass; and thirteen mutation phases each fail in a **named** way — eight
+turn a named behaviour test red, and five must abort the apply with the specific security assertion
+that exists to catch them.
 
 That apply phase deliberately starts from a **bad** permission state — `anon` granted, `service_role`
 revoked — and proves the migration corrects it. That came out of the round-4 security review: the
@@ -159,13 +163,26 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The sixteen tests: the three live row shapes save with derived totals reproducing the live stored
-values exactly; a legitimate oz-rate/lb-price conversion saves; the 16x shape is refused *and* its
-remedy text is asserted to name both numbers the operator must re-enter; `oz/cwt`, `lb per cwt` and
-`lb-per-cwt` are all refused; `gal per acre`, `gal per acres`, `gal per ac` and `gal-per-acre` all
-still save; a `NaN` acreage no longer waves a mismatch through; a negative quantity is refused; a
-caller claiming totals of 1 cent still stores `187632` / `206395`; and every refused save leaves no
-`jobs` or `job_chemicals` row behind.
+The twenty-three tests: the two clean live row shapes save with derived totals reproducing the live
+stored values exactly, while the third — the one live row with a blank unit — is now **refused**, so
+the pre-apply data obligation is pinned by an executable test rather than by prose; a legitimate
+oz-rate/lb-price conversion saves; the 16x shape is refused *and* its remedy text is asserted to
+name both numbers the operator must re-enter; `oz/cwt`, `lb per cwt` and `lb-per-cwt` are all
+refused; `gal per acre`, `gal per acres`, `gal per ac` and `gal-per-acre` all still save; a `NaN`
+acreage no longer waves a mismatch through; a negative quantity is refused; a caller claiming totals
+of 1 cent still stores `187632` / `206395`; a billing line with a blank unit is refused in all three
+wordings (blank stock `unit`, blank rate unit, both blank) and a cost with no price is refused too,
+because `total_cost_cents` feeds margin; the three exemptions all still save — a line with neither
+cost nor price, a `customer_supplied` line, and a zero-quantity line carrying a price; and every
+refused save leaves no `jobs` or `job_chemicals` row behind.
+
+That last one is not padding. When the blank-unit refusal was first written the zero-quantity skip
+sat **below** it, so a line with a blank unit, a filled-in price and quantity 0 was refused — and
+because `performSave` re-sends the whole chemical grid, one such line makes the entire job
+unsaveable. It is reachable from the ordinary UI: `reconcileChemAutofillUnits` leaves `unit` blank
+on its fallback path while the tier price is already populated, so a product picked before any
+acreage is entered lands exactly there. Three independent reviewers found it; the skip moved above
+the refusal, and a mutant that moves it back turns that test red by name.
 
 **Retracted from the earlier draft:** that `55 x 3752.64 = 206395.2` "pins
 ROUND-half-away-from-zero". A `.2` fraction rounds down under every rounding mode, so it pins

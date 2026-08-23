@@ -292,10 +292,20 @@ can only disprove what it can measure, so a blank unit on either side used to be
 unprovable line that still bills is the same hazard class as a provably wrong one, so migration
 `20260820120000` now raises `CHEM_UNIT_UNSPECIFIED` for it.
 
-Two exemptions, both deliberate: a `customer_supplied` line (contributes 0 to both totals) and a
-line carrying neither a cost nor a price. A line that cannot bill cannot bill wrongly, so refusing
-either would be pure friction. The test covers the **cost** side as well as the price, because
-`total_cost_cents` feeds margin and not just the customer bill.
+Three exemptions, all deliberate and all the same rule — a line that cannot bill cannot bill
+*wrongly*, so refusing it would be pure friction: a `customer_supplied` line (contributes 0 to both
+totals), a line carrying neither a cost nor a price, and a line whose quantity is 0. The test covers
+the **cost** side as well as the price, because `total_cost_cents` feeds margin and not just the
+customer bill.
+
+The zero-quantity exemption is third for a reason worth recording. When the refusal was first
+written, the zero-quantity skip sat *below* it, so a line with a blank unit, a filled-in price and
+quantity 0 was refused — and because `performSave` re-sends the whole chemical grid, one such line
+makes the **entire job** unsaveable, not just that line. It is reachable from the ordinary UI:
+`reconcileChemAutofillUnits` leaves `unit` blank on its fallback path while the tier price is
+already populated, so a product picked before any acreage is entered lands exactly there. Three
+independent reviewers found it on the same round; the skip moved above the refusal, test `T20` pins
+it, and a mutant that moves it back turns `T20` red by name.
 
 **PRE-APPLY DATA OBLIGATION — one live row, correct it FIRST.** Read read-only on 2026-08-23 (a
 re-verification of the 2026-08-22 blast-radius measurement stamped at the top of this file,
@@ -306,11 +316,30 @@ migration applies there is nothing left in the refused shape and the guard has z
 impact. Re-run this immediately before the apply and require **zero** rows:
 
 ```sql
-SELECT count(*) FROM job_chemicals
- WHERE coalesce(btrim(unit), '') = ''
+WITH n AS (
+  SELECT jc.quantity, jc.customer_supplied, jc.cost_per_unit_cents, jc.price_per_unit_cents,
+         lower(btrim(coalesce(jc.unit, '')))      AS u_raw,
+         lower(btrim(coalesce(jc.rate_unit, ''))) AS r_raw
+    FROM job_chemicals jc)
+SELECT count(*) FROM n
+ WHERE (u_raw = ''
+        OR (u_raw ~ '\s*/\s*(ac|acre|acres|a)\s*$'
+            AND btrim(regexp_replace(u_raw, '\s*/\s*(ac|acre|acres|a)\s*$', '')) = '')
+        OR btrim(regexp_replace(btrim(split_part(r_raw, '/', 1)),
+                                '[\s-]+per[\s-]+(acres|acre|ac|a)$', '')) = '')
+   AND quantity <> 0
    AND coalesce(customer_supplied, false) = false
    AND (coalesce(cost_per_unit_cents, 0) <> 0 OR coalesce(price_per_unit_cents, 0) <> 0);
 ```
+
+This query is the one in the migration header, character for character, and it took **four**
+versions to get right. The first three tested only a blank stock `unit`, so they missed the rate
+side entirely: `normalize_rate_unit` returns NULL whenever its base strips to empty, which a rate
+unit of `/ac` or `per acre` does — those rows are refused too, and a `unit`-only count reports zero
+while a live row is still refused. Every wrong version failed in the same direction, which is the
+dangerous one: it reads as "no operational impact on apply day" when in fact a job would become
+unsaveable. All four versions happened to return the same **one** live row, so Mason's actual data
+obligation never changed — but that was luck, not correctness.
 
 Context that keeps the risk in proportion: the affected row belongs to a **test product** on a job
 already in `invoiced` status, not to live customer work. Had it not been corrected, the cost would

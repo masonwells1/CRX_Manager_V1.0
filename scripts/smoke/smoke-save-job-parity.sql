@@ -145,7 +145,7 @@ BEGIN
   -- the registered smoke red today for a change that has not been applied yet.
   SELECT position('CHEM_UNIT_MISMATCH' IN p.prosrc) INTO v_n
     FROM pg_proc p
-   WHERE p.oid = to_regprocedure(format('%I.%I(uuid,jsonb,jsonb,jsonb,uuid,text)', 'public', 'save' || '_job'));
+   WHERE p.oid = to_regprocedure('public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text)');
 
   IF v_n > 0 THEN
     -- The payload above deliberately CLAIMS 200000 / 350000. Those are lies, and the
@@ -248,7 +248,7 @@ BEGIN
   -- Same gate as step 3b: only assert the refusals once the migration is installed.
   SELECT position('CHEM_UNIT_MISMATCH' IN p.prosrc) INTO v_n
     FROM pg_proc p
-   WHERE p.oid = to_regprocedure(format('%I.%I(uuid,jsonb,jsonb,jsonb,uuid,text)', 'public', 'save' || '_job'));
+   WHERE p.oid = to_regprocedure('public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text)');
 
   IF v_n > 0 THEN
   -- The 16x shape: a pt/ac rate whose quantity is counted in PINTS while cost and price
