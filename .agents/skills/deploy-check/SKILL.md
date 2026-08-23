@@ -162,21 +162,31 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    gh pr view <n> --repo masonwells1/CRX_Manager_V1.0 --json baseRefName,baseRefOid --jq '.'
    ```
 
-   All three checks must print their marker:
+   All three checks must print their marker.
+
+   **Do not compare the parent to a SHA you typed in — and do not retype it between commands
+   either.** Derive it and consume it inside the *same* command, so the value the review gate is
+   checked against is mechanically the value `git rev-parse` produced, with no step in the middle
+   where a different SHA could be substituted. Shell state does not survive between commands here,
+   so each check re-derives the parent rather than relying on an earlier one:
 
    ```bash
-   git rev-parse <HEAD>^1
+   PARENT1="$(git rev-parse <HEAD>^1)" && echo "parent: $PARENT1" && gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | select(.body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) | select((.body | contains("auto-generated reply by CodeRabbit")) | not) | .body' | grep -oE "and $PARENT1"
    ```
 
-   **Do not compare that to a SHA you typed in.** Take the value this prints and run the *full*
-   review gate against it — the canonical walkthrough stamp naming it, plus its own settled
-   `commits/<PARENT1>/statuses` success, or a submitted review object stamped with it. The exception
-   is then "a no-op merge of a parent that independently passes the normal gate", which is
+   ```bash
+   PARENT1="$(git rev-parse <HEAD>^1)" && test "$(gh api repos/masonwells1/CRX_Manager_V1.0/commits/$PARENT1/statuses --jq '[.[] | select(.context=="CodeRabbit")] | first | .state')" = "success" && echo PARENT_REVIEW_COMPLETED
+   ```
+
+   Together those run the *full* review gate against the derived parent — the canonical walkthrough
+   stamp naming it, plus its own settled status — the same standard any head has to meet. The
+   exception is then "a no-op merge of a parent that independently passes the normal gate", which is
    fail-closed, rather than "a no-op merge of whatever the operator calls reviewed".
 
-   ```bash
-   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | select(.body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) | select((.body | contains("auto-generated reply by CodeRabbit")) | not) | .body' | grep -oE "and <PARENT1>"
-   ```
+   A placeholder the operator fills in is the weak form of this, whatever it is called. An earlier
+   revision printed the parent in one block and looked it up as `<PARENT1>` in the next, which reads
+   as derivation but is still two values joined by whoever is typing. CodeRabbit flagged it on
+   PR #441 and was right — the binding has to be the shell's, not the reader's.
 
    An earlier revision wrote this as `test "$(git rev-parse <HEAD>^1)" = "<REVIEWED_SHA>"`, with
    `<REVIEWED_SHA>` supplied by whoever ran the procedure. Codex flagged that as High on PR #441 and

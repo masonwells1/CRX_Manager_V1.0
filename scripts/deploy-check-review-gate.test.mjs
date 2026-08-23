@@ -80,7 +80,15 @@ const EXPANSION_AFTER_CONTENTS = /contents\/[^\s]*(?:<[A-Za-z_]+>|<\(|>\(|\$|`)/
 // The parent's identity must be DERIVED from HEAD^1 and proven against a
 // CodeRabbit artifact; a value typed in by whoever runs the procedure is the
 // claim, not proof of it. (CodeRabbit, PR #441.)
-const OPERATOR_SUPPLIED_REVIEWED_PLACEHOLDER = /<[A-Z_]*(?:REVIEWED|KNOWN_GOOD|TRUSTED|VERIFIED)[A-Z_]*>/;
+//
+// Angle brackets are one notation for that idea, not the idea. Once the procedure
+// started using real shell variables, `$REVIEWED_SHA` / `${REVIEWED_SHA}` became
+// the natural next spelling of the same hole — an operator-set environment value
+// reads as derived while being exactly as supplied as a typed-in placeholder. The
+// bracket-only pattern would have waved it through. (CodeRabbit, PR #441 — the
+// second time this file was caught matching a spelling instead of a concept.)
+const OPERATOR_SUPPLIED_REVIEWED_PLACEHOLDER =
+  /(?:<|\$\{?)[A-Z_]*(?:REVIEWED|KNOWN_GOOD|TRUSTED|VERIFIED)[A-Z_]*(?:>|\})?/;
 
 for (const [name, file] of SKILLS) {
   const cmds = bashCommands(readFileSync(file, "utf8"));
@@ -157,14 +165,47 @@ for (const [name, file] of SKILLS) {
     `${name}: no check compares HEAD^1 to an operator-supplied "reviewed" identifier, under any name`,
   );
   // The parent must be DERIVED, and the derived value must be what the review
-  // lookup consumes.
-  ok(
-    hasCommandWithAll(cmds, ["git rev-parse <HEAD>^1"]),
-    `${name}: the parent SHA is derived from HEAD^1, not supplied`,
+  // lookup consumes — checked as ONE binding, not as two independent facts.
+  // Asserting "a command derives HEAD^1" and "a command greps for the parent"
+  // separately is satisfied by a procedure that derives one value and looks up
+  // another; the gap between two blocks is exactly where a substituted SHA gets
+  // in. So find the single command that does both, read the variable name it
+  // assigns from `git rev-parse <HEAD>^1`, and require THAT name to be what the
+  // lookup expands. (CodeRabbit, PR #441.)
+  const parentLookup = cmds.find(
+    (c) => /\bgit rev-parse <HEAD>\^1\b/.test(c) && c.includes("issues/<n>/comments"),
   );
   ok(
-    hasCommandWithAll(cmds, ["issues/<n>/comments", 'grep -oE "and <PARENT1>"']),
-    `${name}: the derived parent is what the canonical-stamp review lookup consumes`,
+    Boolean(parentLookup),
+    `${name}: the parent derivation and the canonical-stamp lookup are a single command`,
+  );
+  const assignment = parentLookup
+    ? parentLookup.match(/\b([A-Za-z_][A-Za-z0-9_]*)="\$\(git rev-parse <HEAD>\^1\)"/)
+    : null;
+  ok(
+    Boolean(assignment),
+    `${name}: the parent SHA is captured into a shell variable from git rev-parse <HEAD>^1`,
+  );
+  const boundVar = assignment ? assignment[1] : null;
+  const expandsBoundVar = (cmd, prefix) =>
+    Boolean(boundVar) &&
+    Boolean(cmd) &&
+    new RegExp(`${prefix}\\$(?:\\{${boundVar}\\}|${boundVar}\\b)`).test(cmd);
+  ok(
+    expandsBoundVar(parentLookup, 'grep -oE "and '),
+    `${name}: the canonical-stamp lookup expands that exact variable, not a separately supplied value`,
+  );
+  // The parent's own settled status is the other half of the full gate, and it
+  // has to be bound the same way — a status check on a re-typed SHA proves the
+  // same nothing the lookup would.
+  const parentStatus = cmds.find(
+    (c) => /\bgit rev-parse <HEAD>\^1\b/.test(c) && c.includes("/statuses"),
+  );
+  ok(
+    expandsBoundVar(parentStatus, "commits/") &&
+      parentStatus.includes('select(.context=="CodeRabbit")') &&
+      parentStatus.includes('= "success"'),
+    `${name}: the parent's own CodeRabbit status check is bound to the same derived variable`,
   );
   ok(
     hasCommandWithAll(cmds, ["git merge-tree --write-tree", "<HEAD>^{tree}", "MERGE_ADDED_NOTHING"]),

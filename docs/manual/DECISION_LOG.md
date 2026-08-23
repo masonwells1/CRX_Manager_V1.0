@@ -255,6 +255,28 @@ side is split so both halves are pinned: the parent must be *derived* by `git re
 derived value must be what the canonical-stamp review lookup consumes. A guard that only knows one spelling
 of the thing it forbids is a guard the next rename walks past.
 
+**And the second version matched a notation, not the concept — same lesson, one level down.** CodeRabbit
+returned two findings on `b08dee21`, both correct. First, the widened pattern still only understood angle
+brackets, so `$REVIEWED_SHA` and `${REVIEWED_SHA}` — the natural spelling once the procedure uses real
+shell variables — walked straight past it. An operator-set environment variable *reads* as derived while
+being exactly as supplied as a typed-in placeholder. The pattern now covers `<X>`, `$X`, and `${X}` alike,
+checked against a seventeen-case table.
+
+Second, and the more interesting one: the derivation assertion and the lookup assertion were independent.
+"Some command derives `HEAD^1`" and "some command greps for the parent" are both satisfied by a procedure
+that derives one value and looks up another — the gap *between* the two blocks is precisely where a
+substituted SHA gets in, and `<PARENT1>` as a placeholder is that gap written down. The fix was to change
+the procedure rather than the test: the parent is now captured into a shell variable and consumed inside
+the **same command**, so the binding is the shell's rather than the reader's. The suite reads the variable
+name out of the assignment and requires that exact name to be what the lookup expands, and the same for the
+parent's own status check. Three mutations were run against it — renaming the consumed variable to an
+operator-supplied name, consuming a differently-named variable, and splitting the command back in two — and
+each turns the suite red.
+
+The through-line across all three rounds is one idea: **a check that names the thing it forbids only catches
+that name.** Twice now the fix for that was itself written one notch too narrow. Guards on this path get a
+case table and a mutation run, not a green suite.
+
 **Settled by Mason, 2026-08-22: `auto_pause_after_reviewed_commits: 2` stands, with the enforcement
 follow-up to come.** Codex's CRX-SEC-002 (Medium) argued it should not — fewer automatic reviews put
 more weight on a final check that is still prose. The counter-weight is that `2` is precisely what
