@@ -15,7 +15,9 @@ import { parseDollarsToCents } from '../lib/parseCents';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
-import type { BlendRecipe, Product, RecipeType } from '../types';
+import UnitSelect from '../components/blendtickets/UnitSelect';
+import { blockedUnitSaveMessage, isKnownUnit, type UnitLoadState } from '../lib/units';
+import type { BlendRecipe, Product, RecipeType, UnitConversion } from '../types';
 
 type RecipeRow = BlendRecipe & { item_count: number; creator_name: string };
 
@@ -62,6 +64,12 @@ export default function BlendRecipes() {
   const saveRecipeIdem = useIdempotencyKey('save_blend_recipe', profile?.id || '');
   const [recipes, setRecipes] = useState<RecipeRow[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  // Item units are a PICKER, not free text, so a recipe can no longer carry a unit the
+  // pricing/conversion path cannot resolve. unitLoad is tracked separately from the array
+  // because an empty array means three different things (in flight / fetch failed / table
+  // really is empty) and only this caller knows which — see blockedUnitSaveMessage.
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+  const [unitLoad, setUnitLoad] = useState<UnitLoadState>('pending');
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState('');
   const [cropFilter, setCropFilter] = useState('');
@@ -132,10 +140,28 @@ export default function BlendRecipes() {
     setProducts((data || []) as Product[]);
   }, [toast]);
 
+  const fetchUnitConversions = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('unit_conversions')
+      .select('*')
+      .order('unit');
+    if (error) {
+      // The unit field is a picker, not free text, so a failed load leaves the operator no
+      // way to enter a unit at all. Say so rather than failing quietly.
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_unit_conversions' } });
+      toast('error', 'Failed to load units: ' + error.message);
+      setUnitLoad('failed');
+      return;
+    }
+    setUnitConversions((data || []) as UnitConversion[]);
+    setUnitLoad('loaded');
+  }, [toast]);
+
   useEffect(() => {
     fetchRecipes();
     fetchProducts();
-  }, [fetchRecipes, fetchProducts]);
+    fetchUnitConversions();
+  }, [fetchRecipes, fetchProducts, fetchUnitConversions]);
 
   const filtered = recipes.filter((r) => {
     if (typeFilter && r.recipe_type !== typeFilter) return false;
@@ -197,6 +223,18 @@ export default function BlendRecipes() {
     }
     if (editItems.length === 0) {
       toast('error', 'Add at least one product');
+      return;
+    }
+    // The unit field is a picker now: when the list never arrived the operator had no way to
+    // choose a unit, so a blank one is the failed request's doing and not a choice they made.
+    // A blank unit on a healthy list still saves — that was legal when the field was free text.
+    const unitBlock = blockedUnitSaveMessage(
+      unitLoad,
+      unitConversions,
+      editItems.some((item) => !item.unit.trim()),
+    );
+    if (unitBlock) {
+      toast('error', unitBlock);
       return;
     }
 
@@ -308,14 +346,19 @@ export default function BlendRecipes() {
   const addItem = () => {
     setEditItems([
       ...editItems,
-      { product_id: '', product_name: '', quantity: 0, unit: 'gal', rate_per_acre: null, price_input: '', sort_order: editItems.length, notes: '' },
+      // 'Gal', not 'gal': unit_conversions stores 'Gal', and the lowercase seed was a value the
+      // picker could never offer — it would have shown up as a grandfathered stray option.
+      { product_id: '', product_name: '', quantity: 0, unit: 'Gal', rate_per_acre: null, price_input: '', sort_order: editItems.length, notes: '' },
     ]);
   };
 
+  // Functional updater, NOT a copy of the `editItems` closure: the product <select> fires
+  // two updateItem calls in one handler (product_id then product_name). Reading the closure
+  // meant the second call started from pre-first-call state and threw the product_id away —
+  // the row kept the product's NAME while its ID silently reverted to ''. That left the unit
+  // picker unable to see the product's liquid/dry form, and the saved item carried no product.
   const updateItem = (idx: number, field: keyof EditItem, value: string | number | null) => {
-    const updated = [...editItems];
-    updated[idx] = { ...updated[idx], [field]: value };
-    setEditItems(updated);
+    setEditItems((prev) => prev.map((item, i) => (i === idx ? { ...item, [field]: value } : item)));
   };
 
   const removeItem = (idx: number) => {
@@ -532,7 +575,18 @@ export default function BlendRecipes() {
                       const p = products.find((pr) => pr.id === e.target.value);
                       updateItem(idx, 'product_id', e.target.value);
                       if (p) updateItem(idx, 'product_name', p.product_name);
+                      // Switching to a product of the other form leaves the old unit selected
+                      // as a grandfathered option — e.g. the 'Gal' seed surviving onto a DRY
+                      // product. Clear it so the operator has to pick a unit that fits, rather
+                      // than saving a liquid unit on a dry product by not looking.
+                      // Only when the list really loaded: during an outage isKnownUnit is false
+                      // for everything, and clearing would wipe a stored unit.
+                      if (unitLoad === 'loaded' && unitConversions.length > 0
+                        && !isKnownUnit(unitConversions, p?.product_form ?? null, item.unit)) {
+                        updateItem(idx, 'unit', '');
+                      }
                     }}
+                    aria-label={`Product ${idx + 1}`}
                     className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   >
                     <option value="">Select Product</option>
@@ -548,13 +602,18 @@ export default function BlendRecipes() {
                     placeholder="Qty"
                     className="w-20 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   />
-                  <input
-                    type="text"
-                    value={item.unit}
-                    onChange={(e) => updateItem(idx, 'unit', e.target.value)}
-                    placeholder="Unit"
-                    className="w-16 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
-                  />
+                  <div className="w-28 shrink-0">
+                    <UnitSelect
+                      unitConversions={unitConversions}
+                      // NOT the page's `form` state (that is recipe metadata) — this is the
+                      // selected product's liquid/dry form, which filters the unit list.
+                      form={products.find((p) => p.id === item.product_id)?.product_form ?? null}
+                      value={item.unit}
+                      onChange={(value) => updateItem(idx, 'unit', value)}
+                      disabled={saving}
+                      ariaLabel={`Unit for ${item.product_name || `product ${idx + 1}`}`}
+                    />
+                  </div>
                   <input
                     type="number"
                     step="0.01"
