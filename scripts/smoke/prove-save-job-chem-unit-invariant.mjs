@@ -47,7 +47,7 @@ const HARNESS = join(HERE, "fixtures", "save-job-chem-unit-harness.sql");
 const TESTS = join(HERE, "fixtures", "save-job-chem-unit-tests.sql");
 
 const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
-                  "T11", "T12", "T13", "T14", "T15", "T16"];
+                  "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -320,6 +320,12 @@ const MUTANTS = [
     from: "IF NOT (v_qty >= 0 AND v_qty < 'Infinity'::numeric) THEN",
     to: "IF false THEN",
     expect: "T12",
+  },
+  {
+    name: "blank-unit refusal reverted to a skip",
+    from: "    IF v_qty_unit IS NULL OR v_price_unit IS NULL THEN",
+    to: "    IF false THEN",
+    expect: "T17",
   },
   // These two do not turn a behaviour test red -- they make the APPLY abort, which is the
   // postflight doing its job. Without them the four security assertions were never

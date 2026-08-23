@@ -28,7 +28,14 @@
 --   * ORDERING REQUIREMENT: land PR #436 (client warning + exact client money math)
 --     BEFORE applying this migration.
 --
--- WHAT CHANGES -- four things, and nothing else:
+-- WHAT CHANGES -- five things, and nothing else:
+--   0. A line that BILLS but whose rate unit or stock Unit is BLANK is REFUSED
+--      (`CHEM_UNIT_UNSPECIFIED`). A blank unit proves nothing, so this used to be skipped
+--      -- but transfer_job_to_invoice bills the line anyway, which makes an unprovable
+--      billable line the same hazard class as a provably wrong one. Exempt: customer-
+--      supplied lines, and lines carrying neither a cost nor a price, because a line that
+--      cannot bill cannot bill wrongly. Settled by Mason on 2026-08-23, together with the
+--      pre-apply obligation below.
 --   1. A chemical line whose units provably disagree is REFUSED, naming the product and
 --      both units.
 --   2. A rate unit measured per something OTHER than acres is REFUSED, in the slash form
@@ -77,17 +84,34 @@
 -- carries quantity = 0; the invariant skips it, which is correct, because it bills
 -- nothing.
 --
+-- PRE-APPLY DATA OBLIGATION -- ONE live row, and it must be corrected FIRST.
+-- Exactly one job_chemicals row carries a BLANK unit against a pt/ac rate while holding
+-- both a cost and a price, so change 0 above refuses it. Mason chose on 2026-08-23 to fix
+-- the data first and then close the hole, so that the guard has zero operational impact on
+-- the day it applies: with that row corrected there is nothing left in the refused shape.
+--
+-- Re-run this read-only check IMMEDIATELY BEFORE the apply and require ZERO rows. It is
+-- the whole obligation, and it is cheap:
+--
+--   SELECT count(*) FROM job_chemicals
+--    WHERE coalesce(btrim(unit), '') = ''
+--      AND coalesce(customer_supplied, false) = false
+--      AND (coalesce(cost_per_unit_cents, 0) <> 0 OR coalesce(price_per_unit_cents, 0) <> 0);
+--
+-- Mitigating context, recorded so the risk is not overstated: the affected row belongs to
+-- a TEST product on a job that is already `invoiced`, not to live customer work. The
+-- deliberate exemptions mean a customer-supplied line, or a line with neither a cost nor a
+-- price, is never refused for a blank unit.
+--
 -- KNOWN RESIDUALS -- stated, not hidden:
---   * One live row has a BLANK unit against a pt/ac rate, carrying both a cost and a
---     price. A blank unit proves nothing, so the invariant skips it, and
---     transfer_job_to_invoice still bills it at price_per_unit_cents x quantity. That is
---     the same hazard class this migration exists to close, and for blank units it is NOT
---     closed. Refusing them would make that live job unsaveable until its unit is
---     corrected, which is an operational decision rather than a code one. Tracked in
---     docs/manual/KNOWN_ISSUES.md.
 --   * A NaN acreage can no longer bypass the invariant, but job_fields.acres_to_treat
 --     still carries no CHECK, so a hand-built payload can still STORE one. Pre-existing
 --     and unchanged by this migration.
+--   * save_job is not the only writer of priced job_chemicals rows. Migrations
+--     20260703200000 (close-quote-as-applied) and 20260618230000 (recipe pricing) both
+--     INSERT cost_per_unit_cents / price_per_unit_cents without running any of these
+--     checks. "The database is the boundary" is true of the job-save path and not yet true
+--     of the table. Tracked in docs/manual/KNOWN_ISSUES.md.
 
 -- PREFLIGHT PIN. Asserts that the body the CREATE OR REPLACE below is about to overwrite
 -- is exactly the body that was reviewed. It sits in THIS file, immediately before the
@@ -344,15 +368,43 @@ BEGIN
     v_qty_unit  := normalize_rate_unit(v_rate_base);
     v_price_unit := normalize_rate_unit(v_chem->>'unit');
 
-    -- BLANK on either side proves nothing, so nothing is claimed and the row passes.
-    -- Note precisely what this does NOT do: normalize_rate_unit returns NULL only for
+    -- Note precisely what the blank handling below does NOT cover: normalize_rate_unit
+    -- returns NULL only for
     -- BLANK input; an UNRECOGNISED unit comes back as itself (its ELSE branch). So an
     -- unrecognised unit is NOT skipped here -- it flows on, field_app_priced_quantity
     -- cannot size it, and the row is REFUSED. That is deliberate (an unpriceable unit
     -- must not bill), but it also means a metric pair such as 'g/ac' against 'kg' is
     -- refused even though the conversion is arithmetically well defined, because the
     -- live size tables carry no metric entries. Widening them is a separate change.
-    CONTINUE WHEN v_qty_unit IS NULL OR v_price_unit IS NULL;
+    -- A BLANK unit on either side proves nothing -- and until Mason settled it on
+    -- 2026-08-23 such a row was simply SKIPPED. That was the largest remaining hole, and
+    -- the security review was right to call it out: transfer_job_to_invoice goes on to
+    -- bill the line at price_per_unit_cents x quantity regardless, so an unprovable line
+    -- that still BILLS is the same hazard class this whole migration exists to close, and
+    -- one live row was sitting in exactly that shape.
+    --
+    -- So it is now REFUSED -- but only when the line actually bills. Two exemptions, both
+    -- deliberate: a customer-supplied line contributes 0 to both totals, and a line with
+    -- neither a cost nor a price bills nothing. Refusing either would be pure friction,
+    -- because a line that cannot bill cannot bill WRONGLY. The cost side is included in
+    -- the test, not just the price: total_cost_cents feeds margin, so a blank-unit line
+    -- with a cost and no price is still a wrong number.
+    IF v_qty_unit IS NULL OR v_price_unit IS NULL THEN
+      CONTINUE WHEN COALESCE((v_chem->>'customer_supplied')::boolean, false);
+      CONTINUE WHEN COALESCE(NULLIF(v_chem->>'cost_per_unit_cents', '')::bigint, 0) = 0
+                AND COALESCE(NULLIF(v_chem->>'price_per_unit_cents', '')::bigint, 0) = 0;
+
+      SELECT p.product_name INTO v_product_name
+        FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+      RAISE EXCEPTION
+        'CHEM_UNIT_UNSPECIFIED: % is priced per unit but %, so the amount to bill cannot be checked. Fill in both the rate unit and the stock Unit, then re-enter the cost and price for that unit.',
+        COALESCE(v_product_name, 'This product'),
+        CASE WHEN v_qty_unit IS NULL AND v_price_unit IS NULL THEN 'neither its rate unit nor its Unit is filled in'
+             WHEN v_qty_unit IS NULL                          THEN 'its rate unit is blank'
+             ELSE                                                  'its Unit is blank'
+        END;
+    END IF;
+
     CONTINUE WHEN v_qty_unit = v_price_unit;
 
     -- A zero quantity bills nothing, so there is nothing here to prove or disprove.

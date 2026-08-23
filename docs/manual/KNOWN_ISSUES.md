@@ -286,29 +286,45 @@ saves. **The same gap exists in the client half on PR #436** — `rateDenominato
 in `return raw.includes('/')`, so it flags neither the word nor the hyphen form. That is unfixed and
 belongs to PR #436.
 
-**A BLANK `unit` is still not covered, and one live row is in exactly that shape.** The invariant
-can only refuse what it can disprove, so when either normalized unit is blank the line is skipped —
-but `transfer_job_to_invoice` still bills it at `price_per_unit_cents x quantity`. Read read-only on
-2026-08-23 — a re-verification of the 2026-08-22 blast-radius measurement stamped at the top of this
-file, returning the same figures — of the four `job_chemicals` rows on live, one carries a `pt/ac` rate, a **blank** unit,
-and both a cost and a price, and it is not customer-supplied. That is the same hazard class this
-migration exists to close, and for blank units it is open. Refusing blank units would close it, but
-it would also make that existing job unsaveable until someone corrects its unit — one bad line
-blocks the whole job, because the page re-sends the entire chemical grid on every save. **That is an
-operational decision for Mason, not a code choice, and it is the one open question on this
-migration.**
+**A BLANK `unit` is now REFUSED when the line bills — settled by Mason, 2026-08-23.** The invariant
+can only disprove what it can measure, so a blank unit on either side used to be *skipped* — while
+`transfer_job_to_invoice` billed the line at `price_per_unit_cents x quantity` regardless. An
+unprovable line that still bills is the same hazard class as a provably wrong one, so migration
+`20260820120000` now raises `CHEM_UNIT_UNSPECIFIED` for it.
+
+Two exemptions, both deliberate: a `customer_supplied` line (contributes 0 to both totals) and a
+line carrying neither a cost nor a price. A line that cannot bill cannot bill wrongly, so refusing
+either would be pure friction. The test covers the **cost** side as well as the price, because
+`total_cost_cents` feeds margin and not just the customer bill.
+
+**PRE-APPLY DATA OBLIGATION — one live row, correct it FIRST.** Read read-only on 2026-08-23 (a
+re-verification of the 2026-08-22 blast-radius measurement stamped at the top of this file,
+returning the same figures): of the four `job_chemicals` rows on live, exactly one carries a `pt/ac`
+rate, a **blank** unit and both a cost and a price, and is not customer-supplied — so the new rule
+refuses it. Mason chose to fix the data first and then close the hole, so that on the day the
+migration applies there is nothing left in the refused shape and the guard has zero operational
+impact. Re-run this immediately before the apply and require **zero** rows:
+
+```sql
+SELECT count(*) FROM job_chemicals
+ WHERE coalesce(btrim(unit), '') = ''
+   AND coalesce(customer_supplied, false) = false
+   AND (coalesce(cost_per_unit_cents, 0) <> 0 OR coalesce(price_per_unit_cents, 0) <> 0);
+```
+
+Context that keeps the risk in proportion: the affected row belongs to a **test product** on a job
+already in `invoiced` status, not to live customer work. Had it not been corrected, the cost would
+have been one operator seeing a message naming the product and asking for the Unit — but one bad
+line blocks the *whole* job, because the page re-sends the entire chemical grid on every save.
 
 **A "narrower" option was floated and does not work — recorded so it is not re-proposed.** The
 obvious softening is to refuse a blank unit only when the line carries a non-zero price. That buys
 **nothing** here: the one live blank-unit row carries both a cost *and* a price, so the narrow gate
-refuses exactly the same row as the broad one. The choice is genuinely binary — leave the hole
-open, or accept that one existing job needs its unit filled in before it can be saved again.
+refuses exactly the same row as the broad one.
 
-If the refusal is built, three details are load-bearing: it must trigger on a non-zero **cost** as
-well as a non-zero price (the cost side feeds `total_cost_cents` and therefore margin, not just the
-customer bill); it must exempt `customer_supplied` lines, which contribute 0 to both totals and
-bill nothing, so refusing one is pure friction; and it does not close the class on its own, because
-of the scope limit below.
+Test `T1` in `scripts/smoke/fixtures/save-job-chem-unit-tests.sql` replays that exact live shape and
+asserts the refusal, so the obligation is pinned by an executable test rather than by this
+paragraph. Note this does **not** close the class on its own, because of the scope limit below.
 
 **Scope limit: `save_job` is not the only writer.** The invariant binds `save_job` alone, but
 `_close_quote_as_applied` (migration 20260703200000) and the recipe-pricing path (migration

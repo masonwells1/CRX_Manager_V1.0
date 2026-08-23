@@ -93,12 +93,27 @@ table and the server's is the original 16x bug; a second server-side copy would 
 `job_chemicals` rows in the live database pass the new predicate — none negative, none non-finite —
 and the derived totals reproduce every stored total to the cent.
 
-**Known residuals, stated rather than hidden.** A blank `unit` still skips the invariant, and
-`transfer_job_to_invoice` still bills such a line at `price_per_unit_cents x quantity` — and one
-live row is in exactly that shape today (a pint-per-acre rate, blank unit, carrying both a cost and
-a price). Refusing it would make that job unsaveable until someone corrects its unit, which is an
-operational decision rather than a code one. Separately, `job_fields.acres_to_treat` still carries
-no CHECK, so a `NaN` acreage can no longer bypass the invariant but can still be stored.
+**A blank unit is refused too, and that one is Mason's call rather than a review finding.** A blank
+`unit` used to be skipped — nothing can be disproved about it — while `transfer_job_to_invoice`
+billed the line anyway. An unprovable line that still bills is the same hazard as a provably wrong
+one, so it now raises `CHEM_UNIT_UNSPECIFIED`. Exempt, deliberately: customer-supplied lines and
+lines with neither a cost nor a price, because a line that cannot bill cannot bill wrongly. The test
+covers the cost side as well as the price, since cost drives margin and not just the customer bill.
+
+**Pre-apply data obligation — one live row, corrected first.** Exactly one `job_chemicals` row is in
+the refused shape: a pint-per-acre rate, no Unit, and both a cost and a price. Mason chose to fix
+the data before closing the hole, so the guard lands with zero operational impact — with that row
+corrected there is nothing left for it to refuse. The count to re-run immediately before applying is
+in the migration header and in `KNOWN_ISSUES.md`, and it must return zero. In proportion: that row
+belongs to a **test product** on a job already marked `invoiced`, not to live customer work. Test
+`T1`, which used to assert that this live shape saves, now asserts the refusal — so the obligation is
+held up by an executable test rather than by a sentence.
+
+**Remaining residuals, stated rather than hidden.** `job_fields.acres_to_treat` still carries no
+CHECK, so a `NaN` acreage can no longer bypass the invariant but can still be stored. And `save_job`
+is not the only writer: the close-quote-as-applied and recipe-pricing paths both insert priced
+chemical rows without running any of these checks, so "the database is the boundary" is true of the
+job-save path and not yet true of the table.
 
 **Proof — committed and re-runnable, not asserted.** `node
 scripts/smoke/prove-save-job-chem-unit-invariant.mjs`, with fixtures under
@@ -117,7 +132,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Sixteen behaviour tests pass; and seven mutation phases each fail in a **named** way — five turn a
+Nineteen behaviour tests pass; and eight mutation phases each fail in a **named** way — six turn a
 named behaviour test red, and two must abort the apply with the specific security assertion that
 exists to catch them.
 

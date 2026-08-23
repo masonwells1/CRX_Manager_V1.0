@@ -4,23 +4,36 @@
 -- NOTICE with a PASS line or RAISEs EXCEPTION, so psql -v ON_ERROR_STOP=1 fails the run.
 --
 -- T1-T3 replay the shapes of the real job_chemicals rows in production (read read-only
--- 2026-08-23) and assert the DERIVED totals reproduce what those jobs actually store.
--- T4/T7/T9 are the refusals. T5 is a legitimate conversion that must still save. T6 is
--- the stale-tab case. T8 proves a refusal leaves nothing behind.
+-- 2026-08-23). T2 and T3 assert the DERIVED totals reproduce what those jobs actually
+-- store; T1 is the one live shape the migration now REFUSES, and it is the reason the
+-- header carries a pre-apply data obligation. T4/T7/T9/T11-T13/T17 are the refusals.
+-- T5/T10/T14-T16/T18/T19 are shapes that must still save. T6 is the stale-tab case.
+-- T8 proves a refusal leaves nothing behind.
 
--- T1: live JOB-2026-0002 shape. rate 'pt/ac', unit NULL -> the price unit is unknown, so
--- nothing is proven and nothing is claimed. Must SAVE, totals must match live exactly.
+-- T1: the live JOB-2026-0002 shape -- rate 'pt/ac', unit NULL, and both a cost and a
+-- price. This is THE row the pre-apply data obligation is about, and this test is what
+-- makes that obligation concrete rather than a sentence in a header.
+--
+-- It used to assert that this shape SAVES. It no longer does: a blank unit proves nothing
+-- while transfer_job_to_invoice bills the line anyway, so as of Mason's 2026-08-23
+-- decision the line is REFUSED. Until that live row has its Unit filled in, applying this
+-- migration makes that job unsaveable -- which is exactly why the obligation is to correct
+-- the data FIRST. Note the totals it used to assert (219930 / 278578) were reproduced
+-- exactly by the derivation before the refusal was added, so the arithmetic is not what
+-- changed here; the policy is.
 DO $$
-DECLARE r jsonb; c bigint; p bigint;
+DECLARE ok boolean := false; msg text;
 BEGIN
-  r := save_job(NULL,
-    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":73.31,"total_cost_cents":219930,"total_price_cents":278578}'::jsonb,
-    '[{"field_id":"33333333-3333-3333-3333-333333333331","acres_to_treat":73.31}]'::jsonb,
-    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000001","quantity":73.31,"unit":null,"rate_per_acre":1,"rate_unit":"pt/ac","cost_per_unit_cents":3000,"price_per_unit_cents":3800}]'::jsonb,
-    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
-  SELECT total_cost_cents, total_price_cents INTO c, p FROM jobs WHERE id = (r->>'job_id')::uuid;
-  IF c = 219930 AND p = 278578 THEN RAISE NOTICE 'T1 PASS  saved; derived cost=% price=% (live stores 219930 / 278578)', c, p;
-  ELSE RAISE EXCEPTION 'T1 FAIL  cost=% price=%', c, p; END IF;
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":73.31,"total_cost_cents":219930,"total_price_cents":278578}'::jsonb,
+      '[{"field_id":"33333333-3333-3333-3333-333333333331","acres_to_treat":73.31}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000001","quantity":73.31,"unit":null,"rate_per_acre":1,"rate_unit":"pt/ac","cost_per_unit_cents":3000,"price_per_unit_cents":3800}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_UNSPECIFIED%' THEN RAISE NOTICE 'T1 PASS  the live blank-unit shape is now refused: %', msg;
+  ELSE RAISE EXCEPTION 'T1 FAIL  (refused=% msg=%)  -- the live blank-unit billing row was ACCEPTED', ok, msg; END IF;
 END $$;
 
 -- T2: live JOB-2026-0004 / 0003 shape. Units equal -> no hazard.
@@ -255,12 +268,60 @@ BEGIN
   ELSE RAISE EXCEPTION 'T16 FAIL  cost=%', c; END IF;
 END $$;
 
+-- T17: a BLANK unit on a line that BILLS is refused. This is the shape one live row was
+-- sitting in: a pt/ac rate, no stock Unit, and both a cost and a price. It proves nothing,
+-- so it used to be skipped -- while transfer_job_to_invoice billed it anyway.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"3333333d-3333-3333-3333-333333333337","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":15,"unit":"","rate_per_acre":1.5,"rate_unit":"pt/ac","cost_per_unit_cents":1250,"price_per_unit_cents":1800}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_UNSPECIFIED%' THEN RAISE NOTICE 'T17 PASS  refused a billing line with a blank unit: %', msg;
+  ELSE RAISE EXCEPTION 'T17 FAIL  (refused=% msg=%)  -- a blank-unit line that bills was ACCEPTED', ok, msg; END IF;
+END $$;
+
+-- T18: a blank unit that bills NOTHING still saves. A line that cannot bill cannot bill
+-- wrongly, so refusing it would be pure friction.
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"3333333d-3333-3333-3333-333333333338","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":15,"unit":"","rate_per_acre":1.5,"rate_unit":"pt/ac","cost_per_unit_cents":0,"price_per_unit_cents":0}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 0 THEN RAISE NOTICE 'T18 PASS  a blank-unit line that bills nothing still saves; price=%', c;
+  ELSE RAISE EXCEPTION 'T18 FAIL  price=%', c; END IF;
+END $$;
+
+-- T19: a CUSTOMER-SUPPLIED line with a blank unit still saves. It contributes 0 to both
+-- totals by construction, so it cannot carry a wrong number either.
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"3333333d-3333-3333-3333-333333333339","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":15,"unit":"","rate_per_acre":1.5,"rate_unit":"pt/ac","cost_per_unit_cents":1250,"price_per_unit_cents":1800,"customer_supplied":true}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 0 THEN RAISE NOTICE 'T19 PASS  a customer-supplied blank-unit line still saves and bills 0; price=%', c;
+  ELSE RAISE EXCEPTION 'T19 FAIL  price=%', c; END IF;
+END $$;
+
 -- T8: every refused save must have left NOTHING behind.
 DO $$
 DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 9 AND n_chem = 9 THEN RAISE NOTICE 'T8 PASS  9 jobs / 9 chemical rows -- the 6 refused saves wrote nothing';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 9/9)', n_jobs, n_chem; END IF;
+  IF n_jobs = 10 AND n_chem = 10 THEN RAISE NOTICE 'T8 PASS  10 jobs / 10 chemical rows -- the 8 refused saves wrote nothing';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 10/10)', n_jobs, n_chem; END IF;
 END $$;
