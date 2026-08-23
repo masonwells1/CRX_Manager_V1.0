@@ -23,6 +23,28 @@ current schema rejected the fixture before the behavior under test ran.
   passed its post-apply restore guard, including cancellation of both draw
   orders; both row-version provers remained green.
 
+Review round (Codex P2 findings on the PR, all three in the fixtures themselves):
+
+- The planned-holds chain accepted **either** restore outcome, so a post-cutover
+  regression that restored a drawn booking fell into the pre-cutover success
+  branch and still reached `SMOKE_PASS_ROLLBACK`. It now detects whether
+  `20260816120000` is installed and requires the outcome that schema owes.
+- That chain's success branch asserted only product A's rebuilt hold. It now
+  asserts both A and B, because the later unplanning step only checks that every
+  hold is gone and would not have noticed a dropped or altered B hold.
+- `smoke-order-draw-lock.sql` scenario (f) required the live catalog to contain a
+  cheap product with no Main Warehouse inventory row — data the fixture does not
+  control, so a healthy database could fail at `SMOKE_SETUP` (67 products qualify
+  today). It now runs when the catalog allows and emits `SMOKE_SCENARIO_SKIPPED`
+  when it cannot; the container prover seeds inventory-free products, so (f) is
+  still proven on every container run. Manufacturing the precondition by deleting
+  a live inventory row was rejected: an all-zero row still carries a real reorder
+  point and minimum stock level.
+- Both new guards were mutation-tested. Forcing the cutover flag on produced
+  `SMOKE_FAIL: (e) post-cutover restore of a drawn booking succeeded`; demanding a
+  B total the correct code never yields produced `pa=150.00 pb=100.00`, proving B
+  is genuinely queried and compared rather than ignored.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —

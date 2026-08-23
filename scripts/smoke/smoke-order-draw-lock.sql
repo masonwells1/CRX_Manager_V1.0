@@ -314,6 +314,15 @@ BEGIN
 
   -- (f) Adding a product with no inventory snapshot creates that row before
   -- prebooking, so the ledger and physical snapshot cannot diverge.
+  -- This scenario needs a product with NO Main Warehouse inventory row. Making
+  -- that a hard prerequisite tied the chain to data it does not control: once
+  -- every cheap active product has a warehouse row, a perfectly healthy live
+  -- database fails at SMOKE_SETUP. Deleting a live row to manufacture the
+  -- precondition is worse — an all-zero inventory row still carries a real
+  -- reorder point and minimum stock level. prove-draw-down-price-tier-real-schema.mjs
+  -- seeds two inventory-free products, so (f) is proven on every container run;
+  -- a live run exercises it when the catalog allows and says so loudly when it
+  -- cannot. Never downgrade this to a silent skip.
   SELECT p.id INTO v_product_2
   FROM products p
   WHERE p.is_active IS TRUE
@@ -329,21 +338,22 @@ BEGIN
   ORDER BY p.current_cost, p.id
   LIMIT 1;
   IF v_product_2 IS NULL THEN
-    RAISE EXCEPTION 'SMOKE_SETUP: need a second active product costing 7.00 or less with no Main Warehouse inventory row';
-  END IF;
-  PERFORM update_order_items(v_o2,
-    jsonb_build_array(
-      jsonb_build_object(
-        'id', v_item_2, 'product_id', v_product,
-        'price_per_unit', 10, 'total_units_needed', 250),
-      jsonb_build_object(
-        'product_id', v_product_2, 'product_name', '[SMOKE] added item',
-        'price_per_unit', 7, 'total_units_needed', 7, 'unit_size', 'gal')
-    ), v_admin, NULL);
-  SELECT quantity_prebooked INTO v_qty FROM inventory
-  WHERE product_id = v_product_2 AND location = 'Main Warehouse';
-  IF v_qty IS DISTINCT FROM 7 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (f) new product snapshot/prebook qty=%, expected 7', v_qty;
+    RAISE NOTICE 'SMOKE_SCENARIO_SKIPPED: (f) no active product costing 7.00 or less lacks a Main Warehouse inventory row; the new-product snapshot path is covered by prove-draw-down-price-tier-real-schema.mjs, which seeds one';
+  ELSE
+    PERFORM update_order_items(v_o2,
+      jsonb_build_array(
+        jsonb_build_object(
+          'id', v_item_2, 'product_id', v_product,
+          'price_per_unit', 10, 'total_units_needed', 250),
+        jsonb_build_object(
+          'product_id', v_product_2, 'product_name', '[SMOKE] added item',
+          'price_per_unit', 7, 'total_units_needed', 7, 'unit_size', 'gal')
+      ), v_admin, NULL);
+    SELECT quantity_prebooked INTO v_qty FROM inventory
+    WHERE product_id = v_product_2 AND location = 'Main Warehouse';
+    IF v_qty IS DISTINCT FROM 7 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: (f) new product snapshot/prebook qty=%, expected 7', v_qty;
+    END IF;
   END IF;
 
   -- --------------------------------------------------------------------

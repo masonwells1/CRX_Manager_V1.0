@@ -115,6 +115,7 @@ DECLARE
   v_pa_total numeric; v_pb_total numeric; v_cnt int;
   v_e1 date; v_e2 date;
   v_err text;
+  v_restore_src text; v_cutover boolean;
   v_payload jsonb; v_sections jsonb;
   sfx text := substr(md5(random()::text), 1, 8);
 BEGIN
@@ -124,6 +125,20 @@ BEGIN
   END IF;
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+
+  -- 20260816120000 replaces the drawn-quantity comparison inside
+  -- _restore_quote_version_owner_impl with an up-front provenance refusal.
+  -- Detect it exactly as smoke-restore-version-drawn-guard.sql does, because
+  -- scenario (e) below must REQUIRE the outcome matching the schema it runs
+  -- against rather than accept whichever one it happens to get.
+  SELECT p.prosrc INTO v_restore_src
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_restore_quote_version_owner_impl'
+    AND p.pronargs = 4;
+  v_cutover := v_restore_src IS NOT NULL
+    AND position('QUOTE_RESTORE_BLOCKED_BY_DRAW' IN v_restore_src) > 0;
 
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] PHS Farm ' || sfx) RETURNING id INTO v_cust;
   -- Current quote-item triggers require a real catalog cost, while governed
@@ -303,14 +318,29 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
   END;
+  -- Pin the outcome to the schema phase. Accepting either result let a
+  -- post-cutover regression that restores a drawn booking fall into the
+  -- pre-cutover success branch and still reach SMOKE_PASS_ROLLBACK, so the
+  -- chain stopped proving the invariant it exists for.
+  IF v_cutover AND v_err IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) post-cutover restore of a drawn booking succeeded (%), expected QUOTE_RESTORE_BLOCKED_BY_DRAW', v_res;
+  END IF;
+  IF NOT v_cutover AND v_err IS NOT NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) pre-cutover restore was refused: %', v_err;
+  END IF;
   IF v_err IS NULL THEN
     IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: (e) pre-cutover restore returned %', v_res;
     END IF;
-    SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0) INTO v_pa_total
+    -- Assert BOTH products. Checking only PA let a regression that dropped or
+    -- changed PB's rebuilt hold pass, because the unplanning step in (f) only
+    -- checks that every hold is gone.
+    SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0),
+           COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pb), 0)
+    INTO v_pa_total, v_pb_total
     FROM inventory_holds WHERE source_id = v_q AND is_active = true;
-    IF v_pa_total <> 150 THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: (e) pre-cutover restore holds pa=% (expected 150)', v_pa_total;
+    IF v_pa_total <> 150 OR v_pb_total <> 100 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: (e) pre-cutover restore holds pa=% pb=% (expected 150/100)', v_pa_total, v_pb_total;
     END IF;
 
     -- A successful restore replaces section and item rows. Refresh every ID
