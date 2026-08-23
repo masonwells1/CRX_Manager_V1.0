@@ -239,6 +239,14 @@ total check at all, and said nothing about it. That was a silent hole and a regr
 older same-unit sum comparison. The sets now track the live `normalize_rate_unit` CASE, and a total
 unit that still belongs to no family earns an explicit `unchecked` note naming the unit.
 
+**Narrowed, not closed (2026-08-23).** The two remaining free-text unit boxes — the Field App
+Split Invoice Editor's rate unit and the Blend Recipes item unit — became `UnitSelect` dropdowns,
+so on those two screens a unit can no longer be pasted or typed at all and a zero-width character
+cannot enter that way. This changes the *reachability* of the defect, not the defect: the server
+is still the only place that can fix it, and every other way a rate unit reaches the database
+(the OCR path in `process-blend-ticket`, direct SQL, an import) is untouched. Do not read the
+narrower entry surface as a reason to close this.
+
 **Not started.** No migration written, no live state, and a live apply would need Mason's explicit
 approval plus a migration review.
 

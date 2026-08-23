@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-23 — Replaced the last two free-text unit-of-measure inputs (Field App Split…
+
+Replaced the last two free-text unit-of-measure inputs (Field App Split Invoice Editor rate unit, Blend Recipes item unit) with the shared UnitSelect dropdown, so a unit can no longer be typed or pasted on those screens. Both now load unit_conversions, filter options by the product liquid/dry form, block a save whose unit is blank only because the list failed to load, and clear a unit the newly picked product form cannot offer. Fixed two pre-existing defects in the same path: the new-recipe-item seed was the invalid lowercase gal (live stores Gal), and BlendRecipes updateItem copied a stale closure so picking a product kept its name while silently reverting product_id to empty. Verified by driving both real screens in a browser via a throwaway stubbed Vite harness, plus live grounding that products use exactly liquid/dry/null and every form yields a non-empty option list. Frontend only: no migrations, no database writes.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `874e028a feat(units): replace last free-text unit boxes with UnitSelect`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —
