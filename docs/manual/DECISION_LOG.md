@@ -243,17 +243,27 @@ check whose input is an unverified human claim is not a proof; it is the claim r
 The operator-supplied value is gone: the procedure prints `<HEAD>^1` and runs the **full** review gate
 against that parent (canonical stamp naming it plus its own settled status, or a submitted review
 object stamped with it). The exception is now "a no-op merge of a parent that independently passes the
-normal gate". Two command-scoped regressions enforce it — no command may mention `<REVIEWED_SHA>`, and
-`HEAD^1` must appear in the canonical-stamp query.
+normal gate". Command-scoped regressions enforce it.
 
-**Open, and Mason's call: whether `auto_pause_after_reviewed_commits: 2` may stand before enforcement
-exists.** Codex's CRX-SEC-002 (Medium) argues it should not — fewer automatic reviews put more weight
-on a final check that is still prose. The counter-weight is that `2` is precisely what stopped the
-review allowance being spent on half-finished commits, the problem this PR was opened to solve;
-restoring `5` re-creates the throttle. This is a cost/risk trade-off for the owner, not an engineering
-call, and it is recorded here undecided rather than settled quietly in either direction. Recommended
-path: keep `2` and land the `pr-merge-guard.mjs` enforcement follow-up, which removes the objection at
-its root instead of paying for it in review budget.
+**The first version of that regression matched a spelling, not the concept.** CodeRabbit returned it on
+`f4f67457`: the guard rejected only the literal string `<REVIEWED_SHA>`, so renaming the placeholder to
+`<REVIEWED_COMMIT>` or `<EXPECTED_REVIEWED_HEAD>` would have restored the self-certification hole with
+the suite still green — the same "sweep the concept, not one phrasing" failure this repo has hit before.
+The literal match is now a pattern over the idea, `/<[A-Z_]*(?:REVIEWED|KNOWN_GOOD|TRUSTED|VERIFIED)[A-Z_]*>/`,
+verified against a ten-case table that renames the placeholder six ways and still catches it. The positive
+side is split so both halves are pinned: the parent must be *derived* by `git rev-parse <HEAD>^1`, and that
+derived value must be what the canonical-stamp review lookup consumes. A guard that only knows one spelling
+of the thing it forbids is a guard the next rename walks past.
+
+**Settled by Mason, 2026-08-22: `auto_pause_after_reviewed_commits: 2` stands, with the enforcement
+follow-up to come.** Codex's CRX-SEC-002 (Medium) argued it should not — fewer automatic reviews put
+more weight on a final check that is still prose. The counter-weight is that `2` is precisely what
+stopped the review allowance being spent on half-finished commits, the problem this PR was opened to
+solve; restoring `5` re-creates the throttle. This was a cost/risk trade-off for the owner rather than
+an engineering call, it was put to Mason as such, and he chose to keep `2`. The residual risk is
+carried deliberately and closed at its root by the queued follow-up: move the CodeRabbit-review and
+`--match-head-commit` requirements out of prose and into `.claude/hooks/pr-merge-guard.mjs`, so the
+final check is a hard guard rather than a procedure someone has to follow.
 
 **Stated plainly because it matters: this is a stability heuristic, not a terminal artifact.**
 CodeRabbit publishes no SHA-bound "review finished" marker — the walkthrough's HTML markers are
