@@ -50,6 +50,27 @@
 -- unit table and the server-side copy is the original bug; a second server-side copy
 -- would be the same mistake again.
 --
+-- ONE DELIBERATE EXCEPTION, stated because the sentence above would otherwise be false.
+-- The per-acre SUFFIX STRIPPER here is wider than the one inside normalize_rate_unit.
+-- That helper strips only `\s+per\s+acre$`; this file strips
+-- `[\s-]+per[\s-]+(acres|acre|ac|a)$`, so it also handles the plural, the hyphen and the
+-- abbreviations. Review flagged the divergence and it is kept on purpose, because
+-- narrowing it does not remove the disagreement -- it converts it into a FALSE REFUSAL of
+-- an ordinary spelling such as `pt per ac`, and a refusal blocks the entire job, not the
+-- one line. The divergence runs in the permissive direction and cannot mis-bill: nothing
+-- downstream multiplies money by rate_unit. Billing and inventory both read
+-- job_chemicals.unit, and the stripped value is used here only to pick which unit the
+-- quantity is counted in. Aligning normalize_rate_unit and the client baseUnitOfRate to
+-- this wider form is the correct follow-up and is deliberately NOT bundled into a money
+-- migration, because that helper is called from paths this change does not touch.
+--
+-- APPLY CHANNEL: Supabase MCP `apply_migration` ONLY. This file is four top-level
+-- statements -- the preflight pin, the replacement, the postflight, and the COMMENT.
+-- `execute_sql` returns only the LAST statement, so applied through that channel the pin,
+-- the replacement and the postflight would all be silently skipped and the COMMENT alone
+-- would run. Every atomicity claim in this header assumes the whole file executes as one
+-- unit.
+--
 -- BLAST RADIUS, re-verified read-only on 2026-08-23 against every job_chemicals row:
 -- 4 rows, none negative, none NaN or Infinity, so nothing live is refused by the new
 -- step-3 check. The derived totals reproduce every stored total to the cent. One row
@@ -96,7 +117,12 @@ DECLARE
   v_count integer;
   v_src   text;
 BEGIN
-  v_oid := to_regprocedure(format('%I.%I(uuid,jsonb,jsonb,jsonb,uuid,text)', 'public', 'save' || '_job'));
+  -- Written as a plain literal on purpose. An earlier draft built this name by
+  -- concatenation; review flagged that a grep for the function name would then miss the
+  -- two catalog assertions that pin it, which is the opposite of what an auditable
+  -- security check should do. No guard in .claude/hooks/ keys on this name, so the
+  -- concatenation bought nothing and cost readability.
+  v_oid := to_regprocedure('public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text)');
   IF v_oid IS NULL THEN
     RAISE EXCEPTION
       'PREFLIGHT_MISSING: the six-argument job-save RPC is not installed. This migration replaces a body; it does not create one.';
@@ -271,16 +297,20 @@ BEGIN
     -- with its quantity already derived as rate x acres against a denominator that is not
     -- acres. The word form is therefore refused too. A genuine per-acre rate in either
     -- spelling ('pt/ac', 'gal per acre') is excluded first and is unaffected.
-    -- The separator class is [\s-] and the acre form is plural-tolerant on BOTH sides, so
-    -- the exclusion and the detection stay symmetric. Two asymmetries were found in
-    -- review: the slash form accepted 'acres' while the word form only accepted 'acre'
-    -- (so 'oz per acres' was refused as non-acre), and neither form saw a hyphen (so
-    -- 'oz-per-cwt' fell through to the unit comparison and passed whenever `unit`
-    -- carried the same text). 'per' must still appear as a whole word between
-    -- separators, so a plain hyphenated unit such as 'fl-oz' is untouched.
+    -- The two acre spellings accept the SAME set of abbreviations, in the same order.
+    -- Three asymmetries were found across two review rounds, and every one of them was a
+    -- FALSE REFUSAL of a legitimate per-acre rate, which matters more here than it looks:
+    -- a refusal blocks the whole job, not the line. (i) the slash form accepted 'acres'
+    -- while the word form took only 'acre'; (ii) neither form saw a hyphen, so 'oz-per-cwt'
+    -- fell through to the unit comparison and passed whenever `unit` carried the same
+    -- text; (iii) the word form took only 'acre'/'acres' while the slash form also took
+    -- 'ac' and 'a', so 'pt per ac' -- an ordinary spelling -- was refused as non-acre.
+    -- Alternation is longest-first because PostgreSQL regexps are POSIX. 'per' must still
+    -- appear as a whole word between separators, so a plain hyphenated unit such as
+    -- 'fl-oz' is untouched.
     IF v_raw_rate_unit <> ''
-       AND v_raw_rate_unit !~ '\s*/\s*(ac|acre|acres|a)\s*$'
-       AND v_raw_rate_unit !~ '[\s-]+per[\s-]+acres?$'
+       AND v_raw_rate_unit !~ '\s*/\s*(acres|acre|ac|a)\s*$'
+       AND v_raw_rate_unit !~ '[\s-]+per[\s-]+(acres|acre|ac|a)$'
        AND (position('/' IN v_raw_rate_unit) > 0 OR v_raw_rate_unit ~ '[\s-]+per[\s-]+') THEN
       SELECT p.product_name INTO v_product_name
         FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
@@ -293,7 +323,11 @@ BEGIN
     -- baseUnitOfRate: take everything before the first '/', then drop a spelled-out
     -- ' per acre'. normalize_rate_unit then canonicalises synonyms (lbs -> lb, gl -> gal).
     v_rate_base := btrim(split_part(v_raw_rate_unit, '/', 1));
-    v_rate_base := btrim(regexp_replace(v_rate_base, '[\s-]+per[\s-]+acres?$', ''));
+    -- Kept character-for-character identical to the exclusion above. If the two ever
+    -- disagree, a rate unit can be excluded from the non-acre refusal and then NOT
+    -- stripped, so it reaches normalize_rate_unit whole, comes back unrecognised, and the
+    -- line is refused by the unit comparison instead -- a refusal with the wrong message.
+    v_rate_base := btrim(regexp_replace(v_rate_base, '[\s-]+per[\s-]+(acres|acre|ac|a)$', ''));
     v_qty_unit  := normalize_rate_unit(v_rate_base);
     v_price_unit := normalize_rate_unit(v_chem->>'unit');
 
@@ -587,10 +621,42 @@ END;
 $function$;
 
 -- =============================================================================
+-- ESTABLISH the ACL this file goes on to assert. On live these three statements
+-- are a NO-OP: the grants were read read-only on 2026-08-23 and already stand at
+-- exactly `postgres=X/postgres | authenticated=X/postgres | service_role=X/postgres`,
+-- with `anon` holding nothing.
+--
+-- They are here for the FROM-SCRATCH REBUILD path, which is where the postflight
+-- below would otherwise abort. No migration in this repository has ever REVOKEd
+-- this function from `anon` or `PUBLIC`, and the only grant it has ever received
+-- is `TO authenticated` (migration 20260624120000). So a database replayed from
+-- migrations alone carries whatever Supabase default privileges left at creation
+-- time and no `service_role` grant at all -- and the postflight would then refuse
+-- a migration that is perfectly correct, or, worse, the assertion would be the
+-- only thing standing between an inherited `anon` grant and a SECURITY DEFINER
+-- write path. A file that asserts a security property should also establish it;
+-- asserting alone was the round-3 review finding.
+--
+-- caller-analysis: save_job :: the one live caller is the authenticated job-save
+-- UI (src/pages/JobDetail.tsx:2210, via the shared client in src/lib/db.ts, which
+-- carries the signed-in user's JWT and therefore the `authenticated` role). That
+-- role is GRANTed on the line below and is unaffected. Nothing in the repository
+-- calls this RPC as `anon` or over the public/service key: the body itself raises
+-- AUTH_REQUIRED when auth.uid() IS NULL and then admits only active `admin` or
+-- `sales_rep` profiles, so an anon caller could never have completed a save even
+-- while holding EXECUTE. Live confirms no dependency on the revoked grants --
+-- `anon` already holds nothing and there is no bare PUBLIC entry in proacl.
+-- =============================================================================
+REVOKE EXECUTE ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) FROM anon;
+GRANT  EXECUTE ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) TO authenticated, service_role;
+
+-- =============================================================================
 -- POSTFLIGHT. Assert that the replacement kept every security property the
 -- pre-change function had. CREATE OR REPLACE preserves owner and ACLs, but that
 -- is a property to VERIFY, not to assume -- rows 888-890 assert the same set for
--- the same reason.
+-- the same reason. The three statements above make these assertions reachable on
+-- a rebuilt database as well as on live.
 -- =============================================================================
 DO $postflight$
 DECLARE
@@ -600,7 +666,12 @@ DECLARE
   v_config  text[];
   v_acl     text;
 BEGIN
-  v_oid := to_regprocedure(format('%I.%I(uuid,jsonb,jsonb,jsonb,uuid,text)', 'public', 'save' || '_job'));
+  -- Written as a plain literal on purpose. An earlier draft built this name by
+  -- concatenation; review flagged that a grep for the function name would then miss the
+  -- two catalog assertions that pin it, which is the opposite of what an auditable
+  -- security check should do. No guard in .claude/hooks/ keys on this name, so the
+  -- concatenation bought nothing and cost readability.
+  v_oid := to_regprocedure('public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text)');
   IF v_oid IS NULL THEN
     RAISE EXCEPTION 'POSTFLIGHT_MISSING: the six-argument job-save RPC is absent after replacement.';
   END IF;

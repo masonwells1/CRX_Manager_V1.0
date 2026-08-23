@@ -113,8 +113,23 @@ against the pin the prover parses out of the migration itself — so the pin is 
 source, not against a comment. Against a *different* body the migration aborts with
 `PREFLIGHT_BODY_DRIFT` **and the installed body is confirmed byte-for-byte unchanged**, which is
 the atomicity property the single-file design exists to give. Over the reviewed body it applies and
-its postflight passes; re-applying is a no-op, so it is safely replayable; fourteen behaviour tests
+its postflight passes; re-applying is a no-op, so it is safely replayable; sixteen behaviour tests
 pass; and five mutation phases each turn a **named** test red.
+
+That apply phase deliberately starts from a **bad** permission state — `anon` granted, `service_role`
+revoked — and proves the migration corrects it. That came out of the round-4 security review: the
+file *asserted* the permissions but never *set* them, and no migration in this repo has ever revoked
+this function from `anon`. On the live database it is a no-op (checked read-only: `anon` holds
+nothing, `authenticated` and `service_role` hold EXECUTE, exactly one version of the function
+exists), but a database rebuilt from migrations alone would have carried an inherited `anon` grant
+on a function that writes with elevated privilege, with only an assertion standing against it. A
+file that asserts a security property should also establish it.
+
+Also from that round: the per-acre spellings are now symmetric with the slash form, because
+`gal per ac` — an ordinary way to write a per-acre rate — was being **refused**, and a refusal
+blocks the whole job rather than the one line. And the file now states that it must be applied
+through Supabase MCP `apply_migration` and not `execute_sql`, which returns only the last statement
+and would silently skip the pin, the replacement and the postflight.
 
 That naming matters. An earlier version asserted only "the suite went red", and the moment the
 named-test check was added it immediately caught two false detections: one mutant was being scored
@@ -124,13 +139,13 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The fourteen tests: the three live row shapes save with derived totals reproducing the live stored
+The sixteen tests: the three live row shapes save with derived totals reproducing the live stored
 values exactly; a legitimate oz-rate/lb-price conversion saves; the 16x shape is refused *and* its
 remedy text is asserted to name both numbers the operator must re-enter; `oz/cwt`, `lb per cwt` and
-`lb-per-cwt` are all refused; `gal per acre` and `gal per acres` still save; a `NaN` acreage no
-longer waves a mismatch through; a negative quantity is refused; a caller claiming totals of 1 cent
-still stores `187632` / `206395`; and every refused save leaves no `jobs` or `job_chemicals` row
-behind.
+`lb-per-cwt` are all refused; `gal per acre`, `gal per acres`, `gal per ac` and `gal-per-acre` all
+still save; a `NaN` acreage no longer waves a mismatch through; a negative quantity is refused; a
+caller claiming totals of 1 cent still stores `187632` / `206395`; and every refused save leaves no
+`jobs` or `job_chemicals` row behind.
 
 **Retracted from the earlier draft:** that `55 x 3752.64 = 206395.2` "pins
 ROUND-half-away-from-zero". A `.2` fraction rounds down under every rounding mode, so it pins

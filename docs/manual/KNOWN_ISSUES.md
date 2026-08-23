@@ -295,8 +295,26 @@ migration exists to close, and for blank units it is open. Refusing blank units 
 it would also make that existing job unsaveable until someone corrects its unit — one bad line
 blocks the whole job, because the page re-sends the entire chemical grid on every save. **That is an
 operational decision for Mason, not a code choice, and it is the one open question on this
-migration.** The narrower alternative is to refuse a blank unit only when the line carries a
-non-zero price, which is the billing-relevant case.
+migration.**
+
+**A "narrower" option was floated and does not work — recorded so it is not re-proposed.** The
+obvious softening is to refuse a blank unit only when the line carries a non-zero price. That buys
+**nothing** here: the one live blank-unit row carries both a cost *and* a price, so the narrow gate
+refuses exactly the same row as the broad one. The choice is genuinely binary — leave the hole
+open, or accept that one existing job needs its unit filled in before it can be saved again.
+
+If the refusal is built, three details are load-bearing: it must trigger on a non-zero **cost** as
+well as a non-zero price (the cost side feeds `total_cost_cents` and therefore margin, not just the
+customer bill); it must exempt `customer_supplied` lines, which contribute 0 to both totals and
+bill nothing, so refusing one is pure friction; and it does not close the class on its own, because
+of the scope limit below.
+
+**Scope limit: `save_job` is not the only writer.** The invariant binds `save_job` alone, but
+`_close_quote_as_applied` (migration 20260703200000) and the recipe-pricing path (migration
+20260618230000) both `INSERT INTO job_chemicals` with `cost_per_unit_cents` / `price_per_unit_cents`
+and never run this check. A mismatched-unit priced line can still be created through those paths and
+billed by `transfer_job_to_invoice`. "The database is now the boundary" is therefore true of the
+job-save path and not yet true of the table.
 
 **Still open after that migration applies:** (a) `baseUnitOfRate` itself still collapses `oz/cwt` to
 `oz` on the client — the guard that stops such a row reaching `save_job` (`rateDenominatorIsUnrecognized`

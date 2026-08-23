@@ -224,12 +224,43 @@ BEGIN
   ELSE RAISE EXCEPTION 'T14 FAIL  cost=%', c; END IF;
 END $$;
 
+-- T15 / T16: the ABBREVIATED per-acre spellings must save. The slash form has always
+-- accepted 'ac' and 'a'; the word form originally took only 'acre'/'acres', so 'gal per ac'
+-- -- an entirely ordinary way to write a per-acre rate -- was refused as a non-acre
+-- denominator. That is a false refusal, and a refusal blocks the whole job rather than the
+-- one line, so it is the more damaging direction of the two.
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"3333333c-3333-3333-3333-333333333335","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":20,"unit":"gal","rate_per_acre":2,"rate_unit":"gal per ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_cost_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 2000 THEN RAISE NOTICE 'T15 PASS  the abbreviated word spelling still saves; cost=%', c;
+  ELSE RAISE EXCEPTION 'T15 FAIL  cost=%', c; END IF;
+END $$;
+
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"3333333c-3333-3333-3333-333333333336","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":20,"unit":"gal","rate_per_acre":2,"rate_unit":"gal-per-acre","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_cost_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 2000 THEN RAISE NOTICE 'T16 PASS  the hyphenated per-acre spelling still saves; cost=%', c;
+  ELSE RAISE EXCEPTION 'T16 FAIL  cost=%', c; END IF;
+END $$;
+
 -- T8: every refused save must have left NOTHING behind.
 DO $$
 DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 7 AND n_chem = 7 THEN RAISE NOTICE 'T8 PASS  7 jobs / 7 chemical rows -- the 6 refused saves wrote nothing';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 7/7)', n_jobs, n_chem; END IF;
+  IF n_jobs = 9 AND n_chem = 9 THEN RAISE NOTICE 'T8 PASS  9 jobs / 9 chemical rows -- the 6 refused saves wrote nothing';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 9/9)', n_jobs, n_chem; END IF;
 END $$;

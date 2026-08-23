@@ -47,7 +47,7 @@ const HARNESS = join(HERE, "fixtures", "save-job-chem-unit-harness.sql");
 const TESTS = join(HERE, "fixtures", "save-job-chem-unit-tests.sql");
 
 const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
-                  "T11", "T12", "T13", "T14"];
+                  "T11", "T12", "T13", "T14", "T15", "T16"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -223,11 +223,34 @@ if (afterDrift.value !== beforeDrift.value) {
 log("PHASE 3 OK  drift refused (PREFLIGHT_BODY_DRIFT) and the live body was left untouched");
 
 // --- phase 4: apply over the reviewed body; the postflight must pass -------------
+// Deliberately starts from a BAD ACL: anon is granted EXECUTE first. That is the shape a
+// from-scratch replay of this repo actually produces -- no migration has ever revoked this
+// function from anon or PUBLIC -- and it is the shape the round-3 security review said the
+// file asserted but never established. If the migration only asserted, it would abort here.
 rebuild("phase 4");
+r = psqlCmd("GRANT EXECUTE ON FUNCTION public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text) TO anon;");
+if (!r.ok) fail("could not stage the bad ACL", r.out);
+r = psqlCmd("REVOKE EXECUTE ON FUNCTION public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text) FROM service_role;");
+if (!r.ok) fail("could not stage the missing service_role grant", r.out);
+
 r = psqlFile("/tmp/migration.sql");
 if (!r.ok) fail("the migration failed to apply (its own postflight may have refused it)", r.out);
 if (!/PREFLIGHT_OK/.test(r.out)) fail("the migration applied without the preflight reporting PREFLIGHT_OK", r.out);
-log("PHASE 4 OK  migration applied over the reviewed body; postflight assertions passed");
+
+const aclAfter = psqlScalar(
+  "SELECT has_function_privilege('anon', p.oid, 'EXECUTE')::text || ',' || " +
+  "       has_function_privilege('authenticated', p.oid, 'EXECUTE')::text || ',' || " +
+  "       has_function_privilege('service_role', p.oid, 'EXECUTE')::text " +
+  "  FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace " +
+  "   AND p.proname = 'save_job' AND p.pronargs = 6");
+if (!aclAfter.ok) fail("could not read the ACL after apply", aclAfter.out);
+if (aclAfter.value !== "false,true,true") {
+  fail(`the migration did not ESTABLISH the intended ACL. Expected anon=false, ` +
+       `authenticated=true, service_role=true; got "${aclAfter.value}". A file that ` +
+       `asserts a security property must also set it, or a rebuilt database keeps the ` +
+       `inherited grant and only the assertion stands between anon and a SECDEF write.`);
+}
+log("PHASE 4 OK  applied over a deliberately BAD ACL; anon revoked, authenticated + service_role granted, postflight passed");
 
 // --- phase 5: re-applying must be a no-op (safely replayable) --------------------
 r = psqlFile("/tmp/migration.sql");
