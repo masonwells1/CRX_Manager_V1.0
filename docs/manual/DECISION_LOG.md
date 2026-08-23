@@ -273,9 +273,18 @@ parent's own status check. Three mutations were run against it — renaming the 
 operator-supplied name, consuming a differently-named variable, and splitting the command back in two — and
 each turns the suite red.
 
-The through-line across all three rounds is one idea: **a check that names the thing it forbids only catches
-that name.** Twice now the fix for that was itself written one notch too narrow. Guards on this path get a
-case table and a mutation run, not a green suite.
+**Third round, same shape again: an expansion is not a binding.** CodeRabbit's finding on `114fa7e7`. The
+new assertions checked that the parent's status command *expands* `$PARENT1`, but read that variable name
+out of a **different** command — the canonical-stamp lookup. So a status check written
+`OTHER="$(git rev-parse <HEAD>^1)" && ... commits/$PARENT1/statuses ...` satisfied it while `$PARENT1` was
+unset in that command and expanded to nothing, producing `commits//statuses`. The assignment and the use
+must be the same name in the same command, or the binding is a coincidence of spelling. Both bound checks
+now require the derivation *and* the expansion together, and the mutation above turns the suite red.
+
+The through-line across all four rounds is one idea: **a check that names the thing it forbids only catches
+that name.** Three times running, the fix for that was itself written one notch too narrow — a spelling, then
+a notation, then a variable read from the wrong scope. Guards on this path get a case table and a mutation
+run, not a green suite.
 
 **Settled by Mason, 2026-08-22: `auto_pause_after_reviewed_commits: 2` stands, with the enforcement
 follow-up to come.** Codex's CRX-SEC-002 (Medium) argued it should not — fewer automatic reviews put

@@ -187,13 +187,21 @@ for (const [name, file] of SKILLS) {
     `${name}: the parent SHA is captured into a shell variable from git rev-parse <HEAD>^1`,
   );
   const boundVar = assignment ? assignment[1] : null;
-  const expandsBoundVar = (cmd, prefix) =>
+  // A command is bound only if it BOTH assigns the derived parent to `boundVar`
+  // and expands that same name. Checking the expansion alone is not enough: a
+  // command that assigns `OTHER="$(git rev-parse <HEAD>^1)"` and then expands
+  // `$PARENT1` still matches an expansion-only test, while `$PARENT1` is unset
+  // there and expands to nothing — `commits//statuses`. The assignment and the
+  // use have to be the same name in the same command, or the "binding" is a
+  // coincidence of spelling. (CodeRabbit, PR #441.)
+  const bindsBoundVar = (cmd, prefix) =>
     Boolean(boundVar) &&
     Boolean(cmd) &&
+    new RegExp(`\\b${boundVar}="\\$\\(git rev-parse <HEAD>\\^1\\)"`).test(cmd) &&
     new RegExp(`${prefix}\\$(?:\\{${boundVar}\\}|${boundVar}\\b)`).test(cmd);
   ok(
-    expandsBoundVar(parentLookup, 'grep -oE "and '),
-    `${name}: the canonical-stamp lookup expands that exact variable, not a separately supplied value`,
+    bindsBoundVar(parentLookup, 'grep -oE "and '),
+    `${name}: the canonical-stamp lookup expands the same variable it derived, not a separately supplied value`,
   );
   // The parent's own settled status is the other half of the full gate, and it
   // has to be bound the same way — a status check on a re-typed SHA proves the
@@ -202,10 +210,10 @@ for (const [name, file] of SKILLS) {
     (c) => /\bgit rev-parse <HEAD>\^1\b/.test(c) && c.includes("/statuses"),
   );
   ok(
-    expandsBoundVar(parentStatus, "commits/") &&
+    bindsBoundVar(parentStatus, "commits/") &&
       parentStatus.includes('select(.context=="CodeRabbit")') &&
       parentStatus.includes('= "success"'),
-    `${name}: the parent's own CodeRabbit status check is bound to the same derived variable`,
+    `${name}: the parent's own CodeRabbit status check derives and expands that same variable`,
   );
   ok(
     hasCommandWithAll(cmds, ["git merge-tree --write-tree", "<HEAD>^{tree}", "MERGE_ADDED_NOTHING"]),
