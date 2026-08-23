@@ -97,12 +97,13 @@ supabase/migrations/20260819232000_bind_draw_down_receipts_to_intent.sql text eo
 scripts/smoke/smoke-draw-down-quote-intent-binding.sql text eol=lf
 scripts/smoke/prove-draw-down-quote-intent-binding.mjs text eol=lf
 
-# save_job server-side chemical-unit invariant + derived money totals, and the preflight
-# body pin that must be applied immediately before it. History rows 891-892 record a SQL
-# sha256 over each file's LF bytes, so a CRLF checkout would hash to a different value
-# than the one the apply proof binds. The prover and its fixtures are pinned with them so
-# Windows and Linux execute the same evidence rather than different CRLF/LF artifacts.
-supabase/migrations/20260820115900_pin_save_job_body_before_chem_unit_invariant.sql text eol=lf
+# save_job server-side chemical-unit invariant + derived money totals. History row 891
+# records a SQL sha256 over the file's LF bytes, so a CRLF checkout would hash to a
+# different value than the one the apply proof binds. Its in-file preflight also compares
+# the live body against an md5 the prover reproduces from 20260706080000 after stripping
+# CR, so the two must agree byte-for-byte on every platform. The prover and its fixtures
+# are pinned with it so Windows and Linux execute the same evidence rather than different
+# CRLF/LF artifacts.
 supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql text eol=lf
 scripts/smoke/prove-save-job-chem-unit-invariant.mjs text eol=lf
 scripts/smoke/fixtures/save-job-chem-unit-harness.sql text eol=lf

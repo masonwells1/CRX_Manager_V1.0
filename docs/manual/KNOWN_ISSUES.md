@@ -276,12 +276,27 @@ to live**) makes `save_job` refuse a chemical line whose rate unit has a non-acr
 failure at billing — into a refusal at save time, naming the product and the offending unit. Proven
 in a throwaway container: an `oz/cwt` line is refused and leaves no `jobs` or `job_chemicals` row.
 
-**Both spellings are covered, and the word form is a new finding.** The migration refuses `oz/cwt`
-*and* `oz per cwt`. A slash-only test was the first draft and Codex blocked it (P1, 2026-08-23): a
-spelled-out denominator whose `unit` carries the same text normalizes EQUAL, so the row was
-accepted with its quantity already derived against a non-acre denominator. **The same gap exists
-in the client half on PR #436** — `rateDenominatorIsUnrecognized` ends in `return raw.includes('/')`,
-so it does not flag `oz per cwt` either. That is unfixed and belongs to PR #436.
+**All three spellings are covered, and the word and hyphen forms are new findings.** The migration
+refuses `oz/cwt`, `oz per cwt` *and* `oz-per-cwt`. A slash-only test was the first draft and Codex
+blocked it (P1, 2026-08-23): a spelled-out denominator whose `unit` carries the same text
+normalizes EQUAL, so the row was accepted with its quantity already derived against a non-acre
+denominator. The hyphen form was the same escape one separator away and was found in the following
+review round. The per-acre exclusion is plural-tolerant on both sides, so `gal per acres` still
+saves. **The same gap exists in the client half on PR #436** — `rateDenominatorIsUnrecognized` ends
+in `return raw.includes('/')`, so it flags neither the word nor the hyphen form. That is unfixed and
+belongs to PR #436.
+
+**A BLANK `unit` is still not covered, and one live row is in exactly that shape.** The invariant
+can only refuse what it can disprove, so when either normalized unit is blank the line is skipped —
+but `transfer_job_to_invoice` still bills it at `price_per_unit_cents x quantity`. Read read-only on
+2026-08-23: of the four `job_chemicals` rows on live, one carries a `pt/ac` rate, a **blank** unit,
+and both a cost and a price, and it is not customer-supplied. That is the same hazard class this
+migration exists to close, and for blank units it is open. Refusing blank units would close it, but
+it would also make that existing job unsaveable until someone corrects its unit — one bad line
+blocks the whole job, because the page re-sends the entire chemical grid on every save. **That is an
+operational decision for Mason, not a code choice, and it is the one open question on this
+migration.** The narrower alternative is to refuse a blank unit only when the line carries a
+non-zero price, which is the billing-relevant case.
 
 **Still open after that migration applies:** (a) `baseUnitOfRate` itself still collapses `oz/cwt` to
 `oz` on the client — the guard that stops such a row reaching `save_job` (`rateDenominatorIsUnrecognized`

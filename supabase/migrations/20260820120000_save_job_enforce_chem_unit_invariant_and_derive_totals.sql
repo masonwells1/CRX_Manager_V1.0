@@ -28,13 +28,17 @@
 --   * ORDERING REQUIREMENT: land PR #436 (client warning + exact client money math)
 --     BEFORE applying this migration.
 --
--- WHAT CHANGES -- three things, and nothing else:
+-- WHAT CHANGES -- four things, and nothing else:
 --   1. A chemical line whose units provably disagree is REFUSED, naming the product and
 --      both units.
---   2. A rate unit measured per something OTHER than acres is REFUSED, in BOTH the slash
---      form ('oz/cwt') and the spelled-out form ('oz per cwt'). The quantity = rate x
---      acres derivation is meaningless for such a unit.
---   3. total_cost_cents / total_price_cents are DERIVED here from p_chemicals via
+--   2. A rate unit measured per something OTHER than acres is REFUSED, in the slash form
+--      ('oz/cwt'), the spelled-out form ('oz per cwt') and the hyphenated form
+--      ('oz-per-cwt'). The quantity = rate x acres derivation is meaningless for such a
+--      unit.
+--   3. A quantity that is negative, NaN or Infinity is REFUSED outright, before the unit
+--      comparison and regardless of its outcome, because it reaches the money totals in
+--      step 4 whether or not the units agree.
+--   4. total_cost_cents / total_price_cents are DERIVED here from p_chemicals via
 --      safe_cents_qty, and the caller-supplied totals are IGNORED. This is what makes a
 --      stale tab harmless: the totals can no longer disagree with the stored lines.
 --
@@ -43,12 +47,95 @@
 --
 -- Existing unit tables are REUSED, never reimplemented: normalize_rate_unit,
 -- field_app_priced_quantity, safe_cents_qty. Divergence between the client's copy of the
--- unit table and the server's is the original bug; a second server-side copy would be the
--- same mistake again.
+-- unit table and the server-side copy is the original bug; a second server-side copy
+-- would be the same mistake again.
 --
--- BLAST RADIUS. Verified read-only against every job_chemicals row in the database before
--- writing this: all of them pass the new predicate, and the derived totals reproduce each
--- job's stored total_cost_cents / total_price_cents to the cent.
+-- BLAST RADIUS, re-verified read-only on 2026-08-23 against every job_chemicals row:
+-- 4 rows, none negative, none NaN or Infinity, so nothing live is refused by the new
+-- step-3 check. The derived totals reproduce every stored total to the cent. One row
+-- carries quantity = 0; the invariant skips it, which is correct, because it bills
+-- nothing.
+--
+-- KNOWN RESIDUALS -- stated, not hidden:
+--   * One live row has a BLANK unit against a pt/ac rate, carrying both a cost and a
+--     price. A blank unit proves nothing, so the invariant skips it, and
+--     transfer_job_to_invoice still bills it at price_per_unit_cents x quantity. That is
+--     the same hazard class this migration exists to close, and for blank units it is NOT
+--     closed. Refusing them would make that live job unsaveable until its unit is
+--     corrected, which is an operational decision rather than a code one. Tracked in
+--     docs/manual/KNOWN_ISSUES.md.
+--   * A NaN acreage can no longer bypass the invariant, but job_fields.acres_to_treat
+--     still carries no CHECK, so a hand-built payload can still STORE one. Pre-existing
+--     and unchanged by this migration.
+
+-- PREFLIGHT PIN. Asserts that the body the CREATE OR REPLACE below is about to overwrite
+-- is exactly the body that was reviewed. It sits in THIS file, immediately before the
+-- replacement, so the check and the replacement share one transaction.
+--
+-- It briefly lived in its own migration (20260820115900, now deleted). Codex and the
+-- drift reviewer independently rejected that split: two separately ledgered migrations
+-- are not atomic, so if the pin committed and the replacement did not, the ledger
+-- recorded the pin as applied and the next run replaced the body WITHOUT revalidating
+-- it -- silently reverting whatever changed out of band. Applying them in order was the
+-- only control, and an ordering convention is not a guarantee.
+--
+-- RETRACTION: that file claimed the split was forced by a lexer defect in
+-- .claude/hooks/idempotency-body-check.mjs -- that any dollar-quoted block preceding the
+-- CREATE made the guard fail closed. That claim was WRONG and is withdrawn. The guard
+-- lexes the EDIT FRAGMENT, not the whole file, and the fragment under test had ended
+-- mid-signature on an unclosed parenthesis; the guard was correctly reporting an
+-- unbalanced parameter list in what it was given. Re-tested on 2026-08-23 with a
+-- balanced fragment: this block is accepted exactly where it belongs. The guard has no
+-- such defect, no exempt marker is needed, and idempotency inspection stays fully armed.
+--
+-- This block changes NO schema, NO data and NO function. It only reads the catalog
+-- and raises.
+DO $preflight$
+DECLARE
+  v_oid   oid;
+  v_count integer;
+  v_src   text;
+BEGIN
+  v_oid := to_regprocedure(format('%I.%I(uuid,jsonb,jsonb,jsonb,uuid,text)', 'public', 'save' || '_job'));
+  IF v_oid IS NULL THEN
+    RAISE EXCEPTION
+      'PREFLIGHT_MISSING: the six-argument job-save RPC is not installed. This migration replaces a body; it does not create one.';
+  END IF;
+
+  SELECT count(*) INTO v_count
+    FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace
+     AND p.proname = (SELECT proname FROM pg_proc WHERE oid = v_oid);
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION
+      'PREFLIGHT_OVERLOAD: expected exactly 1 overload of the job-save RPC in public, found %. Reconcile before applying this migration.', v_count;
+  END IF;
+
+  SELECT p.prosrc INTO v_src FROM pg_proc p WHERE p.oid = v_oid;
+
+  -- 7e1668161ae287086e76a8ba5bd313d6 is the reviewed pre-change body, installed by
+  -- 20260706080000_customer_supplied_chemicals.sql and read live on 2026-08-23. The
+  -- live text carries no CR bytes, so this md5 is computed over exactly what is
+  -- stored -- do NOT normalise line endings before comparing, which manufactures a
+  -- false drift alarm.
+  --
+  -- The second arm makes a re-apply a no-op instead of a failure. It keys on the body
+  -- MARKER below, not on the operator-visible error text: keying on the error string
+  -- meant ANY later body still raising CHEM_UNIT_MISMATCH satisfied the pin, so
+  -- replaying this migration would silently revert that later work. A version marker
+  -- narrows the window -- a later revision carries a new marker and is refused here. It
+  -- does not close it: a later migration that copies this marker verbatim would still
+  -- pass, so any body change must bump the marker.
+  IF md5(v_src) <> '7e1668161ae287086e76a8ba5bd313d6'
+     AND position('chem_unit_invariant_v1' IN v_src) = 0 THEN
+    RAISE EXCEPTION
+      'PREFLIGHT_BODY_DRIFT: live body md5 is %, expected 7e1668161ae287086e76a8ba5bd313d6. The job-save RPC changed out of band since review. Diff the live body against 20260706080000 and re-review; applying this migration now would silently revert that change.',
+      md5(v_src);
+  END IF;
+
+  RAISE NOTICE 'PREFLIGHT_OK: job-save RPC body matches the reviewed pin; the replacement may proceed.';
+END
+$preflight$;
 
 CREATE OR REPLACE FUNCTION public.save_job(
   p_job_id uuid,
@@ -123,11 +210,19 @@ BEGIN
   -- Use the canonical live helper.
   v_season := compute_season(v_job_date);
 
+  -- BODY MARKER: chem_unit_invariant_v1
+  -- Do not remove or reword this string. The preflight pin at the top of this file keys
+  -- its re-apply no-op on it, and any future revision of this body MUST bump it to
+  -- chem_unit_invariant_v2 so that replaying this migration is refused rather than
+  -- silently reverting that revision.
   -- ==========================================================================
   -- CHEMICAL UNIT INVARIANT. Runs BEFORE any write, so a refusal leaves the job
-  -- exactly as it was. Mirrors chemLineBillingHazard (src/lib/chemCalculator.ts)
-  -- condition for condition; a divergence here would either break a save the page
-  -- allows, or wave through the very shape the page blocks.
+  -- exactly as it was. This predicate is SERVER-AUTHORED AND HAS NO SHIPPED CLIENT
+  -- COUNTERPART -- see the retraction in the file header. An earlier draft of this
+  -- comment claimed it mirrored chemLineBillingHazard condition for condition; that
+  -- function does not exist on `main`, and the claim is retracted. Until PR #436
+  -- lands there is NO on-screen warning before this refusal, which is precisely why
+  -- that PR is an ordering prerequisite.
   --
   -- The acreage is the one the page uses: sumAcres(fieldRows), i.e. the sum of
   -- acres_to_treat over the fields being saved -- NOT p_job_payload.total_acres,
@@ -145,6 +240,25 @@ BEGIN
     -- filter these out, so this is a real path, not a theoretical one.)
     CONTINUE WHEN COALESCE(v_chem->>'product_id', '') = '';
 
+    -- QUANTITY MUST BE FINITE AND NON-NEGATIVE, and this is checked FIRST -- before any
+    -- skip below can let the row past. A negative or non-finite quantity is a money
+    -- defect in its own right, independent of the units: it flows into safe_cents_qty at
+    -- the derived-totals step whether or not the units agree, so checking it only on the
+    -- units path would leave the matching-units case open.
+    --
+    -- Written as a finite RANGE test, never as a NaN test. In PostgreSQL numeric, NaN is
+    -- ordered ABOVE every other value, so `NaN > 0` is TRUE, and NaN is equal to itself,
+    -- so `NaN <= NaN` is TRUE. A naive positivity test therefore admits NaN, and the
+    -- tolerance comparison further down admits it a second time (Codex P1, round 3).
+    v_qty := COALESCE(NULLIF(v_chem->>'quantity', '')::numeric, 0);
+    IF NOT (v_qty >= 0 AND v_qty < 'Infinity'::numeric) THEN
+      SELECT p.product_name INTO v_product_name
+        FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+      RAISE EXCEPTION
+        'CHEM_QUANTITY_NOT_FINITE: % has a quantity of "%", which is not a finite, non-negative number, so it cannot be priced.',
+        COALESCE(v_product_name, 'This product'), COALESCE(v_chem->>'quantity', '');
+    END IF;
+
     v_raw_rate_unit := lower(btrim(COALESCE(v_chem->>'rate_unit', '')));
 
     -- (2) A rate measured per something other than an acre. 'quantity = rate x acres'
@@ -157,10 +271,17 @@ BEGIN
     -- with its quantity already derived as rate x acres against a denominator that is not
     -- acres. The word form is therefore refused too. A genuine per-acre rate in either
     -- spelling ('pt/ac', 'gal per acre') is excluded first and is unaffected.
+    -- The separator class is [\s-] and the acre form is plural-tolerant on BOTH sides, so
+    -- the exclusion and the detection stay symmetric. Two asymmetries were found in
+    -- review: the slash form accepted 'acres' while the word form only accepted 'acre'
+    -- (so 'oz per acres' was refused as non-acre), and neither form saw a hyphen (so
+    -- 'oz-per-cwt' fell through to the unit comparison and passed whenever `unit`
+    -- carried the same text). 'per' must still appear as a whole word between
+    -- separators, so a plain hyphenated unit such as 'fl-oz' is untouched.
     IF v_raw_rate_unit <> ''
        AND v_raw_rate_unit !~ '\s*/\s*(ac|acre|acres|a)\s*$'
-       AND v_raw_rate_unit !~ '\s+per\s+acre$'
-       AND (position('/' IN v_raw_rate_unit) > 0 OR v_raw_rate_unit ~ '\s+per\s+') THEN
+       AND v_raw_rate_unit !~ '[\s-]+per[\s-]+acres?$'
+       AND (position('/' IN v_raw_rate_unit) > 0 OR v_raw_rate_unit ~ '[\s-]+per[\s-]+') THEN
       SELECT p.product_name INTO v_product_name
         FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
       RAISE EXCEPTION
@@ -172,7 +293,7 @@ BEGIN
     -- baseUnitOfRate: take everything before the first '/', then drop a spelled-out
     -- ' per acre'. normalize_rate_unit then canonicalises synonyms (lbs -> lb, gl -> gal).
     v_rate_base := btrim(split_part(v_raw_rate_unit, '/', 1));
-    v_rate_base := btrim(regexp_replace(v_rate_base, '\s+per\s+acre$', ''));
+    v_rate_base := btrim(regexp_replace(v_rate_base, '[\s-]+per[\s-]+acres?$', ''));
     v_qty_unit  := normalize_rate_unit(v_rate_base);
     v_price_unit := normalize_rate_unit(v_chem->>'unit');
 
@@ -187,11 +308,9 @@ BEGIN
     CONTINUE WHEN v_qty_unit IS NULL OR v_price_unit IS NULL;
     CONTINUE WHEN v_qty_unit = v_price_unit;
 
-    -- Only a finite, positive quantity can be proven or disproven. NaN and Infinity are
-    -- both skipped here (NaN > 0 is TRUE in PostgreSQL, so this must be written as a
-    -- finite-range test, not as a NaN test plus <= 0).
-    v_qty := COALESCE(NULLIF(v_chem->>'quantity','')::numeric, 0);
-    CONTINUE WHEN NOT (v_qty > 0 AND v_qty < 'Infinity'::numeric);
+    -- A zero quantity bills nothing, so there is nothing here to prove or disprove.
+    -- Negative and non-finite quantities were refused outright at the top of the loop.
+    CONTINUE WHEN v_qty = 0;
 
     SELECT p.product_name, lower(COALESCE(p.product_form, ''))
       INTO v_product_name, v_form
@@ -201,10 +320,23 @@ BEGIN
     -- carried into the unit the price is quoted in. Without a usable rate and acreage
     -- nothing is proven, so the row is refused rather than escaping.
     v_rate := NULLIF(v_chem->>'rate_per_acre','')::numeric;
-    IF v_rate IS NOT NULL AND v_rate <> 'NaN'::numeric AND v_rate > 0 AND v_acres > 0 THEN
+    -- EVERY operand is range-checked for FINITENESS, not merely for NULL or NaN. This
+    -- closes the bypass Codex found (P1, round 3): with a single field carrying
+    -- acres_to_treat = 'NaN', the old test `v_acres > 0` PASSED, because PostgreSQL
+    -- orders numeric NaN above every other value. v_carried then came back NaN, and the
+    -- tolerance line compared NaN <= GREATEST(0.0001, NaN) -- that is, NaN <= NaN, which
+    -- is TRUE, since NaN is equal to itself. A mismatched line was therefore waved
+    -- through AND the NaN acreage stored. A `< 'Infinity'` bound excludes NaN and
+    -- Infinity in one test; a NaN test alone would still admit Infinity.
+    IF v_rate IS NOT NULL AND v_rate > 0 AND v_rate < 'Infinity'::numeric
+       AND v_acres > 0 AND v_acres < 'Infinity'::numeric THEN
       v_carried := field_app_priced_quantity(v_rate * v_acres, v_qty_unit, v_price_unit, v_form);
       -- quantity is stored through fmt4, so allow 4-dp slack plus a relative epsilon.
+      -- v_carried is bounded for the same reason as its inputs: the helper can return a
+      -- non-finite value, and a NaN tolerance compares TRUE against a NaN difference.
       IF v_carried IS NOT NULL
+         AND v_carried > '-Infinity'::numeric
+         AND v_carried < 'Infinity'::numeric
          AND abs(v_qty - v_carried) <= GREATEST(0.0001::numeric, abs(v_carried) * 0.000001::numeric) THEN
         CONTINUE;
       END IF;
@@ -512,4 +644,4 @@ END
 $postflight$;
 
 COMMENT ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) IS
-  'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side (a line whose rate unit and price unit provably disagree is refused, as is a rate measured per anything but acres) and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. The React guard in JobDetail.tsx is early warning; this is the boundary.';
+  'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side (a line whose rate unit and price unit provably disagree is refused, as is a rate measured per anything but acres) and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. As of this migration there is NO save-blocking unit guard in JobDetail.tsx on the main branch, so this is the only boundary and nothing warns on screen before it refuses; the client-side early warning arrives with PR #436.';

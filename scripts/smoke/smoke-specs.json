@@ -455,6 +455,7 @@
     },
     "save_job": {
       "chain": "smoke-save-job-parity.sql",
+      "container_prover": "prove-save-job-chem-unit-invariant.mjs",
       "description": "Field-app parity #1 (migration 20260624120000): the extended save_job round-trips scheduling dates (call/proposed/schedule/expires + time_proposed), consultant, three memo fields, per-field agronomy (planted_acres/crop/strip/pests), per-field customer shares, and chemical extras (diluent_rate/rei_hours/phi_days/warehouse/vendor); remaining_acres GENERATED = total - applied; field shares not totalling 100 raise SHARE_NOT_100; idempotent replay returns the same job_id with no second job; a forged p_performed_by raises ACTOR_MISMATCH. Steps 3b and 7 additionally cover migration 20260820120000 (chemical-unit invariant + derived money totals) and are GATED on whether that migration is installed: pre-apply they pin the caller-supplied totals, post-apply they assert the derived totals and that a pint-quantity-priced-per-gallon line and a per-cwt rate are both refused leaving no row behind. Chem A's quantity was corrected from 240 to 30 on 2026-08-23 -- it had been 240 pints recorded as 240 gallons, an 8x over-bill living in the parity fixture itself.",
       "covers": [
         "save_job"

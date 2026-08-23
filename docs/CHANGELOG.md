@@ -24,34 +24,50 @@ line is corrected. Earlier drafts of this entry claimed the predicate mirrored t
 functions "condition for condition" and that "nothing the page accepts today becomes unsaveable".
 Both were false, all four review gates caught it, and both are retracted.
 
-Two new migrations, applied in that order in one session:
-`20260820115900_pin_save_job_body_before_chem_unit_invariant.sql` — a read-only preflight that
-refuses to proceed unless the installed body is the one that was reviewed — and
+One new migration,
 `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`. Authored 2026-08-22,
-revised 2026-08-23; the files keep 2026-08-20 sequence stamps, which is what the disk ordering
-guard keys on, and they still sort after every existing candidate. The second is a
-`CREATE OR REPLACE` on the **identical six-argument signature** — a body replacement, never a new
-overload, so the frozen contract `JobDetail.tsx` depends on is untouched and the existing grants
-are preserved. A postflight block then re-asserts exactly that: one overload, `SECURITY DEFINER`,
-pinned `search_path`, `authenticated` and `service_role` still holding EXECUTE, and neither `anon`
-nor `PUBLIC` holding it.
+revised 2026-08-23; the file keeps its 2026-08-20 sequence stamp, which is what the disk ordering
+guard keys on, and it still sorts after every existing candidate. It is a `CREATE OR REPLACE` on
+the **identical six-argument signature** — a body replacement, never a new overload, so the frozen
+contract `JobDetail.tsx` depends on is untouched and the existing grants are preserved.
+
+It opens with an in-file **preflight pin**: the live body must hash to the md5 that was reviewed,
+or the migration aborts and changes nothing. A **postflight** block then re-asserts one overload,
+`SECURITY DEFINER`, pinned `search_path`, `authenticated` and `service_role` still holding EXECUTE,
+and neither `anon` nor `PUBLIC` holding it.
+
+An earlier draft put that pin in a *separate* migration and justified the split by a claimed lexer
+defect in the repo's `idempotency-body-check` guard. **Both claims are withdrawn.** Codex and the
+drift reviewer independently found that two separately ledgered migrations are not atomic — if the
+pin commits and the replacement does not, the ledger records the pin as done and the next run
+overwrites an unvalidated body, which is exactly what the pin exists to prevent. And the guard has
+no such defect: it lexes the *edit fragment*, and the fragment under test had ended mid-signature
+on an unclosed parenthesis, so the guard was correctly reporting an unbalanced parameter list in
+what it was handed. Re-tested with a balanced fragment, the pin is accepted exactly where it
+belongs, and idempotency inspection stays fully armed.
 
 - **A line whose units provably disagree is refused** (`CHEM_UNIT_MISMATCH`), naming the product
   and both units. It skips a row with no product, skips when either normalized unit is blank,
-  skips when they are equal, skips a non-finite or non-positive quantity, and treats
-  `quantity = rate x acres` carried into the price's unit as the *only* proof of safety. Note what
-  it does **not** do: an *unrecognised* unit is not skipped — it cannot be sized, so the line is
-  refused. That is deliberate (an unpriceable unit must not bill), but it also means a metric pair
-  such as `g/ac` against `kg` is refused even though the conversion is well defined, because the
-  live size tables carry no metric entries. Acreage is summed from `p_fields` — deliberately not
-  the caller-supplied `total_acres`.
+  skips when they are equal, skips a zero quantity, and treats `quantity = rate x acres` carried
+  into the price's unit as the *only* proof of safety. Note what it does **not** do: an
+  *unrecognised* unit is not skipped — it cannot be sized, so the line is refused. That is
+  deliberate (an unpriceable unit must not bill), but it also means a metric pair such as `g/ac`
+  against `kg` is refused even though the conversion is well defined, because the live size tables
+  carry no metric entries. Acreage is summed from `p_fields` — deliberately not the caller-supplied
+  `total_acres`.
 - **A rate measured per anything but an acre is refused** (`CHEM_RATE_DENOMINATOR_NOT_ACRES`), in
-  both the slash form (`oz/cwt`) and the spelled-out form (`oz per cwt`). Testing only for a slash
-  was a real hole that Codex caught: a spelled-out denominator whose `unit` carries the same text
-  normalizes *equal*, so the row sailed through with a quantity already derived against a
-  denominator that is not acres. This one step goes beyond the literal plan
-  and is called out rather than slipped in: leaving it client-only would let the review gate
-  legitimately re-raise the very finding this migration exists to close.
+  the slash form (`oz/cwt`), the spelled-out form (`oz per cwt`) and the hyphenated form
+  (`oz-per-cwt`). Testing only for a slash was a real hole Codex caught: a spelled-out denominator
+  whose `unit` carries the same text normalizes *equal*, so the row sailed through with a quantity
+  already derived against a denominator that is not acres. The hyphen form was the same escape one
+  separator away. The per-acre exclusion is plural-tolerant on both sides, so `gal per acres` still
+  saves. This step goes beyond the literal plan and is called out rather than slipped in: leaving
+  it client-only would let the review gate legitimately re-raise the finding this migration exists
+  to close.
+- **A quantity that is negative, `NaN` or `Infinity` is refused outright**
+  (`CHEM_QUANTITY_NOT_FINITE`), *before* the unit comparison and regardless of its outcome. A
+  negative quantity reaches the money totals whether or not the units agree, so checking it only on
+  the units path left the matching-units case open.
 - **The money totals are derived here**, from `p_chemicals` via `safe_cents_qty`, rounded per line
   then summed, and the caller's totals are ignored outright. That is what makes a stale tab
   harmless. The page and the server do **not** agree to the cent, and an earlier draft wrongly
@@ -62,13 +78,27 @@ nor `PUBLIC` holding it.
   money is right — but the on-screen figure can be a cent off until PR #436 lands the exact-cents
   client path. Second reason that PR goes first.
 
+**The NaN bypass, which is worth stating plainly because it is not intuitive.** PostgreSQL orders
+numeric `NaN` *above* every other value, and `NaN` compares equal to itself. So a single field
+carrying `acres_to_treat: "NaN"` made the old `acres > 0` test true, the carried quantity came back
+`NaN`, and the tolerance test then compared `NaN <= NaN` — true — waving a genuinely mismatched
+line straight through. Codex found it; the arithmetic was confirmed directly against PostgreSQL 17
+rather than reasoned about, and every operand on that path is now bounded to a finite range.
+
 The live unit tables are **reused, not reimplemented** (`normalize_rate_unit`,
 `field_app_priced_quantity`, `safe_cents_qty`). Divergence between the client's copy of the unit
 table and the server's is the original 16x bug; a second server-side copy would repeat it.
 
-**Blast radius measured before writing, not estimated.** All four `job_chemicals` rows in the live
-database pass the new predicate — one has a NULL `unit`, two have `rate_unit = unit = 'oz'`, one has
-`quantity = 0` — and the derived totals reproduce every stored total to the cent.
+**Blast radius measured, not estimated**, re-verified read-only on 2026-08-23. All four
+`job_chemicals` rows in the live database pass the new predicate — none negative, none non-finite —
+and the derived totals reproduce every stored total to the cent.
+
+**Known residuals, stated rather than hidden.** A blank `unit` still skips the invariant, and
+`transfer_job_to_invoice` still bills such a line at `price_per_unit_cents x quantity` — and one
+live row is in exactly that shape today (a pint-per-acre rate, blank unit, carrying both a cost and
+a price). Refusing it would make that job unsaveable until someone corrects its unit, which is an
+operational decision rather than a code one. Separately, `job_fields.acres_to_treat` still carries
+no CHECK, so a `NaN` acreage can no longer bypass the invariant but can still be stored.
 
 **Proof — committed and re-runnable, not asserted.** `node
 scripts/smoke/prove-save-job-chem-unit-invariant.mjs`, with fixtures under
@@ -77,20 +107,30 @@ with nothing committed to run, so no reviewer could re-run or falsify it; that g
 review finding. It runs on **PostgreSQL 17**, matching production's 17.6 — the earlier run used
 15, two majors behind, and said so nowhere.
 
-Seven phases: the real-shape schema loads with the three helper bodies copied verbatim from the
-live catalog; a stub is installed carrying production's real permissions so the postflight is
-asserting against the shape production actually has; the preflight pin **refuses** an unreviewed
-body; the migration applies and its postflight passes; the preflight is then a no-op, proving it
-is safely re-runnable; ten behaviour tests pass; and three mutation phases each turn the suite red
-— disabling the unit comparison, restoring the caller-supplied total, and removing the
-spelled-out-denominator rule. A test that still passes against a broken guard is not holding that
-guard up, which is the whole point of the mutation phases.
+Seven phases. The real-shape schema loads with the three helper bodies copied verbatim from the
+live catalog. The reviewed pre-change body is then installed *from the repo* and its md5 is checked
+against the pin the prover parses out of the migration itself — so the pin is proved against
+source, not against a comment. Against a *different* body the migration aborts with
+`PREFLIGHT_BODY_DRIFT` **and the installed body is confirmed byte-for-byte unchanged**, which is
+the atomicity property the single-file design exists to give. Over the reviewed body it applies and
+its postflight passes; re-applying is a no-op, so it is safely replayable; fourteen behaviour tests
+pass; and five mutation phases each turn a **named** test red.
 
-The ten tests: the three live row shapes save with derived totals reproducing the live stored
+That naming matters. An earlier version asserted only "the suite went red", and the moment the
+named-test check was added it immediately caught two false detections: one mutant was being scored
+by a test that broke incidentally, and another was "detected" while the guard under test was still
+holding, because two independent checks each close the `NaN` path and removing one leaves the other
+standing. Both are fixed — the mutant now removes both bounds together. A test that still passes
+against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
+nothing at all.
+
+The fourteen tests: the three live row shapes save with derived totals reproducing the live stored
 values exactly; a legitimate oz-rate/lb-price conversion saves; the 16x shape is refused *and* its
-remedy text is asserted to name both numbers the operator must re-enter; `oz/cwt` and `lb per cwt`
-are both refused; `gal per acre` still saves; a caller claiming totals of 1 cent still stores
-`187632` / `206395`; and the three refused saves leave no `jobs` or `job_chemicals` row behind.
+remedy text is asserted to name both numbers the operator must re-enter; `oz/cwt`, `lb per cwt` and
+`lb-per-cwt` are all refused; `gal per acre` and `gal per acres` still save; a `NaN` acreage no
+longer waves a mismatch through; a negative quantity is refused; a caller claiming totals of 1 cent
+still stores `187632` / `206395`; and every refused save leaves no `jobs` or `job_chemicals` row
+behind.
 
 **Retracted from the earlier draft:** that `55 x 3752.64 = 206395.2` "pins
 ROUND-half-away-from-zero". A `.2` fraction rounds down under every rounding mode, so it pins
@@ -105,8 +145,9 @@ exactly that shape, which is how it was found. Corrected to 30 GL, with new asse
 derived totals and both refusals, all gated on whether the migration is installed so the chain
 stays green while it is parked.
 
-No frontend change; the React guard stays as early warning. **Parked: not applied to production.**
-An interactive session still needs Mason's explicit in-chat approval for a live apply.
+No frontend change, and there is no client-side warning to fall back on: until PR #436 lands, this
+refusal is the operator's first indication that anything is wrong. **Parked: not applied to
+production.** An interactive session still needs Mason's explicit in-chat approval for a live apply.
 
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
