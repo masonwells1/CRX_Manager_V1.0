@@ -281,10 +281,17 @@ unset in that command and expanded to nothing, producing `commits//statuses`. Th
 must be the same name in the same command, or the binding is a coincidence of spelling. Both bound checks
 now require the derivation *and* the expansion together, and the mutation above turns the suite red.
 
-The through-line across all four rounds is one idea: **a check that names the thing it forbids only catches
-that name.** Three times running, the fix for that was itself written one notch too narrow — a spelling, then
-a notation, then a variable read from the wrong scope. Guards on this path get a case table and a mutation
-run, not a green suite.
+**Fourth round: presence is not order.** CodeRabbit on `30e6cbee`. Requiring the assignment *and* the
+expansion still passed a command that expands `$PARENT1` first and assigns it afterwards — the variable is
+empty at the moment it is used, producing the same `commits//statuses` nothing. Two independent `.test()`
+calls cannot see sequence. `bindsBoundVar` now compares match positions and requires the assignment to
+precede its first expansion; moving the assignment to the end of the command turns the suite red.
+
+The through-line across all five rounds is one idea: **a check that names the thing it forbids only catches
+that name.** Four times running, the fix for that was itself written one notch too narrow — a spelling, then
+a notation, then a variable read from the wrong scope, then two facts with no order between them. Each round
+was found by a reviewer, not by the suite, because a green suite is exactly what each hole produced. Guards
+on this path get a case table and a mutation run, not a green suite.
 
 **Settled by Mason, 2026-08-22: `auto_pause_after_reviewed_commits: 2` stands, with the enforcement
 follow-up to come.** Codex's CRX-SEC-002 (Medium) argued it should not — fewer automatic reviews put

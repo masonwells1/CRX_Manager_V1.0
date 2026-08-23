@@ -194,11 +194,19 @@ for (const [name, file] of SKILLS) {
   // there and expands to nothing — `commits//statuses`. The assignment and the
   // use have to be the same name in the same command, or the "binding" is a
   // coincidence of spelling. (CodeRabbit, PR #441.)
-  const bindsBoundVar = (cmd, prefix) =>
-    Boolean(boundVar) &&
-    Boolean(cmd) &&
-    new RegExp(`\\b${boundVar}="\\$\\(git rev-parse <HEAD>\\^1\\)"`).test(cmd) &&
-    new RegExp(`${prefix}\\$(?:\\{${boundVar}\\}|${boundVar}\\b)`).test(cmd);
+  // Presence of both is still not enough — they have to be in that ORDER. A
+  // command that expands `$PARENT1` and assigns it afterwards satisfies two
+  // independent `.test()` calls while the variable is empty at the moment it is
+  // used, which is the same `commits//statuses` nothing as before. Compare match
+  // positions: the assignment must precede its first expansion.
+  // (CodeRabbit, PR #441.)
+  const bindsBoundVar = (cmd, prefix) => {
+    if (!boundVar || !cmd) return false;
+    const assign = cmd.match(new RegExp(`\\b${boundVar}="\\$\\(git rev-parse <HEAD>\\^1\\)"`));
+    const use = cmd.match(new RegExp(`${prefix}\\$(?:\\{${boundVar}\\}|${boundVar}\\b)`));
+    if (!assign || !use) return false;
+    return assign.index < use.index;
+  };
   ok(
     bindsBoundVar(parentLookup, 'grep -oE "and '),
     `${name}: the canonical-stamp lookup expands the same variable it derived, not a separately supplied value`,
