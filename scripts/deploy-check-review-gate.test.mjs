@@ -75,6 +75,13 @@ const noCommandMatching = (cmds, re) => !cmds.some((c) => re.test(c));
 // edited away, so precision here is what keeps it alive. (CodeRabbit, PR #441.)
 const EXPANSION_AFTER_CONTENTS = /contents\/[^\s]*(?:<[A-Za-z_]+>|<\(|>\(|\$|`)/;
 
+// Any placeholder that invites the operator to name what "reviewed" means —
+// <REVIEWED_SHA>, <REVIEWED_COMMIT>, <EXPECTED_REVIEWED_HEAD>, <KNOWN_GOOD_SHA>.
+// The parent's identity must be DERIVED from HEAD^1 and proven against a
+// CodeRabbit artifact; a value typed in by whoever runs the procedure is the
+// claim, not proof of it. (CodeRabbit, PR #441.)
+const OPERATOR_SUPPLIED_REVIEWED_PLACEHOLDER = /<[A-Z_]*(?:REVIEWED|KNOWN_GOOD|TRUSTED|VERIFIED)[A-Z_]*>/;
+
 for (const [name, file] of SKILLS) {
   const cmds = bashCommands(readFileSync(file, "utf8"));
   ok(cmds.length > 0, `${name}: bash commands were extracted from the skill`);
@@ -142,13 +149,22 @@ for (const [name, file] of SKILLS) {
   // operator supplied — an unreviewed parent labelled <REVIEWED_SHA> would pass
   // all three tree checks, and the merge commit itself carries no stamp by
   // design. (Codex CRX-SEC-001, High, PR #441.)
+  // Match the CONCEPT, not one spelling: an earlier revision rejected only the
+  // literal `<REVIEWED_SHA>`, so renaming it `<REVIEWED_COMMIT>` or
+  // `<EXPECTED_REVIEWED_HEAD>` would have restored the hole with a green suite.
   ok(
-    noCommandWithAll(cmds, ["<REVIEWED_SHA>"]),
-    `${name}: no check compares HEAD^1 to an operator-supplied "reviewed" SHA`,
+    noCommandMatching(cmds, OPERATOR_SUPPLIED_REVIEWED_PLACEHOLDER),
+    `${name}: no check compares HEAD^1 to an operator-supplied "reviewed" identifier, under any name`,
+  );
+  // The parent must be DERIVED, and the derived value must be what the review
+  // lookup consumes.
+  ok(
+    hasCommandWithAll(cmds, ["git rev-parse <HEAD>^1"]),
+    `${name}: the parent SHA is derived from HEAD^1, not supplied`,
   );
   ok(
     hasCommandWithAll(cmds, ["issues/<n>/comments", 'grep -oE "and <PARENT1>"']),
-    `${name}: HEAD^1 is itself run through the canonical-stamp review gate`,
+    `${name}: the derived parent is what the canonical-stamp review lookup consumes`,
   );
   ok(
     hasCommandWithAll(cmds, ["git merge-tree --write-tree", "<HEAD>^{tree}", "MERGE_ADDED_NOTHING"]),
