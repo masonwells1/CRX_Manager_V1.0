@@ -4,21 +4,36 @@
 -- WHY. EXECUTE on save_job is granted to `authenticated`, so any logged-in user can call
 -- it directly. Until now save_job took total_cost_cents / total_price_cents straight from
 -- the caller's payload, and inserted job_chemicals rows without ever comparing the rate's
--- unit against the unit the price is quoted in. The React page guards both (JobDetail.tsx,
--- chemLineBillingHazard) -- but a client-side guard is early warning, not a boundary. A
--- stale browser tab, a replayed request, or a direct RPC call bypassed it entirely.
+-- unit against the unit the price is quoted in. Nothing anywhere refused the bad shape.
 --
 -- The live trigger this closes: a 'Dry oz' rate against pound-priced stock invoices 16x,
 -- because transfer_job_to_invoice multiplies quantity x price_per_unit_cents with NO
 -- conversion.
 --
+-- THIS IS A REAL BEHAVIOUR CHANGE, NOT A MIRROR OF AN EXISTING CLIENT GUARD. Read this
+-- before approving an apply:
+--   * As of this file, `main` has NO save-blocking unit guard in JobDetail.tsx. The
+--     client-side counterpart (chemLineBillingHazard / rateDenominatorIsUnrecognized /
+--     the exact-cents centsTimesQuantity) exists only on the UNMERGED PR #436 branch. An
+--     earlier draft of this header claimed parity with those functions; that claim was
+--     false and is retracted.
+--   * Worse, reconcileChemAutofillUnits (src/lib/chemCalculator.ts) has a documented
+--     "SAFE FALLBACK: keep the STOCK unit" path that MANUFACTURES the refused shape --
+--     including the 16x dry-oz/lb case above. The page creates these rows today.
+--   * Consequence: applied before PR #436 lands, the first operator to hit this gets a
+--     hard save failure, with no prior on-screen warning, on a job the UI showed as fine.
+--     Because performSave always re-sends the whole chemical grid, ONE bad legacy line
+--     makes the entire job unsaveable -- they cannot even edit its memo -- until that
+--     chemical line is corrected.
+--   * ORDERING REQUIREMENT: land PR #436 (client warning + exact client money math)
+--     BEFORE applying this migration.
+--
 -- WHAT CHANGES -- three things, and nothing else:
 --   1. A chemical line whose units provably disagree is REFUSED, naming the product and
---      both units. The predicate mirrors chemLineBillingHazard exactly, so nothing the
---      page accepts today becomes unsaveable.
---   2. A rate unit measured per something OTHER than acres ('oz/cwt') is REFUSED. The
---      quantity = rate x acres derivation is meaningless for such a unit, and the page
---      already refuses it (rateDenominatorIsUnrecognized).
+--      both units.
+--   2. A rate unit measured per something OTHER than acres is REFUSED, in BOTH the slash
+--      form ('oz/cwt') and the spelled-out form ('oz per cwt'). The quantity = rate x
+--      acres derivation is meaningless for such a unit.
 --   3. total_cost_cents / total_price_cents are DERIVED here from p_chemicals via
 --      safe_cents_qty, and the caller-supplied totals are IGNORED. This is what makes a
 --      stale tab harmless: the totals can no longer disagree with the stored lines.
@@ -124,7 +139,10 @@ BEGIN
     FROM jsonb_array_elements(COALESCE(p_fields, '[]'::jsonb)) f;
 
   FOR v_chem IN SELECT * FROM jsonb_array_elements(COALESCE(p_chemicals, '[]'::jsonb)) LOOP
-    -- A row with no product is a blank grid line; the page skips it and so do we.
+    -- A row with no product cannot be checked: the conversion needs products.product_form.
+    -- It is not silently accepted either -- job_chemicals.product_id is NOT NULL, so such a
+    -- row aborts the whole save at the INSERT below. (buildJobChemicalsPayload does NOT
+    -- filter these out, so this is a real path, not a theoretical one.)
     CONTINUE WHEN COALESCE(v_chem->>'product_id', '') = '';
 
     v_raw_rate_unit := lower(btrim(COALESCE(v_chem->>'rate_unit', '')));
@@ -132,10 +150,17 @@ BEGIN
     -- (2) A rate measured per something other than an acre. 'quantity = rate x acres'
     -- cannot be derived from it, so the quantity is simply the wrong amount. Refused
     -- rather than silently treated as per-acre.
+    --
+    -- BOTH denominator spellings are caught. Checking only for '/' left a real hole
+    -- (Codex P1): 'oz per cwt' has no slash, so it fell through to the unit comparison --
+    -- and when `unit` carried the SAME text it compared EQUAL and the row was accepted,
+    -- with its quantity already derived as rate x acres against a denominator that is not
+    -- acres. The word form is therefore refused too. A genuine per-acre rate in either
+    -- spelling ('pt/ac', 'gal per acre') is excluded first and is unaffected.
     IF v_raw_rate_unit <> ''
        AND v_raw_rate_unit !~ '\s*/\s*(ac|acre|acres|a)\s*$'
        AND v_raw_rate_unit !~ '\s+per\s+acre$'
-       AND position('/' IN v_raw_rate_unit) > 0 THEN
+       AND (position('/' IN v_raw_rate_unit) > 0 OR v_raw_rate_unit ~ '\s+per\s+') THEN
       SELECT p.product_name INTO v_product_name
         FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
       RAISE EXCEPTION
@@ -151,12 +176,22 @@ BEGIN
     v_qty_unit  := normalize_rate_unit(v_rate_base);
     v_price_unit := normalize_rate_unit(v_chem->>'unit');
 
-    -- Blank or unrecognised on either side proves nothing, so nothing is claimed.
+    -- BLANK on either side proves nothing, so nothing is claimed and the row passes.
+    -- Note precisely what this does NOT do: normalize_rate_unit returns NULL only for
+    -- BLANK input; an UNRECOGNISED unit comes back as itself (its ELSE branch). So an
+    -- unrecognised unit is NOT skipped here -- it flows on, field_app_priced_quantity
+    -- cannot size it, and the row is REFUSED. That is deliberate (an unpriceable unit
+    -- must not bill), but it also means a metric pair such as 'g/ac' against 'kg' is
+    -- refused even though the conversion is arithmetically well defined, because the
+    -- live size tables carry no metric entries. Widening them is a separate change.
     CONTINUE WHEN v_qty_unit IS NULL OR v_price_unit IS NULL;
     CONTINUE WHEN v_qty_unit = v_price_unit;
 
+    -- Only a finite, positive quantity can be proven or disproven. NaN and Infinity are
+    -- both skipped here (NaN > 0 is TRUE in PostgreSQL, so this must be written as a
+    -- finite-range test, not as a NaN test plus <= 0).
     v_qty := COALESCE(NULLIF(v_chem->>'quantity','')::numeric, 0);
-    CONTINUE WHEN v_qty = 'NaN'::numeric OR v_qty <= 0;
+    CONTINUE WHEN NOT (v_qty > 0 AND v_qty < 'Infinity'::numeric);
 
     SELECT p.product_name, lower(COALESCE(p.product_form, ''))
       INTO v_product_name, v_form
@@ -175,17 +210,32 @@ BEGIN
       END IF;
     END IF;
 
+    -- The remedy text must not teach a quieter version of the same bug. An earlier draft
+    -- said only "Set Unit to <qty_unit>" -- but changing the unit while LEAVING the
+    -- per-pound cost and price in place applies a per-pound price per ounce: a 16x
+    -- UNDER-bill that also silences this guard, because the units then agree. Both
+    -- branches now say explicitly which numbers must be re-entered.
     RAISE EXCEPTION
-      'CHEM_UNIT_MISMATCH: % is measured in % but its cost and price are quoted per %. Set Unit to %, or change the rate unit to %/ac and re-enter the rate.',
-      COALESCE(v_product_name, 'This product'), v_qty_unit, v_price_unit, v_qty_unit, v_price_unit;
+      'CHEM_UNIT_MISMATCH: % is measured in % but its cost and price are quoted per %. Either set Unit to % AND re-enter the cost and price per %, or change the rate unit to %/ac AND re-enter the rate. Changing one without the other bills the wrong amount.',
+      COALESCE(v_product_name, 'This product'), v_qty_unit, v_price_unit, v_qty_unit, v_qty_unit, v_price_unit;
   END LOOP;
 
   -- ==========================================================================
   -- (3) DERIVED MONEY TOTALS. The caller's total_cost_cents / total_price_cents are
-  -- ignored outright. safe_cents_qty is the same exact-cents multiply the page's
-  -- centsTimesQuantity reproduces (exact numeric multiply, ROUND half away from zero),
-  -- rounded PER LINE and then summed -- the same order the page uses, so the two agree
-  -- to the cent. customer_supplied product is applied but not billed, contributing 0.
+  -- ignored outright. safe_cents_qty is an EXACT numeric multiply with ROUND half away
+  -- from zero, applied PER LINE and then summed. customer_supplied product is applied
+  -- but not billed, contributing 0.
+  --
+  -- THE PAGE AND THIS DO NOT AGREE TO THE CENT, and an earlier draft of this comment
+  -- wrongly said they did. On `main`, JobDetail.tsx computes its displayed totals as
+  -- Math.round(parseFloat(qty) * parseInt(cents)) -- IEEE-754 binary multiply, and
+  -- Math.round is half-UP, not half-away-from-zero. Two divergences follow: float
+  -- representation error (25c x 0.58 displays 14c, exact arithmetic gives 15c) and
+  -- negative half-cents. From here on the SERVER value is the authoritative one and is
+  -- what transfer_job_to_invoice bills, so the money is right -- but until PR #436 lands
+  -- the exact-cents client path, the operator can see a figure one cent off what is
+  -- stored. Per-line-then-sum ordering DOES match the page; only the arithmetic base
+  -- differs. This is the second reason PR #436 is an ordering prerequisite.
   -- ==========================================================================
   SELECT
     COALESCE(SUM(
@@ -268,7 +318,7 @@ BEGIN
         THEN (p_job_payload->>'vehicle_id')::uuid ELSE NULL END,
       recipe_id = CASE WHEN p_job_payload->>'recipe_id' IS NOT NULL AND p_job_payload->>'recipe_id' != ''
         THEN (p_job_payload->>'recipe_id')::uuid ELSE NULL END,
-      -- U3 (Codex R3 P2): three-way -- key ABSENT (stale/cached client on the old
+      -- U3 (Codex R3 P2): three-way — key ABSENT (stale/cached client on the old
       -- payload shape) preserves the saved service; key present-but-empty is an
       -- explicit clear; a uuid sets it. Prevents an old client's ordinary save
       -- from silently wiping a billing-impacting field.
@@ -320,7 +370,7 @@ BEGIN
   -- Replace per-field customer shares. Each field's shares must total 100%
   -- (mirrors the field-app split invariant so section #26 can split cleanly).
   -- A share whose field_id is NOT one of the job's fields (a stale defaults
-  -- response or a hand-built payload) is REJECTED -- otherwise the Jobs list /
+  -- response or a hand-built payload) is REJECTED — otherwise the Jobs list /
   -- the #26 split would surface a customer/field that is not on the job (Codex P2).
   DELETE FROM job_field_shares WHERE job_id = v_job_id;
   IF p_job_payload->'field_shares' IS NOT NULL THEN
@@ -403,6 +453,63 @@ BEGIN
   RETURN v_result;
 END;
 $function$;
+
+-- =============================================================================
+-- POSTFLIGHT. Assert that the replacement kept every security property the
+-- pre-change function had. CREATE OR REPLACE preserves owner and ACLs, but that
+-- is a property to VERIFY, not to assume -- rows 888-890 assert the same set for
+-- the same reason.
+-- =============================================================================
+DO $postflight$
+DECLARE
+  v_oid     oid;
+  v_count   integer;
+  v_secdef  boolean;
+  v_config  text[];
+  v_acl     text;
+BEGIN
+  v_oid := to_regprocedure(format('%I.%I(uuid,jsonb,jsonb,jsonb,uuid,text)', 'public', 'save' || '_job'));
+  IF v_oid IS NULL THEN
+    RAISE EXCEPTION 'POSTFLIGHT_MISSING: the six-argument job-save RPC is absent after replacement.';
+  END IF;
+
+  SELECT count(*) INTO v_count
+    FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace
+     AND p.proname = (SELECT proname FROM pg_proc WHERE oid = v_oid);
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_OVERLOAD: expected exactly 1 overload after replacement, found % -- a second overload silently splits callers.', v_count;
+  END IF;
+
+  SELECT p.prosecdef, p.proconfig, COALESCE(array_to_string(p.proacl, ','), '')
+    INTO v_secdef, v_config, v_acl
+    FROM pg_proc p WHERE p.oid = v_oid;
+
+  IF NOT v_secdef THEN
+    RAISE EXCEPTION 'POSTFLIGHT_NOT_SECURITY_DEFINER: the replacement dropped SECURITY DEFINER.';
+  END IF;
+
+  IF v_config IS NULL OR NOT ('search_path=public, pg_temp' = ANY (v_config)) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_SEARCH_PATH: expected a pinned search_path, found %', COALESCE(array_to_string(v_config, ','), '<none>');
+  END IF;
+
+  IF NOT has_function_privilege('authenticated', v_oid, 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_GRANT_LOST: authenticated no longer holds EXECUTE; the app would break.';
+  END IF;
+  IF NOT has_function_privilege('service_role', v_oid, 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_GRANT_LOST: service_role no longer holds EXECUTE.';
+  END IF;
+
+  -- anon must never reach a SECURITY DEFINER write path, and the default PUBLIC
+  -- grant must stay revoked. A bare "=X/" entry in the ACL is the PUBLIC grant.
+  IF has_function_privilege('anon', v_oid, 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_ANON_EXECUTE: anon holds EXECUTE on a SECURITY DEFINER write path.';
+  END IF;
+  IF v_acl ~ '(^|,)=X/' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_PUBLIC_EXECUTE: PUBLIC holds EXECUTE (acl=%)', v_acl;
+  END IF;
+END
+$postflight$;
 
 COMMENT ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) IS
   'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side (a line whose rate unit and price unit provably disagree is refused, as is a rate measured per anything but acres) and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. The React guard in JobDetail.tsx is early warning; this is the boundary.';

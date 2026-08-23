@@ -7,31 +7,60 @@ All significant development milestones, in reverse chronological order.
 `EXECUTE` on `save_job` is granted to `authenticated`. Every logged-in user can therefore call it
 directly, and the old body took `total_cost_cents` / `total_price_cents` straight out of the
 caller's payload with `COALESCE` and inserted `job_chemicals` rows without ever comparing `unit`
-against `rate_unit`. The Dry-oz/Lb 16x billing guard shipped on PR #436 lives entirely in
-`JobDetail.tsx`, so a stale browser tab, a replayed request, or a hand-built RPC call walked past
-it. That is the standing adversarial-review finding — *the financial/unit invariant is enforced
-only in React* — and a client-side check is early warning, not a boundary.
+against `rate_unit`. Nothing anywhere refused the bad shape. That is the standing
+adversarial-review finding — *the financial/unit invariant is enforced only in React* — except
+that on `main` it is not enforced in React either.
 
-One new migration, `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-(authored 2026-08-22; the file keeps a 2026-08-20 sequence stamp, which is what the disk ordering
-guard keys on, and it still sorts after every existing candidate). `CREATE OR REPLACE` on the
-**identical six-argument signature** — a body replacement, never a new overload, so the frozen
-contract `JobDetail.tsx:2351` depends on is untouched and the existing grants are preserved.
+**Read this before approving an apply: it is a real behaviour change, and PR #436 must land
+first.** `main` has no save-blocking unit guard in `JobDetail.tsx`. The client-side counterpart
+(`chemLineBillingHazard`, `rateDenominatorIsUnrecognized`, and the exact-cents
+`centsTimesQuantity`) exists only on the **unmerged** PR #436 branch. Worse,
+`reconcileChemAutofillUnits` has a documented "SAFE FALLBACK: keep the STOCK unit" path that
+actively *creates* the refused shape — including the 16x dry-oz-on-pound-stock case. Applied
+first, the first operator to hit this gets a hard save failure with no prior on-screen warning, on
+a job the app showed as fine; and because the page re-sends the whole chemical grid on every save,
+one bad legacy line makes the entire job unsaveable — they cannot even edit its memo — until that
+line is corrected. Earlier drafts of this entry claimed the predicate mirrored those client
+functions "condition for condition" and that "nothing the page accepts today becomes unsaveable".
+Both were false, all four review gates caught it, and both are retracted.
+
+Two new migrations, applied in that order in one session:
+`20260820115900_pin_save_job_body_before_chem_unit_invariant.sql` — a read-only preflight that
+refuses to proceed unless the installed body is the one that was reviewed — and
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`. Authored 2026-08-22,
+revised 2026-08-23; the files keep 2026-08-20 sequence stamps, which is what the disk ordering
+guard keys on, and they still sort after every existing candidate. The second is a
+`CREATE OR REPLACE` on the **identical six-argument signature** — a body replacement, never a new
+overload, so the frozen contract `JobDetail.tsx` depends on is untouched and the existing grants
+are preserved. A postflight block then re-asserts exactly that: one overload, `SECURITY DEFINER`,
+pinned `search_path`, `authenticated` and `service_role` still holding EXECUTE, and neither `anon`
+nor `PUBLIC` holding it.
 
 - **A line whose units provably disagree is refused** (`CHEM_UNIT_MISMATCH`), naming the product
-  and both units. The predicate mirrors `chemLineBillingHazard` condition for condition, so nothing
-  the page accepts today becomes unsaveable: it skips a row with no product, skips when either
-  normalized unit is blank or unrecognised, skips when they are equal, skips a NaN or non-positive
-  quantity, and treats `quantity = rate x acres` carried into the price's unit as the *only* proof
-  of safety, at the client's own tolerance. Acreage is summed from `p_fields`, mirroring
-  `sumAcres(fieldRows)` — deliberately not the caller-supplied `total_acres`.
-- **A rate measured per anything but an acre is refused** (`CHEM_RATE_DENOMINATOR_NOT_ACRES`),
-  matching the page's `rateDenominatorIsUnrecognized`. This one step goes beyond the literal plan
+  and both units. It skips a row with no product, skips when either normalized unit is blank,
+  skips when they are equal, skips a non-finite or non-positive quantity, and treats
+  `quantity = rate x acres` carried into the price's unit as the *only* proof of safety. Note what
+  it does **not** do: an *unrecognised* unit is not skipped — it cannot be sized, so the line is
+  refused. That is deliberate (an unpriceable unit must not bill), but it also means a metric pair
+  such as `g/ac` against `kg` is refused even though the conversion is well defined, because the
+  live size tables carry no metric entries. Acreage is summed from `p_fields` — deliberately not
+  the caller-supplied `total_acres`.
+- **A rate measured per anything but an acre is refused** (`CHEM_RATE_DENOMINATOR_NOT_ACRES`), in
+  both the slash form (`oz/cwt`) and the spelled-out form (`oz per cwt`). Testing only for a slash
+  was a real hole that Codex caught: a spelled-out denominator whose `unit` carries the same text
+  normalizes *equal*, so the row sailed through with a quantity already derived against a
+  denominator that is not acres. This one step goes beyond the literal plan
   and is called out rather than slipped in: leaving it client-only would let the review gate
   legitimately re-raise the very finding this migration exists to close.
 - **The money totals are derived here**, from `p_chemicals` via `safe_cents_qty`, rounded per line
-  then summed — the same order the page's `centsTimesQuantity` uses — and the caller's totals are
-  ignored outright. That is what makes a stale tab harmless.
+  then summed, and the caller's totals are ignored outright. That is what makes a stale tab
+  harmless. The page and the server do **not** agree to the cent, and an earlier draft wrongly
+  said they did: `main` computes the displayed totals with `Math.round(parseFloat(qty) *
+  parseInt(cents))` — binary float, half-up — against exact decimal, half-away-from-zero here.
+  25c x 0.58 displays 14c and stores 15c. Per-line-then-sum ordering *does* match; only the
+  arithmetic base differs. The stored value is authoritative and is what the invoice bills, so the
+  money is right — but the on-screen figure can be a cent off until PR #436 lands the exact-cents
+  client path. Second reason that PR goes first.
 
 The live unit tables are **reused, not reimplemented** (`normalize_rate_unit`,
 `field_app_priced_quantity`, `safe_cents_qty`). Divergence between the client's copy of the unit
@@ -41,15 +70,40 @@ table and the server's is the original 16x bug; a second server-side copy would 
 database pass the new predicate — one has a NULL `unit`, two have `rate_unit = unit = 'oz'`, one has
 `quantity = 0` — and the derived totals reproduce every stored total to the cent.
 
-**Proof.** The file installs cleanly on stock PostgreSQL 15, and eight behaviour tests ran against
-it in a throwaway container over a real-shape schema whose three helper bodies were copied verbatim
-from the live catalog: the three live row shapes save with totals matching live exactly (including
-`55 x 3752.64 = 206395.2`, pinning ROUND-half-away-from-zero against the page's BigInt math), a
-legitimate oz-rate/lb-price conversion saves, the 16x shape is refused, an `oz/cwt` rate is refused,
-a caller claiming totals of 1 cent still stores the derived `187632` / `206395`, and the two refused
-saves leave no `jobs` or `job_chemicals` row behind. Both halves are mutation-pinned — disabling the
-unit comparison lets the 16x line save, and restoring the caller-supplied cost total turns the money
-assertions red — restored after.
+**Proof — committed and re-runnable, not asserted.** `node
+scripts/smoke/prove-save-job-chem-unit-invariant.mjs`, with fixtures under
+`scripts/smoke/fixtures/`. The first version of this work claimed "eight behaviour tests passed"
+with nothing committed to run, so no reviewer could re-run or falsify it; that gap was itself a
+review finding. It runs on **PostgreSQL 17**, matching production's 17.6 — the earlier run used
+15, two majors behind, and said so nowhere.
+
+Seven phases: the real-shape schema loads with the three helper bodies copied verbatim from the
+live catalog; a stub is installed carrying production's real permissions so the postflight is
+asserting against the shape production actually has; the preflight pin **refuses** an unreviewed
+body; the migration applies and its postflight passes; the preflight is then a no-op, proving it
+is safely re-runnable; ten behaviour tests pass; and three mutation phases each turn the suite red
+— disabling the unit comparison, restoring the caller-supplied total, and removing the
+spelled-out-denominator rule. A test that still passes against a broken guard is not holding that
+guard up, which is the whole point of the mutation phases.
+
+The ten tests: the three live row shapes save with derived totals reproducing the live stored
+values exactly; a legitimate oz-rate/lb-price conversion saves; the 16x shape is refused *and* its
+remedy text is asserted to name both numbers the operator must re-enter; `oz/cwt` and `lb per cwt`
+are both refused; `gal per acre` still saves; a caller claiming totals of 1 cent still stores
+`187632` / `206395`; and the three refused saves leave no `jobs` or `job_chemicals` row behind.
+
+**Retracted from the earlier draft:** that `55 x 3752.64 = 206395.2` "pins
+ROUND-half-away-from-zero". A `.2` fraction rounds down under every rounding mode, so it pins
+nothing about rounding, and the companion figure is exact. Both are kept because they reproduce
+live stored values, which is what they actually prove.
+
+**The registered smoke chain is fixed in the same commit.** `scripts/smoke/smoke-save-job-parity.sql`
+carried a chemical line of 240 *pints* recorded as 240 *gallons* and priced per gallon — an 8x
+over-bill sitting in the repo's own parity fixture, unnoticed for as long as it has existed,
+because nothing on either side of the wire compared the two units. The new invariant refuses
+exactly that shape, which is how it was found. Corrected to 30 GL, with new assertions for the
+derived totals and both refusals, all gated on whether the migration is installed so the chain
+stays green while it is parked.
 
 No frontend change; the React guard stays as early warning. **Parked: not applied to production.**
 An interactive session still needs Mason's explicit in-chat approval for a live apply.

@@ -103,7 +103,14 @@ BEGIN
   );
 
   v_chems := jsonb_build_array(
-    jsonb_build_object('product_id', v_prod_a, 'quantity', 240, 'unit', 'GL', 'rate_per_acre', 1.5, 'rate_unit', 'pt/ac',
+    -- Chem A carries a pt/ac rate against GL-priced stock, so its quantity must be the
+    -- rate CARRIED INTO GALLONS: 1.5 pt/ac x 160 ac = 240 pt = 30 GL.
+    -- It said 240 until 2026-08-23 -- i.e. 240 PINTS recorded as 240 GALLONS, priced per
+    -- gallon: an 8x over-bill sitting in the repo's own parity fixture, unnoticed because
+    -- nothing on either side of the wire compared the two units. The server-side invariant
+    -- in 20260820120000 refuses exactly this shape, which is how the fixture was found.
+    -- Do NOT "fix" a future failure here by loosening the guard; fix the numbers.
+    jsonb_build_object('product_id', v_prod_a, 'quantity', 30, 'unit', 'GL', 'rate_per_acre', 1.5, 'rate_unit', 'pt/ac',
                        'cost_per_unit_cents', 1250, 'price_per_unit_cents', 1800,
                        'diluent_rate', 10, 'rei_hours', 24, 'phi_days', 7, 'warehouse', 'Main', 'vendor', 'Acme Chem', 'sort_order', 0),
     jsonb_build_object('product_id', v_prod_b, 'quantity', 80, 'unit', 'LB', 'rate_per_acre', 0.5, 'rate_unit', 'lb/ac',
@@ -130,6 +137,36 @@ BEGIN
   -- ============================================ 3) remaining_acres GENERATED
   -- applied_acres defaults 0, so remaining == total (160).
   IF v_jrow.remaining_acres <> 160 THEN RAISE EXCEPTION 'FAIL: remaining_acres % (expected 160)', v_jrow.remaining_acres; END IF;
+
+  -- ============================================ 3b) DERIVED MONEY TOTALS
+  -- Gated on whether 20260820120000 is actually installed, because this chain runs
+  -- against live and that migration is PARKED. Asserting unconditionally would turn
+  -- the registered smoke red today for a change that has not been applied yet.
+  SELECT position('CHEM_UNIT_MISMATCH' IN p.prosrc) INTO v_n
+    FROM pg_proc p
+   WHERE p.oid = to_regprocedure(format('%I.%I(uuid,jsonb,jsonb,jsonb,uuid,text)', 'public', 'save' || '_job'));
+
+  IF v_n > 0 THEN
+    -- The payload above deliberately CLAIMS 200000 / 350000. Those are lies, and the
+    -- point of 20260820120000 is that the server no longer believes them: it derives
+    -- both totals from the chemical lines with safe_cents_qty.
+    --   cost  = 1250 x 30 + 400 x 80 =  37500 + 32000 =  69500
+    --   price = 1800 x 30 + 650 x 80 =  54000 + 52000 = 106000
+    IF v_jrow.total_cost_cents <> 69500 THEN
+      RAISE EXCEPTION 'FAIL: total_cost_cents % (expected derived 69500, NOT the payload 200000)', v_jrow.total_cost_cents;
+    END IF;
+    IF v_jrow.total_price_cents <> 106000 THEN
+      RAISE EXCEPTION 'FAIL: total_price_cents % (expected derived 106000, NOT the payload 350000)', v_jrow.total_price_cents;
+    END IF;
+  ELSE
+    -- Pre-apply the caller's totals are stored verbatim. Pin THAT, so the branch is
+    -- not a silent no-op that could hide a regression while the migration is parked.
+    IF v_jrow.total_cost_cents <> 200000 OR v_jrow.total_price_cents <> 350000 THEN
+      RAISE EXCEPTION 'FAIL: pre-apply totals % / % (expected the caller-supplied 200000 / 350000)',
+        v_jrow.total_cost_cents, v_jrow.total_price_cents;
+    END IF;
+    RAISE NOTICE 'SMOKE_NOTE: 20260820120000 is not applied; derived-total and unit-refusal assertions are SKIPPED.';
+  END IF;
 
   -- ============================================ ASSERT job_fields agronomy
   SELECT * INTO v_jf FROM job_fields WHERE job_id = v_job AND field_id = v_field_1;
@@ -204,6 +241,52 @@ BEGIN
           RAISE EXCEPTION 'FAIL: forged actor raised wrong error: %', SQLERRM;
         END IF;
     END;
+  END IF;
+
+  -- ============================================ 7) CHEM-UNIT INVARIANT (20260820120000)
+  -- Same gate as step 3b: only assert the refusals once the migration is installed.
+  SELECT position('CHEM_UNIT_MISMATCH' IN p.prosrc) INTO v_n
+    FROM pg_proc p
+   WHERE p.oid = to_regprocedure(format('%I.%I(uuid,jsonb,jsonb,jsonb,uuid,text)', 'public', 'save' || '_job'));
+
+  IF v_n > 0 THEN
+  -- The 16x shape: a pt/ac rate whose quantity is counted in PINTS while cost and price
+  -- are quoted per GALLON. This is what chem A wrongly looked like before 2026-08-23.
+  BEGIN
+    v_res2 := save_job(NULL, v_payload, v_fields,
+      jsonb_build_array(
+        jsonb_build_object('product_id', v_prod_a, 'quantity', 240, 'unit', 'GL',
+                           'rate_per_acre', 1.5, 'rate_unit', 'pt/ac',
+                           'cost_per_unit_cents', 1250, 'price_per_unit_cents', 1800, 'sort_order', 0)
+      ), v_admin, NULL);
+    RAISE EXCEPTION 'FAIL: a pint quantity priced per gallon did not raise CHEM_UNIT_MISMATCH';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM NOT LIKE 'CHEM_UNIT_MISMATCH%' THEN
+        RAISE EXCEPTION 'FAIL: unit mismatch raised wrong error: %', SQLERRM;
+      END IF;
+  END;
+
+  -- A rate measured per something other than an acre, in the spelled-out form. The
+  -- slash form is the obvious one; 'per cwt' is the one that slipped through review.
+  BEGIN
+    v_res2 := save_job(NULL, v_payload, v_fields,
+      jsonb_build_array(
+        jsonb_build_object('product_id', v_prod_b, 'quantity', 80, 'unit', 'LB',
+                           'rate_per_acre', 0.5, 'rate_unit', 'lb per cwt',
+                           'cost_per_unit_cents', 400, 'price_per_unit_cents', 650, 'sort_order', 0)
+      ), v_admin, NULL);
+    RAISE EXCEPTION 'FAIL: a per-cwt rate did not raise CHEM_RATE_DENOMINATOR_NOT_ACRES';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM NOT LIKE 'CHEM_RATE_DENOMINATOR_NOT_ACRES%' THEN
+        RAISE EXCEPTION 'FAIL: per-cwt rate raised wrong error: %', SQLERRM;
+      END IF;
+  END;
+
+  -- A refusal must leave nothing behind: still exactly the one job from step 1.
+  SELECT count(*) INTO v_n FROM jobs WHERE consultant_id = v_admin AND job_date = v_job_date AND customer_id = v_cust_a AND job_number LIKE 'JOB-%';
+  IF v_n <> 1 THEN RAISE EXCEPTION 'FAIL: a refused save left a job row behind (% found)', v_n; END IF;
   END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';

@@ -276,6 +276,13 @@ to live**) makes `save_job` refuse a chemical line whose rate unit has a non-acr
 failure at billing — into a refusal at save time, naming the product and the offending unit. Proven
 in a throwaway container: an `oz/cwt` line is refused and leaves no `jobs` or `job_chemicals` row.
 
+**Both spellings are covered, and the word form is a new finding.** The migration refuses `oz/cwt`
+*and* `oz per cwt`. A slash-only test was the first draft and Codex blocked it (P1, 2026-08-23): a
+spelled-out denominator whose `unit` carries the same text normalizes EQUAL, so the row was
+accepted with its quantity already derived against a non-acre denominator. **The same gap exists
+in the client half on PR #436** — `rateDenominatorIsUnrecognized` ends in `return raw.includes('/')`,
+so it does not flag `oz per cwt` either. That is unfixed and belongs to PR #436.
+
 **Still open after that migration applies:** (a) `baseUnitOfRate` itself still collapses `oz/cwt` to
 `oz` on the client — the guard that stops such a row reaching `save_job` (`rateDenominatorIsUnrecognized`
 in `chemRowDefects`) rides on PR #436 and is **not on `main`**, so until that PR lands the operator
