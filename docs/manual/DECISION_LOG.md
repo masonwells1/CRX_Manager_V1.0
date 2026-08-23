@@ -319,6 +319,47 @@ fewer wasted review attempts.
 
 ---
 
+## 2026-08-20 — The project no longer pins `autoCompactWindow`; the user-level value governs
+
+**Source:** Mason's in-chat decision, 2026-08-20, while setting up switchable context profiles.
+
+**The problem.** `.claude/settings.json` carried `"autoCompactWindow": 500000` at the top level.
+Per the settings precedence chain (managed → CLI args → `settings.local.json` → `settings.json` →
+`~/.claude/settings.json`), that project value **beats** the user-level setting. The practical
+effect: running `/autocompact <n>` inside this repo appeared to succeed but changed nothing,
+because `/autocompact` writes to *user* settings, which the project file then overrode. The
+threshold was effectively frozen at 500k for every session in this repository.
+
+A second effect: the pin shortened the usable stretch before summarization. `autoCompactWindow`
+is a compaction *trigger*, not a ceiling on the model's context window — the window is set by the
+model and provider, not by this setting, and the pin does not change it. Capacity is 200K by
+default; 1M is available only where the model and route support it (native support, a `[1m]`
+alias, or gateway routing), so treat the suffix as a request that may be a no-op rather than a
+universal switch. On a session that *did* have 1M, the 500k pin still summarized at half the
+available room, so the span of unsummarized conversation was far shorter than the model could
+actually hold.
+
+**Decision.** Remove the `autoCompactWindow` key from `.claude/settings.json` entirely. The
+project no longer expresses an opinion on the compaction threshold; the user-level value in
+`~/.claude/settings.json` governs, and `/autocompact` works as documented inside this repo.
+
+**Operative rule.** Do not reintroduce a top-level `autoCompactWindow` into
+`.claude/settings.json` or `.claude/settings.local.json`. A project-level pin silently disables
+per-session threshold control for everyone working in the repo, including every parallel
+worktree. If a future task genuinely needs a fixed threshold, use the `--autocompact` flag, which
+applies only to the session it launches, or `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. Mind the scope
+difference on the environment variable: set inline for one invocation it affects only that run,
+but **exported** into a shell profile or a CI environment it applies to every Claude Code session
+launched from there. It also sits at the top of the precedence chain — it overrides
+`/autocompact`, `--autocompact`, and any `autoCompactWindow` in a settings file — so an
+accidentally exported value is harder to notice than a project pin, not easier.
+
+**Not changed by this entry.** Nothing about model selection, effort level, or any guard is
+affected. This is a harness-configuration change only; no money, schema, RLS, or migration
+surface is touched.
+
+---
+
 ## 2026-08-20 — Draw-down intent cutover keeps the 24-hour zero-receipt freeze
 
 **Source:** Engineering fail-closed design choice, 2026-08-20. The 24-hour freeze window still
@@ -326,7 +367,9 @@ requires Mason's scheduling approval before any separately authorized live apply
 **Decision:** Keep the pending draw-down intent migration's fail-closed requirement that no
 unexpired legacy draw receipt exists before cutover; because receipts live for 24 hours, schedule a
 deliberate 24-hour no-successful-draw window before any separately authorized apply.
-**Why:** The shared retry helper would refuse each legacy receipt safely, but a planned off-season or
+**Why:** The shared retry helper would handle each legacy receipt safely — an exact retry refuses the
+duplicate business write and returns the already-committed receipt, rather than erroring or returning
+nothing (`scripts/smoke/smoke-draw-down-quote-intent-binding.sql`) — but a planned off-season or
 weekend freeze gives the wrapper a clean invariant and removes ambiguity from a money/inventory cutover.
 **What this forbids/implies:** do not weaken the zero-receipt preflight to avoid the wait. Verify zero
 read-only, keep draws paused through commit, and obtain separate live-apply authority; this PR applies nothing.
