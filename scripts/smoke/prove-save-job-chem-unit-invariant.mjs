@@ -203,18 +203,22 @@ log(`PHASE 2 OK  the pinned md5 (${PINNED_MD5}) reproduces from 20260706080000`)
 // --- phase 3: drift is refused, AND the refusal is atomic ------------------------
 r = psqlCmd(STUB);
 if (!r.ok) fail("could not install the drift stub", r.out);
-const beforeDrift = psqlScalar(
-  "SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text)')");
-if (!beforeDrift.ok) fail("could not read the stub body md5", beforeDrift.out);
+// md5 AND exact octet length. "byte-for-byte unchanged" is a strong claim, and an md5 on
+// its own does not support it; pairing it with the length is what makes the wording honest
+// (compliance review, round 3).
+const BODY_FINGERPRINT =
+  "SELECT md5(prosrc) || ':' || octet_length(prosrc)::text FROM pg_proc " +
+  " WHERE pronamespace = 'public'::regnamespace AND proname = 'save_job' AND pronargs = 6";
+const beforeDrift = psqlScalar(BODY_FINGERPRINT);
+if (!beforeDrift.ok) fail("could not read the stub body fingerprint", beforeDrift.out);
 
 r = psqlFile("/tmp/migration.sql");
 if (r.ok) fail("the migration APPLIED over a body that is not the reviewed one", r.out);
 if (!/PREFLIGHT_BODY_DRIFT/.test(r.out)) {
   fail("the migration aborted, but not with PREFLIGHT_BODY_DRIFT", r.out);
 }
-const afterDrift = psqlScalar(
-  "SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text)')");
-if (!afterDrift.ok) fail("could not re-read the body md5 after the refused apply", afterDrift.out);
+const afterDrift = psqlScalar(BODY_FINGERPRINT);
+if (!afterDrift.ok) fail("could not re-read the body fingerprint after the refused apply", afterDrift.out);
 if (afterDrift.value !== beforeDrift.value) {
   fail(`NOT ATOMIC: the preflight refused, but the function body changed anyway ` +
        `(${beforeDrift.value} -> ${afterDrift.value}). The pin and the replacement are ` +
@@ -252,10 +256,20 @@ if (aclAfter.value !== "false,true,true") {
 }
 log("PHASE 4 OK  applied over a deliberately BAD ACL; anon revoked, authenticated + service_role granted, postflight passed");
 
-// --- phase 5: re-applying must be a no-op (safely replayable) --------------------
+// --- phase 5: re-applying must be safe (an identical re-install, not a skip) -----
+// Precise wording matters here. The marker arm only suppresses the drift RAISE; the
+// CREATE OR REPLACE, the grants, the postflight and the COMMENT all still execute. So a
+// replay REINSTALLS THE IDENTICAL BODY -- it does not skip. Calling that "a no-op" was a
+// review finding, because a reader would assume the second run touches nothing.
+const beforeReplay = psqlScalar(BODY_FINGERPRINT);
 r = psqlFile("/tmp/migration.sql");
 if (!r.ok) fail("the migration refused its own already-applied body; it is not replayable", r.out);
-log(`PHASE 5 OK  replay is a no-op via the "${MARKER}" marker`);
+const afterReplay = psqlScalar(BODY_FINGERPRINT);
+if (!beforeReplay.ok || !afterReplay.ok) fail("could not fingerprint the body around the replay");
+if (beforeReplay.value !== afterReplay.value) {
+  fail(`a replay changed the installed body (${beforeReplay.value} -> ${afterReplay.value})`);
+}
+log(`PHASE 5 OK  replay reinstalls the IDENTICAL body via the "${MARKER}" marker (same md5 and length)`);
 
 // --- phase 6: behaviour ---------------------------------------------------------
 r = psqlFile("/tmp/tests.sql");
@@ -307,6 +321,27 @@ const MUTANTS = [
     to: "IF false THEN",
     expect: "T12",
   },
+  // These two do not turn a behaviour test red -- they make the APPLY abort, which is the
+  // postflight doing its job. Without them the four security assertions were never
+  // exercised by anything (compliance review, round 3): the prover used to hand the
+  // container a correct ACL and a correct SECDEF declaration, so the tripwires could not
+  // fire even in principle.
+  {
+    name: "SECURITY DEFINER downgraded to INVOKER",
+    from: "SECURITY DEFINER\nSET search_path TO 'public', 'pg_temp'",
+    to: "SECURITY INVOKER\nSET search_path TO 'public', 'pg_temp'",
+    expectApplyAbort: "POSTFLIGHT_NOT_SECURITY_DEFINER",
+  },
+  {
+    name: "anon left holding EXECUTE",
+    from: "REVOKE EXECUTE ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) FROM anon;",
+    to: "",
+    // Staged deliberately: with the REVOKE removed, the mutant only differs from the real
+    // file on a database where anon actually holds the grant -- which is exactly the
+    // from-scratch-replay shape this statement exists for.
+    stage: "GRANT EXECUTE ON FUNCTION public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text) TO anon;",
+    expectApplyAbort: "POSTFLIGHT_ANON_EXECUTE",
+  },
 ];
 
 for (const m of MUTANTS) {
@@ -326,7 +361,30 @@ for (const m of MUTANTS) {
   copyIn(p, "/tmp/mutant.sql");
 
   rebuild(`mutant "${m.name}"`);
+  if (m.stage) {
+    const staged = psqlCmd(m.stage);
+    if (!staged.ok) fail(`could not stage the precondition for mutant "${m.name}"`, staged.out);
+  }
   const applied = psqlFile("/tmp/mutant.sql");
+
+  // Two shapes of mutant. Most must let the migration install and then turn a named
+  // behaviour test red. The security mutants must instead make the APPLY ITSELF abort,
+  // with the specific postflight assertion that is supposed to catch them.
+  if (m.expectApplyAbort) {
+    if (applied.ok) {
+      fail(`SECURITY TRIPWIRE NOT ARMED: with "${m.name}", the migration applied ` +
+           `successfully. The postflight assertion ${m.expectApplyAbort} did not fire, so ` +
+           `nothing is checking that property.`, applied.out);
+    }
+    if (!new RegExp(m.expectApplyAbort).test(applied.out)) {
+      fail(`MUTATION MIS-ATTRIBUTED: "${m.name}" aborted the apply, but not with ` +
+           `${m.expectApplyAbort}. Something else failed first, so this mutant proves ` +
+           `nothing about the assertion it was written for.`, applied.out);
+    }
+    log(`PHASE 7 OK  mutant "${m.name}" aborted the apply with ${m.expectApplyAbort} (as required)`);
+    continue;
+  }
+
   if (!applied.ok) fail(`mutant "${m.name}" would not install -- it was never exercised`, applied.out);
 
   const after = psqlFileLenient("/tmp/tests.sql");

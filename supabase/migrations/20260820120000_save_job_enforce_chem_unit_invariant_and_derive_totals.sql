@@ -260,17 +260,18 @@ BEGIN
     FROM jsonb_array_elements(COALESCE(p_fields, '[]'::jsonb)) f;
 
   FOR v_chem IN SELECT * FROM jsonb_array_elements(COALESCE(p_chemicals, '[]'::jsonb)) LOOP
-    -- A row with no product cannot be checked: the conversion needs products.product_form.
-    -- It is not silently accepted either -- job_chemicals.product_id is NOT NULL, so such a
-    -- row aborts the whole save at the INSERT below. (buildJobChemicalsPayload does NOT
-    -- filter these out, so this is a real path, not a theoretical one.)
-    CONTINUE WHEN COALESCE(v_chem->>'product_id', '') = '';
-
-    -- QUANTITY MUST BE FINITE AND NON-NEGATIVE, and this is checked FIRST -- before any
-    -- skip below can let the row past. A negative or non-finite quantity is a money
-    -- defect in its own right, independent of the units: it flows into safe_cents_qty at
-    -- the derived-totals step whether or not the units agree, so checking it only on the
-    -- units path would leave the matching-units case open.
+    -- QUANTITY MUST BE FINITE AND NON-NEGATIVE, and it is checked FIRST -- ahead of every
+    -- skip below, including the missing-product skip. A negative or non-finite quantity is
+    -- a money defect in its own right, independent of the units: it flows into
+    -- safe_cents_qty at the derived-totals step whether or not the units agree, so
+    -- checking it only on the units path would leave the matching-units case open.
+    --
+    -- It also has to precede the product_id skip specifically, because the derived-totals
+    -- SELECT sums EVERY element of p_chemicals -- including the ones this loop skips. With
+    -- the check placed after that skip, a row carrying no product_id and a NaN quantity
+    -- bypassed it entirely and then aborted inside safe_cents_qty with a raw "cannot
+    -- convert NaN to bigint" instead of the operator-facing refusal. Fail-closed either
+    -- way, but the wrong message (compliance review, round 3).
     --
     -- Written as a finite RANGE test, never as a NaN test. In PostgreSQL numeric, NaN is
     -- ordered ABOVE every other value, so `NaN > 0` is TRUE, and NaN is equal to itself,
@@ -278,12 +279,24 @@ BEGIN
     -- tolerance comparison further down admits it a second time (Codex P1, round 3).
     v_qty := COALESCE(NULLIF(v_chem->>'quantity', '')::numeric, 0);
     IF NOT (v_qty >= 0 AND v_qty < 'Infinity'::numeric) THEN
-      SELECT p.product_name INTO v_product_name
-        FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+      -- The name lookup is guarded: this arm now runs for rows with no product_id, and
+      -- casting an empty string to uuid would replace the business error with a cast error.
+      v_product_name := NULL;
+      IF COALESCE(v_chem->>'product_id', '') <> '' THEN
+        SELECT p.product_name INTO v_product_name
+          FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+      END IF;
       RAISE EXCEPTION
         'CHEM_QUANTITY_NOT_FINITE: % has a quantity of "%", which is not a finite, non-negative number, so it cannot be priced.',
         COALESCE(v_product_name, 'This product'), COALESCE(v_chem->>'quantity', '');
     END IF;
+
+    -- A row with no product cannot have its UNITS checked: the conversion needs
+    -- products.product_form. It is not silently accepted either -- job_chemicals.product_id
+    -- is NOT NULL, so such a row aborts the whole save at the INSERT below.
+    -- (buildJobChemicalsPayload does NOT filter these out, so this is a real path, not a
+    -- theoretical one.)
+    CONTINUE WHEN COALESCE(v_chem->>'product_id', '') = '';
 
     v_raw_rate_unit := lower(btrim(COALESCE(v_chem->>'rate_unit', '')));
 
@@ -715,4 +728,4 @@ END
 $postflight$;
 
 COMMENT ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) IS
-  'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side (a line whose rate unit and price unit provably disagree is refused, as is a rate measured per anything but acres) and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. As of this migration there is NO save-blocking unit guard in JobDetail.tsx on the main branch, so this is the only boundary and nothing warns on screen before it refuses; the client-side early warning arrives with PR #436.';
+  'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side (a line whose rate unit and price unit provably disagree is refused, as is a rate measured per anything but acres, as is a negative or non-finite quantity) and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. As of this migration there is NO save-blocking unit guard in JobDetail.tsx on the main branch, so this is the only boundary and nothing warns on screen before it refuses. PR #436 adds a partial client-side early warning only: its rateDenominatorIsUnrecognized tests for a slash, so it does not flag the spelled-out or hyphenated denominator, and it has no counterpart for the non-finite-quantity refusal. Those refusals reach the operator with no prior on-screen warning even after that PR lands.';

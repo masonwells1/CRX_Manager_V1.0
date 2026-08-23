@@ -111,10 +111,15 @@ Seven phases. The real-shape schema loads with the three helper bodies copied ve
 live catalog. The reviewed pre-change body is then installed *from the repo* and its md5 is checked
 against the pin the prover parses out of the migration itself — so the pin is proved against
 source, not against a comment. Against a *different* body the migration aborts with
-`PREFLIGHT_BODY_DRIFT` **and the installed body is confirmed byte-for-byte unchanged**, which is
-the atomicity property the single-file design exists to give. Over the reviewed body it applies and
-its postflight passes; re-applying is a no-op, so it is safely replayable; sixteen behaviour tests
-pass; and five mutation phases each turn a **named** test red.
+`PREFLIGHT_BODY_DRIFT` **and the installed function is confirmed unchanged — same md5 and same exact
+byte length** — which is the atomicity property the single-file design exists to give. Over the
+reviewed body it applies and its postflight passes. Re-applying is safe, and the wording there is
+deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
+marker only suppresses the drift error while the replacement, the grants and the postflight all
+still run; the prover fingerprints the function before and after a replay and requires them equal.
+Sixteen behaviour tests pass; and seven mutation phases each fail in a **named** way — five turn a
+named behaviour test red, and two must abort the apply with the specific security assertion that
+exists to catch them.
 
 That apply phase deliberately starts from a **bad** permission state — `anon` granted, `service_role`
 revoked — and proves the migration corrects it. That came out of the round-4 security review: the

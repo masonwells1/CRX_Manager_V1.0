@@ -50,6 +50,7 @@ DECLARE
   v_jc        record;
   v_jrow      record;
   v_n         int;
+  v_raised    boolean;
 BEGIN
   -- ----------------------------------------------------------------- actor
   SELECT id INTO v_admin FROM profiles WHERE role = 'admin' AND is_active = true
@@ -259,13 +260,21 @@ BEGIN
                            'rate_per_acre', 1.5, 'rate_unit', 'pt/ac',
                            'cost_per_unit_cents', 1250, 'price_per_unit_cents', 1800, 'sort_order', 0)
       ), v_admin, NULL);
-    RAISE EXCEPTION 'FAIL: a pint quantity priced per gallon did not raise CHEM_UNIT_MISMATCH';
+    v_raised := false;
   EXCEPTION
     WHEN OTHERS THEN
+      v_raised := true;
       IF SQLERRM NOT LIKE 'CHEM_UNIT_MISMATCH%' THEN
         RAISE EXCEPTION 'FAIL: unit mismatch raised wrong error: %', SQLERRM;
       END IF;
   END;
+  -- Raised AFTER the block, not inside it. A sentinel raised inside is caught by the
+  -- block's own WHEN OTHERS handler, so a genuine miss was reported as "raised wrong
+  -- error: FAIL: a pint quantity..." -- the chain still failed, but it misnamed the cause
+  -- (compliance review, 2026-08-23).
+  IF NOT v_raised THEN
+    RAISE EXCEPTION 'FAIL: a pint quantity priced per gallon did not raise CHEM_UNIT_MISMATCH';
+  END IF;
 
   -- A rate measured per something other than an acre, in the spelled-out form. The
   -- slash form is the obvious one; 'per cwt' is the one that slipped through review.
@@ -276,13 +285,17 @@ BEGIN
                            'rate_per_acre', 0.5, 'rate_unit', 'lb per cwt',
                            'cost_per_unit_cents', 400, 'price_per_unit_cents', 650, 'sort_order', 0)
       ), v_admin, NULL);
-    RAISE EXCEPTION 'FAIL: a per-cwt rate did not raise CHEM_RATE_DENOMINATOR_NOT_ACRES';
+    v_raised := false;
   EXCEPTION
     WHEN OTHERS THEN
+      v_raised := true;
       IF SQLERRM NOT LIKE 'CHEM_RATE_DENOMINATOR_NOT_ACRES%' THEN
         RAISE EXCEPTION 'FAIL: per-cwt rate raised wrong error: %', SQLERRM;
       END IF;
   END;
+  IF NOT v_raised THEN
+    RAISE EXCEPTION 'FAIL: a per-cwt rate did not raise CHEM_RATE_DENOMINATOR_NOT_ACRES';
+  END IF;
 
   -- A refusal must leave nothing behind: still exactly the one job from step 1.
   SELECT count(*) INTO v_n FROM jobs WHERE consultant_id = v_admin AND job_date = v_job_date AND customer_id = v_cust_a AND job_number LIKE 'JOB-%';

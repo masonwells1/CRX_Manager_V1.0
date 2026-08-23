@@ -289,7 +289,8 @@ belongs to PR #436.
 **A BLANK `unit` is still not covered, and one live row is in exactly that shape.** The invariant
 can only refuse what it can disprove, so when either normalized unit is blank the line is skipped —
 but `transfer_job_to_invoice` still bills it at `price_per_unit_cents x quantity`. Read read-only on
-2026-08-23: of the four `job_chemicals` rows on live, one carries a `pt/ac` rate, a **blank** unit,
+2026-08-23 — a re-verification of the 2026-08-22 blast-radius measurement stamped at the top of this
+file, returning the same figures — of the four `job_chemicals` rows on live, one carries a `pt/ac` rate, a **blank** unit,
 and both a cost and a price, and it is not customer-supplied. That is the same hazard class this
 migration exists to close, and for blank units it is open. Refusing blank units would close it, but
 it would also make that existing job unsaveable until someone corrects its unit — one bad line
