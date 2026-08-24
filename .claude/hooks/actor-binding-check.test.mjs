@@ -122,6 +122,30 @@ ok(isDeny(r), "RETURN QUERY cannot forward an unbound actor through a callable e
 r = runHook(forwardedActorWrapper("RETURN public.record_event_internal($1);"));
 ok(isDeny(r), "a PostgreSQL positional alias cannot forward an unbound actor through a callable expression");
 
+const UNICODE_ACTOR_PARAMETER = 'U&"p_\\0075ser_id"';
+r = runHook(fn(
+  `BEGIN INSERT INTO financial_audit_log (actor_user_id) VALUES (${UNICODE_ACTOR_PARAMETER}); RETURN '{}'::jsonb; END;`,
+  `${UNICODE_ACTOR_PARAMETER} uuid`
+));
+ok(isDeny(r), "a Unicode-escaped named actor parameter cannot bypass actor binding review");
+
+r = runHook(fn(
+  "BEGIN INSERT INTO financial_audit_log (actor_user_id) VALUES ($1); RETURN '{}'::jsonb; END;",
+  `${UNICODE_ACTOR_PARAMETER} uuid`
+));
+ok(isDeny(r), "a Unicode-escaped actor parameter cannot hide behind its PostgreSQL positional alias");
+
+r = runHook(fn(`
+  BEGIN
+  IF $1 IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO financial_audit_log (actor_user_id) VALUES (auth.uid());
+  RETURN '{}'::jsonb;
+  END;
+`, `${UNICODE_ACTOR_PARAMETER} uuid`));
+ok(!isDeny(r), "a Unicode-named input remains allowed after its positional alias is soundly bound");
+
 r = runHook(fn(
   "BEGIN PERFORM public.record_event_internal($2); RETURN '{}'::jsonb; END;",
   "p_note text, p_performed_by uuid"

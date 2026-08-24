@@ -91,10 +91,10 @@ const ACTOR_PARAM_RE = /^p_\w*by$|^p_actor|^p_user/i;
 // Read the declared name out of one parameter entry, skipping a leading
 // IN/OUT/INOUT/VARIADIC mode keyword.
 function paramName(decl) {
-  const tokens = String(decl).trim().split(/\s+/);
-  let i = 0;
-  if (/^(in|out|inout|variadic)$/i.test(tokens[i] || "")) i++;
-  return (tokens[i] || "").replace(/^"|"$/g, "");
+  const declaration = String(decl).trim().replace(/^(?:in|out|inout|variadic)\b\s*/i, "");
+  const unicode = /^U&\s*"(?:[^"]|"")*"(?:\s+UESCAPE\s*'(?:[^']|'')*')?/i.exec(declaration);
+  if (unicode) return unicode[0];
+  return (declaration.split(/\s+/)[0] || "").replace(/^"|"$/g, "");
 }
 
 function paramMode(decl) {
@@ -114,8 +114,14 @@ function actorParameterDescriptors(maskedParams, rawParams) {
     if (mode === "out") continue;
     inputPosition++;
     const name = paramName(declaration);
-    if (!ACTOR_PARAM_RE.test(name)) continue;
-    actors.push({ name, references: [name, `$${inputPosition}`] });
+    const opaqueUnicodeName = /^U&/i.test(name);
+    if (!opaqueUnicodeName && !ACTOR_PARAM_RE.test(name)) continue;
+    // PostgreSQL decodes U&\"...\" before name resolution. Rather than duplicate
+    // that escape grammar and risk another lookalike bypass, conservatively
+    // require every Unicode-named input on a mutating definer routine to prove
+    // actor binding through its exact positional alias (or use exemption).
+    const references = opaqueUnicodeName ? [`$${inputPosition}`] : [name, `$${inputPosition}`];
+    actors.push({ name, references });
   }
   return actors;
 }

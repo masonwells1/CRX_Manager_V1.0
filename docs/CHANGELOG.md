@@ -80,6 +80,15 @@ FUNCTION` and `CREATE PROCEDURE` headers through the same routine boundary. The
 reported scheduled-procedure regression brings the focused suite to 420
 assertions, and removing procedure recognition makes that exact proof fail.
 
+The renewed SEC-01 review found that PostgreSQL Unicode-escaped parameter names
+could conceal an actor-shaped input from the guard. In particular,
+`U&"p_\\0075ser_id"` resolves to `p_user_id`, while the routine body can refer to
+the same input as `$1`. Unicode-named inputs on mutating `SECURITY DEFINER`
+routines now fail closed and must prove actor binding through their exact
+positional alias (or use the existing explicit exemption). Named, positional,
+and soundly-bound controls bring the focused suite to 423 assertions; removing
+the Unicode positional treatment makes the reported `$1` regression fail.
+
 ## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
 
 Fresh review of the cross-schema repair found two additional HIGH bypasses. A
