@@ -34,6 +34,58 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-23 — `codex review <scope>` self-recurses, kills its own process, and exits 0
+
+**Severity: HIGH. Not a crash — a silent false "gate passed".** `codex review --base origin/main`
+run from the repo root loads `AGENTS.md`, `CLAUDE.md`, and `.claude/commands/codex-gauntlet.md`
+as project context. Those files instruct an agent to "run a Codex review", so the reviewer follows
+them literally: it spawns a **nested** `codex review`, enumerates `codex.exe` processes, sees
+duplicates, and `Stop-Process`/`taskkill`s the tree — **including its own PID**. Reproduced twice
+on 2026-08-23 during PR #447 (PIDs 39564 and 36244), identical both times.
+
+**Why it is dangerous rather than merely annoying:** the pipeline still **exits 0**. `tee`
+succeeds, the harness reports success, and the ~1 MB capture is almost entirely echoed context
+files with no findings anywhere in it. Any check that reads exit status — a script, a hook, or an
+agent in a hurry — records a clean Codex review when Codex reviewed nothing. That is precisely the
+false-clean the gauntlet's `UNVERIFIED`/`BLOCKED` rule exists to prevent.
+
+**Workaround (in place, documented in `.claude/skills/codex-review/SKILL.md`):** use
+`node scripts/write-codex-push-proof.mjs`. It runs `codex exec` inside a sanitized
+`%TEMP%\crx-codex-review-*` workspace holding only `BASE_SNAPSHOT`/`CANDIDATE_SNAPSHOT`, so there
+are no agent-instruction files present to recurse on. It returned a real CLEAN verdict with cited
+`file:line` evidence on the first try for the same diff that killed `codex review` twice.
+
+The wrapper covers the `--base origin/main` scope only — its base is pinned to `origin/main...HEAD`
+by design and it fails closed on a dirty worktree, so `--uncommitted` and `--commit <sha>` need a
+committed branch or `/codex-cross-review` instead.
+
+**The gate is the proof file, not the exit code and not the bare token** — the token also spells
+`BLOCKERS`. The wrapper mints the proof only on a terminal `CODEX_PROOF_VERDICT: CLEAN`; no proof
+for the current HEAD means not passed. Secondary check on the capture, matching `CLEAN` itself:
+
+```bash
+grep -cE '^CODEX_PROOF_VERDICT:[[:space:]]*CLEAN[[:space:]]*$' .claude/session-state/codex-review-latest.txt
+```
+
+`0` means no clean verdict. **Two drafting errors were made here on 2026-08-23 and both are worth
+keeping visible**, because each is the same false-clean shape this entry is about:
+
+1. The first draft grepped `CODEX_PROOF_VERDICT|^VERDICT:` — presence only, so it reported a pass
+   on a `BLOCKERS` verdict. Caught by CodeRabbit on PR #448.
+2. The correction then demanded *exactly* `1` match, reasoning from the parser's one-token rule.
+   That rule governs Codex's stdout, not this capture file, which holds a structured section
+   **and** the raw transcript — so a genuinely clean run reports `2` (verified at lines 18 and
+   33671 of a real clean capture) and the "fix" would have raised a false alarm on every pass.
+   Caught by running the command instead of reasoning about it.
+
+**Prevention gap — still OPEN.** The fix shipped is documentation, which is soft scaffolding: it
+advises, it does not block. The hard boundary would be a hook denying (a) a Codex session spawning
+another `codex review`/`codex exec` and (b) `taskkill`/`Stop-Process` aimed at a `codex.exe`. No
+such guard exists — `.claude/hooks/` has nothing matching either pattern today, and one of the two
+kill attempts was stopped only incidentally, by the maintenance-producer guard reacting to the
+command's shape rather than its target. Wiring that guard touches both hook manifests and needs
+Mason's approval.
+
 ## OPEN 2026-08-20 — the Phase 3C containment scanner walks `dist/`, so a concurrent rebuild refuses the push
 
 **Severity: MEDIUM. Not a containment hole — a false refusal.** The pre-push hook
