@@ -209,7 +209,20 @@ it is a trade, not a free win.
    conclusion: *"a capability-level restriction is needed; enumerating shell strings remains
    bypassable."*
 
-**Read the round count as data, not trivia.** Fifteen High bypasses over six adversarial rounds
+9. **HIGH round 9 — platform-native expansion and quote composition.** `& $env:CODEX review`
+   (PowerShell), `%CODEX% review` (cmd.exe), and `c"od"ex review` — the last simply puts quotes
+   inside the word, which the shell concatenates before exec. Only the Bash `$CODEX` form and
+   end-of-token quotes were handled, **on a hook registered for PowerShell.** Probing the reported
+   three turned up an unreported fourth of the same shape, `task"kill"`, fixed in the same change.
+
+   Round 9's other two findings were **not regressions** — the branch was behind `main`, so its
+   older copies of two smoke scripts read as reverts against the reviewer's snapshot pair. Note the
+   asymmetry that caused it: `git diff origin/main...HEAD` (three-dot, what *this branch changed*)
+   listed seven files and neither script; the reviewer compares two-dot, which also shows what
+   `main` gained. Merging `main` in made both findings disappear. **Update the branch before
+   reading a reviewer's "regression" findings**, or you will argue with a diff you did not write.
+
+**Read the round count as data, not trivia.** Sixteen High bypasses over seven adversarial rounds
 on roughly a hundred lines. **Not one was found by reasoning about the pattern** — every one came
 from executing commands against it. Treat that as the measure of how far to trust *any*
 text-matching guard over shell strings, this one included.

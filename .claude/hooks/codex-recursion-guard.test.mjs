@@ -256,6 +256,35 @@ check("the API-call patterns do not swallow ordinary commands", () => {
   assert.equal(blocks("node scripts/write-codex-push-proof.mjs"), null);
 });
 
+// ── Round 9 (Sol on c4c0898c) ─────────────────────────────────────────────────
+check("HIGH round 9: platform-native variable expansion", () => {
+  // The hook is registered for PowerShell, but only the Bash `$CODEX` form was
+  // recognised. These are the ordinary PowerShell and cmd.exe spellings.
+  assert.equal(rule("& $env:CODEX review --base origin/main"), "codex-review");
+  assert.equal(rule("cmd /c %CODEX% review --base origin/main"), "codex-review");
+  assert.equal(rule("& ${env:CODEX} review"), "codex-review");
+});
+
+check("HIGH round 9: quotes INSIDE the executable name", () => {
+  // The shell concatenates `c"od"ex` before exec, so the guard must too. Only
+  // leading/trailing quotes were stripped.
+  assert.equal(rule('c"od"ex review --base origin/main'), "codex-review");
+  assert.equal(normalizeExecutable('c"od"ex'), "codex");
+});
+
+check("the same quote trick on a termination tool — found by probing, not reported", () => {
+  // Sol reported the codex-side spelling only. The kill side splits identically,
+  // and a fix for one that left the other open would be the same bug twice.
+  assert.equal(rule('task"kill" /PID 39564 /F'), "force-kill");
+  assert.equal(rule("pk'i'll -9 codex"), "force-kill");
+});
+
+check("variable matching stays anchored to the CODEX name", () => {
+  // A whole-token match, so an unrelated variable is not swept up.
+  assert.equal(blocks("$env:EDITOR review-notes.md"), null);
+  assert.equal(blocks("echo %PATH%"), null);
+});
+
 // ── Deny payload shape ────────────────────────────────────────────────────────
 check("a blocked command names the wrapper as the alternative", () => {
   const v = classifyCommand("codex review --base origin/main");

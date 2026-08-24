@@ -95,7 +95,13 @@ const LAUNCHERS = new Set([
 const EXECUTABLE_EXT_RE = /\.(?:exe|cmd|bat|com|ps1)$/i;
 
 export function normalizeExecutable(token) {
-  const unquoted = String(token || "").replace(/^["']+|["']+$/g, "");
+  // Quotes are stripped EVERYWHERE, not just at the ends. Sol's round-9 HIGH:
+  // `c"od"ex review` ran normally and read as an unknown token, because only
+  // leading/trailing quotes were removed. The shell concatenates the pieces before
+  // exec, so the guard has to as well — the same lesson as the earlier
+  // `("Hard"+"Link")` bypass in the maintenance guard. This also covers the
+  // unreported twin, `task"kill"`, which I found probing the reported one.
+  const unquoted = String(token || "").replace(/["'`]/g, "");
   const base = unquoted.split(/[\\/]/).pop() || "";
   return base.replace(EXECUTABLE_EXT_RE, "").toLowerCase();
 }
@@ -140,9 +146,27 @@ function isSkippableArgument(token) {
   return /^[\w.]+=/.test(bare);
 }
 
+// A variable that expands to the binary, in every shell this repo actually runs.
+// Round 9 proved the Bash-only form was not enough: `& $env:CODEX review` is the
+// PowerShell spelling and `%CODEX%` the cmd.exe one, and the hook is registered for
+// PowerShell. Matched on the variable NAME containing CODEX, since that is the
+// convention this repo's own skill documented (`"$CODEX" review $SCOPE`).
+// Matched on the STRIPPED form rather than the full spelling, because the
+// tokenizer splits on `{` and `}` — `${env:CODEX}` arrives here as `env:CODEX`
+// with the `$` already gone, so a pattern anchored on the sigil misses it. Caught
+// by the test for this fix, not by reading the regex.
+const CODEX_VAR_RE = /^\w*CODEX\w*$/i;
+
+function stripVariableSyntax(token) {
+  return String(token || "")
+    .replace(/["'`]/g, "")
+    .replace(/[${}%]/g, "")
+    .replace(/^env:/i, "");
+}
+
 function isCodexBinary(token) {
   if (normalizeExecutable(token) === "codex") return true;
-  return /^["']?\$\{?\w*CODEX\w*\}?["']?$/i.test(token);
+  return CODEX_VAR_RE.test(stripVariableSyntax(token));
 }
 
 // A `review` / `exec` subcommand token. The delimiter class includes quotes and
