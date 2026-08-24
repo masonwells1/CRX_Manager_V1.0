@@ -112,6 +112,31 @@
 -- applies this re-runs the count and requires zero -- reading this paragraph is not a
 -- substitute for running it.
 --
+-- ============================================================================================
+-- THE LIMIT OF THIS ENTIRE FILE, stated where nobody can miss it.
+--
+-- EVERY guard below checks that units are INTERNALLY CONSISTENT. NOT ONE checks that a rate
+-- is PLAUSIBLE. Those are different questions and only the first is answered here.
+--
+-- This is not theoretical. During the 2026-08-24 catalogue cleanup the owner was asked what
+-- rate unit 'Powder Keg - Corn' should carry -- a product costing $931 per pound -- and first
+-- answered "MG per acre". A milligram is a legitimate unit_conversions value. A milligram per
+-- acre would satisfy every refusal in this file: the units are consistent, the characters are
+-- ASCII, the unit is recognised, the denominator is per-acre, the quantity equals rate x
+-- acres. All twenty-one rounds of hardening pass it, and the invoice comes out roughly six
+-- orders of magnitude low.
+--
+-- The only thing that caught it was a reviewer refusing to write down an owner answer that
+-- did not look right. No amount of SQL would have. Whoever maintains this next should not
+-- read the length of this file as coverage of that question -- it is not, and closing it
+-- needs per-product plausible-rate bounds, which is a different piece of work.
+--
+-- A narrower instance of the same limit: setting rate_unit = inventory_unit (done for three
+-- products on 2026-08-24) makes the ARITHMETIC safe, because equal units mean no conversion
+-- occurs and so no conversion factor can be wrong. It does not make the RATE right. If a
+-- product's true intent is per-hundredweight, equality hides that rather than catching it.
+-- ============================================================================================
+--
 -- Re-run this read-only check IMMEDIATELY BEFORE the apply and require ZERO rows. It is
 -- the whole obligation, and it is cheap:
 --

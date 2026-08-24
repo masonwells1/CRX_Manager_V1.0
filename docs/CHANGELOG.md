@@ -175,6 +175,28 @@ Blend Recipes was never affected; it selects `*`.
 
 ## 2026-08-22 — The chemical-unit and job-money invariants move out of React and into `save_job` (parked)
 
+**Round 22 (2026-08-24) — the thing none of this catches, written down where it cannot be**
+**missed.** Every check in this migration confirms that units agree with each other. Not one
+confirms that a rate makes sense. During the product cleanup, the answer given for a product
+costing $931 a pound was "MG per acre" — milligrams. That is a perfectly valid unit, so it would
+have passed every single check built over twenty-one rounds, and invoiced roughly a millionth of
+the right amount. The only reason it did not happen is that a reviewer refused to write down an
+answer that looked wrong. That limit is now stated plainly at the top of the migration, so nobody
+mistakes the file's length for coverage of that question. Closing it properly means setting
+sensible rate limits per product, which is separate work.
+
+The related point is recorded beside it: giving a product the same rate unit as its stock unit
+makes the arithmetic safe, because no conversion happens and so no conversion can be wrong. It
+does not confirm the rate itself is right.
+
+The catalogue cleanup finished with Mason's approval and is re-measured here independently:
+active products with no rate unit went from 25 to **zero**, across 25 rows, with pricing across
+all 604 products identical to the cent before and after. So this migration would now refuse
+nothing an operator can currently sell — reached by fixing the data, not by weakening the rule.
+That is a fact about the data today, not about the migration, which is exactly why the rule stays.
+
+Still parked; nothing has been applied to live.
+
 **Round 21 (2026-08-24) — the tidying-up was doing the attacker's work.** Someone can write a unit
 using Cyrillic letters that look identical to ours on screen — `oz∕сԝт`, where the "cwt" is not
 the letters c, w and t at all. The rule stripped out anything it did not recognise as a letter or
@@ -489,7 +511,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Fifty-seven behaviour tests pass; and thirty-one mutation phases each fail in a **named** way — twenty-five
+Fifty-eight behaviour tests pass; and thirty-one mutation phases each fail in a **named** way — twenty-five
 turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -516,7 +538,7 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The fifty-seven tests: all four live row shapes save with derived totals reproducing the live stored
+The fifty-eight tests: all four live row shapes save with derived totals reproducing the live stored
 values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
 by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
 `T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate

@@ -25,7 +25,13 @@ INSERT INTO products VALUES
   ('aaaaaaaa-0000-0000-0000-000000000001', '1A TEST PRODUCT - FAKE PRODUCT', 'liquid'),
   ('aaaaaaaa-0000-0000-0000-000000000002', 'Acuron - 2.5 Gal',              'liquid'),
   ('aaaaaaaa-0000-0000-0000-000000000003', '[UI-TEST] Acuron GT',           'liquid'),
-  ('aaaaaaaa-0000-0000-0000-000000000004', 'DRY PRODUCT - pound stock',     'dry');
+  ('aaaaaaaa-0000-0000-0000-000000000004', 'DRY PRODUCT - pound stock',     'dry'),
+  -- product_form NULL is a REAL live shape, not a contrivance: 11 live products carry it,
+  -- and one of them ('Accelerate Seed Treatment - Per Unit') is active and billing. Every
+  -- form-branching rule in the migration treats NULL as "not dry", which is deliberate and
+  -- matches field_app_priced_quantity's own default -- T58 is what stops that default being
+  -- an untested assumption.
+  ('aaaaaaaa-0000-0000-0000-000000000005', 'PER-UNIT PRODUCT - form unknown', NULL);
 
 -- unit_conversions mirrors the LIVE table, read read-only on 2026-08-24. The
 -- recognised-unit backstop added in round 20 consults it, so the harness has to carry the

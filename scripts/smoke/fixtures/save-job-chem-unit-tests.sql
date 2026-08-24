@@ -1256,6 +1256,44 @@ BEGIN
   END IF;
 END $$;
 
+-- T58: THE PER-UNIT PRODUCT. This pins a REAL LIVE ROW, not a constructed shape, and it is
+-- LOAD-BEARING: if T58 ever goes red, 'Accelerate Seed Treatment - Per Unit' stops being
+-- sellable.
+--
+-- That product is ACTIVE and BILLING (cost 5.03, tier1 8.05), carries product_form NULL, is
+-- stocked in 'Unit', and as of 2026-08-24 carries rate_unit = 'Unit' -- set with Mason's
+-- explicit approval as part of the blank-rate-unit cleanup, alongside 'Powder Keg - Corn' and
+-- '- Soybeans' which took rate_unit = 'Lb' to match their stock unit. Rate unit equal to
+-- stock unit is what makes those three arithmetically safe: when the two are equal NO
+-- conversion occurs, so no conversion factor can be wrong. It does not make the RATE right --
+-- see the plausibility limit recorded in the migration header.
+--
+-- That shape exercises three things at once that no other test touches together:
+--   * product_form NULL -- the branch every form-aware rule collapses into "not dry";
+--   * a unit typed "both" in unit_conversions, so neither the liquid nor the dry table
+--     settles it;
+--   * rate unit EQUAL to price unit, so no conversion can occur at all -- which is precisely
+--     why it is arithmetically safe whatever the agronomically correct rate turns out to be.
+--
+-- It must SAVE. If it refuses, three active products cannot start a job, and that has to be
+-- known BEFORE the apply rather than discovered by an operator afterwards. Raised by the
+-- coordinating session while settling the blank-rate-unit cleanup with Mason.
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"33333450-3333-3333-3333-333333334501","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000005","quantity":100,"unit":"Unit","rate_per_acre":10,"rate_unit":"Unit","cost_per_unit_cents":503,"price_per_unit_cents":805}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 80500 THEN RAISE NOTICE 'T58 PASS  a form-NULL per-unit product priced in "Unit" saves; price=%', c;
+  ELSE RAISE EXCEPTION 'T58 FAIL  price=% (expected 80500)', c; END IF;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T58 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T58 FAIL  a live, active, billing per-unit product cannot start a job: %', SQLERRM;
+END $$;
+
 -- T55: THE COUNTERPART. Every unit the live system actually carries must still SAVE on a
 -- priced line, or the backstop would block ordinary work -- the round-7 defect three reviewers
 -- caught, and the reason a widening is never free. 'dry oz' is the spelling most at risk:
@@ -1384,6 +1422,6 @@ DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 25 AND n_chem = 25 THEN RAISE NOTICE 'T8 PASS  25 jobs / 25 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 25/25)', n_jobs, n_chem; END IF;
+  IF n_jobs = 26 AND n_chem = 26 THEN RAISE NOTICE 'T8 PASS  26 jobs / 26 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 26/26)', n_jobs, n_chem; END IF;
 END $$;
