@@ -58,6 +58,24 @@ Repair every valid merge blocker on PR #364, prove the fail-closed deny paths, c
 4. Merge only when every gate is green/acceptable and no real finding remains, then verify ancestry
    and the live app.
 
+## SECOND RESUME REPAIR — PROVEN LOCALLY
+
+- A fresh exact-head automated review on `8040521e` found that a trigger `WHEN (...)` condition could
+  call a mutating routine while the analyzer followed only the trigger's main function.
+- Trigger attachments now preserve the deferred condition and fold it into the executable frontier
+  only when the migration writes the trigger relation. Separate conditions sharing one main trigger
+  function retain separate internal identities.
+- The validator now receives a dedicated trigger-condition evidence channel and reports the exact
+  callable identity instead of allowing the condition effect to disappear between the analyzer and
+  the shell gate.
+- Focused proof after this repair:
+  - `apply-time-dml-lib.test.mjs`: 319 assertions passed.
+  - `validate-sql-migrations-approved-set.test.mjs`: 219 mutation cases passed, including the real
+    deny path and an unfired safe control.
+- PR #364 remains HOLD. The prior exact-SHA proof and GitHub checks do not approve this new local
+  repair; commit hooks, a fresh exact-SHA Sol review, push, and current-head remote checks remain
+  mandatory before merge.
+
 ## APPROVAL STATE
 
 - Mason approved repairing all findings and completing the normal protected branch-to-PR delivery path in the originating conversation.

@@ -51,6 +51,14 @@ for (const file of paths) {
       `${file}\tstored-column-effect\t${[...new Set(identities)].sort().join(", ")}\n`,
     );
   }
+  if (analysed.firedTriggerConditions?.length) {
+    const identities = analysed.firedTriggerConditions
+      .flatMap((effect) => effect.identities || [])
+      .filter(Boolean);
+    process.stdout.write(
+      `${file}\ttrigger-when-effect\t${[...new Set(identities)].sort().join(", ")}\n`,
+    );
+  }
   if (knownRules.length && analysed.firedRules.length) {
     const localFiredRules = new Set(
       applyTimeWriteTargets(sql).firedRules.map(ruleAttachmentIdentity),

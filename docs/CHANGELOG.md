@@ -11,7 +11,7 @@ worktree root are explicitly fail-closed. Stable generated files and direct forb
 remain blocking. The recovery scan de-duplicates candidates already inspected, preserving the
 normal structural scan budget for newly reappeared or grown files.
 
-## 2026-08-24 — Stored query, column-default, and domain execution bypasses closed
+## 2026-08-24 — Stored query, column-default, domain, and trigger-condition bypasses closed
 
 - `CREATE TABLE ... AS TABLE view` now enters the executable-query fixed point, so a stored view
   cannot hide a protected-row mutator behind PostgreSQL's shorthand `TABLE` query form.
@@ -22,8 +22,12 @@ normal structural scan budget for newly reappeared or grown files.
   the existing cast/domain analyzer. Stored `CHECK` behavior can no longer disappear merely because
   the candidate supplied a base value without spelling an explicit cast, while unrelated inserts
   and definition-only migrations remain silent.
-- Focused proof: apply-time analyzer 314 assertions; approved-set validator 217 adversarial mutation
-  cases covering all three deny paths and their non-executing controls.
+- A trigger's stored `WHEN (...)` expression now joins the executable fixed point only after the
+  migration writes the trigger relation. Callable conditions can no longer mutate protected money
+  rows invisibly; distinct conditions sharing one trigger function remain distinct, opaque resident
+  calls fail closed, and an unfired trigger remains deferred.
+- Focused proof: apply-time analyzer 319 assertions; approved-set validator 219 adversarial mutation
+  cases covering all four deny paths and their non-executing controls.
 
 ## 2026-08-24 — Optional-INTO MERGE bypass closed in migration guards
 

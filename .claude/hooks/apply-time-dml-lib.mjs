@@ -1094,11 +1094,14 @@ const RULE_STMT = /\bcreate\s+(?:or\s+replace\s+)?rule\s+/g;
 const OPERATOR_RUN = /[+\-*\/<>=~!@#%^&|`?]+/g;
 
 /**
- * `{ table, fn }` for every trigger this SQL attaches at apply time.
+ * `{ table, fn, whenCode, whenUnresolved }` for every trigger this SQL attaches
+ * at apply time.
  *
  * `table` is the relation the trigger fires on and `fn` is the canonical
- * schema-qualified function identity. The relation remains schema-stripped to
- * match the protected-table inventory; routine schemas must not collide.
+ * schema-qualified function identity. `whenCode` preserves the deferred trigger
+ * condition so it can join the executable frontier only if the trigger fires.
+ * The relation remains schema-stripped to match the protected-table inventory;
+ * routine schemas must not collide.
  */
 export function triggerAttachments(code) {
   const s = (code || "").toLowerCase();
@@ -1117,7 +1120,30 @@ export function triggerAttachments(code) {
     if (!rel || (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted)) continue;
     const fn = /\bexecute\s+(?:function|procedure)\s+((?:[a-z0-9_]+\s*\.\s*)*[a-z0-9_]+)/.exec(body);
     if (!fn) continue;
-    out.push({ table: rel.table, fn: canonicalRoutineIdentity(fn[1]) });
+    let whenCode = "";
+    let whenUnresolved = false;
+    const condition = scanTo(body, rel.end, ["when", "execute"]);
+    if (condition.hit === "when") {
+      const open = skipSpace(body, condition.end);
+      if (body[open] !== "(") {
+        whenUnresolved = true;
+      } else {
+        let depth = 0;
+        let close = -1;
+        for (let i = open; i < body.length; i += 1) {
+          if (body[i] === "(") depth += 1;
+          else if (body[i] === ")" && --depth === 0) { close = i; break; }
+        }
+        if (close === -1) whenUnresolved = true;
+        else whenCode = body.slice(open + 1, close).trim();
+      }
+    }
+    out.push({
+      table: rel.table,
+      fn: canonicalRoutineIdentity(fn[1]),
+      whenCode,
+      whenUnresolved,
+    });
   }
   return out;
 }
@@ -2083,6 +2109,7 @@ export function applyTimeWriteTargets(
   };
   foldLiterals(top, literals);
   const fired = new Set();
+  const firedAttachmentKeys = new Set();
   const firedRules = new Map();
   const firedRuleKeys = new Set();
   const unknownTriggerFns = new Set();
@@ -2095,6 +2122,7 @@ export function applyTimeWriteTargets(
   const observedInsertRelations = new Set();
   const firedColumnEffects = new Set();
   const firedColumnEffectDetails = new Map();
+  const firedTriggerConditionDetails = new Map();
   const addOperatorInvocations = (sourceCode, into) => {
     for (const definition of invokedOperators(sourceCode, operators)) {
       const key = `${definition.operator}\0${definition.fn}`;
@@ -2224,9 +2252,56 @@ export function applyTimeWriteTargets(
       top.unresolved = true;
     }
     for (const att of attachments) {
-      const key = `${att.table}.${att.fn}`;
-      if (fired.has(key) || !top.tables.has(att.table)) continue;
-      fired.add(key);
+      const reportKey = `${att.table}.${att.fn}`;
+      const attachmentKey = `${reportKey}\0${att.whenCode || ""}\0${att.whenUnresolved ? "1" : "0"}`;
+      if (firedAttachmentKeys.has(attachmentKey) || !top.tables.has(att.table)) continue;
+      firedAttachmentKeys.add(attachmentKey);
+      fired.add(reportKey);
+      // ROUND 66. A row-level trigger evaluates WHEN before deciding whether to
+      // run its main function. The condition is deferred at CREATE time but is
+      // executable once this migration writes the trigger relation, and it can
+      // call the same routine/operator/cast/view graph as any SELECT expression.
+      // Queue a SELECT-shaped expression so the existing fixed point follows
+      // every edge. Malformed or unsupported condition syntax refuses instead
+      // of disappearing. Distinct conditions sharing one table/function pair
+      // retain separate internal keys because PostgreSQL evaluates each one.
+      if (att.whenUnresolved) top.unresolved = true;
+      if (att.whenCode) {
+        const conditionCode = `SELECT (${att.whenCode})`;
+        const conditionRoutines = new Set([
+          ...invokedRoutines(conditionCode.toLowerCase(), new Set(byName.keys())),
+          ...unknownCallsIn(
+            conditionCode.toLowerCase(),
+            new Set(byName.keys()),
+            new Set(trustedUnqualifiedRoutines.map((name) => String(name).toLowerCase())),
+            untrustedRoutineIdentities,
+          ),
+        ]);
+        const priorOperators = new Set(firedOperators);
+        const priorCasts = new Set(firedCasts);
+        const priorViews = new Set(firedViews);
+        execCodes.push(conditionCode);
+        drainExec(into);
+        const identities = [
+          ...conditionRoutines,
+          ...[...firedOperators].filter((entry) => !priorOperators.has(entry)),
+          ...[...firedCasts].filter((entry) => !priorCasts.has(entry)),
+          ...[...firedViews].filter((entry) => !priorViews.has(entry)),
+        ];
+        if (identities.length) {
+          firedTriggerConditionDetails.set(attachmentKey, {
+            table: att.table,
+            triggerFunction: att.fn,
+            identities: [...new Set(identities)].sort(),
+          });
+        }
+      } else if (att.whenUnresolved) {
+        firedTriggerConditionDetails.set(attachmentKey, {
+          table: att.table,
+          triggerFunction: att.fn,
+          identities: ["unparsed-trigger-when-expression"],
+        });
+      }
       if (byName.has(att.fn)) { if (!seen.has(att.fn)) into.add(att.fn); }
       else unknownTriggerFns.add(att.fn);
     }
@@ -2366,6 +2441,7 @@ export function applyTimeWriteTargets(
     invokedCasts: [...firedCasts],
     invokedViews: [...firedViews],
     firedColumnEffects: [...firedColumnEffectDetails.values()],
+    firedTriggerConditions: [...firedTriggerConditionDetails.values()],
   };
 }
 

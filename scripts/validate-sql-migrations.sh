@@ -1437,6 +1437,7 @@ EVENT_TRIGGER_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 
 EVENT_CATALOG_RISK_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "event-catalog-risk" { print $1 }')
 PERSISTED_RULE_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "persisted-rule" { print $1 }')
 STORED_COLUMN_EFFECT_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "stored-column-effect" { print $1 }')
+TRIGGER_WHEN_EFFECT_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "trigger-when-effect" { print $1 }')
 
 for file in $ALL_SQL; do
   # Strip SQL comments for pattern matching
@@ -1485,6 +1486,20 @@ for file in $ALL_SQL; do
       echo "  Stored executable identity: $STORED_COLUMN_EFFECT_IDENTITIES"
     fi
     echo "  Their row effects cannot be bound to an approved set, so this apply is refused."
+    echo ""
+    VIOLATIONS=$((VIOLATIONS + 1))
+  fi
+  if [ -n "$TRIGGER_WHEN_EFFECT_FILES" ] &&
+     printf '%s\n' "$TRIGGER_WHEN_EFFECT_FILES" | grep -Fqx -- "$file"; then
+    TRIGGER_WHEN_EFFECT_IDENTITIES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" |
+      awk -F '\t' -v target="$file" '$1 == target && $2 == "trigger-when-effect" { print $3 }')
+    echo "VIOLATION: $file"
+    echo "  This migration fires a trigger with executable behavior in its WHEN condition."
+    echo "  The condition runs before the trigger function and can mutate rows through callable catalog edges."
+    if [ -n "$TRIGGER_WHEN_EFFECT_IDENTITIES" ]; then
+      echo "  Trigger condition executable identity: $TRIGGER_WHEN_EFFECT_IDENTITIES"
+    fi
+    echo "  Its row effects cannot be bound to an approved set, so this apply is refused."
     echo ""
     VIOLATIONS=$((VIOLATIONS + 1))
   fi

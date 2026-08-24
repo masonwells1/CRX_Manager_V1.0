@@ -1791,4 +1791,56 @@ eq(T(null), [], "a null body does not throw");
     'round-65 MUTANT: an insert into another relation does not fire the checked-domain edge');
 }
 
+// -------- ROUND 66: a fired trigger evaluates its deferred WHEN expression
+{
+  const whenMutator =
+    'CREATE FUNCTION public.round66_when_fix() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$; ' +
+    'CREATE FUNCTION public.round66_trigger_noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN ' +
+    'RETURN NEW; END $$; ' +
+    'CREATE TEMP TABLE round66_scratch(id integer); ' +
+    'CREATE TRIGGER round66_fire AFTER INSERT ON round66_scratch FOR EACH ROW ' +
+    'WHEN (public.round66_when_fix()) EXECUTE FUNCTION public.round66_trigger_noop();';
+
+  const firedWhen = applyTimeWriteTargets(
+    `${whenMutator} INSERT INTO round66_scratch(id) VALUES (1);`,
+  );
+  ok(firedWhen.targets.has('orders.total_profit') &&
+      firedWhen.invokedRoutines.includes('public.round66_when_fix'),
+    'round-66: firing a trigger folds the mutating routine in its WHEN expression');
+  ok(firedWhen.firedTriggerConditions.some((effect) =>
+      effect.table === 'round66_scratch' &&
+      effect.identities.includes('public.round66_when_fix')),
+    'round-66 MUTANT: the fired condition identity reaches the validator evidence channel');
+
+  const deferredWhen = applyTimeWriteTargets(whenMutator);
+  ok(!deferredWhen.targets.has('orders.total_profit') && !deferredWhen.unresolved,
+    'round-66 MUTANT: defining a trigger WHEN expression without firing it remains deferred');
+
+  const residentWhen = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round66_resident_noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN ' +
+    'RETURN NEW; END $$; CREATE TEMP TABLE round66_resident_scratch(id integer); ' +
+    'CREATE TRIGGER round66_resident AFTER INSERT ON round66_resident_scratch FOR EACH ROW ' +
+    'WHEN (public.round66_resident_money_fix()) ' +
+    'EXECUTE FUNCTION public.round66_resident_noop(); ' +
+    'INSERT INTO round66_resident_scratch(id) VALUES (1);',
+  );
+  ok(residentWhen.unknownCalls.includes('public.round66_resident_money_fix'),
+    'round-66: a resident routine called by a fired WHEN expression fails closed');
+
+  const sharedFunction = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round66_shared_when_fix() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$; ' +
+    'CREATE FUNCTION public.round66_shared_noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN ' +
+    'RETURN NEW; END $$; CREATE TEMP TABLE round66_shared_scratch(id integer); ' +
+    'CREATE TRIGGER round66_first AFTER INSERT ON round66_shared_scratch FOR EACH ROW ' +
+    'WHEN (true) EXECUTE FUNCTION public.round66_shared_noop(); ' +
+    'CREATE TRIGGER round66_second AFTER INSERT ON round66_shared_scratch FOR EACH ROW ' +
+    'WHEN (public.round66_shared_when_fix()) EXECUTE FUNCTION public.round66_shared_noop(); ' +
+    'INSERT INTO round66_shared_scratch(id) VALUES (1);',
+  );
+  ok(sharedFunction.targets.has('orders.total_profit'),
+    'round-66: distinct WHEN expressions sharing one table/function pair are each evaluated');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

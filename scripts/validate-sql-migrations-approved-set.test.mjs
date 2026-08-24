@@ -2450,6 +2450,34 @@ const CASES = [
       `v public.round65_deferred_checked_integer);\n`,
   },
   {
+    name: 'round-66: a fired trigger WHEN expression cannot hide a money mutator',
+    expect: 'violation',
+    mustReport: 'round66_when_fix',
+    sql:
+      `CREATE FUNCTION public.round66_when_fix() RETURNS boolean LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$;\n` +
+      `CREATE FUNCTION public.round66_trigger_noop() RETURNS trigger LANGUAGE plpgsql AS $$\n` +
+      `BEGIN RETURN NEW; END $$;\n` +
+      `CREATE TEMP TABLE round66_scratch(id integer);\n` +
+      `CREATE TRIGGER round66_fire AFTER INSERT ON round66_scratch FOR EACH ROW\n` +
+      `WHEN (public.round66_when_fix()) ` +
+      `EXECUTE FUNCTION public.round66_trigger_noop();\n` +
+      `INSERT INTO round66_scratch(id) VALUES (1);\n`,
+  },
+  {
+    name: 'round-66 MUTANT: an unfired trigger WHEN expression remains deferred',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.round66_deferred_when_fix() RETURNS boolean LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$;\n` +
+      `CREATE FUNCTION public.round66_deferred_noop() RETURNS trigger LANGUAGE plpgsql AS $$\n` +
+      `BEGIN RETURN NEW; END $$;\n` +
+      `CREATE TEMP TABLE round66_deferred_scratch(id integer);\n` +
+      `CREATE TRIGGER round66_deferred AFTER INSERT ON round66_deferred_scratch FOR EACH ROW\n` +
+      `WHEN (public.round66_deferred_when_fix()) ` +
+      `EXECUTE FUNCTION public.round66_deferred_noop();\n`,
+  },
+  {
     name: 'round-55: FOREACH cannot replace the captured proof-variable population',
     expect: 'violation',
     mustReport: 'assigned or passed to a possibly OUT/INOUT procedure',
