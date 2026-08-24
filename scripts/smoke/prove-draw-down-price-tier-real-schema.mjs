@@ -86,8 +86,17 @@ function applyMigration(name, options = {}) {
 function wait(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 function waitForDatabase() {
   for (let attempt = 0; attempt < 90; attempt += 1) {
-    if (docker(['exec', NAME, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { allowFailure: true }).status === 0
-      && docker(['exec', NAME, 'psql', '-U', 'postgres', '-d', 'postgres', '-Atqc', 'SELECT 1'], { allowFailure: true }).stdout.trim() === '1') return;
+    if (docker(['exec', NAME, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { allowFailure: true }).status === 0) {
+      // The Supabase image briefly exposes its bootstrap server before the
+      // final server restart. Wait through that handoff, then require a real
+      // query so schema installation cannot race the disappearing socket.
+      wait(2_000);
+      const query = docker(
+        ['exec', NAME, 'psql', '-U', 'postgres', '-d', 'postgres', '-Atqc', 'SELECT 1'],
+        { allowFailure: true },
+      );
+      if (query.status === 0 && query.stdout.trim() === '1') return;
+    }
     wait(500);
   }
   throw new Error(`disposable PostgreSQL failed readiness: ${docker(['logs', NAME], { allowFailure: true }).stderr}`);
