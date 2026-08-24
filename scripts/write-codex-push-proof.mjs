@@ -97,39 +97,29 @@ function trustedGitEnv() {
   return env;
 }
 
-// Ownership allowance. trustedGitEnv() deliberately discards the user's global
-// configuration — which is also the only place Git's `safe.directory` allowlist
-// normally lives. On any checkout Git considers to be of "dubious ownership" (a
-// Windows profile owned by another account, a CI runner, a shared worktree) the
-// sanitized calls below would then ALL refuse to run, and in this wrapper a
-// refused call degrades to its fallback value: exactly the fail-open shape a
-// push proof must never have. So every call re-supplies ONE command-scoped
-// allowance, narrowed to the checkout it is actually operating on. It is never
-// the `*` wildcard, is never written to any config file, and cannot be inherited
-// by another process.
+// Ownership: FAIL CLOSED, deliberately. trustedGitEnv() discards the user's
+// global configuration, which is also the only place Git's ownership allowlist
+// normally lives. So on any checkout Git considers to be of "dubious ownership"
+// (a Windows profile owned by another account, a CI runner, a shared worktree)
+// every sanitized call below REFUSES to run, no proof is minted, and the
+// operator is told to fix the checkout rather than to trust it.
 //
-// The root is resolved WITHOUT invoking Git — walking up to the nearest `.git`
-// entry, which is a directory in a primary checkout and a FILE in a linked
-// worktree — because resolving it with Git would need the very allowance being
-// computed. A directory with no `.git` ancestor (the sanitized packet directory
-// the `--no-index` diff runs in) resolves to itself.
-export function trustedGitCheckoutRoot(cwd) {
-  const start = path.resolve(cwd || FALLBACK_ROOT);
-  let current = start;
-  for (;;) {
-    if (existsSync(path.join(current, ".git"))) return current;
-    const parent = path.dirname(current);
-    if (parent === current) return start;
-    current = parent;
-  }
-}
+// This wrapper does NOT re-supply a command-scoped ownership allowance to keep
+// those checkouts working. Such an allowance would have to name a root this
+// process guessed for itself — from nothing more than the nearest `.git` entry,
+// which an attacker who can plant a checkout also controls — and it would
+// suppress Git's refusal while that repository's own local configuration,
+// including entries that make Git execute a chosen program, remains active.
+// Trading a hard ownership boundary for convenience is precisely the shape a
+// push proof must never have: an unverifiable checkout is not a reviewed one.
 
 // THE single Git invocation site. Every Git call this wrapper makes — status,
 // rev-parse, ls-tree, cat-file, ls-files, and the no-index packet diff — is
 // funnelled through here, so the fixed trusted executable, the sanitized
-// environment, --no-replace-objects, shell:false, the hidden Windows
-// subprocess, and the narrow safe.directory allowance cannot be forgotten at an
-// individual call site. Callers get the raw spawnSync result and decide what a
+// environment, --no-replace-objects, shell:false, and the hidden Windows
+// subprocess cannot be forgotten at an individual call site. Nothing else is
+// prepended to the argument list; in particular no ownership allowance is
+// injected (see above). Callers get the raw spawnSync result and decide what a
 // non-zero status means; this helper never interprets one.
 function runTrustedGit(args, {
   cwd = FALLBACK_ROOT,
@@ -140,8 +130,6 @@ function runTrustedGit(args, {
   input,
 } = {}) {
   return spawnSync(fixedGitExecutable(), [
-    "-c",
-    `safe.directory=${trustedGitCheckoutRoot(cwd).replace(/\\/g, "/")}`,
     "--no-replace-objects",
     ...args,
   ], {

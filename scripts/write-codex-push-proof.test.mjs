@@ -30,7 +30,6 @@ import {
   resolveRepoRoot,
   safeReviewCaptureText,
   timeoutMessage,
-  trustedGitCheckoutRoot,
   worktreeIsClean,
 } from "./write-codex-push-proof.mjs";
 import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
@@ -417,7 +416,6 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     "the only Git spawn site lives inside the trusted helper, and uses the fixed executable",
   );
   for (const required of [
-    "safe.directory=",
     "--no-replace-objects",
     "env: trustedGitEnv()",
     "windowsHide: true",
@@ -425,25 +423,40 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
   ]) {
     assert.ok(helperBody.includes(required), `the trusted Git helper always supplies ${required}`);
   }
-  assert.equal(
-    /safe\.directory=\*/.test(helperBody),
-    false,
-    "the ownership allowance is narrowed to a resolved checkout, never the `*` wildcard",
+
+  // FAIL CLOSED on dubious ownership. Git refuses to operate on a checkout it
+  // considers dubiously owned, and this wrapper must let that refusal stand.
+  // Suppressing it with a command-scoped allowance would let Git proceed on a
+  // root this process guessed from a bare `.git` entry while that repository's
+  // own local configuration — which can make Git execute a chosen program — is
+  // still active, so no allowance may be injected in any form.
+  //
+  // Pin the ENTIRE prepended argument list rather than searching for one
+  // spelling: a re-added allowance assembled from computed pieces would slip
+  // past a text match, but it cannot slip past an exact list.
+  const helperArguments = helperBody
+    .slice(helperBody.indexOf("spawnSync(fixedGitExecutable()"))
+    .match(/\[([\s\S]*?)\]/);
+  assert.ok(helperArguments, "the trusted Git helper's Git argument list is inspectable");
+  assert.deepEqual(
+    helperArguments[1].split(",").map((part) => part.trim()).filter(Boolean),
+    ['"--no-replace-objects"', "...args"],
+    "the helper prepends nothing but --no-replace-objects; any injected flag — including a computed ownership allowance — breaks this pin",
   );
-  assert.ok(
-    helperBody.includes("trustedGitCheckoutRoot(cwd)"),
-    "the ownership allowance is scoped to the checkout the call actually operates on",
+  assert.equal(
+    /safe\.directory\s*=/.test(wrapperSource),
+    false,
+    "no part of the wrapper injects a safe.directory allowance — neither a narrowed checkout root nor the `*` wildcard",
   );
 }
 
-// ── checkout-root resolution from a nested working directory ─────────────────
-// The allowance Git honours is the one naming the TOP LEVEL of the checkout, so
-// resolving the caller's directory instead would silently produce an allowance
-// that never matches — and every sanitized Git call would fail closed into its
-// fallback on a dubious-ownership checkout.
+// ── repository discovery from a nested working directory ─────────────────────
+// A sanitized Git call that fails degrades to the caller's fallback instead of
+// throwing, so a broken invocation shows up as "this wrapper's own root" rather
+// than as an error. Issue a real call from deep inside a SEPARATE checkout and
+// prove it returns that checkout's own top level.
 {
   const nestedSource = mkdtempSync(path.join(tmpdir(), "crx-review-nested-"));
-  const linkedWorktree = mkdtempSync(path.join(tmpdir(), "crx-review-linked-"));
   try {
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: nestedSource, stdio: "ignore" });
     const nestedDir = path.join(nestedSource, "supabase", "migrations", "deep");
@@ -456,36 +469,9 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
       { cwd: nestedSource, stdio: "ignore" },
     );
 
-    assert.equal(
-      trustedGitCheckoutRoot(nestedDir),
-      path.resolve(nestedSource),
-      "a nested working directory resolves to its checkout root, not to itself",
-    );
-    assert.equal(
-      trustedGitCheckoutRoot(nestedSource),
-      path.resolve(nestedSource),
-      "the checkout root resolves to itself",
-    );
-
-    // A linked worktree records `.git` as a FILE. Treating only a directory as
-    // the marker would walk straight past it, up into whatever unrelated
-    // repository happens to sit above the temporary directory.
-    writeFileSync(
-      path.join(linkedWorktree, ".git"),
-      `gitdir: ${path.join(nestedSource, ".git", "worktrees", "linked")}\n`,
-    );
-    const linkedNested = path.join(linkedWorktree, "src", "lib");
-    mkdirSync(linkedNested, { recursive: true });
-    assert.equal(
-      trustedGitCheckoutRoot(linkedNested),
-      path.resolve(linkedWorktree),
-      "a linked worktree's .git FILE still resolves the checkout root",
-    );
-
-    // End-to-end: a real sanitized Git call issued from the nested directory must
-    // return that checkout's top level. If the allowance or the environment were
-    // wrong the call would fail and fall back to this repository's own root, so
-    // the basename comparison catches a silent degradation rather than a throw.
+    // If the trusted executable or the sanitized environment were wrong the call
+    // would fail and fall back to this repository's own root, so the basename
+    // comparison catches a silent degradation rather than a throw.
     const resolvedFromNested = resolveRepoRoot(nestedDir);
     assert.equal(
       path.basename(resolvedFromNested),
@@ -499,7 +485,6 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     );
   } finally {
     rmSync(nestedSource, { recursive: true, force: true });
-    rmSync(linkedWorktree, { recursive: true, force: true });
   }
 }
 

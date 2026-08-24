@@ -61,10 +61,13 @@ carries no other work.
   objects, credential prompts, and optional locks are disabled, and `PATH` is
   narrowed to the trusted installation plus the platform system directory.
   Inherited `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG_*` overrides are dropped by
-  construction rather than filtered. Each invocation injects one command-scoped
-  `safe.directory` for the resolved checkout root, preserving legitimate
-  bind-mounted or differently owned worktrees without restoring ambient Git
-  configuration or trusting every repository.
+  construction rather than filtered. No ownership allowance is re-supplied: a
+  checkout Git considers to be of dubious ownership is refused outright and the
+  wrapper mints no proof. Suppressing that refusal with a command-scoped
+  `safe.directory` would let Git proceed on a root the wrapper guessed from a
+  bare `.git` entry while that repository's own executable configuration stayed
+  active, so the wrapper fails closed and the operator fixes the checkout
+  instead.
 - Previously the shared `runGit()` helper invoked bare `git`, so `PATH` decided
   which binary inspected the tree that gates a push, and every call inherited
   the ambient environment — letting a global `core.attributesfile` plus a
@@ -75,9 +78,10 @@ carries no other work.
   first proves through a control conversion that the filter can execute, and
   then proves the marker is never written during clean-status reads or
   proof-packet construction. Structural coverage also fails if any Git call
-  bypasses the common trusted helper, and cleanup restores process state even
-  when an assertion fails. Mutation-tested — re-enabling global configuration
-  turns it red.
+  bypasses the common trusted helper or if anything at all is added to the
+  trusted argument list — including a reintroduced ownership allowance — and
+  cleanup restores process state even when an assertion fails. Mutation-tested —
+  re-enabling global configuration turns it red.
 
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 
