@@ -15,7 +15,9 @@ import { parseDollarsToCents } from '../lib/parseCents';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
-import type { BlendRecipe, Product, RecipeType } from '../types';
+import UnitSelect from '../components/blendtickets/UnitSelect';
+import { blockedUnitSaveMessage, isKnownUnit, type UnitLoadState } from '../lib/units';
+import type { BlendRecipe, Product, RecipeType, UnitConversion } from '../types';
 
 type RecipeRow = BlendRecipe & { item_count: number; creator_name: string };
 
@@ -62,6 +64,12 @@ export default function BlendRecipes() {
   const saveRecipeIdem = useIdempotencyKey('save_blend_recipe', profile?.id || '');
   const [recipes, setRecipes] = useState<RecipeRow[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  // Item units are a PICKER, not free text, so a recipe can no longer carry a unit the
+  // pricing/conversion path cannot resolve. unitLoad is tracked separately from the array
+  // because an empty array means three different things (in flight / fetch failed / table
+  // really is empty) and only this caller knows which — see blockedUnitSaveMessage.
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+  const [unitLoad, setUnitLoad] = useState<UnitLoadState>('pending');
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState('');
   const [cropFilter, setCropFilter] = useState('');
@@ -132,10 +140,28 @@ export default function BlendRecipes() {
     setProducts((data || []) as Product[]);
   }, [toast]);
 
+  const fetchUnitConversions = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('unit_conversions')
+      .select('*')
+      .order('unit');
+    if (error) {
+      // The unit field is a picker, not free text, so a failed load leaves the operator no
+      // way to enter a unit at all. Say so rather than failing quietly.
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_unit_conversions' } });
+      toast('error', 'Failed to load units: ' + error.message);
+      setUnitLoad('failed');
+      return;
+    }
+    setUnitConversions((data || []) as UnitConversion[]);
+    setUnitLoad('loaded');
+  }, [toast]);
+
   useEffect(() => {
     fetchRecipes();
     fetchProducts();
-  }, [fetchRecipes, fetchProducts]);
+    fetchUnitConversions();
+  }, [fetchRecipes, fetchProducts, fetchUnitConversions]);
 
   const filtered = recipes.filter((r) => {
     if (typeFilter && r.recipe_type !== typeFilter) return false;
@@ -198,6 +224,58 @@ export default function BlendRecipes() {
     if (editItems.length === 0) {
       toast('error', 'Add at least one product');
       return;
+    }
+    // The unit field is a picker now: when the list never arrived the operator had no way to
+    // choose a unit, so a blank one is the failed request's doing and not a choice they made.
+    // Say that plainly instead of telling them to fill in a field they cannot fill in. The
+    // healthy-list case is handled by the stricter check below.
+    const unitBlock = blockedUnitSaveMessage(
+      unitLoad,
+      unitConversions,
+      editItems.some((item) => !item.unit.trim()),
+    );
+    if (unitBlock) {
+      toast('error', unitBlock);
+      return;
+    }
+    // With a healthy list the picker can always offer a usable unit, so a unit that is blank or
+    // that this product's form cannot use is a real error rather than an outage. Checked AFTER
+    // blockedUnitSaveMessage so a genuine outage still gets the outage message and is never
+    // blamed on the operator. Deliberately not applied while unitLoad is anything but 'loaded':
+    // during an outage isKnownUnit is false for everything, and this would reject every item.
+    //
+    // A blank unit is rejected here even though free text allowed it. A recipe bills off
+    // rate_per_acre and a blank unit still bills, so "saved but unpriceable" is the outcome this
+    // screen exists to prevent, and the picker makes a blank the easy accident now that there is
+    // no seeded default.
+    if (unitLoad === 'loaded' && unitConversions.length > 0) {
+      // "Product not in the list" is NOT the same as "product whose form is null", even though
+      // `?.product_form ?? null` renders them identically — and a null form means isKnownUnit
+      // accepts every unit. So an item whose product has not loaded yet (open an existing
+      // recipe before fetchProducts returns) would sail through the check below carrying a
+      // liquid unit on a dry product. Refuse to guess: if the product is unresolved there is
+      // nothing to validate against. This is the same shape as the product_form bug fixed in
+      // c461493b — absent data reading as "no restriction".
+      const unresolved = editItems.find(
+        (item) => item.product_id && !products.some((p) => p.id === item.product_id),
+      );
+      if (unresolved) {
+        toast('error', `Product details for ${unresolved.product_name || 'an item'} have not loaded yet, so its unit cannot be checked. Try saving again in a moment.`);
+        return;
+      }
+      const badItem = editItems.find((item) => {
+        // Safe now: either the product resolved, or product_id is blank (nothing picked yet),
+        // where a null form correctly means "any real unit is acceptable so far".
+        const productForm = products.find((p) => p.id === item.product_id)?.product_form ?? null;
+        return !item.unit.trim() || !isKnownUnit(unitConversions, productForm, item.unit);
+      });
+      if (badItem) {
+        const who = badItem.product_name || 'each product';
+        toast('error', badItem.unit.trim()
+          ? `"${badItem.unit}" is not a unit ${who} can use. Pick one from the list.`
+          : `Pick a unit for ${who}.`);
+        return;
+      }
     }
 
     await runCriticalAction({
@@ -308,14 +386,23 @@ export default function BlendRecipes() {
   const addItem = () => {
     setEditItems([
       ...editItems,
-      { product_id: '', product_name: '', quantity: 0, unit: 'gal', rate_per_acre: null, price_input: '', sort_order: editItems.length, notes: '' },
+      // No seeded unit. Any default is a guess about a product that has not been picked yet,
+      // and a NON-BLANK guess is the dangerous kind: it slips past a blank-only save guard, so
+      // during a unit-list outage the seed itself would have been saved — a liquid unit landing
+      // on a dry product. Blank forces a deliberate pick and is what the save guard below
+      // actually checks. (The previous seed was 'gal', which unit_conversions does not even
+      // contain; correcting it to 'Gal' would have kept the real hole open.)
+      { product_id: '', product_name: '', quantity: 0, unit: '', rate_per_acre: null, price_input: '', sort_order: editItems.length, notes: '' },
     ]);
   };
 
+  // Functional updater, NOT a copy of the `editItems` closure: the product <select> fires
+  // two updateItem calls in one handler (product_id then product_name). Reading the closure
+  // meant the second call started from pre-first-call state and threw the product_id away —
+  // the row kept the product's NAME while its ID silently reverted to ''. That left the unit
+  // picker unable to see the product's liquid/dry form, and the saved item carried no product.
   const updateItem = (idx: number, field: keyof EditItem, value: string | number | null) => {
-    const updated = [...editItems];
-    updated[idx] = { ...updated[idx], [field]: value };
-    setEditItems(updated);
+    setEditItems((prev) => prev.map((item, i) => (i === idx ? { ...item, [field]: value } : item)));
   };
 
   const removeItem = (idx: number) => {
@@ -532,7 +619,18 @@ export default function BlendRecipes() {
                       const p = products.find((pr) => pr.id === e.target.value);
                       updateItem(idx, 'product_id', e.target.value);
                       if (p) updateItem(idx, 'product_name', p.product_name);
+                      // Switching to a product of the other form leaves the old unit selected
+                      // as a grandfathered option — e.g. the 'Gal' seed surviving onto a DRY
+                      // product. Clear it so the operator has to pick a unit that fits, rather
+                      // than saving a liquid unit on a dry product by not looking.
+                      // Only when the list really loaded: during an outage isKnownUnit is false
+                      // for everything, and clearing would wipe a stored unit.
+                      if (unitLoad === 'loaded' && unitConversions.length > 0
+                        && !isKnownUnit(unitConversions, p?.product_form ?? null, item.unit)) {
+                        updateItem(idx, 'unit', '');
+                      }
                     }}
+                    aria-label={`Product ${idx + 1}`}
                     className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   >
                     <option value="">Select Product</option>
@@ -548,13 +646,18 @@ export default function BlendRecipes() {
                     placeholder="Qty"
                     className="w-20 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   />
-                  <input
-                    type="text"
-                    value={item.unit}
-                    onChange={(e) => updateItem(idx, 'unit', e.target.value)}
-                    placeholder="Unit"
-                    className="w-16 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
-                  />
+                  <div className="w-28 shrink-0">
+                    <UnitSelect
+                      unitConversions={unitConversions}
+                      // NOT the page's `form` state (that is recipe metadata) — this is the
+                      // selected product's liquid/dry form, which filters the unit list.
+                      form={products.find((p) => p.id === item.product_id)?.product_form ?? null}
+                      value={item.unit}
+                      onChange={(value) => updateItem(idx, 'unit', value)}
+                      disabled={saving}
+                      ariaLabel={`Unit for ${item.product_name || `product ${idx + 1}`}`}
+                    />
+                  </div>
                   <input
                     type="number"
                     step="0.01"

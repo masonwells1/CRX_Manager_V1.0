@@ -2,6 +2,33 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-23 — Replaced the last two free-text unit-of-measure inputs (Field App Split…
+
+Replaced the last two free-text unit-of-measure inputs (Field App Split Invoice Editor rate unit, Blend Recipes item unit) with the shared UnitSelect dropdown, so a unit can no longer be typed or pasted on those screens. Both now load unit_conversions, filter options by the product liquid/dry form, block a save whose unit is blank only because the list failed to load, and clear a unit the newly picked product form cannot offer. Fixed two pre-existing defects in the same path: the new-recipe-item seed was the invalid lowercase gal (live stores Gal), and BlendRecipes updateItem copied a stale closure so picking a product kept its name while silently reverting product_id to empty. Verified by driving both real screens in a browser via a throwaway stubbed Vite harness, plus live grounding that products use exactly liquid/dry/null and every form yields a non-empty option list. Frontend only: no migrations, no database writes.
+
+**Correction to the paragraph above (same session).** The form filtering it claims was *not*
+actually working in the Split Invoice Editor when that paragraph was written. The picker read
+`product_form`, but the products query never selected the column, and the
+`as Array<ProductOption>` cast hid it from TypeScript — so at runtime the value was always
+`undefined`, every unit stayed on offer, and the clear-on-form-change guard never fired. Neither
+the jsdom tests nor the browser harness could catch it: both feed the component a fixture row
+that carries `product_form` no matter which columns the query asked for. Fixed in `c461493b`,
+which also adds a test that asserts the requested column list itself (mutation-tested red/green)
+and re-grounds the claim against live — the exact column list returns real `product_form` values.
+Blend Recipes was never affected; it selects `*`.
+
+- **Substantive commits** — this list cannot be exhaustive, because the commits that edit this
+  entry cannot contain their own hashes. PR #447 is the complete record.
+  - `874e028a feat(units): replace last free-text unit boxes with UnitSelect`
+  - `670358cb docs: record the unit-picker work in CHANGELOG and KNOWN_ISSUES`
+  - `c461493b fix(units): actually select product_form for the rate-unit filter`
+  - `c4923d6e docs(changelog): correct the form-filtering claim and list all commits`
+  - plus the CodeRabbit round: rejects a unit that is blank or unusable for the product form
+    once the list has loaded, and drops the seeded `'Gal'` default that slipped past the
+    blank-only guard during an outage
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-22 — The chemical-unit and job-money invariants move out of React and into `save_job` (parked)
 
 `EXECUTE` on `save_job` is granted to `authenticated`. Every logged-in user can therefore call it
@@ -208,6 +235,7 @@ stays green while it is parked.
 No frontend change, and there is no client-side warning to fall back on: until PR #436 lands, this
 refusal is the operator's first indication that anything is wrong. **Parked: not applied to
 production.** An interactive session still needs Mason's explicit in-chat approval for a live apply.
+
 
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
