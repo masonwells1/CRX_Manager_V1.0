@@ -365,6 +365,76 @@ Cross-check the SHA against Vercel's own `list_deployments` for project
 
 ---
 
+## Never name the worktree path in a destructive shell command — CLAUDE worktrees (2026-08-20)
+
+**Scope: Claude-managed worktrees only.** Claude creates them at `<repo>/.claude/worktrees/<name>/`;
+Codex worktrees live outside the repo (`~/.codex/worktrees/…`) and have **no such collision** — see
+the Claude-only list in `scripts/agent-manifest-parity.mjs`. `review-proof-guard.mjs` itself is
+wired for both agents, but only a Claude worktree path trips it this way.
+
+Every file inside a Claude worktree carries a `.claude` path component, and `review-proof-guard.mjs`
+protects any `.claude` component — that is how it stops an agent deleting or forging the
+wrapper-owned review proofs and the applied-source ledger. It cannot tell "the repo's review state"
+from "an ordinary scratch file that happens to live under a worktree."
+
+The consequence is narrow and has a zero-cost workaround. **For this collision specifically**, the
+guard fires only when the command **spells out** the worktree path — your shell already starts
+inside the worktree, so relative paths avoid it. (That is a statement about the worktree collision,
+not the guard's complete matching rule: `review-proof-guard` independently blocks commands naming
+`.claude` or `.claude/session-state` anywhere, and treats `rm`/`mv`/`git clean`/`rsync --delete`
+and friends as destructive verbs. See the guard row in `agent-guardrails.md` for the full rule.)
+
+Every ✅ row below was **executed live in a worktree** while writing this page — not reasoned about,
+not checked against one hook. The ❌ rows were reproduced the same way.
+
+| | |
+|---|---|
+| ❌ `rm -f C:\CRX_Manager\.claude\worktrees\wt-a\scratch.tmp` | denied by `review-proof-guard` |
+| ❌ `cd C:\CRX_Manager\.claude\worktrees\wt-a && rm scratch.tmp` | denied by `review-proof-guard` |
+| ✅ `rm -f scratch.tmp` | ran |
+| ✅ `rm probe-dir/x.txt` (nested relative) | ran |
+| ✅ `mv a.txt b.txt` | ran |
+| ✅ `Write` to a worktree file (relative **or** absolute) | ran |
+
+Four things that look like this bug but are not — each is a **different layer**, so relative paths
+do not help:
+
+- **`rm -rf` never runs in a Claude session.** `.claude/settings.json` lists `Bash(rm -rf:*)` and
+  `Bash(rm -fr:*)` in `permissions.deny`, so it is refused before any hook sees it, worktree or not.
+  That permission layer is **Claude-side only** — Codex is governed by `.codex/hooks.json`, so check
+  there rather than assuming the same list. Use a targeted `rm <file>` or `rm -r <dir>`.
+- **`git clean -f`/`-fd`/`-fdx` is blocked for both agents** by the shared `bash-safety-lib.mjs`, and
+  additionally for Claude by `permissions.deny` (`Bash(git clean -f:*)`). `review-proof-guard` allows
+  it once the path is relative, but the command still does not run. Review with `git clean -n` first,
+  then delete the specific files.
+- **`find … -delete` is blocked everywhere** by a separate safety layer, with a message beginning
+  "Blocked". Not `review-proof-guard`, and not `bash-safety-lib.mjs` either —
+  that library allows it. Run the `find` without `-delete`, review the matches, then delete.
+- **A blocked `Write` to `.claude/session-state/stop-wrap-ack.json` is a different hook.**
+  `review-proof-guard` deliberately allows that write — it is the designed session-end
+  acknowledgment valve.
+
+**Lesson worth keeping:** verifying a command against ONE hook does not tell you whether the command
+runs. In a Claude session a Bash call passes through `permissions.deny` in `.claude/settings.json`,
+then several PreToolUse hooks, then the harness's own safety layer — any one of them can refuse it.
+Codex has its own stack (`.codex/hooks.json`) that shares the hook implementations but not the
+permission list, so verdicts are not automatically the same. **Run the command; do not reason about
+it.** This page's first two drafts each claimed a command was "allowed"
+after checking a single guard (`git clean -fd`, then `rm -rf`); both were wrong and both were caught
+in review of PR #434, which is why every ✅ above is now something that was actually executed.
+
+**Do not "fix" this by stripping the worktree prefix out of the command text.** That was attempted
+on 2026-08-19/20 and abandoned after five independent `gpt-5.6-sol` review rounds found eight real
+security holes in five successive versions — each a different way to spell the same path: a trailing
+separator; `../..`; a `$var` descendant; a `/.` dot alias; `."."` quote-joining; an operand named
+`cd`; cmd.exe expansion (`%VAR:~0%` and `!VAR!` — one finding, two spellings); and cmd.exe caret
+escapes. Each round's test suite was green over the next round's hole. All eight are pinned as
+denials in `review-proof-guard.test.mjs` so a future attempt trips on them immediately. See `docs/manual/KNOWN_ISSUES.md` for the options if this is ever worth fixing
+properly — the leading one is moving worktrees out from under `.claude` entirely, which removes
+the collision instead of papering over it.
+
+---
+
 ## Source
 
 This file consolidates lessons from `~/.claude/projects/.../memory/feedback.md` and historical debugging sessions. Add new entries here whenever a non-obvious quirk causes a bug.

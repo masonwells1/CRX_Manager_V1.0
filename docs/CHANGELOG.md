@@ -217,6 +217,448 @@ Actor-binding fresh repair cycle: fixed pre-guard exits, quoted qualifier rebind
   - `supabase/migrations/20260812030000_reject_non_finite_money_and_quantities.sql`
   - `supabase/migrations/20260812050000_guard_job_commission_split_immutable.sql`
   - `supabase/migrations/20260812060000_require_completed_delivery_before_invoice_post.sql`
+## 2026-08-23 — Replaced the last two free-text unit-of-measure inputs (Field App Split…
+
+Replaced the last two free-text unit-of-measure inputs (Field App Split Invoice Editor rate unit, Blend Recipes item unit) with the shared UnitSelect dropdown, so a unit can no longer be typed or pasted on those screens. Both now load unit_conversions, filter options by the product liquid/dry form, block a save whose unit is blank only because the list failed to load, and clear a unit the newly picked product form cannot offer. Fixed two pre-existing defects in the same path: the new-recipe-item seed was the invalid lowercase gal (live stores Gal), and BlendRecipes updateItem copied a stale closure so picking a product kept its name while silently reverting product_id to empty. Verified by driving both real screens in a browser via a throwaway stubbed Vite harness, plus live grounding that products use exactly liquid/dry/null and every form yields a non-empty option list. Frontend only: no migrations, no database writes.
+
+**Correction to the paragraph above (same session).** The form filtering it claims was *not*
+actually working in the Split Invoice Editor when that paragraph was written. The picker read
+`product_form`, but the products query never selected the column, and the
+`as Array<ProductOption>` cast hid it from TypeScript — so at runtime the value was always
+`undefined`, every unit stayed on offer, and the clear-on-form-change guard never fired. Neither
+the jsdom tests nor the browser harness could catch it: both feed the component a fixture row
+that carries `product_form` no matter which columns the query asked for. Fixed in `c461493b`,
+which also adds a test that asserts the requested column list itself (mutation-tested red/green)
+and re-grounds the claim against live — the exact column list returns real `product_form` values.
+Blend Recipes was never affected; it selects `*`.
+
+- **Substantive commits** — this list cannot be exhaustive, because the commits that edit this
+  entry cannot contain their own hashes. PR #447 is the complete record.
+  - `874e028a feat(units): replace last free-text unit boxes with UnitSelect`
+  - `670358cb docs: record the unit-picker work in CHANGELOG and KNOWN_ISSUES`
+  - `c461493b fix(units): actually select product_form for the rate-unit filter`
+  - `c4923d6e docs(changelog): correct the form-filtering claim and list all commits`
+  - plus the CodeRabbit round: rejects a unit that is blank or unusable for the product form
+    once the list has loaded, and drops the seeded `'Gal'` default that slipped past the
+    blank-only guard during an outage
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
+
+`node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —
+so the parked-migration count could not be read at all. That blocks stamping a new migration into
+a queue nobody can count, which is how two branches collide on the same schema.
+
+The check was unsatisfiable by construction. `parkedDraftPathsFrom` reconciled the
+`LOCAL CANDIDATE — NOT APPLIED` rows of `docs/reference/migration-history.md` against the branch's
+own-draft diff (`base..HEAD`) — but that history file is **shared, and arrives from `origin/main`**.
+An inherited candidate row naming SQL that also came with `origin/main`, with no net change since
+the branch point, does not appear in that diff. (`base..HEAD` is a *net* diff: a file touched and
+then reverted is likewise absent, while one genuinely changed **is** present and reconciles
+normally.) A guard that always answers UNKNOWN answers nothing.
+
+- **Fixed the check's domain, not by adding a bypass.** `createOwnDraftPathsReader` now exempts a
+  row **only when `origin/main`'s own shared history REGISTERS it as a LOCAL CANDIDATE** — because
+  then mainline discovery owns it and verifies its pin/header against the same immutable tree. One
+  rule, reading a structured registry. Everything else stays reconciled.
+- **"Exists on `origin/main`" is deliberately NOT sufficient**, and this is the sharp edge. A first
+  draft exempted any candidate whose SQL was present in `origin/main`'s tree; the Codex reviewer
+  raised it as a P1 on PR #437 and it reproduced. A branch may newly register an ordinary
+  already-committed migration as a LOCAL CANDIDATE via the supported SHA-pin form, changing only
+  `migration-history.md`. The SQL is then absent from `base..HEAD`, `origin/main`'s older history
+  does not list it, and its blob carries no parked header — so mainline discovery reports nothing
+  either, and `/fleet` would have **confidently hidden a genuinely pending migration**. Existing on
+  main is not the same as being *accounted for* by main. A dedicated test pins this.
+- **A second exemption arm — "`origin/main` records this migration as settled" — was tried twice
+  and CUT.** Codex blocked both attempts on PR #437, correctly. A bare substring test read
+  `NOT YET APPLIED LIVE` as settled (and `migration-history.md` really carries six such rows).
+  Rejecting an *adjacent* negator still read `will be applied live`, `not successfully applied
+  live` and `not considered superseded` as settled — and worse, row 887, which is genuinely
+  pending (`**LOCAL CANDIDATE — NOT APPLIED.**`), matched purely on later prose mentioning
+  "applied live" and a "superseded price". Every version could flip a conservative UNKNOWN into a
+  **confident zero** over pending SQL. The arm cleared exactly one worktree, so it was removed
+  rather than iterated a third time; the lib carries a DELIBERATELY-ABSENT note stating that any
+  re-add must parse a structurally anchored status field, never prose.
+- **One pinned `origin/main` object id for a whole scan.** Codex raised this same invariant three
+  times on PR #437, and the first two fixes each satisfied it in one component while another still
+  resolved the moving ref on its own — a narrower race is not a fixed one. `origin/main` is shared
+  with every concurrent session, so a `git fetch` landing mid-scan can put two phases on different
+  commits: if the fetch adds a SHA-pinned LOCAL CANDIDATE whose SQL carries no parked header, the
+  older history does not name it, the newer tree holds it, the grep never sees it, and mainline
+  discovery answers `known` while **omitting a pending migration**. Both consumers now resolve
+  `origin/main` to a single object id up front and pass it to every mainline read — history, tree,
+  grep, blobs, mtime, merge-base, and the fallback diff. The lib's readers take that id as an
+  argument defaulting to the symbolic name, so an unpinned caller keeps its previous behaviour.
+  Ten assertions pin it, and reverting any single call site to `origin/main` reddens them.
+- **The pin then broke the grep prefilter, and Codex caught that too.** `git grep <rev>` prefixes
+  every hit with `<rev>:`. The prefilter stripped the literal `origin/main:`, so pinning made the
+  prefix `<sha>:`, every hit came back malformed, `originMainForwardBlobPaths` rejected it, no SQL
+  was opened, and discovery answered `known` with **no paths** — a confident zero over a parked
+  migration, reintroduced inside the fix for confident zeroes. It now strips whatever revision was
+  actually searched and treats a hit missing that prefix as UNKNOWN rather than dropping it. Only
+  the function's two error paths had ever been tested; the success path had no coverage at all,
+  which is how it shipped. It has coverage now. **This one is latent in the current repo** — it
+  needs a parked migration on `main` with no `LOCAL CANDIDATE` history row, which does not exist
+  today — so the fleet run looks identical either way and does not prove it; the tests do.
+- **The exemption compares the row, not just the path.** Codex P2: matching on path alone let a
+  branch rewrite an existing mainline candidate row in place — swapping its SQL sha256 pin for a
+  different 64-hex value — and still report KNOWN, because the SQL file is untouched and the
+  SQL-only `base..HEAD` diff never names it. That branch's own history-to-SQL cross-reference was
+  invalid, and merging it would turn the mainline scan UNKNOWN. A row is exempt only when
+  `origin/main` registers the same path **and** the branch's pin still agrees with mainline's.
+  Absent on both sides counts as agreement; present on one side only, or differing, does not.
+- **A structural guard now enforces the pinning, because prose did not.** Codex raised the "one
+  snapshot per scan" invariant **four** times; each manual fix satisfied the call sites in view and
+  missed a sibling. The last was `mergedLabel()` in `fleet-status.mjs`, still on the symbolic ref
+  after its twin in the SessionStart hook was pinned — visible in my own grep output and skipped.
+  A test now scans both consumers and fails on any revision-consuming git subcommand
+  (`merge-base`, `ls-tree`, `show`, `log`, `diff`, `grep`, `cat-file`, `rev-list`) that names
+  `"origin/main"` instead of the pinned id. `rev-parse` is exempt — that is where the symbolic
+  name is correct — and display strings are not git arguments. Mutation-tested: reverting that one
+  call site reddens it by file and rule.
+- **The exemption reads nothing of its own** (Codex HIGH, round 4). It consumes the exact
+  `origin/main` history text the caller's mainline discovery pass verified against, injected via
+  `readOriginMainHistory`. When the reader resolved `origin/main` independently, a concurrent
+  `git fetch` between the two phases meant mainline discovery could inspect commit A and report
+  no candidate while the exemption saw that candidate registered in commit B and suppressed
+  reconciliation — again a **confident zero** over pending SQL, reproduced by Codex. Both callers
+  (`scripts/fleet-status.mjs`, `.claude/hooks/worktree-awareness.mjs`) now read that history once
+  per run and share the same bytes with both phases, so the two cannot disagree about the
+  registry. A caller supplying no history exempts nothing.
+- **Not a relaxation.** An unreadable `origin/main` history exempts nothing and keeps the old
+  conservative answer. Under-reporting — a confident zero over real pending migrations — is the
+  dangerous direction, so every branch of this is pinned by tests and was mutation-tested,
+  including an aggregate false-zero regression test reproducing Codex's exact scenario.
+- **One lib, both consumers.** `scripts/fleet-status.mjs` and the SessionStart banner share
+  `.claude/hooks/worktree-awareness-lib.mjs` by design (2026-07-29), so the change is in the lib.
+- **Real settled-row case.** `origin/main` row 886 records
+  `20260813080000_lock_quote_versions_writes_to_rpc.sql` `APPLIED LIVE` (live `list_migrations`
+  agrees) while a branch still carried it as a LOCAL CANDIDATE. That row even notes the file's own
+  `-- STATUS: NOT APPLIED` header is stale and deliberately uncorrected, because CRX never edits an
+  applied migration.
+- **Cost.** The ~840 KiB shared history is parsed once per worktree, and `origin/main`'s history is
+  read once per reader.
+
+**Proof:** the structural defect is gone — every worktree reported UNKNOWN before; **6 of 23** do
+now (measured 2026-08-20; the fleet churns, so treat the denominator as a snapshot). Those six are
+named, specific, and real (see below). Note the honest cost: **3 of the 6 come from this PR's own
+pin comparison** — an A/B at one moment measured 3 UNKNOWN with the comparison disabled and 6 with
+it enabled. Three branches carry a candidate row whose sha256 pin disagrees with `origin/main`'s.
+The scan cannot distinguish "this branch rewrote the pin" (the Codex P2 tampering case) from "this
+branch is stale and mainline changed the row underneath it", so it declines to answer for both.
+That is the fail-closed direction and it is deliberate, but it means this PR buys a smaller
+reduction than the structural fix alone would suggest. All mainline candidates are still listed by
+name — attributed, not hidden. 230 lib assertions pass, including the original
+rule's own UNKNOWN test, the tree-vs-history regression, the cross-phase snapshot regression, and
+an aggregate false-zero regression. A standalone end-to-end probe drives all seven false-zero
+shapes Codex raised across four review rounds (negated, future, qualified, qualified-negation,
+prose-only, stale snapshot, no history) through the real reader and gets UNKNOWN for every one,
+plus a registered-candidate control that still exempts and an assertion that the reader issues no
+ref-resolving git call of its own. Both real consumers were run: `fleet-status.mjs` and the
+SessionStart hook, which agree.
+
+**Still open, and NOT a code defect.** Of the six, three are the pin-disagreement cases described
+above. The others are stale checkouts — **70–104 commits behind `origin/main`**
+and still hold its older wording of rows 872–877/886. `main` has since re-worded those same rows —
+PR #393 restaged the Wave A drafts into `scripts/.staging-migrations/` ("PARKED DRAFT (STAGED)")
+and row 886 became "APPLIED LIVE" — so the stale copies still read "LOCAL CANDIDATE" for SQL those
+branches never touched. Nothing on those branches needs editing; they are simply stale, and the
+work they name is already counted via the staging-draft path. Until they are refreshed or retired,
+`/fleet` reports `PARKED STATE UNKNOWN` rather than a number — by design, because a confident zero
+over pending SQL is the worse failure.
+
+Scope: guard/reporting tooling only. No schema change, no migration, no live data, no money path.
+Diagnosis: `docs/reference/parked-migration-scan-unknown-diagnosis.md`. PR #437.
+
+Also filed (diagnosis only, deliberately not bundled): the Phase 3C containment scanner walks the
+repository's own gitignored `dist/` and opens each file with no `ENOENT` tolerance, so a concurrent
+rebuild refuses the push with a misleading "containment failed" — `docs/manual/KNOWN_ISSUES.md`.
+## 2026-08-20 — Blend-ticket unit fields are now dropdowns instead of free text,…
+
+Blend-ticket unit fields are now dropdowns instead of free text, removing the cause of the unit bug class rather than warning about it. Built by headless Codex (gpt-5.6-sol) from a Claude-authored spec, with Claude reviewing the diff and running every check; Codex never touched git, the live database, or a deploy. A shared UnitSelect offers only units the live unit_conversions table carries, filtered to the product's form, and grandfathers an odd saved value so opening an old ticket can never silently blank it. The product form is resolved from each row's current product_id rather than a joined object captured at load. Applying a recipe now pre-selects the product's catalog rate unit instead of saving blank, so the ticket shows the unit it will actually bill in. Proved in a real browser through Vite, not only under vitest; 107 tests green; blendMathValidator deliberately untouched. No schema change, no migration, no edge function.
+
+Review round 2 (CodeRabbit Major, confirmed against source): the picker made a failed
+`unit_conversions` load *unrecoverable* — the list is empty, so the only option is the disabled
+`--` and the operator can no longer type a unit the way free text allowed, while the save still
+persisted the blank. Both screens now surface the failed load (an error banner on manual create,
+a toast on the detail page) and refuse a save that left a unit blank because the list never
+arrived. The block is deliberately narrow: it fires only when the list is empty *and* a row is
+actually missing a unit, so a deliberate blank on a healthy list still saves as before. Both
+guards are mutation-tested — reverting either turns its regression test red. Two existing test
+harnesses returned `[]` for `unit_conversions`, which read as a failed fetch to the new guard;
+they now return the fixture, matching live, where the table is never empty.
+
+Review round 3 (CodeRabbit Minor, also confirmed): that first guard read an empty array as the
+failure signal, but an empty array means three different things — the request is still in
+flight, it failed, or the table really is empty — and only one of them is "refresh the page". A
+fast operator could be told to refresh for a request that was about to succeed. Both screens now
+carry an explicit `pending | loaded | failed` state and route it through one shared
+`blockedUnitSaveMessage()` in `src/lib/units.ts`, so the message names the state that is actually
+true. Verified by calling the shipped function in a real browser through Vite, not only under
+vitest.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `5beda01a feat(blend): pick units from a list instead of typing them`
+  - `fix(blend): surface a failed unit load and block the blank-unit save it causes`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-19 — draw-down retries are bound to the actor and exact booking intent
+
+Pending migration `20260819232000_bind_draw_down_receipts_to_intent.sql` closes the stale-receipt
+hole in `draw_down_quote`: the same key can replay only for the same authenticated actor, quote and
+ordered canonical draw quantities. A changed quantity fails with `IDEMPOTENCY_INTENT_MISMATCH`; a
+different actor fails with `IDEMPOTENCY_ACTOR_MISMATCH`. Numeric-equivalent quantities such as
+`1`, `1.0` and `1.00` remain exact replay, while draw-array order and duplicates remain meaningful.
+The below-cost reason is approval metadata and is deliberately not part of mutation identity.
+
+The migration does **not** copy or change the large money/inventory implementation introduced by
+the pending price-tier work. It renames the current governed five-argument wrapper to an owner-only
+private function and adds a small public wrapper in front of it. The preserved chain still owns the
+cutover lock, below-cost approval, exact quote-tier price/cost/profit calculation, commissions,
+inventory prebooking and draw ledger. Active admins and sales reps can still cover another rep's
+live booking; actor binding is not an ownership restriction. Soft-deleted quotes remain hidden.
+Preflight and postflight now SHA-256-pin the exact reviewed intent helper, preserved cutover wrapper,
+new outer wrapper, tier-split implementation and all five allocated-cent lifecycle bodies. The helper
+must also remain the only overload, owned by `postgres`, `SECURITY DEFINER`, search-path-pinned and
+owner-only executable, so a signature-compatible drift or partial apply is refused fail-closed.
+The migration header records the separately approved emergency revert sequence: drain draws under
+the cutover lock, drop only the new public wrapper, rename the preserved private wrapper back, and
+restore its prior grants. It also warns that this intentionally restores the stale-receipt risk and
+must never be approximated with `CREATE OR REPLACE`.
+
+All six registered smoke chains that create booking draws now supply unique per-run retry keys.
+Their fixtures also follow the current governed pricing, immutable cost-snapshot and row-version
+contracts. The planned-holds fixture deliberately echoes quote-item IDs so duplicate products in
+different sections stay identifiable across repeated ordinary saves; after the merged tier-split
+restore guard, its drawn-version restore case now proves `QUOTE_RESTORE_BLOCKED_BY_DRAW` leaves
+holds unchanged. The restore-version chain likewise expects that provenance refusal for every
+drawn snapshot, while its no-draw control still restores. The separate save-quote-drawn guard
+retains the production id-less fallback shape. Because these chains end in rollback, they do not
+claim to validate commit-time deferred foreign keys. A separate
+container-only proof now confirms a duplicate-product id-less revision is still refused by
+`QUOTE_ITEM_AMBIGUOUS_COST`, then draws two separately identifiable products across two sections,
+sends the production id-less `save_quote` payload, and reaches a real `COMMIT` before printing its
+pass marker. That forces the deferred `order_items.quote_item_id` foreign key to validate both
+stamped lines. The network-isolated restored-schema prover executes all six registered draw chains
+after the candidate and confirms each reaches `SMOKE_PASS_ROLLBACK`, then runs the committing
+supported multi-line id-less proof.
+
+The draw modal now consumes the shared intent-binding recovery contract. A permanently refused key
+is retired instead of trapping the operator until reload; when the mismatch receipt proves an order
+already committed, the page opens that exact order rather than offering another draw. Ambiguous
+receipt/actor cases reload the booking balance and explain the next step, and auth/role failures are
+shown in plain English. Non-numeric and non-finite quantities fail closed with
+`BOOKING_QUANTITY_INVALID`; malformed product identifiers fail with the governed
+`BOOKING_PRODUCT_INVALID` token instead of a raw PostgreSQL cast error. If a changed-intent receipt
+cannot identify the committed order, the operator is sent to Orders before any retry. The new
+public wrapper is executable only by `authenticated`; the unusable `service_role` grant is removed
+because the wrapper requires an authenticated user id and no service caller exists.
+
+The re-review closed the remaining release-proof gaps. The idempotency-key advisory lock is now
+taken before the quote row lock, aligning draw-down with `save_quote`, `convert_quote_to_order`,
+`create_quote_version` and `restore_quote_version`; draw-down was the only lock-order inversion.
+The shared helper re-takes that lock reentrantly before reading the receipt. The money path now
+requires a 1-200 character printable-ASCII retry key, so
+a direct keyless PostgREST call cannot double-create an order, inventory prebooking or ledger row.
+At apply time the migration takes the existing draw-cutover key exclusively, draining legacy calls
+that reached the shared barrier and refusing new barrier participants before it scans for unexpired
+legacy receipts. A cached-plan backend paused before its first wrapper statement is outside that
+lock guarantee; if it finishes after commit, the shared helper treats its unbound receipt as an
+intent mismatch and the UI opens the committed order instead of drawing twice. A temporary-table
+transaction guard refuses autocommit execution before that lock is taken. The
+shared helper's receipt DETAIL is intentionally sales-rep reachable here, following the already-live
+return lifecycle RPC precedent: keys are high-entropy and active reps already share the
+booking/order visibility boundary. The hash-bearing lifecycle migration, this migration, its rollback
+smoke and its prover are all pinned to LF in `.gitattributes`. The already-live migration that
+defines `check_idempotency_intent` is now pinned too: a read-only 2026-08-20 catalog read confirmed
+production stores that helper LF-only (`stores_crlf = false`), matching the reviewed SHA-256. The
+static proof binds each hash to its exact catalog variable instead of merely finding the same value
+somewhere in the candidate.
+
+Operator consequence for the later apply: draw receipts live 24 hours, so the preflight requires a
+deliberate 24-hour window with no successful booking draws before this fourth migration can land.
+Plan that freeze for an off-season or weekend window, verify the read-only receipt count is zero,
+and keep draws paused through commit. The fail-closed choice is recorded in the decision log, the
+older ownership draft is marked fully superseded in known issues, and the container prover now
+executes the candidate under `REPEATABLE READ` to prove the stale-snapshot guard refuses it before
+the legacy-receipt scan. This PR still does not start or authorize that freeze/apply.
+
+Added focused migration/RPC contracts, real QuoteBuilder component recovery tests, and a
+container-only rollback smoke covering exact replay, changed quantity, changed actor,
+cross-representative success, replay after a later soft delete, required-key refusal, one $10 sale / $5 cost / $5 profit
+order, one inventory reservation, one draw-ledger row, and a bound receipt. Keyless calls are now
+refused before the money implementation. The component tests also
+exposed and fixed an initial-load timing defect that could mark a freshly loaded saved quote dirty
+and block its first draw; existing-quote load-generation state now releases suppression from React's post-commit
+effect, so a slow or coverage-instrumented render cannot release it on elapsed time. Mismatch recovery
+now reports a successful balance reload
+only when all three reload reads actually succeed. This migration must follow `20260816110000`,
+`20260816120000` and
+`20260817120000`. **It has not been applied live and this PR does not authorize applying it.**
+
+`node scripts/smoke/prove-draw-down-quote-intent-binding.mjs` applied the migration verbatim on a
+network-isolated PostgreSQL 17 container. Its compact mutation database installs the exact reviewed
+helper/wrapper/pricing/lifecycle prerequisites, executes every hash gate, and swaps in an effect-recording stand-in
+only for adversarial wrapper schedules. A second database restores the supported
+`20260727174805` full schema, replays every default replay-eligible ledger-selected migration
+through this candidate while surfacing the quarantined one-shot set, and
+executes `smoke-draw-down-quote-intent-binding.sql` against the real tier-split money, commission,
+inventory and draw-ledger implementation to `SMOKE_PASS_ROLLBACK`. It proves one $10 sale / $5 cost
+/ $5 profit line and header, one exact $5 commission, one inventory prebooking, one bound receipt
+and one draw-ledger row.
+The compact schedules pass admin/rep authorization, inactive,
+missing-profile, unauthenticated and actor-parameter refusals, key-required and keyed input guards,
+exact replay, changed/non-numeric/non-finite quantity, changed receipt actor,
+deleted quote, ACL, and both same-key concurrency cases. Mutation proof is non-vacuous: removing
+draw quantities is refused by the exact outer-body postflight; a NULL-returning helper, disabled
+actor/fingerprint comparisons, comment-only wrapper calls, an extra helper overload and a drifted
+tier-split body are all refused; and a simulated in-flight legacy draw is drained by
+the exclusive cutover lock before its new receipt blocks cutover. The replay selector also prints
+its one-shot quarantine notice instead of silently implying those data-specific files were replayed. The
+container used `--network none` and tmpfs;
+production was untouched.
+
+The protected merged-main verification pipeline passed ESLint, TypeScript type checking, the
+production build, 336 test files with 4,634 tests passed and 123 intentionally skipped, agent
+workflow/guard regressions, documentation drift checks, and private-artifact containment. Focused
+post-review migration/RPC contract checks passed 102/102 before the full pipeline reran.
+
+## 2026-08-20 — Merged main's zero-width unit fix into the blend-ticket rate/unit…
+
+Merged main's zero-width unit fix into the blend-ticket rate/unit check, keeping main's delete-don't-space normalizer and re-applying the unit-aware rate arm on top of it. Found that the fix does not reach the money path: rateBaseUnit, which every billing-related unit lookup routes through, still leaves zero-width characters intact, so a unit pasted from a PDF can silently skip the rate check or fire a false 'this ticket will fail when you invoice it' alarm. Main's 5 zero-width regression tests were displaced by the merge and still need porting to the new warning shape. 77 tests green and typecheck clean; nothing pushed, no migration, no edge function.
+
+> **CORRECTION, same day, after the PR #439 review.** Two claims in the paragraph above are wrong and
+> the fix they describe was reverted before merge. (1) The "false alarm" was **true**: live
+> `normalize_rate_unit` is `lower(btrim(...))`, `btrim` strips outer spaces only, so the database
+> really does refuse `m<ZWSP>g` and the invoice really would fail — confirmed by reading live
+> `pg_proc.prosrc`. (2) Stripping zero-width inside `rateBaseUnit` was therefore backwards: that
+> function predicts the server, and making it more permissive turns an accurate early warning into a
+> ticket that fails at invoicing instead. Raised as `CRX-MONEY-PARITY-001` by gpt-5.6-sol. The strip
+> is reverted, the parity contract is now pinned by tests that fail if it is re-added, and the real
+> remaining fix is a migration hardening the SQL with the client relaxed in the same change. See the
+> OPEN entry in `docs/manual/KNOWN_ISSUES.md`.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `25e5f9a3 Merge branch 'claude/blend-unit-rebuild-step1' into claude/blend-ticket-rate-unit-check-ccbba2`
+  - `91051d74 feat(blend): tier the math warnings so "couldn't check" reads differently`
+  - `c4f24e06 Merge branch 'claude/loving-hofstadter-6b1f5e' into claude/blend-unit-rebuild-step1`
+  - `4a3ebe40 fix(blend): delete the wrong total-volume equation, add three true ones`
+  - `7b4cf67c Merge branch 'claude/loving-hofstadter-6b1f5e' into claude/blend-unit-rebuild-step1`
+  - `b22d14e1 fix(blend): make the per-acre rate check unit-aware on a billing path`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-19 — Blend-ticket warnings are tiered, so "couldn't check" stops looking like "you're wrong"
+
+`validateBlendMath` returned `string[]`, and both callers rendered every entry in the same amber
+"Math Validation Warnings" block. After the total-volume rebuild the **common** entry on a real
+ticket is a "could not be checked" note, so rendering it identically to a genuine error is exactly
+how a banner gets trained into wallpaper — the main risk an adversarial review raised against the
+whole redesign.
+
+- The return type is now `BlendMathWarning[]`, each carrying `level: 'mismatch' | 'unchecked'`.
+  `mismatch` means a comparison **ran and disagreed**; `unchecked` means one **could not run** and
+  nothing is known to be wrong.
+- Both callers render two blocks: amber and alerted for `mismatch`, quiet grey headed "Not
+  automatically checked" for `unchecked`.
+- The predicted **invoice failure** is classified `mismatch`, not `unchecked`, even though no
+  comparison disagreed — `create_invoice_from_blend_ticket` will hard-raise on that line, so it is
+  a real problem rather than an unverified one.
+- Each of the 12 warning sites was classified individually rather than by pattern-matching its
+  message text, and the tier of each is now pinned by its own test: promoting an `unchecked` to a
+  `mismatch` relights the permanent banner and must fail loudly.
+- **Closed a real coverage gap:** both caller test files mock the validator away, so *nothing* had
+  ever verified a warning reaching the screen. Two tests now render the real component and assert
+  the tiers stay visually distinct; mutation-tested by collapsing the two blocks back into one and
+  confirming the quiet-note test goes red.
+
+41 validator tests, 77 across the three affected suites.
+
+
+## 2026-08-19 — The blend-ticket total-volume check was the wrong equation; replaced with three true ones
+
+Mason confirmed on 2026-08-19 that a blend ticket's total volume is **"everything in the sprayer,
+so water + product"**. The products are therefore meant to come to *far less* than the total — a
+1,000 gal tank might carry 50 gal of actual product. `sum(product quantities) ≈ total_volume` was
+never a true statement about a spray ticket, so unit-converting it would only have made a false
+alarm more precise. **The equality check is deleted, not fixed.** Three statements that are
+actually true replace it:
+
+- **The tank equation.** The header's own `application_rate` × `total_acres` is the finished tank,
+  with water on both sides cancelling. Runs only when the free-text rate parses unambiguously.
+  **`parseApplicationRate` deliberately declines** a range, a sum of two terms, a bare number or
+  prose rather than taking the first number it sees — a confident guess about operator intent is
+  the exact bug class this rebuild exists to remove. In practice this means the tank check often
+  will not run at all; that is a bonus check, not the primary one.
+- **A dry blend's parts must equal its whole.** A total in a weight unit means no water (Mason,
+  2026-08-19), so products are converted into the ticket's unit and compared for equality. If any
+  product is not in a comparable weight unit the check says it was abandoned, rather than quietly
+  comparing a subset — dropping a row would break the claim rather than soften it.
+- **A spray tank can never hold more product than its total.** One-sided, so it cannot false-alarm
+  whatever the water volume happens to be, and it still works on a ticket mixing liquid and dry.
+
+**Net effect, stated plainly: most spray tickets now carry no total-volume check at all.** Before,
+they carried a noisy wrong one. This is the deliberate trade — a check that lies is worse than no
+check — and it was raised with Mason rather than presented as an upgrade.
+
+- **Banner fatigue was designed against.** A dry product sitting in a liquid tank is the ordinary
+  case, not an anomaly, and is silently excluded from the bound rather than warned about. Only a
+  quantity with **no unit at all** — a real data gap, and the hole three separate reviews found —
+  still produces a message.
+- `application_rate` was added to `TicketData` and to **both callers' effect dependency arrays**;
+  omitting it would have frozen the warning at whatever it was before the operator typed.
+- The obsolete tests that encoded the deleted equation were removed rather than adjusted to pass.
+  35 tests; the tank equation, the dry equality and the spray bound were each mutation-tested by
+  disabling them and confirming exactly the expected test went red. Verified by driving the real
+  module in a browser across all ten cases, including both dry-blend shapes and a scanned-ticket
+  shape.
+
+
+## 2026-08-19 — Blend-ticket rate check is unit-aware, and it guards a billing path
+
+**Correction to the entry below: this file is not display-only.** `create_invoice_from_blend_ticket`
+bills each line from `rate_per_acre` and its unit — never from `quantity` (verified against live
+`pg_proc`). A rate recorded in the wrong unit becomes a wrong invoice, not just a wrong number on
+screen. Earlier notes calling `blendMathValidator` "warning text only, severity low" were describing
+its output, not the fields it validates, and understated the risk.
+
+The per-acre rate check was completely unit-blind: it compared `quantity` against
+`rate_per_acre × total_acres` without ever looking at `unit` or `rate_per_acre_unit`. A product
+dosed at 2 gal/ac over 100 acres and entered as `200 oz` — a 128× error — was reported as a perfect
+match. It now converts before comparing, and refuses rather than guessing when it cannot.
+
+- **Conversion goes through `fieldAppPricedQuantity`** (`src/lib/chemCalculator.ts`), which mirrors
+  the live SQL `field_app_priced_quantity` the invoice bills through. Using `unit_conversions.factor_oz`
+  instead was considered and rejected: it knows grams and milligrams that billing cannot price, so the
+  warning and the invoice would disagree about the same line.
+- **`oz` is read by the product's form** — a weight ounce for a dry product, a fluid ounce for a
+  liquid, matching both the server and Mason's 2026-08-19 answer. A null form is treated as liquid,
+  as the server does.
+- **A blank line rate unit falls back to the product's own `rate_unit`,** mirroring billing's
+  `COALESCE(NULLIF(btrim(rate_per_acre_unit), ''), p.rate_unit)`. Refusing instead would have gone
+  silent on recipe-applied rows, which *always* arrive with a blank rate unit, and which bill anyway.
+- **New invoice pre-flight warning.** When a line's rate unit cannot reach the unit the product is
+  sold in, `create_invoice_from_blend_ticket` hard-raises `BLEND_TICKET_UNIT_UNCONVERTIBLE`. That is
+  now surfaced while the ticket is open instead of surfacing weeks later at invoicing.
+- **MG is deliberately supported.** No MG size exists anywhere, but the pricing function returns the
+  quantity untouched when the rate unit already equals the sold unit. All 3 live MG products are
+  MG-rated and MG-sold, so they price correctly through that identity path. MG only fails when paired
+  with a different sold unit — which is exactly what the pre-flight warning now catches.
+- **Per-acre suffix stripping is done here rather than reusing `baseUnitOfRate`,** which splits on the
+  first `/` unconditionally and so reads `oz/cwt` as `oz`. The live `normalize_rate_unit` keeps a
+  non-acre denominator whole so it can never match a bare unit. The existing helper's behaviour fails
+  in the dangerous direction — silent on screen, hard error at billing — so this file mirrors the
+  server instead. **The same divergence exists in `chemCalculator` itself, which the job chemical grid
+  uses; recorded as an open issue rather than changed here.**
+- **Callers now pass the catalog product's form and units** (`ManualTicketCreate.tsx`,
+  `BlendTicketDetail.tsx`). The fields are required on `ProductData`, so the compiler forces any future
+  caller to supply them rather than silently weakening the check on a billing path.
+- 10 new tests (43 in the file); the form split, the billing fallback, and the `oz/cwt` guard were each
+  mutation-tested by reverting them and confirming exactly the expected test went red. Verified by
+  driving the real module in a browser across all nine cases, including both MG shapes.
+
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 
 `validateBlendMath` summed every product quantity regardless of unit, so a ticket holding
@@ -282,6 +724,46 @@ skipped and why.
   that PR is what actually ships the change. (Commit SHAs are deliberately not cited here —
   this branch was rebased, and an earlier version of this entry cited a SHA that the rebase
   orphaned.)
+## 2026-08-20 — Worktree/review-proof-guard collision: documented, not fixed (5 review rounds, 8 holes)
+
+`review-proof-guard.mjs` denies destructive shell commands that NAME a path inside a **Claude-managed**
+worktree, because Claude creates them at `<repo>/.claude/worktrees/<name>/` and the guard protects any
+`.claude` path component. Codex worktrees live outside the repo and have no such collision. Bisected
+to `f3e06c52` (PR #423 round-3/5 hardening); `c64ea3d4` and `4b302050` are not implicated.
+
+**Impact is much smaller than first reported.** *For this collision*, the guard fires only when the
+command *spells out* the worktree path — the agent's shell already starts in the worktree, so
+`rm -f scratch.tmp`, `rm probe-dir/x.txt`, `mv a.txt b.txt` and `Write` (relative or absolute) all
+ran live in a worktree. That describes the collision, not the guard's whole matching rule: it also
+blocks commands naming `.claude`/`.claude/session-state` anywhere, with `rm`/`mv`/`git clean`/
+`rsync --delete`/`find -delete` as destructive verbs when the state directory is named. Two claims
+in the original report were wrong: the blocked `Write` to `stop-wrap-ack.json` came from a different
+hook, and `find … -delete` is blocked everywhere by a separate safety layer rather than by this
+guard. Note `rm -rf` and `git clean -f` never run anywhere in this repo — `permissions.deny` in
+`.claude/settings.json` refuses both before any hook sees them.
+
+**A fix was built and abandoned.** Five successive versions of a text-stripping carve-out were each
+reviewed by an independent `gpt-5.6-sol` high-effort pass. Every round found at least one real
+security hole — eight in total, each a different spelling of the same path (trailing separator,
+`../..`, `$var`, `/.`, `."."` quote-joining, an operand named `cd`, `%VAR:~0%`/`!VAR!`, caret
+escapes). Each round's suite was green over the next round's hole; mutation testing reached 14/15
+without surfacing round 5. Mason's call (2026-08-20): document, don't fix. **The guard is unchanged
+— zero behaviour change ships in this entry.**
+
+What landed: the workaround in `docs/reference/gotchas.md`; the full analysis and three ranked
+options (lead option: move worktrees out from under `.claude`) in `docs/manual/KNOWN_ISSUES.md`; and
+all eight holes pinned as denials in `review-proof-guard.test.mjs` — in every spelling, so the two
+cmd.exe expansion forms of the one finding are pinned separately — meaning a future carve-out attempt
+trips on them immediately. The cmd.exe exploits (`%VAR:~0%`, `!VAR!`, caret escapes) are pinned
+through the `cmd` tool name and a `cmd /c` form as well as Bash: those strings only carry their
+exploit semantics in cmd.exe, so a Bash-only tripwire would have stayed green while a future
+shell-specific carve-out opened the real route. Pinning both routes is deliberate — the guard must
+not decide by tool name, and the tests should fail if a change makes it do so.
+
+- **Files changed**: `.claude/hooks/review-proof-guard.test.mjs` (tests only), `docs/reference/gotchas.md`, `docs/manual/KNOWN_ISSUES.md`, `docs/CHANGELOG.md`
+- **Guard logic changed**: none
+- **Migrations touched**: none
+
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
 Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.

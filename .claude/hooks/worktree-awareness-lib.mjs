@@ -105,22 +105,49 @@ export function hasExplicitParkedMigrationHeader(sqlText) {
 // Git cannot enforce the parser's first-comment-block window, so the SQL blob is
 // still opened and passed through hasExplicitParkedMigrationHeader before it counts.
 // POSIX blank means portable ASCII space/tab, matching the parser exactly.
-export const ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS = [
-  "grep", "-l", "-i", "-E",
-  "-e", "^(\uFEFF)?[[:blank:]]*--[[:blank:]]*(STATUS:[[:blank:]]*)?(PARKED|NOT[[:blank:]]+APPLIED|DO[[:blank:]]+NOT[[:blank:]]+APPLY)",
-  "origin/main", "--", "supabase/migrations",
-];
+// `originMainRev` MUST be the one commit id the caller resolved for this whole scan.
+// Passing the symbolic name is the pre-pin behaviour and is kept only as the default so
+// an omitted argument cannot silently change an existing caller. See the cross-phase
+// snapshot note on `createOwnDraftPathsReader`: every mainline read in one scan \u2014 history,
+// tree, grep, blobs, mtime, merge-base \u2014 must name the SAME object id, or a concurrent
+// fetch can move the ref between two phases and produce a confident zero over pending SQL.
+export function originMainParkedMigrationGrepArgs(originMainRev = "origin/main") {
+  return [
+    "grep", "-l", "-i", "-E",
+    "-e", "^(\uFEFF)?[[:blank:]]*--[[:blank:]]*(STATUS:[[:blank:]]*)?(PARKED|NOT[[:blank:]]+APPLIED|DO[[:blank:]]+NOT[[:blank:]]+APPLY)",
+    String(originMainRev || "origin/main"), "--", "supabase/migrations",
+  ];
+}
+
+export const ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS = originMainParkedMigrationGrepArgs();
 
 // `git grep` uses exit code 1 for the healthy case where no file matched. Both
 // runtime consumers share this wrapper so only a real error/timeout falls back
 // to a complete forward scan.
-export function originMainParkedMigrationPrefilter(runGrep) {
+// `git grep <rev>` prefixes EVERY result line with `<rev>:`, so the prefix to strip is
+// whatever revision the caller actually searched — not the literal string "origin/main".
+// Codex P1 on PR #437: pinning the scan to an object id made the prefix `<sha>:` while
+// this stripped only `origin/main:`, so every hit came back malformed,
+// `originMainForwardBlobPaths` rejected it, no SQL was ever opened, and discovery
+// answered `known` with no paths — a confident zero over a parked migration, reintroduced
+// by the very fix for confident zeroes. A line WITHOUT the expected prefix means we are
+// not reading what we think we are, so it fails closed instead of being passed downstream
+// where a dropped path is indistinguishable from "nothing is parked".
+export function originMainParkedMigrationPrefilter(runGrep, originMainRev = "origin/main") {
+  const prefix = `${String(originMainRev || "origin/main")}:`;
+  const prefixLower = prefix.toLowerCase();
   try {
     const output = String(runGrep() || "");
-    return {
-      state: "known",
-      paths: output.split("\n").filter(Boolean).map((p) => p.replace(/^origin\/main:/i, "")),
-    };
+    const paths = [];
+    for (const line of output.split("\n").filter(Boolean)) {
+      if (line.slice(0, prefix.length).toLowerCase() !== prefixLower) {
+        return { state: "unknown", paths: null };
+      }
+      const p = line.slice(prefix.length);
+      if (!p) return { state: "unknown", paths: null };
+      paths.push(p);
+    }
+    return { state: "known", paths };
   } catch (error) {
     if (Number(error?.status) === 1) return { state: "known", paths: [] };
     return { state: "unknown", paths: null };
@@ -160,7 +187,10 @@ function originMainBatchPaths(paths) {
   return unique;
 }
 
-export function originMainSqlBlobMap(paths, runBatch, maxBuffer = ORIGIN_MAIN_CAT_FILE_MAX_BUFFER) {
+export function originMainSqlBlobMap(
+  paths, runBatch, maxBuffer = ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainRev = "origin/main",
+) {
+  const rev = String(originMainRev || "origin/main");
   const uniquePaths = originMainBatchPaths(paths);
   if (uniquePaths === null || !Number.isSafeInteger(maxBuffer) || maxBuffer < 1) return null;
   if (uniquePaths.length === 0) return new Map();
@@ -169,7 +199,7 @@ export function originMainSqlBlobMap(paths, runBatch, maxBuffer = ORIGIN_MAIN_CA
   try {
     // The tab splits the object expression from `%(rest)`; the latter is checked
     // below before a blob can be associated with a requested path.
-    const input = Buffer.from(`${uniquePaths.map((p) => `origin/main:${p}\t${p}`).join("\n")}\n`, "utf8");
+    const input = Buffer.from(`${uniquePaths.map((p) => `${rev}:${p}\t${p}`).join("\n")}\n`, "utf8");
     output = runBatch(input, uniquePaths);
   } catch {
     return null;
@@ -333,6 +363,11 @@ export function isParkedFallbackFile(
 //
 // Returns a Map of normalized path → the path as git spelled it, so the count dedupes
 // case-insensitively while /fleet still shows Mason the real filename.
+// `reconcileExemptPaths` is an optional Set of normalized candidate paths the
+// own-draft reconciliation below must NOT demand this branch account for, because the
+// branch's diff structurally cannot contain them (see the reconciliation comment).
+// It narrows only WHICH rows are reconciled; every other rule here is untouched, and
+// omitting it reproduces the pre-2026-08-20 behaviour exactly.
 export function parkedDraftPathsFrom(
   changedPaths,
   existsOnDisk = () => true,
@@ -340,6 +375,7 @@ export function parkedDraftPathsFrom(
   historyText = null,
   sha256Text = null,
   parsedHistory = null,
+  reconcileExemptPaths = null,
 ) {
   const out = new Map();
   const history = parsedHistory ?? localCandidateMigrationPathsFromHistory(historyText);
@@ -404,12 +440,27 @@ export function parkedDraftPathsFrom(
   // is the branch's own claim that pending SQL exists; if the diff cannot account for
   // every row of it, the honest answer is UNKNOWN, which sends the caller to a full
   // scan. Under-reporting hides real pending work; an extra scan only costs time.
+  //
+  // 2026-08-20: that reconciliation was UNSATISFIABLE for a whole class of row, so every
+  // one of Mason's 19 worktrees reported UNKNOWN forever and the parked count could never
+  // be read at all. `migration-history.md` is a SHARED file on origin/main, but the diff
+  // it was being reconciled against is `base..HEAD` — what this branch alone changed. A
+  // candidate row that arrived with the shared file, naming SQL that also arrived with
+  // origin/main, can never appear in that diff no matter what the branch does. The check
+  // was demanding the impossible, and a guard that always says UNKNOWN says nothing.
+  // `reconcileExemptPaths` fixes the check's DOMAIN rather than adding a bypass: it is
+  // exactly the rows outside the diff's reach, so what remains reconciled is the branch's
+  // own claim — which is what the paragraph above always meant. The two exempt classes,
+  // both supplied by `createOwnDraftPathsReader`, are documented at that call site. This
+  // is deliberately NOT a relaxation on branch-owned rows: a candidate this branch added,
+  // naming SQL origin/main has never carried, still yields UNKNOWN (proven by test).
   if (historyText !== null) {
     if (history?.state !== "known") {
       unknownReason ||= history?.reason || "worktree migration history is unreadable";
     } else {
       for (const candidate of history.paths) {
         if (visited.has(candidate)) continue;
+        if (reconcileExemptPaths?.has(candidate)) continue;
         unknownReason ||= "branch-owned LOCAL CANDIDATE SQL named by migration history is absent from this branch's own-draft diff";
         break;
       }
@@ -447,8 +498,10 @@ export function draftPathspec() {
 // usable origin/main tree, callers compare each fallback worktree's content to
 // that tree before opening a file or evaluating its parked header. A null return
 // means callers must retain conservative all-disk discovery and say so loudly.
-export function originMainDraftPathSet(run) {
-  const lines = run(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()]);
+export function originMainDraftPathSet(run, originMainRev = "origin/main") {
+  const lines = run([
+    "ls-tree", "-r", "--name-only", String(originMainRev || "origin/main"), "--", ...draftPathspec(),
+  ]);
   if (lines === null) return null;
   return new Set((lines || []).map(normRepoPath).filter(Boolean));
 }
@@ -528,6 +581,23 @@ export function localCandidateMigrationPathsFromHistory(historyText) {
   }
   return { state: "known", paths, sha256ByPath, reason: "" };
 }
+
+// DELIBERATELY ABSENT: a "this row settles the migration" helper.
+//
+// PR #437 tried twice to derive settlement (APPLIED LIVE / RETIRED / SUPERSEDED) from a
+// history row so a stale branch's candidate could be exempted, and Codex blocked both:
+//   1. A bare substring test read "NOT YET APPLIED LIVE" as settled — and the real
+//      migration-history.md carries six such rows.
+//   2. Rejecting an ADJACENT negator still read "will be applied live", "not successfully
+//      applied live" and "not considered superseded" as settled. Worse, row 887 —
+//      `**LOCAL CANDIDATE — NOT APPLIED.**`, genuinely pending — matched purely on later
+//      prose mentioning "applied live" and a "superseded price".
+// Every version could turn a conservative UNKNOWN into a confident zero over pending SQL.
+//
+// The arm bought exactly ONE worktree, so it was cut rather than iterated a third time.
+// Anyone re-adding it must parse a STRUCTURALLY ANCHORED status field — the leading
+// status token of the detail cell — never arbitrary prose, and must add aggregate
+// false-zero regressions for future, conditional, and qualified-negation phrasings.
 
 function historyRowsByMigrationBasename(historyText) {
   const rowsByBasename = new Map();
@@ -697,14 +767,24 @@ export function createOwnDraftPathsReader({
   readHistory = () => null,
   sha256Text = null,
   hasOriginMain = true,
+  // MUST return the same origin/main `migration-history.md` text the caller's mainline
+  // discovery pass uses. Defaulting to null means "no exemption" — a caller that does not
+  // supply it gets the old, fully conservative reconciliation rather than a silent read
+  // of its own, which is what the cross-phase race was.
+  readOriginMainHistory = () => null,
+  // The single commit id this scan pinned origin/main to. Defaults to the symbolic name
+  // so an existing caller that does not pin keeps its previous behaviour rather than
+  // silently changing. Callers that DO pin must pass the same id to every mainline read.
+  originMainRev = "origin/main",
 }) {
+  const pinnedOriginMain = String(originMainRev || "origin/main");
   // Where a worktree's branch left origin/main. Cached by HEAD sha — the ~30 frozen
   // snapshots share a handful of shas between them.
   const baseCache = new Map(); // sha → base sha | null
   function branchPoint(sha) {
     if (!hasOriginMain || !sha) return null;
     if (baseCache.has(sha)) return baseCache.get(sha);
-    const out = run(["merge-base", "origin/main", sha], repoRoot);
+    const out = run(["merge-base", pinnedOriginMain, sha], repoRoot);
     const base = out === null ? "" : String(out[0] || "").trim();
     const result = base || null;
     baseCache.set(sha, result);
@@ -713,8 +793,101 @@ export function createOwnDraftPathsReader({
 
   const cleanCache = new Map(); // head sha → changed paths | null
 
+  // ── Which LOCAL CANDIDATE rows is a branch actually answerable for? ──
+  //
+  // The own-draft reconciliation inside parkedDraftPathsFrom compares the branch's
+  // migration-history rows against `base..HEAD`. But `migration-history.md` is a SHARED
+  // file that arrives from origin/main, so an inherited row naming SQL that also arrived
+  // with origin/main and carries no NET change since the branch point does not appear in
+  // that diff — `base..HEAD` is a net diff, so a file the branch touched and then reverted
+  // is absent too, while one it genuinely changed IS present and reconciles normally.
+  // Demanding such a row appear is not a strict guard — it is a permanent UNKNOWN, which
+  // is what every worktree reported before 2026-08-20.
+  //
+  // The ONLY safe exemption is a candidate origin/main's own shared history REGISTERS as
+  // a LOCAL CANDIDATE, because then parkedMainlineDiscoveryFrom owns it, verifies its
+  // pin/header against the same immutable tree, and reports it. One rule, and it reads a
+  // structured registry rather than interpreting prose.
+  //
+  // A second arm — "origin/main records this migration as settled" — was tried and CUT.
+  // See the DELIBERATELY ABSENT note above `historyRowsByMigrationBasename`: every
+  // prose-derived version of it could turn a conservative UNKNOWN into a confident zero,
+  // and it cleared exactly one worktree.
+  //
+  // DO NOT widen this to "the SQL exists in origin/main's tree" (Codex P1 on PR #437, and
+  // it was verified reproducible). A branch may newly register an ordinary already-committed
+  // migration as a LOCAL CANDIDATE via the supported SHA-pin form, changing only
+  // migration-history.md. The SQL is then absent from `base..HEAD`, origin/main's older
+  // history does not list it, and its blob carries no parked header — so mainline
+  // discovery reports nothing either, and /fleet would confidently hide a genuinely
+  // pending migration. Existing on main is not the same as being ACCOUNTED FOR by main.
+  //
+  // The exemption reads NOTHING of its own. It reuses the EXACT origin/main history text
+  // the caller's mainline discovery pass verified against, supplied by
+  // `readOriginMainHistory` and memoized here — one parse per process, because this runs
+  // inside the SessionStart hook's budget across every worktree — so both phases see one
+  // immutable snapshot.
+  //
+  // Codex HIGH on PR #437, reproduced: an earlier version resolved origin/main
+  // independently. If a concurrent `git fetch` advanced the ref between the two phases,
+  // mainline discovery could inspect commit A and report no candidate while the exemption
+  // saw the candidate registered in commit B and suppressed reconciliation — a confident
+  // zero over pending SQL. Deriving the exemption from the already-verified mainline text
+  // makes that divergence impossible rather than merely unlikely: the two phases cannot
+  // disagree about a registry they read from the same bytes.
+  let originMainCandidates; // undefined = not computed, null = unusable
+  function originMainRegisteredCandidates() {
+    if (originMainCandidates !== undefined) return originMainCandidates;
+    const text = hasOriginMain ? readOriginMainHistory() : null;
+    if (typeof text !== "string" || !text.trim()) {
+      // No usable shared history exempts NOTHING. "I cannot tell" keeps the old
+      // conservative answer; it must never buy a confident zero.
+      originMainCandidates = null;
+      return originMainCandidates;
+    }
+    const parsed = localCandidateMigrationPathsFromHistory(text);
+    originMainCandidates = parsed.state === "known"
+      ? { paths: parsed.paths, sha256ByPath: parsed.sha256ByPath || new Map() }
+      : null;
+    return originMainCandidates;
+  }
+
+  // Exempt a row ONLY when origin/main registers the same path AND the branch's copy of the
+  // row still agrees with mainline's. Codex P2 on PR #437: a path-only match let a branch
+  // edit an existing mainline candidate row in place — swapping its SQL sha256 pin for a
+  // different 64-hex value — and still be exempted, because the SQL-only `base..HEAD` diff
+  // never names the untouched .sql. That branch reported KNOWN while its own
+  // history-to-SQL cross-reference was invalid, and merging it turned the mainline scan
+  // UNKNOWN. A row the branch rewrote is a row the branch is answerable for.
+  function reconcileExemptPathsFor(parsedHistory) {
+    if (parsedHistory?.state !== "known" || parsedHistory.paths.size === 0) return null;
+    const registered = originMainRegisteredCandidates();
+    if (!registered) return null;
+    const branchPins = parsedHistory.sha256ByPath || new Map();
+    const exempt = new Set();
+    for (const candidate of parsedHistory.paths) {
+      if (!registered.paths.has(candidate)) continue;
+      // Absent on both sides is agreement; present on one side only, or differing, is not.
+      if (branchPins.get(candidate) !== registered.sha256ByPath.get(candidate)) continue;
+      exempt.add(candidate);
+    }
+    return exempt.size ? exempt : null;
+  }
+
   function resultFrom(changed, onDisk, textOnDisk, historyText) {
-    const parked = parkedDraftPathsFrom(changed, onDisk, textOnDisk, historyText, sha256Text);
+    // Parse the shared history ONCE and hand the same result to both the classifier and
+    // the exemption computation. It is ~840 KiB and this runs per worktree inside the
+    // SessionStart hook's budget — the same reason createParkedFallbackClassifier exists.
+    const parsedHistory = historyText === null ? null : localCandidateMigrationPathsFromHistory(historyText);
+    const parked = parkedDraftPathsFrom(
+      changed,
+      onDisk,
+      textOnDisk,
+      historyText,
+      sha256Text,
+      parsedHistory,
+      reconcileExemptPathsFor(parsedHistory),
+    );
     Object.defineProperty(parked, "supersededPaths", {
       value: supersededDraftPathsFrom(changed, onDisk),
       enumerable: false,

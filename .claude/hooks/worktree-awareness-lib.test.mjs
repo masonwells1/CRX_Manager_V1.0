@@ -3,7 +3,7 @@
 // Run: node .claude/hooks/worktree-awareness-lib.test.mjs
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -18,7 +18,8 @@ import {
   createParkedFallbackClassifier, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlinePathsFrom, parkedMainlineDiscoveryFrom,
   localCandidateMigrationPathsFromHistory, validateParkedMigrationCrossReferences,
-  ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
+  ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationGrepArgs,
+  originMainParkedMigrationPrefilter,
   ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap, originMainForwardBlobPaths,
   createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
@@ -678,6 +679,8 @@ eq(timeoutScaleHistoryParses, 1, "degraded fallback parses migration history onc
 eq(timeoutScaleDiscovery?.parked, true, "timeout-scale fallback retains SHA-pinned discovery across 867 classifications");
 ok(performance.now() - timeoutScaleStarted < 10_000, "867 fallback classifications complete within the SessionStart hook budget");
 
+const FAKE_ORIGIN_MAIN_SHA = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+
 // Builds a reader over a fake git. `responses` maps a git subcommand to its output lines;
 // a value of null means that git call failed. Records every call for assertions.
 function fakeReader(responses, opts = {}) {
@@ -689,11 +692,22 @@ function fakeReader(responses, opts = {}) {
     exists: opts.exists || (() => true),
     readText: opts.readText || (() => ""),
     readHistory: opts.readHistory || (() => null),
+    // The caller supplies origin/main's history; the reader never resolves the ref itself.
+    // `responses.show` stands in for it so existing cases keep their familiar shape.
+    readOriginMainHistory: opts.readOriginMainHistory
+      || (() => (responses.show === undefined || responses.show === null ? null : responses.show.join("\n"))),
     sha256Text: opts.sha256Text || sha256Text,
+    // Omitted by default so every pre-existing case keeps asserting the unpinned shape.
+    ...(opts.originMainRev === undefined ? {} : { originMainRev: opts.originMainRev }),
     run: (args, cwd) => {
       calls.push({ cmd: args[0], args, cwd });
       const hit = responses[args[0]];
-      return hit === undefined ? [] : hit;
+      if (hit !== undefined) return hit;
+      // The reader resolves origin/main to an immutable sha before any accounting read.
+      // Default it so every pre-existing case keeps exercising what it was written for;
+      // a case that cares (resolution failure, sha pinning) overrides it explicitly.
+      if (args[0] === "rev-parse") return [FAKE_ORIGIN_MAIN_SHA];
+      return [];
     },
   });
   return { reader, calls };
@@ -802,6 +816,265 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
   eq(noCandidates.unknownReason, "", "a history with no LOCAL CANDIDATE rows keeps an unrelated diff confidently zero");
 }
 
+// ── The reconciliation's DOMAIN (2026-08-20) ──
+//
+// The reconciliation above compares shared `migration-history.md` rows against a diff of
+// what THIS branch changed. Rows that arrived with the shared file, naming SQL that also
+// arrived with origin/main, can never appear in that diff — so before this fix every one
+// of Mason's worktrees reported UNKNOWN permanently and the parked count was unreadable.
+//
+// The exemption is deliberately narrow: ONLY rows origin/main's own shared history already
+// accounts for, either as a LOCAL CANDIDATE (mainline discovery owns it) or as a settled
+// APPLIED LIVE / RETIRED / SUPERSEDED row (provably not pending). Existing in origin/main's
+// TREE is NOT enough — see the Codex P1 test below, which is the one that matters. A scan
+// that confidently says zero while real pending migrations exist is far worse than UNKNOWN.
+const CANDIDATE_SQL_PATH = "supabase/migrations/20260101000000_real.sql";
+// origin/main history that says nothing at all about the branch's candidate.
+const MAINLINE_HISTORY_SILENT = "| 842 | 20260102000000 | **APPLIED LIVE.** File: `20260102000000_other.sql`. |";
+// origin/main history that registers the branch's candidate as a LOCAL CANDIDATE too.
+const MAINLINE_HISTORY_REGISTERS_CANDIDATE = BRANCH_CANDIDATE_HISTORY;
+// origin/main history that records the branch's candidate as already applied. Real shape:
+// origin/main row 886 records 20260813080000 APPLIED LIVE while a branch still carried it
+// as a LOCAL CANDIDATE, and live `list_migrations` agreed with origin/main.
+const MAINLINE_HISTORY_SETTLES_CANDIDATE = "| 886 | 20260101000000 | **APPLIED LIVE** as ledger version `20260116174353`. File: `20260101000000_real.sql`. |";
+
+// Baseline: origin/main's history says nothing about the candidate, so nothing is exempt
+// and the branch is UNKNOWN. Without this, the tests below could pass because the
+// exemption plumbing silently did nothing at all.
+{
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: [MAINLINE_HISTORY_SILENT] },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  const got = reader(CLEAN_ENTRY);
+  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "a candidate origin/main's history says nothing about still makes the branch UNKNOWN");
+}
+
+// Exemption (a) — origin/main registers the same LOCAL CANDIDATE, so mainline discovery
+// owns it and verifies it against the same immutable tree.
+{
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: [MAINLINE_HISTORY_REGISTERS_CANDIDATE] },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  const got = reader(CLEAN_ENTRY);
+  eq(got.unknownReason, "", "a candidate origin/main also registers does not make the branch UNKNOWN");
+}
+
+// The CUT arm, pinned as ABSENT. An origin/main row that merely READS as settled must not
+// exempt anything: prose is not a status field, and every attempt to treat it as one
+// produced a false clean (Codex blocked two of them on PR #437). A stale branch reporting
+// UNKNOWN is the accepted cost of never reporting a confident zero over pending SQL.
+{
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: [MAINLINE_HISTORY_SETTLES_CANDIDATE] },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  const got = reader(CLEAN_ENTRY);
+  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "an APPLIED LIVE row on origin/main does NOT exempt a branch candidate");
+}
+
+// The prose trap that forced the cut. origin/main row 887 is genuinely PENDING
+// (`**LOCAL CANDIDATE — NOT APPLIED.**`) yet its later prose mentions "applied live" and a
+// "superseded price", so any settlement-by-prose rule reads it as settled. Under the single
+// structural rule it is exempt for the RIGHT reason — it is a REGISTERED LOCAL CANDIDATE —
+// and the surrounding prose cannot influence the outcome either way.
+{
+  // Carries the SAME sha256 pin as the branch row, so this case isolates what it is about:
+  // prose. A pin that DISAGREES is covered separately below (Codex P2) and must not exempt.
+  const prosyPendingRow = `| 887 | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260101000000_real.sql\`. SQL sha256: \`${sha256Text(BRANCH_CANDIDATE_SQL)}\`. Sibling 20260102 was applied live; this reuses its superseded price basis. |`;
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: [prosyPendingRow] },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  const got = reader(CLEAN_ENTRY);
+  eq(got.unknownReason, "", "a registered LOCAL CANDIDATE row exempts regardless of settlement words in its prose");
+}
+
+// Codex P2 on PR #437: exempting on PATH alone let a branch rewrite an existing mainline
+// candidate row in place — swapping its SQL sha256 pin — and still report KNOWN. The SQL is
+// untouched, so the SQL-only `base..HEAD` diff never names it; only the row changed. That
+// branch's own history-to-SQL cross-reference is invalid, and merging it turns the mainline
+// scan UNKNOWN. A row the branch rewrote is a row the branch is answerable for.
+{
+  const forgedPin = "b".repeat(64);
+  const branchRewroteThePin = `| Entry | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260101000000_real.sql\`. SQL sha256: \`${forgedPin}\`. |`;
+  const mainlineRow = `| 887 | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260101000000_real.sql\`. SQL sha256: \`${sha256Text(BRANCH_CANDIDATE_SQL)}\`. |`;
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: [mainlineRow] },
+    { readHistory: () => branchRewroteThePin },
+  );
+  const got = reader(CLEAN_ENTRY);
+  ok(
+    got.unknownReason.includes("absent from this branch's own-draft diff"),
+    "a branch that rewrote a registered row's sha256 pin is NOT exempted, even with the SQL untouched",
+  );
+
+  // A branch that ADDS a pin mainline does not carry has also edited the row.
+  const mainlineNoPin = "| 887 | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260101000000_real.sql`. |";
+  const { reader: addedPin } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: [mainlineNoPin] },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  ok(
+    addedPin(CLEAN_ENTRY).unknownReason.includes("absent from this branch's own-draft diff"),
+    "a branch that added a sha256 pin mainline lacks is NOT exempted",
+  );
+
+  // Neither side pinning is agreement, not a mismatch — that must still exempt.
+  const branchNoPin = "| Entry | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260101000000_real.sql`. |";
+  const { reader: neitherPinned } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: [mainlineNoPin] },
+    { readHistory: () => branchNoPin },
+  );
+  eq(
+    neitherPinned(CLEAN_ENTRY).unknownReason,
+    "",
+    "an unpinned row identical on both sides still exempts — absent on both sides is agreement",
+  );
+}
+
+// CROSS-PHASE SNAPSHOT RACE (Codex HIGH on PR #437, reproduced).
+//
+// The exemption must read NOTHING of its own. When it resolved origin/main independently,
+// a concurrent `git fetch` between phases meant mainline discovery could inspect commit A
+// and report no candidate while the exemption saw that candidate registered in commit B
+// and suppressed reconciliation — a CONFIDENT ZERO over pending SQL.
+//
+// The reader now consumes exactly the text the caller's mainline pass verified. This pins
+// that: origin/main's history is fetched once from the injected reader, and the reader
+// never issues a ref-resolving git call of its own.
+{
+  let historyReads = 0;
+  const { reader, calls } = fakeReader(
+    { "merge-base": ["base1"], diff: [], "ls-files": [] },
+    {
+      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+      readOriginMainHistory: () => { historyReads++; return MAINLINE_HISTORY_REGISTERS_CANDIDATE; },
+      dirtyCount: (wtPath) => (wtPath === DIRTY_ENTRY.path ? 3 : 0),
+    },
+  );
+  const first = reader(CLEAN_ENTRY);
+  reader(DIRTY_ENTRY);
+  eq(first.unknownReason, "", "the caller-supplied origin/main history drives the exemption");
+  eq(historyReads, 1, "origin/main's shared history is consumed once per reader, not per worktree");
+  eq(calls.filter((c) => c.cmd === "rev-parse").length, 0, "the reader never resolves origin/main itself");
+  eq(calls.filter((c) => c.cmd === "show").length, 0, "the reader never reads origin/main's history itself");
+}
+
+// A caller that supplies no origin/main history exempts NOTHING — the fully conservative
+// pre-exemption behaviour, never a confident zero.
+{
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [] },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY, readOriginMainHistory: () => null },
+  );
+  const got = reader(CLEAN_ENTRY);
+  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "an absent origin/main history exempts nothing");
+}
+
+// THE MUTATION GUARD — Codex P1 on PR #437, reproduced and pinned.
+//
+// A branch may newly register an ordinary already-committed migration as a LOCAL CANDIDATE
+// using the supported SHA-pin form, changing only `migration-history.md`. The SQL is then
+// absent from `base..HEAD`; origin/main's older history does not list it; and its blob
+// carries no parked header, so mainline discovery reports nothing either. An exemption
+// keyed on "the SQL exists in origin/main's tree" hides a genuinely pending migration and
+// /fleet reports a confident zero over it.
+//
+// EXISTING ON MAIN IS NOT THE SAME AS BEING ACCOUNTED FOR BY MAIN. If this ever goes green
+// with an empty unknownReason, the exemption has been widened back into that hole.
+{
+  const { reader } = fakeReader(
+    {
+      "merge-base": ["base1"],
+      diff: [],
+      show: [MAINLINE_HISTORY_SILENT],
+      // The candidate's SQL IS present in origin/main's tree — and must not matter.
+      "ls-tree": [CANDIDATE_SQL_PATH, "supabase/migrations/20260102000000_other.sql"],
+    },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  const got = reader(CLEAN_ENTRY);
+  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "a candidate present in origin/main's TREE but absent from its HISTORY still makes the branch UNKNOWN");
+}
+
+// Fail-safe direction: an unreadable origin/main history exempts NOTHING. "I cannot tell"
+// must keep the old conservative answer, never buy a confident zero.
+{
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: null },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  const got = reader(CLEAN_ENTRY);
+  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "an unreadable origin/main history exempts nothing");
+}
+
+// The exemption's git read is cached: origin/main's shared history is read once per
+// reader, not once per worktree. This runs across every checkout inside the SessionStart
+// hook's budget, the same pressure createParkedFallbackClassifier exists to relieve.
+{
+  const { reader, calls } = fakeReader(
+    { "merge-base": ["base1"], diff: [], "ls-files": [], show: [MAINLINE_HISTORY_REGISTERS_CANDIDATE] },
+    {
+      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+      dirtyCount: (wtPath) => (wtPath === DIRTY_ENTRY.path ? 3 : 0),
+    },
+  );
+  reader(CLEAN_ENTRY);
+  reader(DIRTY_ENTRY);
+  eq(calls.filter((c) => c.cmd === "show").length, 0, "the reader issues no origin/main read of its own — the caller supplies that text");
+}
+
+// A dirty worktree combines `diff` and `ls-files` before reconciliation; the exemption
+// must behave identically on that path (CodeRabbit on PR #437).
+{
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [], "ls-files": [], show: [MAINLINE_HISTORY_REGISTERS_CANDIDATE] },
+    { dirtyCount: () => 1, readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  const got = reader(CLEAN_ENTRY);
+  eq(got.unknownReason, "", "an exempt candidate stays known in a dirty worktree too");
+}
+
+// AGGREGATE FALSE-ZERO REGRESSION (Codex CRX-SEC-001 on PR #437, reproduced end to end).
+//
+// Matcher-level tests above are not sufficient on their own — Codex's finding was that the
+// COMBINED result flipped from a conservative UNKNOWN to a confident zero. This asserts the
+// aggregate: origin/main says "BUILT — NOT YET APPLIED LIVE", the branch registers a valid
+// SHA-pinned LOCAL CANDIDATE, the diff is empty, and the SQL carries no parked header.
+// The only acceptable answer is UNKNOWN. A zero here hides a genuinely pending migration.
+{
+  const pendingSql = "-- ordinary migration, no parked header\nSELECT 1;\n";
+  const branchHistory = `| 900 | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260101000000_real.sql\`. SQL sha256: \`${sha256Text(pendingSql)}\`. |`;
+  const mainNotYetApplied = "| 900 | 20260101000000 | BUILT — NOT YET APPLIED LIVE. File: `20260101000000_real.sql`. |";
+  const { reader } = fakeReader(
+    {
+      "merge-base": ["base1"],
+      diff: [],
+      "ls-files": [],
+      show: [mainNotYetApplied],
+      "ls-tree": [CANDIDATE_SQL_PATH],
+    },
+    { readHistory: () => branchHistory, readText: () => pendingSql },
+  );
+  const got = reader(CLEAN_ENTRY);
+  eq(got.size, 0, "the pending candidate is not invented as a discovered path");
+  ok(got.unknownReason.length > 0, "a candidate whose origin/main row says NOT YET APPLIED LIVE yields UNKNOWN, never a confident zero");
+}
+
+// The exemption must narrow the reconciliation only — a draft this branch really did add
+// is still discovered and reported alongside an exempt row.
+{
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [DRAFT_A], show: [MAINLINE_HISTORY_REGISTERS_CANDIDATE] },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  const got = reader(CLEAN_ENTRY);
+  eq([...got.values()], [DRAFT_A], "an exempt row does not suppress a draft this branch actually added");
+  eq(got.unknownReason, "", "a discovered branch-owned draft plus an exempt row is a confident answer");
+}
+
 // Windows may materialize a normal text migration with CRLF even though Git stores and
 // pins its LF blob. The worktree verifier must compare the bytes Git will commit.
 {
@@ -882,6 +1155,130 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
   reader({ ...CLEAN_ENTRY, path: "C:/wt-other-same-sha" });
   eq(calls.filter((c) => c.cmd === "merge-base").length, 1, "branch point is resolved once per sha");
   eq(calls.filter((c) => c.cmd === "diff").length, 1, "clean diff is computed once per sha");
+}
+
+// ── One pinned origin/main object id for a whole scan (Codex P1 on PR #437) ──
+// The ref is shared with every other session. If one scan's phases each resolve the
+// symbolic name, a concurrent fetch between them can add a SHA-pinned LOCAL CANDIDATE
+// whose SQL carries no parked header: the old history does not name it, the new tree
+// holds it, the grep misses it, and mainline discovery answers "known" while omitting a
+// pending migration. Every mainline read must therefore name the SAME object id.
+// This was the THIRD report of the same invariant — the first two fixes each satisfied
+// it in one component while another still resolved the ref on its own. Pin all of them.
+{
+  const PINNED = "f".repeat(40);
+
+  // The reader's branch-point read must use the caller's id, not the moving ref.
+  const { reader, calls } = fakeReader(
+    { "merge-base": ["base1"], diff: [DRAFT_A] },
+    { originMainRev: PINNED },
+  );
+  reader(CLEAN_ENTRY);
+  const mergeBase = calls.find((c) => c.cmd === "merge-base");
+  ok(mergeBase && mergeBase.args.includes(PINNED), "branch point is resolved against the pinned origin/main id");
+  ok(mergeBase && !mergeBase.args.includes("origin/main"), "branch point never names the moving origin/main ref");
+
+  // Omitting the pin must not change an existing caller.
+  const { reader: unpinned, calls: unpinnedCalls } = fakeReader({ "merge-base": ["base1"], diff: [DRAFT_A] });
+  unpinned(CLEAN_ENTRY);
+  const legacy = unpinnedCalls.find((c) => c.cmd === "merge-base");
+  ok(legacy && legacy.args.includes("origin/main"), "an unpinned caller keeps its previous origin/main behaviour");
+
+  // The grep prefilter must scan the pinned commit.
+  const pinnedGrep = originMainParkedMigrationGrepArgs(PINNED);
+  ok(pinnedGrep.includes(PINNED), "the parked-migration grep scans the pinned origin/main id");
+  ok(!pinnedGrep.includes("origin/main"), "the parked-migration grep never names the moving ref when pinned");
+  eq(
+    ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS,
+    originMainParkedMigrationGrepArgs(),
+    "the legacy exported grep args stay byte-identical to the unpinned form",
+  );
+
+  // The draft tree read must use the pinned commit.
+  let treeArgs = null;
+  originMainDraftPathSet((args) => { treeArgs = args; return []; }, PINNED);
+  ok(treeArgs && treeArgs.includes(PINNED), "the origin/main draft tree is listed at the pinned id");
+  ok(treeArgs && !treeArgs.includes("origin/main"), "the draft tree listing never names the moving ref when pinned");
+
+  // The blob batch must request objects from the pinned commit.
+  let batchInput = "";
+  originMainSqlBlobMap(
+    ["supabase/migrations/20260101000000_x.sql"],
+    (input) => { batchInput = String(input); return Buffer.alloc(0); },
+    ORIGIN_MAIN_CAT_FILE_MAX_BUFFER,
+    PINNED,
+  );
+  ok(batchInput.startsWith(`${PINNED}:`), "SQL blobs are read from the pinned origin/main id");
+  ok(!batchInput.includes("origin/main:"), "SQL blob reads never name the moving ref when pinned");
+
+  // `git grep <rev>` prefixes every hit with `<rev>:`, so the prefilter must strip the
+  // revision it actually searched. Codex P1 on PR #437: pinning the scan made the prefix
+  // `<sha>:` while the strip still matched only `origin/main:`, so every hit came back
+  // malformed, was rejected downstream, no SQL was opened, and discovery answered "known"
+  // with no paths. Nothing covered this success path before — only the two error paths —
+  // which is exactly how a confident zero shipped inside the fix for confident zeroes.
+  const pinnedHit = originMainParkedMigrationPrefilter(
+    () => `${PINNED}:supabase/migrations/20260101000000_parked.sql\n`,
+    PINNED,
+  );
+  eq(pinnedHit.state, "known", "a pinned prefilter hit is a known result");
+  eq(
+    pinnedHit.paths,
+    ["supabase/migrations/20260101000000_parked.sql"],
+    "the pinned revision prefix is stripped, leaving a usable repo-relative path",
+  );
+
+  const legacyHit = originMainParkedMigrationPrefilter(
+    () => "origin/main:supabase/migrations/20260101000000_parked.sql\n",
+  );
+  eq(
+    legacyHit.paths,
+    ["supabase/migrations/20260101000000_parked.sql"],
+    "an unpinned caller still strips the symbolic origin/main prefix",
+  );
+
+  // A hit that does not carry the expected prefix means the scan is not reading what it
+  // thinks it is. Fail closed: downstream, a dropped path is indistinguishable from
+  // "nothing is parked", which is the dangerous direction.
+  const unprefixed = originMainParkedMigrationPrefilter(
+    () => "supabase/migrations/20260101000000_parked.sql\n",
+    PINNED,
+  );
+  eq(unprefixed.state, "unknown", "a grep hit missing the pinned revision prefix is UNKNOWN, never a known zero");
+  eq(unprefixed.paths, null, "an unrecognized prefilter shape keeps the conservative full-forward fallback");
+
+  const emptyPath = originMainParkedMigrationPrefilter(() => `${PINNED}:\n`, PINNED);
+  eq(emptyPath.state, "unknown", "a prefixed hit naming no path is UNKNOWN, never a known zero");
+}
+
+// ── Structural guard: no consumer may read mainline through the SYMBOLIC ref ──
+// Codex raised the "one snapshot per scan" invariant FOUR times on PR #437. Each manual
+// fix satisfied it at the call sites I was looking at and missed a sibling — the last was
+// `mergedLabel()` in fleet-status.mjs, still on `origin/main` after its twin in the
+// SessionStart hook had been pinned, sitting in plain sight in my own grep output.
+// A prose rule cannot enforce this; scanning for it can. Any git subcommand that CONSUMES
+// a revision must name the pinned id. `rev-parse` is the one place the symbolic name is
+// correct — that is where it gets resolved — and bare display strings are not git args.
+{
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const REV_CONSUMING = ["merge-base", "ls-tree", "show", "log", "diff", "grep", "cat-file", "rev-list"];
+  const consumers = [
+    ["scripts/fleet-status.mjs", path.join(HERE, "..", "..", "scripts", "fleet-status.mjs")],
+    [".claude/hooks/worktree-awareness.mjs", path.join(HERE, "worktree-awareness.mjs")],
+  ];
+  for (const [label, file] of consumers) {
+    const offenders = readFileSync(file, "utf8")
+      .split("\n")
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => !line.trim().startsWith("//"))
+      .filter(({ line }) => line.includes('"origin/main"'))
+      .filter(({ line }) => REV_CONSUMING.some((cmd) => line.includes(`"${cmd}"`)));
+    eq(
+      offenders.map((o) => o.n),
+      [],
+      `${label}: every revision-consuming git read must use the pinned origin/main id, not the symbolic ref`,
+    );
+  }
 }
 
 console.log(`worktree-awareness-lib: ${pass} assertions passed`);

@@ -132,6 +132,9 @@ export const RpcErrorCodes = {
   // has no honest value to draw against. Runtime-reachable by the same draw
   // modal path as the two above, so it belongs in the typed contract too.
   BOOKING_QUANTITY_INVALID: 'BOOKING_QUANTITY_INVALID',
+  // draw_down_quote intent wrapper: reject malformed product identifiers with
+  // a governed token before PostgreSQL attempts the UUID cast.
+  BOOKING_PRODUCT_INVALID: 'BOOKING_PRODUCT_INVALID',
   // draw_down_quote cutover barrier (migration 20260816110000). Raised only
   // while the tier-split cutover holds its advisory key; the draw is refused
   // instantly having written nothing, and retrying after the cutover succeeds.

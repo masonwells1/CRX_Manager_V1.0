@@ -51,9 +51,11 @@
 --
 -- ---------------------------------------------------------------------------
 -- WORKED EXAMPLE below: draw_down_quote(p_quote_id uuid, p_draws jsonb,
---   p_performed_by uuid DEFAULT NULL, p_idempotency_key text DEFAULT NULL)
--- Live body (read 2026-06-10): AUTH_REQUIRED -> ACTOR_MISMATCH -> role gate
--- (admin, sales_rep, is_active) -> FOR UPDATE lock -> idempotency -> guards.
+--   p_performed_by uuid DEFAULT NULL, p_idempotency_key text DEFAULT NULL,
+--   p_below_cost_reason text DEFAULT NULL)
+-- Pending post-cutover order: barrier -> AUTH_REQUIRED -> ACTOR_MISMATCH -> role
+-- gate (admin, sales_rep, is_active) -> key required -> payload validation ->
+-- intent replay -> live quote FOR UPDATE -> governed money/inventory call.
 -- Fixtures mirror smoke-draw-ledger-reversal.sql (quote 'sent', one section,
 -- one 500-unit item; no inventory rows needed - draws tolerate shortfalls).
 -- ============================================================================
@@ -98,8 +100,39 @@ BEGIN
   INSERT INTO customers (farm_name)
   VALUES ('[SMOKE] Auth Probe Farm ' || v_suffix) RETURNING id INTO v_customer;
 
-  INSERT INTO products (product_name)
-  VALUES ('[SMOKE] Auth Probe Product ' || v_suffix) RETURNING id INTO v_product;
+  INSERT INTO products (product_name, unit_size)
+  VALUES ('[SMOKE] Auth Probe Product ' || v_suffix, 'gal') RETURNING id INTO v_product;
+
+  -- The positive control must reach the real post-cutover money path. Establish
+  -- governed cost state so the cost-snapshot trigger does not turn a valid auth
+  -- fixture into a false failure. The pricing mutators are themselves
+  -- authenticated, so use the real admin claim while constructing this fixture;
+  -- every rejection probe below replaces it with the identity under test.
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  v_res := preview_product_pricing_changes(
+    'product_page', NULL,
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_product,
+        'row_version', (SELECT pricing_version FROM products WHERE id = v_product),
+        'pricing_mode', 'margin_driven',
+        'new_cost', '6.00',
+        'tier1_margin_percent', '20',
+        'tier2_margin_percent', '25',
+        'tier3_margin_percent', '30',
+        'change_reason', 'Rollback smoke auth-probe fixture'
+      )
+    ),
+    v_admin, 'smk-apt-price-preview-' || v_suffix
+  );
+  PERFORM apply_product_pricing_change_set(
+    (v_res->>'change_set_id')::uuid,
+    v_res->>'request_fingerprint',
+    v_admin,
+    'smk-apt-price-apply-' || v_suffix
+  );
 
   INSERT INTO quotes (quote_number, customer_id, created_by, status, commission_split)
   VALUES ('SMK-APT-' || v_suffix, v_customer, v_admin, 'sent', '{"splits": []}'::jsonb)
@@ -116,6 +149,7 @@ BEGIN
   -- --------------------------------------------------------------------
   -- P1: no-auth -> AUTH_REQUIRED
   -- --------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claim.sub', '', true);
   PERFORM set_config('request.jwt.claims', '', true);
   BEGIN
     PERFORM draw_down_quote(v_quote, v_lines, NULL, NULL);    -- __RPC_CALL__
@@ -130,6 +164,7 @@ BEGIN
   -- --------------------------------------------------------------------
   -- P2: anon-key (role claim, no sub) -> AUTH_REQUIRED, nothing written
   -- --------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claim.sub', '', true);
   PERFORM set_config('request.jwt.claims', '{"role":"anon"}', true);
   BEGIN
     PERFORM draw_down_quote(v_quote, v_lines, NULL, NULL);    -- __RPC_CALL__
@@ -144,6 +179,7 @@ BEGIN
   -- --------------------------------------------------------------------
   -- P3: wrong role (honest actor id, insufficient role) -> INSUFFICIENT_ROLE
   -- --------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claim.sub', v_wrong::text, true);
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_wrong, 'role', 'authenticated')::text, true);
   BEGIN
@@ -160,6 +196,7 @@ BEGIN
   -- P4: forged actor (authenticated admin passing someone ELSE's id)
   --     -> ACTOR_MISMATCH
   -- --------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
   BEGIN

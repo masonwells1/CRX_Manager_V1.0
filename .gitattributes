@@ -33,6 +33,7 @@ supabase/migrations/20260717112011_supplier_pricing_zero_cost_guard.sql text eol
 supabase/migrations/20260717171331_restore_legacy_pricing_version_compat.sql text eol=lf
 supabase/migrations/20260723193312_product_families_return_policy_foundation.sql text eol=lf
 supabase/migrations/20260729222311_bind_save_field_actor.sql text eol=lf
+supabase/migrations/20260811130000_bind_commission_payout_idempotency_to_intent.sql text eol=lf
 scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
 
 # The six migrations applied live on 2026-08-12 whose files were recovered from
@@ -85,6 +86,16 @@ supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql
 # from LF bytes on a throwaway PostgreSQL 17.10 server; the CRLF form of the
 # same body hashes differently, so a CRLF checkout would abort the preflight.
 supabase/migrations/20260816110000_draw_down_cutover_barrier.sql text eol=lf
+
+# Draw-down allocated-cent lifecycle + intent-binding release chain. The fourth
+# migration SHA-256-pins pg_proc.prosrc installed by the third, and the guarded
+# apply proof binds the exact bytes of both migration files. The rollback smoke
+# and isolated prover are pinned with them so Windows and Linux execute the same
+# release evidence rather than different CRLF/LF artifacts.
+supabase/migrations/20260817120000_carry_allocated_line_cents_through_lifecycle.sql text eol=lf
+supabase/migrations/20260819232000_bind_draw_down_receipts_to_intent.sql text eol=lf
+scripts/smoke/smoke-draw-down-quote-intent-binding.sql text eol=lf
+scripts/smoke/prove-draw-down-quote-intent-binding.mjs text eol=lf
 
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf

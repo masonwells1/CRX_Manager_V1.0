@@ -19,6 +19,9 @@ import { parseDollarsToCents } from '../lib/parseCents';
 import { localToday } from '../lib/dateUtils';
 import { SPLIT_BILLING_SETTING_KEY, parseSplitBillingEnabled } from '../lib/splitBillingSetting';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
+import UnitSelect from '../components/blendtickets/UnitSelect';
+import { blockedUnitSaveMessage, isKnownUnit, type UnitLoadState } from '../lib/units';
+import type { UnitConversion } from '../types';
 
 /**
  * Per-line split-billing EDITOR (flag-gated, OFF by default).
@@ -79,6 +82,8 @@ interface FieldOption {
 
 interface ProductOption extends ProductOptionPresentationModel {
   product_name: string;
+  /** liquid | dry — decides which unit_conversions rows the rate-unit picker offers. */
+  product_form: string | null;
 }
 
 interface ServiceOption {
@@ -176,6 +181,12 @@ export default function FieldAppSplitInvoiceEditor() {
   // Picker data
   const [fieldOptions, setFieldOptions] = useState<FieldOption[]>([]);
   const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
+  // Rate unit is a PICKER, not free text, so an operator can no longer invent a unit the
+  // pricing engine cannot resolve. unitLoad is tracked separately from the array because an
+  // empty array means three different things (in flight / fetch failed / table really is
+  // empty) and only this caller knows which — see blockedUnitSaveMessage.
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+  const [unitLoad, setUnitLoad] = useState<UnitLoadState>('pending');
   const [serviceOptions, setServiceOptions] = useState<ServiceOption[]>([]);
   const [jobOptions, setJobOptions] = useState<JobOption[]>([]);
 
@@ -252,9 +263,9 @@ export default function FieldAppSplitInvoiceEditor() {
     let cancelled = false;
     (async () => {
       try {
-        const [flds, prods, svcs, jbs] = await Promise.all([
+        const [flds, prods, svcs, jbs, units] = await Promise.all([
           supabase.from('fields').select('id, field_name').eq('is_active', true).order('field_name').limit(1000),
-          supabase.from('products').select('id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name)').eq('is_active', true).order('product_name').limit(1000),
+          supabase.from('products').select('id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_form, product_family:product_families(name)').eq('is_active', true).order('product_name').limit(1000),
           supabase.from('application_services').select('id, name').eq('is_active', true).order('sort_order'),
           supabase
             .from('jobs')
@@ -265,9 +276,10 @@ export default function FieldAppSplitInvoiceEditor() {
             .eq('status', 'completed')
             .order('job_date', { ascending: false })
             .limit(200),
+          supabase.from('unit_conversions').select('*').order('unit'),
         ]);
         if (cancelled) return;
-        const pickerErrors = [flds.error, prods.error, svcs.error, jbs.error].filter(Boolean);
+        const pickerErrors = [flds.error, prods.error, svcs.error, jbs.error, units.error].filter(Boolean);
         if (pickerErrors.length > 0) {
           pickerErrors.forEach((error) => {
             Sentry.captureException(error, { extra: { context: 'load_field_app_split_invoice_pickers' } });
@@ -283,6 +295,12 @@ export default function FieldAppSplitInvoiceEditor() {
         if (!svcs.error) {
           setServiceOptions(((svcs.data as Array<{ id: string; name: string | null }> | null) ?? []).map((s) => ({ id: s.id, name: s.name || 'Unnamed service' })));
         }
+        if (units.error) {
+          setUnitLoad('failed');
+        } else {
+          setUnitConversions((units.data || []) as UnitConversion[]);
+          setUnitLoad('loaded');
+        }
         if (!jbs.error) {
           setJobOptions(
             ((jbs.data as Array<{ id: string; job_number: string | null; job_date: string | null; customer: { farm_name?: string | null } | null }> | null) ?? []).map((j) => ({
@@ -293,6 +311,10 @@ export default function FieldAppSplitInvoiceEditor() {
         }
       } catch (err) {
         if (!cancelled) {
+          // A thrown request never reached the `units.error` branch above, so without this the
+          // picker stays 'pending' forever and a save would keep telling the operator to "try
+          // again in a moment" for a request that is never coming back.
+          setUnitLoad('failed');
           Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_field_app_split_invoice_pickers' } });
           toast('error', sanitizeError(err));
         }
@@ -444,6 +466,15 @@ export default function FieldAppSplitInvoiceEditor() {
         return `Field "${f.field_name}" has no applied acres. Enter acres greater than zero, or remove the field.`;
       }
     }
+    // Checked before the per-line "needs a rate unit" rule below: when the unit list never
+    // arrived the operator had no way to pick anything, so telling them to enter a rate unit
+    // blames them for the request's failure. Name the real cause instead.
+    const unitBlock = blockedUnitSaveMessage(
+      unitLoad,
+      unitConversions,
+      lines.some((l) => l.line_kind === 'chemical' && !l.rateUnit.trim()),
+    );
+    if (unitBlock) return unitBlock;
     if (members.length === 0) return 'Resolve the default split before saving.';
     if (lines.length === 0) return 'Add at least one billing line.';
     // Codex round-7 P1 (RUP under-reporting): the same chemical product on two lines yields two
@@ -1054,7 +1085,19 @@ export default function FieldAppSplitInvoiceEditor() {
                           <span className="text-xs font-medium text-secondary">Product</span>
                           <select
                             value={l.product_id}
-                            onChange={(e) => patchLine(l.uid, { product_id: e.target.value })}
+                            onChange={(e) => {
+                              const nextForm = productOptions.find((p) => p.id === e.target.value)?.product_form ?? null;
+                              // Switching to a product of the other form would leave the old rate
+                              // unit selected as a grandfathered option (a liquid unit on a dry
+                              // product). Clear it so the operator must pick one that fits.
+                              // Only when the list really loaded: during an outage isKnownUnit is
+                              // false for everything, and clearing would wipe a stored unit.
+                              const dropUnit = unitLoad === 'loaded' && unitConversions.length > 0
+                                && !isKnownUnit(unitConversions, nextForm, l.rateUnit);
+                              patchLine(l.uid, dropUnit
+                                ? { product_id: e.target.value, rateUnit: '' }
+                                : { product_id: e.target.value });
+                            }}
                             className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
                           >
                             <option value="">Select a product…</option>
@@ -1066,10 +1109,17 @@ export default function FieldAppSplitInvoiceEditor() {
                           <span className="text-xs font-medium text-secondary">Total quantity</span>
                           <input type="number" min="0" step="0.0001" value={l.quantity} onChange={(e) => patchLine(l.uid, { quantity: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
                         </label>
-                        <label className="block">
-                          <span className="text-xs font-medium text-secondary">Rate unit</span>
-                          <input type="text" value={l.rateUnit} onChange={(e) => patchLine(l.uid, { rateUnit: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" placeholder="oz, gal…" />
-                        </label>
+                        <div className="block">
+                          <span className="block text-xs font-medium text-secondary mb-1">Rate unit</span>
+                          <UnitSelect
+                            unitConversions={unitConversions}
+                            form={productOptions.find((p) => p.id === l.product_id)?.product_form ?? null}
+                            value={l.rateUnit}
+                            onChange={(value) => patchLine(l.uid, { rateUnit: value })}
+                            disabled={saving}
+                            ariaLabel={`Rate unit for ${productOptions.find((p) => p.id === l.product_id)?.product_name || 'chemical line'}`}
+                          />
+                        </div>
                         <div className="block sm:col-span-2">
                           <label className="inline-flex items-center gap-2 text-xs font-medium text-secondary">
                             <input

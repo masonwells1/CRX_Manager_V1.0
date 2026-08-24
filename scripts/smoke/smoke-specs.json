@@ -597,7 +597,9 @@
     },
     "restore_quote_version": {
       "chain": "smoke-restore-version-drawn-guard.sql",
-      "description": "Drawn-version and row-version restore guard: restoring a snapshot below the drawn ledger raises BOOKING_OVERDRAWN (fall-below AND removes branches; the section DELETE rolls back atomically), while the row-version matrix separately proves owner-only access, stale-writer rejection before child replacement, exact N+1 success, and request-bound replay. A legal restore (>= drawn) succeeds to 'revised' with the ledger intact and then draws to closure; a no-draws control quote restores freely.",
+      "container_only": true,
+      "container_prover": "prove-draw-down-quote-intent-binding.mjs",
+      "description": "CONTAINER ONLY pending-apply post-tier-split restore guard: once a draw stamps per-line billing provenance, every version restore fails closed with QUOTE_RESTORE_BLOCKED_BY_DRAW before child replacement; the rollback smoke covers fall-below, removes-product, and quantity-safe snapshots, proves the quote remains usable to draw to closure, and pins the accepted post-closure refusal. Run only through prove-draw-down-quote-intent-binding.mjs after the pending cutover sequence; live still has the earlier restore behavior. The row-version matrix separately proves owner-only access, stale-writer rejection before child replacement, exact N+1 success, and request-bound replay. A no-draws control quote still restores freely.",
       "covers": [
         "restore_quote_version",
         "create_quote_version",
@@ -658,7 +660,9 @@
     },
     "create_planned_holds": {
       "chain": "smoke-planned-holds-drawn-sync.sql",
-      "description": "Authoritative planned-hold sync (Codex r2 #3, migration 20260611132115): active holds always equal booked − drawn per product after create_planned_holds, save_quote (Draft/Revise/Present), and restore_quote_version, with FIFO consumption so per-item expiry (needed_by+14d) follows the still-reserved tail; rebuild-after-draw no longer re-reserves drawn quantity; is_planned switched off + save releases all holds server-side.",
+      "container_only": true,
+      "container_prover": "prove-draw-down-quote-intent-binding.mjs",
+      "description": "CONTAINER ONLY pending-apply planned-hold/post-tier-split restore chain: active holds always equal booked − drawn per product after create_planned_holds and save_quote (Draft/Revise/Present), with FIFO consumption so per-item expiry (needed_by+14d) follows the still-reserved tail; rebuild-after-draw no longer re-reserves drawn quantity. A drawn booking's post-cutover restore_quote_version refusal is pinned to QUOTE_RESTORE_BLOCKED_BY_DRAW and leaves synchronized holds unchanged; is_planned switched off + save releases all holds server-side. Run only through prove-draw-down-quote-intent-binding.mjs after the pending cutover sequence; live still has the earlier restore behavior.",
       "covers": [
         "create_planned_holds",
         "release_planned_holds",
@@ -669,6 +673,23 @@
       ],
       "area": [
         "inventory"
+      ]
+    },
+    "draw_down_quote_intent_binding": {
+      "chain": "smoke-draw-down-quote-intent-binding.sql",
+      "container_only": true,
+      "container_prover": "prove-draw-down-quote-intent-binding.mjs",
+      "description": "CONTAINER ONLY pending-apply rollback proof for 20260819232000 after 20260816110000, 20260816120000 and 20260817120000: an active sales rep successfully covers a colleague's live booking through the real tier-split money/inventory path; numeric-equivalent exact replay returns one saved order; changed quantity and changed actor fail closed; the receipt is bound to actor plus fingerprint; line/header price, cost and profit remain exact; one exact $5 commission is written to the intended rep; inventory is prebooked once; and a deleted quote is hidden before replay. The network-isolated PostgreSQL 17 prover first applies 20260819232000 verbatim over exact reviewed helper/wrapper/pricing/lifecycle prerequisites, then uses an effect-recording stand-in for adversarial wrapper schedules covering admin/rep authorization, auth/role refusals, required-key plus keyed empty/non-numeric/non-finite guards, ACLs, same-key races, stale-replay mutation, helper/wrapper/prerequisite-body drift, overload drift, autocommit refusal, REPEATABLE READ stale-snapshot refusal and an in-flight legacy receipt drained by the exclusive cutover lock before refusal. A second database restores baseline 20260727174805, surfaces the one-shot quarantine notice, replays every default replay-eligible ledger-selected migration through this candidate, and executes this chain against the real money/commission/inventory/draw-ledger implementation to SMOKE_PASS_ROLLBACK. No PASS is a live-apply claim.",
+      "covers": [
+        "draw_down_quote"
+      ],
+      "area": [
+        "pricing",
+        "inventory",
+        "lifecycle",
+        "security",
+        "idempotency",
+        "regression"
       ]
     },
     "draw_down_quote": {

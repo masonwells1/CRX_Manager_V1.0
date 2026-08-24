@@ -1,11 +1,111 @@
 # Decision Log
 
-Last verified: 2026-08-19
+Last verified: 2026-08-20
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-20 — The project no longer pins `autoCompactWindow`; the user-level value governs
+
+**Source:** Mason's in-chat decision, 2026-08-20, while setting up switchable context profiles.
+
+**The problem.** `.claude/settings.json` carried `"autoCompactWindow": 500000` at the top level.
+Per the settings precedence chain (managed → CLI args → `settings.local.json` → `settings.json` →
+`~/.claude/settings.json`), that project value **beats** the user-level setting. The practical
+effect: running `/autocompact <n>` inside this repo appeared to succeed but changed nothing,
+because `/autocompact` writes to *user* settings, which the project file then overrode. The
+threshold was effectively frozen at 500k for every session in this repository.
+
+A second effect: the pin shortened the usable stretch before summarization. `autoCompactWindow`
+is a compaction *trigger*, not a ceiling on the model's context window — the window is set by the
+model and provider, not by this setting, and the pin does not change it. Capacity is 200K by
+default; 1M is available only where the model and route support it (native support, a `[1m]`
+alias, or gateway routing), so treat the suffix as a request that may be a no-op rather than a
+universal switch. On a session that *did* have 1M, the 500k pin still summarized at half the
+available room, so the span of unsummarized conversation was far shorter than the model could
+actually hold.
+
+**Decision.** Remove the `autoCompactWindow` key from `.claude/settings.json` entirely. The
+project no longer expresses an opinion on the compaction threshold; the user-level value in
+`~/.claude/settings.json` governs, and `/autocompact` works as documented inside this repo.
+
+**Operative rule.** Do not reintroduce a top-level `autoCompactWindow` into
+`.claude/settings.json` or `.claude/settings.local.json`. A project-level pin silently disables
+per-session threshold control for everyone working in the repo, including every parallel
+worktree. If a future task genuinely needs a fixed threshold, use the `--autocompact` flag, which
+applies only to the session it launches, or `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. Mind the scope
+difference on the environment variable: set inline for one invocation it affects only that run,
+but **exported** into a shell profile or a CI environment it applies to every Claude Code session
+launched from there. It also sits at the top of the precedence chain — it overrides
+`/autocompact`, `--autocompact`, and any `autoCompactWindow` in a settings file — so an
+accidentally exported value is harder to notice than a project pin, not easier.
+
+**Not changed by this entry.** Nothing about model selection, effort level, or any guard is
+affected. This is a harness-configuration change only; no money, schema, RLS, or migration
+surface is touched.
+
+---
+
+## 2026-08-20 — Draw-down intent cutover keeps the 24-hour zero-receipt freeze
+
+**Source:** Engineering fail-closed design choice, 2026-08-20. The 24-hour freeze window still
+requires Mason's scheduling approval before any separately authorized live apply.
+**Decision:** Keep the pending draw-down intent migration's fail-closed requirement that no
+unexpired legacy draw receipt exists before cutover; because receipts live for 24 hours, schedule a
+deliberate 24-hour no-successful-draw window before any separately authorized apply.
+**Why:** The shared retry helper would handle each legacy receipt safely — an exact retry refuses the
+duplicate business write and returns the already-committed receipt, rather than erroring or returning
+nothing (`scripts/smoke/smoke-draw-down-quote-intent-binding.sql`) — but a planned off-season or
+weekend freeze gives the wrapper a clean invariant and removes ambiguity from a money/inventory cutover.
+**What this forbids/implies:** do not weaken the zero-receipt preflight to avoid the wait. Verify zero
+read-only, keep draws paused through commit, and obtain separate live-apply authority; this PR applies nothing.
+
+---
+
+## 2026-08-19 — Two of Sol's review findings declined by the owner (D-W, D-X)
+
+An independent adversarial review of the product data model plan (Codex `sol`, `gpt-5.6-sol` at
+high effort; full text in `docs/audits/2026-08-19-sol-adversarial-review-product-data-plan.md`)
+returned **NOT SAFE AS WRITTEN** — 8 blockers, 22 high. Two findings asked for changes that are
+business calls rather than technical ones. Both were put to Mason and **both were declined.**
+
+**D-W — cancelled EPA registrations stay sellable.** Sol's finding 26 argued that "warn loudly,
+keep selling" is unsafe as a blanket rule, because sell-through rights depend on the specific
+cancellation order and some carry a hard sale cutoff date; it wanted the system to fail closed
+when authorization cannot be confirmed. Mason: *"Don't worry about it, let it be sold."* **D-T
+stands unchanged — warn, never block.** No sale-blocking gate is to be added, and this is not to
+be re-opened by a later session reading the review and treating finding 26 as outstanding.
+
+**D-X — the quality tier stays a display concern.** Sol's finding 19 argued the tier is a property
+of the sellable product, not of a brand record, and wanted it moved onto `products` with
+database-enforced cross-tier substitution rules. Mason: it only affects glufosinate and
+mesotrione, and that is too narrow an edge case to justify the work. **Accepted — no schema
+change.** The protection that matters survives at the display layer, where **D-O and D-P already
+put it**: the tier is always shown, the tiers are never presented as interchangeable on matching
+actives alone, and the adjuvant bias running against the premium product is stated on screen.
+A builder must not add `sourcing_tier` to `products` or build substitution rules.
+
+**Operative rule:** findings 19 and 26 are closed by owner decision, not by being fixed.
+
+*This paragraph was written before revision 3 landed and originally said 32 findings remained
+open, naming the WP-4 / D-A contradiction as unresolved. That is now stale, and the stale version
+understated the progress rather than the risk. Corrected on 2026-08-20 (CodeRabbit, PR #435).*
+**Current disposition:** all 8 blockers and 14 of the 22 high findings were fixed in revision 3,
+including the WP-4 / D-A contradiction that would have stored salt-form concentrations on the
+canonical acid and silently overstated active per gallon by ~35%. **Still open:** findings
+20, 21, 22 and 24 — all Phase 2/3 comparison and rate-source behavior, which must settle before
+Phase 2, not before WP-0 — plus 30 (parked-migration ownership, blocking WP-1's first migration)
+and the process-honesty items 32, 33, 34. **Finding 16 was moved out of that deferred set on
+2026-08-20**: it reads as Phase 2 comparison behavior, but which concentration is authoritative is
+decided by WP-4's live write in Phase 1, so it is now answered there as a database invariant.
+The ledger's cycle log is the authoritative record.
+
+**Source:** `docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md` §0 (D-W, D-X);
+`docs/audits/2026-08-19-sol-adversarial-review-product-data-plan.md`.
 
 ---
 

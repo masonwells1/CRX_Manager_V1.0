@@ -38,7 +38,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, rpcAuthErrorMessage, RpcErrorCodes } from '../lib/db';
 import {
   convertQuoteToOrderWithRowVersion,
   createQuoteVersionWithRowVersion,
@@ -47,6 +47,7 @@ import {
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection, getIdempotencyMismatchResult } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
 import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
@@ -441,6 +442,8 @@ export default function QuoteBuilder() {
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
   const suppressDirtyUntilReloadSettlesRef = useRef(false);
+  const initialLoadGenerationRef = useRef(0);
+  const [installedLoadGeneration, setInstalledLoadGeneration] = useState(0);
   const blocker = useUnsavedChanges(isDirty);
 
   // Status-based guards
@@ -521,6 +524,18 @@ export default function QuoteBuilder() {
     if (suppressDirtyUntilReloadSettlesRef.current) return;
     setIsDirty(true);
   }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
+
+  // Release initial-load dirty suppression only after React has committed the
+  // complete installed snapshot. Timer/frame releases can run before that
+  // commit on a busy device and let a late passive update mark a saved quote
+  // dirty, blocking its first draw-down attempt.
+  useEffect(() => {
+    if (installedLoadGeneration === 0) return;
+    if (initialLoadGenerationRef.current !== installedLoadGeneration) return;
+    initialLoadDone.current = true;
+    suppressDirtyUntilReloadSettlesRef.current = false;
+    setIsDirty(false);
+  }, [installedLoadGeneration]);
 
   // Booking settlement (roadmap #6c): for an open booking (saved sent/revised
   // quote), load booked/drawn/remaining + prepay position. Re-runs when the
@@ -877,6 +892,7 @@ export default function QuoteBuilder() {
 
     // The complete snapshot is now known-good. Install its related form state
     // together so React never observes an error-path partial reload.
+    suppressDirtyUntilReloadSettlesRef.current = true;
     quoteRowVersionRef.current = finalRowVersion;
     quoteNumericVersionRequiredRef.current = finalRowVersion !== null;
     quoteVersionRecoveryRequiredRef.current = false;
@@ -929,8 +945,8 @@ export default function QuoteBuilder() {
     }
 
     setLoading(false);
-    // Allow a tick for state to settle before tracking changes
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
+    const loadGeneration = ++initialLoadGenerationRef.current;
+    setInstalledLoadGeneration(loadGeneration);
     return true;
   }, [toast, navigate]);
 
@@ -2337,13 +2353,14 @@ export default function QuoteBuilder() {
 
   // Partial booking draw-down: open the modal with the per-product balance
   const openDrawDownModal = async () => {
-    if (!id) return;
+    if (!id) return false;
     // Draw-down bills at this quote's locked prices, so a current-price stale guard
     // would be misleading and block the first click without protecting the customer.
     if (isDirty) {
       toast('warning', 'Save the quote before drawing down the booking');
-      return;
+      return false;
     }
+    let loaded = false;
     setDrawLoading(true);
     setShowDrawModal(true);
     try {
@@ -2385,12 +2402,14 @@ export default function QuoteBuilder() {
         })
         .sort((a, b) => a.product_name.localeCompare(b.product_name));
       setDrawRows(rows);
+      loaded = true;
     } catch (error: unknown) {
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'draw_down_quote_load' } });
       toast('error', 'Failed to load the booking balance');
       setShowDrawModal(false);
     }
     setDrawLoading(false);
+    return loaded;
   };
 
   const handleDrawDown = async () => {
@@ -2435,6 +2454,53 @@ export default function QuoteBuilder() {
         setDrawing(false);
         return;
       }
+
+      // A retained draw key is bound to one actor and one exact set of draw
+      // quantities. A binding refusal performed no work for THIS request and
+      // makes that key permanently unusable, so retire it before the operator
+      // tries again. If the receipt identifies an earlier committed order,
+      // open that order rather than suggesting a second draw.
+      const bindingRejection = getIdempotencyBindingRejection(error);
+      if (bindingRejection) {
+        drawDownIdem.resetKey();
+        const committedResult = bindingRejection === 'intent'
+          ? getIdempotencyMismatchResult(error, 'draw_down_quote')
+          : null;
+        const committedOrderId = typeof committedResult?.order_id === 'string'
+          && committedResult.order_id.length > 0
+          ? committedResult.order_id
+          : null;
+
+        if (committedOrderId) {
+          setShowDrawModal(false);
+          toast('warning', 'An earlier attempt with this retry already created an order. No new draw was made — opening that order now.');
+          navigate(`/orders/${committedOrderId}`);
+          setDrawing(false);
+          return;
+        }
+
+        if (bindingRejection !== 'intent') {
+          Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+            tags: { source: 'critical_action', action: `draw_down_quote_${bindingRejection}_mismatch` },
+          });
+        }
+        if (bindingRejection === 'intent') {
+          setShowDrawModal(false);
+          toast('warning', 'That retry key was already used, but its prior outcome could not be opened. Nothing new was drawn. Check Orders for this booking before drawing again.');
+          setDrawing(false);
+          return;
+        }
+        const balanceReloaded = await openDrawDownModal();
+        const recoveryStep = balanceReloaded
+          ? 'The booking balance was reloaded; try again.'
+          : 'The booking balance could not be reloaded; refresh the page and check Orders before drawing again.';
+        toast('warning', bindingRejection === 'actor'
+          ? `That retry belongs to another signed-in user, so nothing new was drawn. ${recoveryStep}`
+          : `The database could not confirm this retry outcome, so nothing was drawn now. ${recoveryStep}`);
+        setDrawing(false);
+        return;
+      }
+
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'draw_down_quote' } });
       const errObj = error as Record<string, unknown> | null;
       const errMsg = (error instanceof Error ? error.message : null)
@@ -2444,7 +2510,12 @@ export default function QuoteBuilder() {
       // Friendly mapping for the booking guards — UX parity with the convert
       // path (2026-06-10 error-prevention review §3 LOW). BOOKING_PARTIALLY_DRAWN
       // can't fire here: draw_down_quote IS the partial path.
-      if (hasRpcCode(error, RpcErrorCodes.BOOKING_OVERDRAWN)) {
+      const authError = rpcAuthErrorMessage(error);
+      if (authError) {
+        toast('error', authError);
+      } else if (hasRpcCode(error, RpcErrorCodes.INSUFFICIENT_ROLE)) {
+        toast('error', 'Only active administrators and sales representatives can draw down bookings.');
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_OVERDRAWN)) {
         // The server message already names the product and remaining balance
         // (e.g. another draw landed from a second tab) — surface it as-is.
         toast('error', errMsg);
@@ -2452,6 +2523,10 @@ export default function QuoteBuilder() {
         toast('error', 'This booking is closed — only sent or revised quotes can be drawn down.');
       } else if (hasRpcCode(error, RpcErrorCodes.EMPTY_DRAW)) {
         toast('warning', 'Enter a quantity for at least one product');
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_QUANTITY_INVALID)) {
+        toast('error', errMsg);
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_PRODUCT_INVALID)) {
+        toast('error', 'A draw line has an invalid product reference. Refresh the booking and try again.');
       } else if (hasRpcCode(error, RpcErrorCodes.BOOKED_PRICE_REQUIRED)) {
         // Server message names the product and says what to fix — surface as-is.
         toast('error', errMsg);

@@ -2,6 +2,24 @@
 
 **Date:** 2026-08-18
 **Owner:** Mason Wells
+
+> ## ⚠️ THIS DOCUMENT PREDATES SOL'S ADVERSARIAL REVIEW — IT IS NOT FULLY RECONCILED
+>
+> *Added 2026-08-20 while reviewing PR #435.* This PRD was frozen on **2026-08-18**. Sol's review
+> landed **2026-08-19** with 34 findings, the build plan is now at **revision 3**, and Mason has
+> settled **five decisions** since (D-W, D-X, and the three closed on 2026-08-20). This document
+> has **not** been revised through all of that.
+>
+> **Where this PRD and `2026-08-19-product-data-model-BUILD-PLAN.md` disagree, the BUILD PLAN
+> wins.** It is the newer document and the one Sol's review and Mason's decisions were applied to.
+>
+> The specific contradictions found so far are corrected inline below and marked **[REV4]**.
+> **That correction pass is not known to be complete** — it fixed what PR #435's reviewers
+> happened to surface, not the result of a systematic reconciliation. Until someone walks this
+> document requirement-by-requirement against revision 3, treat any un-marked requirement here as
+> **possibly stale**, and check the build plan before acting on it. A full reconciliation is
+> tracked as a prerequisite of WP-1, not as optional tidying.
+
 **Status:** DRAFT — **three adversarial review rounds COMPLETE** (Fable, 2026-08-18,
 read-only, live-verified). Round 1 asked *"is this design sound?"* (yes, four amendments);
 round 2 asked *"what is missing?"* (24 gaps); round 3 reviewed the combined result and
@@ -10,7 +28,11 @@ plus eight factual corrections. All three rounds are folded in below, marked
 *(round 2)* / **[Round 2]** / **[REV3]** where they changed something. Awaiting Mason's go.
 
 **Round-3 blockers, all now written into Phase 1 above the requirement they affect:**
-1.17 (column-level grants on `products`), 1.9a (brand rides the existing lot chain),
+1.17 (column-level grants on `products`), 1.9a (~~brand rides the existing lot chain~~ — **[REV4]
+REVERSED: brand does NOT ride the lot chain.** PRD 1.9a-iv rules that infrastructure dormant, and
+Mason settled on **2026-08-20** that the application workflow is not currently in use and the
+lot/tote chain stays untouched — `application_record_lots` holds 0 rows. Brand capture follows the
+**delivery** path; see WP-3),
 1.18 (density precedence), 1.9b (brand table and `product_families` are both needed).
 Phases 0 and 0b were judged executor-ready after small edits; Phase 1 was not.
 **Design source:** `docs/plans/2026-08-18-product-data-model-plan.md`
@@ -65,8 +87,14 @@ computed, and therefore never recalculate when a cost changes.
 
 ## 3. Non-goals
 
-- No pricing, margin, or cost changes. No change to how quotes, orders, invoices, or
-  inventory calculate anything.
+- No pricing, margin, or cost changes. **Pricing and money rules are unchanged.**
+  **[REV3 — corrected after Sol finding 23.]** This previously read "no change to how quotes,
+  orders, invoices, or inventory calculate anything", which flatly contradicts Phase 2: Phase 2
+  deliberately rewires **which rate those consumers read**. Taken literally, the old wording
+  tells a builder to leave an invoice reader on legacy `products.rate_per_acre` while quoting
+  moves to `product_rates` — so a quote and its own invoice compute different quantities. The
+  precise rule: **money rules stay the same, and every rate-source reader moves together**, with
+  proven equivalent output through the cutover.
 - Not normalizing `products.vendor` into a foreign key (settled out of scope, 2026-07-16
   supplier pricing plan).
 - Rates that vary by crop — real, deliberately deferred.
@@ -249,11 +277,11 @@ A builder who starts on screens will build them against tables that then change 
 | # | Requirement | Acceptance |
 |---|---|---|
 | 1.1 | Active ingredients stored per product with concentration value, unit, and an explicit `acid_equivalent` vs `active_ingredient` basis | Open a product in the running app, add three ingredients, save, reload — all three persist with basis intact |
-| 1.1a | **`active_ingredients` carries `canonical_ingredient_id` (self-FK) and `ae_fraction`.** EPA salt-form names (`glyphosate, isopropylamine salt` etc.) are seeded as rows pointing at the parent acid; all search and grouping goes through the canonical id | Seed the three glyphosate salt forms; one search for "glyphosate" returns **every** product carrying any of them |
-| 1.2 | Mode-of-action codes in an **`ingredient_moa_codes` child table** (`active_ingredient_id`, `scheme`, `code`) — not scalar columns. Herbicides use the **numeric global HRAC code only** | An ingredient with two codes stores both; a product with ≥4 codes renders all of them, scheme-labeled |
+| 1.1a | **`active_ingredients` carries `canonical_ingredient_id` (self-FK) and `canonical_fraction`.** EPA salt-form names (`glyphosate, isopropylamine salt` etc.) are seeded as rows pointing at the parent acid; all search and grouping goes through the canonical id | Seed the three glyphosate salt forms; one search for "glyphosate" returns **every** product carrying any of them |
+| 1.2 | Mode-of-action codes in an **`ingredient_moa_codes` child table** (**`ingredient_id`** *[REV4 — was `active_ingredient_id`; the build plan and every proof query use `ingredient_id`, and either spelling compiles, so a mismatch would never surface at build time]*, `scheme`, `code`) — not scalar columns. Herbicides use the **numeric global HRAC code only** | An ingredient with two codes stores both; a product with ≥4 codes renders all of them, scheme-labeled |
 | 1.3 | Product density stored with value, unit, and source (`label`/`sds`/`supplier`/`measured`/`assumed`) | Density saved and re-read on a real product |
 | 1.3a | **Density validation is a warn band (~6.5–14 lb/gal), never a hard reject.** Required only for liquid products with weight-basis concentrations or liquid↔dry comparison — not a 604-row mandatory backfill | Enter 7.7 lb/gal (a real crop-oil density): saves, with at most a warning. **A hard 8–12 reject is a defect** |
-| 1.4 | EPA lookup persists the ingredients it already returns instead of discarding them, mapping salt forms to canonical acids | Run the lookup on a product with a known EPA number; ingredients land in the new tables under the right canonical ingredient |
+| **1.4** | **[REV4 — this requirement was DANGEROUS as written and is corrected.]** EPA lookup persists the ingredients it already returns instead of discarding them. ~~mapping salt forms to canonical acids~~ — **NO.** A label states a concentration for a **specific chemical form** ("5.4 lb glyphosate IPA salt per gallon"), and the concentration attaches to **that specific form row**. `canonical_ingredient_id` is used **only** to group and search; **it never receives a concentration.** Storing 5.4 on the canonical acid makes every downstream calculation read it as acid equivalent — the true figure is `5.4 × 0.741 = 4.0014` — so the system believes each gallon carries ~35% more active than it does and quotes roughly **26 gallons too few on a 100-gallon job**, silently. This was Sol's most consequential blocker (2026-08-19); the build plan fixed it in WP-4 and this requirement was left stale until PR #435. See D-A and WP-4 | Run the lookup on an `[E2E]` clone with a known EPA number; read back the stored row and show the **foreign key pointing at the specific chemical-form row, not the canonical parent**. A proof that does not show that has not proved this requirement |
 | 1.5 | New tables have RLS enabled with policies in the same migration | Migration inspected; RLS-security review passes |
 | 1.6 | Concentration unit is `lb_per_gal` or `percent_w_w` only. **`lb_per_lb` is excluded** — it is `percent_w_w` ÷ 100, the same axis twice | Constraint rejects `lb_per_lb` |
 | 1.7 | Any new mutating RPC accepts **and enforces** `p_idempotency_key text DEFAULT NULL` | Replaying the same key does not double-write |
@@ -268,7 +296,7 @@ A builder who starts on screens will build them against tables that then change 
 | **1.9c** | **[REV3] Brand entry must not re-create the packaging-sibling double-entry problem.** "Ag Saver 5.4" would otherwise be typed separately onto the 2.5 Gal, Bulk and 265G rows — the exact drift this plan solves for ingredients in 1.8/1.13. Either extend the copy-from-sibling action to cover brand rows, or model brands as an entity table plus a product-brand junction | Adding a brand to one packaging sibling makes it available on the others without retyping. (Note: a brand legitimately does **not** cross specs — "Ag Saver 5.4" and a 4-lb spec are different products and correctly share no brand row) |
 | **1.10** | **Complete fertilizer analysis** storable: primary macros (N, P₂O₅, K₂O), secondary macros (Ca, Mg, S) and micronutrients (B, Cl, Co, Cu, Fe, Mn, Mo, Ni, Zn), as `percent_w_w` | A liquid fertilizer stores a full guaranteed analysis, saves and re-reads. Combined with density it yields pounds of nutrient actually applied |
 | **1.10a** | **[REV3] Add `cfu_per_ml` and `cfu_per_g` as concentration units.** Round 2 left this an either/or; it is now decided. "Complete analysis" with 9 biological products unstorable is self-contradictory, and forcing a colony-forming-unit count into a percentage column is a data defect | The 9 biological products store their labelled CFU figure in a CFU unit. No biological carries a nonsense percentage |
-| **1.10b** | **[REV3] Nutrient basis must be expressible.** Guaranteed analysis reports phosphorus and potassium on an **oxide** basis (P₂O₅, K₂O); agronomic math frequently needs **elemental** P and K (×0.436 and ×0.830). This is structurally the same problem as acid equivalent versus salt weight, which 1.1a already solves with `canonical_ingredient_id` + `ae_fraction` — but the `basis` column's proposed values (`acid_equivalent` \| `active_ingredient`) cannot express "oxide" | Either a nutrient basis value is added, or the PRD states explicitly that oxide→elemental rides the existing canonical/fraction mechanism. A build that silently treats P₂O₅ as elemental P is a defect |
+| **1.10b** | **[REV3] Nutrient basis must be expressible.** Guaranteed analysis reports phosphorus and potassium on an **oxide** basis (P₂O₅, K₂O); agronomic math frequently needs **elemental** P and K (×0.436 and ×0.830). This is structurally the same problem as acid equivalent versus salt weight, which 1.1a already solves with `canonical_ingredient_id` + `canonical_fraction` — but the `basis` column's proposed values (`acid_equivalent` \| `active_ingredient`) cannot express "oxide" | Either a nutrient basis value is added, or the PRD states explicitly that oxide→elemental rides the existing canonical/fraction mechanism. A build that silently treats P₂O₅ as elemental P is a defect |
 | **1.10c** | **[REV3] Total nitrogen only — Mason, 2026-08-18.** Asked whether recommendations need nitrogen split into ammoniacal / urea / nitrate forms as labels break them out, Mason chose total N. The schema should not *forbid* the breakdown later, but no requirement to enter it ships now | A fertilizer stores a single total-N figure. Adding form-level detail later does not require re-entering the analyses captured now |
 | **1.11** | **Formulation type and safener** captured, because identical ingredients at identical concentrations are not always interchangeable (SC vs EC vs OD; safened vs unsafened s-metolachlor) | A safened and an unsafened product with identical ingredient rows are visibly distinguishable |
 | **1.12** | `concentration_value` nullability is stated explicitly, so *ingredient present, amount unknown* is distinguishable from *ingredient missing* | A product with a known ingredient and unknown amount saves, and Phase 3 can tell the two cases apart |
@@ -276,7 +304,7 @@ A builder who starts on screens will build them against tables that then change 
 | **1.14** | Every new table carries `updated_at` and its trigger | The `tables_without_updated_at` drift check passes |
 | **1.15** | Nickname is searchable on the Products page (`searchKeys`, `src/pages/Products.tsx:862`) and in the QuoteBuilder product picker | Typing "Generic Callisto" finds the product |
 | **1.16** | Edits to ingredients, density and analysis are audited (who, when, old value, new value), following the `cost_history` precedent | Change a concentration, then show the prior value and who changed it |
-| **1.17** | **[REV3] BLOCKER — every new `products` column ships its column-level GRANT in the same migration.** `products` is a **column-carved** table: `authenticated` holds no table-level INSERT or UPDATE, and 27 of its 48 columns instead carry explicit column-level `INSERT`/`UPDATE` grants (verified live via `relacl`). Any Phase 1 column added without a matching `GRANT INSERT(col), UPDATE(col)` is **unwritable by the app** — the field renders, the user types into it, and the save either errors with "permission denied for column" or dies silently. `docs/reference/gotchas.md` currently lists only `application_services` as column-carved and is **stale** | Add a column, then edit it **through the running app as a normal authenticated user** — not as service-role, which masks the failure entirely. Value persists. `gotchas.md` updated in the same change |
+| **1.17** | **[REV4 — carve-out added: "every new column" is not literally every new column.** Columns the build plan makes **RPC-only** must NOT receive direct `INSERT`/`UPDATE` grants — specifically the density fields (WP-2 routes writes through the density RPC so the audit trail and precedence cannot be bypassed) and **`product_data_version`**, which WP-1 explicitly revokes because it is the concurrency token: granting direct write to it lets any authenticated user forge the compare-and-set that protects every other edit. **The rule is: each new column ships either its column-level grant or a deliberate, stated revocation — never silence.** Ship the expected-privilege matrix, not a bare check.**] **[REV3] BLOCKER — every new `products` column ships its column-level GRANT in the same migration.** `products` is a **column-carved** table: `authenticated` holds no table-level INSERT or UPDATE, and 27 of its 48 columns instead carry explicit column-level `INSERT`/`UPDATE` grants (verified live via `relacl`). Any Phase 1 column added without a matching `GRANT INSERT(col), UPDATE(col)` is **unwritable by the app** — the field renders, the user types into it, and the save either errors with "permission denied for column" or dies silently. `docs/reference/gotchas.md` currently lists only `application_services` as column-carved and is **stale** | Add a column, then edit it **through the running app as a normal authenticated user** — not as service-role, which masks the failure entirely. Value persists. `gotchas.md` updated in the same change |
 | **1.18** | **[REV3] BLOCKER — density precedence must be a stated rule, not left to the executor.** 1.3 puts `density_value` on the product spec; 1.9 also puts one on brand rows. Nothing currently says which the scale-weight math uses. That re-plants the exact dual-source ambiguity this project exists to remove, on its most safety-critical path. **Rule: the spec density is the working value; a brand row may carry an override; the weight calculation uses the recorded brand's density when a brand is recorded *and* that brand has one, otherwise the spec's — and the screen displays which one it used.** The same rule governs per-brand ingredient rows; "the link belongs on whichever row is authoritative" is not something a builder can implement | Two products, one with a brand override and one without, both produce a scale weight, and each shows the source of the density it used |
 | **1.19** | **[REV3] Dry products store a net weight per purchase unit.** The design plan discusses this in prose but no numbered requirement ever demanded it, so a builder working from this table would skip it — and dry products then cannot participate in weight-based blending at all | A dry product sold by the case or bag carries its net weight, and a blend drawing on it produces a scale weight |
 | **1.20** | **[REV3] State whether specific-gravity entries are normalized to `lb_per_gal` at write time or converted at read time.** Pick one and write it down; a mixed convention produces two subtly different numbers for the same product | The choice is recorded before code. Entering a specific gravity and entering the equivalent lb/gal yield the same scale weight |
@@ -295,7 +323,7 @@ weight of everything for scales and mixer."* Therefore:
 - **`"5.4#"` is an ingredient concentration, not a density.** It is pounds of glyphosate salt
   per gallon; the product itself is roughly 10.2 lb/gal. Conflating them produces scale
   weights wrong by about half. The 5.4 vs 5.5 pair in the live catalog is also an
-  `ae_fraction` case — 5.5# products are the potassium salt, 5.4# the IPA salt.
+  `canonical_fraction` case — 5.5# products are the potassium salt, 5.4# the IPA salt.
 - **Phase 1 is done when the mechanism works, not when the catalog is full.** Mason parked
   the backfill (*"Let's wait on that for now I don't have time"*). Acceptance is: one product
   can be given a density and read back, and a missing density blocks a weight rather than
@@ -343,7 +371,7 @@ wrongly re-derived number.
 | 3.1 | Search products by active ingredient, **resolved through `canonical_ingredient_id`** | Searching glyphosate returns products carrying **any** salt form, not a partial list |
 | 3.2 | Search/filter by mode-of-action group | Group filter returns the expected set |
 | 3.3 | Build-from-generics cost comparison, read-only, no writes | **Halex GT at 4 pt reproduces the owner's sheet: 33.44 oz generic Roundup, 3.34 oz generic Callisto, 1.09 pt generic Dual** |
-| 3.4 | Mixed weight/volume products compared correctly using density **and `ae_fraction`** — density alone converts `% w/w` to lb *salt*/gal, not to acid equivalent | A `% w/w` salt-basis product compares correctly against a `lb ae/gal` product |
+| 3.4 | Mixed weight/volume products compared correctly using density **and `canonical_fraction`** — density alone converts `% w/w` to lb *salt*/gal, not to acid equivalent | A `% w/w` salt-basis product compares correctly against a `lb ae/gal` product |
 | 3.5 | **Coverage gaps surfaced loudly, never silently dropped.** If no stocked generic carries one of the branded product's ingredients, the tool says so instead of omitting it from the total | Reproduce the "Resicore REV" case: the tool reports the missing ingredient rather than pricing an incomplete rebuild as complete |
 | 3.6 | Unverified concentrations visibly marked using the existing `source` / `verified_at` fields | An unverified number is presented as unverified, not as fact |
 | 3.7 | Money math parses to whole cents before arithmetic — no binary floating-point rounding (2026-08-10 decision) | Cost figures are exact |
@@ -480,7 +508,7 @@ transfer to the executing session.
 
 1. ~~Fable adversarial review in flight.~~ **RESOLVED 2026-08-18.** Verdict: architecture
    sound, no redesign. Four substantive amendments folded in above — canonical
-   ingredient + `ae_fraction`, `product_rates` child table, corrected density warn band,
+   ingredient + `canonical_fraction`, `product_rates` child table, corrected density warn band,
    re-ordered phases. Full change list: plan §9.
 2. ~~Schema sections provisional.~~ **RESOLVED** — §6 Phase 1 is final.
 3. Restricted-use product count is known wrong (2 recorded, owner says materially more).

@@ -110,15 +110,36 @@ function buildUpdateChain(
   return self;
 }
 
-vi.mock('../lib/db', () => ({
-  supabase: { from: mockFrom, rpc: mockRpc },
-  supabaseUntyped: { from: mockFrom, rpc: mockRpc },
-  checkMutationResult: vi.fn(),
-  assertRpcResult: vi.fn((d) => d),
-  hasRpcCode: (error: { message?: string }, code: string) => error.message?.includes(code) ?? false,
-  RpcErrorCodes: { QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
-  sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
-}));
+vi.mock('../lib/db', () => {
+  const hasRpcCode = (error: { message?: string }, code: string) => (
+    error.message === code
+    || error.message?.startsWith(`${code}:`) === true
+    || error.message?.startsWith(`${code} `) === true
+  );
+  return {
+    supabase: { from: mockFrom, rpc: mockRpc },
+    supabaseUntyped: { from: mockFrom, rpc: mockRpc },
+    checkMutationResult: vi.fn(),
+    assertRpcResult: vi.fn((d) => d),
+    hasRpcCode,
+    RpcErrorCodes: {
+      AUTH_REQUIRED: 'AUTH_REQUIRED', ACTOR_MISMATCH: 'ACTOR_MISMATCH',
+      INSUFFICIENT_ROLE: 'INSUFFICIENT_ROLE', BOOKING_QUANTITY_INVALID: 'BOOKING_QUANTITY_INVALID',
+      BOOKING_PRODUCT_INVALID: 'BOOKING_PRODUCT_INVALID', BOOKING_OVERDRAWN: 'BOOKING_OVERDRAWN',
+      BOOKING_CLOSED: 'BOOKING_CLOSED', EMPTY_DRAW: 'EMPTY_DRAW',
+      BOOKED_PRICE_REQUIRED: 'BOOKED_PRICE_REQUIRED', COST_BASIS_REQUIRED: 'COST_BASIS_REQUIRED',
+      DRAW_ALLOCATION_MISMATCH: 'DRAW_ALLOCATION_MISMATCH', QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE',
+      CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT',
+      IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT',
+    },
+    rpcAuthErrorMessage: (error: { message?: string }) => (
+      hasRpcCode(error, 'AUTH_REQUIRED') || hasRpcCode(error, 'ACTOR_MISMATCH')
+        ? 'Your sign-in could not be verified. Refresh the page and try again.'
+        : null
+    ),
+    sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
+  };
+});
 
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'user-1', role: 'admin', full_name: 'Test Admin' }, role: 'admin' }),
@@ -183,7 +204,7 @@ function renderQuoteBuilder(id?: string) {
   );
 }
 
-function makeQuoteFixture(status: 'draft' | 'accepted' = 'draft', rowVersion?: number) {
+function makeQuoteFixture(status: 'draft' | 'sent' | 'accepted' = 'draft', rowVersion?: number) {
   const quote = {
     id: `quote-${status}-${rowVersion ?? 'legacy'}`,
     quote_number: 'Q-version-test',
@@ -245,6 +266,52 @@ function makeQuoteFixture(status: 'draft' | 'accepted' = 'draft', rowVersion?: n
   return { quote, product, section, item };
 }
 
+function configureDrawDownFixture(
+  drawError: { message: string; details?: string },
+  { failRecoveryLoad = false }: { failRecoveryLoad?: boolean } = {},
+) {
+  const fixture = makeQuoteFixture('sent', 7);
+  let quoteItemReads = 0;
+  mockFrom.mockImplementation((table: string) => {
+    if (table === 'quote_items') quoteItemReads += 1;
+    if (table === 'quote_items' && failRecoveryLoad && quoteItemReads >= 3) {
+      return buildChain({ data: null, error: { message: 'booking balance unavailable' } });
+    }
+    const data = table === 'quotes'
+      ? fixture.quote
+      : table === 'quote_sections'
+        ? [fixture.section]
+        : table === 'quote_items'
+          ? [fixture.item]
+          : table === 'customers'
+            ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+            : table === 'products'
+              ? [fixture.product]
+              : [];
+    return buildChain({ data, error: null });
+  });
+  mockRpc.mockImplementation((name: string) => Promise.resolve(
+    name === 'draw_down_quote'
+      ? { data: null, error: drawError }
+      : { data: null, error: null },
+  ));
+  return { ...fixture, quoteItemReads: () => quoteItemReads };
+}
+
+async function submitOneUnitDraw(quoteId: string) {
+  renderQuoteBuilder(quoteId);
+  const createOrderButton = await screen.findByRole('button', { name: /Create Order/ });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitFor(() => expect(dirtyStates[dirtyStates.length - 1]).toBe(false));
+  fireEvent.click(createOrderButton);
+  fireEvent.click(await screen.findByRole('menuitem', { name: /Draw part of booking/ }));
+  expect(mockToast).not.toHaveBeenCalledWith('warning', 'Save the quote before drawing down the booking');
+  const dialog = await screen.findByRole('dialog', { name: 'Create Order from Booking' });
+  const quantity = await within(dialog).findByRole('spinbutton');
+  fireEvent.change(quantity, { target: { value: '1' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Create Order' }));
+}
+
 describe('QuoteBuilder', () => {
   it('prefers customer-facing quoting guidance and falls back to the grower description', () => {
     expect(preferredQuoteNotes({ quoting_notes: 'Customer quote guidance', notes: 'Grower copy' }))
@@ -269,6 +336,99 @@ describe('QuoteBuilder', () => {
     await waitFor(() => {
       expect(screen.getByText('Builder')).toBeInTheDocument();
     });
+  });
+
+  it('opens the exact receipt-proven order after a changed draw intent', async () => {
+    const priorOrderId = '99999999-9999-9999-9999-999999999999';
+    const { quote } = configureDrawDownFixture({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: JSON.stringify({
+        operation: 'draw_down_quote',
+        result: { order_id: priorOrderId, order_number: 'O-EXISTING' },
+      }),
+    });
+
+    await submitOneUnitDraw(quote.id);
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith(`/orders/${priorOrderId}`));
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
+    expect(mockToast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('already created an order'),
+    );
+    expect(screen.queryByRole('dialog', { name: 'Create Order from Booking' })).not.toBeInTheDocument();
+  });
+
+  it('sends the operator to Orders when a changed-intent receipt cannot be opened', async () => {
+    const fixture = configureDrawDownFixture({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: JSON.stringify({ operation: 'draw_down_quote', result: null }),
+    });
+
+    await submitOneUnitDraw(fixture.quote.id);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('prior outcome could not be opened'),
+    ));
+    expect(mockToast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('Check Orders for this booking before drawing again'),
+    );
+    expect(mockToast).not.toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('booking balance was reloaded; try again'),
+    );
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringMatching(/^\/orders\//));
+    expect(screen.queryByRole('dialog', { name: 'Create Order from Booking' })).not.toBeInTheDocument();
+  });
+
+  it('maps a malformed draw product to a governed operator error', async () => {
+    const fixture = configureDrawDownFixture({ message: 'BOOKING_PRODUCT_INVALID: draw product id must be a UUID' });
+
+    await submitOneUnitDraw(fixture.quote.id);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'A draw line has an invalid product reference. Refresh the booking and try again.',
+    ));
+  });
+
+  it('retires another actor retry and reloads the booking balance in the open modal', async () => {
+    const fixture = configureDrawDownFixture({ message: 'IDEMPOTENCY_ACTOR_MISMATCH' });
+
+    await submitOneUnitDraw(fixture.quote.id);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('belongs to another signed-in user'),
+    ));
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
+    expect(fixture.quoteItemReads()).toBeGreaterThanOrEqual(3);
+    const dialog = screen.getByRole('dialog', { name: 'Create Order from Booking' });
+    expect(within(dialog).getByRole('spinbutton')).toHaveValue(null);
+    expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringMatching(/^\/orders\//));
+  });
+
+  it('does not claim the booking balance reloaded when mismatch recovery reads fail', async () => {
+    const fixture = configureDrawDownFixture(
+      { message: 'IDEMPOTENCY_ACTOR_MISMATCH' },
+      { failRecoveryLoad: true },
+    );
+
+    await submitOneUnitDraw(fixture.quote.id);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('booking balance could not be reloaded'),
+    ));
+    expect(mockToast).not.toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('booking balance was reloaded'),
+    );
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog', { name: 'Create Order from Booking' })).not.toBeInTheDocument();
   });
 
   it('shows loading skeleton while fetching data for existing quote', () => {
