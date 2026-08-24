@@ -120,7 +120,11 @@ including `production-action-guard.mjs`, which gates live mutations, pushes, and
 it would let a PR that only weakens that guard skip review entirely.
 
 **Decision: this config ships with no `path_filters` block at all.** The exclusion list is empty,
-so every file in the repository is reviewed. The remaining candidate — `!.agents/**` — is defensible
+so **no repository-specific path is excluded**. That is not the same as "everything is reviewed":
+CodeRabbit's own curated default ignore list — lock files, binaries, generated code, media, source
+maps — still applies underneath, and declining to exclude those paths does not make them
+reviewable. Only an explicit positive pattern would, at the cost described above. That default list
+is exactly where the lockfile blind spot comes from. The remaining candidate — `!.agents/**` — is defensible
 (the adapter-drift check `scripts/check-agent-workflows.mjs` runs inside the required
 "Lint, Type Check, Test, Build" status check, so a hand-edit there cannot ship unreviewed), but it
 saves little review allowance and it is the one line that kept drawing High findings. It parks with
