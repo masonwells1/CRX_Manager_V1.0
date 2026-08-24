@@ -115,14 +115,10 @@ depend on governed product pricing share one current-schema replay:
 node scripts/smoke/prove-draw-down-price-tier-real-schema.mjs
 ```
 
-The runner restores the supported baseline and replays the verified live
-source history, with one explicit historical exception:
-`20260810010308_active_team_note_assignment_actor.sql` is skipped because its
-live-base preflight is incompatible with a from-scratch replay. The prover pins
-both that migration's line-ending-normalized SHA-256 and its exact observed
-`PREFLIGHT_FAIL` reason;
-any content, reason, or skip-set change fails closed. Before applying the parked
-draw-down migration, it requires
+The runner restores the supported baseline and replays all 56 migrations in the
+verified live source history. SQL copied into the container is normalized to LF
+so a Windows checkout cannot manufacture false function-body drift; any skipped
+migration fails closed. Before applying the parked draw-down migration, it requires
 five pricing-sensitive chains to reach `SMOKE_PASS_ROLLBACK`: the auth probe,
 planned-holds synchronization, draw-ledger reversal, order draw lock, and job
 from quote activity-feed chain. It then mutation-tests the candidate-specific
