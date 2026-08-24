@@ -358,7 +358,39 @@ export function finalPollConfirms(settledPoll, finalPoll) {
   );
 }
 
+// A settled `success` is not a completed review. Recorded on PR #411: the check
+// row read "CodeRabbit pass — Review completed" while the bot's own comment said
+// "Review failed — An error occurred during the review process", with no findings
+// ever submitted; PR #402 showed "Review rate limited" behind the same green row
+// (docs/reference/gotchas.md). The walkthrough stamp does not rescue this, because
+// it is written when a review STARTS — so a review that stamps the head and then
+// dies leaves the stamp, the status, and the settle comparison all passing.
+// (Codex CRX-SEC-002, High, PR #441.)
+export const REVIEW_FAILURE_MARKERS = [
+  "Review failed",
+  "Review rate limited",
+  "No files to review",
+  "Review limit reached",
+];
+
+// "Reviews paused" is deliberately NOT a failure marker: auto_pause_after_reviewed_commits
+// makes that notice a permanent fixture of the walkthrough on an active branch, so
+// treating it as failure would block every merge forever.
+export const NOT_A_FAILURE_MARKER = "Reviews paused";
+
+// Comments are considered only from this head's own review cycle. A failure from an
+// earlier head is history; scanning the whole PR would wedge the gate shut on any PR
+// that ever had one failed review.
+export function reviewCompleted(botComments, cycleStartIso) {
+  return !botComments.some(
+    (c) =>
+      c.created_at >= cycleStartIso &&
+      REVIEW_FAILURE_MARKERS.some((m) => c.body.includes(m)),
+  );
+}
+
 const S = (state, created_at) => ({ context: "CodeRabbit", state, created_at });
+const C = (created_at, body) => ({ created_at, body });
 
 // The real 5a12433f timeline, newest-first at two moments.
 const atIntermediateSuccess = [S("success", "2026-08-20T22:51:50Z"), S("pending", "2026-08-20T22:51:43Z")];
@@ -401,10 +433,69 @@ ok(
 );
 ok(finalPollConfirms(atFinalSuccess, []) === false, "final poll with no status is REJECTED (fail closed)");
 
+// ── A stable success is not a completed review (the PR #411 shape) ───────────
+const CYCLE = "2026-08-17T10:00:00Z";
+ok(
+  reviewCompleted([C("2026-08-17T10:05:00Z", "walkthrough … and <HEAD>")], CYCLE) === true,
+  "a stamped head with no failure marker this cycle is ACCEPTED",
+);
+ok(
+  reviewCompleted(
+    [
+      C("2026-08-17T10:05:00Z", "walkthrough … and <HEAD>"),
+      C("2026-08-17T10:06:00Z", "**Review failed** — An error occurred during the review process."),
+    ],
+    CYCLE,
+  ) === false,
+  "the real PR #411 shape is REJECTED: stamped head, stable success, review failed",
+);
+ok(
+  reviewCompleted([C("2026-08-17T10:06:00Z", "Review rate limited")], CYCLE) === false,
+  "the PR #402 shape is REJECTED: green row, review rate limited",
+);
+ok(
+  reviewCompleted([C("2026-08-17T10:06:00Z", "Review limit reached")], CYCLE) === false,
+  "a review-limit-reached comment this cycle is REJECTED",
+);
+ok(
+  reviewCompleted([C("2026-08-17T10:06:00Z", "No files to review.")], CYCLE) === false,
+  "a no-files-to-review comment this cycle is REJECTED for a real commit",
+);
+ok(
+  reviewCompleted([C("2026-08-17T09:00:00Z", "**Review failed** — earlier head")], CYCLE) === true,
+  "a failure marker from BEFORE this cycle is history, not a verdict on this head",
+);
+ok(
+  reviewCompleted([C("2026-08-17T10:06:00Z", `> ## ${NOT_A_FAILURE_MARKER}`)], CYCLE) === true,
+  "the permanent auto-pause notice is NOT treated as a failure (it would block every merge)",
+);
+
 // The skill must actually document the settle requirement, not just the query.
 for (const [name, file] of SKILLS) {
   const text = readFileSync(file, "utf8");
   ok(/90\s*seconds apart/i.test(text), `${name}: the skill requires a >=90s settle window between polls`);
+}
+
+// …and it must carry the fail-closed failure-state check as a real command,
+// scoped to this head's cycle rather than the whole PR.
+for (const [name, file] of SKILLS) {
+  const cmds = bashCommands(readFileSync(file, "utf8"));
+  const failureCheck = cmds.find((c) => c.includes("Review failed") && c.includes("issues/<n>/comments"));
+  ok(Boolean(failureCheck), `${name}: a command checks for CodeRabbit failure states on this head`);
+  for (const marker of REVIEW_FAILURE_MARKERS) {
+    ok(
+      Boolean(failureCheck) && failureCheck.includes(marker),
+      `${name}: the failure-state check covers "${marker}"`,
+    );
+  }
+  ok(
+    Boolean(failureCheck) && !failureCheck.includes(NOT_A_FAILURE_MARKER),
+    `${name}: the failure-state check does NOT match the permanent auto-pause notice`,
+  );
+  ok(
+    Boolean(failureCheck) && failureCheck.includes("$since") && failureCheck.includes("statuses"),
+    `${name}: the failure-state check is scoped to this head's own review cycle`,
+  );
 }
 
 console.log(`deploy-check-review-gate: ${pass} assertions passed`);

@@ -182,14 +182,25 @@ command runs with the reviewer's `gh` credentials. `<HEAD>^{tree}` settles every
 and object ID in a single comparison and interpolates no attacker-controlled text. General rule: a
 verification step must never interpolate PR-controlled strings into a shell command.
 
-**Two different gates, and only one of them is waivable.** Codex's third finding — that permitting a
-Mason-approved merge without a CodeRabbit review contradicts the no-waiver rule — is **declined**,
-because it conflates two distinct gates. AGENTS.md makes CodeRabbit explicitly *advisory* ("it
-comments and does not block"), so Mason approving a merge without it is the owner applying his own
-settled policy, not an agent waiving anything; only he can give that approval. The exact-SHA
-adversarial proof on risky money/RLS/migration diffs is the hard gate and is **not waivable by
-anyone** — clean machine verdict or the change parks. The skill now states both explicitly so the
-two cannot be read as one.
+> **Superseded — this paragraph's conclusion was wrong and the waiver it defends no longer exists.**
+> It is kept only because later paragraphs refer to it. **Do not act on it.** The operative rule is
+> the one stated further down and in `.claude/skills/deploy-check/SKILL.md`: **no review means no
+> merge**, with the single exception of the documented deterministic no-op-merge case. Codex flagged
+> the contradiction a second time (CRX-SEC-001, High, on `61e755a8`) precisely because an agent
+> reading this log top-down would hit the declined version first and treat it as current.
+
+**~~Two different gates, and only one of them is waivable.~~** Codex's third finding — that permitting
+a Mason-approved merge without a CodeRabbit review contradicts the no-waiver rule — was **declined**
+here, on the reasoning that it conflated two distinct gates: AGENTS.md calls CodeRabbit *advisory*
+("it comments and does not block"), so Mason approving a merge without it looked like the owner
+applying his own settled policy rather than an agent waiving anything.
+
+**That reasoning was wrong, and the finding was correct.** "Advisory" in AGENTS.md describes the
+*findings* — that a nitpick may be dismissed with a one-line reason — not the review itself. The
+standing policy requires whoever lands the work to **read** CodeRabbit's review; a merge with no
+review to read does not satisfy it, no matter who approves. The waiver clause was removed from the
+skill in the same round. The exact-SHA adversarial proof on risky money/RLS/migration diffs remains
+a separate and stricter gate, **not waivable by anyone** — clean machine verdict or the change parks.
 
 **Bot authorship is not authenticity — the comment stamp was forgeable.** Codex returned BLOCKED on
 the near-final revision: the clean-review path accepted the range line from *any* `coderabbitai[bot]`
@@ -329,6 +340,30 @@ satisfies — every fragment present, describing the wrong procedure. Replaced w
 walks the index forward so each step must follow the previous one. Reordering the parent paragraph while
 keeping every word turns the suite red. Order was the substance of the rule all along; presence was never
 what needed proving.
+
+**Eighth round, and the one that actually mattered: a settled `success` is not a completed review.** Codex
+returned two High findings on `61e755a8`. The second is the serious one, and it is documented history rather
+than speculation — `docs/reference/gotchas.md` records PR #411 showing `CodeRabbit pass — Review completed`
+while the bot's own comment read "**Review failed** — An error occurred during the review process", with no
+findings ever submitted; PR #402 showed "Review rate limited" behind the same green row. Every check this
+entry has been sharpening — the exact-head stamp, the settled status, the timestamp-matched final poll —
+passes in that state, because the stamp is written when a review **starts**. Seven rounds of tightening the
+identity and settlement of the signal, and the signal itself could be a corpse.
+
+The gate now searches this head's own review cycle for `Review failed`, `Review rate limited`,
+`No files to review`, and `Review limit reached`, and fails closed on any of them. Two deliberate scoping
+decisions: **"Reviews paused" is excluded**, because `auto_pause_after_reviewed_commits: 2` makes it a
+permanent fixture of the walkthrough and matching it would block every merge forever; and the search is
+bounded by the OLDEST CodeRabbit status on the commit rather than scanning the whole PR, because a failure
+from an earlier head is history — an unbounded search would wedge the gate shut on any PR that ever had one
+failed review. `reviewCompleted()` is executable and tested against the real PR #411 and PR #402 shapes, plus
+the two boundary cases.
+
+Codex's first finding was that this very log **authorised and forbade the same waiver**: an earlier paragraph
+declined the "no merge without review" rule as conflating two gates, and a later one recorded that the waiver
+was wrong and removed. An agent reading top-down would act on the first. That paragraph is now fenced as
+superseded. The lesson generalises past this file: a decision log that argues with itself is a hazard, not a
+record, and "I corrected this further down" is not a correction an agent will reach in time.
 
 The through-line across all six rounds is one idea: **a check that names the thing it forbids only catches
 that name.** Five times running, the fix was itself written one notch too narrow — a spelling, then a

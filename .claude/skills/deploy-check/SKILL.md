@@ -340,6 +340,29 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    *different* run that started and completed between your settle window and the merge, whose
    findings you have never read. Same state **and** same timestamp, or the merge does not proceed.
 
+   **A stable `success` can sit on top of a review that FAILED. Check for that explicitly.** This is
+   recorded, not theoretical: on PR #411 the check row read `CodeRabbit pass — Review completed`
+   while CodeRabbit's own comment said "**Review failed** — An error occurred during the review
+   process", and no findings were ever submitted; PR #402 showed the milder "Review rate limited"
+   with the same green row (`docs/reference/gotchas.md`). The walkthrough stamp does not save you
+   here either, because it is written when the review **starts** — so a review that stamps the head
+   and then dies leaves every other check in this section passing. Scope the search to this head's
+   own review cycle, using the OLDEST CodeRabbit status on the commit as the start of that cycle:
+
+   ```bash
+   SINCE="$(gh api repos/masonwells1/CRX_Manager_V1.0/commits/<HEAD>/statuses --jq '[.[] | select(.context=="CodeRabbit")] | last | .created_at')" && gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq --arg since "$SINCE" '.[] | select(.user.login=="coderabbitai[bot]") | select(.created_at >= $since) | .body' | grep -qE "Review failed|Review rate limited|No files to review|Review limit reached" || echo NO_FAILURE_MARKER_THIS_HEAD
+   ```
+
+   Silence means a failure marker WAS found — fail closed and do not merge. Re-trigger the review and
+   settle again from the start.
+
+   Two deliberate exclusions. **"Reviews paused" is not a failure** — `auto_pause_after_reviewed_commits: 2`
+   makes that notice a permanent fixture of the walkthrough on any active branch, so matching it would
+   block every merge forever; the pause is handled by triggering the review explicitly. And the search
+   is bounded by `$SINCE` rather than scanning the whole PR, because a failure marker from an earlier
+   head is history, not a statement about this commit — an unbounded search would wedge the gate shut
+   on any PR that ever had one failed review. (Codex CRX-SEC-002, High, PR #441.)
+
    **Known limitation, tracked.** This is a stability heuristic, not a terminal artifact — CodeRabbit
    publishes no "review finished" marker bound to a SHA, and the walkthrough's HTML markers
    (`walkthrough_start`, `recent_review_start`, …) are structural and present throughout. Closing it
