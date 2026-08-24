@@ -219,9 +219,27 @@ for (const [name, file] of SKILLS) {
   );
   ok(
     bindsBoundVar(parentStatus, "commits/") &&
-      parentStatus.includes('select(.context=="CodeRabbit")') &&
-      parentStatus.includes('= "success"'),
+      parentStatus.includes('select(.context=="CodeRabbit")'),
     `${name}: the parent's own CodeRabbit status check derives and expands that same variable`,
+  );
+  // A one-shot `= "success"` on the parent is the SAME intermediate-success hole
+  // the head procedure exists to close, and an earlier revision shipped exactly
+  // that while this file's own settlement section explained why it is not
+  // terminal. The parent already carries its walkthrough stamp during that
+  // window (the stamp is written when a review STARTS), so a no-op merge could
+  // land before findings were generated. The parent command must therefore emit
+  // `created_at` — the value the two-poll comparison needs — and must not reduce
+  // the status to a bare success test. Asserting this on the COMMAND is the
+  // point: a document-wide search for "90 seconds apart" is satisfied by the
+  // head's section and proves nothing about the parent.
+  // (Codex CRX-SEC-001, High, PR #441.)
+  ok(
+    Boolean(parentStatus) && parentStatus.includes(".created_at"),
+    `${name}: the parent status command emits created_at, so its success can be settled across polls`,
+  );
+  ok(
+    Boolean(parentStatus) && !parentStatus.includes('= "success"'),
+    `${name}: the parent status is not reduced to a one-shot success test`,
   );
   ok(
     hasCommandWithAll(cmds, ["git merge-tree --write-tree", "<HEAD>^{tree}", "MERGE_ADDED_NOTHING"]),

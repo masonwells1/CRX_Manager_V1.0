@@ -175,8 +175,21 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    ```
 
    ```bash
-   PARENT1="$(git rev-parse <HEAD>^1)" && test "$(gh api repos/masonwells1/CRX_Manager_V1.0/commits/$PARENT1/statuses --jq '[.[] | select(.context=="CodeRabbit")] | first | .state')" = "success" && echo PARENT_REVIEW_COMPLETED
+   PARENT1="$(git rev-parse <HEAD>^1)" && gh api repos/masonwells1/CRX_Manager_V1.0/commits/$PARENT1/statuses --jq '[.[] | select(.context=="CodeRabbit")] | first | "\(.state) \(.created_at)"'
    ```
+
+   **The parent's status must be SETTLED by the same rule as the head — a single `success` is not
+   terminal for it either.** Run that command, wait 90s, run it again, and require identical
+   `success <timestamp>` both times; then run it once more immediately before merging and require
+   that *same* `created_at`. A bare one-shot `success` check on the parent is exactly the
+   intermediate-success hole the head procedure exists to close: the parent already carries its
+   walkthrough stamp during that window, because the stamp is written when a review STARTS, so a
+   no-op merge could pass every tree check and land before CodeRabbit finished generating findings.
+   Codex flagged this as High on PR #441 and was right — an earlier revision tested the parent with
+   one `= "success"` while the file two hundred lines below documented why that is not terminal.
+   Observed live on this very branch the same day: heads `30e6cbee` and `26bc5e0f` each got a
+   `success` "Review completed" within ~20 seconds of the push, on a branch whose auto-review was
+   paused — no review had run at all, and the real one only started minutes later.
 
    Together those run the *full* review gate against the derived parent — the canonical walkthrough
    stamp naming it, plus its own settled status — the same standard any head has to meet. The

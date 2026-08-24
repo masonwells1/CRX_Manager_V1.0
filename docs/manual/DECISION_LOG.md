@@ -143,13 +143,22 @@ Both PRs in this session were reviewed first and updated second, wasting an atte
 
 **The merge-only head can never be stamped, and tree identity is the answer.** When `update-branch`
 contributes no new PR changes, CodeRabbit replies "No files to review." and emits no range line for
-that SHA — a SHA-bound gate then cannot pass however often it is re-triggered. The supported
-fallback proves the merge commit contributed nothing of its own, in three checks that **assert**
-rather than print: `test "$(git rev-parse <HEAD>^1)" = "<REVIEWED_SHA>"`, `git merge-base
---is-ancestor <HEAD>^2 <BASE_SHA>`, and `test "$(git merge-tree --write-tree <HEAD>^1 <HEAD>^2)" =
-"$(git rev-parse <HEAD>^{tree})"`. Each prints a marker on success and is silent on failure, so a
-silent command is a FAILED check. CodeRabbit flagged the first draft for printing values a human had
-to compare by eye, and was right — a gate that depends on someone noticing is not a gate.
+that SHA — a SHA-bound gate then cannot pass however often it is re-triggered. The fallback proves
+the merge commit contributed nothing of its own, in checks that **assert** rather than print. Each
+prints a marker on success and is silent on failure, so a silent command is a FAILED check.
+CodeRabbit flagged the first draft for printing values a human had to compare by eye, and was
+right — a gate that depends on someone noticing is not a gate.
+
+> **Obsolete — do not run.** The first version of the parent check was
+> `test "$(git rev-parse <HEAD>^1)" = "<REVIEWED_SHA>"`, with `<REVIEWED_SHA>` supplied by whoever
+> ran the procedure. **That recipe is unsafe and was removed**; it is quoted here only so the
+> paragraphs below have something to refer to. Codex flagged it as High on PR #441, then flagged
+> this entry a second time for stating it as the supported recipe before correcting it further down —
+> a reader who stops early would run the broken one. The current procedure derives the parent and
+> proves it against a real CodeRabbit artifact; see `.claude/skills/deploy-check/SKILL.md` and the
+> four correction rounds recorded later in this entry. The two surviving tree checks are
+> `git merge-base --is-ancestor <HEAD>^2 <BASE_SHA>` and
+> `test "$(git merge-tree --write-tree <HEAD>^1 <HEAD>^2)" = "$(git rev-parse <HEAD>^{tree})"`.
 
 `<BASE_SHA>` is the PR's own `baseRefOid`, never `origin/main`. A local remote-tracking ref is only
 as current as the last fetch, and it is simply the wrong ref for a PR based on any other branch —
@@ -287,11 +296,31 @@ empty at the moment it is used, producing the same `commits//statuses` nothing. 
 calls cannot see sequence. `bindsBoundVar` now compares match positions and requires the assignment to
 precede its first expansion; moving the assignment to the end of the command turns the suite red.
 
-The through-line across all five rounds is one idea: **a check that names the thing it forbids only catches
-that name.** Four times running, the fix for that was itself written one notch too narrow — a spelling, then
-a notation, then a variable read from the wrong scope, then two facts with no order between them. Each round
-was found by a reviewer, not by the suite, because a green suite is exactly what each hole produced. Guards
-on this path get a case table and a mutation run, not a green suite.
+**Fifth round, and the sharpest: the parent was held to a weaker standard than the head.** Codex returned
+this as High (CRX-SEC-001) on `26bc5e0f`. The parent's status was checked with a single
+`test ... = "success"`, while this same file, two hundred lines further down, documents why one `success` is
+**not** terminal and requires two polls 90s apart plus a timestamp-matched final poll. The parent already
+carries its walkthrough stamp during that intermediate window — the stamp is written when a review STARTS —
+so a no-op merge could pass every tree check and land before CodeRabbit finished generating findings. The
+regression did not catch it because its settlement test only confirmed the phrase "90 seconds apart" appeared
+*somewhere in the document*, which the head's own section satisfies.
+
+This one is not hypothetical. It was observed live on this branch the same day: heads `30e6cbee` and
+`26bc5e0f` each received a `success` "Review completed" status within ~20 seconds of being pushed, on a
+branch whose auto-review is paused — no review had run at all. The real review started minutes later. A
+one-shot success check would have accepted both.
+
+The parent now emits `"\(.state) \(.created_at)"` and is settled by the identical two-poll rule as the head,
+with two **command-scoped** regressions: the parent command must emit `created_at`, and must not reduce the
+status to a bare success test. Reverting it to the one-shot form turns the suite red.
+
+The through-line across all six rounds is one idea: **a check that names the thing it forbids only catches
+that name.** Five times running, the fix was itself written one notch too narrow — a spelling, then a
+notation, then a variable read from the wrong scope, then two facts with no order between them, then a
+document-wide search standing in for a command-scoped one. Every round was found by a reviewer, never by the
+suite, because a green suite is exactly what each hole produced. Guards on this path get a case table and a
+mutation run, not a green suite — and any rule the head must satisfy, every other reviewed commit must
+satisfy identically.
 
 **Settled by Mason, 2026-08-22: `auto_pause_after_reviewed_commits: 2` stands, with the enforcement
 follow-up to come.** Codex's CRX-SEC-002 (Medium) argued it should not — fewer automatic reviews put
