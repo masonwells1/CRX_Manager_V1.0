@@ -462,12 +462,6 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     const nestedDir = path.join(nestedSource, "supabase", "migrations", "deep");
     mkdirSync(nestedDir, { recursive: true });
     writeFileSync(path.join(nestedDir, "keep.sql"), "-- nested\n");
-    execFileSync("git", ["add", "."], { cwd: nestedSource, stdio: "ignore" });
-    execFileSync(
-      "git",
-      ["-c", "user.name=Review Test", "-c", "user.email=review@example.invalid", "commit", "-qm", "nested"],
-      { cwd: nestedSource, stdio: "ignore" },
-    );
 
     // If the trusted executable or the sanitized environment were wrong the call
     // would fail and fall back to this repository's own root, so the basename
