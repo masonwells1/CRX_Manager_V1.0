@@ -468,6 +468,16 @@ and `v_actor := auth.uid()` safe-refusal cases across both predicates. Removing
 comment masking or caught-handler detection independently makes its exact
 regression fail; the restored catalog proof passes.
 
+The follow-up CodeRabbit pass found two more catalog-only gaps. A recognized
+`v_actor := auth.uid()` binding made the truncation start at the binding rather
+than the later refusal, hiding any forged forwarding or audit write between
+them. The binding is now proven separately while the removed suffix starts at
+the refusal's `IF`. PostgreSQL also numbers PL/pgSQL `$n` aliases across the
+full declaration list, including `OUT` parameters; the predicates now use the
+catalog ordinal instead of an input-only counter. Disposable PostgreSQL 17
+fixtures reproduce both misses across the general and financial predicates,
+and reverting either load-bearing change makes its exact fixture fail.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —

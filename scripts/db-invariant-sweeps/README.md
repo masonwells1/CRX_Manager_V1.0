@@ -51,7 +51,10 @@ strict-actor `IF ... RAISE EXCEPTION 'ACTOR_MISMATCH'` statement. Any routine
 containing an exception handler stays fail-closed because that handler may catch
 the refusal. A helper, operator, or financial-audit write before a valid refusal
 therefore remains a finding, while ordinary forwarding after a proven early,
-uncaught refusal does not.
+uncaught refusal does not. A `v_actor := auth.uid()` binding is required before
+a local-actor refusal, but the scanned prefix ends at the refusal's `IF`, not at
+the binding, so intervening forwarding remains visible. Positional `$n` aliases
+use full PL/pgSQL declaration order, including preceding `OUT` parameters.
 
 The `save_field` predicate also has a disposable mutation proof that deliberately installs unsafe,
 late-guard, comment-only, and altered bodies and requires the predicate to fail closed. Run both

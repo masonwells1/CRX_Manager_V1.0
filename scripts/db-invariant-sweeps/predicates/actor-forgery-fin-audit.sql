@@ -33,14 +33,11 @@ WITH cand AS (
          p.prosrc,
          a.argname,
          regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g') AS argname_pattern,
-         a.input_position
+         a.ordinality AS argument_position
   FROM pg_proc p
   CROSS JOIN LATERAL (
     SELECT named.argname,
-           named.ordinality,
-           count(*) FILTER (
-             WHERE coalesce(p.proargmodes[named.ordinality], 'i'::"char") IN ('i', 'b', 'v')
-           ) OVER (ORDER BY named.ordinality) AS input_position
+           named.ordinality
     FROM unnest(coalesce(p.proargnames, '{}'::text[])) WITH ORDINALITY AS named(argname, ordinality)
   ) AS a
   WHERE p.pronamespace = 'public'::regnamespace
@@ -59,29 +56,39 @@ WITH cand AS (
            'g'
          ) AS executable_src
   FROM cand
-), analyzed AS (
+), guarded AS (
   SELECT lexed.*,
+         executable_src ~* (
+           '\mv_actor\M\s*:=\s*auth\s*\.\s*uid\s*\(\s*\)\s*;.*?'
+           || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
+           || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M[^;]*'
+           || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
+         ) AS has_bound_local_refusal
+  FROM lexed
+), analyzed AS (
+  SELECT guarded.*,
          CASE
            WHEN executable_src ~* '\mEXCEPTION\s+WHEN\M' THEN executable_src
            ELSE regexp_replace(
              executable_src,
              '('
-               || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || input_position || '\M)'
+               || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
                || '\s+IS\s+DISTINCT\s+FROM\s+auth\s*\.\s*uid\s*\(\s*\)[^;]*'
                || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
-               || '|\mv_actor\M\s*:=\s*auth\s*\.\s*uid\s*\(\s*\)\s*;.*?'
-               || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || input_position || '\M)'
-               || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M[^;]*'
-               || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
+               || CASE WHEN has_bound_local_refusal THEN
+                    '|\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
+                    || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M[^;]*'
+                    || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
+                  ELSE '' END
              || ').*$',
              '',
              'is'
            )
          END AS pre_refusal_src
-  FROM lexed
+  FROM guarded
 )
 SELECT DISTINCT proname || '(' || args || ')' AS violation_key,
        argname AS suspect_param
 FROM analyzed
-WHERE pre_refusal_src ~* ('financial_audit_log[^;]*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
+WHERE pre_refusal_src ~* ('financial_audit_log[^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')
 ORDER BY violation_key;
