@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — Phase 3C containment tolerates rebuilt ignored `dist/` entries
+
+The private-artifact containment guard now skips only the narrow race where Git lists an ignored,
+tool-owned generated file and the build removes it before inspection. It immediately re-lists and
+rescans after that race, so a rebuilt file cannot be hidden; a second disappearance and a missing
+worktree root are explicitly fail-closed. Stable generated files and direct forbidden filenames
+remain blocking. The recovery scan de-duplicates candidates already inspected, preserving the
+normal structural scan budget for newly reappeared or grown files.
+
 ## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
 
 Fresh review of the cross-schema repair found two additional HIGH bypasses. A
@@ -761,7 +770,6 @@ match. It now converts before comparing, and refuses rather than guessing when i
 - 10 new tests (43 in the file); the form split, the billing fallback, and the `oz/cwt` guard were each
   mutation-tested by reverting them and confirming exactly the expected test went red. Verified by
   driving the real module in a browser across all nine cases, including both MG shapes.
-
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 
 `validateBlendMath` summed every product quantity regardless of unit, so a ticket holding
