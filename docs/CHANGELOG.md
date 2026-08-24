@@ -5,8 +5,10 @@ All significant development milestones, in reverse chronological order.
 ## 2026-08-24 — Phase 3C containment tolerates rebuilt ignored `dist/` entries
 
 The private-artifact containment guard now skips only the narrow race where Git lists an ignored,
-tool-owned generated file and the build removes it before inspection. Stable generated files and
-direct forbidden filenames remain blocking; a missing worktree root is explicitly fail-closed.
+tool-owned generated file and the build removes it before inspection. It immediately re-lists and
+rescans after that race, so a rebuilt file cannot be hidden; a second disappearance and a missing
+worktree root are explicitly fail-closed. Stable generated files and direct forbidden filenames
+remain blocking.
 
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 

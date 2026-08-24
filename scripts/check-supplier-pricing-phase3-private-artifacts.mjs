@@ -1752,7 +1752,7 @@ function worktreeEntryKind(root, repoPath, ownWorktrees = { paths: new Set(), wo
   return 'non-regular';
 }
 
-function worktreeContentViolations(root, execute, budget, { includeIgnored = true, ownWorktrees: providedOwnWorktrees } = {}) {
+function worktreeContentViolations(root, execute, budget, { includeIgnored = true, ownWorktrees: providedOwnWorktrees, retryingTransientIgnoredEntries = false } = {}) {
   const ownWorktrees = providedOwnWorktrees ?? registeredWorktreeDirectories(root, execute);
   const modified = new Set(gitPaths(['diff', '--name-only', '-z', '--diff-filter=ACMRT'], root, execute));
   const untracked = new Set(gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute));
@@ -1769,6 +1769,7 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
   const cache = { roots: new Map(), parents: new Map() };
   const bareRoots = bareRepositoryRoots([...candidates.keys()]);
   const bareRootList = [...bareRoots];
+  let sawTransientIgnoredEntry = false;
   for (const bareRoot of bareRoots) violations.push({ repoPath: bareRoot, reason: 'bare Git repository' });
   for (const [repoPath, source] of candidates) {
     // Path-level violations must win before a candidate is dereferenced or
@@ -1789,7 +1790,10 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
       try {
         entryKind = worktreeEntryKind(root, repoPath, ownWorktrees);
       } catch (error) {
-        if (isTransientToolOwnedIgnoredEntryError(source, root, repoPath, error)) continue;
+        if (!retryingTransientIgnoredEntries && isTransientToolOwnedIgnoredEntryError(source, root, repoPath, error)) {
+          sawTransientIgnoredEntry = true;
+          continue;
+        }
         throw error;
       }
       if (entryKind === 'embedded-repository') { violations.push({ repoPath, reason: 'embedded Git repository' }); continue; }
@@ -1813,11 +1817,26 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     try {
       result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives });
     } catch (error) {
-      if (isTransientToolOwnedIgnoredEntryError(source, root, repoPath, error)) continue;
+      if (!retryingTransientIgnoredEntries && isTransientToolOwnedIgnoredEntryError(source, root, repoPath, error)) {
+        sawTransientIgnoredEntry = true;
+        continue;
+      }
       throw error;
     }
     const acceptedReason = acceptedStructuralReason(repoPath, result?.reason);
     if (acceptedReason) violations.push({ repoPath, reason: acceptedReason });
+  }
+  if (sawTransientIgnoredEntry) {
+    // A disappeared generated entry is tolerated once so an ordinary rebuild
+    // cannot make every push fail. Re-list and re-scan the worktree before
+    // success: a file recreated during the first pass must be inspected, and
+    // a second disappearance fails closed rather than hiding it.
+    const recovery = worktreeContentViolations(root, execute, budget, {
+      includeIgnored,
+      ownWorktrees,
+      retryingTransientIgnoredEntries: true,
+    });
+    return { ...recovery, durationMs: Math.round(performance.now() - started) };
   }
   return { violations, candidateCount: candidates.size, ignoredCount: ignored.size, durationMs: Math.round(performance.now() - started) };
 }
