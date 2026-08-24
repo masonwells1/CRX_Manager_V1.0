@@ -65,7 +65,8 @@ const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30",
                   "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
                   "T40", "T41", "T42", "T43", "T44", "T45", "T46", "T47", "T48",
-                  "T49", "T50", "T51", "T52", "T53", "T54", "T55", "T56", "T57", "T58", "T59"];
+                  "T49", "T50", "T51", "T52", "T53", "T54", "T55", "T56", "T57", "T58", "T59",
+                  "T60", "T61", "T62"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -405,14 +406,50 @@ const MUTANTS = [
     // what separates "the tolerance is bounded" from "the tolerance is gone".
     name: "quantity tolerance made relative again",
     edits: [
-      // Anchor re-cut in round 23. The tolerance is no longer a bare 0.0001 -- it models the
-      // rate's own 4-dp rounding slack, 0.00005 * acres. Swapping THAT for a slack relative
-      // to the value being checked restores exactly the round-18 money bug: the caller's own
-      // inflated quantity inflates its own allowance. T50 must go red.
-      { from: "<= GREATEST(0.0001::numeric, 0.00005::numeric * v_acres);",
+      // Anchor re-cut in round 23 and again in round 24. The tolerance is no longer a bare
+      // 0.0001 -- it models the rate's own 4-dp rounding slack, 0.00005 * acres, under an
+      // absolute 0.1 ceiling. Swapping THAT for a slack relative to the value being checked
+      // restores exactly the round-18 money bug: the caller's own inflated quantity inflates
+      // its own allowance. T50 must go red.
+      { from: "<= GREATEST(0.0001::numeric,\n"
+            + "                                  LEAST(0.00005::numeric * v_acres, 0.1::numeric));",
         to: "<= GREATEST(0.0001::numeric, abs(v_rate * v_acres) * 0.000001::numeric);" },
     ],
     expect: "T50",
+  },
+  {
+    // Removes the ABSOLUTE CEILING from the equal-units branch, restoring the round-24 hole
+    // exactly as the gate described it: the slack goes back to 0.00005 * caller-supplied
+    // acreage, so a payload claiming 1e12 acres buys itself a 50,000,000-unit allowance and
+    // bills every one of them. T60 must go red; T59 (the ordinary 178-acre quantity-driven
+    // job) must stay green -- that pair is what separates "the ceiling is load-bearing" from
+    // "the acreage term was simply removed".
+    name: "absolute ceiling removed from the equal-units quantity tolerance",
+    from: "                      <= GREATEST(0.0001::numeric,\n"
+        + "                                  LEAST(0.00005::numeric * v_acres, 0.1::numeric));",
+    to: "                      <= GREATEST(0.0001::numeric, 0.00005::numeric * v_acres);",
+    expect: "T60",
+  },
+  {
+    // The same removal on the MISMATCHED-UNITS branch. Capping one branch and not the other
+    // leaves the identical caller-sized allowance one exit further down, reachable by any
+    // payload whose units merely happen to differ -- so the ceiling needs its own oracle
+    // there. T62 must go red; T5 (an honest cross-unit line) must stay green.
+    name: "absolute ceiling removed from the converted quantity tolerance",
+    from: "                  LEAST(\n"
+        + "                    COALESCE(\n"
+        + "                      field_app_priced_quantity(0.00005::numeric * v_acres,\n"
+        + "                                                v_qty_unit, v_price_unit, v_form),\n"
+        + "                      0.0001::numeric),\n"
+        + "                    COALESCE(\n"
+        + "                      field_app_priced_quantity(0.1::numeric,\n"
+        + "                                                v_qty_unit, v_price_unit, v_form),\n"
+        + "                      0.0001::numeric))) THEN",
+    to: "                  COALESCE(\n"
+      + "                    field_app_priced_quantity(0.00005::numeric * v_acres,\n"
+      + "                                              v_qty_unit, v_price_unit, v_form),\n"
+      + "                    0.0001::numeric)) THEN",
+    expect: "T62",
   },
   {
     // Disables the unsupported-character rule, restoring the homoglyph bypass: the fold

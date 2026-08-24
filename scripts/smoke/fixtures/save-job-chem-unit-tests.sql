@@ -1331,6 +1331,99 @@ EXCEPTION WHEN OTHERS THEN
   RAISE EXCEPTION 'T59 FAIL  an ordinary quantity-driven job entry was REFUSED, which rolls back the whole job save: %', SQLERRM;
 END $$;
 
+-- T60: THE ACREAGE-SIZED ALLOWANCE, and it is the gate's own arithmetic (HIGH, gpt-5.6-sol,
+-- round 24). T59's fix -- a slack of 0.00005 * acres -- was round 18's money bug wearing a
+-- different number. ACREAGE IS NOT A FACT ABOUT THE WORLD HERE: it is summed out of p_fields,
+-- which the caller writes, and there is no CHECK on it anywhere in the live schema (verified
+-- against the live database, not assumed). So a slack proportional to acreage is a slack the
+-- caller sizes for itself, which is precisely the shape round 18 deleted.
+--
+--   claimed acreage      1,000,000,000,000
+--   rate                 0.000000001 per acre
+--   quantity that is due 1,000
+--   quantity submitted   50,001,000
+--   slack, uncapped      0.00005 x 1e12 = 50,000,000  -> ACCEPTED, and 50,001,000 units bill
+--
+-- The ceiling is what refuses it: no quantity further than 0.1 from rate x acres is accepted
+-- at ANY acreage. Must REFUSE, and the refusal must be the derivation one -- if this ever
+-- starts failing on a different code, the guard being tested is not the one that fired.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":1000000000000}'::jsonb,
+      '[{"field_id":"33333460-3333-3333-3333-333333334602","acres_to_treat":1000000000000}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":50001000,"unit":"oz","rate_per_acre":0.000000001,"rate_unit":"oz/ac","cost_per_unit_cents":0,"price_per_unit_cents":100}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF NOT ok THEN
+    RAISE EXCEPTION 'T60 FAIL  a caller-sized acreage bought a 50,000,000-unit allowance and 50,001,000 units billed';
+  END IF;
+  IF msg NOT LIKE 'CHEM_QUANTITY_NOT_DERIVED%' THEN
+    RAISE EXCEPTION 'T60 FAIL  refused, but not by the derivation check: %', msg;
+  END IF;
+  RAISE NOTICE 'T60 PASS  an acreage-sized allowance is capped: %', msg;
+END $$;
+
+-- T61: THE OTHER HALF OF T60, and without it the cap could be "fixed" by refusing large jobs
+-- outright. Large acreage is NOT itself an error, and the remedy the refusal text names has to
+-- actually work: entering the RATE puts the line in the direction where the app derives
+-- quantity = fmt4(rate x acres), which lands within 0.00005 of exact at ANY acreage. Same
+-- 1e12-acre payload as T60, same rate, but the quantity that is genuinely due. Must SAVE.
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":1000000000000}'::jsonb,
+    '[{"field_id":"33333460-3333-3333-3333-333333334603","acres_to_treat":1000000000000}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":1000,"unit":"oz","rate_per_acre":0.000000001,"rate_unit":"oz/ac","cost_per_unit_cents":0,"price_per_unit_cents":100}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 100000 THEN RAISE NOTICE 'T61 PASS  the rate-driven direction saves at any acreage; price=%', c;
+  ELSE RAISE EXCEPTION 'T61 FAIL  price=% (expected 100000)', c; END IF;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T61 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T61 FAIL  a correctly derived line was refused for its acreage alone, and the remedy the message names does not work: %', SQLERRM;
+END $$;
+
+-- T62: THE SAME HOLE ON THE MISMATCHED-UNITS BRANCH. Capping one exit and not the other would
+-- have left the identical caller-sized allowance one branch down, reachable by any payload
+-- whose units merely differ -- and a guard with two exits needs an oracle at both, or the
+-- untested one is where the bug ships.
+--
+--   claimed acreage      10,000,000
+--   rate                 0.0016 oz per acre     (a dry product priced per POUND)
+--   quantity that is due 16,000 oz = 1,000 lb
+--   quantity submitted   1,030 lb
+--   slack, uncapped      0.00005 x 1e7 = 500 oz = 31.25 lb  -> ACCEPTED, 30 lb overbilled
+--
+-- Converted, the ceiling is 0.1 oz = 0.00625 lb, so this is refused. Must REFUSE.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10000000}'::jsonb,
+      '[{"field_id":"33333460-3333-3333-3333-333333334604","acres_to_treat":10000000}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":1030,"unit":"lb","rate_per_acre":0.0016,"rate_unit":"oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF NOT ok THEN
+    RAISE EXCEPTION 'T62 FAIL  the converted branch accepted 30 lb of overbill bought with claimed acreage';
+  END IF;
+  -- The converted branch has no refusal code of its own: failing its tolerance falls through
+  -- to CHEM_UNIT_MISMATCH, the same exit T4 lands on. Pinning the code matters anyway -- a
+  -- refusal for some unrelated reason would otherwise score as a pass and this test would
+  -- stop watching the cap.
+  IF msg NOT LIKE 'CHEM_UNIT_MISMATCH%' THEN
+    RAISE EXCEPTION 'T62 FAIL  refused, but not by the converted-quantity check: %', msg;
+  END IF;
+  RAISE NOTICE 'T62 PASS  the converted branch is capped too: %', msg;
+END $$;
+
 -- T55: THE COUNTERPART. Every unit the live system actually carries must still SAVE on a
 -- priced line, or the backstop would block ordinary work -- the round-7 defect three reviewers
 -- caught, and the reason a widening is never free. 'dry oz' is the spelling most at risk:
@@ -1459,6 +1552,6 @@ DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 27 AND n_chem = 27 THEN RAISE NOTICE 'T8 PASS  27 jobs / 27 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 27/27)', n_jobs, n_chem; END IF;
+  IF n_jobs = 28 AND n_chem = 28 THEN RAISE NOTICE 'T8 PASS  28 jobs / 28 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18), T59 (the quantity-driven UI path, added in round 23) and T61 (a correctly derived line on an enormous acreage, added in round 24 so that capping the tolerance could not be mistaken for refusing large jobs outright). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48, T60, T62 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 28/28)', n_jobs, n_chem; END IF;
 END $$;

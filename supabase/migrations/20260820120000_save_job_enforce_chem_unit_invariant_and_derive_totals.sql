@@ -1003,9 +1003,15 @@ BEGIN
     -- a rate of 1e9 the accepted difference is 5 million units, so at $1 a unit the check
     -- would wave a $5,000,000 discrepancy straight past. Nothing bounds rate, acreage or
     -- quantity, so "one part per million" is not a small quantity here -- it is a percentage
-    -- of whatever the caller chose. The only slack the storage format actually needs is the
-    -- four decimal places it rounds to, which is a FIXED 0.0001: a tolerance that states what
-    -- it is for, rather than one that scales with the very number it is supposed to check.
+    -- of whatever the caller chose.
+    --
+    -- WHAT THE TOLERANCE IS NOW, after rounds 23 and 24 and stated once here so the block
+    -- below is read against the current rule and not an earlier one: GREATEST(0.0001,
+    -- LEAST(0.00005 * acres, 0.1)). Every term earns its place -- 0.0001 is the quantity's
+    -- own storage precision, 0.00005 * acres is the error a 4-decimal RATE introduces when
+    -- the operator drives the line by total instead of by rate, and the 0.1 ceiling is what
+    -- stops that second term from being sized by caller-supplied acreage. No term scales
+    -- with the number under test, and no term is unbounded.
     IF v_qty_unit = v_price_unit THEN
       v_rate := NULLIF(v_chem->>'rate_per_acre','')::numeric;
       IF v_rate IS NOT NULL AND v_rate > 0 AND v_rate < 'Infinity'::numeric
@@ -1027,18 +1033,33 @@ BEGIN
         --
         -- So the slack is the error the rate's own rounding can introduce and nothing more:
         -- a rate stored to 4 dp can be wrong by up to 0.00005, which over v_acres acres is
-        -- 0.00005 * v_acres. This is NOT the relative tolerance round 18 removed. That one
-        -- scaled with the VALUE BEING CHECKED, so a caller inflating the quantity inflated
-        -- its own allowance -- at 5,000 acres and a rate of 1e9 it permitted 5,000,000 units.
-        -- This scales with ACREAGE, which the caller does not get to invent freely and which
-        -- is physically bounded: the same 5,000 acres now allows 0.25 units. It has a reason
-        -- rather than a magnitude.
+        -- 0.00005 * v_acres.
+        --
+        -- AND IT IS CAPPED, because round 24 caught me repeating round 18's mistake in a new
+        -- shape (HIGH, gpt-5.6-sol, 2026-08-24). The round-23 message claimed acreage is
+        -- "physically bounded by the field". THE SERVER DOES NOT KNOW THAT. Acreage is summed
+        -- out of p_fields, which the caller writes, so an uncapped 0.00005 * v_acres is a
+        -- caller-sized allowance exactly like the relative term round 18 deleted -- it just
+        -- reads a different number out of the same payload. The gate's arithmetic: 1e12 acres
+        -- at a rate of 1e-9 expects 1,000 units and opens a slack of 50,000,000, so a
+        -- submitted quantity of 50,001,000 passes and bills every one of them.
+        --
+        -- LEAST(..., 0.1) is that ceiling, and a tenth of a unit is not a guess. The largest
+        -- job in the live data covers 178.31 acres and needs 0.0089; the cap does not begin
+        -- to bind until 2,000 acres, more than ten times the largest job ever recorded here.
+        -- It is also the WHOLE exposure of this exit: whatever the caller claims its acreage
+        -- to be, no quantity further than 0.1 from rate x acres is accepted.
+        --
+        -- A job past the knee is not stuck, and the message now says how: enter the RATE
+        -- instead of the total. That is the other direction, where the app derives the
+        -- quantity as fmt4(rate x acres) and lands within 0.00005 of it at ANY acreage.
         CONTINUE WHEN abs(v_qty - (v_rate * v_acres))
-                      <= GREATEST(0.0001::numeric, 0.00005::numeric * v_acres);
+                      <= GREATEST(0.0001::numeric,
+                                  LEAST(0.00005::numeric * v_acres, 0.1::numeric));
         SELECT p.product_name INTO v_product_name
           FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
         RAISE EXCEPTION
-          'CHEM_QUANTITY_NOT_DERIVED: % is quoted at % per acre over % acres, which is %, but the line carries a quantity of %. The amount billed comes from the quantity, so these must agree. Re-enter the rate or the quantity.',
+          'CHEM_QUANTITY_NOT_DERIVED: % is quoted at % per acre over % acres, which is %, but the line carries a quantity of %. The amount billed comes from the quantity, so these must agree. Re-enter the rate per acre and let the total fill itself in, or correct the quantity.',
           COALESCE(v_product_name, 'This product'), v_rate, v_acres, v_rate * v_acres, v_qty;
       END IF;
       -- ROUND 17 closed what round 15 left open here, on Mason's decision of 2026-08-24.
@@ -1087,17 +1108,33 @@ BEGIN
          AND abs(v_qty - v_carried)
              <= GREATEST(
                   0.0001::numeric,
-                  -- The same rate-rounding slack as the equal-units branch, but CARRIED
-                  -- THROUGH THE CONVERTER, because here the quantity lives in a different
-                  -- unit from the rate. Converting 0.00005 * acres gives the error in the
-                  -- unit actually being compared -- using the unconverted figure would be
-                  -- far too generous in one direction (oz -> gal divides by 128) and too
-                  -- tight in the other. Falls back to the flat 0.0001 if the converter
-                  -- cannot size it, which is the strict reading, not the lax one.
-                  COALESCE(
-                    field_app_priced_quantity(0.00005::numeric * v_acres,
-                                              v_qty_unit, v_price_unit, v_form),
-                    0.0001::numeric)) THEN
+                  -- The same rate-rounding slack as the equal-units branch, CARRIED THROUGH
+                  -- THE CONVERTER because here the quantity lives in a different unit from
+                  -- the rate. Converting 0.00005 * acres gives the error in the unit actually
+                  -- being compared -- the unconverted figure would be far too generous in one
+                  -- direction (oz -> gal divides by 128) and too tight in the other.
+                  --
+                  -- AND THE SAME ABSOLUTE CEILING, converted the same way, so the round-24
+                  -- hole is closed on BOTH branches. Capping only the equal-units exit would
+                  -- have left the identical caller-sized allowance one line further down: a
+                  -- 1e12-acre payload whose units merely happen to differ. Converting the cap
+                  -- rather than applying a flat 0.1 keeps it the SAME PHYSICAL AMOUNT on both
+                  -- sides -- 0.1 gal is 12.8 oz, and the money exposure is what must match,
+                  -- not the digits.
+                  --
+                  -- Both terms fall back to the flat 0.0001 if the converter cannot size
+                  -- them, which is the strict reading, not the lax one; and LEAST of a real
+                  -- conversion against that fallback is still 0.0001, so an unconvertible
+                  -- cap tightens this exit rather than widening it.
+                  LEAST(
+                    COALESCE(
+                      field_app_priced_quantity(0.00005::numeric * v_acres,
+                                                v_qty_unit, v_price_unit, v_form),
+                      0.0001::numeric),
+                    COALESCE(
+                      field_app_priced_quantity(0.1::numeric,
+                                                v_qty_unit, v_price_unit, v_form),
+                      0.0001::numeric))) THEN
         CONTINUE;
       END IF;
     END IF;
