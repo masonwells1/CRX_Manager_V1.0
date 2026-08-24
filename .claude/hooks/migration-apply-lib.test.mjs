@@ -16,7 +16,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
@@ -280,6 +280,15 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   notWrappable("DROP INDEX CONCURRENTLY idx_t;\n", "CONCURRENTLY", "DROP INDEX CONCURRENTLY is refused");
   notWrappable("VACUUM ANALYZE public.t;\n", "VACUUM", "VACUUM is refused");
   notWrappable("ALTER SYSTEM SET work_mem = '64MB';\n", "ALTER SYSTEM", "ALTER SYSTEM is refused");
+  notWrappable("CLUSTER public.t USING idx_t;\n", "CLUSTER", "CLUSTER is refused");
+  // ALTER TYPE … ADD VALUE has been transaction-safe since PostgreSQL 12 (live
+  // server verified: 17.6). The blanket rejection was wrong and its advice was
+  // impossible — the "split it out" file hit the same rule. (Codex P2, round 3.)
+  wrappable("ALTER TYPE public.order_status ADD VALUE 'archived';\n",
+    "an isolated enum addition is wrappable on PostgreSQL 12+");
+  // DROP OWNED is destructive but perfectly transactional; destruction is the
+  // destructive-content gate's job, not a transaction-block restriction.
+  wrappable("DROP OWNED BY some_role;\n", "DROP OWNED is transactional, so wrappability does not reject it");
   notWrappable("   \n", "empty", "an empty migration is refused");
   // Each TXN_CONTROL rule gets a standalone case so it is exercised on its own
   // rather than only via a rule that happens to match first (CodeRabbit round 2).
@@ -347,6 +356,56 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   ok(res.status === 2, `a transaction-managing migration is refused by the script (got ${res.status})`);
   ok(res.stderr.includes("NOT WRAPPABLE"), "the script names the wrappability precondition in its refusal");
   ok(!res.stdout.includes("Transmitting"), "a non-wrappable migration is never transmitted");
+
+  // The snapshot must survive a REFUSAL — invalidation belongs to an apply that
+  // actually transmits, not to every invocation.
+  ok(existsSync(path.join(wRoot, ".claude", "session-state", "applied-migrations.json")),
+    "a refused run leaves the applied-migration snapshot intact");
+}
+
+// ── STALE SNAPSHOT CANNOT SURVIVE AN APPLY ──────────────────────────────────
+// Codex exercised the hole (apply 200, ledger re-read 503): the script exited 0
+// and the OLD snapshot survived, still "fresh" by the clock but missing the row
+// just written — so the next apply could pass the ordering gate for a migration
+// older than the one just applied. The snapshot is now deleted BEFORE the fetch,
+// so no apply outcome, network failure, or crash can leave a stale one.
+{
+  const root = fixture();
+  mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
+  writeFileSync(path.join(root, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
+  const snapshot = path.join(root, ".claude", "session-state", "applied-migrations.json");
+  ok(existsSync(snapshot), "fixture starts with a snapshot present");
+
+  // --confirm with an unreachable endpoint: the gate passes, wrappability passes,
+  // the snapshot is invalidated, and transmission then fails. The snapshot must
+  // NOT come back.
+  const res = spawnSync(process.execPath, [
+    path.resolve(__scriptsDir, "apply-migration-file.mjs"),
+    path.join(root, "supabase", "migrations", `${MIG}.sql`),
+    "--confirm",
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: root,
+      SUPABASE_ACCESS_TOKEN: "not-a-real-token-transmission-must-fail",
+      // Force the request through a dead local proxy so this test NEVER touches
+      // the real management API. Node's fetch ignores proxy env vars unless
+      // NODE_USE_ENV_PROXY is set (Node 24), so without this the run would have
+      // gone out to api.supabase.com with a junk token — offline-by-accident is
+      // not offline.
+      NODE_USE_ENV_PROXY: "1",
+      https_proxy: "http://127.0.0.1:1",
+      HTTPS_PROXY: "http://127.0.0.1:1",
+      NO_PROXY: "",
+      no_proxy: "",
+    },
+  });
+  ok(res.stdout.includes("Invalidated the applied-migration snapshot"),
+    "the snapshot is invalidated before transmission");
+  ok(!existsSync(snapshot),
+    "after an apply attempt the stale snapshot is GONE — the next apply blocks on missing evidence");
+  ok(res.status !== 0, `a failed transmission exits non-zero (got ${res.status})`);
 }
 
 for (const r of roots) { try { rmSync(r, { recursive: true, force: true }); } catch { /* best effort */ } }

@@ -200,10 +200,14 @@ transform of the existing checks is mechanical; block-message text is preserved 
    that skips the gate, and a throw inside the rule book is a REFUSAL, never a pass. The
    direct-POST management-API channel remains for read-only `BEGIN..ROLLBACK` proof bundles only —
    do not reach for it to land a migration.
-3. **The door that applies is the door that refreshes.** The script writes the ledger row
-   `apply_migration` would have written (`statements` as ONE element, matching live rows) inside
-   the same transaction, then re-reads the ledger and refreshes `applied-migrations.json`. Skipping
-   either would leave the ordering preflight blind to the migration that just ran.
+3. **The door that applies invalidates the snapshot BEFORE transmitting, then rebuilds it.** The
+   script writes the ledger row `apply_migration` would have written (`statements` as ONE element,
+   matching live rows) inside the same transaction, deletes `applied-migrations.json` before the
+   request, and rebuilds it from a fresh ledger read after. Refresh-on-success-only is NOT enough:
+   an apply that commits followed by a failed ledger re-read leaves a snapshot still "fresh" by the
+   clock but missing the row just written, so the next apply can replay a migration older than the
+   one just applied. An apply is the real invalidator, not elapsed time. Both post-apply failure
+   paths exit non-zero and say plainly that the migration IS applied.
 4. **A dry run is the default.** `--confirm` is required to transmit, and passing the gate remains
    a FLOOR, not authorization — an interactive session still needs Mason's explicit in-chat OK.
 5. **Migrations that manage their own transactions must not use this door — enforced in code.**
@@ -217,6 +221,12 @@ transform of the existing checks is mechanical; block-message text is preserved 
    in `.codex/hooks/production-action-guard.mjs` (P1). Adding a new production-mutating command
    without wiring it into that guard is the defect, not an oversight to fix later. Editing that guard
    re-pins its blobs in `scripts/apply-live-testdata-maintenance-20260812.mjs` in the same change.
+
+7. **A wrong entry in a "cannot run in a transaction" list is a defect, not a safe over-refusal.**
+   Round 3 removed `ALTER TYPE … ADD VALUE` (transaction-safe since PostgreSQL 12; live server
+   verified at 17.6, and the error advised an impossible split that hit the same rule) and
+   `DROP OWNED` (destructive but transactional — that is the destructive gate's job). Over-refusal
+   rejects legitimate work and teaches the operator something false about PostgreSQL.
 
 **What this round cost, and why it is recorded.** Three reviewer findings on PR #460 were all real:
 an unenforced precondition, an unguarded production spelling, and an `allow`-by-default branch in the

@@ -130,9 +130,20 @@ const NON_TRANSACTIONAL = [
   { re: /(?:^|;)\s*drop\s+tablespace\b/i, what: "DROP TABLESPACE" },
   { re: /(?:^|;)\s*alter\s+system\b/i, what: "ALTER SYSTEM" },
   { re: /(?:^|;)\s*cluster\b/i, what: "CLUSTER" },
-  { re: /\bdrop\s+owned\b/i, what: "DROP OWNED" },
-  { re: /(?:^|;)\s*alter\s+(?:type|database)\b[^;]*\badd\s+value\b/i, what: "ALTER TYPE … ADD VALUE" },
 ];
+// DELIBERATELY NOT LISTED, and both were removed after review rather than left
+// as harmless over-refusals — a wrong entry here rejects a legitimate migration
+// and hands the operator a misleading reason:
+//   * ALTER TYPE … ADD VALUE — transaction-safe since PostgreSQL 12; only USING
+//     the new value must wait for commit. Verified against this project's live
+//     server: PostgreSQL 17.6 (server_version_num 170006). The blanket rule also
+//     gave impossible advice ("split it into its own migration"), since the split
+//     file hit the same pattern. If a migration does use the new value in the same
+//     transaction PostgreSQL raises, and the wrapper's transaction rolls the whole
+//     thing back — the safe failure. (Codex P2, PR #460 round 3.)
+//   * DROP OWNED — destructive, but perfectly transactional. Destruction is the
+//     destructive-content gate's job, not this one; classifying it here stated a
+//     transaction restriction that does not exist.
 
 /**
  * @param {string} sql the migration text

@@ -46,7 +46,7 @@
 //   the per-migration ask (settled 2026-07-13), and destructive migrations never
 //   apply autonomously at all. That policy is enforced inside the rule book.
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -194,6 +194,35 @@ const wrapped =
   `VALUES (${dq}${version}${dq}, ${dq}${migName}${dq}, ARRAY[${dq}${sql}${dq}], ${dq}${createdBy}${dq});\n` +
   `COMMIT;`;
 
+// ── INVALIDATE THE SNAPSHOT BEFORE TRANSMITTING ────────────────────────────
+// The ordering preflight judges the NEXT apply against applied-migrations.json,
+// and it accepts that file while it is under 24h old. Once this transmission is
+// in flight the snapshot is provably out of date — it cannot contain the row this
+// apply is about to write — yet it stays "fresh" by the clock. Codex exercised
+// exactly that hole (apply 200, ledger re-read 503): the script exited 0, the old
+// snapshot survived, and the next apply could then pass the ordering gate for a
+// migration OLDER than the one just applied — the replay class the guard exists
+// to stop.
+//
+// So it is deleted BEFORE the fetch, not repaired afterwards. An apply is the real
+// invalidator, not elapsed time — the same reasoning as the PostToolUse
+// applied-snapshot-invalidate hook, which removes it after EVERY apply, successful
+// or not. Ordering here matters: delete-then-apply cannot leave a stale snapshot no
+// matter how the apply, the network, or this process ends. The cost when an apply
+// fails is regenerating a cache file, and the guard tells the operator how.
+const snapshotPath = path.join(projectDir, ".claude", "session-state", "applied-migrations.json");
+try {
+  if (existsSync(snapshotPath)) {
+    rmSync(snapshotPath);
+    console.log("Invalidated the applied-migration snapshot (an apply is about to run).");
+  }
+} catch (err) {
+  die(2,
+    `apply-migration-file: could not invalidate the applied-migration snapshot at ${snapshotPath} ` +
+    `(${err?.message || err}). Refusing to transmit — leaving a stale snapshot in place would let the ` +
+    `NEXT apply replay a migration older than this one.`);
+}
+
 console.log("");
 console.log(`Transmitting ${Buffer.byteLength(wrapped, "utf8")} bytes (migration + ledger row, one transaction)…`);
 
@@ -228,10 +257,15 @@ const ledgerRes = await fetch(`https://api.supabase.com/v1/projects/${projectId}
   }),
 });
 if (!ledgerRes.ok) {
-  console.error(
-    `WARNING: the apply COMMITTED, but the ledger re-read failed (HTTP ${ledgerRes.status}).\n` +
-    `Refresh the snapshot manually before the next apply, or the ordering guard will refuse it.`);
-  process.exit(0);
+  // Non-zero, not a warning-and-exit-0: the apply COMMITTED and the snapshot is
+  // already gone, so the next apply will correctly block on missing evidence —
+  // but the operator must know this run did not finish cleanly.
+  die(4,
+    `APPLY COMMITTED, SNAPSHOT NOT REBUILT — the ledger re-read failed (HTTP ${ledgerRes.status}).\n` +
+    `The migration IS applied. The applied-migration snapshot was invalidated before transmission and ` +
+    `has not been rebuilt, so the next apply will refuse until you regenerate it:\n` +
+    `  select version, name from supabase_migrations.schema_migrations order by version;\n` +
+    `  node scripts/refresh-applied-migrations.mjs < rows.json`);
 }
 const refresh = spawnSync(process.execPath, [path.join(projectDir, "scripts", "refresh-applied-migrations.mjs")], {
   input: await ledgerRes.text(),
@@ -242,6 +276,8 @@ const refresh = spawnSync(process.execPath, [path.join(projectDir, "scripts", "r
 process.stdout.write(refresh.stdout || "");
 if (refresh.status !== 0) {
   console.error(refresh.stderr || "");
-  console.error(
-    "WARNING: the apply COMMITTED, but the snapshot refresh failed. Refresh it manually before the next apply.");
+  die(4,
+    `APPLY COMMITTED, SNAPSHOT NOT REBUILT — scripts/refresh-applied-migrations.mjs exited ` +
+    `${refresh.status}.\nThe migration IS applied. The snapshot was invalidated before transmission and ` +
+    `has not been rebuilt, so the next apply will refuse until you regenerate it.`);
 }
