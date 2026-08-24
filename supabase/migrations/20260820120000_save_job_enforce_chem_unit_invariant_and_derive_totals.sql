@@ -321,6 +321,7 @@ DECLARE
   v_raw_rate_unit text;
   v_rate_base text;
   v_denom_probe text;
+  v_denom_canon text;
   v_qty_unit text;
   v_price_unit text;
   v_qty numeric;
@@ -571,9 +572,27 @@ BEGIN
     -- separator away. The stacked-denominator rule the round before was written to
     -- close only holds if the strip is singular -- 'remove one, refuse whatever
     -- survives' is not the same rule as 'remove every spelling, then look'.
-    v_denom_probe := regexp_replace(v_raw_rate_unit, '\s*/\s*(acres|acre|ac|a)\s*$', '');
-    IF v_denom_probe = v_raw_rate_unit THEN
-      v_denom_probe := regexp_replace(v_denom_probe, '[\s-]+per[\s-]+(acres|acre|ac|a)$', '');
+    -- SEPARATORS ARE CANONICALISED BEFORE THE DENOMINATOR IS CLASSIFIED, for exactly the
+    -- reason the fluid-ounce rule stopped enumerating them (round 16). This test used to look
+    -- for `per` bounded by whitespace or hyphens, so 'oz_per_cwt' and 'oz.per.cwt' matched
+    -- nothing, survived normalisation unchanged, and -- with a stock unit carrying the same
+    -- text -- reached the equality branch and billed a per-hundredweight rate as per-acre
+    -- (HIGH, gpt-5.6-sol 2026-08-24). Same class of defect, same fix: fold the separators
+    -- instead of listing them.
+    --
+    -- '/' is deliberately PRESERVED by the fold, because here it is not a separator -- it is
+    -- the denominator marker the rule is looking for. Everything else that is not a letter or
+    -- a digit becomes a single space, after which the existing subtractive logic runs on a
+    -- form with exactly one spelling: strip ONE trailing per-acre suffix, then refuse
+    -- whatever denominator SURVIVES.
+    --
+    -- The canonical form also subsumes the leading-`per` arm added in round 15 -- 'per acre'
+    -- folds to itself and is caught by the word-boundary test below -- so that arm is gone
+    -- rather than left as a second way of saying the same thing.
+    v_denom_canon := btrim(regexp_replace(lower(v_raw_rate_unit), '[^a-z0-9/]+', ' ', 'g'));
+    v_denom_probe := regexp_replace(v_denom_canon, '\s*/\s*(acres|acre|ac|a)\s*$', '');
+    IF v_denom_probe = v_denom_canon THEN
+      v_denom_probe := regexp_replace(v_denom_probe, '\s+per\s+(acres|acre|ac|a)$', '');
     END IF;
     -- The LEADING form is caught too, and it was a real bypass: both patterns above and the
     -- surviving-'per' test below require whitespace or a hyphen BEFORE 'per', so a rate unit
@@ -586,8 +605,7 @@ BEGIN
     -- the same half-fix pattern this file has now been caught in three times.
     IF v_raw_rate_unit <> ''
        AND (position('/' IN v_denom_probe) > 0
-            OR v_denom_probe ~ '[\s-]+per[\s-]+'
-            OR v_denom_probe ~ '^[\s-]*per[\s-]+') THEN
+            OR v_denom_probe ~ '(^| )per( |$)') THEN
       SELECT p.product_name INTO v_product_name
         FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
       RAISE EXCEPTION
@@ -836,13 +854,23 @@ BEGIN
     -- self-consistent unit the conversion tables do not carry ('cc' against 'cc') would size
     -- NULL and start REFUSING a line that is perfectly well formed, and one refused line
     -- blocks the whole job save. Same tolerance as the mismatched branch: quantity is stored
-    -- through fmt4, so 4 decimal places of slack plus a relative epsilon.
+    -- through fmt4, so the slack is EXACTLY that storage precision and nothing more.
+    --
+    -- The tolerance is ABSOLUTE, and it used to be RELATIVE -- GREATEST(0.0001, |expected| *
+    -- 1e-6) -- which is a money bug at scale (HIGH, gpt-5.6-sol 2026-08-24). A proportional
+    -- slack means the larger the number, the more the guard lets through: at 5,000 acres and
+    -- a rate of 1e9 the accepted difference is 5 million units, so at $1 a unit the check
+    -- would wave a $5,000,000 discrepancy straight past. Nothing bounds rate, acreage or
+    -- quantity, so "one part per million" is not a small quantity here -- it is a percentage
+    -- of whatever the caller chose. The only slack the storage format actually needs is the
+    -- four decimal places it rounds to, which is a FIXED 0.0001: a tolerance that states what
+    -- it is for, rather than one that scales with the very number it is supposed to check.
     IF v_qty_unit = v_price_unit THEN
       v_rate := NULLIF(v_chem->>'rate_per_acre','')::numeric;
       IF v_rate IS NOT NULL AND v_rate > 0 AND v_rate < 'Infinity'::numeric
          AND v_acres > 0 AND v_acres < 'Infinity'::numeric THEN
         CONTINUE WHEN abs(v_qty - (v_rate * v_acres))
-                      <= GREATEST(0.0001::numeric, abs(v_rate * v_acres) * 0.000001::numeric);
+                      <= 0.0001::numeric;
         SELECT p.product_name INTO v_product_name
           FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
         RAISE EXCEPTION
@@ -886,13 +914,13 @@ BEGIN
     IF v_rate IS NOT NULL AND v_rate > 0 AND v_rate < 'Infinity'::numeric
        AND v_acres > 0 AND v_acres < 'Infinity'::numeric THEN
       v_carried := field_app_priced_quantity(v_rate * v_acres, v_qty_unit, v_price_unit, v_form);
-      -- quantity is stored through fmt4, so allow 4-dp slack plus a relative epsilon.
+      -- quantity is stored through fmt4, so the slack is exactly that storage precision.
       -- v_carried is bounded for the same reason as its inputs: the helper can return a
       -- non-finite value, and a NaN tolerance compares TRUE against a NaN difference.
       IF v_carried IS NOT NULL
          AND v_carried > '-Infinity'::numeric
          AND v_carried < 'Infinity'::numeric
-         AND abs(v_qty - v_carried) <= GREATEST(0.0001::numeric, abs(v_carried) * 0.000001::numeric) THEN
+         AND abs(v_qty - v_carried) <= 0.0001::numeric THEN
         CONTINUE;
       END IF;
     END IF;

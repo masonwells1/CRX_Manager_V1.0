@@ -1003,6 +1003,82 @@ BEGIN
   END IF;
 END $$;
 
+-- T49: DENOMINATOR SEPARATORS (HIGH, gpt-5.6-sol 2026-08-24) -- the same enumeration defect
+-- that beat the fluid-ounce rule four times, in the per-acre rule. It looked for `per`
+-- bounded by whitespace or hyphens, so 'oz_per_cwt' and 'oz.per.cwt' matched nothing,
+-- survived normalisation unchanged, and with a stock unit carrying the same text reached the
+-- equality branch and billed a PER-HUNDREDWEIGHT rate as per-acre. Separators are now folded
+-- before the denominator is classified, exactly as round 16 did for fluid ounces. Both
+-- spellings must be REFUSED.
+DO $$
+DECLARE ok boolean; msg text; spelling text; spellings text[] := ARRAY['oz_per_cwt', 'oz.per.cwt'];
+        i int;
+BEGIN
+  FOR i IN 1 .. array_length(spellings, 1) LOOP
+    spelling := spellings[i];
+    ok := false; msg := NULL;
+    BEGIN
+      PERFORM save_job(NULL,
+        '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+        ('[{"field_id":"333333' || (88 + i)::text || '-3333-3333-3333-3333333333' || (88 + i)::text || '","acres_to_treat":10}]')::jsonb,
+        ('[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":100,"unit":"' || spelling
+          || '","rate_per_acre":10,"rate_unit":"' || spelling
+          || '","cost_per_unit_cents":100,"price_per_unit_cents":200}]')::jsonb,
+        '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+    EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+    END;
+    IF NOT (ok AND msg LIKE 'CHEM_RATE_DENOMINATOR_NOT_ACRES%') THEN
+      RAISE EXCEPTION 'T49 FAIL  "%" hid a non-acre denominator and billed it as per-acre; refused=% msg=%', spelling, ok, msg;
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'T49 PASS  underscore and dot denominator spellings are refused as non-acre';
+END $$;
+
+-- T50: THE TOLERANCE WAS A PERCENTAGE (HIGH, same gate). The quantity check allowed
+-- GREATEST(0.0001, |expected| * 1e-6) -- one part per million. Nothing bounds rate, acreage
+-- or quantity, so that is not a small number: it is a percentage of whatever the caller
+-- chose. 10,000 acres at 1,000/ac expects 10,000,000 units, and the old relative slack
+-- accepted a discrepancy of 10 whole units -- billed at 100 cents each, real money waved
+-- through by a rule whose stated purpose was rounding. The tolerance is now a FIXED 0.0001,
+-- the storage precision and nothing else. A quantity 5 units short must be REFUSED.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10000}'::jsonb,
+      '[{"field_id":"33333392-3333-3333-3333-333333333393","acres_to_treat":10000}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":9999995,"unit":"oz","rate_per_acre":1000,"rate_unit":"oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":100}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_QUANTITY_NOT_DERIVED%' THEN
+    RAISE NOTICE 'T50 PASS  a 5-unit shortfall on a 10,000,000-unit line is refused; the tolerance no longer scales with the number it checks: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T50 FAIL  a relative tolerance let a large discrepancy through; refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
+-- T51: THE COUNTERPART -- a genuine 4-decimal rounding difference on that same large line
+-- must still SAVE, or the tightened tolerance would refuse ordinary saves. 10,000 acres at
+-- 1,000/ac is 10,000,000; a quantity differing by 0.0001 is the storage precision doing its
+-- job, not a discrepancy.
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10000}'::jsonb,
+    '[{"field_id":"33333394-3333-3333-3333-333333333395","acres_to_treat":10000}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":9999999.9999,"unit":"oz","rate_per_acre":1000,"rate_unit":"oz/ac","cost_per_unit_cents":0,"price_per_unit_cents":100}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c > 0 THEN RAISE NOTICE 'T51 PASS  a 0.0001 rounding difference on a 10,000,000-unit line still saves; price=%', c;
+  ELSE RAISE EXCEPTION 'T51 FAIL  price=%', c; END IF;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T51 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T51 FAIL  the fixed tolerance is too tight and refused an ordinary rounding difference: %', SQLERRM;
+END $$;
+
 -- T37: THE BYPASS the round-11 half-fix left open, returned by the gate as a fresh HIGH. A DRY
 -- product with rate 'fl oz/ac' against a stock Unit of 'lb'. These do NOT normalise equal, so the
 -- equality shortcut -- the only thing round 10 guarded -- never runs. The line goes down the
@@ -1101,6 +1177,6 @@ DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 17 AND n_chem = 17 THEN RAISE NOTICE 'T8 PASS  17 jobs / 17 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) and T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price, added in round 17). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 17/17)', n_jobs, n_chem; END IF;
+  IF n_jobs = 18 AND n_chem = 18 THEN RAISE NOTICE 'T8 PASS  18 jobs / 18 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 18/18)', n_jobs, n_chem; END IF;
 END $$;

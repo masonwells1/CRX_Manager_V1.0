@@ -64,7 +64,8 @@ const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19",
                   "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30",
                   "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
-                  "T40", "T41", "T42", "T43", "T44", "T45", "T46", "T47", "T48"];
+                  "T40", "T41", "T42", "T43", "T44", "T45", "T46", "T47", "T48",
+                  "T49", "T50", "T51"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -386,6 +387,25 @@ const MUTANTS = [
     expect: "T45",
   },
   {
+    // Restores the RELATIVE tolerance on both comparison sites. The slack then scales with
+    // the number under test, so a 5-unit shortfall on a 10,000,000-unit line is inside it.
+    // T50 must go red; T51 (a genuine 0.0001 rounding difference) must stay green, which is
+    // what separates "the tolerance is bounded" from "the tolerance is gone".
+    name: "quantity tolerance made relative again",
+    edits: [
+      { from: "<= 0.0001::numeric", to: "<= GREATEST(0.0001::numeric, abs(v_rate * v_acres) * 0.000001::numeric)", all: true },
+    ],
+    expect: "T50",
+  },
+  {
+    // Removes the separator fold from the denominator classifier, restoring the
+    // 'oz_per_cwt' bypass that billed a per-hundredweight rate as per-acre. T49 must go red.
+    name: "denominator separators no longer folded",
+    from: "    v_denom_canon := btrim(regexp_replace(lower(v_raw_rate_unit), '[^a-z0-9/]+', ' ', 'g'));",
+    to: "    v_denom_canon := lower(v_raw_rate_unit);",
+    expect: "T49",
+  },
+  {
     // Restores the UNCONDITIONAL zero-quantity exit, which billed the customer nothing for a
     // product the rate and acreage say was applied. T46 must go red; T20 and T47 (the two
     // legitimate zero-quantity shapes) must stay green, which is what proves the rule is
@@ -412,11 +432,14 @@ const MUTANTS = [
     expect: "T42",
   },
   {
-    // Removes the leading-denominator arm only, leaving the two separator-bounded patterns.
-    // 'per cwt' then survives normalisation and bills. T43 must go red.
-    name: "leading denominator arm removed from the per-acre rule",
-    from: "            OR v_denom_probe ~ '^[\\s-]*per[\\s-]+') THEN",
-    to: "            OR false) THEN",
+    // Re-cut in round 18. The separate leading-`per` arm is gone -- the canonical form made
+    // one word-boundary test cover both positions -- so the mutant now narrows that test to
+    // require a space on BOTH sides, which is precisely the old defect: a rate unit STARTING
+    // with the denominator has nothing before `per` and escapes. T43 must go red, while T49
+    // ('oz per cwt' after folding, which has spaces on both sides) stays green.
+    name: "leading denominator no longer matched by the per-acre rule",
+    from: "            OR v_denom_probe ~ '(^| )per( |$)') THEN",
+    to: "            OR v_denom_probe ~ ' per ') THEN",
     expect: "T43",
   },
   {
@@ -439,14 +462,19 @@ const MUTANTS = [
   {
     // Reverting the single-strip guard to two unconditional strips restores the exact
     // 'oz per acre/ac' bypass. T35 must go red by name.
+    // (Anchor follows the round-18 rename: the strip now compares against the CANONICAL
+    // form, since separators are folded before the denominator is classified.)
     name: "per-acre strip reverted to two unconditional passes",
-    from: "    IF v_denom_probe = v_raw_rate_unit THEN\n",
+    from: "    IF v_denom_probe = v_denom_canon THEN\n",
     to: "    IF true THEN\n",
     expect: "T35",
   },
   {
+    // Round 18 collapsed the two separator-bounded `per` patterns into one word-boundary
+    // test, so removing that single test is what now reproduces "the spelled-out denominator
+    // rule is gone". T9 ('lb per cwt') must go red by name.
     name: "spelled-out and hyphenated denominator rule removed",
-    from: " OR v_denom_probe ~ '[\\s-]+per[\\s-]+'",
+    from: "\n            OR v_denom_probe ~ '(^| )per( |$)'",
     to: "",
     expect: "T9",
   },
@@ -460,9 +488,20 @@ const MUTANTS = [
     // for removing EVERY one. Left as a first-match replace it edited only the equal-units
     // copy, T11 (a mismatched line) never saw the mutation, and the phase reported the test as
     // weak when the test had simply not been reached.
+    // ROUND 18 had to add the tolerance edit below, and WHY is worth recording. Removing the
+    // finiteness bounds alone stopped reproducing the defect, because the fixed 0.0001
+    // tolerance closes the NaN path on its own: abs(v_qty - NaN) is NaN, and NaN <= 0.0001 is
+    // FALSE, so the line falls through to the refusal instead of being waved past. The
+    // original bypass needed the RELATIVE tolerance too -- GREATEST(0.0001, |NaN| * 1e-6) is
+    // NaN, and NaN <= NaN is TRUE. So the mutant now restores both halves of the original
+    // shape. This is a real strengthening rather than a test being weakened: two independent
+    // things now have to fail before a NaN acreage can reach the money, and the prover said
+    // so by refusing to score a detection it had not actually earned.
     name: "every finiteness bound on the acreage path removed",
     edits: [
       { from: "AND v_acres > 0 AND v_acres < 'Infinity'::numeric", to: "AND v_acres > 0", all: true },
+      { from: "abs(v_qty - v_carried) <= 0.0001::numeric",
+        to: "abs(v_qty - v_carried) <= GREATEST(0.0001::numeric, abs(v_carried) * 0.000001::numeric)" },
       { from: "         AND v_carried > '-Infinity'::numeric\n         AND v_carried < 'Infinity'::numeric\n", to: "" },
     ],
     expect: "T11",
@@ -553,15 +592,15 @@ const MUTANTS = [
     // derivation then discards cwt. Without this mutant the tightening is asserted only by a
     // comment.
     name: "denominator rule reverted to the end-with-per-acre exclusion form",
-    // (Anchor re-cut in round 15, when the condition gained its leading-denominator arm. The
-    // revert deliberately drops that arm too -- the exclusion form it restores had no such
-    // arm -- so this mutant reddens T24 by name and would redden T43 as well, which is the
-    // honest reproduction of the old rule rather than a half-revert.)
+    // (Anchor re-cut again in round 18, when the two separator-bounded `per` patterns
+    // collapsed into one word-boundary test against the canonical form. The revert still
+    // restores the ORIGINAL exclusion rule verbatim -- tested against the raw string, with no
+    // fold and no word boundary -- so it reddens T24 by name and would redden the other
+    // denominator tests too, which is the honest reproduction of the old rule.)
     from:
       "    IF v_raw_rate_unit <> ''\n" +
       "       AND (position('/' IN v_denom_probe) > 0\n" +
-      "            OR v_denom_probe ~ '[\\s-]+per[\\s-]+'\n" +
-      "            OR v_denom_probe ~ '^[\\s-]*per[\\s-]+') THEN",
+      "            OR v_denom_probe ~ '(^| )per( |$)') THEN",
     to:
       "    IF v_raw_rate_unit <> ''\n" +
       "       AND v_raw_rate_unit !~ '\\s*/\\s*(acres|acre|ac|a)\\s*$'\n" +
