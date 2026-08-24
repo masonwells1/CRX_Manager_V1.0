@@ -131,10 +131,27 @@ PowerShell's `kill`/`spps` aliases for `Stop-Process` were added at the same tim
    basename**: strip quotes, strip any path, strip `.exe`, lowercase, then compare against a set.
    Adding more alternatives only moves the hole.
 
+5. **HIGH again, on the very next review.** Sol's exact-SHA review of `83d1bf01` returned
+   **BLOCKERS**: `kill 39564` and `Start-Process taskkill.exe … /F` both returned
+   `permissionDecision: "allow"`, proved by read-only execution.
+   - **A bare `kill` was exempt as "a polite TERM" — and my own test pinned that exemption.**
+     It is a POSIX fact and false on this machine: in PowerShell `kill` *is* `Stop-Process`, so
+     `kill <pid>` force-kills. A test that pins a wrong assumption makes the bug permanent, which
+     is worse than no test. The exemption and its assertion are gone; the test now asserts the
+     inverse.
+   - **Launcher-based execution was invisible.** The check read the command-position token only,
+     so `Start-Process taskkill.exe` looked like `Start-Process`. Detection now walks tokens with
+     launcher awareness (`Start-Process`, `sudo`, `env`, `pwsh -Command`, `xargs`, …), so the
+     executable is found wherever the launcher put it.
+
 Every one is the same class: **the guard matched one spelling of the thing rather than the thing.**
-See `guard-design-bypasses` in memory. 24 unit checks now pin each spelling — the four HIGH
+See `guard-design-bypasses` in memory. 26 unit checks now pin each spelling — all five HIGH
 bypasses verbatim among them — and each was re-verified live through the real Bash tool, because a
 unit test is not the hook.
+
+**Cost of a bare-`kill` block:** an agent can no longer stop a process it started with a signal.
+That is deliberate — use the harness's TaskStop, or hand Mason the PID. The guard's message says
+so, because a guard that does not teach the right move gets worked around.
 
 **Standing caveat.** This is still text matching over a command string, which Sol rightly notes is
 weaker than enforcement at the process/tool capability layer. It is a real boundary and it now

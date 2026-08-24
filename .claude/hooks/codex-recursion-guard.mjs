@@ -83,18 +83,31 @@ const EXEC_TOKEN_RE = /(?:^|\s)exec(?:$|[\s"';&|])/i;
 // basename instead: strip a path, strip `.exe`, lowercase.
 const CMD_POS_TOKEN_RE = new RegExp(`${SEP}\\s*(["']?[^\\s;&|]+)`, "gi");
 
-// Verbs that are ALWAYS a force kill, whatever flags follow.
-const ALWAYS_FORCE = new Map([
+// Every guarded kill tool, by NORMALIZED basename.
+//
+// `kill` is in here unconditionally. An earlier version exempted a bare
+// `kill <pid>` as "a polite TERM" and its test pinned that exemption — Sol's second
+// HIGH on PR #452 pointed out the exemption is a POSIX fact that is false on this
+// machine: in PowerShell `kill` IS `Stop-Process`, so `kill 39564` force-kills, and
+// read-only execution proved the hook returned "allow". A test that pins a wrong
+// assumption makes the bug permanent, so the exemption and its test are gone.
+const GUARDED_KILL = new Map([
   ["taskkill", "taskkill"],
   ["pkill", "pkill"],
   ["killall", "killall"],
   ["stop-process", "Stop-Process"],
   ["spps", "Stop-Process"],
+  ["kill", "kill"],
 ]);
 
-// `kill` is only a force kill with a force flag — except in PowerShell, where it
-// is an ALIAS for Stop-Process, hence -Id/-Force.
-const KILL_FORCE_FLAG_RE = /(?:^|\s)(?:-9|-KILL|-SIGKILL|-s\s*(?:9|KILL|SIGKILL)|-Id|-Force)(?:$|[\s"';&|])/i;
+// Programs that RUN another program, so the executable is a later token. Sol proved
+// `Start-Process taskkill.exe … /F` slipped past a check that only looked at the
+// command-position token.
+const LAUNCHERS = new Set([
+  "start-process", "saps", "start", "sudo", "doas", "env", "nohup", "nice",
+  "timeout", "xargs", "cmd", "powershell", "pwsh", "sh", "bash", "zsh",
+  "invoke-expression", "iex", "invoke-command", "icm",
+]);
 
 export function normalizeExecutable(token) {
   const unquoted = String(token || "").replace(/^["']+|["']+$/g, "");
@@ -102,17 +115,30 @@ export function normalizeExecutable(token) {
   return base.replace(/\.exe$/i, "").toLowerCase();
 }
 
+// A flag rather than a program: `-x`, `--x`, or a Windows `/X` switch. A POSIX path
+// like `/usr/bin/pkill` has further separators, so it is NOT treated as a flag.
+function isFlag(token) {
+  const t = token.replace(/^["']+/, "");
+  if (t.startsWith("-")) return true;
+  return t.startsWith("/") && !t.slice(1).includes("/");
+}
+
 export function findForceKill(rawCommand) {
   const cmd = String(rawCommand || "");
-  CMD_POS_TOKEN_RE.lastIndex = 0;
-  let m;
-  while ((m = CMD_POS_TOKEN_RE.exec(cmd)) !== null) {
-    const name = normalizeExecutable(m[1]);
-    const always = ALWAYS_FORCE.get(name);
-    if (always) return always;
-    if (name === "kill") {
-      const rest = cmd.slice(m.index + m[0].length);
-      if (KILL_FORCE_FLAG_RE.test(rest)) return "kill -9";
+  // Split into segments at shell separators; each segment starts a new executable
+  // position. Quoted wrappers (`-Command "…"`) are handled by the launcher walk.
+  for (const segment of cmd.split(/(?:&&|\|\||[;|&\n{()])/)) {
+    const tokens = segment.trim().split(/\s+/).filter(Boolean);
+    let expectingExecutable = true;
+    for (const token of tokens) {
+      if (!expectingExecutable) break;
+      if (isFlag(token)) continue;
+      const name = normalizeExecutable(token);
+      const guarded = GUARDED_KILL.get(name);
+      if (guarded) return guarded;
+      // A launcher runs something else — keep looking in the same segment.
+      if (LAUNCHERS.has(name)) continue;
+      expectingExecutable = false;
     }
   }
   return null;

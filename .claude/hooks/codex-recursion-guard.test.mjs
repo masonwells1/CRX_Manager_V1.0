@@ -131,8 +131,29 @@ check("allows prose merely mentioning codex review", () => {
     "echo of the phrase has no invocation shape");
 });
 
-check("allows a polite kill without a force flag", () => {
-  assert.equal(blocks("kill 1234"), null);
+check("HIGH: blocks a BARE kill — on Windows `kill` IS Stop-Process", () => {
+  // This assertion previously read `assert.equal(blocks("kill 1234"), null)`, pinning
+  // a "polite TERM" exemption that is a POSIX fact and false on this machine. Sol
+  // proved by read-only execution that `kill 39564` returned "allow". A test that
+  // pins a wrong assumption makes the bug permanent — so the exemption is gone and
+  // this is its inverse.
+  assert.equal(rule("kill 1234"), "force-kill");
+  assert.equal(rule("kill 39564"), "force-kill");
+});
+
+check("HIGH: blocks launcher-based execution of a guarded kill tool", () => {
+  // Sol proved `Start-Process taskkill.exe … /F` slipped past a check that only
+  // looked at the command-position token.
+  assert.equal(rule("Start-Process taskkill.exe -ArgumentList '/PID','39564','/F'"), "force-kill");
+  assert.equal(rule("sudo pkill -9 codex"), "force-kill");
+  assert.equal(rule("saps taskkill"), "force-kill");
+  assert.equal(rule('pwsh -NoProfile -Command "taskkill /PID 1 /F"'), "force-kill");
+});
+
+check("a launcher running something harmless is still allowed", () => {
+  assert.equal(blocks("sudo npm install"), null);
+  assert.equal(blocks("timeout 90 codex exec -"), null);
+  assert.equal(blocks("env NODE_ENV=test npm run test"), null);
 });
 
 check("allows unrelated commands", () => {
