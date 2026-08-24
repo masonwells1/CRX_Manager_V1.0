@@ -20,11 +20,16 @@ reviews:
   # cap rather than trade any possible review context for a cheaper report.
   # Deliberate: do not turn these off to save spend.
 
-  # Skip churn that cannot contain a bug: archived/audit/loop/handoff
-  # artifacts (340+ files) and the generated Codex adapters under .agents/.
-  # A PR touching only these is skipped entirely and costs no review
-  # allowance. Live docs (docs/manual, docs/reference, docs/workflows,
-  # docs/plans) stay reviewed.
+  # path_filters opened as a cost-control lever covering archived/audit/loop/
+  # handoff artifacts (340+ files). Four review rounds took it apart; the
+  # history is recorded below because each narrowing failed for the same reason
+  # and the next person will be tempted to re-add one of them. What is left is
+  # the generated Codex adapters under .agents/ and nothing else. Every
+  # document under docs/ is reviewed.
+  #
+  # This costs less review allowance than it looks like: the throttling this
+  # config was written to fix came from auto_pause_after_reviewed_commits, not
+  # from path filters. Mason's standing call is quality over spend.
   #
   # .codex/ is NOT excluded. Only .agents/ is generated - that is the sole
   # TARGET_ROOT in scripts/sync-agent-workflows.mjs. Every tracked file under
@@ -94,12 +99,32 @@ reviews:
   # retire it is to MOVE it into docs/archive/ after looking at it - a decision
   # someone makes about a specific file, not a pattern that guesses.
   #
-  # The two surviving exclusions are the whole list on purpose. Anything added
-  # here must be inert by construction, not by naming convention.
+  # And then docs/archive/ went too, for the same reason one notch deeper.
+  # "Archive" is a naming convention, not a property. Nothing in the repo makes
+  # those files immutable, and automation DOES read them:
+  # .claude/agents/rls-security-reviewer.md tells a security-reviewing agent to
+  # consult docs/archive/2026-spring/2026-05-26-claude-disposition-of-codex-
+  # execution.md for the incident patterns it hunts, and docs/reference/
+  # migration-history.md cites archived execution summaries for migration
+  # context. An excluded file that a reviewer agent reads is the same
+  # prompt-injection path as an excluded prompt. Raised by the Codex reviewer on
+  # PR #441 - the fourth round on this theme, and the one that caught the
+  # exclusion the previous three rounds had been narrowing TOWARD.
+  #
+  # .agents/ is the only remaining exclusion, and it is inert by CONSTRUCTION
+  # rather than by convention: it is generated output, the sole TARGET_ROOT of
+  # scripts/sync-agent-workflows.mjs, and scripts/check-agent-workflows.mjs
+  # fails the test suite if any adapter drifts from its .claude/ source. A
+  # hand-edit there cannot ship unreviewed - it turns CI red. That enforcing
+  # check is what earns the exclusion; a directory name never does.
+  #
+  # The bar for anything added here: name the mechanism that makes the files
+  # inert, and point at the check that fails if they stop being inert.
+  # scripts/coderabbit-review-coverage.test.mjs enforces both halves - every
+  # filter must be exclusion-only, and no excluded path may be referenced by any
+  # live agent or automation surface.
   path_filters:
-    - "!docs/archive/**/*.md"
-    - "!docs/archive/**/*.html"
-    - "!docs/archive/**/*.json"
+    - "!.agents/**"
     - "!.agents/**"
 
   auto_review:

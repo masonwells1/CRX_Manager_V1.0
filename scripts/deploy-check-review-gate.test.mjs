@@ -147,18 +147,26 @@ for (const [name, file] of SKILLS) {
   // ── Review objects: reject unsubmitted and dismissed ──────────────────────
   // The endpoint returns PENDING (submitted_at: null) and DISMISSED reviews
   // whose bodies still carry the range line.
-  // The `and <HEAD>` grep is the part that binds the result to the commit being
-  // merged. Without it in the SAME command, the query proves only that some
-  // submitted review exists — which is true of every PR that was ever reviewed.
+  // `.commit_id` is what binds the result to the commit being merged, and it is
+  // GitHub-populated structured data rather than prose. An earlier revision
+  // grepped the review BODY for a bare `and <HEAD>`; Codex returned High on
+  // that, because review bodies are AI-generated summaries of public PR content
+  // and a PR containing the target SHA could have it echoed back. Without a
+  // head binding in the SAME command, the query proves only that some submitted
+  // review exists — true of every PR that was ever reviewed.
   ok(
     hasCommandWithAll(cmds, [
       "pulls/<n>/reviews",
       'select(.user.login=="coderabbitai[bot]"',
       ".submitted_at != null",
       '.state != "DISMISSED"',
-      'grep -oE "and <HEAD>"',
+      '.commit_id == "<HEAD>"',
     ]),
-    `${name}: the reviews query filters bot identity, unsubmitted, and dismissed AND binds to the head SHA`,
+    `${name}: the reviews query filters bot identity, unsubmitted, and dismissed AND binds to the head via structured commit_id`,
+  );
+  ok(
+    noCommandWithAll(cmds, ["pulls/<n>/reviews", 'grep -oE "and <HEAD>"']),
+    `${name}: the reviews query does not fall back to matching the head SHA in prose`,
   );
 
   // ── Forged-comment defence (Codex BLOCKED, 2026-08-20) ────────────────────
@@ -171,9 +179,13 @@ for (const [name, file] of SKILLS) {
       'select(.user.login=="coderabbitai[bot]")',
       'contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")',
       'select((.body | contains("auto-generated reply by CodeRabbit")) | not)',
-      'grep -oE "and <HEAD>"',
+      "iles that changed from the base of the PR and between [0-9a-f]{40} and <HEAD>",
     ]),
-    `${name}: the comments query keeps only the canonical walkthrough, drops chat replies, AND binds to the head SHA`,
+    `${name}: the comments query keeps only the canonical walkthrough, drops chat replies, AND binds to the head via the fully anchored stamp line`,
+  );
+  ok(
+    noCommandWithAll(cmds, ["issues/<n>/comments", 'grep -oE "and <HEAD>"']),
+    `${name}: the comments query does not accept a bare, unanchored "and <HEAD>" anywhere in the body`,
   );
   ok(
     noCommandWithAll(cmds, [
@@ -245,8 +257,30 @@ for (const [name, file] of SKILLS) {
     return assign.index < use.index;
   };
   ok(
-    bindsBoundVar(parentLookup, 'grep -oE "and '),
+    // The prefix is the tail of the anchored canonical stamp line, so this also
+    // proves the parent lookup uses the anchored form rather than a bare
+    // `and $PARENT1`. Regex metacharacters in the character class are escaped
+    // because this string is compiled into a RegExp.
+    bindsBoundVar(parentLookup, "and between \\[0-9a-f\\]\\{40\\} and "),
     `${name}: the canonical-stamp lookup expands the same variable it derived, not a separately supplied value`,
+  );
+  // The parent gets the same two-endpoint treatment as the head: a review WITH
+  // findings binds through structured commit_id, a clean review only ever
+  // appears in the walkthrough comment. Checking one endpoint reports a
+  // reviewed parent as unreviewed. (Codex, PR #441.)
+  const parentReviewLookup = cmds.find(
+    (c) => /\bgit rev-parse <HEAD>\^1\b/.test(c) && c.includes("pulls/<n>/reviews"),
+  );
+  ok(
+    Boolean(parentReviewLookup),
+    `${name}: the parent is also checked against the reviews endpoint, not comments alone`,
+  );
+  ok(
+    // The jq filter sits inside a double-quoted shell string, so the quotes
+    // around the value are backslash-escaped in the command text. Tolerate any
+    // run of quote/backslash characters between `==` and the expansion.
+    bindsBoundVar(parentReviewLookup, 'commit_id == [\\\\"]*'),
+    `${name}: the parent reviews lookup binds through structured commit_id, derived in the same command`,
   );
   // The parent's own settled status is the other half of the full gate, and it
   // has to be bound the same way — a status check on a re-typed SHA proves the
@@ -576,6 +610,69 @@ for (const [name, file] of SKILLS) {
     Boolean(probes[1][1]) && bindsBoundVarIn(probes[1][1], "PARENT1", "commits/"),
     `${name}: the parent completed-review check derives PARENT1 and expands it, in that order`,
   );
+}
+
+// ── the stamp matcher itself, run rather than described ──────────────────────
+// Codex, High, PR #441: the head binding read AI-generated bot prose and matched
+// a bare `and <HEAD>` anywhere in it. Review and walkthrough bodies summarise
+// PUBLIC PR content, so a PR that contains the target SHA in a changed file — in
+// a doc, a fixture, a test name — could have it echoed into a body and satisfy
+// that grep with no review of that head. The commands are now (a) `.commit_id`,
+// structured and un-influenceable, for review objects, and (b) the entire
+// canonical stamp line, `^`/`$` anchored, for the clean-review walkthrough.
+//
+// Both are modelled here as functions so the negative cases actually EXECUTE. A
+// substring assertion over the command text would have passed for the old,
+// broken form too — which is exactly how it shipped.
+const HEAD_SHA = "821c26b4ee4217ef6991ff1846e6ebeb1ed0fab3";
+const BASE_SHA = "75cce46d81941a273d0496b7fac753220cbf54df";
+
+// Mirrors the grep in the comments query, character for character.
+export function stampLineBinds(body, head) {
+  const re = new RegExp(
+    `^> [A-Za-z ]*[Ff]iles that changed from the base of the PR and between [0-9a-f]{40} and ${head}\\.$`,
+    "m",
+  );
+  return re.test(body);
+}
+
+// Mirrors the jq select in the reviews query.
+export function reviewObjectBinds(review, head) {
+  return (
+    review.user?.login === "coderabbitai[bot]" &&
+    review.submitted_at != null &&
+    review.state !== "DISMISSED" &&
+    review.commit_id === head
+  );
+}
+
+const REAL_STAMP = `> Reviewing files that changed from the base of the PR and between ${BASE_SHA} and ${HEAD_SHA}.`;
+ok(stampLineBinds(REAL_STAMP, HEAD_SHA), "the real canonical stamp line is ACCEPTED (verified live on PR #441)");
+
+// Every one of these contains the head SHA and would have satisfied `and <HEAD>`.
+for (const [label, body] of [
+  ["prose mentioning the SHA", `The diff touches a doc that references commit and ${HEAD_SHA} in passing.`],
+  ["a summarised diff line", `+ // rebased onto and ${HEAD_SHA}`],
+  ["a quoted file path", `> \`docs/handoffs/and ${HEAD_SHA}.md\``],
+  ["the stamp without the leading blockquote", `Reviewing files that changed from the base of the PR and between ${BASE_SHA} and ${HEAD_SHA}.`],
+  ["the stamp with trailing text appended", `${REAL_STAMP} (cached)`],
+  ["a stamp naming a different head", `> Reviewing files that changed from the base of the PR and between ${BASE_SHA} and ${BASE_SHA}.`],
+  ["a non-hex base", `> Reviewing files that changed from the base of the PR and between not-a-sha and ${HEAD_SHA}.`],
+]) {
+  ok(!stampLineBinds(body, HEAD_SHA), `stamp matcher REJECTS ${label}`);
+}
+
+const submitted = { user: { login: "coderabbitai[bot]" }, submitted_at: "2026-08-24T11:40:20Z", state: "COMMENTED", commit_id: HEAD_SHA };
+ok(reviewObjectBinds(submitted, HEAD_SHA), "a submitted bot review whose commit_id IS the head is ACCEPTED");
+for (const [label, review] of [
+  ["a review submitted against an older commit", { ...submitted, commit_id: BASE_SHA }],
+  ["an unsubmitted (PENDING) review", { ...submitted, submitted_at: null }],
+  ["a dismissed review", { ...submitted, state: "DISMISSED" }],
+  ["a review by a non-bot account", { ...submitted, user: { login: "someone" } }],
+  ["a review with no commit_id at all", { ...submitted, commit_id: undefined }],
+  ["a review whose BODY names the head but whose commit_id does not", { ...submitted, commit_id: BASE_SHA, body: REAL_STAMP }],
+]) {
+  ok(!reviewObjectBinds(review, HEAD_SHA), `review binding REJECTS ${label}`);
 }
 
 console.log(`deploy-check-review-gate: ${pass} assertions passed`);

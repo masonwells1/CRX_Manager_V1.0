@@ -30,7 +30,12 @@ const ok = (c, m) => { assert.ok(c, m); pass++; };
 // Deliberately a small hand-rolled parser rather than a YAML dependency: this
 // test must not be able to disagree with what CodeRabbit actually loads because
 // of a parser version.
-function exclusionPatterns(yaml) {
+// Returns EVERY filter, exclusion or not. Recording only `!` entries was itself
+// a hole: a positive (non-`!`) pattern switches CodeRabbit into allowlist mode
+// and drops every unmatched file from review repo-wide — the exact failure that
+// returned "No files to review" on FarmRx PR #26 — and a test that skipped
+// those entries would have stayed green through it. (Codex, PR #441.)
+function allFilters(yaml) {
   const out = [];
   let inFilters = false;
   for (const raw of yaml.split(/\r?\n/)) {
@@ -40,7 +45,7 @@ function exclusionPatterns(yaml) {
     if (line.startsWith("- ")) {
       const m = line.slice(2).trim().match(/^"(.*)"$|^'(.*)'$|^(.*)$/);
       const value = (m[1] ?? m[2] ?? m[3] ?? "").trim();
-      if (value.startsWith("!")) out.push(value.slice(1));
+      if (value) out.push(value);
       continue;
     }
     if (line && !line.startsWith("#")) break; // next key ends the block
@@ -77,14 +82,22 @@ function globToRegExp(glob) {
   return new RegExp(`^${re}$`);
 }
 
-const patterns = exclusionPatterns(readFileSync(path.join(ROOT, ".coderabbit.yaml"), "utf8"));
-ok(patterns.length > 0, "exclusion patterns were parsed from .coderabbit.yaml");
+const filters = allFilters(readFileSync(path.join(ROOT, ".coderabbit.yaml"), "utf8"));
+ok(filters.length > 0, "path_filters were parsed from .coderabbit.yaml");
+
+// EVERY filter must be an exclusion. One positive pattern turns path_filters
+// into an allowlist and silently drops the rest of the repo from review.
+for (const filter of filters) {
+  ok(filter.startsWith("!"), `path filter is exclusion-only (no allowlist mode): ${filter}`);
+}
+
+const patterns = filters.filter((f) => f.startsWith("!")).map((f) => f.slice(1));
 const excluded = (p) => patterns.some((g) => globToRegExp(g).test(p));
 
 // Sanity-check the matcher itself, so a broken glob translator cannot make this
 // suite pass by matching nothing.
-ok(excluded("docs/archive/anything.md"), "matcher: an archived doc IS excluded");
 ok(excluded(".agents/skills/deploy-check/SKILL.md"), "matcher: a generated adapter IS excluded");
+ok(!excluded("docs/archive/2026-spring/anything.md"), "matcher: an archived doc is NOT excluded");
 ok(!excluded("docs/audits/2026-06-10-foundation-ultra-review.md"), "matcher: a dated audit is NOT excluded");
 ok(!excluded("src/lib/db.ts"), "matcher: ordinary source is NOT excluded");
 
@@ -155,20 +168,69 @@ for (const file of auditFiles.filter((f) => f.endsWith(".mjs") || f.endsWith(".j
   ok(!excluded(file), `executable under docs/audits stays reviewable: ${file}`);
 }
 
-// The exclusion list is short on purpose, and must stay that way. Anything added
-// has to be inert BY CONSTRUCTION (a frozen archive), never by naming
-// convention — three separate holes on this PR came from patterns that guessed
-// at content: a whole directory, then a file extension, then a date prefix.
-const ALLOWED_EXCLUSION_ROOTS = ["docs/archive/", ".agents/"];
-for (const pattern of patterns) {
-  ok(
-    ALLOWED_EXCLUSION_ROOTS.some((root) => pattern.startsWith(root)),
-    `exclusion is confined to a vetted inert root: ${pattern}`,
-  );
+// ── nothing automation reads may be excluded ─────────────────────────────────
+// The generalised form of every hole on this PR. Four rounds each removed one
+// exclusion that turned out to name a file some agent or script actually reads:
+// a whole directory (which hid executable .mjs), then a file extension (which
+// hid live "execute this exactly" prompts), then a date prefix (which hid 23
+// prompts/handoffs/ledgers), then docs/archive/ itself — .claude/agents/
+// rls-security-reviewer.md points a SECURITY reviewer at an archived incident
+// document, and docs/reference/migration-history.md cites archived execution
+// summaries. An excluded file that a reviewer agent reads is the same
+// prompt-injection path as an excluded prompt.
+//
+// So instead of curating a list of roots believed inert, assert the property
+// directly: scan the live agent and automation surfaces for repo-relative path
+// references, and fail if any of them resolves to an excluded file. A new
+// exclusion that covers something automation consumes fails here on its own.
+const AUTOMATION_SURFACES = [
+  ".claude/agents", ".claude/commands", ".claude/skills", ".claude/workflows", ".claude/hooks",
+  ".codex", "scripts", "docs/manual", "docs/workflows", "docs/reference",
+];
+const PATH_REF = /(?:docs|src|supabase|scripts|\.claude|\.codex|\.agents)\/[A-Za-z0-9._/-]+\.[A-Za-z0-9]+/g;
+
+let referencesScanned = 0;
+for (const surface of AUTOMATION_SURFACES) {
+  const abs = path.join(ROOT, ...surface.split("/"));
+  let files = [];
+  try {
+    files = walk(abs);
+  } catch {
+    ok(false, `automation surface exists and is walkable: ${surface}`);
+    continue;
+  }
+  for (const file of files) {
+    if (!/\.(md|mjs|js|ts|json|toml|ya?ml)$/.test(file)) continue;
+    let text;
+    try {
+      text = readFileSync(path.join(ROOT, ...file.split("/")), "utf8");
+    } catch {
+      continue;
+    }
+    for (const ref of text.match(PATH_REF) ?? []) {
+      if (!excluded(ref)) continue;
+      referencesScanned++;
+      // A reference into an excluded path is only acceptable if the exclusion is
+      // backed by an enforcing check that makes an unreviewed edit impossible.
+      // `.agents/` qualifies: scripts/check-agent-workflows.mjs turns the suite
+      // red the moment an adapter drifts from its .claude/ source. Nothing else
+      // in this repo has such a check today.
+      ok(
+        ref.startsWith(".agents/"),
+        `automation surface ${file} references excluded path ${ref} — exclude only what an enforcing check keeps inert`,
+      );
+    }
+  }
 }
+ok(referencesScanned >= 0, "automation surfaces were scanned for references into excluded paths");
+
+// The enforcing check that earns `.agents/` its exclusion must actually exist.
+// If it is ever removed, `.agents/` stops being inert-by-construction and this
+// exclusion has to go with it.
+const parityGuard = readFileSync(path.join(ROOT, "package.json"), "utf8");
 ok(
-  patterns.some((p) => p.startsWith("docs/archive/")),
-  "the frozen archive is still excluded (some cost control remains)",
+  parityGuard.includes("check-agent-workflows.mjs"),
+  "the adapter-drift check that earns the .agents/ exclusion is still wired into the test suite",
 );
 
 console.log(`coderabbit-review-coverage: ${pass} assertions passed`);

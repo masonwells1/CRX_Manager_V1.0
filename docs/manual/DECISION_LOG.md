@@ -455,8 +455,42 @@ vetted-root assertion.
 cause: `!docs/audits/**` hid executable code, extension-scoping hid live prompts, and the date prefix hid the
 rest.
 
+**Thirteenth round: the exclusion the previous three rounds had been narrowing *toward* was also a guess.**
+Codex returned High on `docs/archive/**` — the last one standing, and the one every prior round had treated
+as the safe destination. "Archive" is a naming convention, not a property. Nothing in the repo makes those
+files immutable, and automation reads them: `.claude/agents/rls-security-reviewer.md` points a **security**
+reviewer at `docs/archive/2026-spring/2026-05-26-claude-disposition-of-codex-execution.md` for the incident
+patterns it hunts, and `docs/reference/migration-history.md` cites archived execution summaries. An excluded
+file that a reviewer agent reads is the same prompt-injection path as an excluded prompt.
+
+`.agents/` is now the only exclusion, and it is the only one that was ever inert **by construction** rather
+than by convention: it is generated output, the sole `TARGET_ROOT` of `scripts/sync-agent-workflows.mjs`, and
+`scripts/check-agent-workflows.mjs` turns the suite red the moment an adapter drifts from its `.claude/`
+source. A hand-edit there cannot ship unreviewed. **That enforcing check is what earns an exclusion; a
+directory name never does.**
+
+The regression stopped curating roots and now asserts the property: it scans every live agent and automation
+surface for repo-relative path references and fails if any resolves to an excluded file. Mutation-tested by
+excluding only the single archived document the RLS reviewer reads — the test names that exact file and that
+exact referrer. It also now parses **every** filter rather than only `!` entries, because a positive pattern
+switches CodeRabbit to allowlist mode and drops the repo from review, and a test that skipped those entries
+would have stayed green through it.
+
+**And the head binding was reading bot prose instead of structured identity.** Codex, High: the review lookup
+matched `.body` against a bare `and <HEAD>`. Review and walkthrough bodies are AI-generated summaries of
+**public PR content**, so a PR containing the target SHA in a changed file could get it echoed into a body and
+satisfy that grep with no review of that head. Review objects now bind on `.commit_id`, GitHub-populated and
+not influenceable — verified live on PR #441, where it is present on all six CodeRabbit reviews and tracks the
+head each ran against. A clean review creates no review object, so its walkthrough comment is anchored to the
+**entire** canonical stamp line (`^`, fixed prose, a 40-hex base, the head, `$`); both directions were run
+live before the change was written. The parent-derived path in the merge-only fallback got the same two-
+endpoint treatment, which it had been missing. Fifteen new assertions model both matchers as functions so the
+negative cases execute — seven bodies that each contain the head SHA and would all have passed the old grep.
+
 The through-line across every round of this PR is one idea: **a check that names the thing it forbids only
-catches that name.** Five times running, the fix was itself written one notch too narrow — a spelling, then a
+catches that name** — and its corollary, learned four times on `path_filters` alone: **a name is not a
+mechanism.** `docs/audits`, `*.md`, a date prefix, and finally `archive` were all shorthand for "these files
+are safe", and none of them was enforced by anything. Five times running, the fix was itself written one notch too narrow — a spelling, then a
 notation, then a variable read from the wrong scope, then two facts with no order between them, then a
 document-wide search standing in for a command-scoped one. Every round was found by a reviewer, never by the
 suite, because a green suite is exactly what each hole produced. Guards on this path get a case table and a

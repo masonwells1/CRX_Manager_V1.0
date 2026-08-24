@@ -171,7 +171,11 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    so each check re-derives the parent rather than relying on an earlier one:
 
    ```bash
-   PARENT1="$(git rev-parse <HEAD>^1)" && echo "parent: $PARENT1" && gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | select(.body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) | select((.body | contains("auto-generated reply by CodeRabbit")) | not) | .body' | grep -oE "and $PARENT1"
+   PARENT1="$(git rev-parse <HEAD>^1)" && echo "parent: $PARENT1" && gh api --paginate repos/masonwells1/CRX_Manager_V1.0/pulls/<n>/reviews --jq ".[] | select(.user.login==\"coderabbitai[bot]\" and .submitted_at != null and .state != \"DISMISSED\" and .commit_id == \"$PARENT1\") | \"REVIEW_OBJECT_BINDS_PARENT \(.id)\""
+   ```
+
+   ```bash
+   PARENT1="$(git rev-parse <HEAD>^1)" && gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | select(.body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) | select((.body | contains("auto-generated reply by CodeRabbit")) | not) | .body' | grep -oE "^> [A-Za-z ]*[Ff]iles that changed from the base of the PR and between [0-9a-f]{40} and $PARENT1\.$"
    ```
 
    ```bash
@@ -272,14 +276,29 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    (substitute the real 40-character SHA for `<HEAD>`):
 
    ```bash
-   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/pulls/<n>/reviews --jq '.[] | select(.user.login=="coderabbitai[bot]" and .submitted_at != null and .state != "DISMISSED") | .body' | grep -oE "and <HEAD>"
+   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/pulls/<n>/reviews --jq '.[] | select(.user.login=="coderabbitai[bot]" and .submitted_at != null and .state != "DISMISSED" and .commit_id == "<HEAD>") | "REVIEW_OBJECT_BINDS_HEAD \(.id)"'
    ```
 
    ```bash
-   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | select(.body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) | select((.body | contains("auto-generated reply by CodeRabbit")) | not) | .body' | grep -oE "and <HEAD>"
+   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | select(.body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) | select((.body | contains("auto-generated reply by CodeRabbit")) | not) | .body' | grep -oE "^> [A-Za-z ]*[Ff]iles that changed from the base of the PR and between [0-9a-f]{40} and <HEAD>\.$"
    ```
 
-   **Those two `select` filters on the comments query are a security control, not tidiness.** An
+   **Read structured identity where it exists, and anchor hard where it does not.** The reviews
+   query matches on `.commit_id`, a GitHub-populated field naming the commit the review was
+   submitted against — it is not prose and a PR cannot influence it. An earlier revision matched
+   `.body` against a bare `and <HEAD>` instead, and Codex returned High on that, correctly: review
+   and walkthrough bodies are AI-generated text summarising **public PR content**, so a PR that
+   contains the target SHA in a changed file could get that string echoed into a body and satisfy
+   an unanchored grep with no review of that head having happened. Verified live on PR #441:
+   `commit_id` is populated on all six CodeRabbit reviews and tracks the head each ran against.
+
+   A clean review creates no review object at all, so the comments query is the only path for it
+   and cannot use `commit_id`. It is anchored instead to the **entire canonical stamp line** —
+   fixed prose, a 40-hex base, then the head, `^`/`$` bound — so a loose mention of the SHA
+   anywhere in the body no longer matches. If CodeRabbit ever changes that wording the match stops
+   and the gate blocks, which is the safe direction.
+
+   **The two `select` filters on the comments query are a security control, not tidiness.** An
    earlier revision accepted the range line from *any* `coderabbitai[bot]` comment. `chat.auto_reply`
    is enabled in `.coderabbit.yaml`, and this is a public repo where anyone may comment on a PR — so
    a PR author could ask the bot to echo `and <head-sha>` back, and that chat reply would satisfy the
