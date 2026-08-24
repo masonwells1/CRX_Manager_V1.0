@@ -2,6 +2,68 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
+
+Five quote-based smoke chains had silently rotted after product pricing became
+governed and quote items began requiring a positive catalog cost. They created
+pricing-free product shells (or tried to create a product with pricing), so the
+current schema rejected the fixture before the behavior under test ran.
+
+- The chains now borrow real positive whole-cent catalog costs without writing
+  to those products, and use the borrowed cost in each quote line.
+- The planned-holds chain also preserves current quote-item IDs and governed
+  tier pricing across saves and refreshes replacement IDs after version restore,
+  matching the current quote editor contract.
+- The disposable current-live-schema prover now directly runs all five chains,
+  including the auth template and job-from-quote chain that previously had no
+  runner. Its schema-only catalog seeds priced products with the pricing trigger
+  disabled only for the seed, then restores the trigger before any smoke runs.
+- Proof observed: all five chains reached `SMOKE_PASS_ROLLBACK`; the parked
+  draw-down candidate emitted its required pre-apply prerequisite signal and
+  passed its post-apply restore guard, including cancellation of both draw
+  orders; both row-version provers remained green.
+
+Review round (Codex P2 findings on the PR, all three in the fixtures themselves):
+
+- The planned-holds chain accepted **either** restore outcome, so a post-cutover
+  regression that restored a drawn booking fell into the pre-cutover success
+  branch and still reached `SMOKE_PASS_ROLLBACK`. It now detects whether
+  `20260816120000` is installed and requires the outcome that schema owes.
+- That chain's success branch asserted only product A's rebuilt hold. It now
+  asserts both A and B, because the later unplanning step only checks that every
+  hold is gone and would not have noticed a dropped or altered B hold.
+- `smoke-order-draw-lock.sql` scenario (f) required the live catalog to contain a
+  cheap product with no Main Warehouse inventory row — data the fixture does not
+  control, so a healthy database could fail at `SMOKE_SETUP` (67 products qualify
+  today). It now runs when the catalog allows and emits `SMOKE_SCENARIO_SKIPPED`
+  when it cannot; the container prover seeds inventory-free products, so (f) is
+  still proven on every container run. Manufacturing the precondition by deleting
+  a live inventory row was rejected: an all-zero row still carries a real reorder
+  point and minimum stock level.
+- Both new guards were mutation-tested. Forcing the cutover flag on produced
+  `SMOKE_FAIL: (e) post-cutover restore of a drawn booking succeeded`; demanding a
+  B total the correct code never yields produced `pa=150.00 pb=100.00`, proving B
+  is genuinely queried and compared rather than ignored.
+
+Second review round (gpt-5.6-sol, high effort, against `origin/main`) — two more P2
+findings, both accepted:
+
+- The prover copied the checkout's own bytes into PostgreSQL. On Windows that is CRLF,
+  so a function created by a CRLF migration got a CRLF `prosrc` and the *next*
+  migration's LF-based md5 preflight failed — which this proof had been approving as
+  "historical live-base drift". It was a line-ending artifact, not drift. `copySql()`
+  now normalizes every replayed migration and smoke to LF (matching
+  `prove-draw-down-quote-intent-binding.mjs`), binary baseline artifacts still copy
+  verbatim, and the candidate is asserted LF byte-verbatim so what applies in the
+  container is what applies live. **All 56 post-baseline migrations now replay and the
+  approved-skip list is empty**, where it previously replayed 55 and excused one.
+- `smoke-order-draw-lock` (f) emitted a notice and continued to
+  `SMOKE_PASS_ROLLBACK` when the catalog could not supply an inventory-free product.
+  `run-smoke.mjs` does not recognize that notice, so a live `--spec update_order_items`
+  run reported PASS with scenario (f) never executed — incomplete evidence counted as
+  verified, which `docs/workflows/CODEX_REVIEW_GAUNTLET.md` forbids. It now raises
+  `SMOKE_PREREQ`, the recognized "this proved nothing" result, which exits nonzero.
+
 ## 2026-08-23 — Replaced the last two free-text unit-of-measure inputs (Field App Split…
 
 Replaced the last two free-text unit-of-measure inputs (Field App Split Invoice Editor rate unit, Blend Recipes item unit) with the shared UnitSelect dropdown, so a unit can no longer be typed or pasted on those screens. Both now load unit_conversions, filter options by the product liquid/dry form, block a save whose unit is blank only because the list failed to load, and clear a unit the newly picked product form cannot offer. Fixed two pre-existing defects in the same path: the new-recipe-item seed was the invalid lowercase gal (live stores Gal), and BlendRecipes updateItem copied a stale closure so picking a product kept its name while silently reverting product_id to empty. Verified by driving both real screens in a browser via a throwaway stubbed Vite harness, plus live grounding that products use exactly liquid/dry/null and every form yields a non-empty option list. Frontend only: no migrations, no database writes.
@@ -188,7 +250,6 @@ vitest.
   - `fix(blend): surface a failed unit load and block the blank-unit save it causes`
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
-
 ## 2026-08-19 — draw-down retries are bound to the actor and exact booking intent
 
 Pending migration `20260819232000_bind_draw_down_receipts_to_intent.sql` closes the stale-receipt

@@ -24,7 +24,8 @@
 --   (1) fixture quote (sent, is_planned) + section + 1 item
 --       -> create_job_from_quote_section
 --       -> job created (status 'scheduled', correct section/customer linkage,
---          deterministic totals 20000/10000 cents, 40 acres, 1 job_chemicals)
+--          20000 price cents, catalog-derived cost cents, 40 acres,
+--          1 job_chemicals)
 --   (2) THE FIXED STATEMENT: exactly one activity_feed row exists for the job
 --       (event_type 'job_created_from_quote', performed_by = actor,
 --        related_entity_type 'job', related_entity_id = job, customer_id set,
@@ -62,6 +63,8 @@ DECLARE
   v_admin uuid;
   v_customer_id uuid;
   v_product_id uuid;
+  v_product_cost numeric;
+  v_expected_cost_cents bigint;
   v_quote_id uuid;
   v_section_id uuid;
   v_res jsonb;
@@ -84,6 +87,7 @@ BEGIN
   END IF;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   v_idem := '[SMOKE] jfq-' || v_suffix;
 
@@ -94,9 +98,19 @@ BEGIN
   VALUES ('[SMOKE] JobFromQuote Farm ' || v_suffix)
   RETURNING id INTO v_customer_id;
 
-  INSERT INTO products (product_name, current_cost, tier1_price, unit_size)
-  VALUES ('[SMOKE] JobFromQuote Product ' || v_suffix, 5, 10, 'gal')
-  RETURNING id INTO v_product_id;
+  SELECT id, current_cost INTO v_product_id, v_product_cost
+  FROM products
+  WHERE is_active IS TRUE
+    AND current_cost IS NOT NULL
+    AND current_cost > 0
+    AND current_cost = round(current_cost, 2)
+    AND current_cost <= 10
+  ORDER BY current_cost, id
+  LIMIT 1;
+  IF v_product_id IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: need an active product with a positive whole-cent current_cost of 10.00 or less';
+  END IF;
+  v_expected_cost_cents := (v_product_cost * 20 * 100)::bigint;
 
   -- Planned open quote (the RPC requires is_planned and a non-terminal status)
   INSERT INTO quotes (quote_number, customer_id, created_by, status, is_planned)
@@ -107,11 +121,11 @@ BEGIN
   VALUES (v_quote_id, '[SMOKE] Section A', 0)
   RETURNING id INTO v_section_id;
 
-  -- One item: 20 units @ $10 price / $5 cost, 40 acres
-  -- -> job totals must come out 20000 / 10000 cents, 40 acres
+  -- One item: 20 units @ $10 price / the borrowed catalog cost, 40 acres.
+  -- The quote trigger snapshots that same product cost into the line.
   INSERT INTO quote_items (quote_id, section_id, product_id, sort_order,
     price_per_unit, current_cost, total_units_needed, acres, actual_rate, rate_unit)
-  VALUES (v_quote_id, v_section_id, v_product_id, 0, 10, 5, 20, 40, 0.5, 'gal/acre');
+  VALUES (v_quote_id, v_section_id, v_product_id, 0, 10, v_product_cost, 20, 40, 0.5, 'gal/acre');
 
   -- --------------------------------------------------------------------
   -- (1) The RPC under test — pre-fix this aborted with 42P01 every time
@@ -133,10 +147,10 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: (1) job linkage wrong: status=%, section=%, quote=%, customer=%',
       v_job.status, v_job.quote_section_id, v_job.quote_id, v_job.customer_id;
   END IF;
-  IF v_job.total_price_cents <> 20000 OR v_job.total_cost_cents <> 10000
+  IF v_job.total_price_cents <> 20000 OR v_job.total_cost_cents <> v_expected_cost_cents
      OR v_job.total_acres <> 40 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (1) job totals wrong: price_cents=%, cost_cents=%, acres=%',
-      v_job.total_price_cents, v_job.total_cost_cents, v_job.total_acres;
+    RAISE EXCEPTION 'SMOKE_FAIL: (1) job totals wrong: price_cents=%, cost_cents=% (expected %), acres=%',
+      v_job.total_price_cents, v_job.total_cost_cents, v_expected_cost_cents, v_job.total_acres;
   END IF;
   SELECT count(*) INTO v_count FROM job_chemicals WHERE job_id = v_job_id;
   IF v_count <> 1 THEN
