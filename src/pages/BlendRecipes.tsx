@@ -249,7 +249,23 @@ export default function BlendRecipes() {
     // screen exists to prevent, and the picker makes a blank the easy accident now that there is
     // no seeded default.
     if (unitLoad === 'loaded' && unitConversions.length > 0) {
+      // "Product not in the list" is NOT the same as "product whose form is null", even though
+      // `?.product_form ?? null` renders them identically — and a null form means isKnownUnit
+      // accepts every unit. So an item whose product has not loaded yet (open an existing
+      // recipe before fetchProducts returns) would sail through the check below carrying a
+      // liquid unit on a dry product. Refuse to guess: if the product is unresolved there is
+      // nothing to validate against. This is the same shape as the product_form bug fixed in
+      // c461493b — absent data reading as "no restriction".
+      const unresolved = editItems.find(
+        (item) => item.product_id && !products.some((p) => p.id === item.product_id),
+      );
+      if (unresolved) {
+        toast('error', `Product details for ${unresolved.product_name || 'an item'} have not loaded yet, so its unit cannot be checked. Try saving again in a moment.`);
+        return;
+      }
       const badItem = editItems.find((item) => {
+        // Safe now: either the product resolved, or product_id is blank (nothing picked yet),
+        // where a null form correctly means "any real unit is acceptable so far".
         const productForm = products.find((p) => p.id === item.product_id)?.product_form ?? null;
         return !item.unit.trim() || !isKnownUnit(unitConversions, productForm, item.unit);
       });

@@ -69,11 +69,13 @@ const BLANK_UNIT_RECIPE = {
   items: [{ count: 1 }],
 };
 
-function mockTables(overrides: { unitError?: Error; recipes?: unknown[]; recipeItems?: unknown[] } = {}) {
+function mockTables(overrides: {
+  unitError?: Error; recipes?: unknown[]; recipeItems?: unknown[]; products?: unknown[];
+} = {}) {
   mockFrom.mockImplementation((table: string) => {
     if (table === 'blend_recipes') return buildChain({ data: overrides.recipes ?? [], error: null });
     if (table === 'blend_recipe_items') return buildChain({ data: overrides.recipeItems ?? [], error: null });
-    if (table === 'products') return buildChain({ data: [LIQUID_PRODUCT, DRY_PRODUCT], error: null });
+    if (table === 'products') return buildChain({ data: overrides.products ?? [LIQUID_PRODUCT, DRY_PRODUCT], error: null });
     if (table === 'unit_conversions') {
       return overrides.unitError
         ? buildChain({ data: null, error: Object.assign(overrides.unitError, { message: overrides.unitError.message }) })
@@ -285,6 +287,33 @@ describe('BlendRecipes unit picker', () => {
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'error', '"Gal" is not a unit Dry Product can use. Pick one from the list.',
+    ));
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('refuses to save while an item\'s product has not loaded, instead of assuming any unit fits', async () => {
+    mockTables({
+      // Products empty: the load-order case where an existing recipe opens before
+      // fetchProducts returns. A product that has since been deactivated behaves the same.
+      products: [],
+      recipes: [BLANK_UNIT_RECIPE],
+      recipeItems: [{
+        id: 'item-1', product_id: DRY_PRODUCT.id, quantity: 2, unit: 'Gal', rate_per_acre: 1,
+        price_per_unit_cents: null, sort_order: 0, notes: null, product: { product_name: 'Dry Product' },
+      }],
+    });
+    render(<BlendRecipes />);
+    fireEvent.click(await screen.findByText('Legacy Recipe'));
+    await screen.findByLabelText(/^Unit for Dry Product$/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    // Third instance of one bug shape in this PR: absent data collapsing to null, and null
+    // meaning "no restriction". An unresolved product must not read as a form-agnostic one,
+    // or a liquid unit rides through on a dry product.
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Product details for Dry Product have not loaded yet, so its unit cannot be checked. Try saving again in a moment.',
     ));
     expect(mockRpc).not.toHaveBeenCalled();
   });
