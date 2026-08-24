@@ -64,7 +64,7 @@ const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19",
                   "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30",
                   "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
-                  "T40", "T41", "T42", "T43", "T44"];
+                  "T40", "T41", "T42", "T43", "T44", "T45"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -365,31 +365,25 @@ const MUTANTS = [
     // -- it leaves the rule itself standing, so T34 (no periods) must STAY GREEN while
     // T39 alone goes red. A mutant that reddened both would not prove the period handling
     // is what is being tested.
-    // Removes ONLY the period from the fold, leaving whitespace and hyphens, so T39 goes red
-    // while T44 (hyphens) stays green. Keeping the two separator mutants disjoint is what
-    // makes each one evidence about its own character rather than about the fold in general.
-    name: "period folding removed from the dry fl-oz rule",
-    from: "'[[:space:].-]+', ' ', 'g'))",
-    to: "'[[:space:]-]+', ' ', 'g'))",
-    expect: "T39",
+    // The fold is removed entirely: the raw lowercased unit must then BE 'floz' with no
+    // separator at all, so even the plainest spelling 'fl oz' stops matching. T34 is the
+    // plain both-sides dry line, so it is the test that must go red.
+    name: "separator folding removed from the dry fl-oz rule",
+    from: "regexp_replace(lower(COALESCE(raw_unit, '')), '[^a-z0-9]', '', 'g')",
+    to: "lower(COALESCE(raw_unit, ''))",
+    expect: "T34",
   },
   {
-    // Drops the four zero-width characters from the fold, keeping the non-breaking space, so
-    // the expression reverts to exactly what round 13 shipped. T40 must go red by name while
-    // T39 (periods) and T41 (the NBSP false-refusal guard) both stay green -- that split is
-    // the point: it proves the ZERO-WIDTH handling specifically, not the fold in general.
-    name: "zero-width folding removed from the dry fl-oz rule",
-    from: "chr(160) || chr(8203) || chr(8204) || chr(8205) || chr(65279),",
-    to: "chr(160),",
-    expect: "T40",
-  },
-  {
-    // Drops hyphens from the fold, restoring the escape the gate found: 'fl-oz' on both sides
-    // of a dry line normalises equal and bills a volume as a weight. T44 must go red alone.
-    name: "hyphen folding removed from the dry fl-oz rule",
-    from: "'[[:space:].-]+', ' ', 'g'))",
-    to: "'[[:space:].]+', ' ', 'g'))",
-    expect: "T44",
+    // Reverts the fold from "delete everything that is not a letter or digit" to the round-14
+    // ASCII list. Every escape rounds 12-14 closed stays closed, so T39/T40/T44 remain green
+    // -- and T45 alone goes red, because U+2010, U+2011 and U+202F are in no ASCII class.
+    // That split is the evidence: it proves the LIST-FREE property specifically, which is the
+    // only thing separating this round from four rounds that each got beaten by one more
+    // character.
+    name: "fold narrowed back to an ASCII separator list",
+    from: "'[^a-z0-9]', '', 'g')",
+    to: "'[[:space:].-]', '', 'g')",
+    expect: "T45",
   },
   {
     // Restores the bare equality shortcut, which proved the two sides shared a unit and

@@ -887,6 +887,45 @@ BEGIN
   END IF;
 END $$;
 
+-- T45: UNICODE SEPARATORS -- the fourth consecutive escape, and the one that ended the
+-- enumerate-the-characters approach for good. Rounds 12-15 each added the separator that had
+-- just been named and were each defeated by the next one along:
+--   round 12  three literal spellings      -> beaten by 'fl. oz'        (period)
+--   round 13  + periods and whitespace     -> beaten by 'fl<ZWSP>oz'    (zero-width)
+--   round 14  + zero-width and NBSP        -> beaten by 'fl-oz'         (ASCII hyphen)
+--   round 15  + ASCII hyphen               -> beaten by 'fl<U+2010>oz'  (Unicode hyphen)
+-- U+2010 and U+2011 are hyphens, U+202F is a narrow no-break space, and Unicode has plenty
+-- more. Enumeration cannot converge, because whoever sends the payload picks the character
+-- and the list is always written afterwards.
+--
+-- The rule now deletes EVERYTHING that is not a letter or a digit and requires what remains
+-- to BE the word. There is no separator left to smuggle in. This test pins the three
+-- characters the gate named; it is the class that matters, not the three.
+DO $$
+DECLARE ok boolean; msg text; sep text; seps text[] := ARRAY[chr(8208), chr(8209), chr(8239)];
+        labels text[] := ARRAY['U+2010 hyphen', 'U+2011 non-breaking hyphen', 'U+202F narrow no-break space'];
+        i int;
+BEGIN
+  FOR i IN 1 .. array_length(seps, 1) LOOP
+    sep := seps[i];
+    ok := false; msg := NULL;
+    BEGIN
+      PERFORM save_job(NULL,
+        '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+        ('[{"field_id":"333333' || (78 + i)::text || '-3333-3333-3333-3333333333' || (78 + i)::text || '","acres_to_treat":10}]')::jsonb,
+        ('[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":100,"unit":"fl'
+          || sep || 'oz","rate_per_acre":10,"rate_unit":"fl'
+          || sep || 'oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]')::jsonb,
+        '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+    EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+    END;
+    IF NOT (ok AND msg LIKE 'CHEM_UNIT_FORM_MISMATCH%') THEN
+      RAISE EXCEPTION 'T45 FAIL  % hid the fluid ounce from the dry rule; refused=% msg=%', labels[i], ok, msg;
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'T45 PASS  all three Unicode separators (U+2010, U+2011, U+202F) are refused on a dry fluid-ounce line';
+END $$;
+
 -- T37: THE BYPASS the round-11 half-fix left open, returned by the gate as a fresh HIGH. A DRY
 -- product with rate 'fl oz/ac' against a stock Unit of 'lb'. These do NOT normalise equal, so the
 -- equality shortcut -- the only thing round 10 guarded -- never runs. The line goes down the

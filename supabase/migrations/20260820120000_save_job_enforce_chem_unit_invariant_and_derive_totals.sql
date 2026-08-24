@@ -735,27 +735,38 @@ BEGIN
     -- That is not an exotic spelling: src/lib/blendMathValidator.ts documents in so many
     -- words that periods are insignificant and "'fl. oz' is 'fl oz'".
     --
-    -- ROUND 14 widened the fold again, and the reason is worth stating plainly: round 13
-    -- folded PERIODS but not ZERO-WIDTH characters, so 'fl<U+200B>oz' escaped exactly as
-    -- 'fl. oz' had. That is the same defect twice in a row -- fixing the one spelling a
-    -- reviewer named instead of adopting the whole rule the repo already had. The client
-    -- canonicaliser (src/lib/blendMathValidator.ts) defines the complete set of LOSSLESS
-    -- differences: case, zero-width characters (U+200B/200C/200D/FEFF, deleted outright),
-    -- any run of real whitespace INCLUDING the non-breaking space, and periods. This now
-    -- mirrors that set rather than a subset of it. Verified against live PostgreSQL 17.6:
-    -- the round-13 expression missed 'fl<ZWSP>oz', 'fl<ZWNJ>oz', 'fl<ZWJ>oz', 'fl<BOM>oz'
-    -- and 'fluid<ZWSP> ounce' -- five live escapes -- while this one refuses all of them
-    -- and still passes 'oz', 'dry oz', 'dry<NBSP>oz', 'lb', 'ton', 'mg', 'gal' and 'pt'.
+    -- THE FOLD HAS NO CHARACTER LIST, AND THAT IS THE WHOLE POINT. Four consecutive rounds
+    -- of this rule were defeated by a separator nobody had thought of yet:
     --
-    -- translate() is doing two different jobs on purpose: the non-breaking space maps to a
-    -- real space (it SEPARATES words, so 'dry<NBSP>oz' must stay two words), while the four
-    -- zero-width characters are DELETED (they separate nothing, so 'fl<ZWSP>oz' must close
-    -- up to 'floz'). Mapping zero-width to a space instead would still match here but would
-    -- silently split a word elsewhere; the client documents the same ordering and reason.
+    --   round 12  three literal spellings          defeated by 'fl. oz'      (period)
+    --   round 13  + periods and whitespace         defeated by 'fl<ZWSP>oz'  (zero-width)
+    --   round 14  + zero-width and NBSP            defeated by 'fl-oz'       (ASCII hyphen)
+    --   round 15  + ASCII hyphen                   defeated by 'fl<U+2010>oz' (Unicode hyphen)
     --
-    -- So the two sides are folded to a canonical form FIRST -- zero-width deleted, the
-    -- non-breaking space and every run of whitespace and periods collapsed to one space --
-    -- and then matched as a concept:
+    -- Every one of those fixes enumerated the characters that had been NAMED, and every one
+    -- was beaten by the next character along -- U+2010 and U+2011 are hyphens, U+202F is a
+    -- narrow no-break space, and Unicode has plenty more where those came from. Enumeration
+    -- cannot converge here, because the attacker picks the character and the list is always
+    -- written afterwards.
+    --
+    -- So the list is gone. Everything that is not a letter or a digit is DELETED, and what
+    -- remains must BE the word: 'floz', 'fluidounce'. There is no separator to smuggle in,
+    -- because no separator survives -- which is why this form ends the class of bug rather
+    -- than closing one more instance of it.
+    --
+    -- Verified on live PostgreSQL 17.6 over 31 spellings. All 19 fluid-ounce forms refuse,
+    -- including every escape found in rounds 12-15 (period, ZWSP, ZWNJ, ZWJ, BOM, NBSP,
+    -- U+2010, U+2011, U+202F), plus 'fl_oz' and even 'f l o z'. All 12 legitimate units pass
+    -- untouched: 'oz', 'dry oz', 'dry<NBSP>oz', 'dry-oz', 'lb', 'ton', 'mg', 'gal', 'gal.',
+    -- 'pt', 'ozs' -- and 'flour oz', the near-miss that a sloppier rule would eat, since it
+    -- folds to 'flouroz' and the anchors require the word to be exactly fl|fluid + the unit.
+    --
+    -- The deletion also makes the NBSP question moot, which is worth saying because an
+    -- earlier round reasoned carefully about it and that reasoning no longer applies: it does
+    -- not matter whether a separator "separates", since 'dry oz' folds to 'dryoz' and simply
+    -- fails the fl|fluid anchor. T41 still pins that the NBSP line saves.
+    --
+    -- So each side is folded to letters and digits only, and then matched as a concept:
     -- {fl|fluid} x {oz|ozs|ounce|ounces}, optional separator. 'fl. oz', 'fl.oz',
     -- 'fluid oz', 'fl ounces' and 'fl oz.' all land on the rule; a bare 'oz' does NOT,
     -- because on a dry product that is a legitimate dry ounce and refusing it would
@@ -768,12 +779,8 @@ BEGIN
        AND EXISTS (
          SELECT 1
            FROM unnest(ARRAY[v_rate_base, v_chem->>'unit']) AS raw_unit
-          WHERE btrim(regexp_replace(
-                  translate(lower(btrim(COALESCE(raw_unit, ''))),
-                            chr(160) || chr(8203) || chr(8204) || chr(8205) || chr(65279),
-                            ' '),
-                  '[[:space:].-]+', ' ', 'g'))
-                ~ '^(fl|fluid) ?(oz|ozs|ounce|ounces)$'
+          WHERE regexp_replace(lower(COALESCE(raw_unit, '')), '[^a-z0-9]', '', 'g')
+                ~ '^(fl|fluid)(oz|ozs|ounce|ounces)$'
        ) THEN
       RAISE EXCEPTION
         'CHEM_UNIT_FORM_MISMATCH: % is a DRY product, so it cannot be measured or priced in fluid ounces -- a fluid ounce measures volume and a dry product is billed by weight, so "%" against "%" cannot be converted and the amount to bill cannot be checked. Re-enter the rate and the stock Unit in the same dry unit (oz, lb or ton), then re-enter the cost and price for that unit.',
