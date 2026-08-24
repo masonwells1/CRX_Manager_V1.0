@@ -116,9 +116,10 @@ node scripts/smoke/prove-draw-down-price-tier-real-schema.mjs
 ```
 
 The runner restores the supported baseline and replays all 56 migrations in the
-verified live source history. SQL copied into the container is normalized to LF
-so a Windows checkout cannot manufacture false function-body drift; any skipped
-migration fails closed. Before applying the parked draw-down migration, it requires
+verified live source history. SQL is normalized to LF before replay so Windows
+line endings cannot create false preflight drift; the parked candidate itself
+must remain LF byte-verbatim. Any replay failure or non-empty skip set fails
+closed. Before applying the parked draw-down migration, it requires
 five pricing-sensitive chains to reach `SMOKE_PASS_ROLLBACK`: the auth probe,
 planned-holds synchronization, draw-ledger reversal, order draw lock, and job
 from quote activity-feed chain. It then mutation-tests the candidate-specific
