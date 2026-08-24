@@ -209,11 +209,13 @@ reviews:
           request adds no new file under supabase/migrations/, PASS immediately
           and state that the check did not apply.
 
-          FAIL if any added migration contains a CREATE TABLE for a table in the
-          public schema without BOTH of the following in the SAME file: (1)
-          ALTER TABLE ... ENABLE ROW LEVEL SECURITY for that table, and (2) at
-          least one CREATE POLICY targeting that table. Partitions and temporary
-          tables are exempt. Otherwise PASS.
+          FAIL if any added migration contains a CREATE TABLE - in ANY schema,
+          not only `public` - without BOTH of the following in the SAME file:
+          (1) ALTER TABLE ... ENABLE ROW LEVEL SECURITY for that table, and (2)
+          at least one CREATE POLICY targeting that table. A table created in a
+          non-public schema such as `private` or `internal` is NOT exempt;
+          AGENTS.md requires RLS and policies for every new table regardless of
+          schema. Partitions and temporary tables are exempt. Otherwise PASS.
 
       - name: SECURITY DEFINER without search_path
         mode: error
@@ -236,13 +238,23 @@ reviews:
           request adds no new file under supabase/migrations/, PASS immediately
           and state that the check did not apply.
 
-          FAIL if any added migration creates or replaces a function that
-          performs INSERT, UPDATE, DELETE, or MERGE and does not both (1) accept
-          a parameter `p_idempotency_key text DEFAULT NULL` and (2) actually use
-          that parameter to short-circuit or de-duplicate a repeated call. A
-          parameter that is accepted and then ignored is a FAIL, not a pass -
-          the signature alone proves nothing. Read-only functions are exempt.
-          Otherwise PASS.
+          This check covers MUTATING RPCs ONLY - functions a client can call
+          directly. Treat a function as an RPC when the same migration grants it
+          EXECUTE to `authenticated`, `anon`, `service_role`, or PUBLIC. The
+          following are NOT RPCs and are EXEMPT even though they perform DML:
+          trigger functions (RETURNS trigger), and internal helpers with no
+          EXECUTE grant to a client role. Such functions cannot accept a
+          caller-supplied key, and this repository legitimately contains them -
+          for example `notify_team_note_assignment()`, a trigger that inserts a
+          notification. Do not fail them.
+
+          FAIL if any added migration creates or replaces a MUTATING RPC as
+          defined above - one performing INSERT, UPDATE, DELETE, or MERGE - that
+          does not both (1) accept a parameter `p_idempotency_key text DEFAULT
+          NULL` and (2) actually use that parameter to short-circuit or
+          de-duplicate a repeated call. A parameter that is accepted and then
+          ignored is a FAIL, not a pass - the signature alone proves nothing.
+          Read-only functions are exempt. Otherwise PASS.
 
       - name: Money not exact whole cents
         mode: error
@@ -250,14 +262,19 @@ reviews:
           Scope: files under supabase/migrations/ and src/. If this pull request
           changes no file in either location, PASS immediately.
 
-          FAIL on any of the following. (1) A new or changed money column that is
-          not bigint cents, unless it is PostgreSQL numeric AND carries an active
-          finite whole-cent CHECK constraint named
-          `<table>_<column>_whole_cents_chk`. (2) Money arithmetic in TypeScript
-          performed on floats, or on decimal strings, without first parsing the
-          operands into integer cents. (3) Any write to a generated column such
-          as invoices.balance_cents. (4) Money rounding done in binary floating
-          point. Otherwise PASS.
+          FAIL on any of the following. (1) A NEWLY ADDED money column that is
+          not bigint cents. This has NO numeric exception: AGENTS.md states that
+          new money storage uses bigint cents, and the PostgreSQL numeric-dollar
+          allowance is a compatibility exception for storage that ALREADY
+          EXISTS, never a licence to add more. A new numeric money column fails
+          even when it carries a correctly named whole-cent CHECK. (2) A change
+          to a PRE-EXISTING numeric-dollar money column that leaves it without an
+          active finite whole-cent CHECK constraint named
+          `<table>_<column>_whole_cents_chk`, or that widens/rewrites its units.
+          (3) Money arithmetic in TypeScript performed on floats, or on decimal
+          strings, without first parsing the operands into integer cents. (4) Any
+          write to a generated column such as invoices.balance_cents. (5) Money
+          rounding done in binary floating point. Otherwise PASS.
 
       - name: Edit to an already-applied migration
         mode: error
