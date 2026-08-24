@@ -10,6 +10,7 @@ Status captured: 2026-08-24, America/Chicago.
 - Pull request: #364
 - Remote head: `8fe223e24d0bb7768999f591da0f0d2b6cca2d28`
 - Reviewed base: `56321c0d083e958d445854c3310878b916aa971a`
+- Current base after resume refresh: `14bdb2fde6a9a98db9947afd419dbb181182e51f`
 - Preserve the unrelated dirty primary checkout at `C:\CRX_Manager`.
 
 ## GOAL
@@ -42,6 +43,9 @@ Repair every valid merge blocker on PR #364, prove the fail-closed deny paths, c
   - `migration-apply-guard.test.mjs`: 347 assertions passed.
   - Lint, typecheck, production build/PWA, 338 Vitest files with 4,688 passing tests and 123
     intentional skips, agent-workflow tests, correction guards, docs checks, and containment passed.
+- Sol/high returned `CLEAN` for repair commit `d8495eb0`, but `origin/main` advanced to `14bdb2fd`
+  during the review. The wrapper correctly refused to mint proof against the moved base. The branch
+  now includes that base and requires a fresh exact-SHA review after the merge commit.
 - No app source, migration SQL, live database, production data, secret, or permission changed.
 
 ## REMAINING DELIVERY WORK
