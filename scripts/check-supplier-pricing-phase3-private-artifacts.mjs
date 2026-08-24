@@ -6,7 +6,7 @@
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
@@ -237,6 +237,15 @@ function isToolOwnedIgnoredPath(repoPath) {
   // archive inspection; broad segment matching would let it hide a packet.
   return [...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
 }
+function isTransientToolOwnedIgnoredEntryError(source, root, repoPath, error) {
+  // Git can list an ignored build artifact just before its producing tool
+  // replaces the directory. The direct path check has already run, and a
+  // stable artifact remains subject to the normal content scan; only this
+  // vanished tool-owned generated path can be ignored.
+  // A missing worktree root is not a build-output race. Keep that setup failure
+  // fail-closed; only a candidate traversal beneath an extant root may vanish.
+  return source === 'ignored' && existsSync(root) && isToolOwnedIgnoredPath(repoPath) && error?.code === 'ENOENT';
+}
 function isOperatorOwnedIgnoredPath(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
   return [...OPERATOR_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
@@ -274,6 +283,13 @@ export class ScanBudget {
     if (size > MAX_STRUCTURAL_SCAN_BYTES) throw new Error(`private Phase 3C containment per-file scan cap exceeded at ${repoPath}`);
     if (this.logicalBytes > MAX_TOTAL_STRUCTURAL_SCAN_BYTES - size) throw new Error(`private Phase 3C containment total-byte scan cap exceeded at ${repoPath}`);
     this.candidates += 1;
+    this.logicalBytes += size;
+  }
+  admitAdditionalBytes(size, repoPath = '<unknown>', candidateSize = size) {
+    if (!Number.isSafeInteger(size) || size < 0) throw new Error(`private Phase 3C containment could not determine candidate size at ${repoPath}`);
+    if (!Number.isSafeInteger(candidateSize) || candidateSize < 0) throw new Error(`private Phase 3C containment could not determine candidate size at ${repoPath}`);
+    if (candidateSize > MAX_STRUCTURAL_SCAN_BYTES) throw new Error(`private Phase 3C containment per-file scan cap exceeded at ${repoPath}`);
+    if (this.logicalBytes > MAX_TOTAL_STRUCTURAL_SCAN_BYTES - size) throw new Error(`private Phase 3C containment total-byte scan cap exceeded at ${repoPath}`);
     this.logicalBytes += size;
   }
 }
@@ -1743,7 +1759,7 @@ function worktreeEntryKind(root, repoPath, ownWorktrees = { paths: new Set(), wo
   return 'non-regular';
 }
 
-function worktreeContentViolations(root, execute, budget, { includeIgnored = true, ownWorktrees: providedOwnWorktrees } = {}) {
+function worktreeContentViolations(root, execute, budget, { includeIgnored = true, ownWorktrees: providedOwnWorktrees, retryingTransientIgnoredEntries = false, scannedWorktreeCandidates = new Map() } = {}) {
   const ownWorktrees = providedOwnWorktrees ?? registeredWorktreeDirectories(root, execute);
   const modified = new Set(gitPaths(['diff', '--name-only', '-z', '--diff-filter=ACMRT'], root, execute));
   const untracked = new Set(gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute));
@@ -1758,8 +1774,21 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
   for (const repoPath of ignored) if (!candidates.has(repoPath)) candidates.set(repoPath, 'ignored');
   const started = performance.now();
   const cache = { roots: new Map(), parents: new Map() };
+  const worktreeBudget = {
+    admit(size, repoPath) {
+      const previousSize = scannedWorktreeCandidates.get(repoPath);
+      if (previousSize === undefined) {
+        budget.admit(size, repoPath);
+        scannedWorktreeCandidates.set(repoPath, size);
+      } else if (size > previousSize) {
+        budget.admitAdditionalBytes(size - previousSize, repoPath, size);
+        scannedWorktreeCandidates.set(repoPath, size);
+      }
+    },
+  };
   const bareRoots = bareRepositoryRoots([...candidates.keys()]);
   const bareRootList = [...bareRoots];
+  let sawTransientIgnoredEntry = false;
   for (const bareRoot of bareRoots) violations.push({ repoPath: bareRoot, reason: 'bare Git repository' });
   for (const [repoPath, source] of candidates) {
     // Path-level violations must win before a candidate is dereferenced or
@@ -1776,7 +1805,16 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     // directory candidate. Detect their `.git` marker without walking nested
     // content; a benign ignored symlink remains non-regular and is skipped.
     if (source === 'ignored' || source === 'untracked') {
-      const entryKind = worktreeEntryKind(root, repoPath, ownWorktrees);
+      let entryKind;
+      try {
+        entryKind = worktreeEntryKind(root, repoPath, ownWorktrees);
+      } catch (error) {
+        if (!retryingTransientIgnoredEntries && isTransientToolOwnedIgnoredEntryError(source, root, repoPath, error)) {
+          sawTransientIgnoredEntry = true;
+          continue;
+        }
+        throw error;
+      }
       if (entryKind === 'embedded-repository') { violations.push({ repoPath, reason: 'embedded Git repository' }); continue; }
       if (entryKind === 'bare-repository') { violations.push({ repoPath, reason: 'bare Git repository' }); continue; }
       // A verified linked worktree of this repository is skipped rather than
@@ -1794,9 +1832,31 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     // staged/tracked instead and it receives the full structural/archive scan.
     if (source === 'ignored' && isOperatorOwnedIgnoredPath(repoPath)) continue;
     const checkArchives = source !== 'ignored' || !isToolOwnedIgnoredPath(repoPath);
-    const result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives });
+    let result;
+    try {
+      result = scanWorktreeCandidate(root, repoPath, { cache, budget: worktreeBudget, checkArchives });
+    } catch (error) {
+      if (!retryingTransientIgnoredEntries && isTransientToolOwnedIgnoredEntryError(source, root, repoPath, error)) {
+        sawTransientIgnoredEntry = true;
+        continue;
+      }
+      throw error;
+    }
     const acceptedReason = acceptedStructuralReason(repoPath, result?.reason);
     if (acceptedReason) violations.push({ repoPath, reason: acceptedReason });
+  }
+  if (sawTransientIgnoredEntry) {
+    // A disappeared generated entry is tolerated once so an ordinary rebuild
+    // cannot make every push fail. Re-list and re-scan the worktree before
+    // success: a file recreated during the first pass must be inspected, and
+    // a second disappearance fails closed rather than hiding it.
+    const recovery = worktreeContentViolations(root, execute, budget, {
+      includeIgnored,
+      ownWorktrees,
+      retryingTransientIgnoredEntries: true,
+      scannedWorktreeCandidates,
+    });
+    return { ...recovery, durationMs: Math.round(performance.now() - started) };
   }
   return { violations, candidateCount: candidates.size, ignoredCount: ignored.size, durationMs: Math.round(performance.now() - started) };
 }
