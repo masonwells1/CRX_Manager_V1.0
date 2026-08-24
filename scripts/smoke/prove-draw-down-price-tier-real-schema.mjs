@@ -64,11 +64,15 @@ function copy(local, name) { docker(['cp', local, `${NAME}:/tmp/${name}`]); }
  */
 function copySql(local, name) {
   const staged = path.join(tmpdir(), `${NAME}-${name}`);
-  writeFileSync(staged, readFileSync(local, 'utf8').replaceAll('\r\n', '\n'), 'utf8');
   try {
+    writeFileSync(staged, readFileSync(local, 'utf8').replaceAll('\r\n', '\n'), 'utf8');
     docker(['cp', staged, `${NAME}:/tmp/${name}`]);
   } finally {
-    unlinkSync(staged);
+    try {
+      unlinkSync(staged);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
   }
 }
 function apply(name, user) { psql(`\\i /tmp/${name}`, { user }); }
