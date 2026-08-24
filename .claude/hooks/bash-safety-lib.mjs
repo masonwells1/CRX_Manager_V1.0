@@ -594,7 +594,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       return true;
     }
     let resolvedCandidates = [path.resolve(base, rawPath)];
-    if (process.platform === "win32" && !/[\\/]/.test(rawPath) && !/\.[A-Za-z0-9]+$/.test(rawPath)) {
+    if (!/[\\/]/.test(rawPath) && !/\.[A-Za-z0-9]+$/.test(rawPath)) {
       try {
         const bareName = rawPath.toLowerCase();
         const executableExtensions = new Set([
@@ -1151,9 +1151,7 @@ export function maintenanceProducerCommandMentioned(command, depth = 0, fileExec
     if (!fileExecutorInspector || token.control || !invocationPosition(list, index)) return false;
     if (list[index - 1]?.control && /^[<>]$/.test(list[index - 1].value)) return false;
     const candidate = String(token.value || "").replace(/^&/, "");
-    if (!candidate
-      || !(process.platform === "win32" || /[\\/]/.test(candidate) || /\.(?:bat|cmd|ps1|sh|bash|zsh|ksh|exe|com|mjs|cjs|js|py|pl|rb|php)$/i.test(candidate))
-      || /^(?:https?|file):/i.test(candidate)) return false;
+    if (!candidate || /^(?:https?|file):/i.test(candidate)) return false;
     return fileExecutorInspector(candidate);
   };
   const cmdBuiltinDispatchesReviewedExecutor = () => {

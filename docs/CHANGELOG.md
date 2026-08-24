@@ -2,6 +2,31 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — The executor-alias guard stops asking what platform it is running on
+
+`bash-safety-lib.mjs` gated its bare-executable resolution on
+`process.platform === "win32"`: a bare extensionless token was only treated as an
+executable candidate under win32, and only expanded against the directory
+listing under win32. The protected machine is Windows, so the guard held where it
+mattered — and went quiet everywhere else, including CI, which is the only place
+it is ever exercised on Linux. The suite was green about a weaker guard than the
+one actually standing in front of the repository.
+
+- Surfaced as an assertion that passed locally and failed in CI: with an
+  untracked `evil.cmd` present, `cmd /c evil` was denied on Windows and allowed
+  on Linux. The disagreement between the two runs was the bug describing itself.
+- Both conditions had to be removed together. Dropping only the candidate gate
+  would leave a bare `npm` resolving to a literal `<base>/npm`, absent from the
+  HEAD entry map, and would deny ordinary commands; the directory expansion is
+  what answers "no such file, allow".
+- On win32 both removed conditions were already true, so reachable Windows
+  behavior is unchanged; the two platforms now agree, and on the stricter
+  reading.
+
+Authored by Codex, which owns this file and the surrounding executor-alias
+design. Committed separately from the follow-on identity work so the platform
+fix stays attributable and independently revertable.
+
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 
 Five quote-based smoke chains had silently rotted after product pricing became
