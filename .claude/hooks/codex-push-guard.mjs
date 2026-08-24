@@ -36,6 +36,7 @@ import {
   pushUsesConfigRootEnv,
   pushUsesTransportEnv,
   pushSetsInlineEnv,
+  pushRecognitionDisagrees,
   shellSegments,
   unknownPushOptions,
   unknownGitGlobalOptions,
@@ -147,6 +148,10 @@ const projectDir = path.resolve(
 // generic ENOENT denial, so that tailored message was inert under the credential
 // proxy too. Fixing only the MSYS half would have left the same hole one spelling
 // over (Codex P2, PR #445 round 9).
+// The split destroyed the push instead of hiding it — see pushRecognitionDisagrees.
+if (pushRecognitionDisagrees(cmd)) {
+  deny("CODEX GATE: this command is recognisably a `git push`, but no single segment of it is — a quoted separator inside one of its own arguments (`-c`, `-C`, `--config-env`) split the command apart, so the destination, force, refspec, repository-binding and proof checks have nothing to read. A push this guard cannot bind is a push it cannot check. Re-run without a `;`, `&` or `|` inside an option value.");
+}
 for (const segment of shellSegments(cmd).map((text) => text.trim()).filter((text) => isGitPush(text))) {
   // `gitPushCwd` is pure `path.resolve` over the command text — no filesystem
   // access — and the refusal below quotes the literal it produces, so resolving

@@ -535,6 +535,26 @@ try {
         repoDir: projectRoot,
       }).blocked, true, `a nested shell must not hide a merge in its quoted payload: ${nested}`);
     }
+    // The MIRROR failure: a quoted separator inside one command's own arguments
+    // over-segments and DESTROYS push recognition, so every push check is skipped.
+    // Reproduced against this running guard before fixing (Codex proof gate at
+    // `35dca955`); the guard now refuses the disagreement between whole-command and
+    // segmented recognition rather than trusting either parser.
+    for (const destroyed of [
+      `git -c "crx.guard=a;b" push --force origin HEAD:main`,
+      `git -c "foo.bar=x|y" push --force origin HEAD:main`,
+      `git -c "foo.bar=x&y" push origin HEAD:main`,
+      `git -C "C:/we;ird" push origin HEAD:main`,
+      `git --config-env=foo.bar=A;B push origin HEAD:main`,
+    ]) {
+      const result = evaluateProductionAction({
+        toolName: "Bash",
+        toolInput: { command: destroyed },
+        repoDir: projectRoot,
+      });
+      assert.equal(result.blocked, true, `a push whose recognition the split destroyed must fail closed: ${destroyed}`);
+      assert.match(String(result.reason || ""), /cannot bind|no single segment/i, `…naming the binding failure, not an incidental denial: ${destroyed}`);
+    }
   }
 
   if (process.platform === "win32") {

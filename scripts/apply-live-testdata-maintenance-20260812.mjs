@@ -113,8 +113,8 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // additive (+11 lines); all three transform anchors — the matcher, the
   // PROTECTED_HARNESS_FRAGMENT_RE constant, and the maintenance execution gate
   // — are untouched and still present exactly once.
-  codexGuard: "38d2c8a9663c3413fae5468268fd52f536a68459",
-  pushLib: "d9f73cd456a3ba15f62e277cb6f0c22c64649ad8",
+  codexGuard: "1a0075283242b928969d206049349c611c48deaf",
+  pushLib: "359e1c405f5508bd9995b7a0a2e2494e68624598",
 };
   // pushLib re-pinned 2026-08-24 (PR #445 round 15): `shellSegments` now reads
   // every command under all THREE shell escape dialects (`\` Git Bash, backtick
@@ -125,8 +125,8 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // hid `gh pr merge` / a mutating `gh api` from their gates. Only this file
   // changed; the transform over it is still a no-op, so both pins move together.
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "a8a2f58db1dce0f5132ecddbe4ca319ac1ad3682",
-  pushLib: "d9f73cd456a3ba15f62e277cb6f0c22c64649ad8",
+  codexGuard: "e2a4d77250edb6491dd9263cd01b17b4e2264dbe",
+  pushLib: "359e1c405f5508bd9995b7a0a2e2494e68624598",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

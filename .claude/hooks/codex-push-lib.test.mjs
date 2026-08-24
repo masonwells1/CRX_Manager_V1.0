@@ -46,6 +46,7 @@ import {
   pushUsesConfigEnv,
   pushUsesConfigRootEnv,
   pushSetsInlineEnv,
+  pushRecognitionDisagrees,
   shellSegments,
   unknownPushOptions,
   unknownGitGlobalOptions,
@@ -1414,6 +1415,46 @@ for (const nested of [
   assert.ok(
     shellSegments(nested).some((segment) => /^gh\s+pr\s+merge\b/.test(segment.trim())),
     `a nested shell's quoted payload must still be segmented: ${nested}`,
+  );
+}
+// THE OPPOSITE FAILURE, and the invariant that covers both. Quote-blind splitting
+// can over-segment through a quoted separator that belongs to ONE command's own
+// arguments, DESTROYING the push so no segment is recognisable as one — and then
+// every destination, force, refspec, binding and proof check is skipped and the
+// command is allowed outright. Reproduced against the running guard for the `;`,
+// `|`, `&`, `-C` and `--config-env` variants (Codex proof gate at `35dca955`).
+// Neither parser can be made right, because the two errors need opposite fixes, so
+// the guard refuses the DISAGREEMENT instead of trusting either one.
+for (const destroyed of [
+  `git -c "crx.guard=a;b" push --force origin HEAD:main`,
+  `git -c "foo.bar=x;y" push origin HEAD:main`,
+  `git -c "foo.bar=x|y" push --force origin HEAD:main`,
+  `git -c "foo.bar=x&y" push origin HEAD:main`,
+  `git -C "C:/we;ird" push origin HEAD:main`,
+  `git --config-env=foo.bar=A;B push origin HEAD:main`,
+]) {
+  assert.equal(
+    shellSegments(destroyed).filter((segment) => isGitPush(segment.trim())).length, 0,
+    `precondition: the split really does destroy push recognition here: ${destroyed}`,
+  );
+  assert.equal(
+    pushRecognitionDisagrees(destroyed), true,
+    `whole-command push recognition disagreeing with segmented recognition must fail closed: ${destroyed}`,
+  );
+}
+// …and the controls that keep the invariant from swallowing ordinary commands: a
+// push the split leaves intact does NOT disagree, and a non-push never does.
+for (const ordinary of [
+  `git push origin HEAD:main`,
+  `git push origin feature/x`,
+  `git -C "C:/CRX_Manager" push origin main`,
+  `echo hi && git push origin feature/x`,
+  `git commit -m "a | b"`,
+  `npm run test && npm run build`,
+]) {
+  assert.equal(
+    pushRecognitionDisagrees(ordinary), false,
+    `an ordinary command must not trip the disagreement invariant: ${ordinary}`,
   );
 }
 // The two reported regressions, spelled out with no whitespace — the form that

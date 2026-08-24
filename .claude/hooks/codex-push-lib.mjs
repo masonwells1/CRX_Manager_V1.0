@@ -1594,6 +1594,34 @@ export function shellSegments(cmd) {
   return segments;
 }
 
+// THE TWO FAILURE DIRECTIONS ARE OPPOSITE, AND THIS IS THE INVARIANT THAT COVERS
+// BOTH. Quote-aware splitting under-segments, letting a nested shell HIDE a command
+// (round 16). Quote-blind splitting can over-segment through a quoted separator that
+// belongs to ONE command's own arguments, DESTROYING it so no segment is recognised
+// as a push at all:
+//
+//     git -c "crx.guard=a;b" push --force origin HEAD:main
+//
+// splits at the `;` inside the `-c` VALUE into `git -c "crx.guard=a` and
+// `b" push --force origin HEAD:main`, and neither is a recognisable push — so the
+// destination, force, refspec, repository-binding and exact-SHA proof checks were
+// ALL skipped and the command was allowed outright. Reproduced against the running
+// guard, along with the `|`, `&`, `-C` and `--config-env` variants of the same shape
+// (Codex proof gate at `35dca955`).
+//
+// Neither parser can be made right, because the two errors need opposite fixes. So
+// do not trust either one alone: ask both questions and REFUSE THE DISAGREEMENT. If
+// the whole command text is recognisably a push while no single segment is, then the
+// split destroyed the very thing every push check needs to see, and a push this
+// guard cannot bind is a push it cannot check. That is a bounded, checkable
+// invariant rather than another spelling rule, and it holds no matter which parser
+// is wrong.
+export function pushRecognitionDisagrees(cmd) {
+  const text = String(cmd || "");
+  if (!isGitPush(text)) return false;
+  return !shellSegments(text).some((segment) => isGitPush(segment.trim()));
+}
+
 // The one place quote-awareness is still correct — and it is NOT a segmentation
 // question. `pushSetsInlineEnv` needs the assignments sitting immediately before a
 // push, and a quote-blind split cuts `GIT_SSH_COMMAND="ssh -o X && curl evil"` in

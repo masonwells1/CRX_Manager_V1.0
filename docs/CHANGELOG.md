@@ -364,6 +364,29 @@ next agent. Two sessions read it that way.
   matrix still 0 leaks; the 18-command benign corpus still 18/18 allowed; the 5,835-line real corpus
   blocks **13 — the same 13 as round 14, round 15 and `main`**, so the redesign refuses nothing new;
   the inline-env value check still catches its payload. All four suites green.
+- **Round 17 found the MIRROR of round 16, and replaced the argument with an invariant.** The proof
+  gate refused `35dca955`: quote-blind splitting can over-segment through a quoted separator that
+  belongs to ONE command's own arguments, **destroying** the push instead of hiding it —
+  `git -c "crx.guard=a;b" push --force origin HEAD:main` splits at the `;` inside the `-c` VALUE, so
+  no segment is recognisable as a push and the destination, force, refspec, repository-binding and
+  exact-SHA proof checks are ALL skipped. Verified against the running guard, and again wider than
+  reported: the `|`, `&`, `-C` and `--config-env` variants behave identically. `main` denies these.
+- **The two failure directions need opposite fixes, which is why five rounds of parser tuning kept
+  trading one for the other.** Quote-aware splitting under-segments and HIDES a command; quote-blind
+  splitting over-segments and DESTROYS one. Neither parser can be made correct, so the guard no
+  longer trusts either: `pushRecognitionDisagrees` asks both questions — is the WHOLE command text a
+  push, and is any SINGLE segment a push — and **refuses the disagreement**. If the command is
+  recognisably a push while no segment is, the split destroyed the thing every push check needs to
+  read, and a push the guard cannot bind is a push it cannot check. That is a bounded, checkable
+  invariant rather than another spelling rule, and it holds no matter which parser is wrong. Wired
+  into BOTH guards.
+- **Proof:** all six destroyed-push variants now denied, naming the binding failure rather than
+  denying incidentally; all six nested-shell forms from round 16 still denied; the 320-case matrix
+  still 0 leaks; the 18-command benign corpus still 18/18 allowed; the 5,835-line real corpus still
+  blocks **13 — unchanged**, so the new refusal reaches nothing ordinary; an ordinary feature push,
+  a chained `echo && git push`, and a quoted commit message all still pass the invariant. Mutation
+  proved the tests load-bearing: forcing `pushRecognitionDisagrees` to always report agreement turns
+  BOTH suites red. All four suites green.
 - **Round 11 replaced the question entirely.** Both earlier versions asked something about the *raw*
   token list, and a split option value pushes every later token out of position — so
   `git -C C:/My\ Repo commit -m push` (a commit), `… status -- push`, and `… stash push -m wip` were

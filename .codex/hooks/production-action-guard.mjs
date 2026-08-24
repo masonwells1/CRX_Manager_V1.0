@@ -23,6 +23,7 @@ import {
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   riskyFiles,
+  pushRecognitionDisagrees,
   shellSegments,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
@@ -745,6 +746,10 @@ export function evaluateProductionAction({
   // falls out of the filter and this gate never runs at all. Verified against
   // the real Claude-side hook, which allowed a `HEAD:main` push outright
   // (Codex P1, PR #445 round 9). Both guards share the parser, so both need it.
+  // The split destroyed the push instead of hiding it — see pushRecognitionDisagrees.
+  if (pushRecognitionDisagrees(command)) {
+    return denied("CODEX PRODUCTION GATE: this command is recognisably a `git push`, but no single segment of it is — a quoted separator inside one of its own arguments (`-c`, `-C`, `--config-env`) split the command apart, so the destination, force, refspec, repository-binding and proof checks have nothing to read. A push this guard cannot bind is a push it cannot check. Re-run without a `;`, `&` or `|` inside an option value.");
+  }
   const unbindableArgs = gitPushArgumentsUnbindable(command);
   if (unbindableArgs.length > 0) {
     return denied(`CODEX PRODUCTION GATE: this push has an argument the shell will join to the next one (${unbindableArgs.join(", ")}), so the guard cannot tell which repository or refspec it names — and a push it cannot bind is a push it cannot check. That happens when a path with a space is escaped rather than quoted. Quote the whole value instead: \`git -C "C:/My Repo" push origin <branch>\`.`);
