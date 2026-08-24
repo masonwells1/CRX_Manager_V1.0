@@ -285,6 +285,20 @@ check("variable matching stays anchored to the CODEX name", () => {
   assert.equal(blocks("echo %PATH%"), null);
 });
 
+check("CodeRabbit on the final head: a redirect glued to the executable", () => {
+  // Bash launches the program identically; only the output moves. The redirect
+  // stayed inside the token, so the guarded name was never seen.
+  assert.equal(rule("codex>/tmp/review.log review --base origin/main"), "codex-review");
+  assert.equal(rule("/bin/kill>/tmp/out.log -9 39564"), "force-kill");
+  assert.equal(rule("taskkill.exe>nul /PID 39564 /F"), "force-kill");
+  assert.equal(rule("codex 2>&1 review --base origin/main"), "codex-review");
+});
+
+check("redirection splitting does not break ordinary commands", () => {
+  assert.equal(blocks("npm run build > build.log 2>&1"), null);
+  assert.equal(blocks("git log --oneline > /tmp/log.txt"), null);
+});
+
 // ── Deny payload shape ────────────────────────────────────────────────────────
 check("a blocked command names the wrapper as the alternative", () => {
   const v = classifyCommand("codex review --base origin/main");

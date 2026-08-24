@@ -208,7 +208,12 @@ export function classifyWalk(rawCommand) {
   const cmd = String(rawCommand || "");
   if (!cmd.trim()) return null;
 
-  const tokens = cmd.split(/[\s;|&\n(){}]+/).filter(Boolean);
+  // Redirections split too. CodeRabbit found, on the final head, that a redirect
+  // glued straight to the executable kept the guarded name inside an unrecognised
+  // token: `codex>/tmp/review.log review`, `/bin/kill>/tmp/out.log -9 39564` and
+  // `taskkill.exe>nul /PID 39564 /F` all ran while the hook returned "allow".
+  // Bash launches the program exactly the same way; only the output moves.
+  const tokens = cmd.split(/[\s;|&<>\n(){}]+/).filter(Boolean);
 
   for (const token of tokens) {
     const guarded = GUARDED_KILL.get(normalizeExecutable(token));

@@ -222,7 +222,26 @@ it is a trade, not a free win.
    `main` gained. Merging `main` in made both findings disappear. **Update the branch before
    reading a reviewer's "regression" findings**, or you will argue with a diff you did not write.
 
-**Read the round count as data, not trivia.** Sixteen High bypasses over seven adversarial rounds
+10. **CodeRabbit, on the final head — a redirect glued to the executable.** `codex>/tmp/review.log
+    review`, `/bin/kill>/tmp/out.log -9 39564` and `taskkill.exe>nul /PID 39564 /F` all ran while
+    the hook returned `allow`: the tokenizer did not split on `<`/`>`, so the guarded name stayed
+    inside an unrecognised token. Bash launches the program identically — only the output moves.
+    Verified allowed, fixed, re-verified denied, tests added.
+
+    Its two other reports were checked and **not** acted on, with reasons:
+    - *Backticks are not tokenized* — already handled; `` echo `codex review` `` was already
+      denied, because quote and backtick stripping happens before comparison.
+    - *`rg -c taskkill …` and `echo "cmd /c codex review"` are over-blocked* — correct, and it is
+      the documented accepted trade above, not a defect.
+
+    **Known remaining route, not closed here.** The guard is registered for `Bash|PowerShell`, so
+    an MCP process-spawning tool (`mcp__Desktop_Commander__start_process`) does not pass through
+    it. CodeRabbit called this an allowed bypass; it is not — those tools sit in the **`ask`** list
+    in `.claude/settings.json`, so they prompt Mason rather than running unattended. It is still
+    the next piece of coverage worth adding, and it is a further argument for the capability-layer
+    fix below rather than more string matching.
+
+**Read the round count as data, not trivia.** Seventeen High bypasses over eight adversarial rounds
 on roughly a hundred lines. **Not one was found by reasoning about the pattern** — every one came
 from executing commands against it. Treat that as the measure of how far to trust *any*
 text-matching guard over shell strings, this one included.
