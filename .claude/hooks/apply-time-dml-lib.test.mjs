@@ -1722,4 +1722,73 @@ eq(T(null), [], "a null body does not throw");
     'round-60: catalog-change evidence includes the parsed destination identity');
 }
 
+// ----- ROUND 65: stored view/default/domain edges execute on later statements
+{
+  const ctasTable = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round65_ctas_fix() RETURNS integer LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; RETURN 1; END $$; ' +
+    'CREATE VIEW public.round65_money_view AS SELECT public.round65_ctas_fix() AS v; ' +
+    'CREATE TEMP TABLE round65_ctas_copy AS TABLE public.round65_money_view;',
+  );
+  ok(ctasTable.targets.has('orders.total_profit') &&
+      ctasTable.invokedViews.some((entry) => entry.includes('round65_money_view')),
+    'round-65: CREATE TABLE AS TABLE executes and folds the stored view query');
+
+  const storedDefault = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round65_default_fix() RETURNS integer LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; RETURN 1; END $$; ' +
+    'CREATE TEMP TABLE round65_default_probe(' +
+    'v integer DEFAULT public.round65_default_fix()); ' +
+    'INSERT INTO round65_default_probe DEFAULT VALUES;',
+  );
+  ok(storedDefault.targets.has('orders.total_profit') &&
+      storedDefault.invokedRoutines.includes('public.round65_default_fix') &&
+      storedDefault.firedColumnEffects.some((effect) =>
+        effect.kind === 'default' && effect.routines.includes('public.round65_default_fix')),
+    'round-65: INSERT DEFAULT VALUES executes a stored callable column default');
+
+  const deferredDefault = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round65_deferred_default_fix() RETURNS integer LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; RETURN 1; END $$; ' +
+    'CREATE TEMP TABLE round65_deferred_default_probe(' +
+    'v integer DEFAULT public.round65_deferred_default_fix());',
+  );
+  ok(!deferredDefault.targets.has('orders.total_profit') && !deferredDefault.unresolved,
+    'round-65 MUTANT: defining a callable column default without inserting remains deferred');
+
+  const implicitDomain = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round65_domain_fix(integer) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$; ' +
+    'CREATE DOMAIN public.round65_checked_integer AS integer ' +
+    'CHECK (public.round65_domain_fix(VALUE)); ' +
+    'CREATE TEMP TABLE round65_domain_probe(v public.round65_checked_integer); ' +
+    'INSERT INTO round65_domain_probe(v) VALUES (1);',
+  );
+  ok(implicitDomain.unresolved &&
+      implicitDomain.invokedCasts.some((entry) => entry.includes('round65_checked_integer')) &&
+      implicitDomain.firedColumnEffects.some((effect) =>
+        effect.kind === 'domain' && effect.domain.endsWith('round65_checked_integer')),
+    'round-65: assignment into a checked-domain column records implicit coercion and fails closed');
+
+  const deferredDomain = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round65_deferred_domain_fix(integer) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$; ' +
+    'CREATE DOMAIN public.round65_deferred_checked_integer AS integer ' +
+    'CHECK (public.round65_deferred_domain_fix(VALUE)); ' +
+    'CREATE TEMP TABLE round65_deferred_domain_probe(v public.round65_deferred_checked_integer);',
+  );
+  ok(!deferredDomain.targets.has('orders.total_profit') && !deferredDomain.unresolved,
+    'round-65 MUTANT: a checked-domain column remains deferred until a row is inserted');
+
+  const unrelatedInsert = applyTimeWriteTargets(
+    'CREATE DOMAIN public.round65_unrelated_checked_integer AS integer CHECK (VALUE > 0); ' +
+    'CREATE TEMP TABLE round65_domain_holder(v public.round65_unrelated_checked_integer); ' +
+    'CREATE TEMP TABLE round65_plain_holder(v integer); ' +
+    'INSERT INTO round65_plain_holder(v) VALUES (1);',
+  );
+  ok(!unrelatedInsert.unresolved &&
+      !unrelatedInsert.invokedCasts.some((entry) => entry.includes('round65_unrelated_checked_integer')),
+    'round-65 MUTANT: an insert into another relation does not fire the checked-domain edge');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

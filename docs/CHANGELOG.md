@@ -2,6 +2,20 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — Stored query, column-default, and domain execution bypasses closed
+
+- `CREATE TABLE ... AS TABLE view` now enters the executable-query fixed point, so a stored view
+  cannot hide a protected-row mutator behind PostgreSQL's shorthand `TABLE` query form.
+- Callable column defaults are bound to their relation and treated as stored executable behavior
+  when a later `INSERT` can fire them. The fail-closed violation names the exact routine identity
+  instead of reporting an unactionable generic edge; a definition with no insert stays deferred.
+- Inserts into checked-domain columns now reify PostgreSQL's implicit assignment coercion through
+  the existing cast/domain analyzer. Stored `CHECK` behavior can no longer disappear merely because
+  the candidate supplied a base value without spelling an explicit cast, while unrelated inserts
+  and definition-only migrations remain silent.
+- Focused proof: apply-time analyzer 314 assertions; approved-set validator 217 adversarial mutation
+  cases covering all three deny paths and their non-executing controls.
+
 ## 2026-08-24 — Optional-INTO MERGE bypass closed in migration guards
 
 - PostgreSQL's legal `MERGE table` and `MERGE ONLY table` spellings now reach the same

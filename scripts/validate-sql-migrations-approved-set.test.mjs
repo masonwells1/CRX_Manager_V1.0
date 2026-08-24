@@ -2398,6 +2398,58 @@ const CASES = [
     sql: `SELECT * FROM public.replay_bridge;\n`,
   },
   {
+    name: 'round-65: CREATE TABLE AS TABLE cannot hide a stored-view money mutator',
+    expect: 'violation',
+    mustReport: 'view_select_round65_money_view',
+    sql:
+      `CREATE FUNCTION public.round65_ctas_fix() RETURNS integer LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN 1; END $$;\n` +
+      `CREATE VIEW public.round65_money_view AS SELECT public.round65_ctas_fix() AS v;\n` +
+      `CREATE TEMP TABLE round65_ctas_copy AS TABLE public.round65_money_view;\n`,
+  },
+  {
+    name: 'round-65: INSERT DEFAULT VALUES cannot hide a stored column-default mutator',
+    expect: 'violation',
+    mustReport: 'round65_default_fix',
+    sql:
+      `CREATE FUNCTION public.round65_default_fix() RETURNS integer LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN 1; END $$;\n` +
+      `CREATE TEMP TABLE round65_default_probe(` +
+      `v integer DEFAULT public.round65_default_fix());\n` +
+      `INSERT INTO round65_default_probe DEFAULT VALUES;\n`,
+  },
+  {
+    name: 'round-65 MUTANT: defining a callable column default without inserting stays deferred',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.round65_deferred_default_fix() RETURNS integer LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN 1; END $$;\n` +
+      `CREATE TEMP TABLE round65_deferred_default_probe(` +
+      `v integer DEFAULT public.round65_deferred_default_fix());\n`,
+  },
+  {
+    name: 'round-65: implicit assignment into a checked domain fails closed',
+    expect: 'violation',
+    sql:
+      `CREATE FUNCTION public.round65_domain_fix(integer) RETURNS boolean LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$;\n` +
+      `CREATE DOMAIN public.round65_checked_integer AS integer ` +
+      `CHECK (public.round65_domain_fix(VALUE));\n` +
+      `CREATE TEMP TABLE round65_domain_probe(v public.round65_checked_integer);\n` +
+      `INSERT INTO round65_domain_probe(v) VALUES (1);\n`,
+  },
+  {
+    name: 'round-65 MUTANT: a checked-domain column without inserted rows stays deferred',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.round65_deferred_domain_fix(integer) RETURNS boolean LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$;\n` +
+      `CREATE DOMAIN public.round65_deferred_checked_integer AS integer ` +
+      `CHECK (public.round65_deferred_domain_fix(VALUE));\n` +
+      `CREATE TEMP TABLE round65_deferred_domain_probe(` +
+      `v public.round65_deferred_checked_integer);\n`,
+  },
+  {
     name: 'round-55: FOREACH cannot replace the captured proof-variable population',
     expect: 'violation',
     mustReport: 'assigned or passed to a possibly OUT/INOUT procedure',

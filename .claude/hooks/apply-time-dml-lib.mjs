@@ -1184,7 +1184,7 @@ const RUNS_FOR_EFFECT =
 // excluded on purpose — defining a view runs nothing.
 const CREATE_RUNS_QUERY =
   /^create\s+(or\s+replace\s+)?(global\s+|local\s+)?(temp\w*\s+|unlogged\s+)?(table|materialized\s+view)\b/;
-const AS_QUERY = /\bas\s+(select|with|values)\b/;
+const AS_QUERY = /\bas\s+(select|with|values|table)\b/;
 
 // An expression index evaluates its expression per row as the index is built.
 // The leading `CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] [name] ON
@@ -1503,6 +1503,108 @@ export function viewDefinitions(code) {
     out.push({ name: head[1], query: as ? tail.slice(as.index + as[0].length).trim() : "" });
   }
   return out;
+}
+
+// Column defaults and checked-domain coercions are stored executable edges.
+// Defining either is deferred, but a later INSERT into the relation can execute
+// it without spelling the routine call or an explicit cast at that call site.
+// Keep the relation binding so unrelated inserts do not turn every domain or
+// default definition in a migration into an apply-time effect.
+function columnEffectDefinitions(code, domains = []) {
+  const domainNames = new Set();
+  for (const definition of domains) {
+    if (definition?.context !== "domain") continue;
+    const target = normalizeCastType(definition.target);
+    if (!target) continue;
+    domainNames.add(target);
+    domainNames.add(bareCastType(target));
+  }
+
+  const effects = [];
+  const addColumns = (table, region) => {
+    for (const raw of splitTopLevel(region)) {
+      const column = raw.trim();
+      const name = readIdent(column, 0);
+      if (!name) continue;
+      const nameIdentity = identifierIdentity(name.value);
+      if (!nameIdentity.quoted && new Set([
+        "constraint", "primary", "unique", "check", "foreign", "exclude", "like",
+      ]).has(nameIdentity.value)) continue;
+
+      const tail = column.slice(name.end).trim();
+      const type = readRelation(tail, 0);
+      const normalizedType = type ? normalizeCastType(type.table) : "";
+      const domain = normalizedType &&
+        (domainNames.has(normalizedType) || domainNames.has(bareCastType(normalizedType)));
+
+      let defaultCode = "";
+      const defaultHead = /\bdefault\b/.exec(tail);
+      if (defaultHead) {
+        const expression = tail.slice(defaultHead.index + defaultHead[0].length);
+        const stop = scanTo(expression, 0, [
+          "constraint", "not", "null", "check", "references", "unique", "primary",
+          "generated", "collate",
+        ]);
+        const executable = expression.slice(0, stop.at).trim();
+        if (executable) defaultCode = `SELECT ${executable}`;
+      }
+
+      if (defaultCode || domain) {
+        effects.push({
+          table,
+          column: nameIdentity.value,
+          defaultCode,
+          domain: domain ? normalizedType : "",
+        });
+      }
+    }
+  };
+
+  for (const raw of String(code || "").toLowerCase().split(";")) {
+    const statement = raw.trim();
+    const create = /^create\s+(?:(?:global|local)\s+)?(?:(?:temp|temporary|unlogged)\s+)?table\s+(?:if\s+not\s+exists\s+)?/.exec(statement);
+    if (create) {
+      const relation = readRelation(statement, create[0].length);
+      if (!relation) continue;
+      const open = skipSpace(statement, relation.end);
+      if (statement[open] !== "(") continue;
+      let depth = 0;
+      let close = -1;
+      for (let i = open; i < statement.length; i += 1) {
+        if (statement[i] === "(") depth += 1;
+        else if (statement[i] === ")" && --depth === 0) { close = i; break; }
+      }
+      if (close > open) addColumns(relation.table, statement.slice(open + 1, close));
+      continue;
+    }
+
+    const alter = /^alter\s+table\s+(?:if\s+exists\s+)?/.exec(statement);
+    if (!alter) continue;
+    const relation = readRelation(statement, alter[0].length);
+    if (!relation) continue;
+    const add = /^\s*add\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?/.exec(statement.slice(relation.end));
+    if (!add) continue;
+    addColumns(relation.table, statement.slice(relation.end + add[0].length));
+  }
+
+  return effects;
+}
+
+function insertedRelations(code) {
+  const found = new Set();
+  for (const raw of String(code || "").split(";")) {
+    const region = runForEffectRegion(raw.trim().toLowerCase().replace(/"/g, ""));
+    if (!region) continue;
+    const insert = /\binsert\s+into\s+/g;
+    let match;
+    while ((match = insert.exec(region)) !== null) {
+      const relation = readRelation(region, match.index + match[0].length);
+      if (relation && !(NON_RELATION_KEYWORDS.has(relation.table) && !relation.quoted)) {
+        found.add(relation.table);
+      }
+    }
+  }
+  return found;
 }
 
 function invokedViews(code, definitions) {
@@ -1928,6 +2030,17 @@ export function applyTimeWriteTargets(
   // untouched, which is what keeps this affordable: a literal there is a comment
   // or a default, not a statement.
   const execCodes = [];
+  const columnEffects = [];
+  const columnEffectKeys = new Set();
+  const defineColumnEffects = (sourceCode) => {
+    for (const effect of columnEffectDefinitions(sourceCode, casts)) {
+      const key = `${effect.table}\0${effect.column}\0${effect.defaultCode}\0${effect.domain}`;
+      if (columnEffectKeys.has(key)) continue;
+      columnEffectKeys.add(key);
+      columnEffects.push(effect);
+    }
+  };
+  defineColumnEffects(code);
   const analysed = new Set();
   const foldLiterals = (result, lits) => {
     if (!result.dynamicExec) return;
@@ -1959,6 +2072,7 @@ export function applyTimeWriteTargets(
       applyRoutineTransitions(parsed.code);
       defineOperators(operatorDefinitions(parsed.code));
       defineCasts(castDefinitions(parsed.code));
+      defineColumnEffects(parsed.code);
       defineViews(viewDefinitions(parsed.code));
       attachments.push(...triggerAttachments(parsed.code));
       defineRules(ruleAttachments(parsed.code));
@@ -1978,6 +2092,9 @@ export function applyTimeWriteTargets(
   const firedCasts = new Set();
   const firedViews = new Set();
   const foldedViewQueries = new Set();
+  const observedInsertRelations = new Set();
+  const firedColumnEffects = new Set();
+  const firedColumnEffectDetails = new Map();
   const addOperatorInvocations = (sourceCode, into) => {
     for (const definition of invokedOperators(sourceCode, operators)) {
       const key = `${definition.operator}\0${definition.fn}`;
@@ -2016,6 +2133,66 @@ export function applyTimeWriteTargets(
         for (const relation of invokedRelations(definition.query)) readRuleRelations.add(relation);
       }
     }
+  };
+  const fireColumnEffects = () => {
+    for (const effect of columnEffects) {
+      const bareTable = effect.table.split(".").pop();
+      const matches = observedInsertRelations.has(effect.table) ||
+        (effect.table.includes(".") && observedInsertRelations.has(bareTable));
+      const key = `${effect.table}\0${effect.column}\0${effect.defaultCode}\0${effect.domain}`;
+      if (!matches || firedColumnEffects.has(key)) continue;
+      firedColumnEffects.add(key);
+
+      // Defaults execute as ordinary expressions. Feeding their expression
+      // through the existing executable-code queue follows same-file routine,
+      // operator, cast, and view edges instead of inventing a second resolver.
+      if (effect.defaultCode) {
+        execCodes.push(effect.defaultCode);
+        const sameFileCalls = invokedRoutines(
+          effect.defaultCode.toLowerCase(),
+          new Set(byName.keys()),
+        );
+        const residentCalls = unknownCallsIn(
+          effect.defaultCode.toLowerCase(),
+          new Set(byName.keys()),
+          new Set(trustedUnqualifiedRoutines.map((name) => String(name).toLowerCase())),
+          untrustedRoutineIdentities,
+        );
+        if (sameFileCalls.size > 0 || residentCalls.size > 0) {
+          // The INSERT may explicitly supply this column or may omit it. This
+          // static analyzer does not reimplement PostgreSQL's complete INSERT
+          // column/default binding, so a callable stored default is an opaque
+          // apply-time edge even though its readable same-file body is folded.
+          top.unresolved = true;
+          firedColumnEffectDetails.set(key, {
+            table: effect.table,
+            column: effect.column,
+            kind: "default",
+            routines: [...new Set([...sameFileCalls, ...residentCalls])].sort(),
+          });
+        }
+      }
+
+      // Assignment coercion into a checked domain executes its stored CHECK
+      // even when the INSERT supplies an ordinary base-type value and spells no
+      // cast. Reify that implicit coercion as an explicit executable cast so
+      // the existing domain machinery records it and fails closed.
+      if (effect.domain) {
+        execCodes.push(`SELECT NULL::${effect.domain}`);
+        firedColumnEffectDetails.set(key, {
+          table: effect.table,
+          column: effect.column,
+          kind: "domain",
+          domain: effect.domain,
+        });
+      }
+    }
+  };
+  const addColumnInvocations = (sourceCode) => {
+    for (const relation of insertedRelations(sourceCode)) {
+      observedInsertRelations.add(relation);
+    }
+    fireColumnEffects();
   };
   const fireAttached = (into) => {
     for (const rule of rules) {
@@ -2069,6 +2246,7 @@ export function applyTimeWriteTargets(
       addOperatorInvocations(c, into);
       addCastInvocations(c, into);
       addViewInvocations(c);
+      addColumnInvocations(c);
     }
   };
 
@@ -2079,6 +2257,7 @@ export function applyTimeWriteTargets(
   addOperatorInvocations(code, frontier);
   addCastInvocations(code, frontier);
   addViewInvocations(code);
+  addColumnInvocations(code);
   drainExec(frontier);
   fireAttached(frontier);
   while (frontier.size) {
@@ -2122,6 +2301,7 @@ export function applyTimeWriteTargets(
         foldLiterals(inner, r.literals);
         defineOperators(operatorDefinitions(r.code));
         defineCasts(castDefinitions(r.code));
+        defineColumnEffects(r.code);
         defineViews(viewDefinitions(r.code));
         // DDL inside an invoked routine executes now just like literal dynamic
         // SQL. Preserve its trigger/rule graph edges before firing attachments.
@@ -2133,6 +2313,7 @@ export function applyTimeWriteTargets(
         addOperatorInvocations(r.code, next);
         addCastInvocations(r.code, next);
         addViewInvocations(r.code);
+        addColumnInvocations(r.code);
       }
     }
     drainExec(next);
@@ -2184,6 +2365,7 @@ export function applyTimeWriteTargets(
     invokedOperators: [...firedOperators],
     invokedCasts: [...firedCasts],
     invokedViews: [...firedViews],
+    firedColumnEffects: [...firedColumnEffectDetails.values()],
   };
 }
 

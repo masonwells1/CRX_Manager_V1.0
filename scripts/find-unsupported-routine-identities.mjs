@@ -43,6 +43,14 @@ for (const file of paths) {
   if (analysed.searchPathChange || analysed.unresolved) {
     process.stdout.write(`${file}\tevent-catalog-risk\n`);
   }
+  if (analysed.firedColumnEffects?.length) {
+    const identities = analysed.firedColumnEffects.flatMap((effect) =>
+      effect.kind === "default" ? (effect.routines || []) : [effect.domain],
+    ).filter(Boolean);
+    process.stdout.write(
+      `${file}\tstored-column-effect\t${[...new Set(identities)].sort().join(", ")}\n`,
+    );
+  }
   if (knownRules.length && analysed.firedRules.length) {
     const localFiredRules = new Set(
       applyTimeWriteTargets(sql).firedRules.map(ruleAttachmentIdentity),
