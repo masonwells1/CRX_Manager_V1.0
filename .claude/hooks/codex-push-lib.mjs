@@ -1802,16 +1802,31 @@ export function cycleHasFailureMarker(comments, cycleStartIso) {
 // is self-evidently terminal (`submitted_at` is set). The stamp path is not, so
 // it additionally requires a CodeRabbit `success` status created AFTER this
 // cycle's start. (Codex, High, PR #441.)
+// The NEWEST CodeRabbit status must itself be `success`. "Some success after the
+// cycle started" is not enough — this repo's own recorded timeline on head
+// c0490ce9 shows a success sitting BETWEEN two pendings:
+//
+//   success 04:33:33
+//   pending 04:26:00   <- newer than the success below it
+//   success 04:25:11   <- intermediate: findings were still being generated
+//   pending 04:24:41
+//
+// so an "any success" test authorizes a merge mid-review. Taking the newest
+// status instead means a pending that arrived afterwards correctly withholds
+// completion. (Codex, High, PR #441.)
+//
+// This is the single-shot form of the settle rule; `deploy-check`'s two-poll
+// 90-second confirmation remains the stricter procedural check on top.
 export function cycleCompleted(statuses, cycleStartIso) {
   if (!cycleStartIso) return false; // no cycle start → cannot prove completion
   if (!Array.isArray(statuses)) return false;
-  return statuses.some(
-    (s) =>
-      s?.context === "CodeRabbit" &&
-      s?.state === "success" &&
-      typeof s?.created_at === "string" &&
-      s.created_at >= cycleStartIso,
-  );
+  // GitHub returns statuses newest-first; sort defensively rather than trusting it.
+  const own = statuses
+    .filter((s) => s?.context === "CodeRabbit" && typeof s?.created_at === "string")
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+  const newest = own[0];
+  if (!newest) return false;
+  return newest.state === "success" && newest.created_at >= cycleStartIso;
 }
 
 // Verdict for one PR head. Returns null when the head is proven reviewed;

@@ -571,6 +571,37 @@ Editing a protected guard also means re-pinning its reviewed blob in
 `scripts/apply-live-testdata-maintenance-20260812.mjs`; the `TO_BE_FILLED` sentinel exists precisely so the
 new output hash is *computed by the producer* rather than guessed.
 
+**Rounds seventeen and eighteen: the enforcement had to be hardened three times, and every hole was a copy
+that had drifted.** Building the guard did not end the review loop; it moved it from prose to behaviour, where
+the findings got sharper.
+
+- **A global flag defeated the whole gate.** `ghApiMergeRequest()` and `ghApiMutates()` on the Codex side
+  required `api` to sit *immediately* after the `gh` binary. `gh` accepts global flags before a subcommand, so
+  the ordinary `gh -R crop/crx api -X PUT .../merge` did not match, and skipped the head pin, the CodeRabbit
+  gate, the green-check gate, and the Sol proof. Codex ran that exact command as a probe and got
+  `{"blocked":false}`. The Claude-side function already scanned words; the Codex copy had drifted.
+- **The gate accepted a review that had only STARTED.** The walkthrough stamp is a start marker — recorded in
+  this very document — yet the first version of `coderabbitVerdict()` treated it as evidence. The stamp path
+  now also requires a completed CodeRabbit status for the cycle; a submitted review object is terminal on its
+  own.
+- **Then "completed" itself was too loose.** `cycleCompleted()` accepted *any* success after the cycle start,
+  which the timeline recorded above (`success 04:25:11` sandwiched between two pendings) disproves outright:
+  that intermediate success authorizes a merge mid-review. The rule is now that the **newest** CodeRabbit
+  status must itself be `success`, with statuses sorted defensively rather than trusting GitHub's ordering.
+  Both the failing timeline and its completed form are pinned, so the rule is not simply "always block".
+- **`--auto` was unenforceable on the Codex side because its parser never captured it.** A correctly pinned
+  `gh pr merge --auto` passed the pin and the review check, then let GitHub land the PR *after* the gate ran.
+
+Three of those four are the same failure: **two copies of one guard, and the weaker copy is the one that
+decides.** The shared predicates now live once in `codex-push-lib.mjs`, but the two entry points still parse
+commands separately, and that is where every drift appeared. A guard Claude obeys and Codex does not is a
+bypass, not an asymmetry.
+
+The other lesson is narrower and worth keeping: **each fix here was itself one notch too weak, and the next
+round found it.** Stamp → stamp plus completion → newest-status completion. That is the same shape as the
+`path_filters` sequence, in a different file. The difference is that these were caught by *running* the guard
+against real recorded data rather than by reading it.
+
 The through-line across every round of this PR is one idea: **a check that names the thing it forbids only
 catches that name** — and its corollary, learned four times on `path_filters` alone: **a name is not a
 mechanism.** `docs/audits`, `*.md`, a date prefix, and finally `archive` were all shorthand for "these files

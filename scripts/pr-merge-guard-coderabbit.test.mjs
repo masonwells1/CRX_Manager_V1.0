@@ -175,10 +175,55 @@ for (const [label, args] of [
     reviews: [], comments: cleanComments, headSha: HEAD, cycleStartIso: CYCLE,
     statuses: [{ context: "Vercel", state: "success", created_at: "2026-08-24T15:20:00Z" }],
   }],
+  // THE RECORDED TIMELINE. On real head c0490ce9 a CodeRabbit `success` sat
+  // BETWEEN two pendings while findings were still being generated. "Some
+  // success after the cycle start" accepts that and authorizes a merge
+  // mid-review; only the NEWEST status answers the question.
+  // (Codex, High, PR #441.)
+  ["an INTERMEDIATE success with a newer pending after it", {
+    reviews: [], comments: cleanComments, headSha: HEAD, cycleStartIso: "2026-08-24T04:24:38Z",
+    statuses: [
+      { context: "CodeRabbit", state: "pending", created_at: "2026-08-24T04:26:00Z" },
+      { context: "CodeRabbit", state: "success", created_at: "2026-08-24T04:25:11Z" },
+      { context: "CodeRabbit", state: "pending", created_at: "2026-08-24T04:24:41Z" },
+      { context: "CodeRabbit", state: "pending", created_at: "2026-08-24T04:24:38Z" },
+    ],
+  }],
+  // Same timeline, deliberately shuffled: the rule must not depend on GitHub's
+  // ordering happening to be newest-first.
+  ["an intermediate success when statuses arrive out of order", {
+    reviews: [], comments: cleanComments, headSha: HEAD, cycleStartIso: "2026-08-24T04:24:38Z",
+    statuses: [
+      { context: "CodeRabbit", state: "success", created_at: "2026-08-24T04:25:11Z" },
+      { context: "CodeRabbit", state: "pending", created_at: "2026-08-24T04:24:38Z" },
+      { context: "CodeRabbit", state: "pending", created_at: "2026-08-24T04:26:00Z" },
+    ],
+  }],
 ]) {
   const verdict = coderabbitVerdict(args);
   ok(typeof verdict === "string" && verdict.length > 0, `verdict BLOCKS ${label}`);
 }
+// ...and the completed form of that same timeline IS accepted, so the rule is
+// not simply "always block".
+ok(
+  coderabbitVerdict({
+    reviews: [], comments: cleanComments, headSha: HEAD, cycleStartIso: "2026-08-24T04:24:38Z",
+    statuses: [
+      { context: "CodeRabbit", state: "success", created_at: "2026-08-24T04:33:33Z" },
+      { context: "CodeRabbit", state: "pending", created_at: "2026-08-24T04:26:00Z" },
+      { context: "CodeRabbit", state: "success", created_at: "2026-08-24T04:25:11Z" },
+    ],
+  }) === null,
+  "the same timeline with the newest status finally `success` IS accepted",
+);
+ok(
+  ghMergeRequest(`gh pr merge 441 --squash --auto --match-head-commit ${HEAD}`)?.auto === true,
+  "--auto is captured even when the merge is correctly pinned",
+);
+ok(
+  ghMergeRequest(`gh pr merge 441 --squash --match-head-commit ${HEAD}`)?.auto === false,
+  "a non-auto merge does not report auto",
+);
 
 // ── the hook itself still runs and still fails closed ────────────────────────
 // Two cases that need no network, driven through the real hook process.

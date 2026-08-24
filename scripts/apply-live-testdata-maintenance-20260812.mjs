@@ -68,12 +68,17 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // (`gh -R o/r api -X PUT .../merge`) skipped the merge gate entirely, which
   // Codex confirmed by probe. Both guards' verdicts also now require the review
   // CYCLE to have completed, not merely started.
-  codexGuard: "a5ef88bbb2e167d500d057691a689a5e6fe9ce87",
-  pushLib: "396566b44503da1b2347a5b7e781777dcc881673",
+  // Re-pinned 2026-08-24 (PR #441, Codex round 3): the Codex merge parser now
+  // captures `--auto` (it could not deny what it never parsed), and the shared
+  // cycle-completion rule takes the NEWEST CodeRabbit status rather than any
+  // success after the cycle start — an intermediate success authorized a merge
+  // mid-review.
+  codexGuard: "0e6ef0372669c4e3f601d2b57d0af6f24ecaf56d",
+  pushLib: "abf04bd0a70b7fc56e79960024130e4686aad217",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "fcef76d8d9336b68cb4509e9a01538ddf2de5d8c",
-  pushLib: "396566b44503da1b2347a5b7e781777dcc881673",
+  codexGuard: "89acd44d69559cc005843b71854354d68c48b29e",
+  pushLib: "abf04bd0a70b7fc56e79960024130e4686aad217",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

@@ -569,6 +569,23 @@ try {
     nowMs: now,
     runGh: reviewedGh,
   }).blocked, true, "the MCP merge tool cannot pin a head, so it is denied for main");
+  // A CORRECTLY PINNED --auto merge is still denied: GitHub lands it later, after
+  // this gate ran, so a commit pushed in between reaches production with evidence
+  // bound to an older head. The Claude guard denied this; the Codex parser was
+  // not even capturing --auto. (Codex, High, PR #441.)
+  for (const autoForm of [
+    `gh pr merge 123 --squash --auto --match-head-commit ${risky.sha}`,
+    `gh pr merge 123 --squash --auto=true --match-head-commit ${risky.sha}`,
+    `gh pr merge 123 --auto --squash --match-head-commit ${risky.sha}`,
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: autoForm },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: reviewedGh,
+    }).blocked, true, `--auto into main is denied even when correctly pinned: ${autoForm}`);
+  }
   // Evidence bound to a DIFFERENT commit is not evidence for this one.
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",

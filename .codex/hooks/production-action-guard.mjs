@@ -410,10 +410,21 @@ function ghMergeRequest(command) {
   // Kept identical to ghMergeRequest in codex-push-lib.mjs: a merge gate Claude
   // obeys and Codex does not is a bypass, not an asymmetry. (Codex, High, #441.)
   let matchHeadCommit = "";
+  // `--auto` was not captured here at all, so the Codex guard could not deny it
+  // while the Claude guard did: `gh pr merge --auto --match-head-commit <head>`
+  // passed the pin and the CodeRabbit check, then let GitHub land the PR LATER —
+  // after this gate ran — defeating the exact-head guarantee if the branch moved
+  // in between. Same drift-between-two-copies failure as the `gh api` adjacency
+  // bug. (Codex, High, PR #441.)
+  let auto = false;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (word.startsWith("--repo=")) {
       repo = word.slice("--repo=".length);
+      continue;
+    }
+    if (word.toLowerCase() === "--auto" || word.toLowerCase().startsWith("--auto=")) {
+      auto = true;
       continue;
     }
     if (word.toLowerCase().startsWith("--match-head-commit=")) {
@@ -429,7 +440,7 @@ function ghMergeRequest(command) {
     }
     if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
   }
-  return { selector, repo, matchHeadCommit, isGhCli: true };
+  return { selector, repo, matchHeadCommit, auto, isGhCli: true };
 }
 
 // `api` must be found as a WORD, not required to sit immediately after the gh
@@ -642,6 +653,17 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
   if (!/^[0-9a-f]{40}$/i.test(headSha)) {
     return denied(
       "CODEX PRODUCTION GATE: GitHub did not report a usable headRefOid, so the merge cannot be bound to a reviewed commit (fail closed)."
+    );
+  }
+  // `--auto` hands the landing to GitHub for LATER, after this gate has run, so
+  // a commit pushed in the meantime would reach production with review evidence
+  // bound to an older head — the exact guarantee the head pin exists to give.
+  // Denied for every merge into main, matching the Claude guard.
+  if (request?.auto) {
+    return denied(
+      "CODEX PRODUCTION GATE: `--auto` is not allowed for merges into main. Auto-merge lands the PR after " +
+      "this gate has run, so any commit pushed in the meantime would reach production with review evidence " +
+      `bound to an older head. Wait for the checks, then merge immediately:\n  gh pr merge ${request?.selector || "<number>"} --squash --match-head-commit ${headSha}`
     );
   }
   if (!request?.isGhCli) {
