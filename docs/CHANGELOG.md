@@ -61,28 +61,82 @@ carries no other work.
   objects, credential prompts, and optional locks are disabled, and `PATH` is
   narrowed to the trusted installation plus the platform system directory.
   Inherited `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG_*` overrides are dropped by
-  construction rather than filtered.
+  construction rather than filtered. No ownership allowance is re-supplied: a
+  checkout Git considers to be of dubious ownership is refused outright and the
+  wrapper mints no proof. Suppressing that refusal with a command-scoped
+  `safe.directory` would let Git proceed on a root the wrapper guessed from a
+  bare `.git` entry while that repository's own executable configuration stayed
+  active, so the wrapper fails closed and the operator fixes the checkout
+  instead.
 - Previously the shared `runGit()` helper invoked bare `git`, so `PATH` decided
   which binary inspected the tree that gates a push, and every call inherited
   the ambient environment — letting a global `core.attributesfile` plus a
   `filter.<name>.process` run arbitrary code inside the process that decides
   whether a push is trustworthy.
 - Regression: `scripts/write-codex-push-proof.test.mjs` plants a hostile global
-  attributes file plus a process filter outside the source repository and proves
-  the marker file is never written during clean-status reads or proof-packet
-  construction. Mutation-tested — re-enabling global configuration turns the
-  clean-status assertion red.
-- Review round (CodeRabbit, PR #455) on that regression, both fixed here. The
-  filter path was written into `filter.review.process` unquoted, and Git runs a
-  filter command through the shell, so a temporary directory containing a space
-  would split the path and the filter would never execute — leaving the marker
-  absent for a reason unrelated to isolation. The path is shell-quoted now, and
-  a positive control first proves the filter really does execute under ambient
-  Git in a throwaway repository, then clears the marker, so the marker assertion
-  can no longer pass against an unhardened wrapper. The fixture's
-  `HOME`/`USERPROFILE` mutation and cleanup also moved into `try`/`finally`; a
-  throw previously left the hostile environment in place for every later
-  assertion in the file and leaked the fixture directory.
+  attributes file plus a quoted process filter outside the source repository,
+  first proves through a control conversion that the filter can execute, and
+  then proves the marker is never written during clean-status reads or
+  proof-packet construction. Structural coverage also fails if any Git call
+  bypasses the common trusted helper or if anything at all is added to the
+  trusted argument list — including a reintroduced ownership allowance — and
+  cleanup restores process state even when an assertion fails. Mutation-tested —
+  re-enabling global configuration turns it red.
+
+## 2026-08-23 — Live Foundation Gauntlet Section 9 reviewed (NOT settled): three open HIGH findings
+
+Section 9 (purchase orders, receiving, vendor bills, vendor payments, AP safety) was re-audited
+against verified remote `main` `780e88aa` plus the live PostgreSQL function bodies. Verdict:
+**INCOMPLETE — 0 BLOCKER / 3 HIGH / 0 MED / 0 LOW.** The previously recorded vendor-bill /
+accounting-period close race is resolved live; RLS, routine grants, search paths, the PO
+serialization wrappers, and the core AP locks all remain present.
+
+- **HIGH — AP aging buckets by bill date, not days past due.** `get_ap_aging` ages every bucket from
+  `vb.bill_date`; `vb.due_date` is never read. A bill issued March 1 on 60-day terms reports in
+  `31-60 Days` on April 15, two weeks before it is due. **Contract settled by Mason 2026-08-24: AP
+  aging measures days past due** — recorded in `docs/manual/DECISION_LOG.md` so a later session does
+  not re-ask him. The report exposes only four buckets and has no `1-30`, so days-past-due must be
+  *mapped* onto them, and **that mapping is a second decision Mason has not made** (does `Current`
+  mean "not yet due" only, with a new `1-30 Days` column?). It is left explicitly open. See the
+  classification note below.
+- **HIGH — "Due This Month" is a rolling 30-day window.** The dashboard card is labelled as a
+  calendar month but computes the next 30 days, so it disagrees with the month it names.
+- **HIGH — AP/receiving receipts replay by operation.** Retries are keyed to the operation rather
+  than bound to the authenticated actor plus the exact payload, so an uncertain response can
+  replay a prior success for a different request. Note the corrected remediation: binding the key
+  to the payload is necessary but **not sufficient**, because editing the payload after a lost
+  response mints a *new* key and the server then executes a genuine second mutation. The caller
+  must freeze the unresolved intent and reconcile it before any new key may be minted.
+**Classification note on the AP aging finding.** It briefly left HIGH during review. CodeRabbit's P2
+on PR #457 correctly objected that the evidence proved only *which* basis `get_ap_aging` uses, not
+that the basis was wrong — invoice-date and due-date aging are both standard accounting views, and
+neither the UI nor `docs/reference/rpc-functions.md` stated which one these buckets express. Scoring
+it a defect on that footing would have committed Mason to an accounting policy by implication, so it
+was re-classified to an open product decision and put to him directly. **Mason settled it on
+2026-08-24: AP aging measures days past due.** With the contract stated, the live implementation
+provably contradicts it, so the finding returns to HIGH. The UI labels and exported CSV should also
+state the basis — they do not today, and that held under either answer.
+
+This entry records the audit only; **no remediation is included.** All three findings remain open,
+which is why no predicate or test lands beside them — the executable checks belong with the fix, not
+with the write-up. The AP-aging smoke additionally **must not be written until Mason settles the
+bucket mapping**: asserting the proposed mapping now would lock an unapproved policy into an
+executable check, the same error as scoring the aging basis a defect before the contract existed.
+Once settled, its boundary cases are not-yet-due, **due today (`0` days past due)**, and exactly
+30/31/60/61/90/91 — "not yet due" does not cover `0`, and omitting it leaves an off-by-one at the
+due-date boundary untested. It needs **no** null-`due_date` case: live introspection on 2026-08-24
+confirms `public.vendor_bills.due_date` is `NOT NULL`, so an earlier draft's requirement for one
+would have asserted invented behavior for an input that cannot occur.
+
+- **Section 9 did NOT settle and remains the current queue position.** The deterministic section
+  gate's contract rejects a checkout that is behind `origin/main` and cannot settle a dirty tree;
+  the audit ran from a checkout 50 commits behind with 7 uncommitted paths. The findings were
+  reverified independently against the exact remote-`main` objects and the live function bodies,
+  which makes them credible evidence — but evidence is not a settlement. Section 9 must be re-run
+  from a clean, current checkout before it counts as refreshed.
+- Once Section 9 settles, Section 10 is next in the manual refresh sequence (blend tickets,
+  OCR/review/payment status, order linking, repository-only Edge Function handoff contracts).
+  Sections 10–15 share the same 2026-07-28 last-reviewed date, so Section 10 is not uniquely oldest.
 
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 
