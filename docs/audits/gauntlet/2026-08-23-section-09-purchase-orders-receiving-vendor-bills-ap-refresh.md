@@ -45,15 +45,28 @@ Live project: `rhyzpcqhnizqbxphqdkr` — PostgreSQL catalog and function definit
 
 **Plain-English business risk**
 
-A bill with long payment terms shows in the 31, 60, or 90 day column while it is still inside its terms. Concretely: a bill issued March 1 on 60-day terms is not due until April 30, but on April 15 it already reports in `31-60 Days`. Against the settled contract — days past due — that is wrong, and it distorts which vendors look urgent when Mason decides who to pay. It also overstates how overdue Crop RX's payables are.
+A bill with long payment terms lands in `31-60 Days`, `61-90 Days`, or `90+ Days` while it is still inside its terms. Concretely: a bill issued March 1 on 60-day terms is not due until April 30, but on April 15 it already reports in `31-60 Days`. Against the settled contract — days past due — that is wrong, and it distorts which vendors look urgent when Mason decides who to pay. It also overstates how overdue Crop RX's payables are.
 
 **Fix**
 
-Define the bucket contract explicitly as days past `due_date`, then age from `p_as_of_date - vb.due_date` using clear boundary rules for not-yet-due, 1-30, 31-60, 61-90, and 90+ amounts. Align the UI labels and exported CSV with that contract. Note that `vb.due_date` nullability must be handled deliberately rather than allowed to collapse a bill into `Current`; the replacement must state its behavior for a bill with no due date.
+Define the bucket contract explicitly as days past `due_date`, then age from `p_as_of_date - vb.due_date`.
+
+*Mapping onto the existing four-bucket API.* `docs/reference/rpc-functions.md:278` and `src/pages/AccountsPayable.tsx` expose exactly four buckets — `Current`, `31-60 Days`, `61-90 Days`, `90+ Days`. There is no `1-30` bucket, so days-past-due must be mapped, not merely re-based. The mapping that preserves the current API and UI is:
+
+| Bucket | Days past `due_date` |
+|---|---|
+| `Current` | not yet due, through 30 days past due |
+| `31-60 Days` | 31 through 60 |
+| `61-90 Days` | 61 through 90 |
+| `90+ Days` | 91 and over |
+
+Fixing the report without stating this mapping is how the SQL and the smoke test end up asserting different contracts. **Note for Mason, not a defect:** this mapping puts "not yet due" and "up to a month late" in the same `Current` column. Splitting them would need a fifth bucket and a UI change — a separate decision, deliberately not assumed here. Align the UI labels and exported CSV with whichever mapping is adopted, since neither states its basis today.
 
 **Prevention action**
 
-Add a rollback-only AP-aging smoke with bills sharing a bill date but different due dates, including not-yet-due and exact 30/31/60/61/90/91-day boundaries, plus a bill with a null due date. It must assert days-past-due semantics and must fail against the current bill-date implementation.
+Add a rollback-only AP-aging smoke with bills sharing a bill date but different due dates, covering not-yet-due and the exact 30/31/60/61/90/91-day boundaries against the mapping above. It must assert days-past-due semantics and must fail against the current bill-date implementation.
+
+*No null-`due_date` case is required.* An earlier draft of this section called for one. Live introspection on 2026-08-24 shows `public.vendor_bills.due_date` is `NOT NULL` (as is `bill_date`), so that input cannot occur and a test for it would assert invented behavior. If that constraint is ever relaxed, this contract must be revisited first.
 
 ### HIGH 2 — “Due This Month” is actually “Due in the next 30 days”
 

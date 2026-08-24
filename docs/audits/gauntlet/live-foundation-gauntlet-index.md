@@ -57,7 +57,7 @@ This file was present before the Section 5 run and was not modified by this auto
 
 ## Next Section
 
-All 15 sections now have a current refresh. Sections 10–15 were completed manually on 2026-07-28 because they are not encoded in `.claude/workflows/gauntlet-sections-loop.js`.
+All 15 sections have been reviewed at least once. **Fourteen have a settled refresh; Section 9 does not** — its 2026-08-23 run produced an evidence report whose deterministic gate never settled, which is not the same thing as a refresh. Sections 10–15 were completed manually on 2026-07-28 because they are not encoded in `.claude/workflows/gauntlet-sections-loop.js`.
 
 Section 9 was reviewed against verified remote `main` plus live database structure on 2026-08-23, but its deterministic gate did **not** settle (see the Section 9 row). **Section 9 therefore remains the current queue position** and must be re-run from a clean, current checkout before it counts as settled; the 2026-08-23 report is evidence, not a settlement.
 
