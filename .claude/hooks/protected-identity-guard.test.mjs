@@ -57,6 +57,23 @@ if (linked) {
   ok(isDeny(runHook({ tool_name: "Write", tool_input: { path: alias, content: "x" } })), "the `path` field spelling is denied too");
 }
 
+// Git control files choose programs Git runs. A hostile `core.fsmonitor` or
+// `core.attributesfile` executes on the next ordinary Git command, so writing
+// one is arbitrary execution and must deny by PATHNAME — identity cannot cover a
+// file that does not exist yet, and creating it is the attack (Codex, 2026-08-24).
+for (const control of [
+  path.join(repoRoot, ".git", "config"),
+  path.join(repoRoot, ".git", "config.worktree"),
+  path.join(repoRoot, ".git", "info", "attributes"),
+  path.join(repoRoot, ".git", "info", "exclude"),
+  path.join(repoRoot, ".gitattributes"),
+  path.join(repoRoot, ".gitignore"),
+]) {
+  ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: control, content: "x" } })), `writing ${path.basename(control)} is denied`);
+}
+ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: ".git/info/attributes", content: "* filter=x" } }, repoRoot)), "a relative Git attributes path is denied even when the file does not exist yet");
+eq(runHook({ tool_name: "Write", tool_input: { file_path: path.join(scratch, "config"), content: "x" } }).stdout.trim(), "", "an unrelated file merely named config is allowed");
+
 // Malformed and empty payloads must not throw; the guard fails open loudly and
 // the pathname-shaped protections still apply on this route.
 eq(runHook({ tool_name: "Write", tool_input: {} }).stdout.trim(), "", "a payload with no target is allowed");

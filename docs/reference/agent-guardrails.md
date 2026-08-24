@@ -159,6 +159,17 @@ SHA while substituting a hostile wrapper tree.
 Every provenance read invokes Git through a fixed trusted installation path and
 a minimal sanitized environment. Repository-local and PATH-injected Git shims
 are planted in regressions and proven not to execute before trust is established.
+Git's own control files are protected on the native write route by pathname as
+well as by identity — `.git/config`, `.git/config.worktree`, `.git/info/attributes`,
+`.git/info/exclude`, `.gitattributes`, `.gitignore`, and the user-level
+equivalents. Settings there (`core.fsmonitor`, `core.attributesfile`, filter
+definitions) choose programs Git runs on the next ordinary command, so a write is
+arbitrary execution the next time any tooling runs a status check. Identity alone
+cannot cover them: a file that does not exist yet has no inode, and creating one
+is the attack. Regressions drive the real hook for each control file, including a
+relative path to one that does not exist, and prove an unrelated file merely
+named `config` stays writable.
+
 **Where the boundary actually is.** Blocking every way to *create* an alias is
 unbounded — `mklink /H`, `ln`, `cp -l`/`--link`, `link`, BusyBox, PowerShell
 `New-Item`, `fsutil`, and any language runtime with a `link()` binding. Blocking

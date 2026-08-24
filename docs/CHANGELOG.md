@@ -145,6 +145,17 @@ Blend Recipes was never affected; it selects `*`.
   shells, or `node_modules` code outside exact-HEAD inspection. Bash and MCP
   regressions cover the demonstrated `config edit` and `explore` routes plus
   sibling option/config forms.
+- Git's own control files are protected on the native write route. The identity
+  guard's protected set had omitted `.git/config`, `.git/config.worktree`,
+  `.git/info/attributes`, `.git/info/exclude`, `.gitattributes`, and the
+  user-level equivalents, so that route could write settings — `core.fsmonitor`,
+  `core.attributesfile`, filter definitions — which choose programs Git runs on
+  the next ordinary command. They are now matched by pathname as well as
+  identity, because a file that does not exist yet has no inode and creating one
+  is the attack; an unrelated file merely named `config` stays writable.
+  Coverage was also added for the computed item type on the MCP process-start and
+  process-input routes, nested inside PowerShell and `cmd` wrappers, for the
+  variable form, and for the follow-up alias write asserted on its own.
 - The alias boundary moved from "block every way to make one" to "check identity
   on every way to write through one". Enumerating creators is unbounded — four
   review rounds each found another (`mklink /H`, a junction hop, a computed

@@ -11,7 +11,7 @@
 // Pathname-shaped protection for these tools lives in settings.json's permission
 // rules and the sibling content hooks; this adds the one property a second
 // pathname cannot fake. It is checked in addition to those, never instead.
-import { aliasesProtectedFile } from "./protected-identity-lib.mjs";
+import { aliasesProtectedFile, protectedControlPathReason } from "./protected-identity-lib.mjs";
 import path from "node:path";
 
 let raw = "";
@@ -43,6 +43,17 @@ try {
 
   const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const abs = path.isAbsolute(target) ? path.resolve(target) : path.resolve(cwd, target);
+
+  // Git control files decide what Git EXECUTES on the next ordinary command, so
+  // they are checked by pathname as well as identity: a file that does not exist
+  // yet has no inode, and creating one is itself the attack.
+  const controlReason = protectedControlPathReason(abs);
+  if (controlReason) {
+    out(
+      "deny",
+      `PROTECTED IDENTITY GUARD: ${target} is ${controlReason}. Settings there choose programs Git runs on the next command, so edit it deliberately outside the agent tools.`,
+    );
+  }
 
   if (aliasesProtectedFile(abs, cwd)) {
     out(

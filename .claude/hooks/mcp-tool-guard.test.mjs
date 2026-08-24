@@ -599,6 +599,34 @@ ok(isDeny(r), "DC edit_block targeting a hook file is denied");
   // The identity check must not turn every temporary file into a protected one.
   r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: unrelatedPath } });
   eq(r.stdout.trim(), "", "an ordinary unlinked scratch file remains writable (identity check does not over-block)");
+
+  // The full attack through the MCP PROCESS route, not just the file route:
+  // create the alias with a computed item type so the literal token never
+  // appears, then write through it. Both steps must deny here, because
+  // start_process runs the same shell text the Bash matcher would have seen and
+  // this route was the one that could otherwise smuggle it in (Codex, 2026-08-24).
+  const computedItemType = 'New-Item -ItemType ("Hard"+"Link") -Path scratch/notes.mjs -Target .claude/hooks/bash-safety-lib.mjs';
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: computedItemType } });
+  ok(isDeny(r), "MCP start_process denies a computed-item-type hard link");
+  r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { input: computedItemType } });
+  ok(isDeny(r), "MCP interact_with_process denies a computed-item-type hard link fed as process input");
+  // Nested one level down: a shell wrapper must not launder the computed form.
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: `powershell -Command "${computedItemType}"` } });
+  ok(isDeny(r), "a PowerShell command-mode wrapper cannot launder the computed item type");
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: `cmd /c ${computedItemType}` } });
+  ok(isDeny(r), "a cmd /c wrapper cannot launder the computed item type");
+  // The variable form has no literal to match at all.
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "New-Item -ItemType $t -Path a -Target .claude/hooks/bash-safety-lib.mjs" } });
+  ok(isDeny(r), "MCP start_process denies a variable item type");
+  // Ordinary directory creation through the same route stays available.
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "New-Item -ItemType Directory -Path scratch/output" } });
+  eq(r.stdout.trim(), "", "MCP start_process still allows ordinary directory creation");
+  // The follow-up write is the step that actually changes the protected file, so
+  // it must deny on its own even if an alias were created by some other means.
+  if (linked) {
+    r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: aliasPath, content: "HOSTILE" } });
+    ok(isDeny(r), "the follow-up write through the alias is denied independently of how the alias was created");
+  }
   rmSync(aliasDir, { recursive: true, force: true });
 }
 

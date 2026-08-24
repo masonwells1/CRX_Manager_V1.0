@@ -60,7 +60,31 @@ export function protectedFileIdentities(root) {
   add(path.join(root, ".claude", "settings.json"));
   add(path.join(root, "scripts", protectedProducerName));
   add(path.join(root, ".gitignore"));
+  // Git's own control files decide what Git EXECUTES: `core.fsmonitor`,
+  // `core.attributesfile`, and filter definitions all run a program on the next
+  // ordinary Git command. A write here is arbitrary code execution on the next
+  // `git status`, so they belong in the protected set (Codex CRX-SEC-01,
+  // 2026-08-24).
+  addDirectory(path.join(root, ".git"), (name) => /^config(\.worktree)?$/i.test(name));
+  addDirectory(path.join(root, ".git", "info"), (name) => /^(attributes|exclude)$/i.test(name));
+  add(path.join(root, ".gitattributes"));
   return identities;
+}
+
+// Pathname-shaped protection for the control files above. Identity alone cannot
+// cover them: a file that does not exist yet has no inode, and CREATING
+// `.git/info/attributes` is itself the attack. Mirrors the pathname patterns the
+// MCP tool guard applies to the same files, so neither write route is narrower
+// than the other.
+export function protectedControlPathReason(absTarget) {
+  const surface = String(absTarget || "").replace(/\\/g, "/");
+  if (/(^|\/)\.git(\/[^/]+)*\/config(\.worktree)?$/i.test(surface)) return "a Git configuration file";
+  if (/(^|\/)\.git(\/[^/]+)*\/info\/(attributes|exclude)$/i.test(surface)) return "a Git attributes or exclude file";
+  if (/(^|\/)\.gitattributes$/i.test(surface)) return "a Git attributes file";
+  if (/(^|\/)\.gitconfig$/i.test(surface)) return "a Git configuration file";
+  if (/(^|\/)\.config\/git\/(config|ignore)$/i.test(surface)) return "a Git configuration file";
+  if (/(^|\/)\.gitignore$/i.test(surface)) return "a Git ignore file";
+  return "";
 }
 
 // True when `absTarget` is a second pathname for a protected file. Callers use
