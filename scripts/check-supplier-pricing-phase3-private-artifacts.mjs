@@ -6,7 +6,7 @@
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
@@ -237,12 +237,14 @@ function isToolOwnedIgnoredPath(repoPath) {
   // archive inspection; broad segment matching would let it hide a packet.
   return [...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
 }
-function isTransientToolOwnedIgnoredEntryError(source, repoPath, error) {
+function isTransientToolOwnedIgnoredEntryError(source, root, repoPath, error) {
   // Git can list an ignored build artifact just before its producing tool
   // replaces the directory. The direct path check has already run, and a
   // stable artifact remains subject to the normal content scan; only this
   // vanished tool-owned generated path can be ignored.
-  return source === 'ignored' && isToolOwnedIgnoredPath(repoPath) && error?.code === 'ENOENT';
+  // A missing worktree root is not a build-output race. Keep that setup failure
+  // fail-closed; only a candidate traversal beneath an extant root may vanish.
+  return source === 'ignored' && existsSync(root) && isToolOwnedIgnoredPath(repoPath) && error?.code === 'ENOENT';
 }
 function isOperatorOwnedIgnoredPath(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
@@ -1787,7 +1789,7 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
       try {
         entryKind = worktreeEntryKind(root, repoPath, ownWorktrees);
       } catch (error) {
-        if (isTransientToolOwnedIgnoredEntryError(source, repoPath, error)) continue;
+        if (isTransientToolOwnedIgnoredEntryError(source, root, repoPath, error)) continue;
         throw error;
       }
       if (entryKind === 'embedded-repository') { violations.push({ repoPath, reason: 'embedded Git repository' }); continue; }
@@ -1811,7 +1813,7 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     try {
       result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives });
     } catch (error) {
-      if (isTransientToolOwnedIgnoredEntryError(source, repoPath, error)) continue;
+      if (isTransientToolOwnedIgnoredEntryError(source, root, repoPath, error)) continue;
       throw error;
     }
     const acceptedReason = acceptedStructuralReason(repoPath, result?.reason);
