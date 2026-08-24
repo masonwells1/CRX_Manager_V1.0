@@ -144,10 +144,25 @@ PowerShell's `kill`/`spps` aliases for `Stop-Process` were added at the same tim
      launcher awareness (`Start-Process`, `sudo`, `env`, `pwsh -Command`, `xargs`, …), so the
      executable is found wherever the launcher put it.
 
+6. **HIGH a third time, and this one named the structural cause.** Sol on `f1cc4cb4`: *"the kill
+   parser stops at launcher arguments, while the Codex-review detector does not inspect launchers
+   at all."* Two parsers with different notions of a command position means **two independent sets
+   of holes**, which is why each round found a wrapper one understood and the other did not.
+   Proved allowed: `Start-Process codex.exe -ArgumentList 'review','--base'`,
+   `cmd /c start "" taskkill.exe /PID … /F` (the empty quoted title argument ended the walk), and
+   `env X=1 pkill -9 codex` (a `KEY=VALUE` assignment ended it). Both rules now classify from
+   **one** tokenization, so a wrapper understood for kills is understood for codex review by
+   construction.
+
 Every one is the same class: **the guard matched one spelling of the thing rather than the thing.**
-See `guard-design-bypasses` in memory. 26 unit checks now pin each spelling — all five HIGH
+See `guard-design-bypasses` in memory. 29 unit checks now pin each spelling — all six HIGH
 bypasses verbatim among them — and each was re-verified live through the real Bash tool, because a
 unit test is not the hook.
+
+**Read the round count as data, not as trivia.** Six High bypasses over four adversarial rounds on
+roughly a hundred lines. Not one was found by reasoning about the pattern; they came from running
+commands against it. That is the honest measure of how far to trust *any* text-matching guard over
+shell strings — including this one, now that it has no known bypass.
 
 **Cost of a bare-`kill` block:** an agent can no longer stop a process it started with a signal.
 That is deliberate — use the harness's TaskStop, or hand Mason the PID. The guard's message says

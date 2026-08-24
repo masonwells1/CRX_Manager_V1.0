@@ -56,32 +56,11 @@ const Q = String.raw`["']?`;
 // that missed it would have permitted the documented broken path.
 const BIN = String.raw`(?:[^\s"';&|]*[\\/])?codex(?:\.exe)?|\$\{?\w*CODEX\w*\}?`;
 
-// Locate a codex binary sitting at a command position. Deliberately NOT
-// "codex immediately followed by review": Sol flagged (PR #452 P2) that global
-// options are legal before the subcommand, so `codex -c model=x review` bypassed a
-// version that required them to be adjacent.
-const CODEX_BIN_AT_CMD_RE = new RegExp(`${SEP}\\s*${Q}(?:${BIN})${Q}(?=\\s|$)`, "gi");
-
-// A standalone subcommand token in whatever follows the binary.
-const REVIEW_TOKEN_RE = /(?:^|\s)review(?:$|[\s"';&|])/i;
-const EXEC_TOKEN_RE = /(?:^|\s)exec(?:$|[\s"';&|])/i;
-
-// Force-kill verbs, anchored to a command position for the same reason. A bare
-// POSIX `kill <pid>` is a polite TERM and is left alone; only forceful spellings
-// are listed. `Stop-Process` inside a `ForEach-Object { ... }` block is caught
-// because `{` is a separator — that is the real 2026-08-23 command.
-//
-// The signal spellings come from Sol (PR #452 P3): `-SIGKILL` and `-s SIGKILL` were
-// missing from a version that only knew `-9`/`-KILL`. `kill -Id/-Force` is included
-// because in PowerShell `kill` is an ALIAS for Stop-Process, so the "polite kill"
-// exemption does not hold there.
-// Any token sitting at a command position, so its executable name can be
-// NORMALIZED rather than spelled out. Sol's HIGH finding on PR #452: a pattern
-// listing bare verbs allowed `taskkill.exe`, `C:\Windows\System32\taskkill.exe`,
-// `/usr/bin/pkill -9` and `/bin/kill -9` — ordinary Windows and POSIX spellings,
-// not obfuscation. Adding more alternatives just moves the hole, so compare the
-// basename instead: strip a path, strip `.exe`, lowercase.
-const CMD_POS_TOKEN_RE = new RegExp(`${SEP}\\s*(["']?[^\\s;&|]+)`, "gi");
+// Executable names are NORMALIZED rather than spelled out. Sol's first HIGH on
+// PR #452: a pattern listing bare verbs allowed `taskkill.exe`,
+// `C:\Windows\System32\taskkill.exe`, `/usr/bin/pkill -9` and `/bin/kill -9` —
+// ordinary Windows and POSIX spellings, not obfuscation. Adding more alternatives
+// only moves the hole, so compare the basename: strip path, strip `.exe`, lowercase.
 
 // Every guarded kill tool, by NORMALIZED basename.
 //
@@ -123,25 +102,72 @@ function isFlag(token) {
   return t.startsWith("/") && !t.slice(1).includes("/");
 }
 
-export function findForceKill(rawCommand) {
+// Tokens that are neither a flag nor the program: an empty quoted argument (the
+// title slot in `cmd /c start "" taskkill.exe`) and a `KEY=VALUE` assignment (as in
+// `env X=1 pkill -9`). Sol's round-6 HIGH: both ENDED the walk, so the executable
+// after them was never examined.
+function isSkippableArgument(token) {
+  const bare = token.replace(/^["']+|["']+$/g, "");
+  if (bare === "") return true;
+  return /^[\w.]+=/.test(bare);
+}
+
+function isCodexBinary(token) {
+  if (normalizeExecutable(token) === "codex") return true;
+  return /^["']?\$\{?\w*CODEX\w*\}?["']?$/i.test(token);
+}
+
+// A `review` / `exec` subcommand token. The delimiter class includes quotes and
+// commas so PowerShell's `-ArgumentList 'review','--base'` is seen as a subcommand
+// list rather than one opaque token — Sol's round-6 HIGH again.
+const REVIEW_TOKEN_RE = /(?:^|[\s'",(])review(?:$|[\s'",);&|])/i;
+const EXEC_TOKEN_RE = /(?:^|[\s'",(])exec(?:$|[\s'",);&|])/i;
+
+/**
+ * ONE walk for both rules.
+ *
+ * They were separate parsers with different notions of a command position, and every
+ * round of review found a wrapper that one understood and the other did not. Sol's
+ * round-6 finding named that directly: "the kill parser stops at launcher arguments,
+ * while the Codex-review detector does not inspect launchers at all". Two parsers
+ * mean two sets of holes, so there is now one.
+ */
+export function classifyWalk(rawCommand) {
   const cmd = String(rawCommand || "");
-  // Split into segments at shell separators; each segment starts a new executable
-  // position. Quoted wrappers (`-Command "…"`) are handled by the launcher walk.
-  for (const segment of cmd.split(/(?:&&|\|\||[;|&\n{()])/)) {
+  // `{` and `(` start a new command position (`ForEach-Object { Stop-Process … }`),
+  // but NOT when they belong to `${VAR}` or `$(subshell)` — splitting there tore
+  // `${CODEX}` into `$` + `CODEX}` and lost the binary.
+  for (const segment of cmd.split(/(?:&&|\|\||[;|&\n)]|(?<!\$)[{(])/)) {
     const tokens = segment.trim().split(/\s+/).filter(Boolean);
-    let expectingExecutable = true;
-    for (const token of tokens) {
-      if (!expectingExecutable) break;
-      if (isFlag(token)) continue;
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (isFlag(token) || isSkippableArgument(token)) continue;
+
       const name = normalizeExecutable(token);
       const guarded = GUARDED_KILL.get(name);
-      if (guarded) return guarded;
-      // A launcher runs something else — keep looking in the same segment.
+      if (guarded) return { rule: "force-kill", what: guarded };
+
+      if (isCodexBinary(token)) {
+        const rest = tokens.slice(i + 1).join(" ");
+        const review = rest.search(REVIEW_TOKEN_RE);
+        if (review === -1) break;
+        const exec = rest.search(EXEC_TOKEN_RE);
+        // `exec` first means the subcommand is exec and "review" is prompt text.
+        if (exec !== -1 && exec < review) break;
+        return { rule: "codex-review" };
+      }
+
+      // A launcher runs something else — keep scanning this segment for it.
       if (LAUNCHERS.has(name)) continue;
-      expectingExecutable = false;
+      break; // some other program owns this segment
     }
   }
   return null;
+}
+
+export function findForceKill(rawCommand) {
+  const hit = classifyWalk(rawCommand);
+  return hit?.rule === "force-kill" ? hit.what : null;
 }
 
 // True when a codex binary sits at a command position and its SUBCOMMAND is
@@ -153,18 +179,7 @@ export function findForceKill(rawCommand) {
 // this diff"` stays allowed, which matters because the sanitized wrapper and
 // ordinary one-off prompts both rely on `codex exec`.
 export function invokesCodexReview(rawCommand) {
-  const cmd = String(rawCommand || "");
-  CODEX_BIN_AT_CMD_RE.lastIndex = 0;
-  let m;
-  while ((m = CODEX_BIN_AT_CMD_RE.exec(cmd)) !== null) {
-    const rest = cmd.slice(m.index + m[0].length);
-    const review = rest.search(REVIEW_TOKEN_RE);
-    if (review === -1) continue;
-    const exec = rest.search(EXEC_TOKEN_RE);
-    if (exec !== -1 && exec < review) continue;
-    return true;
-  }
-  return false;
+  return classifyWalk(rawCommand)?.rule === "codex-review";
 }
 
 export function classifyCommand(rawCommand) {

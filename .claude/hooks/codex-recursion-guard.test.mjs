@@ -150,6 +150,22 @@ check("HIGH: blocks launcher-based execution of a guarded kill tool", () => {
   assert.equal(rule('pwsh -NoProfile -Command "taskkill /PID 1 /F"'), "force-kill");
 });
 
+check("HIGH round 6: blocks the three wrapper spellings Sol proved were allowed", () => {
+  // Each returned permissionDecision "allow" against the real hook before this fix.
+  assert.equal(rule("Start-Process codex.exe -ArgumentList 'review','--base','origin/main'"), "codex-review");
+  assert.equal(rule('cmd /c start "" taskkill.exe /PID 39564 /T /F'), "force-kill");
+  assert.equal(rule("env X=1 pkill -9 codex"), "force-kill");
+});
+
+check("an empty quoted arg does not end the walk", () => {
+  // `start ""` supplies a window title; it used to terminate the scan.
+  assert.equal(rule('start "" taskkill /F /PID 1'), "force-kill");
+});
+
+check("an env assignment does not end the walk", () => {
+  assert.equal(rule("env A=1 B=2 killall node"), "force-kill");
+});
+
 check("a launcher running something harmless is still allowed", () => {
   assert.equal(blocks("sudo npm install"), null);
   assert.equal(blocks("timeout 90 codex exec -"), null);
