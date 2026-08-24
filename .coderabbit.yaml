@@ -13,11 +13,64 @@ reviews:
   poem: false
   review_status: true
   collapse_walkthrough: false
+
+  # Report sections (sequence diagrams, related PRs/issues, linked-issue
+  # assessment, suggested labels/reviewers, changed-files summary) are left at
+  # their defaults - ON. Mason's call, 2026-08-20: he raised the usage spending
+  # cap rather than trade any possible review context for a cheaper report.
+  # Deliberate: do not turn these off to save spend.
+
+  # There is deliberately NO `path_filters` block here. This config is
+  # exclusion-only BY DESIGN, and right now the exclusion list is empty.
+  #
+  # DO NOT add a positive (non-`!`) pattern. Both CodeRabbit and the Codex
+  # reviewer recommended adding `**/package-lock.json` to override CodeRabbit's
+  # default lockfile ignore. Applied literally on FarmRx PR #26 (2026-08-20)
+  # that advice returned "No files to review": once ANY positive pattern
+  # exists, only files matching a positive pattern are reviewed, so the one
+  # changed file - .coderabbit.yaml itself - was dropped. A single well-meant
+  # line silently switched off code review for the whole repo, and it reads as
+  # a clean pass rather than as a config error. A leading `**` restores
+  # default-include breadth but ALSO opts out of CodeRabbit's curated default
+  # ignore list (node_modules, build output, generated code, binaries, media,
+  # source maps), which then has to be hand-maintained. FarmRx carries that
+  # form because a lockfile has shipped there as the sole functional change.
+  # CRX stays exclusion-only.
+  #
+  # Known, accepted gap: a PR changing ONLY package-lock.json is skipped by
+  # CodeRabbit's own default ignore list, so version bumps and integrity
+  # hashes go uninspected. That predates this config and is NOT closed here.
+  #
+  # The bar for adding ANY exclusion later: name the mechanism that makes those
+  # files inert, and point at the check that fails if they stop being inert. A
+  # directory name is never that mechanism. Four review rounds on PR #441
+  # removed four doc-root exclusions (`docs/audits/`, `docs/loops/`,
+  # `docs/build-loops/`, `docs/handoffs/`, then `docs/archive/`) because each
+  # one turned out to hide files that automation READS AND EXECUTES - loop
+  # prompts, audit prompts, handoffs, and JSON ledgers. On a public repo an
+  # excluded agent-control file is a prompt-injection path into privileged
+  # automation, not a cost-control question. Every document under docs/ is
+  # reviewed today. The exclusion work, and the repository-walking test that
+  # enforces this rule, are parked in PR #441.
+
   auto_review:
     enabled: true
     drafts: false
     base_branches:
       - main
+    # Pause AUTOMATIC review after 2 reviewed commits on a PR (this applies to
+    # ordinary non-draft PRs, not just drafts). Later pushes are then not
+    # auto-reviewed until someone comments `@coderabbitai review`, which
+    # resumes it. The default of 5 spent the weekly allowance on half-finished
+    # commits and left nothing for the finished code: PR #429 (21 commits) and
+    # PR #434 both hit "Review limit reached".
+    #
+    # This number is NOT the pre-merge gate and must never be treated as one.
+    # The gate is reading a fresh CodeRabbit review of the FINAL commit before
+    # merging - the standing policy in AGENTS.md, with the procedure in
+    # .claude/skills/deploy-check/SKILL.md. That procedure is documented, not
+    # yet machine-enforced; the enforcement is parked in PR #441.
+    auto_pause_after_reviewed_commits: 2
 
   # Project-specific review guidance. These mirror the "CRX Hard Rules" in
   # AGENTS.md so CodeRabbit flags the exact mistakes that have bitten this
@@ -32,25 +85,68 @@ reviews:
         that does not accept and enforce `p_idempotency_key text DEFAULT NULL`;
         any GRANT EXECUTE to anon/public on a function that writes data; any
         edit to an already-applied migration (migrations must be new files
-        only). Money must be stored as bigint cents — never floating point.
-        A CHECK constraint that changes allowed status values must include all
-        previously allowed values.
+        only). Money must be exact whole cents - never floating point. New
+        money storage uses bigint cents; any new or changed money column must
+        carry a finite whole-cent CHECK constraint named
+        `<table>_<column>_whole_cents_chk`. A CHECK constraint that changes
+        allowed status values must include all previously allowed values.
+        Timestamps on the live database are UTC: flag any business-day,
+        cutoff, or period-boundary logic that does not convert explicitly to
+        America/Chicago.
     - path: "src/**"
       instructions: >-
         React 18 + TypeScript frontend for a live app. Flag: money handled as
-        floating-point instead of integer cents; missing `assertRpcResult()`
-        after an RPC call or `checkMutationResult()` after `.update()` /
-        `.delete()`; use of `confirm()`, `window.confirm()`, or `alert()`
-        instead of the shared ConfirmModal / toast components; writes to
-        generated columns such as `invoices.balance_cents`; Supabase clients
-        created anywhere other than `src/lib/db.ts`; Sentry imported from
-        anywhere other than `src/lib/sentry`; any hardcoded secret, API key,
-        or service_role key in frontend code.
+        floating-point instead of integer cents; money math that does
+        arithmetic on decimal strings or floats instead of parsing operands
+        into integer cents FIRST; missing `assertRpcResult()` after an RPC call
+        or `checkMutationResult()` after `.update()` / `.delete()`; use of
+        `confirm()`, `window.confirm()`, or `alert()` instead of the shared
+        ConfirmModal / toast components; writes to generated columns such as
+        `invoices.balance_cents`; Supabase clients created anywhere other than
+        `src/lib/db.ts`; Sentry imported from anywhere other than
+        `src/lib/sentry`; any hardcoded secret, API key, or service_role key in
+        frontend code. Timestamps from the database are UTC - flag business-day
+        or period logic that does not convert explicitly to America/Chicago.
+    # Two patterns, not one: `src/**/*[Bb]lend*` matches only the FILENAME
+    # component, so it catches src/pages/BlendTickets.tsx but misses
+    # src/components/blendtickets/BulkTicketUpload.tsx. The directory form
+    # covers everything inside a blend-named folder. Raised by the Codex
+    # reviewer on PR #441 - an earlier `git ls-files` check was a misleading
+    # oracle here, because git pathspec globbing is not CodeRabbit's matcher.
+    - path: "src/**/[Bb]lend*/**"
+      instructions: >-
+        Blend tickets are a MONEY path, not just an agronomy form: billing is
+        driven by `rate_per_acre`, and a blank or missing unit still bills.
+        Review any change here with the same severity as invoice or payment
+        code. Flag unit handling that can silently mix measures (for example
+        adding gallons to pounds), a missing or unvalidated unit that still
+        reaches a billed amount, and any rate/quantity math that is not exact
+        integer-cent arithmetic.
+    - path: "src/**/*[Bb]lend*"
+      instructions: >-
+        Blend tickets are a MONEY path, not just an agronomy form: billing is
+        driven by `rate_per_acre`, and a blank or missing unit still bills.
+        Review any change here with the same severity as invoice or payment
+        code. Flag unit handling that can silently mix measures (for example
+        adding gallons to pounds), a missing or unvalidated unit that still
+        reaches a billed amount, and any rate/quantity math that is not exact
+        integer-cent arithmetic.
     - path: "supabase/functions/**"
       instructions: >-
         Supabase Edge Functions. Flag missing or inconsistent CORS handling,
         and any secret/service-role key that is logged or returned to the
         client.
+
+# Teach CodeRabbit this repo's own written rules so it reviews against the
+# actual house standard instead of only the path instructions above.
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "docs/reference/gotchas.md"
+      - "docs/workflows/**.md"
 
 chat:
   auto_reply: true

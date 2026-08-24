@@ -27,7 +27,12 @@ const legacyLifecycleSmokeFiles = [
   path.join(ROOT, 'scripts', 'smoke', 'smoke-forbid-restore-cancelled-order.sql'),
   path.join(ROOT, 'scripts', 'smoke', 'smoke-order-draw-lock.sql'),
   path.join(ROOT, 'scripts', 'smoke', 'smoke-planned-holds-drawn-sync.sql'),
-  path.join(ROOT, 'scripts', 'smoke', 'smoke-restore-version-drawn-guard.sql'),
+  // smoke-restore-version-drawn-guard.sql is deliberately NOT in this list.
+  // 20260816120000 rewrote what it asserts (QUOTE_RESTORE_BLOCKED_BY_DRAW
+  // instead of the older BOOKING_OVERDRAWN quantity comparison) and gave it no
+  // prerequisite skip, so it cannot pass on this legacy catalog, whose replay
+  // stops at 20260730235031 — long before that migration. Its own replay-based
+  // proof is scripts/smoke/prove-draw-down-price-tier-real-schema.mjs.
   path.join(ROOT, 'scripts', 'smoke', 'smoke-revert-quote-escape-hatch.sql'),
 ];
 const quoteLifecycleAnchors = [
@@ -58,8 +63,22 @@ function apply(name, user) { psql(`\\i /tmp/${name}`, { user }); }
 function wait(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 function waitForDatabase() {
   for (let attempt = 0; attempt < 90; attempt += 1) {
-    if (docker(['exec', NAME, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { allowFailure: true }).status === 0
-      && docker(['exec', NAME, 'psql', '-U', 'postgres', '-d', 'postgres', '-Atqc', 'SELECT 1'], { allowFailure: true }).stdout.trim() === '1') return;
+    // The image exposes a temporary bootstrap server before restarting into
+    // the final server. Require the entrypoint's post-bootstrap marker first,
+    // then prove that the final socket accepts a real query.
+    const logs = docker(['logs', NAME], { allowFailure: true });
+    const initComplete = `${logs.stdout}\n${logs.stderr}`.includes(
+      'PostgreSQL init process complete; ready for start up.',
+    );
+    const ready = initComplete
+      && docker(['exec', NAME, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { allowFailure: true }).status === 0;
+    if (ready) {
+      const query = docker(
+        ['exec', NAME, 'psql', '-U', 'postgres', '-d', 'postgres', '-Atqc', 'SELECT 1'],
+        { allowFailure: true },
+      );
+      if (query.status === 0 && query.stdout.trim() === '1') return;
+    }
     wait(500);
   }
   throw new Error(`disposable PostgreSQL failed readiness: ${docker(['logs', NAME], { allowFailure: true }).stderr}`);
@@ -165,6 +184,18 @@ try {
       ('00000000-0000-4000-8000-000000000004', 'row-version-backup-admin@example.invalid', 'admin', true)
     ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, is_active = true;
   `);
+  // The three legacy lifecycle smokes below now borrow priced products because
+  // current quote-item triggers reject pricing-free product shells. This
+  // schema-only container has no catalog data, so seed two priced products
+  // while the governed-pricing trigger is disabled, then restore it before
+  // any smoke runs. This never touches a live database.
+  psql(`
+    ALTER TABLE public.products DISABLE TRIGGER trigger_y_require_governed_product_pricing;
+    INSERT INTO public.products (product_name, unit_size, current_cost, tier1_price)
+    VALUES ('[PROVER] Row Version Priced A', 'gal', 3.00, 10.00),
+           ('[PROVER] Row Version Priced B', 'gal', 4.00, 8.00);
+    ALTER TABLE public.products ENABLE TRIGGER trigger_y_require_governed_product_pricing;
+  `);
   for (const file of legacyLifecycleSmokeFiles) {
     copy(file, `legacy-${path.basename(file)}`);
     const legacyResult = psql(`\\i /tmp/legacy-${path.basename(file)}`, { allowFailure: true });
@@ -188,7 +219,7 @@ try {
   assert.notEqual(missingDefault.status, 0, 'candidate migration accepted a pre-existing row_version without DEFAULT 1');
   assert.match(missingDefaultOutput, /ROW_VERSION_SCHEMA_DRIFT/, `missing-default drift did not fail with ROW_VERSION_SCHEMA_DRIFT:\n${missingDefaultOutput}`);
   assert.match(missingDefaultOutput, /quotes\.row_version/, `missing-default drift did not identify quotes.row_version:\n${missingDefaultOutput}`);
-  console.log('ROW_VERSION_REAL_SCHEMA_RESTORE_PASS baseline=20260727174805 post_baseline_replay=through_candidate legacy_lifecycle_smokes=7/7 smoke_quote_customer=SMOKE_PASS_ROLLBACK quote_lifecycle=draft-sent-sent stale_before_lifecycle=QUOTE_STALE_WRITE smoke_drawn_guard=SMOKE_PASS_ROLLBACK smoke_planned_holds=SMOKE_PASS_ROLLBACK');
+  console.log('ROW_VERSION_REAL_SCHEMA_RESTORE_PASS baseline=20260727174805 post_baseline_replay=through_candidate legacy_lifecycle_smokes=6/6 smoke_quote_customer=SMOKE_PASS_ROLLBACK quote_lifecycle=draft-sent-sent stale_before_lifecycle=QUOTE_STALE_WRITE smoke_drawn_guard=NOT_RUN_HERE_SEE_DRAW_TIER_PROVER smoke_planned_holds=SMOKE_PASS_ROLLBACK');
 } catch (error) {
   console.error(`ROW_VERSION_REAL_SCHEMA_RESTORE_FAIL ${error.stack ?? error.message}`);
   process.exitCode = 1;
