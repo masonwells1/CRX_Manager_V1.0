@@ -192,30 +192,62 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     ? `@echo hostile>"${hostileGlobalMarker}"\r\n@exit /b 1\r\n`
     : `#!/bin/sh\nprintf hostile > '${hostileGlobalMarker.replaceAll("'", "'\\''")}'\nexit 1\n`);
   if (process.platform !== "win32") chmodSync(hostileGlobalFilter, 0o755);
+  // Git runs a filter command through the shell, so an unquoted path splits at
+  // spaces and the filter silently never executes. A temporary directory that
+  // happens to contain a space would then leave the marker absent for a reason
+  // that has nothing to do with configuration isolation, and the assertion
+  // below would pass against an unhardened wrapper (CodeRabbit, PR #455).
+  const shellQuoted = (value) => `'${value.replaceAll("\\", "/").replaceAll("'", "'\\''")}'`;
   writeFileSync(path.join(hostileGlobalHome, ".gitconfig"), [
     "[core]",
     `\tattributesfile = ${hostileGlobalAttributes.replaceAll("\\", "/")}`,
     '[filter "review"]',
-    `\tprocess = ${hostileGlobalFilter.replaceAll("\\", "/")}`,
+    `\tprocess = ${shellQuoted(hostileGlobalFilter)}`,
     "",
   ].join("\n"));
   const originalHome = process.env.HOME;
   const originalUserProfile = process.env.USERPROFILE;
   process.env.HOME = hostileGlobalHome;
   process.env.USERPROFILE = hostileGlobalHome;
-  assert.equal(worktreeIsClean(source), true, "proof-wrapper status uses fixed Git with global/system configuration disabled");
-  const globallyIsolatedPacket = createSanitizedReviewWorkspace({
-    sourceRoot: source,
-    baseRef: "origin/main",
-    candidateRef: "HEAD",
-  });
-  assert.equal(existsSync(hostileGlobalMarker), false, "hostile global attributes/process filters never execute during proof packet construction");
-  removeSanitizedReviewWorkspace(globallyIsolatedPacket.root);
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = originalUserProfile;
-  rmSync(hostileGlobalHome, { recursive: true, force: true });
+  let globallyIsolatedPacket = null;
+  try {
+    // Positive control. The wrapper's snapshot operations read objects and raw
+    // bytes and never drive Git's clean/smudge/process pipeline, so an absent
+    // marker on its own proves nothing: it is equally consistent with "the
+    // hostile filter was never runnable here". Prove the filter really does
+    // execute under ambient Git first, in a throwaway repository outside the
+    // candidate source tree, then clear the marker before the real assertions.
+    const controlRepo = path.join(hostileGlobalHome, "control-repo");
+    const controlEnv = { ...process.env, HOME: hostileGlobalHome, USERPROFILE: hostileGlobalHome };
+    mkdirSync(controlRepo, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: controlRepo, env: controlEnv, stdio: "ignore" });
+    writeFileSync(path.join(controlRepo, "tracked.txt"), "control\n");
+    try {
+      execFileSync("git", ["add", "tracked.txt"], { cwd: controlRepo, env: controlEnv, stdio: "ignore" });
+    } catch {
+      // The hostile filter writes its marker and then exits non-zero by design,
+      // which Git surfaces as a failed add. Executing at all is the point here.
+    }
+    assert.equal(existsSync(hostileGlobalMarker), true, "control: the hostile global process filter really does execute under ambient Git");
+    rmSync(hostileGlobalMarker, { force: true });
+    assert.equal(worktreeIsClean(source), true, "proof-wrapper status uses fixed Git with global/system configuration disabled");
+    globallyIsolatedPacket = createSanitizedReviewWorkspace({
+      sourceRoot: source,
+      baseRef: "origin/main",
+      candidateRef: "HEAD",
+    });
+    assert.equal(existsSync(hostileGlobalMarker), false, "hostile global attributes/process filters never execute during proof packet construction");
+  } finally {
+    // Restore unconditionally: a throw above would otherwise leave the hostile
+    // HOME/USERPROFILE in place for every later assertion in this file and leak
+    // the fixture directory.
+    if (globallyIsolatedPacket) removeSanitizedReviewWorkspace(globallyIsolatedPacket.root);
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
+    rmSync(hostileGlobalHome, { recursive: true, force: true });
+  }
   const sanitized = createSanitizedReviewWorkspace({
     sourceRoot: source,
     baseRef: "origin/main",

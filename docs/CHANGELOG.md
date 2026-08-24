@@ -35,7 +35,19 @@ carries no other work.
 - Regression: `scripts/write-codex-push-proof.test.mjs` plants a hostile global
   attributes file plus a process filter outside the source repository and proves
   the marker file is never written during clean-status reads or proof-packet
-  construction. Mutation-tested — re-enabling global configuration turns it red.
+  construction. Mutation-tested — re-enabling global configuration turns the
+  clean-status assertion red.
+- Review round (CodeRabbit, PR #455) on that regression, both fixed here. The
+  filter path was written into `filter.review.process` unquoted, and Git runs a
+  filter command through the shell, so a temporary directory containing a space
+  would split the path and the filter would never execute — leaving the marker
+  absent for a reason unrelated to isolation. The path is shell-quoted now, and
+  a positive control first proves the filter really does execute under ambient
+  Git in a throwaway repository, then clears the marker, so the marker assertion
+  can no longer pass against an unhardened wrapper. The fixture's
+  `HOME`/`USERPROFILE` mutation and cleanup also moved into `try`/`finally`; a
+  throw previously left the hostile environment in place for every later
+  assertion in the file and leaked the fixture directory.
 
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 
