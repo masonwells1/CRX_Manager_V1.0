@@ -364,9 +364,45 @@ obvious softening is to refuse a blank unit only when the line carries a non-zer
 **nothing** here: the one live blank-unit row carries both a cost *and* a price, so the narrow gate
 refuses exactly the same row as the broad one.
 
-Test `T1` in `scripts/smoke/fixtures/save-job-chem-unit-tests.sql` replays that exact live shape and
-asserts the refusal, so the obligation is pinned by an executable test rather than by this
-paragraph. Note this does **not** close the class on its own, because of the scope limit below.
+Test `T1` in `scripts/smoke/fixtures/save-job-chem-unit-tests.sql` replays that row's
+**pre-correction** shape and asserts the refusal, so the obligation is pinned by an executable test
+rather than by this paragraph; `T28` replays the corrected row and asserts it saves at the real
+totals. `T1` is deliberately kept now that production is clean — deleting it because no row happens
+to be in that shape today would retire the only executable statement of the policy. Note this does
+**not** close the class on its own, because of the scope limit below.
+
+**A SECOND, UNRELATED LIVE DEFECT IS OPEN IN THE SAME FUNCTION, and the same parked migration
+closes it — `save_job` can create a DUPLICATE JOB, and can silently discard an edit.** Found by the
+exact-SHA `gpt-5.6-sol` proof gate on 2026-08-24; live today, since nothing has been applied. This
+is a defect in the idempotency handling, not in the unit invariant, and it is recorded here so it is
+not re-discovered as new.
+
+An *idempotency key* is the receipt number the app sends with a save so that a double-click, or a
+retry after a dropped connection, records the work once instead of twice. The live `save_job` body
+looks that key up with an unlocked `SELECT` filtered to `operation = 'save_job'`, then records the
+receipt with `ON CONFLICT (idempotency_key) DO NOTHING` — but the live uniqueness constraint is
+`idempotency_keys_idempotency_key_key`, on the **key alone**, not on the pair (verified read-only
+2026-08-24). Those two facts together are the bug. A key already spent by a *different* operation is
+invisible to the filtered lookup, so the job is created, the receipt INSERT is swallowed by the
+conflict, and the **next** retry with that key finds nothing again and creates a **second job** — a
+duplicate job is a duplicate bill. Two callers racing on one key could also both pass the unlocked
+lookup.
+
+The quieter half: even scoped correctly, a key+operation lookup matches on the key, so a key spent
+by an earlier `save_job` and then reused for a **different job or an edited payload** returns the
+earlier success. Nothing is duplicated, but the current request is never saved and the operator is
+told it was — an edited quantity, cent amount or job header silently discarded. Any caller could
+likewise replay another user's receipt. This is the identical defect shape already fixed for
+commission payouts (finding 3.5 below, PR #378, applied live 2026-08-11).
+
+Migration `20260820120000` closes both halves by routing the lookup through
+`check_idempotency_intent(text, text, uuid, text)` — installed live and already called by nine money
+RPCs (the whole return family plus create/post/void commission payment) — which advisory-locks the
+key and binds it to the calling actor and to a sha256 fingerprint of the request. Cross-operation
+reuse raises `IDEMPOTENCY_CROSS_OP_KEY_REUSE`, another actor's receipt `IDEMPOTENCY_ACTOR_MISMATCH`,
+a changed payload `IDEMPOTENCY_INTENT_MISMATCH`; an unchanged retry still replays to the same job.
+Tests `T26`, `T27`, `T29` and `T30` pin all four behaviours. **Parked with the rest of the
+migration — the hole is open on production until it applies.**
 
 **Scope limit: `save_job` is not the only writer.** The invariant binds `save_job` alone, but
 `_close_quote_as_applied` (migration 20260703200000) and the recipe-pricing path (migration

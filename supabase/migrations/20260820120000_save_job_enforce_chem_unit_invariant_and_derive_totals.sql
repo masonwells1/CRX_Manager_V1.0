@@ -211,13 +211,34 @@ BEGIN
       'PREFLIGHT_OVERLOAD: expected exactly 1 overload of the job-save RPC in public, found %. Reconcile before applying this migration.', v_count;
   END IF;
 
-  -- The replacement body CALLS check_idempotency. PL/pgSQL resolves that name at RUN
+  -- The replacement body CALLS check_idempotency_intent. PL/pgSQL resolves that name at RUN
   -- time, not at CREATE time, so a database without the helper would accept this
   -- migration cleanly and then fail on the first real job save -- the worst possible
   -- place to discover it. Assert it here, where the failure is a refused apply.
-  IF to_regprocedure('public.check_idempotency(text,text)') IS NULL THEN
+  IF to_regprocedure('public.check_idempotency_intent(text,text,uuid,text)') IS NULL THEN
     RAISE EXCEPTION
-      'PREFLIGHT_MISSING_HELPER: public.check_idempotency(text, text) is not installed, and the replacement body calls it on every keyed save.';
+      'PREFLIGHT_MISSING_HELPER: public.check_idempotency_intent(text, text, uuid, text) is not installed, and the replacement body calls it on every keyed save.';
+  END IF;
+
+  -- The fingerprint is hashed with extensions.digest. pgcrypto lives in the `extensions`
+  -- schema on this project, and the replacement pins search_path to public, pg_temp, so
+  -- an absent or relocated extension is a RUN-time failure on the first keyed save --
+  -- exactly the class of break the helper assertion above exists to move to apply time.
+  IF to_regprocedure('extensions.digest(bytea,text)') IS NULL THEN
+    RAISE EXCEPTION
+      'PREFLIGHT_MISSING_HELPER: extensions.digest(bytea, text) is not installed (pgcrypto), and the replacement body hashes the request fingerprint with it.';
+  END IF;
+
+  -- Binding columns. Without them the UPDATE that binds each receipt fails at run time.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_attribute
+     WHERE attrelid = 'public.idempotency_keys'::regclass
+       AND attname IN ('request_fingerprint', 'request_actor_id')
+       AND NOT attisdropped
+     GROUP BY attrelid HAVING count(*) = 2
+  ) THEN
+    RAISE EXCEPTION
+      'PREFLIGHT_MISSING_HELPER: idempotency_keys is missing request_fingerprint / request_actor_id, which the replacement binds on every keyed save.';
   END IF;
 
   SELECT p.prosrc INTO v_src FROM pg_proc p WHERE p.oid = v_oid;
@@ -273,6 +294,7 @@ DECLARE
   v_season integer;
   v_job_date date;
   v_existing jsonb;
+  v_fingerprint text;
   v_result jsonb;
   v_share_total numeric;
   -- Chemical-unit invariant + derived totals (this migration).
@@ -305,9 +327,14 @@ BEGIN
   -- Idempotency: replay with the same key returns the original result without
   -- creating a second job (the create-path double-submit hazard).
   --
-  -- This now routes through check_idempotency, the canonical guard the rest of
-  -- the app already uses (draw_down_quote and others call it in exactly this
-  -- shape). The previous code -- carried unchanged from the live body, so this
+  -- This now routes through the canonical check_idempotency helper family the rest
+  -- of the app already uses -- specifically check_idempotency_intent, the same helper
+  -- nine live money RPCs call today (the whole return family plus create/post/void
+  -- commission payment; read read-only from pg_proc 2026-08-24). Round 8 landed the
+  -- plain key+operation helper here and round 9 tightened it to the intent form; the
+  -- reasoning for both is kept below rather than rewritten, because the round-8 hole
+  -- is still the reason the raw lookup can never come back.
+  -- The previous code -- carried unchanged from the live body, so this
   -- is a PRE-EXISTING defect this migration closes rather than one it caused --
   -- did its own unlocked lookup filtered to operation = 'save_job', and then
   -- recorded with ON CONFLICT (idempotency_key) DO NOTHING. The live uniqueness
@@ -328,10 +355,80 @@ BEGIN
   -- check_idempotency is executable by postgres and service_role only, and this
   -- function is SECURITY DEFINER owned by postgres, so the inner call runs with
   -- the owner's rights. T26 pins the cross-operation refusal, T27 the replay.
+  -- ROUND 9: bound to the ACTOR and to a FINGERPRINT of what was actually asked for,
+  -- not merely to the key. check_idempotency alone still let a completed key be reused
+  -- for a DIFFERENT job or a CHANGED payload: it matches on the key, so the caller got
+  -- back the earlier success and the current request was never saved. The operator sees
+  -- "saved" while the edited quantities, cents or job details went nowhere.
+  --
+  -- Reachability, stated honestly because the gate overstated it: the gate said the
+  -- client key is "retained after uncertain failures". It is not. There is exactly one
+  -- live caller (src/pages/JobDetail.tsx:2210) and runJobSave calls resetKey() at the
+  -- START of every save attempt as well as after a success, so the ordinary UI mints a
+  -- fresh key per attempt and cannot reach the silent-no-op. What remains real is the
+  -- hardening gap itself -- any caller presenting a spent key gets the old result -- and
+  -- that is worth closing on a SECURITY DEFINER money path regardless of today's client.
+  --
+  -- Like the rest of this block, the weakness is PRE-EXISTING: the live body binds
+  -- nothing either. Mason approved closing it here (2026-08-24) rather than in a
+  -- follow-up migration.
+  --
+  -- extensions.digest, not digest: pgcrypto is installed in the `extensions` schema
+  -- (read read-only 2026-08-24) and this function pins search_path to public, pg_temp,
+  -- so an unqualified call would not resolve at run time.
+  --
+  -- The arrays are canonicalised by sorting their elements before hashing, so a resend
+  -- that merely reorders the chemical or field rows is still recognised as the SAME
+  -- intent. jsonb already normalises object key order, so only array order needed it.
+  --
+  -- The claimed totals inside p_job_payload are deliberately left IN the fingerprint
+  -- even though the money is derived and they are ignored: two requests that differ
+  -- there are different requests, and failing closed is the safe direction.
+  --
+  -- Lock ordering is unchanged by this swap. check_idempotency and
+  -- check_idempotency_intent take the SAME transaction-scoped advisory lock on the same
+  -- key, at the same point -- before any business write -- so save_job acquires locks in
+  -- the same order it always did. (20260819232000 warns that moving save_quote or
+  -- convert_quote_to_order onto the intent helper needs a fresh same-key deadlock
+  -- review; save_job is not named there, and it takes no barrier or row lock ahead of
+  -- this point.)
   IF p_idempotency_key IS NOT NULL THEN
-    v_existing := check_idempotency(p_idempotency_key, 'save_job');
+    v_fingerprint := encode(
+      extensions.digest(
+        convert_to(
+          jsonb_build_object(
+            'actor_id',   v_actor,
+            'job_id',     p_job_id,
+            'job_payload', COALESCE(p_job_payload, '{}'::jsonb),
+            'fields', (
+              SELECT COALESCE(jsonb_agg(e ORDER BY e::text), '[]'::jsonb)
+                FROM jsonb_array_elements(COALESCE(p_fields, '[]'::jsonb)) e
+            ),
+            'chemicals', (
+              SELECT COALESCE(jsonb_agg(e ORDER BY e::text), '[]'::jsonb)
+                FROM jsonb_array_elements(COALESCE(p_chemicals, '[]'::jsonb)) e
+            )
+          )::text,
+          'UTF8'
+        ),
+        'sha256'
+      ),
+      'hex'
+    );
+
+    -- Returns NULL for a first call. On a valid replay it returns a WRAPPER --
+    -- {"found": true, "result": ...} -- NOT the bare result that check_idempotency
+    -- returns. Returning it unwrapped would hand the browser a payload shaped nothing
+    -- like a save result, and assertRpcResult would reject it. Read from the installed
+    -- body on 2026-08-24, not assumed from the name.
+    v_existing := check_idempotency_intent(p_idempotency_key, 'save_job', v_actor, v_fingerprint);
     IF v_existing IS NOT NULL THEN
-      RETURN v_existing;
+      IF v_existing -> 'result' IS NULL
+         OR jsonb_typeof(v_existing -> 'result') IS DISTINCT FROM 'object'
+         OR NULLIF(v_existing -> 'result' ->> 'job_id', '') IS NULL THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+      END IF;
+      RETURN v_existing -> 'result';
     END IF;
   END IF;
 
@@ -787,10 +884,26 @@ BEGIN
 
   v_result := jsonb_build_object('success', true, 'job_id', v_job_id, 'is_new', v_is_new);
 
+  -- The receipt MUST carry the binding columns, or the next replay of this very key
+  -- hits check_idempotency_intent's deployment bridge -- an unbound receipt whose intent
+  -- cannot be reconstructed fails closed with IDEMPOTENCY_INTENT_MISMATCH -- and a
+  -- legitimate retry would be refused. Writing the row and then binding it mirrors
+  -- 20260819232000 exactly. IDEMPOTENCY_RECEIPT_MISSING is not decorative: it fires if
+  -- the INSERT was swallowed and no row is there to bind, which would otherwise leave a
+  -- silently unbindable receipt behind.
   IF p_idempotency_key IS NOT NULL THEN
     INSERT INTO idempotency_keys (idempotency_key, operation, result, expires_at)
     VALUES (p_idempotency_key, 'save_job', v_result, now() + interval '24 hours')
     ON CONFLICT (idempotency_key) DO NOTHING;
+
+    UPDATE idempotency_keys
+       SET request_fingerprint = v_fingerprint,
+           request_actor_id    = v_actor
+     WHERE idempotency_key = p_idempotency_key
+       AND operation = 'save_job';
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING';
+    END IF;
   END IF;
 
   RETURN v_result;
@@ -934,4 +1047,4 @@ END
 $postflight$;
 
 COMMENT ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) IS
-  'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. Four refusals, all raised before any write: CHEM_UNIT_MISMATCH (the rate unit and the price unit provably disagree), CHEM_RATE_DENOMINATOR_NOT_ACRES (a rate measured per anything but acres, in slash, spelled-out or hyphenated form), CHEM_QUANTITY_NOT_FINITE (a negative, NaN or Infinity quantity) and CHEM_UNIT_UNSPECIFIED (a line that BILLS while its rate unit or its stock unit is blank, so the amount cannot be checked; customer-supplied lines, zero-quantity lines and lines with neither a cost nor a price are exempt because they bill nothing). As of this migration there is NO save-blocking unit guard in JobDetail.tsx on the main branch, so this is the only boundary and nothing warns on screen before it refuses. PR #436 adds a partial client-side early warning only: its rateDenominatorIsUnrecognized tests for a slash, so it does not flag the spelled-out or hyphenated denominator, and it has no counterpart for either the non-finite-quantity or the unspecified-unit refusal. Those reach the operator with no prior on-screen warning even after that PR lands.';
+  'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. Four refusals, all raised before any write: CHEM_UNIT_MISMATCH (the rate unit and the price unit provably disagree), CHEM_RATE_DENOMINATOR_NOT_ACRES (a rate measured per anything but acres, in slash, spelled-out or hyphenated form), CHEM_QUANTITY_NOT_FINITE (a negative, NaN or Infinity quantity) and CHEM_UNIT_UNSPECIFIED (a line that BILLS while its rate unit or its stock unit is blank, so the amount cannot be checked; customer-supplied lines, zero-quantity lines and lines with neither a cost nor a price are exempt because they bill nothing). As of this migration there is NO save-blocking unit guard in JobDetail.tsx on the main branch, so this is the only boundary and nothing warns on screen before it refuses. PR #436 adds a partial client-side early warning only: its rateDenominatorIsUnrecognized tests for a slash, so it does not flag the spelled-out or hyphenated denominator, and it has no counterpart for either the non-finite-quantity or the unspecified-unit refusal. Those reach the operator with no prior on-screen warning even after that PR lands. IDEMPOTENCY: a keyed save now goes through check_idempotency_intent (the same helper the return and commission-payment RPCs use), so the key is bound to the calling actor AND to a sha256 fingerprint of the requested job, fields and chemical lines, under an advisory lock. Reusing a spent key for a different operation raises IDEMPOTENCY_CROSS_OP_KEY_REUSE, from a different actor IDEMPOTENCY_ACTOR_MISMATCH, and with a changed payload IDEMPOTENCY_INTENT_MISMATCH -- the last of which is a REFUSAL WHERE THE OLD BODY SILENTLY RETURNED THE EARLIER SUCCESS AND SAVED NOTHING. An unchanged retry still replays to the same job, which is the whole point of the key.';

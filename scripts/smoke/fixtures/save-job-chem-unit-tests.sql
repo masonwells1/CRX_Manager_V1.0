@@ -516,6 +516,14 @@ BEGIN
   ELSE
     RAISE EXCEPTION 'T27 FAIL  job_id % vs %, jobs %->%  -- the replay path is broken', r1->>'job_id', r2->>'job_id', n_before, n_after;
   END IF;
+-- A handler, for the same reason T20 has one. If the receipt stops being bound to an actor
+-- and a fingerprint, check_idempotency_intent's fail-closed bridge clause turns the ordinary
+-- retry into a hard IDEMPOTENCY_INTENT_MISMATCH instead of a duplicate job. That is still the
+-- replay path breaking, and it must report as "T27 FAIL" rather than as a raw psql error the
+-- mutation phase cannot attribute to any test.
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T27 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T27 FAIL  the same-key replay was refused outright, so an ordinary retry no longer returns the original job: %', SQLERRM;
 END $$;
 
 -- T28: the CORRECTED live JOB-2026-0002 row, read read-only 2026-08-24 -- rate 'pt/ac',
@@ -549,12 +557,89 @@ BEGIN
   END IF;
 END $$;
 
+-- T29: a receipt belonging to a DIFFERENT ACTOR must not be replayed to this caller.
+-- Seeded directly, because the harness authenticates as a single fixed uuid. The row is
+-- fully bound -- both binding columns populated -- so this exercises the actor check
+-- itself and not the unbound-receipt deployment bridge.
+DO $$
+DECLARE ok boolean := false; msg text; n_before int; n_after int;
+BEGIN
+  INSERT INTO idempotency_keys (idempotency_key, operation, result, expires_at,
+                                request_fingerprint, request_actor_id)
+  VALUES ('K-OTHER-ACTOR', 'save_job', '{"success":true,"job_id":"99999999-9999-9999-9999-999999999999"}'::jsonb,
+          now() + interval '24 hours', 'deadbeef', '22222222-0000-0000-0000-00000000dead');
+  SELECT count(*) INTO n_before FROM jobs;
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333344-3333-3333-3333-333333333346","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":20,"unit":"gal","rate_per_acre":2,"rate_unit":"gal/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, 'K-OTHER-ACTOR');
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  SELECT count(*) INTO n_after FROM jobs;
+  IF ok AND msg LIKE 'IDEMPOTENCY_ACTOR_MISMATCH%' AND n_after = n_before THEN
+    RAISE NOTICE 'T29 PASS  another actor''s receipt is refused and wrote nothing: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T29 FAIL  (refused=% msg=% jobs %->%)  -- the receipt is not bound to the actor', ok, msg, n_before, n_after;
+  END IF;
+END $$;
+
+-- T30: A -> B -> A. The exact defect the gate described: reuse a COMPLETED key for a
+-- CHANGED payload. Before intent binding the second call returned the first call's
+-- success and silently saved nothing -- the operator is told "saved" while the edited
+-- quantity went nowhere. It must now be REFUSED, and the third leg proves the refusal did
+-- not corrupt the receipt: replaying the ORIGINAL payload still returns the original job.
+DO $$
+DECLARE r1 jsonb; r3 jsonb; ok boolean := false; msg text; n_after_a int; n_after_b int;
+BEGIN
+  r1 := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"33333345-3333-3333-3333-333333333347","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":20,"unit":"gal","rate_per_acre":2,"rate_unit":"gal/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, 'K-INTENT');
+  SELECT count(*) INTO n_after_a FROM jobs;
+
+  -- Same key, CHANGED quantity (20 -> 40). Must not replay, must not save.
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":20}'::jsonb,
+      '[{"field_id":"33333345-3333-3333-3333-333333333347","acres_to_treat":20}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":40,"unit":"gal","rate_per_acre":2,"rate_unit":"gal/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, 'K-INTENT');
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  SELECT count(*) INTO n_after_b FROM jobs;
+
+  IF NOT ok OR msg NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN
+    RAISE EXCEPTION 'T30 FAIL  a changed payload on a spent key was not refused (refused=% msg=%)  -- the operator would be told "saved" while the edit went nowhere', ok, msg;
+  END IF;
+  IF n_after_b <> n_after_a THEN
+    RAISE EXCEPTION 'T30 FAIL  the refused changed-payload call still wrote a job (%->%)', n_after_a, n_after_b;
+  END IF;
+
+  -- Third leg: the ORIGINAL payload must still replay cleanly to the same job.
+  r3 := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"33333345-3333-3333-3333-333333333347","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":20,"unit":"gal","rate_per_acre":2,"rate_unit":"gal/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, 'K-INTENT');
+  IF (r3->>'job_id') IS DISTINCT FROM (r1->>'job_id') THEN
+    RAISE EXCEPTION 'T30 FAIL  replaying the ORIGINAL payload no longer returns the original job (% vs %)', r1->>'job_id', r3->>'job_id';
+  END IF;
+  IF (SELECT count(*) FROM jobs) <> n_after_a THEN
+    RAISE EXCEPTION 'T30 FAIL  the original-payload replay created a second job';
+  END IF;
+
+  RAISE NOTICE 'T30 PASS  a changed payload on a spent key is refused (%), and the original payload still replays to the same job', msg;
+END $$;
+
 -- T8: every refused save must have left NOTHING behind.
 DO $$
 DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 13 AND n_chem = 13 THEN RAISE NOTICE 'T8 PASS  13 jobs / 13 chemical rows -- the 14 refused saves wrote nothing, and the T27 replay added exactly one';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 13/13)', n_jobs, n_chem; END IF;
+  IF n_jobs = 14 AND n_chem = 14 THEN RAISE NOTICE 'T8 PASS  14 jobs / 14 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 14/14)', n_jobs, n_chem; END IF;
 END $$;

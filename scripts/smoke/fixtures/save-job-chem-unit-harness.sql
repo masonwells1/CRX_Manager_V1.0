@@ -50,8 +50,20 @@ CREATE TABLE job_chemicals (
   diluent_rate numeric, rei_hours integer, phi_days integer, warehouse text, vendor text,
   customer_supplied boolean, sort_order integer
 );
+-- pgcrypto lives in the `extensions` schema on the live project, and save_job pins
+-- search_path to public, pg_temp -- so it must call extensions.digest by that exact
+-- qualified name. The container reproduces that placement rather than installing
+-- pgcrypto into public, or the test would pass against a schema layout production
+-- does not have and the qualified call would break on the first real save.
+CREATE SCHEMA IF NOT EXISTS extensions;
+CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;
+
+-- request_fingerprint / request_actor_id mirror live (read read-only 2026-08-24). The
+-- PRIMARY KEY is the KEY ALONE, not (key, operation), which also mirrors live and is
+-- what makes cross-operation reuse reachable at all -- see T26.
 CREATE TABLE idempotency_keys (
-  idempotency_key text PRIMARY KEY, operation text, result jsonb, expires_at timestamptz
+  idempotency_key text PRIMARY KEY, operation text, result jsonb, expires_at timestamptz,
+  request_fingerprint text, request_actor_id uuid
 );
 
 CREATE OR REPLACE FUNCTION next_job_number() RETURNS text
@@ -63,7 +75,7 @@ CREATE OR REPLACE FUNCTION compute_season(p_d date) RETURNS integer
                 ELSE EXTRACT(YEAR FROM p_d)::int END $$;
 
 -- ===========================================================================
--- The four helpers, VERBATIM from live (do not edit; re-copy if live changes).
+-- The five helpers, VERBATIM from live (do not edit; re-copy if live changes).
 --
 -- Note on idempotency_keys above: its PRIMARY KEY is the KEY ALONE, not
 -- (key, operation). That mirrors live, where the constraint is the unique
@@ -122,6 +134,83 @@ BEGIN
   RETURN NULL;
 END;
 $function$;
+-- check_idempotency_intent, read from live pg_proc 2026-08-24 (md5 of the live body:
+-- edc73be809069669e8441eba7acf443d; the live text stores mixed CRLF/LF, so this copy
+-- matches it in BEHAVIOUR, not byte for byte). Note it returns a WRAPPER,
+-- {"found": true, "result": ...}, not the bare result -- save_job must unwrap it.
+CREATE OR REPLACE FUNCTION public.check_idempotency_intent(p_key text, p_operation text, p_actor uuid, p_fingerprint text)
+ RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_existing public.idempotency_keys%ROWTYPE;
+BEGIN
+  IF p_key IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF btrim(p_key) = '' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED';
+  END IF;
+  IF p_actor IS NULL THEN
+    RAISE EXCEPTION 'AUTH_REQUIRED';
+  END IF;
+  IF p_operation IS NULL OR btrim(p_operation) = '' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_OPERATION_REQUIRED';
+  END IF;
+  IF p_fingerprint IS NULL OR btrim(p_fingerprint) = '' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_FINGERPRINT_REQUIRED';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('crx:idempotency:' || p_key, 0)
+  );
+
+  DELETE FROM public.idempotency_keys
+   WHERE idempotency_key = p_key
+     AND expires_at < now();
+
+  SELECT * INTO v_existing
+    FROM public.idempotency_keys
+   WHERE idempotency_key = p_key;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_existing.operation IS DISTINCT FROM p_operation THEN
+    RAISE EXCEPTION
+      'IDEMPOTENCY_CROSS_OP_KEY_REUSE: idempotency_key % is already in use for operation %; cannot reuse it for operation %',
+      p_key, v_existing.operation, p_operation;
+  END IF;
+
+  -- Deployment bridge: receipts written before intent binding carry neither column.
+  -- Their intent cannot be reconstructed, so fail closed rather than replay.
+  IF v_existing.request_actor_id IS NULL
+     AND v_existing.request_fingerprint IS NULL THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_INTENT_MISMATCH'
+      USING ERRCODE = '22023',
+            DETAIL = jsonb_build_object(
+              'operation', v_existing.operation,
+              'result', v_existing.result
+            )::text;
+  END IF;
+
+  IF v_existing.request_actor_id IS DISTINCT FROM p_actor THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_ACTOR_MISMATCH';
+  END IF;
+
+  IF v_existing.request_fingerprint IS DISTINCT FROM p_fingerprint THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_INTENT_MISMATCH'
+      USING ERRCODE = '22023',
+            DETAIL = jsonb_build_object(
+              'operation', v_existing.operation,
+              'result', v_existing.result
+            )::text;
+  END IF;
+
+  RETURN jsonb_build_object('found', true, 'result', v_existing.result);
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION public.safe_cents_qty(p_cents bigint, p_qty numeric)
  RETURNS bigint LANGUAGE sql IMMUTABLE SET search_path TO 'public', 'pg_temp'
 AS $function$

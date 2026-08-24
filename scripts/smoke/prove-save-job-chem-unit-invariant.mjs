@@ -55,7 +55,7 @@ const TESTS = join(HERE, "fixtures", "save-job-chem-unit-tests.sql");
 
 const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19",
-                  "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28"];
+                  "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -418,14 +418,48 @@ const MUTANTS = [
     // Revert to the raw, unlocked, operation-filtered lookup the live body still carries.
     // T26 must go red: a key already spent by another operation becomes invisible again,
     // the job is created, and the receipt is swallowed by ON CONFLICT DO NOTHING.
-    name: "idempotency lookup reverted to the raw operation-filtered SELECT",
-    from: "    v_existing := check_idempotency(p_idempotency_key, 'save_job');",
-    to:
-      "    SELECT result INTO v_existing\n" +
-      "      FROM idempotency_keys\n" +
+    // Drop back to the key-only helper: no actor, no fingerprint. A completed key reused
+    // for a CHANGED payload then replays the old success and silently saves nothing,
+    // which is exactly the defect the gate described. Two edits, because the key-only
+    // helper returns the bare result while the intent helper returns a wrapper -- reverting
+    // one without the other would break the shape rather than restore the old behaviour,
+    // and the mutant would be scored for the wrong reason.
+    name: "idempotency reverted to the key-only helper (no actor or intent binding)",
+    edits: [
+      {
+        from: "    v_existing := check_idempotency_intent(p_idempotency_key, 'save_job', v_actor, v_fingerprint);",
+        to: "    v_existing := check_idempotency(p_idempotency_key, 'save_job');",
+      },
+      {
+        from:
+          "      IF v_existing -> 'result' IS NULL\n" +
+          "         OR jsonb_typeof(v_existing -> 'result') IS DISTINCT FROM 'object'\n" +
+          "         OR NULLIF(v_existing -> 'result' ->> 'job_id', '') IS NULL THEN\n" +
+          "        RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';\n" +
+          "      END IF;\n" +
+          "      RETURN v_existing -> 'result';",
+        to: "      RETURN v_existing;",
+      },
+    ],
+    expect: "T30",
+  },
+  {
+    // Stop binding the receipt. The row is then written with both binding columns NULL,
+    // and check_idempotency_intent's deployment bridge fails closed on it -- so the very
+    // next legitimate retry of that key is REFUSED. T27 is the ordinary same-key replay,
+    // so it is the test that must go red.
+    name: "receipt no longer bound to actor and fingerprint",
+    from:
+      "    UPDATE idempotency_keys\n" +
+      "       SET request_fingerprint = v_fingerprint,\n" +
+      "           request_actor_id    = v_actor\n" +
       "     WHERE idempotency_key = p_idempotency_key\n" +
-      "       AND operation = 'save_job';",
-    expect: "T26",
+      "       AND operation = 'save_job';\n" +
+      "    IF NOT FOUND THEN\n" +
+      "      RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING';\n" +
+      "    END IF;\n",
+    to: "",
+    expect: "T27",
   },
   {
     // No edit to the migration at all -- an EMPTY edits list, deliberately. What is
@@ -433,9 +467,9 @@ const MUTANTS = [
     // resolves that call at run time, so without the preflight assertion this migration
     // would apply perfectly cleanly and then fail on the first real job save. The apply
     // must refuse instead.
-    name: "check_idempotency helper missing from the database",
+    name: "check_idempotency_intent helper missing from the database",
     edits: [],
-    stage: "DROP FUNCTION public.check_idempotency(text, text);",
+    stage: "DROP FUNCTION public.check_idempotency_intent(text, text, uuid, text);",
     expectApplyAbort: "PREFLIGHT_MISSING_HELPER",
   },
 ];

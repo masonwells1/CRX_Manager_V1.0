@@ -2,9 +2,9 @@
 
 **Date:** 2026-08-23
 **Branch:** `claude/save-job-server-side-chem-unit` (worktree `.claude/worktrees/save-job-enforcement`)
-**Head:** see `git log -1` — round 8 landed on 2026-08-24; **unpushed**. Tree clean.
+**Head:** see `git log -1` — round 9 landed on 2026-08-24; **unpushed**. Tree clean.
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-**SQL sha256:** `7ca707de487b58052d546a9d47e701723d8c0c9b00f523c652bee33fab9127a4`
+**SQL sha256:** `e6885d2d5003102352b1b542d4a77f2d1f8db013c176393109b3f44e2f2c65ed`
 **Status: PARTIAL — written, proven, and parked at two gates that are not mine to open.**
 
 ## Approval state — carries nothing forward
@@ -15,14 +15,15 @@
 
 ## What the migration does
 
-Replaces the **body** of `public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text)` — identical signature, `CREATE OR REPLACE`, no new overload, ACL and owner preserved. Six changes:
+Replaces the **body** of `public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text)` — identical signature, `CREATE OR REPLACE`, no new overload, ACL and owner preserved. Seven changes:
 
 1. A chemical line whose units provably disagree is refused (`CHEM_UNIT_MISMATCH`), naming the product and both units.
 2. A rate measured per something other than acres is refused (`CHEM_RATE_DENOMINATOR_NOT_ACRES`) in the slash, spelled-out and hyphenated forms — **and in stacked forms** such as `oz/cwt/ac`. The test is subtractive: strip one trailing per-acre suffix, then refuse if any denominator survives.
 3. A negative, `NaN` or `Infinity` quantity is refused (`CHEM_QUANTITY_NOT_FINITE`) before the unit comparison and regardless of its outcome.
 4. `total_cost_cents` / `total_price_cents` are **derived** from `p_chemicals` via `safe_cents_qty` and the caller-supplied totals are ignored — this is what makes a stale tab harmless.
 5. A line that actually bills but whose rate unit or stock `unit` is blank is refused (`CHEM_UNIT_UNSPECIFIED`). Three exemptions, all the same rule — a line that cannot bill cannot bill *wrongly*: `customer_supplied`, neither a cost nor a price, and quantity 0.
-6. The idempotency lookup routes through the canonical `check_idempotency` helper instead of a raw unlocked `SELECT`, closing a pre-existing duplicate-job hole (round 8, below).
+6. The idempotency lookup routes through a canonical, advisory-locked helper instead of a raw unlocked `SELECT`, closing a pre-existing duplicate-job hole (round 8, below).
+7. That lookup is `check_idempotency_intent`, so the key is bound to the **calling actor** and to a **sha256 fingerprint of the request** (job id, job payload, fields and chemical lines, each array order-normalised). Reusing a spent key from another actor raises `IDEMPOTENCY_ACTOR_MISMATCH`; reusing it with a *changed* payload raises `IDEMPOTENCY_INTENT_MISMATCH` instead of silently returning the earlier success and saving nothing (round 9, below). An unchanged retry still replays to the same job.
 
 The live unit helpers (`normalize_rate_unit`, `field_app_priced_quantity`, `safe_cents_qty`) are **reused, not reimplemented** — a second server-side copy of the unit table would repeat the original 16x bug.
 
@@ -32,7 +33,7 @@ The live unit helpers (`normalize_rate_unit`, `field_app_priced_quantity`, `safe
 node scripts/smoke/prove-save-job-chem-unit-invariant.mjs
 ```
 
-PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **28 behaviour tests** pass; **16 mutation phases** each fail in a *named* way — 10 turn a named test red, 6 abort the apply with the specific postflight assertion written to catch them.
+PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **30 behaviour tests** pass; **17 mutation phases** each fail in a *named* way — 11 turn a named test red, 6 abort the apply with the specific preflight/postflight assertion written to catch them.
 
 `scripts/smoke/smoke-save-job-parity.sql` is the registered live chain and is **gated** on whether this migration is installed. The container prover is **manual** — `run-smoke.mjs --all` will not run it.
 
@@ -64,7 +65,7 @@ Sequence, in this order:
 
 ## What review actually caught — read before trusting a "clean" round
 
-Eight rounds; **every** round found something real, including the ones that felt finished.
+Nine rounds; **every** round found something real, including the ones that felt finished.
 
 - **NaN acreage bypass (Codex P1).** PostgreSQL orders numeric `NaN` above every value and `NaN = NaN` is true, so `acres > 0` passed, the carried quantity came back `NaN`, and `NaN <= GREATEST(0.0001, NaN)` was true — waving a genuinely mismatched line through. Every operand on that path is now bounded to a finite range.
 - **Non-atomic pin.** An earlier design split the body pin into its own migration. Two separately ledgered migrations are not atomic: a committed pin plus a failed replacement leaves the next run free to overwrite an unvalidated body. Folded in-file.
@@ -72,7 +73,8 @@ Eight rounds; **every** round found something real, including the ones that felt
 - **The file asserted an ACL it never established.** It now `REVOKE`s from `PUBLIC` and `anon` and `GRANT`s to `authenticated, service_role` before asserting.
 - **A false refusal that blocks the whole job** (round 7, found independently by three reviewers): the zero-quantity skip sat *below* the blank-unit refusal, and that shape is reachable from the ordinary UI via `reconcileChemAutofillUnits`.
 - **The mutation phases found a defect no reviewer did** (round 7): the postflight tested `anon` before `PUBLIC`, and a grant to `PUBLIC` reaches every role — so a PUBLIC grant reported itself under the anon message, naming one role while every role was exposed. The broadest grant is now reported first. A mutant that "passes" under the wrong assertion proves nothing; the prover requires the *named* assertion.
-- **A pre-existing duplicate-job hole, closed on Mason's call** (round 8). `save_job` did its own unlocked idempotency lookup filtered to `operation = 'save_job'`, then recorded with `ON CONFLICT (idempotency_key) DO NOTHING` — while the live uniqueness is on the **key alone** (`idempotency_keys_idempotency_key_key`, verified live 2026-08-24). A key already spent by another operation was therefore invisible to the lookup: the job got created, the receipt was swallowed by the conflict, and the next retry created a **second job** — a duplicate bill. That block was byte-identical to the live pre-change body, so the migration did not cause it; Mason decided on 2026-08-24 to close it here rather than in a follow-up, since a second migration replacing the same body is the non-atomic hazard round 3 already caught. It now calls `check_idempotency`, which advisory-locks the key and raises `IDEMPOTENCY_CROSS_OP_KEY_REUSE`. `T26` pins the refusal *and* that nothing was written; `T27` pins that ordinary same-key replays still return the same job. The preflight also asserts the helper exists — PL/pgSQL resolves that call at run time, so otherwise a database missing it would apply cleanly and fail on the first real save.
+- **A pre-existing duplicate-job hole, closed on Mason's call** (round 8). `save_job` did its own unlocked idempotency lookup filtered to `operation = 'save_job'`, then recorded with `ON CONFLICT (idempotency_key) DO NOTHING` — while the live uniqueness is on the **key alone** (`idempotency_keys_idempotency_key_key`, verified live 2026-08-24). A key already spent by another operation was therefore invisible to the lookup: the job got created, the receipt was swallowed by the conflict, and the next retry created a **second job** — a duplicate bill. That block was byte-identical to the live pre-change body, so the migration did not cause it; Mason decided on 2026-08-24 to close it here rather than in a follow-up, since a second migration replacing the same body is the non-atomic hazard round 3 already caught. It now calls an advisory-locking helper that raises `IDEMPOTENCY_CROSS_OP_KEY_REUSE`. `T26` pins the refusal *and* that nothing was written; `T27` pins that ordinary same-key replays still return the same job. The preflight also asserts the helper exists — PL/pgSQL resolves that call at run time, so otherwise a database missing it would apply cleanly and fail on the first real save.
+- **The key was still unbound to what was actually asked for** (round 9, Mason's scope decision on 2026-08-24). Round 8's `check_idempotency(text, text)` matches on key **and operation only**. So a key spent by an earlier `save_job` and then reused for a *different* job or an *edited* payload returned the earlier success — the operator saw "saved" while the changed quantities, cents or job details went nowhere, and a second person's key could be replayed by anyone. The call now goes to `check_idempotency_intent(text, text, uuid, text)`, already used by nine live money RPCs (the whole return family plus create/post/void commission payment, read read-only from `pg_proc` 2026-08-24), which additionally binds the calling actor and a sha256 fingerprint of the request. Three consequences worth knowing before applying: (a) that helper returns a **wrapper** `{"found": true, "result": ...}`, not the bare result, so the body unwraps it and refuses a malformed receipt rather than returning it; (b) the receipt write now stamps `request_fingerprint` and `request_actor_id`, and raises `IDEMPOTENCY_RECEIPT_MISSING` if that stamp lands on no row; (c) the helper **fails closed** on a receipt carrying neither column — a pre-binding receipt cannot have its intent reconstructed, so it raises `IDEMPOTENCY_INTENT_MISMATCH` rather than replaying. `T29` pins the actor mismatch, `T30` pins A→B→A payload reuse, and the preflight asserts the helper, `extensions.digest` (pgcrypto lives in the `extensions` schema while this body pins `search_path` to `public, pg_temp`, so the call is schema-qualified) and both receipt columns.
 - **Stacked denominators bypassed the whole rule** (round 8, the exact-SHA `gpt-5.6-sol` proof gate, and the worst finding of the eight). The rule asked whether the rate unit *ends in* a per-acre suffix, so `oz/cwt/ac` satisfied it — and the unit derivation then took everything before the *first* slash and discarded `cwt`. The line became a plain `oz`, matched a stock unit of `oz`, and **saved**: a per-hundredweight rate billed as per-acre. Reproduced in the container before the fix (`T24`: `refused=f`). The lesson generalises — an *exclusion* list of good spellings is not the same as a *test* that nothing bad survives, and only the subtractive form is safe here.
 - **A latent defect in the prover itself**, found in the same pass: mutants were applied with `String.replace(from, to)`, and JavaScript reads `$&`, `` $` ``, `$'` and `$1` in a *string* replacement as substitution patterns. SQL regex literals here end in `$'` routinely, so such a mutant silently spliced the rest of the migration into itself and failed to install with a syntax error far from the edit — which reads as "the mutant is broken", not "the harness is broken". The replacement now goes through a function.
 
@@ -85,4 +87,4 @@ Eight rounds; **every** round found something real, including the ones that felt
 
 ## One next step
 
-**Land PR #436.** It is gate 1, it is the only step available before 2026-08-26, and nothing here should reach live before it does.
+**Re-mint the Codex proof against the new HEAD** (`node scripts/write-codex-push-proof.mjs`), then push and rewrite the PR #446 body. Landing PR #436 remains gate 1 for the *apply* and is Mason's call; nothing here should reach live before it does.

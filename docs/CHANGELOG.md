@@ -181,7 +181,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Twenty-eight behaviour tests pass; and sixteen mutation phases each fail in a **named** way — ten
+Thirty behaviour tests pass; and seventeen mutation phases each fail in a **named** way — eleven
 turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -208,9 +208,10 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The twenty-eight tests: the two clean live row shapes save with derived totals reproducing the live
-stored values exactly, while the third — the one live row with a blank unit — is now **refused**, so
-the pre-apply data obligation is pinned by an executable test rather than by prose; a legitimate
+The thirty tests: all four live row shapes save with derived totals reproducing the live stored
+values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
+by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
+`T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate
 oz-rate/lb-price conversion saves; the 16x shape is refused *and* its remedy text is asserted to
 name both numbers the operator must re-enter; `oz/cwt`, `lb per cwt` and `lb-per-cwt` are all
 refused, as are the stacked `oz/cwt/ac` and `oz per cwt per acre`; `gal per acre`, `gal per acres`,
@@ -242,6 +243,42 @@ because nothing on either side of the wire compared the two units. The new invar
 exactly that shape, which is how it was found. Corrected to 30 GL, with new assertions for the
 derived totals and both refusals, all gated on whether the migration is installed so the chain
 stays green while it is parked.
+
+**A pre-existing duplicate-job hole was found and closed in the same file (rounds 8 and 9, Mason's
+call both times).** This is not part of the unit invariant; it is a second defect the review of that
+invariant uncovered in the surrounding body, and Mason chose to close it here rather than in a
+follow-up migration, because a second migration replacing this same function body is exactly the
+non-atomic hazard round 3 already caught.
+
+`save_job` did its own idempotency lookup — an unlocked `SELECT` filtered to
+`operation = 'save_job'`, recorded with `ON CONFLICT (idempotency_key) DO NOTHING` — while the live
+uniqueness constraint is on the **key alone**. In plain terms: an idempotency key is the receipt
+number the app sends so that clicking Save twice, or a retry after a dropped connection, records the
+work once instead of twice. Because the lookup filtered by operation but the constraint did not, a
+key already spent by some *other* operation was invisible to the lookup — so the job was created,
+the receipt was silently swallowed by the conflict, and the very next retry found nothing again and
+created a **second job**, which is a second bill. Two callers racing on one key could likewise both
+get past an unlocked lookup. That block was byte-identical to the live pre-change body, so the
+migration inherited the defect rather than causing it.
+
+Round 8 routed the lookup through the canonical advisory-locking helper, which serialises same-key
+callers and refuses cross-operation reuse outright. Round 9 went further, to
+`check_idempotency_intent` — the same helper nine live money RPCs already use (the whole return
+family plus create/post/void commission payment), and the same fix already shipped for commission
+payouts in PR #378. Round 8 alone still matched on key and operation only, so a key spent by an
+earlier `save_job` and then reused for a **different job or an edited payload** returned the earlier
+success: nothing duplicated, but the current request never saved and the operator told it was. The
+key is now bound to the calling actor and to a sha256 fingerprint of what was actually asked for, so
+another user's receipt is refused, a changed payload is refused, and an unchanged retry still
+replays to the same job — which is the whole point of the key. Both halves are pinned by tests, and
+by mutants that turn those tests red when the binding is removed.
+
+One of those mutants exposed a defect in the test suite itself, which is worth recording because it
+is the second time the mutation phase has found what no reviewer did. With the receipt binding
+removed, the helper's fail-closed behaviour turns an *ordinary retry* into a hard refusal, and the
+replay test had no handler — so the file aborted on a raw database error and the mutation phase
+could not attribute the failure to any test. A mutant that reddens the suite without reddening its
+own test proves nothing; the test now converts an outright refusal into a named failure.
 
 No frontend change, and there is no client-side warning to fall back on: until PR #436 lands, this
 refusal is the operator's first indication that anything is wrong. **Parked: not applied to
