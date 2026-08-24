@@ -12,7 +12,8 @@
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,11 +35,13 @@ const pricedProductSmokeFiles = [
   path.join(ROOT, 'scripts', 'smoke', 'smoke-draw-ledger-reversal.sql'),
   path.join(ROOT, 'scripts', 'smoke', 'smoke-job_from_quote_activity_feed_fix.sql'),
 ];
-const expectedSkippedMigrations = [{
-  file: '20260810010308_active_team_note_assignment_actor.sql',
-  sha256: '5ffee511a06f822bfe3b96ad6cdb64cda5e33280aa5351076a037895c1856f68',
-  reason: 'PREFLIGHT_FAIL: notify_team_note_assignment live base drift (owner=postgres, secdef=t, config={"search_path=public, pg_temp"}, body_md5=ad8be4ed1d2bdd2a87ace255b38ab641)',
-}];
+// Empty, and it must stay empty. The single entry that used to live here
+// (20260810010308_active_team_note_assignment_actor.sql) was never real drift:
+// copySql() now feeds LF into PostgreSQL, so the function body this migration
+// md5-pins matches and all 56 migrations replay. Approving that skip was
+// accepting a line-ending artifact as evidence. If an entry ever needs adding
+// back, prove it is not a CRLF artifact first.
+const expectedSkippedMigrations = [];
 
 function docker(args, options = {}) {
   const result = spawnSync('docker', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 60 * 1024 * 1024, ...options });
@@ -49,6 +52,21 @@ function psql(sql, options = {}) {
   return docker(['exec', '-i', NAME, 'psql', '-U', options.user ?? 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1'], { input: sql, allowFailure: options.allowFailure });
 }
 function copy(local, name) { docker(['cp', local, `${NAME}:/tmp/${name}`]); }
+/**
+ * Copy SQL into the container as LF, never as the checkout's own bytes.
+ * Git hands Windows a CRLF working tree, and `docker cp` would install those
+ * bytes verbatim: a function created by a CRLF migration gets a CRLF prosrc,
+ * so a LATER migration's LF-based md5 preflight fails and looks exactly like
+ * historical live-base drift. That made this proof platform-dependent -- it
+ * "passed" on Windows by approving a skip that does not exist on an LF
+ * checkout. prove-draw-down-quote-intent-binding.mjs already normalizes;
+ * this now matches it. Binary baseline artifacts still use copy() verbatim.
+ */
+function copySql(local, name) {
+  const staged = path.join(tmpdir(), `${NAME}-${name}`);
+  writeFileSync(staged, readFileSync(local, 'utf8').replaceAll('\r\n', '\n'), 'utf8');
+  docker(['cp', staged, `${NAME}:/tmp/${name}`]);
+}
 function apply(name, user) { psql(`\\i /tmp/${name}`, { user }); }
 /**
  * Apply one migration the way the real Supabase apply path does: the whole file
@@ -86,7 +104,7 @@ function selectedMigrations() {
   return migrations.slice(0, candidateIndex + 1);
 }
 function runSmoke(file, tag) {
-  copy(file, `${tag}-${path.basename(file)}`);
+  copySql(file, `${tag}-${path.basename(file)}`);
   const result = psql(`\\i /tmp/${tag}-${path.basename(file)}`, { allowFailure: true });
   return { status: result.status, output: `${result.stdout}\n${result.stderr}`.trim() };
 }
@@ -140,16 +158,17 @@ try {
   // asserting the exact live base they were authored against (function body
   // md5, policy text, trigger shape). Those are apply-time gates for the LIVE
   // database and were satisfied there; a from-scratch container rebuild is a
-  // different base, so such a gate can fail on a divergence that is real but
-  // historical and unrelated to this candidate. The one known drifted file is
+  // different base, so such a gate could in principle fail on a divergence that
+  // is real but historical and unrelated to this candidate. No migration in
+  // this set does so today: every one of them replays. Any PREFLIGHT_FAIL is
   // SKIPPED (the whole migration is one transaction, so nothing partial lands)
-  // and REPORTED. The exact-name assertion below fails closed if that known
-  // exception disappears or if any additional migration starts failing. Any
-  // other error is fatal. The candidate's own guards are never skipped.
+  // and REPORTED, and the assertion below fails closed the moment the skip set
+  // stops being empty. Any other error is fatal. The candidate's own guards are
+  // never skipped.
   const skipped = [];
   for (const [index, migration] of migrations.slice(0, liveHighWaterIndex + 1).entries()) {
     const name = `migration-${index}.sql`;
-    copy(migration, name);
+    copySql(migration, name);
     const applied = applyMigration(name, { allowFailure: true });
     if (applied.status === 0) continue;
     if (!/PREFLIGHT_FAIL/.test(applied.output)) {
@@ -227,7 +246,7 @@ try {
 
   // Preserve the production apply boundary: barrier and tier-split candidate
   // are separate transactions, with the mutation check between them.
-  copy(barrier, 'barrier.sql');
+  copySql(barrier, 'barrier.sql');
   applyMigration('barrier.sql');
   console.log('[prover] cutover barrier migration applied');
 
@@ -246,6 +265,12 @@ try {
   );
 
   // ---- Apply the candidate, then require a real pass ----
+  // The candidate is the artifact under review: it must be LF byte-verbatim,
+  // not normalized on its way in, so what applies here is what applies live.
+  assert.ok(
+    !readFileSync(candidate, 'utf8').includes('\r'),
+    'candidate migration is not LF byte-verbatim',
+  );
   copy(candidate, 'candidate.sql');
   applyMigration('candidate.sql');
   console.log('[prover] candidate migration applied');

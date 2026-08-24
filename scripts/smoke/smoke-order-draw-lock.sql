@@ -338,22 +338,26 @@ BEGIN
   ORDER BY p.current_cost, p.id
   LIMIT 1;
   IF v_product_2 IS NULL THEN
-    RAISE NOTICE 'SMOKE_SCENARIO_SKIPPED: (f) no active product costing 7.00 or less lacks a Main Warehouse inventory row; the new-product snapshot path is covered by prove-draw-down-price-tier-real-schema.mjs, which seeds one';
-  ELSE
-    PERFORM update_order_items(v_o2,
-      jsonb_build_array(
-        jsonb_build_object(
-          'id', v_item_2, 'product_id', v_product,
-          'price_per_unit', 10, 'total_units_needed', 250),
-        jsonb_build_object(
-          'product_id', v_product_2, 'product_name', '[SMOKE] added item',
-          'price_per_unit', 7, 'total_units_needed', 7, 'unit_size', 'gal')
-      ), v_admin, NULL);
-    SELECT quantity_prebooked INTO v_qty FROM inventory
-    WHERE product_id = v_product_2 AND location = 'Main Warehouse';
-    IF v_qty IS DISTINCT FROM 7 THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: (f) new product snapshot/prebook qty=%, expected 7', v_qty;
-    END IF;
+    -- SMOKE_PREREQ, not a notice-and-continue. run-smoke.mjs does not recognize
+    -- a bare notice, so continuing here reported PASS for a chain in which (f)
+    -- never ran -- incomplete evidence counted as verified, which
+    -- docs/workflows/CODEX_REVIEW_GAUNTLET.md forbids. SMOKE_PREREQ is the
+    -- recognized "this proved nothing" result and exits nonzero.
+    RAISE EXCEPTION 'SMOKE_PREREQ: (f) needs a second active product costing 7.00 or less with no Main Warehouse inventory row; prove-draw-down-price-tier-real-schema.mjs seeds one, so run this chain there when the live catalog cannot supply it';
+  END IF;
+  PERFORM update_order_items(v_o2,
+    jsonb_build_array(
+      jsonb_build_object(
+        'id', v_item_2, 'product_id', v_product,
+        'price_per_unit', 10, 'total_units_needed', 250),
+      jsonb_build_object(
+        'product_id', v_product_2, 'product_name', '[SMOKE] added item',
+        'price_per_unit', 7, 'total_units_needed', 7, 'unit_size', 'gal')
+    ), v_admin, NULL);
+  SELECT quantity_prebooked INTO v_qty FROM inventory
+  WHERE product_id = v_product_2 AND location = 'Main Warehouse';
+  IF v_qty IS DISTINCT FROM 7 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (f) new product snapshot/prebook qty=%, expected 7', v_qty;
   END IF;
 
   -- --------------------------------------------------------------------

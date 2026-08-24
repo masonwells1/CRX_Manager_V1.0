@@ -45,6 +45,25 @@ Review round (Codex P2 findings on the PR, all three in the fixtures themselves)
   B total the correct code never yields produced `pa=150.00 pb=100.00`, proving B
   is genuinely queried and compared rather than ignored.
 
+Second review round (gpt-5.6-sol, high effort, against `origin/main`) — two more P2
+findings, both accepted:
+
+- The prover copied the checkout's own bytes into PostgreSQL. On Windows that is CRLF,
+  so a function created by a CRLF migration got a CRLF `prosrc` and the *next*
+  migration's LF-based md5 preflight failed — which this proof had been approving as
+  "historical live-base drift". It was a line-ending artifact, not drift. `copySql()`
+  now normalizes every replayed migration and smoke to LF (matching
+  `prove-draw-down-quote-intent-binding.mjs`), binary baseline artifacts still copy
+  verbatim, and the candidate is asserted LF byte-verbatim so what applies in the
+  container is what applies live. **All 56 post-baseline migrations now replay and the
+  approved-skip list is empty**, where it previously replayed 55 and excused one.
+- `smoke-order-draw-lock` (f) emitted a notice and continued to
+  `SMOKE_PASS_ROLLBACK` when the catalog could not supply an inventory-free product.
+  `run-smoke.mjs` does not recognize that notice, so a live `--spec update_order_items`
+  run reported PASS with scenario (f) never executed — incomplete evidence counted as
+  verified, which `docs/workflows/CODEX_REVIEW_GAUNTLET.md` forbids. It now raises
+  `SMOKE_PREREQ`, the recognized "this proved nothing" result, which exits nonzero.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —
