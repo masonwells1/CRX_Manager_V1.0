@@ -414,6 +414,26 @@ real timeline on head `c0490ce9` shows both errors at once: `success 04:33:33` (
 now the newest `pending`, verified live to resolve to `04:26:00`. **A correct diagnosis does not make the
 attached fix correct; check the reasoning, not just the reputation of the reviewer.**
 
+**Eleventh round: the same defect, one directory over — because the fix stopped at the instance it was
+given.** Codex returned High again on `.coderabbit.yaml`. `docs/loops/**/*.md`, `docs/build-loops/**/*.md`,
+and `docs/handoffs/**/*.md` were still excluded, and all three are live agent control surfaces:
+`.claude/commands/run-loop.md` describes its own job as "read `docs/loops/Y.md` and execute it";
+`docs/build-loops/*/` holds `LOOP_PROMPT.md`, `BUILD-LOOP.md`, and `STATE.md` that drive autonomous work
+through migration, merge, and production gates; a handoff document is by definition instructions for the next
+session. The `docs/audits/` fix from the previous round did not touch any of them, and — worse — the
+regression test written to *prevent* exactly this walked only `docs/audits/`, so it passed all 105 assertions
+with the gap wide open.
+
+All three exclusions are gone; `docs/archive/` is the only genuinely inert tree left. The coverage test now
+iterates a `CONTROL_ROOTS` list and protects each one whole, with the dated-report carve-out surviving only
+inside `docs/audits/`. Restoring the `docs/loops/**` exclusion turns it red on
+`docs/loops/billing-day-money-ledger.md`.
+
+This is the clearest instance of the pattern this entry keeps circling: **fixing the instance you were handed
+and stopping is how the second instance survives.** The remedy is not more care at the same scope — it is
+asking "what is the class, and where else does it live?" before writing the fix, and making the regression
+iterate that class rather than the one example.
+
 The through-line across all six rounds is one idea: **a check that names the thing it forbids only catches
 that name.** Five times running, the fix was itself written one notch too narrow — a spelling, then a
 notation, then a variable read from the wrong scope, then two facts with no order between them, then a

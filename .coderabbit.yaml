@@ -69,14 +69,24 @@ reviews:
   # ledger, runbook, and state file under docs/audits/ stays reviewed. If the
   # glob syntax is ever unsupported the pattern matches nothing, which reviews
   # MORE than intended - the safe direction to fail.
+  #
+  # Then the SAME defect turned up in the directories that fix did not touch:
+  # docs/loops/, docs/build-loops/, and docs/handoffs/ were excluded and are
+  # also live agent control surfaces. `.claude/commands/run-loop.md` says its
+  # job is "read docs/loops/Y.md and execute it"; docs/build-loops/*/ holds
+  # LOOP_PROMPT.md, BUILD-LOOP.md and STATE.md that drive autonomous work
+  # through migration, merge, and production gates; a handoff doc is by
+  # definition instructions for the next session. All three exclusions are
+  # GONE. Raised by the Codex reviewer on PR #441 after the docs/audits fix
+  # shipped - fixing one instance of a class and stopping is how the second
+  # instance survives. docs/archive/ is the only genuinely inert tree left,
+  # and scripts/coderabbit-review-coverage.test.mjs now enforces that every
+  # agent-consumed control root stays reviewable, not just docs/audits/.
   path_filters:
     - "!docs/archive/**/*.md"
     - "!docs/archive/**/*.html"
     - "!docs/archive/**/*.json"
     - "!docs/audits/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md"
-    - "!docs/loops/**/*.md"
-    - "!docs/build-loops/**/*.md"
-    - "!docs/handoffs/**/*.md"
     - "!.agents/**"
 
   auto_review:

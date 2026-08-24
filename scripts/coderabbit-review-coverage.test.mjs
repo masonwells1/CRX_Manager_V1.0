@@ -100,16 +100,39 @@ function walk(dir, acc = []) {
   return acc;
 }
 
-const auditFiles = walk(path.join(ROOT, "docs", "audits"));
+// EVERY agent-consumed control root, not just the one that was fixed first.
+// The first version of this test walked `docs/audits/` alone and passed all 105
+// assertions while `docs/loops/`, `docs/build-loops/`, and `docs/handoffs/` were
+// still excluded — the same defect, one directory over. `run-loop.md` describes
+// its own job as "read docs/loops/Y.md and execute it"; docs/build-loops/*/ holds
+// LOOP_PROMPT.md / BUILD-LOOP.md / STATE.md that drive autonomous work through
+// migration, merge, and production gates; a handoff doc is by definition
+// instructions for the next session. Fixing one instance of a class and stopping
+// is how the second instance survives. (Codex, PR #441.)
+const CONTROL_ROOTS = ["docs/audits", "docs/loops", "docs/build-loops", "docs/handoffs"];
 const DATED_REPORT = /^docs\/audits\/\d{4}-\d{2}-\d{2}-[^/]*\.md$/;
-const agentConsumed = auditFiles.filter(
-  (f) => !DATED_REPORT.test(f) && (f.endsWith(".md") || f.endsWith(".json")),
-);
-ok(agentConsumed.length > 0, "agent-consumed audit control files were found");
 
-for (const file of agentConsumed) {
-  ok(!excluded(file), `agent-consumed control file stays reviewable: ${file}`);
+const auditFiles = walk(path.join(ROOT, "docs", "audits"));
+let agentConsumedTotal = 0;
+for (const root of CONTROL_ROOTS) {
+  const abs = path.join(ROOT, ...root.split("/"));
+  let files = [];
+  try {
+    files = walk(abs);
+  } catch {
+    ok(false, `control root exists and is walkable: ${root}`);
+    continue;
+  }
+  ok(files.length > 0, `control root is non-empty: ${root}`);
+  // Inside docs/audits the dated reports are the one carve-out; every other
+  // control root is protected whole.
+  const consumed = files.filter((f) => !DATED_REPORT.test(f));
+  agentConsumedTotal += consumed.length;
+  for (const file of consumed) {
+    ok(!excluded(file), `agent-consumed control file stays reviewable: ${file}`);
+  }
 }
+ok(agentConsumedTotal > 0, "agent-consumed control files were found");
 
 // The two canonical "execute it exactly" prompts, named explicitly. If either is
 // ever renamed, this fails loudly instead of quietly reviewing nothing.
