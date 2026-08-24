@@ -630,7 +630,39 @@ BEGIN
     -- entered produces exactly that shape and would have blocked the WHOLE job save.
     -- Found by the security review of this very change; T20 pins it.
     -- Negative and non-finite quantities were refused outright at the top of the loop.
-    CONTINUE WHEN v_qty = 0;
+    --
+    -- ROUND 17: the skip is no longer UNCONDITIONAL, because as an unconditional exit it was
+    -- the mirror image of the equality shortcut and leaked money the other way (HIGH,
+    -- gpt-5.6-sol 2026-08-24). A line with a real price, a real rate and real acreage but
+    -- quantity 0 saved and billed NOTHING -- so where the equality shortcut let a caller
+    -- OVER-charge, this let one UNDER-charge, and the zero propagates into the invoice.
+    --
+    -- Mason's rule (2026-08-24): refuse only where a customer's money is actually at stake.
+    -- Three exits stay, and each is a case where zero is genuinely the right answer:
+    --   * customer_supplied -- contributes 0 to both totals by definition;
+    --   * no PRICE -- nothing can be under-charged. This is the exemption that keeps live
+    --     JOB-2026-0001 saveable: it carries quantity 0 against a 5/ac rate over 178.31
+    --     acres with a cost but price 0. Its cost still misstates margin, which is a known
+    --     and accepted residual, not an oversight;
+    --   * no usable rate or acreage -- nothing was EXPECTED, so zero is not a shortfall.
+    --     This is the one that matters operationally: it is the ordinary-UI path T20 was
+    --     written for, where a product is picked before any acreage is entered. There
+    --     acres = 0, so the expected quantity is 0 too and the line is simply correct.
+    --
+    -- What is left is exactly the harmful shape: priced, a positive quantity was expected,
+    -- and none was recorded.
+    IF v_qty = 0 THEN
+      CONTINUE WHEN COALESCE((v_chem->>'customer_supplied')::boolean, false);
+      CONTINUE WHEN COALESCE(NULLIF(v_chem->>'price_per_unit_cents', '')::bigint, 0) = 0;
+      v_rate := NULLIF(v_chem->>'rate_per_acre','')::numeric;
+      CONTINUE WHEN NOT (v_rate IS NOT NULL AND v_rate > 0 AND v_rate < 'Infinity'::numeric
+                         AND v_acres > 0 AND v_acres < 'Infinity'::numeric);
+      SELECT p.product_name INTO v_product_name
+        FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+      RAISE EXCEPTION
+        'CHEM_QUANTITY_ZERO_BUT_EXPECTED: % is quoted at % per acre over % acres, so % should have been applied, but the line records a quantity of 0 while still carrying a price. The invoice bills the quantity, so this would charge the customer nothing. Enter the quantity actually applied, or clear the rate and the price if none was used.',
+        COALESCE(v_product_name, 'This product'), v_rate, v_acres, v_rate * v_acres;
+    END IF;
 
     -- A BLANK unit on either side proves nothing -- and until Mason settled it on
     -- 2026-08-23 such a row was simply SKIPPED. That was the largest remaining hole, and
@@ -817,12 +849,25 @@ BEGIN
           'CHEM_QUANTITY_NOT_DERIVED: % is quoted at % per acre over % acres, which is %, but the line carries a quantity of %. The amount billed comes from the quantity, so these must agree. Re-enter the rate or the quantity.',
           COALESCE(v_product_name, 'This product'), v_rate, v_acres, v_rate * v_acres, v_qty;
       END IF;
-      -- RESIDUAL, stated rather than hidden: with no usable rate or acreage there is nothing
-      -- to derive the quantity FROM, so an equal-unit line still saves on the caller's
-      -- quantity. Refusing here instead would block an ordinary job that simply has no
-      -- acreage entered yet, which is the round-7 defect three reviewers caught. Closing this
-      -- last gap means deciding that a priced line with no acreage is itself invalid -- an
-      -- operational policy call for Mason, not a change to slip in behind a review finding.
+      -- ROUND 17 closed what round 15 left open here, on Mason's decision of 2026-08-24.
+      --
+      -- The gap mattered more than round 15 admitted: with no usable rate there is nothing to
+      -- derive from, and a hand-built call chooses its own payload -- so it could defeat the
+      -- whole check by simply OMITTING the rate and naming any quantity it liked. A guard a
+      -- caller can switch off is not a guard.
+      --
+      -- Mason's rule is to refuse only where a customer's money is at stake, so the refusal
+      -- is conditioned on the line carrying a PRICE. A line with no price bills the customer
+      -- nothing, so an unverifiable quantity on it cannot over-charge anyone; its cost can
+      -- still misstate margin, which is the same accepted residual recorded at the
+      -- zero-quantity exit above.
+      IF COALESCE(NULLIF(v_chem->>'price_per_unit_cents', '')::bigint, 0) <> 0 THEN
+        SELECT p.product_name INTO v_product_name
+          FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+        RAISE EXCEPTION
+          'CHEM_QUANTITY_UNVERIFIABLE: % is priced per unit and carries a quantity of %, but without both a rate per acre and field acreage there is nothing to check that quantity against, and the invoice bills it. Enter the rate per acre and the acres treated, or clear the price.',
+          COALESCE(v_product_name, 'This product'), v_qty;
+      END IF;
       CONTINUE;
     END IF;
 

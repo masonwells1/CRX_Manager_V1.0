@@ -337,6 +337,15 @@ EXCEPTION WHEN OTHERS THEN
   RAISE EXCEPTION 'T19 FAIL  the save was refused, so the customer-supplied exemption is gone: %', SQLERRM;
 END $$;
 
+-- T20 CARRIES THE ACREAGE IT WAS ALWAYS ABOUT (corrected in round 17). It previously sent
+-- acres_to_treat = 10 against a 1.5 pt/ac rate, which describes a line where 15 pt WAS
+-- expected and none was recorded -- the underbilling shape T46 now refuses, frozen into a
+-- test as correct. The scenario this test exists for is a product picked BEFORE any acreage
+-- is entered, and there acres is 0, so the expected quantity is 0 too and the line is simply
+-- right. Setting the acreage to 0 makes the test describe its own scenario. The gate caught
+-- this; it is the second time in this file that a test had been written around a defect and
+-- would have defended it against the next reviewer.
+--
 -- T20: a blank unit with a PRICE but quantity 0 must still SAVE. It bills
 -- safe_cents_qty(price, 0) = 0, so by the stated rule -- a line that cannot bill cannot
 -- bill wrongly -- it is exempt. The zero-quantity skip sat BELOW the blank-unit refusal
@@ -350,7 +359,7 @@ DECLARE r jsonb; c bigint;
 BEGIN
   r := save_job(NULL,
     '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
-    '[{"field_id":"3333333e-3333-3333-3333-333333333340","acres_to_treat":10}]'::jsonb,
+    '[{"field_id":"3333333e-3333-3333-3333-333333333340","acres_to_treat":0}]'::jsonb,
     '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":0,"unit":"","rate_per_acre":1.5,"rate_unit":"pt/ac","cost_per_unit_cents":1250,"price_per_unit_cents":1800}]'::jsonb,
     '11111111-1111-1111-1111-111111111111'::uuid, NULL);
   SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
@@ -926,6 +935,74 @@ BEGIN
   RAISE NOTICE 'T45 PASS  all three Unicode separators (U+2010, U+2011, U+202F) are refused on a dry fluid-ounce line';
 END $$;
 
+-- T46: THE UNDERBILLING SHAPE (HIGH, gpt-5.6-sol 2026-08-24) -- the mirror image of T42. The
+-- zero-quantity exit was UNCONDITIONAL, so a line with a real price, a real rate and real
+-- acreage but quantity 0 saved and billed NOTHING, and the zero carried into the invoice.
+-- 10 acres at 1.5 pt/ac is 15 pt; this line records none while still holding a price.
+-- Must be REFUSED.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333382-3333-3333-3333-333333333383","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":0,"unit":"pt","rate_per_acre":1.5,"rate_unit":"pt/ac","cost_per_unit_cents":1250,"price_per_unit_cents":1800}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_QUANTITY_ZERO_BUT_EXPECTED%' THEN
+    RAISE NOTICE 'T46 PASS  a priced line that recorded no quantity where 15 pt was expected is refused: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T46 FAIL  a priced line billed the customer nothing for an applied product; refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
+-- T47: THE EXEMPTION THAT KEEPS LIVE DATA SAVEABLE, and the reason the rule is conditioned on
+-- PRICE rather than on "bills anything". This is live JOB-2026-0001's shape: quantity 0
+-- against a positive rate over real acreage, carrying a COST but a price of 0. Nothing can be
+-- under-charged, so by Mason's 2026-08-24 rule it is exempt and must still SAVE. Refusing it
+-- would have made an existing live job unsaveable and turned the pre-apply count off zero.
+-- The cost still misstates margin; that is a recorded, accepted residual, not an oversight.
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":178.31}'::jsonb,
+    '[{"field_id":"33333384-3333-3333-3333-333333333385","acres_to_treat":178.31}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":0,"unit":"gal","rate_per_acre":5,"rate_unit":"gal/ac","cost_per_unit_cents":4503,"price_per_unit_cents":0}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 0 THEN RAISE NOTICE 'T47 PASS  the live JOB-2026-0001 shape (quantity 0, cost, no price) still saves; price=%', c;
+  ELSE RAISE EXCEPTION 'T47 FAIL  price=%', c; END IF;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T47 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T47 FAIL  the zero-quantity rule over-fired and refused an existing live row shape: %', SQLERRM;
+END $$;
+
+-- T48: THE BYPASS ROUND 15 LEFT OPEN. Round 15 made the quantity provable when the units
+-- matched, but only WHEN a rate and acreage existed to prove it against -- and a hand-built
+-- call writes its own payload, so it could switch the whole check off by simply omitting the
+-- rate and naming any quantity. A guard a caller can disable is not a guard. Priced, equal
+-- units, positive quantity, no rate: must be REFUSED.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333386-3333-3333-3333-333333333387","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":9999,"unit":"oz","rate_unit":"oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":100}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_QUANTITY_UNVERIFIABLE%' THEN
+    RAISE NOTICE 'T48 PASS  omitting the rate no longer switches the quantity check off: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T48 FAIL  a priced line with no rate billed an unverifiable quantity; refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
 -- T37: THE BYPASS the round-11 half-fix left open, returned by the gate as a fresh HIGH. A DRY
 -- product with rate 'fl oz/ac' against a stock Unit of 'lb'. These do NOT normalise equal, so the
 -- equality shortcut -- the only thing round 10 guarded -- never runs. The line goes down the
@@ -1024,6 +1101,6 @@ DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 16 AND n_chem = 16 THEN RAISE NOTICE 'T8 PASS  16 jobs / 16 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the two false-refusal guards that MUST save are T33 (liquid fl oz/oz) and T41 (dry oz carrying a non-breaking space, added in round 14). T34, T39 and T40 are all refusals and write nothing, which is why each new spelling round raises this count by at most the one saving test it adds';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 16/16)', n_jobs, n_chem; END IF;
+  IF n_jobs = 17 AND n_chem = 17 THEN RAISE NOTICE 'T8 PASS  17 jobs / 17 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) and T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price, added in round 17). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 17/17)', n_jobs, n_chem; END IF;
 END $$;

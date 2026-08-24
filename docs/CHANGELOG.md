@@ -93,6 +93,29 @@ Blend Recipes was never affected; it selects `*`.
 
 ## 2026-08-22 — The chemical-unit and job-money invariants move out of React and into `save_job` (parked)
 
+**Round 17 (2026-08-24) — the opposite leak, and Mason's rule for both.** The reviewer found the
+mirror image of the earlier problem: a chemical line could record that *nothing* was applied while
+still carrying a price, and the job would happily bill the customer nothing for a product the rate
+and acreage say went out. Where the earlier hole let a request charge too much, this one let it
+charge too little.
+
+Mason's decision was to refuse only where a customer's money is genuinely at stake, and that is
+what shipped. A line that records nothing applied is refused **if it carries a price and a real
+amount was expected**. A priced line whose amount cannot be checked at all is also refused — that
+one matters, because a hand-built request could previously switch the entire check off just by
+leaving the rate blank.
+
+Three situations stay allowed, because zero is genuinely the right answer in each: a
+customer-supplied product, a line with no price (nothing can be under-charged — this is what keeps
+the existing JOB-2026-0001 saveable), and a line with no rate or no acreage, where nothing was
+expected in the first place. That last one is the ordinary case of picking a product before
+entering acreage, and it is now pinned by a test so a future tightening cannot quietly break it.
+
+One known trade-off, stated rather than buried: a line with a cost but no price can still misstate
+margin. That follows directly from tying the rule to what the customer is charged.
+
+Still parked; nothing has been applied to live.
+
 **Round 16 (2026-08-24) — stopped patching and fixed the approach.** Four times running, the
 rule that stops a powder being priced in fluid ounces was defeated by a punctuation mark nobody
 had listed yet: first a period, then an invisible character, then a hyphen, then a *different*
@@ -306,7 +329,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Forty-five behaviour tests pass; and twenty-three mutation phases each fail in a **named** way — seventeen
+Forty-eight behaviour tests pass; and twenty-five mutation phases each fail in a **named** way — nineteen
 turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -333,7 +356,7 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The forty-five tests: all four live row shapes save with derived totals reproducing the live stored
+The forty-eight tests: all four live row shapes save with derived totals reproducing the live stored
 values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
 by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
 `T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate

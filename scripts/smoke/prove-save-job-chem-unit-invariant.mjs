@@ -64,7 +64,7 @@ const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19",
                   "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30",
                   "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
-                  "T40", "T41", "T42", "T43", "T44", "T45"];
+                  "T40", "T41", "T42", "T43", "T44", "T45", "T46", "T47", "T48"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -386,6 +386,24 @@ const MUTANTS = [
     expect: "T45",
   },
   {
+    // Restores the UNCONDITIONAL zero-quantity exit, which billed the customer nothing for a
+    // product the rate and acreage say was applied. T46 must go red; T20 and T47 (the two
+    // legitimate zero-quantity shapes) must stay green, which is what proves the rule is
+    // discriminating between them rather than just firing.
+    name: "zero-quantity exit made unconditional again",
+    from: "    IF v_qty = 0 THEN\n      CONTINUE WHEN COALESCE((v_chem->>'customer_supplied')::boolean, false);",
+    to: "    CONTINUE WHEN v_qty = 0;\n    IF false THEN\n      CONTINUE WHEN COALESCE((v_chem->>'customer_supplied')::boolean, false);",
+    expect: "T46",
+  },
+  {
+    // Drops the unverifiable-quantity refusal, restoring the switch-it-off-by-omitting-the-
+    // rate bypass that round 15 left open. T48 must go red.
+    name: "unverifiable priced quantity allowed through again",
+    from: "      IF COALESCE(NULLIF(v_chem->>'price_per_unit_cents', '')::bigint, 0) <> 0 THEN\n        SELECT p.product_name INTO v_product_name\n          FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;\n        RAISE EXCEPTION\n          'CHEM_QUANTITY_UNVERIFIABLE",
+    to: "      IF false THEN\n        SELECT p.product_name INTO v_product_name\n          FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;\n        RAISE EXCEPTION\n          'CHEM_QUANTITY_UNVERIFIABLE",
+    expect: "T48",
+  },
+  {
     // Restores the bare equality shortcut, which proved the two sides shared a unit and
     // nothing about the quantity -- the caller then set the money directly. T42 must go red.
     name: "equality shortcut restored as a free pass for the quantity",
@@ -503,9 +521,15 @@ const MUTANTS = [
     expectApplyAbort: "POSTFLIGHT_SEARCH_PATH",
   },
   {
+    // Anchor widened in round 17. The bare CONTINUE line stopped being unique once the
+    // zero-quantity block gained its own customer-supplied exemption, and the new ambiguity
+    // check refused it rather than silently editing whichever came first. The exemption this
+    // mutant is named for is the BLANK-UNIT one that T19 covers, so the anchor now carries
+    // the cost_per_unit_cents line that follows it there and nowhere else.
     name: "customer-supplied exemption removed",
-    from: "      CONTINUE WHEN COALESCE((v_chem->>'customer_supplied')::boolean, false);\n",
-    to: "",
+    from: "      CONTINUE WHEN COALESCE((v_chem->>'customer_supplied')::boolean, false);\n" +
+          "      CONTINUE WHEN COALESCE(NULLIF(v_chem->>'cost_per_unit_cents', '')::bigint, 0) = 0",
+    to: "      CONTINUE WHEN COALESCE(NULLIF(v_chem->>'cost_per_unit_cents', '')::bigint, 0) = 0",
     expect: "T19",
   },
   {
@@ -513,14 +537,13 @@ const MUTANTS = [
     // BELOW the blank-unit refusal. That is exactly how the code shipped when the refusal
     // was first written, and it falsely refused an ordinary UI shape. Without this mutant
     // the ordering is asserted only by a comment.
-    name: "zero-quantity skip moved back below the blank-unit refusal",
-    edits: [
-      { from: "    CONTINUE WHEN v_qty = 0;\n\n    -- A BLANK unit", to: "    -- A BLANK unit" },
-      {
-        from: "    -- (the zero-quantity skip moved ABOVE the blank-unit refusal -- see the comment there)",
-        to: "    CONTINUE WHEN v_qty = 0;",
-      },
-    ],
+    // Re-cut in round 17: the skip became a conditional block, so "move the one-line skip"
+    // no longer describes anything. Disabling the block reproduces the same defect by the
+    // same mechanism -- a zero-quantity line stops being handled early and falls through
+    // into the blank-unit refusal, which is precisely what refused the ordinary UI shape.
+    name: "zero-quantity handling moved back below the blank-unit refusal",
+    from: "    IF v_qty = 0 THEN\n      CONTINUE WHEN COALESCE((v_chem->>'customer_supplied')::boolean, false);",
+    to: "    IF false THEN\n      CONTINUE WHEN COALESCE((v_chem->>'customer_supplied')::boolean, false);",
     expect: "T20",
   },
   {
