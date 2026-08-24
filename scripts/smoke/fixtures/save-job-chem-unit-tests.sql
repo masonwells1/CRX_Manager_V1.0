@@ -1294,6 +1294,43 @@ EXCEPTION WHEN OTHERS THEN
   RAISE EXCEPTION 'T58 FAIL  a live, active, billing per-unit product cannot start a job: %', SQLERRM;
 END $$;
 
+-- T59: THE QUANTITY-DRIVEN UI PATH, and it is the exact case the gate raised as a HIGH
+-- against round 18's flat tolerance. This is an ORDINARY JOB, not an attack.
+--
+-- The app supports two calculation directions. chemCalculator.applyChemEdit tracks which one
+-- the operator used in a `driver` field ('rate' or 'qty') -- but buildJobChemicalsPayload does
+-- NOT send it, so the server cannot tell them apart and must accept both.
+--
+--   * driver 'rate' -> quantity = fmt4(rate x acres). Reproduces exactly.
+--   * driver 'qty'  -> the typed total is HELD and the rate becomes fmt4(quantity / acres).
+--                      That rate is rounded to four decimals, so multiplying it back CANNOT
+--                      return the original quantity.
+--
+-- Numbers below are the gate's own: 178.31 acres, operator types 10, the UI stores rate
+-- 0.0561, and 0.0561 x 178.31 = 10.003191 -- off by 0.003191, which a flat 0.0001 refuses.
+-- Refusing one line rolls back the WHOLE job save, so this would have blocked ordinary
+-- new-job and edit workflows. Round 7 all over again, reached by TIGHTENING rather than
+-- loosening, which is why T51 (a rounding difference that must still save) did not catch it:
+-- T51 tested the rate-driven direction only.
+--
+-- The tolerance now models the rate's own stored precision -- 4 dp means the true rate can
+-- differ by 0.00005, which over v_acres acres is 0.00005 * v_acres. Must SAVE.
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":178.31}'::jsonb,
+    '[{"field_id":"33333460-3333-3333-3333-333333334601","acres_to_treat":178.31}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":10,"unit":"oz","rate_per_acre":0.0561,"rate_unit":"oz/ac","cost_per_unit_cents":0,"price_per_unit_cents":100}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 1000 THEN RAISE NOTICE 'T59 PASS  the quantity-driven UI path saves (178.31 acres, typed qty 10, derived rate 0.0561); price=%', c;
+  ELSE RAISE EXCEPTION 'T59 FAIL  price=% (expected 1000)', c; END IF;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T59 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T59 FAIL  an ordinary quantity-driven job entry was REFUSED, which rolls back the whole job save: %', SQLERRM;
+END $$;
+
 -- T55: THE COUNTERPART. Every unit the live system actually carries must still SAVE on a
 -- priced line, or the backstop would block ordinary work -- the round-7 defect three reviewers
 -- caught, and the reason a widening is never free. 'dry oz' is the spelling most at risk:
@@ -1422,6 +1459,6 @@ DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 26 AND n_chem = 26 THEN RAISE NOTICE 'T8 PASS  26 jobs / 26 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 26/26)', n_jobs, n_chem; END IF;
+  IF n_jobs = 27 AND n_chem = 27 THEN RAISE NOTICE 'T8 PASS  27 jobs / 27 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 27/27)', n_jobs, n_chem; END IF;
 END $$;

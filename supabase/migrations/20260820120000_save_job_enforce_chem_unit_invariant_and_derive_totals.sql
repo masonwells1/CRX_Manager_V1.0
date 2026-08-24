@@ -1010,8 +1010,31 @@ BEGIN
       v_rate := NULLIF(v_chem->>'rate_per_acre','')::numeric;
       IF v_rate IS NOT NULL AND v_rate > 0 AND v_rate < 'Infinity'::numeric
          AND v_acres > 0 AND v_acres < 'Infinity'::numeric THEN
+        -- THE TOLERANCE MODELS THE RATE'S OWN STORED PRECISION, and round 23 is why.
+        --
+        -- The app supports TWO calculation directions and does not tell the server which one
+        -- the operator used (chemCalculator.applyChemEdit tracks a `driver` of 'rate' or
+        -- 'qty', but buildJobChemicalsPayload does not send it). Entering a RATE derives the
+        -- quantity; entering a QUANTITY derives the rate as fmt4(quantity / acres) and HOLDS
+        -- the typed total. The second direction cannot reproduce quantity = rate x acres,
+        -- because the rate it stores has been rounded to four decimals.
+        --
+        -- The gate's example is an ordinary job, not an attack: 178.31 acres, operator types
+        -- quantity 10, the UI stores rate 0.0561, and 0.0561 x 178.31 = 10.003191. A flat
+        -- 0.0001 refuses it -- and refusing one line rolls back the WHOLE job save. That is
+        -- the round-7 defect again, reached by tightening rather than by loosening, which is
+        -- exactly the failure mode T51 was written to watch for and did not cover.
+        --
+        -- So the slack is the error the rate's own rounding can introduce and nothing more:
+        -- a rate stored to 4 dp can be wrong by up to 0.00005, which over v_acres acres is
+        -- 0.00005 * v_acres. This is NOT the relative tolerance round 18 removed. That one
+        -- scaled with the VALUE BEING CHECKED, so a caller inflating the quantity inflated
+        -- its own allowance -- at 5,000 acres and a rate of 1e9 it permitted 5,000,000 units.
+        -- This scales with ACREAGE, which the caller does not get to invent freely and which
+        -- is physically bounded: the same 5,000 acres now allows 0.25 units. It has a reason
+        -- rather than a magnitude.
         CONTINUE WHEN abs(v_qty - (v_rate * v_acres))
-                      <= 0.0001::numeric;
+                      <= GREATEST(0.0001::numeric, 0.00005::numeric * v_acres);
         SELECT p.product_name INTO v_product_name
           FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
         RAISE EXCEPTION
@@ -1061,7 +1084,20 @@ BEGIN
       IF v_carried IS NOT NULL
          AND v_carried > '-Infinity'::numeric
          AND v_carried < 'Infinity'::numeric
-         AND abs(v_qty - v_carried) <= 0.0001::numeric THEN
+         AND abs(v_qty - v_carried)
+             <= GREATEST(
+                  0.0001::numeric,
+                  -- The same rate-rounding slack as the equal-units branch, but CARRIED
+                  -- THROUGH THE CONVERTER, because here the quantity lives in a different
+                  -- unit from the rate. Converting 0.00005 * acres gives the error in the
+                  -- unit actually being compared -- using the unconverted figure would be
+                  -- far too generous in one direction (oz -> gal divides by 128) and too
+                  -- tight in the other. Falls back to the flat 0.0001 if the converter
+                  -- cannot size it, which is the strict reading, not the lax one.
+                  COALESCE(
+                    field_app_priced_quantity(0.00005::numeric * v_acres,
+                                              v_qty_unit, v_price_unit, v_form),
+                    0.0001::numeric)) THEN
         CONTINUE;
       END IF;
     END IF;

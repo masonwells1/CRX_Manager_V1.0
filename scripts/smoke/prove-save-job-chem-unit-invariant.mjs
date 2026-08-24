@@ -65,7 +65,7 @@ const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30",
                   "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
                   "T40", "T41", "T42", "T43", "T44", "T45", "T46", "T47", "T48",
-                  "T49", "T50", "T51", "T52", "T53", "T54", "T55", "T56", "T57", "T58"];
+                  "T49", "T50", "T51", "T52", "T53", "T54", "T55", "T56", "T57", "T58", "T59"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -405,7 +405,12 @@ const MUTANTS = [
     // what separates "the tolerance is bounded" from "the tolerance is gone".
     name: "quantity tolerance made relative again",
     edits: [
-      { from: "<= 0.0001::numeric", to: "<= GREATEST(0.0001::numeric, abs(v_rate * v_acres) * 0.000001::numeric)", all: true },
+      // Anchor re-cut in round 23. The tolerance is no longer a bare 0.0001 -- it models the
+      // rate's own 4-dp rounding slack, 0.00005 * acres. Swapping THAT for a slack relative
+      // to the value being checked restores exactly the round-18 money bug: the caller's own
+      // inflated quantity inflates its own allowance. T50 must go red.
+      { from: "<= GREATEST(0.0001::numeric, 0.00005::numeric * v_acres);",
+        to: "<= GREATEST(0.0001::numeric, abs(v_rate * v_acres) * 0.000001::numeric);" },
     ],
     expect: "T50",
   },
@@ -559,8 +564,11 @@ const MUTANTS = [
     name: "every finiteness bound on the acreage path removed",
     edits: [
       { from: "AND v_acres > 0 AND v_acres < 'Infinity'::numeric", to: "AND v_acres > 0", all: true },
-      { from: "abs(v_qty - v_carried) <= 0.0001::numeric",
-        to: "abs(v_qty - v_carried) <= GREATEST(0.0001::numeric, abs(v_carried) * 0.000001::numeric)" },
+      // Anchor re-cut in round 23 with the tolerance. Still restores the RELATIVE form,
+      // which is the half of the original NaN bypass this mutant needs: NaN <= NaN is TRUE
+      // where NaN <= a bounded number is FALSE.
+      { from: "         AND abs(v_qty - v_carried)\n             <= GREATEST(",
+        to: "         AND abs(v_qty - v_carried) <= GREATEST(abs(v_carried) * 0.000001::numeric, " },
       { from: "         AND v_carried > '-Infinity'::numeric\n         AND v_carried < 'Infinity'::numeric\n", to: "" },
     ],
     expect: "T11",
