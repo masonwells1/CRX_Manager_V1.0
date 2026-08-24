@@ -1794,9 +1794,29 @@ export function cycleHasFailureMarker(comments, cycleStartIso) {
   });
 }
 
+// Did the cycle that began at `cycleStartIso` actually FINISH? The walkthrough
+// stamp cannot answer this: CodeRabbit writes it when a review STARTS, so a
+// stamp naming the head is consistent with a review still running — and with
+// auto-review paused after 2 commits, "still running" is indistinguishable from
+// "never going to report" without a terminal signal. A submitted review object
+// is self-evidently terminal (`submitted_at` is set). The stamp path is not, so
+// it additionally requires a CodeRabbit `success` status created AFTER this
+// cycle's start. (Codex, High, PR #441.)
+export function cycleCompleted(statuses, cycleStartIso) {
+  if (!cycleStartIso) return false; // no cycle start → cannot prove completion
+  if (!Array.isArray(statuses)) return false;
+  return statuses.some(
+    (s) =>
+      s?.context === "CodeRabbit" &&
+      s?.state === "success" &&
+      typeof s?.created_at === "string" &&
+      s.created_at >= cycleStartIso,
+  );
+}
+
 // Verdict for one PR head. Returns null when the head is proven reviewed;
 // otherwise a string naming why it is not. Every unresolvable input fails closed.
-export function coderabbitVerdict({ reviews, comments, headSha, cycleStartIso }) {
+export function coderabbitVerdict({ reviews, comments, headSha, cycleStartIso, statuses }) {
   if (!/^[0-9a-f]{40}$/i.test(String(headSha || ""))) {
     return "GitHub did not return a usable 40-character headRefOid";
   }
@@ -1812,6 +1832,10 @@ export function coderabbitVerdict({ reviews, comments, headSha, cycleStartIso })
   }
   if (cycleHasFailureMarker(comments, cycleStartIso)) {
     return "CodeRabbit posted a failure marker (review failed / rate limited / limit reached / no files to review) in this head's own review cycle, so the review did not complete";
+  }
+  // A submitted review object is terminal on its own. A stamp is not.
+  if (!boundReview && !cycleCompleted(statuses, cycleStartIso)) {
+    return `CodeRabbit's walkthrough names this head but the review has not been shown to FINISH — the stamp is written when a review STARTS, and no completed CodeRabbit status for this cycle was found. Wait for the review to complete and re-check`;
   }
   return null;
 }

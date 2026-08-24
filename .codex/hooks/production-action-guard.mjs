@@ -432,15 +432,26 @@ function ghMergeRequest(command) {
   return { selector, repo, matchHeadCommit, isGhCli: true };
 }
 
+// `api` must be found as a WORD, not required to sit immediately after the gh
+// binary. gh accepts global flags before the subcommand, so
+// `gh -R crop/crx api -X PUT repos/crop/crx/pulls/123/merge` is the standard
+// form — and the old adjacency regex (`gh\s+api\b`) did not match it, returning
+// null and letting the merge past the head-pin, CodeRabbit, green-check, and
+// Sol-proof gates entirely. Codex probed exactly that command and got
+// `{"blocked":false}`. (Codex, High, PR #441.) The Claude-side
+// ghApiMergeRequest already scanned words; this is now the same shape.
 function ghApiMergeRequest(command) {
   const text = String(command || "");
-  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
+  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i.test(text)) {
     return null;
   }
-  if (/\sapi\s+graphql\b/i.test(text) && /\bmergePullRequest\b/i.test(text)) {
+  const words = shellWords(command);
+  const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
+  if (apiIndex === -1) return null;
+  if (words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql") &&
+      /\bmergePullRequest\b/i.test(text)) {
     return { unsupportedGraphql: true };
   }
-  const words = shellWords(command);
   let method = "GET";
   let endpoint = "";
   for (let index = 0; index < words.length; index += 1) {
@@ -470,13 +481,18 @@ function ghApiMergeRequest(command) {
   return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, matchHeadCommit: "", isGhCli: false } : null;
 }
 
+// Same adjacency fix as ghApiMergeRequest: a global flag between `gh` and `api`
+// must not hide a mutating call. (Codex, High, PR #441.)
 function ghApiMutates(command) {
   const text = String(command || "");
-  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
+  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i.test(text)) {
     return false;
   }
-  if (/\sapi\s+graphql\b/i.test(text) && /\bmutation\b/i.test(text)) return true;
   const words = shellWords(text);
+  const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
+  if (apiIndex === -1) return false;
+  if (words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql") &&
+      /\bmutation\b/i.test(text)) return true;
   let method = "GET";
   let methodExplicit = false;
   let hasFields = false;
@@ -576,13 +592,15 @@ function coderabbitMergeVerdict({ request, headSha, runGh }) {
     // reaches into a previous attempt (blocking a clean retry forever); the
     // newest status is the cycle's completion (missing a failure posted just
     // before it). Statuses come back newest-first.
-    const pending = api(`commits/${headSha}/statuses`).filter(
-      (s) => s?.context === "CodeRabbit" && s?.state === "pending",
-    );
+    const statuses = api(`commits/${headSha}/statuses`);
+    const pending = Array.isArray(statuses)
+      ? statuses.filter((s) => s?.context === "CodeRabbit" && s?.state === "pending")
+      : [];
     return coderabbitVerdict({
       reviews,
       comments,
       headSha,
+      statuses,
       cycleStartIso: pending.length > 0 ? String(pending[0].created_at || "") : "",
     });
   } catch (error) {

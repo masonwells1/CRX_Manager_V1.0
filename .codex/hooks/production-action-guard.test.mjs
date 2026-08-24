@@ -626,6 +626,34 @@ try {
     nowMs: now,
     runGh: reviewedGh,
   }).blocked, true, "the gh api REST merge route cannot pin a head, so merges into main via it are denied");
+  // GLOBAL FLAGS BEFORE THE SUBCOMMAND. `gh -R o/r api ...` is the standard
+  // form, and the old `gh\s+api\b` adjacency regex did not match it — Codex
+  // probed exactly this command and got {"blocked":false}, skipping the head
+  // pin, the CodeRabbit gate, the green-check gate, and the Sol proof.
+  // (Codex, High, PR #441.) Every flag position must be covered, not just the
+  // one that was reported.
+  for (const bypass of [
+    "gh -R crop/crx api -X PUT repos/crop/crx/pulls/123/merge -f merge_method=squash",
+    "gh --repo crop/crx api -X PUT repos/crop/crx/pulls/123/merge -f merge_method=squash",
+    "gh -R crop/crx api --method PUT repos/crop/crx/pulls/123/merge",
+    "gh -R crop/crx api -XPUT https://api.github.com/repos/crop/crx/pulls/123/merge",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: bypass },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: reviewedGh,
+    }).blocked, true, `global flags before the subcommand do not hide a merge: ${bypass}`);
+  }
+  // The same applies to the generic mutating-gh-api net.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh -R crop/crx api -X POST repos/crop/crx/issues/1/comments -f body=x" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: reviewedGh,
+  }).blocked, true, "global flags before the subcommand do not hide a mutating gh api call");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh api -X PUT https://api.github.com/repos/crop/crx/pulls/123/merge -f merge_method=squash" },

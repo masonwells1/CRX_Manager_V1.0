@@ -63,12 +63,17 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // .claude/hooks/pr-merge-guard.mjs so the two sides cannot diverge. Every
   // anchor this transform rewrites (the protected-producer list, the matcher,
   // the maintenance gate, the command gate) is untouched.
-  codexGuard: "ffe97aaf4c6d29b0267862b35b816db266dddf23",
-  pushLib: "b86669151d3b68d96e71f06dfbbe5f9c21056959",
+  // Re-pinned again 2026-08-24 (PR #441, Codex round 2): `gh api` detection no
+  // longer requires `api` to sit immediately after the gh binary — a global flag
+  // (`gh -R o/r api -X PUT .../merge`) skipped the merge gate entirely, which
+  // Codex confirmed by probe. Both guards' verdicts also now require the review
+  // CYCLE to have completed, not merely started.
+  codexGuard: "a5ef88bbb2e167d500d057691a689a5e6fe9ce87",
+  pushLib: "396566b44503da1b2347a5b7e781777dcc881673",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "c0e949cfdaa91c03e169c4122ec409476aabe8cd",
-  pushLib: "b86669151d3b68d96e71f06dfbbe5f9c21056959",
+  codexGuard: "fcef76d8d9336b68cb4509e9a01538ddf2de5d8c",
+  pushLib: "396566b44503da1b2347a5b7e781777dcc881673",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

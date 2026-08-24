@@ -194,6 +194,7 @@ function gateRequest(request) {
   let reviews = [];
   let comments = [];
   let cycleStartIso = "";
+  let allStatuses = [];
   try {
     const api = (endpoint) => {
       const args = ["api", "--paginate", `repos/{owner}/{repo}/${endpoint}`];
@@ -213,15 +214,16 @@ function gateRequest(request) {
     // clean retry forever), and the newest status is the COMPLETION of the
     // current cycle (so anchoring there misses a failure posted seconds before
     // it — fail-open). Statuses come back newest-first.
-    const statuses = api(`commits/${headSha}/statuses`).filter(
+    allStatuses = api(`commits/${headSha}/statuses`);
+    const pending = allStatuses.filter(
       (s) => s?.context === "CodeRabbit" && s?.state === "pending",
     );
-    cycleStartIso = statuses.length > 0 ? String(statuses[0].created_at || "") : "";
+    cycleStartIso = pending.length > 0 ? String(pending[0].created_at || "") : "";
   } catch (error) {
     deny(`PR MERGE GATE: could not read this PR's CodeRabbit review from the GitHub API, so the merge is denied (fail closed). ${error?.message || error}`);
   }
 
-  const notReviewed = coderabbitVerdict({ reviews, comments, headSha, cycleStartIso });
+  const notReviewed = coderabbitVerdict({ reviews, comments, headSha, cycleStartIso, statuses: allStatuses });
   if (notReviewed) {
     deny(
       `PR MERGE GATE: ${notReviewed}.\n\n` +

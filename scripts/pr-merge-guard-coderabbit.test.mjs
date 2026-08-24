@@ -137,26 +137,44 @@ ok(
 
 // ── the whole verdict ────────────────────────────────────────────────────────
 const cleanComments = [{ user: { login: "coderabbitai[bot]" }, created_at: "2026-08-24T15:05:00Z", body: `${SUMMARIZE}\nReviewing files that changed from the base of the PR and between ${BASE} and ${HEAD}.` }];
+// The walkthrough stamp is written when a review STARTS, so on its own it is
+// consistent with one still running — and with auto-review paused, "still
+// running" is indistinguishable from "never going to report". The stamp path
+// therefore also needs a completed CodeRabbit status for this cycle.
+// (Codex, High, PR #441.)
+const DONE = [{ context: "CodeRabbit", state: "success", created_at: "2026-08-24T15:20:00Z" }];
+const STILL_RUNNING = [{ context: "CodeRabbit", state: "pending", created_at: CYCLE }];
 ok(
-  coderabbitVerdict({ reviews: [], comments: cleanComments, headSha: HEAD, cycleStartIso: CYCLE }) === null,
-  "a CLEAN review (walkthrough stamp only, no review object) is accepted",
+  coderabbitVerdict({ reviews: [], comments: cleanComments, headSha: HEAD, cycleStartIso: CYCLE, statuses: DONE }) === null,
+  "a CLEAN review (stamp + completed status, no review object) is accepted",
 );
 ok(
-  coderabbitVerdict({ reviews: [submitted], comments: [], headSha: HEAD, cycleStartIso: CYCLE }) === null,
-  "a review WITH findings (review object only, no stamp) is accepted",
+  coderabbitVerdict({ reviews: [submitted], comments: [], headSha: HEAD, cycleStartIso: CYCLE, statuses: STILL_RUNNING }) === null,
+  "a submitted review object is terminal on its own and needs no completed status",
 );
 // Every failure path must return a reason (truthy) — never silently pass.
 for (const [label, args] of [
-  ["no evidence at all", { reviews: [], comments: [], headSha: HEAD, cycleStartIso: CYCLE }],
-  ["evidence bound to a different head", { reviews: [{ ...submitted, commit_id: OTHER }], comments: [], headSha: HEAD, cycleStartIso: CYCLE }],
-  ["a malformed head", { reviews: [submitted], comments: cleanComments, headSha: "nope", cycleStartIso: CYCLE }],
-  ["reviews unreadable", { reviews: null, comments: cleanComments, headSha: HEAD, cycleStartIso: CYCLE }],
-  ["comments unreadable", { reviews: [submitted], comments: null, headSha: HEAD, cycleStartIso: CYCLE }],
+  ["no evidence at all", { reviews: [], comments: [], headSha: HEAD, cycleStartIso: CYCLE, statuses: DONE }],
+  ["evidence bound to a different head", { reviews: [{ ...submitted, commit_id: OTHER }], comments: [], headSha: HEAD, cycleStartIso: CYCLE, statuses: DONE }],
+  ["a malformed head", { reviews: [submitted], comments: cleanComments, headSha: "nope", cycleStartIso: CYCLE, statuses: DONE }],
+  ["reviews unreadable", { reviews: null, comments: cleanComments, headSha: HEAD, cycleStartIso: CYCLE, statuses: DONE }],
+  ["comments unreadable", { reviews: [submitted], comments: null, headSha: HEAD, cycleStartIso: CYCLE, statuses: DONE }],
   ["a stamped head whose review then failed", {
-    reviews: [], headSha: HEAD, cycleStartIso: CYCLE,
+    reviews: [], headSha: HEAD, cycleStartIso: CYCLE, statuses: DONE,
     comments: [...cleanComments, { user: { login: "coderabbitai[bot]" }, created_at: "2026-08-24T15:06:00Z", body: "Review failed" }],
   }],
-  ["an undeterminable cycle start", { reviews: [submitted], comments: cleanComments, headSha: HEAD, cycleStartIso: "" }],
+  ["an undeterminable cycle start", { reviews: [submitted], comments: cleanComments, headSha: HEAD, cycleStartIso: "", statuses: DONE }],
+  ["a stamp whose review is STILL RUNNING", { reviews: [], comments: cleanComments, headSha: HEAD, cycleStartIso: CYCLE, statuses: STILL_RUNNING }],
+  ["a stamp with no status data at all", { reviews: [], comments: cleanComments, headSha: HEAD, cycleStartIso: CYCLE, statuses: [] }],
+  ["a stamp whose statuses are unreadable", { reviews: [], comments: cleanComments, headSha: HEAD, cycleStartIso: CYCLE, statuses: null }],
+  ["a stamp whose only success predates this cycle", {
+    reviews: [], comments: cleanComments, headSha: HEAD, cycleStartIso: CYCLE,
+    statuses: [{ context: "CodeRabbit", state: "success", created_at: "2026-08-24T14:00:00Z" }],
+  }],
+  ["a stamp with a success from a DIFFERENT check context", {
+    reviews: [], comments: cleanComments, headSha: HEAD, cycleStartIso: CYCLE,
+    statuses: [{ context: "Vercel", state: "success", created_at: "2026-08-24T15:20:00Z" }],
+  }],
 ]) {
   const verdict = coderabbitVerdict(args);
   ok(typeof verdict === "string" && verdict.length > 0, `verdict BLOCKS ${label}`);

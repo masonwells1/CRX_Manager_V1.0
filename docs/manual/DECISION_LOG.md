@@ -587,17 +587,20 @@ more weight on a final check that is still prose. The counter-weight is that `2`
 stopped the review allowance being spent on half-finished commits, the problem this PR was opened to
 solve; restoring `5` re-creates the throttle. This was a cost/risk trade-off for the owner rather than
 an engineering call, it was put to Mason as such, and he chose to keep `2`. The residual risk is
-carried deliberately and closed at its root by the queued follow-up: move the CodeRabbit-review and
-`--match-head-commit` requirements out of prose and into `.claude/hooks/pr-merge-guard.mjs`, so the
-final check is a hard guard rather than a procedure someone has to follow.
+carried deliberately, and it was **closed at its root on 2026-08-24**: the CodeRabbit-review and
+`--match-head-commit` requirements moved out of prose and into both merge guards, so the final check
+is a hard guard rather than a procedure someone has to follow. `2` therefore stands with the
+compensating control actually enforced, which is the condition Codex attached to it.
 
-**Stated plainly because it matters: this is a stability heuristic, not a terminal artifact.**
+**Stated plainly because it matters: the stamp is a start marker, not a terminal artifact.**
 CodeRabbit publishes no SHA-bound "review finished" marker — the walkthrough's HTML markers are
-structural and present throughout, which was checked rather than assumed. Closing the race properly
-requires enforcing the whole check inside `.claude/hooks/pr-merge-guard.mjs`, which today verifies
-neither the CodeRabbit artifacts nor `--match-head-commit`. That is the same tracked follow-up named
-above, and it is now the remedy two consecutive Codex findings have pointed at. Until it lands the
-procedure narrows the race but does not eliminate it, and nobody may describe it as airtight.
+structural and present throughout, which was checked rather than assumed. **SUPERSEDED 2026-08-24 —
+the paragraph that stood here said the remedy was future work; it has since landed.** Both merge
+guards now enforce the whole check: `--match-head-commit` must equal GitHub's current `headRefOid`,
+CodeRabbit must be bound to that exact head, and — because the stamp only proves a review *started* —
+the stamp path additionally requires a completed CodeRabbit status for that cycle. A submitted review
+object is terminal on its own and needs no status. See the sixteenth-round entry below for the full
+contract. Nothing in this section describes work still to be done.
 
 **"Advisory" does not mean optional — the review waiver is removed.** An earlier revision of the
 skill let Mason approve a merge with no CodeRabbit review at all, reasoning that AGENTS.md calls
@@ -613,15 +616,15 @@ records here, never a standing escape hatch inside the procedure it bypasses. Re
 first decline was mine and it was wrong: a reviewer that returns the same finding at higher severity
 is usually reading the contract more carefully than I am.
 
-**The gate is prose, and the test does NOT make it executable.** Codex's CRX-SEC-002 (Medium) is
-accepted as stated: the suite below is documentation-regression coverage. It proves the documented
+**The gate was prose, and the test below does NOT make it executable.** Codex's CRX-SEC-002 (Medium)
+was accepted as stated: the suite below is documentation-regression coverage. It proves the documented
 procedure still says the right thing; it does not run the verification and cannot stop a merge that
-skips it. `.claude/hooks/pr-merge-guard.mjs` today enforces the Codex proof and `mergeStateStatus:
-CLEAN`, but **neither the CodeRabbit artifacts nor `--match-head-commit`**. Converting those two into
-the merge guard is open follow-up work, deliberately not bolted onto this PR: it is a new enforcement
-feature on a security guard shared by Claude and Codex, and it deserves its own change and its own
-review rather than a thirteenth round here. Until it lands, nobody may cite this suite as the hard
-gate.
+skips it. **That gap is CLOSED as of 2026-08-24 — see the sixteenth-round entry above.** Mason chose
+to build the enforcement rather than keep narrowing the prose, so both merge guards now verify the
+CodeRabbit artifacts and `--match-head-commit` themselves, with their own behavioural test
+(`scripts/pr-merge-guard-coderabbit.test.mjs`). The paragraph that stood here called that "open
+follow-up work"; it is no longer open. The suite below still may not be cited as the hard gate — the
+**guards** are.
 
 `scripts/deploy-check-review-gate.test.mjs`
 (24 assertions, wired into `npm run test:agent-workflows`) asserts every one of these query shapes in
