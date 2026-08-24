@@ -63,8 +63,65 @@ CREATE OR REPLACE FUNCTION compute_season(p_d date) RETURNS integer
                 ELSE EXTRACT(YEAR FROM p_d)::int END $$;
 
 -- ===========================================================================
--- The three helpers, VERBATIM from live (do not edit; re-copy if live changes).
+-- The four helpers, VERBATIM from live (do not edit; re-copy if live changes).
+--
+-- Note on idempotency_keys above: its PRIMARY KEY is the KEY ALONE, not
+-- (key, operation). That mirrors live, where the constraint is the unique
+-- index idempotency_keys_idempotency_key_key on idempotency_key by itself
+-- (read read-only 2026-08-24). The shape matters -- it is precisely what makes
+-- cross-operation key reuse reachable, and T26 depends on it.
 -- ===========================================================================
+
+-- check_idempotency, read from live pg_proc 2026-08-24 (md5 of the live body:
+-- 2c93efc82ad63c906eab944e8b70c88e; the live text stores mixed CRLF/LF, so this
+-- copy matches it in BEHAVIOUR, not byte for byte). This is the canonical guard
+-- the rest of the app already routes through -- draw_down_quote and others call
+-- it -- and save_job did not, which is the defect T26 and T27 pin.
+CREATE OR REPLACE FUNCTION public.check_idempotency(p_key text, p_operation text)
+ RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_existing public.idempotency_keys%ROWTYPE;
+BEGIN
+  IF p_key IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF btrim(p_key) = '' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED';
+  END IF;
+  IF p_operation IS NULL OR btrim(p_operation) = '' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_OPERATION_REQUIRED';
+  END IF;
+
+  -- Serialize every transaction using the same key. The lock is intentionally
+  -- key-only so same-operation retries replay and cross-operation reuse fails
+  -- before either caller can perform business side effects.
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('crx:idempotency:' || p_key, 0)
+  );
+
+  DELETE FROM public.idempotency_keys
+   WHERE idempotency_key = p_key
+     AND expires_at < now();
+
+  SELECT *
+    INTO v_existing
+    FROM public.idempotency_keys
+   WHERE idempotency_key = p_key;
+
+  IF FOUND AND v_existing.operation IS DISTINCT FROM p_operation THEN
+    RAISE EXCEPTION
+      'IDEMPOTENCY_CROSS_OP_KEY_REUSE: idempotency_key % is already in use for operation %; cannot reuse it for operation %',
+      p_key, v_existing.operation, p_operation;
+  END IF;
+
+  IF FOUND THEN
+    RETURN v_existing.result;
+  END IF;
+
+  RETURN NULL;
+END;
+$function$;
 CREATE OR REPLACE FUNCTION public.safe_cents_qty(p_cents bigint, p_qty numeric)
  RETURNS bigint LANGUAGE sql IMMUTABLE SET search_path TO 'public', 'pg_temp'
 AS $function$

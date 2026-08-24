@@ -143,8 +143,8 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Twenty-five behaviour tests pass; and fourteen mutation phases each fail in a **named** way — nine
-turn a named behaviour test red, and five must abort the apply with the specific security assertion
+Twenty-seven behaviour tests pass; and sixteen mutation phases each fail in a **named** way — ten
+turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
 That apply phase deliberately starts from a **bad** permission state — `anon` granted, `service_role`
@@ -170,7 +170,7 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The twenty-five tests: the two clean live row shapes save with derived totals reproducing the live
+The twenty-seven tests: the two clean live row shapes save with derived totals reproducing the live
 stored values exactly, while the third — the one live row with a blank unit — is now **refused**, so
 the pre-apply data obligation is pinned by an executable test rather than by prose; a legitimate
 oz-rate/lb-price conversion saves; the 16x shape is refused *and* its remedy text is asserted to

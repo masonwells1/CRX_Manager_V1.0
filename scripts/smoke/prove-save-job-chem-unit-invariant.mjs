@@ -7,7 +7,7 @@
 // it (compliance review, 2026-08-23). Rows 889/890 register a prover; this one does too.
 //
 // WHAT IT PROVES, in order:
-//   1. the harness loads a real-shape schema and the three live unit/money helpers;
+//   1. the harness loads a real-shape schema and the four live unit/money/idempotency helpers;
 //   2. the pre-change body recorded in 20260706080000 hashes to EXACTLY the md5 the
 //      migration pins -- so the pin is checked against the repo, not against a comment;
 //   3. against a DIFFERENT body the migration ABORTS with PREFLIGHT_BODY_DRIFT and leaves
@@ -16,7 +16,7 @@
 //      left the next run free to overwrite an unvalidated body (Codex P1, round 3);
 //   4. against the reviewed body it applies and its postflight assertions pass;
 //   5. re-applying it is a no-op, so it is safe to replay;
-//   6. twenty-three behaviour tests;
+//   6. the behaviour tests in fixtures/save-job-chem-unit-tests.sql (count printed at the end);
 //   7. mutation phases in TWO shapes, because two different kinds of guard live in this
 //      file. Most mutants must let the migration install and then turn a NAMED behaviour
 //      test red; a mutant that goes red for any OTHER reason is treated as a failure of
@@ -55,7 +55,7 @@ const TESTS = join(HERE, "fixtures", "save-job-chem-unit-tests.sql");
 
 const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19",
-                  "T20", "T21", "T22", "T23", "T24", "T25"];
+                  "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -413,6 +413,30 @@ const MUTANTS = [
       "       AND v_raw_rate_unit !~ '[\\s-]+per[\\s-]+(acres|acre|ac|a)$'\n" +
       "       AND (position('/' IN v_raw_rate_unit) > 0 OR v_raw_rate_unit ~ '[\\s-]+per[\\s-]+') THEN",
     expect: "T24",
+  },
+  {
+    // Revert to the raw, unlocked, operation-filtered lookup the live body still carries.
+    // T26 must go red: a key already spent by another operation becomes invisible again,
+    // the job is created, and the receipt is swallowed by ON CONFLICT DO NOTHING.
+    name: "idempotency lookup reverted to the raw operation-filtered SELECT",
+    from: "    v_existing := check_idempotency(p_idempotency_key, 'save_job');",
+    to:
+      "    SELECT result INTO v_existing\n" +
+      "      FROM idempotency_keys\n" +
+      "     WHERE idempotency_key = p_idempotency_key\n" +
+      "       AND operation = 'save_job';",
+    expect: "T26",
+  },
+  {
+    // No edit to the migration at all -- an EMPTY edits list, deliberately. What is
+    // mutated is the DATABASE: the helper the new body calls is dropped first. PL/pgSQL
+    // resolves that call at run time, so without the preflight assertion this migration
+    // would apply perfectly cleanly and then fail on the first real job save. The apply
+    // must refuse instead.
+    name: "check_idempotency helper missing from the database",
+    edits: [],
+    stage: "DROP FUNCTION public.check_idempotency(text, text);",
+    expectApplyAbort: "PREFLIGHT_MISSING_HELPER",
   },
 ];
 

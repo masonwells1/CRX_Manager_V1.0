@@ -453,12 +453,68 @@ BEGIN
   ELSE RAISE EXCEPTION 'T25 FAIL  (refused=% msg=%)  -- "oz per cwt per acre" bypassed the denominator rule', ok, msg; END IF;
 END $$;
 
+-- T26: CROSS-OPERATION idempotency key reuse must be REFUSED, not silently ignored.
+-- Found by the exact-SHA proof gate (2026-08-24). The old body looked the key up with
+-- `AND operation = 'save_job'`, so a key already spent by a DIFFERENT operation was
+-- invisible: the job was created, the receipt INSERT was swallowed by
+-- ON CONFLICT (idempotency_key) DO NOTHING -- the uniqueness is on the KEY ALONE, both
+-- here and on live -- and the NEXT retry with that key found nothing again and created a
+-- SECOND job. A duplicate job is a duplicate bill. check_idempotency raises instead.
+-- The row count is asserted too: refusing but still writing would be no better.
+DO $$
+DECLARE ok boolean := false; msg text; n_before int; n_after int;
+BEGIN
+  INSERT INTO idempotency_keys (idempotency_key, operation, result, expires_at)
+  VALUES ('K-CROSS-OP', 'post_invoice', '{"success":true}'::jsonb, now() + interval '24 hours');
+  SELECT count(*) INTO n_before FROM jobs;
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333341-3333-3333-3333-333333333343","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":20,"unit":"gal","rate_per_acre":2,"rate_unit":"gal/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, 'K-CROSS-OP');
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  SELECT count(*) INTO n_after FROM jobs;
+  IF ok AND msg LIKE 'IDEMPOTENCY_CROSS_OP_KEY_REUSE%' AND n_after = n_before THEN
+    RAISE NOTICE 'T26 PASS  a key spent by another operation is refused and wrote nothing: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T26 FAIL  (refused=% msg=% jobs %->%)  -- save_job is not routing through check_idempotency', ok, msg, n_before, n_after;
+  END IF;
+END $$;
+
+-- T27: the ordinary same-key replay must still work -- return the SAME job and create no
+-- second one. This is the behaviour the fix must NOT break: it is the whole reason the
+-- idempotency key exists (the create-path double-submit). Without this test, routing
+-- through check_idempotency could regress every retry into a duplicate and stay green.
+DO $$
+DECLARE r1 jsonb; r2 jsonb; n_before int; n_after int;
+BEGIN
+  SELECT count(*) INTO n_before FROM jobs;
+  r1 := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"33333342-3333-3333-3333-333333333344","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":20,"unit":"gal","rate_per_acre":2,"rate_unit":"gal/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, 'K-REPLAY');
+  r2 := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"33333342-3333-3333-3333-333333333344","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":20,"unit":"gal","rate_per_acre":2,"rate_unit":"gal/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, 'K-REPLAY');
+  SELECT count(*) INTO n_after FROM jobs;
+  IF (r1->>'job_id') = (r2->>'job_id') AND n_after = n_before + 1 THEN
+    RAISE NOTICE 'T27 PASS  a same-key replay returned the same job and created no second one (jobs %->%)', n_before, n_after;
+  ELSE
+    RAISE EXCEPTION 'T27 FAIL  job_id % vs %, jobs %->%  -- the replay path is broken', r1->>'job_id', r2->>'job_id', n_before, n_after;
+  END IF;
+END $$;
+
 -- T8: every refused save must have left NOTHING behind.
 DO $$
 DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 11 AND n_chem = 11 THEN RAISE NOTICE 'T8 PASS  11 jobs / 11 chemical rows -- the 13 refused saves wrote nothing';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 11/11)', n_jobs, n_chem; END IF;
+  IF n_jobs = 12 AND n_chem = 12 THEN RAISE NOTICE 'T8 PASS  12 jobs / 12 chemical rows -- the 14 refused saves wrote nothing, and the T27 replay added exactly one';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 12/12)', n_jobs, n_chem; END IF;
 END $$;

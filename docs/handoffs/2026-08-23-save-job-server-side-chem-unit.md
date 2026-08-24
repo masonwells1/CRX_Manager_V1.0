@@ -4,8 +4,8 @@
 **Branch:** `claude/save-job-server-side-chem-unit` (worktree `.claude/worktrees/save-job-enforcement`)
 **Head:** see `git log -1` — round 8 landed on 2026-08-24; **unpushed**. Tree clean.
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-**SQL sha256:** `e1cc0fed0e1e1420b163dfe83a612fd7daf45be7e4d31bfb37320242157f6623`
-**Status: PARTIAL — written, proven, and parked at three gates that are not mine to open.**
+**SQL sha256:** `fe5999765d80894276c20734c828afb75db552c5f011836f224e4e86ba8f5d45`
+**Status: PARTIAL — written, proven, and parked at two gates that are not mine to open.**
 
 ## Approval state — carries nothing forward
 
@@ -15,13 +15,14 @@
 
 ## What the migration does
 
-Replaces the **body** of `public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text)` — identical signature, `CREATE OR REPLACE`, no new overload, ACL and owner preserved. Five changes:
+Replaces the **body** of `public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text)` — identical signature, `CREATE OR REPLACE`, no new overload, ACL and owner preserved. Six changes:
 
 1. A chemical line whose units provably disagree is refused (`CHEM_UNIT_MISMATCH`), naming the product and both units.
 2. A rate measured per something other than acres is refused (`CHEM_RATE_DENOMINATOR_NOT_ACRES`) in the slash, spelled-out and hyphenated forms — **and in stacked forms** such as `oz/cwt/ac`. The test is subtractive: strip one trailing per-acre suffix, then refuse if any denominator survives.
 3. A negative, `NaN` or `Infinity` quantity is refused (`CHEM_QUANTITY_NOT_FINITE`) before the unit comparison and regardless of its outcome.
 4. `total_cost_cents` / `total_price_cents` are **derived** from `p_chemicals` via `safe_cents_qty` and the caller-supplied totals are ignored — this is what makes a stale tab harmless.
 5. A line that actually bills but whose rate unit or stock `unit` is blank is refused (`CHEM_UNIT_UNSPECIFIED`). Three exemptions, all the same rule — a line that cannot bill cannot bill *wrongly*: `customer_supplied`, neither a cost nor a price, and quantity 0.
+6. The idempotency lookup routes through the canonical `check_idempotency` helper instead of a raw unlocked `SELECT`, closing a pre-existing duplicate-job hole (round 8, below).
 
 The live unit helpers (`normalize_rate_unit`, `field_app_priced_quantity`, `safe_cents_qty`) are **reused, not reimplemented** — a second server-side copy of the unit table would repeat the original 16x bug.
 
@@ -31,11 +32,11 @@ The live unit helpers (`normalize_rate_unit`, `field_app_priced_quantity`, `safe
 node scripts/smoke/prove-save-job-chem-unit-invariant.mjs
 ```
 
-PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **25 behaviour tests** pass; **14 mutation phases** each fail in a *named* way — 9 turn a named test red, 5 abort the apply with the specific postflight assertion written to catch them.
+PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **27 behaviour tests** pass; **16 mutation phases** each fail in a *named* way — 10 turn a named test red, 6 abort the apply with the specific postflight assertion written to catch them.
 
 `scripts/smoke/smoke-save-job-parity.sql` is the registered live chain and is **gated** on whether this migration is installed. The container prover is **manual** — `run-smoke.mjs --all` will not run it.
 
-## Gates 1 and 2, and who opens them (gate 3 is below)
+## The two gates, and who opens them
 
 **Gate 1 — ordering: PR #436 must land first.** This is a real behaviour change, not a mirror of a shipped client guard. `main` has no save-blocking unit guard at all; the client half (`chemLineBillingHazard`, `rateDenominatorIsUnrecognized`, `centsTimesQuantity`) exists only on the unmerged PR #436 branch. Apply this first and the next operator to touch an affected job gets a hard save failure with no prior on-screen warning — and because `performSave` re-sends the whole chemical grid, one bad legacy line makes the **entire job** unsaveable. *Mason's call: land #436.*
 
@@ -56,26 +57,6 @@ Sequence, in this order:
 3. Read CodeRabbit's review on the *head* SHA and fix anything real.
 4. Merge only under the standing push policy — which deploys production.
 
-## Gate 3 — OPEN, and it is a scope decision for Mason
-
-The round-8 gate raised a second finding that is **real, verified against live, and not fixed**: `save_job` does not use the repo's own idempotency helper.
-
-What it does instead: an unlocked `SELECT` scoped to `operation = 'save_job'`, then at the end `INSERT … ON CONFLICT (idempotency_key) DO NOTHING`. The live unique constraint is on `idempotency_key` **alone** — `idempotency_keys_idempotency_key_key`, verified read-only 2026-08-24 — not on the pair. So if a key has already been used by a *different* operation: the lookup filters it out and sees nothing, the job is created, the receipt insert is swallowed by the conflict, and a retry with the same key **creates a second job**. Two callers racing on the same key can also both pass the lookup.
-
-Live already carries the fix and other RPCs already use it: `check_idempotency(text, text)` — `SECURITY DEFINER`, `search_path` pinned, md5 `2c93efc82ad63c906eab944e8b70c88e` — takes `pg_advisory_xact_lock` on the key and raises `IDEMPOTENCY_CROSS_OP_KEY_REUSE`. `draw_down_quote` calls it in exactly the shape this body would need:
-
-```sql
-IF p_idempotency_key IS NOT NULL THEN
-  v_existing := check_idempotency(p_idempotency_key, 'save_job');
-  IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;
-END IF;
-```
-
-No grant change is needed: `check_idempotency` is executable by `postgres` and `service_role` only, and `save_job` is `SECURITY DEFINER` owned by `postgres`, so the inner call runs with the owner's rights.
-
-**Why it is not fixed here.** The current idempotency block is **byte-identical to the live pre-change body** (`20260706080000` lines 87–97 and 297–301), so this migration neither introduces nor worsens the defect. Closing it would change the concurrency behaviour of the most-used job RPC — cross-operation key reuse would start hard-failing — which is a scope and risk call, not a typo fix. The trade-off Mason has to settle: fold it in (one migration, one review, no second body-pin problem) versus a separate follow-up migration (smaller blast radius per change, but two migrations replacing the same function body, which is the non-atomic hazard round 3 already caught).
-
-Recommendation: **fold it in.** A separate migration would face the same gate anyway, and two sequential replacements of one function body is the pattern that has already bitten this work once.
 
 ## Apply channel — this one bites
 
@@ -91,6 +72,7 @@ Eight rounds; **every** round found something real, including the ones that felt
 - **The file asserted an ACL it never established.** It now `REVOKE`s from `PUBLIC` and `anon` and `GRANT`s to `authenticated, service_role` before asserting.
 - **A false refusal that blocks the whole job** (round 7, found independently by three reviewers): the zero-quantity skip sat *below* the blank-unit refusal, and that shape is reachable from the ordinary UI via `reconcileChemAutofillUnits`.
 - **The mutation phases found a defect no reviewer did** (round 7): the postflight tested `anon` before `PUBLIC`, and a grant to `PUBLIC` reaches every role — so a PUBLIC grant reported itself under the anon message, naming one role while every role was exposed. The broadest grant is now reported first. A mutant that "passes" under the wrong assertion proves nothing; the prover requires the *named* assertion.
+- **A pre-existing duplicate-job hole, closed on Mason's call** (round 8). `save_job` did its own unlocked idempotency lookup filtered to `operation = 'save_job'`, then recorded with `ON CONFLICT (idempotency_key) DO NOTHING` — while the live uniqueness is on the **key alone** (`idempotency_keys_idempotency_key_key`, verified live 2026-08-24). A key already spent by another operation was therefore invisible to the lookup: the job got created, the receipt was swallowed by the conflict, and the next retry created a **second job** — a duplicate bill. That block was byte-identical to the live pre-change body, so the migration did not cause it; Mason decided on 2026-08-24 to close it here rather than in a follow-up, since a second migration replacing the same body is the non-atomic hazard round 3 already caught. It now calls `check_idempotency`, which advisory-locks the key and raises `IDEMPOTENCY_CROSS_OP_KEY_REUSE`. `T26` pins the refusal *and* that nothing was written; `T27` pins that ordinary same-key replays still return the same job. The preflight also asserts the helper exists — PL/pgSQL resolves that call at run time, so otherwise a database missing it would apply cleanly and fail on the first real save.
 - **Stacked denominators bypassed the whole rule** (round 8, the exact-SHA `gpt-5.6-sol` proof gate, and the worst finding of the eight). The rule asked whether the rate unit *ends in* a per-acre suffix, so `oz/cwt/ac` satisfied it — and the unit derivation then took everything before the *first* slash and discarded `cwt`. The line became a plain `oz`, matched a stock unit of `oz`, and **saved**: a per-hundredweight rate billed as per-acre. Reproduced in the container before the fix (`T24`: `refused=f`). The lesson generalises — an *exclusion* list of good spellings is not the same as a *test* that nothing bad survives, and only the subtractive form is safe here.
 - **A latent defect in the prover itself**, found in the same pass: mutants were applied with `String.replace(from, to)`, and JavaScript reads `$&`, `` $` ``, `$'` and `$1` in a *string* replacement as substitution patterns. SQL regex literals here end in `$'` routinely, so such a mutant silently spliced the rest of the migration into itself and failed to install with a syntax error far from the edit — which reads as "the mutant is broken", not "the harness is broken". The replacement now goes through a function.
 

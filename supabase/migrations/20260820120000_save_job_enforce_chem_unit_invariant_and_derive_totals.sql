@@ -200,6 +200,15 @@ BEGIN
       'PREFLIGHT_OVERLOAD: expected exactly 1 overload of the job-save RPC in public, found %. Reconcile before applying this migration.', v_count;
   END IF;
 
+  -- The replacement body CALLS check_idempotency. PL/pgSQL resolves that name at RUN
+  -- time, not at CREATE time, so a database without the helper would accept this
+  -- migration cleanly and then fail on the first real job save -- the worst possible
+  -- place to discover it. Assert it here, where the failure is a refused apply.
+  IF to_regprocedure('public.check_idempotency(text,text)') IS NULL THEN
+    RAISE EXCEPTION
+      'PREFLIGHT_MISSING_HELPER: public.check_idempotency(text, text) is not installed, and the replacement body calls it on every keyed save.';
+  END IF;
+
   SELECT p.prosrc INTO v_src FROM pg_proc p WHERE p.oid = v_oid;
 
   -- 7e1668161ae287086e76a8ba5bd313d6 is the reviewed pre-change body, installed by
@@ -284,11 +293,32 @@ BEGIN
 
   -- Idempotency: replay with the same key returns the original result without
   -- creating a second job (the create-path double-submit hazard).
+  --
+  -- This now routes through check_idempotency, the canonical guard the rest of
+  -- the app already uses (draw_down_quote and others call it in exactly this
+  -- shape). The previous code -- carried unchanged from the live body, so this
+  -- is a PRE-EXISTING defect this migration closes rather than one it caused --
+  -- did its own unlocked lookup filtered to operation = 'save_job', and then
+  -- recorded with ON CONFLICT (idempotency_key) DO NOTHING. The live uniqueness
+  -- constraint is idempotency_keys_idempotency_key_key, on the KEY ALONE and NOT
+  -- on (key, operation) -- read read-only 2026-08-24. Those two facts together
+  -- are the bug: a key already spent by ANOTHER operation is invisible to a
+  -- lookup filtered by operation, so the job is created, the receipt INSERT is
+  -- swallowed by the conflict, and the NEXT retry with that key finds nothing
+  -- again and creates a SECOND JOB. A duplicate job is a duplicate bill.
+  -- Two callers racing on one key could likewise both pass the unlocked lookup.
+  --
+  -- check_idempotency closes both: it takes pg_advisory_xact_lock on the key, so
+  -- concurrent callers serialize, and it RAISES IDEMPOTENCY_CROSS_OP_KEY_REUSE
+  -- rather than letting a foreign key silently through. Found by the exact-SHA
+  -- gpt-5.6-sol proof gate (2026-08-24); Mason approved closing it here rather
+  -- than in a follow-up, because a second migration replacing this same body is
+  -- the non-atomic hazard round 3 already caught. No grant change is needed:
+  -- check_idempotency is executable by postgres and service_role only, and this
+  -- function is SECURITY DEFINER owned by postgres, so the inner call runs with
+  -- the owner's rights. T26 pins the cross-operation refusal, T27 the replay.
   IF p_idempotency_key IS NOT NULL THEN
-    SELECT result INTO v_existing
-      FROM idempotency_keys
-     WHERE idempotency_key = p_idempotency_key
-       AND operation = 'save_job';
+    v_existing := check_idempotency(p_idempotency_key, 'save_job');
     IF v_existing IS NOT NULL THEN
       RETURN v_existing;
     END IF;
