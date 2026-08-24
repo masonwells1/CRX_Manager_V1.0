@@ -365,6 +365,29 @@ was wrong and removed. An agent reading top-down would act on the first. That pa
 superseded. The lesson generalises past this file: a decision log that argues with itself is a hazard, not a
 record, and "I corrected this further down" is not a correction an agent will reach in time.
 
+**Ninth round: the fix for the fail-open was itself fail-open, and only running it found that.** Both
+reviewers independently flagged the same defect in the completed-review probe added the round before: it
+passed `--arg` to `gh api`, which rejects the flag outright (`accepts 1 arg(s), received 4`), and it ended
+`... | grep -qE "…" || echo NO_FAILURE_MARKER_THIS_HEAD` — so the command never ran *and* the `||` reported
+clean. A fail-open check is worse than no check, because it also reports success. Codex added a second High:
+the merge-only fallback never applied the probe to the **parent** at all, while the text called that path the
+"full" gate — false as written.
+
+Rewritten with explicit `if/elif` branches where only the final `else` emits the clean marker, and the same
+probe now runs against the parent with the same fail-closed shape. Then running it surfaced a third problem
+no amount of reading would have: the second version piped through a standalone `jq`, **which is not installed
+on this machine**, so it printed `BLOCKED_COMMENT_PARSE_FAILED` — correct behaviour, and proof the structure
+works, but a check that can never pass is not a usable gate. The timestamp is now validated against an
+anchored ISO-8601 pattern and interpolated into `gh api --jq`; that guard fails closed on an empty or
+malformed value *and* is what makes the interpolation safe, since `$SINCE` is API-derived rather than
+PR-authored. Verified live on this PR: `NO_FAILURE_MARKER_THIS_HEAD` for the reviewed head, and
+`BLOCKED_CANNOT_DETERMINE_CYCLE_START` for a commit with no review cycle.
+
+The decision rule is modelled as an executable function with every error path asserted to block, because
+Codex's sharpest observation was that the previous tests matched command substrings and never validated what
+the command *does* when a stage fails — 72 assertions passed over two unsafe paths. **Substring tests over a
+shell command are a description of intent, not evidence of behaviour. Run the command.**
+
 The through-line across all six rounds is one idea: **a check that names the thing it forbids only catches
 that name.** Five times running, the fix was itself written one notch too narrow — a spelling, then a
 notation, then a variable read from the wrong scope, then two facts with no order between them, then a

@@ -68,6 +68,16 @@ function sectionBetween(markdown, startNeedle, endNeedle) {
 // created_at before merging, wait 90s" contains every fragment while describing
 // a different (and wrong) procedure. Walking the index forward pins the order.
 // (CodeRabbit, PR #441.)
+// Same "derive it and expand it, in that order, in one command" rule the parent
+// SHA already has to satisfy, reusable for any command that derives PARENT1.
+function bindsBoundVarIn(cmd, varName, prefix) {
+  if (!cmd) return false;
+  const assign = cmd.match(new RegExp(`\\b${varName}="\\$\\(git rev-parse <HEAD>\\^1\\)"`));
+  const use = cmd.match(new RegExp(`${prefix}\\$(?:\\{${varName}\\}|${varName}\\b)`));
+  if (!assign || !use) return false;
+  return assign.index < use.index;
+}
+
 function containsInOrder(text, needles) {
   let from = 0;
   for (const needle of needles) {
@@ -476,25 +486,95 @@ for (const [name, file] of SKILLS) {
   ok(/90\s*seconds apart/i.test(text), `${name}: the skill requires a >=90s settle window between polls`);
 }
 
-// …and it must carry the fail-closed failure-state check as a real command,
-// scoped to this head's cycle rather than the whole PR.
+// ── The probe's DECISION, modelled and executed ──────────────────────────────
+// Codex's second pass on this file: the previous assertions matched command
+// substrings and never validated what the command DOES when a stage fails. The
+// first version ended `... | grep -qE "…" || echo NO_FAILURE_MARKER_THIS_HEAD`,
+// so a network blip, an expired token, or a jq error all fell through to the
+// clean marker — and it passed `--arg` to `gh api`, which rejects it outright
+// (`accepts 1 arg(s), received 4`), so the probe never ran at all and reported
+// clean unconditionally. Both reviewers caught it independently. A fail-open
+// check is worse than no check, because it also reports success.
+export const PROBE_CLEAN = "NO_FAILURE_MARKER";
+export const ISO_UTC = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/;
+export function failureProbeOutcome({ since, fetchOk, markerFound }) {
+  if (!ISO_UTC.test(since ?? "")) return "BLOCKED_CANNOT_DETERMINE_CYCLE_START";
+  if (!fetchOk) return "BLOCKED_COMMENTS_FETCH_FAILED";
+  if (markerFound) return "BLOCKED_REVIEW_DID_NOT_COMPLETE";
+  return PROBE_CLEAN;
+}
+const allOk = { since: "2026-08-17T10:00:00Z", fetchOk: true, markerFound: false };
+ok(failureProbeOutcome(allOk) === PROBE_CLEAN, "probe: every stage succeeded and no marker -> clean");
+ok(
+  failureProbeOutcome({ ...allOk, markerFound: true }) !== PROBE_CLEAN,
+  "probe: a failure marker BLOCKS",
+);
+ok(
+  failureProbeOutcome({ ...allOk, fetchOk: false }) !== PROBE_CLEAN,
+  "probe: a failed comments fetch BLOCKS rather than reporting clean",
+);
+// The timestamp guard fails closed AND is what makes interpolating $SINCE into
+// the jq program safe. Anything that is not an anchored ISO-8601 UTC instant is
+// rejected before it can reach the query.
+for (const bad of ["", "   ", "not-a-date", "2026-08-17", '2026-08-17T10:00:00Z" or "1']) {
+  ok(
+    failureProbeOutcome({ ...allOk, since: bad }) === "BLOCKED_CANNOT_DETERMINE_CYCLE_START",
+    `probe: a malformed cycle start (${JSON.stringify(bad)}) BLOCKS`,
+  );
+}
+
+// …and the skill must carry that structure as a real command, for the head AND
+// for the merge-only fallback's parent — Codex found the parent running only the
+// stamp and the settled status while the text called it the "full" gate.
 for (const [name, file] of SKILLS) {
   const cmds = bashCommands(readFileSync(file, "utf8"));
-  const failureCheck = cmds.find((c) => c.includes("Review failed") && c.includes("issues/<n>/comments"));
-  ok(Boolean(failureCheck), `${name}: a command checks for CodeRabbit failure states on this head`);
-  for (const marker of REVIEW_FAILURE_MARKERS) {
+  const probes = [
+    ["head", cmds.find((c) => c.includes("Review failed") && c.includes("commits/<HEAD>/statuses"))],
+    ["parent", cmds.find((c) => c.includes("Review failed") && /\bgit rev-parse <HEAD>\^1\b/.test(c))],
+  ];
+  for (const [which, probe] of probes) {
+    ok(Boolean(probe), `${name}: a ${which} command checks whether the review actually completed`);
+    // The three markers both probes must carry. "No files to review" is required
+    // of the head only — it is the EXPECTED answer for a merge-only head, and is
+    // deliberately absent from the parent-cycle pattern.
+    for (const marker of ["Review failed", "Review rate limited", "Review limit reached"]) {
+      ok(
+        Boolean(probe) && probe.includes(marker),
+        `${name}: the ${which} completed-review check covers "${marker}"`,
+      );
+    }
     ok(
-      Boolean(failureCheck) && failureCheck.includes(marker),
-      `${name}: the failure-state check covers "${marker}"`,
+      Boolean(probe) && !probe.includes(NOT_A_FAILURE_MARKER),
+      `${name}: the ${which} check does NOT match the permanent auto-pause notice`,
+    );
+    ok(
+      Boolean(probe) && !/--arg\b/.test(probe),
+      `${name}: the ${which} check passes no --arg (gh api rejects it; standalone jq is absent here)`,
+    );
+    ok(
+      Boolean(probe) && probe.includes("[0-9]{4}-[0-9]{2}-[0-9]{2}T"),
+      `${name}: the ${which} check validates the cycle-start timestamp before interpolating it`,
+    );
+    ok(
+      Boolean(probe) && !/\|\|\s*echo\s+NO_FAILURE_MARKER/.test(probe),
+      `${name}: the ${which} check never reaches its clean marker through an || fallback`,
+    );
+    ok(
+      Boolean(probe) && /\bBLOCKED_[A-Z_]+/.test(probe),
+      `${name}: the ${which} check emits explicit BLOCKED markers for its error paths`,
+    );
+    ok(
+      Boolean(probe) && probe.includes("$SINCE") && probe.includes("statuses"),
+      `${name}: the ${which} check is scoped to that commit's own review cycle`,
+    );
+    ok(
+      Boolean(probe) && probe.includes('.created_at >= \\"$SINCE\\"'),
+      `${name}: the ${which} check filters comments by that cycle start`,
     );
   }
   ok(
-    Boolean(failureCheck) && !failureCheck.includes(NOT_A_FAILURE_MARKER),
-    `${name}: the failure-state check does NOT match the permanent auto-pause notice`,
-  );
-  ok(
-    Boolean(failureCheck) && failureCheck.includes("$since") && failureCheck.includes("statuses"),
-    `${name}: the failure-state check is scoped to this head's own review cycle`,
+    Boolean(probes[1][1]) && bindsBoundVarIn(probes[1][1], "PARENT1", "commits/"),
+    `${name}: the parent completed-review check derives PARENT1 and expands it, in that order`,
   );
 }
 

@@ -191,10 +191,25 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    `success` "Review completed" within ~20 seconds of the push, on a branch whose auto-review was
    paused — no review had run at all, and the real one only started minutes later.
 
+   **And the parent needs the completed-review check too** — the stamp and a settled status can both
+   sit on top of a review that failed, which is as true of a parent as of a head. Codex caught the
+   asymmetry: an earlier revision ran only the stamp and the settled status against the parent and
+   then called that the "full" gate, which was simply false. Same fail-closed structure, same markers,
+   scoped to the parent's own review cycle, with the parent derived in the same command:
+
+   ```bash
+   PARENT1="$(git rev-parse <HEAD>^1)"; SINCE="$(gh api repos/masonwells1/CRX_Manager_V1.0/commits/$PARENT1/statuses --jq '[.[] | select(.context=="CodeRabbit")] | last | .created_at')"; if ! printf '%s' "$SINCE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'; then echo BLOCKED_CANNOT_DETERMINE_PARENT_CYCLE_START; elif ! BODIES="$(gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq ".[] | select(.user.login==\"coderabbitai[bot]\") | select(.created_at >= \"$SINCE\") | .body")"; then echo BLOCKED_COMMENTS_FETCH_FAILED; elif printf '%s' "$BODIES" | grep -qE "Review failed|Review rate limited|Review limit reached"; then echo BLOCKED_PARENT_REVIEW_DID_NOT_COMPLETE; else echo NO_FAILURE_MARKER_PARENT_CYCLE; fi
+   ```
+
+   Only `NO_FAILURE_MARKER_PARENT_CYCLE` permits the merge; every `BLOCKED_…` marker stops it.
+   ("No files to review" is deliberately absent from *this* pattern — it is the expected answer for
+   the merge-only head that sent you down this path, and this scan covers the parent's cycle.)
+
    Together those run the *full* review gate against the derived parent — the canonical walkthrough
-   stamp naming it, plus its own settled status — the same standard any head has to meet. The
-   exception is then "a no-op merge of a parent that independently passes the normal gate", which is
-   fail-closed, rather than "a no-op merge of whatever the operator calls reviewed".
+   stamp naming it, its own settled status, **and** proof its review actually completed — the same
+   standard any head has to meet. The exception is then "a no-op merge of a parent that independently
+   passes the normal gate", which is fail-closed, rather than "a no-op merge of whatever the operator
+   calls reviewed".
 
    A placeholder the operator fills in is the weak form of this, whatever it is called. An earlier
    revision printed the parent in one block and looked it up as `<PARENT1>` in the next, which reads
@@ -350,11 +365,27 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    own review cycle, using the OLDEST CodeRabbit status on the commit as the start of that cycle:
 
    ```bash
-   SINCE="$(gh api repos/masonwells1/CRX_Manager_V1.0/commits/<HEAD>/statuses --jq '[.[] | select(.context=="CodeRabbit")] | last | .created_at')" && gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq --arg since "$SINCE" '.[] | select(.user.login=="coderabbitai[bot]") | select(.created_at >= $since) | .body' | grep -qE "Review failed|Review rate limited|No files to review|Review limit reached" || echo NO_FAILURE_MARKER_THIS_HEAD
+   SINCE="$(gh api repos/masonwells1/CRX_Manager_V1.0/commits/<HEAD>/statuses --jq '[.[] | select(.context=="CodeRabbit")] | last | .created_at')"; if ! printf '%s' "$SINCE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'; then echo BLOCKED_CANNOT_DETERMINE_CYCLE_START; elif ! BODIES="$(gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq ".[] | select(.user.login==\"coderabbitai[bot]\") | select(.created_at >= \"$SINCE\") | .body")"; then echo BLOCKED_COMMENTS_FETCH_FAILED; elif printf '%s' "$BODIES" | grep -qE "Review failed|Review rate limited|No files to review|Review limit reached"; then echo BLOCKED_REVIEW_DID_NOT_COMPLETE; else echo NO_FAILURE_MARKER_THIS_HEAD; fi
    ```
 
-   Silence means a failure marker WAS found — fail closed and do not merge. Re-trigger the review and
-   settle again from the start.
+   **Only `NO_FAILURE_MARKER_THIS_HEAD` permits the merge.** Every other outcome — including one that
+   is nobody's fault, like a network blip or an expired token — prints a `BLOCKED_…` marker and stops
+   the merge. That structure is the whole point of the command, and the first version got it exactly
+   backwards: it ended `... | grep -qE "…" || echo NO_FAILURE_MARKER_THIS_HEAD`, so **any** failure of
+   any stage fell through to the clean marker. It also passed `--arg` to `gh api`, which is a
+   standalone `jq` flag that `gh api` rejects outright (`accepts 1 arg(s), received 4`) — so the probe
+   never ran at all and unconditionally reported clean. CodeRabbit and Codex each flagged it
+   independently. **A fail-open check is worse than no check, because it also reports success.**
+
+   The second version fixed the fail-open but piped through a standalone `jq`, which **is not
+   installed on this machine** — running it printed `BLOCKED_COMMENT_PARSE_FAILED`. That is the
+   correct behaviour and proved the fail-closed structure works, but a check that can never pass is
+   not a usable gate either. So the timestamp is interpolated into `gh api --jq` instead, and the
+   `grep -qE '^[0-9]{4}-…Z$'` guard in front is doing double duty: it fails closed when `$SINCE` is
+   empty or malformed, **and** it is what makes the interpolation safe. That does not weaken the
+   "never interpolate into a shell command" rule — `$SINCE` is an API-derived ISO-8601 timestamp
+   proven to match that anchored pattern, not PR-authored text. Verify a probe by running it, not by
+   reading it; both broken versions looked correct.
 
    Two deliberate exclusions. **"Reviews paused" is not a failure** — `auto_pause_after_reviewed_commits: 2`
    makes that notice a permanent fixture of the walkthrough on any active branch, so matching it would
