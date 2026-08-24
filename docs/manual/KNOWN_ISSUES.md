@@ -115,9 +115,31 @@ Sol also flagged (P3) that `kill -SIGKILL` / `kill -s SIGKILL` were missing next
 PowerShell's `kill`/`spps` aliases for `Stop-Process` were added at the same time, since the
 "a bare `kill` is polite" exemption is a POSIX fact that does not hold there.
 
+4. **HIGH, and the one that mattered.** Sol's exact-SHA review of `72405060` returned **BLOCKERS**:
+   the force-kill rule listed bare verbs, so `taskkill.exe /PID …`,
+   `C:\Windows\System32\taskkill.exe …`, `/usr/bin/pkill -9 codex` and `/bin/kill -9 …` were all
+   **allowed**. Ordinary Windows and POSIX spellings, not obfuscation — each recreates the
+   reviewer-kill exactly. Sol demonstrated it end-to-end: a real hook invocation with
+   `taskkill.exe` returned `permissionDecision: "allow"`.
+
+   This was self-inflicted in a specific, instructive way: the path-and-`.exe` problem had
+   **already been solved for the codex binary in the same file** and simply was not applied to the
+   kill verbs. Fixing a class in one place and not its neighbour is the
+   `partial-compliance-is-the-same-bug` shape.
+
+   Fixed the way Sol recommended — stop enumerating spellings and **normalize the executable
+   basename**: strip quotes, strip any path, strip `.exe`, lowercase, then compare against a set.
+   Adding more alternatives only moves the hole.
+
 Every one is the same class: **the guard matched one spelling of the thing rather than the thing.**
-See `guard-design-bypasses` in memory. 21 unit checks now pin each spelling, and each was
-re-verified live through the real Bash tool.
+See `guard-design-bypasses` in memory. 24 unit checks now pin each spelling — the four HIGH
+bypasses verbatim among them — and each was re-verified live through the real Bash tool, because a
+unit test is not the hook.
+
+**Standing caveat.** This is still text matching over a command string, which Sol rightly notes is
+weaker than enforcement at the process/tool capability layer. It is a real boundary and it now
+holds against every spelling anyone has thrown at it, but treat "no known bypass" as what it is,
+not as proof there is none.
 
 ## OPEN 2026-08-20 — the Phase 3C containment scanner walks `dist/`, so a concurrent rebuild refuses the push
 

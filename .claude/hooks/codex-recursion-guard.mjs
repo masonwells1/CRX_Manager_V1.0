@@ -75,20 +75,48 @@ const EXEC_TOKEN_RE = /(?:^|\s)exec(?:$|[\s"';&|])/i;
 // missing from a version that only knew `-9`/`-KILL`. `kill -Id/-Force` is included
 // because in PowerShell `kill` is an ALIAS for Stop-Process, so the "polite kill"
 // exemption does not hold there.
-const KILL_VERBS = [
-  { pattern: String.raw`taskkill`, what: "taskkill" },
-  { pattern: String.raw`(?:Stop-Process|spps)`, what: "Stop-Process" },
-  { pattern: String.raw`pkill`, what: "pkill" },
-  { pattern: String.raw`killall`, what: "killall" },
-  {
-    pattern: String.raw`kill\s+(?:-9|-KILL|-SIGKILL|-s\s*(?:9|KILL|SIGKILL)|-Id\b|-Force\b)`,
-    what: "kill -9",
-  },
-];
-const KILL_RES = KILL_VERBS.map(({ pattern, what }) => ({
-  re: new RegExp(`${SEP}\\s*${pattern}(?:$|[\\s"';&|])`, "i"),
-  what,
-}));
+// Any token sitting at a command position, so its executable name can be
+// NORMALIZED rather than spelled out. Sol's HIGH finding on PR #452: a pattern
+// listing bare verbs allowed `taskkill.exe`, `C:\Windows\System32\taskkill.exe`,
+// `/usr/bin/pkill -9` and `/bin/kill -9` — ordinary Windows and POSIX spellings,
+// not obfuscation. Adding more alternatives just moves the hole, so compare the
+// basename instead: strip a path, strip `.exe`, lowercase.
+const CMD_POS_TOKEN_RE = new RegExp(`${SEP}\\s*(["']?[^\\s;&|]+)`, "gi");
+
+// Verbs that are ALWAYS a force kill, whatever flags follow.
+const ALWAYS_FORCE = new Map([
+  ["taskkill", "taskkill"],
+  ["pkill", "pkill"],
+  ["killall", "killall"],
+  ["stop-process", "Stop-Process"],
+  ["spps", "Stop-Process"],
+]);
+
+// `kill` is only a force kill with a force flag — except in PowerShell, where it
+// is an ALIAS for Stop-Process, hence -Id/-Force.
+const KILL_FORCE_FLAG_RE = /(?:^|\s)(?:-9|-KILL|-SIGKILL|-s\s*(?:9|KILL|SIGKILL)|-Id|-Force)(?:$|[\s"';&|])/i;
+
+export function normalizeExecutable(token) {
+  const unquoted = String(token || "").replace(/^["']+|["']+$/g, "");
+  const base = unquoted.split(/[\\/]/).pop() || "";
+  return base.replace(/\.exe$/i, "").toLowerCase();
+}
+
+export function findForceKill(rawCommand) {
+  const cmd = String(rawCommand || "");
+  CMD_POS_TOKEN_RE.lastIndex = 0;
+  let m;
+  while ((m = CMD_POS_TOKEN_RE.exec(cmd)) !== null) {
+    const name = normalizeExecutable(m[1]);
+    const always = ALWAYS_FORCE.get(name);
+    if (always) return always;
+    if (name === "kill") {
+      const rest = cmd.slice(m.index + m[0].length);
+      if (KILL_FORCE_FLAG_RE.test(rest)) return "kill -9";
+    }
+  }
+  return null;
+}
 
 // True when a codex binary sits at a command position and its SUBCOMMAND is
 // `review`. Options may appear between the two — `codex -c model=x review` is a
@@ -135,8 +163,9 @@ export function classifyCommand(rawCommand) {
     };
   }
 
-  for (const { re, what } of KILL_RES) {
-    if (re.test(cmd)) {
+  {
+    const what = findForceKill(cmd);
+    if (what) {
       return {
         rule: "force-kill",
         reason:

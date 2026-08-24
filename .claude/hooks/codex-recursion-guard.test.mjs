@@ -5,7 +5,7 @@
 // a guard that does not stop those has not fixed anything.
 
 import assert from "node:assert/strict";
-import { classifyCommand } from "./codex-recursion-guard.mjs";
+import { classifyCommand, normalizeExecutable } from "./codex-recursion-guard.mjs";
 
 let passed = 0;
 function check(name, fn) {
@@ -89,6 +89,26 @@ check("P3: blocks the SIGKILL spellings", () => {
 check("blocks PowerShell's kill alias, where kill IS Stop-Process", () => {
   assert.equal(rule("kill -Id 39564 -Force"), "force-kill");
   assert.equal(rule("spps -Id 39564"), "force-kill");
+});
+
+check("HIGH: blocks the four path/extension spellings Sol proved were allowed", () => {
+  // Verbatim from Sol's BLOCKERS verdict on 72405060. Ordinary Windows and POSIX
+  // spellings, not obfuscation — each one recreates the reviewer-kill exactly.
+  assert.equal(rule("taskkill.exe /PID 39564 /T /F"), "force-kill");
+  assert.equal(rule("C:\\Windows\\System32\\taskkill.exe /PID 39564 /T /F"), "force-kill");
+  assert.equal(rule("/usr/bin/pkill -9 codex"), "force-kill");
+  assert.equal(rule("/bin/kill -9 39564"), "force-kill");
+});
+
+check("normalizeExecutable strips path, extension, quotes, and case", () => {
+  assert.equal(normalizeExecutable('"C:\\Windows\\System32\\TaskKill.EXE"'), "taskkill");
+  assert.equal(normalizeExecutable("/usr/bin/pkill"), "pkill");
+  assert.equal(normalizeExecutable("Stop-Process"), "stop-process");
+  assert.equal(normalizeExecutable("node"), "node");
+});
+
+check("a pathed codex binary review is still caught after the rewrite", () => {
+  assert.equal(rule("/usr/local/bin/codex review --base origin/main"), "codex-review");
 });
 
 check("still allows codex exec even when the prompt text says review", () => {
