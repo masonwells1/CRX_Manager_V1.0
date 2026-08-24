@@ -2,6 +2,46 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — Risky-content denials name the pattern that fired, not a fixed guess
+
+The push gate and the PR-merge gate described every content-flagged diff with
+one hard-coded sentence naming four identifiers — `_cents`,
+`financial_audit_log`, `allocate_payment`, `apply_prepay`. `RISKY_CONTENT_RE`
+has roughly twenty alternatives, so on a diff matching any of the other sixteen
+the message named the wrong cause.
+
+- Measured on PR #456, a two-file config + docs diff containing no money code:
+  `.coderabbit.yaml` matched `_cents` ×2, `.delete(` ×2, `.update(` ×2, `grant`
+  and `policy`; `docs/manual/DECISION_LOG.md` matched `policy` ×3 and `rls`.
+  The guard blamed `_cents` alone. The obvious remedy that suggests — stop
+  matching `_cents` in prose — would have changed nothing, because four other
+  alternatives were also firing. The guard was correct to stop the merge and
+  unable to say why, and the misdirection cost a full investigation.
+- `riskyContentMatches()` and `describeRiskyContent()` report which patterns
+  matched and in which file, capped at 5 files and 6 tokens each. Both are
+  built from `RISKY_CONTENT_RE.source` rather than a copy, so the explanation
+  cannot drift from the rule that produced it.
+- Header lines are scanned rather than consumed: a path such as
+  `docs/policy.md` makes the gate fire through its `+++ b/` line alone, and a
+  reporter that skipped headers would have answered "nothing matched" while the
+  gate said risky.
+- **The verdict does not move.** `RISKY_CONTENT_RE` and `contentIsRisky` are
+  byte-for-byte unchanged; across both guards exactly four lines are removed —
+  the two `contentIsRisky(...)` calls, replaced by the same call now retaining
+  the diff text it already fetched, and the two hard-coded strings. No
+  condition, threshold, or early return is touched.
+- Nothing is narrowed, excluded, or exempted, deliberately. The tempting fix is
+  to stop scanning documentation, but `.md` files under `docs/loops/`,
+  `docs/audits/` and `docs/handoffs/` are read and executed by agents, so
+  "documentation" is not an inert category in this repo. Over-flagging costs an
+  unnecessary Codex proof round; under-flagging costs a missed money path.
+- Mutation-tested, both confirmed red before reverting: building the scanner
+  from a hand-copied pattern instead of `RISKY_CONTENT_RE.source`, and skipping
+  header lines. The real hook was also run end-to-end against the real PR #456
+  diff and its emitted message read directly, rather than asserted by substring
+  match.
+
+
 ## 2026-08-24 — Migration ordering review now matches the deterministic ledger guard
 
 The draw-down cutover review exposed two opposite bookkeeping hazards in the

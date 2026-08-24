@@ -16,6 +16,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   contentIsRisky,
+  describeRiskyContent,
   eachPush,
   gitPushCwd,
   gitSubcommandIsDynamic,
@@ -856,9 +857,11 @@ for (const pushCmd of pushCommands) {
 
   const risky = riskyFiles(files);
   let contentFlagged = false;
+  let contentDiffText = "";
   if (risky.length === 0) {
     try {
-      contentFlagged = contentIsRisky(git(["diff", `origin/main...${srcSha}`], pushRepoDir));
+      contentDiffText = git(["diff", `origin/main...${srcSha}`], pushRepoDir);
+      contentFlagged = contentIsRisky(contentDiffText);
     } catch (error) {
       deny(`CODEX GATE: could not inspect the full main-bound diff for money/security risk, so the push is denied. ${error?.message || error}`);
     }
@@ -887,7 +890,7 @@ for (const pushCmd of pushCommands) {
     ? `changes ${risky.length} risky file(s) that need an independent Codex verdict FIRST:\n` +
       risky.slice(0, 6).map((f) => "  " + f).join("\n") +
       (risky.length > 6 ? `\n  ... and ${risky.length - 6} more` : "")
-    : "changes content that matches a money/financial-audit pattern (_cents, balance_cents, financial_audit_log, allocate_payment, apply_prepay) even though no changed file's PATH looked risky";
+    : describeRiskyContent(contentDiffText);
 
   deny(
     `CODEX GATE: this push to main ${riskyDescription}\n\n"Review is queued/scheduled" is NOT reviewed. Before pushing:\n` +

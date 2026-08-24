@@ -11,6 +11,8 @@ import { scratchHookEnvironment } from "./git-test-env.mjs";
 import {
   claudeProofValid,
   contentIsRisky,
+  describeRiskyContent,
+  riskyContentMatches,
   gitPushCwd,
   gitSubcommandIsDynamic,
   mainPushIsForced,
@@ -334,6 +336,106 @@ assert.deepEqual(riskyFiles(["scripts/write-codex-push-proof.mjs"]), ["scripts/w
 assert.deepEqual(riskyFiles(["scripts/remove-applied-ledger-entry.mjs"]), ["scripts/remove-applied-ledger-entry.mjs"]);
 assert.equal(contentIsRisky("+ const total_cents = 100"), true);
 assert.equal(contentIsRisky("+ const title = 'ordinary'"), false);
+
+// ── risky-content REPORTING (diagnosis only — the verdict must not move) ─────
+// The guards used to blame a fixed list of four identifiers (`_cents`,
+// `financial_audit_log`, `allocate_payment`, `apply_prepay`) for every
+// content-flagged diff. The pattern has ~20 alternatives, so on PR #456 the
+// message blamed `_cents` while `policy`, `grant`, `.update(` and `.delete(`
+// were also matching — removing `_cents` would have changed nothing. These
+// tests pin the reporter to the SAME regex and, above all, pin that adding it
+// did not move the gate.
+
+// 1. THE REGRESSION GUARD. `describeRiskyContent` is diagnosis; it must never
+//    disagree with `contentIsRisky`. If a future edit narrows one and not the
+//    other, this fails. Corpus spans every branch of the alternation plus
+//    negatives.
+for (const [sample, expected] of [
+  ["+ const total_cents = 100", true],
+  ["+ insert into financial_audit_log values (1)", true],
+  ["+ select allocate_payment(1)", true],
+  ["+ select apply_prepay(1)", true],
+  ["+ where owner = auth.uid()", true],
+  ["+ create function f() security definer as $$", true],
+  ["+ -- tighten the rls policy here", true],
+  ["+ grant execute on function f to authenticated", true],
+  ["+ if (is_admin()) { return; }", true],
+  ["+ await supabase.from('t').update({ a: 1 })", true],
+  ["+ const status = 'draft'", true],
+  ["+ inventory levels look fine", true],
+  ["+ const title = 'ordinary'", false],
+  ["+ // just a comment about nothing", false],
+  ["", false],
+]) {
+  assert.equal(contentIsRisky(sample), expected, `contentIsRisky: ${sample}`);
+  assert.equal(
+    riskyContentMatches(sample).length > 0,
+    expected,
+    `reporter agrees with the gate: ${sample}`,
+  );
+}
+
+// 2. Per-file attribution, and the count. This is the whole point: name the
+//    file and the token, not a hard-coded guess.
+{
+  const diff = [
+    "diff --git a/a.yaml b/a.yaml",
+    "+++ b/a.yaml",
+    "+  # the review policy for grant handling",
+    "+  await x.update({})",
+    "diff --git a/b.md b/b.md",
+    "+++ b/b.md",
+    "+  policy, policy, and more policy",
+  ].join("\n");
+  const found = riskyContentMatches(diff);
+  assert.deepEqual(found.map((f) => f.file), ["a.yaml", "b.md"]);
+  const bTokens = found[1].tokens;
+  assert.equal(bTokens[0].token, "policy");
+  assert.equal(bTokens[0].count, 3, "repeat matches on one line are all counted");
+  const aTokens = found[0].tokens.map((t) => t.token).sort();
+  assert.deepEqual(aTokens, [".update(", "grant", "policy"]);
+  const text = describeRiskyContent(diff);
+  assert.match(text, /a\.yaml:/);
+  assert.match(text, /policy x3/, "counts are surfaced, not just the token");
+}
+
+// 3. A match that exists ONLY in the file PATH. `docs/policy.md` makes
+//    contentIsRisky true through the `+++ b/` header alone. A reporter that
+//    consumed headers without scanning them would answer "nothing matched"
+//    while the gate said risky — a contradiction that reads as a broken guard.
+{
+  const diff = ["diff --git a/docs/policy.md b/docs/policy.md", "+++ b/docs/policy.md", "+ nothing notable here"].join("\n");
+  assert.equal(contentIsRisky(diff), true);
+  const found = riskyContentMatches(diff);
+  assert.ok(found.length > 0, "a path-only match is still attributed, not dropped");
+  assert.equal(found[0].file, "docs/policy.md");
+}
+
+// 4. Fail-safe wording. With no matches the description must still read as a
+//    denial reason, never as "nothing matched" (which would invite a bypass).
+{
+  const generic = describeRiskyContent("");
+  assert.match(generic, /matches a money\/security pattern/);
+  assert.doesNotMatch(generic, /nothing|no match/i);
+}
+
+// 5. Caps. A huge diff must not produce an unbounded wall of text.
+{
+  const many = Array.from({ length: 40 }, (_, i) =>
+    [`+++ b/file${i}.md`, "+ policy"].join("\n")).join("\n");
+  const text = describeRiskyContent(many);
+  assert.match(text, /more file\(s\)/, "overflow is summarised, not printed in full");
+  assert.ok(text.split(/\r?\n/).length < 15, "capped output stays readable");
+}
+
+// 6. The reporter is built from RISKY_CONTENT_RE.source, never a copy. Proven
+//    behaviourally: every token the reporter returns must itself re-trigger the
+//    gate. A hand-maintained second pattern would drift and fail this.
+for (const { tokens } of riskyContentMatches("+++ b/x.ts\n+ const total_cents = 1; await a.update({}); -- rls policy")) {
+  for (const { token } of tokens) {
+    assert.equal(contentIsRisky(token), true, `reported token re-triggers the gate: ${token}`);
+  }
+}
 
 // 2026-07-29: the risky-file gate reasons about THIS app's migrations, RLS and
 // money code, so it only applies to THIS repo. It used to run against any repo

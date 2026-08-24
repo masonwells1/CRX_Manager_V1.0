@@ -1536,6 +1536,99 @@ export function contentIsRisky(diffText) {
   return RISKY_CONTENT_RE.test(String(diffText || ""));
 }
 
+// ── diagnosis only: WHICH pattern fired, and in which file ───────────────────
+// `contentIsRisky` answers yes/no; the guards then had to describe WHY, and both
+// hard-coded a list of four identifiers (`_cents`, `financial_audit_log`,
+// `allocate_payment`, `apply_prepay`). The real pattern above has roughly twenty
+// alternatives, including the ordinary English words `policy`, `grant`,
+// `permission`, `inventory`, `commission`, `lifecycle` and `rls`. So the message
+// named the wrong cause on any diff that matched one of the other sixteen.
+//
+// Measured on PR #456 (2026-08-24), a two-file config+docs diff: `.coderabbit.yaml`
+// matched `.update(`, `.delete(`, `_cents`, `policy`, `grant`; `DECISION_LOG.md`
+// matched `policy` ×3 and `rls`. The message blamed `_cents` alone, which sent the
+// investigation after a single identifier when removing it would have changed
+// nothing — four other alternatives still fired.
+//
+// This reports what actually matched. It does NOT change the verdict: the scanner
+// is built from `RISKY_CONTENT_RE.source`, never a copy, so the explanation cannot
+// drift from the rule that produced it.
+function riskyContentScanner() {
+  const flags = RISKY_CONTENT_RE.flags.includes("g")
+    ? RISKY_CONTENT_RE.flags
+    : RISKY_CONTENT_RE.flags + "g";
+  return new RegExp(RISKY_CONTENT_RE.source, flags);
+}
+
+// Returns [{ file, tokens: [{ token, count }] }], ordered by first appearance in
+// the diff and by descending count within a file.
+//
+// Header lines are scanned too, not just skipped after setting the current file:
+// a path such as `docs/policy.md` makes `contentIsRisky` true purely through the
+// `+++ b/...` line, and a reporter that consumed headers silently would answer
+// "nothing matched" while the gate said risky — a contradiction that reads as a
+// broken guard.
+export function riskyContentMatches(diffText) {
+  const scanner = riskyContentScanner();
+  const perFile = new Map();
+  let currentFile = "(diff header)";
+  for (const line of String(diffText || "").split(/\r?\n/)) {
+    // `diff --git a/<p> b/<p>` arrives BEFORE `+++ b/<p>` and can itself match
+    // (a path such as `docs/policy.md` contains `policy`), so attribute from it
+    // provisionally or that match lands under "(diff header)". `+++ b/` still
+    // overrides it, being the unambiguous form when a path contains spaces.
+    const gitHeader = /^diff --git a\/.+ b\/(.+)$/.exec(line);
+    if (gitHeader) currentFile = gitHeader[1].trim() || currentFile;
+    const header = /^\+\+\+ b\/(.+)$/.exec(line);
+    if (header) currentFile = header[1].trim() || currentFile;
+    scanner.lastIndex = 0;
+    const hits = line.match(scanner);
+    if (!hits) continue;
+    let bucket = perFile.get(currentFile);
+    if (!bucket) { bucket = new Map(); perFile.set(currentFile, bucket); }
+    for (const hit of hits) {
+      const token = String(hit).toLowerCase().trim();
+      if (token) bucket.set(token, (bucket.get(token) || 0) + 1);
+    }
+  }
+  return [...perFile.entries()].map(([file, bucket]) => ({
+    file,
+    tokens: [...bucket.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([token, count]) => ({ token, count })),
+  }));
+}
+
+// Human-readable form for a guard's deny message. Falls back to a generic line
+// rather than claiming nothing matched: the two can only disagree if the diff
+// text handed to each differs, and in that case the gate's verdict wins.
+export function describeRiskyContent(diffText, options) {
+  const maxFiles = options?.maxFiles ?? 5;
+  const maxTokensPerFile = options?.maxTokensPerFile ?? 6;
+  const found = riskyContentMatches(diffText);
+  const preamble =
+    "changes content that matches a money/security pattern even though no changed file's PATH looked risky";
+  if (found.length === 0) return preamble;
+
+  const rendered = found.slice(0, maxFiles).map(({ file, tokens }) => {
+    const shown = tokens
+      .slice(0, maxTokensPerFile)
+      .map(({ token, count }) => (count > 1 ? `${token} x${count}` : token))
+      .join(", ");
+    const rest = tokens.length > maxTokensPerFile
+      ? `, +${tokens.length - maxTokensPerFile} more`
+      : "";
+    return `  ${file}: ${shown}${rest}`;
+  });
+  const overflow = found.length > maxFiles
+    ? `\n  ... and ${found.length - maxFiles} more file(s)`
+    : "";
+
+  return `${preamble}.\nThe pattern matches PROSE as well as code, so a docs or config file that merely\n` +
+    `DESCRIBES these rules will match. What actually matched:\n` +
+    rendered.join("\n") + overflow;
+}
+
 function reviewProofValid(data, headSha, nowMs, ranKey, expectedBaseSha) {
   if (!data || data[ranKey] !== true) return false;
   const v = String(data.verdict || "");
