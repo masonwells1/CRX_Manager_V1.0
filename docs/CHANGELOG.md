@@ -84,6 +84,33 @@ carries no other work.
   throw previously left the hostile environment in place for every later
   assertion in the file and leaked the fixture directory.
 
+## 2026-08-23 — Live Foundation Gauntlet Section 9 refreshed: three open HIGH findings in AP
+
+Section 9 (purchase orders, receiving, vendor bills, vendor payments, AP safety) was re-audited
+against verified remote `main` `780e88aa` plus the live PostgreSQL function bodies. Verdict:
+**PARTIAL — 0 BLOCKER / 3 HIGH / 0 MED / 0 LOW.** The previously recorded vendor-bill /
+accounting-period close race is resolved live; RLS, routine grants, search paths, the PO
+serialization wrappers, and the core AP locks all remain present.
+
+- **HIGH — AP aging buckets by bill date, not due date.** `get_ap_aging` measures a bill's age
+  from the date it was issued rather than the date it is actually due, so bills on terms are
+  reported as further past due than they are.
+- **HIGH — "Due This Month" is a rolling 30-day window.** The dashboard card is labelled as a
+  calendar month but computes the next 30 days, so it disagrees with the month it names.
+- **HIGH — AP/receiving receipts replay by operation.** Retries are keyed to the operation rather
+  than bound to the authenticated actor plus the exact payload, so an uncertain response can
+  replay a prior success for a different request.
+
+This entry records the audit only; **no remediation is included.** The three findings remain open,
+which is why no predicate or test lands beside them — the executable checks belong with the fix,
+not with the write-up.
+
+- The deterministic section gate did not settle: its contract rejects a checkout that is behind
+  `origin/main` and cannot settle a dirty tree. The three findings were instead reverified
+  independently against the exact remote-`main` objects and the live function bodies.
+- Next scheduled refresh is the oldest section: Section 10 (blend tickets, OCR/review/payment
+  status, order linking, repository-only Edge Function handoff contracts).
+
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 
 Five quote-based smoke chains had silently rotted after product pricing became
