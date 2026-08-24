@@ -1,5 +1,26 @@
 # Migration History (890 migration-history entries)
 
+> **PRE-APPLY LIVE EVIDENCE (read this first).** The most recent read-only
+> `list_migrations` observation is at the top of this file, immediately below.
+> Do not scroll for it, and do not treat any older dated block as the latest.
+
+**Live-ledger re-read — 2026-08-24, immediately before the draw-down cutover apply.** Read
+read-only from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`. This
+**re-confirms** the 2026-08-18 block below rather than superseding it — every figure is unchanged:
+**971 ledger rows**, `max(version)` `20260816174353`, and current live effective ordering high-water
+**`20260813080000`**. That ordering value was derived row by row: use the timestamp embedded in
+`name` when present, otherwise fall back to that row's `version`. Neither `20260816110000_draw_down_cutover_barrier` nor
+`20260816120000_draw_down_split_order_lines_by_price_tier` is present in the ledger. Both authored
+stamps are strictly greater than the effective ordering high-water, so the ordering guard is satisfied for a
+sequential apply of the barrier followed by the candidate.
+
+Re-read because the `migration-drift-reviewer` charter refuses to rely on a dated observation across
+a live apply (finding H1, 2026-08-23: "the migration-history document explicitly says this dated
+observation must be re-read before relying on it"). **This line is that pre-apply check for the
+2026-08-24 apply only** — it is not a standing exemption, and a later apply must re-read again.
+
+---
+
 > LIVE RECONCILIATION — `20260730235031_quote_customer_row_version_guard.sql` was submitted as `20260730201230_quote_customer_row_version_guard` after PR #290 deployed the compatible browser bundle. It adds trigger-maintained `row_version bigint NOT NULL DEFAULT 1` to `quotes` and `customers`, re-emits `save_quote`/`save_customer` with fail-closed expected-version checks and fresh-version results, and preserves the commission-split-specific guard ahead of the generic guard. Live postflight, four rollback-only chains, zero-residue checks, all 21 invariant predicates, and the B7 rename passed. The AP-only close-race/table-boundary follow-up applied afterward as ledger `20260731001654`; the live schema registry is refreshed through that high-water and records both migrations and both row-version columns.
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
@@ -32,7 +53,7 @@ no timestamp column. The *fact* of the apply is the row itself.)
 
 | Measure | Value |
 |---|---|
-| **Current live high-water by `name` stamp (authoritative for ordering)** | **`20260813080000`** |
+| **Current live effective ordering high-water (timestamped `name`, else that row's `version`)** | **`20260813080000`** |
 | `max(version)` | `20260816174353` |
 | Row holding both | `20260813080000_lock_quote_versions_writes_to_rpc` |
 
@@ -42,13 +63,17 @@ so the two drift apart in whichever direction the delay between authoring and ap
 Both directions are present in this table: in the row above, `20260813080000` was authored 08-13 and
 applied 08-16, so its `version` (`20260816174353`) runs **three days ahead** of its `name`; at row 879
 below, `20260813070000` was applied the evening of 08-12 and its `version` (`20260813011751`) runs
-**behind** its `name`. **The ordering guard compares `name` stamps** — that is the rule that matters,
-and it does not depend on which way `version` fell. The 2026-08-16 `migration-drift-reviewer` run
-read the recorded high-water as stale because the value it compared was a `version`
-(`20260813011751`), not a `name` stamp. Row 879 below records both the `version` (`20260813011751`) and the
-`name` (`20260813070000`), so the comparison can be made on the right one. What this correction
-changed is the pointer: the sentence used to cite **row 49**, which is an unrelated 2026-02-17
-commission-payments entry (`20260217210000`) and records neither of those two values.
+**behind** its `name`. **The ordering guard derives an effective stamp row by row:** use the timestamp
+embedded in that row's `name` when present, otherwise use that row's 14-digit `version` as the
+conservative fallback. A bare `max(version)` is never the ordering high-water because it discards
+the name context that decides which rows need the fallback. Here the effective maximum comes from
+the timestamped `name` `20260813080000`, not its later apply-time version. The 2026-08-16
+`migration-drift-reviewer` run read the recorded high-water as stale because it compared a bare
+`version` (`20260813011751`) instead of deriving the row's authored stamp from `name`. Row 879 below
+records both the `version` (`20260813011751`) and the `name` (`20260813070000`), so the comparison can
+be made with the full row context. What this correction changed is the pointer: the sentence used to
+cite **row 49**, which is an unrelated 2026-02-17 commission-payments entry (`20260217210000`) and
+records neither of those two values.
 
 **Pre-apply read, 2026-08-16 (historical — not current state).** CHECK 6 cleared for
 `20260813080000_lock_quote_versions_writes_to_rpc`: `20260813080000` sorted strictly above the live
