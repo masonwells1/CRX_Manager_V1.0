@@ -808,6 +808,17 @@ function benignVerbContext(s, idx) {
   return BENIGN_VERB_CONTEXT.test(before);
 }
 
+function changesApplyingSessionSearchPath(statement) {
+  if (/\b(?:pg_catalog\.)?set_config\s*\(/.test(statement)) return true;
+  if (!/\b(?:set|reset)\s+(?:(?:local|session)\s+)?search_path\b/.test(statement)) {
+    return false;
+  }
+  // CREATE FUNCTION ... SET search_path records deferred routine config; it
+  // does not mutate the applying session. An attached event routine is still
+  // caught by eventTriggerChange, and ALTER FUNCTION remains conservative.
+  return !/^\s*create\s+(?:or\s+replace\s+)?(?:function|procedure)\b/.test(statement);
+}
+
 /**
  * The (table, column) pairs a migration writes when it is applied.
  *
@@ -861,16 +872,7 @@ function targetsFromCode(code, literals) {
   // through the applying session's search_path. Any executable search-path
   // mutation (including set_config, whose string operands were lexed out) is a
   // catalog-binding boundary and must be visible to manifest consumers.
-  const searchPathChange = s.split(';').some((statement) => {
-    if (/\b(?:pg_catalog\.)?set_config\s*\(/.test(statement)) return true;
-    if (!/\b(?:set|reset)\s+(?:(?:local|session)\s+)?search_path\b/.test(statement)) {
-      return false;
-    }
-    // CREATE FUNCTION ... SET search_path records deferred routine config; it
-    // does not mutate the applying session. An attached event routine is still
-    // caught by eventTriggerChange, and ALTER FUNCTION remains conservative.
-    return !/^\s*create\s+(?:or\s+replace\s+)?(?:function|procedure)\b/.test(statement);
-  });
+  const searchPathChange = s.split(';').some(changesApplyingSessionSearchPath);
   const unsupportedRoutineIdentity = hasUnsupportedRoutineIdentity(s);
   // `nextval` and `setval` persistently change a sequence even when they are
   // written inside SELECT/PERFORM rather than a DML verb. Restrict call
@@ -1582,7 +1584,7 @@ export function viewDefinitions(code) {
 // it without spelling the routine call or an explicit cast at that call site.
 // Keep the relation binding so unrelated inserts do not turn every domain or
 // default definition in a migration into an apply-time effect.
-function columnEffectDefinitions(code, domains = []) {
+function columnEffectDefinitions(code, domains = [], assumePriorSearchPathChange = false) {
   const domainNames = new Set();
   for (const definition of domains) {
     if (definition?.context !== "domain") continue;
@@ -1593,7 +1595,7 @@ function columnEffectDefinitions(code, domains = []) {
   }
 
   const effects = [];
-  const addColumns = (table, region) => {
+  const addColumns = (table, region, definitionSearchPathSafe) => {
     for (const raw of splitTopLevel(region)) {
       const column = raw.trim();
       const name = readIdent(column, 0);
@@ -1627,13 +1629,26 @@ function columnEffectDefinitions(code, domains = []) {
           column: nameIdentity.value,
           defaultCode,
           domain: domain ? normalizedType : "",
+          definitionSearchPathSafe,
         });
       }
     }
   };
 
-  for (const raw of String(code || "").toLowerCase().split(";")) {
+  const statements = String(code || "").toLowerCase().split(";");
+  let earlierSearchPathChange = assumePriorSearchPathChange;
+  const definitionSearchPathSafety = statements.map((statement) => {
+    const safe = !earlierSearchPathChange;
+    if (changesApplyingSessionSearchPath(statement)) earlierSearchPathChange = true;
+    return safe;
+  });
+  for (let statementIndex = 0; statementIndex < statements.length; statementIndex += 1) {
+    const raw = statements[statementIndex];
     const statement = raw.trim();
+    // PostgreSQL resolves and stores a column-default function OID when the
+    // defining DDL is parsed. A later SET/set_config cannot retarget that
+    // already-bound default, so only earlier applying-session mutations matter.
+    const definitionSearchPathSafe = definitionSearchPathSafety[statementIndex];
     const create = /^create\s+(?:(?:global|local)\s+)?(?:(?:temp|temporary|unlogged)\s+)?table\s+(?:if\s+not\s+exists\s+)?/.exec(statement);
     if (create) {
       const relation = readRelation(statement, create[0].length);
@@ -1646,7 +1661,9 @@ function columnEffectDefinitions(code, domains = []) {
         if (statement[i] === "(") depth += 1;
         else if (statement[i] === ")" && --depth === 0) { close = i; break; }
       }
-      if (close > open) addColumns(relation.table, statement.slice(open + 1, close));
+      if (close > open) {
+        addColumns(relation.table, statement.slice(open + 1, close), definitionSearchPathSafe);
+      }
       continue;
     }
 
@@ -1656,7 +1673,11 @@ function columnEffectDefinitions(code, domains = []) {
     if (!relation) continue;
     const add = /^\s*add\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?/.exec(statement.slice(relation.end));
     if (!add) continue;
-    addColumns(relation.table, statement.slice(relation.end + add[0].length));
+    addColumns(
+      relation.table,
+      statement.slice(relation.end + add[0].length),
+      definitionSearchPathSafe,
+    );
   }
 
   return effects;
@@ -2124,15 +2145,19 @@ export function applyTimeWriteTargets(
   };
   const columnEffects = [];
   const columnEffectKeys = new Set();
-  const defineColumnEffects = (sourceCode) => {
-    for (const effect of columnEffectDefinitions(sourceCode, casts)) {
+  const defineColumnEffects = (sourceCode, assumePriorSearchPathChange = top.searchPathChange) => {
+    for (const effect of columnEffectDefinitions(
+      sourceCode,
+      casts,
+      assumePriorSearchPathChange,
+    )) {
       const key = `${effect.table}\0${effect.column}\0${effect.defaultCode}\0${effect.domain}`;
       if (columnEffectKeys.has(key)) continue;
       columnEffectKeys.add(key);
       columnEffects.push(effect);
     }
   };
-  defineColumnEffects(code);
+  defineColumnEffects(code, false);
   const analysed = new Set();
   const foldLiterals = (result, lits) => {
     if (!result.dynamicExec) return;
@@ -2246,7 +2271,7 @@ export function applyTimeWriteTargets(
       // operator, cast, and view edges instead of inventing a second resolver.
       if (effect.defaultCode) {
         const scopedDefaultTrust = new Set();
-        if (!top.searchPathChange) {
+        if (effect.definitionSearchPathSafe) {
           for (const name of SAFE_STORED_DEFAULT_UNQUALIFIED_ROUTINES) {
             const sameFileConflict = [...byName.keys()].some(
               (identity) => routineBareName(identity) === name,

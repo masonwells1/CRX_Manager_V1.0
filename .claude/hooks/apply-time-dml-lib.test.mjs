@@ -1919,6 +1919,26 @@ eq(T(null), [], "a null body does not throw");
       changedSearchPath.firedColumnEffects.some((effect) =>
         effect.kind === 'default' && effect.routines.includes('now')),
     'round-68 MUTANT: an explicit search_path withdraws stored-default builtin trust');
+
+  const laterApplicationConfig = applyTimeWriteTargets(
+    'CREATE TEMP TABLE round68_later_config_probe(' +
+    'id uuid DEFAULT gen_random_uuid(), created_at timestamptz DEFAULT now()); ' +
+    "DO $$ BEGIN PERFORM set_config('crx.cost_basis_backfill', 'phase2', true); END $$; " +
+    'INSERT INTO round68_later_config_probe DEFAULT VALUES;',
+  );
+  ok(!laterApplicationConfig.unresolved && laterApplicationConfig.searchPathChange &&
+      !laterApplicationConfig.unknownCalls.includes('now') &&
+      !laterApplicationConfig.unknownCalls.includes('gen_random_uuid'),
+    'round-68: a later set_config cannot retarget already-bound stored defaults');
+
+  const laterExplicitPath = applyTimeWriteTargets(
+    'CREATE TEMP TABLE round68_later_path_probe(created_at timestamptz DEFAULT now()); ' +
+    'SET search_path = public, pg_catalog; ' +
+    'INSERT INTO round68_later_path_probe DEFAULT VALUES;',
+  );
+  ok(!laterExplicitPath.unresolved && laterExplicitPath.searchPathChange &&
+      !laterExplicitPath.unknownCalls.includes('now'),
+    'round-68: a later explicit search_path cannot retarget an already-bound default');
 }
 
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

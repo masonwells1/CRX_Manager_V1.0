@@ -138,8 +138,30 @@ Repair every valid merge blocker on PR #364, prove the fail-closed deny paths, c
 
 ## NEXT ACTION
 
-Resolve the PR #364 worktree with `git worktree list`, finish the current-main merge commit, and
-rerun the exact-SHA Sol review. Do not publish until that final commit has clean proof; do not merge
-the PR until every current-head gate is green or an explicitly expected neutral result.
+Commit the fifth repair through hooks, rerun the exact-SHA Sol review, and push normally. Do not
+merge the PR until the remote full-corpus SQL audit confirms the locked 61 baseline and every other
+current-head gate is green or an explicitly expected neutral result.
+
+## FIFTH RESUME REPAIR — PROVEN LOCALLY
+
+- Remote SQL validation on merge commit 5e93d36a reported 62 non-exempt findings against the
+  locked baseline of 61. The exact log proved the two historical unsupported-DO exemptions were
+  behaving correctly; the sole excess finding was
+  20260722015019_supplier_cost_basis_phase2.sql.
+- That migration defines now()/gen_random_uuid() column defaults before later executable code
+  calls set_config for application-specific flags. The analyzer incorrectly withdrew trust based
+  on any later migration-wide path signal even though PostgreSQL had already resolved and stored
+  each default's function identity.
+- Column effects now retain definition-time ordering. A path mutation before the DDL remains
+  fail-closed; a later explicit path change or application set_config cannot retroactively retarget
+  an already-bound default. DDL reached through dynamic/invoked code remains conservative when
+  outer ordering is not provable.
+- Current proof for this delta:
+  - apply-time analyzer: 330 assertions passed;
+  - approved-set validator: 225 mutation cases passed;
+  - migration-apply guard: 347 assertions passed;
+  - complete correction-guard bundle passed;
+  - lint, typecheck, and production build/PWA passed.
+- The audit allowance was not raised. No migration SQL or live state changed.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

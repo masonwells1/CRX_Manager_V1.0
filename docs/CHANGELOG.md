@@ -2,6 +2,23 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — Stored-default trust follows definition-time ordering
+
+The first remote full-corpus SQL audit after the stored-default repair remained one finding above
+the locked baseline. The remaining false positive was a migration that creates ordinary
+now()/gen_random_uuid() defaults before later routines use set_config for unrelated application
+flags.
+
+- Column-default analysis now records whether the applying session's search_path was still
+  implicit when each default was defined. PostgreSQL resolves and stores the function identity at
+  that point, so a later SET search_path or set_config cannot retarget the already-bound default.
+- A real path mutation before the definition still withdraws scoped core-default trust. Dynamic or
+  invoked DDL remains conservative when prior ordering cannot be proven.
+- The SQL-audit baseline remains 61. Focused proof passed 330 analyzer assertions, 347 migration
+  apply-guard assertions, and all 225 approved-set mutation cases; correction guards, lint,
+  typecheck, and the production build also passed.
+- No migration SQL, live database state, production data, secrets, or permissions changed.
+
 ## 2026-08-24 — Migration ordering review now matches the deterministic ledger guard
 
 The draw-down cutover review exposed two opposite bookkeeping hazards in the
