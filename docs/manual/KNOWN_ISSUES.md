@@ -380,25 +380,23 @@ Do **not** treat that as retiring the check. "Zero rows today" is a property of 
 not of the migration: a legacy import, a hand-built RPC call, or any save made before this migration
 applies can recreate the shape. Re-run this immediately before the apply and require **zero** rows:
 
-```sql
-WITH n AS (
-  SELECT jc.quantity, jc.customer_supplied, jc.cost_per_unit_cents, jc.price_per_unit_cents,
-         lower(btrim(coalesce(jc.unit, '')))      AS u_raw,
-         lower(btrim(coalesce(jc.rate_unit, ''))) AS r_raw
-    FROM job_chemicals jc)
-SELECT count(*) FROM n
- WHERE (u_raw = ''
-        OR (u_raw ~ '\s*/\s*(ac|acre|acres|a)\s*$'
-            AND btrim(regexp_replace(u_raw, '\s*/\s*(ac|acre|acres|a)\s*$', '')) = '')
-        OR btrim(regexp_replace(btrim(split_part(r_raw, '/', 1)),
-                                '[\s-]+per[\s-]+(acres|acre|ac|a)$', '')) = '')
-   AND quantity <> 0
-   AND coalesce(customer_supplied, false) = false
-   AND (coalesce(cost_per_unit_cents, 0) <> 0 OR coalesce(price_per_unit_cents, 0) <> 0);
-```
+**The query is deliberately NOT reproduced here. Copy it from the header of
+`supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`,
+which is the only authoritative copy.** This page used to carry a second copy claiming to match it
+"character for character", and on 2026-08-24 the exact-SHA gate found the copy had gone stale: it
+was missing the fourth term, the one for a rate that is ONLY a denominator (`per acre`, naming no
+unit at all). A stale pre-apply count fails in the worst direction — it reports a false zero, and
+the apply then makes live jobs unsaveable. One rule written in two places is exactly how that
+happens, so the second place is now a pointer instead of a copy.
 
-This query is the one in the migration header, character for character, and it took **four**
-versions to get right. The first three tested only a blank stock `unit`, so they missed the rate
+What the query looks for, so whoever pastes it can sanity-check what they pasted: a **blank stock
+unit**; a stock unit that is nothing but a per-acre denominator; a **rate unit** that strips to
+nothing once its per-acre suffix is removed; or a rate unit that is only a denominator with no
+leading separator — all counted only on lines that actually bill (non-zero quantity, not
+customer-supplied, carrying a cost or a price). **Four terms. If the block you pasted has three, it
+is the stale version.**
+
+It took **four** versions to get right. The first three tested only a blank stock `unit`, so they missed the rate
 side entirely: `normalize_rate_unit` returns NULL whenever its base strips to empty, which a rate
 unit of `/ac` or `per acre` does — those rows are refused too, and a `unit`-only count reports zero
 while a live row is still refused. Every wrong version failed in the same direction, which is the

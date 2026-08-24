@@ -521,6 +521,27 @@ BEGIN
     INTO v_acres
     FROM jsonb_array_elements(COALESCE(p_fields, '[]'::jsonb)) f;
 
+  -- THE ACREAGE IS NOW VALIDATED, not merely summed, and round 24 is why (HIGH,
+  -- gpt-5.6-sol, 2026-08-24). Every field acreage must be a finite, non-negative number.
+  --
+  -- Checked PER ELEMENT rather than on the total, because a negative acreage on one field
+  -- can be cancelled by a positive one on another and a sum test would never see it. The
+  -- range form also excludes NaN and Infinity in a single comparison, for the reason
+  -- recorded throughout this file: numeric NaN sorts ABOVE every value, so `>= 0` admits it.
+  --
+  -- This is the residual earlier rounds recorded and left open -- job_fields.acres_to_treat
+  -- carries no CHECK anywhere in the live schema -- closed on the RPC path. It does not
+  -- replace the column constraint; it stops THIS entry point storing the shape.
+  IF EXISTS (
+    SELECT 1
+      FROM jsonb_array_elements(COALESCE(p_fields, '[]'::jsonb)) f
+     WHERE NOT (COALESCE(NULLIF(f->>'acres_to_treat','')::numeric, 0) >= 0
+                AND COALESCE(NULLIF(f->>'acres_to_treat','')::numeric, 0) < 'Infinity'::numeric)
+  ) THEN
+    RAISE EXCEPTION
+      'JOB_ACRES_NOT_FINITE: One of the fields on this job carries an acreage that is negative or not a number. Every field must carry a real, non-negative number of acres to treat.';
+  END IF;
+
   FOR v_chem IN SELECT * FROM jsonb_array_elements(COALESCE(p_chemicals, '[]'::jsonb)) LOOP
     -- QUANTITY MUST BE FINITE AND NON-NEGATIVE, and it is checked FIRST -- ahead of every
     -- skip below, including the missing-product skip. A negative or non-finite quantity is
@@ -1212,7 +1233,16 @@ BEGIN
         ELSE NULL END,
       p_job_payload->>'batch_id',
       v_season,
-      COALESCE((p_job_payload->>'total_acres')::numeric, 0),
+      -- DERIVED, not taken from the caller -- round 24, and the reason is the same one that
+      -- makes the totals derived. The caller used to set `total_acres` independently of the
+      -- field rows it sent, so a payload could claim a ten-acre job while sending zero
+      -- billable acreage: the header read as real work, every per-acre check saw nothing to
+      -- expect, and a priced line saved billing nothing. v_acres is the SUM OF THE FIELDS
+      -- BEING SAVED, which is exactly what the page computes (sumAcres over acres_to_treat)
+      -- and what every check above already reasons about. Live agreement verified read-only
+      -- on 2026-08-24: all four jobs carry total_acres equal to their summed field acreage to
+      -- the hundredth, so this changes no existing row and no ordinary save.
+      v_acres,
       -- DERIVED, not taken from the caller.
       v_total_cost_cents,
       v_total_price_cents,
@@ -1262,7 +1292,10 @@ BEGIN
         ELSE NULL END,
       batch_id = p_job_payload->>'batch_id',
       season = v_season,
-      total_acres = COALESCE((p_job_payload->>'total_acres')::numeric, 0),
+      -- DERIVED on the UPDATE path too, for the same reason as the INSERT above. Deriving it
+      -- on one path only would leave the whole gap open on the other -- an EDIT is how a job
+      -- would most plausibly acquire a header acreage its fields do not support.
+      total_acres = v_acres,
       -- DERIVED, not taken from the caller.
       total_cost_cents = v_total_cost_cents,
       total_price_cents = v_total_price_cents,

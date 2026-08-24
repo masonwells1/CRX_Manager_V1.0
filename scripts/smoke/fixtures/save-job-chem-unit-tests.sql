@@ -192,7 +192,13 @@ BEGIN
       '11111111-1111-1111-1111-111111111111'::uuid, NULL);
   EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
   END;
-  IF ok AND msg LIKE 'CHEM_UNIT_MISMATCH%' THEN RAISE NOTICE 'T11 PASS  NaN acreage no longer waves a mismatch through: %', msg;
+  -- ROUND 24 moved the code this test asserts, and the move is the point. A NaN acreage is
+  -- now refused by JOB_ACRES_NOT_FINITE before the chemical loop runs at all, rather than
+  -- surviving to be caught by the units comparison further down. THREE independent guards
+  -- now stand between a NaN acreage and the money -- the new validation, the finiteness
+  -- bounds on the loop's operands, and the bounded tolerance -- and the mutant for this test
+  -- has to remove all three before the original bypass reappears.
+  IF ok AND msg LIKE 'JOB_ACRES_NOT_FINITE%' THEN RAISE NOTICE 'T11 PASS  NaN acreage is refused before it can reach the money: %', msg;
   ELSE RAISE EXCEPTION 'T11 FAIL  (refused=% msg=%)  -- a NaN acreage ACCEPTED a mismatched line', ok, msg; END IF;
 END $$;
 
@@ -355,7 +361,7 @@ END $$;
 -- before any acreage is entered lands exactly here. Found by the security review of the
 -- commit that introduced the refusal.
 DO $$
-DECLARE r jsonb; c bigint;
+DECLARE r jsonb; c bigint; a numeric;
 BEGIN
   r := save_job(NULL,
     '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
@@ -363,7 +369,18 @@ BEGIN
     '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":0,"unit":"","rate_per_acre":1.5,"rate_unit":"pt/ac","cost_per_unit_cents":1250,"price_per_unit_cents":1800}]'::jsonb,
     '11111111-1111-1111-1111-111111111111'::uuid, NULL);
   SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
-  IF c = 0 THEN RAISE NOTICE 'T20 PASS  a zero-quantity blank-unit line still saves and bills 0; price=%', c;
+  -- ROUND 24 added the acreage half of this assertion, because the gate showed that the
+  -- SAVING half on its own encoded an exploit (HIGH, gpt-5.6-sol). The payload claims
+  -- total_acres 10 while sending a single field of 0 acres. Before this round the header was
+  -- stored from the claim, so the row read as a ten-acre job that billed nothing -- a
+  -- caller-shaped underbill on the exact direct-RPC path this migration exists to close, and
+  -- this test asserted the saving half of it as correct. The header is now DERIVED from the
+  -- fields, so the claim does not survive: this must save AND store 0 acres.
+  SELECT total_acres INTO a FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF a <> 0 THEN
+    RAISE EXCEPTION 'T20 FAIL  total_acres stored as % -- the caller''s claimed acreage survived instead of the summed field acreage', a;
+  END IF;
+  IF c = 0 THEN RAISE NOTICE 'T20 PASS  a zero-quantity blank-unit line still saves, bills 0 and stores 0 acres rather than the claimed 10; price=%', c;
   ELSE RAISE EXCEPTION 'T20 FAIL  price=%', c; END IF;
 -- A handler so that losing the skip reports as "T20 FAIL" rather than as a raw psql error.
 -- Without it a mutant that moves the zero-quantity skip back below the blank-unit refusal is
@@ -1424,6 +1441,51 @@ BEGIN
   RAISE NOTICE 'T62 PASS  the converted branch is capped too: %', msg;
 END $$;
 
+-- T63: a NEGATIVE field acreage is refused. T11 covers NaN, but the two are different holes:
+-- a sum test catches NaN (it poisons the total) and misses a negative, because one field of
+-- -50 acres cancels against another of +50 and the total looks ordinary. The check is
+-- therefore per element, and this test is what proves it is per element rather than on the
+-- sum -- the two fields below add to a perfectly plausible 10 acres.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333460-3333-3333-3333-333333334605","acres_to_treat":60},{"field_id":"33333460-3333-3333-3333-333333334606","acres_to_treat":-50}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":20,"unit":"gal","rate_per_acre":2,"rate_unit":"gal/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF NOT ok THEN
+    RAISE EXCEPTION 'T63 FAIL  a negative field acreage saved because the two fields summed to a plausible total';
+  END IF;
+  IF msg NOT LIKE 'JOB_ACRES_NOT_FINITE%' THEN
+    RAISE EXCEPTION 'T63 FAIL  refused, but not by the acreage validation: %', msg;
+  END IF;
+  RAISE NOTICE 'T63 PASS  a negative field acreage is refused even when the total looks ordinary: %', msg;
+END $$;
+
+-- T64: THE HEADER ACREAGE IS THE FIELDS' ACREAGE, on a job that genuinely bills. T20 pins the
+-- zero case; this pins that the claim does not survive on a real save either, which is what
+-- stops a caller presenting ten acres of work while sending one. The payload claims 999 and
+-- sends a single 10-acre field; the job must save, bill on 10 acres, and store 10.
+DO $$
+DECLARE r jsonb; c bigint; a numeric;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":999}'::jsonb,
+    '[{"field_id":"33333460-3333-3333-3333-333333334607","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":20,"unit":"gal","rate_per_acre":2,"rate_unit":"gal/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_acres, total_price_cents INTO a, c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF a = 10 AND c = 4000 THEN RAISE NOTICE 'T64 PASS  the claimed 999 acres did not survive; stored acres=% price=%', a, c;
+  ELSE RAISE EXCEPTION 'T64 FAIL  acres=% price=% (expected 10 / 4000)', a, c; END IF;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T64 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T64 FAIL  an ordinary job whose header acreage disagrees with its fields was refused rather than corrected: %', SQLERRM;
+END $$;
+
 -- T55: THE COUNTERPART. Every unit the live system actually carries must still SAVE on a
 -- priced line, or the backstop would block ordinary work -- the round-7 defect three reviewers
 -- caught, and the reason a widening is never free. 'dry oz' is the spelling most at risk:
@@ -1552,6 +1614,6 @@ DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 28 AND n_chem = 28 THEN RAISE NOTICE 'T8 PASS  28 jobs / 28 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18), T59 (the quantity-driven UI path, added in round 23) and T61 (a correctly derived line on an enormous acreage, added in round 24 so that capping the tolerance could not be mistaken for refusing large jobs outright). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48, T60, T62 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 28/28)', n_jobs, n_chem; END IF;
+  IF n_jobs = 29 AND n_chem = 29 THEN RAISE NOTICE 'T8 PASS  29 jobs / 29 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18), T59 (the quantity-driven UI path, added in round 23) T61 (a correctly derived line on an enormous acreage, added in round 24 so that capping the tolerance could not be mistaken for refusing large jobs outright) and T64 (a job whose header acreage disagrees with its fields must be CORRECTED, not refused). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48, T60, T62, T63 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 29/29)', n_jobs, n_chem; END IF;
 END $$;

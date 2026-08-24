@@ -66,7 +66,7 @@ const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
                   "T40", "T41", "T42", "T43", "T44", "T45", "T46", "T47", "T48",
                   "T49", "T50", "T51", "T52", "T53", "T54", "T55", "T56", "T57", "T58", "T59",
-                  "T60", "T61", "T62"];
+                  "T60", "T61", "T62", "T63", "T64"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -600,6 +600,15 @@ const MUTANTS = [
     // so by refusing to score a detection it had not actually earned.
     name: "every finiteness bound on the acreage path removed",
     edits: [
+      // ROUND 24 had to add this edit for the same reason round 18 had to add the tolerance
+      // one: a NEW guard now closes the NaN path on its own, so removing only the old bounds
+      // no longer reproduces the defect and the prover correctly refused to score it. The
+      // field-acreage validation refuses NaN before the loop runs, so THREE independent
+      // guards now stand between a NaN acreage and the money and this mutant removes all
+      // three. That is a strengthening of the code, recorded here rather than worked around.
+      { from: "     WHERE NOT (COALESCE(NULLIF(f->>'acres_to_treat','')::numeric, 0) >= 0\n"
+            + "                AND COALESCE(NULLIF(f->>'acres_to_treat','')::numeric, 0) < 'Infinity'::numeric)",
+        to: "     WHERE false" },
       { from: "AND v_acres > 0 AND v_acres < 'Infinity'::numeric", to: "AND v_acres > 0", all: true },
       // Anchor re-cut in round 23 with the tolerance. Still restores the RELATIVE form,
       // which is the half of the original NaN bypass this mutant needs: NaN <= NaN is TRUE
@@ -609,6 +618,32 @@ const MUTANTS = [
       { from: "         AND v_carried > '-Infinity'::numeric\n         AND v_carried < 'Infinity'::numeric\n", to: "" },
     ],
     expect: "T11",
+  },
+  {
+    // Removes ONLY the non-negative arm of the field-acreage validation, leaving the finite
+    // bound in place. Aimed deliberately: NaN is still refused (it fails the finite test), so
+    // T11 stays green and T63 -- two fields of +60 and -50, a plausible-looking 10-acre total
+    // hiding a negative -- goes red on its own. A mutant that reddened both would not show
+    // which half of the rule is load-bearing.
+    name: "non-negative arm removed from the field-acreage validation",
+    from: "     WHERE NOT (COALESCE(NULLIF(f->>'acres_to_treat','')::numeric, 0) >= 0",
+    to: "     WHERE NOT (COALESCE(NULLIF(f->>'acres_to_treat','')::numeric, 0) > '-Infinity'::numeric",
+    expect: "T63",
+  },
+  {
+    // Reverts the header acreage to the caller's number on both the INSERT and the UPDATE
+    // path. That is the round-24 HIGH exactly as the gate framed it: a payload claiming ten
+    // acres while sending zero billable acreage stored a job that READ as real work and
+    // billed nothing. T20 is the oracle because it runs first and pins the zero case; T64
+    // pins the same rule on a job that genuinely bills.
+    name: "header acreage taken from the caller again",
+    edits: [
+      { from: "      v_acres,\n      -- DERIVED, not taken from the caller.\n      v_total_cost_cents,",
+        to: "      COALESCE((p_job_payload->>'total_acres')::numeric, 0),\n      v_total_cost_cents," },
+      { from: "      total_acres = v_acres,",
+        to: "      total_acres = COALESCE((p_job_payload->>'total_acres')::numeric, 0)," },
+    ],
+    expect: "T20",
   },
   {
     name: "non-finite/negative quantity refusal removed",
