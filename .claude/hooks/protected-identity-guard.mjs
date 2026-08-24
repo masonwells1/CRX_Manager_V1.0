@@ -28,7 +28,7 @@ import {
   protectedControlPathReason,
   protectedProofCreationReason,
 } from "./protected-identity-lib.mjs";
-import { extractPatchDestinations } from "./codex-push-lib.mjs";
+import { extractPatchDestinations, normalizeToolInput } from "./codex-push-lib.mjs";
 import path from "node:path";
 
 let raw = "";
@@ -52,29 +52,15 @@ function out(decision, reason) {
 
 try {
   const payload = raw.trim() ? JSON.parse(raw) : null;
-  const rawInput = payload?.tool_input;
 
   // Codex's `apply_patch` delivers its payload as a RAW STRING, not an object.
-  // Discarding every non-object `tool_input` therefore extracted no destination
-  // at all and fell straight through to allow — leaving open the exact route
-  // this hook exists to close, while the tests passed because they wrapped the
-  // patch in `{patch: …}`, a shape the real tool never sends (exact-review High,
-  // PR #432). A string that is itself JSON is decoded first, since some hosts
-  // encode the object form; anything else is treated as a free-form patch body.
-  let input = {};
-  let rawStringBody = null;
-  if (rawInput && typeof rawInput === "object") {
-    input = rawInput;
-  } else if (typeof rawInput === "string" && rawInput.trim()) {
-    let decoded = null;
-    try {
-      decoded = JSON.parse(rawInput);
-    } catch {
-      decoded = null;
-    }
-    if (decoded && typeof decoded === "object") input = decoded;
-    else rawStringBody = rawInput;
-  }
+  // Discarding every non-object `tool_input` extracted no destination at all and
+  // fell straight through to allow — leaving open the exact route this hook
+  // exists to close, while the tests passed because they wrapped the patch in
+  // `{patch: …}`, a shape the real tool never sends (exact-review High, PR #432).
+  // The normalizer is shared with review-proof-guard so neither route can learn
+  // this and leave the other behind.
+  const { input, rawBody: rawStringBody } = normalizeToolInput(payload?.tool_input);
 
   // Write uses file_path; Edit uses file_path too. Accept the common spellings
   // so a future tool shape cannot slip past by naming the field differently.

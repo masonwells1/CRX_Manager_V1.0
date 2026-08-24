@@ -32,6 +32,24 @@ worse than not shipping it: a half-closed guard reads as handled.
   matching what `protectedProofCreationReason` already did internally, so a junction
   hop cannot keep the supplied pathname from ever spelling the control file.
 
+Round two of that review found one more High, fixed here:
+
+- `extractPatchDestinations()` required `File:` after every verb, so it recognized
+  only the `*** Move to File:` spelling that `apply_patch` never sends. The real
+  header is `*** Move to:`. A patch pairing an innocuous `*** Update File:` with a
+  `*** Move to:` destination therefore exposed only the innocuous half to every
+  guard built on the shared extractor — forgery by rename: an ordinary untracked
+  file carrying fabricated clean-review fields moved into the wrapper-owned state
+  directory. The extractor now parses `*** Move to:` while keeping the existing
+  spellings, and regressions assert the state directory, Git control paths, a
+  protected-file alias, and an ordinary destination that must stay allowed.
+- `review-proof-guard.mjs` offered no backup on that route because it, too, read
+  only the object shape: a bare-string `tool_input` left a string in `input`, so
+  every `input.<field>` read was undefined and no destination was examined. The
+  payload-shape normalizer is now a single shared `normalizeToolInput()` in
+  `codex-push-lib.mjs` used by both guards, rather than logic each hook restates —
+  the same drift that caused the first round's findings.
+
 ## 2026-08-24 — Identity reaches the patch route, the proof directory, and stops flagging files as aliases of themselves
 
 Two exact-review High findings, plus a third defect found while fixing them.

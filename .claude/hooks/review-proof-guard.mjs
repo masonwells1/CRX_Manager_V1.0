@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 
 import {
   extractPatchDestinations,
+  normalizeToolInput,
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
 } from "./codex-push-lib.mjs";
@@ -31,7 +32,20 @@ try {
   process.exit(0);
 }
 
-const input = payload?.tool_input || payload?.toolInput || {};
+// A bare-STRING tool_input (the shape apply_patch actually sends) left this
+// guard with a string in `input`, so every `input.<field>` read below was
+// undefined and no destination was ever examined — it provided no backup
+// protection on exactly the route that needed it (exact-review CRX-GUARD-01,
+// PR #432). Shared normalizer, so this route and the identity guard cannot
+// diverge on the payload shape again.
+// Empty/absent tool_input still falls back to the camelCase spelling, exactly as
+// the previous `||` chain did — normalizing must not quietly change which field
+// is read.
+const rawToolInput = payload?.tool_input === undefined || payload?.tool_input === null || payload?.tool_input === ""
+  ? payload?.toolInput
+  : payload?.tool_input;
+const { input: normalizedInput, rawBody: rawPatchBody } = normalizeToolInput(rawToolInput);
+const input = normalizedInput;
 const toolName = String(payload?.tool_name || payload?.toolName || "");
 const hookCwd = String(payload?.cwd || input.cwd || input.workdir || "");
 const pathCandidates = [
@@ -46,7 +60,7 @@ const pathCandidates = [
   // patch's destination headers, NOT its whole body — added prose may
   // legitimately mention proof paths in documentation (Codex round-5). Write's
   // `content` is likewise deliberately not scanned; its target is file_path.
-  ...[input.patch, input.diff, input.input, input.changes].flatMap((payloadText) => extractPatchDestinations(payloadText)),
+  ...[input.patch, input.diff, input.input, input.changes, rawPatchBody].flatMap((payloadText) => extractPatchDestinations(payloadText)),
 ];
 if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
   deny("REVIEW PROOF GUARD: Claude/Codex review proof files are wrapper-owned. Run the real review workflow; do not write, edit, move, or delete proof JSON directly.");

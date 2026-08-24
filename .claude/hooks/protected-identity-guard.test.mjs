@@ -132,6 +132,37 @@ ok(
   "a RAW STRING patch that adds a proof file is denied",
 );
 
+// FORGERY BY RENAME. `*** Move to:` is the header apply_patch really emits, and
+// the shared extractor recognized only the `*** Move to File:` spelling that the
+// tool never sends. A patch could therefore pair an innocuous `*** Update File:`
+// — the only destination any guard saw — with a `*** Move to:` that relocated an
+// ordinary file into the wrapper-owned state directory, onto a Git control path,
+// or over a protected file. All three classes are asserted, because fixing only
+// the one the reviewer demonstrated would leave the same header unparsed for the
+// others (exact-review CRX-GUARD-01, PR #432).
+const moveTo = (destination) => [
+  "*** Begin Patch",
+  "*** Update File: harmless.json",
+  `*** Move to: ${destination}`,
+  "@@",
+  "-a",
+  "+b",
+  "*** End Patch",
+].join("\n");
+
+ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: moveTo(".claude/session-state/codex-review-deadbeef.json") }, repoRoot)), "a RAW STRING `*** Move to:` into the review state directory is denied");
+ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: moveTo(".git/config") }, repoRoot)), "a RAW STRING `*** Move to:` onto a Git control path is denied");
+ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: moveTo(".gitattributes") }, repoRoot)), "a RAW STRING `*** Move to:` onto the Git attributes file is denied");
+// The object-wrapped spelling of the same header must be caught too — the bug
+// was in the shared extractor, not in one route's payload handling.
+ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: { patch: moveTo(".claude/session-state/codex-review-deadbeef.json") } }, repoRoot)), "an object-wrapped `*** Move to:` into the review state directory is denied");
+if (linked) {
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: moveTo(alias) })), "a RAW STRING `*** Move to:` onto an alias of a protected file is denied");
+}
+// A move to an ordinary destination stays allowed — the header is now parsed,
+// not blanket-denied.
+eq(runHook({ tool_name: "apply_patch", tool_input: moveTo(path.join(scratch, "renamed.json")) }, repoRoot).stdout.trim(), "", "a `*** Move to:` an ordinary destination is allowed");
+
 // PROOF FORGERY. A new file in the review state directory certifies a change the
 // gate will later trust. Identity cannot see it — a file that does not exist yet
 // has no inode — so the destination is canonicalised first.

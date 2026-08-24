@@ -59,6 +59,17 @@ for (const payload of [
   // Codex round-4: patch-style payloads carry the destination in free-form text.
   { tool_name: "apply_patch", tool_input: { patch: "*** Add File: .claude/session-state/claude-review-push.json\n+{}" } },
   { tool_name: "mcp__codex__apply_patch", tool_input: { input: "*** Update File: .claude/session-state/codex-review-abc.json" } },
+  // Exact-review CRX-GUARD-01 (PR #432): apply_patch sends the body as a BARE
+  // STRING. `input` then held a string, every `input.<field>` read was
+  // undefined, and this guard examined no destination at all — so it offered no
+  // backup protection on the one route that needed it.
+  { tool_name: "apply_patch", tool_input: "*** Add File: .claude/session-state/claude-review-push.json\n+{}" },
+  { tool_name: "mcp__codex__apply_patch", tool_input: "*** Update File: .claude/session-state/codex-review-abc.json" },
+  // Forgery by RENAME: the innocuous `*** Update File:` is the only destination
+  // the old extractor saw, because it required `File:` after every verb and so
+  // never parsed the `*** Move to:` header apply_patch really emits.
+  { tool_name: "apply_patch", tool_input: "*** Update File: harmless.json\n*** Move to: .claude/session-state/codex-review-abc.json" },
+  { tool_name: "apply_patch", tool_input: { patch: "*** Update File: harmless.json\n*** Move to: .claude/session-state/codex-review-abc.json" } },
   // Opus review 2026-08-19 round 4 — proven cd bypasses. A quoted, escaped,
   // eval-wrapped, or composed verb still executes as `cd` in the shell, so the
   // scan must see through each disguise.

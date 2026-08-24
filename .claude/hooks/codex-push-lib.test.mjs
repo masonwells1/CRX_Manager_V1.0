@@ -30,6 +30,7 @@ import {
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   extractPatchDestinations,
+  normalizeToolInput,
   proofValid,
   repoIsGuardedApp,
   urlIsGuardedApp,
@@ -997,6 +998,34 @@ assert.deepEqual(
   ["src/a.ts", "src/b.ts"],
   "unified-diff headers are destinations; body mentions are not",
 );
+// `*** Move to:` is the header apply_patch actually emits. The pattern used to
+// require `File:` after every verb, so it saw only the `*** Move to File:`
+// spelling the tool never sends — and a rename destination was invisible to
+// every guard built on this extractor (exact-review CRX-GUARD-01, PR #432).
+assert.deepEqual(
+  extractPatchDestinations("*** Update File: harmless.json\n*** Move to: .claude/session-state/codex-review-deadbeef.json\n+{}"),
+  ["harmless.json", ".claude/session-state/codex-review-deadbeef.json"],
+  "a `*** Move to:` destination is extracted alongside the innocuous update it hides behind",
+);
+assert.deepEqual(
+  extractPatchDestinations("*** Move to File: .claude/session-state/codex-review-deadbeef.json"),
+  [".claude/session-state/codex-review-deadbeef.json"],
+  "the `*** Move to File:` spelling still parses",
+);
+assert.deepEqual(
+  extractPatchDestinations("*** Move File: docs/a.md"),
+  ["docs/a.md"],
+  "the `*** Move File:` spelling still parses",
+);
+
+// The payload shape normalizer is shared by every guard that reads a patch body,
+// because a guard that understands only the object form inspects nothing at all
+// on the bare-string shape apply_patch actually sends — and silence means allow.
+assert.deepEqual(normalizeToolInput({ patch: "x" }), { input: { patch: "x" }, rawBody: null }, "an object tool_input passes through");
+assert.deepEqual(normalizeToolInput("*** Add File: a.txt"), { input: {}, rawBody: "*** Add File: a.txt" }, "a bare string becomes a free-form patch body");
+assert.deepEqual(normalizeToolInput(JSON.stringify({ patch: "x" })), { input: { patch: "x" }, rawBody: null }, "a JSON-encoded object is decoded, not mistaken for a body");
+assert.deepEqual(normalizeToolInput(undefined), { input: {}, rawBody: null }, "a missing tool_input yields nothing to check");
+assert.deepEqual(normalizeToolInput("   "), { input: {}, rawBody: null }, "a blank string yields nothing to check");
 
 // --- GIT_CONFIG* environment overrides (Codex 2026-07-30, round 3) ------------
 // Proven live: with `origin` pointing elsewhere, GIT_CONFIG_KEY_0=

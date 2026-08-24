@@ -351,13 +351,44 @@ export function pushUsesBulkMode(cmd) {
 // (Codex round-5).
 export function extractPatchDestinations(text) {
   const out = [];
-  const re = /^(?:\*{3}\s*(?:Add|Update|Delete|Move(?:\s+to)?)\s+File:\s*(.+?)\s*$|\+{3}\s+(?:b\/)?(\S+)|-{3}\s+(?:a\/)?(\S+)|rename\s+to\s+(\S+)\s*$)/gim;
+  // `*** Move to:` is the header apply_patch ACTUALLY emits for a rename. The
+  // pattern previously required `File:` after every verb, so it recognized only
+  // the `*** Move to File:` spelling that the tool never sends — and a payload
+  // pairing an innocuous `*** Update File:` with a `*** Move to:` destination
+  // exposed only the innocuous half to every guard built on this extractor.
+  // That moved an ordinary file into the wrapper-owned state directory, which is
+  // proof forgery by rename (exact-review CRX-GUARD-01, PR #432).
+  const re = /^(?:\*{3}\s*(?:(?:Add|Update|Delete)\s+File:|Move(?:\s+to)?\s+File:|Move\s+to:)\s*(.+?)\s*$|\+{3}\s+(?:b\/)?(\S+)|-{3}\s+(?:a\/)?(\S+)|rename\s+to\s+(\S+)\s*$)/gim;
   let match;
   while ((match = re.exec(String(text || ""))) !== null) {
     const dest = match[1] || match[2] || match[3] || match[4];
     if (dest && dest !== "/dev/null") out.push(dest);
   }
   return out;
+}
+
+// `apply_patch` delivers its payload as a bare STRING; other hosts send an
+// object, and some stringify that object. A guard that understands only the
+// object form silently inspects NOTHING on the shape that actually occurs, and
+// silence means allow. Shared rather than re-implemented per hook: two guards
+// that were each supposed to know this drifted apart once already, which is how
+// the raw-string route stayed open behind a green suite (exact-review, PR #432).
+//
+// Returns the object-shaped fields plus, when the payload was a bare string,
+// that string as a free-form body for destination extraction.
+export function normalizeToolInput(rawInput) {
+  if (rawInput && typeof rawInput === "object") return { input: rawInput, rawBody: null };
+  if (typeof rawInput === "string" && rawInput.trim()) {
+    let decoded = null;
+    try {
+      decoded = JSON.parse(rawInput);
+    } catch {
+      decoded = null;
+    }
+    if (decoded && typeof decoded === "object") return { input: decoded, rawBody: null };
+    return { input: {}, rawBody: rawInput };
+  }
+  return { input: {}, rawBody: null };
 }
 
 // A changed file is "risky" (needs a separate Sol/high verdict) when it

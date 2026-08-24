@@ -52,12 +52,20 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // joined RISKY_PATH_RES so a Codex push touching it needs an exact-head
   // proof. The apply-live-testdata risky-path anchor this transform verifies is
   // still present exactly once; the transform is identity, so input == output.
+  // pushLib re-pinned again 2026-08-24 (PR #432, exact-review CRX-GUARD-01):
+  // extractPatchDestinations() now parses the `*** Move to:` rename header that
+  // apply_patch actually emits — it previously required `File:` after every verb
+  // and so never saw a rename destination — and the file gained the shared
+  // normalizeToolInput() used by review-proof-guard and protected-identity-guard.
+  // Neither touches RISKY_PATH_RES: the apply-live-testdata risky-path anchor
+  // this transform verifies is still present exactly once, and the transform is
+  // identity, so input == output.
   codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
-  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
+  pushLib: "5ca3c7bd2adf03de455663df56fd8113de5772c2",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
-  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
+  pushLib: "5ca3c7bd2adf03de455663df56fd8113de5772c2",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
