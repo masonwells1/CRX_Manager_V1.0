@@ -17,6 +17,12 @@ export const CLAUDE_ONLY_HOOKS = new Set([
   // guards.
   "codex-push-guard.mjs",
   "pr-merge-guard.mjs",
+  // Identity checking on the WRITE boundary is wired for both agents, but through
+  // each one's own file-tool route: Codex reaches it via mcp-tool-guard.mjs on its
+  // all-tools matcher, which shares protected-identity-lib.mjs with this hook.
+  // This entry covers only Claude's native Write|Edit matcher, which Codex has no
+  // equivalent of, so a Codex-side copy would never fire.
+  "protected-identity-guard.mjs",
   // Autopilot (the armed hands-free-run concept) is a Claude-session mechanism;
   // Codex has no autopilot flag, so these are Claude-only.
   "autopilot-intent-reminder.mjs",

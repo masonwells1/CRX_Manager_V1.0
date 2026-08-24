@@ -159,6 +159,16 @@ SHA while substituting a hostile wrapper tree.
 Every provenance read invokes Git through a fixed trusted installation path and
 a minimal sanitized environment. Repository-local and PATH-injected Git shims
 are planted in regressions and proven not to execute before trust is established.
+**Where the boundary actually is.** Blocking every way to *create* an alias is
+unbounded — `mklink /H`, `ln`, `cp -l`/`--link`, `link`, BusyBox, PowerShell
+`New-Item`, `fsutil`, and any language runtime with a `link()` binding. Blocking
+every way to *write through* one is bounded: MCP file tools and the native
+Write/Edit tools. So file identity is enforced at the write boundary by both
+`mcp-tool-guard.mjs` and `protected-identity-guard.mjs` (Claude's `Write|Edit`
+matcher, sharing `protected-identity-lib.mjs`), and the shell classifier's
+link-creation denials are defence in depth rather than the boundary itself. That
+list of creators is deliberately not exhaustive and must not be read as such.
+
 Protected-path matching is no longer name-shaped only. A hard link gives a
 protected file a second, innocuous pathname that `realpath` cannot resolve away,
 so an alias write would edit the real file while every pattern missed. MCP file

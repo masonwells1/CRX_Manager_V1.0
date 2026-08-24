@@ -81,6 +81,19 @@ ok(checkDangerousCommand("New-Item -ItemType SymbolicLink -Path scratch\\h -Targ
 // Hard links are denied outright, so an unprotected target is no longer a way in.
 ok(checkDangerousCommand("mklink /H scratch\\a.txt docs\\README.md"), "hard-link creation is denied even between unprotected files");
 ok(checkDangerousCommand("ln docs/README.md /tmp/readme.md"), "a POSIX hard link is denied even between unprotected files");
+// `cp` and `link` create the same alias without ever saying "link" the way ln
+// does (Codex, 2026-08-24). Defence in depth only — the identity check at the
+// write boundary is what actually holds when a creator is not on this list.
+ok(checkDangerousCommand("cp -l .claude/hooks/bash-safety-lib.mjs scratch/alias.mjs"), "cp -l is denied");
+ok(checkDangerousCommand("cp --link docs/README.md scratch/a.md"), "cp --link is denied");
+ok(checkDangerousCommand("cp -al src scratch/src"), "a combined short cluster containing -l is denied");
+ok(checkDangerousCommand("link .claude/hooks/bash-safety-lib.mjs scratch/alias.mjs"), "the standalone link utility is denied");
+ok(checkDangerousCommand("busybox cp -l docs/README.md scratch/a.md"), "busybox cp -l is denied");
+// Ordinary copying must keep working, including flags that merely contain other
+// letters, so this does not become a tax on normal work.
+eq(checkDangerousCommand("cp -r src scratch/src"), null, "an ordinary recursive copy is allowed");
+eq(checkDangerousCommand("cp docs/README.md scratch/a.md"), null, "an ordinary copy is allowed");
+eq(checkDangerousCommand("cp -p docs/README.md scratch/a.md"), null, "a preserving copy is allowed");
 // Ordinary symlinks away from protected locations still work.
 eq(checkDangerousCommand("ln -s docs/README.md /tmp/readme.md"), null, "an ordinary symlink to an unprotected file is allowed");
 eq(checkDangerousCommand("mklink /D scratch\\docs docs"), null, "a directory symlink to an unprotected directory is allowed");

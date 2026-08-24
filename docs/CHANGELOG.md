@@ -145,6 +145,18 @@ Blend Recipes was never affected; it selects `*`.
   shells, or `node_modules` code outside exact-HEAD inspection. Bash and MCP
   regressions cover the demonstrated `config edit` and `explore` routes plus
   sibling option/config forms.
+- The alias boundary moved from "block every way to make one" to "check identity
+  on every way to write through one". Enumerating creators is unbounded — four
+  review rounds each found another (`mklink /H`, a junction hop, a computed
+  PowerShell item type, then `cp -l`/`--link`/`-al`, `link`, and BusyBox) — while
+  the set of write routes is finite. `protected-identity-guard.mjs` now enforces
+  device+inode identity on Claude's native `Write|Edit` matcher, sharing
+  `protected-identity-lib.mjs` with the MCP guard that already covered file
+  tools, so an alias cannot be edited under an innocent pathname however it was
+  created. The shell classifier's creation denials remain as defence in depth and
+  are explicitly documented as non-exhaustive. Regressions create a real hard
+  link and drive the real hook across Write, Edit, relative paths, and alternate
+  field spellings; mutation-tested red.
 - Protected-path matching now compares filesystem identity, not just pathname
   shape. A hard link gave a protected hook, `settings.json`, migration, or
   `.env` a second innocuous pathname that `realpath` cannot resolve away, so an

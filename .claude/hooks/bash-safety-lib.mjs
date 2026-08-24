@@ -2422,12 +2422,20 @@ export const DANGEROUS_CMD_CHECKS = [
   //   mklink /J scratch\hooks .claude\hooks
   //   mklink /H scratch\alias.mjs scratch\hooks\mcp-tool-guard.mjs   <- no protected text
   //   Set-Content scratch\alias.mjs ...                              <- edits the real hook
-  // Canonicalizing operand text would just move the arms race, so hard-link
-  // CREATION is denied outright, whatever the target: nothing in this repo's
-  // workflows needs one, and with no alias there is nothing to launder. The
-  // MCP guard's file-identity check remains the second layer for writes.
+  // Canonicalizing operand text would just move the arms race, so the link
+  // creators below are denied whatever their target: nothing in this repo's
+  // workflows needs one. This is DEFENCE IN DEPTH, not the boundary — the set of
+  // tools that can create a hard link is open-ended (a language runtime's
+  // link() binding will never appear here), so the real boundary is the
+  // file-identity check enforced on every write route by mcp-tool-guard.mjs and
+  // protected-identity-guard.mjs. Do not read this list as exhaustive.
   [/\bmklink\b(?=[^\r\n;&|]*\/[hH]\b)/, "Blocked hard-link creation. A hard link is a second pathname for the same file, which defeats every path-based guard; this project has no workflow that needs one."],
   [/\bln\b(?![^\r\n;&|]*\s-[A-Za-z]*s)(?=[^\r\n;&|]*\s\S)/, "Blocked hard-link creation. A hard link is a second pathname for the same file, which defeats every path-based guard; use `ln -s` for a symbolic link instead."],
+  // `cp` links instead of copying under -l/--link (and inside combined short
+  // clusters like -al), and the standalone `link` utility calls link(2)
+  // directly. BusyBox/Toybox reach both through a multi-call binary.
+  [/\bcp\b[^\r\n;&|]*\s(?:--link\b|-[A-Za-z]*l[A-Za-z]*\b)/, "Blocked hard-link creation. `cp -l`/`--link` creates a second pathname for the same file instead of copying it, which defeats every path-based guard; copy the bytes instead."],
+  [/(?:^|[\s;&|])(?:(?:busybox|toybox)\s+)?link\s+\S/, "Blocked hard-link creation. `link` creates a second pathname for the same file, which defeats every path-based guard; copy the bytes instead."],
   // PowerShell `New-Item -ItemType HardLink` (with its `ni`/`-Type` spellings)
   // and `fsutil hardlink create` build the same alias; match the token itself.
   [/\bHardLink\b/i, "Blocked hard-link creation. A hard link is a second pathname for the same file, which defeats every path-based guard; this project has no workflow that needs one."],
