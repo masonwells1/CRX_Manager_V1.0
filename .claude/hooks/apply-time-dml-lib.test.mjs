@@ -1843,4 +1843,46 @@ eq(T(null), [], "a null body does not throw");
     'round-66: distinct WHEN expressions sharing one table/function pair are each evaluated');
 }
 
+// -------- ROUND 67: unsupported procedural languages and stored matview SQL
+{
+  const unsupportedDo = applyTimeWriteTargets(
+    "CREATE EXTENSION IF NOT EXISTS plv8; DO LANGUAGE plv8 $x$ " +
+    "plv8.execute('UP' + 'DATE public.order_items SET total_price = total_price'); $x$;",
+  );
+  ok(unsupportedDo.unresolved && unsupportedDo.unsupportedDoBody,
+    'round-67: an anonymous PL/V8 body fails closed instead of being read as SQL');
+
+  const supportedDo = applyTimeWriteTargets(
+    'DO LANGUAGE plpgsql $x$ BEGIN UPDATE public.orders SET total_profit = total_profit; END $x$;',
+  );
+  ok(supportedDo.targets.has('orders.total_profit') &&
+      !supportedDo.unsupportedDoBody && !supportedDo.unresolved,
+    'round-67 MUTANT: an explicit PL/pgSQL anonymous block remains analyzable');
+
+  const unsupportedRoutine =
+    "CREATE FUNCTION public.round67_plv8_fix() RETURNS void LANGUAGE plv8 AS $x$ " +
+    "plv8.execute('UP' + 'DATE public.orders SET total_profit = total_profit'); $x$;";
+  const invokedUnsupportedRoutine = applyTimeWriteTargets(
+    `${unsupportedRoutine} SELECT public.round67_plv8_fix();`,
+  );
+  ok(invokedUnsupportedRoutine.unresolved &&
+      invokedUnsupportedRoutine.unsupportedBodyLanguage,
+    'round-67: invoking a same-file PL/V8 routine fails closed');
+
+  const deferredUnsupportedRoutine = applyTimeWriteTargets(unsupportedRoutine);
+  ok(!deferredUnsupportedRoutine.unresolved &&
+      !deferredUnsupportedRoutine.unsupportedBodyLanguage,
+    'round-67 MUTANT: defining but not invoking a PL/V8 routine remains deferred');
+
+  const refresh = applyTimeWriteTargets(
+    'REFRESH MATERIALIZED VIEW public.repair_projection;',
+  );
+  ok(refresh.unresolved && refresh.materializedViewRefresh,
+    'round-67: refreshing stored materialized-view SQL fails closed');
+
+  const ordinarySelect = applyTimeWriteTargets('SELECT * FROM public.repair_projection;');
+  ok(!ordinarySelect.materializedViewRefresh,
+    'round-67 MUTANT: an ordinary relation read is not a materialized-view refresh');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

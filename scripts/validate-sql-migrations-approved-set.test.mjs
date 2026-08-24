@@ -2478,6 +2478,40 @@ const CASES = [
       `EXECUTE FUNCTION public.round66_deferred_noop();\n`,
   },
   {
+    name: 'round-67: an anonymous PL/V8 block cannot hide a money mutator',
+    expect: 'violation',
+    mustReport: 'Unsupported procedural-language body',
+    sql:
+      `CREATE EXTENSION IF NOT EXISTS plv8;\n` +
+      `DO LANGUAGE plv8 $x$\n` +
+      `plv8.execute('UP' + 'DATE public.order_items SET total_price = total_price');\n` +
+      `$x$;\n`,
+  },
+  {
+    name: 'round-67: invoking a PL/V8 routine cannot hide a money mutator',
+    expect: 'violation',
+    mustReport: 'Unsupported procedural-language body',
+    sql:
+      `CREATE FUNCTION public.round67_plv8_fix() RETURNS void LANGUAGE plv8 AS $x$\n` +
+      `plv8.execute('UP' + 'DATE public.orders SET total_profit = total_profit');\n` +
+      `$x$;\n` +
+      `SELECT public.round67_plv8_fix();\n`,
+  },
+  {
+    name: 'round-67 MUTANT: defining but not invoking a PL/V8 routine remains deferred',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.round67_deferred_plv8_fix() RETURNS void LANGUAGE plv8 AS $x$\n` +
+      `plv8.execute('UP' + 'DATE public.orders SET total_profit = total_profit');\n` +
+      `$x$;\n`,
+  },
+  {
+    name: 'round-67: refreshing a materialized view fails closed on its stored query',
+    expect: 'violation',
+    mustReport: 'REFRESH MATERIALIZED VIEW executes a stored query',
+    sql: `REFRESH MATERIALIZED VIEW public.repair_projection;\n`,
+  },
+  {
     name: 'round-55: FOREACH cannot replace the captured proof-variable population',
     expect: 'violation',
     mustReport: 'assigned or passed to a possibly OUT/INOUT procedure',

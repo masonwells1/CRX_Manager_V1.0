@@ -57,6 +57,11 @@ const DOLLAR_ROUTINE_BODY_HEAD = /\bas\s*$/;
 const QUOTED_ROUTINE_BODY_HEAD = /\bas\s*(?:e|u&)?$/;
 const DISABLES_STANDARD_CONFORMING_STRINGS =
   /\bset\s+(?:(?:local|session)\s+)?standard_conforming_strings\s*(?:=|to)\s*(?:off|false|0|(?:e|u&)?''(?=\s|;|$))/i;
+const SUPPORTED_ROUTINE_BODY_LANGUAGES = new Set(["plpgsql", "sql"]);
+
+function declaredBodyLanguage(statement) {
+  return /\blanguage\s+([a-z_][a-z0-9_$]*)\b/.exec(String(statement || "").toLowerCase())?.[1] || "";
+}
 
 function hasNewlineContinuedString(sql, start) {
   let i = start;
@@ -312,6 +317,20 @@ export function applyTimeCode(sql, depth = 0) {
           i = close === -1 ? n : close + tag.length;
           continue;
         }
+        const doHead = /^do\b/.test(stmt);
+        const doClause = doHead
+          ? /^do(?:\s+language\s+([a-z_][a-z0-9_$]*))?\s*$/.exec(stmt)
+          : null;
+        // ROUND 67. Only PL/pgSQL anonymous blocks can be interpreted by this
+        // SQL/PLpgSQL analyzer. PL/V8, PL/Python and other language bodies can
+        // execute arbitrary hidden DML through APIs whose grammar is unrelated
+        // to SQL. Refuse those bodies before attempting to parse their text.
+        if (doHead && (!doClause || (doClause[1] && doClause[1] !== "plpgsql"))) {
+          code += " '' ";
+          unsupportedDoBody = true;
+          i = close === -1 ? n : close + tag.length;
+          continue;
+        }
         const inner = applyTimeCode(body, depth + 1);
         if (deferred) {
           // Keep a placeholder so the statement still parses, and contribute no
@@ -320,6 +339,15 @@ export function applyTimeCode(sql, depth = 0) {
           // it back in if this migration invokes it (round 24).
           code += " '' ";
           const reference = routineDefinitionReference(stmt);
+          const suffixStart = close === -1 ? n : close + tag.length;
+          const suffixEnd = sql.indexOf(";", suffixStart);
+          const suffix = applyTimeCode(
+            sql.slice(suffixStart, suffixEnd === -1 ? n : suffixEnd),
+            depth + 1,
+          ).code;
+          const bodyLanguage = declaredBodyLanguage(`${stmt} ${suffix}`);
+          const unsupportedBodyLanguage =
+            !SUPPORTED_ROUTINE_BODY_LANGUAGES.has(bodyLanguage);
           if (reference?.identity) routines.push({
             name: reference.identity,
             kind: reference.kind,
@@ -327,7 +355,9 @@ export function applyTimeCode(sql, depth = 0) {
             signatureParsed: reference.signatureParsed,
             code: inner.code,
             literals: inner.literals,
-            unresolved: inner.unsupportedDoBody,
+            unresolved: unsupportedBodyLanguage || inner.unsupportedDoBody,
+            unsupportedBodyLanguage,
+            unsupportedDoBody: inner.unsupportedDoBody,
             callableDefault: routineHasCallableParameterDefault(stmt),
             defaultCode: routineParameterDefaults(stmt).map((expression) => `SELECT ${expression}`).join(";\n"),
           });
@@ -411,6 +441,14 @@ export function applyTimeCode(sql, depth = 0) {
         const reference = routineDefinitionReference(head);
         if (reference?.identity) {
           const inner = applyTimeCode(lit, depth + 1);
+          const suffixEnd = sql.indexOf(";", i);
+          const suffix = applyTimeCode(
+            sql.slice(i, suffixEnd === -1 ? n : suffixEnd),
+            depth + 1,
+          ).code;
+          const bodyLanguage = declaredBodyLanguage(`${head} ${suffix}`);
+          const unsupportedBodyLanguage =
+            !SUPPORTED_ROUTINE_BODY_LANGUAGES.has(bodyLanguage);
           routines.push({
             name: reference.identity,
             kind: reference.kind,
@@ -426,8 +464,10 @@ export function applyTimeCode(sql, depth = 0) {
             // separating whitespace contains a newline. This lexer stores one
             // literal at a time, so an invoked continued body must be opaque
             // instead of trusting only its first fragment.
-            unresolved: unsafeRoutineLiteral || inner.unsupportedDoBody ||
+            unresolved: unsupportedBodyLanguage || unsafeRoutineLiteral || inner.unsupportedDoBody ||
               hasNewlineContinuedString(sql, i),
+            unsupportedBodyLanguage,
+            unsupportedDoBody: inner.unsupportedDoBody,
             plainQuotedBody: !unsafeRoutineLiteral,
             callableDefault: routineHasCallableParameterDefault(head),
             defaultCode: routineParameterDefaults(head).map((expression) => `SELECT ${expression}`).join(";\n"),
@@ -807,6 +847,11 @@ function targetsFromCode(code, literals) {
   // lifecycle model exists; a routine that merely RETURNS event_trigger stays
   // deferred unless an EVENT TRIGGER statement attaches it.
   const eventTriggerChange = /\b(?:create|alter|drop)\s+event\s+trigger\b/.test(s);
+  // REFRESH executes a materialized view's stored query. Candidate SQL contains
+  // only the view name, and the linked packet does not bind materialized-view
+  // definitions, so no static analysis can rule out a resident mutator.
+  const materializedViewRefresh = s.split(";").some((statement) =>
+    /^\s*refresh\s+materialized\s+view\b/.test(statement));
   // VALIDATE CONSTRAINT replays a stored domain CHECK over existing values.
   // The expression is absent from this statement, so its resident routine
   // effects cannot be recovered statically and the validation must fail closed.
@@ -838,7 +883,7 @@ function targetsFromCode(code, literals) {
   }) || /\balter\s+sequence\b[^;]*\brestart\b/.test(s) ||
     /\btruncate\b[^;]*\brestart\s+identity\b/.test(s) ||
     /\balter\s+table\b[^;]*\balter\s+(?:column\s+)?[a-z0-9_]+\s+restart\b/.test(s);
-  let unresolved = cursorConstruct || eventTriggerChange || domainConstraintValidation ||
+  let unresolved = cursorConstruct || eventTriggerChange || materializedViewRefresh || domainConstraintValidation ||
     unsupportedRoutineIdentity || sequenceMutation;
 
   APPLY_WRITE_VERB.lastIndex = 0;
@@ -1044,6 +1089,7 @@ function targetsFromCode(code, literals) {
     unresolved: unresolved || unparsedUpsert,
     dynamicExec,
     eventTriggerChange,
+    materializedViewRefresh,
     domainConstraintValidation,
     sequenceMutation,
     searchPathChange,
@@ -1872,6 +1918,8 @@ export function applyTimeWriteTargets(
   } = {},
 ) {
   const { code, literals, routines, unsupportedDoBody } = applyTimeCode(sql || "");
+  let encounteredUnsupportedDoBody = unsupportedDoBody;
+  let encounteredUnsupportedBodyLanguage = false;
   const top = targetsFromCode(code, literals);
   if (unsupportedDoBody) top.unresolved = true;
   const routineCatalogChanges = new Map();
@@ -2088,11 +2136,15 @@ export function applyTimeWriteTargets(
       top.dynamicWrites.push(...inner.dynamicWrites);
       if (inner.unresolved) top.unresolved = true;
       if (inner.eventTriggerChange) top.eventTriggerChange = true;
+      if (inner.materializedViewRefresh) top.materializedViewRefresh = true;
       if (inner.domainConstraintValidation) top.domainConstraintValidation = true;
       if (inner.sequenceMutation) top.sequenceMutation = true;
       if (inner.searchPathChange) top.searchPathChange = true;
       if (inner.unsupportedRoutineIdentity) top.unsupportedRoutineIdentity = true;
-      if (parsed.unsupportedDoBody) top.unresolved = true;
+      if (parsed.unsupportedDoBody) {
+        top.unresolved = true;
+        encounteredUnsupportedDoBody = true;
+      }
       recordRoutineCatalog(parsed.code);
       defineRoutines(parsed.routines);
       applyRoutineTransitions(parsed.code);
@@ -2348,6 +2400,7 @@ export function applyTimeWriteTargets(
         top.dynamicWrites.push(...inner.dynamicWrites);
         if (inner.unresolved) top.unresolved = true;
         if (inner.eventTriggerChange) top.eventTriggerChange = true;
+        if (inner.materializedViewRefresh) top.materializedViewRefresh = true;
         if (inner.domainConstraintValidation) top.domainConstraintValidation = true;
         if (inner.sequenceMutation) top.sequenceMutation = true;
         if (inner.searchPathChange) top.searchPathChange = true;
@@ -2357,6 +2410,8 @@ export function applyTimeWriteTargets(
         // if a default can call code, the invocation is unresolved rather than
         // silently treating the deferred header expression as inert.
         if (r.unresolved || r.callableDefault) top.unresolved = true;
+        if (r.unsupportedBodyLanguage) encounteredUnsupportedBodyLanguage = true;
+        if (r.unsupportedDoBody) encounteredUnsupportedDoBody = true;
         // Creating/replacing/altering/dropping a routine from an invoked body
         // mutates the catalog at apply time. Preserve the identity so callers
         // can compare it with captured enabled event-trigger routines.
@@ -2424,6 +2479,7 @@ export function applyTimeWriteTargets(
     dynamicWrites: top.dynamicWrites,
     unresolved: top.unresolved,
     eventTriggerChange: top.eventTriggerChange,
+    materializedViewRefresh: Boolean(top.materializedViewRefresh),
     domainConstraintValidation: top.domainConstraintValidation,
     sequenceMutation: top.sequenceMutation,
     searchPathChange: top.searchPathChange,
@@ -2442,6 +2498,8 @@ export function applyTimeWriteTargets(
     invokedViews: [...firedViews],
     firedColumnEffects: [...firedColumnEffectDetails.values()],
     firedTriggerConditions: [...firedTriggerConditionDetails.values()],
+    unsupportedDoBody: encounteredUnsupportedDoBody,
+    unsupportedBodyLanguage: encounteredUnsupportedBodyLanguage,
   };
 }
 

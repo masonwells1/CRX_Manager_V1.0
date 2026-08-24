@@ -82,22 +82,39 @@ Repair every valid merge blocker on PR #364, prove the fail-closed deny paths, c
 - This handoff grants no new irreversible authority. Re-verify current conversation approval and `AGENTS.md` before any outward or irreversible action.
 - No live migration belongs to this repair. Any future interactive live migration, edge-function rollout, deletion, secret/auth/permission change, or history rewrite keeps its own current gate.
 
+## THIRD RESUME REPAIR — PROVEN LOCALLY
+
+- The exact-SHA review of commit `65a0c21b` found two additional fail-open cases before push:
+  unsupported procedural languages could hide DML behind language-specific APIs, and
+  `REFRESH MATERIALIZED VIEW` could execute a stored query absent from the proof packet.
+- Anonymous unsupported-language blocks now fail closed immediately. Same-file SQL/PLpgSQL bodies
+  remain analyzable; unsupported-language routine definitions stay deferred until invoked, then
+  fail closed through a dedicated validator reason.
+- Materialized-view refreshes now carry a dedicated fail-closed reason instead of depending on
+  linked event-trigger state. Ordinary reads remain unaffected.
+- Focused proof after this repair:
+  - `apply-time-dml-lib.test.mjs`: 325 assertions passed.
+  - `validate-sql-migrations-approved-set.test.mjs`: 223 mutation cases passed, including both real
+    deny paths and their safe deferred/read controls.
+  - `migration-apply-guard.test.mjs`: 347 assertions passed.
+- PR #364 remains HOLD. These edits still require the broad pipeline, a scoped commit, fresh
+  exact-SHA Sol review, push, and current-head GitHub/CodeRabbit checks before merge.
+
 ## GATES AND BLOCKERS
 
-- **PR #364 remains HOLD and unsafe to merge at this checkpoint.** The three valid P1 bypasses are
-  repaired locally with focused proof, but the repair is not committed, exact-SHA reviewed, pushed,
-  or covered by fresh remote checks yet:
-  - CTAS `AS TABLE` stored-view execution: discussion `r3840364070`.
-  - Stored column default fired by a later insert: discussion `r3840893868`.
-  - Implicit checked-domain coercion on insert: discussion `r3840893874`.
-- The clean exact-SHA proof for `8fe223e2` does not approve this dirty patch or any future repair commit. A new final proof is mandatory.
-- Current remote checks apply only to `8fe223e2`, not the unfinished local work.
+- **PR #364 remains HOLD and unsafe to merge at this checkpoint.** The CTAS stored-view,
+  callable-default, checked-domain, trigger-condition, procedural-language, and materialized-view
+  refresh bypasses are repaired and proven locally. The latest repair is not yet committed,
+  exact-SHA reviewed, pushed, or covered by fresh remote checks.
+- Every earlier clean exact-SHA proof is stale for this patch. A new final proof is mandatory.
+- Current remote checks do not cover the latest local work.
 - A broad database sweep was blocked by a false-positive read-only connector guard on `pg_get_function_identity_arguments()`. Do not claim it ran. The exact live trigger-evidence generator did complete read-only.
 
 ## NEXT ACTION
 
 Continue from `C:\Users\mason\.codex\worktrees\pr364-landing\CRX_Manager` with the broad local
-pipeline. Do not publish until the final commit has fresh exact-SHA proof and every current-head PR
-gate is green or an explicitly expected neutral result.
+pipeline and commit the seven-file Round 67 repair plus this handoff/changelog update. Do not publish
+until the final commit has fresh exact-SHA proof and every current-head PR gate is green or an
+explicitly expected neutral result.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

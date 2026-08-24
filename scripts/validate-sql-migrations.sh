@@ -1433,6 +1433,8 @@ if ! UNSUPPORTED_CONSTRUCTS=$(printf '%s\n' $ALL_SQL | node "$UNSUPPORTED_ROUTIN
   exit 1
 fi
 UNSUPPORTED_ROUTINE_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "routine-identity" { print $1 }')
+UNSUPPORTED_PROCEDURAL_LANGUAGE_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "unsupported-procedural-language" { print $1 }')
+MATERIALIZED_VIEW_REFRESH_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "materialized-view-refresh" { print $1 }')
 EVENT_TRIGGER_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "event-trigger" { print $1 }')
 EVENT_CATALOG_RISK_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "event-catalog-risk" { print $1 }')
 PERSISTED_RULE_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "persisted-rule" { print $1 }')
@@ -1456,6 +1458,24 @@ for file in $ALL_SQL; do
     echo "VIOLATION: $file"
     echo "  Unsupported non-ASCII routine identity: static routine binding is fail-closed."
     echo "  Use an ASCII routine name, or extend the shared analyzer before applying this migration."
+    echo ""
+    VIOLATIONS=$((VIOLATIONS + 1))
+  fi
+  if [ -n "$UNSUPPORTED_PROCEDURAL_LANGUAGE_FILES" ] &&
+     printf '%s\n' "$UNSUPPORTED_PROCEDURAL_LANGUAGE_FILES" | grep -Fqx -- "$file"; then
+    echo "VIOLATION: $file"
+    echo "  Unsupported procedural-language body executes during this migration."
+    echo "  Only SQL and PL/pgSQL routine bodies are statically analyzed; anonymous blocks must use PL/pgSQL."
+    echo "  A non-dollar-quoted single-quoted string body is also opaque and cannot be analyzed safely."
+    echo "  PL/V8, PL/Python, and other language APIs can hide arbitrary row changes, so this apply is refused."
+    echo ""
+    VIOLATIONS=$((VIOLATIONS + 1))
+  fi
+  if [ -n "$MATERIALIZED_VIEW_REFRESH_FILES" ] &&
+     printf '%s\n' "$MATERIALIZED_VIEW_REFRESH_FILES" | grep -Fqx -- "$file"; then
+    echo "VIOLATION: $file"
+    echo "  REFRESH MATERIALIZED VIEW executes a stored query that is absent from the linked proof packet."
+    echo "  Its resident routine and row effects cannot be bound to an approved set, so this apply is refused."
     echo ""
     VIOLATIONS=$((VIOLATIONS + 1))
   fi

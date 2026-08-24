@@ -39,6 +39,12 @@ for (const file of paths) {
   const knownRules = priorRules(file);
   const analysed = applyTimeWriteTargets(sql, { knownRules });
   if (analysed.unsupportedRoutineIdentity) process.stdout.write(`${file}\troutine-identity\n`);
+  if (analysed.unsupportedDoBody || analysed.unsupportedBodyLanguage) {
+    process.stdout.write(`${file}\tunsupported-procedural-language\n`);
+  }
+  if (analysed.materializedViewRefresh) {
+    process.stdout.write(`${file}\tmaterialized-view-refresh\n`);
+  }
   if (analysed.eventTriggerChange) process.stdout.write(`${file}\tevent-trigger\n`);
   if (analysed.searchPathChange || analysed.unresolved) {
     process.stdout.write(`${file}\tevent-catalog-risk\n`);
