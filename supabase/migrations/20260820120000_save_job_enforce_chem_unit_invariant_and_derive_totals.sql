@@ -692,9 +692,37 @@ BEGIN
     -- equal while the liquid size table carries no pound at all, so that form REFUSES an
     -- ordinary line, and one refused line blocks the WHOLE job save (performSave
     -- re-sends the entire grid). That is the round-7 defect three reviewers caught.
+    --
+    -- THE SPELLING TEST IS A CONCEPT TEST, NOT A LIST. The first version of this rule
+    -- matched three literal strings -- 'fl oz', 'floz', 'fluid ounce' -- and the gate
+    -- returned that as a fresh P1 one round later, which is the THIRD time this same
+    -- rule has been caught incomplete. The escape is the PERIOD form: 'fl. oz'.
+    -- normalize_rate_unit knows nothing about it (its CASE has no arm for it, so it
+    -- falls through to ELSE base and hands the string BACK unchanged), so a dry line
+    -- quoted 'fl. oz/ac' against a stock unit of 'fl. oz' normalises to 'fl. oz' on both
+    -- sides, missed this test, hit the equality shortcut below, and derived
+    -- authoritative cost and price totals from a VOLUME on a product billed by weight.
+    -- That is not an exotic spelling: src/lib/blendMathValidator.ts documents in so many
+    -- words that periods are insignificant and "'fl. oz' is 'fl oz'".
+    --
+    -- So the two sides are folded to a canonical form FIRST -- every run of whitespace
+    -- and periods collapses to one space -- and then matched as a concept:
+    -- {fl|fluid} x {oz|ozs|ounce|ounces}, optional separator. 'fl. oz', 'fl.oz',
+    -- 'fluid oz', 'fl ounces' and 'fl oz.' all land on the rule; a bare 'oz' does NOT,
+    -- because on a dry product that is a legitimate dry ounce and refusing it would
+    -- block ordinary jobs.
+    --
+    -- The expression is written ONCE and applied to both sides through a VALUES list
+    -- rather than being spelled out twice. Two copies of a rule are two things that can
+    -- drift apart, and a half-updated pair is exactly how this rule regressed before.
     IF v_form = 'dry'
-       AND (lower(btrim(v_rate_base)) IN ('fl oz', 'floz', 'fluid ounce')
-            OR lower(btrim(COALESCE(v_chem->>'unit', ''))) IN ('fl oz', 'floz', 'fluid ounce')) THEN
+       AND EXISTS (
+         SELECT 1
+           FROM unnest(ARRAY[v_rate_base, v_chem->>'unit']) AS raw_unit
+          WHERE btrim(regexp_replace(lower(btrim(COALESCE(raw_unit, ''))),
+                                     '[[:space:].]+', ' ', 'g'))
+                ~ '^(fl|fluid) ?(oz|ozs|ounce|ounces)$'
+       ) THEN
       RAISE EXCEPTION
         'CHEM_UNIT_FORM_MISMATCH: % is a DRY product, so it cannot be measured or priced in fluid ounces -- a fluid ounce measures volume and a dry product is billed by weight, so "%" against "%" cannot be converted and the amount to bill cannot be checked. Re-enter the rate and the stock Unit in the same dry unit (oz, lb or ton), then re-enter the cost and price for that unit.',
         COALESCE(v_product_name, 'This product'), v_raw_rate_unit, COALESCE(v_chem->>'unit', '');

@@ -93,6 +93,18 @@ Blend Recipes was never affected; it selects `*`.
 
 ## 2026-08-22 — The chemical-unit and job-money invariants move out of React and into `save_job` (parked)
 
+**Round 13 (2026-08-24) — the same fluid-ounce rule, caught incomplete a third time.** The
+previous round refused a dry product measured in fluid ounces by matching three exact spellings.
+Writing it with a period — `fl. oz` — slipped past all three, and because the database's unit
+normaliser has no entry for that spelling it hands the text back untouched, so both sides of the
+line looked identical to each other and the line was billed with nothing actually checked. The
+app's own code says periods do not matter (`src/lib/blendMathValidator.ts`), so the screen and the
+database disagreed about what had been typed. The rule now strips periods and spaces from both
+sides and recognises fluid ounces as an idea rather than a list of spellings, so it no longer
+depends on guessing every way someone might write it. Checked against 23 spellings on PostgreSQL
+17.6: every fluid-ounce form is refused, and ordinary dry units — `oz`, `dry oz`, `lb`, `ton` — are
+not. Nothing about liquid products changed. Still parked; nothing has been applied to live.
+
 `EXECUTE` on `save_job` is granted to `authenticated`. Every logged-in user can therefore call it
 directly, and the old body took `total_cost_cents` / `total_price_cents` straight out of the
 caller's payload with `COALESCE` and inserted `job_chemicals` rows without ever comparing `unit`

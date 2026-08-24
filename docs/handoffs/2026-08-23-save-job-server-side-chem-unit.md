@@ -2,9 +2,9 @@
 
 **Date:** 2026-08-23
 **Branch:** `claude/save-job-server-side-chem-unit` (worktree `.claude/worktrees/save-job-enforcement`)
-**Head:** see `git log -1` — round 12 landed on 2026-08-24; **unpushed**. Tree clean.
+**Head:** see `git log -1` — round 13 landed on 2026-08-24 on `claude/save-job-server-side-chem-unit` (PR #446). Tree clean. (Push state is deliberately not recorded here: it is volatile, it was wrong in this header for a full round, and `git status -sb` answers it exactly.)
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-**SQL sha256:** `a5f8d67d3ca557119c18284192e988a482b8c050a6db1c1ca61a85b392fb90a4`
+**SQL sha256:** `0a1149f7b8f59064f4e25fd9097050ec8f0377f5ebe7005831f0eb31b3effbeb`
 **Status: PARTIAL — written, proven, and parked at two gates that are not mine to open.**
 
 ## Approval state — carries nothing forward
@@ -34,7 +34,7 @@ The live unit helpers (`normalize_rate_unit`, `field_app_priced_quantity`, `safe
 node scripts/smoke/prove-save-job-chem-unit-invariant.mjs
 ```
 
-PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **38 behaviour tests** pass; **19 mutation phases** each fail in a *named* way — 13 turn a named test red, 6 abort the apply with the specific preflight/postflight assertion written to catch them.
+PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **39 behaviour tests** pass; **20 mutation phases** each fail in a *named* way — 14 turn a named test red, 6 abort the apply with the specific preflight/postflight assertion written to catch them.
 
 `scripts/smoke/smoke-save-job-parity.sql` is the registered live chain and is **gated** on whether this migration is installed. The container prover is **manual** — `run-smoke.mjs --all` will not run it.
 

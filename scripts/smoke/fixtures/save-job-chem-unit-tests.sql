@@ -723,6 +723,41 @@ BEGIN
   END IF;
 END $$;
 
+-- T39: THE PERIOD SPELLING -- the escape the round-12 rule left open, returned by the gate as a
+-- fresh P1 and the THIRD time this same fluid-ounce rule has been caught incomplete. Round 12
+-- matched three literal strings ('fl oz', 'floz', 'fluid ounce'). 'fl. oz' is none of them.
+--
+-- Why that reaches the money rather than being refused somewhere else: normalize_rate_unit has no
+-- CASE arm for the period form, so it falls through to ELSE base and hands the string BACK
+-- unchanged. Both sides therefore normalise to the SAME unrecognised token 'fl. oz', the equality
+-- shortcut fires, and the line is accepted with NOTHING proven -- then billed. This is exactly the
+-- shape T34 refuses, wearing a period.
+--
+-- It is not an exotic spelling invented for a test: src/lib/blendMathValidator.ts documents in so
+-- many words that periods are insignificant and "'fl. oz' is 'fl oz'". The client would treat this
+-- line as fluid ounces; the server did not.
+--
+-- The fix canonicalises BOTH sides (whitespace and periods collapse to one space) before matching
+-- the CONCEPT {fl|fluid} x {oz|ozs|ounce|ounces}, so the rule no longer depends on guessing every
+-- spelling in advance. Must be REFUSED.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333366-3333-3333-3333-333333333367","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":100,"unit":"fl. oz","rate_per_acre":10,"rate_unit":"fl. oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_FORM_MISMATCH%' THEN
+    RAISE NOTICE 'T39 PASS  a dry line quoted "fl. oz" on BOTH sides is refused: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T39 FAIL  the period spelling escaped the dry fluid-ounce rule and billed with nothing proven; refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
 -- T37: THE BYPASS the round-11 half-fix left open, returned by the gate as a fresh HIGH. A DRY
 -- product with rate 'fl oz/ac' against a stock Unit of 'lb'. These do NOT normalise equal, so the
 -- equality shortcut -- the only thing round 10 guarded -- never runs. The line goes down the

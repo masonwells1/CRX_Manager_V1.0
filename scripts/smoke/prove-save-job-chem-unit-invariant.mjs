@@ -63,7 +63,7 @@ const TESTS = join(HERE, "fixtures", "save-job-chem-unit-tests.sql");
 const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19",
                   "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30",
-                  "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38"];
+                  "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -322,6 +322,18 @@ const MUTANTS = [
     from: "    IF v_form = 'dry'\n",
     to: "    IF false\n",
     expect: "T37",
+  },
+  {
+    // Reverts the canonicalisation to whitespace-only, which is precisely the round-12
+    // rule the gate returned as a P1: 'fl. oz' stops folding to 'fl oz', escapes the
+    // concept match, and rides the equality shortcut into the money. Deliberately narrow
+    // -- it leaves the rule itself standing, so T34 (no periods) must STAY GREEN while
+    // T39 alone goes red. A mutant that reddened both would not prove the period handling
+    // is what is being tested.
+    name: "period folding removed from the dry fl-oz rule",
+    from: "'[[:space:].]+', ' ', 'g'))",
+    to: "'[[:space:]]+', ' ', 'g'))",
+    expect: "T39",
   },
   {
     name: "unit comparison disabled",
