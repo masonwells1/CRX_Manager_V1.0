@@ -118,6 +118,11 @@ export function prBlockers(pr) {
   if (pr.coderabbit === "failed") out.push("the CodeRabbit review did not succeed at the head commit");
   if (pr.solProof === "stale") out.push("Sol proof is stale — reviewed base no longer matches the live base");
   if (pr.solProof === "missing" && pr.requiresSolProof) out.push("no valid Sol proof at the head commit");
+  // Patrol cannot evaluate the exact-SHA Sol proof registry. Reporting that as silence
+  // meant a risky money/RLS/migration PR with NO proof reached "no blockers found" and
+  // was handed to Mason as his decision — while CRX's hard gate had never been checked.
+  // An unsupported check must read as unchecked, never as passed.
+  if (pr.solProof === "unknown") out.push("patrol cannot check the Sol review gate — if this PR touches money, RLS, or a migration, that gate is UNVERIFIED here");
   return out;
 }
 
@@ -238,10 +243,11 @@ export function classifyPullRequest(pr, nowMs) {
   if (pr.mergeStateStatus === "CLEAN") {
     return finalize(item({
       ...base, rule: "pr.no_blockers_found", disposition: "NEEDS_MASON", severity: SEVERITY.normal,
-      reasons: ["no blockers found from what patrol can see"],
-      // Deliberately a negative claim. Patrol does not model org rulesets, required
-      // deployments, or merge-queue semantics, so it never asserts "ready to merge".
-      recommendation: "the merge decision is yours — GitHub's merge button is the authority on whether it is actually mergeable",
+      reasons: ["no blockers found among the checks patrol can actually see — read the BLOCKER lines below for what it could not check"],
+      // Deliberately a negative claim, and deliberately narrow. Patrol does not model org
+      // rulesets, required deployments, merge-queue semantics, or the Sol review gate, so
+      // it never asserts "ready to merge" and never implies the unchecked gates passed.
+      recommendation: "the merge decision is yours — GitHub's merge button and the Sol review gate are the authorities, and patrol checks neither",
     }));
   }
 

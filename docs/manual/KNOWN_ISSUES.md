@@ -1,5 +1,22 @@
 # Known Issues — Consolidated
 
+**OPEN 2026-08-24 — two `/patrol` findings deferred to Mason (round-3 Codex review, not fixed).**
+Neither is a false-all-clear; both are real and both were left open deliberately at the
+three-round review cap rather than fixed under time pressure.
+(1) **Ambient-code path.** `scripts/patrol/patrol-scan.mjs` and `patrol-sources.mjs` resolve
+`git`, `gh`, and `powershell` from `PATH` with inherited Git configuration, and run
+`git status` across every worktree. Git can execute configured clean/smudge filters, and a
+`PATH` shim could replace any of those programs — so running patrol **hourly from the OS
+scheduler under Mason's account** is an arbitrary-code and credential-exposure surface that
+running it by hand in a session is not. The repo already has precedent for the fix: PR #455
+bound every proof-wrapper Git call to a trusted executable. Until this is done, prefer
+running `/patrol` interactively over scheduling it.
+(2) **Forgeable parked state.** Any PR author can suppress an actionable PR by putting
+`PARKED` / `ON HOLD` / `DO NOT MERGE` in the title; `isParked()` requires no actor
+provenance, and the parked rule runs before the security checks. On a public repo an
+outside contributor could hide their own PR from the report. A trusted-actor label, or a
+label applied only by Mason, would close it.
+
 **Last verified: 2026-08-19 UTC, read-only live re-read.** **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
 of the stored ledger name), and `docs/reference/migration-history.md` uses the 14-digit definition, so this file now matches it. A plain `max(name)` returns the slug `year_end_summary`. The ordering claim holds over the prefixed subset, not over the raw column.) Two things this pass corrected in this file: (1) the header below claimed `20260812003315` / 962 rows, **nine applies** and six days of ledger staleness out of date — the six 2026-08-12 recoveries listed below, then `20260812212323`, `20260813011751` and `20260816174353`, which is 962 + 9 = 971; (2) CRX-SEC-1 **applied live on 2026-08-16** — see the new CLOSED entry immediately below — while `docs/reference/migration-history.md` row 886 still called it an unapplied local candidate. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, matching this ledger; it was **not** re-derived in this pass. **The 2026-08-10 money figures quoted further down this file are stale** — a read-only re-measure on 2026-08-18 finds `order_items.total_price`, `order_items.profit`, `commissions.commission_amount` and `commissions.order_profit` all at **0** sub-cent rows, with only `quotes.total_cost` still holding **2**; the "43 dirty rows" and "49 rows" figures below are superseded by that measurement (recorded in full in `docs/manual/CURRENT_STATE.md` section 2). Everything else below was left as separately dated historical evidence and was not re-verified in this pass.
 

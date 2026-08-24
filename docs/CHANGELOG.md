@@ -77,6 +77,18 @@ needs Mason?" and is built so that its silence is trustworthy.
   when persisting it threw, rendered it normally, and exited 0 — able to print the
   reserved all-clear while citing a queue file that did not exist. Any persistence failure
   now discards the snapshot and produces the emergency result.
+- **A third Codex round found the Sol gate failing open; fixed.** Patrol cannot evaluate
+  the exact-SHA proof registry, and reported that as silence — so a risky money/RLS/
+  migration PR with **no** proof reached "no blockers found" and was handed to Mason as
+  his decision while CRX's hard gate had never been checked. An unsupported check now
+  reads as UNVERIFIED rather than passed: every PR carries an explicit blocker naming the
+  gate patrol cannot see, which also makes the all-clear unreachable while that is true.
+  Verified live — PR #460 (oversized-migration apply path) now surfaces the warning.
+- **Two round-3 findings are NOT fixed and are Mason's call** (see `KNOWN_ISSUES.md`):
+  the scheduled patrol resolves `git`/`gh`/PowerShell from `PATH` with inherited Git
+  configuration, which is an ambient-code path if run hourly under his account; and any
+  PR author can forge parked state by putting `PARKED` in a title, since no actor
+  provenance is required. Both are real; neither is a false-all-clear.
 - **Patrol then caught a false positive in itself.** It reported the Codex gate as down
   because the review capture embeds the reviewed diff, and this change's own source
   contains a usage-limit pattern. The gate probe now anchors to a real error line rather

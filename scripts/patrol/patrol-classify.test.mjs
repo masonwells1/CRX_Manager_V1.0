@@ -114,7 +114,22 @@ for (const status of ["SOMETHING_NEW", "", "clean", "UNSTABLE_FUTURE_VALUE"]) {
 {
   const r = classifyPullRequest(pr(), NOW);
   ok(!/ready to merge/i.test(r.recommendation ?? ""), "a clean PR is never described as ready to merge");
-  ok(/merge button is the authority/i.test(r.recommendation ?? ""), "it defers to GitHub as the authority");
+  ok(/authorit/i.test(r.recommendation ?? ""), "it defers to GitHub and the Sol gate as the authorities");
+}
+// An UNSUPPORTED check must read as unchecked, never as silence. Before this, a risky
+// money/RLS/migration PR with no Sol proof reached "no blockers found" and was handed to
+// Mason as his call while CRX's hard gate had never been looked at.
+{
+  const r = classifyPullRequest(pr({ solProof: "unknown" }), NOW);
+  ok(r.blockers.some((b) => /cannot check the Sol review gate/.test(b)),
+    "an unevaluable Sol gate is reported as UNVERIFIED, not omitted");
+  ok(r.disposition !== "IDLE", "and such a PR can never be idle");
+  ok(!/^no blockers found$/.test(r.reasons[0] ?? ""), "the reason no longer claims a bare 'no blockers found'");
+}
+{
+  // The all-clear must be unreachable while the Sol gate cannot be evaluated.
+  const r = classifyPullRequest(pr({ solProof: "unknown" }), NOW);
+  ok(r.blockers.length > 0, "a blocker is always present, so the renderer's all-clear condition cannot hold");
 }
 
 // ── blockers accumulate regardless of the matching rule ────────────────────
