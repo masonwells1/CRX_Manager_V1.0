@@ -265,7 +265,7 @@ export default function FieldAppSplitInvoiceEditor() {
       try {
         const [flds, prods, svcs, jbs, units] = await Promise.all([
           supabase.from('fields').select('id, field_name').eq('is_active', true).order('field_name').limit(1000),
-          supabase.from('products').select('id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name)').eq('is_active', true).order('product_name').limit(1000),
+          supabase.from('products').select('id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_form, product_family:product_families(name)').eq('is_active', true).order('product_name').limit(1000),
           supabase.from('application_services').select('id, name').eq('is_active', true).order('sort_order'),
           supabase
             .from('jobs')

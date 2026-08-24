@@ -19,6 +19,25 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
   return chain;
 }
 
+/**
+ * Records the column list each table was asked for.
+ *
+ * buildChain hands back its fixture no matter what columns the query requested, so a
+ * fixture field the real `.select(...)` never asks for still shows up in the component —
+ * exactly how a missing `product_form` passed every test while the live query returned
+ * `undefined` for it. Assert against the requested columns, not the fixture.
+ */
+const selectArgs: Record<string, string[]> = {};
+
+function recordingChain(table: string, result: { data: unknown; error: unknown }): Record<string, unknown> {
+  const chain = buildChain(result);
+  chain.select = (...args: unknown[]) => {
+    if (typeof args[0] === 'string') (selectArgs[table] ??= []).push(args[0]);
+    return chain;
+  };
+  return chain;
+}
+
 vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom, rpc: vi.fn() },
   supabaseUntyped: { from: vi.fn(), rpc: vi.fn() },
@@ -130,7 +149,7 @@ function mockTables(overrides: { unitError?: Error } = {}) {
   mockFrom.mockImplementation((table: string) => {
     if (table === 'app_settings') return buildChain({ data: { setting_value: 'true' }, error: null });
     if (table === 'fields') return buildChain({ data: [{ id: 'field-1', field_name: 'North 40' }], error: null });
-    if (table === 'products') return buildChain({ data: [LIQUID_PRODUCT, DRY_PRODUCT], error: null });
+    if (table === 'products') return recordingChain('products', { data: [LIQUID_PRODUCT, DRY_PRODUCT], error: null });
     if (table === 'application_services') return buildChain({ data: [{ id: 'service-1', name: 'Aerial application' }], error: null });
     if (table === 'jobs') return buildChain({ data: [], error: null });
     if (table === 'unit_conversions') {
@@ -152,7 +171,23 @@ async function addFieldWithAcres() {
 describe('FieldAppSplitInvoiceEditor rate unit picker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    for (const key of Object.keys(selectArgs)) delete selectArgs[key];
     mockTables();
+  });
+
+  it('actually asks the database for product_form', async () => {
+    render(
+      <MemoryRouter>
+        <FieldAppSplitInvoiceEditor />
+      </MemoryRouter>,
+    );
+    await screen.findByRole('heading', { name: 'Split Billing — New' });
+
+    // Without this the unit filter silently degrades: product_form comes back undefined,
+    // every unit stays on offer, and the clear-on-form-change guard never fires. The row
+    // fixture cannot catch it because the mock returns product_form regardless.
+    await waitFor(() => expect(selectArgs.products?.length).toBeGreaterThan(0));
+    expect(selectArgs.products.join(' ')).toContain('product_form');
   });
 
   it('offers only real unit_conversions units, filtered to the selected product form', async () => {
