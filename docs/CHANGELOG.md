@@ -27,6 +27,18 @@ charter returned opposite verdicts on the same file.
   `max(version)` or the registry high-water as a substitute for the `name`
   high-water. Real premise (626 of 971 live rows carry a bare-slug `name`), not
   currently reachable (the newest such row is older than the `name` high-water).
+- Review round 2 (CodeRabbit Major on the PR): making `name` authoritative in
+  step 3 exposed that step 5 still ordered the applied file renamed to the
+  server-assigned `version`. That destroys the authored stamp CHECK 6 compares
+  and — because a `version` can sort *below* its own `name`, live example
+  `20260813011751` under `20260813070000` — can push an applied file under the
+  live high-water and produce a false HIGH on the next run. The project had
+  already settled the opposite on 2026-08-12: `docs/reference/migration-history.md`
+  rows 878 and 879 and the `20260813080000` closeout each record a deliberate
+  **no** rename, and no applied file on disk has been renamed. Step 5 now states
+  the no-rename rule, scopes the historical B7 rename to the case where the live
+  `name` does not already equal the filename, and keeps the migration-history
+  closeout obligation either way.
 - `scripts/check-agent-guidance.mjs` holds the canonical pinned copy of CHECK 6,
   so it moves in lockstep; three assertions now pin the new rules. Each was
   mutation-tested — removing the rule from the charter produced a red suite and
