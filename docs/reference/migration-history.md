@@ -4,6 +4,36 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
+**APPLIED LIVE 2026-08-24 — `20260816110000_draw_down_cutover_barrier` (half 1 of 2).** Applied with
+Mason's explicit in-chat approval through the governed `apply_migration` gate, after both reviewer
+charters returned CLEAN machine verdicts from `gpt-5.6-sol` at high reasoning effort. Supabase
+assigned **`version = 20260824185408`**; `name` remains `20260816110000_draw_down_cutover_barrier`,
+so the ledger name equals the disk basename and the file is **deliberately NOT renamed** — the
+2026-08-12 rule now stated outright in CHECK 6 step 5 of `.claude/agents/migration-drift-reviewer.md`.
+Ledger row count 971 → **972**, exactly one new row, so no concurrent sibling apply occurred.
+
+The apply was gated twice before it ran, both correctly: the ordering guard refused a 193h-old
+applied-migration snapshot until it was re-captured read-only from the live ledger, and the live
+`draw_down_quote` body md5 was confirmed to still equal the `970960d8490b63b972bc8c60fe207a5b` pin
+the file's own preflight requires. Independent post-apply read-only verification observed exactly one
+`public.draw_down_quote` overload, `prosecdef` true, `search_path=public, pg_temp` intact, the
+`pg_try_advisory_xact_lock_shared(20260816, 1)` barrier present, `DRAW_DOWN_CUTOVER_IN_PROGRESS`
+present so the barrier refuses rather than waits, the barrier positioned **before** the below-cost
+money gate, EXECUTE held by `authenticated`, and EXECUTE absent for `anon`.
+
+**Half 2 (`20260816120000_draw_down_split_order_lines_by_price_tier`) is NOT applied.** Its apply
+proof minted CLEAN in the same session, but the transmission channel blocked it: the migration is
+162,022 bytes / 2,891 lines, and `migration-apply-guard.mjs` requires the transmitted SQL to hash
+byte-identically to the on-disk file, which is not achievable in a single re-emitted tool call. The
+management-API direct-POST channel would carry the bytes but bypasses the apply guard, so it was not
+used. **This is a blocked transmission path, not a review finding** — nothing about the migration's
+content is in question. Per the barrier's own header it is safe alone and may sit in production
+indefinitely: nothing takes key `(20260816, 1)` in EXCLUSIVE mode until half 2 applies, so every
+`pg_try_advisory_xact_lock_shared` call succeeds on the first try and draw-down behaviour is
+unchanged from before this apply.
+
+---
+
 **Live-ledger re-read — 2026-08-24, immediately before the draw-down cutover apply.** Read
 read-only from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`. This
 **re-confirms** the 2026-08-18 block below rather than superseding it — every figure is unchanged:
