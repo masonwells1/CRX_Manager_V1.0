@@ -109,6 +109,21 @@ Do not claim a database or money fix is ready from code inspection alone.
 
 Use `/codex-review` with the selected scope. If the direct Codex CLI fails to resolve, fall back to `/codex-cross-review`.
 
+**Do not invoke `codex review <scope>` directly — it self-recurses in this repo.** It loads this
+file and `AGENTS.md` as context, follows their "run a Codex review" instruction into a *nested*
+review, then kills its own process tree while still exiting 0 with no verdict (2026-08-23, twice).
+Run `node scripts/write-codex-push-proof.mjs` instead, which reviews a sanitized snapshot pair
+with no agent-instruction files in it. Full detail in `.claude/skills/codex-review/SKILL.md`.
+
+**A zero exit code is not a verdict.** Before recording any Codex gate as passed, confirm the
+capture actually contains one:
+
+```bash
+grep -cE "CODEX_PROOF_VERDICT|^VERDICT:" .claude/session-state/codex-review-latest.txt
+```
+
+`0` means no review happened — `UNVERIFIED`/`BLOCKED` per Step 2, never clean.
+
 The hard gate is a separate ephemeral `gpt-5.6-sol` high-effort review session; Terra may build and
 Luna may take low-risk work, but adversarial review always goes to Sol. Step 4 evidence verification
 reduces false positives; it is NOT a substitute for the Sol gate. The re-review in Step 5 (sub-item 2)

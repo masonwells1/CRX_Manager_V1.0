@@ -71,8 +71,45 @@ Skip this step for frontend-only / docs-only diffs.
 
 ## Step 3: Run Codex
 
-Codex `review` is read-only analysis of the diff. Run it from the repo root, pin
-no-approval so it can't hang unattended, and tee the output so Claude can parse it:
+> ### ⛔ `codex review <scope>` SELF-RECURSES IN THIS REPO — use the wrapper
+>
+> Observed twice on 2026-08-23 (PIDs 39564, 36244), identical both times. `codex review`
+> loads `AGENTS.md` / `CLAUDE.md` / `.claude/commands/codex-gauntlet.md` as project context.
+> Those files instruct an agent to "run a Codex review", so the reviewer follows them
+> **literally**: it spawns a *nested* `codex review`, then enumerates `codex.exe` processes,
+> sees duplicates, and `Stop-Process`/`taskkill`s the tree — **including its own PID**.
+>
+> **The lethal part: the pipeline still exits 0.** `tee` succeeds, the harness reports
+> success, and the ~1 MB capture is almost entirely echoed context files. An exit-code check
+> reads this as a clean review when Codex reviewed nothing.
+>
+> Any repo whose agent instructions say "run a review" can reproduce this. It is not a
+> transient failure and retrying the same command does not help.
+
+**Default path — the sanitized wrapper.** Run it bare from the repo root; the maintenance
+guard rejects `cd &&` chaining and every other wrapper form:
+
+```bash
+node scripts/write-codex-push-proof.mjs
+```
+
+It runs `codex exec` (not `review`) inside a throwaway `%TEMP%\crx-codex-review-*` workspace
+holding only `BASE_SNAPSHOT` / `CANDIDATE_SNAPSHOT` — **no repo agent-instruction files exist
+there to recurse on**. It SHA-256-binds every changed path, pins Sol at high effort, and writes
+the exact-SHA proof JSON the push guard wants. Trust the verdict line it prints;
+`review-proof-guard.mjs` blocks reading the proof JSON back through the shell by design.
+
+**Verify a verdict actually exists — never infer one from an exit code:**
+
+```bash
+grep -cE "CODEX_PROOF_VERDICT|^VERDICT:" .claude/session-state/codex-review-latest.txt
+```
+
+`0` means the review never produced findings, whatever the exit status was. Per the gauntlet
+contract that is `UNVERIFIED`/`BLOCKED` and can never count as clean.
+
+<details>
+<summary>Legacy <code>codex review $SCOPE</code> form (kept for reference — expect self-recursion)</summary>
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -85,6 +122,8 @@ mkdir -p .claude/session-state
   -c approval_policy=never \
   2>&1 | tee .claude/session-state/codex-review-latest.txt
 ```
+
+</details>
 
 **A scope flag carries NO inline prompt.** `--base` / `--uncommitted` / `--commit` are each
 mutually exclusive with a `[PROMPT]` argument — passing both makes Codex exit 2 with e.g.
