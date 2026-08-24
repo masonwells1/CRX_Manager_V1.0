@@ -1,11 +1,52 @@
 # Decision Log
 
-Last verified: 2026-08-20
+Last verified: 2026-08-24
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-24 — AP aging measures DAYS PAST DUE; the bucket mapping is a separate, still-open decision
+
+**Source:** Mason's in-chat decision, 2026-08-24, answering the open product question raised by the
+Live Foundation Gauntlet Section 9 refresh (PR #457).
+
+**The question.** `get_ap_aging(date)` ages every bucket from `vendor_bills.bill_date`; `due_date`
+is never read. An audit initially scored that a HIGH defect. On review that scoring was wrong as
+stated: invoice-date aging and due-date aging are both standard accounting views, and nothing in
+this repository declared which one the `Current` / `31-60 Days` / `61-90 Days` / `90+ Days` buckets
+were meant to express. Calling the existing basis a defect — and queueing a live SQL change on that
+footing — would have committed Crop RX to an accounting policy by implication rather than by
+decision.
+
+**The decision.** **AP aging measures days past due.** Buckets are computed from each bill's
+`due_date`, so a bill inside its terms is not reported as aged no matter when it was issued. With
+that contract stated, the live implementation provably contradicts it, and the Section 9 finding is
+a genuine HIGH.
+
+**Explicitly NOT decided.** The report exposes only four buckets and has no `1-30`, so days-past-due
+must be *mapped* onto them, and the obvious mapping (`Current` = not yet due **through 30 days past
+due**) silently merges "not yet due" with "up to a month late". Whether those should be separated —
+which needs a fifth bucket and a UI change — is a **second decision Mason has not made**. Do not
+assume it, and do not write a test that locks either mapping in until he answers. The question to
+put to him: *should `Current` mean "not yet due" only, with a new `1-30 Days` column?*
+
+**Operative rules.**
+
+- Age AP buckets from `due_date`, not `bill_date`. Do not re-open this half.
+- Get Mason's answer on the bucket mapping **before** writing the migration or its smoke test.
+- `public.vendor_bills.due_date` is `NOT NULL` (verified by live introspection 2026-08-24), as is
+  `bill_date`. Do not add null-handling or a null test case; it would assert invented behavior for
+  an unreachable input. If that constraint is ever relaxed, revisit this contract first.
+- The AP Aging UI labels and CSV export state no basis today. They should state whichever is
+  adopted — that holds under either mapping.
+
+**Status.** Recorded only; **no code, SQL, or migration has been written.** Scope note for the
+implementing session: `.claude/handoffs/SCOPE-ap-aging-days-past-due.md`. Full finding: HIGH 1 in
+`docs/audits/gauntlet/2026-08-23-section-09-purchase-orders-receiving-vendor-bills-ap-refresh.md`.
 
 ---
 

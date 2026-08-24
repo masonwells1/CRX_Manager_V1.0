@@ -51,20 +51,26 @@ A bill with long payment terms lands in `31-60 Days`, `61-90 Days`, or `90+ Days
 
 Define the bucket contract explicitly as days past `due_date`, then age from `p_as_of_date - vb.due_date`.
 
-*Mapping onto the existing four-bucket API.* `docs/reference/rpc-functions.md:278` and `src/pages/AccountsPayable.tsx` expose exactly four buckets — `Current`, `31-60 Days`, `61-90 Days`, `90+ Days`. There is no `1-30` bucket, so days-past-due must be mapped, not merely re-based. The mapping that preserves the current API and UI is:
+*The bucket mapping is a SECOND, still-open decision — do not assume it.* `docs/reference/rpc-functions.md:278` and `src/pages/AccountsPayable.tsx` expose exactly four buckets — `Current`, `31-60 Days`, `61-90 Days`, `90+ Days`. There is **no `1-30` bucket**, so days-past-due has to be *mapped* onto them, not merely re-based. Mason settled the aging **basis**; he has not been asked where the overdue boundary sits, and this report must not decide it for him.
 
-| Bucket | Days past `due_date` |
+The candidate that preserves the current four-bucket API and UI, shown to make the question concrete — **proposed, not settled**:
+
+| Bucket | Days past `due_date` (proposed) |
 |---|---|
-| `Current` | not yet due, through 30 days past due |
+| `Current` | not yet due, due today (`0`), through 30 days past due |
 | `31-60 Days` | 31 through 60 |
 | `61-90 Days` | 61 through 90 |
 | `90+ Days` | 91 and over |
 
-Fixing the report without stating this mapping is how the SQL and the smoke test end up asserting different contracts. **Note for Mason, not a defect:** this mapping puts "not yet due" and "up to a month late" in the same `Current` column. Splitting them would need a fifth bucket and a UI change — a separate decision, deliberately not assumed here. Align the UI labels and exported CSV with whichever mapping is adopted, since neither states its basis today.
+That candidate merges "not yet due" with "up to a month late" in one `Current` column. Separating them needs a fifth bucket and a UI change. **The question for Mason, to be answered before the migration is written:** should `Current` mean "not yet due" only, with a new `1-30 Days` column? Recorded in `docs/manual/DECISION_LOG.md` (2026-08-24) as explicitly undecided. Either way the UI labels and CSV export should state the basis in use, since neither does today.
 
 **Prevention action**
 
-Add a rollback-only AP-aging smoke with bills sharing a bill date but different due dates, covering not-yet-due and the exact 30/31/60/61/90/91-day boundaries against the mapping above. It must assert days-past-due semantics and must fail against the current bill-date implementation.
+Add a rollback-only AP-aging smoke with bills sharing a bill date but different due dates. It must assert days-past-due semantics and must fail against the current bill-date implementation.
+
+Boundary cases to cover: not-yet-due, **due today (`0` days past due)**, and exactly 30 / 31 / 60 / 61 / 90 / 91 days past due. Note that "not yet due" does not cover the `0` case — a bill due on the as-of date is zero days past due, and omitting it leaves an off-by-one at the boundary untested.
+
+**Write this smoke only after the bucket mapping above is settled.** Asserting the proposed mapping now would lock an unapproved policy into an executable check, which is the same error as scoring the aging basis a defect before the contract existed.
 
 *No null-`due_date` case is required.* An earlier draft of this section called for one. Live introspection on 2026-08-24 shows `public.vendor_bills.due_date` is `NOT NULL` (as is `bill_date`), so that input cannot occur and a test for it would assert invented behavior. If that constraint is ever relaxed, this contract must be revisited first.
 

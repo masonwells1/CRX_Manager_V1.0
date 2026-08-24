@@ -95,9 +95,11 @@ serialization wrappers, and the core AP locks all remain present.
 - **HIGH — AP aging buckets by bill date, not days past due.** `get_ap_aging` ages every bucket from
   `vb.bill_date`; `vb.due_date` is never read. A bill issued March 1 on 60-day terms reports in
   `31-60 Days` on April 15, two weeks before it is due. **Contract settled by Mason 2026-08-24: AP
-  aging measures days past due.** The report exposes only four buckets and has no `1-30`, so the fix
-  must also state the mapping — `Current` covers not-yet-due through 30 days past due — or the SQL
-  and its smoke test will assert different contracts. See the classification note below.
+  aging measures days past due** — recorded in `docs/manual/DECISION_LOG.md` so a later session does
+  not re-ask him. The report exposes only four buckets and has no `1-30`, so days-past-due must be
+  *mapped* onto them, and **that mapping is a second decision Mason has not made** (does `Current`
+  mean "not yet due" only, with a new `1-30 Days` column?). It is left explicitly open. See the
+  classification note below.
 - **HIGH — "Due This Month" is a rolling 30-day window.** The dashboard card is labelled as a
   calendar month but computes the next 30 days, so it disagrees with the month it names.
 - **HIGH — AP/receiving receipts replay by operation.** Retries are keyed to the operation rather
@@ -118,11 +120,14 @@ state the basis — they do not today, and that held under either answer.
 
 This entry records the audit only; **no remediation is included.** All three findings remain open,
 which is why no predicate or test lands beside them — the executable checks belong with the fix, not
-with the write-up. The AP-aging smoke is now specifiable — assert days-past-due against the
-four-bucket mapping at the not-yet-due and 30/31/60/61/90/91-day boundaries — and ships with that
-fix. It needs **no** null-`due_date` case: live introspection on 2026-08-24 confirms
-`public.vendor_bills.due_date` is `NOT NULL`, so an earlier draft's requirement for one would have
-asserted invented behavior for an input that cannot occur.
+with the write-up. The AP-aging smoke additionally **must not be written until Mason settles the
+bucket mapping**: asserting the proposed mapping now would lock an unapproved policy into an
+executable check, the same error as scoring the aging basis a defect before the contract existed.
+Once settled, its boundary cases are not-yet-due, **due today (`0` days past due)**, and exactly
+30/31/60/61/90/91 — "not yet due" does not cover `0`, and omitting it leaves an off-by-one at the
+due-date boundary untested. It needs **no** null-`due_date` case: live introspection on 2026-08-24
+confirms `public.vendor_bills.due_date` is `NOT NULL`, so an earlier draft's requirement for one
+would have asserted invented behavior for an input that cannot occur.
 
 - **Section 9 did NOT settle and remains the current queue position.** The deterministic section
   gate's contract rejects a checkout that is behind `origin/main` and cannot settle a dirty tree;
