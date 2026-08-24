@@ -68,12 +68,20 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // destination was the same misdirection this PR removes. Still diagnosis
   // only: `RISKY_CONTENT_RE`, `contentIsRisky` and `RISKY_PATH_RES` remain
   // byte-for-byte unchanged, so the transform is identity and input == output.
+  // pushLib re-pinned again 2026-08-24 (PR #463, Codex round 1): diff-derived
+  // paths are now escaped and delimited before they reach a denial message.
+  // The quoted-path decoding added earlier in the same PR turned an encoded
+  // newline in an attacker-chosen FILENAME into a real one, and that message is
+  // delivered verbatim to a privileged agent — Codex demonstrated a name
+  // rendering as a forged second line of guard guidance. Still diagnosis only:
+  // `RISKY_CONTENT_RE`, `contentIsRisky` and `RISKY_PATH_RES` remain
+  // byte-for-byte unchanged, so the transform is identity and input == output.
   codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
-  pushLib: "f3a97cec5b4b4ec029bf4d65f682beaa8ea1e54b",
+  pushLib: "e247bd41623e3507fa221420210cffd4ee481181",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
-  pushLib: "f3a97cec5b4b4ec029bf4d65f682beaa8ea1e54b",
+  pushLib: "e247bd41623e3507fa221420210cffd4ee481181",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
