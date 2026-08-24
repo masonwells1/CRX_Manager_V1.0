@@ -71,6 +71,15 @@ non-comparison symbolic operator, including positional and local aliases, while
 ordinary identity comparisons remain allowed. Four deny/control regressions
 bring the focused suite to 419 assertions.
 
+The final PR comment audit found one more delayed-DDL alias: the runtime SQL
+reader used a function-only header check before recursively inspecting stored
+commands, even though the routine parser already covered procedures. A direct
+`cron.schedule` literal could therefore create an unbound mutating `SECURITY
+DEFINER` procedure later. Stored and executed DDL now recognizes both `CREATE
+FUNCTION` and `CREATE PROCEDURE` headers through the same routine boundary. The
+reported scheduled-procedure regression brings the focused suite to 420
+assertions, and removing procedure recognition makes that exact proof fail.
+
 ## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
 
 Fresh review of the cross-schema repair found two additional HIGH bypasses. A

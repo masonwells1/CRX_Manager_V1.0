@@ -382,6 +382,10 @@ const UNBOUND_DDL =
   "CREATE OR REPLACE FUNCTION public.dynamic_actor(p_performed_by uuid) " +
   "RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN " +
   "UPDATE invoices SET created_by = p_performed_by; END $fn$;";
+const UNBOUND_PROCEDURE_DDL =
+  "CREATE OR REPLACE PROCEDURE public.dynamic_actor_proc(p_performed_by uuid) " +
+  "LANGUAGE plpgsql SECURITY DEFINER AS $proc$ BEGIN " +
+  "INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by); END $proc$;";
 const BOUND_DDL =
   "CREATE OR REPLACE FUNCTION public.dynamic_bound(p_performed_by uuid) " +
   "RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN " +
@@ -426,6 +430,13 @@ r = runHook(`SELECT cron.schedule(
 );`);
 ok(isDeny(r), "top-level cron.schedule cannot hide a delayed unbound actor function");
 ok(r.stdout.includes("builds a CREATE FUNCTION"), "scheduled DDL denial explains the fail-closed boundary");
+
+r = runHook(`SELECT cron.schedule(
+  'delayed-actor-procedure-ddl',
+  '* * * * *',
+  $job$${UNBOUND_PROCEDURE_DDL}$job$
+);`);
+ok(isDeny(r), "top-level cron.schedule cannot hide a delayed unbound actor procedure");
 
 r = runHook(`SELECT cron.schedule(
   'existing-safe-job',

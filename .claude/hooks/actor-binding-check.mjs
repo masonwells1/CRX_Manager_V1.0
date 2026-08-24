@@ -1199,8 +1199,8 @@ function inExecuteStatement(out, text, afterIdx) {
   );
 }
 
-const CREATE_FN_HEAD_RE = new RegExp(
-  `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${SQL_QUALIFIED_IDENTIFIER_PATTERN}\\s*\\(`,
+const CREATE_ROUTINE_HEAD_RE = new RegExp(
+  `CREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:FUNCTION|PROCEDURE)\\s+${SQL_QUALIFIED_IDENTIFIER_PATTERN}\\s*\\(`,
   "i"
 );
 
@@ -1519,9 +1519,9 @@ function hasEnforcedActorRefusal(body, actorParam, actorReferences = [actorParam
   return false;
 }
 
-function carriesFnHeader(payload) {
-  return CREATE_FN_HEAD_RE.test(payload) ||
-    CREATE_FN_HEAD_RE.test(blankComments(payload));
+function carriesRoutineHeader(payload) {
+  return CREATE_ROUTINE_HEAD_RE.test(payload) ||
+    CREATE_ROUTINE_HEAD_RE.test(blankComments(payload));
 }
 
 /** Decode PostgreSQL U&'...' string escapes only for header detection. The
@@ -1616,7 +1616,7 @@ function hasAdjacentNewlineString(text, from) {
 
 /** CRX's legacy execute_sql_readonly(text) function validates only the first
  * keyword, then dynamically EXECUTEs the supplied SELECT/WITH as its owner.
- * Treat a function-bearing literal in that argument as executable SQL. Unicode
+ * Treat a routine-bearing literal in that argument as executable SQL. Unicode
  * identifiers are opaque, so matching ones conservatively take the same path. */
 function isExecuteSqlReadonlyLiteralPrefix(prefix) {
   const unicodeIdentifier =
@@ -1944,7 +1944,7 @@ function hasPgCronJobIdentityChange(rawSql) {
   return false;
 }
 
-let sawOpaqueFunctionCallable = false;
+let sawOpaqueRoutineCallable = false;
 
 /** Replace comments and quoted-string contents with spaces, while recursively
  * retaining executable SQL held inside procedural bodies and dynamic DDL.
@@ -1982,23 +1982,23 @@ function maskSqlNoise(text, inProceduralCode = false) {
         if (close === -1) return null;
         const payload = text.slice(i + tag.length, close);
         const isProceduralContainer = isProceduralContainerPrefix(out);
-        const hasFunctionHeader = carriesFnHeader(payload);
-        const isKnownSqlExecutor = hasFunctionHeader &&
+        const hasRoutineHeader = carriesRoutineHeader(payload);
+        const isKnownSqlExecutor = hasRoutineHeader &&
           isExecuteSqlReadonlyLiteralPrefix(out);
-        const callablePrefix = hasFunctionHeader
+        const callablePrefix = hasRoutineHeader
           ? maskSqlForCallNames(text.slice(0, i))
           : "";
-        if (hasFunctionHeader && callablePrefix !== null &&
+        if (hasRoutineHeader && callablePrefix !== null &&
             hasUnprovenCallableContext(
               callablePrefix, out, text, close + tag.length
             )) {
-          sawOpaqueFunctionCallable = true;
+          sawOpaqueRoutineCallable = true;
           return null;
         }
         const isExecutable = isProceduralContainer || /\bEXECUTE\s+$/i.test(out) ||
           isKnownSqlExecutor ||
-          (inProceduralCode && hasFunctionHeader) ||
-          (hasFunctionHeader && inExecuteStatement(out, text, close + tag.length));
+          (inProceduralCode && hasRoutineHeader) ||
+          (hasRoutineHeader && inExecuteStatement(out, text, close + tag.length));
         const inner = isExecutable
           ? maskSqlNoise(payload, inProceduralCode || isProceduralContainer)
           : " ".repeat(payload.length);
@@ -2026,19 +2026,19 @@ function maskSqlNoise(text, inProceduralCode = false) {
         ? unicodeStringForHeaderDetection(text, i, end, payload)
         : null;
       if (unicodePayload?.error) return null;
-      const hasFunctionHeader = carriesFnHeader(unicodePayload?.payload ?? payload);
-      const isKnownSqlExecutor = ch === "'" && hasFunctionHeader &&
+      const hasRoutineHeader = carriesRoutineHeader(unicodePayload?.payload ?? payload);
+      const isKnownSqlExecutor = ch === "'" && hasRoutineHeader &&
         isExecuteSqlReadonlyLiteralPrefix(out);
-      const callablePrefix = ch === "'" && hasFunctionHeader
+      const callablePrefix = ch === "'" && hasRoutineHeader
         ? maskSqlForCallNames(text.slice(0, i))
         : "";
-      if (ch === "'" && hasFunctionHeader && callablePrefix !== null &&
+      if (ch === "'" && hasRoutineHeader && callablePrefix !== null &&
           hasUnprovenCallableContext(callablePrefix, out, text, end)) {
-        sawOpaqueFunctionCallable = true;
+        sawOpaqueRoutineCallable = true;
         return null;
       }
       const isDynamicSql = ch === "'" && (isProceduralContainer || isKnownSqlExecutor ||
-        (hasFunctionHeader && (inProceduralCode || inExecuteStatement(out, text, end))));
+        (hasRoutineHeader && (inProceduralCode || inExecuteStatement(out, text, end))));
       if (isDynamicSql) {
         // Recursing into the raw payload is safe only when it needs no SQL
         // quote decoding. In an outer standard string, doubled quotes represent
@@ -2268,9 +2268,9 @@ try {
     );
   }
   if (masked === null) {
-    if (sawOpaqueFunctionCallable) {
+    if (sawOpaqueRoutineCallable) {
       violations.push(
-        "This migration passes CREATE FUNCTION text to a callable that is not allowlisted as a " +
+        "This migration passes CREATE FUNCTION/PROCEDURE text to a callable that is not allowlisted as a " +
         "data-only sink. The callable may execute or store that SQL under another name. Use a " +
         "known reviewed executor, or add the file-level exempt marker " +
         "(-- actor-binding-check: exempt) and get a manual review."
@@ -2336,7 +2336,7 @@ try {
       }
       if (lits.length === 0) return false;
       const ddlLiterals = directExecuteLiteral ? [directExecuteLiteral.literal] : lits;
-      if (!carriesFnHeader(ddlLiterals.map((l) => l.payload).join(""))) return false;
+      if (!carriesRoutineHeader(ddlLiterals.map((l) => l.payload).join(""))) return false;
       const hasUnprovenCallable = lits.some((lit) => {
         const callablePrefix = maskSqlForCallNames(content.slice(0, lit.start));
         return callablePrefix !== null && hasUnprovenCallableContext(
@@ -2353,20 +2353,20 @@ try {
       // one literal while substituting the actor parameter or body at runtime.
       // Replace the literal with a marker and accept only the three deliberately
       // supported direct shapes. Fancy but valid builders use the exemption.
-      if (lits.length === 1 && carriesFnHeader(lits[0].payload)) {
+      if (lits.length === 1 && carriesRoutineHeader(lits[0].payload)) {
         const lit = lits[0];
         const skeleton = singleLiteralSkeleton;
         const directAssign = /^(?:BEGIN\s+)?(?:"[^"]+"|[\w.]+)\s*(?::=|=(?!=))\s*__ACTOR_DDL_LITERAL__$/i.test(skeleton);
         const directSelectInto = /^(?:BEGIN\s+)?SELECT\s+__ACTOR_DDL_LITERAL__\s+INTO\s+(?:"[^"]+"|[\w.]+)$/i.test(skeleton);
         if (directAssign || directSelectInto) return false;
       }
-      if (directExecuteLiteral && carriesFnHeader(directExecuteLiteral.literal.payload)) return false;
+      if (directExecuteLiteral && carriesRoutineHeader(directExecuteLiteral.literal.payload)) return false;
       violations.push(
-        "This migration builds a CREATE FUNCTION statement at runtime, and the actor-binding guard " +
+        "This migration builds a CREATE FUNCTION/PROCEDURE statement at runtime, and the actor-binding guard " +
         "cannot read it as one complete literal — the definition is split across fragments, transformed " +
         "through format/concatenation/conditional logic, or not parseable on its own. Built that way, " +
         "the guard cannot tell whether the " +
-        "function is SECURITY DEFINER, mutates, accepts a caller-supplied actor, and raises " +
+        "routine is SECURITY DEFINER, mutates, accepts a caller-supplied actor, and raises " +
         "ACTOR_MISMATCH. Build the dynamic DDL as a single string literal, or add the file-level " +
         "exempt marker (-- actor-binding-check: exempt) and get a manual review."
       );
