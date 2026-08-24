@@ -24,6 +24,7 @@
 // pathname cannot fake. It is checked in addition to those, never instead.
 import {
   aliasesProtectedFile,
+  canonicalizeThroughExistingAncestor,
   protectedControlPathReason,
   protectedProofCreationReason,
 } from "./protected-identity-lib.mjs";
@@ -51,7 +52,29 @@ function out(decision, reason) {
 
 try {
   const payload = raw.trim() ? JSON.parse(raw) : null;
-  const input = payload?.tool_input && typeof payload.tool_input === "object" ? payload.tool_input : {};
+  const rawInput = payload?.tool_input;
+
+  // Codex's `apply_patch` delivers its payload as a RAW STRING, not an object.
+  // Discarding every non-object `tool_input` therefore extracted no destination
+  // at all and fell straight through to allow — leaving open the exact route
+  // this hook exists to close, while the tests passed because they wrapped the
+  // patch in `{patch: …}`, a shape the real tool never sends (exact-review High,
+  // PR #432). A string that is itself JSON is decoded first, since some hosts
+  // encode the object form; anything else is treated as a free-form patch body.
+  let input = {};
+  let rawStringBody = null;
+  if (rawInput && typeof rawInput === "object") {
+    input = rawInput;
+  } else if (typeof rawInput === "string" && rawInput.trim()) {
+    let decoded = null;
+    try {
+      decoded = JSON.parse(rawInput);
+    } catch {
+      decoded = null;
+    }
+    if (decoded && typeof decoded === "object") input = decoded;
+    else rawStringBody = rawInput;
+  }
 
   // Write uses file_path; Edit uses file_path too. Accept the common spellings
   // so a future tool shape cannot slip past by naming the field differently.
@@ -66,7 +89,7 @@ try {
     input.target,
     input.source,
     input.destination,
-    ...[input.patch, input.diff, input.input, input.changes]
+    ...[input.patch, input.diff, input.input, input.changes, rawStringBody]
       .flatMap((body) => extractPatchDestinations(body)),
   ].filter((candidate) => typeof candidate === "string" && candidate);
 
@@ -79,8 +102,12 @@ try {
 
     // Git control files decide what Git EXECUTES on the next ordinary command, so
     // they are checked by pathname as well as identity: a file that does not exist
-    // yet has no inode, and creating one is itself the attack.
-    const controlReason = protectedControlPathReason(abs);
+    // yet has no inode, and creating one is itself the attack. The canonical
+    // surface is checked alongside the resolved one so a junction hop cannot keep
+    // the supplied pathname from ever spelling the control file, the same way
+    // protectedProofCreationReason already canonicalises internally.
+    const controlReason = protectedControlPathReason(abs)
+      || protectedControlPathReason(canonicalizeThroughExistingAncestor(abs));
     if (controlReason) {
       out(
         "deny",

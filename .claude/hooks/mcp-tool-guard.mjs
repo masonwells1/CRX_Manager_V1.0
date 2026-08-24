@@ -29,7 +29,12 @@
 import { readFileSync } from "node:fs";
 // Identity checking is shared with the native Write|Edit guard so both write
 // routes enforce the same boundary from one implementation.
-import { aliasesProtectedFile, canonicalizeThroughExistingAncestor } from "./protected-identity-lib.mjs";
+import {
+  aliasesProtectedFile,
+  canonicalizeThroughExistingAncestor,
+  protectedControlPathReason,
+  protectedProofCreationReason,
+} from "./protected-identity-lib.mjs";
 import path from "node:path";
 import {
   checkCommandDeep,
@@ -167,13 +172,43 @@ try {
         /(^|\/)(scripts|supabase(\/migrations)?|\.claude(\/hooks)?)\/?$/i.test(s)
       );
 
+      // SHARED canonical rules, not a second copy of them. Re-spelling these
+      // patterns locally is exactly what let the two write routes drift: the
+      // native guard learned about the `.git` POINTER of a linked worktree and
+      // about creation inside the wrapper-owned review state directory, while
+      // this route — Claude's other way to write a file — kept neither. An MCP
+      // write through a junction could therefore mint trusted review JSON and
+      // self-certify a risky change, or repoint the checkout at an
+      // attacker-chosen gitdir (two exact-review Highs, PR #432).
+      //
+      // protectedProofCreationReason canonicalises internally; the control-path
+      // rule takes the surface as given, so every surface this guard already
+      // computes is offered to it.
+      const controlPathReason = surfaces
+        .map((surface) => protectedControlPathReason(surface))
+        .find((reason) => reason) || "";
+      const proofCreationReason = protectedProofCreationReason(abs);
+
       const matchedByName = isEnv || isSettings || isHookFile || isMigrationPath
-        || isProtectedProducer || isGitExclusionControl || isProtectedDir;
+        || isProtectedProducer || isGitExclusionControl || isProtectedDir
+        || Boolean(controlPathReason) || Boolean(proofCreationReason);
       // Checked last, and only when every name-shaped pattern missed, so a
       // hard-link alias cannot present an innocuous pathname for a protected file.
       const matchedByIdentity = !matchedByName && aliasesProtectedFile(abs, cwd);
 
       if (matchedByName || matchedByIdentity) {
+        if (proofCreationReason) {
+          out(
+            "block",
+            `MCP TOOL GUARD (${toolName}): ${targetRaw} resolves into ${proofCreationReason}. Review proofs are minted by the review wrapper; an agent that can create one can certify its own change.`
+          );
+        }
+        if (controlPathReason) {
+          out(
+            "block",
+            `MCP TOOL GUARD (${toolName}): ${targetRaw} is ${controlPathReason}. Settings there choose programs Git runs on the next command, so edit it deliberately outside the agent tools.`
+          );
+        }
         out(
           "block",
           `MCP TOOL GUARD (${toolName}): use the native Edit/Write tools so the guard hooks can inspect this change (protected path: ${targetRaw}).`

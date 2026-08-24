@@ -105,7 +105,32 @@ if (linked) {
   // on normal patching.
   const benign = ["*** Begin Patch", `*** Update File: ${path.join(scratch, "ordinary.txt")}`, "@@", "+x", "*** End Patch"].join("\n");
   eq(runHook({ tool_name: "apply_patch", tool_input: { patch: benign } }).stdout.trim(), "", "a patch touching only ordinary files is allowed");
+
+  // THE REAL SHAPE. Every assertion above wraps the patch in an object, and the
+  // real `apply_patch` does not: it sends the patch body as a bare STRING. The
+  // guard used to discard any non-object tool_input, so the shape that actually
+  // occurs extracted no destination and was ALLOWED, while these object-wrapped
+  // fixtures — a shape the tool never emits — passed and hid it (exact-review
+  // High, PR #432, reproduced with a read-only probe of the real hook).
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: beginPatch })), "a RAW STRING patch body aliasing a protected hook is denied");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: unified })), "a RAW STRING unified-diff patch destination is denied");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: mixed })), "a RAW STRING patch is denied when ANY destination aliases a protected file");
+  eq(runHook({ tool_name: "apply_patch", tool_input: benign }).stdout.trim(), "", "a RAW STRING patch touching only ordinary files is allowed");
+  // Hosts that JSON-encode the object form must still be understood as an object
+  // rather than mistaken for a patch body.
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: JSON.stringify({ patch: beginPatch }) })), "a JSON-encoded string tool_input is decoded and denied");
 }
+
+// The raw-string route must close the FORGERY case too — this is the exact
+// payload the exact-review probe showed being allowed: a bare patch string that
+// creates a trusted review proof.
+ok(
+  isDeny(runHook({
+    tool_name: "apply_patch",
+    tool_input: ["*** Begin Patch", "*** Add File: .claude/session-state/codex-review-deadbeef.json", "@@", "+{}", "*** End Patch"].join("\n"),
+  }, repoRoot)),
+  "a RAW STRING patch that adds a proof file is denied",
+);
 
 // PROOF FORGERY. A new file in the review state directory certifies a change the
 // gate will later trust. Identity cannot see it — a file that does not exist yet

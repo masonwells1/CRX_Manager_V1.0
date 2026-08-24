@@ -2,6 +2,36 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — The identity guard now covers the shape Codex actually sends, and both write routes share one rule set
+
+An exact-SHA `gpt-5.6-sol` review of this branch returned BLOCKED with three High
+findings, all confirmed against current source before fixing. The guard hardening
+below it was real but reached only ONE of the routes it claimed to close, which is
+worse than not shipping it: a half-closed guard reads as handled.
+
+- `apply_patch` delivers its payload as a raw STRING. `protected-identity-guard.mjs`
+  discarded any `tool_input` that was not an object, so the real shape produced no
+  destination to check and fell through to allow — the exact route the hook exists
+  to close. A read-only probe of the real hook confirmed a raw patch creating a
+  review proof under `.claude/session-state` was allowed. The guard now accepts a
+  raw string as a patch body, and decodes a JSON-encoded object form first.
+  The tests were complicit: every patch assertion wrapped the body in `{patch: …}`,
+  a shape the tool never emits, so they passed while the real route stayed open.
+  Each one now also drives the bare-string form, including the forgery payload.
+- `mcp-tool-guard.mjs` — Claude's OTHER write route — never applied
+  `protectedProofCreationReason` and its Git-control list omitted the `.git` POINTER
+  of a linked worktree. An MCP write through a junction could therefore mint trusted
+  review JSON and self-certify a risky change, or repoint the checkout at an
+  attacker-chosen gitdir. Both routes now call the same `protected-identity-lib`
+  functions instead of keeping separate copies of the patterns; re-spelling the rules
+  locally is what let the two drift apart in the first place. Regressions cover proof
+  creation, a move whose destination lands in the state directory, the `.git` pointer,
+  and the junction-laundered destination — plus the `stop-wrap-ack.json` valve, which
+  must stay writable on both routes.
+- The native route now also tests the canonicalised surface for Git control paths,
+  matching what `protectedProofCreationReason` already did internally, so a junction
+  hop cannot keep the supplied pathname from ever spelling the control file.
+
 ## 2026-08-24 — Identity reaches the patch route, the proof directory, and stops flagging files as aliases of themselves
 
 Two exact-review High findings, plus a third defect found while fixing them.

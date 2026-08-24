@@ -572,6 +572,51 @@ ok(isDeny(r), "DC write_file targeting .claude/settings.json is denied");
 r = runHook({ tool_name: "mcp__Desktop_Commander__edit_block", tool_input: { path: ".claude/hooks/bash-safety.mjs" } });
 ok(isDeny(r), "DC edit_block targeting a hook file is denied");
 
+// ── PARITY WITH THE NATIVE ROUTE (exact-review Highs, PR #432) ─────────────
+// The native Write/Edit guard learned two rules this route never received: the
+// wrapper-owned review state directory, and the `.git` POINTER of a linked
+// worktree. Claude can write files BOTH ways, so a rule enforced on only one of
+// them is not enforced at all — an MCP write could mint trusted review JSON and
+// self-certify a risky change, or repoint the checkout at an attacker-chosen
+// gitdir. Both routes now call the SAME functions in protected-identity-lib
+// rather than keeping two copies of the patterns that drifted apart.
+r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: ".claude/session-state/codex-review-deadbeef.json", content: "{}" } });
+ok(isDeny(r), "DC write_file creating a review proof is denied");
+
+r = runHook({ tool_name: "mcp__Desktop_Commander__move_file", tool_input: { source: "notes.json", destination: ".claude/session-state/codex-review-deadbeef.json" } });
+ok(isDeny(r), "DC move_file whose DESTINATION lands in the review state directory is denied");
+
+// The ack valve is the one designed agent-writable file there; denying it would
+// break session close-out, and the native route deliberately allows it.
+r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: ".claude/session-state/stop-wrap-ack.json", content: "{}" } });
+eq(r.stdout.trim(), "", "DC write_file to the stop-wrap ack valve stays allowed");
+
+r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: ".git", content: "gitdir: C:/attacker-controlled/.git" } });
+ok(isDeny(r), "DC write_file targeting the linked-worktree .git pointer is denied");
+
+// A JUNCTION launders the destination out of the supplied pathname: nothing in
+// the string spells `session-state`, and identity cannot help because the proof
+// file does not exist yet. Canonicalising through the existing ancestor is what
+// exposes it — the exact scenario the exact-review probe demonstrated.
+{
+  const junctionParent = mkdtempSync(path.join(os.tmpdir(), "crx-mcp-junction-"));
+  const junction = path.join(junctionParent, "notes");
+  const stateDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".claude", "session-state");
+  let junctionMade = false;
+  try {
+    symlinkSync(stateDir, junction, "junction");
+    junctionMade = true;
+  } catch {
+    // Environments without junction/symlink permission cannot present this
+    // route at all, so there is nothing to assert there.
+  }
+  if (junctionMade) {
+    r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: path.join(junction, "codex-review-deadbeef.json"), content: "{}" } });
+    ok(isDeny(r), "DC write_file into the review state directory THROUGH A JUNCTION is denied");
+  }
+  rmSync(junctionParent, { recursive: true, force: true });
+}
+
 // A hard link is a second directory entry for the SAME file data, so its
 // pathname is innocuous and `realpath` cannot see through it — writing to the
 // alias edits the protected hook. Identity (device + inode/file-ID) is what a
