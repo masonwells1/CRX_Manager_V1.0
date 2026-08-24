@@ -91,6 +91,19 @@ ok(checkDangerousCommand("New-Item -Target .claude\\hooks\\bash-safety-lib.mjs -
 ok(checkDangerousCommand("ni -Type HardLink -Path x.json -Target .claude\\settings.json"), "the ni alias and -Type spelling are blocked too");
 ok(checkDangerousCommand("fsutil hardlink create scratch\\alias.mjs .claude\\hooks\\mcp-tool-guard.mjs"), "fsutil hardlink create against a protected hook blocked");
 ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Target docs/README.md"), "hard-link creation is denied even when both operands are unprotected");
+// PowerShell evaluates the item type, so the literal token can be assembled at
+// runtime and never appear in the command text (Codex, 2026-08-24). The item
+// type must therefore be a recognized safe literal or the command fails closed.
+ok(checkDangerousCommand('New-Item -ItemType ("Hard"+"Link") -Path scratch/n.mjs -Target .claude/hooks/bash-safety-lib.mjs'), "a concatenated item type cannot smuggle a hard link past the literal matcher");
+ok(checkDangerousCommand("New-Item -ItemType $t -Path scratch/n.mjs -Target .claude/hooks/bash-safety-lib.mjs"), "a variable item type fails closed");
+ok(checkDangerousCommand("ni -Type ('Hard'+'Link') -Path a -Target b"), "the ni alias with a computed -Type fails closed");
+ok(checkDangerousCommand("New-Item -ItemType ([char]72+'ardLink') -Path a -Target b"), "a char-code item type fails closed");
+// The safe literals stay usable, including the ordinary directory creation that
+// real work depends on.
+eq(checkDangerousCommand("New-Item -ItemType Directory -Path scratch/output"), null, "creating a directory is allowed");
+eq(checkDangerousCommand("New-Item -ItemType File -Path scratch/notes.txt"), null, "creating a file is allowed");
+eq(checkDangerousCommand("New-Item -Path scratch/notes.txt"), null, "New-Item without an item type is allowed");
+eq(checkDangerousCommand("New-Item -ItemType SymbolicLink -Path scratch/a -Target docs/README.md"), null, "a symlink to an unprotected target is still allowed");
 ok(checkDangerousCommand("rm -rf src"), "rm -rf src blocked");
 ok(checkDangerousCommand("rm -rf supabase"), "rm -rf supabase blocked");
 ok(checkDangerousCommand("git add file.txt .env"), "staging .env blocked");

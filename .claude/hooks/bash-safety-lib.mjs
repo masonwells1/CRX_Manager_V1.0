@@ -2431,6 +2431,15 @@ export const DANGEROUS_CMD_CHECKS = [
   // PowerShell `New-Item -ItemType HardLink` (with its `ni`/`-Type` spellings)
   // and `fsutil hardlink create` build the same alias; match the token itself.
   [/\bHardLink\b/i, "Blocked hard-link creation. A hard link is a second pathname for the same file, which defeats every path-based guard; this project has no workflow that needs one."],
+  // The literal token above is not enough on its own: PowerShell evaluates an
+  // expression there, so `-ItemType ("Hard"+"Link")` never spells the word and a
+  // variable hides it entirely (Codex CRX-SEC-01, 2026-08-24). Enumerating the
+  // ways to compute a string is unwinnable, so this inverts the test — an item
+  // type must be a RECOGNIZED SAFE LITERAL or the command is denied. Computed
+  // expressions, variables, and unknown future item types all fail closed.
+  // Abbreviated parameter spellings (`-Type`, `-ty`, `-ItemT`) are covered;
+  // `-Target` is not, because its name cannot reduce to this shape.
+  [/\b(?:New-Item|ni)\b[^\r\n;&|]*\s-(?:item)?ty?p?e?\b[\s:]+(?!["']?(?:File|Directory|SymbolicLink|Junction)\b)/i, "Blocked unrecognized New-Item item type. Only a literal File, Directory, SymbolicLink, or Junction is allowed here — a computed or variable item type can resolve to a hard link, which defeats every path-based guard."],
   // Directory junctions and symlinks stay available in general — canonicalization
   // resolves them — but not when they are AIMED at a protected location, because
   // that is the hop that launders a protected path out of later command text.

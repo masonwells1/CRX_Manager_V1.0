@@ -173,7 +173,16 @@ spelling (PowerShell `New-Item -ItemType HardLink`, its `ni`/`-Type` forms, and
 with no alias there is nothing to launder. Junctions and symbolic links remain
 available except when aimed at a protected location, which closes the laundering
 hop itself. A regression drives each step of the junction→hard-link→write chain
-separately, because the steps need not arrive in one command. Symbolic links and
+separately, because the steps need not arrive in one command.
+
+Matching the literal `HardLink` token is not sufficient for PowerShell, which
+evaluates an expression in that position: `-ItemType ("Hard"+"Link")` never spells
+the word, and a variable hides it entirely. Enumerating the ways to compute a
+string is unwinnable, so the test is inverted — a `New-Item` item type must be a
+recognized safe literal (`File`, `Directory`, `SymbolicLink`, `Junction`) or the
+command is denied. Computed expressions, variables, abbreviated parameter
+spellings, the `-Param:Value` colon form, and unknown future item types all fail
+closed, while ordinary file and directory creation is unaffected. Symbolic links and
 junctions stay allowed because canonicalization already resolves them. A real
 hard-link regression proves the write, edit, and creation routes all deny.
 

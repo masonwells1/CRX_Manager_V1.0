@@ -159,9 +159,17 @@ Blend Recipes was never affected; it selects `*`.
   `fsutil hardlink create`); nothing here needs one, and with no alias there is
   nothing to launder. Junctions and symlinks stay available except when aimed at
   a protected location, closing the laundering hop. Regressions drive each step
-  of the chain separately against the running hook. Two rounds of real-hook runs
-  found what green unit tests had missed: first a PowerShell spelling, then the
-  junction composition. Symbolic links and junctions remain
+  of the chain separately against the running hook. Matching the literal
+  `HardLink` token was still not enough for PowerShell, which evaluates an
+  expression in that position — `-ItemType ("Hard"+"Link")` never spells the
+  word. Rather than enumerate ways to compute a string, the test is inverted: a
+  `New-Item` item type must be a recognized safe literal (`File`, `Directory`,
+  `SymbolicLink`, `Junction`) or the command is denied, so computed expressions,
+  variables, abbreviated parameters, and unknown future item types all fail
+  closed while ordinary file and directory creation is unaffected. Three rounds
+  of real-hook runs each found something green unit tests had missed: a
+  PowerShell spelling, then the junction composition, then the computed item
+  type — the last on a commit an independent review had already called clean. Symbolic links and junctions remain
   allowed — canonicalization already resolves those. A real hard-link
   regression covers the write, edit, and creation routes, and was mutation-
   tested: without the identity check the alias write is allowed.
