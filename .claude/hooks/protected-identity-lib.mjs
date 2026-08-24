@@ -24,7 +24,7 @@
 // harness unmaintainable through the agent tools the moment it was wired onto a
 // second write route. The comparison is therefore identity AND a differing
 // pathname (2026-08-24).
-import { readdirSync, realpathSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 
 // Assembled rather than written literally: the shell classifier denies commands
@@ -74,6 +74,40 @@ export function canonicalizeThroughExistingAncestor(target) {
   }
 }
 
+// Every directory that holds Git control files for this checkout.
+//
+// In a LINKED WORKTREE `<root>/.git` is a POINTER FILE, not a directory, so
+// `readdirSync(<root>/.git)` throws ENOTDIR and the swallowed error left every
+// Git control file unprotected — including the shared `config`, which lives in
+// the common directory of the main checkout and is never under `<root>` at all.
+// The pointer names the per-worktree gitdir; `<gitdir>/commondir` names the
+// shared one. Both hold settings that decide what Git EXECUTES, so both are
+// protected (Codex, 2026-08-24).
+export function gitControlDirectories(root) {
+  const pointer = path.join(root, ".git");
+  let gitDir = pointer;
+  try {
+    if (statSync(pointer).isFile()) {
+      const match = /^\s*gitdir:\s*(.+?)\s*$/m.exec(readFileSync(pointer, "utf8"));
+      if (!match) return [pointer];
+      gitDir = path.resolve(root, match[1]);
+    }
+  } catch {
+    return [];
+  }
+  const directories = [gitDir];
+  try {
+    const commonRaw = readFileSync(path.join(gitDir, "commondir"), "utf8").trim();
+    if (commonRaw) {
+      const commonDir = path.resolve(gitDir, commonRaw);
+      if (path.resolve(commonDir) !== path.resolve(gitDir)) directories.push(commonDir);
+    }
+  } catch {
+    // An ordinary (non-linked) repository: the gitdir IS the common directory.
+  }
+  return directories;
+}
+
 // identity -> the protected file's OWN pathname. The pathname is what lets a
 // caller tell "this IS the protected file" from "this is a second name for it".
 export function protectedFileIdentityPaths(root) {
@@ -106,9 +140,15 @@ export function protectedFileIdentityPaths(root) {
   // ordinary Git command. A write here is arbitrary code execution on the next
   // `git status`, so they belong in the protected set (Codex CRX-SEC-01,
   // 2026-08-24).
-  addDirectory(path.join(root, ".git"), (name) => /^config(\.worktree)?$/i.test(name));
-  addDirectory(path.join(root, ".git", "info"), (name) => /^(attributes|exclude)$/i.test(name));
+  for (const gitDir of gitControlDirectories(root)) {
+    addDirectory(gitDir, (name) => /^config(\.worktree)?$/i.test(name));
+    addDirectory(path.join(gitDir, "info"), (name) => /^(attributes|exclude)$/i.test(name));
+  }
   add(path.join(root, ".gitattributes"));
+  // package.json chooses the programs every `npm run` executes, and the shell
+  // classifier's npm-script-body check reads it — so a write here is both
+  // arbitrary execution and a way to blind that check.
+  add(path.join(root, "package.json"));
   // The harness that DECIDES whether a change may land, and the proofs it mints.
   // review-proof-guard.mjs already covers these by path and command TEXT; text
   // is exactly what a second pathname defeats, so they need the identity
@@ -140,7 +180,12 @@ export function protectedFileIdentities(root) {
 // MCP tool guard applies to the same files, so neither write route is narrower
 // than the other.
 export function protectedControlPathReason(absTarget) {
-  const surface = String(absTarget || "").replace(/\\/g, "/");
+  const surface = String(absTarget || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  // The `.git` POINTER of a linked worktree. Rewriting it repoints the entire
+  // checkout at an attacker-chosen gitdir — every config, hook, and index that
+  // Git then obeys — so it is protected by pathname; in a linked worktree it is
+  // an ordinary file an editor can create or overwrite.
+  if (/(^|\/)\.git$/i.test(surface)) return "the Git directory pointer";
   if (/(^|\/)\.git(\/[^/]+)*\/config(\.worktree)?$/i.test(surface)) return "a Git configuration file";
   if (/(^|\/)\.git(\/[^/]+)*\/info\/(attributes|exclude)$/i.test(surface)) return "a Git attributes or exclude file";
   if (/(^|\/)\.gitattributes$/i.test(surface)) return "a Git attributes file";

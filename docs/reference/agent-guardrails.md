@@ -203,6 +203,21 @@ thing it refused. The comparison is identity *and* a differing pathname; a
 regression pins the real-path edit as allowed, because that failure mode makes
 the harness unmaintainable rather than merely noisy.
 
+**Linked worktrees hid the entire Git-control category.** The protected set was
+built with `readdirSync(<root>/.git)`. In a linked worktree `.git` is a POINTER
+FILE, so that read throws `ENOTDIR`, the error is swallowed by design (an absent
+directory must not brick the guard), and *every* Git control file went
+unprotected — silently, with all tests green. The shared `config` is not under
+the worktree root at all; it lives in the common directory of the main checkout.
+`gitControlDirectories()` now parses the pointer for the real gitdir and
+`<gitdir>/commondir` for the shared one, and `config`, `config.worktree`, and
+`info/{attributes,exclude}` are protected in both. The `.git` **pointer itself**
+is protected by pathname: rewriting it repoints the whole checkout at an
+attacker-chosen gitdir, and in a linked worktree it is an ordinary file. A file
+merely ending in `.git` stays writable. `package.json` is protected by identity
+for the same class of reason — it chooses what every `npm run` executes, and the
+shell classifier reads it to vet script bodies.
+
 **Proof creation.** `review-proof-guard.mjs` covers `.claude/session-state` by
 path and command *text*, which is exactly what an alias defeats. Identity cannot
 cover a proof that does not exist yet — creating it *is* the forge — so the

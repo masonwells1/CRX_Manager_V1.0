@@ -37,6 +37,21 @@ Two exact-review High findings, plus a third defect found while fixing them.
   allowed.
 - The duplicate `canonicalizeThroughExistingAncestor` in `mcp-tool-guard.mjs` was
   replaced by the shared implementation, so the two write routes cannot drift.
+- **A linked worktree protected no Git control files at all** (Codex, verifying
+  `1fcdeba6`). The set was built with `readdirSync(<root>/.git)`, but in a linked
+  worktree `.git` is a POINTER FILE — the read threw `ENOTDIR`, the error was
+  swallowed, and the whole category went unprotected. The shared `config` is not
+  under the worktree root in the first place: it lives in the common directory of
+  the main checkout (`C:\CRX_Manager\.git\config`). The pointer is now parsed for
+  the real gitdir, `<gitdir>/commondir` for the shared one, and `config`,
+  `config.worktree`, and `info/{attributes,exclude}` are protected in **both**.
+- The `.git` **pointer itself** is protected by pathname. Rewriting it repoints
+  the entire checkout at an attacker-chosen gitdir — every config, hook, and index
+  Git subsequently obeys — and in a linked worktree it is an ordinary file any
+  editor can overwrite. A file merely *ending* in `.git` stays writable.
+- `package.json` joined the protected identity set: it chooses the programs every
+  `npm run` executes, and the shell classifier reads it to vet script bodies, so
+  an alias write there is both arbitrary execution and a way to blind that check.
 - Proof observed: the Edit tool refused `protected-identity-lib.mjs` at its real
   path before the fix and accepted it after, driven through the live hook rather
   than a pattern table.

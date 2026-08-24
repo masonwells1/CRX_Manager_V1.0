@@ -155,6 +155,53 @@ if (existingProof) {
   }
 }
 
+// package.json chooses what every `npm run` executes, and the shell classifier
+// reads it to vet script bodies — so an alias write here is both arbitrary
+// execution and a way to blind that check.
+const packageJson = path.join(repoRoot, "package.json");
+const packageAlias = path.join(scratch, "notes-manifest.json");
+let packageLinked = false;
+try {
+  linkSync(packageJson, packageAlias);
+  packageLinked = true;
+} catch {
+  // Cross-volume or permission-restricted environments cannot create the alias.
+}
+if (packageLinked) {
+  ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: packageAlias, content: "{}" } })), "writing package.json through a hard-link alias is denied");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: { patch: ["*** Begin Patch", `*** Update File: ${packageAlias}`, "@@", "+{}", "*** End Patch"].join("\n") } })), "patching package.json through a hard-link alias is denied");
+}
+eq(runHook({ tool_name: "Edit", tool_input: { file_path: packageJson, old_string: "a", new_string: "b" } }, repoRoot).stdout.trim(), "", "editing package.json at its own real path is allowed");
+
+// THE COMMON GIT DIRECTORY. In a linked worktree `<root>/.git` is a pointer FILE,
+// so readdirSync on it throws and every Git control file went unprotected — the
+// shared `config` is not under the worktree root at all. Resolve it with git
+// itself rather than with the helper under test, so the assertion cannot agree
+// with a bug in the implementation it is checking.
+const commonDir = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: repoRoot, encoding: "utf8" }).stdout.trim();
+if (commonDir) {
+  const commonConfig = path.join(commonDir, "config");
+  ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: commonConfig, content: "x" } }, repoRoot)), "writing the common Git config by pathname is denied");
+  const configAlias = path.join(scratch, "harmless-settings.txt");
+  let configLinked = false;
+  try {
+    linkSync(commonConfig, configAlias);
+    configLinked = true;
+  } catch {
+    // Cross-volume or permission-restricted environments cannot create the alias.
+  }
+  if (configLinked) {
+    ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: configAlias, content: "x" } }, repoRoot)), "writing the ACTUAL common Git config through a hard-link alias is denied");
+    ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: { patch: ["*** Begin Patch", `*** Update File: ${configAlias}`, "@@", "+x", "*** End Patch"].join("\n") } }, repoRoot)), "patching the common Git config through a hard-link alias is denied");
+  }
+}
+
+// The `.git` pointer itself: rewriting it repoints the whole checkout at an
+// attacker-chosen gitdir. In a linked worktree it is an ordinary file.
+ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: path.join(repoRoot, ".git"), content: "gitdir: /tmp/evil" } }, repoRoot)), "writing the .git pointer is denied");
+ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: ".git", content: "gitdir: /tmp/evil" } }, repoRoot)), "the relative .git pointer spelling is denied");
+eq(runHook({ tool_name: "Write", tool_input: { file_path: path.join(scratch, "notes.git"), content: "x" } }).stdout.trim(), "", "an unrelated file merely ending in .git is allowed");
+
 rmSync(scratch, { recursive: true, force: true });
 ok(!existsSync(scratch), "scratch fixture removed");
 
