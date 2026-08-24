@@ -1138,25 +1138,41 @@ git() { return 0; }
   const toolOwnedIgnoredRoots = ['node_modules', 'dist', 'dist-ssr', 'coverage', 'playwright-report', '.playwright-mcp', '.playwright-cli', 'graphify-out'];
   const toolOwnedIgnoredPrefixes = [...toolOwnedIgnoredRoots.map(root => `${root}/`), 'test-results/', 'output/playwright/', 'output/phase1a-db/'];
   const rebuiltDistRepo = fixtureRepo('containment-rebuilt-dist'); writeFileSync(path.join(rebuiltDistRepo, '.gitignore'), 'dist/\n'); git(rebuiltDistRepo, ['add', '.gitignore']); git(rebuiltDistRepo, ['commit', '--quiet', '-m', 'ignore generated dist']);
+  const stableDistPath = path.join(rebuiltDistRepo, 'dist', 'stable.js'); mkdirSync(path.dirname(stableDistPath), { recursive: true }); writeFileSync(stableDistPath, 'generated public output\n');
   let vanishedDistIgnoredListings = 0;
   const executeWithVanishedDistCandidate = (command, args, options = {}) => {
     const output = fixtureGitExecute(command, args, options);
-    if (command === 'git' && args[0] === 'ls-files' && args.includes('--ignored') && vanishedDistIgnoredListings++ === 0) return Buffer.concat([output, Buffer.from('dist/rebuilt-during-scan.js\0')]);
+    if (command === 'git' && args[0] === 'ls-files' && args.includes('--ignored') && ++vanishedDistIgnoredListings === 2) return Buffer.concat([output, Buffer.from('dist/rebuilt-during-scan.js\0')]);
     return output;
   };
-  await checkPrivateArtifactContainment({ root: rebuiltDistRepo, execute: executeWithVanishedDistCandidate });
+  const recoveryBudget = new ScanBudget(); const recoveryAdmissions = []; const admit = recoveryBudget.admit.bind(recoveryBudget); recoveryBudget.admit = (size, repoPath) => { recoveryAdmissions.push(repoPath); return admit(size, repoPath); };
+  await checkPrivateArtifactContainment({ root: rebuiltDistRepo, execute: executeWithVanishedDistCandidate, budget: recoveryBudget });
+  assert.equal(vanishedDistIgnoredListings, 3, 'a vanished ignored candidate must trigger one fresh recovery listing');
+  assert.equal(recoveryAdmissions.filter(repoPath => repoPath === 'dist/stable.js').length, 1, 'recovery must not double-charge already scanned candidates');
   const recreatedDistRepo = fixtureRepo('containment-recreated-dist'); writeFileSync(path.join(recreatedDistRepo, '.gitignore'), 'dist/\n'); git(recreatedDistRepo, ['add', '.gitignore']); git(recreatedDistRepo, ['commit', '--quiet', '-m', 'ignore generated dist']);
   let recreatedDistIgnoredListings = 0;
   const executeWithRecreatedDistCandidate = (command, args, options = {}) => {
     if (command === 'git' && args[0] === 'ls-files' && args.includes('--ignored')) {
-      if (recreatedDistIgnoredListings++ === 0) return Buffer.concat([fixtureGitExecute(command, args, options), Buffer.from('dist/rebuilt-during-scan.js\0')]);
-      const recreatedPath = path.join(recreatedDistRepo, 'dist', 'rebuilt-during-scan.js');
-      mkdirSync(path.dirname(recreatedPath), { recursive: true });
-      writeFileSync(recreatedPath, JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+      if (++recreatedDistIgnoredListings === 2) return Buffer.concat([fixtureGitExecute(command, args, options), Buffer.from('dist/rebuilt-during-scan.js\0')]);
+      if (recreatedDistIgnoredListings === 3) {
+        const recreatedPath = path.join(recreatedDistRepo, 'dist', 'rebuilt-during-scan.js');
+        mkdirSync(path.dirname(recreatedPath), { recursive: true });
+        writeFileSync(recreatedPath, JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+      }
     }
     return fixtureGitExecute(command, args, options);
   };
   await assert.rejects(() => checkPrivateArtifactContainment({ root: recreatedDistRepo, execute: executeWithRecreatedDistCandidate }), /dist\/rebuilt-during-scan\.js \(private JSON format marker in malformed candidate\)/, 'a rebuilt ignored candidate must be re-listed and scanned before success');
+  assert.equal(recreatedDistIgnoredListings, 3, 'a rebuilt ignored candidate must be found by the recovery listing');
+  const repeatedlyVanishedDistRepo = fixtureRepo('containment-repeatedly-vanished-dist'); writeFileSync(path.join(repeatedlyVanishedDistRepo, '.gitignore'), 'dist/\n'); git(repeatedlyVanishedDistRepo, ['add', '.gitignore']); git(repeatedlyVanishedDistRepo, ['commit', '--quiet', '-m', 'ignore generated dist']);
+  let repeatedlyVanishedIgnoredListings = 0;
+  const executeWithRepeatedlyVanishedDistCandidate = (command, args, options = {}) => {
+    const output = fixtureGitExecute(command, args, options);
+    if (command === 'git' && args[0] === 'ls-files' && args.includes('--ignored') && ++repeatedlyVanishedIgnoredListings >= 2) return Buffer.concat([output, Buffer.from('dist/rebuilt-during-scan.js\0')]);
+    return output;
+  };
+  await assert.rejects(() => checkPrivateArtifactContainment({ root: repeatedlyVanishedDistRepo, execute: executeWithRepeatedlyVanishedDistCandidate }), /ENOENT/, 'a repeated ignored-entry disappearance must fail closed');
+  assert.equal(repeatedlyVanishedIgnoredListings, 3, 'a repeated disappearance must occur during the recovery listing before failing');
   const ignoredToolArchiveRepo = fixtureRepo('containment-ignored-tool-archives'); writeFileSync(path.join(ignoredToolArchiveRepo, '.gitignore'), `${[...toolOwnedIgnoredRoots, 'test-results', 'output'].join('\n')}\n`); git(ignoredToolArchiveRepo, ['add', '.gitignore']); git(ignoredToolArchiveRepo, ['commit', '--quiet', '-m', 'ignore tool-owned roots']); for (const prefix of toolOwnedIgnoredPrefixes) { const toolArchivePath = `${prefix}third-party.xlsx`; mkdirSync(path.dirname(path.join(ignoredToolArchiveRepo, toolArchivePath)), { recursive: true }); writeFileSync(path.join(ignoredToolArchiveRepo, toolArchivePath), compressedBytes); } await fixtureContainment(ignoredToolArchiveRepo);
   for (const prefix of toolOwnedIgnoredPrefixes) { const privateJsonPath = `${prefix}private.json`; mkdirSync(path.dirname(path.join(ignoredToolArchiveRepo, privateJsonPath)), { recursive: true }); writeFileSync(path.join(ignoredToolArchiveRepo, privateJsonPath), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); await containmentFails(ignoredToolArchiveRepo, privateJsonPath, 'private JSON format marker in malformed candidate'); rmSync(path.join(ignoredToolArchiveRepo, privateJsonPath)); const privateCsvPath = `${prefix}private.csv`; writeFileSync(path.join(ignoredToolArchiveRepo, privateCsvPath), `${OWNER_DECISION_HEADERS.join(',')}\n`); await containmentFails(ignoredToolArchiveRepo, privateCsvPath, 'owner decision sheet CSV header structure'); rmSync(path.join(ignoredToolArchiveRepo, privateCsvPath)); }
   for (const [name, bytes, reason] of [

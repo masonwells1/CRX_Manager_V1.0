@@ -285,6 +285,13 @@ export class ScanBudget {
     this.candidates += 1;
     this.logicalBytes += size;
   }
+  admitAdditionalBytes(size, repoPath = '<unknown>', candidateSize = size) {
+    if (!Number.isSafeInteger(size) || size < 0) throw new Error(`private Phase 3C containment could not determine candidate size at ${repoPath}`);
+    if (!Number.isSafeInteger(candidateSize) || candidateSize < 0) throw new Error(`private Phase 3C containment could not determine candidate size at ${repoPath}`);
+    if (candidateSize > MAX_STRUCTURAL_SCAN_BYTES) throw new Error(`private Phase 3C containment per-file scan cap exceeded at ${repoPath}`);
+    if (this.logicalBytes > MAX_TOTAL_STRUCTURAL_SCAN_BYTES - size) throw new Error(`private Phase 3C containment total-byte scan cap exceeded at ${repoPath}`);
+    this.logicalBytes += size;
+  }
 }
 export class HistoryTraversalBudget {
   constructor(maxPaths) {
@@ -1752,7 +1759,7 @@ function worktreeEntryKind(root, repoPath, ownWorktrees = { paths: new Set(), wo
   return 'non-regular';
 }
 
-function worktreeContentViolations(root, execute, budget, { includeIgnored = true, ownWorktrees: providedOwnWorktrees, retryingTransientIgnoredEntries = false } = {}) {
+function worktreeContentViolations(root, execute, budget, { includeIgnored = true, ownWorktrees: providedOwnWorktrees, retryingTransientIgnoredEntries = false, scannedWorktreeCandidates = new Map() } = {}) {
   const ownWorktrees = providedOwnWorktrees ?? registeredWorktreeDirectories(root, execute);
   const modified = new Set(gitPaths(['diff', '--name-only', '-z', '--diff-filter=ACMRT'], root, execute));
   const untracked = new Set(gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute));
@@ -1767,6 +1774,18 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
   for (const repoPath of ignored) if (!candidates.has(repoPath)) candidates.set(repoPath, 'ignored');
   const started = performance.now();
   const cache = { roots: new Map(), parents: new Map() };
+  const worktreeBudget = {
+    admit(size, repoPath) {
+      const previousSize = scannedWorktreeCandidates.get(repoPath);
+      if (previousSize === undefined) {
+        budget.admit(size, repoPath);
+        scannedWorktreeCandidates.set(repoPath, size);
+      } else if (size > previousSize) {
+        budget.admitAdditionalBytes(size - previousSize, repoPath, size);
+        scannedWorktreeCandidates.set(repoPath, size);
+      }
+    },
+  };
   const bareRoots = bareRepositoryRoots([...candidates.keys()]);
   const bareRootList = [...bareRoots];
   let sawTransientIgnoredEntry = false;
@@ -1815,7 +1834,7 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     const checkArchives = source !== 'ignored' || !isToolOwnedIgnoredPath(repoPath);
     let result;
     try {
-      result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives });
+      result = scanWorktreeCandidate(root, repoPath, { cache, budget: worktreeBudget, checkArchives });
     } catch (error) {
       if (!retryingTransientIgnoredEntries && isTransientToolOwnedIgnoredEntryError(source, root, repoPath, error)) {
         sawTransientIgnoredEntry = true;
@@ -1835,6 +1854,7 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
       includeIgnored,
       ownWorktrees,
       retryingTransientIgnoredEntries: true,
+      scannedWorktreeCandidates,
     });
     return { ...recovery, durationMs: Math.round(performance.now() - started) };
   }

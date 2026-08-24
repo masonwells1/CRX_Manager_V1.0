@@ -8,7 +8,8 @@ The private-artifact containment guard now skips only the narrow race where Git 
 tool-owned generated file and the build removes it before inspection. It immediately re-lists and
 rescans after that race, so a rebuilt file cannot be hidden; a second disappearance and a missing
 worktree root are explicitly fail-closed. Stable generated files and direct forbidden filenames
-remain blocking.
+remain blocking. The recovery scan de-duplicates candidates already inspected, preserving the
+normal structural scan budget for newly reappeared or grown files.
 
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 
