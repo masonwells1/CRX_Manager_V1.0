@@ -63,6 +63,24 @@ the message named the wrong cause.
   `.gitattributes`, so nothing prevents this recurring; check
   `git diff --ignore-cr-at-eol --stat` against a plain `--stat` whenever a diff
   looks implausibly large.
+- **Diff parsing is stateful, so diff CONTENT cannot forge a file header.** A
+  unified diff renders an added line by prefixing `+`, so file content of
+  `++ b/evil.md` arrives on the wire as `+++ b/evil.md` — indistinguishable from
+  a real header. That let content, not merely a filename, point the operator at a
+  file that was never touched. Headers are now recognised only outside a hunk;
+  the state tracked is "inside a hunk", not "have I seen `diff --git`", so a plain
+  unified diff (`diff -u`, a mailed patch) still parses rather than trading a
+  forged attribution for a lost one. Proven against real `git diff` output, and
+  mutation-tested by never entering hunk state. (Codex SEC-001.)
+- The untrusted block is **fenced and labelled as data**. Escaping stops a path
+  forging a line; it cannot stop a path being readable text, and the path must
+  stay readable or naming the file — this reporter's whole purpose — is
+  pointless. Rendering every byte opaquely was considered and rejected:
+  `\x64\x6f\x63\x73...` identifies nothing, and both guards' pre-existing
+  risky-PATH branch has always printed paths plainly, so opacity would buy
+  nothing while destroying the diagnosis. The honest mitigation is to declare the
+  region untrusted, which is the boundary an agent must already honour for any
+  tool-derived content.
 - **Diff-derived paths are escaped and delimited before they reach a denial
   message.** The quoted-path decoding above created a prompt-injection sink: a
   denial is delivered verbatim to a privileged agent, and on a public repo the

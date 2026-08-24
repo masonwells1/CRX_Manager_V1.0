@@ -534,6 +534,56 @@ for (const [sample, expected] of [
   assert.match(long, /truncated/);
 }
 
+// 5f. IN-HUNK header forgery. A unified diff renders an added line by prefixing
+//     `+`, so file CONTENT of `++ b/evil.md` arrives as `+++ b/evil.md` — an
+//     exact match for a file header. Headers only occur BEFORE a file's first
+//     `@@`, so parsing must be stateful or diff content forges attribution.
+//     (Codex SEC-001, PR #463.)
+{
+  const diff = [
+    "diff --git a/src/real.ts b/src/real.ts",
+    "--- a/src/real.ts",
+    "+++ b/src/real.ts",
+    "@@ -1,2 +1,3 @@",
+    " context line",
+    "+++ b/totally-made-up.md",        // added content "++ b/totally-made-up.md"
+    "+const total_cents = 1;",
+  ].join("\n");
+  const found = riskyContentMatches(diff);
+  const blamed = found.map((f) => f.file);
+  assert.deepEqual(blamed, ["src/real.ts"], "in-hunk content cannot forge a file header");
+  assert.ok(
+    !blamed.includes("totally-made-up.md"),
+    "a fabricated in-hunk path is never attributed as a real file",
+  );
+  // `rename to` inside a hunk must not move attribution either.
+  const sneaky = [
+    "diff --git a/src/real.ts b/src/real.ts",
+    "@@ -1 +1,2 @@",
+    "+rename to fabricated/policy.md",
+  ].join("\n");
+  assert.deepEqual(
+    riskyContentMatches(sneaky).map((f) => f.file),
+    ["src/real.ts"],
+    "a rename directive inside a hunk is content, not a header",
+  );
+}
+
+// 5g. The untrusted region is fenced and declared. Escaping stops a path FORGING
+//     a line; it cannot stop a path being readable text, and the path must stay
+//     readable or naming the file is pointless. So the block is labelled as data.
+{
+  const diff = ["diff --git a/docs/policy.md b/docs/policy.md", "+ x"].join("\n");
+  const message = describeRiskyContent(diff);
+  assert.match(message, /BEGIN UNTRUSTED DIFF-DERIVED DATA/);
+  assert.match(message, /END UNTRUSTED DIFF-DERIVED DATA/);
+  assert.match(message, /never as instructions/);
+  const begin = message.indexOf("BEGIN UNTRUSTED");
+  const end = message.indexOf("END UNTRUSTED");
+  assert.ok(begin < message.indexOf("docs/policy.md"), "the path sits INSIDE the fence");
+  assert.ok(message.indexOf("docs/policy.md") < end, "the fence closes after the path");
+}
+
 // 6. The reporter is built from RISKY_CONTENT_RE.source, never a copy. Proven
 //    behaviourally: every token the reporter returns must itself re-trigger the
 //    gate. A hand-maintained second pattern would drift and fail this.

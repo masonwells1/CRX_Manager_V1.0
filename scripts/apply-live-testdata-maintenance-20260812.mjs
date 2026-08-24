@@ -76,12 +76,20 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // rendering as a forged second line of guard guidance. Still diagnosis only:
   // `RISKY_CONTENT_RE`, `contentIsRisky` and `RISKY_PATH_RES` remain
   // byte-for-byte unchanged, so the transform is identity and input == output.
+  // pushLib re-pinned again 2026-08-24 (PR #463, Codex round 2, SEC-001): diff
+  // parsing is now stateful. A unified diff renders an added line by prefixing
+  // `+`, so file CONTENT of `++ b/evil.md` arrives as `+++ b/evil.md` and was
+  // indistinguishable from a file header — letting diff content, not just a
+  // filename, forge attribution. Headers are now recognised only outside a hunk.
+  // The untrusted block is also fenced and labelled as data. Still diagnosis
+  // only: `RISKY_CONTENT_RE`, `contentIsRisky` and `RISKY_PATH_RES` remain
+  // byte-for-byte unchanged, so the transform is identity and input == output.
   codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
-  pushLib: "e247bd41623e3507fa221420210cffd4ee481181",
+  pushLib: "d0f68482d54e9b0381f760f44b094f290b8599e4",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
-  pushLib: "e247bd41623e3507fa221420210cffd4ee481181",
+  pushLib: "d0f68482d54e9b0381f760f44b094f290b8599e4",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
