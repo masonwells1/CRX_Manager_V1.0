@@ -4,7 +4,7 @@
 **Branch:** `claude/save-job-server-side-chem-unit` (worktree `.claude/worktrees/save-job-enforcement`)
 **Head:** see `git log -1` — round 13 landed on 2026-08-24 on `claude/save-job-server-side-chem-unit` (PR #446). Tree clean. (Push state is deliberately not recorded here: it is volatile, it was wrong in this header for a full round, and `git status -sb` answers it exactly.)
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-**SQL sha256:** `8e5f439ed27c675bc711d5737c1b8d52b74ed06f4b27558f177996ee14860a7f`
+**SQL sha256:** `e858fcfe6aa7f944411e68deb324a564af555f324d53aa2e4cecd769b4868f47`
 **Status: PARTIAL — written, proven, and parked at two gates that are not mine to open.**
 
 ## Approval state — carries nothing forward
