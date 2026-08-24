@@ -67,6 +67,36 @@ check("blocks the $CODEX spelling this repo's own skill documented", () => {
   assert.equal(rule("${CODEX} review --base origin/main"), "codex-review");
 });
 
+// ── Bypasses Sol found on PR #452 (each failed before the fix) ────────────────
+check("P2: blocks `cmd /c codex review` — cmd's wrapper is a command position too", () => {
+  assert.equal(rule("cmd /c codex review --base origin/main"), "codex-review");
+  assert.equal(rule("cmd.exe /K codex review"), "codex-review");
+});
+
+check("P2: blocks global options placed BEFORE the review subcommand", () => {
+  // Legal codex usage — options may precede the subcommand. A pattern demanding
+  // `codex` and `review` be adjacent waved this through.
+  assert.equal(rule('codex -c model="gpt-5.6-sol" review --base origin/main'), "codex-review");
+  assert.equal(rule("codex --cd /repo -c approval_policy=never review"), "codex-review");
+});
+
+check("P3: blocks the SIGKILL spellings", () => {
+  assert.equal(rule("kill -SIGKILL 1234"), "force-kill");
+  assert.equal(rule("kill -s SIGKILL 1234"), "force-kill");
+  assert.equal(rule("kill -s 9 1234"), "force-kill");
+});
+
+check("blocks PowerShell's kill alias, where kill IS Stop-Process", () => {
+  assert.equal(rule("kill -Id 39564 -Force"), "force-kill");
+  assert.equal(rule("spps -Id 39564"), "force-kill");
+});
+
+check("still allows codex exec even when the prompt text says review", () => {
+  // exec is the subcommand; "review" here is prompt content, not a subcommand.
+  assert.equal(blocks('codex exec "review this diff and report"'), null);
+  assert.equal(blocks("codex exec --skip-git-repo-check -"), null);
+});
+
 // ── Must NOT block ────────────────────────────────────────────────────────────
 check("allows codex exec — the wrapper and one-off prompts depend on it", () => {
   assert.equal(blocks("codex exec --skip-git-repo-check -"), null);

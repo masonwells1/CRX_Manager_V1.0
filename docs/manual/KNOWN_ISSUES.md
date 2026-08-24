@@ -98,10 +98,26 @@ Both rules are proven live, not merely unit-tested: `taskkill /PID 999999 /F` an
 and `codex --version` still succeeds. 16 unit checks in
 `.claude/hooks/codex-recursion-guard.test.mjs` lead with the two verbatim incident commands.
 
-One coverage note found by testing rather than reasoning: the first draft missed
-`"$CODEX" review $SCOPE` — **the exact spelling this repo's own skill documented** — because it
-matched a literal `codex` token. Variables whose name contains `CODEX` are now covered. A guard
-that misses the documented form of the thing it guards is not a guard.
+**Three bypasses were found before this landed, none by reasoning about the pattern** — they are
+the record of how a one-spelling guard fails:
+
+1. `"$CODEX" review $SCOPE` — **the exact spelling this repo's own skill documented** — slipped
+   through a draft that required a literal `codex` token. Found by running the tests. A guard that
+   misses the documented form of the thing it guards is not a guard.
+2. `cmd /c codex review …` (Sol, P2) — the draft knew `-Command` and `-c` as command wrappers but
+   not `cmd /c`.
+3. `codex -c model=… review` (Sol, P2) — global options are legal *before* a subcommand, and the
+   draft demanded `codex` and `review` be adjacent. Matching is now "codex binary at a command
+   position, whose first subcommand is `review`", with `exec` winning the race so
+   `codex exec "review this diff"` stays allowed.
+
+Sol also flagged (P3) that `kill -SIGKILL` / `kill -s SIGKILL` were missing next to `-9`/`-KILL`;
+PowerShell's `kill`/`spps` aliases for `Stop-Process` were added at the same time, since the
+"a bare `kill` is polite" exemption is a POSIX fact that does not hold there.
+
+Every one is the same class: **the guard matched one spelling of the thing rather than the thing.**
+See `guard-design-bypasses` in memory. 21 unit checks now pin each spelling, and each was
+re-verified live through the real Bash tool.
 
 ## OPEN 2026-08-20 — the Phase 3C containment scanner walks `dist/`, so a concurrent rebuild refuses the push
 

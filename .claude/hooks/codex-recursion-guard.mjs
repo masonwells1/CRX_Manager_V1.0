@@ -39,11 +39,14 @@ export function out(decision, reason) {
   return JSON.stringify(payload);
 }
 
-// A shell COMMAND POSITION: start of string, after a separator, or just inside a
-// `-Command "` / `-c "` wrapper. Anchoring here rather than "after any whitespace"
+// A shell COMMAND POSITION: start of string, after a separator, or just inside an
+// interpreter's command wrapper. Anchoring here rather than "after any whitespace"
 // is what keeps `echo "do not run codex review here"` from being blocked — prose
 // sits mid-argument, an invocation sits at a command position.
-const SEP = String.raw`(?:^|[;|&\n{(]|-Command\s+|-c\s+)`;
+//
+// `cmd /c` and `cmd /k` are listed because Sol flagged (PR #452 P2) that
+// `cmd /c codex review ...` sailed through a version that only knew `-c`/-Command.
+const SEP = String.raw`(?:^|[;|&\n{(]|-Command\s+|-c\s+|cmd(?:\.exe)?["']?\s+\/[ckCK]\s+)`;
 const Q = String.raw`["']?`;
 
 // The codex binary as actually written in the wild: bare `codex`, a versioned
@@ -53,31 +56,68 @@ const Q = String.raw`["']?`;
 // that missed it would have permitted the documented broken path.
 const BIN = String.raw`(?:[^\s"';&|]*[\\/])?codex(?:\.exe)?|\$\{?\w*CODEX\w*\}?`;
 
-// Requires the `review` SUBCOMMAND specifically. `codex exec` stays allowed: the
-// sanitized wrapper and ordinary one-off prompts depend on it, and neither recurses.
-const CODEX_REVIEW_RE = new RegExp(`${SEP}\\s*${Q}(?:${BIN})${Q}\\s+review(?:$|[\\s"';&|])`, "i");
+// Locate a codex binary sitting at a command position. Deliberately NOT
+// "codex immediately followed by review": Sol flagged (PR #452 P2) that global
+// options are legal before the subcommand, so `codex -c model=x review` bypassed a
+// version that required them to be adjacent.
+const CODEX_BIN_AT_CMD_RE = new RegExp(`${SEP}\\s*${Q}(?:${BIN})${Q}(?=\\s|$)`, "gi");
+
+// A standalone subcommand token in whatever follows the binary.
+const REVIEW_TOKEN_RE = /(?:^|\s)review(?:$|[\s"';&|])/i;
+const EXEC_TOKEN_RE = /(?:^|\s)exec(?:$|[\s"';&|])/i;
 
 // Force-kill verbs, anchored to a command position for the same reason. A bare
-// `kill <pid>` is a polite TERM and is left alone; only the forceful spellings are
-// listed. `Stop-Process` inside a `ForEach-Object { ... }` block is caught because
-// `{` is a separator — that is the real 2026-08-23 command.
+// POSIX `kill <pid>` is a polite TERM and is left alone; only forceful spellings
+// are listed. `Stop-Process` inside a `ForEach-Object { ... }` block is caught
+// because `{` is a separator — that is the real 2026-08-23 command.
+//
+// The signal spellings come from Sol (PR #452 P3): `-SIGKILL` and `-s SIGKILL` were
+// missing from a version that only knew `-9`/`-KILL`. `kill -Id/-Force` is included
+// because in PowerShell `kill` is an ALIAS for Stop-Process, so the "polite kill"
+// exemption does not hold there.
 const KILL_VERBS = [
   { pattern: String.raw`taskkill`, what: "taskkill" },
-  { pattern: String.raw`Stop-Process`, what: "Stop-Process" },
+  { pattern: String.raw`(?:Stop-Process|spps)`, what: "Stop-Process" },
   { pattern: String.raw`pkill`, what: "pkill" },
   { pattern: String.raw`killall`, what: "killall" },
-  { pattern: String.raw`kill\s+(?:-9|-KILL|-s\s*(?:9|KILL))`, what: "kill -9" },
+  {
+    pattern: String.raw`kill\s+(?:-9|-KILL|-SIGKILL|-s\s*(?:9|KILL|SIGKILL)|-Id\b|-Force\b)`,
+    what: "kill -9",
+  },
 ];
 const KILL_RES = KILL_VERBS.map(({ pattern, what }) => ({
   re: new RegExp(`${SEP}\\s*${pattern}(?:$|[\\s"';&|])`, "i"),
   what,
 }));
 
+// True when a codex binary sits at a command position and its SUBCOMMAND is
+// `review`. Options may appear between the two — `codex -c model=x review` is a
+// legal invocation and must not slip past.
+//
+// `exec` winning the race means the subcommand is `exec`, so the word "review"
+// later in the line is part of a PROMPT, not a subcommand: `codex exec "review
+// this diff"` stays allowed, which matters because the sanitized wrapper and
+// ordinary one-off prompts both rely on `codex exec`.
+export function invokesCodexReview(rawCommand) {
+  const cmd = String(rawCommand || "");
+  CODEX_BIN_AT_CMD_RE.lastIndex = 0;
+  let m;
+  while ((m = CODEX_BIN_AT_CMD_RE.exec(cmd)) !== null) {
+    const rest = cmd.slice(m.index + m[0].length);
+    const review = rest.search(REVIEW_TOKEN_RE);
+    if (review === -1) continue;
+    const exec = rest.search(EXEC_TOKEN_RE);
+    if (exec !== -1 && exec < review) continue;
+    return true;
+  }
+  return false;
+}
+
 export function classifyCommand(rawCommand) {
   const cmd = String(rawCommand || "");
   if (!cmd.trim()) return null;
 
-  if (CODEX_REVIEW_RE.test(cmd)) {
+  if (invokesCodexReview(cmd)) {
     return {
       rule: "codex-review",
       reason:
