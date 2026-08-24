@@ -9,6 +9,34 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-24 — Job totals, acreage and product costs are NOT sensitive in the public repo; customer identity and per-order profit still are
+
+**Source:** Mason's in-chat decision, 2026-08-24, answering a reviewer finding on the `save_job`
+chem-unit branch. Refines the standing "public repo, no live financials" rule rather than replacing
+it.
+
+**The question.** The exact-SHA `gpt-5.6-sol` gate raised (MEDIUM) that the branch records live
+business data in a PUBLIC repository: internal job numbers, exact job cost and revenue totals, and
+one identifiable product's exact cost per pound. The proposed fix was to redact the identifiers and
+replace the figures with synthetic equivalents.
+
+**The decision.** **Leave them.** Job numbers, acreage, job totals and catalogue costs are not
+commercially sensitive at Crop RX's scale, and the figures are load-bearing in a way invented ones
+would not be: the tests that replay a live row's exact totals are what prove the migration bills the
+same money the database already holds. Substituting synthetic numbers would keep the shape of the
+proof while removing the thing it proves.
+
+**The operative rule.** Still redact, here and in FarmRx: customer and farm NAMES, contact details,
+order-level identifiers tied to a named customer, and per-order PROFIT or margin. Fine to record:
+product names and catalogue costs, job numbers, acreage, job-level cost and revenue totals, and row
+counts.
+
+**Why it is written down.** An adversarial gate cannot converge on an owner's business judgement —
+nothing in the diff can settle it, so it re-raises the finding every round. Recording the decision
+is what ends that loop; a reviewer raising it again is not finding something new.
+
+---
+
 ## 2026-08-24 — AP aging measures DAYS PAST DUE; the bucket mapping is a separate, still-open decision
 
 **Source:** Mason's in-chat decision, 2026-08-24, answering the open product question raised by the

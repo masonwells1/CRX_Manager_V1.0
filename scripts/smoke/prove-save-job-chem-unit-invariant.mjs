@@ -66,7 +66,7 @@ const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
                   "T40", "T41", "T42", "T43", "T44", "T45", "T46", "T47", "T48",
                   "T49", "T50", "T51", "T52", "T53", "T54", "T55", "T56", "T57", "T58", "T59",
-                  "T60", "T61", "T62", "T63", "T64"];
+                  "T60", "T61", "T62", "T63", "T64", "T65"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -644,6 +644,29 @@ const MUTANTS = [
         to: "      total_acres = COALESCE((p_job_payload->>'total_acres')::numeric, 0)," },
     ],
     expect: "T20",
+  },
+  {
+    // Removes the stock-unit denominator rule, restoring the round-25 bypass: a stock Unit of
+    // 'oz/ac' is normalised to 'oz', matches the rate side, and bills. T65 must go red; T55
+    // (every live unit spelling on a priced line) must stay green, which is what shows the
+    // rule refuses rates rather than refusing units.
+    name: "stock-unit denominator rule removed",
+    from: "      IF v_stock_canon <> ''\n"
+        + "         AND (position('/' IN v_stock_canon) > 0\n"
+        + "              OR v_stock_canon ~ '(^| )per( |$)') THEN",
+    to: "      IF false THEN",
+    expect: "T65",
+  },
+  {
+    // The owner assertion must ABORT THE APPLY, like the other security assertions -- no
+    // behaviour test can reach it, because a correct file never trips it. Re-owning the
+    // function to a role that exists but is not 'postgres' models the drift the assertion
+    // exists to catch: SECURITY DEFINER runs with the OWNER's rights, and CREATE OR REPLACE
+    // preserves whatever owner it finds.
+    name: "function re-owned away from postgres",
+    edits: [],
+    stage: "ALTER FUNCTION public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text) OWNER TO service_role;",
+    expectApplyAbort: "POSTFLIGHT_OWNER",
   },
   {
     name: "non-finite/negative quantity refusal removed",

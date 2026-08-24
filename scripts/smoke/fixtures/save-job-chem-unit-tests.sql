@@ -1486,6 +1486,35 @@ EXCEPTION WHEN OTHERS THEN
   RAISE EXCEPTION 'T64 FAIL  an ordinary job whose header acreage disagrees with its fields was refused rather than corrected: %', SQLERRM;
 END $$;
 
+-- T65: A DENOMINATOR ON THE STOCK-UNIT SIDE. Five rounds of denominator hardening all
+-- examined `rate_unit` and nothing else, so the STOCK unit went straight into
+-- normalize_rate_unit, whose first action is to strip a trailing per-acre suffix. The gate's
+-- payload (HIGH, round 25): 10 acres at 2 oz/ac with quantity 20 and a stock Unit of
+-- 'oz/ac'. The stock side silently became 'oz', matched the rate side's 'oz', satisfied the
+-- quantity check exactly (20 = 2 x 10), and derived authoritative money from a line whose
+-- stored unit is a RATE rather than a quantity. Must REFUSE, and by the stock-unit rule --
+-- if this ever starts reporting CHEM_UNIT_MISMATCH instead, the two sides have drifted apart
+-- again and the refusal is arriving for the wrong reason.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333460-3333-3333-3333-333333334608","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":20,"unit":"oz/ac","rate_per_acre":2,"rate_unit":"oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF NOT ok THEN
+    RAISE EXCEPTION 'T65 FAIL  a per-acre STOCK unit was normalised away and billed as a plain quantity';
+  END IF;
+  IF msg NOT LIKE 'CHEM_STOCK_UNIT_IS_A_RATE%' THEN
+    RAISE EXCEPTION 'T65 FAIL  refused, but not by the stock-unit rule: %', msg;
+  END IF;
+  RAISE NOTICE 'T65 PASS  a stock unit that is really a rate is refused: %', msg;
+END $$;
+
 -- T55: THE COUNTERPART. Every unit the live system actually carries must still SAVE on a
 -- priced line, or the backstop would block ordinary work -- the round-7 defect three reviewers
 -- caught, and the reason a widening is never free. 'dry oz' is the spelling most at risk:

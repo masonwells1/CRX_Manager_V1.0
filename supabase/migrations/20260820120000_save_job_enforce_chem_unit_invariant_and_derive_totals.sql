@@ -348,6 +348,7 @@ DECLARE
   v_denom_probe text;
   v_denom_canon text;
   v_base_folded text;
+  v_stock_canon text;
   v_qty_unit text;
   v_price_unit text;
   v_qty numeric;
@@ -999,6 +1000,46 @@ BEGIN
       END IF;
     END IF;
 
+    -- A STOCK UNIT MUST NAME A QUANTITY, NOT A RATE -- round 25 (HIGH, gpt-5.6-sol,
+    -- 2026-08-24), and it is the denominator rule's missing half.
+    --
+    -- Every denominator rule in this file, through five rounds of hardening, examined
+    -- `rate_unit` and nothing else. The stock `unit` was handed straight to
+    -- normalize_rate_unit, whose FIRST action is to strip a trailing per-acre suffix -- so a
+    -- caller-supplied stock unit of 'oz/ac' quietly became 'oz', matched a rate side that
+    -- also reduced to 'oz', passed the quantity check, and derived authoritative money from
+    -- a line whose stored unit is a RATE. The two sides were being held to different rules,
+    -- which is the same asymmetry round 19 found in the fluid-ounce test and the same shape
+    -- the file has now been caught in more than once.
+    --
+    -- The stock unit answers "how many of what", and 'oz/ac' is not a what -- it is a rate.
+    -- On the rate side '/ac' is legitimate and gets stripped; here ANY denominator, per-acre
+    -- included, is refused. The two rules differ because the two fields mean different
+    -- things, and that difference is the reason this could not be fixed by reusing the rate
+    -- rule verbatim.
+    --
+    -- Same canon as the rate probe -- fold everything that is not a letter, a digit or '/'
+    -- to a space, keeping '/' because here too it is the marker rather than a separator --
+    -- so the two rules cannot drift into recognising different spellings.
+    --
+    -- Gated on PRICE per Mason's 2026-08-24 rule, and the live blast radius is ZERO: read
+    -- read-only 2026-08-24, every stock unit in the catalogue and on every job_chemicals row
+    -- is a bare unit (Gal, Pt, oz, Dry oz, Lb, Qt, MG, Unit, Ea), and not one carries a
+    -- slash or a 'per'.
+    IF COALESCE(NULLIF(v_chem->>'price_per_unit_cents', '')::bigint, 0) <> 0 THEN
+      v_stock_canon := btrim(regexp_replace(lower(COALESCE(v_chem->>'unit', '')),
+                                            '[^a-z0-9/]+', ' ', 'g'));
+      IF v_stock_canon <> ''
+         AND (position('/' IN v_stock_canon) > 0
+              OR v_stock_canon ~ '(^| )per( |$)') THEN
+        SELECT p.product_name INTO v_product_name
+          FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+        RAISE EXCEPTION
+          'CHEM_STOCK_UNIT_IS_A_RATE: % carries a stock Unit of "%", which is measured per something. The Unit says what the quantity counts and what the price is quoted per, so it has to name a plain unit -- put the per-acre part in the rate unit instead.',
+          COALESCE(v_product_name, 'This product'), COALESCE(v_chem->>'unit', '');
+      END IF;
+    END IF;
+
     -- EQUAL UNITS ARE NOT A FREE PASS FOR THE QUANTITY. This used to be a bare
     -- `CONTINUE WHEN v_qty_unit = v_price_unit`, and the gate found the money hole that left
     -- open (HIGH, gpt-5.6-sol, 2026-08-24): matching units proved the two sides were counted
@@ -1511,6 +1552,7 @@ DECLARE
   v_secdef  boolean;
   v_config  text[];
   v_acl     text;
+  v_owner   text;
 BEGIN
   -- Written as a plain literal on purpose. An earlier draft built this name by
   -- concatenation; review flagged that a grep for the function name would then miss the
@@ -1536,6 +1578,29 @@ BEGIN
 
   IF NOT v_secdef THEN
     RAISE EXCEPTION 'POSTFLIGHT_NOT_SECURITY_DEFINER: the replacement dropped SECURITY DEFINER.';
+  END IF;
+
+  -- THE OWNER IS PINNED, and round 25 added it because every other property here was
+  -- (MEDIUM, gpt-5.6-sol, 2026-08-24). SECURITY DEFINER means "runs with the OWNER's
+  -- rights", so the owner is the privilege this function executes under -- and CREATE OR
+  -- REPLACE deliberately PRESERVES the existing owner. Asserting prosecdef without
+  -- asserting proowner therefore checks that the function borrows someone's rights while
+  -- saying nothing about whose: a function re-owned by a lesser or a different role passes
+  -- every other assertion in this block unchanged.
+  --
+  -- Read read-only from live 2026-08-24: save_job is owned by 'postgres', as are
+  -- normalize_rate_unit, field_app_priced_quantity and check_idempotency_intent, so the
+  -- inner calls this body makes run under the same owner they do today.
+  --
+  -- Fail-closed on a MISSING role for the same reason the grant checks are: "the expected
+  -- owner does not exist" is not evidence that the owner is fine.
+  SELECT r.rolname INTO v_owner
+    FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+   WHERE p.oid = v_oid;
+  IF v_owner IS DISTINCT FROM 'postgres' THEN
+    RAISE EXCEPTION
+      'POSTFLIGHT_OWNER: expected the job-save RPC to be owned by "postgres", found %. A SECURITY DEFINER function executes with its OWNER''s rights, so a changed owner changes what this function may do.',
+      COALESCE(v_owner, '<none>');
   END IF;
 
   IF v_config IS NULL OR NOT ('search_path=public, pg_temp' = ANY (v_config)) THEN
@@ -1593,4 +1658,4 @@ END
 $postflight$;
 
 COMMENT ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) IS
-  'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. TEN refusals, all raised before any write. Units: CHEM_UNIT_MISMATCH (rate unit and price unit provably disagree), CHEM_UNIT_FORM_MISMATCH (a DRY product measured or priced in fluid ounces on either side, in ANY spelling -- both sides are reduced to the unit they name, so a denominator does not hide it), CHEM_UNIT_UNSPECIFIED (a line that BILLS while its rate unit or stock unit is blank), CHEM_UNIT_UNSUPPORTED_CHARACTER (a priced line whose unit contains a character this function cannot read -- the fold refuses rather than discarding, because deleting an unreadable character erases a denominator instead of catching it), CHEM_RATE_UNIT_UNRECOGNIZED (a priced line naming a unit that is neither a normalize_rate_unit canonical output nor a live unit_conversions spelling) and CHEM_RATE_DENOMINATOR_NOT_ACRES (a rate measured per anything but acres, in slash, spelled-out, hyphenated, stacked or leading form). Quantities: CHEM_QUANTITY_NOT_FINITE (negative, NaN or Infinity), CHEM_QUANTITY_NOT_DERIVED (quantity disagrees with rate x acres -- enforced on the units-EQUAL path too, since matching units prove what is counted and nothing about how many), CHEM_QUANTITY_ZERO_BUT_EXPECTED (a PRICED line recording zero applied where a positive quantity was derivable) and CHEM_QUANTITY_UNVERIFIABLE (a PRICED line whose quantity cannot be checked at all, which closes the bypass of simply omitting the rate). ZERO-QUANTITY LINES ARE NOT FLATLY EXEMPT -- that was true before round 17 and is not now. The exit survives only where zero is genuinely right: customer_supplied, no PRICE (nothing can be under-charged), or no usable rate/acreage (nothing was expected). Per the Mason 2026-08-24 rule the money refusals key on PRICE, so a cost-only line can still misstate margin -- an accepted, recorded residual. THE LIMIT OF ALL OF IT: every refusal checks that units are INTERNALLY CONSISTENT; none checks that a rate is PLAUSIBLE. A milligram per acre of a $931/lb product passes every one of these and invoices six orders of magnitude low. See the banner block in the header of this migration file. As of this migration there is NO save-blocking unit guard in JobDetail.tsx on the main branch, so this is the only boundary and nothing warns on screen before it refuses. PR #436 adds a partial client-side early warning only: its rateDenominatorIsUnrecognized tests for a slash, so it does not flag the spelled-out or hyphenated denominator, and it has no counterpart for either the non-finite-quantity or the unspecified-unit refusal. Those reach the operator with no prior on-screen warning even after that PR lands. IDEMPOTENCY: a keyed save now goes through check_idempotency_intent (the same helper the return and commission-payment RPCs use), so the key is bound to the calling actor AND to a sha256 fingerprint of the requested job, fields and chemical lines, under an advisory lock. Reusing a spent key for a different operation raises IDEMPOTENCY_CROSS_OP_KEY_REUSE, from a different actor IDEMPOTENCY_ACTOR_MISMATCH, and with a changed payload IDEMPOTENCY_INTENT_MISMATCH -- the last of which is a REFUSAL WHERE THE OLD BODY SILENTLY RETURNED THE EARLIER SUCCESS AND SAVED NOTHING. An unchanged retry still replays to the same job, which is the whole point of the key.';
+  'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. ELEVEN refusals, all raised before any write. Units: CHEM_UNIT_MISMATCH (rate unit and price unit provably disagree), CHEM_UNIT_FORM_MISMATCH (a DRY product measured or priced in fluid ounces on either side, in ANY spelling -- both sides are reduced to the unit they name, so a denominator does not hide it), CHEM_UNIT_UNSPECIFIED (a line that BILLS while its rate unit or stock unit is blank), CHEM_UNIT_UNSUPPORTED_CHARACTER (a priced line whose unit contains a character this function cannot read -- the fold refuses rather than discarding, because deleting an unreadable character erases a denominator instead of catching it), CHEM_RATE_UNIT_UNRECOGNIZED (a priced line naming a unit that is neither a normalize_rate_unit canonical output nor a live unit_conversions spelling) CHEM_RATE_DENOMINATOR_NOT_ACRES (a rate measured per anything but acres, in slash, spelled-out, hyphenated, stacked or leading form) and CHEM_STOCK_UNIT_IS_A_RATE (a PRICED line whose STOCK unit carries a denominator of its own -- the Unit says what the quantity counts and what the price is quoted per, so "oz/ac" there names a rate rather than a quantity; every earlier denominator rule examined rate_unit only, and normalize_rate_unit silently stripped the per-acre suffix off the stock side). Quantities: CHEM_QUANTITY_NOT_FINITE (negative, NaN or Infinity), CHEM_QUANTITY_NOT_DERIVED (quantity disagrees with rate x acres -- enforced on the units-EQUAL path too, since matching units prove what is counted and nothing about how many), CHEM_QUANTITY_ZERO_BUT_EXPECTED (a PRICED line recording zero applied where a positive quantity was derivable) and CHEM_QUANTITY_UNVERIFIABLE (a PRICED line whose quantity cannot be checked at all, which closes the bypass of simply omitting the rate). ZERO-QUANTITY LINES ARE NOT FLATLY EXEMPT -- that was true before round 17 and is not now. The exit survives only where zero is genuinely right: customer_supplied, no PRICE (nothing can be under-charged), or no usable rate/acreage (nothing was expected). Per the Mason 2026-08-24 rule the money refusals key on PRICE, so a cost-only line can still misstate margin -- an accepted, recorded residual. THE LIMIT OF ALL OF IT: every refusal checks that units are INTERNALLY CONSISTENT; none checks that a rate is PLAUSIBLE. A milligram per acre of a $931/lb product passes every one of these and invoices six orders of magnitude low. See the banner block in the header of this migration file. As of this migration there is NO save-blocking unit guard in JobDetail.tsx on the main branch, so this is the only boundary and nothing warns on screen before it refuses. PR #436 adds a partial client-side early warning only: its rateDenominatorIsUnrecognized tests for a slash, so it does not flag the spelled-out or hyphenated denominator, and it has no counterpart for either the non-finite-quantity or the unspecified-unit refusal. Those reach the operator with no prior on-screen warning even after that PR lands. IDEMPOTENCY: a keyed save now goes through check_idempotency_intent (the same helper the return and commission-payment RPCs use), so the key is bound to the calling actor AND to a sha256 fingerprint of the requested job, fields and chemical lines, under an advisory lock. Reusing a spent key for a different operation raises IDEMPOTENCY_CROSS_OP_KEY_REUSE, from a different actor IDEMPOTENCY_ACTOR_MISMATCH, and with a changed payload IDEMPOTENCY_INTENT_MISMATCH -- the last of which is a REFUSAL WHERE THE OLD BODY SILENTLY RETURNED THE EARLIER SUCCESS AND SAVED NOTHING. An unchanged retry still replays to the same job, which is the whole point of the key.';
