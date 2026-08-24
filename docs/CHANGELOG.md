@@ -84,11 +84,18 @@ needs Mason?" and is built so that its silence is trustworthy.
   reads as UNVERIFIED rather than passed: every PR carries an explicit blocker naming the
   gate patrol cannot see, which also makes the all-clear unreachable while that is true.
   Verified live — PR #460 (oversized-migration apply path) now surfaces the warning.
-- **Two round-3 findings are NOT fixed and are Mason's call** (see `KNOWN_ISSUES.md`):
-  the scheduled patrol resolves `git`/`gh`/PowerShell from `PATH` with inherited Git
-  configuration, which is an ambient-code path if run hourly under his account; and any
-  PR author can forge parked state by putting `PARKED` in a title, since no actor
-  provenance is required. Both are real; neither is a false-all-clear.
+- **The ambient-code path is closed** (Mason approved a fourth review round for it).
+  `scripts/patrol/trusted-exec.mjs` binds `git`, `gh`, and `powershell` to fixed absolute
+  executables under one minimal environment — the pattern PR #455 set for the proof
+  wrapper. Since no environment switch disables *repository-local* filters, and
+  `git status` runs Git's conversion pipeline, patrol now **refuses to scan** any worktree
+  whose local config defines an executable filter, fsmonitor command, textconv, or
+  ssh/proxy override, and fails closed when that config is unreadable. This matters
+  because patrol is meant to run unattended: a `PATH` shim or a configured clean filter
+  would otherwise execute hourly under Mason's account.
+- **One round-3 finding remains open and is Mason's call** (see `KNOWN_ISSUES.md`): any PR
+  author can forge parked state by putting `PARKED` in a title, since no actor provenance
+  is required. Real, but not a false-all-clear.
 - **Patrol then caught a false positive in itself.** It reported the Codex gate as down
   because the review capture embeds the reviewed diff, and this change's own source
   contains a usage-limit pattern. The gate probe now anchors to a real error line rather

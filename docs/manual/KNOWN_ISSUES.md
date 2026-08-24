@@ -3,14 +3,16 @@
 **OPEN 2026-08-24 — two `/patrol` findings deferred to Mason (round-3 Codex review, not fixed).**
 Neither is a false-all-clear; both are real and both were left open deliberately at the
 three-round review cap rather than fixed under time pressure.
-(1) **Ambient-code path.** `scripts/patrol/patrol-scan.mjs` and `patrol-sources.mjs` resolve
-`git`, `gh`, and `powershell` from `PATH` with inherited Git configuration, and run
-`git status` across every worktree. Git can execute configured clean/smudge filters, and a
-`PATH` shim could replace any of those programs — so running patrol **hourly from the OS
-scheduler under Mason's account** is an arbitrary-code and credential-exposure surface that
-running it by hand in a session is not. The repo already has precedent for the fix: PR #455
-bound every proof-wrapper Git call to a trusted executable. Until this is done, prefer
-running `/patrol` interactively over scheduling it.
+(1) **Ambient-code path — CLOSED 2026-08-24** (Mason approved the extra review round).
+`scripts/patrol/trusted-exec.mjs` now binds `git`, `gh`, and `powershell` to fixed absolute
+executables under one minimal environment (system/global Git config disabled, replacement
+objects off, system attributes off, no terminal prompt, `PATH` narrowed to the trusted Git
+directory plus the system directory, inherited `GIT_*` overrides dropped by allowlist).
+Because no environment switch disables **repository-local** filters, and `git status` runs
+Git's conversion pipeline, patrol now *refuses* to run status in any worktree whose local
+config defines a `filter.*.clean/smudge/process`, `core.fsmonitor` command, `textconv`, or
+ssh/proxy override — and fails closed when that config is unreadable. Same pattern PR #455
+established for the proof wrapper.
 (2) **Forgeable parked state.** Any PR author can suppress an actionable PR by putting
 `PARKED` / `ON HOLD` / `DO NOT MERGE` in the title; `isParked()` requires no actor
 provenance, and the parked rule runs before the security checks. On a public repo an

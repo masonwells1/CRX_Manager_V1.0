@@ -17,13 +17,13 @@
 //   - parkedMigrations and gateHealth are not implemented; they report INCOMPLETE, which
 //     surfaces as a visible "could not determine" item and suppresses the all-clear.
 
-import { execFileSync } from "node:child_process";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { MIN_STABLE_INTERVAL_MS, SNAPSHOT_TTL_MS } from "./patrol-classify.mjs";
 import { collectLoops, collectParkedMigrations, collectGateHealth } from "./patrol-sources.mjs";
+import { git as trustedGit, gh as trustedGh, worktreeFilterRisk } from "./trusted-exec.mjs";
 
 const SCHEMA_VERSION = 1;
 const CODERABBIT_CONTEXT = "CodeRabbit";
@@ -37,12 +37,11 @@ const argOf = (flag, fallback) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
 
-function sh(file, argv, { timeout = 60_000 } = {}) {
-  return execFileSync(file, argv, { encoding: "utf8", timeout, maxBuffer: 64 * 1024 * 1024, windowsHide: true });
-}
-function gh(argv) { return sh("gh", argv, { timeout: 90_000 }); }
-function ghJson(argv) { return JSON.parse(gh(argv) || "null"); }
-function git(argv, cwd) { return sh("git", ["-C", cwd, ...argv]).trim(); }
+// Fixed trusted executables and a minimal environment — see trusted-exec.mjs. Patrol runs
+// unattended on a schedule, so PATH-resolved binaries and inherited Git configuration are
+// an ambient-code path, not a convenience.
+function ghJson(argv) { return JSON.parse(trustedGh(argv) || "null"); }
+function git(argv, cwd) { return trustedGit(["-C", cwd, ...argv]).trim(); }
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 // ── required checks: union of branch protection AND every active ruleset ────
@@ -267,6 +266,16 @@ function collectWorktrees(repoRoot, openPrBranches) {
       const branch = /^branch refs\/heads\/(.+)$/m.exec(block)?.[1] ?? "(detached)";
       if (!wtPath) continue;
       const wt = { path: wtPath, branch, dirtyCount: 0, merged: false, hasOpenPr: openPrBranches.has(branch), lastHumanActivityAt: null };
+      // `git status` runs the worktree conversion pipeline, so a repository-local
+      // filter.<name>.clean command would EXECUTE here — hourly, under Mason's account,
+      // once patrol is scheduled. No environment switch disables repo-local filters, so a
+      // risky worktree is reported as unobservable instead of being scanned.
+      const risk = worktreeFilterRisk(wtPath);
+      if (risk) {
+        wt.observationError = risk;
+        out.push(wt);
+        continue;
+      }
       try {
         wt.dirtyCount = git(["status", "--porcelain"], wtPath).split("\n").filter((l) => l.trim()).length;
         const head = git(["rev-parse", "HEAD"], wtPath);

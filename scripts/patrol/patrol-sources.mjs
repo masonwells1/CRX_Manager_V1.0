@@ -7,9 +7,16 @@
 // parked counts and no way to tell which is right.
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import {
+  git as trustedGitRun,
+  powershell as trustedPowershell,
+  trustedGit as trustedGitPath,
+  trustedEnv,
+  worktreeFilterRisk,
+} from "./trusted-exec.mjs";
 import {
   parseWorktreePorcelain,
   isLedgerDoc,
@@ -62,8 +69,9 @@ function defaultProcessRun() {
   const script =
     "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(codex|claude|node|powershell)\\.exe$' } " +
     "| Select-Object ProcessId, Name, CommandLine | ConvertTo-Json -Compress";
-  const r = spawnSync("powershell", ["-NoProfile", "-Command", script], { encoding: "utf8", timeout: 30_000, windowsHide: true });
-  return r.status === 0 ? String(r.stdout || "") : null;
+  // Fixed PowerShell path, -NoProfile -NonInteractive, minimal environment: a PATH shim
+  // must not be able to answer "what is running?" on a scheduled run.
+  try { return trustedPowershell(script); } catch { return null; }
 }
 
 const COMPLETION_MARKER = /\b(LOOP COMPLETE|MISSION COMPLETE|CLOSED OUT|FINAL ENTRY|COMPLETE\b.*\bno further)/i;
@@ -189,6 +197,13 @@ export function collectParkedMigrations(repoRoot) {
     const dirtyCount = (wtPath) => {
       if (dirtyCache.has(wtPath)) return dirtyCache.get(wtPath);
       let n = null;
+      // Same conversion-pipeline hazard as the worktree collector: refuse rather than run
+      // status where a repo-local filter command could execute. `null` is the library's
+      // existing "unreadable" signal, which it already treats conservatively.
+      if (worktreeFilterRisk(wtPath, (a, o) => trustedGitRun(a, o))) {
+        dirtyCache.set(wtPath, null);
+        return null;
+      }
       try { n = gitOut(["status", "--porcelain", "-uall"], wtPath).split("\n").filter((l) => l.trim()).length; } catch { n = null; }
       dirtyCache.set(wtPath, n);
       return n;
@@ -202,7 +217,9 @@ export function collectParkedMigrations(repoRoot) {
       // Hash the bytes Git stores (LF), not what a Windows checkout materializes.
       sha256Text: (text) => createHash("sha256").update(text.replace(/\r\n/g, "\n"), "utf8").digest("hex"),
       run: (args, cwd) => {
-        const r = spawnSync("git", args, { encoding: "utf8", timeout: 5000, cwd });
+        const r = spawnSync(trustedGitPath(), ["--no-replace-objects", ...args], {
+          encoding: "utf8", timeout: 5000, cwd, env: trustedEnv(), windowsHide: true, shell: false,
+        });
         return r.status === 0 ? String(r.stdout || "").split("\n") : null;
       },
     });
@@ -242,8 +259,9 @@ export function collectParkedMigrations(repoRoot) {
             historyCandidates.state === "known" ? historyCandidates.paths : [],
           ),
           (input) => {
-            const r = spawnSync("git", ["cat-file", "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)"], {
-              cwd: repoRoot, input, timeout: 20_000, maxBuffer: ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, stdio: ["pipe", "pipe", "ignore"],
+            const r = spawnSync(trustedGitPath(), ["--no-replace-objects", "cat-file", "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)"], {
+              cwd: repoRoot, input, timeout: 20_000, maxBuffer: ORIGIN_MAIN_CAT_FILE_MAX_BUFFER,
+              stdio: ["pipe", "pipe", "ignore"], env: trustedEnv(), windowsHide: true, shell: false,
             });
             return r.status === 0 ? r.stdout : null;
           },
@@ -333,6 +351,8 @@ export function collectGateHealth(repoRoot, { coderabbitDescriptions = [], nowMs
   return { src, gates };
 }
 
+// Fixed trusted Git under a minimal environment — patrol runs unattended, so a PATH shim
+// or ambient Git configuration would be an arbitrary-code path. See trusted-exec.mjs.
 function gitOut(args, cwd) {
-  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 20_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
+  return trustedGitRun(["-C", cwd, ...args], { cwd });
 }
