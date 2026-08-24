@@ -50,20 +50,32 @@ reached."** #429 merged with its later commits never auto-reviewed.
   Lowering it costs no pre-merge coverage. (Wording corrected after CodeRabbit flagged the original
   "mid-work drafts" phrasing as inaccurate on FarmRx PR #26.)
 - **The actual pre-merge gate is a fresh review on the final commit, proven by SHA.** Encoded as a
-  hard rule in `.claude/skills/deploy-check/SKILL.md`: before merging, confirm CodeRabbit's own
-  review-range stamp (`between <base> and <head>`) names the current `headRefOid`; if it does not,
+  hard rule in `.claude/skills/deploy-check/SKILL.md`. A review **with findings** creates a review
+  object, and the binding evidence there is the structured `commit_id`, which must equal the current
+  `headRefOid`. A **clean** review creates no review object at all, so its only evidence is the
+  canonical walkthrough stamp line naming that same head. Check both endpoints; if neither binds,
   comment `@coderabbitai review`, wait, and read it. **`submitted_at` is not proof** — it is only a
   non-null filter. Any reviewer's timestamp satisfies a timestamp check, and a review of the
   previous commit can start before the final push and finish after it. Never merge on a review that
   predates the final commit.
-- **`path_filters` skip churn that cannot hold a bug** — `docs/archive/`, `docs/audits/`,
-  `docs/loops/`, `docs/build-loops/`, `docs/handoffs/`, and the generated `.agents/` adapters.
-  **`.codex/` is deliberately NOT excluded**: only `.agents/` is generated (it is the sole
+- **Refresh a stale branch before spending a review attempt, and stop on any non-`CLEAN` state.**
+  `BEHIND` is the common case and `gh pr update-branch` fixes it, but it is not the only blocking
+  state: `DIRTY`, `BLOCKED`, `UNSTABLE`, and `UNKNOWN` all mean the merge cannot proceed as-is, and
+  requesting a review while in one of them can burn an attempt against a head that is about to
+  move. Re-read `mergeStateStatus` after any refresh and require `CLEAN` before triggering the
+  review and again before merging. (CodeRabbit, PR #441.)
+- **`path_filters` opened as a cost lever covering `docs/archive/`, `docs/audits/`, `docs/loops/`,
+  `docs/build-loops/`, `docs/handoffs/`, and the generated `.agents/` adapters — and four review
+  rounds took all of it apart except the last.** Each of those five doc roots turned out to hold
+  files that automation reads and executes; the rounds are recorded further down. **Only
+  `!.agents/**` survives.** Every document under `docs/` is reviewed.
+  **`.codex/` was never excluded**: only `.agents/` is generated (it is the sole
   `TARGET_ROOT` in `scripts/sync-agent-workflows.mjs`), while every tracked file under `.codex/` is
   hand-maintained — including `production-action-guard.mjs`, which gates live mutations, pushes,
   and merges. Excluding it would let a PR that only weakens that guard skip review entirely.
-  A PR touching only the excluded paths is skipped entirely and costs no allowance. Live docs
-  (`docs/manual/`, `docs/reference/`, `docs/workflows/`, `docs/plans/`) stay reviewed. **Lock files
+  `.agents/` keeps its exclusion only because an enforcing check earns it: the adapter-drift test
+  turns the suite red if a generated file diverges from its `.claude/` source, so a hand-edit there
+  cannot ship unreviewed. **Lock files
   are deliberately not excluded**: a lockfile-only PR would drop to zero reviewable files and be
   skipped outright, leaving version bumps and integrity hashes uninspected — a supply-chain blind
   spot the Codex reviewer raised on FarmRx PR #26. An exclusion that can empty a PR's review scope
@@ -486,6 +498,32 @@ head each ran against. A clean review creates no review object, so its walkthrou
 live before the change was written. The parent-derived path in the merge-only fallback got the same two-
 endpoint treatment, which it had been missing. Fifteen new assertions model both matchers as functions so the
 negative cases execute — seven bodies that each contain the head SHA and would all have passed the old grep.
+
+**Fourteenth round: Codex CLEAN, and the anchor written last round was wrong in a way only running it could
+show.** The clean-review stamp had been anchored to `^> ` after being verified against one live sample. That
+sample was an *in-progress* review, where CodeRabbit blockquotes the line. A **completed** review renders the
+same line bare, inside the collapsed `<details>` "Commits" block — so the anchor silently stopped matching
+exactly the reviews the gate exists to accept. Fail-closed, but wrong, and it would have blocked every merge.
+The prefix is now optional. The negative case that caught the follow-on bug is worth keeping in mind:
+`[A-Za-z ]*` also matches leading indentation, so an indented stamp inside a code block matched too; it is now
+`([A-Za-z]+ )?`. **Verifying a pattern against one live sample proves it matches that sample, not that it
+matches the thing.**
+
+CodeRabbit returned nine findings. Four were real and are fixed: two stale rules in this very entry (it still
+described `submitted_at` as sufficient proof and `.codex/` as excluded — both superseded); `BEHIND` handled as
+the only blocking merge state when `DIRTY`/`BLOCKED`/`UNSTABLE`/`UNKNOWN` all fall through to a wasted review
+request; `statSync` in the coverage walker following symlinks, so `docs/audits/loop -> .` would recurse without
+bound; and the parent-settlement assertions matching an ordered subsequence of words generic enough
+("identical", "same", "before merging") that a rewritten section could drop the operation and keep the word.
+Each settle step now has a distinctive phrase pinned to its own operand, asserted both in order and
+individually, and mutation-tested by deleting the 90-second window.
+
+Three were false against the shipped code and are dismissed with reason: the reviews query does bind
+`commit_id`, the comments query does bind the anchored stamp, and the statuses query does filter
+`.context=="CodeRabbit"`. One repeated the `last` → `first` advice already checked and rejected two rounds
+earlier — CodeRabbit inferred `last` from the stale word "OLDEST" in the prose above the command, which Codex
+had separately flagged Low and which is now corrected. The SkillSpector "credential access" errors are a false
+positive on this file's own secret-*scanning* step; a detector is not an accessor.
 
 The through-line across every round of this PR is one idea: **a check that names the thing it forbids only
 catches that name** — and its corollary, learned four times on `path_filters` alone: **a name is not a

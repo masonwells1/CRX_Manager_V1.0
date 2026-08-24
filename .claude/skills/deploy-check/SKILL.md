@@ -143,6 +143,15 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    → only then `@coderabbitai review`. Reversing those two steps burns a review attempt against the
    allowance for nothing. Learned on PR #441 and FarmRx #26, 2026-08-20.
 
+   **`BEHIND` is not the only state that must stop you — require `CLEAN`.** `DIRTY` (conflicts),
+   `BLOCKED` (a required check failing or missing), `UNSTABLE`, and `UNKNOWN` (GitHub has not
+   finished computing mergeability) all mean the merge cannot proceed as-is, and triggering a review
+   in any of them can spend an attempt on a head that is about to move. Handling only `BEHIND`
+   leaves every other non-`CLEAN` state falling through to the review request. Re-read
+   `mergeStateStatus` after any refresh, and **stop unless it is `CLEAN`** — both before requesting
+   the review and again before merging. `UNKNOWN` in particular is not a pass: it means "ask again",
+   so poll until it resolves rather than proceeding. (CodeRabbit, PR #441.)
+
    ```bash
    gh pr view <n> --repo masonwells1/CRX_Manager_V1.0 --json headRefOid,mergeStateStatus --jq '.'
    ```
@@ -175,7 +184,7 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    ```
 
    ```bash
-   PARENT1="$(git rev-parse <HEAD>^1)" && gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | select(.body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) | select((.body | contains("auto-generated reply by CodeRabbit")) | not) | .body' | grep -oE "^> [A-Za-z ]*[Ff]iles that changed from the base of the PR and between [0-9a-f]{40} and $PARENT1\.$"
+   PARENT1="$(git rev-parse <HEAD>^1)" && gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | select(.body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) | select((.body | contains("auto-generated reply by CodeRabbit")) | not) | .body' | grep -oE "^(> )?([A-Za-z]+ )?[Ff]iles that changed from the base of the PR and between [0-9a-f]{40} and $PARENT1\.$"
    ```
 
    ```bash
@@ -280,7 +289,7 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    ```
 
    ```bash
-   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | select(.body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) | select((.body | contains("auto-generated reply by CodeRabbit")) | not) | .body' | grep -oE "^> [A-Za-z ]*[Ff]iles that changed from the base of the PR and between [0-9a-f]{40} and <HEAD>\.$"
+   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | select(.body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) | select((.body | contains("auto-generated reply by CodeRabbit")) | not) | .body' | grep -oE "^(> )?([A-Za-z]+ )?[Ff]iles that changed from the base of the PR and between [0-9a-f]{40} and <HEAD>\.$"
    ```
 
    **Read structured identity where it exists, and anchor hard where it does not.** The reviews
@@ -381,7 +390,9 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    with the same green row (`docs/reference/gotchas.md`). The walkthrough stamp does not save you
    here either, because it is written when the review **starts** — so a review that stamps the head
    and then dies leaves every other check in this section passing. Scope the search to this head's
-   own review cycle, using the OLDEST CodeRabbit status on the commit as the start of that cycle:
+   own review cycle, using the NEWEST `pending` CodeRabbit status on the commit as the start of that
+   cycle (see the note below the command — it is neither the oldest nor the newest status, and both
+   of those are wrong in different directions):
 
    ```bash
    SINCE="$(gh api repos/masonwells1/CRX_Manager_V1.0/commits/<HEAD>/statuses --jq '[.[] | select(.context=="CodeRabbit" and .state=="pending")] | first | .created_at')"; if ! printf '%s' "$SINCE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'; then echo BLOCKED_CANNOT_DETERMINE_CYCLE_START; elif ! BODIES="$(gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq ".[] | select(.user.login==\"coderabbitai[bot]\") | select(.created_at >= \"$SINCE\") | .body")"; then echo BLOCKED_COMMENTS_FETCH_FAILED; elif printf '%s' "$BODIES" | grep -qE "Review failed|Review rate limited|No files to review|Review limit reached"; then echo BLOCKED_REVIEW_DID_NOT_COMPLETE; else echo NO_FAILURE_MARKER_THIS_HEAD; fi

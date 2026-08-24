@@ -18,7 +18,7 @@
 // prompt added under an excluded path later fails this test rather than silently
 // dropping out of review.
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, lstatSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -105,10 +105,17 @@ ok(!excluded("src/lib/db.ts"), "matcher: ordinary source is NOT excluded");
 // A file is agent-consumed if a command/skill names it as instructions to
 // execute, or automation reads it as state. Discovered from the repo rather
 // than hard-coded, so new ones are covered automatically.
+// `lstatSync`, not `statSync`: statSync FOLLOWS symlinks, so a link such as
+// `docs/audits/loop -> .` would recurse without bound and hang or exhaust the
+// test run. Symlinks are skipped entirely rather than followed — a linked file
+// is reviewed at its real path anyway, and following one could walk outside the
+// repository. (CodeRabbit, PR #441.)
 function walk(dir, acc = []) {
   for (const entry of readdirSync(dir)) {
     const full = path.join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, acc);
+    const st = lstatSync(full);
+    if (st.isSymbolicLink()) continue;
+    if (st.isDirectory()) walk(full, acc);
     else acc.push(path.relative(ROOT, full).split(path.sep).join("/"));
   }
   return acc;

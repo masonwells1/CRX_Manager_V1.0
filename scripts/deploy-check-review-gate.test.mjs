@@ -331,18 +331,34 @@ for (const [name, file] of SKILLS) {
   // section must lay the steps out in the order they are performed —
   // poll, wait 90s, poll again, require identical, then re-read before merging
   // and require that same created_at. (CodeRabbit, PR #441.)
+  // Each needle names ONE operation distinctively. The earlier version used
+  // "identical", "same", and "before merging" — generic enough that a rewritten
+  // section could drop the operation and keep the word, which is the failure
+  // mode this whole file is about. CodeRabbit flagged it on PR #441 and was
+  // right: an ordered subsequence of common words is not evidence the procedure
+  // survived. Each fragment below is the distinctive phrase for its step, and
+  // the settle window and the equality target are pinned to their own operands.
+  const PARENT_SETTLE_STEPS = [
+    "Run that command",                   // first poll
+    "wait 90s",                           // the settle window, not just "wait"
+    "run it again",                       // second poll
+    "require identical",                  // equality demanded, not merely mentioned
+    "`success <timestamp>` both times",   // ...of the status AND its timestamp, across BOTH polls
+    "once more immediately before merging", // the final re-read, not any "before merging"
+    "that *same* `created_at`",           // ...matched against the settled value
+  ];
   ok(
-    Boolean(parentSection) &&
-      containsInOrder(parentSection, [
-        "wait 90s",
-        "run it again",
-        "identical",
-        "before merging",
-        "same",
-        "created_at",
-      ]),
-    `${name}: the parent section states the full settlement sequence, in order`,
+    Boolean(parentSection) && containsInOrder(parentSection, PARENT_SETTLE_STEPS),
+    `${name}: the parent section states the full settlement sequence, in order, with each step named distinctively`,
   );
+  // And every step must be individually present — containsInOrder alone reports
+  // only that the ones it found were ordered.
+  for (const step of PARENT_SETTLE_STEPS) {
+    ok(
+      Boolean(parentSection) && parentSection.includes(step),
+      `${name}: the parent settlement step "${step}" is present in the parent section itself`,
+    );
+  }
   ok(
     hasCommandWithAll(cmds, ["git merge-tree --write-tree", "<HEAD>^{tree}", "MERGE_ADDED_NOTHING"]),
     `${name}: tree identity is asserted, not printed`,
@@ -630,7 +646,7 @@ const BASE_SHA = "75cce46d81941a273d0496b7fac753220cbf54df";
 // Mirrors the grep in the comments query, character for character.
 export function stampLineBinds(body, head) {
   const re = new RegExp(
-    `^> [A-Za-z ]*[Ff]iles that changed from the base of the PR and between [0-9a-f]{40} and ${head}\\.$`,
+    `^(> )?([A-Za-z]+ )?[Ff]iles that changed from the base of the PR and between [0-9a-f]{40} and ${head}\\.$`,
     "m",
   );
   return re.test(body);
@@ -646,16 +662,24 @@ export function reviewObjectBinds(review, head) {
   );
 }
 
-const REAL_STAMP = `> Reviewing files that changed from the base of the PR and between ${BASE_SHA} and ${HEAD_SHA}.`;
-ok(stampLineBinds(REAL_STAMP, HEAD_SHA), "the real canonical stamp line is ACCEPTED (verified live on PR #441)");
+// CodeRabbit renders this line TWO ways, and both are real: blockquoted while a
+// review is in progress, and bare inside the collapsed `<details>` "Commits"
+// block once it completes. An earlier revision anchored on `^> ` alone, which
+// silently stopped matching completed reviews — caught only by running the probe
+// against a real finished review on this PR rather than trusting one sample.
+// Both renderings are pinned here so a regression to either-only fails.
+const REAL_STAMP_INPROGRESS = `> Reviewing files that changed from the base of the PR and between ${BASE_SHA} and ${HEAD_SHA}.`;
+const REAL_STAMP_COMPLETED = `Reviewing files that changed from the base of the PR and between ${BASE_SHA} and ${HEAD_SHA}.`;
+ok(stampLineBinds(REAL_STAMP_INPROGRESS, HEAD_SHA), "the blockquoted in-progress stamp is ACCEPTED (verified live on PR #441)");
+ok(stampLineBinds(REAL_STAMP_COMPLETED, HEAD_SHA), "the bare completed-review stamp is ACCEPTED (verified live on PR #441)");
 
 // Every one of these contains the head SHA and would have satisfied `and <HEAD>`.
 for (const [label, body] of [
   ["prose mentioning the SHA", `The diff touches a doc that references commit and ${HEAD_SHA} in passing.`],
   ["a summarised diff line", `+ // rebased onto and ${HEAD_SHA}`],
   ["a quoted file path", `> \`docs/handoffs/and ${HEAD_SHA}.md\``],
-  ["the stamp without the leading blockquote", `Reviewing files that changed from the base of the PR and between ${BASE_SHA} and ${HEAD_SHA}.`],
-  ["the stamp with trailing text appended", `${REAL_STAMP} (cached)`],
+  ["a stamp line indented into a code block", `    Reviewing files that changed from the base of the PR and between ${BASE_SHA} and ${HEAD_SHA}.`],
+  ["the stamp with trailing text appended", `${REAL_STAMP_INPROGRESS} (cached)`],
   ["a stamp naming a different head", `> Reviewing files that changed from the base of the PR and between ${BASE_SHA} and ${BASE_SHA}.`],
   ["a non-hex base", `> Reviewing files that changed from the base of the PR and between not-a-sha and ${HEAD_SHA}.`],
 ]) {
@@ -670,7 +694,7 @@ for (const [label, review] of [
   ["a dismissed review", { ...submitted, state: "DISMISSED" }],
   ["a review by a non-bot account", { ...submitted, user: { login: "someone" } }],
   ["a review with no commit_id at all", { ...submitted, commit_id: undefined }],
-  ["a review whose BODY names the head but whose commit_id does not", { ...submitted, commit_id: BASE_SHA, body: REAL_STAMP }],
+  ["a review whose BODY names the head but whose commit_id does not", { ...submitted, commit_id: BASE_SHA, body: REAL_STAMP_COMPLETED }],
 ]) {
   ok(!reviewObjectBinds(review, HEAD_SHA), `review binding REJECTS ${label}`);
 }
