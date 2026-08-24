@@ -425,8 +425,9 @@ regression test written to *prevent* exactly this walked only `docs/audits/`, so
 with the gap wide open.
 
 All three exclusions are gone; `docs/archive/` is the only genuinely inert tree left. The coverage test now
-iterates a `CONTROL_ROOTS` list and protects each one whole, with the dated-report carve-out surviving only
-inside `docs/audits/`. Restoring the `docs/loops/**` exclusion turns it red on
+iterates a `CONTROL_ROOTS` list and protects each one whole, with a dated-report carve-out surviving at this
+point only inside `docs/audits/` — removed the following round.
+Restoring the `docs/loops/**` exclusion turns it red on
 `docs/loops/billing-day-money-ledger.md`.
 
 This is the clearest instance of the pattern this entry keeps circling: **fixing the instance you were handed
@@ -434,8 +435,28 @@ and stopping is how the second instance survives.** The remedy is not more care 
 asking "what is the class, and where else does it live?" before writing the fix, and making the regression
 iterate that class rather than the one example.
 
-The through-line across all six rounds is one idea: **a check that names the thing it forbids only catches
-that name.** Five times running, the fix was itself written one notch too narrow — a spelling, then a
+**Twelfth round: the carve-out that survived was itself a guess.** Codex returned High a third time on
+`.coderabbit.yaml`, this time on the one exclusion the previous two rounds had left standing:
+`!docs/audits/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md`. "Date-prefixed file = inert report" infers a
+document's *content* from the *shape of its filename*, and the inference was wrong — of the 57 files matching
+that pattern, 23 are prompts, handoffs, ledgers, plans, or go-live execution documents, and one is cited by
+the `codex-review` skill as a worked example. Nothing stops a future control prompt from being created with
+that name shape, and it would have dropped out of review silently.
+
+`docs/audits/` is now reviewed in full. The exclusion list is down to `docs/archive/**` (three document
+extensions) and the generated `.agents/` adapters, and the coverage test enforces that shape directly: every
+parsed exclusion must start with one of `docs/archive/` or `.agents/`, so the next well-meant pattern fails
+the suite instead of quietly narrowing review. Mutation-tested both ways — re-adding the date-prefix pattern
+turns it red on the matcher sanity check, and an unrelated `!docs/plans/**/*.md` turns it red on the
+vetted-root assertion.
+
+**If a document really is inert, retiring it is a decision someone makes about a specific file — move it into
+`docs/archive/` after looking at it — never a pattern that guesses.** Three rounds, three narrowings, one
+cause: `!docs/audits/**` hid executable code, extension-scoping hid live prompts, and the date prefix hid the
+rest.
+
+The through-line across every round of this PR is one idea: **a check that names the thing it forbids only
+catches that name.** Five times running, the fix was itself written one notch too narrow — a spelling, then a
 notation, then a variable read from the wrong scope, then two facts with no order between them, then a
 document-wide search standing in for a command-scoped one. Every round was found by a reviewer, never by the
 suite, because a green suite is exactly what each hole produced. Guards on this path get a case table and a

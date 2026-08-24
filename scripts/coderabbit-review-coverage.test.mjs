@@ -84,7 +84,8 @@ const excluded = (p) => patterns.some((g) => globToRegExp(g).test(p));
 // Sanity-check the matcher itself, so a broken glob translator cannot make this
 // suite pass by matching nothing.
 ok(excluded("docs/archive/anything.md"), "matcher: an archived doc IS excluded");
-ok(excluded("docs/audits/2026-06-10-foundation-ultra-review.md"), "matcher: a dated report IS excluded");
+ok(excluded(".agents/skills/deploy-check/SKILL.md"), "matcher: a generated adapter IS excluded");
+ok(!excluded("docs/audits/2026-06-10-foundation-ultra-review.md"), "matcher: a dated audit is NOT excluded");
 ok(!excluded("src/lib/db.ts"), "matcher: ordinary source is NOT excluded");
 
 // ── every agent-consumed path must be reviewable ─────────────────────────────
@@ -110,7 +111,6 @@ function walk(dir, acc = []) {
 // instructions for the next session. Fixing one instance of a class and stopping
 // is how the second instance survives. (Codex, PR #441.)
 const CONTROL_ROOTS = ["docs/audits", "docs/loops", "docs/build-loops", "docs/handoffs"];
-const DATED_REPORT = /^docs\/audits\/\d{4}-\d{2}-\d{2}-[^/]*\.md$/;
 
 const auditFiles = walk(path.join(ROOT, "docs", "audits"));
 let agentConsumedTotal = 0;
@@ -124,11 +124,16 @@ for (const root of CONTROL_ROOTS) {
     continue;
   }
   ok(files.length > 0, `control root is non-empty: ${root}`);
-  // Inside docs/audits the dated reports are the one carve-out; every other
-  // control root is protected whole.
-  const consumed = files.filter((f) => !DATED_REPORT.test(f));
-  agentConsumedTotal += consumed.length;
-  for (const file of consumed) {
+  // No carve-out. The previous version exempted date-prefixed files under
+  // docs/audits/ as "inert reports" — a guess about content from the shape of a
+  // filename, and a wrong one: 23 of those 57 files are prompts, handoffs,
+  // ledgers, plans, or go-live execution docs, and one is cited by the
+  // codex-review skill as a worked example. A future control prompt created with
+  // that name shape would have dropped out of review silently. Retiring a
+  // document is a decision someone makes about a specific file — move it into
+  // docs/archive/ — never a pattern that guesses. (Codex, PR #441.)
+  agentConsumedTotal += files.length;
+  for (const file of files) {
     ok(!excluded(file), `agent-consumed control file stays reviewable: ${file}`);
   }
 }
@@ -150,12 +155,20 @@ for (const file of auditFiles.filter((f) => f.endsWith(".mjs") || f.endsWith(".j
   ok(!excluded(file), `executable under docs/audits stays reviewable: ${file}`);
 }
 
-// And the inert side of the split still works, or the exclusion is pointless.
-const datedReports = auditFiles.filter((f) => DATED_REPORT.test(f));
-ok(datedReports.length > 0, "dated audit reports exist");
+// The exclusion list is short on purpose, and must stay that way. Anything added
+// has to be inert BY CONSTRUCTION (a frozen archive), never by naming
+// convention — three separate holes on this PR came from patterns that guessed
+// at content: a whole directory, then a file extension, then a date prefix.
+const ALLOWED_EXCLUSION_ROOTS = ["docs/archive/", ".agents/"];
+for (const pattern of patterns) {
+  ok(
+    ALLOWED_EXCLUSION_ROOTS.some((root) => pattern.startsWith(root)),
+    `exclusion is confined to a vetted inert root: ${pattern}`,
+  );
+}
 ok(
-  datedReports.every((f) => excluded(f)),
-  "every dated audit report is excluded (the cost control still applies)",
+  patterns.some((p) => p.startsWith("docs/archive/")),
+  "the frozen archive is still excluded (some cost control remains)",
 );
 
 console.log(`coderabbit-review-coverage: ${pass} assertions passed`);

@@ -65,10 +65,9 @@ reviews:
   # CodeRabbit stamp - the review would never have looked at it. On a PUBLIC
   # repo that is a prompt-injection path into privileged automation, not a
   # cost-control question. Raised by the Codex reviewer on PR #441 (CRX-SEC-001,
-  # High). The exclusion is now the date-prefixed reports only; every prompt,
-  # ledger, runbook, and state file under docs/audits/ stays reviewed. If the
-  # glob syntax is ever unsupported the pattern matches nothing, which reviews
-  # MORE than intended - the safe direction to fail.
+  # High). That round narrowed the exclusion to date-prefixed reports only; the
+  # round recorded further down removed even that, so docs/audits/ is reviewed
+  # in full today.
   #
   # Then the SAME defect turned up in the directories that fix did not touch:
   # docs/loops/, docs/build-loops/, and docs/handoffs/ were excluded and are
@@ -82,11 +81,25 @@ reviews:
   # instance survives. docs/archive/ is the only genuinely inert tree left,
   # and scripts/coderabbit-review-coverage.test.mjs now enforces that every
   # agent-consumed control root stays reviewable, not just docs/audits/.
+  #
+  # And the date-prefix carve-out went too. "Dated file = inert report" is a
+  # guess about content from the SHAPE OF A FILENAME, and it was wrong: of the
+  # 57 matches, 23 are prompts, handoffs, ledgers, plans, or go-live execution
+  # docs, and one of them is cited by the codex-review skill as a worked
+  # example. A future control prompt could be created with that name shape and
+  # would drop out of review silently. docs/audits/ is now reviewed in full.
+  # Raised by the Codex reviewer on PR #441, third round on this same theme:
+  # `!docs/audits/**` hid executable code, extension-scoping hid live prompts,
+  # and the date prefix hid the rest. If a document really is inert, the way to
+  # retire it is to MOVE it into docs/archive/ after looking at it - a decision
+  # someone makes about a specific file, not a pattern that guesses.
+  #
+  # The two surviving exclusions are the whole list on purpose. Anything added
+  # here must be inert by construction, not by naming convention.
   path_filters:
     - "!docs/archive/**/*.md"
     - "!docs/archive/**/*.html"
     - "!docs/archive/**/*.json"
-    - "!docs/audits/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md"
     - "!.agents/**"
 
   auto_review:
