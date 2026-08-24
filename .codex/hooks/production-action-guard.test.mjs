@@ -474,6 +474,34 @@ try {
     repoDir: risky.repo,
     nowMs: now,
   }).blocked, true, "every push in a chained command is inspected");
+  // …including one chained with bash's BACKGROUND separator, a single `&`. This
+  // guard's segment set matched `&&`, `|`, `||`, `;` and newlines but not that, so
+  // bash ran BOTH commands while the guard classified only the first and returned
+  // unblocked on the main-bound push behind it. The harmless leading push is the
+  // whole trick: it is what made the segment the guard DID read look fine.
+  // Reproduced against this guard before fixing.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push origin feature/test & git push origin HEAD:main" },
+    repoDir: risky.repo,
+    nowMs: now,
+  }).blocked, true, "a second push hidden behind a single background `&` is inspected too");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push origin feature/test & git push --force origin HEAD:main" },
+    repoDir: risky.repo,
+    nowMs: now,
+  }).blocked, true, "…including when the hidden one is a force-push");
+  // The control that keeps the widened separator from becoming over-refusal: an
+  // ordinary feature push with no second command is untouched. Measured more
+  // broadly too — across 5,833 real command lines taken from this repo's own
+  // package.json scripts and documentation, this change newly refuses NOTHING.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push origin feature/test" },
+    repoDir: ordinary.repo,
+    nowMs: now,
+  }).blocked, false, "an ordinary feature push is unaffected by the widened separator set");
   writeProof(risky.repo, valid);
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",

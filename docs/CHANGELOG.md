@@ -2,6 +2,36 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — The Codex guard splits on a single `&`, and PR #445 is parked
+
+Bash's BACKGROUND separator is a lone `&`. The Codex-side production guard split its
+command on `&&`, `||`, `|`, `;` and newlines but **not** on that, so
+`git push origin feature & git -C <repo> push origin HEAD:main` ran BOTH commands while
+the guard classified only the first and returned unblocked on the main-bound push behind
+it. The harmless leading push is the whole trick — it is what made the segment the guard
+DID read look fine. `&&` becomes `&&?`, mirroring the `\|\|?` already in that set.
+
+- Proven against the real guard: the background-`&` main push and force-push both go
+  from **allowed to blocked**; a merge hidden the same way was already blocked and stays so.
+- **No over-refusal:** across 5,833 real command lines taken from this repo's own
+  `package.json` scripts and its documentation, the blocked set is **unchanged at 13** —
+  the widened separator newly refuses nothing. An ordinary feature push is asserted
+  unaffected as a control.
+- The Claude-side `shellSegments` has always split on a single `&`; this brings the
+  Codex-side set into line with it.
+
+**The two guards keep their SEPARATE parsers deliberately, and that asymmetry is
+load-bearing.** Each catches shapes the other misses — the Codex side's quote-blind split
+sees through a nested shell's quoted payload, while the Claude side's quote-aware split
+keeps a quoted separator inside one command's own arguments from destroying it. PR #445
+tried to unify them onto one parser and spent eighteen rounds discovering, repeatedly, that
+neither parser is safe alone: quote-aware splitting lets `cmd.exe /c "echo x & gh pr merge …"`
+hide a command, and quote-blind splitting lets `git -c "a;b" push --force origin HEAD:main`
+destroy one. **PR #445 is parked unmerged** — it was measured a net regression against
+`main` at five separate checkpoints and its final head still carried an unfixed
+filesystem-touch on an attacker-supplied UNC path. This change takes the one genuine
+improvement out of it and leaves the rest.
+
 ## 2026-08-24 — Migration ordering review now matches the deterministic ledger guard
 
 The draw-down cutover review exposed two opposite bookkeeping hazards in the

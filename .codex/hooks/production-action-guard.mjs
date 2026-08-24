@@ -701,7 +701,21 @@ export function evaluateProductionAction({
 
   // Split on single `|` too (Codex round-4): `git push a | git push b` runs
   // BOTH pushes in a shell pipeline, so every pipeline stage is a segment.
-  const commandSegments = command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
+  //
+  // …and on a single `&`, which is bash's BACKGROUND separator and was the one
+  // spelling this set missed: `git push origin feature & git -C <repo> push origin
+  // HEAD:main` runs BOTH commands, but only `&&` matched, so the guard classified
+  // the harmless leading push and returned unblocked on the main-bound one behind
+  // it. The harmless first command is the whole trick — it is what made the segment
+  // the guard DID read look fine. Reproduced against this guard before fixing.
+  //
+  // `&&?` matches a single `&` and `&&` alike, mirroring the `\|\|?` already here.
+  // The Claude-side `shellSegments` has always split on a single `&`; this brings
+  // the Codex-side set into line with it. The two guards keep their SEPARATE
+  // parsers deliberately — that asymmetry is load-bearing, because each one catches
+  // shapes the other misses, and PR #445 demonstrated at length what happens when
+  // they are unified onto one parser instead.
+  const commandSegments = command.split(/(?:&&?|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
   for (const segment of commandSegments) {
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     if (ghRequest?.unsupportedGraphql) {

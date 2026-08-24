@@ -52,11 +52,11 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // joined RISKY_PATH_RES so a Codex push touching it needs an exact-head
   // proof. The apply-live-testdata risky-path anchor this transform verifies is
   // still present exactly once; the transform is identity, so input == output.
-  codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
+  codexGuard: "50efc638d2dbc1037c65593186aab5e450229dd8",
   pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
+  codexGuard: "bd39058010014d21c768a943d1418a1ad34a39c2",
   pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
 };
 
