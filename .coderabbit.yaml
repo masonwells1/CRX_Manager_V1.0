@@ -238,29 +238,45 @@ reviews:
           request adds no new file under supabase/migrations/, PASS immediately
           and state that the check did not apply.
 
-          This check covers MUTATING RPCs ONLY - functions a client can call
-          directly. Treat a function as an RPC when the same migration grants it
-          EXECUTE to `authenticated`, `anon`, `service_role`, or PUBLIC. The
-          following are NOT RPCs and are EXEMPT even though they perform DML:
-          trigger functions (RETURNS trigger), and internal helpers with no
-          EXECUTE grant to a client role. Such functions cannot accept a
-          caller-supplied key, and this repository legitimately contains them -
-          for example `notify_team_note_assignment()`, a trigger that inserts a
-          notification. Do not fail them.
+          The rule being enforced is AGENTS.md: "Mutating RPCs must accept and
+          actually enforce `p_idempotency_key text DEFAULT NULL`." Apply that
+          rule with judgement; the notes below exist to stop known
+          misclassifications, not to replace reading the migration.
 
-          FAIL if any added migration creates or replaces a MUTATING RPC as
-          defined above - one performing INSERT, UPDATE, DELETE, or MERGE - that
-          does not both (1) accept a parameter `p_idempotency_key text DEFAULT
-          NULL` and (2) actually use that parameter to short-circuit or
-          de-duplicate a repeated call. A parameter that is accepted and then
-          ignored is a FAIL, not a pass - the signature alone proves nothing.
-          Read-only functions are exempt. Otherwise PASS.
+          CALLABLE. Do not infer callability from the presence of a GRANT.
+          PostgreSQL grants EXECUTE to PUBLIC by default, so a function with NO
+          explicit grant is callable, and `CREATE OR REPLACE FUNCTION` preserves
+          grants an earlier migration made. Treat a function as callable UNLESS
+          the migration actively removes client access (for example REVOKE
+          EXECUTE ... FROM PUBLIC/authenticated/anon with no compensating
+          grant). Absence of evidence is not an exemption.
+
+          MUTATING. Include DELEGATED writes. A thin wrapper whose own body
+          contains no INSERT/UPDATE/DELETE/MERGE but which calls a helper that
+          performs them IS mutating - this repository uses the public-wrapper /
+          internal-implementation pattern heavily. Inspect the callee before
+          granting any exemption; if you cannot determine what the callee does,
+          FAIL and say which callee you could not resolve.
+
+          EXEMPT: trigger functions (RETURNS trigger), which cannot accept a
+          caller-supplied key - `notify_team_note_assignment()` is a legitimate
+          example already in this repo - and genuinely read-only functions.
+
+          FAIL if any added migration creates or replaces a callable mutating
+          function that does not both (1) accept `p_idempotency_key text DEFAULT
+          NULL` and (2) actually use it to short-circuit or de-duplicate a
+          repeated call. A parameter accepted and then ignored is a FAIL - the
+          signature alone proves nothing. Otherwise PASS.
 
       - name: Money not exact whole cents
         mode: error
         instructions: >-
-          Scope: files under supabase/migrations/ and src/. If this pull request
-          changes no file in either location, PASS immediately.
+          Scope: files under supabase/migrations/, src/, AND
+          supabase/functions/. Edge Functions are TypeScript and are an
+          authoritative money surface in this repo - process-document and
+          process-blend-ticket already handle `unit_cost` and `price_per_unit` -
+          so they are inside this guard, not outside it. If this pull request
+          changes no file in any of those three locations, PASS immediately.
 
           FAIL on any of the following. (1) A NEWLY ADDED money column that is
           not bigint cents. This has NO numeric exception: AGENTS.md states that
