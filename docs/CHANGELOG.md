@@ -243,7 +243,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Thirty-six behaviour tests pass; and nineteen mutation phases each fail in a **named** way — thirteen
+Thirty-eight behaviour tests pass; and nineteen mutation phases each fail in a **named** way — thirteen
 turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -270,7 +270,7 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The thirty-six tests: all four live row shapes save with derived totals reproducing the live stored
+The thirty-eight tests: all four live row shapes save with derived totals reproducing the live stored
 values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
 by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
 `T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate
@@ -349,11 +349,23 @@ product that is exactly right — the live conversion table records `oz` as an a
 guard compared the two units *before* it looked up whether the product was dry, so a dry line with a
 `fl oz` rate against an `oz` stock unit looked identical and billed with nothing checked — while the
 app's own pricing converter refuses that pair as unconvertible. A guard that is more permissive than
-the code that does the billing is not a guard. The product's form is now read first, and that one
-combination is refused. The rule is deliberately narrow, and two of the new tests exist only to
-prove it does not over-fire: the liquid `fl oz`/`oz` pair must still save, and so must a dry line
-quoted in `fl oz` on both sides. The wider version of the rule would have refused an ordinary liquid
-product priced in pounds, and one refused line blocks the entire job.
+the code that does the billing is not a guard. The product's form is now read first, and **any** use of fluid
+ounces on a dry product is refused.
+
+That rule started out narrower and had to be widened, which is the part worth keeping. The first
+version only refused the case where the two units *looked identical* after the alias. But that was
+not the only way a fluid ounce reached the money, and the case it missed was worse: a dry product
+with a `fl oz` rate priced per **pound** doesn't look identical at all, so it skipped straight past
+the new check and into the converter — which had already been handed `oz` instead of `fl oz`, and
+dutifully converted sixteen fluid ounces into one pound. A volume became a weight, and the stored
+cost and price were calculated from it.
+
+One of the round's own tests had to be reversed as part of that. It had required a dry line quoted
+in fluid ounces on *both* sides to save, on the grounds that the numbers at least agreed with each
+other. Agreeing with yourself in a unit the invoice cannot convert is not the same as being right —
+and writing that exemption into a test is what would have kept the half-fix alive through the next
+review. The one test that must never change is the liquid one: on a liquid product `fl oz` and `oz`
+genuinely are the same unit, and refusing that pair would block ordinary jobs.
 
 No live product is in that shape today — the 85 dry products use `dry oz`, `lb`, `mg` and `oz` — but
 the units being compared arrive in the request, not from the product catalog, and any logged-in user

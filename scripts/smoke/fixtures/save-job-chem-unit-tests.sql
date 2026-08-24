@@ -698,24 +698,77 @@ EXCEPTION WHEN OTHERS THEN
   RAISE EXCEPTION 'T33 FAIL  a LIQUID fl-oz/oz line was REFUSED, so the new dry rule is over-firing and blocks whole jobs: %', SQLERRM;
 END $$;
 
--- T34: the second false-refusal guard. A DRY product whose two sides carry the IDENTICAL raw
--- spelling is self-consistent, and field_app_priced_quantity returns the quantity untouched
--- whenever the raw units match, before its form logic runs at all. So this must SAVE -- the new
--- rule fires only where the ALIAS manufactured the equality, not wherever 'fl oz' appears.
+-- T34: INVERTED in round 12, and the inversion is the point. This test used to require that a
+-- DRY line quoted 'fl oz' on BOTH sides SAVE, on the reasoning that identical spellings are
+-- self-consistent and field_app_priced_quantity passes them untouched. That reasoning was wrong
+-- in the way that matters: self-consistent arithmetic on a unit the inventory and invoice sides
+-- cannot convert is not a saving grace, and writing the exemption into a test froze the half-fix
+-- in place. A dry product has no density here, so a fluid ounce cannot be carried into a weight
+-- honestly on ANY side. Must be REFUSED.
 DO $$
-DECLARE r jsonb; c bigint;
+DECLARE ok boolean := false; msg text;
 BEGIN
-  r := save_job(NULL,
-    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
-    '[{"field_id":"33333356-3333-3333-3333-333333333357","acres_to_treat":10}]'::jsonb,
-    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":100,"unit":"fl oz","rate_per_acre":10,"rate_unit":"fl oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
-    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
-  SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
-  IF c = 20000 THEN RAISE NOTICE 'T34 PASS  a dry line quoted fl oz on BOTH sides still saves; price=%', c;
-  ELSE RAISE EXCEPTION 'T34 FAIL  price=%', c; END IF;
-EXCEPTION WHEN OTHERS THEN
-  IF SQLERRM LIKE 'T34 FAIL%' THEN RAISE; END IF;
-  RAISE EXCEPTION 'T34 FAIL  an identically-spelled dry fl-oz line was REFUSED, so the new rule is matching on the unit rather than on the alias: %', SQLERRM;
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333356-3333-3333-3333-333333333357","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":100,"unit":"fl oz","rate_per_acre":10,"rate_unit":"fl oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_FORM_MISMATCH%' THEN
+    RAISE NOTICE 'T34 PASS  a dry line quoted fl oz on BOTH sides is refused: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T34 FAIL  refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
+-- T37: THE BYPASS the round-11 half-fix left open, returned by the gate as a fresh HIGH. A DRY
+-- product with rate 'fl oz/ac' against a stock Unit of 'lb'. These do NOT normalise equal, so the
+-- equality shortcut -- the only thing round 10 guarded -- never runs. The line goes down the
+-- CONVERSION path instead, and field_app_priced_quantity is called with the NORMALISED units, so
+-- 'fl oz' has already become 'oz' before the converter sees it: handed the raw 'fl oz' its dry
+-- branch sizes it NULL and refuses, handed 'oz' it sizes it 1 and converts 16:1 into pounds. A
+-- VOLUME became a WEIGHT and the authoritative cost/price totals were derived from it. Must be
+-- REFUSED.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333362-3333-3333-3333-333333333363","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":6.25,"unit":"lb","rate_per_acre":10,"rate_unit":"fl oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_FORM_MISMATCH%' THEN
+    RAISE NOTICE 'T37 PASS  a dry fl-oz rate against a pound stock unit is refused before the 16:1 conversion: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T37 FAIL  refused=% msg=%  -- a fluid ounce is still being converted into a weight', ok, msg;
+  END IF;
+END $$;
+
+-- T38: the same conversion path against 'dry oz'. 'dry oz' does not normalise to 'oz' (it is not
+-- in normalize_rate_unit's CASE, so it comes back as itself), so this pair also skips the
+-- equality shortcut and reaches the converter, where the dry branch sizes BOTH sides 1 and the
+-- fluid ounce passes through as though it were a dry ounce. Must be REFUSED.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333364-3333-3333-3333-333333333365","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":100,"unit":"dry oz","rate_per_acre":10,"rate_unit":"fl oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_FORM_MISMATCH%' THEN
+    RAISE NOTICE 'T38 PASS  a dry fl-oz rate against dry oz is refused: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T38 FAIL  refused=% msg=%', ok, msg;
+  END IF;
 END $$;
 
 -- T35: the MIXED-format stacked denominator, and the BLOCKER the exact-SHA gpt-5.6-sol gate
@@ -768,6 +821,6 @@ DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 16 AND n_chem = 16 THEN RAISE NOTICE 'T8 PASS  16 jobs / 16 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and T33/T34 are the two false-refusal guards that MUST save';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 16/16)', n_jobs, n_chem; END IF;
+  IF n_jobs = 15 AND n_chem = 15 THEN RAISE NOTICE 'T8 PASS  15 jobs / 15 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and T33 is the false-refusal guard that MUST save (T34 was inverted to a refusal in round 12, which is why this is 15 and not 16)';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 15/15)', n_jobs, n_chem; END IF;
 END $$;
