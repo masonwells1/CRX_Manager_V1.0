@@ -1,0 +1,331 @@
+#!/usr/bin/env node
+// Patrol collector — READ-ONLY. Emits one snapshot per run.
+//
+// Every request here is a read: `gh api` GETs and `git` queries that do not mutate.
+// There is no write action in this file, so there is nothing to bypass.
+//
+// Source status is the load-bearing idea. Each source reports OK / INCOMPLETE / ERROR
+// with counts. A source that failed emits an explicit SCAN_ERROR item downstream, so an
+// empty list from a broken source can never be mistaken for a genuinely empty list.
+// `complete` covers the REQUIRED sources; a failed optional source still blocks the
+// all-clear (via its SCAN_ERROR item) but lets the rest of the report render.
+//
+// v1 LIMITATIONS, declared rather than papered over:
+//   - Sol proof state is not evaluated (`solProof: "unknown"`), so patrol never claims a
+//     PR is missing one. Reading the proof registry is deliberately left to the existing
+//     validator, which is the only thing entitled to judge it.
+//   - parkedMigrations and gateHealth are not implemented; they report INCOMPLETE, which
+//     surfaces as a visible "could not determine" item and suppresses the all-clear.
+
+import { execFileSync } from "node:child_process";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { MIN_STABLE_INTERVAL_MS, SNAPSHOT_TTL_MS } from "./patrol-classify.mjs";
+
+const SCHEMA_VERSION = 1;
+const CODERABBIT_CONTEXT = "CodeRabbit";
+const CODERABBIT_CREATOR_ID = 136622811; // coderabbitai[bot]; identity, not just a name
+const STATE_DIR = path.join(process.env.LOCALAPPDATA || process.env.TMPDIR || ".", "crx-patrol");
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+const args = process.argv.slice(2);
+const argOf = (flag, fallback) => {
+  const i = args.indexOf(flag);
+  return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
+};
+
+function sh(file, argv, { timeout = 60_000 } = {}) {
+  return execFileSync(file, argv, { encoding: "utf8", timeout, maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+}
+function gh(argv) { return sh("gh", argv, { timeout: 90_000 }); }
+function ghJson(argv) { return JSON.parse(gh(argv) || "null"); }
+function git(argv, cwd) { return sh("git", ["-C", cwd, ...argv]).trim(); }
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// ── required checks: union of branch protection AND every active ruleset ────
+// Resolving from branch protection alone is not enough — this repo's `protect-main`
+// ruleset requires a Vercel check that protection does not list. Missing it would let a
+// PR read as green when a required check had not run.
+function requiredContexts(repo, baseRef) {
+  const contexts = new Set();
+  let degraded = null;
+  try {
+    const prot = ghJson(["api", `repos/${repo}/branches/${baseRef}/protection`]);
+    for (const c of prot?.required_status_checks?.checks ?? []) contexts.add(c.context);
+  } catch (e) { degraded = `branch protection unreadable: ${String(e.message).slice(0, 120)}`; }
+  try {
+    for (const rs of ghJson(["api", `repos/${repo}/rulesets`]) ?? []) {
+      const full = ghJson(["api", `repos/${repo}/rulesets/${rs.id}`]);
+      if (full?.enforcement !== "active") continue;
+      for (const rule of full.rules ?? []) {
+        if (rule.type !== "required_status_checks") continue;
+        for (const c of rule.parameters?.required_status_checks ?? []) contexts.add(c.context);
+      }
+    }
+  } catch (e) { degraded = `${degraded ? `${degraded}; ` : ""}rulesets unreadable: ${String(e.message).slice(0, 120)}`; }
+  return { contexts: [...contexts], degraded };
+}
+
+// statusCheckRollup carries DUPLICATE entries per context (a rerun leaves the old one
+// behind). Selecting anything but the newest per context is how a stale green wins.
+function checksVerdict(rollup, required) {
+  if (required.length === 0) return "unknown"; // could not resolve → fail closed
+  const latest = new Map();
+  for (const e of rollup ?? []) {
+    const name = e.context ?? e.name;
+    if (!name) continue;
+    const at = Date.parse(e.startedAt ?? e.createdAt ?? 0) || 0;
+    const prev = latest.get(name);
+    if (!prev || at >= prev.at) latest.set(name, { at, entry: e });
+  }
+  let pending = false;
+  for (const ctx of required) {
+    const hit = latest.get(ctx);
+    if (!hit) return "unknown"; // a required context with no run at this head
+    const e = hit.entry;
+    const state = (e.conclusion || e.state || e.status || "").toUpperCase();
+    if (["FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "CANCELLED", "ERROR", "STARTUP_FAILURE"].includes(state)) return "failing";
+    if (["IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "REQUESTED"].includes(state)) { pending = true; continue; }
+    if (!["SUCCESS", "COMPLETED"].includes(state)) return "unknown"; // NEUTRAL/SKIPPED/unknown → fail closed
+  }
+  return pending ? "pending" : "green";
+}
+
+function coderabbitState(repo, headSha) {
+  try {
+    const statuses = ghJson(["api", `repos/${repo}/commits/${headSha}/statuses`]) ?? [];
+    // Identity, not just a context name: another credential with status-write access
+    // could otherwise post a lookalike status.
+    const mine = statuses.filter((s) => s.context === CODERABBIT_CONTEXT && s.creator?.id === CODERABBIT_CREATOR_ID);
+    if (mine.length === 0) return "missing";
+    mine.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+    return mine[0].state === "pending" ? "in_flight" : "complete";
+  } catch { return "missing"; }
+}
+
+// ── pull requests ───────────────────────────────────────────────────────────
+// `commits` is deliberately absent: asking for it across every open PR fans out the
+// authors connection past GitHub's GraphQL node ceiling and fails the whole scan. Head
+// commit identity is fetched per PR below instead.
+const PR_FIELDS = "number,title,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergeable,mergeStateStatus,statusCheckRollup,updatedAt,author,labels";
+
+// Markers that mean "held by a decision". Patrol can only honour a marker that exists on
+// GitHub; a decision recorded only in notes or memory is invisible to it.
+const PARKED_LABELS = new Set(["hold", "parked", "on-hold", "do-not-merge", "blocked"]);
+const PARKED_TITLE = /\bPARKED\b|\bON HOLD\b|\bDO NOT MERGE\b/i;
+function isParked(pr) {
+  if ((pr.labels ?? []).some((l) => PARKED_LABELS.has(String(l.name).toLowerCase()))) return true;
+  return PARKED_TITLE.test(pr.title ?? "");
+}
+
+function collectPullRequests(repo) {
+  const src = { name: "pullRequests", required: true, status: "OK", expected: null, received: 0 };
+  try {
+    const list = (argv) => ghJson(["pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json", argv]);
+    const readA = list(PR_FIELDS);
+    const tA = new Date().toISOString();
+
+    // Independent observation from a DIFFERENT API (REST), which also forces GitHub to
+    // compute mergeability. Two GraphQL reads can agree by sharing one cache.
+    const rest = new Map();
+    const headCommit = new Map();
+    for (const p of readA) {
+      try {
+        const r = ghJson(["api", `repos/${repo}/pulls/${p.number}`]);
+        rest.set(p.number, { head: r.head?.sha, state: String(r.mergeable_state || "").toUpperCase() });
+      } catch { /* absent → compareObserved false below */ }
+      try {
+        const c = ghJson(["api", `repos/${repo}/commits/${p.headRefOid}`]);
+        headCommit.set(p.number, { login: c?.author?.login ?? "", date: c?.commit?.committer?.date ?? null });
+      } catch { /* absent → activity stays unknown, never "fresh" */ }
+    }
+
+    sleep(MIN_STABLE_INTERVAL_MS + 250); // defeat a shared cache between the two reads
+    const readB = list(PR_FIELDS);
+    const tB = new Date().toISOString();
+
+    const byNumB = new Map(readB.map((p) => [p.number, p]));
+    const { contexts, degraded } = requiredContexts(repo, "main");
+    if (degraded) { src.status = "INCOMPLETE"; src.detail = degraded; }
+
+    const prs = readA.map((a) => {
+      const b = byNumB.get(a.number);
+      const r = rest.get(a.number);
+      const mk = (p, observedAt) => p && ({
+        headRefOid: p.headRefOid, baseRefOid: p.baseRefOid,
+        mergeable: p.mergeable, mergeStateStatus: p.mergeStateStatus, observedAt,
+      });
+      const lastHuman = lastHumanActivity(a, headCommit.get(a.number));
+      return {
+        number: a.number, title: a.title, state: a.state, isDraft: a.isDraft,
+        headRefName: a.headRefName, headRefOid: a.headRefOid,
+        baseRefName: a.baseRefName, baseRefOid: a.baseRefOid,
+        mergeStateStatus: a.mergeStateStatus, mergeable: a.mergeable,
+        mergeStateObservation: {
+          readA: mk(a, tA), readB: mk(b, tB),
+          compareObserved: Boolean(r && r.head === a.headRefOid && r.state === a.mergeStateStatus),
+        },
+        parked: isParked(a),
+        checks: checksVerdict(a.statusCheckRollup, contexts),
+        coderabbit: coderabbitState(repo, a.headRefOid),
+        solProof: "unknown",       // v1 does not evaluate the proof registry
+        requiresSolProof: false,   // so it never claims one is missing
+        lastHumanActivityAt: lastHuman,
+        firstSeenAt: lastHuman,
+      };
+    });
+    src.expected = readA.length;
+    src.received = prs.length;
+    if (src.expected !== src.received) { src.status = "INCOMPLETE"; src.detail = "pull request count changed mid-scan"; }
+    return { src, prs };
+  } catch (e) {
+    src.status = "ERROR";
+    src.detail = String(e.message).slice(0, 200);
+    return { src, prs: [] };
+  }
+}
+
+// An actor that cannot be resolved is ambiguous and is NOT counted as human, so bot
+// noise cannot reset an abandonment clock.
+const BOT_LOGIN = /\[bot\]$|^dependabot|^coderabbitai|^github-actions/i;
+function lastHumanActivity(pr, head) {
+  // The head commit's own author/date is the cheapest signal that is actually about a
+  // human touching the branch. `updatedAt` is not usable: a bot comment bumps it, which
+  // would silently reset an abandonment clock.
+  if (head?.date && head.login && !BOT_LOGIN.test(head.login)) return head.date;
+  if (head?.date && !head.login) return null; // unresolved actor is ambiguous, not human
+  const author = pr.author?.login ?? "";
+  if (head?.date && author && !BOT_LOGIN.test(author)) return head.date;
+  return null; // unknown → isStale() returns null, never "fresh"
+}
+
+// ── worktrees ───────────────────────────────────────────────────────────────
+function collectWorktrees(repoRoot, openPrBranches) {
+  const src = { name: "worktrees", required: true, status: "OK", expected: null, received: 0 };
+  const out = [];
+  try {
+    const porcelain = git(["worktree", "list", "--porcelain"], repoRoot);
+    const blocks = porcelain.split(/\n\n+/).filter(Boolean);
+    src.expected = blocks.length;
+    for (const block of blocks) {
+      const wtPath = /^worktree (.+)$/m.exec(block)?.[1];
+      const branch = /^branch refs\/heads\/(.+)$/m.exec(block)?.[1] ?? "(detached)";
+      if (!wtPath) continue;
+      const wt = { path: wtPath, branch, dirtyCount: 0, merged: false, hasOpenPr: openPrBranches.has(branch), lastHumanActivityAt: null };
+      try {
+        wt.dirtyCount = git(["status", "--porcelain"], wtPath).split("\n").filter((l) => l.trim()).length;
+        const head = git(["rev-parse", "HEAD"], wtPath);
+        wt.merged = git(["branch", "--remotes", "--contains", head], wtPath).split("\n").some((l) => l.trim() === "origin/main");
+        wt.lastHumanActivityAt = git(["log", "-1", "--format=%cI"], wtPath) || null;
+      } catch (e) { wt.observationError = String(e.message).slice(0, 160); }
+      out.push(wt);
+    }
+    src.received = out.length;
+  } catch (e) {
+    src.status = "ERROR";
+    src.detail = String(e.message).slice(0, 200);
+  }
+  return { src, worktrees: out };
+}
+
+// ── loops ───────────────────────────────────────────────────────────────────
+// Not implemented in v1: judging a loop DEAD requires a process probe whose known
+// failure mode is failing OPEN ("nothing running") when the probe itself breaks. A
+// wrong "all your loops are fine" is exactly the lie patrol exists to prevent, so this
+// source declares itself incomplete rather than guessing.
+function collectLoops() {
+  return { src: { name: "loops", required: false, status: "INCOMPLETE", expected: null, received: 0,
+    detail: "loop liveness is not implemented in patrol v1 — run /fleet for the process probe" }, loops: [] };
+}
+
+function collectParkedMigrations() {
+  return { src: { name: "parkedMigrations", required: false, status: "INCOMPLETE", expected: null, received: 0,
+    detail: "parked-migration state is not implemented in patrol v1 — run /parked" }, parked: null };
+}
+
+function collectGateHealth() {
+  return { src: { name: "gateHealth", required: false, status: "INCOMPLETE", expected: null, received: 0,
+    detail: "review-gate health probes are not implemented in patrol v1" }, gates: [] };
+}
+
+// ── snapshot assembly ───────────────────────────────────────────────────────
+function collectorBuild() {
+  try {
+    const head = git(["rev-parse", "HEAD"], SCRIPT_DIR);
+    const dirty = git(["status", "--porcelain", "--", SCRIPT_DIR], SCRIPT_DIR).trim().length > 0;
+    return dirty ? `${head}-dirty` : head;
+  } catch { return "unknown"; }
+}
+
+export function buildSnapshot({ repo, repoRoot, runId }) {
+  const { src: prSrc, prs } = collectPullRequests(repo);
+  const openBranches = new Set(prs.map((p) => p.headRefName));
+  const { src: wtSrc, worktrees } = collectWorktrees(repoRoot, openBranches);
+  const { src: loopSrc, loops } = collectLoops();
+  const { src: parkedSrc, parked } = collectParkedMigrations();
+  const { src: gateSrc, gates } = collectGateHealth();
+
+  const sources = [prSrc, wtSrc, loopSrc, parkedSrc, gateSrc];
+  const generatedAt = new Date();
+  const snapshot = {
+    schemaVersion: SCHEMA_VERSION,
+    runId,
+    repoId: repo,
+    collectorCommit: collectorBuild(),
+    ghVersion: (() => { try { return gh(["--version"]).split("\n")[0].trim(); } catch { return "unknown"; } })(),
+    generatedAt: generatedAt.toISOString(),
+    expiresAt: new Date(generatedAt.getTime() + SNAPSHOT_TTL_MS).toISOString(),
+    // `complete` covers REQUIRED sources. An optional source that failed still emits a
+    // visible SCAN_ERROR item downstream, which suppresses the all-clear.
+    complete: sources.filter((s) => s.required).every((s) => s.status === "OK"),
+    sources,
+    pullRequests: prs,
+    worktrees,
+    loops,
+    parkedMigrations: parked,
+    gateHealth: gates,
+    queuePath: path.join(STATE_DIR, `snapshot-${runId}.json`),
+  };
+  snapshot.contentHash = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+  return snapshot;
+}
+
+// Persisting the snapshot is what makes the report's "Full queue" path real. A report
+// that cites a file which was never written is its own small lie, so every caller that
+// renders a report must call this.
+export function writeSnapshot(snapshot) {
+  mkdirSync(STATE_DIR, { recursive: true });
+  const finalPath = path.join(STATE_DIR, `snapshot-${snapshot.runId}.json`);
+  const tmpPath = `${finalPath}.tmp`;
+  writeFileSync(tmpPath, JSON.stringify(snapshot, null, 1), "utf8");
+  renameSync(tmpPath, finalPath); // atomic: a reader never sees a half-written snapshot
+
+  // Heartbeat is bound to a COMPLETED run, so a crashed or degraded scan cannot keep the
+  // dead-man monitor looking healthy.
+  if (snapshot.complete) {
+    const hb = path.join(STATE_DIR, "heartbeat.json");
+    const hbTmp = `${hb}.tmp`;
+    writeFileSync(hbTmp, JSON.stringify({ schemaVersion: SCHEMA_VERSION, runId: snapshot.runId, at: snapshot.generatedAt, snapshot: finalPath }), "utf8");
+    renameSync(hbTmp, hb);
+  }
+  return finalPath;
+}
+
+function main() {
+  const repoRoot = argOf("--repo-root", path.resolve(SCRIPT_DIR, "..", ".."));
+  let repo = argOf("--repo", null);
+  if (!repo) {
+    const url = git(["remote", "get-url", "origin"], repoRoot);
+    repo = /github\.com[:/](.+?)(?:\.git)?$/.exec(url)?.[1] ?? "";
+  }
+  const runId = argOf("--run-id", randomUUID());
+  const snapshot = buildSnapshot({ repo, repoRoot, runId });
+  const finalPath = writeSnapshot(snapshot);
+
+  if (args.includes("--path-only")) process.stdout.write(`${finalPath}\n`);
+  else process.stdout.write(`${JSON.stringify(snapshot)}\n`);
+}
+
+if (import.meta.url === `file://${process.argv[1].replace(/\\/g, "/")}`) main();

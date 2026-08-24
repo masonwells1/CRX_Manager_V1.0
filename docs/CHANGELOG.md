@@ -2,6 +2,52 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — `/patrol`: a read-only queue reporter that cannot fake an all-clear
+
+Mason runs 28 worktrees and ~20 open PRs at once, and `/fleet` reports all of it without
+filtering — he reads everything or nothing. `/patrol` answers the narrower question "what
+needs Mason?" and is built so that its silence is trustworthy.
+
+- **Read-only by construction.** The collector issues GETs and non-mutating `git` queries.
+  An earlier design proposed one automatic `gh pr update-branch` action; two adversarial
+  Codex (`gpt-5.6-sol`, high effort) review rounds on the plan established that the
+  classify-then-act window could not be made race-free against 28 concurrent sessions or
+  against exact-SHA review proofs, so every mutation was removed rather than guarded.
+- **The renderer, not a language model, owns every safety-critical line** — the lanes, the
+  counts, the emergency text, and the exact phrase `Nothing waiting on you`. The reporting
+  agent may append one labelled paragraph; it cannot suppress a lane, soften an error, or
+  paraphrase an all-clear. Round 2 of the review flagged the previous "the agent is
+  instructed not to…" wording as an assertion without a mechanism.
+- **Exhaustive fallback.** Any unmatched condition combination resolves to `INDETERMINATE`;
+  `IDLE` is never a fallback and is downgraded automatically if it carries a blocker.
+- **Freshness is proved, not assumed.** Merge state requires two reads a minimum interval
+  apart, cross-checked against a different GitHub API, so two responses from one cache
+  cannot pass as agreement.
+- **Required checks are the union of branch protection AND active rulesets.** This repo's
+  `protect-main` ruleset requires a `Vercel` check that branch protection does not list;
+  resolving from protection alone would have read a PR as green with a required check
+  unrun. Duplicate check contexts resolve to the newest run so a stale green cannot win,
+  and the CodeRabbit status is validated by creating App id rather than context name.
+- **A failed source emits a visible `SCAN_ERROR` item**, so an empty list from a broken
+  source can never be mistaken for a genuinely empty list.
+- **Negative claims only.** Patrol reports blockers it can see and never asserts a PR is
+  ready to merge — a complete readiness predicate would have to model every current and
+  future GitHub ruleset. GitHub's merge button stays the authority.
+- **Parking must be marked on GitHub.** A PR held by a judgement call is invisible to
+  patrol unless it carries a `hold`/`parked`/`do-not-merge` label or `PARKED` in the title.
+  Verified live: patrol reported "no blockers found" for PR #445, which is deliberately
+  parked as a net regression, because that decision exists only in session notes.
+- Proven by running against the live queue, not only by tests: the run surfaced two real
+  defects unit tests would not have — a decision-table hole routing nine ordinary
+  worktrees into the fallback, and a cited "full queue" path that was never written.
+  153 assertions pass, including a mutation set that flips each all-clear condition
+  individually and asserts the phrase disappears every time.
+- **Declared v1 gaps:** loop liveness, parked-migration state, and review-gate health are
+  not implemented and report `INCOMPLETE`, which deliberately suppresses the all-clear.
+  The heartbeat is written on every completed scan, but the independent monitor that
+  alarms when it goes stale is **not built**, so a scheduled patrol is not yet a safety
+  net against its own silent death.
+
 ## 2026-08-24 — Migration ordering review now matches the deterministic ledger guard
 
 The draw-down cutover review exposed two opposite bookkeeping hazards in the
