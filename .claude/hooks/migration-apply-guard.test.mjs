@@ -1938,6 +1938,25 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(!isOneShotDeny(r),
       "round-41 control: explicit pg_catalog.round remains trusted");
 
+    r = apply("20990601000195_relocated_catalog_mutator",
+      "CREATE FUNCTION public.pg_sleep() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN " +
+      "UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$; " +
+      "ALTER FUNCTION public.pg_sleep() SET SCHEMA pg_catalog; " +
+      "SELECT pg_catalog.pg_sleep();");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-60: a same-file mutator moved into pg_catalog cannot inherit builtin trust");
+
+    r = apply("20990601000196_relocated_catalog_resident",
+      "ALTER FUNCTION public.pg_sleep() SET SCHEMA pg_catalog; " +
+      "SELECT pg_catalog.pg_sleep();");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-60: a relocated resident routine remains unknown at the one-shot boundary");
+
+    r = apply("20990601000197_relocated_catalog_resident_unqualified",
+      "ALTER FUNCTION public.round(numeric) SET SCHEMA pg_catalog; SELECT round(1.2);");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-60: an unqualified relocated resident routine cannot inherit implicit catalog trust");
+
     r = apply("20990601000028_auth_helper", "SELECT auth.uid();");
     ok(!isOneShotDeny(r),
       "round-41 control: exact auth.uid remains trusted");

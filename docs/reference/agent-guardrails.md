@@ -77,7 +77,11 @@ verified migration history; invoking one follows its backing routine through the
 write analysis, and a database-resident backing routine fails closed. Routine definitions, calls,
 trigger attachments, operators, and casts retain canonical `schema.routine` identity, so a
 same-bare-name definition in another schema cannot suppress a resident call; unqualified calls fail
-closed unless resolution is independently proven. Whitespace around a schema separator is accepted,
+closed unless resolution is independently proven. Routine `SET SCHEMA` and `RENAME TO` operations
+preserve their complete signature evidence and alias every possible same-file overload body to the
+destination in order; every destination loses qualified and unqualified spelling-based builtin
+trust, while an incomplete or
+unqualified transition fails closed. Whitespace around a schema separator is accepted,
 and trigger/rule attachments created inside an invoked routine join the graph before its writes and
 reads are fired. Rewrite rules do not end at the file that creates them: the linked manifest binds
 live public rules by relation/event/OID/definition hash, and earlier checked-in migration files seed

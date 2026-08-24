@@ -9,6 +9,23 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-23 — Routine identity changes carry bodies and revoke spelling-based trust
+
+**Source:** Exact-head `gpt-5.6-sol` high-effort review of PR #364 and focused analyzer/apply-guard
+mutation proof.
+**Decision:** `ALTER FUNCTION`/`PROCEDURE` `SET SCHEMA` and `RENAME TO` are ordered routine-identity
+transitions. The analyzer preserves the complete declared signature as evidence, aliases every
+possible same-file overload body to the destination, and marks every destination untrusted by
+both qualified and unqualified spelling. An incomplete or unqualified transition fails closed.
+**Why:** Filing a body only under its `CREATE` name let a migration move a money mutator into a
+trusted-looking `pg_catalog` name, call it, and receive neither a write target nor an unknown-call
+refusal.
+**What this forbids/implies:** candidate-created or relocated routines cannot inherit builtin/auth
+trust merely from their destination text. A resident relocation stays unknown, and overload
+ambiguity is handled by unioning bodies rather than narrowing them away.
+
+---
+
 ## 2026-08-23 — Rewrite rules are identified by their complete attachment
 
 **Source:** Exact-head CodeRabbit review of PR #364 and focused removal/collision mutation proof.

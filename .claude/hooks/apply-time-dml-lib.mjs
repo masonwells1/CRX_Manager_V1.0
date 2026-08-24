@@ -319,10 +319,12 @@ export function applyTimeCode(sql, depth = 0) {
           // parsed now and filed under the routine's name so the caller can fold
           // it back in if this migration invokes it (round 24).
           code += " '' ";
-          const named = ROUTINE_NAME_CAPTURE.exec(stmt);
-          const identity = canonicalRoutineIdentity(named?.[1]);
-          if (identity) routines.push({
-            name: identity,
+          const reference = routineDefinitionReference(stmt);
+          if (reference?.identity) routines.push({
+            name: reference.identity,
+            kind: reference.kind,
+            signature: reference.signature,
+            signatureParsed: reference.signatureParsed,
             code: inner.code,
             literals: inner.literals,
             unresolved: inner.unsupportedDoBody,
@@ -406,12 +408,14 @@ export function applyTimeCode(sql, depth = 0) {
       // head. Require the body's AS introducer so a harmless default cannot
       // leave a second, falsely opaque definition under the routine's name.
       if (ROUTINE_CREATE_HEAD.test(head) && QUOTED_ROUTINE_BODY_HEAD.test(head)) {
-        const named = ROUTINE_NAME_CAPTURE.exec(head);
-        const identity = canonicalRoutineIdentity(named?.[1]);
-        if (identity) {
+        const reference = routineDefinitionReference(head);
+        if (reference?.identity) {
           const inner = applyTimeCode(lit, depth + 1);
           routines.push({
-            name: identity,
+            name: reference.identity,
+            kind: reference.kind,
+            signature: reference.signature,
+            signatureParsed: reference.signatureParsed,
             code: inner.code,
             literals: inner.literals,
             // E'...' can spell UPDATE as UPD\101TE, and U&'...' has its own
@@ -538,6 +542,99 @@ function canonicalRoutineIdentity(value) {
 
 function routineBareName(identity) {
   return canonicalRoutineIdentity(identity).split(".").pop() || "";
+}
+
+function readRoutineReference(s, pos) {
+  let i = skipSpace(s, pos);
+  const parts = [];
+  while (i < s.length && parts.length < 3) {
+    const ident = readIdent(s, i);
+    if (!ident) break;
+    // Routine call discovery operates on the lexer's canonical token stream,
+    // where quoted identities retain their _crxq_ marker. Do not strip it as
+    // relation readers do, or a quoted definition and call stop pairing.
+    parts.push(ident.value);
+    i = skipSpace(s, ident.end);
+    if (s[i] !== ".") break;
+    i = skipSpace(s, i + 1);
+  }
+  if (!parts.length) return null;
+  const identity = canonicalRoutineIdentity(parts.join("."));
+  const open = skipSpace(s, i);
+  if (s[open] !== "(") {
+    return { identity, signature: "", signatureParsed: false, end: i };
+  }
+  let depth = 0;
+  for (let j = open; j < s.length; j += 1) {
+    if (s[j] === "(") depth += 1;
+    else if (s[j] === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return {
+          identity,
+          // Keep the complete declared identity arguments as evidence. Body
+          // dispatch deliberately unions overloads by name below because
+          // resolving PostgreSQL aliases, modes and defaults here would be a
+          // less honest narrowing than counting every possible body.
+          signature: s.slice(open + 1, j).replace(/\s+/g, " ").trim(),
+          signatureParsed: true,
+          end: j + 1,
+        };
+      }
+    }
+  }
+  return { identity, signature: "", signatureParsed: false, end: s.length };
+}
+
+function routineDefinitionReference(statement) {
+  const head = /^create\s+(?:or\s+replace\s+)?(function|procedure)\s+/.exec(statement);
+  if (!head) return null;
+  const reference = readRoutineReference(statement, head[0].length);
+  return reference ? { ...reference, kind: head[1] } : null;
+}
+
+function routineIdentityTransitions(code) {
+  const transitions = [];
+  let unparsed = false;
+  for (const raw of String(code || "").toLowerCase().split(";")) {
+    const statement = raw.trim();
+    const head = /\balter\s+(function|procedure|routine)\s+(?:if\s+exists\s+)?/.exec(statement);
+    if (!head) continue;
+    const reference = readRoutineReference(statement, head.index + head[0].length);
+    const possibleTail = reference ? statement.slice(reference.end) : statement.slice(head.index + head[0].length);
+    const action = /\b(rename\s+to|set\s+schema)\s+/.exec(possibleTail);
+    if (!action) continue;
+    if (!reference?.identity || !reference.signatureParsed) {
+      unparsed = true;
+      continue;
+    }
+    const destination = readIdent(possibleTail, skipSpace(possibleTail, action.index + action[0].length));
+    if (!destination) {
+      unparsed = true;
+      continue;
+    }
+    const destinationIdent = destination.value;
+    const oldParts = reference.identity.split(".");
+    const oldSchema = oldParts.length > 1 ? oldParts.at(-2) : "";
+    const oldName = oldParts.at(-1) || "";
+    const transitionKind = action[1].replace(/\s+/g, " ");
+    const toIdentity = transitionKind === "set schema"
+      ? canonicalRoutineIdentity(`${destinationIdent}.${oldName}`)
+      : canonicalRoutineIdentity(oldSchema ? `${oldSchema}.${destinationIdent}` : destinationIdent);
+    if (!toIdentity) {
+      unparsed = true;
+      continue;
+    }
+    transitions.push({
+      kind: head[1],
+      from: reference.identity,
+      to: toIdentity,
+      signature: reference.signature,
+      action: transitionKind,
+      sourceQualified: oldParts.length > 1,
+    });
+  }
+  return { transitions, unparsed };
 }
 
 // Walk forward from `pos` at paren depth 0 until one of `stops` appears as a
@@ -1233,6 +1330,15 @@ export function routineIdentityChanges(sql) {
       name: parts.at(-1),
     });
   }
+  const transitions = routineIdentityTransitions(code);
+  if (transitions.unparsed) unparsed = true;
+  for (const transition of transitions.transitions) {
+    const parts = transition.to.split(".");
+    changes.push({
+      schema: parts.length > 1 ? parts.at(-2) : "",
+      name: parts.at(-1),
+    });
+  }
   return { changes, unparsed };
 }
 
@@ -1553,7 +1659,12 @@ const TRUSTED_AUTH_ROUTINES = new Set(["uid", "jwt", "role"]);
 // `FROM` is deliberately absent: `SELECT * FROM do_the_repair()` IS a call.
 const NOT_A_CALL_HERE = /\b(insert\s+into|update|delete\s+from|merge\s+into|truncate(\s+table)?|copy|into|as|references|table)\s+(only\s+)?(if\s+(not\s+)?exists\s+)?(?:[a-z0-9_]+\.)*$/;
 
-function unknownCallsIn(codeLower, defined, trustedUnqualifiedRoutines = new Set()) {
+function unknownCallsIn(
+  codeLower,
+  defined,
+  trustedUnqualifiedRoutines = new Set(),
+  untrustedRoutineIdentities = new Set(),
+) {
   const out = new Set();
   for (const raw of codeLower.split(";")) {
     const stmt = runForEffectRegion(raw.trim());
@@ -1590,7 +1701,9 @@ function unknownCallsIn(codeLower, defined, trustedUnqualifiedRoutines = new Set
       // has independently proved pg_catalog resolves before user schemas. The
       // event-trigger capture uses this for PostgreSQL's read-only DDL metadata
       // helpers and binds the routine search_path into the manifest hash.
-      if (trustedBuiltin || (!schema && trustedUnqualifiedRoutines.has(name))) continue;
+      const trustedBySpelling = trustedBuiltin ||
+        (!schema && trustedUnqualifiedRoutines.has(name));
+      if (trustedBySpelling && !untrustedRoutineIdentities.has(identity)) continue;
       out.add(identity);
     }
   }
@@ -1652,6 +1765,50 @@ export function applyTimeWriteTargets(
     }
   };
   defineRoutines(routines);
+
+  // ROUND 60. Routine moves and renames must carry same-file bodies to their
+  // destination; retaining the old key as well is the overload-safe direction.
+  const untrustedRoutineIdentities = new Set();
+  const applyRoutineTransitions = (sourceCode) => {
+    const parsed = routineIdentityTransitions(sourceCode);
+    if (parsed.unparsed) top.unresolved = true;
+    for (const transition of parsed.transitions) {
+      untrustedRoutineIdentities.add(transition.to);
+      // pg_catalog is searched implicitly before ordinary user schemas. A
+      // routine moved there can therefore be invoked without qualification,
+      // and any destination name may also coincide with a caller-provided
+      // trusted-unqualified allowlist entry. Revoke both spellings rather than
+      // letting the shorter call inherit trust after a catalog mutation.
+      untrustedRoutineIdentities.add(routineBareName(transition.to));
+      const candidates = [...byName.entries()].filter(([identity]) =>
+        transition.sourceQualified
+          ? identity === transition.from
+          : routineBareName(identity) === routineBareName(transition.from));
+      if (!transition.sourceQualified) top.unresolved = true;
+      for (const [identity, bodies] of candidates) {
+        const sourceParts = identity.split(".");
+        const destinationBare = routineBareName(transition.to);
+        const destination = transition.action === "rename to" && !transition.sourceQualified
+          ? canonicalRoutineIdentity(sourceParts.length > 1
+            ? `${sourceParts.at(-2)}.${destinationBare}`
+            : destinationBare)
+          : transition.to;
+        if (!destination) { top.unresolved = true; continue; }
+        untrustedRoutineIdentities.add(destination);
+        untrustedRoutineIdentities.add(routineBareName(destination));
+        if (!byName.has(destination)) byName.set(destination, []);
+        const destinationBodies = byName.get(destination);
+        for (const body of bodies) {
+          if (!body.signatureParsed) top.unresolved = true;
+          if (!destinationBodies.some((candidate) => candidate === body ||
+              (candidate.originalBody === body && candidate.name === destination))) {
+            destinationBodies.push({ ...body, name: destination, originalBody: body });
+          }
+        }
+      }
+    }
+  };
+  applyRoutineTransitions(code);
 
   const operators = [];
   const operatorKeys = new Set();
@@ -1786,6 +1943,7 @@ export function applyTimeWriteTargets(
       if (parsed.unsupportedDoBody) top.unresolved = true;
       recordRoutineCatalog(parsed.code);
       defineRoutines(parsed.routines);
+      applyRoutineTransitions(parsed.code);
       defineOperators(operatorDefinitions(parsed.code));
       defineCasts(castDefinitions(parsed.code));
       defineViews(viewDefinitions(parsed.code));
@@ -1936,6 +2094,7 @@ export function applyTimeWriteTargets(
         // mutates the catalog at apply time. Preserve the identity so callers
         // can compare it with captured enabled event-trigger routines.
         recordRoutineCatalog(r.code);
+        applyRoutineTransitions(r.code);
         // Defaults live in the routine header, not its body, but omitted
         // arguments evaluate them at invocation time. Feed that executable
         // expression through the same routine/operator/cast/view dispatch
@@ -1981,6 +2140,7 @@ export function applyTimeWriteTargets(
       scan,
       new Set(byName.keys()),
       new Set(trustedUnqualifiedRoutines.map((name) => String(name).toLowerCase())),
+      untrustedRoutineIdentities,
     ),
     ...unknownTriggerFns,
     ...unknownOperatorFns,

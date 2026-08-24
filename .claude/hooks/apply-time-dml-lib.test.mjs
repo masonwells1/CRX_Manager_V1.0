@@ -1651,4 +1651,67 @@ eq(T(null), [], "a null body does not throw");
     'round-58 MUTANT: a quoted comma and callable array default remain deferred until invocation');
 }
 
+// ---------------- ROUND 60: routine moves/renames preserve executable bodies
+{
+  const relocated = applyTimeWriteTargets(
+    'CREATE FUNCTION public.pg_sleep() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET total_price = total_price; RETURN true; END $$; ' +
+    'ALTER FUNCTION public.pg_sleep() SET SCHEMA pg_catalog; ' +
+    'SELECT pg_catalog.pg_sleep();',
+  );
+  ok(relocated.targets.has('order_items.total_price'),
+    'round-60: moving a same-file mutator into a trusted schema preserves its writes');
+  ok(relocated.definedRoutines.includes('pg_catalog.pg_sleep') &&
+      relocated.invokedRoutines.includes('pg_catalog.pg_sleep'),
+    'round-60 MUTANT: the relocated complete identity owns and invokes the preserved body');
+
+  const renamed = applyTimeWriteTargets(
+    'CREATE FUNCTION public.before_name() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; END $$; ' +
+    'ALTER FUNCTION public.before_name() RENAME TO after_name; ' +
+    'SELECT public.after_name();',
+  );
+  ok(renamed.targets.has('orders.total_profit') &&
+      renamed.definedRoutines.includes('public.after_name'),
+    'round-60: renaming a same-file mutator re-keys its body under the destination');
+
+  const chained = applyTimeWriteTargets(
+    'CREATE FUNCTION public.chain_name() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; END $$; ' +
+    'ALTER FUNCTION public.chain_name() SET SCHEMA scratch; ' +
+    'ALTER FUNCTION scratch.chain_name() RENAME TO final_name; ' +
+    'SELECT scratch.final_name();',
+  );
+  ok(chained.targets.has('orders.total_profit') &&
+      chained.definedRoutines.includes('scratch.final_name'),
+    'round-60: ordered SET SCHEMA plus RENAME transitions preserve the final body identity');
+
+  const residentRelocation = applyTimeWriteTargets(
+    'ALTER FUNCTION public.pg_sleep() SET SCHEMA pg_catalog; ' +
+    'SELECT pg_catalog.pg_sleep();',
+  );
+  ok(residentRelocation.unknownCalls.includes('pg_catalog.pg_sleep') || residentRelocation.unresolved,
+    'round-60: a relocated resident routine cannot inherit pg_catalog trust by spelling');
+
+  const residentUnqualifiedRelocation = applyTimeWriteTargets(
+    'ALTER FUNCTION public.round(numeric) SET SCHEMA pg_catalog; SELECT round(1.2);',
+  );
+  ok(residentUnqualifiedRelocation.unknownCalls.includes('round') ||
+      residentUnqualifiedRelocation.unresolved,
+    'round-60: an unqualified relocated resident routine cannot inherit implicit pg_catalog trust');
+
+  const unreadable = applyTimeWriteTargets(
+    'ALTER FUNCTION public.before_name SET SCHEMA pg_catalog; SELECT pg_catalog.before_name();',
+  );
+  ok(unreadable.unresolved,
+    'round-60: an identity transition without a complete signature fails closed');
+
+  const changedCatalog = routineIdentityChanges(
+    'ALTER FUNCTION public.before_name(integer, text[]) SET SCHEMA scratch;',
+  );
+  ok(changedCatalog.changes.some((change) =>
+      change.schema === 'scratch' && change.name === 'before_name'),
+    'round-60: catalog-change evidence includes the parsed destination identity');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

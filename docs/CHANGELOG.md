@@ -14,7 +14,11 @@ All significant development milestones, in reverse chronological order.
 - Control-fragment scanning now preserves an executable `IF`/`ELSIF`/`WHILE` condition even when
   its arm later contains `PERFORM` or `CALL`; the later verb can no longer hide an earlier
   money-mutating routine invocation in the same fragment.
-- Focused proof: apply-time analyzer 296 assertions; migration apply guard 341 assertions;
+- `ALTER FUNCTION`/`PROCEDURE` schema moves and renames now carry every possible same-file overload
+  body to the destination identity in order. Relocated identities never inherit `pg_catalog` or
+  other textual trust exemptions through either qualified or unqualified calls, and incomplete
+  transition signatures fail closed.
+- Focused proof: apply-time analyzer 304 assertions; migration apply guard 344 assertions;
   generator 29 assertions; persisted-rule cross-migration mutation passed.
 
 ## 2026-08-22 — Persisted CHECK-routine effects added to migration evidence
