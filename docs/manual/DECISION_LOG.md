@@ -323,6 +323,13 @@ nothing. The suite now slices the document between the parent heading and the tr
 requires every element of the sequence inside that slice. Removing "wait 90s … identical" from the parent
 paragraph turns the suite red even though "90 seconds apart" still appears verbatim in the head's section.
 
+**Seventh round: a set of words is not a sequence.** CodeRabbit on `c476c8f5`. The parent-section check used
+five independent `includes()` calls, which "require that same `created_at` before merging, wait 90s" also
+satisfies — every fragment present, describing the wrong procedure. Replaced with `containsInOrder()`, which
+walks the index forward so each step must follow the previous one. Reordering the parent paragraph while
+keeping every word turns the suite red. Order was the substance of the rule all along; presence was never
+what needed proving.
+
 The through-line across all six rounds is one idea: **a check that names the thing it forbids only catches
 that name.** Five times running, the fix was itself written one notch too narrow — a spelling, then a
 notation, then a variable read from the wrong scope, then two facts with no order between them, then a

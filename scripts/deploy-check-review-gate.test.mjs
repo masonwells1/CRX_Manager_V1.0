@@ -63,6 +63,21 @@ function sectionBetween(markdown, startNeedle, endNeedle) {
   return markdown.slice(start, end);
 }
 
+// Every needle present, each after the previous one — a SEQUENCE, not a set.
+// Independent `includes()` checks pass on scrambled prose: "require that same
+// created_at before merging, wait 90s" contains every fragment while describing
+// a different (and wrong) procedure. Walking the index forward pins the order.
+// (CodeRabbit, PR #441.)
+function containsInOrder(text, needles) {
+  let from = 0;
+  for (const needle of needles) {
+    const at = text.indexOf(needle, from);
+    if (at === -1) return false;
+    from = at + needle.length;
+  }
+  return true;
+}
+
 // A command satisfies a rule only if it contains EVERY required fragment.
 const hasCommandWithAll = (cmds, fragments) =>
   cmds.some((c) => fragments.every((f) => c.includes(f)));
@@ -266,18 +281,24 @@ for (const [name, file] of SKILLS) {
     "git merge-base --is-ancestor <HEAD>^2 <BASE_SHA>",
   );
   ok(Boolean(parentSection), `${name}: the parent fallback section is locatable`);
-  for (const [needle, why] of [
-    ["90s", "the 90-second gap between polls"],
-    ["identical", "both polls must agree"],
-    ["created_at", "agreement is on the timestamp, not merely on 'success'"],
-    ["before merging", "a third poll immediately before the merge"],
-    ["same", "that final poll must match the settled timestamp"],
-  ]) {
-    ok(
-      Boolean(parentSection) && parentSection.includes(needle),
-      `${name}: the parent section itself states ${why}`,
-    );
-  }
+  // One ordered sequence, not five independent presence checks. Order is the
+  // substance here: "require that same created_at before merging, wait 90s"
+  // contains every fragment and describes the wrong procedure. The parent
+  // section must lay the steps out in the order they are performed —
+  // poll, wait 90s, poll again, require identical, then re-read before merging
+  // and require that same created_at. (CodeRabbit, PR #441.)
+  ok(
+    Boolean(parentSection) &&
+      containsInOrder(parentSection, [
+        "wait 90s",
+        "run it again",
+        "identical",
+        "before merging",
+        "same",
+        "created_at",
+      ]),
+    `${name}: the parent section states the full settlement sequence, in order`,
+  );
   ok(
     hasCommandWithAll(cmds, ["git merge-tree --write-tree", "<HEAD>^{tree}", "MERGE_ADDED_NOTHING"]),
     `${name}: tree identity is asserted, not printed`,
