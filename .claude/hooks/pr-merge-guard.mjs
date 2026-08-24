@@ -28,6 +28,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
+  coderabbitVerdict,
   contentIsRisky,
   ghApiMergeRequest,
   ghMergeRequest,
@@ -131,6 +132,110 @@ function gateRequest(request) {
   }
   if (base !== "main") return; // ordinary feature-branch merges are not production landings
 
+  // ── ONE SHA, bound from here through the merge itself ──────────────────────
+  // Codex, High, PR #441: verifying review evidence for one SHA while a
+  // different SHA reaches the merge is a real path to landing unreviewed code,
+  // and nothing mechanically prevented it — `--match-head-commit` was documented
+  // procedure, and this guard did not look at it. The head is now derived ONCE,
+  // here, from GitHub, and every check below plus the merge argument must equal
+  // that value. GitHub itself then refuses the merge if the branch moved between
+  // this hook and the API call.
+  const headSha = String(pr.headRefOid || "").trim();
+  if (!/^[0-9a-f]{40}$/i.test(headSha)) {
+    deny("PR MERGE GATE: GitHub did not return a usable headRefOid, so the merge cannot be bound to a reviewed commit (fail closed).");
+  }
+
+  // `--auto` hands the landing to GitHub for later, AFTER this gate has run, so
+  // commits pushed in the meantime would land with review evidence that was
+  // checked against an older head. That is precisely the hole this gate exists
+  // to close, so it is denied for every merge into main — not only risky ones.
+  if (request.auto) {
+    deny(
+      "PR MERGE GATE: `--auto` is not allowed for merges into main. Auto-merge lands the PR after " +
+      "this gate has run, so any commit pushed in the meantime would reach production with review " +
+      "evidence bound to an older head. Wait for the checks, then merge immediately with " +
+      `\`gh pr merge <n> --squash --match-head-commit ${headSha}\`.`
+    );
+  }
+
+  // Merge forms that cannot carry a head binding are denied outright: the MCP
+  // merge tool and the REST endpoint have no --match-head-commit equivalent, so
+  // there is no way to make GitHub enforce the SHA this gate verified.
+  if (!request.isGhCli) {
+    deny(
+      "PR MERGE GATE: merges into main must go through `gh pr merge` so the landing can be pinned " +
+      `with \`--match-head-commit ${headSha}\`. The MCP merge tool and the REST endpoint cannot pin ` +
+      "the head, so a commit pushed between this check and the merge would land unreviewed."
+    );
+  }
+
+  const pinned = String(request.matchHeadCommit || "").trim();
+  if (!pinned) {
+    deny(
+      "PR MERGE GATE: merges into main must pass `--match-head-commit` so GitHub refuses the merge " +
+      `if the branch moves after this check. Re-run as:\n  gh pr merge ${request.selector || "<number>"} --squash --match-head-commit ${headSha}`
+    );
+  }
+  if (pinned.toLowerCase() !== headSha.toLowerCase()) {
+    deny(
+      `PR MERGE GATE: \`--match-head-commit ${pinned}\` does not equal this PR's current head ` +
+      `(${headSha}). The review evidence this gate checks is bound to the current head, so merging a ` +
+      "different SHA would land content that was never verified. Re-read the head and retry:\n" +
+      `  gh pr merge ${request.selector || "<number>"} --squash --match-head-commit ${headSha}`
+    );
+  }
+
+  // ── CodeRabbit must have reviewed THIS EXACT head ──────────────────────────
+  // Standing policy (Mason, 2026-07-17) is that every PR's CodeRabbit review is
+  // read and its real issues fixed before merging. That was procedure only, and
+  // `auto_pause_after_reviewed_commits: 2` means later pushes are NOT
+  // auto-reviewed — so a green status check on an unreviewed head was reachable.
+  // Codex raised it five rounds running, finally as High. It is enforced here.
+  let reviews = [];
+  let comments = [];
+  let cycleStartIso = "";
+  try {
+    const api = (endpoint) => {
+      const args = ["api", "--paginate", `repos/{owner}/{repo}/${endpoint}`];
+      if (request.repo) {
+        args[2] = `repos/${request.repo}/${endpoint}`;
+      }
+      return JSON.parse(gh(args));
+    };
+    const number = String(request.selector || "").replace(/^#/, "");
+    if (!/^\d+$/.test(number)) {
+      throw new Error("could not resolve the PR number needed to read its CodeRabbit review");
+    }
+    reviews = api(`pulls/${number}/reviews`);
+    comments = api(`issues/${number}/comments`);
+    // The cycle starts at the NEWEST `pending` status on this head: the oldest
+    // reaches back into a previous attempt (so one old failure would block a
+    // clean retry forever), and the newest status is the COMPLETION of the
+    // current cycle (so anchoring there misses a failure posted seconds before
+    // it — fail-open). Statuses come back newest-first.
+    const statuses = api(`commits/${headSha}/statuses`).filter(
+      (s) => s?.context === "CodeRabbit" && s?.state === "pending",
+    );
+    cycleStartIso = statuses.length > 0 ? String(statuses[0].created_at || "") : "";
+  } catch (error) {
+    deny(`PR MERGE GATE: could not read this PR's CodeRabbit review from the GitHub API, so the merge is denied (fail closed). ${error?.message || error}`);
+  }
+
+  const notReviewed = coderabbitVerdict({ reviews, comments, headSha, cycleStartIso });
+  if (notReviewed) {
+    deny(
+      `PR MERGE GATE: ${notReviewed}.\n\n` +
+      "A green `CodeRabbit` status check is NOT proof the head was reviewed — a paused branch emits " +
+      "a no-op \"Review completed\" success within seconds of a push, with no review behind it. The " +
+      "binding evidence is a submitted review object whose commit_id equals the head, or the " +
+      "canonical walkthrough stamp naming it.\n\n" +
+      `  1. Confirm the branch is CLEAN (\`gh pr view ${request.selector || "<number>"} --json mergeStateStatus\`); if BEHIND, run \`gh pr update-branch\` FIRST — it moves the head and voids any review you already paid for.\n` +
+      `  2. Comment \`@coderabbitai review\` on the PR and WAIT for it to finish.\n` +
+      "  3. Read the review and fix every real issue it raises.\n" +
+      `  4. Re-read the head and merge with \`--match-head-commit\`.`
+    );
+  }
+
   // ── green-pipeline requirement ─────────────────────────────────────────────
   // `--auto` defers the merge to GitHub, which itself enforces the required
   // checks — so only immediate merges must already be green here.
@@ -169,6 +274,9 @@ function gateRequest(request) {
   if (risky.length === 0 && !contentFlagged) return;
 
   // ── risky merge: --auto is denied outright ─────────────────────────────────
+  // Subsumed since PR #441 by the blanket `--auto` denial for every merge into
+  // main above, and kept deliberately: it carries the risky-diff-specific
+  // wording, and it stays correct if the earlier check is ever narrowed.
   // Auto-merge defers the landing until GitHub's checks pass — AFTER this hook
   // has run. Later commits pushed to the branch would then merge with no fresh
   // proof and no re-run of this gate (Codex round-4). Risky diffs must merge
@@ -183,7 +291,9 @@ function gateRequest(request) {
   }
 
   // ── risky merge → require the fresh, bound Codex proof ─────────────────────
-  const headSha = pr.headRefOid;
+  // `headSha` is the one derived and validated above — the same value the
+  // CodeRabbit evidence was checked against and that `--match-head-commit` was
+  // required to equal. One SHA, from GitHub, through every check and the merge.
   const baseSha = String(pr.baseRefOid).trim(); // GitHub's real base tip, not local origin/main
   if (!/^[0-9a-f]{40}$/i.test(baseSha)) {
     deny("PR MERGE GATE: GitHub returned an unusable baseRefOid, so the proof cannot be bound to the real base (fail closed).");

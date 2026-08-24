@@ -130,7 +130,18 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    blocking, and its nitpicks may be dismissed with a one-line reason. It is the broad every-PR
    pass; a separate exact-SHA `gpt-5.6-sol` high-effort proof remains the hard gate for risky
    money/RLS/migration diffs — both run, neither replaces the other.
-5. **Confirm the review actually covered the FINAL commit.** Auto-review pauses after 2 reviewed
+5. **Confirm the review actually covered the FINAL commit. This is now ENFORCED, not just asked
+   for.** `.claude/hooks/pr-merge-guard.mjs` and `.codex/hooks/production-action-guard.mjs` both
+   refuse a merge into `main` unless (a) the command carries `--match-head-commit` equal to
+   GitHub's current `headRefOid`, and (b) CodeRabbit has demonstrably reviewed that exact head —
+   a submitted review object whose `commit_id` matches, or the canonical walkthrough stamp naming
+   it — with no failure marker in that head's own review cycle. `--auto`, the MCP merge tool, and
+   the REST merge endpoint are denied for `main` because none of them can pin the head. Every
+   unreadable API response fails closed. The steps below are how you SATISFY that gate; skipping
+   them no longer produces a merge, it produces a denial. (Codex, High, PR #441 — raised five
+   rounds running while it was still only prose.)
+
+   Auto-review pauses after 2 reviewed
    commits (`.coderabbit.yaml`), and a rate-limited PR can silently skip a review entirely — PR
    #429 (21 commits) and PR #434 both posted "Review limit reached". A review of an earlier commit
    is **not** a review of what you are about to merge. Bind the proof to the **head SHA**. Nothing

@@ -1697,19 +1697,123 @@ export function ghMergeRequest(command) {
   let selector = "";
   let repo = "";
   let auto = false;
+  // `--match-head-commit` used to be parsed only to SKIP its value. The guard now
+  // requires it to equal GitHub's current headRefOid for merges into main, so the
+  // value has to be captured: without it the guard could verify review evidence
+  // for one SHA while a different SHA was handed to the merge. (Codex, High,
+  // PR #441.)
+  let matchHeadCommit = "";
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (word.startsWith("--repo=")) { repo = word.slice("--repo=".length); continue; }
+    if (word.toLowerCase().startsWith("--match-head-commit=")) {
+      matchHeadCommit = word.slice("--match-head-commit=".length);
+      continue;
+    }
     if (word.toLowerCase() === "--auto" || word.toLowerCase().startsWith("--auto=")) { auto = true; continue; }
     if (valueFlags.has(word)) {
       const value = words[index + 1] || "";
       if (word === "--repo" || word === "-R") repo = value;
+      if (word === "--match-head-commit") matchHeadCommit = value;
       index += 1;
       continue;
     }
     if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
   }
-  return { selector, repo, auto };
+  return { selector, repo, auto, matchHeadCommit, isGhCli: true };
+}
+
+// ── CodeRabbit exact-head evidence ───────────────────────────────────────────
+// Pure functions so the merge guard's decision is testable without network.
+//
+// Two endpoints, because CodeRabbit emits its binding evidence in two different
+// places depending on the outcome:
+//   * a review WITH findings creates a review object whose `commit_id` is the
+//     SHA it was submitted against — structured, GitHub-populated, and not
+//     influenceable by PR content;
+//   * a CLEAN review creates no review object at all, and its only SHA-bound
+//     evidence is the canonical walkthrough comment's range line.
+// Checking one endpoint alone reports a reviewed head as unreviewed.
+
+// The canonical walkthrough range line, fully anchored. CodeRabbit renders it
+// blockquoted while the review is in progress and bare inside the collapsed
+// <details> "Commits" block once it completes, so the `> ` prefix is optional.
+// The leading word is `([A-Za-z]+ )?` and NOT `[A-Za-z ]*` — the latter's space
+// also matches indentation, which would accept a stamp quoted inside a code
+// block. Anchoring matters because review bodies are AI-generated summaries of
+// PUBLIC PR content: an unanchored `and <sha>` could be satisfied by a PR that
+// merely contains its own head SHA in a changed file.
+export function stampLineBindsHead(body, headSha) {
+  if (!/^[0-9a-f]{40}$/i.test(String(headSha || ""))) return false;
+  const re = new RegExp(
+    `^(> )?([A-Za-z]+ )?[Ff]iles that changed from the base of the PR and between [0-9a-f]{40} and ${headSha}\\.$`,
+    "m",
+  );
+  return re.test(String(body || ""));
+}
+
+// The canonical walkthrough comment carries the summarize marker; every
+// conversational reply carries the auto-generated-reply marker. `chat.auto_reply`
+// is enabled and the repo is public, so ANY unfiltered bot comment is
+// attacker-solicitable — a PR author can ask the bot to echo a SHA back.
+export function isCanonicalWalkthrough(comment) {
+  const body = String(comment?.body || "");
+  return (
+    comment?.user?.login === "coderabbitai[bot]" &&
+    body.includes("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->") &&
+    !body.includes("auto-generated reply by CodeRabbit")
+  );
+}
+
+export function reviewObjectBindsHead(review, headSha) {
+  return (
+    review?.user?.login === "coderabbitai[bot]" &&
+    review?.submitted_at != null &&
+    review?.state !== "DISMISSED" &&
+    typeof review?.commit_id === "string" &&
+    review.commit_id.toLowerCase() === String(headSha || "").toLowerCase() &&
+    /^[0-9a-f]{40}$/i.test(String(headSha || ""))
+  );
+}
+
+// A stamp proves the review STARTED on this head, never that it finished. These
+// markers mean it did not: the gate must treat every one of them as unreviewed.
+export const CODERABBIT_FAILURE_MARKERS = [
+  "Review failed",
+  "Review rate limited",
+  "Review limit reached",
+  "No files to review",
+];
+
+export function cycleHasFailureMarker(comments, cycleStartIso) {
+  if (!cycleStartIso) return true; // cannot scope the cycle → fail closed
+  return (comments || []).some((c) => {
+    if (c?.user?.login !== "coderabbitai[bot]") return false;
+    if (!c?.created_at || c.created_at < cycleStartIso) return false;
+    return CODERABBIT_FAILURE_MARKERS.some((m) => String(c.body || "").includes(m));
+  });
+}
+
+// Verdict for one PR head. Returns null when the head is proven reviewed;
+// otherwise a string naming why it is not. Every unresolvable input fails closed.
+export function coderabbitVerdict({ reviews, comments, headSha, cycleStartIso }) {
+  if (!/^[0-9a-f]{40}$/i.test(String(headSha || ""))) {
+    return "GitHub did not return a usable 40-character headRefOid";
+  }
+  if (!Array.isArray(reviews) || !Array.isArray(comments)) {
+    return "CodeRabbit review data could not be read from the GitHub API";
+  }
+  const boundReview = reviews.some((r) => reviewObjectBindsHead(r, headSha));
+  const boundStamp = comments.some(
+    (c) => isCanonicalWalkthrough(c) && stampLineBindsHead(c.body, headSha),
+  );
+  if (!boundReview && !boundStamp) {
+    return `no CodeRabbit review is bound to this exact head (${headSha.slice(0, 12)}...) — neither a submitted review object with a matching commit_id nor a canonical walkthrough stamp naming it`;
+  }
+  if (cycleHasFailureMarker(comments, cycleStartIso)) {
+    return "CodeRabbit posted a failure marker (review failed / rate limited / limit reached / no files to review) in this head's own review cycle, so the review did not complete";
+  }
+  return null;
 }
 
 // `gh api -X PUT repos/o/r/pulls/N/merge`, plus the GraphQL mergePullRequest
@@ -1739,7 +1843,7 @@ export function ghApiMergeRequest(command) {
   }
   if (method !== "PUT" || !endpoint) return null;
   const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
-  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false } : null;
+  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false, matchHeadCommit: "", isGhCli: false } : null;
 }
 
 // MCP merge tool inputs — key spellings differ per connector (GitHub MCP uses
@@ -1751,7 +1855,7 @@ export function mcpMergeRequest(toolInput = {}) {
   const repository = toolInput.repo ?? toolInput.repository ?? toolInput.repoName ??
     toolInput.repository_full_name ?? toolInput.repositoryFullName ?? toolInput.full_name ?? "";
   const repo = String(repository).includes("/") ? String(repository) : (owner && repository ? `${owner}/${repository}` : "");
-  return { selector: String(selector), repo, auto: false };
+  return { selector: String(selector), repo, auto: false, matchHeadCommit: "", isGhCli: false };
 }
 
 // Fully-green pipeline: mergeStateStatus CLEAN and every reported check

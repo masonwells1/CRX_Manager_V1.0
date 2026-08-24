@@ -542,6 +542,35 @@ test and invisible to every existing assertion, because a duplicate of a vetted 
 exclusion. Harmless to CodeRabbit, but it is evidence the list was edited without being read, and this list is
 short precisely so it can be read in full. The coverage test now rejects duplicates.
 
+**Sixteenth round, and the one that ends the argument: the gate is now enforced, not written down.**
+Codex escalated to two Highs and drew an explicit line — *"Until then, do not reduce automatic review
+coverage to two commits."* Its case was sound: this PR lowers `auto_pause_after_reviewed_commits` from 5 to 2,
+and the control compensating for that was a procedure in a Markdown file. A later unreviewed commit could
+carry a green status into production, and separately, `<HEAD>` was hand-substituted into each verification
+command *and* into `--match-head-commit`, so evidence could be checked for one SHA while another merged.
+
+**Mason's call, 2026-08-24: build the enforcement.** That matches the standing principle in his global
+instructions — *prefer hard guards over more rules; the deterministic layer is the real boundary.* Fifteen
+rounds of sharpening prose were, in that light, the wrong shape of work.
+
+Both merge guards — `.claude/hooks/pr-merge-guard.mjs` and `.codex/hooks/production-action-guard.mjs` — now
+refuse a merge into `main` unless the command pins `--match-head-commit` to GitHub's current `headRefOid`
+**and** CodeRabbit has demonstrably reviewed that exact head, with no failure marker in that head's own review
+cycle. `--auto`, the MCP merge tool, and the REST endpoint are denied for `main` outright: none of them can
+pin a head, so none can guarantee the SHA verified is the SHA landed. Every unreadable API response fails
+closed. The predicates live once in `codex-push-lib.mjs` and are shared, because **a gate Claude obeys and
+Codex does not is a bypass, not an asymmetry** — the Codex side had to move in the same commit.
+
+Proven by driving the real hook against the real PR: correctly pinned, unpinned, pinned to the wrong SHA,
+`--auto`, and the MCP tool all produce the right outcome, and the positive path is reached (the pinned case
+passes the CodeRabbit check and stops at the Codex proof, which is the correct next gate). 46 new assertions
+call the decision functions directly rather than matching command text — and the first run of them caught a
+real `SyntaxError` in the hook, which every substring test in the repo would have sailed past.
+
+Editing a protected guard also means re-pinning its reviewed blob in
+`scripts/apply-live-testdata-maintenance-20260812.mjs`; the `TO_BE_FILLED` sentinel exists precisely so the
+new output hash is *computed by the producer* rather than guessed.
+
 The through-line across every round of this PR is one idea: **a check that names the thing it forbids only
 catches that name** — and its corollary, learned four times on `path_filters` alone: **a name is not a
 mechanism.** `docs/audits`, `*.md`, a date prefix, and finally `archive` were all shorthand for "these files

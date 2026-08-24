@@ -52,12 +52,23 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // joined RISKY_PATH_RES so a Codex push touching it needs an exact-head
   // proof. The apply-live-testdata risky-path anchor this transform verifies is
   // still present exactly once; the transform is identity, so input == output.
-  codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
-  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
+  // pushLib re-pinned 2026-08-24 (PR #441): ghMergeRequest now CAPTURES the
+  // --match-head-commit value instead of parsing it only to skip it, marks which
+  // merge form can pin a head (isGhCli), and gained the CodeRabbit exact-head
+  // evidence predicates the merge guard enforces. RISKY_PATH_RES and the risky
+  // producer-path anchor this transform verifies are untouched, so the transform
+  // is still identity and input == output.
+  // codexGuard re-pinned 2026-08-24 (PR #441): the merge route gained the
+  // exact-head CodeRabbit gate and the --match-head-commit binding, mirroring
+  // .claude/hooks/pr-merge-guard.mjs so the two sides cannot diverge. Every
+  // anchor this transform rewrites (the protected-producer list, the matcher,
+  // the maintenance gate, the command gate) is untouched.
+  codexGuard: "ffe97aaf4c6d29b0267862b35b816db266dddf23",
+  pushLib: "b86669151d3b68d96e71f06dfbbe5f9c21056959",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
-  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
+  codexGuard: "c0e949cfdaa91c03e169c4122ec409476aabe8cd",
+  pushLib: "b86669151d3b68d96e71f06dfbbe5f9c21056959",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

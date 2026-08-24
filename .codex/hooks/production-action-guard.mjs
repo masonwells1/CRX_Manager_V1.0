@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
+  coderabbitVerdict,
   contentIsRisky,
   extractPatchDestinations,
   gitPushCwd,
@@ -404,21 +405,31 @@ function ghMergeRequest(command) {
   const valueFlags = new Set(["--repo", "-R", "--match-head-commit", "--subject", "--body"]);
   let selector = "";
   let repo = "";
+  // Captured, not just skipped — the merge gate requires it to equal GitHub's
+  // current headRefOid so review evidence and the merged SHA cannot diverge.
+  // Kept identical to ghMergeRequest in codex-push-lib.mjs: a merge gate Claude
+  // obeys and Codex does not is a bypass, not an asymmetry. (Codex, High, #441.)
+  let matchHeadCommit = "";
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (word.startsWith("--repo=")) {
       repo = word.slice("--repo=".length);
       continue;
     }
+    if (word.toLowerCase().startsWith("--match-head-commit=")) {
+      matchHeadCommit = word.slice("--match-head-commit=".length);
+      continue;
+    }
     if (valueFlags.has(word)) {
       const value = words[index + 1] || "";
       if (word === "--repo" || word === "-R") repo = value;
+      if (word === "--match-head-commit") matchHeadCommit = value;
       index += 1;
       continue;
     }
     if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
   }
-  return { selector, repo };
+  return { selector, repo, matchHeadCommit, isGhCli: true };
 }
 
 function ghApiMergeRequest(command) {
@@ -456,7 +467,7 @@ function ghApiMergeRequest(command) {
   }
   if (method !== "PUT" || !endpoint) return null;
   const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
-  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}` } : null;
+  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, matchHeadCommit: "", isGhCli: false } : null;
 }
 
 function ghApiMutates(command) {
@@ -511,7 +522,7 @@ function mcpMergeRequest(toolInput) {
   const repository = toolInput.repo ?? toolInput.repository ?? toolInput.repoName ??
     toolInput.repository_full_name ?? toolInput.repositoryFullName ?? toolInput.full_name ?? "";
   const repo = String(repository).includes("/") ? String(repository) : (owner && repository ? `${owner}/${repository}` : "");
-  return { selector: String(selector), repo };
+  return { selector: String(selector), repo, matchHeadCommit: "", isGhCli: false };
 }
 
 function resolvePullRequest({ request, repoDir, runGh }) {
@@ -547,6 +558,38 @@ export function pullRequestChecksGreen(pullRequest) {
   });
 }
 
+// Reads the two endpoints CodeRabbit binds evidence to and returns null when the
+// head is proven reviewed, otherwise a reason string. Every unresolvable input
+// fails closed. The predicates themselves live in codex-push-lib.mjs so both
+// guards share one implementation.
+function coderabbitMergeVerdict({ request, headSha, runGh }) {
+  const number = String(request?.selector || "").replace(/^#/, "");
+  if (!/^\d+$/.test(number)) {
+    return "the pull request number needed to read its CodeRabbit review could not be resolved";
+  }
+  const repo = request?.repo ? String(request.repo) : "{owner}/{repo}";
+  try {
+    const api = (endpoint) => JSON.parse(runGh(["api", "--paginate", `repos/${repo}/${endpoint}`]));
+    const reviews = api(`pulls/${number}/reviews`);
+    const comments = api(`issues/${number}/comments`);
+    // Newest `pending` status = start of THIS head's review cycle. The oldest
+    // reaches into a previous attempt (blocking a clean retry forever); the
+    // newest status is the cycle's completion (missing a failure posted just
+    // before it). Statuses come back newest-first.
+    const pending = api(`commits/${headSha}/statuses`).filter(
+      (s) => s?.context === "CodeRabbit" && s?.state === "pending",
+    );
+    return coderabbitVerdict({
+      reviews,
+      comments,
+      headSha,
+      cycleStartIso: pending.length > 0 ? String(pending[0].created_at || "") : "",
+    });
+  } catch (error) {
+    return `this pull request's CodeRabbit review could not be read from the GitHub API (${error?.message || error})`;
+  }
+}
+
 function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
   let pullRequest;
   try {
@@ -572,6 +615,50 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."
     );
   }
+
+  // ── one SHA, bound through verification and the merge ──────────────────────
+  // Mirrors .claude/hooks/pr-merge-guard.mjs exactly. A merge gate Claude obeys
+  // and Codex does not is a bypass, not a deliberate asymmetry. (Codex, High,
+  // PR #441 — raised five rounds running before it was enforced anywhere.)
+  const headSha = normalize(pullRequest.headRefOid);
+  if (!/^[0-9a-f]{40}$/i.test(headSha)) {
+    return denied(
+      "CODEX PRODUCTION GATE: GitHub did not report a usable headRefOid, so the merge cannot be bound to a reviewed commit (fail closed)."
+    );
+  }
+  if (!request?.isGhCli) {
+    return denied(
+      "CODEX PRODUCTION GATE: merges into main must go through `gh pr merge` so the landing can be pinned " +
+      `with \`--match-head-commit ${headSha}\`. The MCP merge tool and the REST endpoint cannot pin the head, ` +
+      "so a commit pushed between this check and the merge would land unreviewed."
+    );
+  }
+  const pinned = normalize(request?.matchHeadCommit);
+  if (!pinned) {
+    return denied(
+      "CODEX PRODUCTION GATE: merges into main must pass `--match-head-commit` so GitHub refuses the merge " +
+      `if the branch moves after this check. Re-run as:\n  gh pr merge ${request?.selector || "<number>"} --squash --match-head-commit ${headSha}`
+    );
+  }
+  if (pinned.toLowerCase() !== headSha.toLowerCase()) {
+    return denied(
+      `CODEX PRODUCTION GATE: \`--match-head-commit ${pinned}\` does not equal this pull request's current head ` +
+      `(${headSha}). Review evidence is bound to the current head, so merging a different SHA would land ` +
+      `content that was never verified.\n  gh pr merge ${request?.selector || "<number>"} --squash --match-head-commit ${headSha}`
+    );
+  }
+
+  // ── CodeRabbit must have reviewed THIS EXACT head ──────────────────────────
+  const notReviewed = coderabbitMergeVerdict({ request, headSha, runGh });
+  if (notReviewed) {
+    return denied(
+      `CODEX PRODUCTION GATE: ${notReviewed}.\n\n` +
+      "A green `CodeRabbit` status check is NOT proof the head was reviewed — a paused branch emits a no-op " +
+      '"Review completed" success within seconds of a push with no review behind it. Comment ' +
+      "`@coderabbitai review`, wait for it to finish, read it, then re-read the head and merge pinned to it."
+    );
+  }
+
   return gateMainChange({
     repoDir,
     sourceSha: pullRequest.headRefOid,
