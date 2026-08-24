@@ -1598,9 +1598,12 @@ function liveSeparatorPositions(text, dialect) {
     if (ch === "'" || ch === '"') { quote = ch; continue; }
     if (SEGMENT_SEPARATORS.has(ch)) live.add(i);
   }
-  // An UNTERMINATED quote means this reading never made sense: no shell would run
-  // the line as written, so the span this parser believed in is not a span, and
-  // every separator it swallowed was swallowed on a false premise. `main` split on
+  // An UNTERMINATED quote means this reading did not parse. The parser does not
+  // claim to know what a shell would do with an unbalanced command — the three
+  // dialects disagree about that, which is the whole reason this function exists.
+  // It claims only that the span it believed in is unproven, so every separator
+  // that span swallowed was swallowed on an unproven premise, and the conservative
+  // reading is to keep them. `main` split on
   // a plain `command.split(/(?:&&|\|\|?|;|\r?\n)/)` that ignored quotes entirely,
   // so it caught these; quote-awareness lost them, and `echo x"|gh …` reached the
   // merge and `gh api` gates as one unrecognised command — the same regression as

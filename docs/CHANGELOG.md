@@ -128,8 +128,10 @@ next agent. Two sessions read it that way.
   live there, Git Bash converts and pushes from `C:\repo` while the guard reads branch, remotes, diff
   and proof from `C:\c\repo` — the innocuous one authorizing a risky push from the real one. That is
   the same fail-open the translation kept producing, arriving by a different route (Codex P1, round
-  5). A test asserts the "does not exist" diagnostic is **absent** from that denial, which is what
-  proves the refusal ran before the filesystem was ever consulted.
+  5). A test asserts the denial names the path SPELLING and not the missing-directory diagnostic, so
+  the MSYS refusal — not an incidental lookup failure — is the operative reason. That is what the
+  assertion establishes; it does not by itself prove the order in which the two checks were reached,
+  and the earlier wording claiming it did has been corrected (CodeRabbit, round 15).
 - **An argument the shell joins across a space is now refused — this one was a fail-OPEN** (Codex P1,
   round 9). `git -C /c/My\ Repo push origin HEAD:main` is ONE argument to the shell and two to the
   literal parser, which then found a bare word where `push` or a global option belongs and concluded
@@ -211,7 +213,8 @@ next agent. Two sessions read it that way.
 - **So round 15 stopped picking a dialect.** Every command is now read under **all three** — `\` Git
   Bash, backtick PowerShell, `^` cmd — and a position is a command boundary when it is a live
   separator under **any** reading; a reading left with an unterminated quote falls back to the naive
-  split, because no shell runs an unbalanced command as written. The boundary set only ever grows, so
+  split — not on a claim about what shells do with unbalanced input, but because a reading that did not
+  parse cannot be evidence for the span it thought it saw. The boundary set only ever grows, so
   a shape caught today cannot become uncaught: an extra segment is merely scanned again, while a
   missing one hides a command outright. Over-refusal is bounded by the same rule — a *balanced* quoted
   separator is still literal, so `git commit -m "a | b"`, a Windows path with an apostrophe, and

@@ -1410,8 +1410,9 @@ assert.ok(
 // An UNTERMINATED quote is the second family the quote-aware switch opened, found
 // by running the whole matrix rather than only the reported shapes. `main` split on
 // a naive regex that ignored quotes and caught these; quote-awareness swallowed the
-// line instead. No shell runs an unbalanced command as written, so a reading that
-// does not parse falls back to the naive one.
+// line instead. A reading that does not parse is not evidence about what any
+// shell would do — the dialects disagree there — so it falls back to the naive
+// split rather than trusting a span it could not confirm.
 for (const quote of ['"', "'"]) {
   assert.ok(
     shellSegments(`echo x${quote}|gh pr merge 445`).map((segment) => segment.trim()).includes("gh pr merge 445"),
@@ -1568,6 +1569,13 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "codex-push-guard.mjs");
   const tmp = mkdtempSync(path.join(os.tmpdir(), "codex-push-guard-env-"));
   const work = path.join(tmp, "work");
+  // The `-C` values below are interpolated UNQUOTED on purpose: several cases
+  // exercise unquoted-path hazards, so quoting them would change what they test.
+  // A space in the scratch path would instead make `gitPushArgumentsUnbindable`
+  // refuse them, and the ALLOW controls would fail for an unrelated reason. Fail
+  // here with the cause named, rather than mysteriously many assertions later
+  // (CodeRabbit, PR #445 round 15).
+  assert.ok(!/\s/.test(work), `scratch repo path must be whitespace-free, got: ${work}`);
   const dest = path.join(tmp, "dest.git");
   const git = (args, cwd) => spawnSync("git", args, { cwd, encoding: "utf8", env: scratchHookEnvironment(cwd, process.env) });
 
@@ -2595,6 +2603,13 @@ for (const clean of [
   const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "codex-push-guard.mjs");
   const tmp = mkdtempSync(path.join(os.tmpdir(), "codex-push-msys-"));
   const work = path.join(tmp, "work");
+  // The `-C` values below are interpolated UNQUOTED on purpose: several cases
+  // exercise unquoted-path hazards, so quoting them would change what they test.
+  // A space in the scratch path would instead make `gitPushArgumentsUnbindable`
+  // refuse them, and the ALLOW controls would fail for an unrelated reason. Fail
+  // here with the cause named, rather than mysteriously many assertions later
+  // (CodeRabbit, PR #445 round 15).
+  assert.ok(!/\s/.test(work), `scratch repo path must be whitespace-free, got: ${work}`);
   const dest = path.join(tmp, "dest.git");
   const git = (args, cwd) => spawnSync("git", args, { cwd, encoding: "utf8", env: scratchHookEnvironment(cwd, process.env) });
 

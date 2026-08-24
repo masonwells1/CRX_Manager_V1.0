@@ -386,6 +386,15 @@ try {
       assert.equal(nonDrivePush.blocked, true, `a non-drive MSYS -C is refused too: ${nonDrive}`);
       assert.match(nonDrivePush.reason, /Git Bash path/, `…naming the spelling as the reason: ${nonDrive}`);
     }
+  }
+
+  // PLATFORM-INDEPENDENT from here: these cases exercise `shellSegments` wiring
+  // inside `evaluateProductionAction`, which is pure command parsing. They used
+  // to sit inside the win32 gate above, so Linux CI skipped them and the very
+  // regression this PR fixes was unguarded there (CodeRabbit, PR #445 round 15).
+  // Only the MSYS `-C` cases above and the UNC/portable cases below depend on
+  // `process.platform`, through `pushNamesMsysPath`.
+  {
     // Bash's BACKGROUND separator is a single `&`, and this guard's own splitter
     // matched `&&`, `|`, `||`, `;` and newlines but not that. Bash runs both
     // commands; the guard classified only the first and returned unblocked on a
@@ -467,8 +476,9 @@ try {
     // The same switch opened a SECOND family, found by running the whole matrix
     // rather than only the two reported shapes: a bare UNTERMINATED quote. `main`
     // split on a regex that ignored quotes and caught these; quote-awareness
-    // swallowed the line instead. No shell runs an unbalanced command as written,
-    // so a reading that does not parse falls back to the naive one.
+    // swallowed the line instead. A reading that does not parse is not evidence
+    // about what any shell would do, so it falls back to the naive split rather
+    // than trusting a span it could not confirm.
     for (const quote of ['"', "'"]) {
       const unterminated = evaluateProductionAction({
         toolName: "PowerShell",
@@ -485,6 +495,24 @@ try {
       repoDir: projectRoot,
     });
     assert.equal(quotedMessage.blocked, false, "a quoted pipe in a commit message is not a second command");
+    // Controls: the SAME hidden-merge text inside a BALANCED quoted string is a
+    // genuine quoted string — no shell runs the merge — so it must stay allowed.
+    // These are what make every `blocked` assertion above load-bearing: a guard
+    // that matched on text rather than segments would deny all three.
+    for (const [label, control] of [
+      ["balanced double quote", `echo x"|gh pr merge 445"`],
+      ["balanced single quote", "echo x'|gh pr merge 445'"],
+      ["merge text inside a commit message", `git commit -m "note: gh pr merge 445 is gated"`],
+    ]) {
+      assert.equal(evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command: control },
+        repoDir: projectRoot,
+      }).blocked, false, `control stays allowed, so the denials above are about segmentation and not text: ${label}`);
+    }
+  }
+
+  if (process.platform === "win32") {
     // A UNC path means the same share to MSYS and to node, so refusing it would
     // be over-refusal: it must reach the ordinary gates instead.
     const unc = evaluateProductionAction({
