@@ -64,14 +64,21 @@ function copy(local, name) { docker(['cp', local, `${NAME}:/tmp/${name}`]); }
  */
 function copySql(local, name) {
   const staged = path.join(tmpdir(), `${NAME}-${name}`);
+  let operationError;
   try {
     writeFileSync(staged, readFileSync(local, 'utf8').replaceAll('\r\n', '\n'), 'utf8');
     docker(['cp', staged, `${NAME}:/tmp/${name}`]);
+  } catch (error) {
+    operationError = error;
+    throw error;
   } finally {
     try {
       unlinkSync(staged);
     } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
+      if (error.code !== 'ENOENT') {
+        if (operationError) console.error(`Failed to clean staged SQL ${staged}:`, error);
+        else throw error;
+      }
     }
   }
 }
