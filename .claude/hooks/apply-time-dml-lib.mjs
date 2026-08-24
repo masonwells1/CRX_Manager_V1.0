@@ -1139,10 +1139,6 @@ const PLPGSQL_EVALUATED_EXPRESSION =
   /^(?:if|elsif|elseif|while|case|for|foreach|assert|raise|return(?:\s+(?:next|query))?|exit\s+when|continue\s+when)\b|^[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?(?:\[[^\]]+\])?\s*(?::=|=(?!=))|^[a-z_][a-z0-9_]*\s+(?:constant\s+)?[a-z_][a-z0-9_.]*(?:(?:%type|%rowtype)|\s*\([^)]*\)|\s*\[\])*(?:\s+not\s+null)?\s*(?::=|default\b)/;
 
 function runForEffectRegion(stmt) {
-  // PERFORM and CALL exist only as statement verbs, so wherever they appear in
-  // a fragment, what follows them runs. Scan from there.
-  const verb = /\b(perform|call)\s+/.exec(stmt);
-  if (verb) return stmt.slice(verb.index);
   let rest = stmt;
   let prev;
   do { prev = rest; rest = rest.replace(BLOCK_LEAD, ""); } while (rest !== prev);
@@ -1180,15 +1176,26 @@ function runForEffectRegion(stmt) {
     return "";
   }
 
+  // The expression at the head of a control fragment executes before the arm's
+  // statement. Keep the WHOLE fragment here: returning only a later PERFORM,
+  // CALL, or THEN/ELSE tail would discard a callable IF/ELSIF/WHILE condition.
+  if (PLPGSQL_EVALUATED_EXPRESSION.test(rest)) return rest;
+
   // A statement introduced by a control structure rather than beginning the
-  // fragment. Reached only when the fragment is not a definition.
+  // fragment. Reached only when the fragment is not a definition and its head
+  // is not itself an evaluated PL/pgSQL expression.
   CONTROL_INTRO.lastIndex = 0;
   let intro;
   while ((intro = CONTROL_INTRO.exec(rest)) !== null) {
     const tail = rest.slice(intro.index + intro[0].length);
     if (RUNS_FOR_EFFECT.test(tail)) return tail;
   }
-  if (PLPGSQL_EVALUATED_EXPRESSION.test(rest)) return rest;
+
+  // PERFORM and CALL exist only as statement verbs. This broad suffix fallback
+  // is deliberately last so it cannot hide an earlier executable expression in
+  // the same semicolon-delimited fragment.
+  const verb = /\b(perform|call)\s+/.exec(rest);
+  if (verb) return rest.slice(verb.index);
   return "";
 }
 

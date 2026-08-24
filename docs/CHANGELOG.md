@@ -11,7 +11,10 @@ All significant development milestones, in reverse chronological order.
   the linked manifest consumer preserves live rule names instead of discarding them.
 - Trigger fan-out producer root comparison now resolves symlinks/junctions before comparing the
   requested checkout with Git's canonical worktree path.
-- Focused proof: apply-time analyzer 294 assertions; migration apply guard 341 assertions;
+- Control-fragment scanning now preserves an executable `IF`/`ELSIF`/`WHILE` condition even when
+  its arm later contains `PERFORM` or `CALL`; the later verb can no longer hide an earlier
+  money-mutating routine invocation in the same fragment.
+- Focused proof: apply-time analyzer 296 assertions; migration apply guard 341 assertions;
   generator 29 assertions; persisted-rule cross-migration mutation passed.
 
 ## 2026-08-22 — Persisted CHECK-routine effects added to migration evidence

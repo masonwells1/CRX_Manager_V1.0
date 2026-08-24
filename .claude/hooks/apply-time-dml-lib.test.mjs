@@ -851,6 +851,16 @@ eq(T(null), [], "a null body does not throw");
     "round-56: ELSIF evaluates its condition and follows the invoked money writer");
   eq(T(branchRepair("ELSEIF")), elsifTargets,
     "round-56: PostgreSQL ELSEIF has the same apply-time write identity as ELSIF");
+
+  const conditionBeforePerform = applyTimeWriteTargets(
+    "CREATE FUNCTION public.condition_money_fix() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN " +
+    "UPDATE public.order_items SET total_price = total_price; RETURN true; END $$; " +
+    "DO $$ BEGIN IF public.condition_money_fix() THEN PERFORM 1; END IF; END $$;",
+  );
+  ok(conditionBeforePerform.targets.has("order_items.total_price"),
+    "round-59: a later PERFORM cannot hide the money writer evaluated by an IF condition");
+  ok(conditionBeforePerform.invokedRoutines.includes("public.condition_money_fix"),
+    "round-59 MUTANT: the condition call remains named when its arm starts with PERFORM");
 }
 
 // ---------------- ROUND 37: custom operators dispatch to routines too
