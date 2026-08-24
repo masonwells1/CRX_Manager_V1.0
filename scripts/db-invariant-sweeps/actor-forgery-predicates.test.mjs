@@ -77,6 +77,8 @@ try {
 
   psql(`
 CREATE ROLE authenticated;
+CREATE SCHEMA auth;
+CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS 'SELECT gen_random_uuid()';
 CREATE TABLE public.financial_audit_log (actor_user_id uuid);
 CREATE FUNCTION public.forward_actor(uuid) RETURNS uuid
 LANGUAGE sql AS 'SELECT $1';
@@ -154,11 +156,78 @@ BEGIN
   RETURN v_actor;
 END;
 $body$;
+
+CREATE FUNCTION public.actor_comment_token_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  -- IF p_actor_source IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION 'ACTOR_MISMATCH'; END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+CREATE FUNCTION public.actor_notice_token_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  RAISE NOTICE 'ACTOR_MISMATCH';
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+CREATE FUNCTION public.actor_string_guard_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  RAISE NOTICE 'IF p_actor_source IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION ''ACTOR_MISMATCH'';';
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+CREATE FUNCTION public.actor_caught_refusal_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  BEGIN
+    IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'ACTOR_MISMATCH';
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+CREATE FUNCTION public.actor_safe_refusal_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+CREATE FUNCTION public.actor_safe_local_refusal_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid;
+BEGIN
+  v_actor := auth.uid();
+  IF p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
 `);
 
   assertCoversNamedAndPositional(predicateRows(GENERAL), 'actor_forward_');
   assertCoversNamedAndPositional(predicateRows(FINANCIAL_AUDIT), 'actor_audit_');
   const generalRows = predicateRows(GENERAL);
+  const financialRows = predicateRows(FINANCIAL_AUDIT);
   assert.ok(
     generalRows.some((row) =>
       row.startsWith('actor_overloaded_equality(') && row.endsWith('|p_actor_source')
@@ -169,6 +238,31 @@ $body$;
     assert.ok(
       generalRows.some((row) => row.startsWith(`${routine}(`) && row.endsWith('|p_actor_source')),
       `general predicate must catch ${routine}: ${generalRows.join(', ')}`,
+    );
+  }
+  for (const routine of [
+    'actor_comment_token_forward',
+    'actor_notice_token_forward',
+    'actor_string_guard_forward',
+    'actor_caught_refusal_forward',
+  ]) {
+    assert.ok(
+      generalRows.some((row) => row.startsWith(`${routine}(`) && row.endsWith('|p_actor_source')),
+      `general predicate must ignore non-refusing ACTOR_MISMATCH text in ${routine}: ${generalRows.join(', ')}`,
+    );
+    assert.ok(
+      financialRows.some((row) => row.startsWith(`${routine}(`) && row.endsWith('|p_actor_source')),
+      `financial predicate must ignore non-refusing ACTOR_MISMATCH text in ${routine}: ${financialRows.join(', ')}`,
+    );
+  }
+  for (const routine of ['actor_safe_refusal_forward', 'actor_safe_local_refusal_forward']) {
+    assert.ok(
+      !generalRows.some((row) => row.startsWith(`${routine}(`)),
+      `general predicate must stop at the executable uncaught refusal in ${routine}: ${generalRows.join(', ')}`,
+    );
+    assert.ok(
+      !financialRows.some((row) => row.startsWith(`${routine}(`)),
+      `financial predicate must stop at the executable uncaught refusal in ${routine}: ${financialRows.join(', ')}`,
     );
   }
   console.log('ACTOR_FORGERY_PREDICATES_TEST_PASS');

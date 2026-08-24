@@ -18,7 +18,6 @@ WITH cand AS (
          p.proname,
          pg_get_function_identity_arguments(p.oid) AS args,
          p.prosrc,
-         regexp_replace(p.prosrc, 'ACTOR_MISMATCH.*$', '', 'is') AS pre_refusal_src,
          a.argname,
          regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g') AS argname_pattern,
          a.input_position
@@ -38,10 +37,41 @@ WITH cand AS (
     AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
     AND coalesce(p.proargmodes[a.ordinality], 'i'::"char") IN ('i', 'b', 'v')
     AND a.argname ~* '^p_\w*by$|^p_actor|^p_user'
+), lexed AS (
+  SELECT cand.*,
+         regexp_replace(
+           regexp_replace(prosrc, '/\*.*?\*/', ' ', 'gs'),
+           '--[^\r\n]*',
+           ' ',
+           'g'
+         ) AS executable_src
+  FROM cand
+), analyzed AS (
+  SELECT lexed.*,
+         CASE
+           -- A handler can catch a nested/outer refusal. Fail closed rather
+           -- than trying to prove PL/pgSQL exception-block nesting in SQL.
+           WHEN executable_src ~* '\mEXCEPTION\s+WHEN\M' THEN executable_src
+           ELSE regexp_replace(
+             executable_src,
+             '('
+               || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || input_position || '\M)'
+               || '\s+IS\s+DISTINCT\s+FROM\s+auth\s*\.\s*uid\s*\(\s*\)[^;]*'
+               || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
+               || '|\mv_actor\M\s*:=\s*auth\s*\.\s*uid\s*\(\s*\)\s*;.*?'
+               || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || input_position || '\M)'
+               || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M[^;]*'
+               || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
+             || ').*$',
+             '',
+             'is'
+           )
+         END AS pre_refusal_src
+  FROM lexed
 )
 SELECT DISTINCT proname || '(' || args || ')' AS violation_key,
        argname AS suspect_param
-FROM cand
+FROM analyzed
 WHERE (pre_refusal_src ~* ('coalesce\s*\(\s*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
        OR pre_refusal_src ~* ('(\m' || argname_pattern || '\M|\$' || input_position || '\M)\s*,\s*auth\.uid')
        OR pre_refusal_src ~* ('role[^;]{0,120}(\m' || argname_pattern || '\M|\$' || input_position || '\M)')

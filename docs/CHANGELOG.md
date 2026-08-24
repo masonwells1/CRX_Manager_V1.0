@@ -456,6 +456,18 @@ token appears anywhere. Eight hook regressions and three disposable PostgreSQL
 before refusal. The restored hook passes 434 assertions, the catalog proof is
 green, and disabling each load-bearing guard reproduces its exact failure.
 
+CodeRabbit's current-head review then found that both catalog predicates still
+treated raw `ACTOR_MISMATCH` text as proof. A full fake guard in a comment, a
+notice/string, or a refusal caught by `EXCEPTION WHEN` could therefore hide
+later actor forwarding or a forged financial-audit write. Both predicates now
+strip comments and truncate only at a recognized strict-actor `IF` followed by
+an executable `RAISE EXCEPTION 'ACTOR_MISMATCH'`; any routine containing an
+exception handler remains fail-closed. Disposable PostgreSQL 17 fixtures cover
+comment, notice, full fake-guard string, caught-refusal, direct safe-refusal,
+and `v_actor := auth.uid()` safe-refusal cases across both predicates. Removing
+comment masking or caught-handler detection independently makes its exact
+regression fail; the restored catalog proof passes.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —

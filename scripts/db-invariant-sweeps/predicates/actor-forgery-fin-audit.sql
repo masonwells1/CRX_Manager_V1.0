@@ -1,7 +1,7 @@
 -- predicate (i): actor-forgery into the financial audit log   (blind-spot closer for predicate (c))
 -- Authenticated-executable SECDEF routines that reference a forgeable actor-shaped parameter
--- (p_%by / p_actor% / p_user%) INSIDE a financial_audit_log INSERT, WITHOUT raising the canonical
--- ACTOR_MISMATCH token. financial_audit_log is append-only / immutable (a CLAUDE.md hard red line), so
+-- (p_%by / p_actor% / p_user%) INSIDE a financial_audit_log INSERT before an executable, uncaught
+-- canonical ACTOR_MISMATCH refusal. financial_audit_log is append-only / immutable (a CLAUDE.md hard red line), so
 -- stamping its actor (actor_user_id / actor_role) from a caller-supplied id lets an authenticated
 -- admin/sales_rep forge WHO performed a money-ledger event. This is the exact class fixed for
 -- link_blend_ticket_to_order / unlink_blend_ticket_from_order in migration 20260617171500 (Live
@@ -50,10 +50,38 @@ WITH cand AS (
     AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
     AND coalesce(p.proargmodes[a.ordinality], 'i'::"char") IN ('i', 'b', 'v')
     AND a.argname ~* '^p_\w*by$|^p_actor|^p_user'
+), lexed AS (
+  SELECT cand.*,
+         regexp_replace(
+           regexp_replace(prosrc, '/\*.*?\*/', ' ', 'gs'),
+           '--[^\r\n]*',
+           ' ',
+           'g'
+         ) AS executable_src
+  FROM cand
+), analyzed AS (
+  SELECT lexed.*,
+         CASE
+           WHEN executable_src ~* '\mEXCEPTION\s+WHEN\M' THEN executable_src
+           ELSE regexp_replace(
+             executable_src,
+             '('
+               || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || input_position || '\M)'
+               || '\s+IS\s+DISTINCT\s+FROM\s+auth\s*\.\s*uid\s*\(\s*\)[^;]*'
+               || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
+               || '|\mv_actor\M\s*:=\s*auth\s*\.\s*uid\s*\(\s*\)\s*;.*?'
+               || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || input_position || '\M)'
+               || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M[^;]*'
+               || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
+             || ').*$',
+             '',
+             'is'
+           )
+         END AS pre_refusal_src
+  FROM lexed
 )
 SELECT DISTINCT proname || '(' || args || ')' AS violation_key,
        argname AS suspect_param
-FROM cand
-WHERE prosrc !~* 'ACTOR_MISMATCH'
-  AND prosrc ~* ('financial_audit_log[^;]*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
+FROM analyzed
+WHERE pre_refusal_src ~* ('financial_audit_log[^;]*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
 ORDER BY violation_key;
