@@ -51,13 +51,54 @@ const SCRIPT_DIR = path.resolve(fileURLToPath(new URL(".", import.meta.url)));
 const FALLBACK_ROOT = path.resolve(SCRIPT_DIR, "..");
 
 // ── git helpers ──────────────────────────────────────────────────────────────
+function fixedGitExecutable() {
+  const candidates = process.platform === "win32"
+    ? ["C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\bin\\git.exe"]
+    : ["/usr/bin/git", "/usr/local/bin/git"];
+  const executable = candidates.find((candidate) => existsSync(candidate));
+  if (!executable) throw new Error("A fixed trusted Git executable is required to build the sanitized review workspace.");
+  return executable;
+}
+
+// Every Git call this wrapper makes runs under ONE minimal environment, so an
+// ambient global/system Git configuration can never steer the process that
+// decides whether a push is trustworthy. Global and system config, the system
+// attributes file, replacement objects, credential prompts, and optional locks
+// are all disabled; PATH is narrowed to the trusted Git installation plus the
+// platform system directory. Inherited GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_* style
+// overrides are dropped by construction — only the names below survive.
+// Repository-local executable filters and attribute overrides remain denied by
+// the bootstrap classifier, and no call here runs Git's worktree conversion
+// pipeline, so no configured filter has an execution path.
+function trustedGitEnv() {
+  const env = {};
+  for (const name of ["SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE"]) {
+    if (process.env[name]) env[name] = process.env[name];
+  }
+  env.GIT_NO_REPLACE_OBJECTS = "1";
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+  env.GIT_TERMINAL_PROMPT = "0";
+  env.GCM_INTERACTIVE = "never";
+  env.GIT_OPTIONAL_LOCKS = "0";
+  env.GIT_ATTR_NOSYSTEM = "1";
+  const systemPath = process.platform === "win32"
+    ? path.join(env.SystemRoot || env.WINDIR || "C:\\Windows", "System32")
+    : "/usr/bin:/bin";
+  env.PATH = `${path.dirname(fixedGitExecutable())}${path.delimiter}${systemPath}`;
+  return env;
+}
+
 function runGit(args, { cwd = FALLBACK_ROOT, fallback = "" } = {}) {
   try {
-    return execFileSync("git", args, {
+    return execFileSync(fixedGitExecutable(), ["--no-replace-objects", ...args], {
       cwd,
       encoding: "utf8",
       timeout: 10_000,
       stdio: ["ignore", "pipe", "ignore"],
+      env: trustedGitEnv(),
+      windowsHide: true,
+      shell: false,
     }).trim();
   } catch {
     return fallback;
@@ -80,15 +121,6 @@ const STATUS_UNAVAILABLE = "__GIT_STATUS_UNAVAILABLE__";
 export function worktreeIsClean(cwd) {
   const out = runGit(["status", "--short"], { cwd, fallback: STATUS_UNAVAILABLE });
   return out !== STATUS_UNAVAILABLE && out.trim() === "";
-}
-
-function fixedGitExecutable() {
-  const candidates = process.platform === "win32"
-    ? ["C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\bin\\git.exe"]
-    : ["/usr/bin/git", "/usr/local/bin/git"];
-  const executable = candidates.find((candidate) => existsSync(candidate));
-  if (!executable) throw new Error("A fixed trusted Git executable is required to build the sanitized review workspace.");
-  return executable;
 }
 
 function assertSanitizedReviewRoot(reviewRoot) {
@@ -154,6 +186,7 @@ function verifySnapshotFiles(destination, entries) {
 
 function parseCommitTree(sourceRoot, commitSha) {
   const treeBytes = execFileSync(fixedGitExecutable(), [
+    "--no-replace-objects",
     "ls-tree",
     "-r",
     "-z",
@@ -165,6 +198,9 @@ function parseCommitTree(sourceRoot, commitSha) {
     timeout: 120_000,
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 256 * 1024 * 1024,
+    env: trustedGitEnv(),
+    windowsHide: true,
+    shell: false,
   });
   const records = treeBytes.toString("utf8").split("\0").filter(Boolean);
   if (records.some((record) => record.includes("\uFFFD"))) {
@@ -190,13 +226,15 @@ function parseCommitTree(sourceRoot, commitSha) {
 
 function readCommitBlobs(sourceRoot, entries) {
   if (entries.length === 0) return [];
-  const result = spawnSync(fixedGitExecutable(), ["cat-file", "--batch"], {
+  const result = spawnSync(fixedGitExecutable(), ["--no-replace-objects", "cat-file", "--batch"], {
     cwd: sourceRoot,
     input: `${entries.map((entry) => entry.objectId).join("\n")}\n`,
     encoding: null,
     shell: false,
     timeout: 120_000,
     maxBuffer: 512 * 1024 * 1024,
+    env: trustedGitEnv(),
+    windowsHide: true,
   });
   if (result.error || result.status !== 0) {
     throw result.error || new Error(`Trusted blob extraction failed with exit ${result.status}.`);
@@ -291,12 +329,15 @@ function writeTreeManifest(reviewRoot, name, manifest) {
 
 function copyWorkingTreeSnapshot(sourceRoot, destination) {
   mkdirSync(destination, { recursive: true });
-  const listed = execFileSync(fixedGitExecutable(), ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+  const listed = execFileSync(fixedGitExecutable(), ["--no-replace-objects", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
     cwd: sourceRoot,
     encoding: "utf8",
     timeout: 120_000,
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 256 * 1024 * 1024,
+    env: trustedGitEnv(),
+    windowsHide: true,
+    shell: false,
   }).split("\0").filter(Boolean);
   const seenTargets = new Set();
   const copied = [];
@@ -355,6 +396,7 @@ export function createSanitizedReviewWorkspace({
     writeTreeManifest(reviewRoot, "BASE_TREE_MANIFEST.json", baseTreeManifest);
     writeTreeManifest(reviewRoot, "CANDIDATE_TREE_MANIFEST.json", candidateTreeManifest);
     const diff = spawnSync(fixedGitExecutable(), [
+      "--no-replace-objects",
       "diff",
       "--no-index",
       "--no-ext-diff",
@@ -370,6 +412,8 @@ export function createSanitizedReviewWorkspace({
       shell: false,
       timeout: 120_000,
       maxBuffer: 256 * 1024 * 1024,
+      env: trustedGitEnv(),
+      windowsHide: true,
     });
     if (diff.error || ![0, 1].includes(diff.status)) {
       throw diff.error || new Error(`Sanitized review diff failed with exit ${diff.status}.`);
