@@ -68,19 +68,29 @@ ok(checkDangerousCommand("mklink /H notes.mjs .claude\\hooks\\bash-safety-lib.mj
 ok(checkDangerousCommand("mklink /h scratch\\x.json .claude\\settings.json"), "mklink /h alias of settings.json blocked");
 ok(checkDangerousCommand("ln .claude/hooks/mcp-tool-guard.mjs /tmp/alias.mjs"), "POSIX hard link to a protected hook blocked");
 ok(checkDangerousCommand("ln supabase/migrations/20260101000000_x.sql /tmp/m.sql"), "POSIX hard link to a migration blocked");
-// Symbolic links stay allowed: realpath resolves them back to the protected
-// name, so the existing path patterns already see through them.
-eq(checkDangerousCommand("ln -s .claude/hooks/mcp-tool-guard.mjs /tmp/alias.mjs"), null, "a symbolic link is not treated as a hard-link bypass");
-eq(checkDangerousCommand("mklink /D scratch\\hooks .claude\\hooks"), null, "a directory symlink is not treated as a hard-link bypass");
+// The junction->hardlink->write chain Codex demonstrated (2026-08-24). Only the
+// FIRST command names a protected path; the hard link and the write are laundered
+// through the alias directory. Every step must deny on its own, because an
+// attacker does not have to run them in one command.
+ok(checkDangerousCommand("mklink /J scratch\\hooks .claude\\hooks"), "the junction hop that launders a protected path is blocked");
+ok(checkDangerousCommand("mklink /H scratch\\alias.mjs scratch\\hooks\\mcp-tool-guard.mjs"), "the laundered hard link is blocked even though its text names no protected path");
+// Aliases aimed at a protected location are blocked whatever kind they are.
+ok(checkDangerousCommand("ln -s .claude/hooks/mcp-tool-guard.mjs /tmp/alias.mjs"), "a symlink aimed at a protected hook is blocked");
+ok(checkDangerousCommand("mklink /D scratch\\hooks .claude\\hooks"), "a directory symlink aimed at the protected hooks directory is blocked");
+ok(checkDangerousCommand("New-Item -ItemType SymbolicLink -Path scratch\\h -Target .claude\\hooks"), "a PowerShell symlink aimed at a protected location is blocked");
+// Hard links are denied outright, so an unprotected target is no longer a way in.
+ok(checkDangerousCommand("mklink /H scratch\\a.txt docs\\README.md"), "hard-link creation is denied even between unprotected files");
+ok(checkDangerousCommand("ln docs/README.md /tmp/readme.md"), "a POSIX hard link is denied even between unprotected files");
+// Ordinary symlinks away from protected locations still work.
 eq(checkDangerousCommand("ln -s docs/README.md /tmp/readme.md"), null, "an ordinary symlink to an unprotected file is allowed");
+eq(checkDangerousCommand("mklink /D scratch\\docs docs"), null, "a directory symlink to an unprotected directory is allowed");
 // Other spellings of the same alias. A guard that knows only `mklink`/`ln`
 // leaves the route open through PowerShell and fsutil.
 ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\notes.mjs -Target .claude\\hooks\\bash-safety-lib.mjs"), "PowerShell New-Item HardLink to a protected hook blocked");
 ok(checkDangerousCommand("New-Item -Target .claude\\hooks\\bash-safety-lib.mjs -ItemType HardLink -Path scratch\\notes.mjs"), "PowerShell New-Item HardLink blocked with the target named first");
 ok(checkDangerousCommand("ni -Type HardLink -Path x.json -Target .claude\\settings.json"), "the ni alias and -Type spelling are blocked too");
 ok(checkDangerousCommand("fsutil hardlink create scratch\\alias.mjs .claude\\hooks\\mcp-tool-guard.mjs"), "fsutil hardlink create against a protected hook blocked");
-eq(checkDangerousCommand("New-Item -ItemType SymbolicLink -Path scratch\\notes.mjs -Target .claude\\hooks\\bash-safety-lib.mjs"), null, "a PowerShell symbolic link is not treated as a hard-link bypass");
-eq(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Target docs/README.md"), null, "a hard link between unprotected files is allowed");
+ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Target docs/README.md"), "hard-link creation is denied even when both operands are unprotected");
 ok(checkDangerousCommand("rm -rf src"), "rm -rf src blocked");
 ok(checkDangerousCommand("rm -rf supabase"), "rm -rf supabase blocked");
 ok(checkDangerousCommand("git add file.txt .env"), "staging .env blocked");

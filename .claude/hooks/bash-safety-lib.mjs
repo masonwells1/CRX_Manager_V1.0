@@ -2414,19 +2414,29 @@ export const DANGEROUS_CMD_CHECKS = [
   [/\bgit\b[^\r\n;&|]*\brestore\b[^\r\n;&|]*\s(?:--\s+)?\.\s*(?:$|[;&|<>]|2>)/, "Blocked discard-all. Use targeted `git restore <file>`."],
   [/\bgit\b[^\r\n;&|]*\bclean\b[^\r\n;&|]*\s(?:--force\b|-[A-Za-z]*[fdx][A-Za-z]*\b)/, "Blocked `git clean -f`. Permanently deletes untracked files. Review with `git clean -n` first."],
   [/--no-verify\b/, "Blocked `--no-verify`. Pre-commit hooks prevent bugs — fix the underlying issue."],
-  // A hard link gives a protected file a second, innocuous-looking pathname
-  // that `realpath` cannot see through, so a later write to the alias edits the
-  // protected file itself. The MCP guard denies writes by file identity; this
-  // closes the creation route as well, so the alias never exists to be written
-  // (Codex CRX-SEC-01, 2026-08-23). Symbolic links stay allowed — `realpath`
-  // already resolves those back to the protected name.
-  [/\bmklink\b(?![^\r\n;&|]*\/[dDjJ]\b)[^\r\n;&|]*(?:\.claude[\\/](?:hooks[\\/][\w.-]+\.mjs|settings\.json)|supabase[\\/]migrations[\\/]|\.env\b|\.gitignore\b)/i, "Blocked hard-link alias of a protected file. A second pathname for the same file bypasses every path-based guard; edit the real path with the native tools instead."],
-  [/\bln\b(?![^\r\n;&|]*\s-[A-Za-z]*s)[^\r\n;&|]*(?:\.claude\/(?:hooks\/[\w.-]+\.mjs|settings\.json)|supabase\/migrations\/|\.env\b|\.gitignore\b)/, "Blocked hard-link alias of a protected file. A second pathname for the same file bypasses every path-based guard; edit the real path with the native tools instead."],
-  // `mklink` and `ln` are not the only spellings: PowerShell `New-Item -ItemType
-  // HardLink` (and its `ni` / `-Type` forms) and `fsutil hardlink create` build
-  // the same alias. Match the HardLink token itself, in either operand order, so
-  // one wrapper spelling cannot reopen the route. `SymbolicLink` is untouched.
-  [/\bHardLink\b[^\r\n;&|]*(?:\.claude[\\/](?:hooks[\\/][\w.-]+\.mjs|settings\.json)|supabase[\\/]migrations[\\/]|\.env\b|\.gitignore\b)|(?:\.claude[\\/](?:hooks[\\/][\w.-]+\.mjs|settings\.json)|supabase[\\/]migrations[\\/]|\.env\b|\.gitignore\b)[^\r\n;&|]*\bHardLink\b/i, "Blocked hard-link alias of a protected file. A second pathname for the same file bypasses every path-based guard; edit the real path with the native tools instead."],
+  // A hard link gives a file a second pathname that `realpath` cannot see
+  // through, so a write to the alias edits the original while every path check
+  // sees an innocuous name. Matching the protected path in the COMMAND TEXT was
+  // not enough: a directory junction launders it out of the text entirely
+  // (Codex, 2026-08-24) —
+  //   mklink /J scratch\hooks .claude\hooks
+  //   mklink /H scratch\alias.mjs scratch\hooks\mcp-tool-guard.mjs   <- no protected text
+  //   Set-Content scratch\alias.mjs ...                              <- edits the real hook
+  // Canonicalizing operand text would just move the arms race, so hard-link
+  // CREATION is denied outright, whatever the target: nothing in this repo's
+  // workflows needs one, and with no alias there is nothing to launder. The
+  // MCP guard's file-identity check remains the second layer for writes.
+  [/\bmklink\b(?=[^\r\n;&|]*\/[hH]\b)/, "Blocked hard-link creation. A hard link is a second pathname for the same file, which defeats every path-based guard; this project has no workflow that needs one."],
+  [/\bln\b(?![^\r\n;&|]*\s-[A-Za-z]*s)(?=[^\r\n;&|]*\s\S)/, "Blocked hard-link creation. A hard link is a second pathname for the same file, which defeats every path-based guard; use `ln -s` for a symbolic link instead."],
+  // PowerShell `New-Item -ItemType HardLink` (with its `ni`/`-Type` spellings)
+  // and `fsutil hardlink create` build the same alias; match the token itself.
+  [/\bHardLink\b/i, "Blocked hard-link creation. A hard link is a second pathname for the same file, which defeats every path-based guard; this project has no workflow that needs one."],
+  // Directory junctions and symlinks stay available in general — canonicalization
+  // resolves them — but not when they are AIMED at a protected location, because
+  // that is the hop that launders a protected path out of later command text.
+  [/\bmklink\b[^\r\n;&|]*\/[dDjJ]\b[^\r\n;&|]*(?:\.claude\b|supabase[\\/]migrations\b|[\\/]?scripts\b)|(?:\.claude\b|supabase[\\/]migrations\b)[^\r\n;&|]*\bmklink\b[^\r\n;&|]*\/[dDjJ]\b/i, "Blocked directory junction or symlink aimed at a protected location. An alias directory hides the protected path from later commands; work through the real path instead."],
+  [/\bln\s+-[A-Za-z]*s[A-Za-z]*\s[^\r\n;&|]*(?:\.claude(?:\/|\b)|supabase\/migrations\b)/, "Blocked symbolic link aimed at a protected location. An alias hides the protected path from later commands; work through the real path instead."],
+  [/\bSymbolicLink\b[^\r\n;&|]*(?:\.claude\b|supabase[\\/]migrations\b)|(?:\.claude\b|supabase[\\/]migrations\b)[^\r\n;&|]*\bSymbolicLink\b/i, "Blocked symbolic link aimed at a protected location. An alias hides the protected path from later commands; work through the real path instead."],
   [/\brm\s+-[A-Za-z]*r[A-Za-z]*f?[A-Za-z]*\s+(?:\.\.?\s*(?:$|;|&|\|)|\.\.?\/(?:src|supabase|docs)(?:\b|\/)|\/?(?:src|supabase|docs)(?:\b|\/))/, "Blocked recursive deletion of project source/migrations/docs."],
   // Long/split option spellings of the same recursive delete — `rm --recursive
   // --force src`, `rm -r --force src` (Codex P1 round 4, PR #352). A lookahead

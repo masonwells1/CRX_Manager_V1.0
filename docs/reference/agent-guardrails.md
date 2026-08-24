@@ -163,11 +163,17 @@ Protected-path matching is no longer name-shaped only. A hard link gives a
 protected file a second, innocuous pathname that `realpath` cannot resolve away,
 so an alias write would edit the real file while every pattern missed. MCP file
 targets are now also compared by filesystem identity (device plus inode/file-ID)
-against the protected set, and the creation routes aimed at a protected path are
-denied so the alias is never created — `mklink /H`, non-symbolic `ln`, and the
-`HardLink` token itself in either operand order, which covers PowerShell
-`New-Item -ItemType HardLink` (with its `ni` and `-Type` spellings) and
-`fsutil hardlink create`. Symbolic links and
+against the protected set. Matching the protected path in the command text was
+not sufficient on its own: a directory junction launders it out of the text, so
+`mklink /J alias .claude\hooks` followed by a hard link through `alias\` names
+nothing protected. Hard-link **creation** is therefore denied outright, whatever
+the operands — `mklink /H`, non-symbolic `ln`, and the `HardLink` token in any
+spelling (PowerShell `New-Item -ItemType HardLink`, its `ni`/`-Type` forms, and
+`fsutil hardlink create`). Nothing in this project's workflows needs one, and
+with no alias there is nothing to launder. Junctions and symbolic links remain
+available except when aimed at a protected location, which closes the laundering
+hop itself. A regression drives each step of the junction→hard-link→write chain
+separately, because the steps need not arrive in one command. Symbolic links and
 junctions stay allowed because canonicalization already resolves them. A real
 hard-link regression proves the write, edit, and creation routes all deny.
 

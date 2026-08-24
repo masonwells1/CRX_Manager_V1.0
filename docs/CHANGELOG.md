@@ -150,12 +150,18 @@ Blend Recipes was never affected; it selects `*`.
   `.env` a second innocuous pathname that `realpath` cannot resolve away, so an
   MCP write through the alias edited the real file with every pattern missing
   it. MCP file targets are compared by device plus inode/file-ID against the
-  protected set, and the creation routes at a protected path are denied so the
-  alias is never created: `mklink /H`, non-symbolic `ln`, and the `HardLink`
-  token in either operand order, which covers PowerShell `New-Item -ItemType
-  HardLink` (plus its `ni`/`-Type` spellings) and `fsutil hardlink create`.
-  Matching only the first two spellings left PowerShell open, which a real-hook
-  run caught after the unit tests were already green. Symbolic links and junctions remain
+  protected set. Matching the protected path in the command text was not enough
+  on its own — a directory junction launders it out of the text, so
+  `mklink /J alias .claude\hooks` and then a hard link through `alias\` names
+  nothing protected. Hard-link creation is therefore denied outright whatever
+  the operands, in every spelling (`mklink /H`, non-symbolic `ln`, PowerShell
+  `New-Item -ItemType HardLink` with its `ni`/`-Type` forms, and
+  `fsutil hardlink create`); nothing here needs one, and with no alias there is
+  nothing to launder. Junctions and symlinks stay available except when aimed at
+  a protected location, closing the laundering hop. Regressions drive each step
+  of the chain separately against the running hook. Two rounds of real-hook runs
+  found what green unit tests had missed: first a PowerShell spelling, then the
+  junction composition. Symbolic links and junctions remain
   allowed — canonicalization already resolves those. A real hard-link
   regression covers the write, edit, and creation routes, and was mutation-
   tested: without the identity check the alias write is allowed.
