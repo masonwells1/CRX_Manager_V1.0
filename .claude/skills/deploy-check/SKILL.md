@@ -198,7 +198,7 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    scoped to the parent's own review cycle, with the parent derived in the same command:
 
    ```bash
-   PARENT1="$(git rev-parse <HEAD>^1)"; SINCE="$(gh api repos/masonwells1/CRX_Manager_V1.0/commits/$PARENT1/statuses --jq '[.[] | select(.context=="CodeRabbit")] | last | .created_at')"; if ! printf '%s' "$SINCE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'; then echo BLOCKED_CANNOT_DETERMINE_PARENT_CYCLE_START; elif ! BODIES="$(gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq ".[] | select(.user.login==\"coderabbitai[bot]\") | select(.created_at >= \"$SINCE\") | .body")"; then echo BLOCKED_COMMENTS_FETCH_FAILED; elif printf '%s' "$BODIES" | grep -qE "Review failed|Review rate limited|Review limit reached"; then echo BLOCKED_PARENT_REVIEW_DID_NOT_COMPLETE; else echo NO_FAILURE_MARKER_PARENT_CYCLE; fi
+   PARENT1="$(git rev-parse <HEAD>^1)"; SINCE="$(gh api repos/masonwells1/CRX_Manager_V1.0/commits/$PARENT1/statuses --jq '[.[] | select(.context=="CodeRabbit" and .state=="pending")] | first | .created_at')"; if ! printf '%s' "$SINCE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'; then echo BLOCKED_CANNOT_DETERMINE_PARENT_CYCLE_START; elif ! BODIES="$(gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq ".[] | select(.user.login==\"coderabbitai[bot]\") | select(.created_at >= \"$SINCE\") | .body")"; then echo BLOCKED_COMMENTS_FETCH_FAILED; elif printf '%s' "$BODIES" | grep -qE "Review failed|Review rate limited|Review limit reached"; then echo BLOCKED_PARENT_REVIEW_DID_NOT_COMPLETE; else echo NO_FAILURE_MARKER_PARENT_CYCLE; fi
    ```
 
    Only `NO_FAILURE_MARKER_PARENT_CYCLE` permits the merge; every `BLOCKED_…` marker stops it.
@@ -365,7 +365,7 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    own review cycle, using the OLDEST CodeRabbit status on the commit as the start of that cycle:
 
    ```bash
-   SINCE="$(gh api repos/masonwells1/CRX_Manager_V1.0/commits/<HEAD>/statuses --jq '[.[] | select(.context=="CodeRabbit")] | last | .created_at')"; if ! printf '%s' "$SINCE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'; then echo BLOCKED_CANNOT_DETERMINE_CYCLE_START; elif ! BODIES="$(gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq ".[] | select(.user.login==\"coderabbitai[bot]\") | select(.created_at >= \"$SINCE\") | .body")"; then echo BLOCKED_COMMENTS_FETCH_FAILED; elif printf '%s' "$BODIES" | grep -qE "Review failed|Review rate limited|No files to review|Review limit reached"; then echo BLOCKED_REVIEW_DID_NOT_COMPLETE; else echo NO_FAILURE_MARKER_THIS_HEAD; fi
+   SINCE="$(gh api repos/masonwells1/CRX_Manager_V1.0/commits/<HEAD>/statuses --jq '[.[] | select(.context=="CodeRabbit" and .state=="pending")] | first | .created_at')"; if ! printf '%s' "$SINCE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'; then echo BLOCKED_CANNOT_DETERMINE_CYCLE_START; elif ! BODIES="$(gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq ".[] | select(.user.login==\"coderabbitai[bot]\") | select(.created_at >= \"$SINCE\") | .body")"; then echo BLOCKED_COMMENTS_FETCH_FAILED; elif printf '%s' "$BODIES" | grep -qE "Review failed|Review rate limited|No files to review|Review limit reached"; then echo BLOCKED_REVIEW_DID_NOT_COMPLETE; else echo NO_FAILURE_MARKER_THIS_HEAD; fi
    ```
 
    **Only `NO_FAILURE_MARKER_THIS_HEAD` permits the merge.** Every other outcome — including one that
@@ -386,6 +386,26 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    "never interpolate into a shell command" rule — `$SINCE` is an API-derived ISO-8601 timestamp
    proven to match that anchored pattern, not PR-authored text. Verify a probe by running it, not by
    reading it; both broken versions looked correct.
+
+   **`$SINCE` is the newest `pending`, which is neither the oldest nor the newest status.** Statuses
+   come back newest-first, and a commit accumulates several review cycles. The oldest status reaches
+   back into a *previous* cycle, so one failed attempt would keep the gate shut forever even after a
+   clean retry. The newest status is the **completion** of the current cycle, so anchoring there
+   skips the very window the probe exists to search — a "Review failed" comment posted seconds
+   before its status would go unseen. The newest `pending` is the start of the latest attempt, which
+   is exactly the window wanted. Real timeline from this PR's own head `c0490ce9`:
+
+   ```text
+   success 04:33:33   <- newest status: anchoring here misses a failure at 04:33:30 (fail-open)
+   pending 04:26:00   <- the latest cycle starts HERE
+   success 04:25:11
+   pending 04:24:41
+   pending 04:24:38   <- oldest status: reaches into the previous cycle (blocks forever)
+   ```
+
+   CodeRabbit flagged the oldest-status bug correctly and proposed the newest status as the fix; that
+   half was wrong, and the timeline above is why. If no `pending` exists at all the value is empty and
+   the probe blocks, which is the right answer for a commit whose review never started.
 
    Two deliberate exclusions. **"Reviews paused" is not a failure** — `auto_pause_after_reviewed_commits: 2`
    makes that notice a permanent fixture of the walkthrough on any active branch, so matching it would

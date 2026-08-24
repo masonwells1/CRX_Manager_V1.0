@@ -53,12 +53,27 @@ reviews:
   # skipped review entirely. Raised by the Codex reviewer on PR #441.
   # Keep this shape - if a new folder is excluded, exclude its doc extensions,
   # not the folder, so a script dropped in there stays reviewable by default.
+  #
+  # Extension-scoping is still not enough on its own. docs/audits/ mixes two
+  # very different things: inert dated reports, and LIVE AGENT CONTROL FILES -
+  # architecture-weakness-audit-prompt.md and foundation-ultra-review-prompt.md
+  # are the canonical instructions their slash commands say to "read that file
+  # and execute it exactly", and codex-driven-bug-hunt/LEDGER.json plus
+  # PHASE-PLAN.md are state that automation reads and writes. Excluding all
+  # .md/.json under docs/audits/ meant a PR could rewrite a privileged agent
+  # prompt next to one innocuous reviewed file and still collect an exact-head
+  # CodeRabbit stamp - the review would never have looked at it. On a PUBLIC
+  # repo that is a prompt-injection path into privileged automation, not a
+  # cost-control question. Raised by the Codex reviewer on PR #441 (CRX-SEC-001,
+  # High). The exclusion is now the date-prefixed reports only; every prompt,
+  # ledger, runbook, and state file under docs/audits/ stays reviewed. If the
+  # glob syntax is ever unsupported the pattern matches nothing, which reviews
+  # MORE than intended - the safe direction to fail.
   path_filters:
     - "!docs/archive/**/*.md"
     - "!docs/archive/**/*.html"
     - "!docs/archive/**/*.json"
-    - "!docs/audits/**/*.md"
-    - "!docs/audits/**/*.json"
+    - "!docs/audits/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md"
     - "!docs/loops/**/*.md"
     - "!docs/build-loops/**/*.md"
     - "!docs/handoffs/**/*.md"

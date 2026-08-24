@@ -388,6 +388,32 @@ Codex's sharpest observation was that the previous tests matched command substri
 the command *does* when a stage fails — 72 assertions passed over two unsafe paths. **Substring tests over a
 shell command are a description of intent, not evidence of behaviour. Run the command.**
 
+**Tenth round, and the config itself was the worst finding.** Codex returned High on `.coderabbit.yaml`:
+`docs/audits/**/*.md` and `**/*.json` were excluded from review, and that directory is **not** inert. It holds
+`architecture-weakness-audit-prompt.md` and `foundation-ultra-review-prompt.md` — the canonical instructions
+their slash commands tell an agent to "read that file and execute it exactly" — plus
+`codex-driven-bug-hunt/LEDGER.json` and `PHASE-PLAN.md`, which automation reads and writes. A PR could have
+rewritten a privileged agent prompt beside one innocuous reviewed file and still collected an exact-head
+CodeRabbit stamp; the review would never have looked at it. On a **public** repo that is a prompt-injection
+path into privileged automation, not a cost question. This is the third distinct way the same directory has
+bitten: first `!docs/audits/**` hid executable `.mjs`, then extension-scoping hid live prompts.
+
+The exclusion is now the date-prefixed reports only — every prompt, ledger, runbook, and state file stays
+reviewed — and `scripts/coderabbit-review-coverage.test.mjs` walks the real repository to prove it, so a
+prompt added under an excluded path later fails the suite instead of silently dropping out of review. The
+glob matcher is self-checked, because a broken translator would make the whole suite pass by matching
+nothing. Restoring the blanket exclusion turns it red.
+
+**And a review finding that was half right, checked rather than obeyed.** CodeRabbit said the probe's cycle
+anchor used `last`, which selects the *oldest* status and reaches back into a previous cycle — correct, and a
+real bug: one failed attempt would keep the gate shut forever after a clean retry. Its proposed fix was
+`first`. That is the **completion** status of the current cycle, so anchoring there skips the very window the
+probe searches; a "Review failed" comment posted seconds before its status would go unseen — fail-open. The
+real timeline on head `c0490ce9` shows both errors at once: `success 04:33:33` (newest), `pending 04:26:00`
+(the actual cycle start), `success 04:25:11`, `pending 04:24:41`, `pending 04:24:38` (oldest). The anchor is
+now the newest `pending`, verified live to resolve to `04:26:00`. **A correct diagnosis does not make the
+attached fix correct; check the reasoning, not just the reputation of the reviewer.**
+
 The through-line across all six rounds is one idea: **a check that names the thing it forbids only catches
 that name.** Five times running, the fix was itself written one notch too narrow — a spelling, then a
 notation, then a variable read from the wrong scope, then two facts with no order between them, then a
