@@ -114,11 +114,19 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // PROTECTED_HARNESS_FRAGMENT_RE constant, and the maintenance execution gate
   // — are untouched and still present exactly once.
   codexGuard: "38d2c8a9663c3413fae5468268fd52f536a68459",
-  pushLib: "ccf80fb188cc793c03546992c13df10d7ed08109",
+  pushLib: "aa7ba849c5824e8df1e3ac396c19e98180502ecb",
 };
+  // pushLib re-pinned 2026-08-24 (PR #445 round 15): `shellSegments` now reads
+  // every command under all THREE shell escape dialects (`\` Git Bash, backtick
+  // PowerShell, `^` cmd) and unions their command boundaries, and a reading with
+  // an unterminated quote falls back to the naive split. The quote-aware switch
+  // had made the branch a net regression against `main`: a backtick- or caret-
+  // escaped quote, and a bare unmatched quote, each swallowed the separator and
+  // hid `gh pr merge` / a mutating `gh api` from their gates. Only this file
+  // changed; the transform over it is still a no-op, so both pins move together.
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "a8a2f58db1dce0f5132ecddbe4ca319ac1ad3682",
-  pushLib: "ccf80fb188cc793c03546992c13df10d7ed08109",
+  pushLib: "aa7ba849c5824e8df1e3ac396c19e98180502ecb",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

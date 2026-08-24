@@ -436,6 +436,55 @@ try {
     });
     assert.equal(hiddenApi.blocked, true, "a mutating `gh api` hidden behind a backslash-pipe is gated");
     assert.match(String(hiddenApi.reason || ""), /gh api/i, "…and named as the gh-api gate, so the diagnosis points at the real command");
+    // The backslash was only ONE of the three escape characters these commands
+    // arrive with. PowerShell escapes with a BACKTICK and cmd with `^`, and the
+    // shared splitter recognised neither, so the escaped quote read as a quote
+    // OPENING a span that swallowed the pipeline separator. Both shapes were
+    // ALLOWED on this branch while `main`'s naive split blocked them — a NET
+    // REGRESSION, reproduced against this running guard before the fix. The
+    // no-whitespace spelling is deliberate: it is the form that actually slipped
+    // through, because there is nothing to tokenize on (PR #445, round 15).
+    const BACKTICK = "`";
+    const backtickMerge = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: `Write-Output x${BACKTICK}"|gh pr merge 445` },
+      repoDir: projectRoot,
+    });
+    assert.equal(backtickMerge.blocked, true, "a `gh pr merge` hidden behind a PowerShell backtick-escaped quote is gated");
+    const backtickApi = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: `Write-Output x${BACKTICK}"|gh api -X DELETE /repos/masonwells1/CRX_Manager_V1.0/git/refs/heads/main` },
+      repoDir: projectRoot,
+    });
+    assert.equal(backtickApi.blocked, true, "a mutating `gh api` hidden behind a PowerShell backtick-escaped quote is gated");
+    assert.match(String(backtickApi.reason || ""), /gh api/i, "…and named as the gh-api gate, not caught by accident on another rule");
+    const caretMerge = evaluateProductionAction({
+      toolName: "Bash",
+      toolInput: { command: 'echo x^"|gh pr merge 445' },
+      repoDir: projectRoot,
+    });
+    assert.equal(caretMerge.blocked, true, "a `gh pr merge` hidden behind a cmd caret-escaped quote is gated");
+    // The same switch opened a SECOND family, found by running the whole matrix
+    // rather than only the two reported shapes: a bare UNTERMINATED quote. `main`
+    // split on a regex that ignored quotes and caught these; quote-awareness
+    // swallowed the line instead. No shell runs an unbalanced command as written,
+    // so a reading that does not parse falls back to the naive one.
+    for (const quote of ['"', "'"]) {
+      const unterminated = evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command: `echo x${quote}|gh pr merge 445` },
+        repoDir: projectRoot,
+      });
+      assert.equal(unterminated.blocked, true, `a merge hidden behind an unterminated ${quote} quote is gated`);
+    }
+    // …and the boundary that keeps all of the above from becoming over-refusal: a
+    // BALANCED quoted separator is literal, so an ordinary commit message survives.
+    const quotedMessage = evaluateProductionAction({
+      toolName: "Bash",
+      toolInput: { command: 'git commit -m "a | b"' },
+      repoDir: projectRoot,
+    });
+    assert.equal(quotedMessage.blocked, false, "a quoted pipe in a commit message is not a second command");
     // A UNC path means the same share to MSYS and to node, so refusing it would
     // be over-refusal: it must reach the ordinary gates instead.
     const unc = evaluateProductionAction({

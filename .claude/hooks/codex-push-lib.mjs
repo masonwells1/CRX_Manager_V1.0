@@ -1527,46 +1527,118 @@ const INLINE_ENV_ALLOWED = new Map([
 // literally. `.claude/hooks/codex-push-guard.mjs` additionally refuses any
 // segment that still contains more than one push, so a future gap in this parser
 // fails closed instead of silently skipping a push.
-// The characters that end one command and begin another. A backslash must never
-// suppress one of these — see shellSegments().
+// The characters that end one command and begin another. No escape character —
+// `\`, a backtick, or `^` — may ever suppress one of these; see shellSegments().
 const SEGMENT_SEPARATORS = new Set([";", "\n", "\r", "&", "|"]);
 
-export function shellSegments(cmd) {
-  const text = String(cmd ?? "");
-  const segments = [];
+// Quote tracking has to answer "which shell?", and this parser cannot know. Three
+// shells drive this repo and each spells the escape character differently — `\` in
+// Git Bash, a BACKTICK in PowerShell, `^` in cmd — and each honours it in a
+// different place. Teaching the parser only the POSIX spelling is what made the
+// quote-aware switch a NET REGRESSION against `main`: a PowerShell backtick-quote
+// and a cmd `^"` both read as ONE segment, because the escaped quote was mistaken
+// for a quote OPENING a span, which then swallowed the pipeline separator and the
+// merge command hiding behind it. Reproduced against both real guards before this
+// fix (PR #445, round 15).
+//
+// Fixing one spelling at a time failed three consecutive review rounds, because
+// every dialect disagrees with the others somewhere. So do not pick a dialect:
+// read the line under ALL THREE and treat a position as a command boundary when it
+// is a live separator under ANY reading. That is monotone in the safe direction —
+// the boundary set only ever grows, so a shape that is caught today cannot become
+// uncaught, while an extra segment merely gets scanned again by every gate and a
+// missing one hides a command outright.
+//
+// Two rules below — Rule A, and the caret's `escapesInsideDoubleQuotes: false` —
+// are INDIVIDUALLY REDUNDANT once the union is in place. That is stated here rather
+// than left for a reviewer to rediscover as apparent dead code. A separator can only
+// be suppressed in the dialect whose escape character precedes it, and the three
+// escape characters are distinct, so the other two readings always still see it; and
+// bash never honours `^`, so its reading always closes a `"a^"` span and finds the
+// separator cmd's reading would miss. Both were removed by mutation — separately and
+// together — with zero losses across the 320-case hostile matrix and a 60k-command
+// fuzz. They are kept as defence in depth so this function stays correct if the
+// dialect table is ever narrowed. The union is what carries the guarantee, and the
+// tests pin the union.
+const ESCAPE_DIALECTS = [
+  // `\` escapes inside a double-quoted span, and is literal inside `'…'`.
+  { escape: "\\", escapesInsideDoubleQuotes: true },
+  // PowerShell's backtick behaves the same way; inside `'…'` it is literal.
+  { escape: "`", escapesInsideDoubleQuotes: true },
+  // cmd's `^` is literal INSIDE any quoted span, so `"a^"` really does close there
+  // and a following `&` really does start a new command. Honouring `^` inside
+  // quotes would swallow that separator — the exact under-segmentation this
+  // function exists to prevent.
+  { escape: "^", escapesInsideDoubleQuotes: false },
+];
+
+// Positions of separators that sit OUTSIDE any quoted span under one dialect's
+// reading of the line.
+function liveSeparatorPositions(text, dialect) {
+  const live = new Set();
   let quote = null;
-  let start = 0;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
-    // A backslash escapes the NEXT character in Bash — and in PowerShell and cmd it
-    // does not: there it is an ordinary argument character, so `\|` remains a real
-    // pipeline separator and the shell runs TWO commands. This parser cannot know
-    // which shell will run the line, so for separators it takes the safer reading:
-    // a backslash never suppresses one. Over-segmenting is safe — every extra
-    // segment is still scanned by every gate — while under-segmenting is how
-    // `Write-Output x\|gh pr merge 445` reached the merge gate as a single
-    // unrecognised command, and how a hidden `--force` reached the push gate
-    // (Codex proof gate, PR #445, rounds 13 and 14). Escaping is otherwise
-    // unchanged, so `\"` still does not open a quoted span, and a separator inside
-    // a quoted span is still literal.
-    if (ch === "\\" && quote !== "'" && i + 1 < text.length && !SEGMENT_SEPARATORS.has(text[i + 1])) {
+    const escapeApplies = quote === null
+      || (quote === '"' && dialect.escapesInsideDoubleQuotes);
+    // Rule A: an escape NEVER suppresses a separator. In Bash `\|` is a literal
+    // pipe, but in PowerShell and cmd the backslash is an ordinary argument
+    // character and the shell runs TWO commands — so the separator stands. This is
+    // what already stopped a `\`-hidden merge and a `\`-hidden `--force` from
+    // reaching their gates unclassified (rounds 13 and 14).
+    //
+    // Rule B: an escape before a quote means that quote is not a delimiter in this
+    // reading — it neither opens nor closes a span.
+    if (ch === dialect.escape && escapeApplies && i + 1 < text.length
+      && !SEGMENT_SEPARATORS.has(text[i + 1])) {
       i += 1;
       continue;
     }
     if (quote) { if (ch === quote) quote = null; continue; }
     if (ch === "'" || ch === '"') { quote = ch; continue; }
-    if (ch === ";" || ch === "\n" || ch === "\r") {
-      segments.push(text.slice(start, i));
-      start = i + 1;
-      continue;
+    if (SEGMENT_SEPARATORS.has(ch)) live.add(i);
+  }
+  // An UNTERMINATED quote means this reading never made sense: no shell would run
+  // the line as written, so the span this parser believed in is not a span, and
+  // every separator it swallowed was swallowed on a false premise. `main` split on
+  // a plain `command.split(/(?:&&|\|\|?|;|\r?\n)/)` that ignored quotes entirely,
+  // so it caught these; quote-awareness lost them, and `echo x"|gh …` reached the
+  // merge and `gh api` gates as one unrecognised command — the same regression as
+  // the escape dialects above, in a second family (PR #445, round 15, found by
+  // running the whole matrix rather than only the reported shapes). A reading that
+  // does not parse therefore falls back to the naive one and contributes every
+  // separator. Balanced commands are untouched, so a quoted `git commit -m "a | b"`
+  // is still ONE segment.
+  if (quote !== null) {
+    for (let i = 0; i < text.length; i += 1) {
+      if (SEGMENT_SEPARATORS.has(text[i])) live.add(i);
     }
-    if (ch === "&" || ch === "|") {
-      segments.push(text.slice(start, i));
-      let end = i;
-      while (end < text.length && (text[end] === "&" || text[end] === "|")) end += 1;
-      start = end;
-      i = end - 1;
+  }
+  return live;
+}
+
+export function shellSegments(cmd) {
+  const text = String(cmd ?? "");
+  const boundaries = new Set();
+  for (const dialect of ESCAPE_DIALECTS) {
+    for (const position of liveSeparatorPositions(text, dialect)) boundaries.add(position);
+  }
+  const segments = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (!boundaries.has(i)) continue;
+    segments.push(text.slice(start, i));
+    // `&&` and `||` are one separator, not two empty segments with nothing between
+    // them. A run is collapsed only across positions that are themselves
+    // boundaries; separators never change quote state, so a run is either live in a
+    // dialect or not and cannot straddle the edge of a quoted span.
+    let end = i + 1;
+    if (text[i] === "&" || text[i] === "|") {
+      while (end < text.length && (text[end] === "&" || text[end] === "|")
+        && boundaries.has(end)) end += 1;
     }
+    start = end;
+    i = end - 1;
   }
   segments.push(text.slice(start));
   return segments;

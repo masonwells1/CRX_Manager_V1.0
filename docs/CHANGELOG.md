@@ -195,6 +195,41 @@ next agent. Two sessions read it that way.
   force-push. Splitting costs nothing there, verified against the real guard: the leading fragment is
   a push with no destination, which is not main-bound and stays allowed. Every consumer of the
   splitter is fixed at once, and round 13's multi-push backstop stays as defence in depth.
+- **Round 15 found that rounds 13/14 had fixed one spelling of a three-spelling bug, and that the
+  branch was still a NET REGRESSION against `main`.** Round 14 stopped a *backslash* from suppressing
+  a separator, but the backslash was never the only escape character in play: PowerShell escapes with
+  a **backtick** and cmd with **`^`**, and `shellSegments` recognised neither. So the escaped quote in
+  ``Write-Output x`"|gh pr merge 445`` and `echo x^"|gh pr merge 445` was read as a quote *opening* a
+  span, which swallowed the pipeline separator and the command behind it. Reproduced against both
+  running guards: the backtick form hid a PR merge and a mutating `gh api -X DELETE`, the caret form
+  hid a PR merge, and all three were **allowed here while `main` blocked them**. The no-whitespace
+  spelling is the point — there is nothing to tokenize on.
+- **Running the whole matrix, rather than only the two reported shapes, surfaced a second family from
+  the same switch.** A bare **unterminated quote** — `echo x"|gh pr merge 445` — swallowed the line
+  too. `main` split on `command.split(/(?:&&|\|\|?|;|\r?\n)/)`, which ignored quotes entirely and
+  caught these; quote-awareness lost them. Twelve further cells, invisible to a per-shape fix.
+- **So round 15 stopped picking a dialect.** Every command is now read under **all three** — `\` Git
+  Bash, backtick PowerShell, `^` cmd — and a position is a command boundary when it is a live
+  separator under **any** reading; a reading left with an unterminated quote falls back to the naive
+  split, because no shell runs an unbalanced command as written. The boundary set only ever grows, so
+  a shape caught today cannot become uncaught: an extra segment is merely scanned again, while a
+  missing one hides a command outright. Over-refusal is bounded by the same rule — a *balanced* quoted
+  separator is still literal, so `git commit -m "a | b"`, a Windows path with an apostrophe, and
+  `git log --format="%h | %s"` all stay one segment.
+- **Proof.** A 320-case hostile matrix (escape × quote × separator × inside/outside a span × four
+  payloads: force-push, main-bound push, PR merge, mutating `gh api`) went from **12 leaks to 0**; an
+  18-command benign corpus is unchanged at 18/18 allowed; a 60,000-command fuzz shows **0 boundaries
+  lost** against round 14 and no case producing fewer segments. Mutation-tested: deleting the
+  backtick/caret dialects turns the balanced-quote assertions red, and deleting the unterminated-quote
+  fallback turns the unbalanced ones red. The first test pass was found to be partly **vacuous** — the
+  fallback alone satisfied it — which is why the matrix now also asserts *balanced* variants, where the
+  dialect table is the only thing that can find the separator.
+- **Two rules are documented as redundant rather than left to look like dead code.** Under the union,
+  round 14's "an escape never suppresses a separator" and cmd's "`^` is literal inside quotes" are each
+  individually unnecessary: only one dialect's escape can precede a given separator, so the other two
+  readings still see it, and bash never honours `^`, so its reading always closes a `"a^"` span. Both
+  were removed by mutation, separately and together, with zero losses across the matrix and the fuzz.
+  They are kept as defence in depth so the function stays correct if the dialect table is narrowed.
 - **Round 11 replaced the question entirely.** Both earlier versions asked something about the *raw*
   token list, and a split option value pushes every later token out of position — so
   `git -C C:/My\ Repo commit -m push` (a commit), `… status -- push`, and `… stash push -m wip` were

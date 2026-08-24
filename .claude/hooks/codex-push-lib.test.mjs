@@ -1316,6 +1316,125 @@ assert.equal(
   shellSegments("git push \\\norigin main").length, 2,
   "a backslash before a newline still splits, because only bash would have joined it",
 );
+
+// --- the splitter is escape-aware in ALL THREE shells (PR #445, round 15) -----
+// Round 10 taught this splitter the POSIX escape, and rounds 13/14 stopped a
+// backslash from suppressing a separator. That still left the two Windows shells
+// this repo is actually driven from: PowerShell escapes with a BACKTICK and cmd
+// with `^`. Neither was recognised, so the escaped quote in `x<BACKTICK>"|…` and
+// `x^"|…` was read as a quote OPENING a span, which swallowed the pipeline
+// separator and the command hiding behind it. Both were ALLOWED here while
+// `main`'s naive split blocked them — the branch was a NET REGRESSION, reproduced
+// against both real guards before this fix.
+//
+// Fixing one spelling at a time failed three consecutive review rounds, so the
+// whole matrix is asserted instead: {escape} x {quote} x {separator} x {inside,
+// outside a span}. The property is the one that matters — whatever the escape
+// trickery, the hidden command must end up in a segment of its OWN, where every
+// gate can see it.
+{
+  const BACKTICK = "`";
+  const hidden = "git push --force origin HEAD:main";
+  const escapes = [["backslash", "\\"], ["backtick", BACKTICK], ["caret", "^"], ["none", ""]];
+  const quotes = [["double", '"'], ["single", "'"]];
+  const separators = [["pipe", "|"], ["ampersand", "&"], ["semicolon", ";"], ["newline", "\n"]];
+  let cells = 0;
+  for (const [escapeName, escape] of escapes) {
+    for (const [quoteName, quote] of quotes) {
+      for (const [separatorName, separator] of separators) {
+        const where = `${escapeName}/${quoteName}/${separatorName}`;
+        // The escape+quote sits in OPEN text, so a parser that mistakes it for an
+        // opening quote swallows the rest of the line. This is the exact shape of
+        // the two reported regressions.
+        const outside = `echo x${escape}${quote}${separator}${hidden}`;
+        assert.ok(
+          shellSegments(outside).map((segment) => segment.trim()).includes(hidden),
+          `an escaped quote in open text must not swallow the separator (${where}, outside)`,
+        );
+        // …and the mirror case, where a span is already open. cmd does NOT honour
+        // `^` inside quotes, so `"a^"` really does close there and the separator
+        // after it really does start a new command.
+        const inside = `echo ${quote}a${escape}${quote}${separator}${hidden}`;
+        assert.ok(
+          shellSegments(inside).map((segment) => segment.trim()).includes(hidden),
+          `an escaped quote inside a span must not swallow the separator (${where}, inside)`,
+        );
+        cells += 2;
+      }
+    }
+  }
+  assert.equal(cells, 64, "the whole escape/quote/separator matrix is asserted, not a sample");
+}
+// The matrix above always leaves the line UNBALANCED, so the unterminated-quote
+// fallback alone would satisfy it — which would make the dialect table untested
+// scaffolding. Close the quote at the end and every reading parses, so the fallback
+// cannot fire and the ONLY thing that can still find the separator is the dialect
+// that owns that escape character. Verified by mutation: deleting the backtick and
+// caret rows turns these red while the unbalanced cases stay green.
+{
+  const BACKTICK = "`";
+  const hidden = "gh pr merge 445";
+  for (const [escapeName, escape] of [["backslash", "\\"], ["backtick", BACKTICK], ["caret", "^"]]) {
+    for (const [quoteName, quote] of [["double", '"'], ["single", "'"]]) {
+      for (const [separatorName, separator] of [["pipe", "|"], ["ampersand", "&"], ["semicolon", ";"], ["newline", "\n"]]) {
+        const where = `${escapeName}/${quoteName}/${separatorName}`;
+        const balanced = `echo x${escape}${quote}${separator}${hidden}${quote}`;
+        assert.ok(
+          shellSegments(balanced).map((segment) => segment.trim().replace(/["']$/, "")).includes(hidden),
+          `a BALANCED escaped quote must still expose the hidden command (${where})`,
+        );
+      }
+    }
+  }
+}
+// …and the counterpart that must NOT split, which is what keeps the rule above from
+// being "split on everything": with no escape at all, `echo x"|gh …"` is a genuinely
+// quoted string. Every shell echoes it as text and none runs the merge, so it stays
+// ONE segment. This is the line between hardening and refusing ordinary commands.
+for (const quote of ['"', "'"]) {
+  assert.equal(
+    shellSegments(`echo x${quote}|gh pr merge 445${quote}`).length, 1,
+    `an unescaped balanced quote really is a quoted string and must not split (${quote})`,
+  );
+}
+// The two reported regressions, spelled out with no whitespace — the form that
+// actually slipped through, because `x<BACKTICK>"|gh …` has nothing to tokenize on.
+assert.ok(
+  shellSegments("Write-Output x`\"|gh pr merge 445").map((segment) => segment.trim()).includes("gh pr merge 445"),
+  "a PowerShell backtick-escaped quote does not hide a merge",
+);
+assert.ok(
+  shellSegments('echo x^"|gh pr merge 445').map((segment) => segment.trim()).includes("gh pr merge 445"),
+  "a cmd caret-escaped quote does not hide a merge",
+);
+// An UNTERMINATED quote is the second family the quote-aware switch opened, found
+// by running the whole matrix rather than only the reported shapes. `main` split on
+// a naive regex that ignored quotes and caught these; quote-awareness swallowed the
+// line instead. No shell runs an unbalanced command as written, so a reading that
+// does not parse falls back to the naive one.
+for (const quote of ['"', "'"]) {
+  assert.ok(
+    shellSegments(`echo x${quote}|gh pr merge 445`).map((segment) => segment.trim()).includes("gh pr merge 445"),
+    `an unterminated ${quote === '"' ? "double" : "single"} quote does not hide a merge`,
+  );
+}
+// Over-segmenting is the safe direction, but it must not reach ORDINARY commands:
+// a BALANCED quoted separator is literal and the command stays whole. These are the
+// shapes a Windows path, a commit message, and a log format actually produce.
+for (const benign of [
+  `git commit -m "a | b"`,
+  `git commit -m 'a | b'`,
+  `git commit -m "fix: don't split | here"`,
+  `git -C "C:/Mason's Repo" status`,
+  `git log --format="%h | %s"`,
+  `git commit -m "caret ^ inside"`,
+  `git commit -m "path C:\\Users\\mason | x"`,
+]) {
+  assert.equal(
+    shellSegments(benign).length, 1,
+    `a balanced quoted separator is literal and must not split: ${benign}`,
+  );
+}
 // The escape handling must not have re-broken the round-9 case.
 assert.deepEqual(
   pushSetsInlineEnv(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20 && curl evil" git push origin feature`),
