@@ -32,6 +32,7 @@ import {
   castDefinitions,
   operatorDefinitions,
   overlappingTables,
+  ruleAttachmentIdentity,
   ruleAttachments,
   routineIdentityChanges,
   viewDefinitions,
@@ -281,8 +282,14 @@ function loadTrustedFanout(evidenceRoots) {
         throw new Error(`${manifestPath}: invalid rewrite-rule evidence`);
       }
       persistedRules.set(
-        `${rule.event}\0${rule.relation}\0${rule.oid}\0${rule.definition_hash}`,
-        { table: rule.relation, event: rule.event },
+        `${rule.event}\0${rule.relation}\0${rule.name}\0${rule.oid}\0${rule.definition_hash}`,
+        {
+          name: rule.name,
+          schema: rule.relation.includes(".") ? rule.relation.split(".")[0] : "public",
+          relation: rule.relation.split(".").pop(),
+          table: rule.relation,
+          event: rule.event,
+        },
       );
     }
     const manifestTables = new Set(parsed.tables_scanned.map((table) => String(table).toLowerCase()));
@@ -450,7 +457,7 @@ function loadKnownDefinitions(evidenceRoots, currentMigration = "") {
       // a false availability failure.
       if (hasRules && (!currentMigration || name < `${currentMigration}.sql`)) {
         for (const definition of ruleAttachments(code)) {
-          rulesByKey.set(`${definition.event}\0${definition.table}`, definition);
+          rulesByKey.set(ruleAttachmentIdentity(definition), definition);
         }
       }
     }

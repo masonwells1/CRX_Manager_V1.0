@@ -1338,21 +1338,34 @@ function invokedCasts(code, definitions) {
 
 /** Relations that receive a standing PostgreSQL rule in this migration. */
 export function ruleAttachments(code) {
-  const s = (code || "").toLowerCase();
+  const source = String(code || "");
+  const s = source.toLowerCase();
   const out = [];
   RULE_STMT.lastIndex = 0;
   let m;
   while ((m = RULE_STMT.exec(s)) !== null) {
+    const nameStart = skipSpace(s, m.index + m[0].length);
+    const ruleName = readIdent(source, nameStart);
     const semi = s.indexOf(";", m.index);
     const body = s.slice(m.index, semi === -1 ? s.length : semi);
     const eventMatch = /\bas\s+on\s+(select|insert|update|delete)\s+to\b/.exec(body);
     const to = scanTo(body, 0, ["to"]);
-    if (!eventMatch || to.hit !== "to") continue;
+    if (!ruleName || !eventMatch || to.hit !== "to") continue;
     const rel = readRelation(body, to.end);
     if (!rel || (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted)) continue;
-    out.push({ table: rel.table, event: eventMatch[1] });
+    const nameIdentity = identifierIdentity(ruleName.value);
+    const name = nameIdentity.quoted ? nameIdentity.value : nameIdentity.value.toLowerCase();
+    const parts = rel.table.split(".");
+    const schema = parts.length === 2 ? parts[0] : "public";
+    const relation = parts.at(-1);
+    out.push({ name, schema, relation, table: rel.table, event: eventMatch[1] });
   }
-  return [...new Map(out.map((rule) => [`${rule.event}\0${rule.table}`, rule])).values()];
+  return [...new Map(out.map((rule) => [ruleAttachmentIdentity(rule), rule])).values()];
+}
+
+/** Stable full identity for a PostgreSQL rewrite-rule attachment. */
+export function ruleAttachmentIdentity(rule) {
+  return `${rule?.schema || ""}\0${rule?.relation || ""}\0${rule?.event || ""}\0${rule?.name || ""}`;
 }
 
 /** Ordinary (non-materialized) view definitions and their stored query text. */
@@ -1670,7 +1683,7 @@ export function applyTimeWriteTargets(
   const viewKeys = new Set();
   const defineViews = (list) => {
     for (const definition of list) {
-      const name = String(definition?.name || "").toLowerCase();
+      const name = String(definition?.name || "");
       const query = String(definition?.query || "").toLowerCase();
       if (!name) continue;
       const key = `${name}\0${query}`;
@@ -1692,17 +1705,26 @@ export function applyTimeWriteTargets(
   const ruleKeys = new Set();
   const defineRules = (list) => {
     for (const definition of list) {
-      const table = String(definition?.table || "").toLowerCase();
+      const rawTable = String(definition?.table || "").toLowerCase();
+      const tableParts = rawTable.split(".").filter(Boolean);
+      const schema = String(definition?.schema ||
+        (tableParts.length === 2 ? tableParts[0] : "public")).toLowerCase();
+      const relation = String(definition?.relation || tableParts.at(-1) || "").toLowerCase();
+      const table = schema === "public" ? relation : `${schema}.${relation}`;
       const event = String(definition?.event || "").toLowerCase();
-      if (!/^[a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?$/.test(table) ||
+      const name = String(definition?.name || "").toLowerCase();
+      if (!/^[a-z_][a-z0-9_$]*$/.test(schema) ||
+          !/^[a-z_][a-z0-9_$]*$/.test(relation) ||
+          !/^[A-Za-z_][A-Za-z0-9_$]*$/.test(name) ||
           !new Set(["select", "insert", "update", "delete"]).has(event)) {
         top.unresolved = true;
         continue;
       }
-      const key = `${event}\0${table}`;
+      const rule = { name, schema, relation, table, event };
+      const key = ruleAttachmentIdentity(rule);
       if (ruleKeys.has(key)) continue;
       ruleKeys.add(key);
-      rules.push({ table, event });
+      rules.push(rule);
     }
   };
   defineRules(knownRules);
@@ -1769,7 +1791,7 @@ export function applyTimeWriteTargets(
   };
   foldLiterals(top, literals);
   const fired = new Set();
-  const firedRules = new Set();
+  const firedRules = new Map();
   const firedRuleKeys = new Set();
   const unknownTriggerFns = new Set();
   const unknownOperatorFns = new Set();
@@ -1819,7 +1841,7 @@ export function applyTimeWriteTargets(
   };
   const fireAttached = (into) => {
     for (const rule of rules) {
-      const key = `${rule.event}\0${rule.table}`;
+      const key = ruleAttachmentIdentity(rule);
       const bareRuleTable = rule.table.split(".").pop();
       const isQualifiedRule = bareRuleTable !== rule.table;
       // An unqualified relation can resolve through search_path to a captured
@@ -1838,7 +1860,12 @@ export function applyTimeWriteTargets(
       // DML. Until rule actions are parsed as fully as routine bodies, firing
       // one is not provably bounded and must refuse rather than disappear.
       firedRuleKeys.add(key);
-      firedRules.add(rule.table);
+      firedRules.set(key, {
+        name: rule.name,
+        schema: rule.schema,
+        relation: rule.relation,
+        event: rule.event,
+      });
       top.unresolved = true;
     }
     for (const att of attachments) {
@@ -1973,7 +2000,7 @@ export function applyTimeWriteTargets(
     definedRoutines: [...byName.keys()],
     invokedRoutines: [...seen],
     firedTriggers: [...fired],
-    firedRules: [...firedRules],
+    firedRules: [...firedRules.values()],
     invokedOperators: [...firedOperators],
     invokedCasts: [...firedCasts],
     invokedViews: [...firedViews],

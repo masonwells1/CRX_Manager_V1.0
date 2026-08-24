@@ -371,7 +371,9 @@ edge cannot hide stale evidence. A hash changed by the same branch is not accept
 refresh; absent an external exact-artifact attestation, the affected source must be opaque. Quoted
 routine names are canonicalized as atomic identifiers so comment markers inside a legal name cannot
 erase its body or invocation. A `CREATE RULE` remains deferred until the migration writes its
-relation; when fired, its action is conservatively unresolved rather than silently trusted. The
+relation; when fired, its action is conservatively unresolved rather than silently trusted. Rule
+catalogs and fired-rule comparisons retain schema, relation, event, and rule name, so a local rule
+cannot mask a differently named rule installed by an earlier migration. The
 shared live-read helper accepts only named built-in queries and cannot submit an arbitrary `SELECT`
 with side effects. **Cost:** a repair
 on a table with a cascading trigger can no longer take the one-table shape at all — it

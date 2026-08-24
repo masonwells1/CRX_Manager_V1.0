@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 import {
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -155,9 +156,15 @@ function git(args, cwd) {
 }
 
 function samePath(a, b) {
-  const normalize = (value) => process.platform === 'win32'
-    ? path.resolve(value).toLowerCase()
-    : path.resolve(value);
+  const normalize = (value) => {
+    let resolved;
+    try {
+      resolved = realpathSync.native(value);
+    } catch {
+      resolved = path.resolve(value);
+    }
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
   return normalize(a) === normalize(b);
 }
 

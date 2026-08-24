@@ -1,11 +1,22 @@
 # Decision Log
 
-Last verified: 2026-08-21
+Last verified: 2026-08-23
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-23 — Rewrite rules are identified by their complete attachment
+
+**Source:** Exact-head CodeRabbit review of PR #364 and focused removal/collision mutation proof.
+**Decision:** A rewrite-rule attachment identity is schema + relation + event + rule name.
+**Why:** PostgreSQL permits differently named rules on one relation/event. Deduplicating only by
+relation/event can let a candidate-local rule hide an earlier persisted rule from the replay guard.
+**What this forbids/implies:** rule catalogs and fired-rule comparisons must preserve the complete
+attachment identity. Relation-only or relation/event-only comparisons are not sufficient evidence.
 
 ---
 

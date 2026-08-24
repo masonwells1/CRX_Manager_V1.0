@@ -15,6 +15,7 @@ import {
   applyTimeWriteTargets,
   applyTimeCode,
   overlappingTables,
+  ruleAttachmentIdentity,
   routineIdentityChanges,
 } from "./apply-time-dml-lib.mjs";
 
@@ -24,6 +25,7 @@ function eq(a, b, m) { assert.deepEqual(a, b, m); pass += 1; }
 
 const T = (sql) => [...applyTimeWriteTargets(sql).targets].sort();
 const has = (sql, t) => applyTimeWriteTargets(sql).targets.has(t);
+const firedRuleIds = (result) => result.firedRules.map(ruleAttachmentIdentity).sort();
 
 // ---------------------------------------------------------------- the basics
 eq(T("UPDATE order_items SET total_price = 1;"), ["order_items.total_price"],
@@ -705,8 +707,8 @@ eq(T(null), [], "a null body does not throw");
     "INSERT INTO scratch_probe(id) VALUES (1);",
   );
   ok(rule.unresolved, "round-33: firing a PostgreSQL rule fails closed");
-  eq([...rule.firedRules], ["scratch_probe"],
-    "round-33: the fired rule relation is named");
+  eq(firedRuleIds(rule), ["public\0scratch_probe\0insert\0fire_repair"],
+    "round-33: the fired rule's complete attachment identity is named");
 
   const attachOnly = applyTimeWriteTargets(
     "CREATE TEMP TABLE scratch_probe(id integer); " +
@@ -1378,8 +1380,8 @@ eq(T(null), [], "a null body does not throw");
   const selected = applyTimeWriteTargets(`${definition} SELECT * FROM public.scratch_probe;`);
   ok(selected.unresolved,
     'round-52: selecting a relation with an ON SELECT rule fails closed');
-  eq(selected.firedRules, ['scratch_probe'],
-    'round-52: the fired ON SELECT rule relation is named');
+  eq(firedRuleIds(selected), ['public\0scratch_probe\0select\0_return'],
+    'round-52: the fired ON SELECT rule attachment is named');
 
   const definitionOnly = applyTimeWriteTargets(definition);
   ok(!definitionOnly.unresolved,
@@ -1392,32 +1394,44 @@ eq(T(null), [], "a null body does not throw");
 {
   const selected = applyTimeWriteTargets(
     'SELECT * FROM public.persisted_rule_probe;',
-    { knownRules: [{ table: 'persisted_rule_probe', event: 'select' }] },
+    { knownRules: [{ name: 'persisted_select', table: 'persisted_rule_probe', event: 'select' }] },
   );
   ok(selected.unresolved,
     'round-57: selecting a relation with a catalog-known ON SELECT rule fails closed');
-  eq(selected.firedRules, ['persisted_rule_probe'],
-    'round-57: the persisted fired rule relation is named');
+  eq(firedRuleIds(selected), ['public\0persisted_rule_probe\0select\0persisted_select'],
+    'round-57: the persisted fired rule attachment is named');
 
   const notSelected = applyTimeWriteTargets(
     'SELECT 1;',
-    { knownRules: [{ table: 'persisted_rule_probe', event: 'select' }] },
+    { knownRules: [{ name: 'persisted_select', table: 'persisted_rule_probe', event: 'select' }] },
   );
   ok(!notSelected.unresolved && notSelected.firedRules.length === 0,
     'round-57 MUTANT: a persisted rule that is not fired does not block unrelated SQL');
 
   const crossSchema = applyTimeWriteTargets(
     'SELECT * FROM auth.persisted_rule_probe;',
-    { knownRules: [{ table: 'auth.persisted_rule_probe', event: 'select' }] },
+    { knownRules: [{ name: 'auth_select', table: 'auth.persisted_rule_probe', event: 'select' }] },
   );
-  ok(crossSchema.unresolved && crossSchema.firedRules.includes('auth.persisted_rule_probe'),
+  ok(crossSchema.unresolved &&
+      firedRuleIds(crossSchema).includes('auth\0persisted_rule_probe\0select\0auth_select'),
     'round-57: a catalog-known rule retains its non-public schema identity');
   const unqualified = applyTimeWriteTargets(
     'SELECT * FROM persisted_rule_probe;',
-    { knownRules: [{ table: 'auth.persisted_rule_probe', event: 'select' }] },
+    { knownRules: [{ name: 'auth_select', table: 'auth.persisted_rule_probe', event: 'select' }] },
   );
-  ok(unqualified.unresolved && unqualified.firedRules.includes('auth.persisted_rule_probe'),
+  ok(unqualified.unresolved &&
+      firedRuleIds(unqualified).includes('auth\0persisted_rule_probe\0select\0auth_select'),
     'round-57: an unqualified relation may resolve through search_path to the auth rule');
+
+  const sameEventRules = applyTimeWriteTargets(
+    'CREATE RULE local_repair AS ON UPDATE TO public.persisted_rule_probe DO ALSO SELECT 1; ' +
+      'UPDATE public.persisted_rule_probe SET id = id;',
+    { knownRules: [{ name: 'inherited_repair', table: 'persisted_rule_probe', event: 'update' }] },
+  );
+  eq(firedRuleIds(sameEventRules), [
+    'public\0persisted_rule_probe\0update\0inherited_repair',
+    'public\0persisted_rule_probe\0update\0local_repair',
+  ], 'round-64: inherited and local rules on one relation/event retain distinct identities');
 }
 
 // ---------------- ROUND 54: routine schemas are part of call identity
@@ -1487,7 +1501,8 @@ eq(T(null), [], "a null body does not throw");
     'CREATE RULE round55_r AS ON SELECT TO public.round55_rule_source DO INSTEAD SELECT 1 AS id; ' +
     'END $$; CALL public.round55_rule_install(); SELECT * FROM public.round55_rule_source;',
   );
-  ok(installedRule.unresolved && installedRule.firedRules.includes('round55_rule_source'),
+  ok(installedRule.unresolved &&
+      firedRuleIds(installedRule).includes('public\0round55_rule_source\0select\0round55_r'),
     'round-55: a rule attached by an invoked routine fails closed when its relation is read');
 
   const usingRule = applyTimeWriteTargets(
@@ -1496,7 +1511,8 @@ eq(T(null), [], "a null body does not throw");
     'DO INSTEAD SELECT 1 AS id; DELETE FROM public.round55_sink_table ' +
     'USING public.round55_using_source WHERE true;',
   );
-  ok(usingRule.unresolved && usingRule.firedRules.includes('round55_using_source'),
+  ok(usingRule.unresolved &&
+      firedRuleIds(usingRule).includes('public\0round55_using_source\0select\0round55_using'),
     'round-55: DELETE or MERGE USING reads can fire standing SELECT rules');
 }
 

@@ -2,6 +2,18 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-23 — Rewrite-rule attachment identities made collision-safe
+
+- Apply-time rewrite rules are now keyed by schema, relation, event, and rule name. A candidate
+  rule can no longer hide a differently named rule installed by an earlier migration merely because
+  both attach to the same relation/event; every fired attachment remains fail-closed.
+- The cross-migration validator now mutation-tests that exact inherited-plus-local collision, and
+  the linked manifest consumer preserves live rule names instead of discarding them.
+- Trigger fan-out producer root comparison now resolves symlinks/junctions before comparing the
+  requested checkout with Git's canonical worktree path.
+- Focused proof: apply-time analyzer 294 assertions; migration apply guard 341 assertions;
+  generator 29 assertions; persisted-rule cross-migration mutation passed.
+
 ## 2026-08-22 — Persisted CHECK-routine effects added to migration evidence
 
 - The linked production fan-out capture now binds every public table `CHECK` constraint that

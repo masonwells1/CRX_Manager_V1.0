@@ -3237,8 +3237,8 @@ function runPersistedRuleAcrossMigrations() {
     writeFileSync(
       join(migrations, '29980101000000_install_rule.sql'),
       'CREATE TABLE public.persisted_rule_probe(id integer);\n' +
-        'CREATE RULE persisted_repair AS ON SELECT TO public.persisted_rule_probe ' +
-        'DO INSTEAD SELECT public.existing_repair() AS id;\n',
+        'CREATE RULE persisted_repair AS ON UPDATE TO public.persisted_rule_probe ' +
+        'DO ALSO SELECT public.existing_repair();\n',
     );
     git('init');
     git('add', '.');
@@ -3247,7 +3247,8 @@ function runPersistedRuleAcrossMigrations() {
     const candidate = '29980101000001_fire_persisted_rule.sql';
     writeFileSync(
       join(migrations, candidate),
-      'SELECT * FROM public.persisted_rule_probe;\n',
+      'CREATE RULE local_repair AS ON UPDATE TO public.persisted_rule_probe DO ALSO SELECT 1;\n' +
+        'UPDATE public.persisted_rule_probe SET id = id;\n',
     );
     const result = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
       cwd: dir,
@@ -3259,7 +3260,7 @@ function runPersistedRuleAcrossMigrations() {
     if (classify(output, candidate) !== 'violation' ||
         !block.includes('rewrite rule installed by an earlier migration')) {
       failures.push(
-        '  round-57: changed-only validation lost an earlier migration rewrite rule\n' +
+        '  round-64: a local rule masked an earlier rule on the same relation/event\n' +
           block.split('\n').map((line) => `      | ${line}`).join('\n'),
       );
     }

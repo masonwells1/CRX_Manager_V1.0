@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   applyTimeCode,
   applyTimeWriteTargets,
+  ruleAttachmentIdentity,
   ruleAttachments,
 } from "../.claude/hooks/apply-time-dml-lib.mjs";
 
@@ -43,8 +44,10 @@ for (const file of paths) {
     process.stdout.write(`${file}\tevent-catalog-risk\n`);
   }
   if (knownRules.length && analysed.firedRules.length) {
-    const localFiredRules = new Set(applyTimeWriteTargets(sql).firedRules);
-    if (analysed.firedRules.some((table) => !localFiredRules.has(table))) {
+    const localFiredRules = new Set(
+      applyTimeWriteTargets(sql).firedRules.map(ruleAttachmentIdentity),
+    );
+    if (analysed.firedRules.some((rule) => !localFiredRules.has(ruleAttachmentIdentity(rule)))) {
       process.stdout.write(`${file}\tpersisted-rule\n`);
     }
   }
