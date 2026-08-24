@@ -71,12 +71,20 @@ check('builds canonical ledger names and preserves database time', () => {
   });
 });
 
-check('authoritative ledger version wins over a different timestamp embedded in name', () => {
+check('authored leading timestamp wins over a different ledger version', () => {
   const snapshot = buildAppliedSnapshot({
     captured_at: CAPTURED_AT,
     applied: [{ version: '20260814000000', name: '20250101000000_legacy_authored_name' }],
   });
-  assert.deepEqual(snapshot.applied, ['20260814000000_20250101000000_legacy_authored_name']);
+  assert.deepEqual(snapshot.applied, ['20250101000000_legacy_authored_name']);
+});
+
+check('authored non-leading timestamp also wins over the ledger version', () => {
+  const snapshot = buildAppliedSnapshot({
+    captured_at: CAPTURED_AT,
+    applied: [{ version: '20260814000000', name: 'legacy_20250101000000_authored_name' }],
+  });
+  assert.deepEqual(snapshot.applied, ['legacy_20250101000000_authored_name']);
 });
 
 for (const [label, payload] of [

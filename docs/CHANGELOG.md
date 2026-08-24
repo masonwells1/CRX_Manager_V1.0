@@ -10,10 +10,12 @@ authored migration high-water and falsely blocked a correctly ordered money
 migration. The first correction then went too far and discarded `version` even
 for legacy ledger rows whose `name` contains no timestamp.
 
-- Migration ordering evidence is now derived row by row: prefer the authored
-  14-digit stamp embedded in `name`, and use that row's 14-digit `version` only
-  when the name has no timestamp. A bare `max(version)` or schema-registry
-  version is not sufficient ordering evidence because it loses that context.
+- Migration ordering evidence is now derived row by row: the snapshot producer
+  preserves `name` unchanged whenever it contains an authored 14-digit stamp,
+  and the parser prefers that stamp; the producer prefixes that row's 14-digit
+  `version` only when the name has no timestamp. A bare `max(version)` or
+  schema-registry version is not sufficient ordering evidence because it loses
+  that context.
 - The fallback premise is real: a read-only live check found 626 of 971 ledger
   rows have bare-slug names. The newest such row remains older than the current
   authored-name high-water, so this was a latent guard contradiction rather

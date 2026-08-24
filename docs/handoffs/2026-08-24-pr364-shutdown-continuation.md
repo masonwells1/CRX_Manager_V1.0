@@ -5,13 +5,13 @@ Status captured: 2026-08-24, America/Chicago.
 ## WHERE
 
 - Repository: `masonwells1/CRX_Manager_V1.0`
-- Isolated checkout: `C:\Users\mason\.codex\worktrees\pr364-landing\CRX_Manager`
+- Isolated checkout: the Codex worktree currently attached to PR #364 (resolve it with `git worktree list`)
 - Branch: `claude/session-orchestration-setup-d73e6c`
 - Pull request: #364
-- Remote head: `8fe223e24d0bb7768999f591da0f0d2b6cca2d28`
-- Reviewed base: `56321c0d083e958d445854c3310878b916aa971a`
-- Current base after resume refresh: `14bdb2fde6a9a98db9947afd419dbb181182e51f`
-- Preserve the unrelated dirty primary checkout at `C:\CRX_Manager`.
+- Remote head: `5193864fa757067420f250d2fdaa8c9afcf272d6`
+- Last reviewed base: `4b8ef10f4c6610b4c4d33a3607419e03e076a2ec`
+- Current base after resume refresh: `78834482` (must be integrated before final review)
+- Preserve the unrelated dirty primary checkout; do not use it for this PR.
 
 ## GOAL
 
@@ -26,7 +26,7 @@ Repair every valid merge blocker on PR #364, prove the fail-closed deny paths, c
 - The first final exact-SHA Sol review timed out after 1,200 seconds and wrote no proof. The approved 2,400-second retry returned clean and bound its proof to head `8fe223e2` and base `56321c0d`.
 - The branch was pushed. Pre-push proof passed Phase 3C containment over 52,319 paths and four commits, typecheck, build, and Graphify refresh.
 - At capture time, CodeQL, Vercel, Vercel Preview Comments, and CodeRabbit were green for remote head `8fe223e2`; the two Phase 3C containment jobs were still running.
-- No live migration, database write, edge-function rollout, secret change, permission change, or data mutation occurred.
+- No additional live migration, database write, edge-function rollout, secret change, permission change, or data mutation occurred during this repair.
 
 ## RESUME REPAIR — PROVEN LOCALLY
 
@@ -46,7 +46,7 @@ Repair every valid merge blocker on PR #364, prove the fail-closed deny paths, c
 - Sol/high returned `CLEAN` for repair commit `d8495eb0`, but `origin/main` advanced to `14bdb2fd`
   during the review. The wrapper correctly refused to mint proof against the moved base. The branch
   now includes that base and requires a fresh exact-SHA review after the merge commit.
-- No app source, migration SQL, live database, production data, secret, or permission changed.
+- No additional live migration, database write, edge-function rollout, secret change, permission change, or data mutation occurred during this repair.
 
 ## REMAINING DELIVERY WORK
 
@@ -103,18 +103,44 @@ Repair every valid merge blocker on PR #364, prove the fail-closed deny paths, c
 ## GATES AND BLOCKERS
 
 - **PR #364 remains HOLD and unsafe to merge at this checkpoint.** The CTAS stored-view,
-  callable-default, checked-domain, trigger-condition, procedural-language, and materialized-view
-  refresh bypasses are repaired and proven locally. The latest repair is not yet committed,
-  exact-SHA reviewed, pushed, or covered by fresh remote checks.
+  callable-default, checked-domain, trigger-condition, procedural-language, materialized-view
+  refresh, stored-default baseline, and ordering-snapshot issues are repaired and proven locally.
+  The latest repair is not yet committed, exact-SHA reviewed, pushed, or covered by fresh remote
+  checks.
 - Every earlier clean exact-SHA proof is stale for this patch. A new final proof is mandatory.
-- Current remote checks do not cover the latest local work.
+- Current remote checks cover only `5193864f`, not the latest local work.
 - A broad database sweep was blocked by a false-positive read-only connector guard on `pg_get_function_identity_arguments()`. Do not claim it ran. The exact live trigger-evidence generator did complete read-only.
+
+## FOURTH RESUME REPAIR — PROVEN LOCALLY
+
+- Remote full-corpus CI on `5193864f` reported 75 findings against the fixed allowance of 61. The
+  14 new findings were isolated rather than hidden by raising the allowance:
+  - 12 ordinary stored defaults using only PostgreSQL core `now()` or `gen_random_uuid()`;
+  - 2 already-applied nested-delimiter DO repairs newly refused by the unsupported-language check.
+- Fired stored defaults now receive scoped trust only for those two zero-argument pg_catalog
+  routines, and only while the migration leaves `search_path` implicit, defines no same-name
+  routine, and performs no identity transition. All other unqualified builtin-looking calls remain
+  fail-closed. The two immutable historical files have one exact-LF-hash-pinned finding each; the
+  aggregate baseline remains 61.
+- CodeRabbit's exact-head review then identified a real ordering mismatch: the snapshot producer
+  prefixed `version` when an authored timestamp appeared away from the start of `name`, while the
+  parser prefers the authored timestamp. The producer now preserves any timestamp-bearing name and
+  falls back to `version` only for timestamp-less names, with leading and non-leading regressions.
+- Current proof:
+  - apply-time analyzer: 328 assertions passed;
+  - approved-set validator: 225 mutation cases passed;
+  - migration-apply guard: 347 assertions passed;
+  - snapshot/fan-out/replay producer suites: 24 / 29 / 25 assertions passed;
+  - correction guards, agent workflows, lint, typecheck, docs, production build/PWA, and all 338
+    Vitest files passed (4,688 tests passed; 123 intentional skips).
+- No additional live migration, database write, edge-function rollout, secret change, permission
+  change, or data mutation occurred during this repair.
 
 ## NEXT ACTION
 
-Continue from `C:\Users\mason\.codex\worktrees\pr364-landing\CRX_Manager` with the broad local
-pipeline and commit the seven-file Round 67 repair plus this handoff/changelog update. Do not publish
-until the final commit has fresh exact-SHA proof and every current-head PR gate is green or an
-explicitly expected neutral result.
+Resolve the PR #364 worktree with `git worktree list`, commit only the scoped repair plus this
+handoff/changelog update, integrate current `origin/main`, and rerun the exact-SHA Sol review. Do not
+publish until that final commit has clean proof; do not merge until every current-head PR gate is
+green or an explicitly expected neutral result.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

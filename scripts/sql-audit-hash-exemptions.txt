@@ -57,3 +57,12 @@
 32dbf78a2efcd4c7e4f9f98fb7657ec472f6f6f0ff7a5cf811b7f028d21b9a08  20260812115236_quote_items_cost_at_quote_snapshot.sql  1  # quote_items fan-out intentionally opaque during bootstrap
 250e1bea81571eafc7402af7516d6a1833e778c70e03a359fa4be77bdeff49ba  20260812115237_enforce_below_cost_admin_approval.sql  1  # invoked repair routine is intentionally unbindable history
 7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca  20260812115238_repair_historical_order_line_cents.sql  1  # order_items fan-out intentionally opaque during bootstrap
+
+# Round 67 now refuses procedural languages other than SQL and PL/pgSQL. These
+# two already-applied 2026 repair migrations use anonymous DO blocks containing
+# deliberately nested delimiter text that the conservative parser cannot bind.
+# Their exact LF-normalized bytes are already pinned in the immutable-history
+# manifest; acknowledge one newly discovered unsupported-language finding per
+# file without increasing the aggregate baseline or exempting any future edit.
+2add7d1431bdf319900b6eb3af6935d54aa47bb28a8cdff2844f80431f170089  20260332200000_fix_idempotency_column_refs_round2.sql  1  # immutable nested-delimiter DO repair cannot be parsed as supported PL/pgSQL
+c9d2644c0759318eb444284129fb488c8d19a479fa9304454f158c5c6fafc36f  20260332700000_fix_idempotency_column_refs_round3.sql  1  # immutable nested-delimiter DO repair cannot be parsed as supported PL/pgSQL

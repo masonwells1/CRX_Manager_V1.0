@@ -2512,6 +2512,23 @@ const CASES = [
     sql: `REFRESH MATERIALIZED VIEW public.repair_projection;\n`,
   },
   {
+    name: 'round-68: ordinary core stored defaults do not consume the legacy violation budget',
+    expect: 'silent',
+    sql:
+      `CREATE TEMP TABLE round68_default_probe(` +
+      `id uuid DEFAULT gen_random_uuid(), created_at timestamptz DEFAULT now());\n` +
+      `INSERT INTO round68_default_probe DEFAULT VALUES;\n`,
+  },
+  {
+    name: 'round-68 MUTANT: changing search_path withdraws stored-default builtin trust',
+    expect: 'violation',
+    mustReport: 'Stored executable identity: now',
+    sql:
+      `SET search_path = public, pg_catalog;\n` +
+      `CREATE TEMP TABLE round68_path_probe(created_at timestamptz DEFAULT now());\n` +
+      `INSERT INTO round68_path_probe DEFAULT VALUES;\n`,
+  },
+  {
     name: 'round-55: FOREACH cannot replace the captured proof-variable population',
     expect: 'violation',
     mustReport: 'assigned or passed to a possibly OUT/INOUT procedure',

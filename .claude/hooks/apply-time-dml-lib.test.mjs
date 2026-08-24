@@ -1885,4 +1885,40 @@ eq(T(null), [], "a null body does not throw");
     'round-67 MUTANT: an ordinary relation read is not a materialized-view refresh');
 }
 
+// -------- ROUND 68: narrow pg_catalog trust for fired stored defaults
+{
+  const ordinaryDefaults = applyTimeWriteTargets(
+    'CREATE TEMP TABLE round68_default_probe(' +
+    'id uuid DEFAULT gen_random_uuid(), created_at timestamptz DEFAULT now()); ' +
+    'INSERT INTO round68_default_probe DEFAULT VALUES;',
+  );
+  ok(!ordinaryDefaults.unresolved &&
+      !ordinaryDefaults.unknownCalls.includes('now') &&
+      !ordinaryDefaults.unknownCalls.includes('gen_random_uuid') &&
+      ordinaryDefaults.firedColumnEffects.length === 0,
+    'round-68: core zero-argument defaults stay silent under implicit pg_catalog precedence');
+
+  const sameFileOverload = applyTimeWriteTargets(
+    'CREATE FUNCTION public.now() RETURNS timestamptz LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; RETURN clock_timestamp(); END $$; ' +
+    'CREATE TEMP TABLE round68_overload_probe(created_at timestamptz DEFAULT now()); ' +
+    'INSERT INTO round68_overload_probe DEFAULT VALUES;',
+  );
+  ok(sameFileOverload.unresolved &&
+      sameFileOverload.targets.has('orders.total_profit') &&
+      sameFileOverload.firedColumnEffects.some((effect) =>
+        effect.kind === 'default' && effect.routines.some((name) => name.endsWith('now'))),
+    'round-68 MUTANT: a same-file now overload cannot inherit stored-default builtin trust');
+
+  const changedSearchPath = applyTimeWriteTargets(
+    'SET search_path = public, pg_catalog; ' +
+    'CREATE TEMP TABLE round68_path_probe(created_at timestamptz DEFAULT now()); ' +
+    'INSERT INTO round68_path_probe DEFAULT VALUES;',
+  );
+  ok(changedSearchPath.unresolved && changedSearchPath.searchPathChange &&
+      changedSearchPath.firedColumnEffects.some((effect) =>
+        effect.kind === 'default' && effect.routines.includes('now')),
+    'round-68 MUTANT: an explicit search_path withdraws stored-default builtin trust');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

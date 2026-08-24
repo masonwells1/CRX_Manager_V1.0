@@ -1812,6 +1812,18 @@ const NOT_A_ROUTINE_CALL = new Set([
   // is named here rather than charged as a resident routine of unknown effect.
   "plpgsql_check_function",
 ]);
+
+// PostgreSQL stores a parsed column-default expression, including the resolved
+// function OID, when the table is created. These two zero-argument functions
+// resolve to pg_catalog before user schemas while pg_catalog remains implicit
+// in search_path. Keep the allowance deliberately narrower than the general
+// builtin list: it applies only to a fired stored default, and it is withdrawn
+// when this migration changes search_path, defines a same-bare-name routine, or
+// relocates/renames a routine into either identity.
+const SAFE_STORED_DEFAULT_UNQUALIFIED_ROUTINES = new Set([
+  "now",
+  "gen_random_uuid",
+]);
 // These are grammar or type-constructor spellings, not schema-resolved routine
 // calls. They remain safe unqualified. Ordinary functions in the larger list
 // above are trusted only as explicit pg_catalog identities: an unqualified
@@ -2104,6 +2116,12 @@ export function applyTimeWriteTargets(
   // untouched, which is what keeps this affordable: a literal there is a comment
   // or a default, not a statement.
   const execCodes = [];
+  const queueExecCode = (sourceCode, scopedTrustedRoutines = new Set()) => {
+    execCodes.push({
+      code: sourceCode,
+      scopedTrustedRoutines: new Set(scopedTrustedRoutines),
+    });
+  };
   const columnEffects = [];
   const columnEffectKeys = new Set();
   const defineColumnEffects = (sourceCode) => {
@@ -2155,7 +2173,7 @@ export function applyTimeWriteTargets(
       attachments.push(...triggerAttachments(parsed.code));
       defineRules(ruleAttachments(parsed.code));
       for (const relation of invokedRelations(parsed.code)) readRuleRelations.add(relation);
-      execCodes.push(parsed.code);
+      queueExecCode(parsed.code);
       foldLiterals(inner, parsed.literals);
     }
   };
@@ -2209,7 +2227,7 @@ export function applyTimeWriteTargets(
         top.unresolved = true;
       } else if (!foldedViewQueries.has(key)) {
         foldedViewQueries.add(key);
-        execCodes.push(definition.query);
+        queueExecCode(definition.query);
         for (const relation of invokedRelations(definition.query)) readRuleRelations.add(relation);
       }
     }
@@ -2227,15 +2245,30 @@ export function applyTimeWriteTargets(
       // through the existing executable-code queue follows same-file routine,
       // operator, cast, and view edges instead of inventing a second resolver.
       if (effect.defaultCode) {
-        execCodes.push(effect.defaultCode);
+        const scopedDefaultTrust = new Set();
+        if (!top.searchPathChange) {
+          for (const name of SAFE_STORED_DEFAULT_UNQUALIFIED_ROUTINES) {
+            const sameFileConflict = [...byName.keys()].some(
+              (identity) => routineBareName(identity) === name,
+            );
+            const transitionedIdentity = untrustedRoutineIdentities.has(name) ||
+              untrustedRoutineIdentities.has(`pg_catalog.${name}`);
+            if (!sameFileConflict && !transitionedIdentity) scopedDefaultTrust.add(name);
+          }
+        }
+        queueExecCode(effect.defaultCode, scopedDefaultTrust);
         const sameFileCalls = invokedRoutines(
           effect.defaultCode.toLowerCase(),
           new Set(byName.keys()),
         );
+        const trustedDefaultCalls = new Set([
+          ...trustedUnqualifiedRoutines.map((name) => String(name).toLowerCase()),
+          ...scopedDefaultTrust,
+        ]);
         const residentCalls = unknownCallsIn(
           effect.defaultCode.toLowerCase(),
           new Set(byName.keys()),
-          new Set(trustedUnqualifiedRoutines.map((name) => String(name).toLowerCase())),
+          trustedDefaultCalls,
           untrustedRoutineIdentities,
         );
         if (sameFileCalls.size > 0 || residentCalls.size > 0) {
@@ -2258,7 +2291,7 @@ export function applyTimeWriteTargets(
       // cast. Reify that implicit coercion as an explicit executable cast so
       // the existing domain machinery records it and fails closed.
       if (effect.domain) {
-        execCodes.push(`SELECT NULL::${effect.domain}`);
+        queueExecCode(`SELECT NULL::${effect.domain}`);
         firedColumnEffectDetails.set(key, {
           table: effect.table,
           column: effect.column,
@@ -2332,7 +2365,7 @@ export function applyTimeWriteTargets(
         const priorOperators = new Set(firedOperators);
         const priorCasts = new Set(firedCasts);
         const priorViews = new Set(firedViews);
-        execCodes.push(conditionCode);
+        queueExecCode(conditionCode);
         drainExec(into);
         const identities = [
           ...conditionRoutines,
@@ -2365,7 +2398,7 @@ export function applyTimeWriteTargets(
   let execScanned = 0;
   const drainExec = (into) => {
     while (execScanned < execCodes.length) {
-      const c = execCodes[execScanned++];
+      const c = execCodes[execScanned++].code;
       for (const relation of invokedRelations(c)) readRuleRelations.add(relation);
       for (const n of invokedRoutines(c.toLowerCase(), new Set(byName.keys()))) {
         if (!seen.has(n)) into.add(n);
@@ -2458,18 +2491,33 @@ export function applyTimeWriteTargets(
   // above, because a defined helper may itself call something that only exists
   // in the database.
   const bodies = [...seen].flatMap((n) => (byName.get(n) || []).flatMap((r) => [r.code, r.defaultCode || ""]));
-  const scan = [code, ...execCodes, ...bodies].join("\n;\n").toLowerCase();
-  const unknownCalls = [...new Set([
-    ...unknownCallsIn(
-      scan,
+  const trustedUnqualifiedSet = new Set(
+    trustedUnqualifiedRoutines.map((name) => String(name).toLowerCase()),
+  );
+  const unknownCallSet = new Set(
+    unknownCallsIn(
+      [code, ...bodies].join("\n;\n").toLowerCase(),
       new Set(byName.keys()),
-      new Set(trustedUnqualifiedRoutines.map((name) => String(name).toLowerCase())),
+      trustedUnqualifiedSet,
       untrustedRoutineIdentities,
     ),
-    ...unknownTriggerFns,
-    ...unknownOperatorFns,
-    ...unknownCastFns,
-  ])];
+  );
+  for (const entry of execCodes) {
+    const scopedTrust = new Set([
+      ...trustedUnqualifiedSet,
+      ...entry.scopedTrustedRoutines,
+    ]);
+    for (const identity of unknownCallsIn(
+      entry.code.toLowerCase(),
+      new Set(byName.keys()),
+      scopedTrust,
+      untrustedRoutineIdentities,
+    )) unknownCallSet.add(identity);
+  }
+  for (const identity of unknownTriggerFns) unknownCallSet.add(identity);
+  for (const identity of unknownOperatorFns) unknownCallSet.add(identity);
+  for (const identity of unknownCastFns) unknownCallSet.add(identity);
+  const unknownCalls = [...unknownCallSet];
 
   // `dynamicExec` is internal bookkeeping for the literal fold above and is not
   // part of this function's contract, so the fields are named rather than spread.

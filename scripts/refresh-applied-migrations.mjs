@@ -47,10 +47,13 @@ export function buildAppliedSnapshot(payload, projectId = CRX_SUPABASE_PROJECT_I
     const version = String(row.version ?? '').trim();
     const name = String(row.name ?? '').trim();
     if (!/^\d{14}$/.test(version)) fail(`ledger version ${JSON.stringify(version)} is invalid`);
-    // The ledger version is authoritative. A name can legally carry an older
-    // authored timestamp (or simply contain an unrelated 14-digit number), so
-    // only omit the prefix when the name already begins with this exact version.
-    if (name.startsWith(version)) return name;
+    // Preserve the authored name whenever it carries its own timestamp. The
+    // ordering parser deliberately treats that stamp as authoritative even when
+    // it is not the leading token; prefixing the apply-time version would make
+    // non-leading authored stamps resolve differently from leading ones.
+    // Timestamp-less legacy names still need the ledger version reattached so
+    // they continue to constrain ordering.
+    if (TS.test(name)) return name;
     return name ? `${version}_${name}` : version;
   });
 
