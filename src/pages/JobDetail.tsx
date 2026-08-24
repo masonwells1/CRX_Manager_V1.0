@@ -44,7 +44,7 @@ import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { centsTimesQuantity, isExactDecimalText, quantitySurvivesSave } from '../lib/money';
-import { applyChemEdit, chemLineBillingHazard, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
+import { applyChemEdit, chemLineBillingHazard, chemUnitUnspecifiedSides, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
@@ -1450,6 +1450,29 @@ export default function JobDetail() {
         byIndex.set(i, `the rate unit "${c.rate_unit}" is measured per something other than acres, so a per-acre quantity cannot be derived from it`);
         return;
       }
+      // BLANK UNIT on a line that BILLS. chemLineBillingHazard can only flag a PROVEN
+      // mismatch, so it stays silent when either unit is blank — which made clearing a
+      // unit an off switch for the guard: the warning vanished while the same quantity ×
+      // price still billed (Codex High, 2026-08-24). Mirrors the server's
+      // CHEM_UNIT_UNSPECIFIED refusal (PR #446), including its exemptions: a
+      // customer-supplied line and a line with neither a cost nor a price contribute
+      // nothing to either total, and a zero quantity bills nothing — a line that cannot
+      // bill cannot bill wrongly. parseFloat('') is NaN, which fails the ≠ 0 test toward
+      // BLOCKING, so an unparseable quantity stays gated (the grammar rule below also
+      // refuses it on its own).
+      const blankSides = chemUnitUnspecifiedSides(c.rate_unit, c.unit);
+      if (blankSides
+          && !(c.customer_supplied ?? false)
+          && parseFloat(c.quantity) !== 0
+          && ((parseInt(c.cost_per_unit_cents) || 0) !== 0 || (parseInt(c.price_per_unit_cents) || 0) !== 0)) {
+        const side = blankSides.stockBlank && blankSides.rateBlank
+          ? 'its Unit and its rate unit are both blank'
+          : blankSides.stockBlank
+            ? 'its Unit is blank'
+            : 'its rate unit names no unit';
+        byIndex.set(i, `${side} while the line still carries a cost or price, so there is no way to know what the quantity would be billed per — pick the unit, or clear the cost and price if the line should not bill`);
+        return;
+      }
       // Gate on the money helper's OWN grammar, not on Number.isFinite. They are not the
       // same test: Number('1e3') is a finite 1000, but centsTimesQuantity refuses exponent
       // notation and returns 0. Gating on the looser test let a save persist quantity 1000
@@ -2128,6 +2151,17 @@ export default function JobDetail() {
     }
     if (chemRowDefects.size > 0) {
       toast('error', 'A chemical line has a unit or a number that cannot be saved — fix the highlighted line before saving.');
+      return;
+    }
+    // The SUMMED totals get their own gate. Every per-line cents amount is individually
+    // safe-integer-checked in chemRowDefects, but a line EXTENSION (cents × quantity) or
+    // the sum of extensions can still pass 2^53 − 1, where Number arithmetic silently
+    // lands on a neighbouring cent — and centsTimesQuantity now reports its own overflow
+    // as NaN for the same reason. Either way these two numbers are about to be SAVED as
+    // jobs.total_cost_cents / total_price_cents, so a total that is not an exact integer
+    // is refused, never rounded. (Codex Medium, 2026-08-24)
+    if (!Number.isSafeInteger(totalCostCents) || !Number.isSafeInteger(totalPriceCents)) {
+      toast('error', 'The job total is too large to save exactly — check the chemical quantities and per-unit amounts for a typo.');
       return;
     }
     if (!customerId) { toast('error', 'Customer is required'); return; }

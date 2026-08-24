@@ -439,6 +439,55 @@ export function rateDenominatorIsUnrecognized(rateUnit: string | null | undefine
   return raw.includes('/');
 }
 
+/** Which side(s) of a chemical line name no unit at all. See chemUnitUnspecifiedSides. */
+export interface ChemUnitBlankSides {
+  /** The stock `unit` (what the per-unit cost/price is quoted per) names no unit. */
+  stockBlank: boolean;
+  /** The rate unit's numerator (what the quantity is counted in) names no unit. */
+  rateBlank: boolean;
+}
+
+// The three spellings the server's blank-unit refusal recognises, verbatim from the
+// CHEM_UNIT_UNSPECIFIED check in 20260820120000_save_job_enforce_chem_unit_invariant
+// (PR #446): a stock unit that is ONLY a per-acre denominator ('/ac'), a rate whose
+// numerator vanishes once its per-acre suffix is stripped ('per acre', ' - per ac'),
+// and a rate that is a bare denominator with no leading separator at all ('per acre').
+const STOCK_ACRE_DENOM_ONLY = /\s*\/\s*(?:ac|acre|acres|a)\s*$/;
+const RATE_PER_ACRE_SUFFIX = /[\s-]+per[\s-]+(?:acres|acre|ac|a)$/;
+const RATE_PER_ACRE_ONLY = /^[\s-]*per[\s-]+(?:acres|acre|ac|a)$/;
+
+/**
+ * Detect a line where either unit is BLANK — the rate names nothing to count the quantity
+ * in, or the stock `unit` names nothing to price it per. A blank unit proves nothing, and
+ * chemLineBillingHazard deliberately stays silent on it (it can only flag a PROVEN
+ * mismatch), so without this rule clearing a unit was an off switch for the whole guard:
+ * the warning vanished while the same quantity × price still billed (Codex High,
+ * 2026-08-24). This mirrors the server's CHEM_UNIT_UNSPECIFIED refusal in PR #446's
+ * save_job migration, character-class for character-class — the client mirror must never
+ * be MORE lenient than the SQL that refuses the save.
+ *
+ * Blankness only — a PRESENT but unrecognised unit ('MG') is deliberately not flagged
+ * here, matching the server: these guards prove inconsistency, not plausibility.
+ *
+ * Returns null when both sides name something. The BILLING-shape gate (quantity ≠ 0, not
+ * customer-supplied, a nonzero cost or price) lives at the caller, exactly as it does in
+ * the SQL — a line that cannot bill cannot bill wrongly, so refusing it would be friction.
+ */
+export function chemUnitUnspecifiedSides(
+  rateUnit: string | null | undefined,
+  unit: string | null | undefined,
+): ChemUnitBlankSides | null {
+  const u = String(unit ?? '').trim().toLowerCase();
+  const stockBlank = u === ''
+    || (STOCK_ACRE_DENOM_ONLY.test(u) && u.replace(STOCK_ACRE_DENOM_ONLY, '').trim() === '');
+
+  const rFirst = String(rateUnit ?? '').trim().toLowerCase().split('/')[0].trim();
+  const rateBlank = rFirst.replace(RATE_PER_ACRE_SUFFIX, '').trim() === ''
+    || RATE_PER_ACRE_ONLY.test(rFirst);
+
+  return stockBlank || rateBlank ? { stockBlank, rateBlank } : null;
+}
+
 export interface ChemBillingHazard {
   /** true only when the mislabelling is PROVEN (see below), never on suspicion. */
   hazard: boolean;
@@ -457,7 +506,9 @@ const NO_HAZARD: ChemBillingHazard = { hazard: false, quantityUnit: '', priceUni
  *
  * PROOF STANDARD — FAIL CLOSED. The units disagreeing IS the hazard. We stay silent only
  * for a row that is provably fine:
- *  • either unit blank/unrecognized (a separate, pre-existing condition), or
+ *  • either unit blank/unrecognized — blank on a BILLING line is refused separately by
+ *    chemUnitUnspecifiedSides (above) via chemRowDefects, so silence here is not an off
+ *    switch; a PRESENT-but-unknown unit stays unflagged (consistency, not plausibility), or
  *  • the two units are the same, or
  *  • the quantity is exactly what rate × acres becomes once carried into the price's unit
  *    — the one thing that actually proves the quantity is expressed in the price's unit.

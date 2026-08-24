@@ -9,6 +9,7 @@ import {
   baseUnitOfRate,
   reconcileChemAutofillUnits,
   chemLineBillingHazard,
+  chemUnitUnspecifiedSides,
   rateDenominatorIsUnrecognized,
   type ChemCalcRow,
 } from './chemCalculator';
@@ -648,6 +649,50 @@ describe('chemCalculator — a RELOADED row is never rewritten (Codex P1 revert)
     const reloaded = row({ quantity: '150', rate_per_acre: '1.5' });  // no driver, as loaded
     expect(recomputeChemRowForAcres(reloaded, 200).quantity).toBe('150');
     expect(recomputeChemRowForAcres(reloaded, 50).quantity).toBe('150');
+  });
+});
+
+describe('chemCalculator — chemUnitUnspecifiedSides (blank units mirror CHEM_UNIT_UNSPECIFIED)', () => {
+  it('flags a blank stock unit', () => {
+    expect(chemUnitUnspecifiedSides('oz/ac', '')).toEqual({ stockBlank: true, rateBlank: false });
+    expect(chemUnitUnspecifiedSides('oz/ac', '   ')).toEqual({ stockBlank: true, rateBlank: false });
+    expect(chemUnitUnspecifiedSides('oz/ac', null)).toEqual({ stockBlank: true, rateBlank: false });
+    expect(chemUnitUnspecifiedSides('oz/ac', undefined)).toEqual({ stockBlank: true, rateBlank: false });
+  });
+
+  it('flags a stock unit that is ONLY a per-acre denominator — it names nothing to price per', () => {
+    for (const u of ['/ac', '/acre', '/acres', '/a', ' / ac ']) {
+      expect(chemUnitUnspecifiedSides('oz/ac', u)).toEqual({ stockBlank: true, rateBlank: false });
+    }
+  });
+
+  it('flags a rate whose numerator vanishes once the per-acre suffix is stripped', () => {
+    expect(chemUnitUnspecifiedSides('', 'oz')).toEqual({ stockBlank: false, rateBlank: true });
+    expect(chemUnitUnspecifiedSides(null, 'oz')).toEqual({ stockBlank: false, rateBlank: true });
+    expect(chemUnitUnspecifiedSides('/ac', 'oz')).toEqual({ stockBlank: false, rateBlank: true });
+  });
+
+  it('flags the v4 shapes: a rate that is ONLY a denominator with no unit before it', () => {
+    for (const r of ['per acre', 'per-acre', 'per ac', ' per acres', '-per acre']) {
+      expect(chemUnitUnspecifiedSides(r, 'oz')).toEqual({ stockBlank: false, rateBlank: true });
+    }
+  });
+
+  it('flags both sides at once', () => {
+    expect(chemUnitUnspecifiedSides('', '')).toEqual({ stockBlank: true, rateBlank: true });
+  });
+
+  it('stays silent when both sides name a unit — even an UNRECOGNISED one', () => {
+    expect(chemUnitUnspecifiedSides('oz/ac', 'oz')).toBeNull();
+    expect(chemUnitUnspecifiedSides('oz per acre', 'lb')).toBeNull();
+    expect(chemUnitUnspecifiedSides('pt/ac', 'Pt')).toBeNull();
+    // Consistency, not plausibility: a PRESENT-but-unknown unit is not "blank".
+    expect(chemUnitUnspecifiedSides('MG/ac', 'MG')).toBeNull();
+  });
+
+  it('does NOT treat a real unit with a per-acre suffix as blank', () => {
+    expect(chemUnitUnspecifiedSides('oz per acre', 'oz')).toBeNull();
+    expect(chemUnitUnspecifiedSides('fl oz/ac', 'fl oz')).toBeNull();
   });
 });
 

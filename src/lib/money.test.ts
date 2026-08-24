@@ -168,6 +168,22 @@ describe('centsTimesQuantity — exact parity with the server safe_cents_qty', (
     });
   });
 
+  describe('the 2^53 boundary — a result a Number cannot hold exactly is NaN, never a neighbour (Codex Medium, 2026-08-24)', () => {
+    it('returns the exact figure at the boundary itself', () => {
+      // 2^53 − 1 = 9007199254740991 — the largest integer a Number holds exactly.
+      expect(centsTimesQuantity(9007199254740991, '1')).toBe(9007199254740991);
+    });
+    it('refuses one cent past the boundary instead of silently landing on …992', () => {
+      // 9007199254740993 is NOT representable: Number() would give 9007199254740992,
+      // a real but WRONG amount. NaN fails the save gate loudly instead.
+      expect(centsTimesQuantity(3002399751580331, '3')).toBeNaN();  // 3002399751580331 × 3 = exactly 9007199254740993
+    });
+    it('refuses far past the boundary too, in either sign', () => {
+      expect(centsTimesQuantity(9007199254740991, '1000')).toBeNaN();
+      expect(centsTimesQuantity(9007199254740991, '-1000')).toBeNaN();
+    });
+  });
+
   describe('isExactDecimalText — the saveability gate (Codex P2)', () => {
     // The bug this closes: callers gated on Number.isFinite(Number(text)), which is a
     // LOOSER test than what centsTimesQuantity can actually multiply. Anything the two

@@ -165,5 +165,15 @@ export function centsTimesQuantity(cents: number, quantityText: string | number)
   // Half AWAY FROM ZERO, matching PostgreSQL's ROUND(numeric).
   const roundedAbs = remainder * 2n >= denominator ? quotient + 1n : quotient;
 
+  // Above 2^53 − 1 a Number no longer holds every integer, so Number(...) would silently
+  // land on a NEIGHBOURING cent (9007199254740993n → 9007199254740992). The server's
+  // numeric has no such boundary, so past this point the client cannot reproduce the
+  // server's figure at all. NaN, deliberately — not 0 (this function's invalid-input
+  // convention), because 0 would bill NOTHING for the largest line on the job, and not a
+  // clamp, which is just a different wrong number. NaN survives summation, so the totals
+  // fail runJobSave's Number.isSafeInteger gate and the save is refused loudly instead of
+  // billed a cent off. (Codex Medium, 2026-08-24)
+  if (roundedAbs > 9007199254740991n) return Number.NaN;
+
   return Number(product < 0n ? -roundedAbs : roundedAbs);
 }
