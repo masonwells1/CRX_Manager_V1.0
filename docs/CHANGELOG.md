@@ -2,6 +2,45 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — Identity reaches the patch route, the proof directory, and stops flagging files as aliases of themselves
+
+Two exact-review High findings, plus a third defect found while fixing them.
+
+- **The native patch route was unguarded.** `mcp-tool-guard.mjs` anchors its tool
+  pattern to an `mcp__<server>__` prefix, so a bare `apply_patch` never matched
+  and exited unchecked. `protected-identity-guard.mjs` is now wired for Codex
+  too. It sits on the **all-tools** matcher, not `Write|Edit`: a matcher matches
+  the tool's *name*, and `apply_patch` is neither, so the obvious wiring would
+  have produced a hook that passes the parity check and never fires. Patch
+  destinations are parsed out of the free-form body (reusing
+  `extractPatchDestinations`), and every destination in a payload is checked —
+  one patch can carry a benign file and a hostile one together.
+- **The manifest declaration was false on both counts.** It claimed Codex reached
+  the check through `mcp-tool-guard.mjs` (it did not) and that Codex had no
+  `Write|Edit` equivalent (`.codex/hooks.json` had wired one all along). The hook
+  is now two-sided and declared nowhere.
+- **Proof creation is closed.** `review-proof-guard.mjs` already covers the review
+  state directory by path and command *text* — the dimension an alias defeats.
+  Identity cannot cover a proof that does not exist yet, since creating it is the
+  forge, so destinations are canonicalised through their deepest existing ancestor
+  first; that resolves a junction and exposes the real directory. Existing proofs,
+  the Codex hook manifest and adapters, Husky, the CI workflows, and the review
+  wrapper scripts joined the protected identity set. `stop-wrap-ack.json` stays
+  writable — it is the one designed agent-writable valve there.
+- **A protected file was treated as an alias of itself.** The first cut compared
+  identities alone, so editing a protected hook at its own real path matched its
+  own identity and denied; the guard's own message says "edit the real path",
+  which was the one thing it refused. Found by the guard blocking this very
+  change. Left in place, wiring it onto a second write route would have made the
+  harness unmaintainable through the agent tools. The comparison is now identity
+  *and* a differing pathname, with a regression pinning the real-path edit as
+  allowed.
+- The duplicate `canonicalizeThroughExistingAncestor` in `mcp-tool-guard.mjs` was
+  replaced by the shared implementation, so the two write routes cannot drift.
+- Proof observed: the Edit tool refused `protected-identity-lib.mjs` at its real
+  path before the fix and accepted it after, driven through the live hook rather
+  than a pattern table.
+
 ## 2026-08-24 — The executor-alias guard stops asking what platform it is running on
 
 `bash-safety-lib.mjs` gated its bare-executable resolution on

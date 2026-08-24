@@ -26,10 +26,10 @@
 // FAIL-OPEN, LOUD: any internal error here → allow, with a stderr warning. A
 // broken guard must never brick a session.
 
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 // Identity checking is shared with the native Write|Edit guard so both write
 // routes enforce the same boundary from one implementation.
-import { aliasesProtectedFile } from "./protected-identity-lib.mjs";
+import { aliasesProtectedFile, canonicalizeThroughExistingAncestor } from "./protected-identity-lib.mjs";
 import path from "node:path";
 import {
   checkCommandDeep,
@@ -80,23 +80,6 @@ const protectedProducerRepoPath = `scripts/${protectedProducerName}`;
 // persistent-process or signal routes by itself.
 const protectedProducerRetired = false;
 
-function canonicalizeThroughExistingAncestor(target) {
-  const original = path.resolve(target);
-  let current = original;
-  const missing = [];
-  while (true) {
-    try {
-      const canonical = realpathSync.native(current);
-      return path.resolve(canonical, ...missing.reverse());
-    } catch (error) {
-      if (!error || !["ENOENT", "ENOTDIR"].includes(error.code)) return original;
-      const parent = path.dirname(current);
-      if (parent === current) return original;
-      missing.push(path.basename(current));
-      current = parent;
-    }
-  }
-}
 
 try {
   const producerProtectionActive = !protectedProducerRetired;

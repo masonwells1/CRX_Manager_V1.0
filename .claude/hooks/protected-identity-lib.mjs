@@ -9,19 +9,35 @@
 // Blocking every way to CREATE such an alias is unbounded — `mklink /H`, `ln`,
 // `cp -l`, `link`, `busybox cp -l`, PowerShell `New-Item`, `fsutil`, and any
 // language runtime with a link() binding. Blocking every way to WRITE through
-// one is bounded: MCP file tools, and the native Write/Edit tools. So identity
-// is checked at the write boundary by both, and link-creation denial in the
-// shell classifier is defence-in-depth rather than the boundary itself.
+// one is bounded: MCP file tools, the native Write/Edit tools, and the native
+// patch route. So identity is checked at the write boundary by all three, and
+// link-creation denial in the shell classifier is defence-in-depth rather than
+// the boundary itself.
 //
 // Identity is device + inode/file-ID, which is exactly what a second pathname
 // cannot disguise (Codex CRX-SEC-01, 2026-08-23/24).
-import { readdirSync, statSync } from "node:fs";
+//
+// A protected file is NOT an alias of itself. The first cut compared identities
+// alone, so editing a protected hook at its own real path matched its own
+// identity and denied — the guard's own error text says "edit the real path",
+// which was the one thing it refused. Left in place it would have made the
+// harness unmaintainable through the agent tools the moment it was wired onto a
+// second write route. The comparison is therefore identity AND a differing
+// pathname (2026-08-24).
+import { readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 
 // Assembled rather than written literally: the shell classifier denies commands
 // that name the protected maintenance producer, and this file is read by tools
 // that would otherwise trip that check on their own source.
 const protectedProducerName = ["apply-live-testdata-maintenance-", "20260812.mjs"].join("");
+
+// Windows pathnames are case-insensitive; a case-variant spelling of the real
+// path is the same file, not a second name for it.
+function pathKey(candidate) {
+  const resolved = path.resolve(String(candidate || ""));
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
 
 export function fileIdentity(target) {
   try {
@@ -36,11 +52,36 @@ export function fileIdentity(target) {
   }
 }
 
-export function protectedFileIdentities(root) {
-  const identities = new Set();
+// Resolve the deepest existing ancestor and re-attach the missing tail. A file
+// that does not exist yet cannot be realpath'd, but the JUNCTION it would be
+// created through already can — which is how a not-yet-created proof file is
+// caught. Shared so the MCP route and the native write/patch route cannot drift.
+export function canonicalizeThroughExistingAncestor(target) {
+  const original = path.resolve(target);
+  let current = original;
+  const missing = [];
+  for (;;) {
+    try {
+      const canonical = realpathSync.native(current);
+      return path.resolve(canonical, ...missing.reverse());
+    } catch (error) {
+      if (!error || !["ENOENT", "ENOTDIR"].includes(error.code)) return original;
+      const parent = path.dirname(current);
+      if (parent === current) return original;
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+// identity -> the protected file's OWN pathname. The pathname is what lets a
+// caller tell "this IS the protected file" from "this is a second name for it".
+export function protectedFileIdentityPaths(root) {
+  const byIdentity = new Map();
   const add = (candidate) => {
     const identity = fileIdentity(candidate);
-    if (identity) identities.add(identity);
+    if (!identity || byIdentity.has(identity)) return;
+    byIdentity.set(identity, path.resolve(candidate));
   };
   const addDirectory = (directory, matches) => {
     let entries = [];
@@ -68,7 +109,29 @@ export function protectedFileIdentities(root) {
   addDirectory(path.join(root, ".git"), (name) => /^config(\.worktree)?$/i.test(name));
   addDirectory(path.join(root, ".git", "info"), (name) => /^(attributes|exclude)$/i.test(name));
   add(path.join(root, ".gitattributes"));
-  return identities;
+  // The harness that DECIDES whether a change may land, and the proofs it mints.
+  // review-proof-guard.mjs already covers these by path and command TEXT; text
+  // is exactly what a second pathname defeats, so they need the identity
+  // dimension too. stop-wrap-ack.json is deliberately excluded: it is the one
+  // designed agent-writable valve in that directory, and protecting it by
+  // identity would deny the legitimate ack write at its own real path.
+  addDirectory(path.join(root, ".claude", "session-state"), (name) => name !== "stop-wrap-ack.json");
+  addDirectory(path.join(root, ".codex", "hooks"), (name) => /\.mjs$/i.test(name));
+  add(path.join(root, ".codex", "hooks.json"));
+  addDirectory(path.join(root, ".husky"), () => true);
+  addDirectory(path.join(root, ".github", "workflows"), (name) => /\.ya?ml$/i.test(name));
+  for (const script of [
+    "write-codex-push-proof.mjs",
+    "run-claude-review.mjs",
+    "overnight-codex-gate.mjs",
+    "remove-applied-ledger-entry.mjs",
+    "agent-manifest-parity.mjs",
+  ]) add(path.join(root, "scripts", script));
+  return byIdentity;
+}
+
+export function protectedFileIdentities(root) {
+  return new Set(protectedFileIdentityPaths(root).keys());
 }
 
 // Pathname-shaped protection for the control files above. Identity alone cannot
@@ -87,12 +150,33 @@ export function protectedControlPathReason(absTarget) {
   return "";
 }
 
-// True when `absTarget` is a second pathname for a protected file. Callers use
+// Creating a NEW file in the review state directory is the forge that identity
+// cannot see: a brand-new file has no inode to compare, and a junction keeps the
+// supplied pathname from ever spelling `session-state`, so the text matchers in
+// review-proof-guard miss it too. Canonicalising through the existing ancestor
+// resolves the junction and exposes the real destination.
+//
+// The ack valve stays open, matched CASE-SENSITIVELY for parity with
+// review-proof-guard's ACK_VALVE_RE — a case-variant name is denied like any
+// other basename.
+export function protectedProofCreationReason(absTarget) {
+  const surface = canonicalizeThroughExistingAncestor(absTarget).replace(/\\/g, "/");
+  if (!/(^|\/)\.claude\/session-state(\/|$)/i.test(surface)) return "";
+  if (/(^|\/)\.claude\/session-state\/stop-wrap-ack\.json$/.test(surface)) return "";
+  return "the wrapper-owned review state directory";
+}
+
+// True when `absTarget` is a SECOND pathname for a protected file. Callers use
 // this only after their own pathname patterns miss, so the ordinary deny path
 // costs nothing extra. Unreadable protected files simply contribute no identity;
 // the pathname patterns remain the primary boundary.
+//
+// The protected file's own path is not a second name for itself — that edit is
+// the legitimate one every other guard is there to inspect.
 export function aliasesProtectedFile(absTarget, root) {
   const identity = fileIdentity(absTarget);
   if (!identity) return false;
-  return protectedFileIdentities(root).has(identity);
+  const ownPath = protectedFileIdentityPaths(root).get(identity);
+  if (!ownPath) return false;
+  return pathKey(absTarget) !== pathKey(ownPath);
 }

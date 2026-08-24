@@ -173,12 +173,43 @@ named `config` stays writable.
 **Where the boundary actually is.** Blocking every way to *create* an alias is
 unbounded — `mklink /H`, `ln`, `cp -l`/`--link`, `link`, BusyBox, PowerShell
 `New-Item`, `fsutil`, and any language runtime with a `link()` binding. Blocking
-every way to *write through* one is bounded: MCP file tools and the native
-Write/Edit tools. So file identity is enforced at the write boundary by both
-`mcp-tool-guard.mjs` and `protected-identity-guard.mjs` (Claude's `Write|Edit`
-matcher, sharing `protected-identity-lib.mjs`), and the shell classifier's
-link-creation denials are defence in depth rather than the boundary itself. That
-list of creators is deliberately not exhaustive and must not be read as such.
+every way to *write through* one is bounded: MCP file tools, the native
+Write/Edit tools, and the native patch route. So file identity is enforced at the
+write boundary by both `mcp-tool-guard.mjs` and `protected-identity-guard.mjs`
+(Claude's `Write|Edit` matcher and Codex's all-tools matcher, sharing
+`protected-identity-lib.mjs`), and the shell classifier's link-creation denials
+are defence in depth rather than the boundary itself. That list of creators is
+deliberately not exhaustive and must not be read as such.
+
+**The patch route, and why the matcher matters.** `protected-identity-guard.mjs`
+was briefly declared Claude-only on two grounds, both false: that Codex reached
+the same check through `mcp-tool-guard.mjs`, whose tool pattern is anchored to an
+`mcp__<server>__` prefix and therefore never matched a bare `apply_patch`; and
+that Codex had no `Write|Edit` equivalent, when `.codex/hooks.json` had wired one
+all along. It is now two-sided and declared nowhere. It is wired on Codex's
+**all-tools** matcher rather than `Write|Edit` deliberately — a matcher matches
+the tool's *name*, and `apply_patch` is neither "Write" nor "Edit", so the
+obvious wiring would have produced a hook that passes the parity check and never
+fires. A patch also carries its destinations inside a free-form body instead of a
+path field, so the guard parses destination headers (via
+`extractPatchDestinations`, shared with `review-proof-guard.mjs`) and checks
+**every** destination in a payload — one patch can carry a benign file and a
+hostile one together.
+
+**A protected file is not an alias of itself.** The first cut compared identities
+alone, so editing a protected hook at its own real path matched its own identity
+and denied — the guard's own message says "edit the real path", which was the one
+thing it refused. The comparison is identity *and* a differing pathname; a
+regression pins the real-path edit as allowed, because that failure mode makes
+the harness unmaintainable rather than merely noisy.
+
+**Proof creation.** `review-proof-guard.mjs` covers `.claude/session-state` by
+path and command *text*, which is exactly what an alias defeats. Identity cannot
+cover a proof that does not exist yet — creating it *is* the forge — so the
+destination is canonicalised through its deepest existing ancestor first, which
+resolves a junction and exposes the real directory. `stop-wrap-ack.json` stays
+writable: it is the one designed agent-writable valve there, and protecting it
+would break session close-out.
 
 Protected-path matching is no longer name-shaped only. A hard link gives a
 protected file a second, innocuous pathname that `realpath` cannot resolve away,

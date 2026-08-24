@@ -1,17 +1,33 @@
 #!/usr/bin/env node
-// PreToolUse guard on the native Write|Edit matcher.
+// PreToolUse guard on every write route that can reach a file by pathname.
 //
 // The MCP tool guard already denies file tools whose target is a second pathname
-// for a protected file. The native Write/Edit tools were the remaining write
-// route: an alias created by any means — `cp -l`, `link`, a junction hop, a
-// language runtime's link() — could be edited here under an innocent pathname,
-// changing a protected hook, migration, settings file, or `.env` without ever
-// naming it (Codex, 2026-08-24).
+// for a protected file. The native Write/Edit tools were one remaining route: an
+// alias created by any means — `cp -l`, `link`, a junction hop, a language
+// runtime's link() — could be edited under an innocent pathname, changing a
+// protected hook, migration, settings file, or `.env` without ever naming it
+// (Codex, 2026-08-24).
+//
+// The NATIVE PATCH route was the other, and it was open. The MCP guard's tool
+// pattern is anchored to an `mcp__<server>__` prefix, so a bare `apply_patch`
+// never matched it and exited unchecked; the manifest meanwhile declared this
+// hook Claude-only on the stated grounds that the other agent "reaches the same
+// check through its own file route". It did not. A patch also carries its
+// DESTINATIONS inside a free-form body rather than a path field, so a guard that
+// reads only `file_path` sees nothing to check even when it does run. Both are
+// closed here: destinations are parsed out of the patch body, and every target
+// in a single payload is checked rather than only the first — one patch can
+// carry a benign file and a hostile one together (2026-08-24).
 //
 // Pathname-shaped protection for these tools lives in settings.json's permission
 // rules and the sibling content hooks; this adds the one property a second
 // pathname cannot fake. It is checked in addition to those, never instead.
-import { aliasesProtectedFile, protectedControlPathReason } from "./protected-identity-lib.mjs";
+import {
+  aliasesProtectedFile,
+  protectedControlPathReason,
+  protectedProofCreationReason,
+} from "./protected-identity-lib.mjs";
+import { extractPatchDestinations } from "./codex-push-lib.mjs";
 import path from "node:path";
 
 let raw = "";
@@ -36,30 +52,59 @@ function out(decision, reason) {
 try {
   const payload = raw.trim() ? JSON.parse(raw) : null;
   const input = payload?.tool_input && typeof payload.tool_input === "object" ? payload.tool_input : {};
+
   // Write uses file_path; Edit uses file_path too. Accept the common spellings
   // so a future tool shape cannot slip past by naming the field differently.
-  const target = input.file_path || input.path || input.filePath || "";
-  if (!target) out("allow");
+  // Patch-style tools carry the destination inside a free-form payload instead,
+  // so parse the patch's destination headers as well. Only the headers, never
+  // the whole body: added prose may legitimately mention a protected path, and
+  // scanning content would deny ordinary documentation edits.
+  const targets = [
+    input.file_path,
+    input.path,
+    input.filePath,
+    input.target,
+    input.source,
+    input.destination,
+    ...[input.patch, input.diff, input.input, input.changes]
+      .flatMap((body) => extractPatchDestinations(body)),
+  ].filter((candidate) => typeof candidate === "string" && candidate);
+
+  if (targets.length === 0) out("allow");
 
   const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const abs = path.isAbsolute(target) ? path.resolve(target) : path.resolve(cwd, target);
 
-  // Git control files decide what Git EXECUTES on the next ordinary command, so
-  // they are checked by pathname as well as identity: a file that does not exist
-  // yet has no inode, and creating one is itself the attack.
-  const controlReason = protectedControlPathReason(abs);
-  if (controlReason) {
-    out(
-      "deny",
-      `PROTECTED IDENTITY GUARD: ${target} is ${controlReason}. Settings there choose programs Git runs on the next command, so edit it deliberately outside the agent tools.`,
-    );
-  }
+  for (const target of targets) {
+    const abs = path.isAbsolute(target) ? path.resolve(target) : path.resolve(cwd, target);
 
-  if (aliasesProtectedFile(abs, cwd)) {
-    out(
-      "deny",
-      `PROTECTED IDENTITY GUARD: ${target} is a second pathname for a protected file (same device and inode). Edit the real path so the guard hooks can inspect the change.`,
-    );
+    // Git control files decide what Git EXECUTES on the next ordinary command, so
+    // they are checked by pathname as well as identity: a file that does not exist
+    // yet has no inode, and creating one is itself the attack.
+    const controlReason = protectedControlPathReason(abs);
+    if (controlReason) {
+      out(
+        "deny",
+        `PROTECTED IDENTITY GUARD: ${target} is ${controlReason}. Settings there choose programs Git runs on the next command, so edit it deliberately outside the agent tools.`,
+      );
+    }
+
+    // Creating a new file in the review state directory forges a proof the gate
+    // will later trust. Canonicalised first, so a junction cannot launder the
+    // destination out of the pathname.
+    const proofReason = protectedProofCreationReason(abs);
+    if (proofReason) {
+      out(
+        "deny",
+        `PROTECTED IDENTITY GUARD: ${target} resolves into ${proofReason}. Review proofs are minted by the review wrapper; an agent that can create one can certify its own change.`,
+      );
+    }
+
+    if (aliasesProtectedFile(abs, cwd)) {
+      out(
+        "deny",
+        `PROTECTED IDENTITY GUARD: ${target} is a second pathname for a protected file (same device and inode). Edit the real path so the guard hooks can inspect the change.`,
+      );
+    }
   }
 } catch (err) {
   // FAIL-OPEN, but loud: a broken guard must never brick the session. The

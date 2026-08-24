@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { existsSync, linkSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -78,6 +78,82 @@ eq(runHook({ tool_name: "Write", tool_input: { file_path: path.join(scratch, "co
 // the pathname-shaped protections still apply on this route.
 eq(runHook({ tool_name: "Write", tool_input: {} }).stdout.trim(), "", "a payload with no target is allowed");
 eq(spawnSync(process.execPath, [path.join(__dirname, "protected-identity-guard.mjs")], { input: "not json", encoding: "utf8" }).stdout.trim(), "", "a malformed payload fails open rather than throwing");
+
+// REGRESSION — a protected file is not an alias of ITSELF. The first cut of this
+// guard compared identities alone, so editing a protected hook at its own real
+// path matched its own identity and denied: the guard's error text says "edit the
+// real path", which was the one thing it refused. Wiring that onto a second write
+// route would have left the harness uneditable through the agent tools.
+const realHook = path.join(repoRoot, ".claude", "hooks", "bash-safety-lib.mjs");
+eq(runHook({ tool_name: "Edit", tool_input: { file_path: realHook, old_string: "a", new_string: "b" } }, repoRoot).stdout.trim(), "", "editing a protected hook at its OWN real path is allowed");
+eq(runHook({ tool_name: "Write", tool_input: { file_path: ".claude/hooks/bash-safety-lib.mjs", content: "x" } }, repoRoot).stdout.trim(), "", "the repo-relative spelling of the real path is allowed");
+
+// The NATIVE PATCH route. A patch carries its destinations inside a free-form
+// body, so a guard reading only file_path sees nothing to check. These drive the
+// real hook with real patch bodies rather than asserting against a parser.
+if (linked) {
+  const beginPatch = ["*** Begin Patch", `*** Update File: ${alias}`, "@@", "-a", "+b", "*** End Patch"].join("\n");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: { patch: beginPatch } })), "a patch whose destination is an alias of a protected hook is denied");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: { input: beginPatch } })), "the `input` field spelling of a patch body is denied too");
+  const unified = [`--- a/${alias}`, `+++ b/${alias}`, "@@ -1 +1 @@", "-a", "+b"].join("\n");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: { patch: unified } })), "a unified-diff patch destination is denied");
+  // EVERY destination is checked, not just the first: one patch can carry a
+  // benign file and a hostile one in the same body.
+  const mixed = ["*** Begin Patch", `*** Update File: ${path.join(scratch, "ordinary.txt")}`, "@@", "+x", `*** Update File: ${alias}`, "@@", "+y", "*** End Patch"].join("\n");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: { patch: mixed } })), "a patch is denied when ANY of its destinations aliases a protected file");
+  // A patch touching only ordinary files must still work — the rule is not a tax
+  // on normal patching.
+  const benign = ["*** Begin Patch", `*** Update File: ${path.join(scratch, "ordinary.txt")}`, "@@", "+x", "*** End Patch"].join("\n");
+  eq(runHook({ tool_name: "apply_patch", tool_input: { patch: benign } }).stdout.trim(), "", "a patch touching only ordinary files is allowed");
+}
+
+// PROOF FORGERY. A new file in the review state directory certifies a change the
+// gate will later trust. Identity cannot see it — a file that does not exist yet
+// has no inode — so the destination is canonicalised first.
+ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: ".claude/session-state/codex-review-deadbeef.json", content: "{}" } }, repoRoot)), "creating a new proof file is denied");
+ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: { patch: ["*** Begin Patch", "*** Add File: .claude/session-state/codex-review-deadbeef.json", "@@", "+{}", "*** End Patch"].join("\n") } }, repoRoot)), "adding a proof file through the patch route is denied");
+// The ack valve is the ONE designed agent-writable file there; stop-wrap.mjs
+// instructs the agent to write it, so protecting it would break session close-out.
+eq(runHook({ tool_name: "Write", tool_input: { file_path: ".claude/session-state/stop-wrap-ack.json", content: "{}" } }, repoRoot).stdout.trim(), "", "the stop-wrap ack valve stays writable");
+
+// A JUNCTION launders the protected directory out of the pathname entirely: the
+// supplied path never spells session-state, so every text matcher misses it.
+const junction = path.join(scratch, "notes-dir");
+let junctioned = false;
+try {
+  symlinkSync(path.join(repoRoot, ".claude", "session-state"), junction, "junction");
+  junctioned = true;
+} catch {
+  // Environments without junction/symlink permission cannot mount this route.
+}
+if (junctioned) {
+  ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: path.join(junction, "codex-review-deadbeef.json"), content: "{}" } })), "creating a proof through a junction is denied");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: { patch: ["*** Begin Patch", `*** Add File: ${path.join(junction, "codex-review-deadbeef.json")}`, "@@", "+{}", "*** End Patch"].join("\n") } })), "adding a proof through a junction is denied on the patch route");
+}
+
+// An existing proof file reached through a hard-link alias is caught by identity,
+// which is the dimension the text matchers in review-proof-guard cannot supply.
+const stateDir = path.join(repoRoot, ".claude", "session-state");
+let existingProof = "";
+try {
+  existingProof = (readdirSync(stateDir).find((name) => /^codex-review-.*\.json$/.test(name)) || "");
+} catch {
+  // No state directory in this checkout; the route does not exist here.
+}
+if (existingProof) {
+  const proofAlias = path.join(scratch, "meeting-notes.json");
+  let proofLinked = false;
+  try {
+    linkSync(path.join(stateDir, existingProof), proofAlias);
+    proofLinked = true;
+  } catch {
+    // Cross-volume or permission-restricted environments cannot create the alias.
+  }
+  if (proofLinked) {
+    ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: proofAlias, content: "{}" } })), "writing an existing proof through a hard-link alias is denied");
+    ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: { patch: ["*** Begin Patch", `*** Update File: ${proofAlias}`, "@@", "+{}", "*** End Patch"].join("\n") } })), "patching an existing proof through a hard-link alias is denied");
+  }
+}
 
 rmSync(scratch, { recursive: true, force: true });
 ok(!existsSync(scratch), "scratch fixture removed");
