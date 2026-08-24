@@ -5,7 +5,7 @@
 // it runs unattended: fixed executables, a stripped environment, and a refusal to run
 // Git's conversion pipeline anywhere a repo-local filter command could execute.
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   trustedEnv,
   trustedGhEnv,
@@ -78,5 +78,24 @@ eq(dangerousConfigKeys(null), [], "missing config text does not throw");
   ok(/will not run status/.test(risk), "and the reason states patrol refuses to run status there");
 }
 eq(worktreeFilterRisk("C:/whatever", () => "user.name=Mason"), null, "an ordinary worktree is safe to scan");
+
+// ── no patrol module may resolve an executable from PATH ────────────────────
+// The hardening was incomplete once already: patrol-report.mjs still called
+// execFileSync("git", ...) to resolve the repo, and that is the FIRST line an unattended
+// run reaches, so a PATH shim executed straight past the fixed-executable layer. This
+// sweeps every module rather than trusting that the last audit was thorough.
+{
+  const dir = new URL("./", import.meta.url);
+  const modules = [
+    "patrol-report.mjs", "patrol-scan.mjs", "patrol-sources.mjs",
+    "patrol-classify.mjs", "patrol-render.mjs", "patrol-monitor.mjs",
+  ];
+  for (const name of modules) {
+    const src = readFileSync(new URL(name, dir), "utf8");
+    // A bare-name first argument to execFileSync/spawnSync is a PATH lookup.
+    const bare = src.match(/(?:execFileSync|spawnSync)\(\s*["'](git|gh|powershell|pwsh|cmd|bash|sh)["']/g) ?? [];
+    eq(bare, [], `${name} never resolves git/gh/powershell from PATH`);
+  }
+}
 
 console.log(`patrol-trusted-exec: ${pass} assertions passed`);

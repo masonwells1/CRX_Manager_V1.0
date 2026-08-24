@@ -158,6 +158,17 @@ eq(judgeCodeRabbitGate(["Review in progress", "quota exceeded"]).state, "DOWN", 
   eq(checksVerdict({ required, checkRuns: [], statuses: [] }), "unknown", "a required context with no run at all is unknown");
 }
 {
+  // An UNBOUND required context cannot be producer-verified at all. Filtering only when
+  // appId != null meant any app posting the expected context name counted as green.
+  const unbound = [{ context: "Some Check", appId: null }];
+  const anyApp = [{ name: "Some Check", conclusion: "success", app: { id: 4242 }, started_at: "2026-08-24T20:00:00Z" }];
+  eq(checksVerdict({ required: unbound, checkRuns: anyApp, statuses: [] }), "unknown",
+    "a required context with NO app binding is unknown, never green — an unbound producer cannot be verified");
+  const anyStatus = [{ context: "Some Check", state: "success", creator: { id: 7 }, created_at: "2026-08-24T20:00:00Z" }];
+  eq(checksVerdict({ required: unbound, checkRuns: [], statuses: anyStatus }), "unknown",
+    "the same holds for a status-based unbound context");
+}
+{
   // Vercel arrives as a commit status, which carries no app id, so its producer is pinned.
   const required = [{ context: "Vercel", appId: 8329 }];
   const real = [{ context: "Vercel", state: "success", creator: { id: 35613825 }, created_at: "2026-08-24T20:00:00Z" }];

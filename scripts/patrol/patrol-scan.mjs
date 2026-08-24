@@ -93,14 +93,19 @@ export function checksVerdict({ required, checkRuns = [], statuses = [] }) {
 
   let pending = false;
   for (const { context, appId } of required) {
+    // A required context with NO app binding cannot be producer-verified at all, so any
+    // app posting that context name would have counted as green — the actor-forgery
+    // condition this binding exists to prevent. An unbound producer is unknown, not green.
+    if (appId == null) return "unknown";
+
     const candidates = [];
     for (const r of checkRuns) {
       // Producer verified generically: the run must come from the required app.
       if (r?.name !== context) continue;
-      if (appId != null && r?.app?.id !== appId) continue;
+      if (r?.app?.id !== appId) continue;
       candidates.push({ at: Date.parse(r.started_at ?? r.completed_at ?? 0) || 0, state: String(r.conclusion ?? r.status ?? "").toUpperCase() });
     }
-    const expectedCreator = appId == null ? null : STATUS_CREATOR_BY_APP_ID.get(appId);
+    const expectedCreator = STATUS_CREATOR_BY_APP_ID.get(appId);
     for (const s of statuses) {
       if (s?.context !== context) continue;
       if (expectedCreator == null || s?.creator?.id !== expectedCreator) continue;
@@ -343,16 +348,23 @@ export function writeSnapshot(snapshot) {
   const tmpPath = `${finalPath}.tmp`;
   writeFileSync(tmpPath, JSON.stringify(snapshot, null, 1), "utf8");
   renameSync(tmpPath, finalPath); // atomic: a reader never sees a half-written snapshot
-
-  // Heartbeat is bound to a COMPLETED run, so a crashed or degraded scan cannot keep the
-  // dead-man monitor looking healthy.
-  if (snapshot.complete) {
-    const hb = path.join(STATE_DIR, "heartbeat.json");
-    const hbTmp = `${hb}.tmp`;
-    writeFileSync(hbTmp, JSON.stringify({ schemaVersion: SCHEMA_VERSION, runId: snapshot.runId, at: snapshot.generatedAt, snapshot: finalPath }), "utf8");
-    renameSync(hbTmp, hb);
-  }
   return finalPath;
+}
+
+// Deliberately NOT written by writeSnapshot. The heartbeat is the dead-man monitor's only
+// evidence that patrol is alive and doing its job, so it must be stamped only after a run
+// has actually DELIVERED a report. Writing it at persistence time meant a crash during
+// classification or rendering left the monitor reporting healthy while Mason saw nothing.
+export function writeHeartbeat(snapshot, snapshotPath) {
+  if (!snapshot?.complete) return null; // a degraded scan never refreshes the heartbeat
+  mkdirSync(STATE_DIR, { recursive: true });
+  const hb = path.join(STATE_DIR, "heartbeat.json");
+  const hbTmp = `${hb}.tmp`;
+  writeFileSync(hbTmp, JSON.stringify({
+    schemaVersion: SCHEMA_VERSION, runId: snapshot.runId, at: snapshot.generatedAt, snapshot: snapshotPath,
+  }), "utf8");
+  renameSync(hbTmp, hb);
+  return hb;
 }
 
 function main() {
