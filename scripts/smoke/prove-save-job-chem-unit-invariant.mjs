@@ -64,7 +64,7 @@ const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19",
                   "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30",
                   "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
-                  "T40", "T41"];
+                  "T40", "T41", "T42", "T43", "T44"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -365,9 +365,12 @@ const MUTANTS = [
     // -- it leaves the rule itself standing, so T34 (no periods) must STAY GREEN while
     // T39 alone goes red. A mutant that reddened both would not prove the period handling
     // is what is being tested.
+    // Removes ONLY the period from the fold, leaving whitespace and hyphens, so T39 goes red
+    // while T44 (hyphens) stays green. Keeping the two separator mutants disjoint is what
+    // makes each one evidence about its own character rather than about the fold in general.
     name: "period folding removed from the dry fl-oz rule",
-    from: "'[[:space:].]+', ' ', 'g'))",
-    to: "'[[:space:]]+', ' ', 'g'))",
+    from: "'[[:space:].-]+', ' ', 'g'))",
+    to: "'[[:space:]-]+', ' ', 'g'))",
     expect: "T39",
   },
   {
@@ -381,9 +384,38 @@ const MUTANTS = [
     expect: "T40",
   },
   {
+    // Drops hyphens from the fold, restoring the escape the gate found: 'fl-oz' on both sides
+    // of a dry line normalises equal and bills a volume as a weight. T44 must go red alone.
+    name: "hyphen folding removed from the dry fl-oz rule",
+    from: "'[[:space:].-]+', ' ', 'g'))",
+    to: "'[[:space:].]+', ' ', 'g'))",
+    expect: "T44",
+  },
+  {
+    // Restores the bare equality shortcut, which proved the two sides shared a unit and
+    // nothing about the quantity -- the caller then set the money directly. T42 must go red.
+    name: "equality shortcut restored as a free pass for the quantity",
+    from: "    IF v_qty_unit = v_price_unit THEN\n      v_rate := NULLIF(v_chem->>'rate_per_acre','')::numeric;",
+    to: "    CONTINUE WHEN v_qty_unit = v_price_unit;\n    IF false THEN\n      v_rate := NULLIF(v_chem->>'rate_per_acre','')::numeric;",
+    expect: "T42",
+  },
+  {
+    // Removes the leading-denominator arm only, leaving the two separator-bounded patterns.
+    // 'per cwt' then survives normalisation and bills. T43 must go red.
+    name: "leading denominator arm removed from the per-acre rule",
+    from: "            OR v_denom_probe ~ '^[\\s-]*per[\\s-]+') THEN",
+    to: "            OR false) THEN",
+    expect: "T43",
+  },
+  {
+    // Forces EVERY line down the equal-units branch, so the units are never compared at all.
+    // A genuinely mismatched line (T4: oz measured, lb priced) is then either waved through or
+    // reported as a quantity problem -- both wrong, and either way T4 goes red by name.
+    // (The anchor moved in round 15: the bare `CONTINUE WHEN v_qty_unit = v_price_unit` became
+    // a block when the equality shortcut stopped being a free pass for the quantity.)
     name: "unit comparison disabled",
-    from: "CONTINUE WHEN v_qty_unit = v_price_unit;",
-    to: "CONTINUE;",
+    from: "IF v_qty_unit = v_price_unit THEN",
+    to: "IF true THEN",
     expect: "T4",
   },
   {
@@ -411,9 +443,14 @@ const MUTANTS = [
     // removing either alone leaves the other holding and proves nothing -- the earlier
     // single-anchor version of this mutant scored a false detection until the
     // named-test assertion above caught it.
+    // `all: true` is load-bearing, not tidiness. Since round 15 the acreage finiteness bound
+    // exists in BOTH the equal-units branch and the mismatched branch, and the mutant is named
+    // for removing EVERY one. Left as a first-match replace it edited only the equal-units
+    // copy, T11 (a mismatched line) never saw the mutation, and the phase reported the test as
+    // weak when the test had simply not been reached.
     name: "every finiteness bound on the acreage path removed",
     edits: [
-      { from: "AND v_acres > 0 AND v_acres < 'Infinity'::numeric", to: "AND v_acres > 0" },
+      { from: "AND v_acres > 0 AND v_acres < 'Infinity'::numeric", to: "AND v_acres > 0", all: true },
       { from: "         AND v_carried > '-Infinity'::numeric\n         AND v_carried < 'Infinity'::numeric\n", to: "" },
     ],
     expect: "T11",
@@ -499,9 +536,15 @@ const MUTANTS = [
     // derivation then discards cwt. Without this mutant the tightening is asserted only by a
     // comment.
     name: "denominator rule reverted to the end-with-per-acre exclusion form",
+    // (Anchor re-cut in round 15, when the condition gained its leading-denominator arm. The
+    // revert deliberately drops that arm too -- the exclusion form it restores had no such
+    // arm -- so this mutant reddens T24 by name and would redden T43 as well, which is the
+    // honest reproduction of the old rule rather than a half-revert.)
     from:
       "    IF v_raw_rate_unit <> ''\n" +
-      "       AND (position('/' IN v_denom_probe) > 0 OR v_denom_probe ~ '[\\s-]+per[\\s-]+') THEN",
+      "       AND (position('/' IN v_denom_probe) > 0\n" +
+      "            OR v_denom_probe ~ '[\\s-]+per[\\s-]+'\n" +
+      "            OR v_denom_probe ~ '^[\\s-]*per[\\s-]+') THEN",
     to:
       "    IF v_raw_rate_unit <> ''\n" +
       "       AND v_raw_rate_unit !~ '\\s*/\\s*(acres|acre|ac|a)\\s*$'\n" +
@@ -582,6 +625,19 @@ for (const m of MUTANTS) {
     if (!mutated.includes(e.from)) {
       fail(`mutation "${m.name}" could not find its anchor -- the prover is stale relative to the migration`);
     }
+    // An AMBIGUOUS anchor is refused outright unless the mutant opts into `all`. Without this
+    // the failure is silent and actively misleading: String.replace takes the FIRST match, so
+    // when a guard came to exist in two places the mutant quietly edited the copy it did not
+    // mean, left the real one standing, and the phase reported "MUTATION NOT DETECTED" -- which
+    // reads as "the test is weak" when in fact the test was never exercised. That is exactly
+    // what happened when the equality shortcut gained its own copy of the acreage finiteness
+    // bound in round 15. A mutant must land where it says it lands.
+    const hits = mutated.split(e.from).length - 1;
+    if (hits > 1 && !e.all) {
+      fail(`mutation "${m.name}" has an AMBIGUOUS anchor: "${e.from.slice(0, 60)}..." occurs ` +
+           `${hits} times. String.replace would silently take the first one. Either make the ` +
+           `anchor unique or set all:true if every occurrence is genuinely meant.`);
+    }
     // The replacement MUST go through a function. String.replace treats $&, $`, $' and $1
     // in a string replacement as substitution patterns, and SQL regex literals here end in
     // `$'` all the time -- e.g. '\s*/\s*(acres|acre|ac|a)\s*$'. Passed as a plain string
@@ -589,7 +645,7 @@ for (const m of MUTANTS) {
     // then fails to install with a syntax error hundreds of lines away from the edit. A
     // function replacement is taken verbatim. Found while adding the stacked-denominator
     // mutant; every mutant whose `to` contains a dollar sign depended on this.
-    mutated = mutated.replace(e.from, () => e.to);
+    mutated = e.all ? mutated.split(e.from).join(e.to) : mutated.replace(e.from, () => e.to);
   }
   const p = join(scratch, "mutant.sql");
   writeFileSync(p, mutated, "utf8");

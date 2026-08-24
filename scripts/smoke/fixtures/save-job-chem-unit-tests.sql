@@ -818,6 +818,75 @@ EXCEPTION WHEN OTHERS THEN
   RAISE EXCEPTION 'T41 FAIL  a legitimate dry unit carrying a non-breaking space was REFUSED, so the zero-width widening is over-firing and blocks whole jobs: %', SQLERRM;
 END $$;
 
+-- T42: THE MONEY HOLE THE EQUALITY SHORTCUT LEFT OPEN (HIGH, gpt-5.6-sol 2026-08-24). Matching
+-- units proved both sides were counted in the same unit and NOTHING about how many. 10 acres at
+-- 2 oz/ac is 20 oz; this line claims 200. Both sides are 'oz', so the old shortcut accepted it
+-- and the derived totals stored 20,000 cents instead of 2,000 -- the caller setting the money
+-- directly, on the one path this whole migration exists to close. Must be REFUSED.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333372-3333-3333-3333-333333333373","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":200,"unit":"oz","rate_per_acre":2,"rate_unit":"oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":100}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_QUANTITY_NOT_DERIVED%' THEN
+    RAISE NOTICE 'T42 PASS  an inflated quantity is refused even though both units match: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T42 FAIL  a caller-chosen quantity rode the equality shortcut straight into the money; refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
+-- T43: THE LEADING DENOMINATOR (HIGH, same gate). Every 'per' pattern required whitespace or a
+-- hyphen BEFORE the word, so a rate unit that STARTS with the denominator matched none of them,
+-- survived normalisation unchanged, and -- with a stock unit carrying the same text -- reached
+-- the equality shortcut and billed. Such a rate names no unit to count in at all. An earlier
+-- round added this shape to the PRE-APPLY query but not to the runtime guard, which is the
+-- half-fix pattern this file keeps repeating. Must be REFUSED.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333374-3333-3333-3333-333333333375","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":100,"unit":"per cwt","rate_per_acre":10,"rate_unit":"per cwt","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_RATE_DENOMINATOR_NOT_ACRES%' THEN
+    RAISE NOTICE 'T43 PASS  a rate unit that is only a leading denominator is refused: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T43 FAIL  a leading "per" denominator escaped both the denominator and unspecified-unit guards; refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
+-- T44: THE HYPHENATED FLUID OUNCE (HIGH, same gate). The fold handled whitespace, periods and
+-- zero-width characters but not hyphens, so a dry line quoted 'fl-oz' on both sides normalised
+-- equal and billed a volume as a weight. Third spelling escape in three rounds, which is why
+-- the fold now covers the whole separator class rather than the characters named so far.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333376-3333-3333-3333-333333333377","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":100,"unit":"fl-oz","rate_per_acre":10,"rate_unit":"fl-oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_FORM_MISMATCH%' THEN
+    RAISE NOTICE 'T44 PASS  a dry line quoted "fl-oz" on both sides is refused: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T44 FAIL  the hyphenated spelling escaped the dry fluid-ounce rule; refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
 -- T37: THE BYPASS the round-11 half-fix left open, returned by the gate as a fresh HIGH. A DRY
 -- product with rate 'fl oz/ac' against a stock Unit of 'lb'. These do NOT normalise equal, so the
 -- equality shortcut -- the only thing round 10 guarded -- never runs. The line goes down the

@@ -575,8 +575,19 @@ BEGIN
     IF v_denom_probe = v_raw_rate_unit THEN
       v_denom_probe := regexp_replace(v_denom_probe, '[\s-]+per[\s-]+(acres|acre|ac|a)$', '');
     END IF;
+    -- The LEADING form is caught too, and it was a real bypass: both patterns above and the
+    -- surviving-'per' test below require whitespace or a hyphen BEFORE 'per', so a rate unit
+    -- that STARTS with the denominator -- 'per cwt', 'per acre', 'per-acre' -- matched none of
+    -- them. It then survived normalisation unchanged, and a stock `unit` carrying the same text
+    -- reached the equality shortcut and billed. Worse, such a rate names no unit at all, so
+    -- there was nothing to bill per in the first place. Found by the exact-SHA gpt-5.6-sol gate
+    -- on 2026-08-24 (HIGH), after an earlier round had added this same shape to the PRE-APPLY
+    -- query but NOT to the runtime guard -- fixing the report and leaving the enforcement is
+    -- the same half-fix pattern this file has now been caught in three times.
     IF v_raw_rate_unit <> ''
-       AND (position('/' IN v_denom_probe) > 0 OR v_denom_probe ~ '[\s-]+per[\s-]+') THEN
+       AND (position('/' IN v_denom_probe) > 0
+            OR v_denom_probe ~ '[\s-]+per[\s-]+'
+            OR v_denom_probe ~ '^[\s-]*per[\s-]+') THEN
       SELECT p.product_name INTO v_product_name
         FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
       RAISE EXCEPTION
@@ -761,7 +772,7 @@ BEGIN
                   translate(lower(btrim(COALESCE(raw_unit, ''))),
                             chr(160) || chr(8203) || chr(8204) || chr(8205) || chr(65279),
                             ' '),
-                  '[[:space:].]+', ' ', 'g'))
+                  '[[:space:].-]+', ' ', 'g'))
                 ~ '^(fl|fluid) ?(oz|ozs|ounce|ounces)$'
        ) THEN
       RAISE EXCEPTION
@@ -769,7 +780,44 @@ BEGIN
         COALESCE(v_product_name, 'This product'), v_raw_rate_unit, COALESCE(v_chem->>'unit', '');
     END IF;
 
-    CONTINUE WHEN v_qty_unit = v_price_unit;
+    -- EQUAL UNITS ARE NOT A FREE PASS FOR THE QUANTITY. This used to be a bare
+    -- `CONTINUE WHEN v_qty_unit = v_price_unit`, and the gate found the money hole that left
+    -- open (HIGH, gpt-5.6-sol, 2026-08-24): matching units proved the two sides were counted
+    -- in the SAME unit, and nothing at all about HOW MANY. A hand-built call sending 10 acres
+    -- at 2 oz/ac with quantity 200 oz passed -- both sides 'oz' -- and the derived totals then
+    -- authoritatively stored 20,000 cents instead of 2,000. The caller controlled the money
+    -- directly, on the exact path this migration exists to close.
+    --
+    -- The rule already existed for the mismatched branch below, which refuses when the
+    -- quantity is not what rate x acres reads. Applying it only when the units DIFFER was the
+    -- inconsistency; the quantity reaches the totals either way.
+    --
+    -- No converter is called here on purpose. The units are identical, so the carried quantity
+    -- IS rate x acres and a conversion would add nothing but a failure mode: an exotic-but-
+    -- self-consistent unit the conversion tables do not carry ('cc' against 'cc') would size
+    -- NULL and start REFUSING a line that is perfectly well formed, and one refused line
+    -- blocks the whole job save. Same tolerance as the mismatched branch: quantity is stored
+    -- through fmt4, so 4 decimal places of slack plus a relative epsilon.
+    IF v_qty_unit = v_price_unit THEN
+      v_rate := NULLIF(v_chem->>'rate_per_acre','')::numeric;
+      IF v_rate IS NOT NULL AND v_rate > 0 AND v_rate < 'Infinity'::numeric
+         AND v_acres > 0 AND v_acres < 'Infinity'::numeric THEN
+        CONTINUE WHEN abs(v_qty - (v_rate * v_acres))
+                      <= GREATEST(0.0001::numeric, abs(v_rate * v_acres) * 0.000001::numeric);
+        SELECT p.product_name INTO v_product_name
+          FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+        RAISE EXCEPTION
+          'CHEM_QUANTITY_NOT_DERIVED: % is quoted at % per acre over % acres, which is %, but the line carries a quantity of %. The amount billed comes from the quantity, so these must agree. Re-enter the rate or the quantity.',
+          COALESCE(v_product_name, 'This product'), v_rate, v_acres, v_rate * v_acres, v_qty;
+      END IF;
+      -- RESIDUAL, stated rather than hidden: with no usable rate or acreage there is nothing
+      -- to derive the quantity FROM, so an equal-unit line still saves on the caller's
+      -- quantity. Refusing here instead would block an ordinary job that simply has no
+      -- acreage entered yet, which is the round-7 defect three reviewers caught. Closing this
+      -- last gap means deciding that a priced line with no acreage is itself invalid -- an
+      -- operational policy call for Mason, not a change to slip in behind a review finding.
+      CONTINUE;
+    END IF;
 
     -- PROOF OF SAFETY, and the only one: the quantity is what rate x acres reads once
     -- carried into the unit the price is quoted in. Without a usable rate and acreage

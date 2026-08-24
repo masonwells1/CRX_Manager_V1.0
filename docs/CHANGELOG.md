@@ -93,6 +93,25 @@ Blend Recipes was never affected; it selects `*`.
 
 ## 2026-08-22 — The chemical-unit and job-money invariants move out of React and into `save_job` (parked)
 
+**Round 15 (2026-08-24) — the independent reviewer found the biggest hole yet, and it was not a
+spelling.** Until now the database only checked the *amount* on a line when the two units
+disagreed. When they matched, it accepted whatever amount the request claimed. So a job of 10
+acres at 2 oz per acre — 20 oz — could be submitted claiming 200 oz, and because both sides said
+"oz" it went straight through and the database stored $200 instead of $20. That is the caller
+setting the price, which is the exact thing this whole change exists to prevent. The rule already
+existed for lines whose units disagreed; applying it only there was the inconsistency. Your live
+data was checked first: all three billing lines already match exactly, so nothing that exists
+today is affected. Two smaller escapes were closed with it — a rate written as `per cwt` slipped
+past every check, and `fl-oz` with a hyphen slipped past the fluid-ounce rule.
+
+**One gap is deliberately left open for Mason to decide.** If a line has no acreage entered,
+there is nothing to check the amount against, so it still saves on trust. Closing it means
+ruling that a priced chemical line with no acreage is invalid — which would start refusing saves
+that operators can make today. That is an operating decision, not a review fix, so it is not
+taken here.
+
+Still parked; nothing has been applied to live.
+
 **Round 14 (2026-08-24) — and then the same mistake again, one layer down.** Hours after round
 13 shipped, the automated reviewer found that writing the unit with an *invisible* character
 inside it — a zero-width space, which can arrive from a copy-paste out of a spreadsheet or a
@@ -271,7 +290,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Forty-one behaviour tests pass; and twenty-one mutation phases each fail in a **named** way — fifteen
+Forty-four behaviour tests pass; and twenty-four mutation phases each fail in a **named** way — eighteen
 turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -298,7 +317,7 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The forty-one tests: all four live row shapes save with derived totals reproducing the live stored
+The forty-four tests: all four live row shapes save with derived totals reproducing the live stored
 values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
 by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
 `T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate
