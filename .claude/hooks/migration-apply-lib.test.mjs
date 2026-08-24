@@ -281,6 +281,20 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   notWrappable("VACUUM ANALYZE public.t;\n", "VACUUM", "VACUUM is refused");
   notWrappable("ALTER SYSTEM SET work_mem = '64MB';\n", "ALTER SYSTEM", "ALTER SYSTEM is refused");
   notWrappable("   \n", "empty", "an empty migration is refused");
+  // Each TXN_CONTROL rule gets a standalone case so it is exercised on its own
+  // rather than only via a rule that happens to match first (CodeRabbit round 2).
+  notWrappable("CREATE TABLE public.t (id bigint);\nEND;\n", "END", "a top-level END is refused");
+  notWrappable("PREPARE TRANSACTION 'tx1';\n", "PREPARE TRANSACTION", "PREPARE TRANSACTION is refused");
+  notWrappable("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;\nCREATE TABLE public.t (id bigint);\n",
+    "SET TRANSACTION", "SET TRANSACTION is refused");
+  notWrappable("COMMIT TRANSACTION;\n", "COMMIT", "COMMIT TRANSACTION is refused");
+  notWrappable("ROLLBACK TO SAVEPOINT s1;\n", "ROLLBACK", "ROLLBACK TO SAVEPOINT is refused");
+  notWrappable("BEGIN TRANSACTION;\nCREATE TABLE public.t (id bigint);\n", "BEGIN", "BEGIN TRANSACTION is refused");
+  notWrappable("RELEASE SAVEPOINT s1;\n", "SAVEPOINT", "RELEASE SAVEPOINT is refused");
+  // A migration with no statements is a no-op that would still write a ledger row.
+  notWrappable("-- just a comment, no statements\n", "no SQL statements", "a comment-only migration is refused");
+  notWrappable(";;;\n", "no SQL statements", "a semicolon-only migration is refused");
+  notWrappable("/* block comment only */\n", "no SQL statements", "a block-comment-only migration is refused");
 
   // The false positives that would make this check unusable.
   wrappable(

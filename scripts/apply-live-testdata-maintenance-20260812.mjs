@@ -58,13 +58,13 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // every OTHER migration path was already blocked here (P1), so the guard had to
   // learn the new spelling. The transform anchors below are untouched by that
   // edit; only the pinned blobs move.
-  codexGuard: "099f0273d328e5b935bb68bc084eb9355af9ed28",
+  codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
   pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   // Re-pinned 2026-08-24 (PR #460) alongside the input blob above; taken from the
   // producer test's reported candidate, not hand-computed.
-  codexGuard: "7831a360ad903038531e960ff7122e2c8e97442e",
+  codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
   pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
 };
 

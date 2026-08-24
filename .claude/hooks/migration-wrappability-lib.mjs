@@ -157,6 +157,19 @@ export function checkWrappable(sql) {
     };
   }
 
+  // `text.trim()` above only catches a truly blank file. A comment-only or
+  // semicolon-only migration is non-blank yet carries NO statements: it would
+  // sail through every rule below, be wrapped, and commit a schema_migrations row
+  // recording a migration that changed nothing. Refuse it as the no-op it is
+  // (CodeRabbit, PR #460 round 2).
+  if (!scanned.replace(/[;\s]/g, "")) {
+    return {
+      wrappable: false,
+      reason: "it contains no SQL statements (comments and/or bare semicolons only). Applying it would record a " +
+        "schema_migrations row for a migration that changes nothing.",
+    };
+  }
+
   for (const { re, what } of TXN_CONTROL) {
     if (re.test(scanned)) {
       return {

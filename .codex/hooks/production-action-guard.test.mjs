@@ -264,6 +264,17 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node scripts/apply\"-\"migration-file.mjs x.sql --confirm" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node scripts/apply\\-migration-file.mjs x.sql --confirm" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node ./scripts/apply-migration-file.mjs x.sql" } }).blocked, true);
+  // A computed argument never spells the script name, so the literal matcher
+  // alone loses to it (CodeRabbit, PR #460 round 2). An interpreter invoked with
+  // ANY shell expansion is statically unresolvable and refused.
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "S=scripts/apply-migration-file.mjs; node $S --confirm" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node ${SCRIPT} --confirm" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node $(echo scripts/apply-migration-file.mjs)" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node `echo x.mjs`" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node $env:SCRIPT" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node %SCRIPT%" } }).blocked, true);
+  // A literal, statically-readable interpreter command is still fine.
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node scripts/check-doc-drift.mjs" } }).blocked, false);
   // Reading or discussing the file is not applying it.
   assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/apply-migration-file.mjs" } }).blocked, false);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node -e \"require('child_process').execSync('git pu'+'sh origin main')\"" } }).blocked, true);
