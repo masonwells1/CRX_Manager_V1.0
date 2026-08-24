@@ -28,6 +28,12 @@ for legacy ledger rows whose `name` contains no timestamp.
   tested by removing the timestamp-less-name fallback and by restoring the
   obsolete always-rename instruction; both mutations failed the intended
   assertions.
+- Exact-head Codex review found that CHECK 6 still cited the schema-registry
+  staleness heuristic and a name-only history paragraph as if they implemented
+  the fallback. The reviewer now cites the executable ordering library and
+  snapshot producer; both the library commentary and migration history spell
+  out the same row-by-row effective-stamp calculation. Deterministic assertions
+  pin the citations and both corroborating explanations.
 - All agent workflow and correction-guard suites passed. No live migration or
   business-data change was performed while correcting these gates.
 
