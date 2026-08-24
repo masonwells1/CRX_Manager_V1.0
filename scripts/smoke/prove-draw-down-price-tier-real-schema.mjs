@@ -12,7 +12,7 @@
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -64,8 +64,23 @@ function copy(local, name) { docker(['cp', local, `${NAME}:/tmp/${name}`]); }
  */
 function copySql(local, name) {
   const staged = path.join(tmpdir(), `${NAME}-${name}`);
-  writeFileSync(staged, readFileSync(local, 'utf8').replaceAll('\r\n', '\n'), 'utf8');
-  docker(['cp', staged, `${NAME}:/tmp/${name}`]);
+  let operationError;
+  try {
+    writeFileSync(staged, readFileSync(local, 'utf8').replaceAll('\r\n', '\n'), 'utf8');
+    docker(['cp', staged, `${NAME}:/tmp/${name}`]);
+  } catch (error) {
+    operationError = error;
+    throw error;
+  } finally {
+    try {
+      unlinkSync(staged);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        if (operationError) console.error(`Failed to clean staged SQL ${staged}:`, error);
+        else throw error;
+      }
+    }
+  }
 }
 function apply(name, user) { psql(`\\i /tmp/${name}`, { user }); }
 /**
@@ -86,11 +101,15 @@ function applyMigration(name, options = {}) {
 function wait(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 function waitForDatabase() {
   for (let attempt = 0; attempt < 90; attempt += 1) {
-    if (docker(['exec', NAME, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { allowFailure: true }).status === 0) {
-      // The Supabase image briefly exposes its bootstrap server before the
-      // final server restart. Wait through that handoff, then require a real
-      // query so schema installation cannot race the disappearing socket.
-      wait(2_000);
+    // The image exposes a temporary bootstrap server, stops it, prints this
+    // canonical entrypoint marker, and only then execs the final server. Do not
+    // accept readiness until that lifecycle boundary has actually occurred.
+    const logs = docker(['logs', NAME], { allowFailure: true });
+    const initComplete = `${logs.stdout}\n${logs.stderr}`.includes(
+      'PostgreSQL init process complete; ready for start up.',
+    );
+    if (initComplete
+      && docker(['exec', NAME, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { allowFailure: true }).status === 0) {
       const query = docker(
         ['exec', NAME, 'psql', '-U', 'postgres', '-d', 'postgres', '-Atqc', 'SELECT 1'],
         { allowFailure: true },
