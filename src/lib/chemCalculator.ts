@@ -264,6 +264,24 @@ export function fieldAppPricedQuantity(
 // per-base-unit with the SAME server-parity factor tables above.
 
 /**
+ * Does this raw unit spelling name a FLUID measure *explicitly*?
+ *
+ * Only the fluid-ounce spellings qualify. Everything else — including a bare 'oz' — is not
+ * explicit: for a liquid product 'oz' means fluid ounces, for a dry product it means weight
+ * ounces, and that ambiguity is exactly why the caller must know the product's form.
+ *
+ * Kept deliberately narrow and LOCAL to this file rather than folded into normalizeRateUnit:
+ * that function mirrors the live SQL normalize_rate_unit, and the label-rate guardrail
+ * compares against it. Changing the shared normalizer would drift the client away from the
+ * server — the class of bug this whole branch exists to fix.
+ */
+function isExplicitlyFluidUnit(unit: string | null | undefined): boolean {
+  const t = String(unit ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return t === 'fl oz' || t === 'floz' || t === 'fl. oz.' || t === 'fl oz.'
+    || t === 'fluid ounce' || t === 'fluid ounces';
+}
+
+/**
  * Strip a per-acre suffix ('/ac', '/acre', '/a', ' per acre') from a rate_unit and
  * return the bare base measure unit (e.g. 'pt/ac' → 'pt', 'GAL' → 'gal'). Empty in →
  * empty out.
@@ -451,13 +469,38 @@ export function chemLineBillingHazard(
   acres: number,
   productForm?: 'liquid' | 'dry' | null,
 ): ChemBillingHazard {
-  const quantityUnit = normalizeRateUnit(baseUnitOfRate(row.rate_unit));
+  const rateBaseRaw = baseUnitOfRate(row.rate_unit);
+  const quantityUnit = normalizeRateUnit(rateBaseRaw);
   const priceUnit = normalizeRateUnit(row.unit);
   if (quantityUnit == null || priceUnit == null) return NO_HAZARD;
-  if (quantityUnit === priceUnit) return NO_HAZARD;
 
   const qty = parseFloat(row.quantity);
   if (!Number.isFinite(qty) || qty <= 0) return NO_HAZARD;
+
+  // VOLUME PRICED AS WEIGHT — caught BEFORE the equality fast path (Codex P2, 2026-08-23).
+  //
+  // normalizeRateUnit folds 'fl oz' into 'oz' (its SYNONYMS table, mirroring the live SQL
+  // normalize_rate_unit). For a LIQUID product that is right: a bare 'oz' there means fluid
+  // ounces, so the two spellings really are the same unit. For a DRY product it is not —
+  // 'oz' is a WEIGHT and 'fl oz' is a VOLUME, and the two normalize equal, so a dry line
+  // rated in 'fl oz/ac' and priced per 'oz' took the units-are-equal exit and was declared
+  // safe. Product rate units are unvalidated free text (the CSV import writes them as-is),
+  // so this shape is reachable, and it prices a volume as though it were a weight.
+  //
+  // There is no conversion to offer: volume→weight needs the product's density, which we do
+  // not store. So this is refused outright with billedRatio null rather than a ratio we
+  // cannot compute. The RAW spellings are reported, not the normalized ones — telling the
+  // operator "measured in oz but priced per oz" would be unreadable.
+  if ((productForm ?? null) === 'dry' && isExplicitlyFluidUnit(rateBaseRaw) !== isExplicitlyFluidUnit(row.unit)) {
+    return {
+      hazard: true,
+      quantityUnit: (rateBaseRaw ?? '').trim() || quantityUnit,
+      priceUnit: String(row.unit ?? '').trim() || priceUnit,
+      billedRatio: null,
+    };
+  }
+
+  if (quantityUnit === priceUnit) return NO_HAZARD;
 
   // `quantity` is stored through fmt4, so allow 4-dp slack plus a relative epsilon.
   const near = (a: number, b: number): boolean => Math.abs(a - b) <= Math.max(1e-4, Math.abs(b) * 1e-6);

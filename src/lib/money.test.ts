@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatCents, formatUSD, centsTimesQuantity, isExactDecimalText } from './money';
+import { formatCents, formatUSD, centsTimesQuantity, isExactDecimalText, quantitySurvivesSave, sameExactDecimal } from './money';
 
 /**
  * money.ts is the canonical formatter for a codebase where money is stored as
@@ -190,6 +190,51 @@ describe('centsTimesQuantity — exact parity with the server safe_cents_qty', (
       for (const ok of ['0', '150', '1.5', '.5', '5.', '-2.5', '+3', '232.9001', '1234.5678']) {
         expect(isExactDecimalText(ok)).toBe(true);
       }
+    });
+  });
+
+  describe('quantitySurvivesSave — the header/line agreement gate (Codex P2, 2026-08-23)', () => {
+    // THE BUG: the page totals money from the exact decimal TEXT, but
+    // buildJobChemicalsPayload persists that same field as parseFloat(quantity). When the
+    // text carries more precision than a double holds, those are two different numbers, and
+    // the stored total contradicts the stored line.
+    it('catches the exact divergence Codex reported: 5c x 0.29999999999999999', () => {
+      const typed = '0.29999999999999999';
+      // What the page's exact math bills from the TEXT:
+      expect(centsTimesQuantity(5, typed)).toBe(1);       // exact 1.4999… → 1c
+      // What the database bills from the PERSISTED value (parseFloat → 0.3):
+      expect(String(parseFloat(typed))).toBe('0.3');
+      expect(centsTimesQuantity(5, '0.3')).toBe(2);       // exact 1.5 → 2c, away from zero
+      // A cent apart, so the row is refused rather than saved to either figure.
+      expect(quantitySurvivesSave(typed)).toBe(false);
+    });
+
+    it('accepts every quantity the grid actually produces', () => {
+      // fmt4 caps a derived quantity at 4 dp; all of these round-trip through a double.
+      for (const ok of ['0', '150', '1.5', '.5', '5.', '3200', '232.9001', '1234.5678', '0.3', '73.31', '3752.64']) {
+        expect(quantitySurvivesSave(ok)).toBe(true);
+      }
+    });
+
+    it('refuses whatever isExactDecimalText refuses — one grammar, one gate', () => {
+      for (const bad of ['1e3', 'NaN', 'Infinity', 'abc', '', '   ', null, undefined]) {
+        expect(quantitySurvivesSave(bad)).toBe(false);
+      }
+    });
+
+    it('refuses a value whose float form is EXPONENT notation, which cannot be billed at all', () => {
+      expect(String(parseFloat('0.0000001'))).toBe('1e-7');
+      expect(centsTimesQuantity(150, '1e-7')).toBe(0);
+      expect(quantitySurvivesSave('0.0000001')).toBe(false);
+    });
+
+    it('sameExactDecimal compares VALUE, not spelling', () => {
+      expect(sameExactDecimal('0.30', '0.3')).toBe(true);
+      expect(sameExactDecimal('5.', '5')).toBe(true);
+      expect(sameExactDecimal('.5', '0.5')).toBe(true);
+      expect(sameExactDecimal('-0', '0')).toBe(true);
+      expect(sameExactDecimal('0.3', '0.30000000000000004')).toBe(false);
+      expect(sameExactDecimal('-2.5', '2.5')).toBe(false);
     });
   });
 });

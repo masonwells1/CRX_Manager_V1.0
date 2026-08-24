@@ -12,6 +12,7 @@ import {
   rateDenominatorIsUnrecognized,
   type ChemCalcRow,
 } from './chemCalculator';
+import { normalizeRateUnit } from './labelGuardrails';
 
 const row = (over: Partial<ChemCalcRow> = {}): ChemCalcRow => ({
   quantity: '0',
@@ -413,6 +414,54 @@ describe('chemCalculator — chemLineBillingHazard (production fail-closed guard
     expect(chemLineBillingHazard(
       { quantity: '240', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: '' }, 160, 'liquid',
     ).hazard).toBe(false);
+  });
+
+  describe('VOLUME PRICED AS WEIGHT — the units-are-equal fast path was a hole (Codex P2)', () => {
+    // normalizeRateUnit folds 'fl oz' into 'oz' (mirroring the live SQL normalize_rate_unit),
+    // so a DRY line rated in fl oz/ac and priced per oz compared EQUAL and exited "safe" —
+    // pricing a volume as though it were a weight. Product rate units are unvalidated free
+    // text from the CSV import, so this shape is reachable.
+    const DRY_FL_OZ = { quantity: '100', rate_per_acre: '1', rate_unit: 'fl oz/ac', unit: 'oz' };
+
+    it('proves the collapse that caused it: both spellings normalize to the same token', () => {
+      expect(normalizeRateUnit(baseUnitOfRate('fl oz/ac'))).toBe('oz');
+      expect(normalizeRateUnit('oz')).toBe('oz');
+    });
+
+    it('FLAGS a dry product measured in fl oz but priced per oz', () => {
+      const h = chemLineBillingHazard(DRY_FL_OZ, 100, 'dry');
+      expect(h.hazard).toBe(true);
+      // No ratio is claimed: volume→weight needs a density this app does not store.
+      expect(h.billedRatio).toBeNull();
+    });
+
+    it('reports the RAW spellings, so the message is readable', () => {
+      // Reporting the normalized units would read "measured in oz but priced per oz".
+      const h = chemLineBillingHazard(DRY_FL_OZ, 100, 'dry');
+      expect(h.quantityUnit).toBe('fl oz');
+      expect(h.priceUnit).toBe('oz');
+    });
+
+    it('leaves a LIQUID product alone — there, bare oz really does mean fluid ounces', () => {
+      expect(chemLineBillingHazard(DRY_FL_OZ, 100, 'liquid').hazard).toBe(false);
+      // and with the form unknown, nothing about volume-vs-weight is claimed either.
+      expect(chemLineBillingHazard(DRY_FL_OZ, 100, null).hazard).toBe(false);
+    });
+
+    it('leaves a dry product alone when BOTH sides are the same kind of ounce', () => {
+      expect(chemLineBillingHazard(
+        { quantity: '100', rate_per_acre: '1', rate_unit: 'oz/ac', unit: 'oz' }, 100, 'dry',
+      ).hazard).toBe(false);
+      expect(chemLineBillingHazard(
+        { quantity: '100', rate_per_acre: '1', rate_unit: 'fl oz/ac', unit: 'fl oz' }, 100, 'dry',
+      ).hazard).toBe(false);
+    });
+
+    it('does not fire on a blank or zero quantity — a fresh row is not born warning', () => {
+      for (const q of ['', '0']) {
+        expect(chemLineBillingHazard({ ...DRY_FL_OZ, quantity: q }, 100, 'dry').hazard).toBe(false);
+      }
+    });
   });
 
   it('DOES flag a quantity matching neither reading — unprovable is not safe', () => {

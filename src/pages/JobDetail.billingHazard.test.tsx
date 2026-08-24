@@ -146,6 +146,50 @@ function mountWith(chem: Record<string, unknown>) {
   );
 }
 
+/**
+ * A `products` chain that answers the ACTIVE-LIST query and the BY-ID query differently,
+ * which buildChain cannot do (it fixes its result before any filter is applied).
+ *
+ * The distinction is the whole point of the discontinued-product case: `.eq('is_active',
+ * true)` must come back EMPTY, while `.in('id', [...])` must still return the product. The
+ * result is therefore resolved lazily, at await time, once the filters have been recorded.
+ */
+function buildProductsChain(rows: unknown[]): Record<string, unknown> {
+  let activeOnly = false;
+  let byId = false;
+  const self: Record<string, unknown> = {};
+  const method = (..._args: unknown[]) => self;
+  for (const m of ['select', 'insert', 'update', 'upsert', 'delete', 'neq', 'gt', 'gte',
+    'lt', 'lte', 'like', 'ilike', 'is', 'contains', 'containedBy', 'range', 'filter', 'not',
+    'or', 'and', 'match', 'order', 'limit', 'offset', 'single', 'maybeSingle', 'csv',
+    'rollback', 'returns', 'textSearch', 'overlaps', 'abortSignal']) self[m] = method;
+  self.eq = (col: unknown, val: unknown) => {
+    if (col === 'is_active' && val === true) activeOnly = true;
+    return self;
+  };
+  self.in = (col: unknown, _vals: unknown) => { if (col === 'id') byId = true; return self; };
+  const settle = () => Promise.resolve({ data: activeOnly && !byId ? [] : rows, error: null });
+  self.then = (onF: unknown, onR: unknown) => settle().then(onF as never, onR as never);
+  self.catch = (onR: unknown) => settle().catch(onR as never);
+  self.finally = (onF: unknown) => settle().finally(onF as never);
+  return self;
+}
+
+/** Same as mountWith, but the product is DISCONTINUED: absent from the active list, and
+ *  reachable only by id — the shape a saved job with a retired product actually has. */
+function mountWithInactiveProduct(chem: Record<string, unknown>) {
+  mockFrom.mockImplementation((table: string) => {
+    if (table === 'jobs') return buildChain({ data: makeJob(chem), error: null });
+    if (table === 'products') return buildProductsChain([{ ...DRY_PRODUCT, is_active: false }]);
+    return buildChain({ data: [], error: null });
+  });
+  return render(
+    <MemoryRouter initialEntries={['/jobs/job-1?tab=chemicals']}>
+      <Routes><Route path="/jobs/:id" element={<JobDetail />} /></Routes>
+    </MemoryRouter>,
+  );
+}
+
 describe('JobDetail — billing-hazard guard is wired, not just implemented', () => {
   beforeEach(() => {
     mockToast.mockClear();
@@ -423,4 +467,21 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
     expect(screen.queryByText(/This line cannot be saved/i)).toBeNull();
   });
+
+  it('does NOT block a job whose product has since been DISCONTINUED', async () => {
+    // THE FALSE POSITIVE THIS PINS (Codex P2, 2026-08-23). loadLookups fills allProducts
+    // with is_active = true only. A saved job carrying a now-inactive product therefore had
+    // NO product_form, and fieldAppPricedQuantity silently fell to its LIQUID table — so a
+    // correctly carried DRY line (1 oz/ac × 100 ac = 100 oz = 6.25 lb) could not be proven
+    // safe, and the fail-closed guard blocked the whole job. The operator could not even fix
+    // the memo: performSave re-sends the entire grid, so one un-provable line freezes it all.
+    //
+    // The form is now resolved by product id, inactive included, so the row proves out.
+    mountWithInactiveProduct({
+      ...HAZARD_CHEM,
+      quantity: 6.25, unit: 'Lb', rate_per_acre: 1, rate_unit: 'oz/ac',
+    });
+    await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    expect(screen.queryByText(/This line cannot be saved/i)).toBeNull();
+  }, 30000);
 });

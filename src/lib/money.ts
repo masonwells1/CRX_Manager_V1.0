@@ -82,6 +82,57 @@ export function isExactDecimalText(text: string | number | null | undefined): bo
   return m != null && !(m[2] === '' && (m[3] ?? '') === '');
 }
 
+/** Split a plain decimal into (negative, numerator, scale) — exact, no float. */
+function decimalParts(text: string): { negative: boolean; numerator: bigint; scale: number } | null {
+  const m = PLAIN_DECIMAL.exec(String(text ?? '').trim());
+  if (!m || (m[2] === '' && (m[3] ?? '') === '')) return null;
+  const frac = m[3] || '';
+  return { negative: m[1] === '-', numerator: BigInt((m[2] || '0') + frac), scale: frac.length };
+}
+
+/**
+ * True when two plain-decimal strings denote the SAME exact value ('0.30' === '0.3').
+ * Compares by cross-multiplying to a common scale in BigInt — never through a float.
+ */
+export function sameExactDecimal(a: string | number, b: string | number): boolean {
+  const pa = decimalParts(String(a));
+  const pb = decimalParts(String(b));
+  if (pa == null || pb == null) return false;
+  const scale = Math.max(pa.scale, pb.scale);
+  const na = pa.numerator * 10n ** BigInt(scale - pa.scale);
+  const nb = pb.numerator * 10n ** BigInt(scale - pb.scale);
+  if (na === 0n && nb === 0n) return true;   // -0 === 0
+  return na === nb && pa.negative === pb.negative;
+}
+
+/**
+ * True when a quantity's decimal text still means the same number after the trip it
+ * actually takes on save.
+ *
+ * WHY THIS GATE EXISTS (Codex P2, 2026-08-23). The page now totals money from the exact
+ * decimal STRING via `centsTimesQuantity`, but `buildJobChemicalsPayload` persists the same
+ * field as `parseFloat(quantity)` — a binary double. When those two disagree, so do the
+ * header and the line: typing `0.29999999999999999` against a 5c unit price totals 1c here
+ * (exact 1.4999…), while the payload stores `0.3` and the server's `safe_cents_qty` bills
+ * 2c (exact 1.5, rounded away from zero). The stored total then contradicts the stored line.
+ *
+ * Refused rather than coerced, matching how this module treats fractional cents and
+ * exponent notation. Every quantity an operator can realistically type — anything within
+ * ~15 significant digits, which includes every 4-decimal value the rate maths produces —
+ * round-trips unchanged and is unaffected.
+ */
+export function quantitySurvivesSave(text: string | number | null | undefined): boolean {
+  const raw = String(text ?? '').trim();
+  if (!isExactDecimalText(raw)) return false;
+  const asFloat = parseFloat(raw);
+  if (!Number.isFinite(asFloat)) return false;
+  const persisted = String(asFloat);
+  // `String(1e-7)` is '1e-7' — exponent notation, which centsTimesQuantity cannot multiply.
+  // Such a value cannot be reconciled with the server at all, so it fails here too.
+  if (!isExactDecimalText(persisted)) return false;
+  return sameExactDecimal(raw, persisted);
+}
+
 /**
  * Multiply an integer CENTS amount by a decimal quantity and round to whole cents
  * EXACTLY as the server's `safe_cents_qty` does. Returns 0 for a blank/non-finite

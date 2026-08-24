@@ -43,7 +43,7 @@ import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerat
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { centsTimesQuantity, isExactDecimalText } from '../lib/money';
+import { centsTimesQuantity, isExactDecimalText, quantitySurvivesSave } from '../lib/money';
 import { applyChemEdit, chemLineBillingHazard, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
@@ -1241,7 +1241,14 @@ export default function JobDetail() {
   // §5: label max per product for the lines ON THIS JOB — fetched by product_id WITHOUT an
   // is_active filter (Codex P2), so a now-INACTIVE product on a saved job still gets its
   // label max for the guardrail (allProducts is active-only). Authoritative over allProducts.
-  const [jobProductLabels, setJobProductLabels] = useState<Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null }>>(new Map());
+  //
+  // Also carries product_form, for the same reason and a sharper one (Codex P2, 2026-08-23):
+  // the form picks which conversion table fieldAppPricedQuantity uses, so a MISSING form
+  // silently takes the liquid branch. On a discontinued DRY product that turns a correctly
+  // carried line (1 oz/ac × 100 ac stored as 6.25 lb) into one that cannot be proven safe —
+  // and chemLineBillingHazard fails closed, so the whole job becomes unsaveable. Resolving
+  // the form by id, inactive included, is what keeps the guard from firing on good rows.
+  const [jobProductLabels, setJobProductLabels] = useState<Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null; product_form: 'liquid' | 'dry' | null }>>(new Map());
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
 
   useEffect(() => {
@@ -1355,13 +1362,17 @@ export default function JobDetail() {
     (async () => {
       const { data, error } = await supabase
         .from('products')
-        .select('id, max_label_rate, max_label_rate_unit')
+        .select('id, max_label_rate, max_label_rate_unit, product_form')
         .in('id', ids);
       if (cancelled) return;
       if (error) { setJobProductLabels(new Map()); setJobLabelsLoaded(true); return; }
-      const m = new Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null }>();
-      for (const p of (data as unknown as Array<{ id: string; max_label_rate: number | null; max_label_rate_unit: string | null }> | null) ?? []) {
-        m.set(p.id, { max_label_rate: p.max_label_rate, max_label_rate_unit: p.max_label_rate_unit });
+      const m = new Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null; product_form: 'liquid' | 'dry' | null }>();
+      for (const p of (data as unknown as Array<{ id: string; max_label_rate: number | null; max_label_rate_unit: string | null; product_form: string | null }> | null) ?? []) {
+        m.set(p.id, {
+          max_label_rate: p.max_label_rate,
+          max_label_rate_unit: p.max_label_rate_unit,
+          product_form: p.product_form === 'liquid' || p.product_form === 'dry' ? p.product_form : null,
+        });
       }
       setJobProductLabels(m);
       setJobLabelsLoaded(true);
@@ -1375,6 +1386,16 @@ export default function JobDetail() {
     if (fromJob) return fromJob;
     const lp = allProducts.find((p) => p.id === productId);
     return { max_label_rate: lp?.max_label_rate ?? null, max_label_rate_unit: lp?.max_label_rate_unit ?? null };
+  }, [jobProductLabels, allProducts]);
+
+  // Resolve a line's liquid/dry form the same inactive-safe way: the by-id fetch wins, then
+  // allProducts. Every caller that feeds a UNIT CONVERSION must come through here — reading
+  // allProducts directly is what mis-classified discontinued products (Codex P2, 2026-08-23).
+  const productFormFor = useCallback((productId: string): 'liquid' | 'dry' | null => {
+    const fromJob = jobProductLabels.get(productId);
+    if (fromJob) return fromJob.product_form;
+    const form = allProducts.find((p) => p.id === productId)?.product_form ?? null;
+    return form === 'liquid' || form === 'dry' ? form : null;
   }, [jobProductLabels, allProducts]);
 
   // §5: aggregate guardrail state from chemRows + allProducts (the live label max). Drives
@@ -1406,12 +1427,11 @@ export default function JobDetail() {
     const acres = sumAcres(fieldRows);
     chemRows.forEach((c, i) => {
       if (!c.product_id) return;
-      const form = allProducts.find((p) => p.id === c.product_id)?.product_form ?? null;
-      const h = chemLineBillingHazard(c, acres, form === 'liquid' || form === 'dry' ? form : null);
+      const h = chemLineBillingHazard(c, acres, productFormFor(c.product_id));
       if (h.hazard) byIndex.set(i, h);
     });
     return byIndex;
-  }, [chemRows, fieldRows, allProducts]);
+  }, [chemRows, fieldRows, productFormFor]);
 
   // Rows whose numbers are not fit to save at all, for reasons the billing-hazard guard
   // does not cover. Both fail closed rather than being silently coerced:
@@ -1438,6 +1458,14 @@ export default function JobDetail() {
       // is reachable by typing. One grammar, one gate. (Codex P2)
       if (!isExactDecimalText(c.quantity)) {
         byIndex.set(i, 'its quantity is blank, or is not written as a plain number, and would not be billed correctly');
+        return;
+      }
+      // The totals above multiply the exact decimal TEXT, but buildJobChemicalsPayload
+      // persists the same field as parseFloat(quantity). A quantity carrying more precision
+      // than a double can hold means those two are different numbers, so the stored total
+      // and the stored line disagree by a cent. Refused, not rounded. (Codex P2, 2026-08-23)
+      if (!quantitySurvivesSave(c.quantity)) {
+        byIndex.set(i, 'its quantity has more decimal places than can be saved exactly, so the line total and the job total would not agree — round it to 4 decimal places or fewer');
         return;
       }
       // Cents are WHOLE, so the gate has to be stricter for them than for a quantity.
@@ -3701,8 +3729,10 @@ export default function JobDetail() {
                 // in bare 'oz' takes the legacy branch and is mis-classified as POUNDS
                 // (oz = 1/16 lb) instead of FLUID ounces (1/128 gal) — the preview then
                 // disagrees with the saved/invoiced value.
-                const previewForm = allProducts.find((p) => p.id === c.product_id)?.product_form ?? null;
-                const conv = toGallonOrLbEquivalent(totalApplied, c.unit, previewForm === 'liquid' || previewForm === 'dry' ? previewForm : null);
+                // Inactive-safe (Codex P2, 2026-08-23): a discontinued product read straight
+                // out of allProducts has no form, which silently takes the liquid branch.
+                const previewForm = productFormFor(c.product_id);
+                const conv = toGallonOrLbEquivalent(totalApplied, c.unit, previewForm);
                 const hazard = chemBillingHazards.get(i);
                 const rowDefect = chemRowDefects.get(i);
                 return (
