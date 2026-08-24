@@ -478,6 +478,19 @@ catalog ordinal instead of an input-only counter. Disposable PostgreSQL 17
 fixtures reproduce both misses across the general and financial predicates,
 and reverting either load-bearing change makes its exact fixture fail.
 
+The next exact-head Sol review found two High variants behind those catalog
+fixes. PostgreSQL equality is overloadable, so a custom actor type could make
+`IS DISTINCT FROM auth.uid()` lie and skip the refusal. Actor refusals now count
+only when the write-time declaration and live catalog prove the actor is UUID;
+local `v_actor` bindings must also be declared UUID. The live predicates now
+use a length-preserving lexer that masks comments plus ordinary, escape,
+Unicode, and dollar-quoted data strings before looking for a refusal, while
+preserving the executable canonical exception literal. Unterminated or
+nested-comment residue fails closed. Lying equality, custom local identity,
+ordinary/E/U&/dollar fake-guard, nested-comment, and safe-refusal controls run
+in disposable PostgreSQL 17; each type, position, and lexer guard was removed
+in turn and its exact regression failed.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —

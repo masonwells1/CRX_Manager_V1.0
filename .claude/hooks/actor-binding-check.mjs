@@ -31,6 +31,8 @@
 //       RAISE EXCEPTION 'ACTOR_MISMATCH: p_performed_by must equal auth.uid()';
 //     END IF;
 //     -- ... and every actor stamp downstream derives from v_actor, not the param
+//   Both the actor parameter and any v_actor identity local must be declared
+//   as uuid; custom types can overload equality and make the refusal lie.
 //
 // Escape hatch: the file-level marker comment
 //   -- actor-binding-check: exempt
@@ -102,17 +104,21 @@ function paramMode(decl) {
   return /^(in|out|inout|variadic)$/i.test(first) ? first.toLowerCase() : "in";
 }
 
-/** PostgreSQL lets routine bodies reference input arguments by both their
- * declared name and their one-based positional alias ($1, $2, ...). OUT-only
- * parameters do not consume an input position and cannot be caller-forged. */
+function isTrustedUuidParameterDeclaration(declaration) {
+  const normalized = normalizedRoutineIdentityArgs(declaration, true);
+  return normalized === "uuid" || normalized === "pg_catalog.uuid";
+}
+
+/** PostgreSQL lets routine bodies reference parameters by both their declared
+ * name and their one-based positional alias ($1, $2, ...). PL/pgSQL positional
+ * aliases follow full declaration order, including OUT parameters, even though
+ * OUT-only values are not caller inputs and are skipped as actor candidates. */
 function actorParameterDescriptors(maskedParams, rawParams) {
   const declarations = splitTopLevelArgs(maskedParams, rawParams);
   const actors = [];
-  let inputPosition = 0;
-  for (const declaration of declarations) {
+  for (const [index, declaration] of declarations.entries()) {
     const mode = paramMode(declaration);
     if (mode === "out") continue;
-    inputPosition++;
     const name = paramName(declaration);
     const opaqueUnicodeName = /^U&/i.test(name);
     if (!opaqueUnicodeName && !ACTOR_PARAM_RE.test(name)) continue;
@@ -120,8 +126,13 @@ function actorParameterDescriptors(maskedParams, rawParams) {
     // that escape grammar and risk another lookalike bypass, conservatively
     // require every Unicode-named input on a mutating definer routine to prove
     // actor binding through its exact positional alias (or use exemption).
-    const references = opaqueUnicodeName ? [`$${inputPosition}`] : [name, `$${inputPosition}`];
-    actors.push({ name, references });
+    const position = index + 1;
+    const references = opaqueUnicodeName ? [`$${position}`] : [name, `$${position}`];
+    actors.push({
+      name,
+      references,
+      trustedUuid: isTrustedUuidParameterDeclaration(declaration),
+    });
   }
   return actors;
 }
@@ -1304,6 +1315,13 @@ function stableAuthUidBindings(structuralBody, beforeIndex) {
     if (!isOuterDeclarationInitializer && !isTopLevelBodyAssignment) continue;
     const name = match[1];
     const ref = identifierReferencePattern(name);
+    const declarationRe = new RegExp(
+      `(?:^|;|\\bDECLARE\\b)\\s*${ref}\\s+` +
+        `(?:pg_catalog\\s*\\.\\s*)?uuid\\b(?:\\s+NOT\\s+NULL)?\\s*` +
+        `(?=;|:=|=(?!=)|DEFAULT\\b)`,
+      "i"
+    );
+    if (!declarationRe.test(structuralBody.slice(0, outerBegin.index))) continue;
     // PL/pgSQL permits a local to be qualified by its function/block label,
     // and that label follows the full PostgreSQL identifier grammar. Treat
     // quoted and Unicode-escaped qualifiers as assignments too; otherwise
@@ -1499,7 +1517,16 @@ function hasActorMismatchRaiseException(rawAction, structuralAction, actorParam)
  * one parameter can be guarded while a second parameter is written downstream.
  * The established CRX legacy phrase remains compatible, but only inside the
  * same simple IF mismatch THEN RAISE EXCEPTION shape. */
-function hasEnforcedActorRefusal(body, actorParam, actorReferences = [actorParam]) {
+function hasEnforcedActorRefusal(
+  body,
+  actorParam,
+  actorReferences = [actorParam],
+  trustedUuid = false
+) {
+  // IS DISTINCT FROM and <> dispatch through PostgreSQL equality operators.
+  // A custom actor type can overload equality and claim a forged identity is
+  // authentic, so only a catalog-UUID actor can establish this refusal.
+  if (!trustedUuid) return false;
   const structuralBody = maskSqlForCallNames(body);
   if (structuralBody === null) return false;
   // maskSqlForCallNames deliberately preserves quoted identifiers for relation
@@ -2570,8 +2597,8 @@ try {
       actorForwardedSymbolicOperator;
     if (!hasMutation) continue;
 
-    const hasRecognizedActorRefusal = actorDescriptors.every(({ name, references }) =>
-      hasEnforcedActorRefusal(body, name, references)
+    const hasRecognizedActorRefusal = actorDescriptors.every(({ name, references, trustedUuid }) =>
+      hasEnforcedActorRefusal(body, name, references, trustedUuid)
     );
     if (hasRecognizedActorRefusal) continue;
 

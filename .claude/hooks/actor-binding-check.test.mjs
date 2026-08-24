@@ -37,6 +37,7 @@ function proc(body, params = "p_performed_by uuid", security = "SECURITY DEFINER
 
 const MUTATION = "INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);";
 const BOUND = `
+  DECLARE v_actor uuid;
   BEGIN
   v_actor := auth.uid();
   IF p_performed_by IS DISTINCT FROM v_actor THEN
@@ -184,9 +185,32 @@ ok(!isDeny(r), "$1 does not partially match PostgreSQL positional alias $10");
 
 r = runHook(`CREATE FUNCTION public.out_gap(OUT p_result uuid, IN p_performed_by uuid)
 LANGUAGE plpgsql SECURITY DEFINER AS $fn$
-BEGIN p_result := public.record_event_internal($1); END
+BEGIN p_result := public.record_event_internal($2); END
 $fn$;`);
-ok(isDeny(r), "an OUT-only parameter does not consume the actor's PostgreSQL input position");
+ok(isDeny(r), "an actor's PostgreSQL positional alias follows full declaration order including OUT parameters");
+
+r = runHook(`CREATE FUNCTION public.custom_actor_refusal(p_actor public.actor_token) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $wrapper$
+BEGIN
+  IF p_actor IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO financial_audit_log(actor_user_id) VALUES ((p_actor).value);
+END
+$wrapper$;`);
+ok(isDeny(r), "a custom actor declaration cannot use overloaded equality as identity proof");
+
+r = runHook(`CREATE FUNCTION public.custom_local_actor_refusal(p_actor uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $wrapper$
+DECLARE v_actor public.actor_token := auth.uid();
+BEGIN
+  IF p_actor IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO financial_audit_log(actor_user_id) VALUES (p_actor);
+END
+$wrapper$;`);
+ok(isDeny(r), "a custom local identity type cannot satisfy a UUID actor refusal");
 
 r = runHook(forwardedActorWrapper("RETURN p_performed_by OPERATOR(public.##) auth.uid();"));
 ok(isDeny(r), "an explicit user-defined operator cannot receive an unbound actor from a definer wrapper");
@@ -228,13 +252,21 @@ CREATE OR REPLACE FUNCTION public.record_actor_equality(p_actor public.actor_tok
 RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path TO 'public', 'pg_temp' AS $helper$
 BEGIN
   INSERT INTO financial_audit_log (actor_user_id) VALUES ((p_actor).value);
-  RETURN (p_actor).value IS NOT DISTINCT FROM (p_identity).value;
+  RETURN true;
 END
 $helper$;
 CREATE OPERATOR public.= (
   LEFTARG = public.actor_token,
   RIGHTARG = public.actor_token,
   FUNCTION = public.record_actor_equality
+);
+CREATE OR REPLACE FUNCTION public.record_actor_uuid_equality(p_actor public.actor_token, p_identity uuid)
+RETURNS boolean LANGUAGE sql SECURITY INVOKER SET search_path TO 'public', 'pg_temp'
+AS 'SELECT true';
+CREATE OPERATOR public.= (
+  LEFTARG = public.actor_token,
+  RIGHTARG = uuid,
+  FUNCTION = public.record_actor_uuid_equality
 );
 CREATE OR REPLACE FUNCTION public.forward_actor_equality(p_actor public.actor_token)
 RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $wrapper$
@@ -246,6 +278,42 @@ GRANT EXECUTE ON FUNCTION public.forward_actor_equality(public.actor_token) TO a
 
 r = runHook(OVERLOADED_ACTOR_COMPARISON);
 ok(isDeny(r), "an overloaded comparison operator cannot receive an unbound actor from a definer wrapper");
+
+r = runHook(OVERLOADED_ACTOR_COMPARISON.replace(
+  "BEGIN\n  RETURN p_actor = ROW(auth.uid())::public.actor_token;\nEND",
+  `BEGIN
+  IF p_actor IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO financial_audit_log (actor_user_id) VALUES ((p_actor).value);
+  RETURN true;
+END`
+));
+ok(isDeny(r), "an overloaded equality operator cannot make a custom actor type's mismatch refusal trustworthy");
+
+r = runHook(`CREATE TYPE public.actor_token AS (value uuid);
+CREATE FUNCTION public.actor_token_from_uuid(p_identity uuid) RETURNS public.actor_token
+LANGUAGE sql IMMUTABLE AS 'SELECT ROW(p_identity)::public.actor_token';
+CREATE CAST (uuid AS public.actor_token)
+WITH FUNCTION public.actor_token_from_uuid(uuid) AS IMPLICIT;
+CREATE FUNCTION public.uuid_actor_equality(p_identity uuid, p_actor public.actor_token)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true';
+CREATE OPERATOR public.= (
+  LEFTARG = uuid,
+  RIGHTARG = public.actor_token,
+  FUNCTION = public.uuid_actor_equality
+);
+CREATE FUNCTION public.custom_local_actor_refusal(p_actor uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $wrapper$
+DECLARE v_actor public.actor_token := auth.uid();
+BEGIN
+  IF p_actor IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO financial_audit_log(actor_user_id) VALUES (p_actor);
+END
+$wrapper$;`);
+ok(isDeny(r), "a custom-typed local identity cannot make a UUID actor's mismatch refusal trustworthy");
 
 r = runHook(OVERLOADED_ACTOR_COMPARISON.replace(
   "RETURN p_actor = ROW(auth.uid())::public.actor_token;",

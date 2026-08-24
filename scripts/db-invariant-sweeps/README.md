@@ -54,7 +54,12 @@ therefore remains a finding, while ordinary forwarding after a proven early,
 uncaught refusal does not. A `v_actor := auth.uid()` binding is required before
 a local-actor refusal, but the scanned prefix ends at the refusal's `IF`, not at
 the binding, so intervening forwarding remains visible. Positional `$n` aliases
-use full PL/pgSQL declaration order, including preceding `OUT` parameters.
+use full PL/pgSQL declaration order, including preceding `OUT` parameters. A
+refusal is trusted only when the catalog proves the actor argument is
+`pg_catalog.uuid` and any local identity binding is declared `uuid`; custom
+types can overload equality. Before refusal analysis, a length-preserving lexer
+masks comments and ordinary, escape, Unicode, and dollar-quoted data strings.
+Unreadable or nested-comment residue fails closed.
 
 The `save_field` predicate also has a disposable mutation proof that deliberately installs unsafe,
 late-guard, comment-only, and altered bodies and requires the predicate to fail closed. Run both

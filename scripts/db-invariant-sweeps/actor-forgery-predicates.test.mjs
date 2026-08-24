@@ -116,7 +116,7 @@ CREATE FUNCTION public.actor_equality_impl(p_actor public.actor_token, p_identit
 RETURNS boolean LANGUAGE plpgsql AS $body$
 BEGIN
   INSERT INTO public.financial_audit_log(actor_user_id) VALUES ((p_actor).value);
-  RETURN (p_actor).value IS NOT DISTINCT FROM (p_identity).value;
+  RETURN true;
 END;
 $body$;
 CREATE OPERATOR public.= (
@@ -124,6 +124,24 @@ CREATE OPERATOR public.= (
   RIGHTARG = public.actor_token,
   FUNCTION = public.actor_equality_impl
 );
+CREATE FUNCTION public.actor_uuid_equality_impl(p_actor public.actor_token, p_identity uuid)
+RETURNS boolean LANGUAGE sql AS 'SELECT true';
+CREATE OPERATOR public.= (
+  LEFTARG = public.actor_token,
+  RIGHTARG = uuid,
+  FUNCTION = public.actor_uuid_equality_impl
+);
+CREATE FUNCTION public.uuid_actor_equality_impl(p_identity uuid, p_actor public.actor_token)
+RETURNS boolean LANGUAGE sql AS 'SELECT true';
+CREATE OPERATOR public.= (
+  LEFTARG = uuid,
+  RIGHTARG = public.actor_token,
+  FUNCTION = public.uuid_actor_equality_impl
+);
+CREATE FUNCTION public.actor_token_from_uuid(p_identity uuid) RETURNS public.actor_token
+LANGUAGE sql IMMUTABLE AS 'SELECT ROW(p_identity)::public.actor_token';
+CREATE CAST (uuid AS public.actor_token)
+WITH FUNCTION public.actor_token_from_uuid(uuid) AS IMPLICIT;
 CREATE FUNCTION public.actor_overloaded_equality(p_actor_source public.actor_token) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER AS $body$
 BEGIN
@@ -142,6 +160,17 @@ CREATE FUNCTION public.actor_reverse_equality(p_actor_source public.actor_token)
 LANGUAGE plpgsql SECURITY DEFINER AS $body$
 BEGIN
   RETURN ROW(gen_random_uuid())::public.actor_token = CAST(p_actor_source AS public.actor_token);
+END;
+$body$;
+
+CREATE FUNCTION public.actor_custom_refusal_forward(p_actor_source public.actor_token) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor((p_actor_source).value);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES ((p_actor_source).value);
 END;
 $body$;
 
@@ -166,6 +195,18 @@ BEGIN
 END;
 $body$;
 
+CREATE FUNCTION public.actor_nested_comment_guard_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  /* outer comment
+     /* nested comment */
+     IF p_actor_source IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION 'ACTOR_MISMATCH';
+  */
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
 CREATE FUNCTION public.actor_notice_token_forward(p_actor_source uuid) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER AS $body$
 BEGIN
@@ -179,6 +220,33 @@ CREATE FUNCTION public.actor_string_guard_forward(p_actor_source uuid) RETURNS v
 LANGUAGE plpgsql SECURITY DEFINER AS $body$
 BEGIN
   RAISE NOTICE 'IF p_actor_source IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION ''ACTOR_MISMATCH'';';
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+CREATE FUNCTION public.actor_dollar_guard_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  RAISE NOTICE $notice$IF p_actor_source IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION 'ACTOR_MISMATCH';$notice$;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+CREATE FUNCTION public.actor_escape_guard_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  RAISE NOTICE E'IF p_actor_source IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION ''ACTOR_MISMATCH'';';
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+CREATE FUNCTION public.actor_unicode_guard_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  PERFORM U&'IF p_actor_source IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION ''ACTOR_MISMATCH'';';
   PERFORM public.forward_actor(p_actor_source);
   INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
 END;
@@ -236,6 +304,19 @@ BEGIN
 END;
 $body$;
 
+CREATE FUNCTION public.actor_custom_local_refusal_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor public.actor_token;
+BEGIN
+  v_actor := auth.uid();
+  IF p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
 CREATE FUNCTION public.actor_out_before_positional(OUT p_result uuid, IN p_actor_source uuid)
 LANGUAGE plpgsql SECURITY DEFINER AS $body$
 BEGIN
@@ -264,11 +345,17 @@ $body$;
   }
   for (const routine of [
     'actor_comment_token_forward',
+    'actor_nested_comment_guard_forward',
     'actor_notice_token_forward',
     'actor_string_guard_forward',
     'actor_caught_refusal_forward',
+    'actor_escape_guard_forward',
+    'actor_unicode_guard_forward',
     'actor_out_before_positional',
     'actor_local_pre_refusal_forward',
+    'actor_custom_local_refusal_forward',
+    'actor_custom_refusal_forward',
+    'actor_dollar_guard_forward',
   ]) {
     assert.ok(
       generalRows.some((row) => row.startsWith(`${routine}(`) && row.endsWith('|p_actor_source')),
