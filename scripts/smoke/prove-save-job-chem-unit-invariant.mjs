@@ -65,7 +65,7 @@ const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30",
                   "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
                   "T40", "T41", "T42", "T43", "T44", "T45", "T46", "T47", "T48",
-                  "T49", "T50", "T51", "T52", "T53"];
+                  "T49", "T50", "T51", "T52", "T53", "T54", "T55"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -408,6 +408,16 @@ const MUTANTS = [
       { from: "<= 0.0001::numeric", to: "<= GREATEST(0.0001::numeric, abs(v_rate * v_acres) * 0.000001::numeric)", all: true },
     ],
     expect: "T50",
+  },
+  {
+    // Disables the recognised-unit backstop, restoring the slash-homoglyph bypass: 'oz∕cwt'
+    // folds to 'oz cwt', which no denominator pattern sees, and a per-hundredweight rate
+    // bills as per-acre. T54 must go red; T55 (every live unit spelling) must stay green,
+    // which is what shows the backstop is discriminating rather than simply refusing.
+    name: "recognised-unit backstop removed",
+    from: "    IF COALESCE(NULLIF(v_chem->>'price_per_unit_cents', '')::bigint, 0) <> 0 THEN\n      v_base_folded :=",
+    to: "    IF false THEN\n      v_base_folded :=",
+    expect: "T54",
   },
   {
     // Stops the fluid-ounce check stripping the denominator, so the stock side is tested in

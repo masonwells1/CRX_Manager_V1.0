@@ -1138,6 +1138,73 @@ BEGIN
   END IF;
 END $$;
 
+-- T54: THE SLASH HOMOGLYPH (HIGH, gpt-5.6-sol 2026-08-24) and, more importantly, the rule
+-- that ends the class. The denominator canon preserves ASCII '/' and folds every other
+-- punctuation mark to a space, so 'oz<U+2215>cwt' -- a Unicode DIVISION SLASH -- became
+-- 'oz cwt': no '/' and no whole-word 'per' left, nothing for the denominator rule to see, and
+-- a PER-HUNDREDWEIGHT rate would bill as per-acre.
+--
+-- Patching one more slash lookalike would have been the FIFTH round of the game the
+-- fluid-ounce list lost four times. What separates 'oz cwt' from a legitimate 'fl oz' is not
+-- the character between the words -- it is that 'oz cwt' is not a unit. A priced line must now
+-- name a unit the system recognises, which refuses a denominator hidden behind ANY separator,
+-- including ones nobody has thought of yet. All three spellings must be REFUSED.
+DO $$
+DECLARE ok boolean; msg text; spelling text;
+        spellings text[] := ARRAY['oz' || chr(8725) || 'cwt', 'oz' || chr(8260) || 'cwt', 'oz' || chr(65295) || 'cwt'];
+        labels text[] := ARRAY['U+2215 division slash', 'U+2044 fraction slash', 'U+FF0F fullwidth solidus'];
+        i int;
+BEGIN
+  FOR i IN 1 .. array_length(spellings, 1) LOOP
+    spelling := spellings[i];
+    ok := false; msg := NULL;
+    BEGIN
+      PERFORM save_job(NULL,
+        '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+        ('[{"field_id":"3333340' || i::text || '-3333-3333-3333-3333333334' || (10 + i)::text || '","acres_to_treat":10}]')::jsonb,
+        ('[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":100,"unit":"' || spelling
+          || '","rate_per_acre":10,"rate_unit":"' || spelling
+          || '","cost_per_unit_cents":100,"price_per_unit_cents":200}]')::jsonb,
+        '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+    EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+    END;
+    IF NOT (ok AND (msg LIKE 'CHEM_RATE_UNIT_UNRECOGNIZED%' OR msg LIKE 'CHEM_RATE_DENOMINATOR_NOT_ACRES%')) THEN
+      RAISE EXCEPTION 'T54 FAIL  % hid a per-hundredweight denominator and it billed as per-acre; refused=% msg=%', labels[i], ok, msg;
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'T54 PASS  all three Unicode slash homoglyphs are refused on a priced line';
+END $$;
+
+-- T55: THE COUNTERPART. Every unit the live system actually carries must still SAVE on a
+-- priced line, or the backstop would block ordinary work -- the round-7 defect three reviewers
+-- caught, and the reason a widening is never free. 'dry oz' is the spelling most at risk:
+-- normalize_rate_unit has no arm for it, so it survives only because unit_conversions carries
+-- it. 'ton' is the mirror risk: unit_conversions has NO row for it, and it survives only
+-- through the canonical-output arm. Both arms are therefore load-bearing, and this test fails
+-- if either is dropped.
+DO $$
+DECLARE r jsonb; c bigint; u text; units text[] := ARRAY['dry oz', 'ton', 'fl. oz', 'lb', 'qt', 'ea']; i int;
+BEGIN
+  FOR i IN 1 .. array_length(units, 1) LOOP
+    u := units[i];
+    r := save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      ('[{"field_id":"3333342' || i::text || '-3333-3333-3333-33333333420' || i::text || '","acres_to_treat":10}]')::jsonb,
+      ('[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":100,"unit":"' || u
+        || '","rate_per_acre":10,"rate_unit":"' || u
+        || '/ac","cost_per_unit_cents":0,"price_per_unit_cents":100}]')::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+    SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+    IF c <> 10000 THEN
+      RAISE EXCEPTION 'T55 FAIL  unit "%" saved but priced % rather than 10000', u, c;
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'T55 PASS  every live unit spelling still saves on a priced line (dry oz, ton, fl. oz, lb, qt, ea)';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T55 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T55 FAIL  the recognised-unit backstop over-fired and refused a legitimate unit, which blocks whole jobs: %', SQLERRM;
+END $$;
+
 -- T37: THE BYPASS the round-11 half-fix left open, returned by the gate as a fresh HIGH. A DRY
 -- product with rate 'fl oz/ac' against a stock Unit of 'lb'. These do NOT normalise equal, so the
 -- equality shortcut -- the only thing round 10 guarded -- never runs. The line goes down the
@@ -1236,6 +1303,6 @@ DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 19 AND n_chem = 19 THEN RAISE NOTICE 'T8 PASS  19 jobs / 19 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 19/19)', n_jobs, n_chem; END IF;
+  IF n_jobs = 25 AND n_chem = 25 THEN RAISE NOTICE 'T8 PASS  25 jobs / 25 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 25/25)', n_jobs, n_chem; END IF;
 END $$;

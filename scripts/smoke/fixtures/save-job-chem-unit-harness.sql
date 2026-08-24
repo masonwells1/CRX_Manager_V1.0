@@ -27,6 +27,36 @@ INSERT INTO products VALUES
   ('aaaaaaaa-0000-0000-0000-000000000003', '[UI-TEST] Acuron GT',           'liquid'),
   ('aaaaaaaa-0000-0000-0000-000000000004', 'DRY PRODUCT - pound stock',     'dry');
 
+-- unit_conversions mirrors the LIVE table, read read-only on 2026-08-24. The
+-- recognised-unit backstop added in round 20 consults it, so the harness has to carry the
+-- real spellings or the proof would be testing a different allowlist from production.
+--
+-- The exact contents matter to two tests. 'dry oz' has no arm in normalize_rate_unit, so it
+-- is recognised ONLY because this table carries the spelling. 'ton' is the mirror case: it is
+-- absent here and recognised only through normalize_rate_unit's canonical outputs. T55
+-- exercises both, so dropping either arm of the backstop turns it red.
+--
+-- Only the columns the backstop reads are modelled; factor_oz and unit_type are carried
+-- because the live table has them and a future check may want them, not because this file
+-- uses them today.
+CREATE TABLE unit_conversions (
+  unit text,
+  unit_type text,
+  factor_oz numeric
+);
+INSERT INTO unit_conversions (unit, unit_type, factor_oz) VALUES
+  ('dry oz', 'dry',    1),
+  ('ea',     'both',   1),
+  ('fl oz',  'liquid', 1),
+  ('g',      'dry',    0.03527396),
+  ('gal',    'liquid', 128),
+  ('lb',     'dry',    16),
+  ('mg',     'dry',    0.00003527396),
+  ('oz',     'liquid', 1),
+  ('pt',     'liquid', 16),
+  ('qt',     'liquid', 32),
+  ('unit',   'both',   1);
+
 CREATE TABLE jobs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   job_number text, customer_id uuid, status text, job_date date, scheduled_time time,

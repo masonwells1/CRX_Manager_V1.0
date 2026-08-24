@@ -175,6 +175,29 @@ Blend Recipes was never affected; it selects `*`.
 
 ## 2026-08-22 — The chemical-unit and job-money invariants move out of React and into `save_job` (parked)
 
+**Round 20 (2026-08-24) — a false alarm worth recording, and the fix that ends a whole class.**
+
+The reviewer raised its most serious warning yet: that this work had stripped the security out
+of the tool that certifies code as reviewed. That would matter enormously — it is the thing
+standing between unreviewed code and your database. It was wrong, and one command proved it:
+this branch never touched that file. What actually happened is that the main line of work moved
+forward while this was in progress, and one of those changes *improved* that very file — so the
+comparison showed the improvement as though this branch had deleted it. The fix was to catch up
+with the main line, not to "restore" anything. Rewriting a security-critical file by hand to
+match a version never actually read is how you introduce the very hole the warning describes.
+
+The second finding was real. A division slash — a character that looks almost identical to the
+ordinary one but is not — let a rate quoted per hundredweight be billed as though it were per
+acre. Rather than add another lookalike character to a list, which is the same game already lost
+four times, the rule now asks a different question: not "is there a divider in here?" but "does
+this actually name a unit we know?" `oz∕cwt` reduces to `oz cwt`, which is not a unit, so it is
+refused — and so is any separator nobody has thought of yet.
+
+Checked against the live unit list: every real unit still works, and a test now covers all six
+of them specifically, because a rule this broad could otherwise start rejecting ordinary jobs.
+
+Still parked; nothing has been applied to live.
+
 **Round 19 (2026-08-24) — one side of a comparison was measured differently from the other.**
 The rule that stops a powder being priced in fluid ounces trimmed the "per acre" part off the
 rate before checking it, but not off the stock unit. So writing the stock unit as `fl oz/ac`
@@ -447,7 +470,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Fifty-three behaviour tests pass; and twenty-nine mutation phases each fail in a **named** way — twenty-three
+Fifty-five behaviour tests pass; and thirty mutation phases each fail in a **named** way — twenty-four
 turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -474,7 +497,7 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The fifty-three tests: all four live row shapes save with derived totals reproducing the live stored
+The fifty-five tests: all four live row shapes save with derived totals reproducing the live stored
 values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
 by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
 `T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate

@@ -322,6 +322,7 @@ DECLARE
   v_rate_base text;
   v_denom_probe text;
   v_denom_canon text;
+  v_base_folded text;
   v_qty_unit text;
   v_price_unit text;
   v_qty numeric;
@@ -864,6 +865,53 @@ BEGIN
       RAISE EXCEPTION
         'CHEM_UNIT_FORM_MISMATCH: % is a DRY product, so it cannot be measured or priced in fluid ounces -- a fluid ounce measures volume and a dry product is billed by weight, so "%" against "%" cannot be converted and the amount to bill cannot be checked. Re-enter the rate and the stock Unit in the same dry unit (oz, lb or ton), then re-enter the cost and price for that unit.',
         COALESCE(v_product_name, 'This product'), v_raw_rate_unit, COALESCE(v_chem->>'unit', '');
+    END IF;
+
+    -- STRUCTURAL BACKSTOP: A PRICED LINE MUST NAME A UNIT THIS SYSTEM KNOWS.
+    --
+    -- This exists because the gate found a FOURTH separator bypass -- 'oz<U+2215>cwt', a
+    -- Unicode DIVISION SLASH -- and patching one more character would have been the fifth
+    -- round of the same losing game. The denominator canon preserves ASCII '/' and folds
+    -- every other punctuation mark to a space, so a slash homoglyph became 'oz cwt': no '/'
+    -- and no whole-word 'per' survived, the denominator rule saw nothing, and a
+    -- PER-HUNDREDWEIGHT rate would then be billed as per-acre.
+    --
+    -- Enumerating slash lookalikes loses the same way the fluid-ounce list lost four times.
+    -- What actually distinguishes 'oz cwt' from a legitimate 'fl oz' is not the character
+    -- between the words -- it is that 'oz cwt' IS NOT A UNIT. So the rule asks that instead.
+    -- Whatever remains after the per-acre suffix is stripped must be a unit the system
+    -- recognises: either normalize_rate_unit maps it to a canonical unit, or it is a spelling
+    -- carried in the live unit_conversions table. A denominator smuggled in behind ANY
+    -- separator, present or future, leaves a residue that is not a unit -- and is refused.
+    --
+    -- Verified read-only on live PostgreSQL 17.6: all 12 spellings in unit_conversions match
+    -- under this fold, including 'fl. oz' -> 'fl oz' and 'dry oz'; 'ton', 'kg', 'l' and 'ml'
+    -- are covered by the canonical-output arm even though the conversions table has no row
+    -- for them; and 'oz cwt', 'cwt', 'oz bu' and 'bu' do not match, which is the point.
+    --
+    -- Gated on PRICE, following Mason's 2026-08-24 rule: refuse only where a customer's money
+    -- is at stake. An unrecognised unit on a line that bills nothing cannot bill wrongly. The
+    -- known consequence, recorded rather than buried: a cost-only line can still carry an
+    -- unrecognised rate unit and misstate MARGIN -- the same accepted residual as the
+    -- zero-quantity and unverifiable-quantity rules, following from the same decision. Live
+    -- JOB-2026-0001 carries rate_unit '32' with price 0 and is exempt for exactly that
+    -- reason; T3 and T47 pin that it still saves.
+    IF COALESCE(NULLIF(v_chem->>'price_per_unit_cents', '')::bigint, 0) <> 0 THEN
+      v_base_folded := btrim(regexp_replace(lower(COALESCE(v_rate_base, '')), '[^a-z0-9]+', ' ', 'g'));
+      IF v_base_folded <> ''
+         AND normalize_rate_unit(v_base_folded) NOT IN
+             ('oz', 'pt', 'qt', 'gal', 'lb', 'ton', 'g', 'kg', 'l', 'ml')
+         AND NOT EXISTS (
+               SELECT 1 FROM unit_conversions uc
+                WHERE btrim(regexp_replace(lower(COALESCE(uc.unit, '')), '[^a-z0-9]+', ' ', 'g'))
+                      = v_base_folded)
+      THEN
+        SELECT p.product_name INTO v_product_name
+          FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+        RAISE EXCEPTION
+          'CHEM_RATE_UNIT_UNRECOGNIZED: % has a rate unit of "%", which does not name a unit this system recognises, so the amount to bill cannot be derived from it. Re-enter the rate using one of the units on the product.',
+          COALESCE(v_product_name, 'This product'), v_raw_rate_unit;
+      END IF;
     END IF;
 
     -- EQUAL UNITS ARE NOT A FREE PASS FOR THE QUANTITY. This used to be a bare
