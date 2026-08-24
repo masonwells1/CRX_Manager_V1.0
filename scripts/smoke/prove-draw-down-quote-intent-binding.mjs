@@ -315,6 +315,35 @@ ON CONFLICT (id) DO UPDATE
       role = EXCLUDED.role,
       is_active = true;`);
 
+  // The registered smokes borrow real priced catalog rows, matching production
+  // without mutating product pricing. This restored database is schema-only, so
+  // seed two disposable rows before the smokes run. The governed-pricing trigger
+  // is disabled for this seed statement only and must be enabled again before
+  // any behavior under test executes.
+  psql(`
+BEGIN;
+ALTER TABLE public.products
+  DISABLE TRIGGER trigger_y_require_governed_product_pricing;
+INSERT INTO public.products (product_name, unit_size, current_cost, tier1_price)
+VALUES
+  ('[PROVER] Draw Intent Priced A', 'gal', 3.00, 10.00),
+  ('[PROVER] Draw Intent Priced B', 'gal', 4.00, 8.00);
+ALTER TABLE public.products
+  ENABLE TRIGGER trigger_y_require_governed_product_pricing;
+DO $seed_check$
+BEGIN
+  IF (SELECT tgenabled
+        FROM pg_trigger
+       WHERE tgrelid = 'public.products'::regclass
+         AND tgname = 'trigger_y_require_governed_product_pricing')
+       IS DISTINCT FROM 'O' THEN
+    RAISE EXCEPTION 'FULL_SCHEMA_PRICED_CATALOG_SEED_FAIL: governed pricing trigger is not enabled';
+  END IF;
+END
+$seed_check$;
+COMMIT;`);
+  console.log('FULL_SCHEMA_PRICED_CATALOG_SEED_PASS count=2 trigger=enabled');
+
   for (const smokePath of KEYED_DRAW_SMOKE_PATHS) {
     const keyedSmoke = psql(readFileSync(smokePath, 'utf8'), { allowFailure: true });
     const keyedOutput = `${keyedSmoke.stdout}\n${keyedSmoke.stderr}`;
