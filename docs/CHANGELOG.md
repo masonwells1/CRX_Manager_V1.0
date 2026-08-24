@@ -55,6 +55,14 @@ the message named the wrong cause.
   per file; otherwise a filename match read as four occurrences and overstated
   itself. The `a/`/`b/` prefix is now required before a `---`/`+++` line is
   treated as a patch header, so a markdown rule is not mistaken for one.
+- `codex-push-lib.test.mjs` is normalised back to LF. An editing round stored it
+  with CRLF, which turned a 55-line change into a 4,919-line diff — functionally
+  harmless, but reviewers are billed by what they read, so the real change would
+  have been buried in line-ending noise and the round would have cost far more
+  than it should. `.claude/hooks/**` carries no `eol=lf` attribute in
+  `.gitattributes`, so nothing prevents this recurring; check
+  `git diff --ignore-cr-at-eol --stat` against a plain `--stat` whenever a diff
+  looks implausibly large.
 - **Diff-derived paths are escaped and delimited before they reach a denial
   message.** The quoted-path decoding above created a prompt-injection sink: a
   denial is delivered verbatim to a privileged agent, and on a public repo the
