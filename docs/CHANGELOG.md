@@ -387,6 +387,38 @@ next agent. Two sessions read it that way.
   a chained `echo && git push`, and a quoted commit message all still pass the invariant. Mutation
   proved the tests load-bearing: forcing `pushRecognitionDisagrees` to always report agreement turns
   BOTH suites red. All four suites green.
+- **Round 18 — the invariant was right but asked the wrong question, and the same weakness existed in
+  two more gates.** The proof gate refused `d98a0f95`: `pushRecognitionDisagrees` used `.some()`, so a
+  **harmless first push** satisfied it while a later destroyed push went unchecked —
+  `git push origin feature/test && git -c foo.bar=x\&y push --force origin HEAD:main`. In bash `\&` is a
+  literal ampersand inside a valid config value, so this is ONE command; the splitter cuts there
+  anyway, the second push stops being recognisable, and the leading harmless push answers the
+  existential question. The force-push to `main` reached no gate at all. It is the same
+  harmless-first trick that hid the single-`&` push in round 13. Fixed by **counting**: every push the
+  whole command contains must still be visible as its own segment.
+- **Then the pattern was hunted rather than waited for, and it was in two more gates.** The merge and
+  mutating-`gh api` gates had no count to compare and the identical weakness:
+  `gh --repo "a;b" pr merge 445` and `gh --repo "a;b" api -X DELETE …` split at the `;` inside the
+  quoted flag, destroying the verb before either gate could recognise it. Both were ALLOWED. Found
+  before review rather than by it.
+- **So the invariant is now stated once, generally, instead of per gate.** The quote-blind and
+  quote-aware readings disagree in EXACTLY one situation — a separator one treats as a command
+  boundary and the other treats as literal — and that is the entire attack surface for both the
+  hiding direction (round 16) and the destroying direction (rounds 17-18).
+  `quotedSeparatorIsUnbindable` tests that condition directly: when the readings disagree **and** the
+  command names a gated action (a push, a pull-request merge, or a mutating `gh api` call), the guard
+  refuses rather than picking whichever reading is convenient. Scoped to gated verbs deliberately —
+  `git commit -m "a | b"` and `git log --format="%h | %s"` also make the readings disagree, and
+  refusing those would be pure over-refusal.
+- **Proof:** the 4 safe-first/escaped-ampersand variants denied while three controls (two ordinary
+  pushes, one push, echo-then-push) stay allowed; both merge/api destruction shapes denied, plus a
+  three-push command with the MIDDLE push destroyed; all 6 nested-shell forms and all 6
+  destroyed-push forms still denied; the 320-case matrix still 0 leaks; the 18-command benign corpus
+  still 18/18; the 5,835-line real corpus still blocks **13 — the same 13 as rounds 14-17 and
+  `main`**; and the real hook still ALLOWS an ordinary feature push. Two assertions were widened
+  rather than deleted, because their payloads are now caught EARLIER by the general invariant than by
+  the specific gate they were written for; both still assert a denial, and the specific protections
+  stay covered by their own unit assertions.
 - **Round 11 replaced the question entirely.** Both earlier versions asked something about the *raw*
   token list, and a split option value pushes every later token out of position — so
   `git -C C:/My\ Repo commit -m push` (a commit), `… status -- push`, and `… stash push -m wip` were

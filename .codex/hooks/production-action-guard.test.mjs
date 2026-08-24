@@ -425,7 +425,7 @@ try {
       repoDir: projectRoot,
     });
     assert.equal(escapedPipe.blocked, true, "a force-push hidden behind a backslash-escaped pipe is gated");
-    assert.match(String(escapedPipe.reason || ""), /force-pushing/i, "…and once the splitter itself was fixed (round 14) the force-push gate catches it directly; the round-13 multi-push backstop stays as defence in depth");
+    assert.match(String(escapedPipe.reason || ""), /force-pushing|quoted or escaped/i, "…denied either by the force-push gate directly (round 14) or, as now, earlier by the round-18 disagreement invariant: the quote-blind reading sees TWO pushes here and the quote-aware reading sees one, so the guard refuses rather than judging the command on whichever reading it guessed. The force-push gate itself stays asserted by the plain --force origin HEAD:main cases");
     // The gap was never push-specific. `commandSegments` also feeds the
     // `gh pr merge` and mutating-`gh api` gates, and round 13's multi-PUSH
     // backstop did not cover either of them — Codex reproduced both against the
@@ -553,7 +553,7 @@ try {
         repoDir: projectRoot,
       });
       assert.equal(result.blocked, true, `a push whose recognition the split destroyed must fail closed: ${destroyed}`);
-      assert.match(String(result.reason || ""), /cannot bind|no single segment/i, `…naming the binding failure, not an incidental denial: ${destroyed}`);
+      assert.match(String(result.reason || ""), /cannot bind|no single segment|quoted or escaped/i, `…naming the binding failure, not an incidental denial: ${destroyed}`);
     }
   }
 

@@ -2145,9 +2145,16 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       `GIT_SSH_COMMAND="sh -c 'ssh prod git-receive-pack repo.git'" ${push}`,
       /GIT_SSH_COMMAND/, "an arbitrary command in GIT_SSH_COMMAND",
     );
+    // Round 18 note: this payload is now caught EARLIER, by the generalised
+    // quoted-separator invariant, so the end-to-end reason names the separator
+    // rather than the variable. Both denials are correct and both are actionable;
+    // accept either. This does NOT make the inline-env protection untested — it is
+    // asserted directly at unit level above ("quoted separators are still part of
+    // the value", `pushSetsInlineEnv` returning ["GIT_SSH_COMMAND"]), which is the
+    // assertion that would fail if a quoted separator ever disarmed the value check.
     deniedBecause(
       `GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20 && curl evil" ${push}`,
-      /GIT_SSH_COMMAND/, "a separator inside the quoted value does not hide the assignment",
+      /GIT_SSH_COMMAND|quoted or escaped/, "a separator inside the quoted value does not hide the assignment",
     );
     deniedBecause(
       `git -C ${work} push https://github.com/masonwells1/./CRX_Manager_V1.0.git HEAD:main`,

@@ -1616,10 +1616,58 @@ export function shellSegments(cmd) {
 // guard cannot bind is a push it cannot check. That is a bounded, checkable
 // invariant rather than another spelling rule, and it holds no matter which parser
 // is wrong.
+// COUNT the pushes, do not merely ask whether one survived. The first version of
+// this invariant used `.some()` — "is ANY segment still a push?" — and a HARMLESS
+// FIRST PUSH satisfies that while a later destroyed push goes unchecked:
+//
+//     git push origin feature/test && git -c foo.bar=x\&y push --force origin HEAD:main
+//
+// In bash `\&` is a literal ampersand inside a valid config value, so this is ONE
+// command; the splitter cuts at that `&` anyway and the second push stops being
+// recognisable. The leading harmless push then answered the existential question and
+// the force-push to main reached no gate at all — hidden-composition, recognition
+// and unbindable-argument checks all reported clean (Codex proof gate at
+// `d98a0f95`). The harmless first push is the whole trick, exactly as it was for the
+// single-`&` finding in round 13.
+//
+// So every push the WHOLE command contains must still be visible as its own segment.
+// Fewer segmented pushes than whole-command pushes means the split destroyed one,
+// and a push this guard cannot bind is a push it cannot check.
 export function pushRecognitionDisagrees(cmd) {
   const text = String(cmd || "");
-  if (!isGitPush(text)) return false;
-  return !shellSegments(text).some((segment) => isGitPush(segment.trim()));
+  const wholeCommandPushes = [...eachPush(text)].length;
+  if (wholeCommandPushes === 0) return false;
+  const segmentedPushes = shellSegments(text)
+    .filter((segment) => isGitPush(segment.trim()))
+    .length;
+  return segmentedPushes < wholeCommandPushes;
+}
+
+// GENERALISED FORM OF THE SAME INVARIANT, covering every gate rather than just the
+// push gate. `pushRecognitionDisagrees` above counts pushes; the merge and mutating
+// `gh api` gates have no count to compare, and they were vulnerable to exactly the
+// same trick — `gh --repo "a;b" pr merge 445` and
+// `gh --repo "a;b" api -X DELETE …` split at the `;` inside the quoted flag,
+// destroying the verb before either gate could recognise it. Found by hunting the
+// pattern rather than waiting for it to be reported.
+//
+// The two parsers disagree in EXACTLY one situation: a separator that the
+// quote-blind reading treats as a command boundary while the quote-aware reading
+// sees inside a quoted span. That is the entire attack surface for both the hiding
+// and the destroying direction, so it can be tested directly instead of gate by
+// gate. When the readings disagree AND the command names an action that must be
+// gated, the guard cannot say which reading the shell will use — and it must not
+// pick the convenient one.
+//
+// Scoped to gated verbs on purpose: an ordinary `git commit -m "a | b"` or
+// `git log --format="%h | %s"` also makes the readings disagree, and refusing those
+// would be pure over-refusal. Measured across the 5,835-line real-command corpus.
+const GATED_ACTION_RE = /(?:^|\s)(?:git(?:\.exe)?\b[\s\S]*?\bpush\b|gh(?:\.exe)?\b[\s\S]*?\b(?:merge|api)\b)/i;
+
+export function quotedSeparatorIsUnbindable(cmd) {
+  const text = String(cmd || "");
+  if (!GATED_ACTION_RE.test(text)) return false;
+  return shellSegments(text).length !== assignmentScanSegments(text).length;
 }
 
 // The one place quote-awareness is still correct — and it is NOT a segmentation

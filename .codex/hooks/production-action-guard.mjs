@@ -24,6 +24,7 @@ import {
   reviewStateDirectoryMentioned,
   riskyFiles,
   pushRecognitionDisagrees,
+  quotedSeparatorIsUnbindable,
   shellSegments,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
@@ -718,6 +719,11 @@ export function evaluateProductionAction({
   // segment IS (Codex proof-gate review at `aec25bdb`, reproduced before
   // fixing). Sharing the parser also brings quote-awareness, so a separator
   // inside a quoted value can no longer manufacture a phantom segment.
+  // A separator inside a quoted span means the two readings of this command differ,
+  // and one of them hides or destroys a gated action — see quotedSeparatorIsUnbindable.
+  if (quotedSeparatorIsUnbindable(command)) {
+    return denied("CODEX PRODUCTION GATE: this command has a `;`, `&` or `|` that is quoted or escaped, so the guard cannot tell whether the shell will treat it as literal text or as a command boundary — and the two readings disagree about whether a push, a pull-request merge, or a mutating `gh api` call is present. One reading hides the action, the other destroys it, and neither can be trusted over the other. Re-run without a quoted or escaped separator.");
+  }
   const commandSegments = shellSegments(command).map((segment) => segment.trim()).filter(Boolean);
   for (const segment of commandSegments) {
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);

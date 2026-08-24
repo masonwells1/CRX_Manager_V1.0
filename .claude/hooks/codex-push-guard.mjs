@@ -37,6 +37,7 @@ import {
   pushUsesTransportEnv,
   pushSetsInlineEnv,
   pushRecognitionDisagrees,
+  quotedSeparatorIsUnbindable,
   shellSegments,
   unknownPushOptions,
   unknownGitGlobalOptions,
@@ -148,6 +149,11 @@ const projectDir = path.resolve(
 // generic ENOENT denial, so that tailored message was inert under the credential
 // proxy too. Fixing only the MSYS half would have left the same hole one spelling
 // over (Codex P2, PR #445 round 9).
+// The two readings of this command disagree about where commands end, and one of
+// them hides or destroys a gated action — see quotedSeparatorIsUnbindable.
+if (quotedSeparatorIsUnbindable(cmd)) {
+  deny("CODEX GATE: this command has a `;`, `&` or `|` that is quoted or escaped, so the guard cannot tell whether the shell will treat it as literal text or as a command boundary — and the two readings disagree about whether a push is present. One reading hides it, the other destroys it, and neither can be trusted over the other. Re-run without a quoted or escaped separator.");
+}
 // The split destroyed the push instead of hiding it — see pushRecognitionDisagrees.
 if (pushRecognitionDisagrees(cmd)) {
   deny("CODEX GATE: this command is recognisably a `git push`, but no single segment of it is — a quoted separator inside one of its own arguments (`-c`, `-C`, `--config-env`) split the command apart, so the destination, force, refspec, repository-binding and proof checks have nothing to read. A push this guard cannot bind is a push it cannot check. Re-run without a `;`, `&` or `|` inside an option value.");
