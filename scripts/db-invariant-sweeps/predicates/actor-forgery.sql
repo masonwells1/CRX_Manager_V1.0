@@ -1,6 +1,6 @@
 -- predicate (c): actor-forgery   (over-broad BY DESIGN — allowlist the semantic-safe ones)
 -- authenticated-executable SECDEF routines that take an actor-shaped parameter (p_%by / p_actor% / p_user%)
--- AND appear to role-check, COALESCE, use that parameter in a MERGE, or forward it to another callable,
+-- AND appear to role-check, COALESCE, use that parameter in a MERGE, or forward it to another callable/operator,
 -- WITHOUT raising the canonical ACTOR_MISMATCH token.
 -- Would have caught (the recurring six-date actor-forgery class): save_blend_ticket (2026-06-08),
 --   cancel_return (2026-06-08), restore_cancelled_order/restore_cancelled_delivery (2026-06-08),
@@ -48,5 +48,24 @@ WHERE prosrc !~* 'ACTOR_MISMATCH'
        OR prosrc ~* ('merge\s+into[^;]*(\m' || argname || '\M|\$' || input_position || '\M)')
        OR prosrc ~* ('\m([[:alpha:]_][[:alnum:]_$]*\s*\.\s*)*[[:alpha:]_][[:alnum:]_$]*\s*\([^;]*(\m' || argname || '\M|\$' || input_position || '\M)')
        OR prosrc ~* ('(\m' || argname || '\M|\$' || input_position || '\M)[^;]{0,120}\mOPERATOR\s*\(')
-       OR prosrc ~* ('\mOPERATOR\s*\([^;]{0,120}(\m' || argname || '\M|\$' || input_position || '\M)'))
+       OR prosrc ~* ('\mOPERATOR\s*\([^;]{0,120}(\m' || argname || '\M|\$' || input_position || '\M)')
+       OR EXISTS (
+         SELECT 1
+         FROM regexp_matches(
+           prosrc,
+           '(\m' || argname || '\M|\$' || input_position || '\M)\s*([-+*/\\<>=~!@#%^&|`?]+)',
+           'gi'
+         ) AS actor_operator(parts)
+         WHERE (actor_operator.parts)[2] NOT IN ('=', '<>', '!=', '<', '<=', '>', '>=')
+       )
+       OR EXISTS (
+         SELECT 1
+         FROM regexp_matches(
+           prosrc,
+           '([-+*/\\<>=~!@#%^&|`?]+)\s*(\m' || argname || '\M|\$' || input_position || '\M)',
+           'gi'
+         ) AS operator_actor(parts)
+         WHERE (operator_actor.parts)[1] NOT IN ('=', '<>', '!=', '<', '<=', '>', '>=')
+       )
+  )
 ORDER BY violation_key;

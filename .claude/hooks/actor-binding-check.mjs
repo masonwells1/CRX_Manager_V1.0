@@ -1752,6 +1752,33 @@ function hasActorOperatorForwarding(structuralBody, actorParams) {
   return false;
 }
 
+const SAFE_ACTOR_SYMBOLIC_OPERATORS = new Set([
+  "=", "<>", "!=", "<", "<=", ">", ">=",
+]);
+const SQL_SYMBOLIC_OPERATOR_PATTERN = '[-+*/\\\\<>=~!@#%^&|`?]+';
+
+/** Ordinary infix syntax can invoke a user-defined PostgreSQL operator without
+ * the explicit OPERATOR(schema.symbol) spelling. Comparison operators are the
+ * only symbolic forms this guard can prove are identity checks; every other
+ * operator immediately adjacent to a tainted actor is a fail-closed callable
+ * boundary. This also covers prefix/postfix operators and local/$n aliases. */
+function hasActorSymbolicOperatorForwarding(structuralBody, actorParams) {
+  for (const actorParam of actorParams) {
+    const reference = new RegExp(actorReferencePattern(actorParam), "gi");
+    let match;
+    while ((match = reference.exec(structuralBody)) !== null) {
+      const prefix = structuralBody.slice(0, match.index);
+      const suffix = structuralBody.slice(match.index + match[0].length);
+      const before = prefix.match(new RegExp(`(${SQL_SYMBOLIC_OPERATOR_PATTERN})\\s*$`));
+      const after = suffix.match(new RegExp(`^\\s*(${SQL_SYMBOLIC_OPERATOR_PATTERN})`));
+      if ([before?.[1], after?.[1]].some((operator) =>
+        operator && !SAFE_ACTOR_SYMBOLIC_OPERATORS.has(operator)
+      )) return true;
+    }
+  }
+  return false;
+}
+
 /** Carry direct actor taint through the ordinary PL/pgSQL local-binding forms
  * that wrappers use before invoking helpers. The analysis is deliberately
  * monotonic: once a local receives an unbound actor in the routine, a later
@@ -2483,13 +2510,21 @@ try {
       hasActorCallableForwarding(commentBlankedBody, commentBlankedForwardingReferences);
     const actorForwardedOperator = hasActorOperatorForwarding(maskedBody, maskedForwardingReferences) ||
       hasActorOperatorForwarding(commentBlankedBody, commentBlankedForwardingReferences);
+    const actorForwardedSymbolicOperator = hasActorSymbolicOperatorForwarding(
+      maskedBody,
+      maskedForwardingReferences
+    ) || hasActorSymbolicOperatorForwarding(
+      commentBlankedBody,
+      commentBlankedForwardingReferences
+    );
     const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(maskedBody) ||
       /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(commentBlankedBody) ||
       /\bEXECUTE\b/i.test(maskedBody) ||
       actorForwardedInvocation.test(maskedBody) ||
       actorForwardedInvocation.test(commentBlankedBody) ||
       actorForwardedCallable ||
-      actorForwardedOperator;
+      actorForwardedOperator ||
+      actorForwardedSymbolicOperator;
     if (!hasMutation) continue;
 
     const hasRecognizedActorRefusal = actorDescriptors.every(({ name, references }) =>

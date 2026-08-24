@@ -146,6 +146,38 @@ ok(isDeny(r), "an explicit user-defined operator cannot receive an unbound actor
 r = runHook(forwardedActorWrapper("v_id := p_performed_by; RETURN v_id OPERATOR(public.##) auth.uid();"));
 ok(isDeny(r), "a local assignment cannot launder an actor into an explicit user-defined operator");
 
+const INVOKER_ACTOR_OPERATOR = `CREATE OR REPLACE FUNCTION public.record_actor_operator(p_actor uuid, p_identity uuid)
+RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path TO 'public', 'pg_temp' AS $helper$
+BEGIN
+  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_actor);
+  RETURN p_actor = p_identity;
+END
+$helper$;
+CREATE OPERATOR public.## (
+  LEFTARG = uuid,
+  RIGHTARG = uuid,
+  FUNCTION = public.record_actor_operator
+);`;
+
+r = runHook(`${INVOKER_ACTOR_OPERATOR}
+CREATE OR REPLACE FUNCTION public.forward_actor_operator(p_performed_by uuid)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $wrapper$
+BEGIN
+  RETURN p_performed_by ## auth.uid();
+END
+$wrapper$;
+GRANT EXECUTE ON FUNCTION public.forward_actor_operator(uuid) TO authenticated;`);
+ok(isDeny(r), "an unqualified user-defined operator cannot receive an unbound actor from a definer wrapper");
+
+r = runHook(forwardedActorWrapper("RETURN $1 ## auth.uid();"));
+ok(isDeny(r), "an unqualified user-defined operator cannot receive a PostgreSQL positional actor alias");
+
+r = runHook(forwardedActorWrapper("v_id := p_performed_by; RETURN auth.uid() ## v_id;"));
+ok(isDeny(r), "a local assignment cannot launder an actor into either side of an unqualified operator");
+
+r = runHook(fn("BEGIN RETURN p_performed_by = auth.uid(); END;"));
+ok(!isDeny(r), "an ordinary actor identity comparison is not treated as callable forwarding");
+
 r = runHook(forwardedActorWrapper("v_id := p_performed_by; RETURN public.record_event_internal(v_id);"));
 ok(isDeny(r), "a local assignment cannot launder an unbound actor before a callable expression");
 

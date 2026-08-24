@@ -63,7 +63,13 @@ position. An explicit user-defined operator receiving the actor in the same SQL
 statement is also a fail-closed mutation boundary. Both live actor-forgery
 predicates recognize positional aliases, and the general predicate recognizes
 operator forwarding. Eight deny/control regressions bring the focused suite to
-415 assertions.
+415 assertions. The next exact-head review found the same callable boundary in
+ordinary symbolic syntax: `p_performed_by ## auth.uid()` invokes a user-defined
+operator without the explicit `OPERATOR(public.##)` spelling. The hook and the
+general live sweep now fail closed when a tainted actor is adjacent to any
+non-comparison symbolic operator, including positional and local aliases, while
+ordinary identity comparisons remain allowed. Four deny/control regressions
+bring the focused suite to 419 assertions.
 
 ## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
 
