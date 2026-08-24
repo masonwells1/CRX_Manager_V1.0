@@ -1,5 +1,25 @@
 # Migration History (890 migration-history entries)
 
+> **PRE-APPLY LIVE EVIDENCE (read this first).** The most recent read-only
+> `list_migrations` observation is at the top of this file, immediately below.
+> Do not scroll for it, and do not treat any older dated block as the latest.
+
+**Live-ledger re-read — 2026-08-24, immediately before the draw-down cutover apply.** Read
+read-only from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`. This
+**re-confirms** the 2026-08-18 block below rather than superseding it — every figure is unchanged:
+**971 ledger rows**, `max(version)` `20260816174353`, and current live high-water by `name` stamp
+**`20260813080000`**. Neither `20260816110000_draw_down_cutover_barrier` nor
+`20260816120000_draw_down_split_order_lines_by_price_tier` is present in the ledger. Both authored
+stamps are strictly greater than the `name` high-water, so the ordering guard is satisfied for a
+sequential apply of the barrier followed by the candidate.
+
+Re-read because the `migration-drift-reviewer` charter refuses to rely on a dated observation across
+a live apply (finding H1, 2026-08-23: "the migration-history document explicitly says this dated
+observation must be re-read before relying on it"). **This line is that pre-apply check for the
+2026-08-24 apply only** — it is not a standing exemption, and a later apply must re-read again.
+
+---
+
 > LIVE RECONCILIATION — `20260730235031_quote_customer_row_version_guard.sql` was submitted as `20260730201230_quote_customer_row_version_guard` after PR #290 deployed the compatible browser bundle. It adds trigger-maintained `row_version bigint NOT NULL DEFAULT 1` to `quotes` and `customers`, re-emits `save_quote`/`save_customer` with fail-closed expected-version checks and fresh-version results, and preserves the commission-split-specific guard ahead of the generic guard. Live postflight, four rollback-only chains, zero-residue checks, all 21 invariant predicates, and the B7 rename passed. The AP-only close-race/table-boundary follow-up applied afterward as ledger `20260731001654`; the live schema registry is refreshed through that high-water and records both migrations and both row-version columns.
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
