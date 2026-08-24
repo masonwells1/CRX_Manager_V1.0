@@ -386,6 +386,20 @@ try {
       assert.equal(nonDrivePush.blocked, true, `a non-drive MSYS -C is refused too: ${nonDrive}`);
       assert.match(nonDrivePush.reason, /Git Bash path/, `…naming the spelling as the reason: ${nonDrive}`);
     }
+    // Bash's BACKGROUND separator is a single `&`, and this guard's own splitter
+    // matched `&&`, `|`, `||`, `;` and newlines but not that. Bash runs both
+    // commands; the guard classified only the first and returned unblocked on a
+    // main-bound push. The harmless leading push is the point — it is what made
+    // the segment the guard DID read look fine (Codex proof-gate review at
+    // `aec25bdb`, reproduced before fixing). Both guards now share
+    // `shellSegments`, so they cannot disagree about what a segment is.
+    const backgrounded = evaluateProductionAction({
+      toolName: "Bash",
+      toolInput: { command: `git push origin feature/test & git -C ${risky.repo.replace(/\\/g, "/")} push origin HEAD:main` },
+      repoDir: projectRoot,
+    });
+    assert.equal(backgrounded.blocked, true, "a second push hidden behind a single `&` is still gated");
+    assert.match(String(backgrounded.reason || ""), /proof/i, "…and for the real reason — the missing exact-SHA proof");
     // A UNC path means the same share to MSYS and to node, so refusing it would
     // be over-refusal: it must reach the ordinary gates instead.
     const unc = evaluateProductionAction({

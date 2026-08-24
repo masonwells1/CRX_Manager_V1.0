@@ -2390,6 +2390,29 @@ assert.deepEqual(
   ["C:/My^"],
   "…and a cmd caret-escaped space",
 );
+// INLINE options carry their value in the same token, so the split happens
+// INSIDE the option: `--exec-path=C:/My\ Repo` tokenizes as `--exec-path=C:/My\`
+// plus `Repo`. The option walk used to advance past those without keeping the
+// fragment, and all three forms were allowed through BOTH guards with
+// `HEAD:main` and no checks at all. `--exec-path` also swaps Git's transport
+// helper, so the objects need not go where the URL says (Codex proof-gate
+// review at `aec25bdb`).
+for (const option of ["--exec-path", "--git-dir", "--work-tree"]) {
+  assert.deepEqual(
+    gitPushArgumentsUnbindable(`git ${option}=C:/My\\ Repo push origin HEAD:main`),
+    [`${option}=C:/My\\`],
+    `an inline ${option}= carrying a joined fragment is caught`,
+  );
+}
+// …and the same options WITHOUT a split value stay clean, so the rule is about
+// the fragment and not about the option name.
+for (const option of ["--exec-path", "--git-dir", "--work-tree"]) {
+  assert.deepEqual(
+    gitPushArgumentsUnbindable(`git ${option}=C:/Repo push origin HEAD:main`),
+    [],
+    `a well-formed inline ${option}= is not a hazard`,
+  );
+}
 // The other half of the rule: it must not refuse ordinary commands. Each of
 // these once broke, or would break, a plausible real invocation.
 for (const clean of [
@@ -2561,6 +2584,10 @@ for (const clean of [
       // The two Windows shells this repo is actually driven from (round 10).
       ["PowerShell backtick", `git -C C:/My${String.fromCharCode(96)} Repo push origin main:refs/heads/main`],
       ["cmd caret", "git -C C:/My^ Repo push origin main:refs/heads/main"],
+      // Inline options, all three forms (Codex proof-gate review at aec25bdb).
+      ["inline --exec-path", "git --exec-path=C:/My\\ Repo push origin main:refs/heads/main"],
+      ["inline --git-dir", "git --git-dir=C:/My\\ Repo push origin main:refs/heads/main"],
+      ["inline --work-tree", "git --work-tree=C:/My\\ Repo push origin main:refs/heads/main"],
     ]) {
       const unbindable = runHook(command);
       assert.equal(unbindable.decision, "deny", `an unbindable push argument fails closed (${label})`);

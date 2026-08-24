@@ -113,12 +113,12 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // additive (+11 lines); all three transform anchors — the matcher, the
   // PROTECTED_HARNESS_FRAGMENT_RE constant, and the maintenance execution gate
   // — are untouched and still present exactly once.
-  codexGuard: "608194f2034d1142bf4edc47c3ed59b621d4dd81",
-  pushLib: "ade30dfcb569587d51d79481caa07de4b4160322",
+  codexGuard: "8d88b792eeef6290b320e29a945389b3f53cabc9",
+  pushLib: "635dcce8ec3ad4b6d30ab5ceb74f1727ede1ecb2",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "e343e9b17ae265aa7b9cb161862e987caed5450c",
-  pushLib: "ade30dfcb569587d51d79481caa07de4b4160322",
+  codexGuard: "6e4f98fdfd263d37ad90767c97345e44d42539c4",
+  pushLib: "635dcce8ec3ad4b6d30ab5ceb74f1727ede1ecb2",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

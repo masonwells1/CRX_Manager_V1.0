@@ -186,6 +186,17 @@ export function gitPushArgumentsUnbindable(cmd) {
           continue;
         }
         if (valueless.has(token) || /^--(?:config-env|git-dir|work-tree|exec-path)=/.test(token)) {
+          // Recorded, NOT skipped. An inline option carries its value in the
+          // SAME token, so the split happens inside it: `--exec-path=C:/My\ Repo`
+          // tokenizes as `--exec-path=C:/My\` + `Repo`. Advancing past it without
+          // keeping the fragment threw away the only evidence, and all three
+          // inline forms — `--exec-path=`, `--git-dir=`, `--work-tree=` — were
+          // then allowed straight through BOTH guards with `HEAD:main` and no
+          // repository-binding, destination, force, refspec or proof check at
+          // all. `--exec-path` additionally substitutes Git's transport helper,
+          // so the objects need not even go where the URL says (Codex proof-gate
+          // review at `aec25bdb`, reproduced against both guards before fixing).
+          optionRegion.push(tokens[cursor]);
           cursor += 1;
           continue;
         }

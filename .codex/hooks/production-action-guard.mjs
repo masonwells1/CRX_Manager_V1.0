@@ -22,6 +22,7 @@ import {
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   riskyFiles,
+  shellSegments,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
 
@@ -703,7 +704,19 @@ export function evaluateProductionAction({
 
   // Split on single `|` too (Codex round-4): `git push a | git push b` runs
   // BOTH pushes in a shell pipeline, so every pipeline stage is a segment.
-  const commandSegments = command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
+  // The SHARED, quote-aware splitter — not a local regex. The local one matched
+  // `&&`, `|`, `||`, `;` and newlines but NOT a single `&`, so Bash's background
+  // separator hid a second push from this gate entirely:
+  //
+  //   git push origin feature/x & git -C /tmp/risky push origin HEAD:main
+  //
+  // Bash runs both; this guard classified only the first and returned unblocked
+  // on a `HEAD:main` push. The Claude-side guard already used `shellSegments`
+  // and denied it correctly — the two guards must not disagree about what a
+  // segment IS (Codex proof-gate review at `aec25bdb`, reproduced before
+  // fixing). Sharing the parser also brings quote-awareness, so a separator
+  // inside a quoted value can no longer manufacture a phantom segment.
+  const commandSegments = shellSegments(command).map((segment) => segment.trim()).filter(Boolean);
   for (const segment of commandSegments) {
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     if (ghRequest?.unsupportedGraphql) {

@@ -64,6 +64,17 @@ next agent. Two sessions read it that way.
   global options to find the **real subcommand**, scanning only that option region — so a hazard that
   could hide the subcommand is caught, while anything after a subcommand already identified as
   something other than `push` is left alone.
+- **The proof gate then found two more bypasses that eleven `codex review` rounds had missed** — it
+  reviews a sanitized snapshot pair and probes the running guards directly. Both were reproduced
+  before fixing. **(a) Inline git options bypassed BOTH guards:** `git --exec-path=C:/My\ Repo push
+  origin HEAD:main` (and the `--git-dir=`/`--work-tree=` forms) split the *option itself*, and the
+  walk advanced past inline options without recording the fragment — so a main-bound push ran with no
+  binding, destination, force, refspec or proof check, and `--exec-path` also swaps Git's transport
+  helper. Inline option tokens are now recorded like any other. **(b) A single `&` hid a second push
+  from the Codex guard:** it split on `&&`, `|`, `||`, `;` and newlines but not Bash's background
+  separator, so `git push origin feature/x & git -C /tmp/risky push origin HEAD:main` was read as
+  only the harmless first command. That guard now uses the shared quote-aware `shellSegments()` the
+  Claude guard already used — the two must never disagree about what a segment is.
 - **Round 11 replaced the question entirely.** Both earlier versions asked something about the *raw*
   token list, and a split option value pushes every later token out of position — so
   `git -C C:/My\ Repo commit -m push` (a commit), `… status -- push`, and `… stash push -m wip` were
@@ -139,9 +150,9 @@ Tests: `.claude/hooks/codex-push-lib.test.mjs` and `.codex/hooks/production-acti
 
 **Both protected guard sources changed, and both are re-pinned in
 `scripts/apply-live-testdata-maintenance-20260812.mjs`.** `.claude/hooks/codex-push-lib.mjs` moves to
-`ade30dfc…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 608194f2…` (input) and
-`0f3a62cf… → e343e9b1…` (transformed output) because it gained the same outright MSYS-path refusal
-and the same unbindable-argument refusal —
+`635dcce8…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 8d88b792…` (input) and
+`0f3a62cf… → 6e4f98fd…` (transformed output) because it gained the same outright MSYS-path refusal,
+the same unbindable-argument refusal, and the shared segment parser —
 it is a **second caller** of the shared resolution, and a security-relevant change in its own right,
 not an incidental edit. Both changes are purely additive and leave every transform anchor untouched
 and present exactly once: the risky-path line in the push library, and the matcher, the
