@@ -138,9 +138,17 @@ next agent. Two sessions read it that way.
   and proof from `C:\c\repo` — the innocuous one authorizing a risky push from the real one. That is
   the same fail-open the translation kept producing, arriving by a different route (Codex P1, round
   5). A test asserts the denial names the path SPELLING and not the missing-directory diagnostic, so
-  the MSYS refusal — not an incidental lookup failure — is the operative reason. That is what the
-  assertion establishes; it does not by itself prove the order in which the two checks were reached,
-  and the earlier wording claiming it did has been corrected (CodeRabbit, round 15).
+  the MSYS refusal — not an incidental lookup failure — is the operative reason. An earlier version of
+  this entry went further and claimed the ABSENT diagnostic proved the refusal ran before the
+  filesystem was consulted; absence proves no such ordering, and CodeRabbit was right to flag it in
+  round 15. Rather than only soften the claim, round 15 made it true: `pushNamesMsysPath` now runs
+  BEFORE the `statSync` in `codex-push-guard.mjs`, which is the only filesystem access in that loop,
+  so an MSYS spelling is refused without the guard touching the disk at all. `gitPushCwd` still runs
+  first because it is pure `path.resolve` over the command text and the refusal message quotes the
+  literal it produces. Proven by running the real hook on four shapes: an MSYS `-C` main push and an
+  otherwise-ALLOWED MSYS feature push both deny naming the SPELLING, a native missing directory denies
+  naming RESOLUTION, and a native valid repository feature push is still ALLOWED — the last being the
+  control that the reorder did not break the ordinary path.
 - **An argument the shell joins across a space is now refused — this one was a fail-OPEN** (Codex P1,
   round 9). `git -C /c/My\ Repo push origin HEAD:main` is ONE argument to the shell and two to the
   literal parser, which then found a bare word where `push` or a global option belongs and concluded
