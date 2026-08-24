@@ -769,11 +769,19 @@ $function$;
 -- asserting a state nothing in the repo sets.
 --
 -- An earlier version of this comment justified them by a specific FROM-SCRATCH
--- REBUILD scenario. That narrative is withdrawn as unproven: review pointed out
--- that migration 20260215200000 creates a FIVE-argument save_job which nothing
--- ever drops, so a true replay of the migration chain would end up with two
--- overloads and abort at PREFLIGHT_OVERLOAD long before these statements mattered.
--- The prover does not replay the chain either -- it builds a real-shape schema and
+-- REBUILD scenario, and a later one withdrew that narrative on the grounds that
+-- migration 20260215200000 creates a FIVE-argument save_job which "nothing ever
+-- drops", so a replay would abort at PREFLIGHT_OVERLOAD. THAT REASON WAS WRONG and
+-- is corrected here rather than quietly deleted: 20260331600000_consolidate_all_
+-- rpc_overloads.sql collects every save_job overload, DROPS ALL OF THEM, and
+-- recreates a single unified one; every migration after it (20260530020452,
+-- 20260609190820, 20260624120000, 20260706020000, 20260706080000) recreates the
+-- SAME six-argument signature. A clean replay therefore converges on exactly one
+-- overload, which is also what live carries (read read-only 2026-08-24: one row,
+-- pronargs 6). The rebuild narrative stays withdrawn anyway -- not because a replay
+-- would abort, but because this file has never been replayed from scratch and an
+-- unrun scenario is not evidence.
+-- The prover does not replay the chain -- it builds a real-shape schema and
 -- installs the reviewed pre-change body directly. What IS proven is narrower and
 -- enough: prover phase 4 stages a deliberately bad ACL (anon granted, service_role
 -- revoked) and requires the apply to correct it, and five mutation phases require

@@ -2,10 +2,10 @@
 
 **Date:** 2026-08-23
 **Branch:** `claude/save-job-server-side-chem-unit` (worktree `.claude/worktrees/save-job-enforcement`)
-**Head:** `76731072`, **ahead 6, unpushed**. Tree clean.
+**Head:** see `git log -1` — round 8 landed on 2026-08-24; **unpushed**. Tree clean.
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-**SQL sha256:** `1f337c98552f6a7ee69392441012e1bf19003b8fac464b299859c4892bd6c97f`
-**Status: PARTIAL — written, proven, and parked at two gates that are not mine to open.**
+**SQL sha256:** `e1cc0fed0e1e1420b163dfe83a612fd7daf45be7e4d31bfb37320242157f6623`
+**Status: PARTIAL — written, proven, and parked at three gates that are not mine to open.**
 
 ## Approval state — carries nothing forward
 
@@ -35,7 +35,7 @@ PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_C
 
 `scripts/smoke/smoke-save-job-parity.sql` is the registered live chain and is **gated** on whether this migration is installed. The container prover is **manual** — `run-smoke.mjs --all` will not run it.
 
-## The two gates, and who opens them
+## Gates 1 and 2, and who opens them (gate 3 is below)
 
 **Gate 1 — ordering: PR #436 must land first.** This is a real behaviour change, not a mirror of a shipped client guard. `main` has no save-blocking unit guard at all; the client half (`chemLineBillingHazard`, `rateDenominatorIsUnrecognized`, `centsTimesQuantity`) exists only on the unmerged PR #436 branch. Apply this first and the next operator to touch an affected job gets a hard save failure with no prior on-screen warning — and because `performSave` re-sends the whole chemical grid, one bad legacy line makes the **entire job** unsaveable. *Mason's call: land #436.*
 
@@ -55,6 +55,27 @@ Sequence, in this order:
 2. Push the branch; **rewrite the PR #446 body** (it still describes the withdrawn two-migration design and carries a stale proof transcript).
 3. Read CodeRabbit's review on the *head* SHA and fix anything real.
 4. Merge only under the standing push policy — which deploys production.
+
+## Gate 3 — OPEN, and it is a scope decision for Mason
+
+The round-8 gate raised a second finding that is **real, verified against live, and not fixed**: `save_job` does not use the repo's own idempotency helper.
+
+What it does instead: an unlocked `SELECT` scoped to `operation = 'save_job'`, then at the end `INSERT … ON CONFLICT (idempotency_key) DO NOTHING`. The live unique constraint is on `idempotency_key` **alone** — `idempotency_keys_idempotency_key_key`, verified read-only 2026-08-24 — not on the pair. So if a key has already been used by a *different* operation: the lookup filters it out and sees nothing, the job is created, the receipt insert is swallowed by the conflict, and a retry with the same key **creates a second job**. Two callers racing on the same key can also both pass the lookup.
+
+Live already carries the fix and other RPCs already use it: `check_idempotency(text, text)` — `SECURITY DEFINER`, `search_path` pinned, md5 `2c93efc82ad63c906eab944e8b70c88e` — takes `pg_advisory_xact_lock` on the key and raises `IDEMPOTENCY_CROSS_OP_KEY_REUSE`. `draw_down_quote` calls it in exactly the shape this body would need:
+
+```sql
+IF p_idempotency_key IS NOT NULL THEN
+  v_existing := check_idempotency(p_idempotency_key, 'save_job');
+  IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;
+END IF;
+```
+
+No grant change is needed: `check_idempotency` is executable by `postgres` and `service_role` only, and `save_job` is `SECURITY DEFINER` owned by `postgres`, so the inner call runs with the owner's rights.
+
+**Why it is not fixed here.** The current idempotency block is **byte-identical to the live pre-change body** (`20260706080000` lines 87–97 and 297–301), so this migration neither introduces nor worsens the defect. Closing it would change the concurrency behaviour of the most-used job RPC — cross-operation key reuse would start hard-failing — which is a scope and risk call, not a typo fix. The trade-off Mason has to settle: fold it in (one migration, one review, no second body-pin problem) versus a separate follow-up migration (smaller blast radius per change, but two migrations replacing the same function body, which is the non-atomic hazard round 3 already caught).
+
+Recommendation: **fold it in.** A separate migration would face the same gate anyway, and two sequential replacements of one function body is the pattern that has already bitten this work once.
 
 ## Apply channel — this one bites
 
