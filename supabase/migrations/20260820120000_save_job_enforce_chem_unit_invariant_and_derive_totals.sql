@@ -616,13 +616,56 @@ BEGIN
         END;
     END IF;
 
-    CONTINUE WHEN v_qty_unit = v_price_unit;
-
     -- (the zero-quantity skip moved ABOVE the blank-unit refusal -- see the comment there)
 
+    -- The product's FORM is loaded BEFORE the equality shortcut, not after it. That
+    -- ordering is the fix for a BLOCKER the exact-SHA gpt-5.6-sol proof gate found on
+    -- 2026-08-24, and the ordering is the whole of it.
+    --
+    -- normalize_rate_unit collapses 'fl oz' -> 'oz' knowing nothing about the product.
+    -- On a LIQUID product that alias is exactly right: the live unit_conversions table
+    -- records 'oz' as "alias for fl oz", both liquid, both factor 1. On a DRY product it
+    -- is wrong -- there 'oz' means a dry ounce, a WEIGHT, while 'fl oz' is a VOLUME --
+    -- and field_app_priced_quantity, the authoritative converter the rest of the app
+    -- bills through, agrees: its dry branch sizes 'fl oz' as NULL, i.e. not convertible,
+    -- so the caller must error. This guard was collapsing the pair to oz = oz, taking the
+    -- shortcut, and billing a line with NOTHING proven -- passing a shape its own
+    -- converter calls unpriceable. A guard must never be more lenient than the SQL that
+    -- does the billing.
+    --
+    -- Reachability, stated at its real size rather than inflated: no live product carries
+    -- 'fl oz' on a dry form today (read read-only 2026-08-24 -- the 85 dry products use
+    -- 'dry oz', 'lb', 'mg' and 'oz'). But the units compared here come from p_chemicals,
+    -- NOT from the product catalog, and EXECUTE on this function is granted to
+    -- authenticated -- which is the premise of this entire migration. A hand-built call
+    -- reaches the shape regardless of how clean the catalog is.
     SELECT p.product_name, lower(COALESCE(p.product_form, ''))
       INTO v_product_name, v_form
       FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+
+    -- Deliberately NARROW, and mirrored on the converter rather than invented. It fires
+    -- only where the shortcut would otherwise have fired, only on a dry product, only
+    -- when a FLUID ounce spelling is what made the two sides equal, and only when the two
+    -- raw spellings actually DIFFER -- because field_app_priced_quantity returns the
+    -- quantity untouched whenever the raw units are identical, so 'fl oz' against 'fl oz'
+    -- is self-consistent and must keep saving.
+    --
+    -- Widening this into "the converter must agree before the shortcut" was considered and
+    -- REJECTED: on a LIQUID product 'lbs/ac' against 'lb' normalises equal while the
+    -- liquid size table carries no pound at all, so that form would REFUSE an ordinary
+    -- line -- and a false refusal blocks the WHOLE job save, which is exactly the round-7
+    -- defect three reviewers caught. Narrow beats clever here.
+    IF v_qty_unit = v_price_unit AND v_form = 'dry'
+       AND lower(btrim(v_rate_base))
+           IS DISTINCT FROM lower(btrim(COALESCE(v_chem->>'unit', '')))
+       AND (lower(btrim(v_rate_base)) IN ('fl oz', 'floz', 'fluid ounce')
+            OR lower(btrim(COALESCE(v_chem->>'unit', ''))) IN ('fl oz', 'floz', 'fluid ounce')) THEN
+      RAISE EXCEPTION
+        'CHEM_UNIT_FORM_MISMATCH: % is a DRY product, so a rate of "%" cannot be billed against a stock Unit of "%" -- a fluid ounce measures volume and a dry ounce measures weight, so the amount to bill cannot be checked. Re-enter the rate and the stock Unit in the same dry unit (oz, lb or ton), then re-enter the cost and price for that unit.',
+        COALESCE(v_product_name, 'This product'), v_raw_rate_unit, COALESCE(v_chem->>'unit', '');
+    END IF;
+
+    CONTINUE WHEN v_qty_unit = v_price_unit;
 
     -- PROOF OF SAFETY, and the only one: the quantity is what rate x acres reads once
     -- carried into the unit the price is quoted in. Without a usable rate and acreage
@@ -1047,4 +1090,4 @@ END
 $postflight$;
 
 COMMENT ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) IS
-  'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. Four refusals, all raised before any write: CHEM_UNIT_MISMATCH (the rate unit and the price unit provably disagree), CHEM_RATE_DENOMINATOR_NOT_ACRES (a rate measured per anything but acres, in slash, spelled-out or hyphenated form), CHEM_QUANTITY_NOT_FINITE (a negative, NaN or Infinity quantity) and CHEM_UNIT_UNSPECIFIED (a line that BILLS while its rate unit or its stock unit is blank, so the amount cannot be checked; customer-supplied lines, zero-quantity lines and lines with neither a cost nor a price are exempt because they bill nothing). As of this migration there is NO save-blocking unit guard in JobDetail.tsx on the main branch, so this is the only boundary and nothing warns on screen before it refuses. PR #436 adds a partial client-side early warning only: its rateDenominatorIsUnrecognized tests for a slash, so it does not flag the spelled-out or hyphenated denominator, and it has no counterpart for either the non-finite-quantity or the unspecified-unit refusal. Those reach the operator with no prior on-screen warning even after that PR lands. IDEMPOTENCY: a keyed save now goes through check_idempotency_intent (the same helper the return and commission-payment RPCs use), so the key is bound to the calling actor AND to a sha256 fingerprint of the requested job, fields and chemical lines, under an advisory lock. Reusing a spent key for a different operation raises IDEMPOTENCY_CROSS_OP_KEY_REUSE, from a different actor IDEMPOTENCY_ACTOR_MISMATCH, and with a changed payload IDEMPOTENCY_INTENT_MISMATCH -- the last of which is a REFUSAL WHERE THE OLD BODY SILENTLY RETURNED THE EARLIER SUCCESS AND SAVED NOTHING. An unchanged retry still replays to the same job, which is the whole point of the key.';
+  'Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. Five refusals, all raised before any write: CHEM_UNIT_MISMATCH (the rate unit and the price unit provably disagree), CHEM_UNIT_FORM_MISMATCH (a DRY product whose two units are only equal because fl oz was aliased to oz, which field_app_priced_quantity refuses to convert), CHEM_RATE_DENOMINATOR_NOT_ACRES (a rate measured per anything but acres, in slash, spelled-out or hyphenated form), CHEM_QUANTITY_NOT_FINITE (a negative, NaN or Infinity quantity) and CHEM_UNIT_UNSPECIFIED (a line that BILLS while its rate unit or its stock unit is blank, so the amount cannot be checked; customer-supplied lines, zero-quantity lines and lines with neither a cost nor a price are exempt because they bill nothing). As of this migration there is NO save-blocking unit guard in JobDetail.tsx on the main branch, so this is the only boundary and nothing warns on screen before it refuses. PR #436 adds a partial client-side early warning only: its rateDenominatorIsUnrecognized tests for a slash, so it does not flag the spelled-out or hyphenated denominator, and it has no counterpart for either the non-finite-quantity or the unspecified-unit refusal. Those reach the operator with no prior on-screen warning even after that PR lands. IDEMPOTENCY: a keyed save now goes through check_idempotency_intent (the same helper the return and commission-payment RPCs use), so the key is bound to the calling actor AND to a sha256 fingerprint of the requested job, fields and chemical lines, under an advisory lock. Reusing a spent key for a different operation raises IDEMPOTENCY_CROSS_OP_KEY_REUSE, from a different actor IDEMPOTENCY_ACTOR_MISMATCH, and with a changed payload IDEMPOTENCY_INTENT_MISMATCH -- the last of which is a REFUSAL WHERE THE OLD BODY SILENTLY RETURNED THE EARLIER SUCCESS AND SAVED NOTHING. An unchanged retry still replays to the same job, which is the whole point of the key.';

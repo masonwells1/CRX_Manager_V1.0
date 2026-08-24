@@ -634,12 +634,96 @@ BEGIN
   RAISE NOTICE 'T30 PASS  a changed payload on a spent key is refused (%), and the original payload still replays to the same job', msg;
 END $$;
 
+-- T31: THE BLOCKER the exact-SHA gpt-5.6-sol gate found on 2026-08-24. A DRY product with a
+-- rate of 'fl oz/ac' against a stock Unit of 'oz'. normalize_rate_unit collapses BOTH to 'oz'
+-- knowing nothing about the product, so the equality shortcut fired and the line billed with
+-- nothing proven -- while field_app_priced_quantity, which the rest of the app bills through,
+-- sizes 'fl oz' as NULL in its dry branch and refuses the pair outright. A guard that is more
+-- lenient than the SQL doing the billing is not a guard. Must be REFUSED.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333350-3333-3333-3333-333333333351","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":100,"unit":"oz","rate_per_acre":10,"rate_unit":"fl oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_FORM_MISMATCH%' THEN
+    RAISE NOTICE 'T31 PASS  a dry product billed fl oz against oz is refused: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T31 FAIL  refused=% msg=%  -- the fl-oz-on-dry alias still reaches the money', ok, msg;
+  END IF;
+END $$;
+
+-- T32: the same hole one swap away -- rate in dry 'oz', stock Unit in 'fl oz'. The alias is
+-- symmetric, so the refusal has to be too.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333352-3333-3333-3333-333333333353","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":100,"unit":"fl oz","rate_per_acre":10,"rate_unit":"oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_FORM_MISMATCH%' THEN
+    RAISE NOTICE 'T32 PASS  the reversed dry fl-oz pair is refused too: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T32 FAIL  refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
+-- T33: THE FALSE-REFUSAL GUARD, and the reason the new rule is narrow. On a LIQUID product the
+-- fl oz -> oz alias is exactly RIGHT: the live unit_conversions table records 'oz' as "alias for
+-- fl oz", both liquid, both factor 1. This line must still SAVE. Refusing it would block the
+-- whole job save, which is the round-7 defect three reviewers caught.
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"33333354-3333-3333-3333-333333333355","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":100,"unit":"oz","rate_per_acre":10,"rate_unit":"fl oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 20000 THEN RAISE NOTICE 'T33 PASS  fl oz against oz on a LIQUID product still saves; price=%', c;
+  ELSE RAISE EXCEPTION 'T33 FAIL  price=%', c; END IF;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T33 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T33 FAIL  a LIQUID fl-oz/oz line was REFUSED, so the new dry rule is over-firing and blocks whole jobs: %', SQLERRM;
+END $$;
+
+-- T34: the second false-refusal guard. A DRY product whose two sides carry the IDENTICAL raw
+-- spelling is self-consistent, and field_app_priced_quantity returns the quantity untouched
+-- whenever the raw units match, before its form logic runs at all. So this must SAVE -- the new
+-- rule fires only where the ALIAS manufactured the equality, not wherever 'fl oz' appears.
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"33333356-3333-3333-3333-333333333357","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":100,"unit":"fl oz","rate_per_acre":10,"rate_unit":"fl oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 20000 THEN RAISE NOTICE 'T34 PASS  a dry line quoted fl oz on BOTH sides still saves; price=%', c;
+  ELSE RAISE EXCEPTION 'T34 FAIL  price=%', c; END IF;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T34 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T34 FAIL  an identically-spelled dry fl-oz line was REFUSED, so the new rule is matching on the unit rather than on the alias: %', SQLERRM;
+END $$;
+
 -- T8: every refused save must have left NOTHING behind.
 DO $$
 DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 14 AND n_chem = 14 THEN RAISE NOTICE 'T8 PASS  14 jobs / 14 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 14/14)', n_jobs, n_chem; END IF;
+  IF n_jobs = 16 AND n_chem = 16 THEN RAISE NOTICE 'T8 PASS  16 jobs / 16 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and T33/T34 are the two false-refusal guards that MUST save';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 16/16)', n_jobs, n_chem; END IF;
 END $$;

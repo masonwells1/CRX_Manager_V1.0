@@ -2,9 +2,9 @@
 
 **Date:** 2026-08-23
 **Branch:** `claude/save-job-server-side-chem-unit` (worktree `.claude/worktrees/save-job-enforcement`)
-**Head:** see `git log -1` — round 9 landed on 2026-08-24; **unpushed**. Tree clean.
+**Head:** see `git log -1` — round 10 landed on 2026-08-24; **unpushed**. Tree clean.
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-**SQL sha256:** `e6885d2d5003102352b1b542d4a77f2d1f8db013c176393109b3f44e2f2c65ed`
+**SQL sha256:** `e52c3d8165ed76e014836e59c27cc89679a19478a1ea0af598e4faaf28cb0765`
 **Status: PARTIAL — written, proven, and parked at two gates that are not mine to open.**
 
 ## Approval state — carries nothing forward
@@ -15,7 +15,7 @@
 
 ## What the migration does
 
-Replaces the **body** of `public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text)` — identical signature, `CREATE OR REPLACE`, no new overload, ACL and owner preserved. Seven changes:
+Replaces the **body** of `public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text)` — identical signature, `CREATE OR REPLACE`, no new overload, ACL and owner preserved. Eight changes:
 
 1. A chemical line whose units provably disagree is refused (`CHEM_UNIT_MISMATCH`), naming the product and both units.
 2. A rate measured per something other than acres is refused (`CHEM_RATE_DENOMINATOR_NOT_ACRES`) in the slash, spelled-out and hyphenated forms — **and in stacked forms** such as `oz/cwt/ac`. The test is subtractive: strip one trailing per-acre suffix, then refuse if any denominator survives.
@@ -23,6 +23,7 @@ Replaces the **body** of `public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text)
 4. `total_cost_cents` / `total_price_cents` are **derived** from `p_chemicals` via `safe_cents_qty` and the caller-supplied totals are ignored — this is what makes a stale tab harmless.
 5. A line that actually bills but whose rate unit or stock `unit` is blank is refused (`CHEM_UNIT_UNSPECIFIED`). Three exemptions, all the same rule — a line that cannot bill cannot bill *wrongly*: `customer_supplied`, neither a cost nor a price, and quantity 0.
 6. The idempotency lookup routes through a canonical, advisory-locked helper instead of a raw unlocked `SELECT`, closing a pre-existing duplicate-job hole (round 8, below).
+8. A **DRY** product whose two units are equal only because `fl oz` was aliased to `oz` is refused (`CHEM_UNIT_FORM_MISMATCH`). The alias is right on a liquid product and wrong on a dry one, where `oz` is a weight and `fl oz` a volume — and `field_app_priced_quantity`, the converter the app bills through, refuses that pair outright (round 10, below).
 7. That lookup is `check_idempotency_intent`, so the key is bound to the **calling actor** and to a **sha256 fingerprint of the request** (job id, job payload, fields and chemical lines, each array order-normalised). Reusing a spent key from another actor raises `IDEMPOTENCY_ACTOR_MISMATCH`; reusing it with a *changed* payload raises `IDEMPOTENCY_INTENT_MISMATCH` instead of silently returning the earlier success and saving nothing (round 9, below). An unchanged retry still replays to the same job.
 
 The live unit helpers (`normalize_rate_unit`, `field_app_priced_quantity`, `safe_cents_qty`) are **reused, not reimplemented** — a second server-side copy of the unit table would repeat the original 16x bug.
@@ -33,7 +34,7 @@ The live unit helpers (`normalize_rate_unit`, `field_app_priced_quantity`, `safe
 node scripts/smoke/prove-save-job-chem-unit-invariant.mjs
 ```
 
-PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **30 behaviour tests** pass; **17 mutation phases** each fail in a *named* way — 11 turn a named test red, 6 abort the apply with the specific preflight/postflight assertion written to catch them.
+PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **34 behaviour tests** pass; **18 mutation phases** each fail in a *named* way — 12 turn a named test red, 6 abort the apply with the specific preflight/postflight assertion written to catch them.
 
 `scripts/smoke/smoke-save-job-parity.sql` is the registered live chain and is **gated** on whether this migration is installed. The container prover is **manual** — `run-smoke.mjs --all` will not run it.
 
@@ -65,7 +66,7 @@ Sequence, in this order:
 
 ## What review actually caught — read before trusting a "clean" round
 
-Nine rounds; **every** round found something real, including the ones that felt finished.
+Ten rounds; **every** round found something real, including the ones that felt finished.
 
 - **NaN acreage bypass (Codex P1).** PostgreSQL orders numeric `NaN` above every value and `NaN = NaN` is true, so `acres > 0` passed, the carried quantity came back `NaN`, and `NaN <= GREATEST(0.0001, NaN)` was true — waving a genuinely mismatched line through. Every operand on that path is now bounded to a finite range.
 - **Non-atomic pin.** An earlier design split the body pin into its own migration. Two separately ledgered migrations are not atomic: a committed pin plus a failed replacement leaves the next run free to overwrite an unvalidated body. Folded in-file.
@@ -77,6 +78,9 @@ Nine rounds; **every** round found something real, including the ones that felt 
 - **The key was still unbound to what was actually asked for** (round 9, Mason's scope decision on 2026-08-24). Round 8's `check_idempotency(text, text)` matches on key **and operation only**. So a key spent by an earlier `save_job` and then reused for a *different* job or an *edited* payload returned the earlier success — the operator saw "saved" while the changed quantities, cents or job details went nowhere, and a second person's key could be replayed by anyone. The call now goes to `check_idempotency_intent(text, text, uuid, text)`, already used by nine live money RPCs (the whole return family plus create/post/void commission payment, read read-only from `pg_proc` 2026-08-24), which additionally binds the calling actor and a sha256 fingerprint of the request. Three consequences worth knowing before applying: (a) that helper returns a **wrapper** `{"found": true, "result": ...}`, not the bare result, so the body unwraps it and refuses a malformed receipt rather than returning it; (b) the receipt write now stamps `request_fingerprint` and `request_actor_id`, and raises `IDEMPOTENCY_RECEIPT_MISSING` if that stamp lands on no row; (c) the helper **fails closed** on a receipt carrying neither column — a pre-binding receipt cannot have its intent reconstructed, so it raises `IDEMPOTENCY_INTENT_MISMATCH` rather than replaying. `T29` pins the actor mismatch, `T30` pins A→B→A payload reuse, and the preflight asserts the helper, `extensions.digest` (pgcrypto lives in the `extensions` schema while this body pins `search_path` to `public, pg_temp`, so the call is schema-qualified) and both receipt columns.
 - **Stacked denominators bypassed the whole rule** (round 8, the exact-SHA `gpt-5.6-sol` proof gate, and the worst finding of the eight). The rule asked whether the rate unit *ends in* a per-acre suffix, so `oz/cwt/ac` satisfied it — and the unit derivation then took everything before the *first* slash and discarded `cwt`. The line became a plain `oz`, matched a stock unit of `oz`, and **saved**: a per-hundredweight rate billed as per-acre. Reproduced in the container before the fix (`T24`: `refused=f`). The lesson generalises — an *exclusion* list of good spellings is not the same as a *test* that nothing bad survives, and only the subtractive form is safe here.
 - **A latent defect in the prover itself**, found in the same pass: mutants were applied with `String.replace(from, to)`, and JavaScript reads `$&`, `` $` ``, `$'` and `$1` in a *string* replacement as substitution patterns. SQL regex literals here end in `$'` routinely, so such a mutant silently spliced the rest of the migration into itself and failed to install with a syntax error far from the edit — which reads as "the mutant is broken", not "the harness is broken". The replacement now goes through a function.
+
+- **Fluid ounces could be billed as dry ounces** (round 10, the proof gate again, and the worst finding since the stacked denominators). `normalize_rate_unit` collapses `fl oz` to `oz` form-blind, and the equality shortcut ran *before* the `product_form` lookup — so a dry product with a `fl oz/ac` rate against an `oz` stock unit compared equal and billed with nothing proven, while `field_app_priced_quantity` refuses that pair as not convertible. The guard was more lenient than the SQL that bills. An earlier round had cleared this same alias — correctly for liquids, and it never checked dry. Fixed by moving the form lookup above the shortcut and adding a narrow `CHEM_UNIT_FORM_MISMATCH`; `T33`/`T34` exist to prove the rule does not over-fire, because the wide form of it would refuse a liquid product priced in pounds and block whole jobs.
+- **Two findings from the gate were rejected on evidence** (stale base): it reported this branch rolls back the `codex-review` skill hardening and deletes the draw-tier prover. The proof wrapper diffs a snapshot of `origin/main` against a snapshot of HEAD — a two-dot comparison — so everything `main` gained since the merge base reads as a rollback. `git diff origin/main...HEAD` is **empty** for every file named. Merging current `origin/main` made both disappear. Worth knowing before believing the next "regression" this gate reports.
 
 ## Known residuals, stated not hidden
 

@@ -243,7 +243,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Thirty behaviour tests pass; and seventeen mutation phases each fail in a **named** way — eleven
+Thirty-four behaviour tests pass; and eighteen mutation phases each fail in a **named** way — twelve
 turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -270,7 +270,7 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The thirty tests: all four live row shapes save with derived totals reproducing the live stored
+The thirty-four tests: all four live row shapes save with derived totals reproducing the live stored
 values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
 by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
 `T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate
@@ -341,6 +341,23 @@ removed, the helper's fail-closed behaviour turns an *ordinary retry* into a har
 replay test had no handler — so the file aborted on a raw database error and the mutation phase
 could not attribute the failure to any test. A mutant that reddens the suite without reddening its
 own test proves nothing; the test now converts an outright refusal into a named failure.
+
+**Fluid ounces could have been billed as dry ounces, and that is now refused.** The unit helper
+`normalize_rate_unit` turns `fl oz` into `oz` without knowing what the product is. On a liquid
+product that is exactly right — the live conversion table records `oz` as an alias for `fl oz`. On a
+**dry** product it is wrong: there `oz` means a dry ounce, a weight, while `fl oz` is a volume. The
+guard compared the two units *before* it looked up whether the product was dry, so a dry line with a
+`fl oz` rate against an `oz` stock unit looked identical and billed with nothing checked — while the
+app's own pricing converter refuses that pair as unconvertible. A guard that is more permissive than
+the code that does the billing is not a guard. The product's form is now read first, and that one
+combination is refused. The rule is deliberately narrow, and two of the new tests exist only to
+prove it does not over-fire: the liquid `fl oz`/`oz` pair must still save, and so must a dry line
+quoted in `fl oz` on both sides. The wider version of the rule would have refused an ordinary liquid
+product priced in pounds, and one refused line blocks the entire job.
+
+No live product is in that shape today — the 85 dry products use `dry oz`, `lb`, `mg` and `oz` — but
+the units being compared arrive in the request, not from the product catalog, and any logged-in user
+can call this function directly, which is the whole reason it exists.
 
 No frontend change, and there is no client-side warning to fall back on: until PR #436 lands, this
 refusal is the operator's first indication that anything is wrong. **Parked: not applied to
