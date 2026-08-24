@@ -17,7 +17,8 @@ import {
   collectGateHealth,
 } from "./patrol-sources.mjs";
 import { judgeHeartbeat, alarmText, ALARM_EXIT } from "./patrol-monitor.mjs";
-import { HEARTBEAT_OVERDUE_MS } from "./patrol-classify.mjs";
+import { checksVerdict, coderabbitStateFrom } from "./patrol-scan.mjs";
+import { HEARTBEAT_OVERDUE_MS, prBlockers as prBlockersFor } from "./patrol-classify.mjs";
 
 let pass = 0;
 const ok = (c, m) => { assert.ok(c, m); pass++; };
@@ -98,16 +99,28 @@ eq(st({ hasCompletionMarker: true, ledgerAgeMs: LEDGER_ARCHIVED_MS + 1 }), "FINI
 eq(judgeCodexGate({ captureText: null, captureAgeMs: null }).state, "UNKNOWN", "no evidence means unknown, never healthy");
 eq(judgeCodexGate({ captureText: "CODEX_PROOF_VERDICT: CLEAN", captureAgeMs: GATE_EVIDENCE_TTL_MS + 1 }).state, "UNKNOWN", "stale evidence cannot prove health now");
 {
-  const r = judgeCodexGate({ captureText: "ERROR: You've hit your usage limit", captureAgeMs: 1000 });
-  eq(r.state, "DOWN", "a usage-limit capture means the gate is down");
+  const r = judgeCodexGate({ captureText: "some output\nERROR: You've hit your usage limit\n", captureAgeMs: 1000 });
+  eq(r.state, "DOWN", "a usage-limit ERROR line means the gate is down");
   ok(/not the same as the gate saying no/.test(r.detail), "and distinguishes 'gate down' from 'gate found problems' — only one has something to fix");
+}
+{
+  // The capture embeds the reviewed diff. Reviewing code that merely TALKS about usage
+  // limits must not make patrol report the gate as down — this actually happened.
+  const capture = [
+    "CODEX_PROOF_VERDICT: CLEAN",
+    "diff --git a/scripts/patrol/patrol-sources.mjs",
+    "+const USAGE_LIMIT = /you've hit your usage limit|quota exceeded/i;",
+    "+// a comment mentioning rate limit handling",
+  ].join("\n");
+  eq(judgeCodexGate({ captureText: capture, captureAgeMs: 1000 }).state, "HEALTHY",
+    "reviewed code that merely mentions a usage limit does not mark the gate down");
 }
 eq(judgeCodexGate({ captureText: "CODEX_PROOF_VERDICT: CLEAN", captureAgeMs: 1000 }).state, "HEALTHY", "a recent real verdict means healthy");
 eq(judgeCodexGate({ captureText: "some unrelated noise", captureAgeMs: 1000 }).state, "UNKNOWN", "a capture with no parseable verdict is unknown, not healthy");
 {
   // A capture that BOTH ran and hit a limit must read as DOWN, not HEALTHY.
-  const mixed = "CODEX_PROOF_VERDICT: CLEAN\nlater: you've hit your usage limit";
-  eq(judgeCodexGate({ captureText: mixed, captureAgeMs: 1000 }).state, "DOWN", "a usage limit anywhere in the capture wins over an earlier clean verdict");
+  const mixed = "CODEX_PROOF_VERDICT: CLEAN\nERROR: you've hit your usage limit";
+  eq(judgeCodexGate({ captureText: mixed, captureAgeMs: 1000 }).state, "DOWN", "a real usage-limit error line wins over an earlier clean verdict");
 }
 
 // ── CodeRabbit gate health ──────────────────────────────────────────────────
@@ -123,6 +136,78 @@ eq(judgeCodeRabbitGate(["Review in progress", "quota exceeded"]).state, "DOWN", 
   eq(src.status, "OK", "gate collection succeeds even with no evidence available");
   eq(gates.length, 2, "both gates are always reported");
   eq(gates.filter((g) => g.state === "HEALTHY").length, 0, "with no evidence, neither gate is claimed healthy");
+}
+
+// ── required-check producer binding (Codex HIGH #1) ─────────────────────────
+// Matching a required check by NAME alone lets any integration with status-write access
+// post a lookalike success and make patrol report green.
+{
+  const required = [{ context: "Lint, Type Check, Test, Build", appId: 15368 }];
+  const good = [{ name: "Lint, Type Check, Test, Build", conclusion: "success", app: { id: 15368 }, started_at: "2026-08-24T20:00:00Z" }];
+  const forged = [{ name: "Lint, Type Check, Test, Build", conclusion: "success", app: { id: 9999 }, started_at: "2026-08-24T20:00:00Z" }];
+
+  eq(checksVerdict({ required, checkRuns: good, statuses: [] }), "green", "a check run from the required app counts");
+  eq(checksVerdict({ required, checkRuns: forged, statuses: [] }), "unknown",
+    "a successful check with the RIGHT NAME from the WRONG APP is not green — it fails closed");
+  eq(checksVerdict({ required, checkRuns: [...forged, ...good], statuses: [] }), "green",
+    "a forged run alongside a genuine one does not prevent the genuine one from counting");
+  eq(checksVerdict({ required: [], checkRuns: good, statuses: [] }), "unknown",
+    "if the required set could not be resolved, nothing is green");
+  eq(checksVerdict({ required, checkRuns: [], statuses: [] }), "unknown", "a required context with no run at all is unknown");
+}
+{
+  // Vercel arrives as a commit status, which carries no app id, so its producer is pinned.
+  const required = [{ context: "Vercel", appId: 8329 }];
+  const real = [{ context: "Vercel", state: "success", creator: { id: 35613825 }, created_at: "2026-08-24T20:00:00Z" }];
+  const impostor = [{ context: "Vercel", state: "success", creator: { id: 1 }, created_at: "2026-08-24T20:00:00Z" }];
+  eq(checksVerdict({ required, checkRuns: [], statuses: real }), "green", "the pinned Vercel producer counts");
+  eq(checksVerdict({ required, checkRuns: [], statuses: impostor }), "unknown", "a status from an unpinned account is not trusted");
+}
+{
+  // Newest verified run wins, so a stale green cannot outlive a fresh failure.
+  const required = [{ context: "c", appId: 1 }];
+  const runs = [
+    { name: "c", conclusion: "success", app: { id: 1 }, started_at: "2026-08-24T19:00:00Z" },
+    { name: "c", conclusion: "failure", app: { id: 1 }, started_at: "2026-08-24T20:00:00Z" },
+  ];
+  eq(checksVerdict({ required, checkRuns: runs, statuses: [] }), "failing", "the newest verified run decides, not the friendliest one");
+  const rerun = [
+    { name: "c", conclusion: "failure", app: { id: 1 }, started_at: "2026-08-24T19:00:00Z" },
+    { name: "c", conclusion: "success", app: { id: 1 }, started_at: "2026-08-24T20:00:00Z" },
+  ];
+  eq(checksVerdict({ required, checkRuns: rerun, statuses: [] }), "green", "a passing rerun supersedes an earlier failure");
+}
+for (const state of ["neutral", "skipped", "stale", ""]) {
+  const required = [{ context: "c", appId: 1 }];
+  const runs = [{ name: "c", conclusion: state, app: { id: 1 }, started_at: "2026-08-24T20:00:00Z" }];
+  eq(checksVerdict({ required, checkRuns: runs, statuses: [] }), "unknown", `a "${state}" conclusion fails closed rather than passing`);
+}
+{
+  const required = [{ context: "c", appId: 1 }];
+  const runs = [{ name: "c", status: "in_progress", app: { id: 1 }, started_at: "2026-08-24T20:00:00Z" }];
+  eq(checksVerdict({ required, checkRuns: runs, statuses: [] }), "pending", "a running required check is pending");
+}
+
+// ── CodeRabbit completion (Codex HIGH #2) ───────────────────────────────────
+const crStatus = (state) => [{ context: "CodeRabbit", state, creator: { id: 136622811 }, updated_at: "2026-08-24T20:00:00Z", description: "d" }];
+eq(coderabbitStateFrom(crStatus("success")).state, "complete", "only a successful review is complete");
+eq(coderabbitStateFrom(crStatus("pending")).state, "in_flight", "a pending review is in flight");
+eq(coderabbitStateFrom(crStatus("failure")).state, "failed", "a FAILED review is not a completed review");
+eq(coderabbitStateFrom(crStatus("error")).state, "failed", "an ERRORED review is not a completed review");
+eq(coderabbitStateFrom([]).state, "missing", "no status at all is missing");
+eq(coderabbitStateFrom([{ context: "CodeRabbit", state: "success", creator: { id: 1 }, updated_at: "2026-08-24T20:00:00Z" }]).state, "missing",
+  "a CodeRabbit-looking status from another account does not count");
+{
+  const both = [
+    { context: "CodeRabbit", state: "success", creator: { id: 136622811 }, updated_at: "2026-08-24T19:00:00Z" },
+    { context: "CodeRabbit", state: "error", creator: { id: 136622811 }, updated_at: "2026-08-24T20:00:00Z" },
+  ];
+  eq(coderabbitStateFrom(both).state, "failed", "the newest status decides, so a later error is not masked by an earlier success");
+}
+// And the classifier must turn that into a visible blocker.
+{
+  const blockers = prBlockersFor({ checks: "green", coderabbit: "failed", solProof: "unknown", requiresSolProof: false });
+  ok(blockers.some((b) => /did not succeed/.test(b)), "a failed review becomes an explicit blocker, so it cannot yield 'no blockers found'");
 }
 
 // ── dead-man monitor ────────────────────────────────────────────────────────

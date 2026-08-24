@@ -49,12 +49,16 @@ const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 
 // Resolving from branch protection alone is not enough — this repo's `protect-main`
 // ruleset requires a Vercel check that protection does not list. Missing it would let a
 // PR read as green when a required check had not run.
+//
+// The expected PRODUCER travels with each context. Matching a required check by name
+// alone means any integration with status-write access can post a lookalike success and
+// make patrol report green — the actor-forgery shape CRX treats as a red line.
 function requiredContexts(repo, baseRef) {
-  const contexts = new Set();
+  const byContext = new Map(); // context → expected app/integration id
   let degraded = null;
   try {
     const prot = ghJson(["api", `repos/${repo}/branches/${baseRef}/protection`]);
-    for (const c of prot?.required_status_checks?.checks ?? []) contexts.add(c.context);
+    for (const c of prot?.required_status_checks?.checks ?? []) byContext.set(c.context, c.app_id ?? null);
   } catch (e) { degraded = `branch protection unreadable: ${String(e.message).slice(0, 120)}`; }
   try {
     for (const rs of ghJson(["api", `repos/${repo}/rulesets`]) ?? []) {
@@ -62,57 +66,85 @@ function requiredContexts(repo, baseRef) {
       if (full?.enforcement !== "active") continue;
       for (const rule of full.rules ?? []) {
         if (rule.type !== "required_status_checks") continue;
-        for (const c of rule.parameters?.required_status_checks ?? []) contexts.add(c.context);
+        for (const c of rule.parameters?.required_status_checks ?? []) {
+          byContext.set(c.context, c.integration_id ?? c.app_id ?? byContext.get(c.context) ?? null);
+        }
       }
     }
   } catch (e) { degraded = `${degraded ? `${degraded}; ` : ""}rulesets unreadable: ${String(e.message).slice(0, 120)}`; }
-  return { contexts: [...contexts], degraded };
+  return { required: [...byContext].map(([context, appId]) => ({ context, appId })), degraded };
 }
 
-// statusCheckRollup carries DUPLICATE entries per context (a rerun leaves the old one
-// behind). Selecting anything but the newest per context is how a stale green wins.
-function checksVerdict(rollup, required) {
-  if (required.length === 0) return "unknown"; // could not resolve → fail closed
-  const latest = new Map();
-  for (const e of rollup ?? []) {
-    const name = e.context ?? e.name;
-    if (!name) continue;
-    const at = Date.parse(e.startedAt ?? e.createdAt ?? 0) || 0;
-    const prev = latest.get(name);
-    if (!prev || at >= prev.at) latest.set(name, { at, entry: e });
-  }
+// Check runs carry `app.id` directly, so their producer verifies generically. Commit
+// statuses do not expose the producing app at all, so the few required checks that arrive
+// as statuses have their producing account pinned here. An unlisted producer fails closed
+// rather than being trusted on its context name.
+const STATUS_CREATOR_BY_APP_ID = new Map([
+  [8329, 35613825], // vercel → vercel[bot]
+]);
+
+const FAILING = new Set(["FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "CANCELLED", "ERROR", "STARTUP_FAILURE"]);
+const RUNNING = new Set(["IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "REQUESTED"]);
+const PASSING = new Set(["SUCCESS", "COMPLETED"]);
+
+// Both APIs carry DUPLICATE entries per context (a rerun leaves the old one behind).
+// Selecting anything but the newest verified run is how a stale green wins.
+export function checksVerdict({ required, checkRuns = [], statuses = [] }) {
+  if (!required || required.length === 0) return "unknown"; // could not resolve → fail closed
+
   let pending = false;
-  for (const ctx of required) {
-    const hit = latest.get(ctx);
-    if (!hit) return "unknown"; // a required context with no run at this head
-    const e = hit.entry;
-    const state = (e.conclusion || e.state || e.status || "").toUpperCase();
-    if (["FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "CANCELLED", "ERROR", "STARTUP_FAILURE"].includes(state)) return "failing";
-    if (["IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "REQUESTED"].includes(state)) { pending = true; continue; }
-    if (!["SUCCESS", "COMPLETED"].includes(state)) return "unknown"; // NEUTRAL/SKIPPED/unknown → fail closed
+  for (const { context, appId } of required) {
+    const candidates = [];
+    for (const r of checkRuns) {
+      // Producer verified generically: the run must come from the required app.
+      if (r?.name !== context) continue;
+      if (appId != null && r?.app?.id !== appId) continue;
+      candidates.push({ at: Date.parse(r.started_at ?? r.completed_at ?? 0) || 0, state: String(r.conclusion ?? r.status ?? "").toUpperCase() });
+    }
+    const expectedCreator = appId == null ? null : STATUS_CREATOR_BY_APP_ID.get(appId);
+    for (const s of statuses) {
+      if (s?.context !== context) continue;
+      if (expectedCreator == null || s?.creator?.id !== expectedCreator) continue;
+      candidates.push({ at: Date.parse(s.created_at ?? 0) || 0, state: String(s.state ?? "").toUpperCase() });
+    }
+    if (candidates.length === 0) return "unknown"; // no VERIFIED run for a required context
+
+    candidates.sort((a, b) => b.at - a.at);
+    const state = candidates[0].state;
+    if (FAILING.has(state)) return "failing";
+    if (RUNNING.has(state)) { pending = true; continue; }
+    if (!PASSING.has(state)) return "unknown"; // NEUTRAL/SKIPPED/unknown → fail closed
   }
   return pending ? "pending" : "green";
 }
 
-function coderabbitState(repo, headSha) {
-  try {
-    const statuses = ghJson(["api", `repos/${repo}/commits/${headSha}/statuses`]) ?? [];
-    // Identity, not just a context name: another credential with status-write access
-    // could otherwise post a lookalike status.
-    const mine = statuses.filter((s) => s.context === CODERABBIT_CONTEXT && s.creator?.id === CODERABBIT_CREATOR_ID);
-    if (mine.length === 0) return { state: "missing", description: null };
-    mine.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
-    // The description is how CodeRabbit announces a rate limit or a reached spend cap,
-    // which the gate-health source reads to tell "gate down" from "gate says no".
-    return { state: mine[0].state === "pending" ? "in_flight" : "complete", description: mine[0].description ?? null };
-  } catch { return { state: "missing", description: null }; }
+// Only a verified SUCCESS counts as a completed review. Mapping "anything that is not
+// pending" to complete silently absorbed `failure` and `error`, which cleared the
+// missing-review blocker and could print "no blockers found" when no review had actually
+// succeeded — the exact false-all-clear this tool exists to prevent.
+export function coderabbitStateFrom(statuses) {
+  // Identity, not just a context name: another credential with status-write access could
+  // otherwise post a lookalike status.
+  const mine = (statuses ?? []).filter((s) => s?.context === CODERABBIT_CONTEXT && s?.creator?.id === CODERABBIT_CREATOR_ID);
+  if (mine.length === 0) return { state: "missing", description: null };
+  mine.sort((a, b) => Date.parse(b.updated_at ?? 0) - Date.parse(a.updated_at ?? 0));
+  const latest = mine[0];
+  // The description is how CodeRabbit announces a rate limit or a reached spend cap,
+  // which the gate-health source reads to tell "gate down" from "gate says no".
+  const description = latest.description ?? null;
+  if (latest.state === "pending") return { state: "in_flight", description };
+  if (latest.state === "success") return { state: "complete", description };
+  return { state: "failed", description }; // failure / error → fail closed
 }
 
 // ── pull requests ───────────────────────────────────────────────────────────
 // `commits` is deliberately absent: asking for it across every open PR fans out the
 // authors connection past GitHub's GraphQL node ceiling and fails the whole scan. Head
 // commit identity is fetched per PR below instead.
-const PR_FIELDS = "number,title,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergeable,mergeStateStatus,statusCheckRollup,updatedAt,author,labels";
+// `statusCheckRollup` is deliberately absent: it omits the producing app, so a context
+// resolved from it cannot be bound to the integration the branch rule requires. Checks
+// come from the REST check-runs and statuses endpoints instead.
+const PR_FIELDS = "number,title,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergeable,mergeStateStatus,updatedAt,author,labels";
 
 // Markers that mean "held by a decision". Patrol can only honour a marker that exists on
 // GitHub; a decision recorded only in notes or memory is invisible to it.
@@ -134,6 +166,7 @@ function collectPullRequests(repo) {
     // compute mergeability. Two GraphQL reads can agree by sharing one cache.
     const rest = new Map();
     const headCommit = new Map();
+    const checkData = new Map();
     for (const p of readA) {
       try {
         const r = ghJson(["api", `repos/${repo}/pulls/${p.number}`]);
@@ -143,6 +176,14 @@ function collectPullRequests(repo) {
         const c = ghJson(["api", `repos/${repo}/commits/${p.headRefOid}`]);
         headCommit.set(p.number, { login: c?.author?.login ?? "", date: c?.commit?.committer?.date ?? null });
       } catch { /* absent → activity stays unknown, never "fresh" */ }
+      // Check runs and commit statuses, not the GraphQL rollup: the rollup omits the
+      // producing app entirely, so a check resolved from it cannot be attributed to the
+      // integration the branch rule actually requires.
+      let checkRuns = null;
+      let statuses = null;
+      try { checkRuns = ghJson(["api", `repos/${repo}/commits/${p.headRefOid}/check-runs`])?.check_runs ?? []; } catch { checkRuns = null; }
+      try { statuses = ghJson(["api", `repos/${repo}/commits/${p.headRefOid}/statuses`]) ?? []; } catch { statuses = null; }
+      checkData.set(p.number, { checkRuns, statuses });
     }
 
     sleep(MIN_STABLE_INTERVAL_MS + 250); // defeat a shared cache between the two reads
@@ -150,7 +191,7 @@ function collectPullRequests(repo) {
     const tB = new Date().toISOString();
 
     const byNumB = new Map(readB.map((p) => [p.number, p]));
-    const { contexts, degraded } = requiredContexts(repo, "main");
+    const { required, degraded } = requiredContexts(repo, "main");
     if (degraded) { src.status = "INCOMPLETE"; src.detail = degraded; }
 
     const crDescriptions = [];
@@ -162,7 +203,13 @@ function collectPullRequests(repo) {
         mergeable: p.mergeable, mergeStateStatus: p.mergeStateStatus, observedAt,
       });
       const lastHuman = lastHumanActivity(a, headCommit.get(a.number));
-      const cr = coderabbitState(repo, a.headRefOid);
+      const cd = checkData.get(a.number) ?? { checkRuns: null, statuses: null };
+      // An API that failed is not an empty result: unreadable check or status data must
+      // fail closed to "unknown", never read as "nothing failing".
+      const checks = cd.checkRuns === null || cd.statuses === null
+        ? "unknown"
+        : checksVerdict({ required, checkRuns: cd.checkRuns, statuses: cd.statuses });
+      const cr = cd.statuses === null ? { state: "missing", description: null } : coderabbitStateFrom(cd.statuses);
       if (cr.description) crDescriptions.push(cr.description);
       return {
         number: a.number, title: a.title, state: a.state, isDraft: a.isDraft,
@@ -174,7 +221,7 @@ function collectPullRequests(repo) {
           compareObserved: Boolean(r && r.head === a.headRefOid && r.state === a.mergeStateStatus),
         },
         parked: isParked(a),
-        checks: checksVerdict(a.statusCheckRollup, contexts),
+        checks,
         coderabbit: cr.state,
         solProof: "unknown",       // v1 does not evaluate the proof registry
         requiresSolProof: false,   // so it never claims one is missing

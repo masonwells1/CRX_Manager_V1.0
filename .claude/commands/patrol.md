@@ -29,8 +29,13 @@ node scripts/patrol/patrol-report.mjs
 
 ## What patrol does and does not do
 
-- **Read-only.** It performs GET requests and `git` queries. It has no write capability, so
-  it never updates a branch, merges, comments, applies a migration, or restarts a loop.
+- **Read-only against everything that matters, and precise about what that means.** Patrol
+  issues only read requests to GitHub and non-mutating `git` queries: it never updates a
+  branch, merges, comments, labels, applies a migration, deploys, or restarts a loop, and
+  it never writes to the repository or the database. It *does* write its own local state —
+  the per-run snapshot, a heartbeat, a lock, and rotated logs, all under
+  `%LOCALAPPDATA%\crx-patrol\`, outside every Git worktree. If a request is "run nothing
+  that writes anything at all", say that, rather than calling patrol write-free.
 - **Negative claims only.** It reports blockers it can see. It never says a pull request is
   ready to merge — GitHub's merge button is the authority.
 - **It cannot see decisions that live outside GitHub.** A pull request held back by a

@@ -54,6 +54,25 @@ needs Mason?" and is built so that its silence is trustworthy.
   only fires when someone starts a session — no alarm in exactly the cases (machine
   asleep, nobody working) it existed to catch. Registering the scheduled task changes
   system settings and is Mason's to run; the command is in `.claude/commands/patrol.md`.
+- **An independent Codex (`gpt-5.6-sol`, high effort) review of the code returned
+  BLOCKERS and found two real review-gate defects, both now fixed.** (1) Required checks
+  were matched by context name with the producing app discarded, so any integration with
+  status-write access could post a lookalike success and make patrol report green — the
+  actor-forgery shape CRX treats as a red line. Checks now resolve from the REST
+  check-runs and statuses endpoints and bind each required context to its expected app;
+  the GraphQL rollup was dropped because it omits the producer entirely. Commit statuses
+  expose no app id, so the one status-based required check has its producing account
+  pinned, and any unverifiable producer fails closed. (2) Any CodeRabbit status other than
+  `pending` counted as a completed review, so `failure` and `error` cleared the
+  missing-review blocker and could yield "no blockers found" with nothing having passed;
+  only a verified `success` now counts, and a failed review is an explicit blocker.
+  A third, medium finding corrected the command doc, which claimed patrol had "no write
+  capability" when it does write its own local state.
+- **Patrol then caught a false positive in itself.** It reported the Codex gate as down
+  because the review capture embeds the reviewed diff, and this change's own source
+  contains a usage-limit pattern. The gate probe now anchors to a real error line rather
+  than matching text anywhere in the capture — the same "matches text, not effect" trap
+  the merge guard has hit before.
 - Three further defects were found only by running it, not by tests: both CLI entry points
   never executed at all on Windows (a hand-built `file://C:/…` never equals Node's
   `file:///C:/…`); the main checkout is a path prefix of every nested worktree, so a bare

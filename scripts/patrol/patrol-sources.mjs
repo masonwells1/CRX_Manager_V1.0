@@ -227,7 +227,11 @@ export function collectParkedMigrations(repoRoot) {
 
 // ── review-gate health ──────────────────────────────────────────────────────
 
-const USAGE_LIMIT = /you'?ve hit your usage limit|usage limit reached|insufficient (credits|quota)|quota exceeded/i;
+// Anchored to an actual error LINE, not a substring anywhere in the capture. The capture
+// embeds the reviewed diff, so an unanchored match reported the gate as down whenever the
+// reviewed code merely mentioned a usage limit — which is what happened the first time
+// patrol reviewed this very file. Same trap as a guard that matches text instead of effect.
+const USAGE_LIMIT = /^\s*(?:ERROR|error)\b[^\n]*(?:usage limit|quota exceeded|insufficient (?:credits|quota)|rate limit)/m;
 const CLEAN_VERDICT = /^CODEX_PROOF_VERDICT:\s*CLEAN\s*$/m;
 
 // Health is judged from evidence, never assumed. Proving Codex healthy would mean
