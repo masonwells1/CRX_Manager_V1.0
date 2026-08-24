@@ -525,6 +525,23 @@ earlier — CodeRabbit inferred `last` from the stale word "OLDEST" in the prose
 had separately flagged Low and which is now corrected. The SkillSpector "credential access" errors are a false
 positive on this file's own secret-*scanning* step; a detector is not an accessor.
 
+**Fifteenth round: the same binding bug, one operand over — and a duplicate line I created myself.** Codex
+returned High on the no-op-merge fallback: `<BASE_SHA>` in the ancestry check was still hand-substituted from
+a value an earlier command *printed*. That is precisely the hole the parent binding was rewritten to close two
+rounds earlier, sitting in the adjacent operand of the adjacent command, and the test called it "bound"
+because the `<BASE_SHA>` placeholder was present. A wrong descendant SHA pasted there certifies an unreviewed
+second parent while the command still looks like proof. The base is now derived from `gh pr view --json
+baseRefOid`, validated against `^[0-9a-f]{40}$`, and consumed inside one `&&` chain — the validation is what
+makes the interpolation safe as well as correct, since an empty or error-shaped response stops the chain
+instead of running `merge-base` against nothing. `<HEAD>^2` is resolved by `git rev-parse` in the same command
+rather than supplied. Run live against PR #441 before the assertion was written; mutation-tested by restoring
+the hand-substituted form.
+
+Codex also caught a duplicated `!.agents/**` in `path_filters` — **mine**, created while reverting a mutation
+test and invisible to every existing assertion, because a duplicate of a vetted exclusion is still a vetted
+exclusion. Harmless to CodeRabbit, but it is evidence the list was edited without being read, and this list is
+short precisely so it can be read in full. The coverage test now rejects duplicates.
+
 The through-line across every round of this PR is one idea: **a check that names the thing it forbids only
 catches that name** — and its corollary, learned four times on `path_filters` alone: **a name is not a
 mechanism.** `docs/audits`, `*.md`, a date prefix, and finally `archive` were all shorthand for "these files

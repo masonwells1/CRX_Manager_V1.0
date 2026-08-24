@@ -125,7 +125,6 @@ reviews:
   # live agent or automation surface.
   path_filters:
     - "!.agents/**"
-    - "!.agents/**"
 
   auto_review:
     enabled: true

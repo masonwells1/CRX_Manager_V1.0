@@ -237,8 +237,17 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    proof — it is the claim, restated in shell.
 
    ```bash
-   git merge-base --is-ancestor <HEAD>^2 <BASE_SHA> && echo ANCESTOR_OF_BASE
+   BASE_SHA="$(gh pr view <n> --repo masonwells1/CRX_Manager_V1.0 --json baseRefOid --jq .baseRefOid)" && printf '%s' "$BASE_SHA" | grep -qE '^[0-9a-f]{40}$' && git merge-base --is-ancestor "$(git rev-parse <HEAD>^2)" "$BASE_SHA" && echo ANCESTOR_OF_BASE
    ```
+
+   **The base is derived from the API and consumed in the same command — never typed in.** An
+   earlier revision printed `baseRefOid` in one command and hand-substituted it into this one, which
+   is the identical hole the parent binding above was fixed for: a wrong descendant SHA pasted here
+   certifies an unreviewed second parent, and the shape of the command still looks like proof. Codex
+   flagged it High on PR #441. The `grep -qE '^[0-9a-f]{40}$'` is what makes the interpolation safe
+   as well as correct — an empty or error-shaped API response fails the pattern and the `&&` chain
+   stops rather than running `merge-base` against nothing. `<HEAD>^2` is likewise resolved by `git
+   rev-parse` inside the command rather than supplied.
 
    Bind that check to the PR's exact `baseRefOid`, **not** to `origin/main`. `origin/main` is only
    as current as your last fetch, and it is the wrong ref entirely for a PR whose base is some other

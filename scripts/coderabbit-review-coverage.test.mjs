@@ -91,6 +91,17 @@ for (const filter of filters) {
   ok(filter.startsWith("!"), `path filter is exclusion-only (no allowlist mode): ${filter}`);
 }
 
+// No duplicates. A repeated pattern is harmless to CodeRabbit but it is evidence
+// the list was edited without being read — which is exactly how it happened: a
+// `!.agents/**` line was restored on top of the one already there while reverting
+// a mutation test, and every other assertion stayed green because a duplicate of
+// a vetted exclusion is still a vetted exclusion. This list is short precisely so
+// that it can be read in full; enforce that it stays readable. (Codex, PR #441.)
+ok(
+  new Set(filters).size === filters.length,
+  `path_filters contains no duplicate entries: ${JSON.stringify(filters)}`,
+);
+
 const patterns = filters.filter((f) => f.startsWith("!")).map((f) => f.slice(1));
 const excluded = (p) => patterns.some((g) => globToRegExp(g).test(p));
 

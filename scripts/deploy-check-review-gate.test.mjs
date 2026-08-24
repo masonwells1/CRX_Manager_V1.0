@@ -322,7 +322,7 @@ for (const [name, file] of SKILLS) {
   const parentSection = sectionBetween(
     readFileSync(file, "utf8"),
     "**Do not compare the parent to a SHA you typed in",
-    "git merge-base --is-ancestor <HEAD>^2 <BASE_SHA>",
+    "git merge-base --is-ancestor",
   );
   ok(Boolean(parentSection), `${name}: the parent fallback section is locatable`);
   // One ordered sequence, not five independent presence checks. Order is the
@@ -363,9 +363,37 @@ for (const [name, file] of SKILLS) {
     hasCommandWithAll(cmds, ["git merge-tree --write-tree", "<HEAD>^{tree}", "MERGE_ADDED_NOTHING"]),
     `${name}: tree identity is asserted, not printed`,
   );
+  // The base must be DERIVED from the API and consumed in the same command, not
+  // hand-substituted from a value printed by an earlier one. An earlier revision
+  // did the latter, and this assertion passed on the mere presence of the
+  // `<BASE_SHA>` placeholder while calling it "bound" — the identical mistake the
+  // parent binding above was written to prevent, one operand over. A wrong
+  // descendant SHA pasted in certifies an unreviewed second parent, and the
+  // command still looks like proof. (Codex, High, PR #441.)
+  const ancestry = cmds.find((c) => c.includes("git merge-base --is-ancestor"));
+  ok(Boolean(ancestry), `${name}: the ancestry check exists`);
   ok(
-    hasCommandWithAll(cmds, ["git merge-base --is-ancestor <HEAD>^2 <BASE_SHA>", "ANCESTOR_OF_BASE"]),
-    `${name}: ancestry is bound to the PR's baseRefOid`,
+    Boolean(ancestry) && ancestry.includes("ANCESTOR_OF_BASE"),
+    `${name}: the ancestry check asserts a marker rather than printing a value`,
+  );
+  // Assignment from the API, then use, in that order, in this one command.
+  const baseAssign = ancestry
+    ? ancestry.match(/\bBASE_SHA="\$\(gh pr view [^)]*baseRefOid[^)]*\)"/)
+    : null;
+  const baseUse = ancestry ? ancestry.match(/git merge-base --is-ancestor .*\$(?:\{BASE_SHA\}|BASE_SHA\b)/) : null;
+  ok(
+    Boolean(baseAssign) && Boolean(baseUse) && baseAssign.index < baseUse.index,
+    `${name}: the ancestry check derives baseRefOid from the PR API and consumes it in the same command`,
+  );
+  // ...and validates it before interpolating, so an empty or error-shaped API
+  // response stops the chain instead of running merge-base against nothing.
+  ok(
+    Boolean(ancestry) && /\$BASE_SHA[^|]*\|\s*grep -qE '\^\[0-9a-f\]\{40\}\$'/.test(ancestry),
+    `${name}: the derived base is validated as a 40-hex SHA before it is used`,
+  );
+  ok(
+    Boolean(ancestry) && baseAssign && /grep -qE '\^\[0-9a-f\]\{40\}\$'/.exec(ancestry).index > baseAssign.index,
+    `${name}: the base validation happens after the assignment and before the merge-base call`,
   );
   ok(
     noCommandWithAll(cmds, ["git merge-base --is-ancestor", "origin/main"]),
