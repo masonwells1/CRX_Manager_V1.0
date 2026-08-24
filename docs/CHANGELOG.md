@@ -76,12 +76,14 @@ next agent. Two sessions read it that way.
   Neither existing backstop could see it — `unknownGitGlobalOptions` only fires on a token starting
   with `-`, and `pushHiddenByShellComposition` strips the escape to `/c/My Repo`, whose space breaks
   the parse identically, so both readings agreed there was no push. Nothing about it is MSYS-specific;
-  `C:/My\ Repo` fails open the same way. `gitPushArgumentsUnbindable()` refuses any git invocation
-  whose pre-`push` arguments the shell would join — an unmatched trailing backslash, or an unmatched
-  quote once complete quoted spans are removed — and **both** guards call it before their non-push
-  exit and push filter. Deliberately narrow: `git stash push`, a commit message containing the word
-  push, and `git -C "C:/Mason's Repo" push` are all untouched, the last because an apostrophe inside a
-  quoted span is a literal, not an operator.
+  `C:/My\ Repo` fails open the same way. `gitPushArgumentsUnbindable()` refuses a git invocation only
+  when reassembling its pre-`push` arguments — across an unmatched trailing backslash, or an
+  unmatched quote once complete quoted spans are removed — reveals a `push` that the literal parse
+  cannot see. An ordinary non-push command whose arguments the shell joins the same way is left
+  alone. **Both** guards call it before their non-push exit and push filter. Deliberately narrow:
+  `git stash push`, a commit message containing the word push, and `git -C "C:/Mason's Repo" push`
+  are all untouched, the last because an apostrophe inside a quoted span is a literal, not an
+  operator.
 - **Round 10 corrected that rule in both directions.** It had checked only the POSIX `\` escape, so
   the identical fail-open survived in **PowerShell** (backtick) and **cmd** (caret) — the two shells
   this repo is actually driven from; reproduced against the real hook, both were allowed outright. And
@@ -122,7 +124,7 @@ next agent. Two sessions read it that way.
   hoisted loop filters `cmd` with the same `shellSegments`/`isGitPush` pair that builds
   `pushCommands`, so a second copy could only drift. The Codex-side guard was checked for the same
   ordering hazard and is already correct — its first push-derived lookup follows its refusal.
-- **Every slash-rooted `-C` is refused, not only the `/c/…` drive form** (Codex P1, round 7). MSYS
+- **Every non-UNC slash-rooted `-C` is refused, not only the `/c/…` drive form** (Codex P1, round 7). MSYS
   maps its whole mount table, and the non-drive entries diverge *further* from what these guards
   resolve — measured on this machine: `/tmp/x` reaches git as `C:\Users\<user>\AppData\Local\Temp\x`
   but resolves here to `C:\tmp\x`; `/usr/x` reaches git inside the Git installation and resolves here
