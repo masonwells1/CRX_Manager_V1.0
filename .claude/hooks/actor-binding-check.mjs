@@ -1434,7 +1434,12 @@ function hasOuterExceptionHandler(controlBody) {
   return false;
 }
 
-function hasRecognizedMutationBefore(structuralBody, beforeIndex) {
+function hasRecognizedMutationBefore(structuralBody, beforeIndex, actorReferences = []) {
+  const prefix = structuralBody.slice(0, beforeIndex);
+  const forwardingReferences = actorForwardingReferences(prefix, actorReferences);
+  if (hasActorCallableForwarding(prefix, forwardingReferences) ||
+      hasActorOperatorForwarding(prefix, forwardingReferences) ||
+      hasActorSymbolicOperatorForwarding(prefix, forwardingReferences)) return true;
   // A pre-guard control-flow exit can skip the identity check after evaluating
   // a side-effecting expression (for example RETURN helper(p_performed_by)).
   // Treat exits as disqualifying rather than trying to prove expressions pure.
@@ -1516,7 +1521,7 @@ function hasEnforcedActorRefusal(body, actorParam, actorReferences = [actorParam
     const actionEnd = block.index + endIf.index;
     const bindings = stableAuthUidBindings(structuralBody, block.index);
     if (!isTopLevelPlpgsqlStatement(controlBody, block.index)) continue;
-    if (hasRecognizedMutationBefore(controlBody, block.index)) continue;
+    if (hasRecognizedMutationBefore(controlBody, block.index, actorReferences)) continue;
     if (!actorReferences.some((reference) =>
       hasExactLegacyMismatchCondition(condition, reference, bindings)
     )) continue;
@@ -1763,6 +1768,34 @@ function hasActorOperatorForwarding(structuralBody, actorParams) {
 }
 
 const SQL_SYMBOLIC_OPERATOR_PATTERN = '[-+*/\\\\<>=~!@#%^&|`?]+';
+const SQL_CAST_TYPE_PATTERN =
+  `${SQL_QUALIFIED_IDENTIFIER_PATTERN}(?:\\s*\\([^;()]*\\))?(?:\\s*\\[\\s*\\])*`;
+
+function hasOpenCastContext(prefix) {
+  return unmatchedOpenParens(prefix).some((open) =>
+    /\bCAST\s*$/i.test(prefix.slice(0, open))
+  );
+}
+
+/** Skip syntax that preserves the actor value while separating it from an
+ * operator token. Grouping, CAST/::, field selection, and subscripting do not
+ * make a caller-supplied actor safe. */
+function afterTransparentActorExpression(prefix, suffix) {
+  let rest = suffix;
+  const openCast = hasOpenCastContext(prefix);
+  while (true) {
+    const castTail = openCast
+      ? new RegExp(`^\\s+AS\\s+${SQL_CAST_TYPE_PATTERN}\\s*\\)`, "i").exec(rest)
+      : null;
+    const postgresCast = new RegExp(`^\\s*::\\s*${SQL_CAST_TYPE_PATTERN}`, "i").exec(rest);
+    const field = new RegExp(`^\\s*\\.\\s*${SQL_IDENTIFIER_PATTERN}`, "i").exec(rest);
+    const subscript = /^\s*\[[^;\]]*\]/.exec(rest);
+    const closeParen = /^\s*\)/.exec(rest);
+    const transparent = castTail || postgresCast || field || subscript || closeParen;
+    if (!transparent) return rest;
+    rest = rest.slice(transparent[0].length);
+  }
+}
 
 /** Ordinary infix syntax can invoke a user-defined PostgreSQL operator without
  * the explicit OPERATOR(schema.symbol) spelling. PostgreSQL permits custom
@@ -1777,8 +1810,12 @@ function hasActorSymbolicOperatorForwarding(structuralBody, actorParams) {
     while ((match = reference.exec(structuralBody)) !== null) {
       const prefix = structuralBody.slice(0, match.index);
       const suffix = structuralBody.slice(match.index + match[0].length);
-      const before = prefix.match(new RegExp(`(${SQL_SYMBOLIC_OPERATOR_PATTERN})\\s*$`));
-      const after = suffix.match(new RegExp(`^\\s*(${SQL_SYMBOLIC_OPERATOR_PATTERN})`));
+      const before = prefix.match(new RegExp(
+        `(${SQL_SYMBOLIC_OPERATOR_PATTERN})\\s*(?:(?:CAST\\s*)?\\(\\s*)*$`,
+        "i"
+      ));
+      const after = afterTransparentActorExpression(prefix, suffix)
+        .match(new RegExp(`^\\s*(${SQL_SYMBOLIC_OPERATOR_PATTERN})`));
       if ([before?.[1], after?.[1]].some(Boolean)) return true;
     }
   }

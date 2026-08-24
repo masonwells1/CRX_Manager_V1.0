@@ -247,6 +247,63 @@ GRANT EXECUTE ON FUNCTION public.forward_actor_equality(public.actor_token) TO a
 r = runHook(OVERLOADED_ACTOR_COMPARISON);
 ok(isDeny(r), "an overloaded comparison operator cannot receive an unbound actor from a definer wrapper");
 
+r = runHook(OVERLOADED_ACTOR_COMPARISON.replace(
+  "RETURN p_actor = ROW(auth.uid())::public.actor_token;",
+  "RETURN (p_actor) = ROW(auth.uid())::public.actor_token;"
+));
+ok(isDeny(r), "parentheses cannot hide an actor from an overloaded comparison operator");
+
+r = runHook(OVERLOADED_ACTOR_COMPARISON.replace(
+  "RETURN p_actor = ROW(auth.uid())::public.actor_token;",
+  "RETURN CAST(p_actor AS public.actor_token) = ROW(auth.uid())::public.actor_token;"
+));
+ok(isDeny(r), "a CAST wrapper cannot hide an actor from an overloaded comparison operator");
+
+r = runHook(OVERLOADED_ACTOR_COMPARISON.replace(
+  "RETURN p_actor = ROW(auth.uid())::public.actor_token;",
+  "RETURN ROW(auth.uid())::public.actor_token = (p_actor);"
+));
+ok(isDeny(r), "a reverse operand cannot hide an actor from an overloaded comparison operator");
+
+r = runHook(OVERLOADED_ACTOR_COMPARISON.replace(
+  "RETURN p_actor = ROW(auth.uid())::public.actor_token;",
+  "RETURN ((p_actor))::public.actor_token = ROW(auth.uid())::public.actor_token;"
+));
+ok(isDeny(r), "combined grouping and casts cannot hide an actor from an overloaded comparison operator");
+
+function preRefusalCallableWrapper(prefix, helper = INVOKER_ACTOR_HELPER) {
+  return `${helper}
+CREATE OR REPLACE FUNCTION public.pre_refusal_actor(p_performed_by uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $wrapper$
+DECLARE v_id uuid;
+BEGIN
+  ${prefix}
+  IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  RETURN v_id;
+END
+$wrapper$;
+GRANT EXECUTE ON FUNCTION public.pre_refusal_actor(uuid) TO authenticated;`;
+}
+
+r = runHook(preRefusalCallableWrapper("SELECT public.record_event_internal(p_performed_by) INTO v_id;"));
+ok(isDeny(r), "SELECT cannot call a mutating actor helper before the accepted refusal");
+
+r = runHook(preRefusalCallableWrapper("v_id := public.record_event_internal(p_performed_by);"));
+ok(isDeny(r), "assignment cannot call a mutating actor helper before the accepted refusal");
+
+r = runHook(preRefusalCallableWrapper(
+  "v_id := coalesce(public.record_event_internal(p_performed_by), auth.uid());"
+));
+ok(isDeny(r), "a nested callable cannot mutate with an actor before the accepted refusal");
+
+r = runHook(preRefusalCallableWrapper(
+  "v_id := CASE WHEN p_performed_by ## auth.uid() THEN p_performed_by ELSE auth.uid() END;",
+  INVOKER_ACTOR_OPERATOR
+));
+ok(isDeny(r), "an actor operator cannot execute before the accepted refusal");
+
 r = runHook(fn("BEGIN RETURN p_performed_by = auth.uid(); END;"));
 ok(isDeny(r), "an unproven actor identity comparison fails closed because its operator type is unknown");
 

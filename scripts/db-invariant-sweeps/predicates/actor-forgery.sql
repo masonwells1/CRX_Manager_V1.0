@@ -1,7 +1,7 @@
 -- predicate (c): actor-forgery   (over-broad BY DESIGN — allowlist the semantic-safe ones)
 -- authenticated-executable SECDEF routines that take an actor-shaped parameter (p_%by / p_actor% / p_user%)
--- AND appear to role-check, COALESCE, use that parameter in a MERGE, or forward it to another callable/operator,
--- WITHOUT raising the canonical ACTOR_MISMATCH token.
+-- AND appear to role-check, COALESCE, use that parameter in a MERGE, or forward it to another callable/operator
+-- BEFORE raising the canonical ACTOR_MISMATCH token.
 -- Would have caught (the recurring six-date actor-forgery class): save_blend_ticket (2026-06-08),
 --   cancel_return (2026-06-08), restore_cancelled_order/restore_cancelled_delivery (2026-06-08),
 --   the 9 strict-actor RPCs of 2026-06-09 (void_payment, reopen_accounting_period, ...), batch_apply_all_prepayments
@@ -18,6 +18,7 @@ WITH cand AS (
          p.proname,
          pg_get_function_identity_arguments(p.oid) AS args,
          p.prosrc,
+         regexp_replace(p.prosrc, 'ACTOR_MISMATCH.*$', '', 'is') AS pre_refusal_src,
          a.argname,
          regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g') AS argname_pattern,
          a.input_position
@@ -41,28 +42,27 @@ WITH cand AS (
 SELECT DISTINCT proname || '(' || args || ')' AS violation_key,
        argname AS suspect_param
 FROM cand
-WHERE prosrc !~* 'ACTOR_MISMATCH'
-  AND (prosrc ~* ('coalesce\s*\(\s*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
-       OR prosrc ~* ('(\m' || argname_pattern || '\M|\$' || input_position || '\M)\s*,\s*auth\.uid')
-       OR prosrc ~* ('role[^;]{0,120}(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
-       OR prosrc ~* ('(\m' || argname_pattern || '\M|\$' || input_position || '\M)[^;]{0,120}role')
-       OR prosrc ~* ('merge\s+into[^;]*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
-       OR prosrc ~* ('\m([[:alpha:]_][[:alnum:]_$]*\s*\.\s*)*[[:alpha:]_][[:alnum:]_$]*\s*\([^;]*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
-       OR prosrc ~* ('(\m' || argname_pattern || '\M|\$' || input_position || '\M)[^;]{0,120}\mOPERATOR\s*\(')
-       OR prosrc ~* ('\mOPERATOR\s*\([^;]{0,120}(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
+WHERE (pre_refusal_src ~* ('coalesce\s*\(\s*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
+       OR pre_refusal_src ~* ('(\m' || argname_pattern || '\M|\$' || input_position || '\M)\s*,\s*auth\.uid')
+       OR pre_refusal_src ~* ('role[^;]{0,120}(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
+       OR pre_refusal_src ~* ('(\m' || argname_pattern || '\M|\$' || input_position || '\M)[^;]{0,120}role')
+       OR pre_refusal_src ~* ('merge\s+into[^;]*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
+       OR pre_refusal_src ~* ('\m([[:alpha:]_][[:alnum:]_$]*\s*\.\s*)*[[:alpha:]_][[:alnum:]_$]*\s*\([^;]*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
+       OR pre_refusal_src ~* ('(\m' || argname_pattern || '\M|\$' || input_position || '\M)[^;]{0,120}\mOPERATOR\s*\(')
+       OR pre_refusal_src ~* ('\mOPERATOR\s*\([^;]{0,120}(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
        OR EXISTS (
          SELECT 1
          FROM regexp_matches(
-           prosrc,
-           '(\m' || argname_pattern || '\M|\$' || input_position || '\M)\s*([-+*/\\<>=~!@#%^&|`?]+)',
+           pre_refusal_src,
+           '(\m' || argname_pattern || '\M|\$' || input_position || '\M)(?:\s*\)|\s*::\s*[[:alpha:]_"][[:alnum:]_$".]*|\s*\.\s*[[:alpha:]_"][[:alnum:]_$"]*|\s*\[[^;\]]*\]|\s+AS\s+[[:alpha:]_"][[:alnum:]_$".]*\s*\))*\s*([-+*/\\<>=~!@#%^&|`?]+)',
            'gi'
          ) AS actor_operator(parts)
        )
        OR EXISTS (
          SELECT 1
          FROM regexp_matches(
-           prosrc,
-           '([-+*/\\<>=~!@#%^&|`?]+)\s*(\m' || argname_pattern || '\M|\$' || input_position || '\M)',
+           pre_refusal_src,
+           '([-+*/\\<>=~!@#%^&|`?]+)\s*(?:(?:CAST\s*)?\(\s*)*(\m' || argname_pattern || '\M|\$' || input_position || '\M)',
            'gi'
          ) AS operator_actor(parts)
        )

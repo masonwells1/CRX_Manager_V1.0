@@ -32,7 +32,7 @@ This runner makes those queries **standing executable gates** that run **before*
 |---|---|---|
 | `anon-exec-secdef.sql` | (a) every anon-executable SECDEF | only the documented RLS-helper / trigger / sequence / self-gating-report set (allowlist) |
 | `ungated-secdef-mutators.sql` | (b) authenticated SECDEF that mutates and references no auth.uid()/role helper | **zero** (the round-2 definitive predicate, standing) |
-| `actor-forgery.sql` | (c) function/procedure actor-param role-check/COALESCE/MERGE/callable or operator forwarding without ACTOR_MISMATCH | over-broad by design; allowlist semantic-safe |
+| `actor-forgery.sql` | (c) function/procedure actor-param role-check/COALESCE/MERGE/callable or operator forwarding before an ACTOR_MISMATCH refusal | over-broad by design; allowlist semantic-safe |
 | `actor-forgery-fin-audit.sql` | (i) function/procedure actor param referenced inside a `financial_audit_log` INSERT without ACTOR_MISMATCH (blind-spot closer for (c)) | over-broad by design; allowlist verified attribution-only |
 | `auth-bound-role-ungated.sql` | (d) auth.uid()-bound mutator with no role check (the `create_direct_order` W1 variant) | **zero** |
 | `secdef-searchpath.sql` | (e) SECDEF missing `search_path` | **zero** (no allowlist case) |
@@ -43,6 +43,12 @@ This runner makes those queries **standing executable gates** that run **before*
 | `returns-lifecycle-rpc-owned.sql` | return lifecycle fields, creation, and line mutations stay behind canonical RPCs/triggers | **zero** (catches direct `returns` INSERT policy/grant drift and direct `return_items` mutation policy/grant drift) |
 | `save-field-actor-binding.sql` | exact reviewed `save_field(uuid,jsonb,jsonb,uuid,text)` actor-binding body | **zero** (missing signature or any body drift fails closed) |
 | `product-name-vs-return-policy.sql` | a product whose **name** asserts it cannot be returned is classified `return_policy = 'no_return'` | **zero** (a business-**data** predicate — emits the product **id** only, never the name or SKU; see *Output containment* below) |
+
+The actor-forgery predicate treats grouping, casts, field/subscript access, and
+reverse operands as transparent around actor-bearing symbolic operators. It
+inspects only source before the first canonical refusal token, so a helper or
+operator that receives the actor before the refusal remains a finding while
+ordinary forwarding after a proven early refusal does not.
 
 The `save_field` predicate also has a disposable mutation proof that deliberately installs unsafe,
 late-guard, comment-only, and altered bodies and requires the predicate to fail closed. Run both

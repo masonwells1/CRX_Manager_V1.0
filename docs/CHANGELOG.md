@@ -406,6 +406,18 @@ PostgreSQL 17 predicate run. Reinstating the comparison exclusions makes the
 exact PostgreSQL regression fail while all named and positional controls remain
 detected.
 
+The final bounded SEC-01 repair closes two ordering and syntax gaps from the
+next exact-head review. Parentheses, `CAST(...)`, PostgreSQL `::` casts, field
+selection, and subscripts can no longer separate a caller-supplied actor from a
+user-defined operator and make the forwarding look safe. A canonical refusal
+also counts only when no actor-bearing helper or operator expression ran before
+it; the catalog predicate now scans the routine prefix before the first
+`ACTOR_MISMATCH` token instead of suppressing the whole routine whenever that
+token appears anywhere. Eight hook regressions and three disposable PostgreSQL
+17 routines cover wrapped/reverse operators and callable/operator execution
+before refusal. The restored hook passes 434 assertions, the catalog proof is
+green, and disabling each load-bearing guard reproduces its exact failure.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —

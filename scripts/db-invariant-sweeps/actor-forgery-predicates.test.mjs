@@ -128,6 +128,32 @@ BEGIN
   RETURN p_actor_source = ROW(gen_random_uuid())::public.actor_token;
 END;
 $body$;
+
+CREATE FUNCTION public.actor_parenthesized_equality(p_actor_source public.actor_token) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  RETURN ((p_actor_source))::public.actor_token = ROW(gen_random_uuid())::public.actor_token;
+END;
+$body$;
+
+CREATE FUNCTION public.actor_reverse_equality(p_actor_source public.actor_token) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  RETURN ROW(gen_random_uuid())::public.actor_token = CAST(p_actor_source AS public.actor_token);
+END;
+$body$;
+
+CREATE FUNCTION public.actor_pre_refusal_forward(p_actor_source uuid) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid;
+BEGIN
+  SELECT public.forward_actor(p_actor_source) INTO v_actor;
+  IF p_actor_source IS DISTINCT FROM gen_random_uuid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  RETURN v_actor;
+END;
+$body$;
 `);
 
   assertCoversNamedAndPositional(predicateRows(GENERAL), 'actor_forward_');
@@ -139,6 +165,12 @@ $body$;
     ),
     `general predicate must catch an overloaded comparison operator receiving an actor: ${generalRows.join(', ')}`,
   );
+  for (const routine of ['actor_parenthesized_equality', 'actor_reverse_equality', 'actor_pre_refusal_forward']) {
+    assert.ok(
+      generalRows.some((row) => row.startsWith(`${routine}(`) && row.endsWith('|p_actor_source')),
+      `general predicate must catch ${routine}: ${generalRows.join(', ')}`,
+    );
+  }
   console.log('ACTOR_FORGERY_PREDICATES_TEST_PASS');
 } finally {
   if (CONTAINER.startsWith(PREFIX)) {
