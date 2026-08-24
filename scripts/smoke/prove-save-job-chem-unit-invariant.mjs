@@ -63,7 +63,8 @@ const TESTS = join(HERE, "fixtures", "save-job-chem-unit-tests.sql");
 const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19",
                   "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30",
-                  "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39"];
+                  "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
+                  "T40", "T41"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -73,6 +74,30 @@ const docker = (args, opts = {}) =>
 function psqlFile(containerPath) {
   const r = spawnSync("docker",
     ["exec", CONTAINER, "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-f", containerPath],
+    { encoding: "utf8" });
+  return { ok: r.status === 0, out: `${r.stdout || ""}${r.stderr || ""}` };
+}
+/** Apply the MIGRATION, and only the migration, in ONE transaction (`--single-transaction`).
+ *
+ * This is not a tidiness preference -- without it the proof quietly overstated itself.
+ * psql autocommits each statement, so when a postflight mutant raised, the CREATE OR REPLACE
+ * and the ACL statements ahead of it had ALREADY committed. The prover reported "aborted the
+ * apply (as required)" -- true of psql's exit status -- while the container was left carrying
+ * the mutated body. Supabase's apply_migration wraps the file in a transaction, so the real
+ * channel rolls back and the prover did not model it. Phase 3 could not catch the gap either:
+ * its preflight raises before any write, so "the body is unchanged" held trivially there.
+ *
+ * Only migration applies use this. The harness, the pre-change migration and the behaviour
+ * tests deliberately stay outside it: those files are SETUP and ASSERTIONS, and wrapping the
+ * test file would roll back the committed rows T8 counts at the end.
+ *
+ * Raised by CodeRabbit on 2026-08-24, which also pointed at the repo's existing precedent in
+ * scripts/smoke/prove-blend-ticket-fractional-cents.mjs.
+ */
+function psqlMigration(containerPath) {
+  const r = spawnSync("docker",
+    ["exec", CONTAINER, "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1",
+     "--single-transaction", "-f", containerPath],
     { encoding: "utf8" });
   return { ok: r.status === 0, out: `${r.stdout || ""}${r.stderr || ""}` };
 }
@@ -112,8 +137,18 @@ function cleanup() {
  * could clean up. Filtering on our own label is what keeps this safe: an unrelated
  * container cannot carry it, so nothing outside this prover is ever a candidate. */
 function reapStale() {
+  // STOPPED containers only. The label is shared by every run of this prover, so filtering
+  // on the label ALONE also matched a CONCURRENT run's live container and force-removed it
+  // mid-proof -- two developers, or two CI jobs, and the second run silently killed the
+  // first. The unique per-run name does not help here, because this lookup is by label.
+  // A running container is by definition not stale, so restricting to terminal states is
+  // both the fix and the honest reading of "stale". Raised by CodeRabbit on 2026-08-24.
   let ids = "";
-  try { ids = docker(["ps", "-aq", "--filter", `label=${OWNER_LABEL}`]); } catch { return; }
+  for (const status of ["exited", "dead", "created"]) {
+    try {
+      ids += docker(["ps", "-aq", "--filter", `label=${OWNER_LABEL}`, "--filter", `status=${status}`]);
+    } catch { /* daemon unavailable or no match; nothing to reap for this status */ }
+  }
   for (const id of ids.split("\n").map((x) => x.trim()).filter(Boolean)) {
     try { docker(["rm", "-f", id], { stdio: "ignore" }); } catch { /* already gone */ }
   }
@@ -241,7 +276,7 @@ const BODY_FINGERPRINT =
 const beforeDrift = psqlScalar(BODY_FINGERPRINT);
 if (!beforeDrift.ok) fail("could not read the stub body fingerprint", beforeDrift.out);
 
-r = psqlFile("/tmp/migration.sql");
+r = psqlMigration("/tmp/migration.sql");
 if (r.ok) fail("the migration APPLIED over a body that is not the reviewed one", r.out);
 if (!/PREFLIGHT_BODY_DRIFT/.test(r.out)) {
   fail("the migration aborted, but not with PREFLIGHT_BODY_DRIFT", r.out);
@@ -266,7 +301,7 @@ if (!r.ok) fail("could not stage the bad ACL", r.out);
 r = psqlCmd("REVOKE EXECUTE ON FUNCTION public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text) FROM service_role;");
 if (!r.ok) fail("could not stage the missing service_role grant", r.out);
 
-r = psqlFile("/tmp/migration.sql");
+r = psqlMigration("/tmp/migration.sql");
 if (!r.ok) fail("the migration failed to apply (its own postflight may have refused it)", r.out);
 if (!/PREFLIGHT_OK/.test(r.out)) fail("the migration applied without the preflight reporting PREFLIGHT_OK", r.out);
 
@@ -291,7 +326,7 @@ log("PHASE 4 OK  applied over a deliberately BAD ACL; anon revoked, authenticate
 // replay REINSTALLS THE IDENTICAL BODY -- it does not skip. Calling that "a no-op" was a
 // review finding, because a reader would assume the second run touches nothing.
 const beforeReplay = psqlScalar(BODY_FINGERPRINT);
-r = psqlFile("/tmp/migration.sql");
+r = psqlMigration("/tmp/migration.sql");
 if (!r.ok) fail("the migration refused its own already-applied body; it is not replayable", r.out);
 const afterReplay = psqlScalar(BODY_FINGERPRINT);
 if (!beforeReplay.ok || !afterReplay.ok) fail("could not fingerprint the body around the replay");
@@ -317,7 +352,7 @@ const MUTANTS = [
   {
     // Deleting the whole form-aware block restores the exact BLOCKER the gate found:
     // fl oz and oz collapse to one unit on a DRY product and the equality shortcut bills
-    // a line the app's own converter calls unpriceable. T31 must go red by name.
+    // a line the app's own converter calls unpriceable. T37 must go red by name.
     name: "form-aware dry fl-oz refusal removed",
     from: "    IF v_form = 'dry'\n",
     to: "    IF false\n",
@@ -334,6 +369,16 @@ const MUTANTS = [
     from: "'[[:space:].]+', ' ', 'g'))",
     to: "'[[:space:]]+', ' ', 'g'))",
     expect: "T39",
+  },
+  {
+    // Drops the four zero-width characters from the fold, keeping the non-breaking space, so
+    // the expression reverts to exactly what round 13 shipped. T40 must go red by name while
+    // T39 (periods) and T41 (the NBSP false-refusal guard) both stay green -- that split is
+    // the point: it proves the ZERO-WIDTH handling specifically, not the fold in general.
+    name: "zero-width folding removed from the dry fl-oz rule",
+    from: "chr(160) || chr(8203) || chr(8204) || chr(8205) || chr(65279),",
+    to: "chr(160),",
+    expect: "T40",
   },
   {
     name: "unit comparison disabled",
@@ -466,8 +511,11 @@ const MUTANTS = [
   },
   {
     // Revert to the raw, unlocked, operation-filtered lookup the live body still carries.
-    // T26 must go red: a key already spent by another operation becomes invisible again,
-    // the job is created, and the receipt is swallowed by ON CONFLICT DO NOTHING.
+    // T30 must go red by name -- the assertion below is what this mutant is scored on.
+    // (This comment used to name T26. The cross-operation defect T26 covers is real, but
+    // the key-only helper still raises on it, so T26 stays GREEN under this mutant; what
+    // actually breaks is the changed-payload replay, which is T30. Naming the wrong test
+    // in a comment is how a reader concludes the wrong guard is covered.)
     // Drop back to the key-only helper: no actor, no fingerprint. A completed key reused
     // for a CHANGED payload then replays the old success and silently saves nothing,
     // which is exactly the defect the gate described. Two edits, because the key-only
@@ -552,7 +600,7 @@ for (const m of MUTANTS) {
     const staged = psqlCmd(m.stage);
     if (!staged.ok) fail(`could not stage the precondition for mutant "${m.name}"`, staged.out);
   }
-  const applied = psqlFile("/tmp/mutant.sql");
+  const applied = psqlMigration("/tmp/mutant.sql");
 
   // Two shapes of mutant. Most must let the migration install and then turn a named
   // behaviour test red. The security mutants must instead make the APPLY ITSELF abort,
@@ -585,7 +633,7 @@ for (const m of MUTANTS) {
 
 // --- restore a clean, unmutated final state and re-prove ------------------------
 rebuild("final");
-r = psqlFile("/tmp/migration.sql");
+r = psqlMigration("/tmp/migration.sql");
 if (!r.ok) fail("final clean re-apply failed", r.out);
 r = psqlFile("/tmp/tests.sql");
 if (!r.ok) fail("final clean run failed", r.out);

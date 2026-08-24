@@ -93,6 +93,22 @@ Blend Recipes was never affected; it selects `*`.
 
 ## 2026-08-22 — The chemical-unit and job-money invariants move out of React and into `save_job` (parked)
 
+**Round 14 (2026-08-24) — and then the same mistake again, one layer down.** Hours after round
+13 shipped, the automated reviewer found that writing the unit with an *invisible* character
+inside it — a zero-width space, which can arrive from a copy-paste out of a spreadsheet or a
+web page — slipped past the new rule just as the period had. The honest lesson is not about
+zero-width characters: round 13 fixed the one spelling a reviewer happened to name, when the
+app already had a complete list of "differences that don't change which unit is meant". The
+guard now uses that whole list. Invisible characters are deleted; a non-breaking space is
+turned into a normal space instead, because it really does separate two words — so `dry oz`
+typed with one still saves, and a test now pins that so a future widening can't quietly start
+blocking ordinary jobs. Four smaller review points were fixed alongside: the safety checks that
+run at the end of the migration now give a clear named error instead of a raw database error if
+an expected user role is missing; the proof now applies the migration the same all-or-nothing
+way the real system does, which it previously only claimed; the proof no longer deletes another
+copy of itself running at the same time; and two comments naming the wrong test were corrected.
+Still parked; nothing has been applied to live.
+
 **Round 13 (2026-08-24) — the same fluid-ounce rule, caught incomplete a third time.** The
 previous round refused a dry product measured in fluid ounces by matching three exact spellings.
 Writing it with a period — `fl. oz` — slipped past all three, and because the database's unit
@@ -255,7 +271,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Thirty-eight behaviour tests pass; and nineteen mutation phases each fail in a **named** way — thirteen
+Forty-one behaviour tests pass; and twenty-one mutation phases each fail in a **named** way — fifteen
 turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -282,7 +298,7 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The thirty-eight tests: all four live row shapes save with derived totals reproducing the live stored
+The forty-one tests: all four live row shapes save with derived totals reproducing the live stored
 values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
 by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
 `T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate

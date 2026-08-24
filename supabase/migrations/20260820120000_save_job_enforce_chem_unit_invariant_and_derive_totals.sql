@@ -125,10 +125,29 @@
 --           OR (u_raw ~ '\s*/\s*(ac|acre|acres|a)\s*$'
 --               AND btrim(regexp_replace(u_raw, '\s*/\s*(ac|acre|acres|a)\s*$', '')) = '')
 --           OR btrim(regexp_replace(btrim(split_part(r_raw, '/', 1)),
---                                   '[\s-]+per[\s-]+(acres|acre|ac|a)$', '')) = '')
+--                                   '[\s-]+per[\s-]+(acres|acre|ac|a)$', '')) = ''
+--           -- v4: a rate that is ONLY a denominator, with no leading separator to strip.
+--           -- 'per acre' and 'per-acre' name no unit at all, but the strip above requires
+--           -- [\s-]+ BEFORE 'per', so neither reduced to '' and neither was counted.
+--           OR btrim(split_part(r_raw, '/', 1)) ~ '^[\s-]*per[\s-]+(acres|acre|ac|a)$')
 --      AND quantity <> 0
 --      AND coalesce(customer_supplied, false) = false
 --      AND (coalesce(cost_per_unit_cents, 0) <> 0 OR coalesce(price_per_unit_cents, 0) <> 0);
+--
+-- SCOPE, stated because it was previously implied and a reader could over-trust this count:
+-- these terms mirror the CHEM_UNIT_UNSPECIFIED refusal (change 5) ONLY. They do not model
+-- CHEM_UNIT_MISMATCH, CHEM_RATE_DENOMINATOR_NOT_ACRES, CHEM_UNIT_FORM_MISMATCH or
+-- CHEM_QUANTITY_NOT_FINITE. A zero here therefore means "no live row trips change 5", NOT
+-- "no live row is refused". Whoever applies must satisfy BOTH: this count returns zero AND
+-- every live job_chemicals row clears the other four rules.
+--
+-- That second half was done row by row on 2026-08-24 (read-only) rather than by predicate,
+-- which is stronger while the table is this small -- all FOUR live rows were inspected
+-- individually and every one clears all five refusals: JOB-2026-0001 quantity 0 (exempt);
+-- JOB-2026-0002 'pt/ac' against 'Pt'; JOB-2026-0003 and -0004 'oz' against 'oz'. All four
+-- products are LIQUID, so the dry fluid-ounce rule cannot fire on any of them, and none
+-- carries a blank unit, a non-acre denominator or a non-finite quantity. Re-do this
+-- inspection at apply time; four rows is a read, not a project.
 --
 -- Every term mirrors a term of the refusal, and it took THREE review rounds to get right --
 -- worth recording, because each wrong version failed in the same direction, reporting ZERO
@@ -705,8 +724,27 @@ BEGIN
     -- That is not an exotic spelling: src/lib/blendMathValidator.ts documents in so many
     -- words that periods are insignificant and "'fl. oz' is 'fl oz'".
     --
-    -- So the two sides are folded to a canonical form FIRST -- every run of whitespace
-    -- and periods collapses to one space -- and then matched as a concept:
+    -- ROUND 14 widened the fold again, and the reason is worth stating plainly: round 13
+    -- folded PERIODS but not ZERO-WIDTH characters, so 'fl<U+200B>oz' escaped exactly as
+    -- 'fl. oz' had. That is the same defect twice in a row -- fixing the one spelling a
+    -- reviewer named instead of adopting the whole rule the repo already had. The client
+    -- canonicaliser (src/lib/blendMathValidator.ts) defines the complete set of LOSSLESS
+    -- differences: case, zero-width characters (U+200B/200C/200D/FEFF, deleted outright),
+    -- any run of real whitespace INCLUDING the non-breaking space, and periods. This now
+    -- mirrors that set rather than a subset of it. Verified against live PostgreSQL 17.6:
+    -- the round-13 expression missed 'fl<ZWSP>oz', 'fl<ZWNJ>oz', 'fl<ZWJ>oz', 'fl<BOM>oz'
+    -- and 'fluid<ZWSP> ounce' -- five live escapes -- while this one refuses all of them
+    -- and still passes 'oz', 'dry oz', 'dry<NBSP>oz', 'lb', 'ton', 'mg', 'gal' and 'pt'.
+    --
+    -- translate() is doing two different jobs on purpose: the non-breaking space maps to a
+    -- real space (it SEPARATES words, so 'dry<NBSP>oz' must stay two words), while the four
+    -- zero-width characters are DELETED (they separate nothing, so 'fl<ZWSP>oz' must close
+    -- up to 'floz'). Mapping zero-width to a space instead would still match here but would
+    -- silently split a word elsewhere; the client documents the same ordering and reason.
+    --
+    -- So the two sides are folded to a canonical form FIRST -- zero-width deleted, the
+    -- non-breaking space and every run of whitespace and periods collapsed to one space --
+    -- and then matched as a concept:
     -- {fl|fluid} x {oz|ozs|ounce|ounces}, optional separator. 'fl. oz', 'fl.oz',
     -- 'fluid oz', 'fl ounces' and 'fl oz.' all land on the rule; a bare 'oz' does NOT,
     -- because on a dry product that is a legitimate dry ounce and refusing it would
@@ -719,8 +757,11 @@ BEGIN
        AND EXISTS (
          SELECT 1
            FROM unnest(ARRAY[v_rate_base, v_chem->>'unit']) AS raw_unit
-          WHERE btrim(regexp_replace(lower(btrim(COALESCE(raw_unit, ''))),
-                                     '[[:space:].]+', ' ', 'g'))
+          WHERE btrim(regexp_replace(
+                  translate(lower(btrim(COALESCE(raw_unit, ''))),
+                            chr(160) || chr(8203) || chr(8204) || chr(8205) || chr(65279),
+                            ' '),
+                  '[[:space:].]+', ' ', 'g'))
                 ~ '^(fl|fluid) ?(oz|ozs|ounce|ounces)$'
        ) THEN
       RAISE EXCEPTION
@@ -1126,6 +1167,24 @@ BEGIN
     RAISE EXCEPTION 'POSTFLIGHT_SEARCH_PATH: expected a pinned search_path, found %', COALESCE(array_to_string(v_config, ','), '<none>');
   END IF;
 
+  -- Every role NAME is checked for existence before it is handed to
+  -- has_function_privilege(). Passing a name that no role carries does not return false --
+  -- PostgreSQL raises 'role "..." does not exist', which aborts the apply with a raw
+  -- catalog error instead of the named POSTFLIGHT_* assertion written to explain it. The
+  -- apply still fails closed either way, so this is about the DIAGNOSIS, not the safety:
+  -- on a rebuilt or non-Supabase database the operator would see a bare role error and
+  -- have no idea which assertion tripped. Raised by CodeRabbit on 2026-08-24.
+  --
+  -- A MISSING role is itself a refusal, not a pass. Treating "the role does not exist" as
+  -- "the grant is fine" would be the fail-open reading, and it is exactly how an ACL
+  -- assertion turns into decoration.
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_ROLE_MISSING: role "authenticated" does not exist, so the EXECUTE grant this migration depends on cannot be verified.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_ROLE_MISSING: role "service_role" does not exist, so the EXECUTE grant this migration depends on cannot be verified.';
+  END IF;
+
   IF NOT has_function_privilege('authenticated', v_oid, 'EXECUTE') THEN
     RAISE EXCEPTION 'POSTFLIGHT_GRANT_LOST: authenticated no longer holds EXECUTE; the app would break.';
   END IF;
@@ -1146,7 +1205,13 @@ BEGIN
   IF v_acl ~ '(^|,)=X/' THEN
     RAISE EXCEPTION 'POSTFLIGHT_PUBLIC_EXECUTE: PUBLIC holds EXECUTE, so every role reaches this SECURITY DEFINER write path (acl=%)', v_acl;
   END IF;
-  IF has_function_privilege('anon', v_oid, 'EXECUTE') THEN
+  -- anon is guarded the OPPOSITE way round from the two grants above, and deliberately so.
+  -- A role that does not exist cannot hold EXECUTE, so "anon is absent" genuinely satisfies
+  -- this assertion and skipping is fail-CLOSED. The two grant checks above cannot be skipped
+  -- on the same reasoning, because there "the role is absent" would leave a required grant
+  -- unverified -- which is why that case raises instead.
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')
+     AND has_function_privilege('anon', v_oid, 'EXECUTE') THEN
     RAISE EXCEPTION 'POSTFLIGHT_ANON_EXECUTE: anon holds EXECUTE on a SECURITY DEFINER write path.';
   END IF;
 END

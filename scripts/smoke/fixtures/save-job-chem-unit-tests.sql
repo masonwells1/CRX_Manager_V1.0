@@ -758,6 +758,66 @@ BEGIN
   END IF;
 END $$;
 
+-- T40: THE ZERO-WIDTH SPELLING -- the escape the round-13 fix ITSELF left open, returned by
+-- CodeRabbit as a P1 the same day. Round 13 folded periods and whitespace and stopped there,
+-- so 'fl<U+200B>oz' walked through exactly as 'fl. oz' had one round earlier. That is the same
+-- mistake twice running: fixing the single spelling a reviewer happened to name instead of
+-- adopting the whole rule the repository already had.
+--
+-- src/lib/blendMathValidator.ts defines the complete LOSSLESS set -- case, zero-width
+-- characters (U+200B/200C/200D/FEFF, deleted outright), any run of real whitespace including
+-- the non-breaking space, and periods. The guard now mirrors that set. Measured against live
+-- PostgreSQL 17.6, the round-13 expression missed five real forms: 'fl<ZWSP>oz',
+-- 'fl<ZWNJ>oz', 'fl<ZWJ>oz', 'fl<BOM>oz' and 'fluid<ZWSP> ounce'.
+--
+-- Zero-width is DELETED rather than mapped to a space, which is the detail that matters:
+-- these characters separate nothing, so 'fl<ZWSP>oz' must close up to 'floz'. The
+-- non-breaking space is mapped to a space instead, because it DOES separate -- 'dry<NBSP>oz'
+-- has to stay two words or a legitimate dry unit would start matching. Must be REFUSED.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333368-3333-3333-3333-333333333369","acres_to_treat":10}]'::jsonb,
+      ('[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":100,"unit":"fl'
+        || chr(8203) || 'oz","rate_per_acre":10,"rate_unit":"fl'
+        || chr(8203) || 'oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]')::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_FORM_MISMATCH%' THEN
+    RAISE NOTICE 'T40 PASS  a dry line quoted with a ZERO-WIDTH space inside the unit is refused: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T40 FAIL  a zero-width character hid the fluid ounce from the dry rule and the line billed with nothing proven; refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
+-- T41: THE COUNTERPART that must NOT move. A dry product quoted 'dry<NBSP>oz' -- a NON-breaking
+-- space -- is an ordinary dry unit and must still SAVE. This is the reason the non-breaking
+-- space is collapsed to a space rather than deleted: deleting it would close 'dry<NBSP>oz' up
+-- into 'dryoz', and a rule that mangles legitimate units to catch illegitimate ones blocks the
+-- WHOLE job save (performSave re-sends the entire grid). Widening is not free, and this test
+-- is what keeps the widening honest.
+DO $$
+DECLARE r jsonb; c bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"33333370-3333-3333-3333-333333333371","acres_to_treat":10}]'::jsonb,
+    ('[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":100,"unit":"dry'
+      || chr(160) || 'oz","rate_per_acre":10,"rate_unit":"dry'
+      || chr(160) || 'oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]')::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_price_cents INTO c FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 20000 THEN RAISE NOTICE 'T41 PASS  a dry line quoted "dry<NBSP>oz" on both sides still saves; price=%', c;
+  ELSE RAISE EXCEPTION 'T41 FAIL  price=%', c; END IF;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE 'T41 FAIL%' THEN RAISE; END IF;
+  RAISE EXCEPTION 'T41 FAIL  a legitimate dry unit carrying a non-breaking space was REFUSED, so the zero-width widening is over-firing and blocks whole jobs: %', SQLERRM;
+END $$;
+
 -- T37: THE BYPASS the round-11 half-fix left open, returned by the gate as a fresh HIGH. A DRY
 -- product with rate 'fl oz/ac' against a stock Unit of 'lb'. These do NOT normalise equal, so the
 -- equality shortcut -- the only thing round 10 guarded -- never runs. The line goes down the
@@ -856,6 +916,6 @@ DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 15 AND n_chem = 15 THEN RAISE NOTICE 'T8 PASS  15 jobs / 15 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and T33 is the false-refusal guard that MUST save (T34 was inverted to a refusal in round 12, which is why this is 15 and not 16)';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 15/15)', n_jobs, n_chem; END IF;
+  IF n_jobs = 16 AND n_chem = 16 THEN RAISE NOTICE 'T8 PASS  16 jobs / 16 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the two false-refusal guards that MUST save are T33 (liquid fl oz/oz) and T41 (dry oz carrying a non-breaking space, added in round 14). T34, T39 and T40 are all refusals and write nothing, which is why each new spelling round raises this count by at most the one saving test it adds';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 16/16)', n_jobs, n_chem; END IF;
 END $$;
