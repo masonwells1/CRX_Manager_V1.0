@@ -38,6 +38,11 @@ try {
   writeSnapshot(snapshot); // the report cites this path; it must actually exist
 } catch (e) {
   failure = String(e?.message ?? e);
+  // Discard the in-memory snapshot on ANY failure, including a persistence failure that
+  // left a perfectly good snapshot in hand. Keeping it would render normally — possibly
+  // printing the reserved all-clear — and exit 0, while the run had actually errored and
+  // the "full queue" path it cites does not exist.
+  snapshot = null;
 }
 
 const nowMs = Date.now();

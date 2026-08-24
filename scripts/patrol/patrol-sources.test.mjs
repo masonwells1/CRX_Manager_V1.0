@@ -5,6 +5,8 @@
 // FAILS OPEN, so "I could not tell" gets reported as "everything is fine". Most of these
 // assertions exist to pin that shut.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { renderReport } from "./patrol-render.mjs";
 import {
   LEDGER_STALL_MS,
   LEDGER_ARCHIVED_MS,
@@ -208,6 +210,36 @@ eq(coderabbitStateFrom([{ context: "CodeRabbit", state: "success", creator: { id
 {
   const blockers = prBlockersFor({ checks: "green", coderabbit: "failed", solProof: "unknown", requiresSolProof: false });
   ok(blockers.some((b) => /did not succeed/.test(b)), "a failed review becomes an explicit blocker, so it cannot yield 'no blockers found'");
+}
+
+// ── a persistence failure must never render an all-clear (Codex HIGH) ───────
+// patrol-report.mjs used to keep a good in-memory snapshot when writeSnapshot() threw,
+// render it normally, and exit 0 — printing the reserved phrase while the run had errored
+// and the "full queue" path it cited did not exist. Passing a null snapshot models that
+// discarded state and must produce the emergency result.
+{
+  const r = renderReport(null, [], { nowMs: NOW });
+  eq(r.allClear, false, "a discarded snapshot never yields an all-clear");
+  ok(r.exitCode !== 0, "and never exits 0");
+  ok(/NOT an all-clear/.test(r.text), "the emergency text says so explicitly");
+}
+{
+  // Guard the source itself: the catch block must clear the snapshot, or the fix regresses
+  // silently the next time someone edits it.
+  const src = readFileSync(new URL("./patrol-report.mjs", import.meta.url), "utf8");
+  const catchBlock = src.slice(src.indexOf("} catch (e) {"));
+  ok(/snapshot = null;/.test(catchBlock), "the report's catch block discards the snapshot on any failure, persistence included");
+}
+
+// ── mainline parked discovery must run (Codex HIGH) ─────────────────────────
+{
+  // Worktree-owned discovery EXEMPTS drafts inherited from origin/main, so without a
+  // second mainline pass patrol could report zero parked migrations while an unapplied
+  // mainline migration still waited on Mason.
+  const src = readFileSync(new URL("./patrol-sources.mjs", import.meta.url), "utf8");
+  ok(/parkedMainlineDiscoveryFrom\(/.test(src), "parked collection runs the same mainline discovery /fleet uses");
+  ok(/mainlineState = "unknown"/.test(src), "and has an explicit unknown state");
+  ok(/mainline parked state unknown/.test(src), "which marks the source incomplete rather than reporting a clean zero");
 }
 
 // ── dead-man monitor ────────────────────────────────────────────────────────

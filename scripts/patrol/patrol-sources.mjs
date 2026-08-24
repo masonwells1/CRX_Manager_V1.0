@@ -15,6 +15,15 @@ import {
   isLedgerDoc,
   normRepoPath,
   createOwnDraftPathsReader,
+  draftPathspec,
+  parkedMainlineDiscoveryFrom,
+  localCandidateMigrationPathsFromHistory,
+  supersededDraftPathsFrom,
+  originMainParkedMigrationGrepArgs,
+  originMainParkedMigrationPrefilter,
+  originMainSqlBlobMap as parseOriginMainSqlBlobMap,
+  originMainForwardBlobPaths,
+  ORIGIN_MAIN_CAT_FILE_MAX_BUFFER,
 } from "../../.claude/hooks/worktree-awareness-lib.mjs";
 
 // A ledger untouched this long, while something still claims to be running, is suspect.
@@ -208,7 +217,60 @@ export function collectParkedMigrations(repoRoot) {
       if (own.unknownReason) unknown.push(`${path.basename(e.path)}: ${own.unknownReason}`);
     }
 
+    // Worktree-owned discovery deliberately EXEMPTS drafts inherited from origin/main, so
+    // it alone can return zero while an unapplied mainline migration still waits on Mason.
+    // /fleet runs a second, separate mainline pass for exactly this reason; without it
+    // patrol could report "no parked migrations" and contribute to a false all-clear.
+    let mainlineState = hasOriginMain ? "known" : "unknown";
+    let mainlineReason = hasOriginMain ? "" : "origin/main is unavailable";
+    if (hasOriginMain) {
+      try {
+        const tree = gitOut(["ls-tree", "-r", "--name-only", originMainRev, "--", ...draftPathspec()], repoRoot);
+        const history = readOriginMainHistory();
+        if (history === null) throw new Error("origin/main migration history is unreadable");
+        const prefilter = originMainParkedMigrationPrefilter(
+          () => gitOut(originMainParkedMigrationGrepArgs(originMainRev), repoRoot),
+          originMainRev,
+        );
+        const mainlinePaths = tree.split("\n");
+        for (const rel of supersededDraftPathsFrom(mainlinePaths, () => true).values()) names.delete(normRepoPath(rel));
+        const historyCandidates = localCandidateMigrationPathsFromHistory(history);
+        const blobs = parseOriginMainSqlBlobMap(
+          originMainForwardBlobPaths(
+            mainlinePaths,
+            prefilter.paths,
+            historyCandidates.state === "known" ? historyCandidates.paths : [],
+          ),
+          (input) => {
+            const r = spawnSync("git", ["cat-file", "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)"], {
+              cwd: repoRoot, input, timeout: 20_000, maxBuffer: ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, stdio: ["pipe", "pipe", "ignore"],
+            });
+            return r.status === 0 ? r.stdout : null;
+          },
+          ORIGIN_MAIN_CAT_FILE_MAX_BUFFER,
+          originMainRev,
+        );
+        const discovery = parkedMainlineDiscoveryFrom(
+          mainlinePaths,
+          history,
+          (p) => blobs?.get(normRepoPath(p)) ?? null,
+          prefilter.paths,
+          (text) => createHash("sha256").update(text, "utf8").digest("hex"),
+        );
+        mainlineState = discovery.state;
+        mainlineReason = discovery.reason;
+        for (const p of discovery.paths) names.add(normRepoPath(p));
+      } catch (e) {
+        mainlineState = "unknown";
+        mainlineReason = `origin/main parked-state metadata is unreadable: ${String(e.message).slice(0, 120)}`;
+      }
+    }
+
     if (!hasOriginMain) { src.status = "INCOMPLETE"; src.detail = "origin/main not available locally — parked discovery would be unreliable"; }
+    else if (mainlineState === "unknown") {
+      src.status = "INCOMPLETE";
+      src.detail = `mainline parked state unknown: ${mainlineReason}`;
+    }
     else if (unknown.length) {
       // /fleet says "do not treat the parked count as a clean zero" in this case. Patrol
       // says the same thing by refusing to call the source OK.

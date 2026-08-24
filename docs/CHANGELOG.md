@@ -68,6 +68,15 @@ needs Mason?" and is built so that its silence is trustworthy.
   only a verified `success` now counts, and a failed review is an explicit blocker.
   A third, medium finding corrected the command doc, which claimed patrol had "no write
   capability" when it does write its own local state.
+- **A second Codex round found two more false-all-clear paths, both fixed.** (1) Parked
+  discovery ran only the worktree-owned pass, which deliberately exempts drafts inherited
+  from `origin/main` — so patrol could report zero parked migrations while an unapplied
+  mainline migration still waited. It now runs the same mainline discovery `/fleet` does
+  and marks the source incomplete when that state is unknown; the live count went from
+  "source errored" to a real 16. (2) `patrol-report.mjs` kept a good in-memory snapshot
+  when persisting it threw, rendered it normally, and exited 0 — able to print the
+  reserved all-clear while citing a queue file that did not exist. Any persistence failure
+  now discards the snapshot and produces the emergency result.
 - **Patrol then caught a false positive in itself.** It reported the Codex gate as down
   because the review capture embeds the reviewed diff, and this change's own source
   contains a usage-limit pattern. The gate probe now anchors to a real error line rather
