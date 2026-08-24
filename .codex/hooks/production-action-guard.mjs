@@ -7,6 +7,7 @@ import path from "node:path";
 
 import {
   contentIsRisky,
+  eachPush,
   extractPatchDestinations,
   gitPushArgumentsUnbindable,
   gitPushCwd,
@@ -747,6 +748,29 @@ export function evaluateProductionAction({
   const unbindableArgs = gitPushArgumentsUnbindable(command);
   if (unbindableArgs.length > 0) {
     return denied(`CODEX PRODUCTION GATE: this push has an argument the shell will join to the next one (${unbindableArgs.join(", ")}), so the guard cannot tell which repository or refspec it names — and a push it cannot bind is a push it cannot check. That happens when a path with a space is escaped rather than quoted. Quote the whole value instead: \`git -C "C:/My Repo" push origin <branch>\`.`);
+  }
+
+  // Backstop for the splitter itself (Codex proof gate, PR #445, at `6ad405b7`).
+  // `shellSegments` treats `\` as escaping the next character. That is true in
+  // Bash and FALSE in PowerShell, where a backslash is an ordinary argument
+  // character — so `\|` stays a real pipeline separator and PowerShell runs two
+  // commands where this guard, after adopting the shared splitter, sees one:
+  //
+  //     git push origin feature/test \| git push --force origin HEAD:shared-work
+  //
+  // The local regex this guard used BEFORE that switch split on `|` unconditionally
+  // and caught it; Codex reproduced both versions and the candidate returned
+  // unblocked on the force-push. Teaching the splitter which shell it is in is not
+  // possible — the guard cannot know. So refuse the one shape the ambiguity can
+  // produce instead: every check below classifies ONE push, so a segment holding
+  // two of them means the split failed and a push would be judged on the OTHER
+  // push's arguments. A single shell command cannot legitimately push twice. The
+  // Claude-side guard has carried this backstop since round 10; the two guards
+  // disagreeing about what a segment IS is what produced both of these holes.
+  for (const segment of commandSegments.filter((part) => isGitPush(part))) {
+    if (eachPush(segment).length > 1) {
+      return denied("CODEX PRODUCTION GATE: this command chains more than one push in a way the guard cannot split reliably (quoting/escaping makes the boundaries ambiguous, and what a backslash means depends on the shell), so it is denied rather than judged on a guess. Run each push as its own separate command.");
+    }
   }
 
   for (const segment of commandSegments.filter((part) => isGitPush(part))) {

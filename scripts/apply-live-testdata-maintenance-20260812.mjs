@@ -113,11 +113,11 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // additive (+11 lines); all three transform anchors — the matcher, the
   // PROTECTED_HARNESS_FRAGMENT_RE constant, and the maintenance execution gate
   // — are untouched and still present exactly once.
-  codexGuard: "8d88b792eeef6290b320e29a945389b3f53cabc9",
+  codexGuard: "38d2c8a9663c3413fae5468268fd52f536a68459",
   pushLib: "635dcce8ec3ad4b6d30ab5ceb74f1727ede1ecb2",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "6e4f98fdfd263d37ad90767c97345e44d42539c4",
+  codexGuard: "a8a2f58db1dce0f5132ecddbe4ca319ac1ad3682",
   pushLib: "635dcce8ec3ad4b6d30ab5ceb74f1727ede1ecb2",
 };
 

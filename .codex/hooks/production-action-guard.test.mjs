@@ -400,6 +400,23 @@ try {
     });
     assert.equal(backgrounded.blocked, true, "a second push hidden behind a single `&` is still gated");
     assert.match(String(backgrounded.reason || ""), /proof/i, "…and for the real reason — the missing exact-SHA proof");
+    // ...and the mirror-image hazard that the `shellSegments` switch INTRODUCED. That
+    // splitter treats a backslash as escaping the next character — true in Bash,
+    // FALSE in PowerShell, where a backslash is an ordinary argument character and
+    // `\|` stays a real pipeline separator. PowerShell runs two commands; the
+    // guard saw one and returned unblocked on the hidden `--force` (Codex proof
+    // gate at `6ad405b7`, reproduced against both the pre- and post-switch guard
+    // before fixing). The local regex this guard used BEFORE the switch split on
+    // `|` unconditionally and caught it, so the switch traded one gap for
+    // another. The guard cannot know which shell will run the line, so it refuses
+    // the only shape the ambiguity can produce: two pushes it could not separate.
+    const escapedPipe = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: "git push origin feature/test \\| git push --force origin HEAD:shared-work" },
+      repoDir: projectRoot,
+    });
+    assert.equal(escapedPipe.blocked, true, "a force-push hidden behind a backslash-escaped pipe is gated");
+    assert.match(String(escapedPipe.reason || ""), /more than one push/i, "…refused as an unsplittable multi-push, not judged on one of them");
     // A UNC path means the same share to MSYS and to node, so refusing it would
     // be over-refusal: it must reach the ordinary gates instead.
     const unc = evaluateProductionAction({

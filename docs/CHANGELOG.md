@@ -104,6 +104,20 @@ next agent. Two sessions read it that way.
   separator, so `git push origin feature/x & git -C /tmp/risky push origin HEAD:main` was read as
   only the harmless first command. That guard now uses the shared quote-aware `shellSegments()` the
   Claude guard already used — the two must never disagree about what a segment is.
+- **The fix for (b) opened a hole of its own, and the next proof gate caught it.** `shellSegments`
+  treats a backslash as escaping the next character — true in Bash, **false in PowerShell**, where a
+  backslash is an ordinary argument character and `\|` stays a real pipeline separator. So
+  `git push origin feature/test \| git push --force origin HEAD:shared-work` is **two** commands to
+  PowerShell, and the newly shared splitter read it as one: the pre-fix guard returned *unblocked* on
+  the hidden `--force`, while the local regex it had just replaced split on a pipe unconditionally and
+  caught it. Adopting the shared parser traded one gap for another — the cost of making two guards
+  agree is that they now agree about a shell neither can identify. The guard cannot know which shell
+  will run a line, so it stops trying: the Codex guard now carries the same **fail-closed backstop the
+  Claude guard has had since round 10** — every check classifies ONE push, so a segment holding two of
+  them means the split failed, and a push that would be judged on the *other* push's arguments is
+  refused instead of guessed at. Proven in both directions: the committed pre-fix guard **allows** the
+  payload, the fixed one **denies** it, and the `&` case, an ordinary bound feature push, and a commit
+  whose message contains the word push all still behave.
 - **Round 11 replaced the question entirely.** Both earlier versions asked something about the *raw*
   token list, and a split option value pushes every later token out of position — so
   `git -C C:/My\ Repo commit -m push` (a commit), `… status -- push`, and `… stash push -m wip` were
