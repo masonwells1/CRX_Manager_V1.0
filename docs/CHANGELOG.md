@@ -2,6 +2,88 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — Migration ordering review now matches the deterministic ledger guard
+
+The draw-down cutover review exposed two opposite bookkeeping hazards in the
+human-review charter. It first treated Supabase's apply-time `version` as the
+authored migration high-water and falsely blocked a correctly ordered money
+migration. The first correction then went too far and discarded `version` even
+for legacy ledger rows whose `name` contains no timestamp.
+
+- Migration ordering evidence is now derived row by row: prefer the authored
+  14-digit stamp embedded in `name`, and use that row's 14-digit `version` only
+  when the name has no timestamp. A bare `max(version)` or schema-registry
+  version is not sufficient ordering evidence because it loses that context.
+- The fallback premise is real: a read-only live check found 626 of 971 ledger
+  rows have bare-slug names. The newest such row remains older than the current
+  authored-name high-water, so this was a latent guard contradiction rather
+  than a change to today's migration verdict.
+- Post-apply B7 handling now reconciles the new ledger row instead of always
+  renaming the disk file. When the normalized live `name` already matches the
+  authored basename, the filename stays unchanged; a differing apply-time
+  version alone must not manufacture drift. The version rename remains the
+  fallback when the live name does not preserve the authored basename.
+- The canonical `/ship` workflow and the migration-drift reviewer use the same
+  rule. Deterministic guidance checks pin both edge cases and were mutation-
+  tested by removing the timestamp-less-name fallback and by restoring the
+  obsolete always-rename instruction; both mutations failed the intended
+  assertions.
+- Exact-head Codex review found that CHECK 6 still cited the schema-registry
+  staleness heuristic and a name-only history paragraph as if they implemented
+  the fallback. The reviewer now cites the executable ordering library and
+  snapshot producer; both the library commentary and migration history spell
+  out the same row-by-row effective-stamp calculation. Deterministic assertions
+  pin the citations and both corroborating explanations.
+- All agent workflow and correction-guard suites passed. No live migration or
+  business-data change was performed while correcting these gates.
+
+## 2026-08-24 — Phase 3C containment tolerates rebuilt ignored `dist/` entries
+
+The private-artifact containment guard now skips only the narrow race where Git lists an ignored,
+tool-owned generated file and the build removes it before inspection. It immediately re-lists and
+rescans after that race, so a rebuilt file cannot be hidden; a second disappearance and a missing
+worktree root are explicitly fail-closed. Stable generated files and direct forbidden filenames
+remain blocking. The recovery scan de-duplicates candidates already inspected, preserving the
+normal structural scan budget for newly reappeared or grown files.
+
+## 2026-08-24 — The push-proof wrapper runs Git through one trusted executable and a sanitized environment
+
+Landed on its own so the exact-review bootstrap exception can be restored. The
+bootstrap rule only trusts `scripts/write-codex-push-proof.mjs` while it
+byte-matches its protected-`main` blob, so a branch that hardens the wrapper
+cannot mint its own proof — this change reaches `main` first, by design, and
+carries no other work.
+
+- All Git calls in the proof wrapper — repository discovery, clean-tree status,
+  ref binding, tree/blob enumeration, candidate listing, and packet diffing —
+  now run one fixed trusted Git executable under a single minimal environment.
+  Global and system configuration, the system attributes file, replacement
+  objects, credential prompts, and optional locks are disabled, and `PATH` is
+  narrowed to the trusted installation plus the platform system directory.
+  Inherited `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG_*` overrides are dropped by
+  construction rather than filtered.
+- Previously the shared `runGit()` helper invoked bare `git`, so `PATH` decided
+  which binary inspected the tree that gates a push, and every call inherited
+  the ambient environment — letting a global `core.attributesfile` plus a
+  `filter.<name>.process` run arbitrary code inside the process that decides
+  whether a push is trustworthy.
+- Regression: `scripts/write-codex-push-proof.test.mjs` plants a hostile global
+  attributes file plus a process filter outside the source repository and proves
+  the marker file is never written during clean-status reads or proof-packet
+  construction. Mutation-tested — re-enabling global configuration turns the
+  clean-status assertion red.
+- Review round (CodeRabbit, PR #455) on that regression, both fixed here. The
+  filter path was written into `filter.review.process` unquoted, and Git runs a
+  filter command through the shell, so a temporary directory containing a space
+  would split the path and the filter would never execute — leaving the marker
+  absent for a reason unrelated to isolation. The path is shell-quoted now, and
+  a positive control first proves the filter really does execute under ambient
+  Git in a throwaway repository, then clears the marker, so the marker assertion
+  can no longer pass against an unhardened wrapper. The fixture's
+  `HOME`/`USERPROFILE` mutation and cleanup also moved into `try`/`finally`; a
+  throw previously left the hostile environment in place for every later
+  assertion in the file and leaked the fixture directory.
+
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 
 Five quote-based smoke chains had silently rotted after product pricing became
@@ -815,7 +897,6 @@ match. It now converts before comparing, and refuses rather than guessing when i
 - 10 new tests (43 in the file); the form split, the billing fallback, and the `oz/cwt` guard were each
   mutation-tested by reverting them and confirming exactly the expected test went red. Verified by
   driving the real module in a browser across all nine cases, including both MG shapes.
-
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 
 `validateBlendMath` summed every product quantity regardless of unit, so a ticket holding
