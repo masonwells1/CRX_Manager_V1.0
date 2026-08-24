@@ -95,11 +95,22 @@
 -- blank-unit refusal was added ahead of the zero-quantity skip. That ordering was itself a
 -- defect and is fixed; the sentence is restated here so the two do not drift apart again.
 --
--- PRE-APPLY DATA OBLIGATION -- ONE live row, and it must be corrected FIRST.
--- Exactly one job_chemicals row carries a BLANK unit against a pt/ac rate while holding
--- both a cost and a price, so change 0 above refuses it. Mason chose on 2026-08-23 to fix
--- the data first and then close the hole, so that the guard has zero operational impact on
--- the day it applies: with that row corrected there is nothing left in the refused shape.
+-- PRE-APPLY DATA OBLIGATION -- SATISFIED as of 2026-08-24, but STILL RE-RUN IT.
+-- One job_chemicals row (JOB-2026-0002) carried a BLANK unit against a pt/ac rate while
+-- holding both a cost and a price, so change 5 below refused it. Mason chose on 2026-08-23
+-- to fix the data first and then close the hole, so the guard would have zero operational
+-- impact on the day it applies. That correction was made on 2026-08-24 with his explicit
+-- OK -- one row, unit set to 'Pt' -- and re-verified read-only here: the count below now
+-- returns ZERO, and the job totals did not move (219930 / 278578 before and after), because
+-- the per-unit amounts were already quoted per pint. Only the label was missing. T28 replays
+-- the corrected row and asserts those same two totals, so this is proved by execution rather
+-- than asserted; T1 keeps the pre-correction shape as the executable statement of the policy.
+--
+-- The obligation is NOT deleted, and this is the point: "zero rows today" is not a property
+-- of the migration, it is a property of the data on one day. A legacy import, a hand-built
+-- RPC call, or any save made before this migration applies can recreate the shape. Whoever
+-- applies this re-runs the count and requires zero -- reading this paragraph is not a
+-- substitute for running it.
 --
 -- Re-run this read-only check IMMEDIATELY BEFORE the apply and require ZERO rows. It is
 -- the whole obligation, and it is cheap:

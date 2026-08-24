@@ -4,7 +4,7 @@
 **Branch:** `claude/save-job-server-side-chem-unit` (worktree `.claude/worktrees/save-job-enforcement`)
 **Head:** see `git log -1` — round 8 landed on 2026-08-24; **unpushed**. Tree clean.
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-**SQL sha256:** `fe5999765d80894276c20734c828afb75db552c5f011836f224e4e86ba8f5d45`
+**SQL sha256:** `7ca707de487b58052d546a9d47e701723d8c0c9b00f523c652bee33fab9127a4`
 **Status: PARTIAL — written, proven, and parked at two gates that are not mine to open.**
 
 ## Approval state — carries nothing forward
@@ -32,7 +32,7 @@ The live unit helpers (`normalize_rate_unit`, `field_app_priced_quantity`, `safe
 node scripts/smoke/prove-save-job-chem-unit-invariant.mjs
 ```
 
-PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **27 behaviour tests** pass; **16 mutation phases** each fail in a *named* way — 10 turn a named test red, 6 abort the apply with the specific postflight assertion written to catch them.
+PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **28 behaviour tests** pass; **16 mutation phases** each fail in a *named* way — 10 turn a named test red, 6 abort the apply with the specific postflight assertion written to catch them.
 
 `scripts/smoke/smoke-save-job-parity.sql` is the registered live chain and is **gated** on whether this migration is installed. The container prover is **manual** — `run-smoke.mjs --all` will not run it.
 
@@ -40,9 +40,9 @@ PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_C
 
 **Gate 1 — ordering: PR #436 must land first.** This is a real behaviour change, not a mirror of a shipped client guard. `main` has no save-blocking unit guard at all; the client half (`chemLineBillingHazard`, `rateDenominatorIsUnrecognized`, `centsTimesQuantity`) exists only on the unmerged PR #436 branch. Apply this first and the next operator to touch an affected job gets a hard save failure with no prior on-screen warning — and because `performSave` re-sends the whole chemical grid, one bad legacy line makes the **entire job** unsaveable. *Mason's call: land #436.*
 
-**Gate 2 — pre-apply data obligation: one live row, correct it first.** Mason chose (2026-08-23) to fix the data before closing the hole, so the guard lands with zero operational impact. Exactly one `job_chemicals` row is in the refused shape: a `pt/ac` rate, blank Unit, both a cost and a price, not customer-supplied — on **JOB-2026-0002** (2026-06-30, status `invoiced`, product "1A TEST PRODUCT - FAKE PRODUCT", quantity 73.31). It is a **test product**, so the fix is nearly free; `isEditable` at `src/pages/JobDetail.tsx:286` is `role === 'admin' || role === 'sales_rep'`, so `invoiced` does not block editing it. *Mason's call: it is a live-data edit.*
+**Gate 2 — pre-apply data obligation: DONE 2026-08-24.** One `job_chemicals` row was in the refused shape (**JOB-2026-0002**: `pt/ac` rate, blank Unit, both a cost and a price, not customer-supplied). Mason gave his explicit OK and a separate session made the one-row change — `unit` set to `'Pt'`. Re-verified read-only here: the count returns **zero**, and the job totals did not move (`219930` / `278578` before and after), because the per-unit amounts were already quoted per pint and only the label was missing. Test `T28` replays the corrected row and asserts those same two totals, so **all four live rows are now proved by execution** to save with the correct money, not merely asserted to.
 
-Re-run the exact four-term count immediately before applying and require **zero** rows. It is in the migration header and in `docs/manual/KNOWN_ISSUES.md`, character for character in both. Do **not** re-derive it from memory — three earlier versions of that query were wrong, all in the same direction (reporting zero while a live row was still refused).
+**The check is not retired.** Re-run the exact four-term count immediately before applying and require **zero** rows — zero today is a property of the data on one day, not of the migration, and a legacy import or hand-built call can recreate the shape. It is in the migration header and in `docs/manual/KNOWN_ISSUES.md`, character for character in both. Do **not** re-derive it from memory — three earlier versions of that query were wrong, all in the same direction (reporting zero while a live row was still refused).
 
 ## Blocked, not forgotten
 

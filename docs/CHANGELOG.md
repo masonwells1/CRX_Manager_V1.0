@@ -126,9 +126,10 @@ table and the server's is the original 16x bug; a second server-side copy would 
 **Blast radius measured, not estimated**, re-verified read-only on 2026-08-23. All four
 `job_chemicals` rows in the live database clear the *mismatch*, *denominator* and *finiteness*
 refusals — none negative, none non-finite, no unit disagreement — and the derived totals reproduce
-every stored total to the cent. The blank-unit refusal added below is the one exception, and it is
-tracked separately as a pre-apply data obligation rather than folded into this sentence: exactly one
-of those four rows would be refused by it.
+every stored total to the cent. The blank-unit refusal added below *was* the one exception — one of
+those four rows would have been refused by it — and that row was corrected on 2026-08-24, so all
+four now clear every refusal. It stays tracked as a pre-apply obligation rather than folded into
+this sentence, because the data can change again between now and the apply.
 
 **A blank unit is refused too, and that one is Mason's call rather than a review finding.** A blank
 `unit` used to be skipped — nothing can be disproved about it — while `transfer_job_to_invoice`
@@ -138,14 +139,24 @@ reason — a line that cannot bill cannot bill *wrongly*: customer-supplied line
 a cost nor a price, and zero-quantity lines. The test covers the cost side as well as the price,
 since cost drives margin and not just the customer bill.
 
-**Pre-apply data obligation — one live row, corrected first.** Exactly one `job_chemicals` row is in
-the refused shape: a pint-per-acre rate, no Unit, and both a cost and a price. Mason chose to fix
-the data before closing the hole, so the guard lands with zero operational impact — with that row
-corrected there is nothing left for it to refuse. The count to re-run immediately before applying is
-in the migration header and in `KNOWN_ISSUES.md`, and it must return zero. In proportion: that row
-belongs to a **test product** on a job already marked `invoiced`, not to live customer work. Test
-`T1`, which used to assert that this live shape saves, now asserts the refusal — so the obligation is
-held up by an executable test rather than by a sentence.
+**Pre-apply data obligation — one live row, and it has now been corrected.** Exactly one
+`job_chemicals` row was in the refused shape: a pint-per-acre rate, no Unit, and both a cost and a
+price. Mason chose to fix the data before closing the hole, so the guard lands with zero operational
+impact, and **that correction was made on 2026-08-24 with his explicit OK** — one row, Unit set to
+`Pt`. The count now returns zero, and the job totals did not move (`219930` / `278578` before and
+after): the per-unit amounts were already quoted per pint, so only the label was missing. In
+proportion: that row belonged to a **test product** on a job already marked `invoiced`, not to live
+customer work.
+
+Both sides of it are held up by executable tests rather than by this paragraph. `T1` keeps the
+pre-correction shape and asserts the refusal — the policy statement survives even though no live row
+is in that shape any more, because a legacy import or a hand-built call can recreate it at any time.
+`T28` replays the *corrected* row and asserts it saves with derived totals of exactly `219930` /
+`278578`, which is the stronger claim: correcting the label did not move the money. With `T2` and
+`T3` that now covers **all four** live rows by execution.
+
+The count is deliberately **not** deleted. Zero rows is a property of the data on one day, not of the
+migration, so whoever applies it re-runs the check in the migration header and requires zero.
 
 **Remaining residuals, stated rather than hidden.** `job_fields.acres_to_treat` still carries no
 CHECK, so a `NaN` acreage can no longer bypass the invariant but can still be stored. And `save_job`
@@ -170,7 +181,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Twenty-seven behaviour tests pass; and sixteen mutation phases each fail in a **named** way — ten
+Twenty-eight behaviour tests pass; and sixteen mutation phases each fail in a **named** way — ten
 turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -197,7 +208,7 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The twenty-seven tests: the two clean live row shapes save with derived totals reproducing the live
+The twenty-eight tests: the two clean live row shapes save with derived totals reproducing the live
 stored values exactly, while the third — the one live row with a blank unit — is now **refused**, so
 the pre-apply data obligation is pinned by an executable test rather than by prose; a legitimate
 oz-rate/lb-price conversion saves; the 16x shape is refused *and* its remedy text is asserted to

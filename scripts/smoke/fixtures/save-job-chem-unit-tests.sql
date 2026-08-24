@@ -3,24 +3,33 @@
 -- scripts/smoke/prove-save-job-chem-unit-invariant.mjs. Every DO block either RAISEs
 -- NOTICE with a PASS line or RAISEs EXCEPTION, so psql -v ON_ERROR_STOP=1 fails the run.
 --
--- T1-T3 replay the shapes of the real job_chemicals rows in production (read read-only
--- 2026-08-23). T2 and T3 assert the DERIVED totals reproduce what those jobs actually
--- store; T1 is the one live shape the migration now REFUSES, and it is the reason the
--- header carries a pre-apply data obligation. T4/T7/T9/T11-T13/T17 are the refusals.
+-- T2, T3 and T28 replay the shapes of the real job_chemicals rows in production (read
+-- read-only 2026-08-24, after JOB-2026-0002 was corrected) and assert the DERIVED totals
+-- reproduce what those jobs actually store. Between them they now cover ALL FOUR live
+-- rows, so every live row is proved to save with the correct money rather than merely
+-- asserted to. T1 replays what JOB-2026-0002 looked like BEFORE that correction and pins
+-- the refusal; no live row is in that shape today.
+-- T4/T7/T9/T11-T13/T17 are the refusals.
 -- T5/T10/T14-T16/T18/T19 are shapes that must still save. T6 is the stale-tab case.
 -- T8 proves a refusal leaves nothing behind.
 
 -- T1: the live JOB-2026-0002 shape -- rate 'pt/ac', unit NULL, and both a cost and a
--- price. This is THE row the pre-apply data obligation is about, and this test is what
--- makes that obligation concrete rather than a sentence in a header.
+-- price. This WAS the live shape of JOB-2026-0002 and the reason for the pre-apply data
+-- obligation. **That row was corrected on 2026-08-24** (unit set to 'Pt' with Mason's
+-- explicit OK, in a separate session; re-verified read-only here: the obligation count is
+-- now ZERO and no live row is in this shape). The test is deliberately KEPT anyway, and
+-- promoted from "this is the live row" to "this is the shape the rule exists to refuse" --
+-- deleting it because production happens to be clean today would retire the only executable
+-- statement of the policy, and the next hand-built call or legacy import can recreate the
+-- shape at any time. T28 covers the CORRECTED live row.
 --
 -- It used to assert that this shape SAVES. It no longer does: a blank unit proves nothing
 -- while transfer_job_to_invoice bills the line anyway, so as of Mason's 2026-08-23
--- decision the line is REFUSED. Until that live row has its Unit filled in, applying this
--- migration makes that job unsaveable -- which is exactly why the obligation is to correct
--- the data FIRST. Note the totals it used to assert (219930 / 278578) were reproduced
--- exactly by the derivation before the refusal was added, so the arithmetic is not what
--- changed here; the policy is.
+-- decision the line is REFUSED. Note the totals it used to assert (219930 / 278578) were
+-- reproduced exactly by the derivation before the refusal was added, so the arithmetic is
+-- not what changed here; the policy is. T28 now asserts those same two totals against the
+-- CORRECTED row, which is the stronger claim: the money was always right, only the label
+-- was missing.
 DO $$
 DECLARE ok boolean := false; msg text;
 BEGIN
@@ -32,7 +41,7 @@ BEGIN
       '11111111-1111-1111-1111-111111111111'::uuid, NULL);
   EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
   END;
-  IF ok AND msg LIKE 'CHEM_UNIT_UNSPECIFIED%' THEN RAISE NOTICE 'T1 PASS  the live blank-unit shape is now refused: %', msg;
+  IF ok AND msg LIKE 'CHEM_UNIT_UNSPECIFIED%' THEN RAISE NOTICE 'T1 PASS  a blank-unit billing line is refused (the former JOB-2026-0002 shape): %', msg;
   ELSE RAISE EXCEPTION 'T1 FAIL  (refused=% msg=%)  -- the live blank-unit billing row was ACCEPTED', ok, msg; END IF;
 END $$;
 
@@ -509,12 +518,43 @@ BEGIN
   END IF;
 END $$;
 
+-- T28: the CORRECTED live JOB-2026-0002 row, read read-only 2026-08-24 -- rate 'pt/ac',
+-- unit 'Pt', quantity 73.31, 3000c cost and 3800c price. Its Unit was filled in on
+-- 2026-08-24 with Mason's explicit OK (a separate session made the one-row change), which
+-- retired the pre-apply data obligation: the obligation count now returns ZERO.
+--
+-- Two things are asserted, and the second is the point. First, the row SAVES: 'pt/ac'
+-- normalises to 'pt' and 'Pt' lowercases to 'pt', so the units-are-equal skip fires and
+-- no proof is needed. Second, the DERIVED totals are 219930 / 278578, reproducing what
+-- that job actually stores to the cent -- the same two numbers T1 used to assert before
+-- the refusal existed. That is the real claim: correcting the label did not move the
+-- money, because the per-unit amounts were already quoted per pint.
+--
+-- Written because the correction made T1 stop covering any live row. A migration whose
+-- live-shape tests no longer match live is exactly the "proved something that is not
+-- production" trap, and the fix is to add the new shape rather than to reword a comment.
+DO $$
+DECLARE r jsonb; c bigint; p bigint;
+BEGIN
+  r := save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":73.31,"total_cost_cents":219930,"total_price_cents":278578}'::jsonb,
+    '[{"field_id":"33333343-3333-3333-3333-333333333345","acres_to_treat":73.31}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000001","quantity":73.31,"unit":"Pt","rate_per_acre":1,"rate_unit":"pt/ac","cost_per_unit_cents":3000,"price_per_unit_cents":3800}]'::jsonb,
+    '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  SELECT total_cost_cents, total_price_cents INTO c, p FROM jobs WHERE id = (r->>'job_id')::uuid;
+  IF c = 219930 AND p = 278578 THEN
+    RAISE NOTICE 'T28 PASS  the corrected live row saves; derived cost=% price=% (live stores 219930 / 278578)', c, p;
+  ELSE
+    RAISE EXCEPTION 'T28 FAIL  cost=% price=% (expected 219930 / 278578)  -- the derivation no longer reproduces the live totals', c, p;
+  END IF;
+END $$;
+
 -- T8: every refused save must have left NOTHING behind.
 DO $$
 DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 12 AND n_chem = 12 THEN RAISE NOTICE 'T8 PASS  12 jobs / 12 chemical rows -- the 14 refused saves wrote nothing, and the T27 replay added exactly one';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 12/12)', n_jobs, n_chem; END IF;
+  IF n_jobs = 13 AND n_chem = 13 THEN RAISE NOTICE 'T8 PASS  13 jobs / 13 chemical rows -- the 14 refused saves wrote nothing, and the T27 replay added exactly one';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 13/13)', n_jobs, n_chem; END IF;
 END $$;

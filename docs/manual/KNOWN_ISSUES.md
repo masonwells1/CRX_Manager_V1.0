@@ -315,13 +315,18 @@ already populated, so a product picked before any acreage is entered lands exact
 independent reviewers found it on the same round; the skip moved above the refusal, test `T20` pins
 it, and a mutant that moves it back turns `T20` red by name.
 
-**PRE-APPLY DATA OBLIGATION — one live row, correct it FIRST.** Read read-only on 2026-08-23 (a
-re-verification of the 2026-08-22 blast-radius measurement stamped at the top of this file,
-returning the same figures): of the four `job_chemicals` rows on live, exactly one carries a `pt/ac`
-rate, a **blank** unit and both a cost and a price, and is not customer-supplied — so the new rule
-refuses it. Mason chose to fix the data first and then close the hole, so that on the day the
-migration applies there is nothing left in the refused shape and the guard has zero operational
-impact. Re-run this immediately before the apply and require **zero** rows:
+**PRE-APPLY DATA OBLIGATION — SATISFIED 2026-08-24, and still re-run it before any apply.** Of the
+four live `job_chemicals` rows, exactly one (JOB-2026-0002) carried a `pt/ac` rate, a **blank** unit
+and both a cost and a price, so the new rule refused it. Mason chose to fix the data first and then
+close the hole. **That correction was made on 2026-08-24 with his explicit OK** — one row, `unit` set
+to `'Pt'` — and re-verified read-only: the count below now returns **zero**, and the job totals did
+not move (`219930` / `278578` before and after), because the per-unit amounts were already quoted
+per pint; only the label was missing. Behaviour test `T28` replays the corrected row and asserts
+those same two totals, so the claim is proved by execution rather than asserted.
+
+Do **not** treat that as retiring the check. "Zero rows today" is a property of the data on one day,
+not of the migration: a legacy import, a hand-built RPC call, or any save made before this migration
+applies can recreate the shape. Re-run this immediately before the apply and require **zero** rows:
 
 ```sql
 WITH n AS (
