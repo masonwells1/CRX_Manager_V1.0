@@ -11,6 +11,32 @@ worktree root are explicitly fail-closed. Stable generated files and direct forb
 remain blocking. The recovery scan de-duplicates candidates already inspected, preserving the
 normal structural scan budget for newly reappeared or grown files.
 
+## 2026-08-24 — The push-proof wrapper runs Git through one trusted executable and a sanitized environment
+
+Landed on its own so the exact-review bootstrap exception can be restored. The
+bootstrap rule only trusts `scripts/write-codex-push-proof.mjs` while it
+byte-matches its protected-`main` blob, so a branch that hardens the wrapper
+cannot mint its own proof — this change reaches `main` first, by design, and
+carries no other work.
+
+- All Git calls in the proof wrapper — repository discovery, clean-tree status,
+  ref binding, tree/blob enumeration, candidate listing, and packet diffing —
+  now run one fixed trusted Git executable under a single minimal environment.
+  Global and system configuration, the system attributes file, replacement
+  objects, credential prompts, and optional locks are disabled, and `PATH` is
+  narrowed to the trusted installation plus the platform system directory.
+  Inherited `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG_*` overrides are dropped by
+  construction rather than filtered.
+- Previously the shared `runGit()` helper invoked bare `git`, so `PATH` decided
+  which binary inspected the tree that gates a push, and every call inherited
+  the ambient environment — letting a global `core.attributesfile` plus a
+  `filter.<name>.process` run arbitrary code inside the process that decides
+  whether a push is trustworthy.
+- Regression: `scripts/write-codex-push-proof.test.mjs` plants a hostile global
+  attributes file plus a process filter outside the source repository and proves
+  the marker file is never written during clean-status reads or proof-packet
+  construction. Mutation-tested — re-enabling global configuration turns it red.
+
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 
 Five quote-based smoke chains had silently rotted after product pricing became

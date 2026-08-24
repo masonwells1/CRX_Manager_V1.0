@@ -2,7 +2,7 @@
 // Tests for the Codex push-proof wrapper (scripts/write-codex-push-proof.mjs).
 // Run: node scripts/write-codex-push-proof.test.mjs
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -179,6 +179,43 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
   writeFileSync(path.join(source, ".env"), "GITHUB_TOKEN=must-not-copy\n");
   execFileSync("git", ["add", "tracked.txt", ".gitattributes", "supabase/migrations/hidden.sql"], { cwd: source, stdio: "ignore" });
   execFileSync("git", ["-c", "user.name=Review Test", "-c", "user.email=review@example.invalid", "commit", "-qm", "candidate"], { cwd: source, stdio: "ignore" });
+  // The hostile global home MUST live outside the source repository: an
+  // untracked directory inside it would make the worktree legitimately dirty
+  // and turn the clean-status assertion below into a tautology.
+  const hostileGlobalHome = mkdtempSync(path.join(tmpdir(), "crx-review-hostile-home-"));
+  const hostileGlobalAttributes = path.join(hostileGlobalHome, "attributes");
+  const hostileGlobalMarker = path.join(hostileGlobalHome, "process-filter-ran.txt");
+  const hostileGlobalFilter = path.join(hostileGlobalHome, process.platform === "win32" ? "filter.cmd" : "filter.sh");
+  mkdirSync(hostileGlobalHome, { recursive: true });
+  writeFileSync(hostileGlobalAttributes, "* filter=review\n");
+  writeFileSync(hostileGlobalFilter, process.platform === "win32"
+    ? `@echo hostile>"${hostileGlobalMarker}"\r\n@exit /b 1\r\n`
+    : `#!/bin/sh\nprintf hostile > '${hostileGlobalMarker.replaceAll("'", "'\\''")}'\nexit 1\n`);
+  if (process.platform !== "win32") chmodSync(hostileGlobalFilter, 0o755);
+  writeFileSync(path.join(hostileGlobalHome, ".gitconfig"), [
+    "[core]",
+    `\tattributesfile = ${hostileGlobalAttributes.replaceAll("\\", "/")}`,
+    '[filter "review"]',
+    `\tprocess = ${hostileGlobalFilter.replaceAll("\\", "/")}`,
+    "",
+  ].join("\n"));
+  const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
+  process.env.HOME = hostileGlobalHome;
+  process.env.USERPROFILE = hostileGlobalHome;
+  assert.equal(worktreeIsClean(source), true, "proof-wrapper status uses fixed Git with global/system configuration disabled");
+  const globallyIsolatedPacket = createSanitizedReviewWorkspace({
+    sourceRoot: source,
+    baseRef: "origin/main",
+    candidateRef: "HEAD",
+  });
+  assert.equal(existsSync(hostileGlobalMarker), false, "hostile global attributes/process filters never execute during proof packet construction");
+  removeSanitizedReviewWorkspace(globallyIsolatedPacket.root);
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = originalUserProfile;
+  rmSync(hostileGlobalHome, { recursive: true, force: true });
   const sanitized = createSanitizedReviewWorkspace({
     sourceRoot: source,
     baseRef: "origin/main",
