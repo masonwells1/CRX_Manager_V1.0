@@ -501,6 +501,25 @@ const CASES = [
       `WHEN MATCHED THEN UPDATE SET total_profit = 0;\n`,
   },
   {
+    name: 'MERGE without optional INTO still rewrites existing rows',
+    expect: 'violation',
+    sql:
+      `MERGE public.orders t\nUSING (SELECT 1 AS id) s ON t.id = s.id\n` +
+      `WHEN MATCHED THEN UPDATE SET total_profit = 0;\n`,
+  },
+  {
+    name: 'MERGE ONLY without optional INTO can delete existing rows',
+    expect: 'violation',
+    sql:
+      `MERGE ONLY public.orders t\nUSING (SELECT 1 AS id) s ON t.id = s.id\n` +
+      `WHEN MATCHED THEN DELETE;\n`,
+  },
+  {
+    name: 'malformed MERGE target fails closed',
+    expect: 'violation',
+    sql: `MERGE USING (SELECT 1 AS id) s ON true WHEN MATCHED THEN DELETE;\n`,
+  },
+  {
     // A real hash, correctly assigned to the compared variable — of a constant.
     // It proves the migration can call digest(), and nothing else.
     name: 'hash of a constant, not of the rows being rewritten',

@@ -712,6 +712,11 @@ function inGrantOrRevoke(s, idx) {
   return /\b(grant|revoke)\b/.test(s.slice(start, idx));
 }
 
+// PostgreSQL's INTO keyword is optional for MERGE. Keep the established write
+// matcher intact, then add the legal bare form and feed both through the same
+// token-wise relation reader below.
+const APPLY_WRITE_VERB = new RegExp(`${WRITE_VERB.source}|\\b(merge)\\s`, "gi");
+
 // ROUND 44. PostgreSQL accepts high-bit characters in unquoted identifiers,
 // but the routine-definition/call graph below canonicalizes into an ASCII token
 // language. Silently truncating `public.修復()` drops both its deferred body and
@@ -836,14 +841,14 @@ function targetsFromCode(code, literals) {
   let unresolved = cursorConstruct || eventTriggerChange || domainConstraintValidation ||
     unsupportedRoutineIdentity || sequenceMutation;
 
-  WRITE_VERB.lastIndex = 0;
+  APPLY_WRITE_VERB.lastIndex = 0;
   let m;
   // `INSERT INTO t ... ON CONFLICT DO UPDATE SET c = ...` writes `t.c`, but the
   // word after that `UPDATE` is `SET`, not a relation. The upsert's target is
   // the INSERT's, so the most recent one is carried forward.
   let lastInsertTable = "";
-  while ((m = WRITE_VERB.exec(s)) !== null) {
-    const verb = m[1].replace(/\s+/g, " ");
+  while ((m = APPLY_WRITE_VERB.exec(s)) !== null) {
+    const verb = (m[1] ?? m[2]).replace(/\s+/g, " ");
 
     if (verb === "truncate" || verb === "truncate table") {
       // `TRUNCATE [TABLE] [ONLY] a [, [ONLY] b ...] [RESTART|CONTINUE IDENTITY]
@@ -895,7 +900,10 @@ function targetsFromCode(code, literals) {
     // UPDATE USING (...)`, and `SELECT ... FOR UPDATE` all put a keyword where
     // a relation would go. Reading that keyword as a table name invented
     // targets like `on.*` and `of.*` — noise that hides the real ones.
-    if (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted) continue;
+    if (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted) {
+      if (verb === "merge" || verb === "merge into") unresolved = true;
+      continue;
+    }
     if (rel.quoted && NON_RELATION_KEYWORDS.has(rel.table)) unresolved = true;
     tables.add(rel.table);
     if (verb === "insert into") lastInsertTable = rel.table;
@@ -1021,9 +1029,11 @@ function targetsFromCode(code, literals) {
 
   for (const lit of literals) {
     const dm = /\b(update|insert\s+into|delete\s+from|merge\s+into|truncate(?:\s+table)?)\s+/i.exec(lit);
-    if (!dm) continue;
+    const bareMerge = /\bmerge\s+/i.exec(lit);
+    const write = dm || bareMerge;
+    if (!write) continue;
     dynamicWrites.push(lit);
-    const rest = lit.slice(dm.index + dm[0].length).replace(/^only\s+/i, "");
+    const rest = lit.slice(write.index + write[0].length).replace(/^only\s+/i, "");
     if (FORMAT_PLACEHOLDER.test(rest.trim())) unresolved = true;
   }
 
@@ -1659,6 +1669,8 @@ const TRUSTED_AUTH_ROUTINES = new Set(["uid", "jwt", "role"]);
 // `FROM` is deliberately absent: `SELECT * FROM do_the_repair()` IS a call.
 const NOT_A_CALL_HERE = /\b(insert\s+into|update|delete\s+from|merge\s+into|truncate(\s+table)?|copy|into|as|references|table)\s+(only\s+)?(if\s+(not\s+)?exists\s+)?(?:[a-z0-9_]+\.)*$/;
 
+const MERGE_NOT_A_CALL_HERE = /\bmerge(?:\s+into)?\s+(?:only\s+)?(?:[a-z0-9_]+\.)*$/;
+
 function unknownCallsIn(
   codeLower,
   defined,
@@ -1680,7 +1692,8 @@ function unknownCallsIn(
     while ((mm = re.exec(stmt)) !== null) {
       const nameStart = mm.index + mm[1].length;
       const before = stmt.slice(0, nameStart);
-      if (NOT_A_CALL.test(before) || NOT_A_CALL_HERE.test(before)) continue;
+      if (NOT_A_CALL.test(before) || NOT_A_CALL_HERE.test(before) ||
+          MERGE_NOT_A_CALL_HERE.test(before)) continue;
       const schema = mm[1].replace(/\s+/g, "").replace(/\.$/, "");
       const name = mm[2];
       const identity = canonicalRoutineIdentity(schema ? `${schema}.${name}` : name);

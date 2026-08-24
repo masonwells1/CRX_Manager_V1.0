@@ -968,7 +968,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       // `public.orders` -> `orders`, `o.id` -> `id`. Requires a letter or
       // underscore start so a numeric literal like `1.5` is never touched.
       .replace(/\b[a-z_][a-z0-9_]*\s*\.\s*(?=[a-z_"*])/g, "")
-      .replace(/\b(update|delete from|insert into|merge into) only /g, "$1 ")
+      .replace(/\b(update|delete from|insert into|merge(?: into)?) only /g, "$1 ")
       .replace(/\bupdate ("?[a-z0-9_]+"?) (?:as )?[a-z0-9_]+ set\b/g, "update $1 set")
       .replace(
         /\bdelete from ("?[a-z0-9_]+"?) (?:as )?[a-z0-9_]+ (where|using|returning)\b/g,
@@ -991,7 +991,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         if (ch === ")") { depth -= 1; continue; }
         if (depth !== 0) continue;
         if (i > 0 && /[a-z0-9_]/.test(st[i - 1])) continue;
-        if (/^(insert into|update|delete from|merge into) /.test(st.slice(i))) return st.slice(i);
+        if (/^(insert into|update|delete from|merge(?: into)?) /.test(st.slice(i))) return st.slice(i);
       }
       return "";
     };

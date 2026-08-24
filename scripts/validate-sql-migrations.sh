@@ -944,7 +944,7 @@ build_mutating_fn_index() {
               sub(/^.*\./, "", nm)
               if (nm ~ /^[a-z_][a-z0-9_$]*$/ && nm != f) print "C\t" f "\t" nm
             }
-            if (b ~ ("(^|[^a-z0-9_])(update|merge[ \t]+into|delete[ \t]+from|insert[ \t]+into|truncate([ \t]+table)?)[ \t]+(only[ \t]+)?(public\\.)?(" tables ")([^a-z0-9_]|$)")) {
+            if (b ~ ("(^|[^a-z0-9_])(update|merge([ \t]+into)?|delete[ \t]+from|insert[ \t]+into|truncate([ \t]+table)?)[ \t]+(only[ \t]+)?(public\\.)?(" tables ")([^a-z0-9_]|$)")) {
               print "M\t" f
               continue
             }
@@ -1618,7 +1618,8 @@ $MIG_BASENAME
     # all of that, so the non-function-body text is flattened into a token
     # stream and scanned for `UPDATE [ONLY] <tbl>` / `DELETE FROM [ONLY] <tbl>`,
     # plus the two rewrite shapes that do not spell UPDATE first:
-    # `INSERT INTO <tbl> ... ON CONFLICT ... DO UPDATE` and `MERGE INTO <tbl>`.
+    # `INSERT INTO <tbl> ... ON CONFLICT ... DO UPDATE` and
+    # `MERGE [INTO] [ONLY] <tbl>` (`INTO` is optional in PostgreSQL).
     # Quoted string literals are dropped first so prose inside a RAISE NOTICE
     # cannot fabricate a match.
     #
@@ -2300,10 +2301,15 @@ $MIG_BASENAME
             fires_trigger(tok[j], i)
             if (setp == 0) continue
             target = tok[j]; kind = "upsert"
-          } else if (tok[i] == "merge" && tok[i + 1] == "into") {
-            j = i + 2
+          } else if (tok[i] == "merge") {
+            j = i + 1
+            if (tok[j] == "into") j++
             if (tok[j] == "only") j++
-            target = tok[j]; kind = "merge"; setp = j + 1
+            if (j > ntok || tok[j] == ";") {
+              target = "__unreadable_merge_target__"; kind = "merge"; setp = 0
+            } else {
+              target = tok[j]; kind = "merge"; setp = j + 1
+            }
           }
           if (target == "") continue
           fires_trigger(target, i)
@@ -3618,7 +3624,7 @@ $cascade_row"
                   gsub(/[ \t]+/, " ", last)
                   gsub(/^ +| +$/, "", last)
                   if (last == "") continue
-                  return (last ~ ("(^|[^a-z0-9_])(update|merge[ \t]+into|delete[ \t]+from|insert[ \t]+into|truncate([ \t]+table)?)[ \t]+(only[ \t]+)?(public\\.)?(" tables ")([^a-z0-9_]|$)"))
+                  return (last ~ ("(^|[^a-z0-9_])(update|merge([ \t]+into)?|delete[ \t]+from|insert[ \t]+into|truncate([ \t]+table)?)[ \t]+(only[ \t]+)?(public\\.)?(" tables ")([^a-z0-9_]|$)"))
                 }
                 return 0
               }

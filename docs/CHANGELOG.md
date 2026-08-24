@@ -2,6 +2,16 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — Optional-INTO MERGE bypass closed in migration guards
+
+- PostgreSQL's legal `MERGE table` and `MERGE ONLY table` spellings now reach the same
+  token-wise apply-time analysis, approved-set binding, replay normalization, trigger fan-out,
+  and one-shot refusal paths as `MERGE INTO table`.
+- Missing or keyword-shaped merge targets fail closed instead of disappearing as zero-effect SQL.
+- Focused proof: apply-time analyzer 308 assertions; migration apply guard 347 assertions;
+  approved-set validator 212 adversarial mutation cases, covering update, delete, and malformed
+  target forms.
+
 ## 2026-08-23 — Rewrite-rule attachment identities made collision-safe
 
 - Apply-time rewrite rules are now keyed by schema, relation, event, and rule name. A candidate

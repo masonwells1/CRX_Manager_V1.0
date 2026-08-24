@@ -38,6 +38,12 @@ eq(T("INSERT INTO order_items VALUES (1, 2);"), ["order_items.*"],
   "an INSERT with no column list writes all of them");
 eq(T("MERGE INTO order_items t USING src ON t.id = src.id WHEN MATCHED THEN UPDATE SET total_price = 1;"),
   ["order_items.*"], "MERGE is treated as touching the whole row");
+eq(T("MERGE order_items t USING src ON t.id = src.id WHEN MATCHED THEN UPDATE SET total_price = 1;"),
+  ["order_items.*"], "MERGE without optional INTO still touches the whole row");
+eq(T("MERGE ONLY public.order_items t USING src ON t.id = src.id WHEN MATCHED THEN DELETE;"),
+  ["order_items.*"], "MERGE ONLY without optional INTO cannot hide a row deletion");
+ok(applyTimeWriteTargets("MERGE USING src ON true WHEN MATCHED THEN DELETE;").unresolved,
+  "a malformed MERGE target fails closed instead of disappearing");
 
 // -------------------------------------------------- ROUND 23: the actual bug
 // `SET total_price = (total_price)` is the exact text that walked past the name,
@@ -496,6 +502,8 @@ eq(T(null), [], "a null body does not throw");
     ["DELETE ... WHERE", `${SCRATCH}DELETE FROM public.scratch WHERE v = public.wrapper();`],
     ["MERGE ... UPDATE SET",
       `${SCRATCH}MERGE INTO public.scratch t USING (SELECT 1 x) s ON t.v = s.x WHEN MATCHED THEN UPDATE SET v = public.wrapper();`],
+    ["MERGE without INTO ... UPDATE SET",
+      `${SCRATCH}MERGE public.scratch t USING (SELECT 1 x) s ON t.v = s.x WHEN MATCHED THEN UPDATE SET v = public.wrapper();`],
     ["bare VALUES", "VALUES (public.wrapper());"],
     ["CREATE TABLE AS", "CREATE TABLE public.t2 AS SELECT public.wrapper() AS v;"],
     ["CREATE MATERIALIZED VIEW", "CREATE MATERIALIZED VIEW public.mv AS SELECT public.wrapper() AS v;"],

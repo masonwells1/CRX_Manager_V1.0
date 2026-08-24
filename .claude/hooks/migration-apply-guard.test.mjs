@@ -2254,6 +2254,23 @@ function armAutopilot(stateDir, hoursFromNow) {
       "round-51 MUTANT: a deferred sequence default does not claim the counter changed at apply time");
     writeFanoutManifest(tmp, FANOUT_FIXTURE);
 
+    // ROUND 62. PostgreSQL makes INTO optional in MERGE. Both update-only and
+    // delete forms must reach the same one-shot refusal as MERGE INTO; otherwise
+    // the semantic guard reports an empty effect set for a real row rewrite.
+    writeFanoutManifest(tmp, noEventManifest);
+    for (const [index, sql] of [
+      "MERGE public.orders t USING (SELECT 1 AS id) s ON t.id = s.id " +
+        "WHEN MATCHED THEN UPDATE SET total_profit = 0;",
+      "MERGE ONLY public.orders t USING (SELECT 1 AS id) s ON t.id = s.id " +
+        "WHEN MATCHED THEN DELETE;",
+      "MERGE USING (SELECT 1 AS id) s ON true WHEN MATCHED THEN DELETE;",
+    ].entries()) {
+      r = apply(`20990601000062_merge_without_into_${index}`, sql);
+      ok(isDeny(r) && isOneShotDeny(r),
+        `round-62: MERGE without INTO case ${index + 1} reaches the one-shot fail-closed path`);
+    }
+    writeFanoutManifest(tmp, FANOUT_FIXTURE);
+
     // ROUND 52. The tracked registry is candidate-controlled input to a
     // security boundary. Keys may never become path fragments or executable
     // instructions, and prose values may never be reflected as authoritative
