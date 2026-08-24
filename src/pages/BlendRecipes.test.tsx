@@ -128,6 +128,7 @@ describe('BlendRecipes unit picker', () => {
 
     fireEvent.change(screen.getByPlaceholderText(/Corn Pre-Emerge Standard/), { target: { value: 'New Blend' } });
     fireEvent.change(screen.getByRole('combobox', { name: 'Product 1' }), { target: { value: LIQUID_PRODUCT.id } });
+    fireEvent.change(await screen.findByLabelText(/^Unit for Liquid Product$/), { target: { value: 'Gal' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create Recipe' }));
 
     // Regression guard: the product <select> fires two updateItem calls in one handler.
@@ -138,25 +139,29 @@ describe('BlendRecipes unit picker', () => {
     })));
   });
 
-  it("seeds a new item with 'Gal', a unit that exists in unit_conversions", async () => {
+  it('seeds a new item with NO unit, so no default can slip past the save guard', async () => {
     render(<BlendRecipes />);
     await openNewRecipeWithOneItem();
 
     const unitSelect = await screen.findByLabelText(/^Unit for product 1$/) as HTMLSelectElement;
-    // Regression guard: the seed used to be lowercase 'gal', which the table does not
-    // contain — the picker could never have offered it back once cleared.
-    expect(unitSelect.value).toBe('Gal');
-    expect(UNIT_ROWS.map((u) => u.unit)).toContain(unitSelect.value);
+    // The seed was 'gal' (a value unit_conversions does not even contain) and then 'Gal'.
+    // Both were wrong for the same reason: a NON-BLANK seed is invisible to a blank-only
+    // save guard, so during a unit-list outage the guess itself got saved — a liquid unit
+    // riding along on a dry product. Blank forces a deliberate pick.
+    expect(unitSelect.value).toBe('');
   });
 
   it('clears a unit the newly picked product form cannot offer', async () => {
     render(<BlendRecipes />);
     await openNewRecipeWithOneItem();
-    expect((await screen.findByLabelText(/^Unit for product 1$/) as HTMLSelectElement).value).toBe('Gal');
 
-    // 'Gal' is a LIQUID unit. Switching to a dry product used to leave it selected as a
-    // grandfathered option, so an operator who did not look saved a liquid unit on a dry
-    // product. Found by driving the real screen in a browser, not by this suite.
+    // With no product picked, every unit is on offer — choose a LIQUID one.
+    fireEvent.change(await screen.findByLabelText(/^Unit for product 1$/), { target: { value: 'Gal' } });
+    expect((screen.getByLabelText(/^Unit for product 1$/) as HTMLSelectElement).value).toBe('Gal');
+
+    // Switching to a dry product used to leave 'Gal' selected as a grandfathered option, so
+    // an operator who did not look saved a liquid unit on a dry product. Found by driving
+    // the real screen in a browser, not by this suite.
     fireEvent.change(screen.getByRole('combobox', { name: 'Product 1' }), { target: { value: DRY_PRODUCT.id } });
 
     const unitSelect = await screen.findByLabelText(/^Unit for Dry Product$/) as HTMLSelectElement;
@@ -167,6 +172,7 @@ describe('BlendRecipes unit picker', () => {
   it('keeps a unit the newly picked product form still offers', async () => {
     render(<BlendRecipes />);
     await openNewRecipeWithOneItem();
+    fireEvent.change(await screen.findByLabelText(/^Unit for product 1$/), { target: { value: 'Gal' } });
 
     // 'Gal' is valid for a liquid product, so the pick must survive — the clear only fires
     // when the unit genuinely no longer fits.
@@ -230,12 +236,67 @@ describe('BlendRecipes unit picker', () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
+  it('refuses to save a new item during an outage, where the seed used to slip through', async () => {
+    mockTables({ unitError: new Error('unit_conversions unavailable') });
+    render(<BlendRecipes />);
+    await openNewRecipeWithOneItem();
+    fireEvent.change(screen.getByPlaceholderText(/Corn Pre-Emerge Standard/), { target: { value: 'New Blend' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Recipe' }));
+
+    // The hole CodeRabbit found on PR #447: the item was seeded with a NON-BLANK unit, the
+    // save guard only looked for blanks, and the outage meant the operator could not correct
+    // it — so the seeded liquid unit saved onto whatever product was chosen.
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Units could not be loaded, so a unit is still blank. Refresh and retry before saving.',
+    ));
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('refuses to save a blank unit even when the list is healthy', async () => {
+    render(<BlendRecipes />);
+    await openNewRecipeWithOneItem();
+    fireEvent.change(screen.getByPlaceholderText(/Corn Pre-Emerge Standard/), { target: { value: 'New Blend' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Product 1' }), { target: { value: LIQUID_PRODUCT.id } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Recipe' }));
+
+    // A recipe bills off rate_per_acre and a blank unit still bills, so "saved but
+    // unpriceable" is exactly what this screen exists to prevent. Free text allowed a blank;
+    // the picker does not.
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Pick a unit for Liquid Product.'));
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('refuses to save a stored unit the product form cannot use', async () => {
+    mockTables({
+      recipes: [BLANK_UNIT_RECIPE],
+      // A dry product carrying a liquid unit. UnitSelect grandfathers it so re-saving cannot
+      // silently blank it — but grandfathering must not mean the save is allowed to keep it.
+      recipeItems: [{
+        id: 'item-1', product_id: DRY_PRODUCT.id, quantity: 2, unit: 'Gal', rate_per_acre: 1,
+        price_per_unit_cents: null, sort_order: 0, notes: null, product: { product_name: 'Dry Product' },
+      }],
+    });
+    render(<BlendRecipes />);
+    fireEvent.click(await screen.findByText('Legacy Recipe'));
+    await screen.findByLabelText(/^Unit for Dry Product$/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error', '"Gal" is not a unit Dry Product can use. Pick one from the list.',
+    ));
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it('does not block a save when the unit list loaded fine', async () => {
     mockRpc.mockResolvedValue({ data: { recipe_id: 'r-1', created: true }, error: null });
     render(<BlendRecipes />);
     await openNewRecipeWithOneItem();
 
     fireEvent.change(screen.getByPlaceholderText(/Corn Pre-Emerge Standard/), { target: { value: 'New Blend' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Product 1' }), { target: { value: LIQUID_PRODUCT.id } });
+    fireEvent.change(await screen.findByLabelText(/^Unit for Liquid Product$/), { target: { value: 'Gal' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create Recipe' }));
 
     // A healthy list must never produce a "refresh and retry" message; the save proceeds.

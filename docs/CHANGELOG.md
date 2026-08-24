@@ -17,10 +17,15 @@ which also adds a test that asserts the requested column list itself (mutation-t
 and re-grounds the claim against live — the exact column list returns real `product_form` values.
 Blend Recipes was never affected; it selects `*`.
 
-- **Commits this session** (git log origin/main..HEAD):
+- **Substantive commits** — this list cannot be exhaustive, because the commits that edit this
+  entry cannot contain their own hashes. PR #447 is the complete record.
   - `874e028a feat(units): replace last free-text unit boxes with UnitSelect`
   - `670358cb docs: record the unit-picker work in CHANGELOG and KNOWN_ISSUES`
   - `c461493b fix(units): actually select product_form for the rate-unit filter`
+  - `c4923d6e docs(changelog): correct the form-filtering claim and list all commits`
+  - plus the CodeRabbit round: rejects a unit that is blank or unusable for the product form
+    once the list has loaded, and drops the seeded `'Gal'` default that slipped past the
+    blank-only guard during an outage
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
 

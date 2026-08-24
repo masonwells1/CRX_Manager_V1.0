@@ -227,7 +227,8 @@ export default function BlendRecipes() {
     }
     // The unit field is a picker now: when the list never arrived the operator had no way to
     // choose a unit, so a blank one is the failed request's doing and not a choice they made.
-    // A blank unit on a healthy list still saves — that was legal when the field was free text.
+    // Say that plainly instead of telling them to fill in a field they cannot fill in. The
+    // healthy-list case is handled by the stricter check below.
     const unitBlock = blockedUnitSaveMessage(
       unitLoad,
       unitConversions,
@@ -236,6 +237,29 @@ export default function BlendRecipes() {
     if (unitBlock) {
       toast('error', unitBlock);
       return;
+    }
+    // With a healthy list the picker can always offer a usable unit, so a unit that is blank or
+    // that this product's form cannot use is a real error rather than an outage. Checked AFTER
+    // blockedUnitSaveMessage so a genuine outage still gets the outage message and is never
+    // blamed on the operator. Deliberately not applied while unitLoad is anything but 'loaded':
+    // during an outage isKnownUnit is false for everything, and this would reject every item.
+    //
+    // A blank unit is rejected here even though free text allowed it. A recipe bills off
+    // rate_per_acre and a blank unit still bills, so "saved but unpriceable" is the outcome this
+    // screen exists to prevent, and the picker makes a blank the easy accident now that there is
+    // no seeded default.
+    if (unitLoad === 'loaded' && unitConversions.length > 0) {
+      const badItem = editItems.find((item) => {
+        const productForm = products.find((p) => p.id === item.product_id)?.product_form ?? null;
+        return !item.unit.trim() || !isKnownUnit(unitConversions, productForm, item.unit);
+      });
+      if (badItem) {
+        const who = badItem.product_name || 'each product';
+        toast('error', badItem.unit.trim()
+          ? `"${badItem.unit}" is not a unit ${who} can use. Pick one from the list.`
+          : `Pick a unit for ${who}.`);
+        return;
+      }
     }
 
     await runCriticalAction({
@@ -346,9 +370,13 @@ export default function BlendRecipes() {
   const addItem = () => {
     setEditItems([
       ...editItems,
-      // 'Gal', not 'gal': unit_conversions stores 'Gal', and the lowercase seed was a value the
-      // picker could never offer — it would have shown up as a grandfathered stray option.
-      { product_id: '', product_name: '', quantity: 0, unit: 'Gal', rate_per_acre: null, price_input: '', sort_order: editItems.length, notes: '' },
+      // No seeded unit. Any default is a guess about a product that has not been picked yet,
+      // and a NON-BLANK guess is the dangerous kind: it slips past a blank-only save guard, so
+      // during a unit-list outage the seed itself would have been saved — a liquid unit landing
+      // on a dry product. Blank forces a deliberate pick and is what the save guard below
+      // actually checks. (The previous seed was 'gal', which unit_conversions does not even
+      // contain; correcting it to 'Gal' would have kept the real hole open.)
+      { product_id: '', product_name: '', quantity: 0, unit: '', rate_per_acre: null, price_input: '', sort_order: editItems.length, notes: '' },
     ]);
   };
 
