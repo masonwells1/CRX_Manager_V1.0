@@ -84,14 +84,18 @@ carries no other work.
   throw previously left the hostile environment in place for every later
   assertion in the file and leaked the fixture directory.
 
-## 2026-08-23 — Live Foundation Gauntlet Section 9 reviewed (NOT settled): two open HIGH findings plus one product decision
+## 2026-08-23 — Live Foundation Gauntlet Section 9 reviewed (NOT settled): three open HIGH findings
 
 Section 9 (purchase orders, receiving, vendor bills, vendor payments, AP safety) was re-audited
 against verified remote `main` `780e88aa` plus the live PostgreSQL function bodies. Verdict:
-**INCOMPLETE — 0 BLOCKER / 2 HIGH / 0 MED / 0 LOW, plus 1 open product decision.** The previously
-recorded vendor-bill / accounting-period close race is resolved live; RLS, routine grants, search
-paths, the PO serialization wrappers, and the core AP locks all remain present.
+**INCOMPLETE — 0 BLOCKER / 3 HIGH / 0 MED / 0 LOW.** The previously recorded vendor-bill /
+accounting-period close race is resolved live; RLS, routine grants, search paths, the PO
+serialization wrappers, and the core AP locks all remain present.
 
+- **HIGH — AP aging buckets by bill date, not days past due.** `get_ap_aging` ages every bucket from
+  `vb.bill_date`; `vb.due_date` is never read. A bill issued March 1 on 60-day terms reports in
+  `31-60 Days` on April 15, two weeks before it is due. **Contract settled by Mason 2026-08-24: AP
+  aging measures days past due.** See the classification note below.
 - **HIGH — "Due This Month" is a rolling 30-day window.** The dashboard card is labelled as a
   calendar month but computes the next 30 days, so it disagrees with the month it names.
 - **HIGH — AP/receiving receipts replay by operation.** Retries are keyed to the operation rather
@@ -100,17 +104,20 @@ paths, the PO serialization wrappers, and the core AP locks all remain present.
   to the payload is necessary but **not sufficient**, because editing the payload after a lost
   response mints a *new* key and the server then executes a genuine second mutation. The caller
   must freeze the unresolved intent and reconcile it before any new key may be minted.
-- **OPEN PRODUCT DECISION — AP aging basis.** `get_ap_aging` ages from the bill date rather than
-  the due date. This was **originally scored HIGH and has been re-classified** (2026-08-24, after
-  CodeRabbit P2 on PR #457): invoice-date aging and due-date aging are both standard accounting
-  views, and nothing in this repo states which one these buckets are meant to express. Scoring it
-  a defect would silently commit Mason to an accounting policy. **Mason must choose the basis.**
-  Either way, the UI labels and exported CSV should state which basis is in use; today they do not.
+**Classification note on the AP aging finding.** It briefly left HIGH during review. CodeRabbit's P2
+on PR #457 correctly objected that the evidence proved only *which* basis `get_ap_aging` uses, not
+that the basis was wrong — invoice-date and due-date aging are both standard accounting views, and
+neither the UI nor `docs/reference/rpc-functions.md` stated which one these buckets express. Scoring
+it a defect on that footing would have committed Mason to an accounting policy by implication, so it
+was re-classified to an open product decision and put to him directly. **Mason settled it on
+2026-08-24: AP aging measures days past due.** With the contract stated, the live implementation
+provably contradicts it, so the finding returns to HIGH. The UI labels and exported CSV should also
+state the basis — they do not today, and that held under either answer.
 
-This entry records the audit only; **no remediation is included.** The findings remain open, which
-is why no predicate or test lands beside them — the executable checks belong with the fix, not with
-the write-up. Writing the AP-aging assertion now would additionally freeze an unconfirmed policy
-into an executable check.
+This entry records the audit only; **no remediation is included.** All three findings remain open,
+which is why no predicate or test lands beside them — the executable checks belong with the fix, not
+with the write-up. The AP-aging smoke is now specifiable (assert days-past-due, including a null
+`due_date` case) and ships with that fix.
 
 - **Section 9 did NOT settle and remains the current queue position.** The deterministic section
   gate's contract rejects a checkout that is behind `origin/main` and cannot settle a dirty tree;

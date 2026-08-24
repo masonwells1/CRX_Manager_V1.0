@@ -7,7 +7,9 @@ Live project: `rhyzpcqhnizqbxphqdkr` — PostgreSQL catalog and function definit
 
 ## Verdict
 
-**INCOMPLETE — 0 BLOCKER / 2 HIGH / 0 MED / 0 LOW, plus 1 open product decision.** Section 9 has two production-risk defects: the dashboard's “Due This Month” card is a rolling 30-day window rather than the calendar month it names, and high-impact AP/receiving retries are operation-only rather than bound to the authenticated actor and exact payload. A third item — AP aging measuring from the vendor's bill date rather than its due date — is **not scored as a defect**: both bases are legitimate accounting views and no authoritative source in this repo states which one these buckets are meant to express, so it is recorded as an open product decision for Mason (re-classified 2026-08-24 from HIGH after CodeRabbit P2 on PR #457). The former vendor-bill/accounting-period race is resolved live, and the live RLS, routine grants, search paths, PO serialization wrappers, and core AP locks remain present.
+**INCOMPLETE — 0 BLOCKER / 3 HIGH / 0 MED / 0 LOW.** Section 9 has three production-risk defects: AP aging measures from the vendor's bill date rather than its due date, the dashboard's “Due This Month” card is a rolling 30-day window rather than the calendar month it names, and high-impact AP/receiving retries are operation-only rather than bound to the authenticated actor and exact payload. The former vendor-bill/accounting-period race is resolved live, and the live RLS, routine grants, search paths, PO serialization wrappers, and core AP locks remain present.
+
+**On the AP aging count.** That finding briefly moved out of HIGH during review. CodeRabbit's P2 on PR #457 rightly objected that the evidence showed only *which* aging basis the report uses, not that the basis was wrong, and no source in this repo stated the intended contract — so scoring it a defect would have committed Mason to an accounting policy by implication. **Mason settled the contract on 2026-08-24: AP aging measures days past due.** With the contract stated, the live implementation provably contradicts it, so the finding is HIGH.
 
 **This section is NOT settled.** The deterministic section gate was not run because its contract rejects a checkout that is behind `origin/main` and cannot settle a dirty tree. The findings were independently reverified against the exact remote-main objects and the live function bodies, which makes them credible evidence — but evidence is not a settlement. Section 9 remains the current queue position and must be re-run from a clean, current checkout.
 
@@ -22,15 +24,18 @@ Live project: `rhyzpcqhnizqbxphqdkr` — PostgreSQL catalog and function definit
 
 ## Findings
 
-### OPEN PRODUCT DECISION 1 — AP aging buckets are based on bill age; no authoritative source says they should be days past due
+### HIGH 1 — AP aging buckets are based on bill age, not days past due
 
-> **Re-classified 2026-08-24 (CodeRabbit P2 on PR #457, accepted).** This was originally scored HIGH. The
-> evidence below proves only *which* basis the report uses; it does not prove that basis is wrong.
-> Invoice-date aging and due-date aging are both standard, materially different accounting views, and
-> neither the UI nor `docs/reference/rpc-functions.md` defines these buckets as days past due. Calling the
-> current basis a production defect — and queueing a SQL change on that footing — would silently make a
-> business-policy choice that belongs to Mason. **It is recorded here as an unresolved product decision.**
-> If Mason confirms due-date aging is the intended contract, this becomes a HIGH defect with the fix below.
+> **Contract settled by Mason on 2026-08-24: AP aging measures DAYS PAST DUE.** The buckets are to be
+> computed from each bill's `due_date`, so a bill inside its terms reads as `Current` no matter how long
+> ago it was issued. Recorded because it is a business-policy choice, not a technical one.
+>
+> **Audit trail for this finding's classification.** Originally scored HIGH. CodeRabbit's P2 on PR #457
+> correctly objected that the evidence proved only *which* basis `get_ap_aging` uses, not that the basis
+> was wrong — invoice-date and due-date aging are both standard accounting views, and neither the UI nor
+> `docs/reference/rpc-functions.md` stated which one these buckets express. It was therefore re-classified
+> to an open product decision rather than a defect. Mason's decision above supplies the missing contract,
+> so it returns to **HIGH**: the live implementation now provably contradicts the stated intent.
 
 **Evidence**
 
@@ -40,19 +45,15 @@ Live project: `rhyzpcqhnizqbxphqdkr` — PostgreSQL catalog and function definit
 
 **Plain-English business risk**
 
-Under the current basis, a bill with long payment terms can show in the 31, 60, or 90 day column while it is not yet due. Whether that is *wrong* depends on what the columns are meant to say. Aging from the invoice date answers "how long have we owed this?"; aging from the due date answers "how late are we?". Both are legitimate; the report currently answers the first while the column labels (`Current`, `31-60 Days`, `61-90 Days`, `90+ Days`) do not say which.
+A bill with long payment terms shows in the 31, 60, or 90 day column while it is still inside its terms. Concretely: a bill issued March 1 on 60-day terms is not due until April 30, but on April 15 it already reports in `31-60 Days`. Against the settled contract — days past due — that is wrong, and it distorts which vendors look urgent when Mason decides who to pay. It also overstates how overdue Crop RX's payables are.
 
-**Decision needed from Mason**
+**Fix**
 
-Which question should the AP aging report answer? The unambiguous, no-code-change part of this either way: the UI labels and exported CSV should state the basis, because today they do not.
+Define the bucket contract explicitly as days past `due_date`, then age from `p_as_of_date - vb.due_date` using clear boundary rules for not-yet-due, 1-30, 31-60, 61-90, and 90+ amounts. Align the UI labels and exported CSV with that contract. Note that `vb.due_date` nullability must be handled deliberately rather than allowed to collapse a bill into `Current`; the replacement must state its behavior for a bill with no due date.
 
-**Fix if Mason chooses due-date aging**
+**Prevention action**
 
-Define the bucket contract explicitly as days past `due_date`, then age from `p_as_of_date - vb.due_date` using clear boundary rules for not-yet-due, 1-30, 31-60, 61-90, and 90+ amounts. Align the UI labels and exported CSV with that contract.
-
-**Prevention action (only once the contract is settled)**
-
-Add a rollback-only AP-aging smoke with bills sharing a bill date but different due dates, including not-yet-due and exact 30/31/60/61/90/91-day boundaries, asserting whichever contract Mason confirms. Writing that test now would freeze an unconfirmed policy into an executable check.
+Add a rollback-only AP-aging smoke with bills sharing a bill date but different due dates, including not-yet-due and exact 30/31/60/61/90/91-day boundaries, plus a bill with a null due date. It must assert days-past-due semantics and must fail against the current bill-date implementation.
 
 ### HIGH 2 — “Due This Month” is actually “Due in the next 30 days”
 
@@ -114,7 +115,7 @@ The smoke must additionally exercise the **edit-after-uncertain-response caller 
 
 ## Queue disposition
 
-**Section 9 is NOT refreshed — it remains the current queue position.** This run produced two open HIGH findings and one open product decision, but its deterministic gate did not settle, so Section 9 must be re-run from a clean, current checkout before it counts as refreshed. Do not advance the queue past Section 9 on the strength of this report.
+**Section 9 is NOT refreshed — it remains the current queue position.** This run produced three open HIGH findings, but its deterministic gate did not settle, so Section 9 must be re-run from a clean, current checkout before it counts as refreshed. Do not advance the queue past Section 9 on the strength of this report.
 
 Once Section 9 settles, the next manual refresh is **Section 10 — blend tickets and repository-only Edge Function handoff contracts**. Sections 10–15 share the same 2026-07-28 last-reviewed date, so Section 10 is next in sequence rather than uniquely oldest.
 
