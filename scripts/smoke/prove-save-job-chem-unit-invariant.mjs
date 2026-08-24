@@ -65,7 +65,7 @@ const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30",
                   "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
                   "T40", "T41", "T42", "T43", "T44", "T45", "T46", "T47", "T48",
-                  "T49", "T50", "T51", "T52", "T53", "T54", "T55"];
+                  "T49", "T50", "T51", "T52", "T53", "T54", "T55", "T56", "T57"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -410,14 +410,31 @@ const MUTANTS = [
     expect: "T50",
   },
   {
+    // Disables the unsupported-character rule, restoring the homoglyph bypass: the fold
+    // deletes the Cyrillic letters outright, 'oz∕сԝт' becomes a legitimate 'oz', and a
+    // per-hundredweight rate bills as per-acre. T56 must go red; T41 (the NBSP unit that
+    // must still SAVE) and T40 (zero-width, which the fluid-ounce rule catches earlier) both
+    // stay green, which is what shows this rule is the one being tested.
+    name: "unsupported-character rule removed",
+    from: "          WHERE translate(lower(COALESCE(raw_unit, '')),\n"
+        + "                          chr(160) || chr(8239) || chr(8203) || chr(8204) || chr(8205) || chr(65279),\n"
+        + "                          '  ') ~ '[^a-z0-9 ./-]'",
+    to: "          WHERE false",
+    expect: "T56",
+  },
+  {
     // Disables the recognised-unit backstop, restoring the slash-homoglyph bypass: 'oz∕cwt'
     // folds to 'oz cwt', which no denominator pattern sees, and a per-hundredweight rate
     // bills as per-acre. T54 must go red; T55 (every live unit spelling) must stay green,
     // which is what shows the backstop is discriminating rather than simply refusing.
+    // Re-aimed at T57 in round 21. It used to score against T54, but the new
+    // unsupported-character rule now catches those Unicode slashes FIRST, so removing the
+    // backstop left T54 green and the prover refused the unearned detection. T57 ('cwt' --
+    // plain ASCII, no separator, simply not a unit) is the case ONLY this rule catches.
     name: "recognised-unit backstop removed",
     from: "    IF COALESCE(NULLIF(v_chem->>'price_per_unit_cents', '')::bigint, 0) <> 0 THEN\n      v_base_folded :=",
     to: "    IF false THEN\n      v_base_folded :=",
-    expect: "T54",
+    expect: "T57",
   },
   {
     // Stops the fluid-ounce check stripping the denominator, so the stock side is tested in

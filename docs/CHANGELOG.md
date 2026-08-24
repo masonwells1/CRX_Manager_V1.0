@@ -175,6 +175,25 @@ Blend Recipes was never affected; it selects `*`.
 
 ## 2026-08-22 — The chemical-unit and job-money invariants move out of React and into `save_job` (parked)
 
+**Round 21 (2026-08-24) — the tidying-up was doing the attacker's work.** Someone can write a unit
+using Cyrillic letters that look identical to ours on screen — `oz∕сԝт`, where the "cwt" is not
+the letters c, w and t at all. The rule stripped out anything it did not recognise as a letter or
+number. Against Cyrillic that did not leave a suspicious remnant behind; it **erased the whole
+thing**, leaving a clean, innocent-looking `oz`, which is a real unit. So it passed, and a rate
+quoted per hundredweight would have billed as per-acre.
+
+Every earlier round assumed that tidying up leaves something behind to catch. Against letters
+from another alphabet it leaves nothing. The rule now refuses any unit containing a character it
+cannot read, on lines where money is at stake, with a plain message about copy-and-paste from a
+spreadsheet.
+
+The important part is the reversal: getting the list of known-harmless characters wrong can now
+only cause a **refusal**, never an acceptance. Every round before this one had the opposite
+property, which is why each one was beaten by the next character along. Checked against the live
+database: the attack is refused, and every real unit still works.
+
+Still parked; nothing has been applied to live.
+
 **Round 20 (2026-08-24) — a false alarm worth recording, and the fix that ends a whole class.**
 
 The reviewer raised its most serious warning yet: that this work had stripped the security out
@@ -470,7 +489,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Fifty-five behaviour tests pass; and thirty mutation phases each fail in a **named** way — twenty-four
+Fifty-seven behaviour tests pass; and thirty-one mutation phases each fail in a **named** way — twenty-five
 turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -497,7 +516,7 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The fifty-five tests: all four live row shapes save with derived totals reproducing the live stored
+The fifty-seven tests: all four live row shapes save with derived totals reproducing the live stored
 values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
 by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
 `T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate

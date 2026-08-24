@@ -1168,11 +1168,92 @@ BEGIN
         '11111111-1111-1111-1111-111111111111'::uuid, NULL);
     EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
     END;
-    IF NOT (ok AND (msg LIKE 'CHEM_RATE_UNIT_UNRECOGNIZED%' OR msg LIKE 'CHEM_RATE_DENOMINATOR_NOT_ACRES%')) THEN
+    -- Three codes are accepted because the property under test is THAT THE LINE IS REFUSED,
+    -- not which rule reaches it first. Round 21 added the unsupported-character rule ahead of
+    -- the recognised-unit backstop, so these now report CHEM_UNIT_UNSUPPORTED_CHARACTER;
+    -- pinning a single code here would make the test fail on an ordering change that is not a
+    -- behaviour change.
+    IF NOT (ok AND (msg LIKE 'CHEM_UNIT_UNSUPPORTED_CHARACTER%'
+                    OR msg LIKE 'CHEM_RATE_UNIT_UNRECOGNIZED%'
+                    OR msg LIKE 'CHEM_RATE_DENOMINATOR_NOT_ACRES%')) THEN
       RAISE EXCEPTION 'T54 FAIL  % hid a per-hundredweight denominator and it billed as per-acre; refused=% msg=%', labels[i], ok, msg;
     END IF;
   END LOOP;
   RAISE NOTICE 'T54 PASS  all three Unicode slash homoglyphs are refused on a priced line';
+END $$;
+
+-- T56: THE HOMOGLYPH ATTACK, and the round that stopped the fold doing the attacker's work.
+-- Every separator round before this one assumed folding leaves a RESIDUE behind for the rule
+-- to catch. Against non-ASCII it leaves nothing: 'oz<U+2215>сԝт' -- a Unicode division slash
+-- followed by CYRILLIC homoglyphs for "cwt" -- folds under '[^a-z0-9]' to plain 'oz', because
+-- every non-ASCII character is DELETED. The denominator is not caught, it is ERASED. 'oz' is
+-- then a perfectly recognised unit, both sides match, and a per-hundredweight rate bills as
+-- per-acre. The deletion was doing the attacker's work.
+--
+-- The fold may no longer discard anything silently. A small enumerated set is normalised
+-- first (Unicode spaces to a space, zero-width deleted) and ANY remaining character outside
+-- the supported ASCII set refuses the line. The enumeration is for CONVENIENCE, the allowlist
+-- is for SAFETY: getting the convenience list wrong can only cause a REFUSAL, never an
+-- acceptance -- the opposite of every separator round before it.
+--
+-- The visually identical ASCII spelling is included as the control: it must ALSO be refused,
+-- by the denominator rule, so a reader can see the two paths are both closed.
+DO $$
+DECLARE ok boolean; msg text; spelling text;
+        spellings text[] := ARRAY[
+          'oz' || chr(8725) || chr(1089) || chr(1400) || chr(1090),
+          'oz' || chr(1089) || chr(1400) || chr(1090),
+          'oz/cwt'];
+        labels text[] := ARRAY['Cyrillic cwt behind a Unicode slash', 'Cyrillic cwt with no slash at all', 'the plain ASCII control'];
+        i int;
+BEGIN
+  FOR i IN 1 .. array_length(spellings, 1) LOOP
+    spelling := spellings[i];
+    ok := false; msg := NULL;
+    BEGIN
+      PERFORM save_job(NULL,
+        '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+        ('[{"field_id":"3333343' || i::text || '-3333-3333-3333-33333333430' || i::text || '","acres_to_treat":10}]')::jsonb,
+        ('[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":100,"unit":"' || spelling
+          || '","rate_per_acre":10,"rate_unit":"' || spelling
+          || '","cost_per_unit_cents":100,"price_per_unit_cents":200}]')::jsonb,
+        '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+    EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+    END;
+    IF NOT (ok AND (msg LIKE 'CHEM_UNIT_UNSUPPORTED_CHARACTER%'
+                    OR msg LIKE 'CHEM_RATE_UNIT_UNRECOGNIZED%'
+                    OR msg LIKE 'CHEM_RATE_DENOMINATOR_NOT_ACRES%')) THEN
+      RAISE EXCEPTION 'T56 FAIL  % was erased by the fold and billed as per-acre; refused=% msg=%', labels[i], ok, msg;
+    END IF;
+  END LOOP;
+  RAISE NOTICE 'T56 PASS  a homoglyph denominator is refused rather than silently erased by the fold';
+END $$;
+
+-- T57: THE CASE ONLY THE RECOGNISED-UNIT BACKSTOP CATCHES, and it exists so that rule has an
+-- oracle of its own. 'cwt' is plain ASCII, so the round-21 character rule passes it; it holds
+-- no slash and no 'per', so the denominator rule passes it; it is not a fluid-ounce spelling,
+-- so that rule passes it. It is simply NOT A UNIT this system knows, and on a priced line
+-- that means the amount to bill cannot be derived. Only the backstop refuses it.
+--
+-- Without this test the backstop had no case it alone could fail, and its mutant scored
+-- against T54 -- which the character rule now catches first, so removing the backstop left
+-- T54 green and the prover correctly refused the unearned detection.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333440-3333-3333-3333-333333334401","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":100,"unit":"cwt","rate_per_acre":10,"rate_unit":"cwt","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_RATE_UNIT_UNRECOGNIZED%' THEN
+    RAISE NOTICE 'T57 PASS  a plain-ASCII unit the system does not know is refused on a priced line: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T57 FAIL  an unrecognised unit was billed; refused=% msg=%', ok, msg;
+  END IF;
 END $$;
 
 -- T55: THE COUNTERPART. Every unit the live system actually carries must still SAVE on a

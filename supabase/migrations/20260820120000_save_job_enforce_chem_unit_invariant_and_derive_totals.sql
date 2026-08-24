@@ -867,6 +867,45 @@ BEGIN
         COALESCE(v_product_name, 'This product'), v_raw_rate_unit, COALESCE(v_chem->>'unit', '');
     END IF;
 
+    -- FAIL CLOSED ON CHARACTERS THIS FILE CANNOT INTERPRET.
+    --
+    -- The round-20 backstop was defeated by making the DELETION do the attacker's work
+    -- (HIGH, gpt-5.6-sol 2026-08-24). `oz<U+2215>сԝт` -- a Unicode division slash followed by
+    -- CYRILLIC homoglyphs for "cwt" -- folds under '[^a-z0-9]' to plain 'oz', because every
+    -- non-ASCII character is DELETED. The denominator does not survive as a residue for the
+    -- rule to catch; it is erased outright. 'oz' is then a perfectly recognised unit, both
+    -- sides match, and a per-hundredweight rate bills as per-acre. Every previous round of
+    -- this rule assumed folding leaves SOMETHING behind. Against non-ASCII it leaves nothing.
+    --
+    -- So the fold is no longer allowed to discard anything silently. A small, deliberately
+    -- enumerated set is normalised first -- Unicode spaces become a space, zero-width
+    -- characters are deleted -- and then ANY remaining character outside the supported ASCII
+    -- set refuses the line. The enumeration is for CONVENIENCE and the allowlist is for
+    -- SAFETY: getting the convenience list wrong can only cause a refusal, never an
+    -- acceptance, which is the opposite of every separator round before this one.
+    --
+    -- Ordering is deliberate. This sits AFTER the fluid-ounce rule so a dry line written
+    -- 'fl<U+2010>oz' still reports the specific CHEM_UNIT_FORM_MISMATCH that tells the
+    -- operator what is actually wrong, rather than a generic character complaint.
+    --
+    -- Gated on PRICE, per Mason's 2026-08-24 rule. Every live unit is plain ASCII
+    -- (read read-only 2026-08-24: Gal, Pt, oz, dry oz, fl oz, lb, qt, g, mg, ea, unit), so
+    -- this refuses nothing that exists.
+    IF COALESCE(NULLIF(v_chem->>'price_per_unit_cents', '')::bigint, 0) <> 0
+       AND EXISTS (
+         SELECT 1
+           FROM unnest(ARRAY[v_raw_rate_unit, v_chem->>'unit']) AS raw_unit
+          WHERE translate(lower(COALESCE(raw_unit, '')),
+                          chr(160) || chr(8239) || chr(8203) || chr(8204) || chr(8205) || chr(65279),
+                          '  ') ~ '[^a-z0-9 ./-]'
+       ) THEN
+      SELECT p.product_name INTO v_product_name
+        FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+      RAISE EXCEPTION
+        'CHEM_UNIT_UNSUPPORTED_CHARACTER: % has a unit containing a character this system cannot read ("%" against "%"). That is usually a copy-and-paste from a spreadsheet or a web page carrying a lookalike letter or symbol. Re-type both the rate unit and the stock Unit using plain letters.',
+        COALESCE(v_product_name, 'This product'), v_raw_rate_unit, COALESCE(v_chem->>'unit', '');
+    END IF;
+
     -- STRUCTURAL BACKSTOP: A PRICED LINE MUST NAME A UNIT THIS SYSTEM KNOWS.
     --
     -- This exists because the gate found a FOURTH separator bypass -- 'oz<U+2215>cwt', a
