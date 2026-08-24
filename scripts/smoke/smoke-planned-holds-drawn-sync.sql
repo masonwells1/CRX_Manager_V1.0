@@ -56,11 +56,12 @@ DECLARE
 BEGIN
   IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)') IS NOT NULL THEN
     EXECUTE
-      'SELECT public.restore_quote_version($1, $2, $3, $4, $5, NULL)'
+      'SELECT public.restore_quote_version($1, $2, $3, $4, $5, NULL::text)'
       INTO v_result
       USING p_quote_id, p_version_id, p_performed_by, p_idempotency_key, p_expected_row_version;
     RETURN v_result;
-  ELSIF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint)') IS NOT NULL THEN
+  END IF;
+  IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint)') IS NOT NULL THEN
     EXECUTE
       'SELECT public.restore_quote_version($1, $2, $3, $4, $5)'
       INTO v_result
@@ -108,11 +109,13 @@ $helper$;
 DO $smoke$
 DECLARE
   v_admin uuid; v_cust uuid; v_pa uuid; v_pb uuid; v_q uuid;
+  v_cost_a numeric; v_cost_b numeric; v_price_a numeric; v_price_b numeric;
   v_s1 uuid; v_s2 uuid; v_res jsonb; v_ver uuid; v_quote_version bigint;
   v_pa_early_item uuid; v_pa_late_item uuid; v_pb_early_item uuid;
   v_pa_total numeric; v_pb_total numeric; v_cnt int;
   v_e1 date; v_e2 date;
   v_err text;
+  v_restore_src text; v_cutover boolean;
   v_payload jsonb; v_sections jsonb;
   sfx text := substr(md5(random()::text), 1, 8);
 BEGIN
@@ -123,52 +126,60 @@ BEGIN
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
+  -- 20260816120000 replaces the drawn-quantity comparison inside
+  -- _restore_quote_version_owner_impl with an up-front provenance refusal.
+  -- Detect it exactly as smoke-restore-version-drawn-guard.sql does, because
+  -- scenario (e) below must REQUIRE the outcome matching the schema it runs
+  -- against rather than accept whichever one it happens to get.
+  SELECT p.prosrc INTO v_restore_src
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_restore_quote_version_owner_impl'
+    AND p.pronargs = 4;
+  v_cutover := v_restore_src IS NOT NULL
+    AND position('QUOTE_RESTORE_BLOCKED_BY_DRAW' IN v_restore_src) > 0;
+
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] PHS Farm ' || sfx) RETURNING id INTO v_cust;
-  -- Establish real governed costs so the quote-cost snapshot trigger remains
-  -- enabled while this rollback-only hold proof exercises booking draws.
-  INSERT INTO products (product_name, unit_size) VALUES ('[SMOKE] PHS A ' || sfx, 'gal') RETURNING id INTO v_pa;
-  INSERT INTO products (product_name, unit_size) VALUES ('[SMOKE] PHS B ' || sfx, 'gal') RETURNING id INTO v_pb;
-  v_res := preview_product_pricing_changes(
-    'product_page', NULL,
-    jsonb_build_array(
-      jsonb_build_object(
-        'product_id', v_pa,
-        'row_version', (SELECT pricing_version FROM products WHERE id = v_pa),
-        'pricing_mode', 'margin_driven',
-        'new_cost', '6.00',
-        'tier1_margin_percent', '20',
-        'tier2_margin_percent', '25',
-        'tier3_margin_percent', '30',
-        'change_reason', 'Rollback smoke planned-holds fixture A'
-      ),
-      jsonb_build_object(
-        'product_id', v_pb,
-        'row_version', (SELECT pricing_version FROM products WHERE id = v_pb),
-        'pricing_mode', 'margin_driven',
-        'new_cost', '6.00',
-        'tier1_margin_percent', '20',
-        'tier2_margin_percent', '25',
-        'tier3_margin_percent', '30',
-        'change_reason', 'Rollback smoke planned-holds fixture B'
-      )
-    ),
-    v_admin, 'smk-phds-price-preview-' || sfx
-  );
-  PERFORM apply_product_pricing_change_set(
-    (v_res->>'change_set_id')::uuid,
-    v_res->>'request_fingerprint',
-    v_admin,
-    'smk-phds-price-apply-' || sfx
-  );
+  -- Current quote-item triggers require a real catalog cost, while governed
+  -- pricing forbids creating a throwaway product with that cost. Borrow two
+  -- priced products without changing them. Use each product's governed tier-1
+  -- price as well as its cost because save_quote recalculates from that tier.
+  SELECT id, current_cost, tier1_price INTO v_pa, v_cost_a, v_price_a
+  FROM products
+  WHERE is_active IS TRUE
+    AND current_cost IS NOT NULL
+    AND current_cost > 0
+    AND current_cost = round(current_cost, 2)
+    AND tier1_price IS NOT NULL
+    AND tier1_price >= current_cost
+    AND tier1_price = round(tier1_price, 2)
+  ORDER BY current_cost, id
+  LIMIT 1;
+  SELECT id, current_cost, tier1_price INTO v_pb, v_cost_b, v_price_b
+  FROM products
+  WHERE is_active IS TRUE
+    AND current_cost IS NOT NULL
+    AND current_cost > 0
+    AND current_cost = round(current_cost, 2)
+    AND tier1_price IS NOT NULL
+    AND tier1_price >= current_cost
+    AND tier1_price = round(tier1_price, 2)
+    AND id IS DISTINCT FROM v_pa
+  ORDER BY current_cost, id
+  LIMIT 1;
+  IF v_pa IS NULL OR v_pb IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: need two distinct active products with positive whole-cent cost and a tier-1 price at or above cost';
+  END IF;
 
   INSERT INTO quotes (quote_number, customer_id, created_by, status, is_planned, commission_split)
   VALUES ('[SMOKE] PHS-' || sfx, v_cust, v_admin, 'sent', true, '{"splits": []}'::jsonb) RETURNING id INTO v_q;
   INSERT INTO quote_sections (quote_id, section_name, sort_order, needed_by_date) VALUES (v_q, 'Early', 0, DATE '2026-07-01') RETURNING id INTO v_s1;
   INSERT INTO quote_sections (quote_id, section_name, sort_order, needed_by_date) VALUES (v_q, 'Late', 1, DATE '2026-08-01') RETURNING id INTO v_s2;
   INSERT INTO quote_items (quote_id, section_id, product_id, price_per_unit, current_cost, total_units_needed, unit_size, sort_order, calc_mode)
-  VALUES (v_q, v_s1, v_pa, 10, 6, 300, 'gal', 0, 'units_direct'),
-         (v_q, v_s2, v_pa, 10, 6, 200, 'gal', 0, 'units_direct'),
-         (v_q, v_s1, v_pb, 8, 4, 100, 'gal', 1, 'units_direct');
+  VALUES (v_q, v_s1, v_pa, v_price_a, v_cost_a, 300, 'gal', 0, 'units_direct'),
+         (v_q, v_s2, v_pa, v_price_a, v_cost_a, 200, 'gal', 0, 'units_direct'),
+         (v_q, v_s1, v_pb, v_price_b, v_cost_b, 100, 'gal', 1, 'units_direct');
   SELECT id INTO STRICT v_pa_early_item FROM quote_items
   WHERE quote_id = v_q AND section_id = v_s1 AND product_id = v_pa;
   SELECT id INTO STRICT v_pa_late_item FROM quote_items
@@ -221,10 +232,10 @@ BEGIN
   v_payload := jsonb_build_object('quote_number', '[SMOKE] PHS-' || sfx, 'customer_id', v_cust, 'status', 'sent', 'tier', 1);
   v_sections := jsonb_build_array(
     jsonb_build_object('section_name', 'Early', 'sort_order', 0, 'items', jsonb_build_array(
-      jsonb_build_object('id', v_pa_early_item, 'product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', 10, 'current_cost', 6, 'sort_order', 0),
-      jsonb_build_object('id', v_pb_early_item, 'product_id', v_pb, 'calc_mode', 'units_direct', 'total_units_needed', 100, 'price_per_unit', 8, 'current_cost', 4, 'sort_order', 1))),
+      jsonb_build_object('id', v_pa_early_item, 'product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', v_price_a, 'current_cost', v_cost_a, 'sort_order', 0),
+      jsonb_build_object('id', v_pb_early_item, 'product_id', v_pb, 'calc_mode', 'units_direct', 'total_units_needed', 100, 'price_per_unit', v_price_b, 'current_cost', v_cost_b, 'sort_order', 1))),
     jsonb_build_object('section_name', 'Late', 'sort_order', 1, 'items', jsonb_build_array(
-      jsonb_build_object('id', v_pa_late_item, 'product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', 10, 'current_cost', 6, 'sort_order', 0))));
+      jsonb_build_object('id', v_pa_late_item, 'product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', v_price_a, 'current_cost', v_cost_a, 'sort_order', 0))));
   SELECT (to_jsonb(q)->>'row_version')::bigint
   INTO v_quote_version
   FROM quotes q
@@ -258,9 +269,10 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: (d) after save holds pa=% pb=% (expected 150/100)', v_pa_total, v_pb_total;
   END IF;
 
-  -- (e) restore_quote_version on a drawn booking is now refused before any
-  -- child or hold mutation. Ordinary save above remains the supported revision
-  -- path and has already proven the 450 - 250 = 200 invariant.
+  -- (e) This chain runs on both sides of the parked 20260816120000 cutover.
+  -- Before it, restore succeeds and rebuilds holds from the restored 400-unit
+  -- snapshot. After it, a drawn booking refuses restore before child or hold
+  -- mutation, leaving the supported 450-unit save above intact.
   PERFORM pg_temp.create_quote_version_smoke(
     v_q,
     v_admin,
@@ -306,16 +318,60 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
   END;
+  -- Pin the outcome to the schema phase. Accepting either result let a
+  -- post-cutover regression that restores a drawn booking fall into the
+  -- pre-cutover success branch and still reach SMOKE_PASS_ROLLBACK, so the
+  -- chain stopped proving the invariant it exists for.
+  IF v_cutover AND v_err IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) post-cutover restore of a drawn booking succeeded (%), expected QUOTE_RESTORE_BLOCKED_BY_DRAW', v_res;
+  END IF;
+  IF NOT v_cutover AND v_err IS NOT NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) pre-cutover restore was refused: %', v_err;
+  END IF;
   IF v_err IS NULL THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (e) restore of a drawn booking was allowed: %', v_res;
-  END IF;
-  IF v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%' THEN
+    IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: (e) pre-cutover restore returned %', v_res;
+    END IF;
+    -- Assert BOTH products. Checking only PA let a regression that dropped or
+    -- changed PB's rebuilt hold pass, because the unplanning step in (f) only
+    -- checks that every hold is gone.
+    SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0),
+           COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pb), 0)
+    INTO v_pa_total, v_pb_total
+    FROM inventory_holds WHERE source_id = v_q AND is_active = true;
+    IF v_pa_total <> 150 OR v_pb_total <> 100 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: (e) pre-cutover restore holds pa=% pb=% (expected 150/100)', v_pa_total, v_pb_total;
+    END IF;
+
+    -- A successful restore replaces section and item rows. Refresh every ID
+    -- echoed by the next save so duplicate-product cost mapping stays exact.
+    SELECT id INTO STRICT v_s1 FROM quote_sections
+    WHERE quote_id = v_q AND section_name = 'Early';
+    SELECT id INTO STRICT v_s2 FROM quote_sections
+    WHERE quote_id = v_q AND section_name = 'Late';
+    SELECT id INTO STRICT v_pa_early_item FROM quote_items
+    WHERE quote_id = v_q AND section_id = v_s1 AND product_id = v_pa;
+    SELECT id INTO STRICT v_pa_late_item FROM quote_items
+    WHERE quote_id = v_q AND section_id = v_s2 AND product_id = v_pa;
+    SELECT id INTO STRICT v_pb_early_item FROM quote_items
+    WHERE quote_id = v_q AND section_id = v_s1 AND product_id = v_pb;
+    v_sections := jsonb_set(
+      jsonb_set(
+        jsonb_set(v_sections, '{0,items,0,id}', to_jsonb(v_pa_early_item)),
+        '{0,items,1,id}', to_jsonb(v_pb_early_item)
+      ),
+      '{1,items,0,id}', to_jsonb(v_pa_late_item)
+    );
+  ELSIF v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (e) restore refused with the wrong error: %', v_err;
-  END IF;
-  SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0) INTO v_pa_total
-  FROM inventory_holds WHERE source_id = v_q AND is_active = true;
-  IF v_pa_total <> 200 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (e) refused restore changed holds pa=% (expected 200)', v_pa_total;
+  ELSE
+    SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0),
+           COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pb), 0)
+    INTO v_pa_total, v_pb_total
+    FROM inventory_holds WHERE source_id = v_q AND is_active = true;
+    IF v_pa_total <> 200 OR v_pb_total <> 100 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: (e) refused restore changed holds pa=% pb=% (expected 200/100)', v_pa_total, v_pb_total;
+    END IF;
   END IF;
 
   -- (f) plan switched off: save_quote releases everything transactionally.

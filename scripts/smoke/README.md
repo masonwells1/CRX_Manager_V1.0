@@ -106,6 +106,29 @@ per-acre prices while a caller still cannot write those derived values directly.
 The runner force-removes the exact container in `finally`; it never
 reads a Supabase URL and does not apply or alter production.
 
+## Disposable draw-down and priced-product smoke proof
+
+The pending draw-down price-tier migration and the quote smoke fixtures that
+depend on governed product pricing share one current-schema replay:
+
+```bash
+node scripts/smoke/prove-draw-down-price-tier-real-schema.mjs
+```
+
+The runner restores the supported baseline and replays all 56 migrations in the
+verified live source history. SQL copied into the container is normalized to LF
+so a Windows checkout cannot manufacture false function-body drift; any skipped
+migration fails closed. Before applying the parked draw-down migration, it requires
+five pricing-sensitive chains to reach `SMOKE_PASS_ROLLBACK`: the auth probe,
+planned-holds synchronization, draw-ledger reversal, order draw lock, and job
+from quote activity-feed chain. It then mutation-tests the candidate-specific
+restore guard, applies the candidate only inside the disposable container, and
+requires the repaired restore chain to pass. The schema-only database is seeded
+with two governed-looking priced products while the pricing trigger is disabled
+for that seed alone; the trigger is restored before any chain executes. The
+container has no network, never reads a Supabase URL, and is force-removed in
+`finally`.
+
 Safety notes:
 
 - Chains run as table owner; direct fixture INSERTs bypass RLS but the RPCs
