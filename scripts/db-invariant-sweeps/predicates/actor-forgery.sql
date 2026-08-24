@@ -57,7 +57,6 @@ WHERE prosrc !~* 'ACTOR_MISMATCH'
            '(\m' || argname_pattern || '\M|\$' || input_position || '\M)\s*([-+*/\\<>=~!@#%^&|`?]+)',
            'gi'
          ) AS actor_operator(parts)
-         WHERE (actor_operator.parts)[2] NOT IN ('=', '<>', '!=', '<', '<=', '>', '>=')
        )
        OR EXISTS (
          SELECT 1
@@ -66,7 +65,6 @@ WHERE prosrc !~* 'ACTOR_MISMATCH'
            '([-+*/\\<>=~!@#%^&|`?]+)\s*(\m' || argname_pattern || '\M|\$' || input_position || '\M)',
            'gi'
          ) AS operator_actor(parts)
-         WHERE (operator_actor.parts)[1] NOT IN ('=', '<>', '!=', '<', '<=', '>', '>=')
        )
   )
 ORDER BY violation_key;

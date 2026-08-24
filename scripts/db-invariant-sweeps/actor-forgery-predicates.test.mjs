@@ -3,7 +3,8 @@
  * Disposable PostgreSQL 17 regression for the general and financial-audit
  * actor-forgery predicates. Catalog argument names are untrusted regex input:
  * a legal `$` in a named parameter must be matched literally, while `$1`
- * positional forwarding must remain covered.
+ * positional forwarding must remain covered. PostgreSQL comparison symbols
+ * are also overloadable operators, so a custom mutating `=` must be caught.
  */
 
 import assert from 'node:assert/strict';
@@ -107,10 +108,37 @@ BEGIN
   INSERT INTO public.financial_audit_log(actor_user_id) VALUES ($1);
 END;
 $body$;
+
+CREATE TYPE public.actor_token AS (value uuid);
+CREATE FUNCTION public.actor_equality_impl(p_actor public.actor_token, p_identity public.actor_token)
+RETURNS boolean LANGUAGE plpgsql AS $body$
+BEGIN
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES ((p_actor).value);
+  RETURN (p_actor).value IS NOT DISTINCT FROM (p_identity).value;
+END;
+$body$;
+CREATE OPERATOR public.= (
+  LEFTARG = public.actor_token,
+  RIGHTARG = public.actor_token,
+  FUNCTION = public.actor_equality_impl
+);
+CREATE FUNCTION public.actor_overloaded_equality(p_actor_source public.actor_token) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  RETURN p_actor_source = ROW(gen_random_uuid())::public.actor_token;
+END;
+$body$;
 `);
 
   assertCoversNamedAndPositional(predicateRows(GENERAL), 'actor_forward_');
   assertCoversNamedAndPositional(predicateRows(FINANCIAL_AUDIT), 'actor_audit_');
+  const generalRows = predicateRows(GENERAL);
+  assert.ok(
+    generalRows.some((row) =>
+      row.startsWith('actor_overloaded_equality(') && row.endsWith('|p_actor_source')
+    ),
+    `general predicate must catch an overloaded comparison operator receiving an actor: ${generalRows.join(', ')}`,
+  );
   console.log('ACTOR_FORGERY_PREDICATES_TEST_PASS');
 } finally {
   if (CONTAINER.startsWith(PREFIX)) {

@@ -1762,16 +1762,14 @@ function hasActorOperatorForwarding(structuralBody, actorParams) {
   return false;
 }
 
-const SAFE_ACTOR_SYMBOLIC_OPERATORS = new Set([
-  "=", "<>", "!=", "<", "<=", ">", ">=",
-]);
 const SQL_SYMBOLIC_OPERATOR_PATTERN = '[-+*/\\\\<>=~!@#%^&|`?]+';
 
 /** Ordinary infix syntax can invoke a user-defined PostgreSQL operator without
- * the explicit OPERATOR(schema.symbol) spelling. Comparison operators are the
- * only symbolic forms this guard can prove are identity checks; every other
+ * the explicit OPERATOR(schema.symbol) spelling. PostgreSQL permits custom
+ * overloads even for comparison symbols such as `=`, so every symbolic
  * operator immediately adjacent to a tainted actor is a fail-closed callable
- * boundary. This also covers prefix/postfix operators and local/$n aliases. */
+ * boundary unless the routine has the canonical actor-refusal proof. This also
+ * covers prefix/postfix operators and local/$n aliases. */
 function hasActorSymbolicOperatorForwarding(structuralBody, actorParams) {
   for (const actorParam of actorParams) {
     const reference = new RegExp(actorReferencePattern(actorParam), "gi");
@@ -1781,9 +1779,7 @@ function hasActorSymbolicOperatorForwarding(structuralBody, actorParams) {
       const suffix = structuralBody.slice(match.index + match[0].length);
       const before = prefix.match(new RegExp(`(${SQL_SYMBOLIC_OPERATOR_PATTERN})\\s*$`));
       const after = suffix.match(new RegExp(`^\\s*(${SQL_SYMBOLIC_OPERATOR_PATTERN})`));
-      if ([before?.[1], after?.[1]].some((operator) =>
-        operator && !SAFE_ACTOR_SYMBOLIC_OPERATORS.has(operator)
-      )) return true;
+      if ([before?.[1], after?.[1]].some(Boolean)) return true;
     }
   }
   return false;

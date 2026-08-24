@@ -357,6 +357,20 @@ before constructing any match. A disposable PostgreSQL 17 regression first
 proved that only the positional controls were detected, then proved both named
 and positional forms are caught by both predicates after the repair.
 
+The next exact-head SEC-01 review found that the ordinary-symbol path still
+treated `=`, `<>`, `!=`, `<`, `<=`, `>`, and `>=` as inherently safe identity
+checks. PostgreSQL permits user-defined overloads for every one of those
+symbols, so an authenticated caller could pass a forged actor through a custom
+comparison function executing with its `SECURITY DEFINER` wrapper's effective
+privileges. The hook and general live predicate now treat every actor-adjacent
+symbolic operator as a fail-closed callable boundary unless the routine proves
+the canonical `ACTOR_MISMATCH` refusal. A custom composite actor type with a
+mutating overloaded `=` reproduced the hook allow and missing catalog row before
+the fix; the restored code passes 426 focused assertions and a disposable
+PostgreSQL 17 predicate run. Reinstating the comparison exclusions makes the
+exact PostgreSQL regression fail while all named and positional controls remain
+detected.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —

@@ -223,8 +223,32 @@ ok(isDeny(r), "an unqualified user-defined operator cannot receive a PostgreSQL 
 r = runHook(forwardedActorWrapper("v_id := p_performed_by; RETURN auth.uid() ## v_id;"));
 ok(isDeny(r), "a local assignment cannot launder an actor into either side of an unqualified operator");
 
+const OVERLOADED_ACTOR_COMPARISON = `CREATE TYPE public.actor_token AS (value uuid);
+CREATE OR REPLACE FUNCTION public.record_actor_equality(p_actor public.actor_token, p_identity public.actor_token)
+RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path TO 'public', 'pg_temp' AS $helper$
+BEGIN
+  INSERT INTO financial_audit_log (actor_user_id) VALUES ((p_actor).value);
+  RETURN (p_actor).value IS NOT DISTINCT FROM (p_identity).value;
+END
+$helper$;
+CREATE OPERATOR public.= (
+  LEFTARG = public.actor_token,
+  RIGHTARG = public.actor_token,
+  FUNCTION = public.record_actor_equality
+);
+CREATE OR REPLACE FUNCTION public.forward_actor_equality(p_actor public.actor_token)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $wrapper$
+BEGIN
+  RETURN p_actor = ROW(auth.uid())::public.actor_token;
+END
+$wrapper$;
+GRANT EXECUTE ON FUNCTION public.forward_actor_equality(public.actor_token) TO authenticated;`;
+
+r = runHook(OVERLOADED_ACTOR_COMPARISON);
+ok(isDeny(r), "an overloaded comparison operator cannot receive an unbound actor from a definer wrapper");
+
 r = runHook(fn("BEGIN RETURN p_performed_by = auth.uid(); END;"));
-ok(!isDeny(r), "an ordinary actor identity comparison is not treated as callable forwarding");
+ok(isDeny(r), "an unproven actor identity comparison fails closed because its operator type is unknown");
 
 r = runHook(forwardedActorWrapper("v_id := p_performed_by; RETURN public.record_event_internal(v_id);"));
 ok(isDeny(r), "a local assignment cannot launder an unbound actor before a callable expression");
@@ -2829,7 +2853,7 @@ r = runHook(fn(MUTATION, "p_performed_by uuid", ""));
 ok(!isDeny(r), "function with no SECURITY clause (invoker default) is out of scope");
 
 r = runHook(fn("SELECT * FROM invoices WHERE created_by = p_performed_by;"));
-ok(!isDeny(r), "non-mutating SECDEF function is allowed even with an actor param");
+ok(isDeny(r), "an actor comparison is not provably non-mutating when its operator type is unknown");
 
 r = runHook(fn(MUTATION, "p_invoice_id uuid, p_amount_cents bigint"));
 ok(!isDeny(r), "SECDEF mutator with NO actor-shaped parameter is allowed");

@@ -32,7 +32,7 @@ This runner makes those queries **standing executable gates** that run **before*
 |---|---|---|
 | `anon-exec-secdef.sql` | (a) every anon-executable SECDEF | only the documented RLS-helper / trigger / sequence / self-gating-report set (allowlist) |
 | `ungated-secdef-mutators.sql` | (b) authenticated SECDEF that mutates and references no auth.uid()/role helper | **zero** (the round-2 definitive predicate, standing) |
-| `actor-forgery.sql` | (c) function/procedure actor-param role-check/COALESCE/MERGE/callable forwarding without ACTOR_MISMATCH | over-broad by design; allowlist semantic-safe |
+| `actor-forgery.sql` | (c) function/procedure actor-param role-check/COALESCE/MERGE/callable or operator forwarding without ACTOR_MISMATCH | over-broad by design; allowlist semantic-safe |
 | `actor-forgery-fin-audit.sql` | (i) function/procedure actor param referenced inside a `financial_audit_log` INSERT without ACTOR_MISMATCH (blind-spot closer for (c)) | over-broad by design; allowlist verified attribution-only |
 | `auth-bound-role-ungated.sql` | (d) auth.uid()-bound mutator with no role check (the `create_direct_order` W1 variant) | **zero** |
 | `secdef-searchpath.sql` | (e) SECDEF missing `search_path` | **zero** (no allowlist case) |
