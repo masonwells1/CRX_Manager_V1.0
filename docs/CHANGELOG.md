@@ -2,6 +2,26 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — Live migration evidence is no longer self-attested
+
+Exact-head review found that the migration guard trusted locally written production-labelled
+ledger and trigger/fan-out evidence. Hashing those artifacts and their committed producers proved
+internal consistency, but an importing helper could inject a fake command runner and mint the same
+shape without executing the fixed linked query.
+
+- The registered production guard now executes both named Supabase linked reads itself for every
+  apply attempt and consumes the ledger and trigger/fan-out manifest in memory. Local evidence
+  files cannot authorize production behavior.
+- Fixture-backed tests moved behind a separately named test entrypoint. Claude and Codex hook
+  manifests are asserted never to reference it, the production CLI accepts no arguments, and a
+  forged-cache mutation proves the production entry fails closed.
+- The owning migration-guard suite passes 352 assertions; trigger-fanout, applied-snapshot, and
+  replay-override producer suites pass 29, 24, and 25 assertions. A real read-only production-path
+  smoke also passed.
+- That live smoke surfaced an enabled, catalog-changing issue_pg_graphql_access event trigger. The
+  guard now intentionally blocks migration applies on the current live body rather than trusting
+  an older checked-in capture. No trigger, migration, data, secret, or permission was changed.
+
 ## 2026-08-24 — Stored-default trust follows definition-time ordering
 
 The first remote full-corpus SQL audit after the stored-default repair remained one finding above

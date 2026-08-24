@@ -21,6 +21,7 @@
 import { readFileSync, existsSync, readdirSync, statSync, mkdirSync, unlinkSync, openSync, closeSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
@@ -44,6 +45,12 @@ import {
   validProjectRef,
   validRegistryReason,
 } from "./guard-input-validation.mjs";
+import { buildTriggerFanoutManifest } from "../../scripts/generate-trigger-fanout.mjs";
+import { buildAppliedSnapshot } from "../../scripts/refresh-applied-migrations.mjs";
+import {
+  LINKED_READ_QUERY_IDS,
+  runLinkedRead,
+} from "../../scripts/supabase-linked-read.mjs";
 
 const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 const REQUIRED_CODEX_EFFORT = "high";
@@ -173,7 +180,37 @@ function loadAttestedFanout(root) {
   return { manifestPath, parsed };
 }
 
-function loadTrustedFanout(evidenceRoots) {
+function captureLiveAppliedSnapshot(projectRoot) {
+  const capture = runLinkedRead({
+    projectRoot,
+    queryId: LINKED_READ_QUERY_IDS.APPLIED_MIGRATIONS,
+  });
+  if (capture.rows.length !== 1) {
+    throw new Error("linked migration-ledger query did not return exactly one row");
+  }
+  const row = capture.rows[0];
+  if (!exactKeys(row, ["migration_ledger"])) {
+    throw new Error("linked migration-ledger query returned an unexpected row shape");
+  }
+  return buildAppliedSnapshot(row.migration_ledger, capture.projectId);
+}
+
+function captureLiveFanoutManifest(projectRoot) {
+  const capture = runLinkedRead({
+    projectRoot,
+    queryId: LINKED_READ_QUERY_IDS.TRIGGER_FANOUT,
+  });
+  if (capture.rows.length !== 1) {
+    throw new Error("linked trigger-fanout query did not return exactly one row");
+  }
+  const row = capture.rows[0];
+  if (!exactKeys(row, ["trigger_fanout_capture"])) {
+    throw new Error("linked trigger-fanout query returned an unexpected row shape");
+  }
+  return buildTriggerFanoutManifest(row.trigger_fanout_capture, capture.projectId);
+}
+
+function loadTrustedFanout(evidenceRoots, inMemoryManifest = null) {
   const scanned = new Set();
   const opaque = new Set();
   const fanout = new Map();
@@ -185,16 +222,25 @@ function loadTrustedFanout(evidenceRoots) {
   const manifests = [];
   const expiredManifests = [];
   const rejectedManifests = [];
-  for (const root of evidenceRoots) {
-    const manifestPath = path.join(root, "scripts", "trigger-fanout.json");
-    if (!existsSync(manifestPath)) continue;
-    let parsed;
-    try {
-      ({ parsed } = loadAttestedFanout(root));
-    } catch (err) {
-      rejectedManifests.push(`${manifestPath}: ${err?.message || err}`);
-      continue;
+  const sources = [];
+  if (inMemoryManifest) {
+    sources.push({
+      manifestPath: "linked production query (in memory)",
+      parsed: inMemoryManifest,
+    });
+  } else {
+    for (const root of evidenceRoots) {
+      const manifestPath = path.join(root, "scripts", "trigger-fanout.json");
+      if (!existsSync(manifestPath)) continue;
+      try {
+        const { parsed } = loadAttestedFanout(root);
+        sources.push({ manifestPath, parsed });
+      } catch (err) {
+        rejectedManifests.push(`${manifestPath}: ${err?.message || err}`);
+      }
     }
+  }
+  for (const { manifestPath, parsed } of sources) {
     if (parsed?._meta?.format_version !== 6 ||
         parsed?._meta?.source_project !== CRX_PRODUCTION_REF ||
         typeof parsed?._meta?.captured_at !== "string" ||
@@ -470,6 +516,7 @@ function loadKnownDefinitions(evidenceRoots, currentMigration = "") {
   };
 }
 
+function runMigrationApplyGuard(useCachedTestEvidence) {
 let payload;
 try {
   payload = JSON.parse(readFileSync(0, "utf8"));
@@ -540,19 +587,18 @@ const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unkno
 //
 // The comparison set is the APPLIED ledger, never the files on disk: a file on
 // disk is not proof it ran, and comparing against disk would block a correct
-// ascending batch of new migrations. The snapshot is written by
-// scripts/refresh-applied-migrations.mjs from
-// supabase_migrations.schema_migrations.
+// ascending batch of new migrations. The production entry runs the fixed
+// linked ledger query itself and consumes the result in memory. Locally written
+// snapshots exist only behind the separately named regression-test entry.
 //
-// MISSING EVIDENCE IS A BLOCK, NOT A PASS. The snapshot is gitignored, so a
-// clean checkout has none — if that abstained, the guard would be absent
-// exactly when it is most needed, recreating the incident it exists to stop
-// (Codex P1, PR #348). A missing, unreadable, or stale snapshot therefore
-// refuses the apply and tells the operator how to produce one. Only the
+// MISSING EVIDENCE IS A BLOCK, NOT A PASS. A failed, malformed, stale, or
+// project-mismatched linked read therefore refuses the apply. Only the
 // library's internal "this name has no timestamp" case abstains.
 const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 {
-  const snapPaths = [...new Set(proofDirs.map((dir) => path.join(dir, "applied-migrations.json")))];
+  const snapPaths = useCachedTestEvidence
+    ? [...new Set(proofDirs.map((dir) => path.join(dir, "applied-migrations.json")))]
+    : ["linked production query (in memory)"];
   let snapPath = snapPaths[0];
   // The recapture target must be the project THIS apply is aimed at. Reading it
   // from the environment printed a literal `<your project ref>` in every normal
@@ -571,36 +617,49 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       `reflecting the supplied value.`);
   }
   const targetRef = targetRefRaw;
-  const howTo =
-    `Refresh it first (read-only):\n` +
-    `  node scripts/refresh-applied-migrations.mjs\n` +
-    `That command verifies the linked checkout is project ${CRX_PRODUCTION_REF}, queries its ` +
-    `migration ledger directly, and refuses mismatched or malformed output. ` +
-    `The snapshot is gitignored in this session's active checkout, so a fresh clone or a newer apply elsewhere ` +
-    `means it must be regenerated. Do NOT hand-write it.`;
+  const howTo = useCachedTestEvidence
+    ? `Refresh it first (read-only):\n` +
+      `  node scripts/refresh-applied-migrations.mjs\n` +
+      `That fixture-only command path is retained for deterministic regression tests.`
+    : `The guard performs its own fixed read-only linked query against project ` +
+      `${CRX_PRODUCTION_REF} for every apply attempt. Verify Supabase CLI authentication and the ` +
+      `repository link, then retry; local snapshot files are not accepted as production evidence.`;
 
   let appliedNames = [];
   let snapshotAgeMs = null;
   try {
     const candidates = [];
     const readErrors = [];
-    for (const candidatePath of snapPaths) {
-      if (!existsSync(candidatePath)) continue;
+    if (useCachedTestEvidence) {
+      for (const candidatePath of snapPaths) {
+        if (!existsSync(candidatePath)) continue;
+        try {
+          const parsed = JSON.parse(readFileSync(candidatePath, "utf8"));
+          candidates.push({
+            snapPath: candidatePath,
+            parsed,
+            capturedAt: Date.parse(parsed?.captured_at ?? ""),
+          });
+        } catch (err) {
+          readErrors.push(`${candidatePath}: ${err?.message || err}`);
+        }
+      }
+    } else {
       try {
-        const parsed = JSON.parse(readFileSync(candidatePath, "utf8"));
+        const parsed = captureLiveAppliedSnapshot(projectDir);
         candidates.push({
-          snapPath: candidatePath,
+          snapPath: snapPaths[0],
           parsed,
           capturedAt: Date.parse(parsed?.captured_at ?? ""),
         });
       } catch (err) {
-        readErrors.push(`${candidatePath}: ${err?.message || err}`);
+        readErrors.push(`fixed linked read: ${err?.message || err}`);
       }
     }
     if (candidates.length === 0) {
       out("block",
-        `MIGRATION ORDERING GUARD: no readable applied-migration snapshot in this session's verified ` +
-        `checkout paths (${snapPaths.join(", ")}), so there is no ` +
+        `MIGRATION ORDERING GUARD: no trustworthy live applied-migration evidence was available ` +
+        `(source: ${snapPaths.join(", ")}), so there is no ` +
         `evidence of what the database has already run and an out-of-order replay could not be ` +
         `detected. Refusing the apply.` +
         (readErrors.length ? ` Read error(s): ${readErrors.join("; ")}.` : "") +
@@ -844,7 +903,9 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     let knownViews;
     let knownRules;
     try {
-      fanoutEvidence = loadTrustedFanout(evidenceRoots);
+      fanoutEvidence = useCachedTestEvidence
+        ? loadTrustedFanout(evidenceRoots)
+        : loadTrustedFanout([], captureLiveFanoutManifest(projectDir));
       const knownDefinitions = loadKnownDefinitions(evidenceRoots, migName);
       knownOperators = knownDefinitions.operators;
       knownCasts = knownDefinitions.casts;
@@ -855,7 +916,8 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `ONE-SHOT REPLAY GUARD: trusted trigger/FK, custom-operator, custom-cast/domain, or stored-view evidence could not be loaded ` +
         `(${err?.message || err}). A directly named table is not the complete apply-time write ` +
         `surface when live triggers or referential actions can rewrite another population. ` +
-        `Refusing the apply; restore or regenerate scripts/trigger-fanout.json and retry.`);
+        `Refusing the apply; production evidence is read directly in memory and cannot be ` +
+        `replaced by a local manifest or attestation.`);
     }
     if (fanoutEvidence.enabledEventTriggers.length) {
       out("block",
@@ -863,8 +925,8 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `trigger(s): ${fanoutEvidence.enabledEventTriggers.map((trigger) => trigger.name).join(", ")}. ` +
         `Event triggers execute database-wide on DDL and these routine bodies do not have a ` +
         `complete no-write static proof. Refusing every migration apply until the trigger(s) are ` +
-        `disabled/removed through a separately reviewed path and ` +
-        `node scripts/generate-trigger-fanout.mjs refreshes the linked capture.`);
+        `disabled/removed through a separately reviewed path or their exact current behavior is ` +
+        `modeled and independently reviewed. The guard's live read will re-evaluate them on retry.`);
     }
 
     // Normalize for comparison: lowercase, strip comments, collapse whitespace.
@@ -1054,8 +1116,8 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `${changedEventRoutines.map((trigger) =>
           `${trigger.routine_schema}.${trigger.routine_name} ` +
           `(OID ${trigger.routine_oid}, body ${trigger.routine_hash.slice(0, 12)}…)`).join(", ")}. ` +
-        `The checked-in live capture proves only the exact recorded routine bodies. Refusing the ` +
-        `apply; review the event-trigger change independently and recapture linked fan-out evidence.`);
+        `The guard's in-memory linked read proves only the exact current routine bodies. Refusing ` +
+        `the apply; review the event-trigger change independently before retrying.`);
     }
     if (fanoutEvidence.sessionDependentEventTriggers.length &&
         (submitted.searchPathChange || submitted.eventTriggerChange || submitted.unresolved)) {
@@ -1065,7 +1127,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `use PostgreSQL catalog metadata helpers through the applying session's search_path. ` +
         `This migration changes that path or has an unresolved apply-time effect, so the ` +
         `catalog binding cannot be proved. Refusing the apply; remove the ambiguous construct or ` +
-        `pin and independently review the event-trigger routine before recapturing fan-out evidence.`);
+        `pin and independently review the event-trigger routine before retrying.`);
     }
     const submittedFanout = expandThroughFanout(submitted, fanoutEvidence);
 
@@ -1732,3 +1794,16 @@ out("block",
   `This guard exists because of the B7/B8/B9 incidents (2026-05-26) where migrations were\n` +
   `applied without the parallel-session reviewers catching anon-EXECUTE-able SECDEF DML.`
 );
+}
+
+export function runMigrationApplyGuardWithCachedTestEvidence() {
+  return runMigrationApplyGuard(true);
+}
+
+if (process.argv[1] && path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1])) {
+  if (process.argv.slice(2).length) {
+    process.stderr.write("migration-apply-guard: no arguments are accepted\n");
+    process.exit(1);
+  }
+  runMigrationApplyGuard(false);
+}

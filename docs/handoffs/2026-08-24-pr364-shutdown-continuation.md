@@ -164,4 +164,28 @@ current-head gate is green or an explicitly expected neutral result.
   - lint, typecheck, and production build/PWA passed.
 - The audit allowance was not raised. No migration SQL or live state changed.
 
+## SIXTH RESUME REPAIR — LOCAL SELF-ATTESTATION REMOVED
+
+- Exact-SHA review of commit 264927d3 returned CRX-SEC-001: High. The apply guard accepted
+  locally self-attested migration-ledger and trigger-fan-out JSON. An external helper could import
+  the exported producers, inject fake command results, and mint internally consistent
+  production-labelled files without running the fixed live query.
+- The production guard now performs the fixed applied-ledger and trigger/fan-out linked reads
+  itself and consumes both results in memory. Local caches are ignored by production.
+- Regression fixtures use a separately named test entry. Neither hook manifest may reference it,
+  and the production entry accepts no arguments or caller-selected evidence mode.
+- Local proof:
+  - production local-cache forgery is denied;
+  - production fixed-read smoke ran both real read-only Supabase queries successfully;
+  - migration apply guard: 352 assertions passed;
+  - trigger-fanout, snapshot, and replay producer suites: 29 / 24 / 25 assertions passed;
+  - complete correction guards, workflow parity, documentation drift, lint, typecheck, and the
+    production build/PWA passed.
+- Live verification found current issue_pg_graphql_access event-trigger behavior differs from the
+  older checked-in capture and performs catalog DDL conditionally. The guard correctly blocks all
+  migration applies until that exact live behavior is modeled/reviewed or changed through a
+  separate reviewed path. No live mutation was performed.
+- PR #364 remains HOLD. Broad gates, a new commit, fresh exact-SHA Sol review, push, current-head
+  CodeRabbit/GitHub checks, merge, and production verification still remain.
+
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

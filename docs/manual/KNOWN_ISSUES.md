@@ -34,6 +34,21 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-24 — live pg_graphql event trigger currently blocks migration applies
+
+The production migration guard now performs its own fixed linked reads in memory instead of
+trusting locally self-attested ledger and fan-out files. Its first real-path smoke succeeded and
+then failed closed on live event trigger issue_pg_graphql_access. The current routine is enabled
+for ddl_command_end, has an empty pinned search path, and can drop/recreate the GraphQL wrapper
+when pg_graphql extension DDL appears. The analyzer cannot prove that catalog-changing body
+harmless for every candidate DDL statement, so every migration apply is intentionally refused.
+
+This is an operational release blocker, not evidence that production data changed or that the
+event trigger is malicious. Do not disable or alter the Supabase-managed trigger casually. The
+safe repair is to model and mutation-test its exact early-return condition against the live
+routine identity/body/config, then obtain independent exact-SHA review. Until that lands, no live
+migration should be described as apply-ready.
+
 ## OPEN 2026-08-23 — `codex review <scope>` self-recurses, kills its own process, and exits 0
 
 **Severity: HIGH. Not a crash — a silent false "gate passed".** `codex review --base origin/main`

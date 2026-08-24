@@ -9,6 +9,30 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-24 — A live migration guard must read production itself
+
+**Source:** exact-head Sol/high review CRX-SEC-001 on PR #364, followed by the fixed-read
+production smoke and read-only live Supabase catalog verification. This supersedes the
+apply-authorization role assigned to local ledger snapshots and trigger-fanout attestations in
+the 2026-08-21 and 2026-08-14 entries; those artifacts remain useful for offline validation and
+diagnostics but cannot authorize a live apply.
+
+**Decision.** Internal hashes and committed producer hashes prove that local evidence is
+self-consistent; they do not prove the fixed production query ran. The registered migration apply
+guard therefore runs both named linked reads itself for every apply attempt and consumes the
+ledger and trigger/fan-out result in memory. Local snapshot/manifest files are ignored by the
+production entry. Fixture-backed regression tests use a separately named, unregistered entrypoint;
+both hook manifests are asserted never to reference it, and the production entry accepts no
+arguments or mode switches.
+
+**Fail-closed consequence.** The first real-path read found that live
+issue_pg_graphql_access currently has an enabled, catalog-changing event-trigger body that the
+static analyzer cannot prove harmless for arbitrary DDL. Migration applies now refuse on that
+current live fact until the exact behavior is modeled and independently reviewed or the trigger is
+changed through a separately reviewed path. A stale checked-in capture may not suppress the block.
+
+---
+
 ## 2026-08-24 — CodeRabbit config: stop spending the review budget on half-finished commits
 
 **Source:** Mason's in-chat decisions, 2026-08-20 through 2026-08-24. Supersedes nothing; refines

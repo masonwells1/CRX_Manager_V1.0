@@ -101,7 +101,27 @@ ok(
 eq(destructiveMigrationCheck("").destructive, false, "empty SQL is not destructive");
 
 // ── live hook: proof gate + armed-run destructive carve-out ─────────────────
-const HOOK = path.join(__dirname, "migration-apply-guard.mjs");
+const PRODUCTION_HOOK = path.join(__dirname, "migration-apply-guard.mjs");
+const HOOK = path.join(__dirname, "migration-apply-guard-test-entry.mjs");
+for (const manifestPath of [
+  path.join(__dirname, "..", "settings.json"),
+  path.join(__dirname, "..", "..", ".codex", "hooks.json"),
+]) {
+  ok(
+    !readFileSync(manifestPath, "utf8").includes("migration-apply-guard-test-entry"),
+    `${manifestPath} invokes the fixed-read production entry, never the fixture entry`,
+  );
+}
+{
+  const attemptedModeSwitch = spawnSync(process.execPath, [PRODUCTION_HOOK, "--cached"], {
+    encoding: "utf8",
+  });
+  ok(
+    attemptedModeSwitch.status !== 0 &&
+      attemptedModeSwitch.stderr.includes("no arguments are accepted"),
+    "production entry refuses every caller-supplied mode switch",
+  );
+}
 // Git exports GIT_DIR/GIT_INDEX_FILE to every hook it runs, and this suite runs
 // inside pre-commit. Inheriting those redirects every fixture git command at the
 // REAL repository: `git init` on an inherited GIT_DIR rewrites the shared config
@@ -248,6 +268,21 @@ function armAutopilot(stateDir, hoursFromNow) {
       !r.stdout.includes("execute_sql on") && !r.stdout.includes("--project="),
       "recapture instructions never ask the caller to assert provenance",
     );
+
+    // The production entrypoint ignores even a perfectly shaped local cache.
+    // Its fixed linked read fails here because this hermetic fixture has no
+    // production link; accepting the forged files would recreate CRX-SEC-001.
+    writeAppliedSnapshot(stateDir);
+    const productionResult = spawnSync(process.execPath, [PRODUCTION_HOOK], {
+      input: JSON.stringify(call(BENIGN_SQL)),
+      encoding: "utf8",
+      cwd: tmp,
+      env: hermeticEnv({ CLAUDE_PROJECT_DIR: tmp }),
+    });
+    ok(isDeny(productionResult),
+      "production guard ignores locally self-attested ledger and fan-out evidence");
+    ok(productionResult.stdout.includes("fixed linked read"),
+      "production denial says its own fixed linked read failed");
 
     writeAppliedSnapshot(stateDir, { ageHours: 48 });
     r = runHook(call(BENIGN_SQL), tmp);
