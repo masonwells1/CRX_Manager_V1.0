@@ -101,7 +101,11 @@ export function normalizeExecutable(token) {
   // exec, so the guard has to as well — the same lesson as the earlier
   // `("Hard"+"Link")` bypass in the maintenance guard. This also covers the
   // unreported twin, `task"kill"`, which I found probing the reported one.
-  const unquoted = String(token || "").replace(/["'`]/g, "");
+  // The caret is cmd.exe's escape character and vanishes before the program is
+  // resolved, so `co^dex` and `task^kill.exe` launch normally (round 10). It is
+  // stripped with the quotes for the same reason: the shell removes it, so the
+  // guard must compare what actually gets executed.
+  const unquoted = String(token || "").replace(/["'`^]/g, "");
   const base = unquoted.split(/[\\/]/).pop() || "";
   return base.replace(EXECUTABLE_EXT_RE, "").toLowerCase();
 }

@@ -299,6 +299,14 @@ check("redirection splitting does not break ordinary commands", () => {
   assert.equal(blocks("git log --oneline > /tmp/log.txt"), null);
 });
 
+check("round 10: cmd.exe caret escapes vanish before the program resolves", () => {
+  assert.equal(rule("cmd /c co^dex review --base origin/main"), "codex-review");
+  assert.equal(rule("cmd /c task^kill.exe /PID 39564 /T /F"), "force-kill");
+  assert.equal(rule("cmd /c k^i^l^l 39564"), "force-kill");
+  // A caret used as ordinary syntax, not as an escape, is untouched.
+  assert.equal(blocks("git log --format=%h^ -3"), null);
+});
+
 // ── Deny payload shape ────────────────────────────────────────────────────────
 check("a blocked command names the wrapper as the alternative", () => {
   const v = classifyCommand("codex review --base origin/main");

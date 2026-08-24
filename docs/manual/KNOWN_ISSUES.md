@@ -241,7 +241,21 @@ it is a trade, not a free win.
     the next piece of coverage worth adding, and it is a further argument for the capability-layer
     fix below rather than more string matching.
 
-**Read the round count as data, not trivia.** Seventeen High bypasses over eight adversarial rounds
+11. **HIGH round 10 — `cmd.exe` caret escapes, and the point where the gate stopped converging.**
+    `cmd /c co^dex review` and `cmd /c task^kill.exe /PID 39564 /T /F` both ran: the caret is
+    cmd.exe's escape character and vanishes before the program is resolved. Stripped with the
+    quotes now, for the same reason — compare what actually executes. Verified allowed, fixed,
+    re-verified denied.
+
+    **The reviewer's instruction with this finding was not "fix the escape".** It was: *"Extending
+    token enumeration with another escape rule will remain structurally bypassable. Keep the issue
+    open until capability-level enforcement and end-to-end bypass tests exist."* That is the third
+    consecutive verdict asking for a different mechanism, and it means **the merge gate cannot be
+    satisfied by improving this guard** — a clean verdict is not reachable on a command-text
+    boundary. Treat any future round of spelling patches here as known-futile unless the
+    capability-layer work has been done.
+
+**Read the round count as data, not trivia.** Eighteen High bypasses over nine adversarial rounds
 on roughly a hundred lines. **Not one was found by reasoning about the pattern** — every one came
 from executing commands against it. Treat that as the measure of how far to trust *any*
 text-matching guard over shell strings, this one included.
