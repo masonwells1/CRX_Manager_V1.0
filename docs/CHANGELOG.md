@@ -2,6 +2,31 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — Migration ordering review now matches the deterministic ledger guard
+
+The draw-down cutover review exposed two opposite bookkeeping hazards in the
+human-review charter. It first treated Supabase's apply-time `version` as the
+authored migration high-water and falsely blocked a correctly ordered money
+migration. The first correction then went too far and discarded `version` even
+for legacy ledger rows whose `name` contains no timestamp.
+
+- Migration ordering evidence is now derived row by row: prefer the authored
+  14-digit stamp embedded in `name`, and use that row's 14-digit `version` only
+  when the name has no timestamp. A bare `max(version)` or schema-registry
+  version is not sufficient ordering evidence because it loses that context.
+- Post-apply B7 handling now reconciles the new ledger row instead of always
+  renaming the disk file. When the normalized live `name` already matches the
+  authored basename, the filename stays unchanged; a differing apply-time
+  version alone must not manufacture drift. The version rename remains the
+  fallback when the live name does not preserve the authored basename.
+- The canonical `/ship` workflow and the migration-drift reviewer use the same
+  rule. Deterministic guidance checks pin both edge cases and were mutation-
+  tested by removing the timestamp-less-name fallback and by restoring the
+  obsolete always-rename instruction; both mutations failed the intended
+  assertions.
+- All agent workflow and correction-guard suites passed. No live migration or
+  business-data change was performed while correcting these gates.
+
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 
 Five quote-based smoke chains had silently rotted after product pricing became
