@@ -55,11 +55,28 @@ false-clean the gauntlet's `UNVERIFIED`/`BLOCKED` rule exists to prevent.
 are no agent-instruction files present to recurse on. It returned a real CLEAN verdict with cited
 `file:line` evidence on the first try for the same diff that killed `codex review` twice.
 
-**Always confirm a verdict exists rather than trusting the exit code:**
+The wrapper covers the `--base origin/main` scope only — its base is pinned to `origin/main...HEAD`
+by design and it fails closed on a dirty worktree, so `--uncommitted` and `--commit <sha>` need a
+committed branch or `/codex-cross-review` instead.
+
+**The gate is the proof file, not the exit code and not the bare token** — the token also spells
+`BLOCKERS`. The wrapper mints the proof only on a terminal `CODEX_PROOF_VERDICT: CLEAN`; no proof
+for the current HEAD means not passed. Secondary check on the capture, matching `CLEAN` itself:
 
 ```bash
-grep -cE "CODEX_PROOF_VERDICT|^VERDICT:" .claude/session-state/codex-review-latest.txt
+grep -cE '^CODEX_PROOF_VERDICT:[[:space:]]*CLEAN[[:space:]]*$' .claude/session-state/codex-review-latest.txt
 ```
+
+`0` means no clean verdict. **Two drafting errors were made here on 2026-08-23 and both are worth
+keeping visible**, because each is the same false-clean shape this entry is about:
+
+1. The first draft grepped `CODEX_PROOF_VERDICT|^VERDICT:` — presence only, so it reported a pass
+   on a `BLOCKERS` verdict. Caught by CodeRabbit on PR #448.
+2. The correction then demanded *exactly* `1` match, reasoning from the parser's one-token rule.
+   That rule governs Codex's stdout, not this capture file, which holds a structured section
+   **and** the raw transcript — so a genuinely clean run reports `2` (verified at lines 18 and
+   33671 of a real clean capture) and the "fix" would have raised a false alarm on every pass.
+   Caught by running the command instead of reasoning about it.
 
 **Prevention gap — still OPEN.** The fix shipped is documentation, which is soft scaffolding: it
 advises, it does not block. The hard boundary would be a hook denying (a) a Codex session spawning

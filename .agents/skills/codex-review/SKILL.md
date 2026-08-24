@@ -96,17 +96,40 @@ node scripts/write-codex-push-proof.mjs
 It runs `codex exec` (not `review`) inside a throwaway `%TEMP%\crx-codex-review-*` workspace
 holding only `BASE_SNAPSHOT` / `CANDIDATE_SNAPSHOT` — **no repo agent-instruction files exist
 there to recurse on**. It SHA-256-binds every changed path, pins Sol at high effort, and writes
-the exact-SHA proof JSON the push guard wants. Trust the verdict line it prints;
-`review-proof-guard.mjs` blocks reading the proof JSON back through the shell by design.
+the exact-SHA proof JSON the push guard wants;
+`review-proof-guard.mjs` blocks reading that JSON back through the shell by design.
 
-**Verify a verdict actually exists — never infer one from an exit code:**
+> **Scope contract — the wrapper covers ONE scope, not all three.** Its base is pinned to
+> `origin/main...HEAD` and is *deliberately* not a CLI option (`write-codex-push-proof.mjs`:
+> "a caller who could pass `--base HEAD` would get a clean review of nothing"). It also fails
+> closed on a dirty or shifted worktree and mints nothing. So it replaces Step 1's
+> `--base origin/main` row **only**. It cannot serve `--uncommitted` or `--commit <sha>`:
+> commit the work onto a branch and review it against `origin/main`, or use
+> `/codex-cross-review` for a scope the wrapper cannot express. Do not run the legacy
+> `codex review --uncommitted` as a substitute — it self-recurses exactly as above.
+
+**Verify the verdict. Presence of the *token* is NOT a pass — the token also spells `BLOCKERS`.**
+
+*Primary signal — the wrapper's own refusal.* It writes the proof JSON **only** on a terminal
+`CODEX_PROOF_VERDICT: CLEAN`, and mints nothing on `BLOCKERS`, on a duplicate token (treated as
+diff-injected), or on a worktree that was dirty or moved mid-review. So it prints
+`… (verdict: clean, head <sha>, base <sha>)` or it prints why it refused. **No proof file for the
+current HEAD = no pass**, regardless of exit status.
+
+*Secondary sanity check on the capture* — match `CLEAN` specifically, never the bare token:
 
 ```bash
-grep -cE "CODEX_PROOF_VERDICT|^VERDICT:" .claude/session-state/codex-review-latest.txt
+grep -cE '^CODEX_PROOF_VERDICT:[[:space:]]*CLEAN[[:space:]]*$' .claude/session-state/codex-review-latest.txt
 ```
 
-`0` means the review never produced findings, whatever the exit status was. Per the gauntlet
-contract that is `UNVERIFIED`/`BLOCKED` and can never count as clean.
+`0` means no clean verdict: either `BLOCKERS`, or — as in the self-recursion above — nothing at
+all while still exiting 0.
+
+**Do not tighten this to "exactly 1".** A clean run legitimately reports **2**: the wrapper writes
+a structured section *and* the raw transcript tail into the same capture, so the verdict appears
+twice (verified 2026-08-23 at lines 18 and 33671 of a real clean run). The parser's
+one-token rule applies to Codex's stdout, which is not what this file holds. Counting matches here
+is a smoke test; the proof file is the gate.
 
 <details>
 <summary>Legacy <code>codex review $SCOPE</code> form (kept for reference — expect self-recursion)</summary>
