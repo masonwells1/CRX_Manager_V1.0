@@ -126,9 +126,26 @@ check("allows the sanctioned wrapper", () => {
   assert.equal(blocks("node scripts/write-codex-push-proof.mjs"), null);
 });
 
-check("allows prose merely mentioning codex review", () => {
-  assert.equal(blocks('echo "do not run codex review here"'), null,
-    "echo of the phrase has no invocation shape");
+check("HIGH round 7: blocks the seven wrapper spellings Sol proved were allowed", () => {
+  // Shell builtins and launcher arguments that ended the old position-tracking walk.
+  assert.equal(rule("command codex review --base origin/main"), "codex-review");
+  assert.equal(rule("exec codex review --base origin/main"), "codex-review");
+  assert.equal(rule("cmd /c call codex review --base origin/main"), "codex-review");
+  assert.equal(rule("timeout 90 codex review --base origin/main"), "codex-review");
+  assert.equal(rule("command taskkill.exe /PID 39564 /T /F"), "force-kill");
+  assert.equal(rule("exec /bin/kill -9 39564"), "force-kill");
+  assert.equal(
+    rule("Start-Process codex.exe -ArgumentList @('review','--base','origin/main')"),
+    "codex-review",
+  );
+});
+
+check("ACCEPTED OVER-BLOCK: prose naming a guarded tool is refused", () => {
+  // Previously asserted as allowed. Fail-closed means a token is a token; there is
+  // no reliable way to tell `echo taskkill` from an invocation by string shape, and
+  // four rounds proved that guessing loses. A refused echo costs one message.
+  assert.equal(rule('echo "do not run codex review here"'), "codex-review");
+  assert.equal(rule("grep -r taskkill docs/"), "force-kill");
 });
 
 check("HIGH: blocks a BARE kill — on Windows `kill` IS Stop-Process", () => {

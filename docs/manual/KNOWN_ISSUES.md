@@ -159,10 +159,40 @@ See `guard-design-bypasses` in memory. 29 unit checks now pin each spelling — 
 bypasses verbatim among them — and each was re-verified live through the real Bash tool, because a
 unit test is not the hook.
 
-**Read the round count as data, not as trivia.** Six High bypasses over four adversarial rounds on
-roughly a hundred lines. Not one was found by reasoning about the pattern; they came from running
-commands against it. That is the honest measure of how far to trust *any* text-matching guard over
-shell strings — including this one, now that it has no known bypass.
+7. **HIGH a fourth time — and the point at which patching stopped.** Sol on `137dafb3` proved
+   seven more: `command codex review`, `exec codex review`, `cmd /c call codex review`,
+   `timeout 90 codex review` (the bare `90` ended the walk), `command taskkill.exe`,
+   `exec /bin/kill -9`, and `Start-Process codex.exe -ArgumentList @('review',…)`. Its diagnosis
+   was of the shape, not the spellings: *"parsing stops when it encounters an unrecognized
+   launcher or launcher argument"*, and it asked for **fail-closed handling of opaque launchers**.
+
+   **The guard no longer tracks command position at all.** Every whitespace-or-separator token is
+   a candidate executable; if a guarded kill tool appears anywhere, the command is refused. There
+   is no launcher table left to be incomplete and no walk left to terminate early. Correctly
+   recognising every wrapper in every shell is not achievable by string matching, and four rounds
+   of trying is enough evidence.
+
+**The accepted cost, so nobody rediscovers it as a bug.** This over-blocks. `grep -r taskkill docs/`
+and `echo "never run codex review"` are refused, and a test pins that as intended. There is no
+reliable way to distinguish those from an invocation by string shape — that distinction is exactly
+what failed four times.
+
+**The tax is bigger than "one wasted message", so budget for it.** Writing *about* these tools
+through a shell is refused too. The commit message for this very change could not be written with a
+Bash heredoc, because it names the tools it guards. **Author the docs and tests for this guard with
+the Write/Edit tools, not a shell heredoc** — the hook matches `Bash|PowerShell` only. The trade
+still holds (a missed termination costs a security gate that reports clean without having run), but
+it is a trade, not a free win.
+
+**Read the round count as data, not trivia.** Thirteen High bypasses over five adversarial rounds
+on roughly a hundred lines. **Not one was found by reasoning about the pattern** — every one came
+from executing commands against it. Treat that as the measure of how far to trust *any*
+text-matching guard over shell strings, this one included.
+
+**Still not the end state.** Sol has now recommended capability-layer enforcement three times, and
+it is right: the durable version of this is a tool-permission rule that operates on tool calls
+rather than command strings. That is a separate change and Mason's call; this guard is the
+strongest available today, not the last word.
 
 **Cost of a bare-`kill` block:** an agent can no longer stop a process it started with a signal.
 That is deliberate — use the harness's TaskStop, or hand Mason the PID. The guard's message says

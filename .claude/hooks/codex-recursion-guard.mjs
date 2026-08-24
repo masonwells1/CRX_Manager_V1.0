@@ -132,36 +132,49 @@ const EXEC_TOKEN_RE = /(?:^|[\s'",(])exec(?:$|[\s'",);&|])/i;
  * while the Codex-review detector does not inspect launchers at all". Two parsers
  * mean two sets of holes, so there is now one.
  */
+/**
+ * FAIL CLOSED. Every token is a candidate executable, not just the ones at a
+ * position this parser believes it understands.
+ *
+ * Four adversarial rounds killed the position-tracking approach. Each round the
+ * walk stopped at a token it did not recognise and everything after it went
+ * unexamined: an empty `""`, a `KEY=VALUE`, a bare `90` after `timeout`, and then
+ * `command`, `exec`, `call`, `@(…)`. Sol's round-7 verdict named the shape rather
+ * than the spellings — "parsing stops when it encounters an unrecognized launcher
+ * or launcher argument" — and asked for fail-closed handling of opaque launchers.
+ *
+ * Correctly recognising every wrapper in every shell is not achievable with string
+ * matching, so this stops trying. If a guarded kill tool appears ANYWHERE as a
+ * token, refuse. No launcher table to be incomplete, no walk to terminate early.
+ *
+ * THE TRADE, stated plainly: this over-blocks. `grep taskkill notes.md` and
+ * `echo "never run codex review"` are now refused. That is the intended direction —
+ * a refused `grep` costs one message, a missed kill costs a security gate that
+ * reports clean without running. See the KNOWN_ISSUES entry.
+ */
 export function classifyWalk(rawCommand) {
   const cmd = String(rawCommand || "");
-  // `{` and `(` start a new command position (`ForEach-Object { Stop-Process … }`),
-  // but NOT when they belong to `${VAR}` or `$(subshell)` — splitting there tore
-  // `${CODEX}` into `$` + `CODEX}` and lost the binary.
-  for (const segment of cmd.split(/(?:&&|\|\||[;|&\n)]|(?<!\$)[{(])/)) {
-    const tokens = segment.trim().split(/\s+/).filter(Boolean);
-    for (let i = 0; i < tokens.length; i += 1) {
-      const token = tokens[i];
-      if (isFlag(token) || isSkippableArgument(token)) continue;
+  if (!cmd.trim()) return null;
 
-      const name = normalizeExecutable(token);
-      const guarded = GUARDED_KILL.get(name);
-      if (guarded) return { rule: "force-kill", what: guarded };
+  const tokens = cmd.split(/[\s;|&\n(){}]+/).filter(Boolean);
 
-      if (isCodexBinary(token)) {
-        const rest = tokens.slice(i + 1).join(" ");
-        const review = rest.search(REVIEW_TOKEN_RE);
-        if (review === -1) break;
-        const exec = rest.search(EXEC_TOKEN_RE);
-        // `exec` first means the subcommand is exec and "review" is prompt text.
-        if (exec !== -1 && exec < review) break;
-        return { rule: "codex-review" };
-      }
-
-      // A launcher runs something else — keep scanning this segment for it.
-      if (LAUNCHERS.has(name)) continue;
-      break; // some other program owns this segment
-    }
+  for (const token of tokens) {
+    const guarded = GUARDED_KILL.get(normalizeExecutable(token));
+    if (guarded) return { rule: "force-kill", what: guarded };
   }
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (!isCodexBinary(tokens[i])) continue;
+    const rest = tokens.slice(i + 1).join(" ");
+    const review = rest.search(REVIEW_TOKEN_RE);
+    if (review === -1) continue;
+    const exec = rest.search(EXEC_TOKEN_RE);
+    // `exec` first means the subcommand is exec and "review" is prompt text —
+    // the sanitized wrapper and one-off prompts both depend on `codex exec`.
+    if (exec !== -1 && exec < review) continue;
+    return { rule: "codex-review" };
+  }
+
   return null;
 }
 
