@@ -61,12 +61,19 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // than a copy, so the gate's verdict cannot move. RISKY_PATH_RES and the
   // risky producer-path anchor this transform verifies are untouched, so the
   // transform is still identity and input == output.
+  // pushLib re-pinned again 2026-08-24 (PR #463, CodeRabbit round 1): the
+  // reporter now parses C-quoted patch paths and attributes a RENAME to the
+  // source path rather than the destination — a rename of `docs/policy.md` to
+  // `docs/ordinary.md` fires the gate on the SOURCE name, and blaming the
+  // destination was the same misdirection this PR removes. Still diagnosis
+  // only: `RISKY_CONTENT_RE`, `contentIsRisky` and `RISKY_PATH_RES` remain
+  // byte-for-byte unchanged, so the transform is identity and input == output.
   codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
-  pushLib: "05f590da1c777f9880f895ac876e33e4a31477f1",
+  pushLib: "f3a97cec5b4b4ec029bf4d65f682beaa8ea1e54b",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
-  pushLib: "05f590da1c777f9880f895ac876e33e4a31477f1",
+  pushLib: "f3a97cec5b4b4ec029bf4d65f682beaa8ea1e54b",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

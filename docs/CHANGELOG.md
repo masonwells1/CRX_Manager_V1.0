@@ -40,6 +40,21 @@ the message named the wrong cause.
   header lines. The real hook was also run end-to-end against the real PR #456
   diff and its emitted message read directly, rather than asserted by substring
   match.
+- Review round 1 found two ways the new reporter could still name the wrong
+  file — the one failure mode it exists to remove — and both were fixed and
+  mutation-tested. A **rename** attributed its match to the destination:
+  renaming `docs/policy.md` to `docs/ordinary.md` fires the gate on the SOURCE
+  name, so blaming `docs/ordinary.md` sent the operator to a file that never
+  contained the token; a pure rename also emits no `---`/`+++` pair at all, only
+  `rename from` / `rename to`. And **C-quoted patch paths**
+  (`"a/docs/policy\treview.md"`, produced whenever a path holds a control
+  character, quote, backslash or non-ASCII byte) did not parse, leaving the
+  previous file blamed. Octal escapes in those paths encode UTF-8 bytes, so they
+  are gathered and decoded once rather than per character.
+- A path can appear on up to four header lines, so path matches are counted once
+  per file; otherwise a filename match read as four occurrences and overstated
+  itself. The `a/`/`b/` prefix is now required before a `---`/`+++` line is
+  treated as a patch header, so a markdown rule is not mistaken for one.
 
 
 ## 2026-08-24 — Migration ordering review now matches the deterministic ledger guard

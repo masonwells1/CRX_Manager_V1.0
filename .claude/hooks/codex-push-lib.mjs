@@ -1560,36 +1560,149 @@ function riskyContentScanner() {
   return new RegExp(RISKY_CONTENT_RE.source, flags);
 }
 
+// Git renders a patch path either bare (`a/src/db.ts`) or C-quoted when it holds
+// a control character, a double quote, a backslash or a non-ASCII byte —
+// `"a/docs/policy\treview.md"`. A parser that only knows the bare form leaves
+// `currentFile` pointing at the PREVIOUS file, so the denial names a file that
+// never contained the token. Octal escapes encode UTF-8 bytes, so they are
+// gathered as bytes and decoded once at the end rather than per character.
+// (CodeRabbit, PR #463.)
+export function unquoteGitPath(raw) {
+  const text = String(raw ?? "").trim();
+  if (text.length < 2 || !text.startsWith("\"") || !text.endsWith("\"")) return text;
+  const inner = text.slice(1, -1);
+  const SIMPLE = { t: 9, n: 10, r: 13, f: 12, b: 8, v: 11, a: 7, "\"": 34, "\\": 92 };
+  const bytes = [];
+  const pushUtf8 = (ch) => { for (const byte of Buffer.from(ch, "utf8")) bytes.push(byte); };
+  for (let i = 0; i < inner.length; i += 1) {
+    const ch = inner[i];
+    if (ch !== "\\") { pushUtf8(ch); continue; }
+    const next = inner[i + 1];
+    if (next === undefined) break;
+    i += 1;
+    if (next >= "0" && next <= "7") {
+      let octal = next;
+      while (octal.length < 3 && inner[i + 1] >= "0" && inner[i + 1] <= "7") { octal += inner[i + 1]; i += 1; }
+      bytes.push(parseInt(octal, 8) & 0xff);
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(SIMPLE, next)) { bytes.push(SIMPLE[next]); continue; }
+    pushUtf8(next);
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+function stripPatchPrefix(value, prefix) {
+  const text = String(value ?? "").trim();
+  return text.startsWith(prefix) ? text.slice(prefix.length) : text;
+}
+
+// `diff --git <old> <new>`. Either side may be quoted, and on a RENAME the two
+// differ — which is the whole reason both are returned.
+function splitPatchPathPair(rest) {
+  if (rest.startsWith("\"")) {
+    let i = 1;
+    while (i < rest.length) {
+      if (rest[i] === "\\") { i += 2; continue; }
+      if (rest[i] === "\"") break;
+      i += 1;
+    }
+    if (i >= rest.length) return null;
+    const second = rest.slice(i + 1).trim();
+    return second ? [rest.slice(0, i + 1), second] : null;
+  }
+  // Git does not quote a plain space, so the ` b/` boundary is the same
+  // heuristic git's own tooling relies on. Fall back to the first space.
+  const boundary = rest.lastIndexOf(" b/");
+  if (boundary !== -1) return [rest.slice(0, boundary), rest.slice(boundary + 1)];
+  const space = rest.indexOf(" ");
+  if (space === -1) return null;
+  return [rest.slice(0, space), rest.slice(space + 1)];
+}
+
+function parseDiffGitHeader(line) {
+  if (!line.startsWith("diff --git ")) return null;
+  const pair = splitPatchPathPair(line.slice("diff --git ".length));
+  if (!pair) return null;
+  return {
+    oldPath: stripPatchPrefix(unquoteGitPath(pair[0]), "a/"),
+    newPath: stripPatchPrefix(unquoteGitPath(pair[1]), "b/"),
+  };
+}
+
+// `--- a/x` / `+++ b/x`. The `a/`/`b/` prefix is required: markdown rules and
+// added lines beginning with `--` would otherwise read as patch headers.
+function parsePatchPath(line, marker, prefix) {
+  if (!line.startsWith(marker)) return null;
+  const rest = line.slice(marker.length).trim();
+  if (!rest || rest === "/dev/null") return null;
+  const unquoted = unquoteGitPath(rest);
+  if (!unquoted.startsWith(prefix)) return null;
+  return unquoted.slice(prefix.length) || null;
+}
+
+function parseNamedPath(line, marker) {
+  if (!line.startsWith(marker)) return null;
+  const rest = line.slice(marker.length).trim();
+  return rest ? unquoteGitPath(rest) || null : null;
+}
+
 // Returns [{ file, tokens: [{ token, count }] }], ordered by first appearance in
 // the diff and by descending count within a file.
 //
-// Header lines are scanned too, not just skipped after setting the current file:
-// a path such as `docs/policy.md` makes `contentIsRisky` true purely through the
-// `+++ b/...` line, and a reporter that consumed headers silently would answer
-// "nothing matched" while the gate said risky — a contradiction that reads as a
-// broken guard.
+// Header lines are scanned, not merely consumed after setting the current file:
+// a path such as `docs/policy.md` makes `contentIsRisky` true purely through its
+// header, and a reporter that skipped headers would answer "nothing matched"
+// while the gate said risky — a contradiction that reads as a broken guard.
+//
+// Each path is attributed to ITSELF, which matters on a rename. Renaming
+// `docs/policy.md` to `docs/ordinary.md` fires the gate on `policy`, but the
+// token lives only in the SOURCE name; blaming the destination would send the
+// operator to a file that never contained it — precisely the misdirection this
+// reporter exists to remove. A pure rename emits no `---`/`+++` pair at all,
+// only `rename from`/`rename to`, so those are parsed too. (CodeRabbit, PR #463.)
 export function riskyContentMatches(diffText) {
   const scanner = riskyContentScanner();
   const perFile = new Map();
+  const pathsCounted = new Set();
   let currentFile = "(diff header)";
-  for (const line of String(diffText || "").split(/\r?\n/)) {
-    // `diff --git a/<p> b/<p>` arrives BEFORE `+++ b/<p>` and can itself match
-    // (a path such as `docs/policy.md` contains `policy`), so attribute from it
-    // provisionally or that match lands under "(diff header)". `+++ b/` still
-    // overrides it, being the unambiguous form when a path contains spaces.
-    const gitHeader = /^diff --git a\/.+ b\/(.+)$/.exec(line);
-    if (gitHeader) currentFile = gitHeader[1].trim() || currentFile;
-    const header = /^\+\+\+ b\/(.+)$/.exec(line);
-    if (header) currentFile = header[1].trim() || currentFile;
+
+  const addMatches = (file, text) => {
     scanner.lastIndex = 0;
-    const hits = line.match(scanner);
-    if (!hits) continue;
-    let bucket = perFile.get(currentFile);
-    if (!bucket) { bucket = new Map(); perFile.set(currentFile, bucket); }
+    const hits = String(text).match(scanner);
+    if (!hits) return;
+    let bucket = perFile.get(file);
+    if (!bucket) { bucket = new Map(); perFile.set(file, bucket); }
     for (const hit of hits) {
       const token = String(hit).toLowerCase().trim();
       if (token) bucket.set(token, (bucket.get(token) || 0) + 1);
     }
+  };
+  // A path can appear on up to four header lines (`diff --git` twice, `---`,
+  // `+++`). Count it once, or a filename match reads as four occurrences.
+  const addPath = (file) => {
+    if (!file || pathsCounted.has(file)) return;
+    pathsCounted.add(file);
+    addMatches(file, file);
+  };
+
+  for (const line of String(diffText || "").split(/\r?\n/)) {
+    const gitHeader = parseDiffGitHeader(line);
+    if (gitHeader) {
+      addPath(gitHeader.oldPath);
+      addPath(gitHeader.newPath);
+      currentFile = gitHeader.newPath || gitHeader.oldPath || currentFile;
+      continue;
+    }
+    const renameFrom = parseNamedPath(line, "rename from ") ?? parseNamedPath(line, "copy from ");
+    if (renameFrom) { addPath(renameFrom); continue; }
+    const renameTo = parseNamedPath(line, "rename to ") ?? parseNamedPath(line, "copy to ");
+    if (renameTo) { addPath(renameTo); currentFile = renameTo; continue; }
+    const oldPath = parsePatchPath(line, "--- ", "a/");
+    if (oldPath) { addPath(oldPath); continue; }
+    const newPath = parsePatchPath(line, "+++ ", "b/");
+    if (newPath) { addPath(newPath); currentFile = newPath; continue; }
+    addMatches(currentFile, line);
   }
   return [...perFile.entries()].map(([file, bucket]) => ({
     file,

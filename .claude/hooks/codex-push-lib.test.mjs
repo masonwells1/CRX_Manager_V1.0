@@ -13,6 +13,7 @@ import {
   contentIsRisky,
   describeRiskyContent,
   riskyContentMatches,
+  unquoteGitPath,
   gitPushCwd,
   gitSubcommandIsDynamic,
   mainPushIsForced,
@@ -426,6 +427,60 @@ for (const [sample, expected] of [
   const text = describeRiskyContent(many);
   assert.match(text, /more file\(s\)/, "overflow is summarised, not printed in full");
   assert.ok(text.split(/\r?\n/).length < 15, "capped output stays readable");
+}
+
+// 5b. QUOTED patch paths. Git C-quotes a path holding a control character, a
+//     quote, a backslash or a non-ASCII byte. A parser that knows only the bare
+//     form leaves currentFile on the PREVIOUS file, so the denial names a file
+//     that never held the token. (CodeRabbit, PR #463.)
+{
+  assert.equal(unquoteGitPath('"a/docs/policy\\treview.md"'), "a/docs/policy\treview.md");
+  assert.equal(unquoteGitPath('"b/docs/quote\\"review.md"'), 'b/docs/quote"review.md');
+  assert.equal(unquoteGitPath("b/docs/plain.md"), "b/docs/plain.md", "bare paths pass through untouched");
+  // Octal escapes are UTF-8 BYTES; decoding per byte would mojibake. "é" is C3 A9.
+  assert.equal(unquoteGitPath('"a/caf\\303\\251.md"'), "a/café.md");
+
+  const diff = [
+    "diff --git a/src/ordinary.ts b/src/ordinary.ts",
+    "+++ b/src/ordinary.ts",
+    "+ const untouched = 1;",
+    'diff --git "a/docs/policy\treview.md" "b/docs/policy\treview.md"',
+    '+++ "b/docs/policy\treview.md"',
+    "+ nothing notable",
+  ].join("\n");
+  const files = riskyContentMatches(diff).map((f) => f.file);
+  assert.ok(
+    files.includes("docs/policy\treview.md"),
+    `quoted path is attributed to itself, got ${JSON.stringify(files)}`,
+  );
+  assert.ok(
+    !files.includes("src/ordinary.ts"),
+    "the innocent PREVIOUS file is not blamed for the quoted file's token",
+  );
+}
+
+// 5c. RENAME attribution. `docs/policy.md` -> `docs/ordinary.md` fires the gate
+//     on `policy`, but the token lives only in the SOURCE name. Blaming the
+//     destination sends the operator to a file that never contained it — the
+//     exact misdirection this reporter exists to remove. A pure rename emits no
+//     `---`/`+++` pair, only `rename from`/`rename to`. (CodeRabbit, PR #463.)
+{
+  const diff = [
+    "diff --git a/docs/policy.md b/docs/ordinary.md",
+    "similarity index 100%",
+    "rename from docs/policy.md",
+    "rename to docs/ordinary.md",
+  ].join("\n");
+  assert.equal(contentIsRisky(diff), true);
+  const found = riskyContentMatches(diff);
+  const blamed = found.map((f) => f.file);
+  assert.deepEqual(blamed, ["docs/policy.md"], "only the source path is blamed for a source-path token");
+  assert.equal(found[0].tokens[0].token, "policy");
+  assert.equal(
+    found[0].tokens[0].count,
+    1,
+    "a path repeated across diff --git + rename lines counts ONCE, not per header line",
+  );
 }
 
 // 6. The reporter is built from RISKY_CONTENT_RE.source, never a copy. Proven
