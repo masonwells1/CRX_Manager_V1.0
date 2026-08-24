@@ -448,18 +448,84 @@ describe('chemCalculator — chemLineBillingHazard (production fail-closed guard
       expect(chemLineBillingHazard(DRY_FL_OZ, 100, null).hazard).toBe(false);
     });
 
-    it('leaves a dry product alone when BOTH sides are the same kind of ounce', () => {
+    it('leaves a dry product alone when both sides are a DRY ounce', () => {
       expect(chemLineBillingHazard(
         { quantity: '100', rate_per_acre: '1', rate_unit: 'oz/ac', unit: 'oz' }, 100, 'dry',
-      ).hazard).toBe(false);
-      expect(chemLineBillingHazard(
-        { quantity: '100', rate_per_acre: '1', rate_unit: 'fl oz/ac', unit: 'fl oz' }, 100, 'dry',
       ).hazard).toBe(false);
     });
 
     it('does not fire on a blank or zero quantity — a fresh row is not born warning', () => {
       for (const q of ['', '0']) {
         expect(chemLineBillingHazard({ ...DRY_FL_OZ, quantity: q }, 100, 'dry').hazard).toBe(false);
+      }
+    });
+  });
+
+  describe('FLUID OUNCE ON A DRY PRODUCT — refused outright, on either side, however spelled', () => {
+    // Aligns this guard with the predicate in migration 20260820120000 (PR #446), which
+    // reached this shape over three review rounds. A client guard that is MORE LENIENT than
+    // the SQL doing the billing is worse than no client guard: the operator passes the
+    // browser, then hits a hard save refusal with nothing on screen explaining it — and
+    // because performSave re-sends the whole grid, one such line makes the entire job
+    // unsaveable, memo included.
+    const dry = (rate_unit: string, unit: string) =>
+      chemLineBillingHazard({ quantity: '100', rate_per_acre: '1', rate_unit, unit }, 100, 'dry');
+
+    it('refuses a dry line when BOTH sides are fluid ounces (this assertion was inverted)', () => {
+      // Self-consistent, so the old exclusive-or test read it as safe. But
+      // fieldAppPricedQuantity's dry branch sizes 'fl oz' as null — unpriceable — so the
+      // totals were being derived from a volume on a product billed by weight.
+      expect(dry('fl oz/ac', 'fl oz').hazard).toBe(true);
+      expect(dry('fl oz/ac', 'fl oz').billedRatio).toBeNull();
+    });
+
+    it('refuses the CONVERSION path the exclusive-or never even reached', () => {
+      // 'fl oz' normalizes to 'oz' before the converter sees it, which then sizes it 1 and
+      // converts 16:1 into pounds — turning a volume into a weight with nothing proven.
+      expect(dry('fl oz/ac', 'lb').hazard).toBe(true);
+    });
+
+    it('catches the PERIOD spellings that a literal list missed', () => {
+      // normalizeRateUnit has no SYNONYMS arm for these, so both sides normalize to the same
+      // token and the line sailed past both the spelling list and the equality fast path.
+      for (const spelling of ['fl. oz', 'fl.oz', 'Fl. Oz.', 'fl . oz']) {
+        expect(dry(`${spelling}/ac`, spelling).hazard).toBe(true);
+        expect(dry(`${spelling}/ac`, 'lb').hazard).toBe(true);
+      }
+    });
+
+    it('catches the long and plural spellings too', () => {
+      // Both sides carry the SAME spelling deliberately, so the units-are-equal exit would
+      // wave the line through and only the fluid rule can refuse it. Written against 'lb'
+      // instead, these would pass on the ordinary unit-mismatch rule even with the fluid
+      // helper broken — a test that goes green for the wrong reason pins nothing.
+      for (const spelling of ['fluid oz', 'fl ounces', 'fl ozs', 'fluid ounce', 'FLUID OUNCES', 'floz']) {
+        expect(dry(`${spelling}/ac`, spelling).hazard).toBe(true);
+      }
+    });
+
+    it('does NOT fire on a bare oz — on a dry product that is a legitimate dry ounce', () => {
+      // The rule must stay narrow. Refusing bare 'oz' would block ordinary dry jobs.
+      expect(dry('oz/ac', 'oz').hazard).toBe(false);
+      expect(dry('dry oz/ac', 'oz').hazard).toBe(false);
+    });
+
+    it('does not OVER-match — the regex is anchored, so a longer word is not a fluid ounce', () => {
+      // Both sides identical, so the units-are-equal exit is the only thing that can save
+      // these. If the anchored regex ever loosened to a substring test, the fluid rule would
+      // fire first and refuse them — which is what these pin.
+      for (const spelling of ['flour oz', 'oz fl', 'fluid', 'oz', 'gal fl oz']) {
+        expect(dry(`${spelling}/ac`, spelling).hazard).toBe(false);
+      }
+    });
+
+    it('leaves LIQUID and unknown-form products untouched', () => {
+      // On a liquid product 'oz' IS 'fl oz' — the live unit_conversions table records both
+      // at factor 1 — so this rule must not move a single liquid line.
+      for (const form of ['liquid', null] as const) {
+        expect(chemLineBillingHazard(
+          { quantity: '100', rate_per_acre: '1', rate_unit: 'fl oz/ac', unit: 'fl oz' }, 100, form,
+        ).hazard).toBe(false);
       }
     });
   });

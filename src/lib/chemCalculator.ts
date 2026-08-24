@@ -264,21 +264,37 @@ export function fieldAppPricedQuantity(
 // per-base-unit with the SAME server-parity factor tables above.
 
 /**
- * Does this raw unit spelling name a FLUID measure *explicitly*?
+ * Does this raw unit spelling name a FLUID ounce *explicitly*?
  *
- * Only the fluid-ounce spellings qualify. Everything else — including a bare 'oz' — is not
- * explicit: for a liquid product 'oz' means fluid ounces, for a dry product it means weight
- * ounces, and that ambiguity is exactly why the caller must know the product's form.
+ * A CONCEPT TEST, NOT A SPELLING LIST. The first version of this matched six literal
+ * strings, and the escape is the PERIOD form: 'fl. oz'. normalizeRateUnit knows nothing
+ * about it — its SYNONYMS table has no such key, so the string falls through and comes back
+ * unchanged — which means a dry line quoted 'fl. oz/ac' against a stock unit of 'fl. oz'
+ * normalizes to 'fl. oz' on BOTH sides, misses a literal-list test, and reaches the money.
+ * That is not an exotic spelling: src/lib/blendMathValidator.ts documents in so many words
+ * that periods are insignificant and "'fl. oz' is 'fl oz'".
  *
- * Kept deliberately narrow and LOCAL to this file rather than folded into normalizeRateUnit:
- * that function mirrors the live SQL normalize_rate_unit, and the label-rate guardrail
- * compares against it. Changing the shared normalizer would drift the client away from the
- * server — the class of bug this whole branch exists to fix.
+ * So both sides are folded to a canonical form FIRST — every run of whitespace and periods
+ * collapses to one space — and then matched as a concept: {fl|fluid} × {oz|ozs|ounce|ounces},
+ * separator optional. 'fl. oz', 'fl.oz', 'fluid oz', 'fl ounces' and 'fl oz.' all land on
+ * the rule. A bare 'oz' does NOT: on a dry product that is a legitimate dry ounce, and on a
+ * liquid one it means fluid ounces, and that ambiguity is exactly why the caller must know
+ * the product's form.
+ *
+ * This mirrors the predicate in migration 20260820120000 (PR #446) deliberately, down to the
+ * regex: `'^(fl|fluid) ?(oz|ozs|ounce|ounces)$'` applied over
+ * `regexp_replace(lower(btrim(u)), '[[:space:].]+', ' ', 'g')`. A client guard that is MORE
+ * LENIENT than the SQL that does the billing is the exact bug class this branch exists to
+ * close — the operator would pass the browser and then hit a hard save refusal with nothing
+ * on screen explaining it.
+ *
+ * Kept LOCAL to this file rather than folded into normalizeRateUnit: that function mirrors
+ * the live SQL normalize_rate_unit, and the label-rate guardrail compares against it.
+ * Changing the shared normalizer would drift the client away from the server.
  */
 function isExplicitlyFluidUnit(unit: string | null | undefined): boolean {
-  const t = String(unit ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
-  return t === 'fl oz' || t === 'floz' || t === 'fl. oz.' || t === 'fl oz.'
-    || t === 'fluid ounce' || t === 'fluid ounces';
+  const canonical = String(unit ?? '').toLowerCase().replace(/[\s.]+/g, ' ').trim();
+  return /^(fl|fluid) ?(oz|ozs|ounce|ounces)$/.test(canonical);
 }
 
 /**
@@ -491,7 +507,34 @@ export function chemLineBillingHazard(
   // not store. So this is refused outright with billedRatio null rather than a ratio we
   // cannot compute. The RAW spellings are reported, not the normalized ones — telling the
   // operator "measured in oz but priced per oz" would be unreadable.
-  if ((productForm ?? null) === 'dry' && isExplicitlyFluidUnit(rateBaseRaw) !== isExplicitlyFluidUnit(row.unit)) {
+  //
+  // REFUSED WHENEVER EITHER SIDE IS A FLUID OUNCE — not only when the two sides disagree.
+  // The first version of this test was `fluid(rate) !== fluid(unit)`, an exclusive-or, and
+  // that was a half-fix of exactly the kind PR #446's gate returned as a fresh HIGH one
+  // round later on the SQL side. Two shapes escape an XOR:
+  //
+  //   - Both sides fluid. A dry line rated 'fl oz/ac' and priced per 'fl oz' is
+  //     self-consistent, so the XOR is false and it took the equality exit below. But
+  //     self-consistent arithmetic in a unit the inventory and invoice sides cannot convert
+  //     is not a saving grace — fieldAppPricedQuantity's dry branch sizes 'fl oz' as null,
+  //     i.e. unpriceable, so the totals were derived from a volume on a product billed by
+  //     weight. An earlier test in this file required that shape to SAVE; it was wrong and
+  //     is now inverted.
+  //   - The CONVERSION path, which is worse than the one the XOR closed. Below,
+  //     fieldAppPricedQuantity is handed the NORMALIZED units, so 'fl oz' has already become
+  //     'oz' before the converter sees it. Handed the raw 'fl oz' the dry branch refuses;
+  //     handed 'oz' it sizes it 1 and happily converts 16:1 into pounds. So a dry product
+  //     rated 'fl oz/ac' against a stock unit of 'lb' never took the shortcut at all — it
+  //     went through the conversion and turned a VOLUME into a WEIGHT. Normalization erased
+  //     the very distinction the converter would have refused on.
+  //
+  // The unconditional form is both simpler and strictly stronger, and it has no precondition
+  // left to get wrong: a dry product has no density in this system, so NOTHING downstream can
+  // carry a fluid ounce into a weight honestly. It stays gated on the DRY form and touches
+  // liquid lines not at all — there 'oz' IS 'fl oz' (the live unit_conversions table records
+  // both at factor 1), and widening it beyond fluid ounces would refuse ordinary lines.
+  if ((productForm ?? null) === 'dry'
+      && (isExplicitlyFluidUnit(rateBaseRaw) || isExplicitlyFluidUnit(row.unit))) {
     return {
       hazard: true,
       quantityUnit: (rateBaseRaw ?? '').trim() || quantityUnit,
