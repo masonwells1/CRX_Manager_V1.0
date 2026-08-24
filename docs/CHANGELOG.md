@@ -2,53 +2,43 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-24 — The migration drift reviewer stops comparing filename stamps against apply-time versions
+## 2026-08-24 — Migration ordering review now matches the deterministic ledger guard
 
-`supabase_migrations.schema_migrations` carries two figures, and CHECK 6 of
-`.claude/agents/migration-drift-reviewer.md` did not say which one it meant.
-`name` preserves the authored filename stamp and governs replay ordering;
-`version` is assigned by Supabase at apply time and can land on either side of
-`name`. Given the ambiguity the reviewer reached for
-`.claude/schema-registry.json`'s `_meta.migrations_high_water` — a `version` —
-and emitted a false **HIGH** against a correctly ordered migration, blocking a
-money-correctness migration on a bookkeeping artifact. Two runs of the same
-charter returned opposite verdicts on the same file.
+The draw-down cutover review exposed two opposite bookkeeping hazards in the
+human-review charter. It first treated Supabase's apply-time `version` as the
+authored migration high-water and falsely blocked a correctly ordered money
+migration. The first correction then went too far and discarded `version` even
+for legacy ledger rows whose `name` contains no timestamp.
 
-- CHECK 6 now names the `name` high-water explicitly and rejects any `version`
-  figure, including the schema registry's, as ordering evidence. The check is
-  **stricter**, not looser: it still demands current live evidence, still fails
-  closed without it, and still emits HIGH for a badly ordered filename.
-- Review round (CodeRabbit P2 on the PR): the new rule was absolute, so a ledger
-  row whose `name` carries no 14-digit stamp would have had its only ordering
-  signal discarded — contradicting `scripts/refresh-applied-migrations.mjs` and
-  `.claude/hooks/migration-apply-guard.mjs`, which both synthesize
-  `<version>_<name>` for exactly those rows. Step 3 now carves a narrow per-row
-  exception matching the guards, scoped so it still never licenses a bare
-  `max(version)` or the registry high-water as a substitute for the `name`
-  high-water. Real premise (626 of 971 live rows carry a bare-slug `name`), not
-  currently reachable (the newest such row is older than the `name` high-water).
-- Review round 2 (CodeRabbit Major on the PR): making `name` authoritative in
-  step 3 exposed that step 5 still ordered the applied file renamed to the
-  server-assigned `version`. That destroys the authored stamp CHECK 6 compares
-  and — because a `version` can sort *below* its own `name`, live example
-  `20260813011751` under `20260813070000` — can push an applied file under the
-  live high-water and produce a false HIGH on the next run. The project had
-  already settled the opposite on 2026-08-12: `docs/reference/migration-history.md`
-  rows 878 and 879 and the `20260813080000` closeout each record a deliberate
-  **no** rename, and no applied file on disk has been renamed. Step 5 now states
-  the no-rename rule, scopes the historical B7 rename to the case where the live
-  `name` does not already equal the filename, and keeps the migration-history
-  closeout obligation either way.
-- `scripts/check-agent-guidance.mjs` holds the canonical pinned copy of CHECK 6,
-  so it moves in lockstep; three assertions now pin the new rules. Each was
-  mutation-tested — removing the rule from the charter produced a red suite and
-  exit code 1, restoring it returned `PASS - shared agent guidance and
-  deterministic guards are aligned`.
-- Also records a dated pre-apply live-ledger observation at the top of
-  `docs/reference/migration-history.md`. It sits above the fold because the
-  proof-gate reviewers read repository files from GitHub `main` — their local
-  reads are blocked by sandbox policy — so pre-apply evidence only counts once
-  merged.
+- Migration ordering evidence is now derived row by row: prefer the authored
+  14-digit stamp embedded in `name`, and use that row's 14-digit `version` only
+  when the name has no timestamp. A bare `max(version)` or schema-registry
+  version is not sufficient ordering evidence because it loses that context.
+- The fallback premise is real: a read-only live check found 626 of 971 ledger
+  rows have bare-slug names. The newest such row remains older than the current
+  authored-name high-water, so this was a latent guard contradiction rather
+  than a change to today's migration verdict.
+- Post-apply B7 handling now reconciles the new ledger row instead of always
+  renaming the disk file. When the normalized live `name` already matches the
+  authored basename, the filename stays unchanged; a differing apply-time
+  version alone must not manufacture drift. The version rename remains the
+  fallback when the live name does not preserve the authored basename.
+- The canonical `/ship` workflow and the migration-drift reviewer use the same
+  rule. Deterministic guidance checks pin both edge cases and were mutation-
+  tested by removing the timestamp-less-name fallback and by restoring the
+  obsolete always-rename instruction; both mutations failed the intended
+  assertions.
+- All agent workflow and correction-guard suites passed. No live migration or
+  business-data change was performed while correcting these gates.
+
+## 2026-08-24 — Phase 3C containment tolerates rebuilt ignored `dist/` entries
+
+The private-artifact containment guard now skips only the narrow race where Git lists an ignored,
+tool-owned generated file and the build removes it before inspection. It immediately re-lists and
+rescans after that race, so a rebuilt file cannot be hidden; a second disappearance and a missing
+worktree root are explicitly fail-closed. Stable generated files and direct forbidden filenames
+remain blocking. The recovery scan de-duplicates candidates already inspected, preserving the
+normal structural scan budget for newly reappeared or grown files.
 
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 
@@ -552,7 +542,6 @@ match. It now converts before comparing, and refuses rather than guessing when i
 - 10 new tests (43 in the file); the form split, the billing fallback, and the `oz/cwt` guard were each
   mutation-tested by reverting them and confirming exactly the expected test went red. Verified by
   driving the real module in a browser across all nine cases, including both MG shapes.
-
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 
 `validateBlendMath` summed every product quantity regardless of unit, so a ticket holding

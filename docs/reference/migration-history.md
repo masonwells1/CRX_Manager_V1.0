@@ -7,10 +7,11 @@
 **Live-ledger re-read — 2026-08-24, immediately before the draw-down cutover apply.** Read
 read-only from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`. This
 **re-confirms** the 2026-08-18 block below rather than superseding it — every figure is unchanged:
-**971 ledger rows**, `max(version)` `20260816174353`, and current live high-water by `name` stamp
-**`20260813080000`**. Neither `20260816110000_draw_down_cutover_barrier` nor
+**971 ledger rows**, `max(version)` `20260816174353`, and current live effective ordering high-water
+**`20260813080000`**. That ordering value was derived row by row: use the timestamp embedded in
+`name` when present, otherwise fall back to that row's `version`. Neither `20260816110000_draw_down_cutover_barrier` nor
 `20260816120000_draw_down_split_order_lines_by_price_tier` is present in the ledger. Both authored
-stamps are strictly greater than the `name` high-water, so the ordering guard is satisfied for a
+stamps are strictly greater than the effective ordering high-water, so the ordering guard is satisfied for a
 sequential apply of the barrier followed by the candidate.
 
 Re-read because the `migration-drift-reviewer` charter refuses to rely on a dated observation across
