@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — PR #432 Git hook indirection hardening
+
+- The shared command guard blocks `git hook` execution and rejects executable
+  Git configuration through `core.hooksPath`, `include.path`, and
+  `includeIf.*.path` alongside existing executable configuration keys.
+- Protected identity resolution covers hook files beneath both ordinary and
+  linked-worktree Git directories; native Write/Edit and MCP regressions prove
+  creating or modifying those hooks is denied.
+
 ## 2026-08-24 — The identity guard now covers the shape Codex actually sends, and both write routes share one rule set
 
 An exact-SHA `gpt-5.6-sol` review of this branch returned BLOCKED with three High

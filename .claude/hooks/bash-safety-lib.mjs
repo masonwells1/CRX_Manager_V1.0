@@ -2874,7 +2874,7 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     }
     if (gitCursor < 0) return null;
     const args = words.slice(gitCursor + 1).map((token) => token.value);
-    const executableConfigNamed = (value) => /^(?:alias\.[^=\s]+|diff\.external|core\.(?:fsmonitor|pager|editor|sshcommand)|pager\.[^=\s]+|interactive\.difffilter|diff\.[^=\s]+\.textconv|filter\.[^=\s]+\.(?:clean|smudge|process)|sequence\.editor|gpg\.program|credential\.helper)\s*(?:=|$)/i.test(String(value || "").trim());
+    const executableConfigNamed = (value) => /^(?:alias\.[^=\s]+|diff\.external|core\.(?:fsmonitor|pager|editor|sshcommand|hookspath)|include(?:if\.[^=\s]+)?\.path|pager\.[^=\s]+|interactive\.difffilter|diff\.[^=\s]+\.textconv|filter\.[^=\s]+\.(?:clean|smudge|process)|sequence\.editor|gpg\.program|credential\.helper)\s*(?:=|$)/i.test(String(value || "").trim());
     for (let index = 0; index < args.length; index += 1) {
       const argument = args[index];
       if (/^(?:-c|--config-env)$/i.test(argument)) {
@@ -2909,6 +2909,9 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     }
     if (!gitBuiltinCommands.has(subcommand)) {
       return "Blocked Git alias or external helper execution because it can launch an unreviewed executable.";
+    }
+    if (subcommand === "hook") {
+      return "Blocked Git hook execution because hooks can launch an unreviewed executable.";
     }
     if (subcommand === "config" && args.some(executableConfigNamed)) {
       return "Blocked persisted executable Git configuration because it can redirect later Git commands into unreviewed code.";

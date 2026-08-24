@@ -143,6 +143,7 @@ export function protectedFileIdentityPaths(root) {
   for (const gitDir of gitControlDirectories(root)) {
     addDirectory(gitDir, (name) => /^config(\.worktree)?$/i.test(name));
     addDirectory(path.join(gitDir, "info"), (name) => /^(attributes|exclude)$/i.test(name));
+    addDirectory(path.join(gitDir, "hooks"), () => true);
   }
   add(path.join(root, ".gitattributes"));
   // package.json chooses the programs every `npm run` executes, and the shell
@@ -188,6 +189,7 @@ export function protectedControlPathReason(absTarget) {
   if (/(^|\/)\.git$/i.test(surface)) return "the Git directory pointer";
   if (/(^|\/)\.git(\/[^/]+)*\/config(\.worktree)?$/i.test(surface)) return "a Git configuration file";
   if (/(^|\/)\.git(\/[^/]+)*\/info\/(attributes|exclude)$/i.test(surface)) return "a Git attributes or exclude file";
+  if (/(^|\/)\.git(\/[^/]+)*\/hooks(?:\/|$)/i.test(surface)) return "a Git hook path";
   if (/(^|\/)\.gitattributes$/i.test(surface)) return "a Git attributes file";
   if (/(^|\/)\.gitconfig$/i.test(surface)) return "a Git configuration file";
   if (/(^|\/)\.config\/git\/(config|ignore)$/i.test(surface)) return "a Git configuration file";

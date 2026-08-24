@@ -66,12 +66,15 @@ for (const control of [
   path.join(repoRoot, ".git", "config.worktree"),
   path.join(repoRoot, ".git", "info", "attributes"),
   path.join(repoRoot, ".git", "info", "exclude"),
+  path.join(repoRoot, ".git", "hooks", "pre-commit"),
   path.join(repoRoot, ".gitattributes"),
   path.join(repoRoot, ".gitignore"),
 ]) {
   ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: control, content: "x" } })), `writing ${path.basename(control)} is denied`);
 }
 ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: ".git/info/attributes", content: "* filter=x" } }, repoRoot)), "a relative Git attributes path is denied even when the file does not exist yet");
+ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: ".git/hooks/pre-commit", content: "hostile" } }, repoRoot)), "a real Write payload cannot create a Git pre-commit hook");
+ok(isDeny(runHook({ tool_name: "Edit", tool_input: { file_path: ".git/hooks/pre-commit", old_string: "safe", new_string: "hostile" } }, repoRoot)), "a real Edit payload cannot modify a Git pre-commit hook");
 eq(runHook({ tool_name: "Write", tool_input: { file_path: path.join(scratch, "config"), content: "x" } }).stdout.trim(), "", "an unrelated file merely named config is allowed");
 
 // Malformed and empty payloads must not throw; the guard fails open loudly and
@@ -237,7 +240,10 @@ eq(runHook({ tool_name: "Edit", tool_input: { file_path: packageJson, old_string
 const commonDir = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: repoRoot, encoding: "utf8" }).stdout.trim();
 if (commonDir) {
   const commonConfig = path.join(commonDir, "config");
+  const commonHook = path.join(commonDir, "hooks", "pre-commit");
   ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: commonConfig, content: "x" } }, repoRoot)), "writing the common Git config by pathname is denied");
+  ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: commonHook, content: "x" } }, repoRoot)), "writing a linked-worktree common Git hook by pathname is denied");
+  ok(isDeny(runHook({ tool_name: "Edit", tool_input: { file_path: commonHook, old_string: "safe", new_string: "hostile" } }, repoRoot)), "editing a linked-worktree common Git hook by pathname is denied");
   const configAlias = path.join(scratch, "harmless-settings.txt");
   let configLinked = false;
   try {

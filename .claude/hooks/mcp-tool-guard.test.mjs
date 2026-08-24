@@ -1135,10 +1135,12 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       tool_input: { path: aliasedProducerPath, content: "unreviewed" },
     }, tmp);
     ok(isDeny(r), "MCP canonicalizes a short-name or linked-directory alias before protecting the maintenance producer");
-    for (const exclusionPath of [".gitignore", ".git/info/exclude", ".git/config", ".git/config.worktree", ".gitconfig", ".config/git/ignore"]) {
+    for (const exclusionPath of [".gitignore", ".git/info/exclude", ".git/config", ".git/config.worktree", ".git/hooks/pre-commit", ".gitconfig", ".config/git/ignore"]) {
       r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: exclusionPath } }, tmp);
       ok(isDeny(r), `MCP cannot edit Git exclusion control ${exclusionPath}`);
     }
+    r = runHook({ tool_name: "mcp__Desktop_Commander__edit_block", tool_input: { path: ".git/hooks/pre-commit", old_string: "safe", new_string: "hostile" } }, tmp);
+    ok(isDeny(r), "MCP edit_block cannot modify a Git pre-commit hook");
 
     renameSync(path.join(tmp, producerRelative), path.join(tmp, alternateRelative));
     writeFileSync(path.join(tmp, ".git", "info", "exclude"), `${alternateRelative}\n`);
