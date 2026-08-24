@@ -63,8 +63,22 @@ function apply(name, user) { psql(`\\i /tmp/${name}`, { user }); }
 function wait(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 function waitForDatabase() {
   for (let attempt = 0; attempt < 90; attempt += 1) {
-    if (docker(['exec', NAME, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { allowFailure: true }).status === 0
-      && docker(['exec', NAME, 'psql', '-U', 'postgres', '-d', 'postgres', '-Atqc', 'SELECT 1'], { allowFailure: true }).stdout.trim() === '1') return;
+    // The image exposes a temporary bootstrap server before restarting into
+    // the final server. Require the entrypoint's post-bootstrap marker first,
+    // then prove that the final socket accepts a real query.
+    const logs = docker(['logs', NAME], { allowFailure: true });
+    const initComplete = `${logs.stdout}\n${logs.stderr}`.includes(
+      'PostgreSQL init process complete; ready for start up.',
+    );
+    const ready = initComplete
+      && docker(['exec', NAME, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { allowFailure: true }).status === 0;
+    if (ready) {
+      const query = docker(
+        ['exec', NAME, 'psql', '-U', 'postgres', '-d', 'postgres', '-Atqc', 'SELECT 1'],
+        { allowFailure: true },
+      );
+      if (query.status === 0 && query.stdout.trim() === '1') return;
+    }
     wait(500);
   }
   throw new Error(`disposable PostgreSQL failed readiness: ${docker(['logs', NAME], { allowFailure: true }).stderr}`);
