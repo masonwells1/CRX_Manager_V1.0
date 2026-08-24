@@ -122,6 +122,30 @@ ok(isDeny(r), "RETURN QUERY cannot forward an unbound actor through a callable e
 r = runHook(forwardedActorWrapper("RETURN public.record_event_internal($1);"));
 ok(isDeny(r), "a PostgreSQL positional alias cannot forward an unbound actor through a callable expression");
 
+function compositeForwardedActorWrapper(binding = "") {
+  return `${INVOKER_ACTOR_HELPER}
+CREATE OR REPLACE FUNCTION public.forward_composite_actor(p_performed_by uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $wrapper$
+DECLARE v_profile public.profiles%ROWTYPE;
+BEGIN
+  ${binding}
+  v_profile.id := p_performed_by;
+  PERFORM public.record_event_internal(v_profile.id);
+  RETURN v_profile.id;
+END
+$wrapper$;
+GRANT EXECUTE ON FUNCTION public.forward_composite_actor(uuid) TO authenticated;`;
+}
+
+r = runHook(compositeForwardedActorWrapper());
+ok(isDeny(r), "a composite-record field cannot forward an unbound actor through a callable expression");
+
+r = runHook(compositeForwardedActorWrapper(`
+  IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;`));
+ok(!isDeny(r), "a composite-record field remains allowed after its source actor is soundly bound");
+
 const UNICODE_ACTOR_PARAMETER = 'U&"p_\\0075ser_id"';
 r = runHook(fn(
   `BEGIN INSERT INTO financial_audit_log (actor_user_id) VALUES (${UNICODE_ACTOR_PARAMETER}); RETURN '{}'::jsonb; END;`,

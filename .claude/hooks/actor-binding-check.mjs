@@ -1271,6 +1271,10 @@ function actorReferencePattern(reference) {
   if (/^\$\d+$/.test(value)) {
     return `${escapedRegexLiteral(value)}(?!\\d)`;
   }
+  const qualified = value.split(".");
+  if (qualified.length > 1 && qualified.every((part) => /^[A-Za-z_][\w$]*$/.test(part))) {
+    return qualified.map(identifierReferencePattern).join("\\s*\\.\\s*");
+  }
   return identifierReferencePattern(value);
 }
 
@@ -1798,7 +1802,7 @@ function actorForwardingReferences(structuralBody, actorParams) {
       const sourceRef = actorReferencePattern(source);
       const patterns = [
         new RegExp(
-          `(?:^|[;\\n]|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b)\\s*(${SQL_IDENTIFIER_PATTERN})\\s*` +
+          `(?:^|[;\\n]|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b)\\s*(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*` +
             `(?::=|=(?!=))\\s*[^;\\n]*(?:${sourceRef})`,
           "gi"
         ),
@@ -1819,7 +1823,7 @@ function actorForwardingReferences(structuralBody, actorParams) {
       for (const pattern of patterns) {
         let match;
         while ((match = pattern.exec(structuralBody)) !== null) {
-          const target = normalizedIdentifier(match[1]);
+          const target = normalizedQualifiedIdentifier(match[1]);
           if (target !== null && !references.has(target)) {
             references.add(target);
             changed = true;

@@ -89,6 +89,14 @@ positional alias (or use the existing explicit exemption). Named, positional,
 and soundly-bound controls bring the focused suite to 423 assertions; removing
 the Unicode positional treatment makes the reported `$1` regression fail.
 
+The first exact-head rerun then exposed a second actor-forwarding alias before
+timing out: an unbound actor could be assigned to a composite record field such
+as `v_profile.id` and passed to an invoker helper because local taint tracking
+recognized only simple variables. Qualified PL/pgSQL assignment targets now
+remain actor-tainted through callable and operator analysis. Deny and
+soundly-bound controls bring the focused suite to 425 assertions; removing the
+qualified-reference matcher makes the reproduced forwarding regression fail.
+
 ## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
 
 Fresh review of the cross-schema repair found two additional HIGH bypasses. A
