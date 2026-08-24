@@ -78,13 +78,30 @@ keeping visible**, because each is the same false-clean shape this entry is abou
    33671 of a real clean capture) and the "fix" would have raised a false alarm on every pass.
    Caught by running the command instead of reasoning about it.
 
-**Prevention gap — still OPEN.** The fix shipped is documentation, which is soft scaffolding: it
-advises, it does not block. The hard boundary would be a hook denying (a) a Codex session spawning
-another `codex review`/`codex exec` and (b) `taskkill`/`Stop-Process` aimed at a `codex.exe`. No
-such guard exists — `.claude/hooks/` has nothing matching either pattern today, and one of the two
-kill attempts was stopped only incidentally, by the maintenance-producer guard reacting to the
-command's shape rather than its target. Wiring that guard touches both hook manifests and needs
-Mason's approval.
+**Prevention — CLOSED with a hard guard 2026-08-23 (Mason approved).**
+`.claude/hooks/codex-recursion-guard.mjs`, wired on **both** sides (`.claude/settings.json` and
+`.codex/hooks.json` via the shared adapter, so `agent-manifest-parity` needs no one-sided
+declaration). Two rules:
+
+1. Denies `codex review` from a shell, naming `node scripts/write-codex-push-proof.mjs` as the
+   route. `codex exec` stays allowed — the wrapper and one-off prompts need it and neither
+   recurses. The wrapper itself spawns Codex from Node, not a shell tool call, so it never
+   reaches the hook.
+2. Denies force kills (`taskkill` / `Stop-Process` / `pkill` / `killall` / `kill -9`).
+   **Deliberately not scoped to commands naming codex**: the command that actually killed the
+   reviewer was `taskkill /PID 39564 /T /F`, which never says "codex", so a guard matching the
+   word would have watched it happen. It matches the dangerous *verb*, anchored to a shell command
+   position so prose in an `echo` is not blocked.
+
+Both rules are proven live, not merely unit-tested: `taskkill /PID 999999 /F` and
+`codex review --help` were each refused through the real Bash tool in the session that wrote them,
+and `codex --version` still succeeds. 16 unit checks in
+`.claude/hooks/codex-recursion-guard.test.mjs` lead with the two verbatim incident commands.
+
+One coverage note found by testing rather than reasoning: the first draft missed
+`"$CODEX" review $SCOPE` — **the exact spelling this repo's own skill documented** — because it
+matched a literal `codex` token. Variables whose name contains `CODEX` are now covered. A guard
+that misses the documented form of the thing it guards is not a guard.
 
 ## OPEN 2026-08-20 — the Phase 3C containment scanner walks `dist/`, so a concurrent rebuild refuses the push
 
