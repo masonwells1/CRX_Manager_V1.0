@@ -1291,16 +1291,30 @@ assert.equal(
   shellSegments(`echo 'a\\' && git push origin main`).length, 2,
   "a backslash inside single quotes is literal, so the following separator still splits",
 );
-// A separator that is itself escaped is not a separator. (`\;` is a literal
-// semicolon to bash, so this is one command, not two.)
+// A separator that is itself escaped is STILL treated as a separator. `\;` is a
+// literal semicolon to BASH, so there this is one command — but a backslash is an
+// ordinary character in PowerShell and cmd, where the same line is two commands and
+// the second one is a push. This parser cannot know which shell will run the line,
+// so it takes the reading that cannot hide anything: over-segmenting only means more
+// segments get scanned, while under-segmenting is how a hidden `gh pr merge`, a
+// hidden mutating `gh api`, and a hidden `--force` each reached their gate as one
+// unrecognised command (Codex proof gate, PR #445, rounds 13 and 14).
 assert.equal(
-  shellSegments(`echo a\\; git push origin main`).length, 1,
-  "an escaped separator does not split",
+  shellSegments(`echo a\\; git push origin main`).length, 2,
+  "an escaped separator still splits, because only bash would have escaped it",
 );
-// Line continuations join, they do not split.
+assert.match(
+  shellSegments(`echo a\\; git push origin main`)[1], /git push origin main\s*$/,
+  "…and the hidden push lands in its own segment, where every push check can see it",
+);
+// Same reasoning for a line continuation: `\` before a newline joins in bash, but
+// PowerShell and cmd run two lines — and the second one can be a force-push. Splitting
+// costs nothing here, verified against the real guard: the leading fragment is a push
+// with no destination, which is not main-bound and passes, while the ATTACK shape
+// (`git push origin feature \` + newline + `git push --force origin HEAD:main`) is denied.
 assert.equal(
-  shellSegments("git push \\\norigin main").length, 1,
-  "a line continuation keeps one command together",
+  shellSegments("git push \\\norigin main").length, 2,
+  "a backslash before a newline still splits, because only bash would have joined it",
 );
 // The escape handling must not have re-broken the round-9 case.
 assert.deepEqual(

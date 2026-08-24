@@ -416,7 +416,26 @@ try {
       repoDir: projectRoot,
     });
     assert.equal(escapedPipe.blocked, true, "a force-push hidden behind a backslash-escaped pipe is gated");
-    assert.match(String(escapedPipe.reason || ""), /more than one push/i, "…refused as an unsplittable multi-push, not judged on one of them");
+    assert.match(String(escapedPipe.reason || ""), /force-pushing/i, "…and once the splitter itself was fixed (round 14) the force-push gate catches it directly; the round-13 multi-push backstop stays as defence in depth");
+    // The gap was never push-specific. `commandSegments` also feeds the
+    // `gh pr merge` and mutating-`gh api` gates, and round 13's multi-PUSH
+    // backstop did not cover either of them — Codex reproduced both against the
+    // running guard and both returned unblocked. Fixing the splitter fixes every
+    // consumer at once, which is why the fix moved there instead of growing a
+    // third per-gate backstop.
+    const hiddenMerge = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: "Write-Output x\\|gh pr merge 445" },
+      repoDir: projectRoot,
+    });
+    assert.equal(hiddenMerge.blocked, true, "a `gh pr merge` hidden behind a backslash-pipe is gated");
+    const hiddenApi = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: "Write-Output x\\|gh api -X DELETE /repos/masonwells1/CRX_Manager_V1.0/git/refs/heads/main" },
+      repoDir: projectRoot,
+    });
+    assert.equal(hiddenApi.blocked, true, "a mutating `gh api` hidden behind a backslash-pipe is gated");
+    assert.match(String(hiddenApi.reason || ""), /gh api/i, "…and named as the gh-api gate, so the diagnosis points at the real command");
     // A UNC path means the same share to MSYS and to node, so refusing it would
     // be over-refusal: it must reach the ordinary gates instead.
     const unc = evaluateProductionAction({

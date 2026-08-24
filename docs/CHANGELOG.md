@@ -180,6 +180,21 @@ next agent. Two sessions read it that way.
   refused instead of guessed at. Proven in both directions: the committed pre-fix guard **allows** the
   payload, the fixed one **denies** it, and the `&` case, an ordinary bound feature push, and a commit
   whose message contains the word push all still behave.
+- **Round 14 moved that fix to its root: the backstop was the wrong scope.** The next proof round
+  found the same backslash-pipe hiding `gh pr merge 445` and a mutating
+  `gh api -X DELETE …` — because `commandSegments` feeds the PR-merge and `gh api` gates
+  as well, and a multi-*push* backstop cannot see either of them. Both reproduced as
+  `blocked:false` against the running guard. So the fix moved into the shared parser instead of
+  growing a third per-gate patch: **a backslash no longer suppresses a separator.** Only bash would
+  have escaped one, the parser cannot know which shell will run the line, and so it takes the
+  reading that cannot hide anything — over-segmenting merely means more segments get scanned, while
+  under-segmenting is what hid all three commands. Quoting is untouched: `git commit -m "a | b"`
+  is still one segment, and `\"` still does not open a quoted span. Two existing assertions that
+  encoded bash's rules as universal were inverted deliberately, the line-continuation one included —
+  `\` before a newline joins in bash, but PowerShell runs two lines and the second can be a
+  force-push. Splitting costs nothing there, verified against the real guard: the leading fragment is
+  a push with no destination, which is not main-bound and stays allowed. Every consumer of the
+  splitter is fixed at once, and round 13's multi-push backstop stays as defence in depth.
 - **Round 11 replaced the question entirely.** Both earlier versions asked something about the *raw*
   token list, and a split option value pushes every later token out of position — so
   `git -C C:/My\ Repo commit -m push` (a commit), `… status -- push`, and `… stash push -m wip` were
@@ -255,8 +270,8 @@ Tests: `.claude/hooks/codex-push-lib.test.mjs` and `.codex/hooks/production-acti
 
 **Both protected guard sources changed, and both are re-pinned in
 `scripts/apply-live-testdata-maintenance-20260812.mjs`.** `.claude/hooks/codex-push-lib.mjs` moves to
-`635dcce8…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 8d88b792…` (input) and
-`0f3a62cf… → 6e4f98fd…` (transformed output) because it gained the same outright MSYS-path refusal,
+`ccf80fb1…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 38d2c8a9…` (input) and
+`0f3a62cf… → a8a2f58d…` (transformed output) because it gained the same outright MSYS-path refusal,
 the same unbindable-argument refusal, and the shared segment parser —
 it is a **second caller** of the shared resolution, and a security-relevant change in its own right,
 not an incidental edit. Both changes are purely additive and leave every transform anchor untouched

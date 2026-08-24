@@ -1527,6 +1527,10 @@ const INLINE_ENV_ALLOWED = new Map([
 // literally. `.claude/hooks/codex-push-guard.mjs` additionally refuses any
 // segment that still contains more than one push, so a future gap in this parser
 // fails closed instead of silently skipping a push.
+// The characters that end one command and begin another. A backslash must never
+// suppress one of these — see shellSegments().
+const SEGMENT_SEPARATORS = new Set([";", "\n", "\r", "&", "|"]);
+
 export function shellSegments(cmd) {
   const text = String(cmd ?? "");
   const segments = [];
@@ -1534,7 +1538,21 @@ export function shellSegments(cmd) {
   let start = 0;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
-    if (ch === "\\" && quote !== "'" && i + 1 < text.length) { i += 1; continue; }
+    // A backslash escapes the NEXT character in Bash — and in PowerShell and cmd it
+    // does not: there it is an ordinary argument character, so `\|` remains a real
+    // pipeline separator and the shell runs TWO commands. This parser cannot know
+    // which shell will run the line, so for separators it takes the safer reading:
+    // a backslash never suppresses one. Over-segmenting is safe — every extra
+    // segment is still scanned by every gate — while under-segmenting is how
+    // `Write-Output x\|gh pr merge 445` reached the merge gate as a single
+    // unrecognised command, and how a hidden `--force` reached the push gate
+    // (Codex proof gate, PR #445, rounds 13 and 14). Escaping is otherwise
+    // unchanged, so `\"` still does not open a quoted span, and a separator inside
+    // a quoted span is still literal.
+    if (ch === "\\" && quote !== "'" && i + 1 < text.length && !SEGMENT_SEPARATORS.has(text[i + 1])) {
+      i += 1;
+      continue;
+    }
     if (quote) { if (ch === quote) quote = null; continue; }
     if (ch === "'" || ch === '"') { quote = ch; continue; }
     if (ch === ";" || ch === "\n" || ch === "\r") {
