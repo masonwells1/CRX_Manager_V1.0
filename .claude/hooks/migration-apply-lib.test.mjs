@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { evaluateMigrationApply } from "./migration-apply-lib.mjs";
+import { checkWrappable } from "./migration-wrappability-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // .claude/hooks/ → repo root → scripts/
@@ -249,6 +250,89 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   const refusedConfirm = runScript(badRoot, ["--confirm"]);
   ok(refusedConfirm.status === 2, "--confirm does not override a gate refusal");
   ok(!refusedConfirm.stdout.includes("Transmitting"), "--confirm on a refused gate never transmits");
+}
+
+// ── WRAPPABILITY: the precondition the atomicity promise depends on ─────────
+// CodeRabbit (Major) and Codex (P2) both caught that the first revision only
+// DOCUMENTED "no transaction control, nothing non-transactional" and never
+// enforced it. These pin the enforcement, including the false positives that
+// would make it useless: a PL/pgSQL body legitimately contains BEGIN/END, and a
+// comment or string literal naming COMMIT is not transaction control.
+{
+  const wrappable = (sql, m) => { ok(checkWrappable(sql).wrappable === true, `${m} — expected wrappable, got: ${checkWrappable(sql).reason}`); };
+  const notWrappable = (sql, fragment, m) => {
+    const v = checkWrappable(sql);
+    assert.equal(v.wrappable, false, `${m} — expected NOT wrappable`);
+    assert.ok(String(v.reason).includes(fragment), `${m} — reason did not mention ${JSON.stringify(fragment)}; got: ${v.reason}`);
+    pass++;
+  };
+
+  wrappable("CREATE TABLE public.t (id bigint);\nALTER TABLE public.t ENABLE ROW LEVEL SECURITY;\n",
+    "an ordinary additive migration is wrappable");
+
+  notWrappable("CREATE TABLE public.t (id bigint);\nCOMMIT;\n", "COMMIT", "a top-level COMMIT is refused");
+  notWrappable("BEGIN;\nCREATE TABLE public.t (id bigint);\n", "BEGIN", "a top-level BEGIN is refused");
+  notWrappable("START TRANSACTION;\nCREATE TABLE public.t (id bigint);\n", "START TRANSACTION", "START TRANSACTION is refused");
+  notWrappable("CREATE TABLE public.t (id bigint);\nROLLBACK;\n", "ROLLBACK", "a top-level ROLLBACK is refused");
+  notWrappable("SAVEPOINT s1;\nCREATE TABLE public.t (id bigint);\n", "SAVEPOINT", "a SAVEPOINT is refused");
+  notWrappable("CREATE INDEX CONCURRENTLY idx_t ON public.t (id);\n", "CONCURRENTLY",
+    "CREATE INDEX CONCURRENTLY is refused — Postgres cannot run it in a transaction block");
+  notWrappable("DROP INDEX CONCURRENTLY idx_t;\n", "CONCURRENTLY", "DROP INDEX CONCURRENTLY is refused");
+  notWrappable("VACUUM ANALYZE public.t;\n", "VACUUM", "VACUUM is refused");
+  notWrappable("ALTER SYSTEM SET work_mem = '64MB';\n", "ALTER SYSTEM", "ALTER SYSTEM is refused");
+  notWrappable("   \n", "empty", "an empty migration is refused");
+
+  // The false positives that would make this check unusable.
+  wrappable(
+    "CREATE OR REPLACE FUNCTION public.f() RETURNS void AS $$\nBEGIN\n  INSERT INTO public.t VALUES (1);\nEND\n$$ LANGUAGE plpgsql;\n",
+    "a PL/pgSQL body's BEGIN/END is not transaction control");
+  wrappable(
+    "DO $do$\nBEGIN\n  PERFORM 1;\nEND\n$do$;\n",
+    "a DO block's BEGIN/END is not transaction control");
+  // REGRESSION (found by running the real 162KB migration, not by a unit test):
+  // the first implementation reused live-testdata-lib's stripDollarQuoted, which
+  // strips DO bodies but deliberately KEEPS CREATE FUNCTION bodies visible. A
+  // body ending `END;` therefore read as top-level transaction control and the
+  // real migration was refused. These pin the terminated-`END;` forms — the
+  // earlier "$$ BEGIN … END $$" case passed only because no `;` followed END.
+  wrappable(
+    "CREATE OR REPLACE FUNCTION public.f() RETURNS void AS $function$\nBEGIN\n  PERFORM 1;\nEND;\n$function$ LANGUAGE plpgsql;\n",
+    "a function body ending END; is not transaction control");
+  wrappable(
+    "CREATE OR REPLACE FUNCTION public.f() RETURNS void AS $function$\nBEGIN\n  BEGIN\n    PERFORM 1;\n  EXCEPTION WHEN others THEN\n    RAISE;\n  END;\nEND;\n$function$ LANGUAGE plpgsql;\n",
+    "nested PL/pgSQL BEGIN/EXCEPTION/END; blocks are not transaction control");
+  wrappable(
+    "DO $preflight$\nBEGIN\n  IF true THEN\n    RAISE NOTICE 'ok';\n  END IF;\nEND;\n$preflight$;\nDO $postflight$\nBEGIN\n  PERFORM 1;\nEND;\n$postflight$;\n",
+    "custom-tagged DO blocks with END; are not transaction control");
+  wrappable(
+    "CREATE FUNCTION public.g() RETURNS void AS $qty_check$\nBEGIN\n  -- COMMIT; ROLLBACK; inside a body comment\n  PERFORM 1;\nEND;\n$qty_check$ LANGUAGE plpgsql;\n",
+    "transaction keywords inside a function body are not top-level");
+  // Unterminated bodies cannot be classified, so they must refuse.
+  notWrappable("CREATE FUNCTION public.f() RETURNS void AS $function$\nBEGIN\n  PERFORM 1;\n", "UNKNOWN",
+    "an unterminated dollar-quoted body is refused, not assumed safe");
+  notWrappable("SELECT 'unterminated;\n", "UNKNOWN", "an unterminated string literal is refused");
+  wrappable(
+    "-- this migration does not COMMIT on its own; the caller wraps it\nCREATE TABLE public.t (id bigint);\n",
+    "a comment naming COMMIT is not transaction control");
+  wrappable(
+    "INSERT INTO public.audit (note) VALUES ('COMMIT was requested');\n",
+    "a string literal naming COMMIT is not transaction control");
+  wrappable(
+    "CREATE TABLE public.commit_log (id bigint, rollback_reason text);\n",
+    "identifiers containing commit/rollback are not transaction control");
+
+  // And the script must refuse a non-wrappable file end-to-end, before the gate.
+  const wRoot = fixture();
+  mkdirSync(path.join(wRoot, "supabase", "migrations"), { recursive: true });
+  writeFileSync(path.join(wRoot, "supabase", "migrations", `${MIG}.sql`), "CREATE TABLE public.t (id bigint);\nCOMMIT;\n", "utf8");
+  const res = spawnSync(process.execPath, [
+    path.resolve(__scriptsDir, "apply-migration-file.mjs"),
+    path.join(wRoot, "supabase", "migrations", `${MIG}.sql`),
+    "--confirm",
+  ], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: wRoot, SUPABASE_ACCESS_TOKEN: "" } });
+  ok(res.status === 2, `a transaction-managing migration is refused by the script (got ${res.status})`);
+  ok(res.stderr.includes("NOT WRAPPABLE"), "the script names the wrappability precondition in its refusal");
+  ok(!res.stdout.includes("Transmitting"), "a non-wrappable migration is never transmitted");
 }
 
 for (const r of roots) { try { rmSync(r, { recursive: true, force: true }); } catch { /* best effort */ } }

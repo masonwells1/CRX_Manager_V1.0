@@ -206,9 +206,26 @@ transform of the existing checks is mechanical; block-message text is preserved 
    either would leave the ordering preflight blind to the migration that just ran.
 4. **A dry run is the default.** `--confirm` is required to transmit, and passing the gate remains
    a FLOOR, not authorization — an interactive session still needs Mason's explicit in-chat OK.
-5. **Migrations that manage their own transactions must not use this door.** The wrapper assumes no
-   `BEGIN`/`COMMIT` and nothing non-transactional (`CREATE INDEX CONCURRENTLY`, `VACUUM`); half 2
-   was checked for both before this path was built.
+5. **Migrations that manage their own transactions must not use this door — enforced in code.**
+   `.claude/hooks/migration-wrappability-lib.mjs` refuses top-level transaction control and
+   non-transactional statements before anything is wrapped, and refuses anything it cannot tokenize.
+   The first revision only *documented* this and hand-checked the one target migration; CodeRabbit
+   (Major) and Codex (P2) both caught that nothing re-checked it, so the next caller would have
+   inherited a promise the code did not keep.
+6. **The Codex production guard must know every live-apply spelling.** Codex's own review found
+   `scripts/apply-migration-file.mjs` reached production while every other migration path was blocked
+   in `.codex/hooks/production-action-guard.mjs` (P1). Adding a new production-mutating command
+   without wiring it into that guard is the defect, not an oversight to fix later. Editing that guard
+   re-pins its blobs in `scripts/apply-live-testdata-maintenance-20260812.mjs` in the same change.
+
+**What this round cost, and why it is recorded.** Three reviewer findings on PR #460 were all real:
+an unenforced precondition, an unguarded production spelling, and an `allow`-by-default branch in the
+hook (`decision === "block"` blocked, so any unrecognised verdict passed). None were style. The
+enforcement fix then failed on its first run against the real 162KB migration — it reused the
+destructive classifier's stripper, which keeps `CREATE FUNCTION` bodies visible, and read a PL/pgSQL
+`END;` as a transaction commit. That was caught by **running the real file**, not by the unit tests,
+which had passed by luck because their function body ended `END` with no semicolon. The regression
+cases now pin the terminated form and were mutation-proved to fail without the fix.
 
 **Verification standard applied.** The guard was mutation-tested, not just run green: each check
 was disabled in turn and the suite was required to go red. The first pass exposed a real weakness in

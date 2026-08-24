@@ -54,6 +54,7 @@ import {
   evaluateMigrationApply,
   CRX_PRODUCTION_REF,
 } from "../.claude/hooks/migration-apply-lib.mjs";
+import { assertWrappable } from "../.claude/hooks/migration-wrappability-lib.mjs";
 
 // Every existing ledger row carries this; apply_migration fills it from the
 // authenticated Supabase account, and the personal access token this script uses
@@ -105,6 +106,21 @@ console.log(`file      : ${absFile}`);
 console.log(`bytes     : ${Buffer.byteLength(sql, "utf8")} (LF-normalized)`);
 console.log(`queryHash : ${queryHash}`);
 console.log(`project   : ${projectId}`);
+console.log("");
+
+// ── PRECONDITION FOR THIS DOOR ─────────────────────────────────────────────
+// Checked BEFORE the gate so a dry run reports it immediately, and enforced in
+// code rather than documented in a comment: this path wraps the migration and
+// its ledger row in one transaction, and that promise is only real if the
+// migration does not manage its own transactions and contains nothing that
+// cannot run inside a transaction block.
+try {
+  assertWrappable(sql, migName);
+} catch (err) {
+  if (err?.notWrappable) die(2, err.message);
+  die(2, `NOT WRAPPABLE: could not establish whether "${migName}" is safe to wrap (${err?.message || err}). Refusing.`);
+}
+console.log("Wrappability: no transaction control, nothing non-transactional — safe to wrap.");
 console.log("");
 
 // ── THE GATE ───────────────────────────────────────────────────────────────
@@ -172,8 +188,6 @@ if (sql.includes(dq) || migName.includes(dq) || createdBy.includes(dq)) {
 }
 
 // One transaction: the migration and its ledger row commit together or not at all.
-// The migration was checked for BEGIN/COMMIT/CONCURRENTLY before this path was
-// built; a migration that manages its own transactions must not use this door.
 const wrapped =
   `BEGIN;\n${sql}\n;\n` +
   `INSERT INTO supabase_migrations.schema_migrations (version, name, statements, created_by)\n` +

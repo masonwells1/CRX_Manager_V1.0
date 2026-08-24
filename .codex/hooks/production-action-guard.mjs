@@ -77,6 +77,26 @@ function protectedHarnessPathMentioned(value) {
   return PROTECTED_HARNESS_PATH_RE.test(String(value || "").trim());
 }
 
+// scripts/apply-migration-file.mjs mutates the LIVE database. It was added
+// 2026-08-24 as a gated door for migrations too large to transmit through
+// apply_migration, and Codex's review of that PR caught that the new spelling
+// reached production while every OTHER migration path was blocked here (P1).
+// Blocked outright rather than only on `--confirm`: matching a flag invites
+// quoting games, and Codex has no need for even the dry run.
+// Matched across quote-stripped and backslash-dropped views so `apply"-"migration-file`
+// and `apply\-migration-file` — which the shell runs identically — cannot slip past.
+const LIVE_APPLY_SCRIPT_RE = /apply-migration-file(?:\.mjs)?\b/i;
+function liveApplyScriptMentioned(command) {
+  const base = String(command || "").replace(/[\\`]\r?\n/g, "");
+  const views = [
+    base,
+    base.replace(/["']/g, ""),
+    base.replace(/\\(.)/g, "$1"),
+    base.replace(/["']/g, "").replace(/\\(.)/g, "$1"),
+  ];
+  return views.some((v) => LIVE_APPLY_SCRIPT_RE.test(v));
+}
+
 function usesDynamicProcessEval(command) {
   const text = String(command || "");
   return /(?:^|[\s"'\\/])node(?:\.exe)?["']?\s+(?:(?:--[a-z-]+(?:=[^\s]+)?|-{1,2}[a-z-]+)\s+)*(?:-e|--eval|-p|--print)(?:\s|=|$)/i.test(text) ||
@@ -677,6 +697,13 @@ export function evaluateProductionAction({
   const changesDirectory = /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|set-location)\s+/i.test(command);
   if ((changesDirectory && reviewStateDirectoryMentioned(command)) || reviewStateDirectoryMentioned(actionRepoDir)) {
     return denied("CODEX PRODUCTION GATE: the wrapper-owned review state directory cannot be used as an interactive shell working directory.");
+  }
+  if (liveApplyScriptMentioned(command)) {
+    return denied(
+      "CODEX PRODUCTION GATE: scripts/apply-migration-file.mjs applies a migration to the LIVE database and is " +
+      "blocked, exactly like the MCP apply_migration and Supabase CLI migration paths. Its internal gate checks " +
+      "review evidence but cannot verify Mason's required in-chat approval, so it is not an alternative spelling " +
+      "for the reviewed migration path. Live migrations remain outside Codex's standing authorization.");
   }
   if (usesDynamicProcessEval(command)) {
     return denied("CODEX PRODUCTION GATE: Node eval/print modes are blocked because generated code can hide uninspected git or GitHub writes. Put ordinary diagnostic code in a reviewed script instead.");

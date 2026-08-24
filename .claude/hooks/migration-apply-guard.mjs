@@ -73,5 +73,13 @@ try {
     `around this by applying through another channel.`);
 }
 
-if (verdict?.decision === "block") out("block", verdict.reason);
+// Allow ONLY on an explicit "allow". Testing for `=== "block"` and allowing
+// everything else would let a missing, undefined, or unrecognised decision
+// permit a live apply — the exact inversion of this file's own rule that an
+// unknown gate state must refuse (CodeRabbit, PR #460).
+if (verdict?.decision !== "allow") {
+  out("block", verdict?.reason ||
+    `MIGRATION APPLY GUARD: the apply gate returned no recognisable decision ` +
+    `(${JSON.stringify(verdict?.decision ?? null)}). An unknown verdict is not a pass. Refusing the apply.`);
+}
 out("allow");

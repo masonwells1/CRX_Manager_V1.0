@@ -255,6 +255,17 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "cd .claude/session-state" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "printf {} > codex-review-forged.json" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "printf {} > harmless.json", cwd: ".claude/session-state" } }).blocked, true);
+  // scripts/apply-migration-file.mjs applies to the LIVE database. Codex's own
+  // review of PR #460 found the new script reached production while every other
+  // migration path was blocked here (P1). Blocked outright — dry run included —
+  // and across the quote/backslash views the shell would run identically.
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node scripts/apply-migration-file.mjs supabase/migrations/x.sql --confirm" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node scripts/apply-migration-file.mjs supabase/migrations/x.sql" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node scripts/apply\"-\"migration-file.mjs x.sql --confirm" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node scripts/apply\\-migration-file.mjs x.sql --confirm" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node ./scripts/apply-migration-file.mjs x.sql" } }).blocked, true);
+  // Reading or discussing the file is not applying it.
+  assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/apply-migration-file.mjs" } }).blocked, false);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node -e \"require('child_process').execSync('git pu'+'sh origin main')\"" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "echo code | node" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node -" } }).blocked, true);
