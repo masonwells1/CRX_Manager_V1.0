@@ -314,6 +314,15 @@ The parent now emits `"\(.state) \(.created_at)"` and is settled by the identica
 with two **command-scoped** regressions: the parent command must emit `created_at`, and must not reduce the
 status to a bare success test. Reverting it to the one-shot form turns the suite red.
 
+**Sixth round: the one rule that must be prose needs a scoped assertion.** CodeRabbit on `069ea1ac`. Making
+the parent command emit `created_at` only makes settlement *possible* — the sequence itself ("run it, wait
+90s, run it again, require identical `success <timestamp>`, then re-read immediately before merging and
+require that same timestamp") cannot live inside one shell command, so it is necessarily documentation. That
+makes it precisely the rule a document-wide search satisfies from the *head's* section while the parent says
+nothing. The suite now slices the document between the parent heading and the tree checks that follow it, and
+requires every element of the sequence inside that slice. Removing "wait 90s … identical" from the parent
+paragraph turns the suite red even though "90 seconds apart" still appears verbatim in the head's section.
+
 The through-line across all six rounds is one idea: **a check that names the thing it forbids only catches
 that name.** Five times running, the fix was itself written one notch too narrow — a spelling, then a
 notation, then a variable read from the wrong scope, then two facts with no order between them, then a

@@ -51,6 +51,18 @@ function bashCommands(markdown) {
   return blocks;
 }
 
+// The slice of the document between two markers, so a prose rule can be asserted
+// where it must actually appear rather than anywhere in the file. Returns null
+// when either marker is missing or they are out of order, so a moved section
+// fails closed instead of silently matching an empty string.
+function sectionBetween(markdown, startNeedle, endNeedle) {
+  const start = markdown.indexOf(startNeedle);
+  if (start === -1) return null;
+  const end = markdown.indexOf(endNeedle, start + startNeedle.length);
+  if (end === -1) return null;
+  return markdown.slice(start, end);
+}
+
 // A command satisfies a rule only if it contains EVERY required fragment.
 const hasCommandWithAll = (cmds, fragments) =>
   cmds.some((c) => fragments.every((f) => c.includes(f)));
@@ -241,6 +253,31 @@ for (const [name, file] of SKILLS) {
     Boolean(parentStatus) && !parentStatus.includes('= "success"'),
     `${name}: the parent status is not reduced to a one-shot success test`,
   );
+  // Emitting `created_at` only makes settlement POSSIBLE; the procedure still has
+  // to spell out the whole sequence. "Wait 90 seconds" cannot live inside a single
+  // shell command, so this is the one rule that is necessarily prose — which makes
+  // it the one rule a document-wide search would wrongly satisfy from the head's
+  // section. Scope the search to the parent block itself: every element of the
+  // sequence must appear between the parent heading and the tree checks that
+  // follow it. (CodeRabbit, PR #441.)
+  const parentSection = sectionBetween(
+    readFileSync(file, "utf8"),
+    "**Do not compare the parent to a SHA you typed in",
+    "git merge-base --is-ancestor <HEAD>^2 <BASE_SHA>",
+  );
+  ok(Boolean(parentSection), `${name}: the parent fallback section is locatable`);
+  for (const [needle, why] of [
+    ["90s", "the 90-second gap between polls"],
+    ["identical", "both polls must agree"],
+    ["created_at", "agreement is on the timestamp, not merely on 'success'"],
+    ["before merging", "a third poll immediately before the merge"],
+    ["same", "that final poll must match the settled timestamp"],
+  ]) {
+    ok(
+      Boolean(parentSection) && parentSection.includes(needle),
+      `${name}: the parent section itself states ${why}`,
+    );
+  }
   ok(
     hasCommandWithAll(cmds, ["git merge-tree --write-tree", "<HEAD>^{tree}", "MERGE_ADDED_NOTHING"]),
     `${name}: tree identity is asserted, not printed`,
