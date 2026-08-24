@@ -1387,14 +1387,33 @@ assert.equal(
     }
   }
 }
-// …and the counterpart that must NOT split, which is what keeps the rule above from
-// being "split on everything": with no escape at all, `echo x"|gh …"` is a genuinely
-// quoted string. Every shell echoes it as text and none runs the merge, so it stays
-// ONE segment. This is the line between hardening and refusing ordinary commands.
+// Round 15 asserted the opposite here — that `echo x"|gh pr merge 445"` is a
+// genuinely quoted string and must stay ONE segment. That was the assumption the
+// nested-shell bypass broke: `cmd.exe /d /s /c "echo 'x| gh pr merge 445 & rem '"`
+// is balanced-quoted too, and cmd runs the merge anyway. Whether quoted text is
+// inert depends on who parses it next, which this guard cannot know, so it now
+// splits regardless and lets the per-segment gates decide.
 for (const quote of ['"', "'"]) {
-  assert.equal(
-    shellSegments(`echo x${quote}|gh pr merge 445${quote}`).length, 1,
-    `an unescaped balanced quote really is a quoted string and must not split (${quote})`,
+  const segments = shellSegments(`echo x${quote}|gh pr merge 445${quote}`);
+  assert.ok(
+    segments.length > 1,
+    `a quoted separator still ends a command, because a nested shell may re-parse it (${quote})`,
+  );
+}
+// The nested-shell forms themselves. Every one runs the hidden merge, every one was
+// ALLOWED by the quote-aware splitter, and every one is blocked by `main`'s
+// quote-blind split (Codex proof gate at `0d3ef8fa`, reproduced against both).
+for (const nested of [
+  `cmd.exe /d /s /c "echo 'x| gh pr merge 445 & rem '"`,
+  `cmd.exe /c "echo x & gh pr merge 445"`,
+  `bash -c "echo x | gh pr merge 445"`,
+  `sh -c 'echo x | gh pr merge 445'`,
+  `powershell -Command "echo x; gh pr merge 445"`,
+  `pwsh -Command "echo x; gh pr merge 445"`,
+]) {
+  assert.ok(
+    shellSegments(nested).some((segment) => /^gh\s+pr\s+merge\b/.test(segment.trim())),
+    `a nested shell's quoted payload must still be segmented: ${nested}`,
   );
 }
 // The two reported regressions, spelled out with no whitespace — the form that
@@ -1419,9 +1438,15 @@ for (const quote of ['"', "'"]) {
     `an unterminated ${quote === '"' ? "double" : "single"} quote does not hide a merge`,
   );
 }
-// Over-segmenting is the safe direction, but it must not reach ORDINARY commands:
-// a BALANCED quoted separator is literal and the command stays whole. These are the
-// shapes a Windows path, a commit message, and a log format actually produce.
+// ROUND 16 OVERTURNED THE PREMISE THESE USED TO ASSERT. They required a BALANCED
+// quoted separator to stay ONE segment, on the reasoning that quoted text is not a
+// command. A nested shell re-parses its own quoted payload, so that is false:
+// `cmd.exe /c "echo x & gh pr merge 445"` really does run the merge. Segmentation
+// no longer respects quotes at all, so these commands DO split now — and that is
+// correct, because what matters is not how many segments an ordinary command makes
+// but whether any segment looks like a command that needs gating. None of these do,
+// which is why the guard still allows every one of them (asserted end-to-end in
+// `.codex/hooks/production-action-guard.test.mjs`).
 for (const benign of [
   `git commit -m "a | b"`,
   `git commit -m 'a | b'`,
@@ -1431,10 +1456,12 @@ for (const benign of [
   `git commit -m "caret ^ inside"`,
   `git commit -m "path C:\\Users\\mason | x"`,
 ]) {
-  assert.equal(
-    shellSegments(benign).length, 1,
-    `a balanced quoted separator is literal and must not split: ${benign}`,
-  );
+  for (const segment of shellSegments(benign)) {
+    assert.ok(
+      !isGitPush(segment.trim()),
+      `splitting an ordinary command must not manufacture a push-looking segment: ${benign} -> ${segment}`,
+    );
+  }
 }
 // The escape handling must not have re-broken the round-9 case.
 assert.deepEqual(

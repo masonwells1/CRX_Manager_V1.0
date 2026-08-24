@@ -114,7 +114,7 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // PROTECTED_HARNESS_FRAGMENT_RE constant, and the maintenance execution gate
   // — are untouched and still present exactly once.
   codexGuard: "38d2c8a9663c3413fae5468268fd52f536a68459",
-  pushLib: "8778eeee570313f0e533536f9bbfb02685a4eed6",
+  pushLib: "d9f73cd456a3ba15f62e277cb6f0c22c64649ad8",
 };
   // pushLib re-pinned 2026-08-24 (PR #445 round 15): `shellSegments` now reads
   // every command under all THREE shell escape dialects (`\` Git Bash, backtick
@@ -126,7 +126,7 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // changed; the transform over it is still a no-op, so both pins move together.
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "a8a2f58db1dce0f5132ecddbe4ca319ac1ad3682",
-  pushLib: "8778eeee570313f0e533536f9bbfb02685a4eed6",
+  pushLib: "d9f73cd456a3ba15f62e277cb6f0c22c64649ad8",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

@@ -495,20 +495,45 @@ try {
       repoDir: projectRoot,
     });
     assert.equal(quotedMessage.blocked, false, "a quoted pipe in a commit message is not a second command");
-    // Controls: the SAME hidden-merge text inside a BALANCED quoted string is a
-    // genuine quoted string — no shell runs the merge — so it must stay allowed.
-    // These are what make every `blocked` assertion above load-bearing: a guard
-    // that matched on text rather than segments would deny all three.
+    // ROUND 16 RETIRED TWO OF THESE CONTROLS, and the reason is the finding itself.
+    // They asserted that the hidden-merge text inside a BALANCED quoted string stays
+    // allowed, because no shell would run it. A nested shell re-parses its own quoted
+    // payload, so that was false — `cmd.exe /d /s /c "echo 'x| gh pr merge 445 & rem '"`
+    // is balanced-quoted and cmd runs the merge. Segmentation no longer trusts quotes,
+    // so `echo x"|gh pr merge 445"` now splits and IS refused. That is accepted
+    // over-refusal on a contrived shape, and it is what `main` has always done.
+    //
+    // The controls that remain are the ones that still prove the point: they carry the
+    // dangerous TEXT but produce no dangerous SEGMENT, so a guard matching on text
+    // rather than structure would deny them.
     for (const [label, control] of [
-      ["balanced double quote", `echo x"|gh pr merge 445"`],
-      ["balanced single quote", "echo x'|gh pr merge 445'"],
       ["merge text inside a commit message", `git commit -m "note: gh pr merge 445 is gated"`],
+      ["merge text in a quoted log format", `git log --format="gh pr merge %h"`],
+      ["a quoted pipe in an ordinary commit message", `git commit -m "a | b"`],
+      ["an ordinary chained build", "npm run test && npm run build"],
     ]) {
       assert.equal(evaluateProductionAction({
         toolName: "PowerShell",
         toolInput: { command: control },
         repoDir: projectRoot,
       }).blocked, false, `control stays allowed, so the denials above are about segmentation and not text: ${label}`);
+    }
+    // …and the nested-shell forms the quote-aware splitter let through. Each runs the
+    // hidden merge; each was ALLOWED on this branch before round 16 and BLOCKED by
+    // `main` (Codex proof gate at `0d3ef8fa`, reproduced against both guards).
+    for (const nested of [
+      `cmd.exe /d /s /c "echo 'x| gh pr merge 445 & rem '"`,
+      `cmd.exe /c "echo x & gh pr merge 445"`,
+      `bash -c "echo x | gh pr merge 445"`,
+      `sh -c 'echo x | gh pr merge 445'`,
+      `powershell -Command "echo x; gh pr merge 445"`,
+      `pwsh -Command "echo x; gh pr merge 445"`,
+    ]) {
+      assert.equal(evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command: nested },
+        repoDir: projectRoot,
+      }).blocked, true, `a nested shell must not hide a merge in its quoted payload: ${nested}`);
     }
   }
 

@@ -250,6 +250,47 @@ next agent. Two sessions read it that way.
   readings still see it, and bash never honours `^`, so its reading always closes a `"a^"` span. Both
   were removed by mutation, separately and together, with zero losses across the matrix and the fuzz.
   They are kept as defence in depth so the function stays correct if the dialect table is narrowed.
+- **Round 16 abandoned quote-aware segmentation entirely, because it was the root cause of every
+  hole rounds 13-15 had been patching.** The exact-SHA Codex proof gate refused `0d3ef8fa` with a
+  high-severity finding, verified by its own read-only base-versus-candidate probe: a **nested shell
+  re-parses its own quoted payload**, so "inside quotes" never meant "not a command". Reproduced
+  independently, and the bypass is wider than reported — six forms, not one:
+  `cmd.exe /d /s /c "echo 'x| gh pr merge 445 & rem '"`, `cmd.exe /c "echo x & gh pr merge 445"`,
+  `bash -c "…"`, `sh -c '…'`, `powershell -Command "…"` and `pwsh -Command "…"`. Each runs the hidden
+  merge. **All six were ALLOWED by the quote-aware splitter and BLOCKED by the quote-blind split on
+  `main`** — the branch was a net regression for the fourth time.
+- **The pattern, not the payload, was the finding.** Rounds 13/14 patched an escaped separator,
+  round 15 patched escaped quotes in two more shell dialects plus unterminated quotes, and round 16
+  would have patched nested shells. Every one traced to the same decision: teaching the splitter to
+  respect quotes. "Inside quotes" is not a property of the text — it is a property of whoever parses
+  the text NEXT, which this guard cannot know. Enumerating nested-shell verbs (`cmd /c`, `bash -c`,
+  `env`, `xargs`, …) would have been denylist-by-enumeration, the trap already recorded against the
+  cd-guard.
+- **So the cost of quote-awareness was measured rather than argued.** Over **5,835 real command
+  lines** harvested from this repo's own `package.json` scripts and 444 documentation files, the
+  quote-aware and quote-blind splitters block an **identical set — the same 13**. Quote-awareness
+  bought nothing on real commands and cost six bypasses on hostile ones. `shellSegments` is now
+  maximally conservative: **every separator ends a command**, with no quote or escape able to
+  suppress one. That is `main`'s behaviour plus the one genuine gap this PR found — `main` split on
+  `&&`, `||`, `|`, `;` and newlines but **not on a single `&`**, so bash's background separator hid a
+  second push.
+- **Quote-awareness survives in exactly one place, and it is not a segmentation question.**
+  `pushSetsInlineEnv` needs the assignments immediately preceding a push, and a quote-blind split
+  cuts `GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20 && curl evil" git push` in half at the `&&`
+  *inside the value*, so the assignment vanishes and the value check is disarmed (measured:
+  quote-blind returns `[]`, quote-aware returns `["GIT_SSH_COMMAND"]`). That parse is safe because it
+  never decides which commands exist — a nested shell can only mis-attribute an assignment, and an
+  unrecognised assignment is already a reason to deny. It lives in `assignmentScanSegments`.
+- **Accepted over-refusal, stated plainly.** `echo x"|gh pr merge 445"` — the dangerous text inside a
+  balanced quoted string — is now REFUSED. Round 15 asserted it must be allowed; the nested-shell
+  finding is precisely why that assertion was wrong, since `cmd.exe /c` runs the balanced-quoted form
+  too. This matches `main`. The controls that remain are the ones that still prove the denials are
+  about structure rather than text: a commit message or `--format` string carrying the words
+  `gh pr merge` produces no dangerous segment and stays allowed.
+- **Proof on the final tree:** all six nested-shell forms denied; the 320-case escape/quote/separator
+  matrix still 0 leaks; the 18-command benign corpus still 18/18 allowed; the 5,835-line real corpus
+  blocks **13 — the same 13 as round 14, round 15 and `main`**, so the redesign refuses nothing new;
+  the inline-env value check still catches its payload. All four suites green.
 - **Round 11 replaced the question entirely.** Both earlier versions asked something about the *raw*
   token list, and a split option value pushes every later token out of position — so
   `git -C C:/My\ Repo commit -m push` (a commit), `… status -- push`, and `… stash push -m wip` were
