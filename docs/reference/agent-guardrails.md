@@ -163,8 +163,11 @@ Protected-path matching is no longer name-shaped only. A hard link gives a
 protected file a second, innocuous pathname that `realpath` cannot resolve away,
 so an alias write would edit the real file while every pattern missed. MCP file
 targets are now also compared by filesystem identity (device plus inode/file-ID)
-against the protected set, and `mklink /H` / non-symbolic `ln` routes aimed at a
-protected path are denied so the alias is never created. Symbolic links and
+against the protected set, and the creation routes aimed at a protected path are
+denied so the alias is never created — `mklink /H`, non-symbolic `ln`, and the
+`HardLink` token itself in either operand order, which covers PowerShell
+`New-Item -ItemType HardLink` (with its `ni` and `-Type` spellings) and
+`fsutil hardlink create`. Symbolic links and
 junctions stay allowed because canonicalization already resolves them. A real
 hard-link regression proves the write, edit, and creation routes all deny.
 

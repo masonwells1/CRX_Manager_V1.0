@@ -2422,6 +2422,11 @@ export const DANGEROUS_CMD_CHECKS = [
   // already resolves those back to the protected name.
   [/\bmklink\b(?![^\r\n;&|]*\/[dDjJ]\b)[^\r\n;&|]*(?:\.claude[\\/](?:hooks[\\/][\w.-]+\.mjs|settings\.json)|supabase[\\/]migrations[\\/]|\.env\b|\.gitignore\b)/i, "Blocked hard-link alias of a protected file. A second pathname for the same file bypasses every path-based guard; edit the real path with the native tools instead."],
   [/\bln\b(?![^\r\n;&|]*\s-[A-Za-z]*s)[^\r\n;&|]*(?:\.claude\/(?:hooks\/[\w.-]+\.mjs|settings\.json)|supabase\/migrations\/|\.env\b|\.gitignore\b)/, "Blocked hard-link alias of a protected file. A second pathname for the same file bypasses every path-based guard; edit the real path with the native tools instead."],
+  // `mklink` and `ln` are not the only spellings: PowerShell `New-Item -ItemType
+  // HardLink` (and its `ni` / `-Type` forms) and `fsutil hardlink create` build
+  // the same alias. Match the HardLink token itself, in either operand order, so
+  // one wrapper spelling cannot reopen the route. `SymbolicLink` is untouched.
+  [/\bHardLink\b[^\r\n;&|]*(?:\.claude[\\/](?:hooks[\\/][\w.-]+\.mjs|settings\.json)|supabase[\\/]migrations[\\/]|\.env\b|\.gitignore\b)|(?:\.claude[\\/](?:hooks[\\/][\w.-]+\.mjs|settings\.json)|supabase[\\/]migrations[\\/]|\.env\b|\.gitignore\b)[^\r\n;&|]*\bHardLink\b/i, "Blocked hard-link alias of a protected file. A second pathname for the same file bypasses every path-based guard; edit the real path with the native tools instead."],
   [/\brm\s+-[A-Za-z]*r[A-Za-z]*f?[A-Za-z]*\s+(?:\.\.?\s*(?:$|;|&|\|)|\.\.?\/(?:src|supabase|docs)(?:\b|\/)|\/?(?:src|supabase|docs)(?:\b|\/))/, "Blocked recursive deletion of project source/migrations/docs."],
   // Long/split option spellings of the same recursive delete — `rm --recursive
   // --force src`, `rm -r --force src` (Codex P1 round 4, PR #352). A lookahead

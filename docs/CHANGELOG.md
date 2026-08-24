@@ -88,8 +88,12 @@ Blend Recipes was never affected; it selects `*`.
   `.env` a second innocuous pathname that `realpath` cannot resolve away, so an
   MCP write through the alias edited the real file with every pattern missing
   it. MCP file targets are compared by device plus inode/file-ID against the
-  protected set, and `mklink /H` / non-symbolic `ln` routes at a protected path
-  are denied so the alias is never created. Symbolic links and junctions remain
+  protected set, and the creation routes at a protected path are denied so the
+  alias is never created: `mklink /H`, non-symbolic `ln`, and the `HardLink`
+  token in either operand order, which covers PowerShell `New-Item -ItemType
+  HardLink` (plus its `ni`/`-Type` spellings) and `fsutil hardlink create`.
+  Matching only the first two spellings left PowerShell open, which a real-hook
+  run caught after the unit tests were already green. Symbolic links and junctions remain
   allowed — canonicalization already resolves those. A real hard-link
   regression covers the write, edit, and creation routes, and was mutation-
   tested: without the identity check the alias write is allowed.

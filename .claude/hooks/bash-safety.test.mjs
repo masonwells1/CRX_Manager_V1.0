@@ -73,6 +73,14 @@ ok(checkDangerousCommand("ln supabase/migrations/20260101000000_x.sql /tmp/m.sql
 eq(checkDangerousCommand("ln -s .claude/hooks/mcp-tool-guard.mjs /tmp/alias.mjs"), null, "a symbolic link is not treated as a hard-link bypass");
 eq(checkDangerousCommand("mklink /D scratch\\hooks .claude\\hooks"), null, "a directory symlink is not treated as a hard-link bypass");
 eq(checkDangerousCommand("ln -s docs/README.md /tmp/readme.md"), null, "an ordinary symlink to an unprotected file is allowed");
+// Other spellings of the same alias. A guard that knows only `mklink`/`ln`
+// leaves the route open through PowerShell and fsutil.
+ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\notes.mjs -Target .claude\\hooks\\bash-safety-lib.mjs"), "PowerShell New-Item HardLink to a protected hook blocked");
+ok(checkDangerousCommand("New-Item -Target .claude\\hooks\\bash-safety-lib.mjs -ItemType HardLink -Path scratch\\notes.mjs"), "PowerShell New-Item HardLink blocked with the target named first");
+ok(checkDangerousCommand("ni -Type HardLink -Path x.json -Target .claude\\settings.json"), "the ni alias and -Type spelling are blocked too");
+ok(checkDangerousCommand("fsutil hardlink create scratch\\alias.mjs .claude\\hooks\\mcp-tool-guard.mjs"), "fsutil hardlink create against a protected hook blocked");
+eq(checkDangerousCommand("New-Item -ItemType SymbolicLink -Path scratch\\notes.mjs -Target .claude\\hooks\\bash-safety-lib.mjs"), null, "a PowerShell symbolic link is not treated as a hard-link bypass");
+eq(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Target docs/README.md"), null, "a hard link between unprotected files is allowed");
 ok(checkDangerousCommand("rm -rf src"), "rm -rf src blocked");
 ok(checkDangerousCommand("rm -rf supabase"), "rm -rf supabase blocked");
 ok(checkDangerousCommand("git add file.txt .env"), "staging .env blocked");
