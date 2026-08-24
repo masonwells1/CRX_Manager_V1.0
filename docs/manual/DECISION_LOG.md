@@ -165,6 +165,60 @@ enforcement separately rather than hold the config behind it.
 
 ---
 
+## 2026-08-24 — Oversized migrations get a second door, not a second lock
+
+**Source:** Mason's in-chat approval, 2026-08-24, after the draw-down cutover half 2 could not be
+applied.
+
+**The problem.** `mcp__supabase__apply_migration` accepts `{project_id, name, query}` — a pasted
+string, no file path. `migration-apply-guard.mjs` binds the reviewer proof to
+`sha256(transmitted query)`, and `scripts/write-apply-proofs.mjs` pins that hash to the on-disk
+file (CRLF→LF normalized). Those two facts are good and stay: together they guarantee the SQL that
+runs is the SQL that was reviewed. But they made
+`20260816120000_draw_down_split_order_lines_by_price_tier.sql` — 162,022 bytes / 2,891 lines —
+**unappliable**. No single tool call re-emits that byte-exact, so the hash never matched. The
+migration was blocked by its own size, not by any review finding; both charters had returned CLEAN.
+
+Splitting it was not available: its preflight compares `pg_proc.xmin` on the barrier wrapper
+against its own transaction id and aborts with `DRAW_DOWN_CUTOVER_BARRIER_UNCOMMITTED` if the two
+halves share a transaction. The management-API direct-POST channel would have carried the bytes but
+bypasses the PreToolUse hook entirely — no ordering preflight, no reviewer proof, no Codex gate —
+and was deliberately not used.
+
+**Decision.** Move the apply rules into a shared module, `.claude/hooks/migration-apply-lib.mjs`,
+and give the file bytes their own gated caller, `scripts/apply-migration-file.mjs`. Both the
+PreToolUse hook and the script ask the identical `evaluateMigrationApply()` for a verdict. The
+transform of the existing checks is mechanical; block-message text is preserved verbatim and
+`migration-apply-guard.test.mjs` still passes unchanged at 86 assertions.
+
+**Operative rules.**
+
+1. **One rule book.** Never reimplement or copy the apply checks beside a caller. Two copies drift,
+   and the looser copy becomes the way in. A new caller imports `evaluateMigrationApply` or it does
+   not ship.
+2. **No ungated transmission path.** `apply-migration-file.mjs` must have no route to `fetch()`
+   that skips the gate, and a throw inside the rule book is a REFUSAL, never a pass. The
+   direct-POST management-API channel remains for read-only `BEGIN..ROLLBACK` proof bundles only —
+   do not reach for it to land a migration.
+3. **The door that applies is the door that refreshes.** The script writes the ledger row
+   `apply_migration` would have written (`statements` as ONE element, matching live rows) inside
+   the same transaction, then re-reads the ledger and refreshes `applied-migrations.json`. Skipping
+   either would leave the ordering preflight blind to the migration that just ran.
+4. **A dry run is the default.** `--confirm` is required to transmit, and passing the gate remains
+   a FLOOR, not authorization — an interactive session still needs Mason's explicit in-chat OK.
+5. **Migrations that manage their own transactions must not use this door.** The wrapper assumes no
+   `BEGIN`/`COMMIT` and nothing non-transactional (`CREATE INDEX CONCURRENTLY`, `VACUUM`); half 2
+   was checked for both before this path was built.
+
+**Verification standard applied.** The guard was mutation-tested, not just run green: each check
+was disabled in turn and the suite was required to go red. The first pass exposed a real weakness in
+the *tests* — disabling the missing-snapshot check still produced a refusal (the read threw and the
+catch failed closed), so a banner-only assertion stayed green while the check it named was gone.
+Assertions now pin the specific message per condition. `.claude/hooks/migration-apply-lib.test.mjs`
+is wired into `test:correction-guards`.
+
+---
+
 ## 2026-08-20 — The project no longer pins `autoCompactWindow`; the user-level value governs
 
 **Source:** Mason's in-chat decision, 2026-08-20, while setting up switchable context profiles.
