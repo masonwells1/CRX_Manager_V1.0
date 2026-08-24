@@ -93,6 +93,24 @@ Blend Recipes was never affected; it selects `*`.
 
 ## 2026-08-22 — The chemical-unit and job-money invariants move out of React and into `save_job` (parked)
 
+**Round 19 (2026-08-24) — one side of a comparison was measured differently from the other.**
+The rule that stops a powder being priced in fluid ounces trimmed the "per acre" part off the
+rate before checking it, but not off the stock unit. So writing the stock unit as `fl oz/ac`
+rather than `fl oz` slipped straight past — the check saw something it did not recognise, while
+the rest of the system still treated both sides as the same unit and billed a volume price on a
+product sold by weight. Both sides are now reduced the same way before they are compared.
+Checked across 21 spellings on the live database: every fluid-ounce form is refused, and every
+ordinary unit still works, including the per-acre forms and the near-miss "flour oz/ac".
+
+A smaller one alongside it: the "don't process this twice" key did not take account of who is
+recorded as having created the job. Retrying with a different person named would quietly reuse
+the earlier result and discard the new name. It now refuses instead of pretending it saved.
+
+That is the third defect in this file of the form "the system accepts it and silently discards
+what you actually asked for" — the most dangerous kind here, because nothing looks wrong.
+
+Still parked; nothing has been applied to live.
+
 **Round 18 (2026-08-24) — the rounding allowance was a percentage.** The check that the amount
 on a chemical line matches rate × acres allowed a tiny mismatch for rounding, which is sensible.
 But it was written as "one part per million", which *scales with the number*. On a small job that
@@ -347,7 +365,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Fifty-one behaviour tests pass; and twenty-seven mutation phases each fail in a **named** way — twenty-one
+Fifty-three behaviour tests pass; and twenty-nine mutation phases each fail in a **named** way — twenty-three
 turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -374,7 +392,7 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The fifty-one tests: all four live row shapes save with derived totals reproducing the live stored
+The fifty-three tests: all four live row shapes save with derived totals reproducing the live stored
 values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
 by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
 `T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate

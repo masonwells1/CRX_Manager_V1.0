@@ -65,7 +65,7 @@ const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30",
                   "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
                   "T40", "T41", "T42", "T43", "T44", "T45", "T46", "T47", "T48",
-                  "T49", "T50", "T51"];
+                  "T49", "T50", "T51", "T52", "T53"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -369,9 +369,13 @@ const MUTANTS = [
     // The fold is removed entirely: the raw lowercased unit must then BE 'floz' with no
     // separator at all, so even the plainest spelling 'fl oz' stops matching. T34 is the
     // plain both-sides dry line, so it is the test that must go red.
+    // (Anchor re-cut in round 19, when the fold gained its denominator-stripping wrapper.)
+    // Letting spaces survive the final fold is enough: the pattern is ANCHORED, so 'fl oz'
+    // stays 'fl oz' and no longer matches '^(fl|fluid)(oz|...)$'. T34, the plainest both-sides
+    // dry line, must go red.
     name: "separator folding removed from the dry fl-oz rule",
-    from: "regexp_replace(lower(COALESCE(raw_unit, '')), '[^a-z0-9]', '', 'g')",
-    to: "lower(COALESCE(raw_unit, ''))",
+    from: "                  '[^a-z0-9]', '', 'g')",
+    to: "                  '[^a-z0-9 ]', '', 'g')",
     expect: "T34",
   },
   {
@@ -381,9 +385,17 @@ const MUTANTS = [
     // That split is the evidence: it proves the LIST-FREE property specifically, which is the
     // only thing separating this round from four rounds that each got beaten by one more
     // character.
+    // ROUND 19 forced this mutant to narrow BOTH folds, and the reason is the same shape as
+    // the finiteness/tolerance pair: the denominator-stripping wrapper added its own
+    // list-free fold, which independently deletes Unicode separators. Narrowing only the
+    // outer fold left the inner one still closing the hole, so T45 stayed green and the
+    // prover correctly refused to score a detection it had not earned. Two independent folds
+    // now have to be narrowed before a Unicode separator can reach the money.
     name: "fold narrowed back to an ASCII separator list",
-    from: "'[^a-z0-9]', '', 'g')",
-    to: "'[[:space:].-]', '', 'g')",
+    edits: [
+      { from: "'[^a-z0-9/]+', ' ', 'g'", to: "'[[:space:].-]+', ' ', 'g'", all: true },
+      { from: "'[^a-z0-9]', '', 'g')", to: "'[[:space:].-]', '', 'g')" },
+    ],
     expect: "T45",
   },
   {
@@ -396,6 +408,26 @@ const MUTANTS = [
       { from: "<= 0.0001::numeric", to: "<= GREATEST(0.0001::numeric, abs(v_rate * v_acres) * 0.000001::numeric)", all: true },
     ],
     expect: "T50",
+  },
+  {
+    // Stops the fluid-ounce check stripping the denominator, so the stock side is tested in
+    // its raw form again and 'fl oz/ac' folds to 'flozac' and escapes. T52 must go red; T34
+    // ('fl oz' with no denominator) stays green, which is what isolates the STRIPPING rather
+    // than the concept match.
+    name: "denominator no longer stripped before the fluid-ounce check",
+    from: "                    split_part(\n" +
+          "                      btrim(regexp_replace(lower(COALESCE(raw_unit, '')), '[^a-z0-9/]+', ' ', 'g')),\n" +
+          "                      '/', 1),",
+    to: "                    btrim(regexp_replace(lower(COALESCE(raw_unit, '')), '[^a-z0-9/]+', ' ', 'g')),",
+    expect: "T52",
+  },
+  {
+    // Drops p_performed_by from the idempotency fingerprint, restoring the silent replay that
+    // discarded a changed audit identity. T53 must go red.
+    name: "audit identity dropped from the idempotency fingerprint",
+    from: "            'performed_by', p_performed_by,\n",
+    to: "",
+    expect: "T53",
   },
   {
     // Removes the separator fold from the denominator classifier, restoring the

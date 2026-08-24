@@ -1079,6 +1079,65 @@ EXCEPTION WHEN OTHERS THEN
   RAISE EXCEPTION 'T51 FAIL  the fixed tolerance is too tight and refused an ordinary rounding difference: %', SQLERRM;
 END $$;
 
+-- T52: THE PRICE SIDE WAS TESTED IN A DIFFERENT FORM FROM THE RATE SIDE (HIGH, gpt-5.6-sol
+-- 2026-08-24). The rate side reached the fluid-ounce check already stripped of its
+-- denominator (v_rate_base), but the stock side was passed in RAW -- so 'fl oz/ac' folded to
+-- 'flozac' and missed the anchored pattern entirely. normalize_rate_unit then collapsed BOTH
+-- sides to 'oz', the equality branch accepted the line, and authoritative money was derived
+-- from a VOLUME price on a weight product. The asymmetry was the whole defect: two sides of
+-- one comparison were being canonicalised differently.
+--
+-- 'fl oz/ac' still DENOTES fluid ounces; the denominator says per what, not what. Both sides
+-- are now reduced to the unit they name before the concept test runs. Must be REFUSED.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333396-3333-3333-3333-333333333397","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":100,"unit":"fl oz/ac","rate_per_acre":10,"rate_unit":"oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_UNIT_FORM_MISMATCH%' THEN
+    RAISE NOTICE 'T52 PASS  a fluid-ounce STOCK unit carrying a denominator is refused on a dry product: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T52 FAIL  a volume price unit reached the money on a dry product because only the rate side was stripped; refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
+-- T53: THE AUDIT IDENTITY WAS NOT BOUND TO THE KEY (MEDIUM, same gate). p_performed_by is
+-- written to jobs.created_by, and the actor check only refuses it when it is non-NULL AND
+-- disagrees with the caller -- so flipping it between NULL and the authenticated actor passes
+-- that check while changing what the row records. It was missing from the idempotency
+-- fingerprint, so a retry on the same key with a changed p_performed_by REPLAYED the earlier
+-- receipt and silently discarded the new audit identity. That is the identical silent-discard
+-- shape round 9 fixed for the payload; it was missed here because this parameter is not part
+-- of the payload. The second call must be REFUSED, not replayed.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  PERFORM save_job(NULL,
+    '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+    '[{"field_id":"33333398-3333-3333-3333-333333333399","acres_to_treat":10}]'::jsonb,
+    '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":100,"unit":"oz","rate_per_acre":10,"rate_unit":"oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+    NULL, 'K-PERFORMED-BY');
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333398-3333-3333-3333-333333333399","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000002","quantity":100,"unit":"oz","rate_per_acre":10,"rate_unit":"oz/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, 'K-PERFORMED-BY');
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN
+    RAISE NOTICE 'T53 PASS  changing the recorded audit identity on a spent key is refused rather than silently replayed: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T53 FAIL  a changed p_performed_by replayed the old receipt and discarded the new created_by; refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
 -- T37: THE BYPASS the round-11 half-fix left open, returned by the gate as a fresh HIGH. A DRY
 -- product with rate 'fl oz/ac' against a stock Unit of 'lb'. These do NOT normalise equal, so the
 -- equality shortcut -- the only thing round 10 guarded -- never runs. The line goes down the
@@ -1177,6 +1236,6 @@ DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 18 AND n_chem = 18 THEN RAISE NOTICE 'T8 PASS  18 jobs / 18 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
-  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 18/18)', n_jobs, n_chem; END IF;
+  IF n_jobs = 19 AND n_chem = 19 THEN RAISE NOTICE 'T8 PASS  19 jobs / 19 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
+  ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 19/19)', n_jobs, n_chem; END IF;
 END $$;

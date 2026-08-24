@@ -418,6 +418,17 @@ BEGIN
         convert_to(
           jsonb_build_object(
             'actor_id',   v_actor,
+            -- p_performed_by is fingerprinted SEPARATELY from v_actor because it is a
+            -- DIFFERENT input with a different effect: it is written to jobs.created_by at
+            -- the INSERT below, so it is the audit identity the row ends up carrying. Line
+            -- 337 only refuses it when it is non-NULL AND disagrees with the caller, so
+            -- flipping it between NULL and the authenticated actor passes that check while
+            -- changing what gets recorded. Omitted from the fingerprint, a retry on the same
+            -- key with a changed p_performed_by replayed the earlier receipt and silently
+            -- discarded the new audit identity -- the same silent-discard shape round 9
+            -- fixed for the payload, missed here because this parameter is not part of the
+            -- payload. Found by the gate on 2026-08-24 (MEDIUM).
+            'performed_by', p_performed_by,
             'job_id',     p_job_id,
             'job_payload', COALESCE(p_job_payload, '{}'::jsonb),
             'fields', (
@@ -829,7 +840,25 @@ BEGIN
        AND EXISTS (
          SELECT 1
            FROM unnest(ARRAY[v_rate_base, v_chem->>'unit']) AS raw_unit
-          WHERE regexp_replace(lower(COALESCE(raw_unit, '')), '[^a-z0-9]', '', 'g')
+          -- ANY DENOMINATOR IS STRIPPED FIRST, on BOTH sides. The rate side arrives already
+          -- stripped (v_rate_base), but the stock side was passed in RAW -- so a dry line
+          -- with rate_unit 'oz/ac' against a stock unit of 'fl oz/ac' folded to 'flozac',
+          -- missed the anchored pattern, and then normalise_rate_unit collapsed BOTH sides to
+          -- 'oz' anyway, so the equality branch accepted it and derived money from a volume
+          -- price on a weight product (HIGH, gpt-5.6-sol 2026-08-24). The asymmetry was the
+          -- whole defect: one side was being tested in a different form from the other.
+          --
+          -- 'fl oz/ac' still DENOTES fluid ounces -- the denominator says per what, not what.
+          -- So each side is reduced to the unit it names before the concept test runs: fold
+          -- separators (keeping '/' meaningful), drop everything from the first '/', drop a
+          -- spelled-out 'per ...' tail, then delete every remaining non-alphanumeric.
+          WHERE regexp_replace(
+                  regexp_replace(
+                    split_part(
+                      btrim(regexp_replace(lower(COALESCE(raw_unit, '')), '[^a-z0-9/]+', ' ', 'g')),
+                      '/', 1),
+                    '\s+per\s+.*$', ''),
+                  '[^a-z0-9]', '', 'g')
                 ~ '^(fl|fluid)(oz|ozs|ounce|ounces)$'
        ) THEN
       RAISE EXCEPTION
