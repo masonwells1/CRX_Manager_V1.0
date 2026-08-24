@@ -2414,6 +2414,14 @@ export const DANGEROUS_CMD_CHECKS = [
   [/\bgit\b[^\r\n;&|]*\brestore\b[^\r\n;&|]*\s(?:--\s+)?\.\s*(?:$|[;&|<>]|2>)/, "Blocked discard-all. Use targeted `git restore <file>`."],
   [/\bgit\b[^\r\n;&|]*\bclean\b[^\r\n;&|]*\s(?:--force\b|-[A-Za-z]*[fdx][A-Za-z]*\b)/, "Blocked `git clean -f`. Permanently deletes untracked files. Review with `git clean -n` first."],
   [/--no-verify\b/, "Blocked `--no-verify`. Pre-commit hooks prevent bugs — fix the underlying issue."],
+  // A hard link gives a protected file a second, innocuous-looking pathname
+  // that `realpath` cannot see through, so a later write to the alias edits the
+  // protected file itself. The MCP guard denies writes by file identity; this
+  // closes the creation route as well, so the alias never exists to be written
+  // (Codex CRX-SEC-01, 2026-08-23). Symbolic links stay allowed — `realpath`
+  // already resolves those back to the protected name.
+  [/\bmklink\b(?![^\r\n;&|]*\/[dDjJ]\b)[^\r\n;&|]*(?:\.claude[\\/](?:hooks[\\/][\w.-]+\.mjs|settings\.json)|supabase[\\/]migrations[\\/]|\.env\b|\.gitignore\b)/i, "Blocked hard-link alias of a protected file. A second pathname for the same file bypasses every path-based guard; edit the real path with the native tools instead."],
+  [/\bln\b(?![^\r\n;&|]*\s-[A-Za-z]*s)[^\r\n;&|]*(?:\.claude\/(?:hooks\/[\w.-]+\.mjs|settings\.json)|supabase\/migrations\/|\.env\b|\.gitignore\b)/, "Blocked hard-link alias of a protected file. A second pathname for the same file bypasses every path-based guard; edit the real path with the native tools instead."],
   [/\brm\s+-[A-Za-z]*r[A-Za-z]*f?[A-Za-z]*\s+(?:\.\.?\s*(?:$|;|&|\|)|\.\.?\/(?:src|supabase|docs)(?:\b|\/)|\/?(?:src|supabase|docs)(?:\b|\/))/, "Blocked recursive deletion of project source/migrations/docs."],
   // Long/split option spellings of the same recursive delete — `rm --recursive
   // --force src`, `rm -r --force src` (Codex P1 round 4, PR #352). A lookahead

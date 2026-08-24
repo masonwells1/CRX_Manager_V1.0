@@ -40,6 +40,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
+// Windows resolves a backslash-separated relative command; POSIX treats the
+// backslash as a literal filename character, so `scripts\x.bat` there names a
+// file that does not exist and the guard has nothing to classify. Exercise the
+// backslash spelling only where the platform actually resolves it, so these
+// assertions test the deny they name instead of a missing-path accident.
+const nativeCommandPath = (relative) => (process.platform === "win32" ? relative.replaceAll("/", "\\") : relative);
 function runHook(payload, cwd) {
   return spawnSync(process.execPath, [path.join(__dirname, "bash-safety.mjs")], {
     input: JSON.stringify(payload),
@@ -55,6 +61,18 @@ ok(checkDangerousCommand("git reset --hard HEAD~1"), "hard reset blocked");
 ok(checkDangerousCommand("git checkout ."), "discard-all checkout blocked");
 ok(checkDangerousCommand("git clean -fd"), "git clean -f blocked");
 ok(checkDangerousCommand("npm test -- --no-verify"), "--no-verify blocked");
+// Hard-link aliasing of a protected file (Codex CRX-SEC-01, 2026-08-23). The
+// alias gets an innocuous pathname for the same file data, so a later write
+// through it edits the protected file while every path pattern sees nothing.
+ok(checkDangerousCommand("mklink /H notes.mjs .claude\\hooks\\bash-safety-lib.mjs"), "mklink /H alias of a protected hook blocked");
+ok(checkDangerousCommand("mklink /h scratch\\x.json .claude\\settings.json"), "mklink /h alias of settings.json blocked");
+ok(checkDangerousCommand("ln .claude/hooks/mcp-tool-guard.mjs /tmp/alias.mjs"), "POSIX hard link to a protected hook blocked");
+ok(checkDangerousCommand("ln supabase/migrations/20260101000000_x.sql /tmp/m.sql"), "POSIX hard link to a migration blocked");
+// Symbolic links stay allowed: realpath resolves them back to the protected
+// name, so the existing path patterns already see through them.
+eq(checkDangerousCommand("ln -s .claude/hooks/mcp-tool-guard.mjs /tmp/alias.mjs"), null, "a symbolic link is not treated as a hard-link bypass");
+eq(checkDangerousCommand("mklink /D scratch\\hooks .claude\\hooks"), null, "a directory symlink is not treated as a hard-link bypass");
+eq(checkDangerousCommand("ln -s docs/README.md /tmp/readme.md"), null, "an ordinary symlink to an unprotected file is allowed");
 ok(checkDangerousCommand("rm -rf src"), "rm -rf src blocked");
 ok(checkDangerousCommand("rm -rf supabase"), "rm -rf supabase blocked");
 ok(checkDangerousCommand("git add file.txt .env"), "staging .env blocked");
@@ -387,7 +405,7 @@ for (const command of [
     eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor is allowed when HEAD is the reviewed main commit");
     eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor after -- is allowed on the reviewed main commit");
     eq(checkCommandDeep(`node --no-warnings ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed Node entrypoint remains available with an explicitly safe startup flag");
-    ok(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions)?.includes("not auditable JavaScript"), "a non-JavaScript wrapper is denied even when tracked because it can launch a mutable child runtime");
+    ok(checkCommandDeep(nativeCommandPath(trackedDirectRelative), integrityRepo, reviewOptions)?.includes("not auditable JavaScript"), "a non-JavaScript wrapper is denied even when tracked because it can launch a mutable child runtime");
     ok(checkCommandDeep(`node ${builtinEscapeRelative}`, integrityRepo, reviewOptions)?.includes("dynamic code or native-process escape"), "process.getBuiltinModule cannot bypass reviewed runtime closure");
     ok(checkCommandDeep(`node ${commentLoaderRelative}`, integrityRepo, reviewOptions)?.includes("ignored or untracked code"), "comment-separated dynamic imports cannot bypass reviewed runtime closure");
     eq(checkCommandDeep(`node ${importingWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed importer is allowed while its tracked dependency tree exactly matches HEAD");
@@ -410,10 +428,10 @@ for (const command of [
     }
     const priorNodeOptions = process.env.NODE_OPTIONS;
     process.env.NODE_OPTIONS = "--require=output/ignored-wrapper.mjs";
-    ok(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions)?.includes("inherited NODE_OPTIONS"), "an indirect tracked wrapper cannot inherit a Node preload");
+    ok(checkCommandDeep(nativeCommandPath(trackedDirectRelative), integrityRepo, reviewOptions)?.includes("inherited NODE_OPTIONS"), "an indirect tracked wrapper cannot inherit a Node preload");
     if (priorNodeOptions === undefined) delete process.env.NODE_OPTIONS;
     else process.env.NODE_OPTIONS = priorNodeOptions;
-    const indirectPreloadCommand = `NODE_OPTIONS=--require=output/ignored-wrapper.mjs ${trackedDirectRelative.replaceAll("/", "\\")}`;
+    const indirectPreloadCommand = `NODE_OPTIONS=--require=output/ignored-wrapper.mjs ${nativeCommandPath(trackedDirectRelative)}`;
     ok(checkCommandDeep(indirectPreloadCommand, integrityRepo, reviewOptions)?.includes("runtime preload/search-path mutation"), "a command-local Node preload cannot hide behind a tracked wrapper");
     const indirectPreloadHookResult = runHook({ tool_name: "Bash", tool_input: { command: indirectPreloadCommand } }, integrityRepo);
     ok(indirectPreloadHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies a command-local preload behind an indirect wrapper");
@@ -629,8 +647,8 @@ for (const command of [
     writeFileSync(trackedDirectPath, "@echo worktree-divergent direct wrapper\n");
     ok(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), "a worktree-divergent file-backed executor is denied");
     ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions), "a worktree-divergent file-backed executor after -- is denied");
-    ok(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions)?.includes("worktree bytes differ"), "a directly executed modified script is denied");
-    const divergentDirectHookResult = runHook({ tool_name: "Bash", tool_input: { command: trackedDirectRelative.replaceAll("/", "\\") } }, integrityRepo);
+    ok(checkCommandDeep(nativeCommandPath(trackedDirectRelative), integrityRepo, reviewOptions)?.includes("worktree bytes differ"), "a directly executed modified script is denied");
+    const divergentDirectHookResult = runHook({ tool_name: "Bash", tool_input: { command: nativeCommandPath(trackedDirectRelative) } }, integrityRepo);
     ok(divergentDirectHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denies a directly executed modified script");
     const divergentHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${trackedWrapperRelative}` } }, integrityRepo);
     ok(divergentHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook origin/main-binds a worktree-divergent executor after --");
@@ -643,7 +661,7 @@ for (const command of [
       eq(result.status, 0, `local-only malicious wrapper commit succeeds for the regression: git ${args[0]}`);
     }
     ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions)?.includes("fresh exact-SHA independent review proof"), "a local commit plus a moved local tracking ref cannot forge authoritative provenance");
-    ok(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions)?.includes("fresh exact-SHA independent review proof"), "a directly executed script from an unreviewed local HEAD is denied");
+    ok(checkCommandDeep(nativeCommandPath(trackedDirectRelative), integrityRepo, reviewOptions)?.includes("fresh exact-SHA independent review proof"), "a directly executed script from an unreviewed local HEAD is denied");
     const localCommitHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${trackedWrapperRelative}` } }, integrityRepo);
     ok(localCommitHookResult.stdout.includes("Blocked file-backed interpreter"), "the production Bash hook refuses a test environment local main substitution");
     const featureBranchGitShim = writeGitShim(integrityRepo, localGitShimMarker);

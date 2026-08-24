@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { chmodSync, existsSync, mkdtempSync, writeFileSync, mkdirSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdtempSync, writeFileSync, mkdirSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { checkCommandDeep, fixedTrustedGitExecutable, SECURITY_COMMAND_CHAR_BUDGET } from "./bash-safety-lib.mjs";
@@ -571,6 +571,36 @@ ok(isDeny(r), "DC write_file targeting .claude/settings.json is denied");
 
 r = runHook({ tool_name: "mcp__Desktop_Commander__edit_block", tool_input: { path: ".claude/hooks/bash-safety.mjs" } });
 ok(isDeny(r), "DC edit_block targeting a hook file is denied");
+
+// A hard link is a second directory entry for the SAME file data, so its
+// pathname is innocuous and `realpath` cannot see through it — writing to the
+// alias edits the protected hook. Identity (device + inode/file-ID) is what a
+// hard link cannot disguise (Codex CRX-SEC-01, 2026-08-23).
+{
+  const aliasDir = mkdtempSync(path.join(os.tmpdir(), "crx-hardlink-guard-"));
+  const protectedHook = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".claude", "hooks", "bash-safety-lib.mjs");
+  const aliasPath = path.join(aliasDir, "innocuous-notes.mjs");
+  const unrelatedPath = path.join(aliasDir, "unrelated.mjs");
+  writeFileSync(unrelatedPath, "// ordinary scratch file\n");
+  let linked = false;
+  try {
+    linkSync(protectedHook, aliasPath);
+    linked = true;
+  } catch {
+    // Cross-volume or permission-restricted environments cannot create the
+    // alias at all; the exploit this covers is impossible there.
+  }
+  if (linked) {
+    r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: aliasPath } });
+    ok(isDeny(r), "DC write_file through a hard-link alias of a protected hook is denied by file identity");
+    r = runHook({ tool_name: "mcp__Desktop_Commander__edit_block", tool_input: { path: aliasPath } });
+    ok(isDeny(r), "DC edit_block through a hard-link alias of a protected hook is denied by file identity");
+  }
+  // The identity check must not turn every temporary file into a protected one.
+  r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: unrelatedPath } });
+  eq(r.stdout.trim(), "", "an ordinary unlinked scratch file remains writable (identity check does not over-block)");
+  rmSync(aliasDir, { recursive: true, force: true });
+}
 
 r = runHook({ tool_name: "mcp__Desktop_Commander__move_file", tool_input: { destination: ".env.production" } });
 ok(isDeny(r), "DC move_file targeting .env.production is denied");

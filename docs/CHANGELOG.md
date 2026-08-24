@@ -83,6 +83,16 @@ Blend Recipes was never affected; it selects `*`.
   shells, or `node_modules` code outside exact-HEAD inspection. Bash and MCP
   regressions cover the demonstrated `config edit` and `explore` routes plus
   sibling option/config forms.
+- Protected-path matching now compares filesystem identity, not just pathname
+  shape. A hard link gave a protected hook, `settings.json`, migration, or
+  `.env` a second innocuous pathname that `realpath` cannot resolve away, so an
+  MCP write through the alias edited the real file with every pattern missing
+  it. MCP file targets are compared by device plus inode/file-ID against the
+  protected set, and `mklink /H` / non-symbolic `ln` routes at a protected path
+  are denied so the alias is never created. Symbolic links and junctions remain
+  allowed — canonicalization already resolves those. A real hard-link
+  regression covers the write, edit, and creation routes, and was mutation-
+  tested: without the identity check the alias write is allowed.
 - Exact-review Git operations are now defined against one fixed trusted Git
   executable and one minimal environment with global/system configuration,
   system attributes, replacement objects, prompts, and optional locks disabled.

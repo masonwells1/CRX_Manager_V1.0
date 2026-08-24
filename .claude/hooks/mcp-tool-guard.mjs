@@ -26,7 +26,7 @@
 // FAIL-OPEN, LOUD: any internal error here → allow, with a stderr warning. A
 // broken guard must never brick a session.
 
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import {
   checkCommandDeep,
@@ -76,6 +76,62 @@ const protectedProducerRepoPath = `scripts/${protectedProducerName}`;
 // this guard and its regressions; producer tracking state cannot reopen the
 // persistent-process or signal routes by itself.
 const protectedProducerRetired = false;
+
+// A hard link is NOT a link at the path level: it is a second directory entry
+// pointing at the same file data, so `realpath` returns the alias's own
+// pathname and every name-shaped check above sees an unprotected spelling.
+// `mklink /H alias .claude\hooks\bash-safety-lib.mjs` followed by a write to
+// `alias` would therefore edit a protected hook (Codex CRX-SEC-01, 2026-08-23).
+// Identity — device + inode/file-ID — is the property a hard link cannot
+// disguise, so compare that too whenever the target already exists.
+function fileIdentity(target) {
+  try {
+    const stat = statSync(target);
+    if (!stat.isFile()) return "";
+    // A filesystem that cannot report a real inode/file-ID (reported as 0)
+    // gives no identity signal; never let that read as "matches nothing".
+    if (!stat.ino) return "";
+    return `${stat.dev}:${stat.ino}`;
+  } catch {
+    return "";
+  }
+}
+
+function protectedFileIdentities(root) {
+  const identities = new Set();
+  const add = (candidate) => {
+    const identity = fileIdentity(candidate);
+    if (identity) identities.add(identity);
+  };
+  const addDirectory = (directory, matches) => {
+    let entries = [];
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !matches(entry.name)) continue;
+      add(path.join(directory, entry.name));
+    }
+  };
+  addDirectory(path.join(root, ".claude", "hooks"), (name) => /\.mjs$/i.test(name));
+  addDirectory(path.join(root, "supabase", "migrations"), (name) => /\.sql$/i.test(name));
+  addDirectory(root, (name) => /^\.env(\.[\w-]+)?$/i.test(name));
+  add(path.join(root, ".claude", "settings.json"));
+  add(path.join(root, "scripts", protectedProducerName));
+  add(path.join(root, ".gitignore"));
+  return identities;
+}
+
+// Only consulted when no name-shaped pattern matched, so the ordinary deny path
+// costs nothing extra. Unreadable protected files simply contribute no identity;
+// the name patterns above remain the primary boundary.
+function aliasesProtectedFile(absTarget, root) {
+  const identity = fileIdentity(absTarget);
+  if (!identity) return false;
+  return protectedFileIdentities(root).has(identity);
+}
 
 function canonicalizeThroughExistingAncestor(target) {
   const original = path.resolve(target);
@@ -181,7 +237,13 @@ try {
         /(^|\/)(scripts|supabase(\/migrations)?|\.claude(\/hooks)?)\/?$/i.test(s)
       );
 
-      if (isEnv || isSettings || isHookFile || isMigrationPath || isProtectedProducer || isGitExclusionControl || isProtectedDir) {
+      const matchedByName = isEnv || isSettings || isHookFile || isMigrationPath
+        || isProtectedProducer || isGitExclusionControl || isProtectedDir;
+      // Checked last, and only when every name-shaped pattern missed, so a
+      // hard-link alias cannot present an innocuous pathname for a protected file.
+      const matchedByIdentity = !matchedByName && aliasesProtectedFile(abs, cwd);
+
+      if (matchedByName || matchedByIdentity) {
         out(
           "block",
           `MCP TOOL GUARD (${toolName}): use the native Edit/Write tools so the guard hooks can inspect this change (protected path: ${targetRaw}).`
