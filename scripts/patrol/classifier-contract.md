@@ -87,7 +87,16 @@ not an assertion of readiness.
 | 5 | `loop.progressing` | ledger advancing | `WAITING_EXTERNAL` |
 | 6 | `loop.alive` | process alive, advance not yet observable | `WAITING_EXTERNAL` |
 | 7 | `loop.finished` | ledger marked complete, nothing claims to run | `IDLE` |
+| 7a | `loop.archived` | ledger untouched for over `LEDGER_ARCHIVED_MS` | `IDLE` |
 | 8 | `loop.fallback` | anything else | `INDETERMINATE` |
+
+`loop.archived` is decided before any process evidence. A ledger nobody has touched in a
+week is history sitting in `docs/loops/`, not a loop that just died; without this window
+the first live run put twelve ledgers from July in front of Mason as "stalled".
+
+A process is attributed to the **longest** worktree path it names, at a path boundary.
+The main checkout is a prefix of every nested worktree, so a bare substring test credits
+every nested process to the parent and marks all of the parent's ledgers as live.
 
 A dead or stalled loop is reported, never restarted — restarting is Mason's call after he sees
 what it was doing.

@@ -283,6 +283,10 @@ export function classifyLoop(loop) {
     return finalize(item({ ...base, rule: "loop.finished", disposition: "IDLE", severity: SEVERITY.info,
       reasons: ["complete; nothing claims to be running"] }));
   }
+  if (loop.state === "ARCHIVED") {
+    return finalize(item({ ...base, rule: "loop.archived", disposition: "IDLE", severity: SEVERITY.info,
+      reasons: ["ledger untouched for over a week — historical, not a loop that just died"] }));
+  }
   return finalize(item({ ...base, rule: "loop.fallback", disposition: "INDETERMINATE", severity: SEVERITY.normal,
     reasons: [`unrecognized loop state (${loop.state})`] }));
 }

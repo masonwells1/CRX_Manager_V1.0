@@ -42,11 +42,24 @@ needs Mason?" and is built so that its silence is trustworthy.
   worktrees into the fallback, and a cited "full queue" path that was never written.
   153 assertions pass, including a mutation set that flips each all-clear condition
   individually and asserts the phrase disappears every time.
-- **Declared v1 gaps:** loop liveness, parked-migration state, and review-gate health are
-  not implemented and report `INCOMPLETE`, which deliberately suppresses the all-clear.
-  The heartbeat is written on every completed scan, but the independent monitor that
-  alarms when it goes stale is **not built**, so a scheduled patrol is not yet a safety
-  net against its own silent death.
+- **Loop liveness, parked migrations, and gate health are implemented.** Parked discovery
+  reuses `.claude/hooks/worktree-awareness-lib.mjs` — the library `/fleet` composes — so
+  the two can never report different parked counts; when that library cannot determine a
+  worktree's parked state, patrol marks the source incomplete instead of reporting a clean
+  zero. The process probe fails **closed**: zero `powershell` rows in its own output means
+  the probe broke, never that nothing is running.
+- **A dead-man monitor now exists** (`patrol-monitor.mjs`), alarming when patrol's
+  heartbeat is missing, stale, malformed, or future-dated. It must run from the OS
+  scheduler rather than a Claude hook: an earlier design hung it on `SessionStart`, which
+  only fires when someone starts a session — no alarm in exactly the cases (machine
+  asleep, nobody working) it existed to catch. Registering the scheduled task changes
+  system settings and is Mason's to run; the command is in `.claude/commands/patrol.md`.
+- Three further defects were found only by running it, not by tests: both CLI entry points
+  never executed at all on Windows (a hand-built `file://C:/…` never equals Node's
+  `file:///C:/…`); the main checkout is a path prefix of every nested worktree, so a bare
+  substring match credited every nested process to the parent and reported twelve July
+  ledgers as "stalled"; and ledgers older than a week are now `ARCHIVED` rather than
+  presented as loops that just died.
 
 ## 2026-08-24 — Migration ordering review now matches the deterministic ledger guard
 

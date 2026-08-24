@@ -21,8 +21,9 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { MIN_STABLE_INTERVAL_MS, SNAPSHOT_TTL_MS } from "./patrol-classify.mjs";
+import { collectLoops, collectParkedMigrations, collectGateHealth } from "./patrol-sources.mjs";
 
 const SCHEMA_VERSION = 1;
 const CODERABBIT_CONTEXT = "CodeRabbit";
@@ -99,10 +100,12 @@ function coderabbitState(repo, headSha) {
     // Identity, not just a context name: another credential with status-write access
     // could otherwise post a lookalike status.
     const mine = statuses.filter((s) => s.context === CODERABBIT_CONTEXT && s.creator?.id === CODERABBIT_CREATOR_ID);
-    if (mine.length === 0) return "missing";
+    if (mine.length === 0) return { state: "missing", description: null };
     mine.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
-    return mine[0].state === "pending" ? "in_flight" : "complete";
-  } catch { return "missing"; }
+    // The description is how CodeRabbit announces a rate limit or a reached spend cap,
+    // which the gate-health source reads to tell "gate down" from "gate says no".
+    return { state: mine[0].state === "pending" ? "in_flight" : "complete", description: mine[0].description ?? null };
+  } catch { return { state: "missing", description: null }; }
 }
 
 // ── pull requests ───────────────────────────────────────────────────────────
@@ -150,6 +153,7 @@ function collectPullRequests(repo) {
     const { contexts, degraded } = requiredContexts(repo, "main");
     if (degraded) { src.status = "INCOMPLETE"; src.detail = degraded; }
 
+    const crDescriptions = [];
     const prs = readA.map((a) => {
       const b = byNumB.get(a.number);
       const r = rest.get(a.number);
@@ -158,6 +162,8 @@ function collectPullRequests(repo) {
         mergeable: p.mergeable, mergeStateStatus: p.mergeStateStatus, observedAt,
       });
       const lastHuman = lastHumanActivity(a, headCommit.get(a.number));
+      const cr = coderabbitState(repo, a.headRefOid);
+      if (cr.description) crDescriptions.push(cr.description);
       return {
         number: a.number, title: a.title, state: a.state, isDraft: a.isDraft,
         headRefName: a.headRefName, headRefOid: a.headRefOid,
@@ -169,7 +175,7 @@ function collectPullRequests(repo) {
         },
         parked: isParked(a),
         checks: checksVerdict(a.statusCheckRollup, contexts),
-        coderabbit: coderabbitState(repo, a.headRefOid),
+        coderabbit: cr.state,
         solProof: "unknown",       // v1 does not evaluate the proof registry
         requiresSolProof: false,   // so it never claims one is missing
         lastHumanActivityAt: lastHuman,
@@ -179,11 +185,11 @@ function collectPullRequests(repo) {
     src.expected = readA.length;
     src.received = prs.length;
     if (src.expected !== src.received) { src.status = "INCOMPLETE"; src.detail = "pull request count changed mid-scan"; }
-    return { src, prs };
+    return { src, prs, crDescriptions };
   } catch (e) {
     src.status = "ERROR";
     src.detail = String(e.message).slice(0, 200);
-    return { src, prs: [] };
+    return { src, prs: [], crDescriptions: [] };
   }
 }
 
@@ -230,26 +236,6 @@ function collectWorktrees(repoRoot, openPrBranches) {
   return { src, worktrees: out };
 }
 
-// ── loops ───────────────────────────────────────────────────────────────────
-// Not implemented in v1: judging a loop DEAD requires a process probe whose known
-// failure mode is failing OPEN ("nothing running") when the probe itself breaks. A
-// wrong "all your loops are fine" is exactly the lie patrol exists to prevent, so this
-// source declares itself incomplete rather than guessing.
-function collectLoops() {
-  return { src: { name: "loops", required: false, status: "INCOMPLETE", expected: null, received: 0,
-    detail: "loop liveness is not implemented in patrol v1 — run /fleet for the process probe" }, loops: [] };
-}
-
-function collectParkedMigrations() {
-  return { src: { name: "parkedMigrations", required: false, status: "INCOMPLETE", expected: null, received: 0,
-    detail: "parked-migration state is not implemented in patrol v1 — run /parked" }, parked: null };
-}
-
-function collectGateHealth() {
-  return { src: { name: "gateHealth", required: false, status: "INCOMPLETE", expected: null, received: 0,
-    detail: "review-gate health probes are not implemented in patrol v1" }, gates: [] };
-}
-
 // ── snapshot assembly ───────────────────────────────────────────────────────
 function collectorBuild() {
   try {
@@ -260,12 +246,12 @@ function collectorBuild() {
 }
 
 export function buildSnapshot({ repo, repoRoot, runId }) {
-  const { src: prSrc, prs } = collectPullRequests(repo);
+  const { src: prSrc, prs, crDescriptions } = collectPullRequests(repo);
   const openBranches = new Set(prs.map((p) => p.headRefName));
   const { src: wtSrc, worktrees } = collectWorktrees(repoRoot, openBranches);
-  const { src: loopSrc, loops } = collectLoops();
-  const { src: parkedSrc, parked } = collectParkedMigrations();
-  const { src: gateSrc, gates } = collectGateHealth();
+  const { src: loopSrc, loops } = collectLoops(repoRoot);
+  const { src: parkedSrc, parked } = collectParkedMigrations(repoRoot);
+  const { src: gateSrc, gates } = collectGateHealth(repoRoot, { coderabbitDescriptions: crDescriptions });
 
   const sources = [prSrc, wtSrc, loopSrc, parkedSrc, gateSrc];
   const generatedAt = new Date();
@@ -328,4 +314,7 @@ function main() {
   else process.stdout.write(`${JSON.stringify(snapshot)}\n`);
 }
 
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, "/")}`) main();
+// pathToFileURL, not string surgery: on Windows a hand-built `file://C:/...` has two
+// slashes where Node's import.meta.url has three, so the comparison silently never
+// matched and this CLI produced no output at all.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) main();

@@ -37,14 +37,35 @@ node scripts/patrol/patrol-report.mjs
   judgement call looks unblocked to patrol unless the hold is marked on GitHub itself —
   a `hold` / `parked` / `do-not-merge` label, or `PARKED` in the title. When Mason parks
   something, add the marker, or patrol will keep raising it.
-- **Not yet implemented in v1:** loop liveness, parked-migration state, and review-gate
-  health. These report as visible "could not determine" items and deliberately suppress the
-  all-clear. Use `/fleet` and `/parked` for those until they are built.
+- **Parked migrations come from the same library `/fleet` uses**, so the two never
+  disagree. When that library reports parked state as unknown for a worktree, patrol marks
+  the source incomplete rather than reporting a clean zero.
+- **It reports gates, it does not run them.** "Codex gate down" means reviews cannot run —
+  a different thing from a review finding problems.
 
-## Recurring use
+## Recurring use and the dead-man alarm
 
-To have it check on a schedule, run `/loop 30m /patrol`. Patrol writes a heartbeat to
-`%LOCALAPPDATA%\crx-patrol\heartbeat.json` on every completed scan; the independent monitor
-that alarms when that heartbeat goes stale is **not built yet**, so a silent death of the
-loop would currently go unnoticed. Do not describe a scheduled patrol as a safety net until
-that monitor exists.
+To have it check on a schedule, run `/loop 30m /patrol`.
+
+Patrol cannot report its own death: if the loop stops, the laptop sleeps, or auth expires,
+it just goes quiet — and quiet looks exactly like "nothing needs you". `patrol-monitor.mjs`
+is the independent check. It reads the heartbeat patrol writes on every **completed** scan
+and alarms when it is missing, stale, malformed, or future-dated.
+
+Check it any time:
+
+```bash
+node scripts/patrol/patrol-monitor.mjs
+```
+
+For it to work while nobody is at the machine it must run from the **OS scheduler**, not
+from an agent session — a session-triggered check cannot fire when no session starts, which
+is precisely the case it exists to catch. Registering a scheduled task changes system
+settings, so **Mason runs this himself**, once, in an elevated PowerShell:
+
+```powershell
+schtasks /Create /TN "CRX Patrol Monitor" /SC MINUTE /MO 60 /TR "node C:\CRX_Manager\scripts\patrol\patrol-monitor.mjs" /F
+```
+
+Until that task exists, a scheduled patrol is **not** a safety net — say so plainly rather
+than implying the queue is being watched.
