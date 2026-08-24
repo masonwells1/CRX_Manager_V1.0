@@ -56,6 +56,12 @@ All significant development milestones, in reverse chronological order.
   shells, or `node_modules` code outside exact-HEAD inspection. Bash and MCP
   regressions cover the demonstrated `config edit` and `explore` routes plus
   sibling option/config forms.
+- Exact-review Git operations are now defined against one fixed trusted Git
+  executable and one minimal environment with global/system configuration,
+  system attributes, replacement objects, prompts, and optional locks disabled.
+  Repository-local executable filters and attributes remain denied. Hostile
+  global attributes/process-filter regressions prove neither the Bash/MCP
+  bootstrap inspection nor proof-packet construction executes that code.
 - Bootstrap tree verification now compares the exact index and worktree bytes
   directly, without invoking Git's worktree conversion/filter pipeline. It
   rejects executable clean/smudge/process filters, external attribute files,

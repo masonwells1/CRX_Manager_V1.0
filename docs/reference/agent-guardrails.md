@@ -159,6 +159,13 @@ SHA while substituting a hostile wrapper tree.
 Every provenance read invokes Git through a fixed trusted installation path and
 a minimal sanitized environment. Repository-local and PATH-injected Git shims
 are planted in regressions and proven not to execute before trust is established.
+The proof wrapper uses that same fixed executable and minimal environment for
+repository discovery, clean-tree status, ref binding, tree/blob enumeration,
+candidate listing, and packet diffing. Global/system Git configuration and
+system attributes are disabled throughout, while repository-local executable
+filters/attribute overrides still fail closed. A hostile global attributes file
+plus process filter is planted in Bash, MCP, and packet-construction regressions
+and proven not to execute.
 After provenance succeeds, ordinary Node entrypoints receive a transitive static
 runtime-closure audit. Relative JavaScript dependencies must resolve to tracked
 exact-HEAD files; bare package imports, ignored or untracked dependencies,

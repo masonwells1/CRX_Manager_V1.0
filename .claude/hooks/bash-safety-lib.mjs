@@ -69,9 +69,10 @@ function bootstrapGitSafetyReason(root, gitExecutable, gitEnv) {
   if (!bareGit || !sameExecutablePath(bareGit, gitExecutable)) {
     return "bare Git does not resolve to the fixed trusted executable";
   }
+  // Inspect the exact configuration scope used by every trusted bootstrap Git
+  // call. Global/system config and system attributes stay disabled in gitEnv,
+  // so only repository-local settings can be effective here.
   const configInspectionEnv = { ...gitEnv };
-  delete configInspectionEnv.GIT_CONFIG_NOSYSTEM;
-  delete configInspectionEnv.GIT_CONFIG_GLOBAL;
   const readConfig = (key) => spawnSync(
     gitExecutable,
     ["-C", root, "--no-replace-objects", "config", "--includes", "--get-all", key],
@@ -87,14 +88,14 @@ function bootstrapGitSafetyReason(root, gitExecutable, gitEnv) {
   if (externalDiff.status === 0 && String(externalDiff.stdout || "").trim()) return "effective Git diff.external can execute code before review";
   const executableFilters = spawnSync(
     gitExecutable,
-    ["-C", root, "--no-replace-objects", "config", "--local", "--includes", "--get-regexp", "^filter\\..*\\.(clean|smudge|process)$"],
+    ["-C", root, "--no-replace-objects", "config", "--includes", "--get-regexp", "^filter\\..*\\.(clean|smudge|process)$"],
     { encoding: "utf8", windowsHide: true, timeout: 5_000, env: configInspectionEnv },
   );
   if (executableFilters.error || ![0, 1].includes(executableFilters.status)) return "effective Git executable filters could not be verified";
   if (executableFilters.status === 0 && String(executableFilters.stdout || "").trim()) return "effective Git filter clean, smudge, or process configuration can execute code before review";
   const attributesFile = spawnSync(
     gitExecutable,
-    ["-C", root, "--no-replace-objects", "config", "--local", "--includes", "--get-all", "core.attributesfile"],
+    ["-C", root, "--no-replace-objects", "config", "--includes", "--get-all", "core.attributesfile"],
     { encoding: "utf8", windowsHide: true, timeout: 5_000, env: configInspectionEnv },
   );
   if (attributesFile.error || ![0, 1].includes(attributesFile.status)) return "effective Git attributes override could not be verified";

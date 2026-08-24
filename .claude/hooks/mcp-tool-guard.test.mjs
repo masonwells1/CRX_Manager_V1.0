@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { chmodSync, existsSync, mkdtempSync, writeFileSync, mkdirSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { checkCommandDeep, SECURITY_COMMAND_CHAR_BUDGET } from "./bash-safety-lib.mjs";
+import { checkCommandDeep, fixedTrustedGitExecutable, SECURITY_COMMAND_CHAR_BUDGET } from "./bash-safety-lib.mjs";
 
 // npm injects its own config paths into child test processes. Clear all
 // runtime-startup controls so fixtures begin from the production hook's safe
@@ -748,6 +748,46 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: ["node", bootstrapRelative].join(" ") } }, tmp);
     ok(isDeny(r), "MCP start_process denies executable Git filters before bootstrap worktree verification");
     eq(spawnSync("git", ["config", "--unset-all", "filter.review.process"], { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true }).status, 0, "MCP hostile Git process filter removes");
+    const hostileGlobalGitHome = path.join(tmp, "output", "hostile-global-git-home");
+    const hostileGlobalAttributes = path.join(hostileGlobalGitHome, "attributes");
+    const hostileGlobalFilterMarker = path.join(hostileGlobalGitHome, "filter-ran.txt");
+    const hostileGlobalFilter = path.join(hostileGlobalGitHome, process.platform === "win32" ? "filter.cmd" : "filter.sh");
+    mkdirSync(hostileGlobalGitHome, { recursive: true });
+    writeFileSync(hostileGlobalAttributes, "* filter=review\n");
+    writeFileSync(hostileGlobalFilter, process.platform === "win32"
+      ? `@echo hostile>"${hostileGlobalFilterMarker}"\r\n@exit /b 1\r\n`
+      : `#!/bin/sh\nprintf hostile > '${hostileGlobalFilterMarker.replaceAll("'", "'\\''")}'\nexit 1\n`);
+    if (process.platform !== "win32") chmodSync(hostileGlobalFilter, 0o755);
+    writeFileSync(path.join(hostileGlobalGitHome, ".gitconfig"), [
+      "[core]",
+      `\tattributesfile = ${hostileGlobalAttributes.replaceAll("\\", "/")}`,
+      '[filter "review"]',
+      `\tprocess = ${hostileGlobalFilter.replaceAll("\\", "/")}`,
+      "",
+    ].join("\n"));
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    const originalBootstrapPath = process.env.PATH;
+    process.env.HOME = hostileGlobalGitHome;
+    process.env.USERPROFILE = hostileGlobalGitHome;
+    // This assertion isolates ONE variable: the hostile global Git configuration.
+    // Bare `git` must therefore resolve to the fixed trusted executable, or the
+    // bootstrap classifier denies on executable provenance instead and the
+    // hostile-config case is never actually exercised. Git for Windows ships a
+    // mingw64 `git.exe` that wins on the default PATH, so pin the trusted
+    // installation first for this block only — the same normalization
+    // bash-safety.test.mjs applies process-wide.
+    process.env.PATH = `${path.dirname(fixedTrustedGitExecutable())}${path.delimiter}${originalBootstrapPath || ""}`;
+    eq(checkCommandDeep(["node", bootstrapRelative].join(" "), tmp, reviewOptions), null, "MCP direct inspection treats hostile global attributes/filters as inert under sanitized Git config");
+    r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: ["node", bootstrapRelative].join(" ") } }, tmp);
+    ok(isDeny(r), "the production MCP hook still fails closed when the disposable fixture cannot prove canonical GitHub provenance");
+    ok(!existsSync(hostileGlobalFilterMarker), "the hostile global Git process filter never executes through the MCP bootstrap path");
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
+    if (originalBootstrapPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalBootstrapPath;
     ok(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), tmp, reviewOptions)?.includes("not auditable JavaScript"), "direct injection denies a tracked non-JavaScript wrapper");
     eq(checkCommandDeep(`node ${importingWrapperRelative}`, tmp, reviewOptions), null, "direct injection allows an importer whose tracked dependency tree matches reviewed HEAD");
     ok(checkCommandDeep(`node ${builtinEscapeRelative}`, tmp, reviewOptions)?.includes("dynamic code or native-process escape"), "direct injection denies process.getBuiltinModule runtime escape");

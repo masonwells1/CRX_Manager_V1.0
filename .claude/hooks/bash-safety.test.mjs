@@ -521,15 +521,27 @@ for (const command of [
     rmSync(infoAttributesPath, { force: true });
     const hostileGlobalHome = path.join(integrityRepo, "output", "hostile-git-home");
     mkdirSync(hostileGlobalHome, { recursive: true });
-    writeFileSync(path.join(hostileGlobalHome, ".gitconfig"), `[core]\n\tfsmonitor = ${hostileFsmonitor.replaceAll("\\", "/")}\n`);
+    const hostileGlobalAttributes = path.join(hostileGlobalHome, "attributes");
+    const hostileGlobalFilterMarker = path.join(hostileGlobalHome, "global-filter-ran.txt");
+    const hostileGlobalFilter = path.join(hostileGlobalHome, process.platform === "win32" ? "filter.cmd" : "filter.sh");
+    writeFileSync(hostileGlobalAttributes, "* filter=review\n");
+    writeFileSync(hostileGlobalFilter, process.platform === "win32"
+      ? `@echo hostile>"${hostileGlobalFilterMarker}"\r\n@exit /b 1\r\n`
+      : `#!/bin/sh\nprintf hostile > '${hostileGlobalFilterMarker.replaceAll("'", "'\\''")}'\nexit 1\n`);
+    if (process.platform !== "win32") chmodSync(hostileGlobalFilter, 0o755);
+    writeFileSync(path.join(hostileGlobalHome, ".gitconfig"), [
+      "[core]",
+      `\tattributesfile = ${hostileGlobalAttributes.replaceAll("\\", "/")}`,
+      '[filter "review"]',
+      `\tprocess = ${hostileGlobalFilter.replaceAll("\\", "/")}`,
+      "",
+    ].join("\n"));
     const originalHome = process.env.HOME;
     const originalUserProfile = process.env.USERPROFILE;
     process.env.HOME = hostileGlobalHome;
     process.env.USERPROFILE = hostileGlobalHome;
-    ok(
-      checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions)?.includes("core.fsmonitor"),
-      "the bootstrap is denied when effective global Git configuration can execute an fsmonitor hook",
-    );
+    eq(checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions), null, "global attributes and filter configuration is inert because trusted bootstrap Git disables global/system config");
+    ok(!existsSync(hostileGlobalFilterMarker), "the hostile global Git process filter never executes during bootstrap inspection");
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
     if (originalUserProfile === undefined) delete process.env.USERPROFILE;
