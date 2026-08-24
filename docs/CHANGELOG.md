@@ -57,7 +57,14 @@ belongs, and idempotency inspection stays fully armed.
   `total_acres`.
 - **A rate measured per anything but an acre is refused** (`CHEM_RATE_DENOMINATOR_NOT_ACRES`), in
   the slash form (`oz/cwt`), the spelled-out form (`oz per cwt`) and the hyphenated form
-  (`oz-per-cwt`). Testing only for a slash was a real hole Codex caught: a spelled-out denominator
+  (`oz-per-cwt`) — and in **stacked** forms such as `oz/cwt/ac` and `oz per cwt per acre`, which is
+  the sharpest version of this bug and the one the exact-SHA proof gate caught last. Asking "does
+  the rate unit *end in* a per-acre suffix?" accepts `oz/cwt/ac`, and the code that derives the unit
+  then takes everything before the *first* slash and throws `cwt` away — so the line became a plain
+  `oz`, matched a stock unit of `oz`, and saved: a per-hundredweight rate billed as if it were
+  per-acre. The rule is now written subtractively — strip one per-acre suffix, then refuse if any
+  denominator *survives* — which is strictly stronger and refuses nothing the old form accepted.
+  Testing only for a slash was a real hole Codex caught earlier: a spelled-out denominator
   whose `unit` carries the same text normalizes *equal*, so the row sailed through with a quantity
   already derived against a denominator that is not acres. The hyphen form was the same escape one
   separator away. The per-acre exclusion is plural-tolerant on both sides, so `gal per acres` still
@@ -136,7 +143,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Twenty-three behaviour tests pass; and thirteen mutation phases each fail in a **named** way — eight
+Twenty-five behaviour tests pass; and fourteen mutation phases each fail in a **named** way — nine
 turn a named behaviour test red, and five must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -163,12 +170,13 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The twenty-three tests: the two clean live row shapes save with derived totals reproducing the live
+The twenty-five tests: the two clean live row shapes save with derived totals reproducing the live
 stored values exactly, while the third — the one live row with a blank unit — is now **refused**, so
 the pre-apply data obligation is pinned by an executable test rather than by prose; a legitimate
 oz-rate/lb-price conversion saves; the 16x shape is refused *and* its remedy text is asserted to
 name both numbers the operator must re-enter; `oz/cwt`, `lb per cwt` and `lb-per-cwt` are all
-refused; `gal per acre`, `gal per acres`, `gal per ac` and `gal-per-acre` all still save; a `NaN`
+refused, as are the stacked `oz/cwt/ac` and `oz per cwt per acre`; `gal per acre`, `gal per acres`,
+`gal per ac` and `gal-per-acre` all still save; a `NaN`
 acreage no longer waves a mismatch through; a negative quantity is refused; a caller claiming totals
 of 1 cent still stores `187632` / `206395`; a billing line with a blank unit is refused in all three
 wordings (blank stock `unit`, blank rate unit, both blank) and a cost with no price is refused too,

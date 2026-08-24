@@ -4,7 +4,7 @@
 **Branch:** `claude/save-job-server-side-chem-unit` (worktree `.claude/worktrees/save-job-enforcement`)
 **Head:** `76731072`, **ahead 6, unpushed**. Tree clean.
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-**SQL sha256:** `42e5d9cf9f561938017d8756f54f10d6e1821fdbb04e7e57ba9ba6b72be7399f`
+**SQL sha256:** `1f337c98552f6a7ee69392441012e1bf19003b8fac464b299859c4892bd6c97f`
 **Status: PARTIAL — written, proven, and parked at two gates that are not mine to open.**
 
 ## Approval state — carries nothing forward
@@ -18,7 +18,7 @@
 Replaces the **body** of `public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text)` — identical signature, `CREATE OR REPLACE`, no new overload, ACL and owner preserved. Five changes:
 
 1. A chemical line whose units provably disagree is refused (`CHEM_UNIT_MISMATCH`), naming the product and both units.
-2. A rate measured per something other than acres is refused (`CHEM_RATE_DENOMINATOR_NOT_ACRES`) in the slash, spelled-out and hyphenated forms.
+2. A rate measured per something other than acres is refused (`CHEM_RATE_DENOMINATOR_NOT_ACRES`) in the slash, spelled-out and hyphenated forms — **and in stacked forms** such as `oz/cwt/ac`. The test is subtractive: strip one trailing per-acre suffix, then refuse if any denominator survives.
 3. A negative, `NaN` or `Infinity` quantity is refused (`CHEM_QUANTITY_NOT_FINITE`) before the unit comparison and regardless of its outcome.
 4. `total_cost_cents` / `total_price_cents` are **derived** from `p_chemicals` via `safe_cents_qty` and the caller-supplied totals are ignored — this is what makes a stale tab harmless.
 5. A line that actually bills but whose rate unit or stock `unit` is blank is refused (`CHEM_UNIT_UNSPECIFIED`). Three exemptions, all the same rule — a line that cannot bill cannot bill *wrongly*: `customer_supplied`, neither a cost nor a price, and quantity 0.
@@ -31,7 +31,7 @@ The live unit helpers (`normalize_rate_unit`, `field_app_priced_quantity`, `safe
 node scripts/smoke/prove-save-job-chem-unit-invariant.mjs
 ```
 
-PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **23 behaviour tests** pass; **13 mutation phases** each fail in a *named* way — 8 turn a named test red, 5 abort the apply with the specific postflight assertion written to catch them.
+PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **25 behaviour tests** pass; **14 mutation phases** each fail in a *named* way — 9 turn a named test red, 5 abort the apply with the specific postflight assertion written to catch them.
 
 `scripts/smoke/smoke-save-job-parity.sql` is the registered live chain and is **gated** on whether this migration is installed. The container prover is **manual** — `run-smoke.mjs --all` will not run it.
 
@@ -45,9 +45,11 @@ Re-run the exact four-term count immediately before applying and require **zero*
 
 ## Blocked, not forgotten
 
-**The Codex proof cannot be minted until 2026-08-26.** Codex credits are exhausted; `node scripts/write-codex-push-proof.mjs` exits 1 with a usage-limit message. This is a money/migration diff, so `.claude/hooks/codex-push-guard.mjs` blocks the push without a fresh HEAD-bound proof, and Mason chose (2026-08-23) to **wait** rather than buy credits. "No clean verdict yet" is **not** the same as "blockers found" — nothing has reviewed commits `bde3b6ae` onward from the Codex side at all.
+**Codex credits returned on 2026-08-24 and the gate has now run once — it returned BLOCKERS, and it was right.** `node scripts/write-codex-push-proof.mjs` refused to write a proof and captured the finding to `.claude/session-state/codex-review-latest.txt`; the stacked-denominator bug above came out of that run. It has been fixed and the container proof re-run green, so the proof must be **re-minted against the new HEAD** before any push.
 
-Sequence once credits return, in this order:
+One operational note worth keeping: the plain `codex review --base origin/main` form is a poor fit in this repo. A scope flag cannot carry a prompt, so Codex takes its direction from the repo instruction files — and those describe *how to run a review*, which it followed literally, reading `.claude/skills/codex-review/SKILL.md`, running a full `npm build`, compacting its own context and finally spawning a nested copy of itself. Twelve minutes of credits, no review. **Use the wrapper**, which carries a fixed prompt and produces the gate artifact in one run.
+
+Sequence, in this order:
 
 1. `node scripts/write-codex-push-proof.mjs` — never hand-write the JSON.
 2. Push the branch; **rewrite the PR #446 body** (it still describes the withdrawn two-migration design and carries a stale proof transcript).
@@ -60,7 +62,7 @@ Sequence once credits return, in this order:
 
 ## What review actually caught — read before trusting a "clean" round
 
-Seven rounds; **every** round found something real, including the ones that felt finished.
+Eight rounds; **every** round found something real, including the ones that felt finished.
 
 - **NaN acreage bypass (Codex P1).** PostgreSQL orders numeric `NaN` above every value and `NaN = NaN` is true, so `acres > 0` passed, the carried quantity came back `NaN`, and `NaN <= GREATEST(0.0001, NaN)` was true — waving a genuinely mismatched line through. Every operand on that path is now bounded to a finite range.
 - **Non-atomic pin.** An earlier design split the body pin into its own migration. Two separately ledgered migrations are not atomic: a committed pin plus a failed replacement leaves the next run free to overwrite an unvalidated body. Folded in-file.
@@ -68,6 +70,8 @@ Seven rounds; **every** round found something real, including the ones that felt
 - **The file asserted an ACL it never established.** It now `REVOKE`s from `PUBLIC` and `anon` and `GRANT`s to `authenticated, service_role` before asserting.
 - **A false refusal that blocks the whole job** (round 7, found independently by three reviewers): the zero-quantity skip sat *below* the blank-unit refusal, and that shape is reachable from the ordinary UI via `reconcileChemAutofillUnits`.
 - **The mutation phases found a defect no reviewer did** (round 7): the postflight tested `anon` before `PUBLIC`, and a grant to `PUBLIC` reaches every role — so a PUBLIC grant reported itself under the anon message, naming one role while every role was exposed. The broadest grant is now reported first. A mutant that "passes" under the wrong assertion proves nothing; the prover requires the *named* assertion.
+- **Stacked denominators bypassed the whole rule** (round 8, the exact-SHA `gpt-5.6-sol` proof gate, and the worst finding of the eight). The rule asked whether the rate unit *ends in* a per-acre suffix, so `oz/cwt/ac` satisfied it — and the unit derivation then took everything before the *first* slash and discarded `cwt`. The line became a plain `oz`, matched a stock unit of `oz`, and **saved**: a per-hundredweight rate billed as per-acre. Reproduced in the container before the fix (`T24`: `refused=f`). The lesson generalises — an *exclusion* list of good spellings is not the same as a *test* that nothing bad survives, and only the subtractive form is safe here.
+- **A latent defect in the prover itself**, found in the same pass: mutants were applied with `String.replace(from, to)`, and JavaScript reads `$&`, `` $` ``, `$'` and `$1` in a *string* replacement as substitution patterns. SQL regex literals here end in `$'` routinely, so such a mutant silently spliced the rest of the migration into itself and failed to install with a syntax error far from the edit — which reads as "the mutant is broken", not "the harness is broken". The replacement now goes through a function.
 
 ## Known residuals, stated not hidden
 

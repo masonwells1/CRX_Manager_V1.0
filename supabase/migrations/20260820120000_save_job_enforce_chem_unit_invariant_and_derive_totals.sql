@@ -259,6 +259,7 @@ DECLARE
   v_acres numeric;
   v_raw_rate_unit text;
   v_rate_base text;
+  v_denom_probe text;
   v_qty_unit text;
   v_price_unit text;
   v_qty numeric;
@@ -387,10 +388,27 @@ BEGIN
     -- Alternation is longest-first because PostgreSQL regexps are POSIX. 'per' must still
     -- appear as a whole word between separators, so a plain hyphenated unit such as
     -- 'fl-oz' is untouched.
+    -- STACKED denominators, and the reason this test is written subtractively rather than
+    -- as a set of exclusions. Codex found (BLOCKER, 2026-08-24) that asking "does the rate
+    -- unit END in a per-acre suffix?" and stopping there accepts 'oz/cwt/ac': it does end
+    -- in '/ac', so every exclusion above was satisfied, and the base derivation below then
+    -- took everything before the FIRST slash and silently discarded 'cwt'. The line
+    -- normalised to a plain 'oz', compared EQUAL to a stock unit of 'oz', and SAVED -- a
+    -- per-hundredweight rate billed as though it were per-acre, which is exactly the money
+    -- error this rule exists to stop. 'oz per cwt per acre' was the same hole one spelling
+    -- away. Reproduced in the container before the fix: T24 reported refused=f.
+    --
+    -- So: remove ONE trailing per-acre suffix, in either spelling, and then ask whether a
+    -- denominator separator SURVIVES that removal. Anything still carrying a '/' or a
+    -- whole-word 'per' is measured per something that is not acres, however many
+    -- denominators deep it is. This is strictly stronger than the exclusion form and
+    -- refuses nothing the exclusion form accepted: every legitimate spelling reduces to a
+    -- bare unit ('pt/ac' -> 'pt', 'gal-per-acre' -> 'gal'), and a hyphenated unit such as
+    -- 'fl-oz' carries no separator to survive. T24 and T25 pin both stacked forms.
+    v_denom_probe := regexp_replace(v_raw_rate_unit, '\s*/\s*(acres|acre|ac|a)\s*$', '');
+    v_denom_probe := regexp_replace(v_denom_probe, '[\s-]+per[\s-]+(acres|acre|ac|a)$', '');
     IF v_raw_rate_unit <> ''
-       AND v_raw_rate_unit !~ '\s*/\s*(acres|acre|ac|a)\s*$'
-       AND v_raw_rate_unit !~ '[\s-]+per[\s-]+(acres|acre|ac|a)$'
-       AND (position('/' IN v_raw_rate_unit) > 0 OR v_raw_rate_unit ~ '[\s-]+per[\s-]+') THEN
+       AND (position('/' IN v_denom_probe) > 0 OR v_denom_probe ~ '[\s-]+per[\s-]+') THEN
       SELECT p.product_name INTO v_product_name
         FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
       RAISE EXCEPTION

@@ -411,12 +411,54 @@ BEGIN
   ELSE RAISE EXCEPTION 'T23 FAIL  (refused=% msg=%)  -- the cost side of the rule is not enforced', ok, msg; END IF;
 END $$;
 
+-- T24: a STACKED denominator in the slash form. Found by Codex (BLOCKER, 2026-08-24) against
+-- the round-7 commits. The old rule asked whether the rate unit ENDS in a per-acre suffix and
+-- stopped there, so `oz/cwt/ac` satisfied it -- and the base derivation then took everything
+-- before the FIRST slash, silently discarding `cwt`. The line therefore normalised to plain
+-- `oz`, compared EQUAL to a stock unit of `oz`, and saved: a per-hundredweight rate billed as
+-- though it were per-acre. `unit` deliberately carries the matching text, so if the
+-- denominator rule does not fire there is nothing else left to catch it.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333333-3333-3333-3333-333333333337","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":10,"unit":"oz","rate_per_acre":16,"rate_unit":"oz/cwt/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_RATE_DENOMINATOR_NOT_ACRES%' THEN RAISE NOTICE 'T24 PASS  a stacked slash denominator is refused: %', msg;
+  ELSE RAISE EXCEPTION 'T24 FAIL  (refused=% msg=%)  -- oz/cwt/ac bypassed the denominator rule and billed per-acre', ok, msg; END IF;
+END $$;
+
+-- T25: the same bypass one spelling away -- a stacked denominator in the WORD form. The
+-- trailing ` per acre` satisfied the old rule and the stripper removed exactly that suffix,
+-- leaving `oz per cwt` to be compared against a stock unit carrying the same text. Asserting
+-- the SPECIFIC message matters here: a refusal with the wrong error name would mean the row
+-- was caught by the blank-unit rule downstream by luck, not by the denominator rule.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333333-3333-3333-3333-333333333337","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000004","quantity":10,"unit":"oz per cwt","rate_per_acre":16,"rate_unit":"oz per cwt per acre","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_RATE_DENOMINATOR_NOT_ACRES%' THEN RAISE NOTICE 'T25 PASS  a stacked word denominator is refused: %', msg;
+  ELSE RAISE EXCEPTION 'T25 FAIL  (refused=% msg=%)  -- "oz per cwt per acre" bypassed the denominator rule', ok, msg; END IF;
+END $$;
+
 -- T8: every refused save must have left NOTHING behind.
 DO $$
 DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 11 AND n_chem = 11 THEN RAISE NOTICE 'T8 PASS  11 jobs / 11 chemical rows -- the 11 refused saves wrote nothing';
+  IF n_jobs = 11 AND n_chem = 11 THEN RAISE NOTICE 'T8 PASS  11 jobs / 11 chemical rows -- the 13 refused saves wrote nothing';
   ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 11/11)', n_jobs, n_chem; END IF;
 END $$;

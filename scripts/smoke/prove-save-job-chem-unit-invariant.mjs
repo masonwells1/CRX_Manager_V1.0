@@ -55,7 +55,7 @@ const TESTS = join(HERE, "fixtures", "save-job-chem-unit-tests.sql");
 
 const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19",
-                  "T20", "T21", "T22", "T23"];
+                  "T20", "T21", "T22", "T23", "T24", "T25"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -307,7 +307,7 @@ const MUTANTS = [
   },
   {
     name: "spelled-out and hyphenated denominator rule removed",
-    from: " OR v_raw_rate_unit ~ '[\\s-]+per[\\s-]+'",
+    from: " OR v_denom_probe ~ '[\\s-]+per[\\s-]+'",
     to: "",
     expect: "T9",
   },
@@ -397,6 +397,23 @@ const MUTANTS = [
     ],
     expect: "T20",
   },
+  {
+    // Codex's BLOCKER (2026-08-24), reproduced as a mutant: revert the subtractive probe to
+    // the old "does it END in a per-acre suffix" exclusion form. That form accepts a STACKED
+    // denominator -- oz/cwt/ac ends in /ac, so every exclusion is satisfied, and the base
+    // derivation then discards cwt. Without this mutant the tightening is asserted only by a
+    // comment.
+    name: "denominator rule reverted to the end-with-per-acre exclusion form",
+    from:
+      "    IF v_raw_rate_unit <> ''\n" +
+      "       AND (position('/' IN v_denom_probe) > 0 OR v_denom_probe ~ '[\\s-]+per[\\s-]+') THEN",
+    to:
+      "    IF v_raw_rate_unit <> ''\n" +
+      "       AND v_raw_rate_unit !~ '\\s*/\\s*(acres|acre|ac|a)\\s*$'\n" +
+      "       AND v_raw_rate_unit !~ '[\\s-]+per[\\s-]+(acres|acre|ac|a)$'\n" +
+      "       AND (position('/' IN v_raw_rate_unit) > 0 OR v_raw_rate_unit ~ '[\\s-]+per[\\s-]+') THEN",
+    expect: "T24",
+  },
 ];
 
 for (const m of MUTANTS) {
@@ -409,7 +426,14 @@ for (const m of MUTANTS) {
     if (!mutated.includes(e.from)) {
       fail(`mutation "${m.name}" could not find its anchor -- the prover is stale relative to the migration`);
     }
-    mutated = mutated.replace(e.from, e.to);
+    // The replacement MUST go through a function. String.replace treats $&, $`, $' and $1
+    // in a string replacement as substitution patterns, and SQL regex literals here end in
+    // `$'` all the time -- e.g. '\s*/\s*(acres|acre|ac|a)\s*$'. Passed as a plain string
+    // that silently splices the whole remainder of the migration into the mutant, which
+    // then fails to install with a syntax error hundreds of lines away from the edit. A
+    // function replacement is taken verbatim. Found while adding the stacked-denominator
+    // mutant; every mutant whose `to` contains a dollar sign depended on this.
+    mutated = mutated.replace(e.from, () => e.to);
   }
   const p = join(scratch, "mutant.sql");
   writeFileSync(p, mutated, "utf8");
