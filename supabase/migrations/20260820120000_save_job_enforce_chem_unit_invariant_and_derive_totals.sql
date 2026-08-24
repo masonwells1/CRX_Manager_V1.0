@@ -543,8 +543,19 @@ BEGIN
     -- refuses nothing the exclusion form accepted: every legitimate spelling reduces to a
     -- bare unit ('pt/ac' -> 'pt', 'gal-per-acre' -> 'gal'), and a hyphenated unit such as
     -- 'fl-oz' carries no separator to survive. T24 and T25 pin both stacked forms.
+    -- EXACTLY ONE suffix comes off, and the IF is what makes that true. Running both
+    -- regexes unconditionally strips TWO, which was a BLOCKER the exact-SHA gpt-5.6-sol
+    -- gate found on 2026-08-24: 'oz per acre/ac' lost '/ac' to the first pattern and
+    -- ' per acre' to the second, the probe came back a bare 'oz' with no denominator
+    -- left to catch, and a rate of oz per acre PER ACRE normalised to 'oz', matched a
+    -- stock unit of 'oz' and was BILLED. 'oz-per-acre/ac' was the same hole one
+    -- separator away. The stacked-denominator rule the round before was written to
+    -- close only holds if the strip is singular -- 'remove one, refuse whatever
+    -- survives' is not the same rule as 'remove every spelling, then look'.
     v_denom_probe := regexp_replace(v_raw_rate_unit, '\s*/\s*(acres|acre|ac|a)\s*$', '');
-    v_denom_probe := regexp_replace(v_denom_probe, '[\s-]+per[\s-]+(acres|acre|ac|a)$', '');
+    IF v_denom_probe = v_raw_rate_unit THEN
+      v_denom_probe := regexp_replace(v_denom_probe, '[\s-]+per[\s-]+(acres|acre|ac|a)$', '');
+    END IF;
     IF v_raw_rate_unit <> ''
        AND (position('/' IN v_denom_probe) > 0 OR v_denom_probe ~ '[\s-]+per[\s-]+') THEN
       SELECT p.product_name INTO v_product_name
@@ -558,7 +569,12 @@ BEGIN
     -- baseUnitOfRate: take everything before the first '/', then drop a spelled-out
     -- ' per acre'. normalize_rate_unit then canonicalises synonyms (lbs -> lb, gl -> gal).
     v_rate_base := btrim(split_part(v_raw_rate_unit, '/', 1));
-    -- Kept character-for-character identical to the exclusion above. If the two ever
+    -- The per-acre STRIPPER below stays character-for-character identical to the word-form
+    -- pattern used in the probe above -- what deliberately differs is only that the probe
+    -- takes ONE suffix while this takes a split_part plus one strip. That is sound because
+    -- anything reaching here has already been PROVED to carry at most one per-acre
+    -- denominator in one spelling; a stacked or mixed form was refused above and never
+    -- arrives. If the two patterns ever
     -- disagree, a rate unit can be excluded from the non-acre refusal and then NOT
     -- stripped, so it reaches normalize_rate_unit whole, comes back unrecognised, and the
     -- line is refused by the unit comparison instead -- a refusal with the wrong message.

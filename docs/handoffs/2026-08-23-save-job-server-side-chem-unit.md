@@ -2,9 +2,9 @@
 
 **Date:** 2026-08-23
 **Branch:** `claude/save-job-server-side-chem-unit` (worktree `.claude/worktrees/save-job-enforcement`)
-**Head:** see `git log -1` — round 10 landed on 2026-08-24; **unpushed**. Tree clean.
+**Head:** see `git log -1` — round 11 landed on 2026-08-24; **unpushed**. Tree clean.
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-**SQL sha256:** `e52c3d8165ed76e014836e59c27cc89679a19478a1ea0af598e4faaf28cb0765`
+**SQL sha256:** `31a6ff698f8041ee72ce6b0b5646d3c56f1d88ba3f079cff4beefd25590f3db4`
 **Status: PARTIAL — written, proven, and parked at two gates that are not mine to open.**
 
 ## Approval state — carries nothing forward
@@ -34,7 +34,7 @@ The live unit helpers (`normalize_rate_unit`, `field_app_priced_quantity`, `safe
 node scripts/smoke/prove-save-job-chem-unit-invariant.mjs
 ```
 
-PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **34 behaviour tests** pass; **18 mutation phases** each fail in a *named* way — 12 turn a named test red, 6 abort the apply with the specific preflight/postflight assertion written to catch them.
+PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **36 behaviour tests** pass; **19 mutation phases** each fail in a *named* way — 13 turn a named test red, 6 abort the apply with the specific preflight/postflight assertion written to catch them.
 
 `scripts/smoke/smoke-save-job-parity.sql` is the registered live chain and is **gated** on whether this migration is installed. The container prover is **manual** — `run-smoke.mjs --all` will not run it.
 
@@ -66,7 +66,7 @@ Sequence, in this order:
 
 ## What review actually caught — read before trusting a "clean" round
 
-Ten rounds; **every** round found something real, including the ones that felt finished.
+Eleven rounds; **every** round found something real, including the ones that felt finished.
 
 - **NaN acreage bypass (Codex P1).** PostgreSQL orders numeric `NaN` above every value and `NaN = NaN` is true, so `acres > 0` passed, the carried quantity came back `NaN`, and `NaN <= GREATEST(0.0001, NaN)` was true — waving a genuinely mismatched line through. Every operand on that path is now bounded to a finite range.
 - **Non-atomic pin.** An earlier design split the body pin into its own migration. Two separately ledgered migrations are not atomic: a committed pin plus a failed replacement leaves the next run free to overwrite an unvalidated body. Folded in-file.
@@ -81,6 +81,8 @@ Ten rounds; **every** round found something real, including the ones that felt f
 
 - **Fluid ounces could be billed as dry ounces** (round 10, the proof gate again, and the worst finding since the stacked denominators). `normalize_rate_unit` collapses `fl oz` to `oz` form-blind, and the equality shortcut ran *before* the `product_form` lookup — so a dry product with a `fl oz/ac` rate against an `oz` stock unit compared equal and billed with nothing proven, while `field_app_priced_quantity` refuses that pair as not convertible. The guard was more lenient than the SQL that bills. An earlier round had cleared this same alias — correctly for liquids, and it never checked dry. Fixed by moving the form lookup above the shortcut and adding a narrow `CHEM_UNIT_FORM_MISMATCH`; `T33`/`T34` exist to prove the rule does not over-fire, because the wide form of it would refuse a liquid product priced in pounds and block whole jobs.
 - **Two findings from the gate were rejected on evidence** (stale base): it reported this branch rolls back the `codex-review` skill hardening and deletes the draw-tier prover. The proof wrapper diffs a snapshot of `origin/main` against a snapshot of HEAD — a two-dot comparison — so everything `main` gained since the merge base reads as a rollback. `git diff origin/main...HEAD` is **empty** for every file named. Merging current `origin/main` made both disappear. Worth knowing before believing the next "regression" this gate reports.
+
+- **The stacked-denominator rule was reopened** (round 11, the gate again). Round 8 stated the rule as "strip exactly one trailing per-acre suffix, then refuse if any denominator survives" and then implemented **two** unconditional strips. So `oz per acre/ac` — one denominator in each spelling — lost both, came back a bare `oz`, and billed a per-acre-**squared** rate as per-acre. The lesson is narrow and reusable: *remove one and refuse what survives* is not the same rule as *remove every spelling and then look*, and only the first is safe. The second strip is now conditional on the first not firing; `T35`/`T36` pin both spellings. Also fixed from that verdict: the prover force-removed a **fixed-name** Docker container before proving it owned it, which could destroy a developer's unrelated container. Unique name per run plus a `crx.prover` label now.
 
 ## Known residuals, stated not hidden
 

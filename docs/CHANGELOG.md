@@ -243,7 +243,7 @@ reviewed body it applies and its postflight passes. Re-applying is safe, and the
 deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
 marker only suppresses the drift error while the replacement, the grants and the postflight all
 still run; the prover fingerprints the function before and after a replay and requires them equal.
-Thirty-four behaviour tests pass; and eighteen mutation phases each fail in a **named** way — twelve
+Thirty-six behaviour tests pass; and nineteen mutation phases each fail in a **named** way — thirteen
 turn a named behaviour test red, and six must abort the apply with the specific security assertion
 that exists to catch them.
 
@@ -270,7 +270,7 @@ standing. Both are fixed — the mutant now removes both bounds together. A test
 against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
 nothing at all.
 
-The thirty-four tests: all four live row shapes save with derived totals reproducing the live stored
+The thirty-six tests: all four live row shapes save with derived totals reproducing the live stored
 values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
 by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
 `T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate
@@ -358,6 +358,20 @@ product priced in pounds, and one refused line blocks the entire job.
 No live product is in that shape today — the 85 dry products use `dry oz`, `lb`, `mg` and `oz` — but
 the units being compared arrive in the request, not from the product catalog, and any logged-in user
 can call this function directly, which is the whole reason it exists.
+
+**The rule against rates measured per something other than an acre was reopened, and the reason is
+worth keeping.** It was stated correctly — strip one trailing "per acre" off the end, then refuse if
+any other denominator is still there — and then written to strip *every* spelling of "per acre"
+before looking. Those are different rules. A rate written `oz per acre/ac` carries the denominator
+twice, once in each spelling; both were stripped, nothing was left to object to, and a rate that is
+really "per acre per acre" was billed as an ordinary per-acre rate. Now exactly one comes off, and
+whatever survives is refused. Two new tests pin both spellings, and a mutant that puts the old
+behaviour back turns the first of them red by name.
+
+One more fix from the same review, unrelated to money: the proof script force-deleted a Docker
+container by a fixed name before checking the container was its own, so it could have destroyed an
+unrelated container on a developer's machine that happened to share the name. Each run now uses its
+own name and labels what it creates, and only ever removes containers carrying that label.
 
 No frontend change, and there is no client-side warning to fall back on: until PR #436 lands, this
 refusal is the operator's first indication that anything is wrong. **Parked: not applied to

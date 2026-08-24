@@ -43,7 +43,14 @@ import { tmpdir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..");
-const CONTAINER = "crx-prove-save-job-chem-unit";
+// The container name is UNIQUE PER RUN and every container this prover starts carries
+// OWNER_LABEL. cleanup() then force-removes only a name this process generated, never a
+// fixed name a developer's own container might also be using -- 'docker rm -f' on a
+// shared constant is a destructive action aimed at something you have not proved you own.
+// Raised by the exact-SHA gpt-5.6-sol gate, 2026-08-24.
+const RUN_ID = `${process.pid.toString(36)}${Date.now().toString(36)}`;
+const CONTAINER = `crx-prove-save-job-chem-unit-${RUN_ID}`;
+const OWNER_LABEL = "crx.prover=save-job-chem-unit";
 const IMAGE = "postgres:17";
 
 const MIGRATION = join(REPO, "supabase", "migrations",
@@ -56,7 +63,7 @@ const TESTS = join(HERE, "fixtures", "save-job-chem-unit-tests.sql");
 const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18", "T19",
                   "T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30",
-                  "T31", "T32", "T33", "T34"];
+                  "T31", "T32", "T33", "T34", "T35", "T36"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -99,6 +106,17 @@ function copyIn(localPath, containerPath) {
 
 function cleanup() {
   try { docker(["rm", "-f", CONTAINER], { stdio: "ignore" }); } catch { /* not running */ }
+}
+
+/** Reap containers left behind by a PREVIOUS run of THIS prover that was killed before it
+ * could clean up. Filtering on our own label is what keeps this safe: an unrelated
+ * container cannot carry it, so nothing outside this prover is ever a candidate. */
+function reapStale() {
+  let ids = "";
+  try { ids = docker(["ps", "-aq", "--filter", `label=${OWNER_LABEL}`]); } catch { return; }
+  for (const id of ids.split("\n").map((x) => x.trim()).filter(Boolean)) {
+    try { docker(["rm", "-f", id], { stdio: "ignore" }); } catch { /* already gone */ }
+  }
 }
 
 function fail(msg, detail) {
@@ -159,7 +177,9 @@ catch { fail("Docker is not available. This proof needs a throwaway PostgreSQL 1
 
 cleanup();
 log(`Starting ${IMAGE} (throwaway container ${CONTAINER})...`);
-docker(["run", "-d", "--name", CONTAINER, "-e", "POSTGRES_PASSWORD=proveonly", IMAGE]);
+reapStale();
+docker(["run", "-d", "--name", CONTAINER, "--label", OWNER_LABEL,
+        "-e", "POSTGRES_PASSWORD=proveonly", IMAGE]);
 
 // Wait for readiness by polling pg_isready rather than sleeping a guessed interval.
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -314,6 +334,14 @@ const MUTANTS = [
     from: "      v_total_cost_cents,\n",
     to: "      COALESCE((p_job_payload->>'total_cost_cents')::bigint, 0),\n",
     expect: "T6",
+  },
+  {
+    // Reverting the single-strip guard to two unconditional strips restores the exact
+    // 'oz per acre/ac' bypass. T35 must go red by name.
+    name: "per-acre strip reverted to two unconditional passes",
+    from: "    IF v_denom_probe = v_raw_rate_unit THEN\n",
+    to: "    IF true THEN\n",
+    expect: "T35",
   },
   {
     name: "spelled-out and hyphenated denominator rule removed",

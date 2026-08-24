@@ -718,6 +718,50 @@ EXCEPTION WHEN OTHERS THEN
   RAISE EXCEPTION 'T34 FAIL  an identically-spelled dry fl-oz line was REFUSED, so the new rule is matching on the unit rather than on the alias: %', SQLERRM;
 END $$;
 
+-- T35: the MIXED-format stacked denominator, and the BLOCKER the exact-SHA gpt-5.6-sol gate
+-- found on 2026-08-24. 'oz per acre/ac' is oz per acre PER ACRE -- two denominators, one in each
+-- spelling. The probe stripped BOTH (the slash pattern took '/ac', the word pattern then took
+-- ' per acre'), so it came back a bare 'oz' with no denominator left to catch, normalised to 'oz',
+-- matched a stock unit of 'oz' and BILLED. The round-8 subtractive rule only holds if exactly ONE
+-- suffix comes off: "remove one, refuse what survives" is a different rule from "remove every
+-- spelling, then look". Must be REFUSED.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333358-3333-3333-3333-333333333359","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000003","quantity":100,"unit":"oz","rate_per_acre":10,"rate_unit":"oz per acre/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_RATE_DENOMINATOR_NOT_ACRES%' THEN
+    RAISE NOTICE 'T35 PASS  the mixed-format stacked denominator is refused: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T35 FAIL  refused=% msg=%  -- two per-acre suffixes are still being stripped, so a per-acre-squared rate bills', ok, msg;
+  END IF;
+END $$;
+
+-- T36: the same hole one separator away -- the hyphenated word form stacked on the slash form.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333360-3333-3333-3333-333333333361","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000003","quantity":100,"unit":"oz","rate_per_acre":10,"rate_unit":"oz-per-acre/ac","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_RATE_DENOMINATOR_NOT_ACRES%' THEN
+    RAISE NOTICE 'T36 PASS  the hyphenated mixed-format stack is refused too: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T36 FAIL  refused=% msg=%', ok, msg;
+  END IF;
+END $$;
+
 -- T8: every refused save must have left NOTHING behind.
 DO $$
 DECLARE n_jobs int; n_chem int;
