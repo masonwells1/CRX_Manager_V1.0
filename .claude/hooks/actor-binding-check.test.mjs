@@ -2276,6 +2276,31 @@ ok(!isDeny(r), "the current-August stable v_actor refusal remains compatible");
 
 r = runHook(fn(`
   DECLARE
+    v_actor uuid := auth.uid() OPERATOR(public.##) p_target;
+  BEGIN
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`, "p_performed_by uuid, p_target uuid"));
+ok(isDeny(r), "a declaration initializer must bind the local to exactly auth.uid()");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid;
+  BEGIN
+    v_actor := auth.uid() OPERATOR(public.##) p_target;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`, "p_performed_by uuid, p_target uuid"));
+ok(isDeny(r), "a later assignment must bind the local to exactly auth.uid()");
+
+r = runHook(fn(`
+  DECLARE
     v_actor uuid := auth.uid();
   BEGIN
     IF p_performed_by IS NOT NULL AND p_performed_by <> v_actor THEN

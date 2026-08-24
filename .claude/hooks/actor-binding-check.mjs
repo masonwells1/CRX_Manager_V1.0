@@ -1304,7 +1304,7 @@ function stableAuthUidBindings(structuralBody, beforeIndex) {
   const bindingRe = new RegExp(
     `(?:^|[;\\n]|\\bDECLARE\\b)\\s*` +
       `(?!(?:DECLARE|BEGIN|IF|THEN|ELSE|LOOP|CASE|END)\\b)([A-Za-z_][\\w$]*)` +
-      `(?:\\s+[^;\\n:=]+?)?\\s*:=\\s*auth\\s*\\.\\s*uid\\s*\\(\\s*\\)`,
+      `(?:\\s+[^;\\n:=]+?)?\\s*:=\\s*auth\\s*\\.\\s*uid\\s*\\(\\s*\\)\\s*;`,
     "gi"
   );
   let match;

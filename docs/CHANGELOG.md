@@ -545,6 +545,12 @@ ordinary/E/U&/dollar fake-guard, nested-comment, and safe-refusal controls run
 in disposable PostgreSQL 17; each type, position, and lexer guard was removed
 in turn and its exact regression failed.
 
+The following exact-head review found that the write-time hook accepted a local
+assignment whose expression merely started with `auth.uid()`, allowing a
+trailing operator to replace the trusted identity. Declaration initializers and
+later assignments must now end immediately after the exact `auth.uid()` call;
+both forged forms are pinned, bringing the focused suite to 440 assertions.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —
