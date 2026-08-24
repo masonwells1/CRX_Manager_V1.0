@@ -1,4 +1,7 @@
 {
+  "env": {
+    "BASH_ENV": "C:/CRX_Manager/.claude/shims/bash-env.sh"
+  },
   "permissions": {
     "defaultMode": "dontAsk",
     "allow": [

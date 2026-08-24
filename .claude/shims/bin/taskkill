@@ -1,0 +1,28 @@
+#!/bin/sh
+# CAPABILITY-LAYER SHIM — process termination
+#
+# See .claude/shims/README.md. In short: the text guard inspects the command
+# string an agent asks to run, and ten adversarial rounds proved that boundary is
+# structurally bypassable, because the shell rewrites the text before it resolves
+# the program. This shim sits after that rewrite — every quote, caret, variable
+# and redirect is already gone by the time PATH is searched, so all those
+# spellings arrive here identically.
+#
+# The 2026-08-23 incident command was `taskkill /PID 39564 /T /F`, which never
+# mentions codex. It terminated the reviewer's own process tree while the
+# pipeline still exited 0, recording a clean security gate that never ran. So
+# termination is refused by CAPABILITY, not by target.
+
+NAME="$(basename "$0")"
+cat >&2 <<REFUSED
+CAPABILITY SHIM: refusing process termination via \`$NAME\`.
+
+An agent force-terminating processes is how the 2026-08-23 Codex reviewer
+destroyed its own review: \`taskkill /PID 39564 /T /F\` — a command that never
+mentions codex — while the pipeline still exited 0 with no verdict.
+
+To stop something you started, use the harness (TaskStop). If a stray process
+genuinely must be terminated, tell Mason the PID and why and let him do it: a
+wrong PID here ends the thing that was proving the work.
+REFUSED
+exit 9

@@ -21,6 +21,11 @@
 .agents/**          text eol=lf
 .claude/skills/**   text eol=lf
 .claude/commands/** text eol=lf
+# The capability shims are extensionless executables, so `*.sh` does not reach
+# them. A CRLF shebang makes the kernel look for an interpreter named "sh\r" and
+# the shim dies with "bad interpreter" — installed, unreachable, silent. That is
+# the exact failure shape .claude/shims/README.md warns about.
+.claude/shims/**    text eol=lf
 .husky/**           text eol=lf
 .github/workflows/** text eol=lf
 *.sh                 text eol=lf

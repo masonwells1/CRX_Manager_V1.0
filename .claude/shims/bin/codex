@@ -1,0 +1,72 @@
+#!/bin/sh
+# CAPABILITY-LAYER SHIM — `codex`
+#
+# Why this exists, and why it is not another pattern in the text guard:
+# `.claude/hooks/codex-recursion-guard.mjs` inspects the command STRING an agent
+# asks to run. Ten adversarial rounds proved that boundary is structurally
+# bypassable — `c"od"ex`, `co^dex`, `$env:CODEX`, `%CODEX%`, `codex.cmd`,
+# `codex>/tmp/x review`, `command codex`, `timeout 90 codex` — because the shell
+# rewrites the text before it resolves the program. The reviewer's own verdict:
+# "Extending token enumeration with another escape rule will remain structurally
+# bypassable."
+#
+# This shim sits on the OTHER side of that rewrite. By the time the shell looks
+# up `codex` on PATH, every quote, caret, variable and redirect is already gone,
+# so all of those spellings arrive here as the same argv. There is nothing left
+# to spell differently.
+#
+# It refuses `codex review` (which self-recurses and exits 0 with no verdict —
+# 2026-08-23, PIDs 39564 and 36244) and passes everything else through to the
+# real binary untouched, because `codex exec` is what the sanctioned wrapper and
+# ordinary one-off prompts use.
+#
+# The proof wrapper is unaffected: scripts/write-codex-push-proof.mjs resolves
+# the real binary from its versioned install directory and deliberately refuses
+# PATH lookups, so a shim cannot impersonate the reviewer.
+
+for arg in "$@"; do
+  if [ "$arg" = "review" ]; then
+    cat >&2 <<'REFUSED'
+CODEX CAPABILITY SHIM: refusing `codex review`.
+
+It cannot complete in this repository: it loads AGENTS.md / CLAUDE.md /
+.claude/commands/codex-gauntlet.md as context, follows their "run a Codex
+review" instruction into a NESTED review, then terminates its own process tree —
+while still EXITING 0 with no verdict, so it reads as a clean gate that never
+ran.
+
+Use the sanitized wrapper instead, bare from the repository root:
+
+    node scripts/write-codex-push-proof.mjs
+
+It reviews a BASE/CANDIDATE snapshot pair with no agent-instruction files
+present to recurse on, and mints the exact-SHA proof only on a terminal CLEAN
+verdict. Detail: .claude/skills/codex-review/SKILL.md
+REFUSED
+    exit 9
+  fi
+done
+
+# Pass-through. The Codex CLI installs into a version-hashed directory that
+# changes on every update, so resolve the newest rather than pinning a hash —
+# the same rule scripts/write-codex-push-proof.mjs uses.
+BIN_ROOT="$HOME/AppData/Local/OpenAI/Codex/bin"
+[ -d "$BIN_ROOT" ] || BIN_ROOT="$HOME/.local/share/OpenAI/Codex/bin"
+
+REAL=""
+for candidate in $(ls -1dt "$BIN_ROOT"/*/ 2>/dev/null); do
+  for exe in "$candidate/codex.exe" "$candidate/codex"; do
+    if [ -x "$exe" ]; then
+      REAL="$exe"
+      break 2
+    fi
+  done
+done
+
+if [ -z "$REAL" ]; then
+  echo "CODEX CAPABILITY SHIM: no real Codex CLI found under $BIN_ROOT." >&2
+  echo "Install/authenticate the Codex CLI, or remove the shim from PATH." >&2
+  exit 127
+fi
+
+exec "$REAL" "$@"

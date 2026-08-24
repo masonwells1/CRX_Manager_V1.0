@@ -255,6 +255,25 @@ it is a trade, not a free win.
     boundary. Treat any future round of spelling patches here as known-futile unless the
     capability-layer work has been done.
 
+**The capability layer (2026-08-24) — the mechanism the reviewer kept asking for.** `.claude/shims/`
+puts stand-ins for the guarded programs first on `PATH`, loaded through `BASH_ENV`. The shell strips
+quotes, carets, variables and redirects *before* it resolves a program, so every spelling above
+arrives as one lookup; there is nothing left to spell differently. Proven by running each spelling
+through real bash: all ten refused, `codex exec` still reaches the real binary, and **prose runs
+normally again** — the over-block the text guard could not avoid is fixed here.
+
+**It is a second half, not a replacement.** Absolute paths skip `PATH`, PowerShell cmdlets are not on
+`PATH`, and API-level termination resolves no program at all. `codex-recursion-guard.mjs` covers
+those three; do not delete either layer believing the other is total. Details and failure modes:
+`.claude/shims/README.md`.
+
+**ACTIVATION IS A SEPARATE STEP, and it fails silently if skipped.** The shims do nothing until
+`.claude/settings.json` carries `"env": { "BASH_ENV": "C:/CRX_Manager/.claude/shims/bash-env.sh" }`,
+and bash ignores a missing `BASH_ENV` target without a word. Same for `enable -n kill` in the
+loader: remove it and the `kill` shim is installed but unreachable. Both are pinned by
+`.claude/hooks/capability-shim.test.mjs` — run it to find out whether the layer is real right now
+rather than assuming.
+
 **Read the round count as data, not trivia.** Eighteen High bypasses over nine adversarial rounds
 on roughly a hundred lines. **Not one was found by reasoning about the pattern** — every one came
 from executing commands against it. Treat that as the measure of how far to trust *any*

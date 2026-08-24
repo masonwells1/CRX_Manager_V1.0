@@ -1,0 +1,22 @@
+#!/bin/sh
+# CAPABILITY-LAYER SHIM — process termination. See .claude/shims/README.md.
+#
+# NOTE: `kill` is a bash BUILTIN, so a PATH shim alone never runs. The loader in
+# .claude/shims/bash-env.sh disables the builtin (`enable -n kill`) precisely so
+# this file is reached. If that line is ever removed, this shim silently stops
+# working while still appearing installed — the failure mode is invisible, which
+# is why bash-env.sh carries a test.
+
+NAME="$(basename "$0")"
+cat >&2 <<REFUSED
+CAPABILITY SHIM: refusing process termination via \`$NAME\`.
+
+An agent force-terminating processes is how the 2026-08-23 Codex reviewer
+destroyed its own review: \`taskkill /PID 39564 /T /F\` — a command that never
+mentions codex — while the pipeline still exited 0 with no verdict.
+
+To stop something you started, use the harness (TaskStop). If a stray process
+genuinely must be terminated, tell Mason the PID and why and let him do it: a
+wrong PID here ends the thing that was proving the work.
+REFUSED
+exit 9
