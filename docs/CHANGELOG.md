@@ -14,6 +14,10 @@ for legacy ledger rows whose `name` contains no timestamp.
   14-digit stamp embedded in `name`, and use that row's 14-digit `version` only
   when the name has no timestamp. A bare `max(version)` or schema-registry
   version is not sufficient ordering evidence because it loses that context.
+- The fallback premise is real: a read-only live check found 626 of 971 ledger
+  rows have bare-slug names. The newest such row remains older than the current
+  authored-name high-water, so this was a latent guard contradiction rather
+  than a change to today's migration verdict.
 - Post-apply B7 handling now reconciles the new ledger row instead of always
   renaming the disk file. When the normalized live `name` already matches the
   authored basename, the filename stays unchanged; a differing apply-time
