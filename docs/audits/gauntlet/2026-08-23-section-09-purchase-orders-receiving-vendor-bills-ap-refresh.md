@@ -7,7 +7,9 @@ Live project: `rhyzpcqhnizqbxphqdkr` — PostgreSQL catalog and function definit
 
 ## Verdict
 
-**PARTIAL — 0 BLOCKER / 3 HIGH / 0 MED / 0 LOW.** Section 9 has three production-risk defects: AP aging measures age from the vendor's bill date rather than its due date, the dashboard's “Due This Month” card is a rolling 30-day window, and high-impact AP/receiving retries are operation-only rather than bound to the authenticated actor and exact payload. The former vendor-bill/accounting-period race is resolved live, and the live RLS, routine grants, search paths, PO serialization wrappers, and core AP locks remain present. The deterministic section gate was not run because its contract rejects a checkout that is behind `origin/main` and cannot settle a dirty tree; the findings themselves were independently reverified against the exact remote-main objects and the live function bodies.
+**INCOMPLETE — 0 BLOCKER / 2 HIGH / 0 MED / 0 LOW, plus 1 open product decision.** Section 9 has two production-risk defects: the dashboard's “Due This Month” card is a rolling 30-day window rather than the calendar month it names, and high-impact AP/receiving retries are operation-only rather than bound to the authenticated actor and exact payload. A third item — AP aging measuring from the vendor's bill date rather than its due date — is **not scored as a defect**: both bases are legitimate accounting views and no authoritative source in this repo states which one these buckets are meant to express, so it is recorded as an open product decision for Mason (re-classified 2026-08-24 from HIGH after CodeRabbit P2 on PR #457). The former vendor-bill/accounting-period race is resolved live, and the live RLS, routine grants, search paths, PO serialization wrappers, and core AP locks remain present.
+
+**This section is NOT settled.** The deterministic section gate was not run because its contract rejects a checkout that is behind `origin/main` and cannot settle a dirty tree. The findings were independently reverified against the exact remote-main objects and the live function bodies, which makes them credible evidence — but evidence is not a settlement. Section 9 remains the current queue position and must be re-run from a clean, current checkout.
 
 ## Scope and method
 
@@ -20,7 +22,15 @@ Live project: `rhyzpcqhnizqbxphqdkr` — PostgreSQL catalog and function definit
 
 ## Findings
 
-### HIGH 1 — AP aging buckets are based on bill age, not days past due
+### OPEN PRODUCT DECISION 1 — AP aging buckets are based on bill age; no authoritative source says they should be days past due
+
+> **Re-classified 2026-08-24 (CodeRabbit P2 on PR #457, accepted).** This was originally scored HIGH. The
+> evidence below proves only *which* basis the report uses; it does not prove that basis is wrong.
+> Invoice-date aging and due-date aging are both standard, materially different accounting views, and
+> neither the UI nor `docs/reference/rpc-functions.md` defines these buckets as days past due. Calling the
+> current basis a production defect — and queueing a SQL change on that footing — would silently make a
+> business-policy choice that belongs to Mason. **It is recorded here as an unresolved product decision.**
+> If Mason confirms due-date aging is the intended contract, this becomes a HIGH defect with the fix below.
 
 **Evidence**
 
@@ -30,15 +40,19 @@ Live project: `rhyzpcqhnizqbxphqdkr` — PostgreSQL catalog and function definit
 
 **Plain-English business risk**
 
-A bill with long payment terms can look 31, 60, or 90 days aged while it is not yet due. That can make Mason prioritize the wrong vendor payments and misstate how overdue Crop RX's payables are.
+Under the current basis, a bill with long payment terms can show in the 31, 60, or 90 day column while it is not yet due. Whether that is *wrong* depends on what the columns are meant to say. Aging from the invoice date answers "how long have we owed this?"; aging from the due date answers "how late are we?". Both are legitimate; the report currently answers the first while the column labels (`Current`, `31-60 Days`, `61-90 Days`, `90+ Days`) do not say which.
 
-**Suggested fix**
+**Decision needed from Mason**
+
+Which question should the AP aging report answer? The unambiguous, no-code-change part of this either way: the UI labels and exported CSV should state the basis, because today they do not.
+
+**Fix if Mason chooses due-date aging**
 
 Define the bucket contract explicitly as days past `due_date`, then age from `p_as_of_date - vb.due_date` using clear boundary rules for not-yet-due, 1-30, 31-60, 61-90, and 90+ amounts. Align the UI labels and exported CSV with that contract.
 
-**Prevention action**
+**Prevention action (only once the contract is settled)**
 
-Add a rollback-only AP-aging smoke with bills sharing a bill date but different due dates, including not-yet-due and exact 30/31/60/61/90/91-day boundaries. The test must fail against the current bill-date implementation.
+Add a rollback-only AP-aging smoke with bills sharing a bill date but different due dates, including not-yet-due and exact 30/31/60/61/90/91-day boundaries, asserting whichever contract Mason confirms. Writing that test now would freeze an unconfirmed policy into an executable check.
 
 ### HIGH 2 — “Due This Month” is actually “Due in the next 30 days”
 
@@ -76,11 +90,17 @@ After a request commits but its response is lost, a user can edit the amount, da
 
 **Suggested fix**
 
-Require an idempotency key for the high-impact Section 9 mutators and bind each receipt to `auth.uid()` plus a canonical fingerprint of every business-relevant argument. Use the existing intent-bound helper contract, reject mismatches, and keep thin Section 9 serialization wrappers delegating to one authoritative implementation. On the frontend, scope unresolved keys to the canonical intent and retire them only after a definitive success or a server-proven mismatch.
+Require an idempotency key for the high-impact Section 9 mutators and bind each receipt to `auth.uid()` plus a canonical fingerprint of every business-relevant argument. Use the existing intent-bound helper contract, reject mismatches, and keep thin Section 9 serialization wrappers delegating to one authoritative implementation.
+
+**Frontend — corrected 2026-08-24 (CodeRabbit P1 on PR #457, accepted).** An earlier draft of this section said to "scope unresolved keys to the canonical intent." **That is not sufficient, and on its own it makes the problem worse.** If the key is derived from the payload, then editing payment/receipt A into payload B *after A's response was lost* selects a **new** key for B. The server sees no receipt mismatch, so it executes B as a genuine second money or inventory mutation — exactly the duplicate the binding was meant to stop. Server-side payload binding closes the replay-with-different-payload hole; it cannot close the edit-then-retry hole, because the edited request is no longer a retry.
+
+The caller must therefore **freeze or reconcile the unresolved intent before any new key may be minted**: while an action slot has an unresolved response, the UI must block edit-and-resend and first ask the server for the original request's outcome. Only a definitive answer — committed (adopt A's result) or provably never committed (release the slot) — may release the slot for a new intent.
 
 **Prevention action**
 
 Add rollback-only lost-response smokes for vendor payment and PO receiving. Each must prove: exact replay returns one original result; same key with a changed amount/item/quantity/location fails closed; another actor with the same key fails closed; and no second money, inventory, receiving, or audit side effect occurs.
+
+The smoke must additionally exercise the **edit-after-uncertain-response caller path** — not just server-side replay. Simulate a lost response, edit the payload in the UI, resend, and assert that no second mutation occurs. A suite that only replays the *same* payload will pass against a frontend that still mints a fresh key for an edited one, which is the actual defect.
 
 ## Verified safe in this refresh
 
@@ -94,5 +114,7 @@ Add rollback-only lost-response smokes for vendor payment and PO receiving. Each
 
 ## Queue disposition
 
-Section 9 is refreshed with three open HIGH findings. Because all 15 sections have already been reviewed at least once, the next scheduled refresh is the oldest section: **Section 10 — blend tickets and repository-only Edge Function handoff contracts**.
+**Section 9 is NOT refreshed — it remains the current queue position.** This run produced two open HIGH findings and one open product decision, but its deterministic gate did not settle, so Section 9 must be re-run from a clean, current checkout before it counts as refreshed. Do not advance the queue past Section 9 on the strength of this report.
+
+Once Section 9 settles, the next manual refresh is **Section 10 — blend tickets and repository-only Edge Function handoff contracts**. Sections 10–15 share the same 2026-07-28 last-reviewed date, so Section 10 is next in sequence rather than uniquely oldest.
 

@@ -84,32 +84,43 @@ carries no other work.
   throw previously left the hostile environment in place for every later
   assertion in the file and leaked the fixture directory.
 
-## 2026-08-23 — Live Foundation Gauntlet Section 9 refreshed: three open HIGH findings in AP
+## 2026-08-23 — Live Foundation Gauntlet Section 9 reviewed (NOT settled): two open HIGH findings plus one product decision
 
 Section 9 (purchase orders, receiving, vendor bills, vendor payments, AP safety) was re-audited
 against verified remote `main` `780e88aa` plus the live PostgreSQL function bodies. Verdict:
-**PARTIAL — 0 BLOCKER / 3 HIGH / 0 MED / 0 LOW.** The previously recorded vendor-bill /
-accounting-period close race is resolved live; RLS, routine grants, search paths, the PO
-serialization wrappers, and the core AP locks all remain present.
+**INCOMPLETE — 0 BLOCKER / 2 HIGH / 0 MED / 0 LOW, plus 1 open product decision.** The previously
+recorded vendor-bill / accounting-period close race is resolved live; RLS, routine grants, search
+paths, the PO serialization wrappers, and the core AP locks all remain present.
 
-- **HIGH — AP aging buckets by bill date, not due date.** `get_ap_aging` measures a bill's age
-  from the date it was issued rather than the date it is actually due, so bills on terms are
-  reported as further past due than they are.
 - **HIGH — "Due This Month" is a rolling 30-day window.** The dashboard card is labelled as a
   calendar month but computes the next 30 days, so it disagrees with the month it names.
 - **HIGH — AP/receiving receipts replay by operation.** Retries are keyed to the operation rather
   than bound to the authenticated actor plus the exact payload, so an uncertain response can
-  replay a prior success for a different request.
+  replay a prior success for a different request. Note the corrected remediation: binding the key
+  to the payload is necessary but **not sufficient**, because editing the payload after a lost
+  response mints a *new* key and the server then executes a genuine second mutation. The caller
+  must freeze the unresolved intent and reconcile it before any new key may be minted.
+- **OPEN PRODUCT DECISION — AP aging basis.** `get_ap_aging` ages from the bill date rather than
+  the due date. This was **originally scored HIGH and has been re-classified** (2026-08-24, after
+  CodeRabbit P2 on PR #457): invoice-date aging and due-date aging are both standard accounting
+  views, and nothing in this repo states which one these buckets are meant to express. Scoring it
+  a defect would silently commit Mason to an accounting policy. **Mason must choose the basis.**
+  Either way, the UI labels and exported CSV should state which basis is in use; today they do not.
 
-This entry records the audit only; **no remediation is included.** The three findings remain open,
-which is why no predicate or test lands beside them — the executable checks belong with the fix,
-not with the write-up.
+This entry records the audit only; **no remediation is included.** The findings remain open, which
+is why no predicate or test lands beside them — the executable checks belong with the fix, not with
+the write-up. Writing the AP-aging assertion now would additionally freeze an unconfirmed policy
+into an executable check.
 
-- The deterministic section gate did not settle: its contract rejects a checkout that is behind
-  `origin/main` and cannot settle a dirty tree. The three findings were instead reverified
-  independently against the exact remote-`main` objects and the live function bodies.
-- Next scheduled refresh is the oldest section: Section 10 (blend tickets, OCR/review/payment
-  status, order linking, repository-only Edge Function handoff contracts).
+- **Section 9 did NOT settle and remains the current queue position.** The deterministic section
+  gate's contract rejects a checkout that is behind `origin/main` and cannot settle a dirty tree;
+  the audit ran from a checkout 50 commits behind with 7 uncommitted paths. The findings were
+  reverified independently against the exact remote-`main` objects and the live function bodies,
+  which makes them credible evidence — but evidence is not a settlement. Section 9 must be re-run
+  from a clean, current checkout before it counts as refreshed.
+- Once Section 9 settles, Section 10 is next in the manual refresh sequence (blend tickets,
+  OCR/review/payment status, order linking, repository-only Edge Function handoff contracts).
+  Sections 10–15 share the same 2026-07-28 last-reviewed date, so Section 10 is not uniquely oldest.
 
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 
