@@ -109,6 +109,32 @@ Do not claim a database or money fix is ready from code inspection alone.
 
 Use `/codex-review` with the selected scope. If the direct Codex CLI fails to resolve, fall back to `/codex-cross-review`.
 
+**Do not invoke `codex review <scope>` directly — it self-recurses in this repo.** It loads this
+file and `AGENTS.md` as context, follows their "run a Codex review" instruction into a *nested*
+review, then kills its own process tree while still exiting 0 with no verdict (2026-08-23, twice).
+Run `node scripts/write-codex-push-proof.mjs` instead, which reviews a sanitized snapshot pair
+with no agent-instruction files in it. Full detail in `.claude/skills/codex-review/SKILL.md`.
+
+**That wrapper serves the `--base origin/main` scope only.** Its base is pinned to
+`origin/main...HEAD` by design and it fails closed on a dirty worktree, so it cannot honor the
+`--uncommitted` or `--commit <sha>` scopes offered in Step 1. For those, commit onto a branch and
+review against `origin/main`, or fall back to `/codex-cross-review` — never substitute the legacy
+`codex review --uncommitted`, which self-recurses the same way.
+
+**A zero exit code is not a verdict — and neither is the bare token, which also spells
+`BLOCKERS`.** The gate is the proof file: the wrapper mints it *only* on a terminal
+`CODEX_PROOF_VERDICT: CLEAN` and refuses on `BLOCKERS`, on a duplicate token, or on a worktree
+that moved mid-review. **No proof for the current HEAD = not passed.** As a secondary check on
+the capture, match `CLEAN` specifically:
+
+```bash
+grep -cE '^CODEX_PROOF_VERDICT:[[:space:]]*CLEAN[[:space:]]*$' .claude/session-state/codex-review-latest.txt
+```
+
+`0` means no clean verdict — `BLOCKERS`, or nothing at all. Do **not** tighten this to "exactly
+1": a clean run legitimately reports `2`, because the capture holds both a structured section and
+the raw transcript. Anything with `0` is `UNVERIFIED`/`BLOCKED` per Step 2, never clean.
+
 The hard gate is a separate ephemeral `gpt-5.6-sol` high-effort review session; Terra may build and
 Luna may take low-risk work, but adversarial review always goes to Sol. Step 4 evidence verification
 reduces false positives; it is NOT a substitute for the Sol gate. The re-review in Step 5 (sub-item 2)
