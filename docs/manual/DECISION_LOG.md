@@ -222,7 +222,15 @@ transform of the existing checks is mechanical; block-message text is preserved 
    without wiring it into that guard is the defect, not an oversight to fix later. Editing that guard
    re-pins its blobs in `scripts/apply-live-testdata-maintenance-20260812.mjs` in the same change.
 
-7. **A wrong entry in a "cannot run in a transaction" list is a defect, not a safe over-refusal.**
+7. **The apply target is pinned to CRX production; there is no `--project` flag.** Round 4 found
+   that parameterizing the ref was unsound: `applied-migrations.json`, the reviewer/Codex proofs and
+   the `AUTOPILOT.on` flag are all checkout-wide and assume ONE project. Applying elsewhere would
+   overwrite the snapshot production ordering is judged against with a foreign ledger, and CRX-local
+   proofs would authorize a target they never reviewed. Restricting is the honest fix. If another
+   target is ever needed, scope those three things to the ref FIRST — never re-add the flag alone.
+   (A concrete instance of the standing lesson that parameterizing a constant breaks its downstream
+   assumers.)
+8. **A wrong entry in a "cannot run in a transaction" list is a defect, not a safe over-refusal.**
    Round 3 removed `ALTER TYPE … ADD VALUE` (transaction-safe since PostgreSQL 12; live server
    verified at 17.6, and the error advised an impossible split that hit the same rule) and
    `DROP OWNED` (destructive but transactional — that is the destructive gate's job). Over-refusal

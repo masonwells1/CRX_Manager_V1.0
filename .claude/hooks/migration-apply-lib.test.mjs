@@ -250,6 +250,18 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   const refusedConfirm = runScript(badRoot, ["--confirm"]);
   ok(refusedConfirm.status === 2, "--confirm does not override a gate refusal");
   ok(!refusedConfirm.stdout.includes("Transmitting"), "--confirm on a refused gate never transmits");
+
+  // --project is refused outright. The snapshot, the proofs and the autopilot flag
+  // are all checkout-wide and assume ONE project; pointing this script at another
+  // ref would overwrite the snapshot production ordering is judged against with a
+  // foreign ledger, and CRX-local proofs would authorize a target they never
+  // reviewed. (Codex P1, PR #460 round 4.)
+  const otherProject = runScript(okRoot, ["--project", "someotherprojectref"]);
+  ok(otherProject.status === 1, `--project is refused (got ${otherProject.status})`);
+  ok(otherProject.stderr.includes("--project is not supported"), "the refusal names the flag");
+  ok(!otherProject.stdout.includes("Transmitting"), "--project never reaches transmission");
+  const otherProjectConfirm = runScript(okRoot, ["--project", "someotherprojectref", "--confirm"]);
+  ok(otherProjectConfirm.status === 1, "--project is refused even with --confirm");
 }
 
 // ── WRAPPABILITY: the precondition the atomicity promise depends on ─────────

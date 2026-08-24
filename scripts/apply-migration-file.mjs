@@ -36,8 +36,10 @@
 //   Flags:
 //     --confirm            actually transmit. Without it this is a dry run.
 //     --name <name>        ledger name (default: file basename without .sql)
-//     --project <ref>      Supabase project ref (default: CRX production)
 //     --created-by <who>   ledger created_by (default: the CRX ledger convention)
+//
+//   There is deliberately NO --project flag; the target is pinned to CRX
+//   production. See TARGET below.
 //
 // AUTHORIZATION
 //   Passing the gate is a FLOOR, not authorization. In an ordinary interactive
@@ -85,8 +87,33 @@ if (!filePath) {
 }
 
 const confirm = argv.includes("--confirm");
-const projectId = flagValue(argv, "--project") || CRX_PRODUCTION_REF;
 const createdBy = flagValue(argv, "--created-by") || DEFAULT_CREATED_BY;
+
+// ── TARGET: pinned, not a parameter ────────────────────────────────────────
+// This started life with a `--project <ref>` flag. Codex (P1, PR #460 round 4)
+// showed that flag was unsound, because three things around it are checkout-wide
+// and assume a SINGLE project:
+//   * `applied-migrations.json` is one file per checkout, not per project. Apply
+//     to another ref and this script would overwrite the shared snapshot with THAT
+//     project's ledger — so the next production apply would be judged against a
+//     foreign high-water mark and could replay a migration production already
+//     superseded.
+//   * the reviewer proof and the Codex proof are minted against CRX content and
+//     carry no project binding, so they would silently authorize a different target.
+//   * the AUTOPILOT.on flag is authorization for THIS project.
+// Parameterizing the ref quietly broke every one of those assumers. Restricting is
+// the honest fix; binding snapshot + proofs + authorization per-ref would be a much
+// larger change and nothing needs it — this repo has one production project.
+const projectId = CRX_PRODUCTION_REF;
+if (argv.includes("--project")) {
+  die(1,
+    "apply-migration-file: --project is not supported. The target is pinned to CRX production " +
+    `(${CRX_PRODUCTION_REF}).\n` +
+    "The applied-migration snapshot, the reviewer/Codex proofs, and the autopilot authorization flag are all " +
+    "checkout-wide and assume a single project; pointing this script elsewhere would let a foreign ledger " +
+    "overwrite the snapshot production ordering is judged against. If another target is ever genuinely needed, " +
+    "scope those three things to the project ref FIRST — do not re-add the flag on its own.");
+}
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const absFile = path.resolve(process.cwd(), filePath);
