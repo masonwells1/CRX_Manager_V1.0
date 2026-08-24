@@ -5,7 +5,23 @@
 // a guard that does not stop those has not fixed anything.
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { classifyCommand, normalizeExecutable } from "./codex-recursion-guard.mjs";
+
+const HOOK_PATH = fileURLToPath(new URL("./codex-recursion-guard.mjs", import.meta.url));
+
+// End-to-end through the REAL hook process, not the exported classifier.
+// Sol's round-8 HIGH was invisible to every classifier-level test: the parser was
+// correct and the ENTRYPOINT read the wrong field. Testing the pure function only
+// would have kept reporting 30/30 green while the Codex wiring was dead.
+function runHook(toolInput) {
+  const result = spawnSync(process.execPath, [HOOK_PATH], {
+    input: JSON.stringify({ tool_name: "Bash", tool_input: toolInput }),
+    encoding: "utf8",
+  });
+  return JSON.parse(result.stdout).hookSpecificOutput.permissionDecision;
+}
 
 let passed = 0;
 function check(name, fn) {
@@ -198,6 +214,46 @@ check("allows unrelated commands", () => {
 
 check("allows a filename that merely contains the word killall", () => {
   assert.equal(blocks("cat docs/killall-notes.md"), null);
+});
+
+// ── Round 8 (Sol on 1bdf061c) ─────────────────────────────────────────────────
+check("HIGH round 8: a Codex-native `cmd` payload is guarded, not just `command`", () => {
+  // The hook read only tool_input.command. `.codex/hooks.json` forwards Codex's
+  // payload unchanged, and Codex carries the text in `cmd` — so the Codex half of
+  // the wiring this PR adds was DEAD and returned "allow" for both rules.
+  assert.equal(runHook({ cmd: "taskkill /PID 39564 /T /F" }), "deny");
+  assert.equal(runHook({ cmd: "codex review --base origin/main" }), "deny");
+  // The Claude field still works, and benign commands still pass on both fields.
+  assert.equal(runHook({ command: "taskkill /PID 39564 /T /F" }), "deny");
+  assert.equal(runHook({ command: "git status --short" }), "allow");
+  assert.equal(runHook({ cmd: "git status --short" }), "allow");
+});
+
+check("HIGH round 8: .cmd/.bat/.ps1 are executable extensions too", () => {
+  // `codex.cmd` is the shim extension an npm-installed CLI actually gets on
+  // Windows; only `.exe` was stripped, so this was an ordinary allowed spelling.
+  assert.equal(rule("codex.cmd review --base origin/main"), "codex-review");
+  assert.equal(rule("taskkill.bat /PID 1 /F"), "force-kill");
+  assert.equal(normalizeExecutable("codex.cmd"), "codex");
+  assert.equal(normalizeExecutable("Stop-Process.ps1"), "stop-process");
+});
+
+check("HIGH round 8: termination via an API call, naming no kill program", () => {
+  // None of these contain a guarded executable name, so the basename walk is blind
+  // to them. Each was proven to return "allow".
+  assert.equal(rule("Get-Process codex | ForEach-Object { $_.Kill() }"), "force-kill");
+  assert.equal(rule("node -e \"process.kill(39564, 'SIGKILL')\""), "force-kill");
+  assert.equal(
+    rule("Invoke-CimMethod -InputObject $p -MethodName Terminate"),
+    "force-kill",
+  );
+  assert.equal(rule("wmic process where name='codex.exe' call terminate"), "force-kill");
+});
+
+check("the API-call patterns do not swallow ordinary commands", () => {
+  assert.equal(blocks("npm run test"), null);
+  assert.equal(blocks("git log --oneline -5"), null);
+  assert.equal(blocks("node scripts/write-codex-push-proof.mjs"), null);
 });
 
 // ── Deny payload shape ────────────────────────────────────────────────────────

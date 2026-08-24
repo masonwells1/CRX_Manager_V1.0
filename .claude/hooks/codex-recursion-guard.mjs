@@ -88,11 +88,39 @@ const LAUNCHERS = new Set([
   "invoke-expression", "iex", "invoke-command", "icm",
 ]);
 
+// Windows resolves a bare name against PATHEXT, so `codex.cmd` and `taskkill.bat`
+// are ordinary spellings of the same program, not obfuscation. Sol's round-8 HIGH
+// proved `codex.cmd review --base origin/main` returned "allow" because only `.exe`
+// was stripped — and `.cmd` is the SHIM extension npm-installed CLIs actually get.
+const EXECUTABLE_EXT_RE = /\.(?:exe|cmd|bat|com|ps1)$/i;
+
 export function normalizeExecutable(token) {
   const unquoted = String(token || "").replace(/^["']+|["']+$/g, "");
   const base = unquoted.split(/[\\/]/).pop() || "";
-  return base.replace(/\.exe$/i, "").toLowerCase();
+  return base.replace(EXECUTABLE_EXT_RE, "").toLowerCase();
 }
+
+// Termination reached through an API rather than a kill PROGRAM. Sol's round-8
+// HIGH: `Get-Process codex | ForEach-Object { $_.Kill() }`,
+// `node -e "process.kill(39564, 'SIGKILL')"` and
+// `Invoke-CimMethod … -MethodName Terminate` all end the reviewer without ever
+// naming a guarded executable, so the basename walk above cannot see them.
+//
+// These are METHOD-CALL shapes, matched anywhere in the command text for the same
+// fail-closed reason the basename walk is position-blind.
+//
+// Honest limit, stated where the next reader will see it: this is enumeration, and
+// enumeration of a language's kill APIs cannot be finished. Sol's own conclusion on
+// round 8 was "a capability-level restriction is needed; enumerating shell strings
+// remains bypassable". Adding a pattern here closes one named hole; it does not make
+// the class complete. Do not read a green test run as coverage of this class.
+const KILL_MECHANISMS = [
+  { re: /\.kill\s*\(/i, what: "a .kill() call" },
+  { re: /\bkill\s*\(\s*\d/i, what: "a kill(pid) call" },
+  { re: /-MethodName\s+["']?Terminate\b/i, what: "CIM Terminate" },
+  { re: /\.Terminate\s*\(/i, what: "a .Terminate() call" },
+  { re: /\bcall\s+terminate\b/i, what: "wmic call terminate" },
+];
 
 // A flag rather than a program: `-x`, `--x`, or a Windows `/X` switch. A POSIX path
 // like `/usr/bin/pkill` has further separators, so it is NOT treated as a flag.
@@ -161,6 +189,10 @@ export function classifyWalk(rawCommand) {
   for (const token of tokens) {
     const guarded = GUARDED_KILL.get(normalizeExecutable(token));
     if (guarded) return { rule: "force-kill", what: guarded };
+  }
+
+  for (const mechanism of KILL_MECHANISMS) {
+    if (mechanism.re.test(cmd)) return { rule: "force-kill", what: mechanism.what };
   }
 
   for (let i = 0; i < tokens.length; i += 1) {
@@ -246,7 +278,14 @@ function main() {
     process.exit(0);
   }
 
-  const verdict = classifyCommand(payload?.tool_input?.command);
+  // BOTH field names. Sol's round-8 HIGH: this read only `command`, so a
+  // Codex-native payload — which carries `cmd`, and which `.codex/hooks.json`
+  // forwards unchanged through the adapter — returned "allow" for `taskkill …` and
+  // `codex review …` alike. The Codex half of the wiring this PR adds was DEAD, and
+  // a sibling guard (`review-proof-guard.mjs`) already read both. Wiring a hook on
+  // both sides is not the same as the hook understanding both sides' payloads.
+  const toolInput = payload?.tool_input ?? {};
+  const verdict = classifyCommand(toolInput.command ?? toolInput.cmd);
   process.stdout.write(verdict ? out("block", verdict.reason) : out("allow"));
   process.exit(0);
 }

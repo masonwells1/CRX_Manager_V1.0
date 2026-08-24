@@ -87,16 +87,22 @@ declaration). Two rules:
    route. `codex exec` stays allowed — the wrapper and one-off prompts need it and neither
    recurses. The wrapper itself spawns Codex from Node, not a shell tool call, so it never
    reaches the hook.
-2. Denies force kills (`taskkill` / `Stop-Process` / `pkill` / `killall` / `kill -9`).
-   **Deliberately not scoped to commands naming codex**: the command that actually killed the
-   reviewer was `taskkill /PID 39564 /T /F`, which never says "codex", so a guard matching the
-   word would have watched it happen. It matches the dangerous *verb*, anchored to a shell command
-   position so prose in an `echo` is not blocked.
+2. Denies process termination (`taskkill` / `Stop-Process` / `pkill` / `killall` / `kill`,
+   including a bare `kill`, plus the direct `.Kill()` / `process.kill(` / CIM-`Terminate`
+   mechanisms). **Deliberately not scoped to commands naming codex**: the command that actually
+   killed the reviewer was `taskkill /PID 39564 /T /F`, which never says "codex", so a guard
+   matching the word would have watched it happen. It matches the dangerous *verb*.
+
+   **Prose IS blocked.** An early version anchored to a shell command position so an `echo` would
+   pass; that anchor is gone — see the fail-closed rewrite below — and a test now pins the
+   over-block as intended.
 
 Both rules are proven live, not merely unit-tested: `taskkill /PID 999999 /F` and
 `codex review --help` were each refused through the real Bash tool in the session that wrote them,
-and `codex --version` still succeeds. 16 unit checks in
-`.claude/hooks/codex-recursion-guard.test.mjs` lead with the two verbatim incident commands.
+and `codex --version` still succeeds. The unit checks in
+`.claude/hooks/codex-recursion-guard.test.mjs` lead with the two verbatim incident commands. (The
+check COUNT is deliberately not quoted here — it changed every round, and a stale number in this
+file was itself a review finding.)
 
 **Three bypasses were found before this landed, none by reasoning about the pattern** — they are
 the record of how a one-spelling guard fails:
@@ -184,7 +190,26 @@ the Write/Edit tools, not a shell heredoc** — the hook matches `Bash|PowerShel
 still holds (a missed termination costs a security gate that reports clean without having run), but
 it is a trade, not a free win.
 
-**Read the round count as data, not trivia.** Thirteen High bypasses over five adversarial rounds
+8. **HIGH round 8 — the bug the classifier tests could not see.** Sol on `1bdf061c` found the
+   entrypoint read only `payload.tool_input.command`. Codex's own payload carries the text in
+   `cmd`, and `.codex/hooks.json` forwards it unchanged, so **the Codex half of the wiring was
+   dead** — proven by execution: `allow` for both a termination command and `codex review`.
+   A sibling guard (`review-proof-guard.mjs:108`) already read `input.command ?? input.cmd`.
+
+   **Wiring a hook on both sides is not the same as the hook understanding both sides' payloads**,
+   and 30 passing classifier tests reported green throughout, because the parser was correct and
+   the *entrypoint* was wrong. The tests now drive the real hook process with both field names.
+   Mutation-proved against the committed `1bdf061c`: `cmd`-field termination → `allow` before,
+   `deny` after.
+
+   Same round, second HIGH: `codex.cmd review` (only `.exe` was stripped, and `.cmd` is the shim
+   extension npm-installed CLIs get on Windows), plus termination through an API instead of a
+   program — `$_.Kill()`, `process.kill(pid)`, `Invoke-CimMethod -MethodName Terminate`. Patterns
+   added for each named form, and **that is enumeration, which cannot be finished.** Sol's own
+   conclusion: *"a capability-level restriction is needed; enumerating shell strings remains
+   bypassable."*
+
+**Read the round count as data, not trivia.** Fifteen High bypasses over six adversarial rounds
 on roughly a hundred lines. **Not one was found by reasoning about the pattern** — every one came
 from executing commands against it. Treat that as the measure of how far to trust *any*
 text-matching guard over shell strings, this one included.
