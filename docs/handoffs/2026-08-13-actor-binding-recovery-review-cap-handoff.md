@@ -5,6 +5,7 @@
 - Repository/worktree: `C:\Users\mason\.codex\worktrees\df6d\CRX_Manager`
 - Branch: `codex/actor-binding-mixed-notation-repair-20260810`
 - Functional repair head before this documentation commit: `66e6a013fa3083e232913389656343d99b95b9d9`
+- Documentation-only handoff commit: `4a20885cbebc502ed562e353e0f2920cc55c9164`; it created this file and is intentionally excluded from the pre-documentation functional proof snapshot below.
 - Current fetched `origin/main`: `73af6f19941b3c428e41bf0654870a5f09b839ac`
 - Delivery PR: [#373](https://github.com/masonwells1/CRX_Manager_V1.0/pull/373), still draft; its remote head is `e652f723` and its base is the old `a44fc2f`.
 - Production service: `https://croprxsolutions.app`; Supabase project: `rhyzpcqhnizqbxphqdkr`.

@@ -19,6 +19,7 @@ WITH cand AS (
          pg_get_function_identity_arguments(p.oid) AS args,
          p.prosrc,
          a.argname,
+         regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g') AS argname_pattern,
          a.input_position
   FROM pg_proc p
   CROSS JOIN LATERAL (
@@ -41,19 +42,19 @@ SELECT DISTINCT proname || '(' || args || ')' AS violation_key,
        argname AS suspect_param
 FROM cand
 WHERE prosrc !~* 'ACTOR_MISMATCH'
-  AND (prosrc ~* ('coalesce\s*\(\s*(\m' || argname || '\M|\$' || input_position || '\M)')
-       OR prosrc ~* ('(\m' || argname || '\M|\$' || input_position || '\M)\s*,\s*auth\.uid')
-       OR prosrc ~* ('role[^;]{0,120}(\m' || argname || '\M|\$' || input_position || '\M)')
-       OR prosrc ~* ('(\m' || argname || '\M|\$' || input_position || '\M)[^;]{0,120}role')
-       OR prosrc ~* ('merge\s+into[^;]*(\m' || argname || '\M|\$' || input_position || '\M)')
-       OR prosrc ~* ('\m([[:alpha:]_][[:alnum:]_$]*\s*\.\s*)*[[:alpha:]_][[:alnum:]_$]*\s*\([^;]*(\m' || argname || '\M|\$' || input_position || '\M)')
-       OR prosrc ~* ('(\m' || argname || '\M|\$' || input_position || '\M)[^;]{0,120}\mOPERATOR\s*\(')
-       OR prosrc ~* ('\mOPERATOR\s*\([^;]{0,120}(\m' || argname || '\M|\$' || input_position || '\M)')
+  AND (prosrc ~* ('coalesce\s*\(\s*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
+       OR prosrc ~* ('(\m' || argname_pattern || '\M|\$' || input_position || '\M)\s*,\s*auth\.uid')
+       OR prosrc ~* ('role[^;]{0,120}(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
+       OR prosrc ~* ('(\m' || argname_pattern || '\M|\$' || input_position || '\M)[^;]{0,120}role')
+       OR prosrc ~* ('merge\s+into[^;]*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
+       OR prosrc ~* ('\m([[:alpha:]_][[:alnum:]_$]*\s*\.\s*)*[[:alpha:]_][[:alnum:]_$]*\s*\([^;]*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
+       OR prosrc ~* ('(\m' || argname_pattern || '\M|\$' || input_position || '\M)[^;]{0,120}\mOPERATOR\s*\(')
+       OR prosrc ~* ('\mOPERATOR\s*\([^;]{0,120}(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
        OR EXISTS (
          SELECT 1
          FROM regexp_matches(
            prosrc,
-           '(\m' || argname || '\M|\$' || input_position || '\M)\s*([-+*/\\<>=~!@#%^&|`?]+)',
+           '(\m' || argname_pattern || '\M|\$' || input_position || '\M)\s*([-+*/\\<>=~!@#%^&|`?]+)',
            'gi'
          ) AS actor_operator(parts)
          WHERE (actor_operator.parts)[2] NOT IN ('=', '<>', '!=', '<', '<=', '>', '>=')
@@ -62,7 +63,7 @@ WHERE prosrc !~* 'ACTOR_MISMATCH'
          SELECT 1
          FROM regexp_matches(
            prosrc,
-           '([-+*/\\<>=~!@#%^&|`?]+)\s*(\m' || argname || '\M|\$' || input_position || '\M)',
+           '([-+*/\\<>=~!@#%^&|`?]+)\s*(\m' || argname_pattern || '\M|\$' || input_position || '\M)',
            'gi'
          ) AS operator_actor(parts)
          WHERE (operator_actor.parts)[1] NOT IN ('=', '<>', '!=', '<', '<=', '>', '>=')

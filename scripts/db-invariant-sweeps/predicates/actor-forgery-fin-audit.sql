@@ -32,6 +32,7 @@ WITH cand AS (
          pg_get_function_identity_arguments(p.oid) AS args,
          p.prosrc,
          a.argname,
+         regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g') AS argname_pattern,
          a.input_position
   FROM pg_proc p
   CROSS JOIN LATERAL (
@@ -54,5 +55,5 @@ SELECT DISTINCT proname || '(' || args || ')' AS violation_key,
        argname AS suspect_param
 FROM cand
 WHERE prosrc !~* 'ACTOR_MISMATCH'
-  AND prosrc ~* ('financial_audit_log[^;]*(\m' || argname || '\M|\$' || input_position || '\M)')
+  AND prosrc ~* ('financial_audit_log[^;]*(\m' || argname_pattern || '\M|\$' || input_position || '\M)')
 ORDER BY violation_key;
