@@ -1,11 +1,167 @@
 # Decision Log
 
-Last verified: 2026-08-23
+Last verified: 2026-08-24
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-24 — CodeRabbit config: stop spending the review budget on half-finished commits
+
+**Source:** Mason's in-chat decisions, 2026-08-20 through 2026-08-24. Supersedes nothing; refines
+the mechanics of the 2026-07-17 / 2026-07-30 standing CodeRabbit review policy in `AGENTS.md`,
+which is unchanged. This entry covers the **configuration** half of the work opened as PR #441.
+The merge-gate enforcement half is parked — see "What is deliberately not here" below.
+
+**The problem.** CodeRabbit was refusing reviews for two *different* reasons, and the distinction
+matters because only one of them is fixable with money:
+
+1. **Fair-usage throttle.** 61 included review attempts in 7 days dropped the org from Pro's 5
+   reviews/hour to the floor — 1 review/hour, one at a time. Attempt *count* drives this, not spend.
+2. **Usage spending cap.** Separately, large reviews were refused with "This review is too large to
+   run within your organization's remaining usage spending cap."
+
+**What was measured.** The org was on **Pro** (CodeRabbit's own run-configuration block on PR #434
+reported `Plan: Pro`). After Mason raised the cap the same block reports **`Plan: Pro Plus`** on
+FarmRx PR #26 — the billing change moved the tier, not just the cap.
+`auto_pause_after_reviewed_commits` sat at its default of 5 and auto-review re-runs on every push,
+so each PR could spend five attempts on mid-work commits. Recent PRs are commit-heavy — #429 had 21
+commits, #433 had 11, #431 had 8 — across 12 PRs in roughly two days: 12 × 5 ≈ 60, the entire
+weekly allowance. The failure mode ran the dangerous direction: the budget was consumed by
+**half-finished intermediate commits**, and the runs that got refused were the ones on finished
+code. **PR #429 (21 commits) and PR #434 both posted "Review limit reached."** #429 merged with its
+later commits never auto-reviewed.
+
+**Decisions.**
+
+- **Mason raised the usage spending cap** (billing tab), then raised it again, stating he would
+  rather spend more than lose review quality.
+- **Report sections stay ON at their defaults** — sequence diagrams, related PRs/issues,
+  linked-issue assessment, suggested labels/reviewers, changed-files summary. Turning them off was
+  proposed as a cost saving and Mason declined: he will not trade any possible review context for a
+  cheaper report. Do not re-propose disabling them to save spend.
+- **`auto_pause_after_reviewed_commits: 2`.** Mason initially objected, on the belief that a higher
+  number meant "it reviews my changes before merge." It does not. The setting pauses *automatic*
+  review after N reviewed commits on a PR — ordinary non-draft PRs included, not only GitHub drafts
+  — after which later pushes are not auto-reviewed until someone comments `@coderabbitai review`,
+  which resumes it. So the number caps how many **intermediate** commits get reviewed for free; it
+  guarantees nothing about the final one, and at 5 it was actively starving the runs that mattered.
+  **Settled by Mason, 2026-08-22: keep 2.** (Wording in the config corrected after CodeRabbit
+  flagged the original "mid-work drafts" phrasing as inaccurate on FarmRx PR #26.)
+- **The actual pre-merge gate is a fresh review on the final commit, proven by SHA** — the standing
+  policy in `AGENTS.md`, with the procedure in `.claude/skills/deploy-check/SKILL.md`. A review
+  **with findings** creates a review object whose structured `commit_id` must equal the current
+  `headRefOid`. A **clean** review creates no review object at all, so its only evidence is
+  CodeRabbit's canonical walkthrough stamp naming that same head. Check both endpoints; if neither
+  binds, comment `@coderabbitai review`, wait, and read it. **`submitted_at` is not proof** — any
+  reviewer's timestamp satisfies a timestamp check, and a review of the previous commit can start
+  before the final push and finish after it. Never merge on a review that predates the final commit.
+- **A green `CodeRabbit` status check is not proof the head was reviewed.** On FarmRx PR #26 the
+  check read **pass** while the three reviewed commits were `358e3a8`, `cc28976`, and `ae0e6b1` —
+  not the head, `9abaf18`.
+- **Refresh a stale branch before spending a review attempt, and stop on any non-`CLEAN` state.**
+  `BEHIND` is the common case and `gh pr update-branch` fixes it, but `DIRTY`, `BLOCKED`,
+  `UNSTABLE`, and `UNKNOWN` all mean the merge cannot proceed as-is, and requesting a review while
+  in one of them can burn an attempt against a head that is about to move.
+- **`path_instructions` extended** with rules settled since the July config: integer-cent parsing
+  before money arithmetic, the `<table>_<column>_whole_cents_chk` naming, explicit UTC →
+  America/Chicago conversion for business-day logic, and **two** blend patterns
+  (`src/**/[Bb]lend*/**` and `src/**/*[Bb]lend*`) marking blend tickets as a money path. One
+  pattern alone misses files *inside* a blend-named folder, because `src/**/*[Bb]lend*` matches
+  only the filename component.
+- **`knowledge_base.code_guidelines`** now points CodeRabbit at `AGENTS.md`, `CLAUDE.md`,
+  `docs/reference/gotchas.md`, and `docs/workflows/`, so it reviews against the repo's own written
+  contract rather than only the inline path instructions.
+
+**A positive `path_filters` pattern switches off review for everything else.** Both CodeRabbit and
+the Codex reviewer recommended adding a positive `**/package-lock.json` filter, to override
+CodeRabbit's built-in ignore of lock files. Applied literally on FarmRx PR #26, the next review
+answered **"No files to review"** — on a PR whose one changed file was `.coderabbit.yaml` itself.
+Once *any* non-`!` pattern exists in `path_filters`, only files matching a positive pattern are
+reviewed. Two well-meant lines silently disabled code review for the whole repo, and the result
+reads as a clean pass rather than an error.
+
+A leading `**` restores default-include breadth, but it is not free: it also opts **out of
+CodeRabbit's curated default ignore list**, so dependencies, build output, generated code,
+binaries, media, and source maps become reviewable and must be re-excluded by hand or every review
+inflates. That is why the two repos differ. FarmRx carries the `**` + lockfile-include +
+hand-maintained-ignores form, because a lockfile there has shipped as the sole functional change.
+**CRX stays exclusion-only**, because its problem was review budget and hand-maintaining an ignore
+list CodeRabbit already curates is the worse trade. The lockfile-only blind spot on CRX is a
+documented, accepted gap, not something this change closed.
+
+**An exclusion must name a mechanism, not a directory.** The config opened with `path_filters`
+covering `docs/archive/`, `docs/audits/`, `docs/loops/`, `docs/build-loops/`, `docs/handoffs/`, and
+the generated `.agents/` adapters — 340+ files. Four review rounds took all of it apart, each time
+for the same reason:
+
+- A blanket `!docs/audits/**` also hid real executable programs
+  (`docs/audits/ordering-cycle-review-2026-08-09/workflow.mjs` and `build-report.mjs`).
+- Scoping to `*.md`/`*.json` still hid **live agent control files**:
+  `architecture-weakness-audit-prompt.md` and `foundation-ultra-review-prompt.md` are the canonical
+  instructions their slash commands tell an agent to "read that file and execute it exactly", and
+  `codex-driven-bug-hunt/LEDGER.json` is state automation reads and writes. On a **public** repo an
+  excluded agent-control file is a prompt-injection path into privileged automation, not a
+  cost-control question. The same defect then turned up untouched in `docs/loops/`,
+  `docs/build-loops/`, and `docs/handoffs/`.
+- A `[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md` carve-out inferred "inert report" from the
+  *shape of a filename*: of the 57 matches, 23 are prompts, handoffs, ledgers, plans, or go-live
+  execution docs.
+- `docs/archive/` went too. "Archive" is a naming convention, not a property, and automation does
+  read those files — `.claude/agents/rls-security-reviewer.md` sends a security-reviewing agent to
+  an archived incident disposition for the patterns it hunts.
+
+**`.codex/` was never excluded.** Only `.agents/` is generated (it is the sole `TARGET_ROOT` in
+`scripts/sync-agent-workflows.mjs`); every tracked file under `.codex/` is hand-maintained,
+including `production-action-guard.mjs`, which gates live mutations, pushes, and merges. Excluding
+it would let a PR that only weakens that guard skip review entirely.
+
+**Decision: this config ships with no `path_filters` block at all.** The exclusion list is empty,
+so **no repository-specific path is excluded**. That is not the same as "everything is reviewed":
+CodeRabbit's own curated default ignore list — lock files, binaries, generated code, media, source
+maps — still applies underneath, and declining to exclude those paths does not make them
+reviewable. Only an explicit positive pattern would, at the cost described above. That default list
+is exactly where the lockfile blind spot comes from. The remaining candidate — `!.agents/**` — is defensible
+(the adapter-drift check `scripts/check-agent-workflows.mjs` runs inside the required
+"Lint, Type Check, Test, Build" status check, so a hand-edit there cannot ship unreviewed), but it
+saves little review allowance and it is the one line that kept drawing High findings. It parks with
+the repository-walking test that enforces the rule.
+
+**What is deliberately not here.** PR #441 opened as this config change and, over eighteen review
+rounds, grew a second half: an **executable pre-merge gate** in
+`.claude/skills/deploy-check/SKILL.md`, `.claude/hooks/pr-merge-guard.mjs`, and
+`.codex/hooks/production-action-guard.mjs` that binds a merge to exact-head CodeRabbit evidence and
+`--match-head-commit`, plus the `path_filters` exclusion and its coverage test. **Mason parked that
+half on 2026-08-24** — the loop was self-sustaining (the PR edits guard machinery → guard machinery
+is a risky path → risky paths need a clean exact-SHA Codex proof → each guard fix is new guard code
+to review), and six CodeRabbit reviews in one day made the per-round cost real. Three Codex Highs
+are outstanding on it. It stays open as PR #441 in draft.
+
+**Known consequence of shipping this half alone, stated plainly.** Lowering
+`auto_pause_after_reviewed_commits` from 5 to 2 reduces *automatic* review coverage while the
+compensating control — reading a fresh review of the final commit before merging — remains a
+**written procedure, not enforcement**. Codex raised this as High and it is correct as stated.
+Mason's settled call (2026-08-22, reaffirmed at the park on 2026-08-24) is to keep 2 and land the
+enforcement separately rather than hold the config behind it.
+
+**Operative rules.**
+
+- Never add a positive (non-`!`) pattern to a `.coderabbit.yaml` without testing it on FarmRx first
+  and confirming a real source file still appears under "Files selected for processing".
+- Before adding any exclusion, name the mechanism that makes those files inert and point at the
+  check that fails if they stop being inert. A directory name is not a mechanism. If a document
+  really is inert, move it into `docs/archive/` after looking at it — a decision someone makes
+  about a specific file, not a pattern that guesses.
+- Do not treat `auto_pause_after_reviewed_commits` as the pre-merge gate. Read a fresh CodeRabbit
+  review of the final commit before merging, and bind it to the head SHA, not to a timestamp or to
+  a green status check.
+- "Review limit reached" is a *temporary* state that refills. It is never evidence that a PR was
+  reviewed, and never a reason to merge without one.
+- Treat reviewer advice as a hypothesis to test, not a patch to apply. On this work three findings
+  were right and fixed; the fourth would have switched off review for the whole repository.
 
 ---
 

@@ -10,7 +10,7 @@ Status captured: 2026-08-24, America/Chicago.
 - Pull request: #364
 - Remote head: `5193864fa757067420f250d2fdaa8c9afcf272d6`
 - Last reviewed base: `4b8ef10f4c6610b4c4d33a3607419e03e076a2ec`
-- Current base after resume refresh: `78834482` (must be integrated before final review)
+- Current base after resume refresh: `8760b614` (being integrated by the final merge commit)
 - Preserve the unrelated dirty primary checkout; do not use it for this PR.
 
 ## GOAL
@@ -105,8 +105,8 @@ Repair every valid merge blocker on PR #364, prove the fail-closed deny paths, c
 - **PR #364 remains HOLD and unsafe to merge at this checkpoint.** The CTAS stored-view,
   callable-default, checked-domain, trigger-condition, procedural-language, materialized-view
   refresh, stored-default baseline, and ordering-snapshot issues are repaired and proven locally.
-  The latest repair is not yet committed, exact-SHA reviewed, pushed, or covered by fresh remote
-  checks.
+  The latest repair is committed as `a214c8e6`, but its current-main merge commit is not yet
+  exact-SHA reviewed, pushed, or covered by fresh remote checks.
 - Every earlier clean exact-SHA proof is stale for this patch. A new final proof is mandatory.
 - Current remote checks cover only `5193864f`, not the latest local work.
 - A broad database sweep was blocked by a false-positive read-only connector guard on `pg_get_function_identity_arguments()`. Do not claim it ran. The exact live trigger-evidence generator did complete read-only.
@@ -138,9 +138,8 @@ Repair every valid merge blocker on PR #364, prove the fail-closed deny paths, c
 
 ## NEXT ACTION
 
-Resolve the PR #364 worktree with `git worktree list`, commit only the scoped repair plus this
-handoff/changelog update, integrate current `origin/main`, and rerun the exact-SHA Sol review. Do not
-publish until that final commit has clean proof; do not merge until every current-head PR gate is
-green or an explicitly expected neutral result.
+Resolve the PR #364 worktree with `git worktree list`, finish the current-main merge commit, and
+rerun the exact-SHA Sol review. Do not publish until that final commit has clean proof; do not merge
+the PR until every current-head gate is green or an explicitly expected neutral result.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.
