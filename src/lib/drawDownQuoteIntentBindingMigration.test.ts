@@ -368,7 +368,9 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(restoreSmoke).not.toContain('expected BOOKING_OVERDRAWN');
     expect(restoreSmoke.match(/expected QUOTE_RESTORE_BLOCKED_BY_DRAW/g)).toHaveLength(2);
     expect(plannedHoldsSmoke).toContain("v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%'");
-    expect(plannedHoldsSmoke).toContain('refused restore changed holds pa=% (expected 200)');
+    expect(plannedHoldsSmoke).toContain(
+      'refused restore changed holds pa=% pb=% (expected 200/100)',
+    );
     expect(smokeSpecs.specs.restore_quote_version.description).toContain(
       'every version restore fails closed with QUOTE_RESTORE_BLOCKED_BY_DRAW',
     );
