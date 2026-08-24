@@ -2,6 +2,42 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — The migration drift reviewer stops comparing filename stamps against apply-time versions
+
+`supabase_migrations.schema_migrations` carries two figures, and CHECK 6 of
+`.claude/agents/migration-drift-reviewer.md` did not say which one it meant.
+`name` preserves the authored filename stamp and governs replay ordering;
+`version` is assigned by Supabase at apply time and can land on either side of
+`name`. Given the ambiguity the reviewer reached for
+`.claude/schema-registry.json`'s `_meta.migrations_high_water` — a `version` —
+and emitted a false **HIGH** against a correctly ordered migration, blocking a
+money-correctness migration on a bookkeeping artifact. Two runs of the same
+charter returned opposite verdicts on the same file.
+
+- CHECK 6 now names the `name` high-water explicitly and rejects any `version`
+  figure, including the schema registry's, as ordering evidence. The check is
+  **stricter**, not looser: it still demands current live evidence, still fails
+  closed without it, and still emits HIGH for a badly ordered filename.
+- Review round (CodeRabbit P2 on the PR): the new rule was absolute, so a ledger
+  row whose `name` carries no 14-digit stamp would have had its only ordering
+  signal discarded — contradicting `scripts/refresh-applied-migrations.mjs` and
+  `.claude/hooks/migration-apply-guard.mjs`, which both synthesize
+  `<version>_<name>` for exactly those rows. Step 3 now carves a narrow per-row
+  exception matching the guards, scoped so it still never licenses a bare
+  `max(version)` or the registry high-water as a substitute for the `name`
+  high-water. Real premise (626 of 971 live rows carry a bare-slug `name`), not
+  currently reachable (the newest such row is older than the `name` high-water).
+- `scripts/check-agent-guidance.mjs` holds the canonical pinned copy of CHECK 6,
+  so it moves in lockstep; three assertions now pin the new rules. Each was
+  mutation-tested — removing the rule from the charter produced a red suite and
+  exit code 1, restoring it returned `PASS - shared agent guidance and
+  deterministic guards are aligned`.
+- Also records a dated pre-apply live-ledger observation at the top of
+  `docs/reference/migration-history.md`. It sits above the fold because the
+  proof-gate reviewers read repository files from GitHub `main` — their local
+  reads are blocked by sandbox policy — so pre-apply evidence only counts once
+  merged.
+
 ## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
 
 Five quote-based smoke chains had silently rotted after product pricing became
