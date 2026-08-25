@@ -60,11 +60,19 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Neither touches RISKY_PATH_RES: the apply-live-testdata risky-path anchor
   // this transform verifies is still present exactly once, and the transform is
   // identity, so input == output.
-  codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
+  // codexGuard re-pinned 2026-08-24 (PR #460): the guard gained the gated
+  // file-bytes apply path for oversized migrations. That change is confined to
+  // the migration-apply surface and leaves every anchor this transform rewrites
+  // untouched — the protected-producer harness list, the
+  // PROTECTED_HARNESS_FRAGMENT_RE constant, the maintenanceProducerCommandMentioned
+  // matcher, the maintenance-producer execution gate, and the multi-line command
+  // gate call are each still present exactly once, so the transform still applies
+  // cleanly.
+  codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
   pushLib: "5ca3c7bd2adf03de455663df56fd8113de5772c2",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
+  codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
   pushLib: "5ca3c7bd2adf03de455663df56fd8113de5772c2",
 };
 

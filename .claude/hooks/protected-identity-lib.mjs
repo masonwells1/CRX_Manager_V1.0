@@ -145,11 +145,55 @@ export function protectedFileIdentityPaths(root) {
   // ordinary Git command. A write here is arbitrary code execution on the next
   // `git status`, so they belong in the protected set (Codex CRX-SEC-01,
   // 2026-08-24).
+  // The linked-worktree `.git` POINTER is itself executable control state: a
+  // rewrite redirects every later Git command to a different config, hook, and
+  // index. Enrol the file before resolving the directories it names so a hard-
+  // link alias cannot hide it behind an innocent pathname (CRX-SEC-01,
+  // 2026-08-24).
+  add(path.join(root, ".git"));
   for (const gitDir of gitControlDirectories(root)) {
     addDirectory(gitDir, (name) => /^config(\.worktree)?$/i.test(name));
     addDirectory(path.join(gitDir, "info"), (name) => /^(attributes|exclude)$/i.test(name));
     addDirectory(path.join(gitDir, "hooks"), () => true);
   }
+  // Existing user-level Git files are already protected by pathname below.
+  // Add the locations Git can actually select in this process so an alias of
+  // `$HOME/.gitconfig`, XDG config, or an explicit config environment path has
+  // the same identity protection. Multiple home spellings are intentional on
+  // Windows, where HOME and USERPROFILE can differ.
+  const homeDirectories = new Set();
+  for (const value of [
+    process.env.HOME,
+    process.env.USERPROFILE,
+    process.env.HOMEDRIVE && process.env.HOMEPATH
+      ? `${process.env.HOMEDRIVE}${process.env.HOMEPATH}`
+      : "",
+  ]) {
+    if (value) homeDirectories.add(path.resolve(value));
+  }
+  for (const home of homeDirectories) {
+    add(path.join(home, ".gitconfig"));
+    add(path.join(home, ".config", "git", "config"));
+    add(path.join(home, ".config", "git", "ignore"));
+  }
+  if (process.env.XDG_CONFIG_HOME) {
+    add(path.join(path.resolve(process.env.XDG_CONFIG_HOME), "git", "config"));
+    add(path.join(path.resolve(process.env.XDG_CONFIG_HOME), "git", "ignore"));
+  }
+  for (const value of [
+    process.env.GIT_CONFIG,
+    process.env.GIT_CONFIG_GLOBAL,
+    process.env.GIT_CONFIG_SYSTEM,
+  ]) {
+    if (value && value !== "/dev/null" && value.toUpperCase() !== "NUL") {
+      add(path.isAbsolute(value) ? value : path.resolve(root, value));
+    }
+  }
+  // These are useful in disposable repositories and cover a repository-root
+  // spelling that the pathname rule already denies if it exists.
+  add(path.join(root, ".gitconfig"));
+  add(path.join(root, ".config", "git", "config"));
+  add(path.join(root, ".config", "git", "ignore"));
   add(path.join(root, ".gitattributes"));
   // package.json chooses the programs every `npm run` executes, and the shell
   // classifier's npm-script-body check reads it — so a write here is both

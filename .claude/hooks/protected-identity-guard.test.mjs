@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { existsSync, linkSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -19,11 +19,11 @@ let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
 
-function runHook(payload, cwd) {
+function runHook(payload, cwd, envOverrides = {}) {
   return spawnSync(process.execPath, [path.join(__dirname, "protected-identity-guard.mjs")], {
     input: JSON.stringify(payload),
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: cwd || repoRoot },
+    env: { ...process.env, ...envOverrides, CLAUDE_PROJECT_DIR: cwd || repoRoot },
   });
 }
 const isDeny = (r) => r.stdout.includes('"permissionDecision":"deny"');
@@ -278,6 +278,35 @@ if (pointerLinked) {
   ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: { patch: ["*** Begin Patch", `*** Update File: ${pointerAlias}`, "@@", "+gitdir: /tmp/evil", "*** End Patch"].join("\n") } }, repoRoot)), "patching the linked-worktree .git pointer through a hard-link alias is denied");
 }
 eq(runHook({ tool_name: "Write", tool_input: { file_path: path.join(scratch, "notes.git"), content: "x" } }).stdout.trim(), "", "an unrelated file merely ending in .git is allowed");
+
+// The exact-review exploit uses a SECOND name for the pointer, so pathname
+// checks never see `.git`. Build a deterministic linked-worktree shape instead
+// of depending on whether the checkout running CI is itself linked.
+const pointerRepo = path.join(scratch, "linked-pointer-repo");
+const pointerGitDir = path.join(scratch, "linked-pointer-gitdir");
+mkdirSync(pointerRepo, { recursive: true });
+mkdirSync(pointerGitDir, { recursive: true });
+const pointerFile = path.join(pointerRepo, ".git");
+writeFileSync(pointerFile, `gitdir: ${pointerGitDir.replaceAll("\\", "/")}\n`);
+const deterministicPointerAlias = path.join(scratch, "harmless-pointer-notes.txt");
+linkSync(pointerFile, deterministicPointerAlias);
+ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: deterministicPointerAlias, content: "gitdir: /attacker" } }, pointerRepo)), "Write through a hard-link alias of a linked-worktree .git pointer is denied");
+ok(isDeny(runHook({ tool_name: "Edit", tool_input: { file_path: deterministicPointerAlias, old_string: "safe", new_string: "hostile" } }, pointerRepo)), "Edit through a hard-link alias of a linked-worktree .git pointer is denied");
+const pointerPatch = ["*** Begin Patch", `*** Update File: ${deterministicPointerAlias}`, "@@", "+gitdir: /attacker", "*** End Patch"].join("\n");
+ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: pointerPatch }, pointerRepo)), "a RAW STRING patch through a hard-link alias of the .git pointer is denied");
+
+// User-level config is equally executable control state. Override both home
+// spellings so the fixture is deterministic on Windows and Linux.
+const gitHome = path.join(scratch, "git-home");
+mkdirSync(gitHome, { recursive: true });
+const globalConfig = path.join(gitHome, ".gitconfig");
+writeFileSync(globalConfig, "[user]\n\tname = Guard Test\n");
+const globalConfigAlias = path.join(scratch, "harmless-global-notes.txt");
+linkSync(globalConfig, globalConfigAlias);
+const gitHomeEnv = { HOME: gitHome, USERPROFILE: gitHome };
+ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: globalConfigAlias, content: "[core]\nfsmonitor=evil" } }, pointerRepo, gitHomeEnv)), "Write through a hard-link alias of the active user .gitconfig is denied");
+const globalPatch = ["*** Begin Patch", `*** Update File: ${globalConfigAlias}`, "@@", "+[core]", "+fsmonitor=evil", "*** End Patch"].join("\n");
+ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: globalPatch }, pointerRepo, gitHomeEnv)), "a RAW STRING patch through a hard-link alias of the active user .gitconfig is denied");
 
 rmSync(scratch, { recursive: true, force: true });
 ok(!existsSync(scratch), "scratch fixture removed");

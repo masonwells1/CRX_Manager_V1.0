@@ -30,6 +30,22 @@ All significant development milestones, in reverse chronological order.
 - The Quote Builder save-resume concurrency regression now creates a fresh
   quote, so crossing the 30-day stale-price threshold cannot bypass the path
   that the test is intended to prove.
+## 2026-08-24 — Git-control identity protection now includes the worktree pointer and user config
+
+The exact-SHA review of the combined PR #432 head found one remaining High:
+pathname rules denied direct writes to a linked worktree's `.git` pointer and
+user Git configuration, but those existing files were absent from the protected
+identity map. A hard-link alias with an innocent name could therefore rewrite
+the same underlying file and redirect or instrument later Git commands.
+
+- The shared identity map now enrolls the linked-worktree `.git` pointer before
+  resolving its per-worktree and common Git directories.
+- Existing Git configuration selected by `HOME`, `USERPROFILE`,
+  `XDG_CONFIG_HOME`, or the explicit Git config environment paths is enrolled
+  alongside repository Git config, hook, attribute, and exclusion files.
+- Real hard-link regressions drive native Write/Edit, the raw-string patch shape
+  Codex actually sends, and the MCP write route against both the `.git` pointer
+  and an active user `.gitconfig` fixture.
 
 ## 2026-08-24 — The identity guard now covers the shape Codex actually sends, and both write routes share one rule set
 

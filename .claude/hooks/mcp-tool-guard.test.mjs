@@ -25,11 +25,11 @@ let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
 
-function runHook(payload, cwd) {
+function runHook(payload, cwd, envOverrides = {}) {
   return spawnSync(process.execPath, [path.join(__dirname, "mcp-tool-guard.mjs")], {
     input: JSON.stringify(payload),
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: cwd || process.env.CLAUDE_PROJECT_DIR },
+    env: { ...process.env, ...envOverrides, CLAUDE_PROJECT_DIR: cwd || process.env.CLAUDE_PROJECT_DIR },
   });
 }
 function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
@@ -677,6 +677,33 @@ ok(isDeny(r), "DC write_file targeting the linked-worktree .git pointer is denie
   // The identity check must not turn every temporary file into a protected one.
   r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: unrelatedPath } });
   eq(r.stdout.trim(), "", "an ordinary unlinked scratch file remains writable (identity check does not over-block)");
+
+  // A linked-worktree `.git` pointer is a FILE. Its innocent hard-link alias
+  // must be denied on the MCP write route too, even though the supplied path
+  // contains no recognizable Git-control name (exact-review CRX-SEC-01).
+  const pointerRepo = path.join(aliasDir, "linked-pointer-repo");
+  const pointerGitDir = path.join(aliasDir, "linked-pointer-gitdir");
+  mkdirSync(pointerRepo, { recursive: true });
+  mkdirSync(pointerGitDir, { recursive: true });
+  const pointerFile = path.join(pointerRepo, ".git");
+  writeFileSync(pointerFile, `gitdir: ${pointerGitDir.replaceAll("\\", "/")}\n`);
+  const pointerAlias = path.join(aliasDir, "harmless-pointer-notes.txt");
+  linkSync(pointerFile, pointerAlias);
+  r = runHook({ tool_name: "mcp__filesystem__write_file", tool_input: { path: pointerAlias, content: "gitdir: /attacker" } }, pointerRepo);
+  ok(isDeny(r), "MCP write_file through a hard-link alias of a linked-worktree .git pointer is denied");
+
+  const gitHome = path.join(aliasDir, "git-home");
+  mkdirSync(gitHome, { recursive: true });
+  const globalConfig = path.join(gitHome, ".gitconfig");
+  writeFileSync(globalConfig, "[user]\n\tname = Guard Test\n");
+  const globalConfigAlias = path.join(aliasDir, "harmless-global-notes.txt");
+  linkSync(globalConfig, globalConfigAlias);
+  r = runHook(
+    { tool_name: "mcp__filesystem__write_file", tool_input: { path: globalConfigAlias, content: "[core]\nfsmonitor=evil" } },
+    pointerRepo,
+    { HOME: gitHome, USERPROFILE: gitHome },
+  );
+  ok(isDeny(r), "MCP write_file through a hard-link alias of the active user .gitconfig is denied");
 
   // The full attack through the MCP PROCESS route, not just the file route:
   // create the alias with a computed item type so the literal token never
