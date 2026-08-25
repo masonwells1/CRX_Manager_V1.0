@@ -16,6 +16,14 @@ import { spawnSync } from "node:child_process";
 import { builtinModules } from "node:module";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
+import {
+  aliasesProtectedFile,
+  canonicalizeThroughExistingAncestor,
+  fileIdentity,
+  protectedControlPathReason,
+  protectedFileIdentities,
+  protectedProofCreationReason,
+} from "./protected-identity-lib.mjs";
 
 export const SECURITY_COMMAND_CHAR_BUDGET = 16_384;
 export const SECURITY_COMMAND_TOKEN_BUDGET = 512;
@@ -1706,6 +1714,203 @@ function tokenizeShellWords(text) {
   return tokens;
 }
 
+const shellWord = (codes) => String.fromCharCode(...codes);
+const SHELL_FILE_MUTATORS = new Set([
+  [115, 101, 116, 45, 99, 111, 110, 116, 101, 110, 116],
+  [97, 100, 100, 45, 99, 111, 110, 116, 101, 110, 116],
+  [99, 108, 101, 97, 114, 45, 99, 111, 110, 116, 101, 110, 116],
+  [111, 117, 116, 45, 102, 105, 108, 101],
+  [115, 101, 116, 45, 105, 116, 101, 109],
+  [116, 101, 101], [116, 101, 101, 45, 111, 98, 106, 101, 99, 116],
+  [115, 99], [97, 99], [99, 108, 99], [115, 105],
+  [116, 111, 117, 99, 104], [116, 114, 117, 110, 99, 97, 116, 101],
+  [100, 100], [99, 112], [109, 118], [105, 110, 115, 116, 97, 108, 108],
+  [99, 111, 112, 121, 45, 105, 116, 101, 109],
+  [109, 111, 118, 101, 45, 105, 116, 101, 109],
+  [114, 101, 110, 97, 109, 101, 45, 105, 116, 101, 109],
+  [114, 101, 109, 111, 118, 101, 45, 105, 116, 101, 109],
+  [114, 109], [117, 110, 108, 105, 110, 107],
+  [115, 101, 100], [112, 101, 114, 108], [97, 119, 107],
+].map(shellWord));
+const SHELL_MUTATION_WRAPPERS = new Set([
+  "command", "builtin", "env", "sudo", "doas", "exec", "nohup", "nice",
+  "timeout", "wsl", "busybox", "toybox", "stdbuf",
+]);
+
+const shellExecutableName = (token) => String(token?.value || "")
+  .replace(/^@/, "")
+  .replace(/\\([^\\/])/g, "$1")
+  .replace(/\^([^^])/g, "$1")
+  .replace(/`([^`])/g, "$1")
+  .split(/[\\/]/)
+  .pop()
+  .replace(/\.(?:exe|cmd|bat|ps1)$/i, "")
+  .toLowerCase();
+
+function protectedShellDestinationReason(token, cwd, protectedIdentities) {
+  const raw = String(token?.value || "").trim();
+  if (!raw || token?.control || /[*?\[\]{}$`]|\$\(|\$\{|%[^%]+%|![^!]+!|\+|\s-join(?:\s|$)/i.test(raw)) {
+    return "Blocked shell file mutation because its destination is dynamic and cannot be checked against protected filesystem identities.";
+  }
+  if (/^[A-Za-z][\w-]*:/.test(raw) && !/^[A-Za-z]:[\\/]/.test(raw) && !/^FileSystem::/i.test(raw)) return null;
+  const candidate = raw.replace(/^FileSystem::/i, "");
+  if (!candidate || candidate === "-" || /^(?:NUL|CON|PRN|AUX|COM\d|LPT\d|\/dev\/(?:null|stdout|stderr))$/i.test(candidate)) return null;
+  const base = cwd || process.cwd();
+  const abs = path.isAbsolute(candidate) ? path.resolve(candidate) : path.resolve(base, candidate);
+  const controlReason = protectedControlPathReason(abs)
+    || protectedControlPathReason(canonicalizeThroughExistingAncestor(abs));
+  if (controlReason) return `Blocked shell file mutation because ${candidate} is ${controlReason}.`;
+  const proofReason = protectedProofCreationReason(abs);
+  if (proofReason) return `Blocked shell file mutation because ${candidate} resolves into ${proofReason}.`;
+  if (aliasesProtectedFile(abs, base)) {
+    return `Blocked shell file mutation because ${candidate} is a second pathname for a protected file.`;
+  }
+  const identity = fileIdentity(abs);
+  if (identity && protectedIdentities.has(identity)) {
+    return `Blocked shell file mutation because ${candidate} is a protected file.`;
+  }
+  return null;
+}
+
+// Process tools carry filesystem destinations inside command text instead of
+// explicit path fields. Resolve those destinations before execution and apply
+// the same canonical-path and file-identity boundary as native file tools.
+export function checkProtectedShellMutation(command, cwd, depth = 0) {
+  const value = String(command || "");
+  if (!value) return null;
+  if (depth > 4 || commandExceedsSecurityBudget(value)) {
+    return "Blocked shell file mutation because the command is too complex to resolve its destinations safely.";
+  }
+  const base = cwd || process.cwd();
+  let protectedIdentities = null;
+  const tokens = tokenizeShellWords(value);
+  const inspect = (token) => {
+    if (protectedIdentities === null) protectedIdentities = protectedFileIdentities(base);
+    return protectedShellDestinationReason(token, base, protectedIdentities);
+  };
+  const redirect = shellWord([62]);
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (!tokens[index].control || tokens[index].value !== redirect) continue;
+    let targetIndex = index + 1;
+    while (tokens[targetIndex]?.control && tokens[targetIndex].value === redirect) targetIndex += 1;
+    if (tokens[targetIndex]?.control && tokens[targetIndex].value === "|") targetIndex += 1;
+    if (tokens[targetIndex]?.control && tokens[targetIndex].value === "&"
+      && /^\d+$/.test(tokens[targetIndex + 1]?.value || "")) continue;
+    const reason = inspect(tokens[targetIndex]);
+    if (reason) return reason;
+  }
+
+  const hardBoundary = (token) => token?.control && /^(?:;|&|\||\n)$/.test(token.value);
+  const attachedPathOption = /^(?:--?|\/)(?:literalpath|filepath|path|destination|dest)(?::|=)(.+)$/i;
+  const separatePathOption = /^(?:--?|\/)(?:literalpath|filepath|path|destination|dest)$/i;
+  const attachedDestinationOption = /^(?:--?|\/)(?:destination|dest)(?::|=)(.+)$/i;
+  const separateDestinationOption = /^(?:--?|\/)(?:destination|dest)$/i;
+  const valuedOptions = new Set(["-value", "-inputobject", "-encoding", "-width", "-stream", "-filter", "-include", "-exclude", "-credential"]);
+  const operands = (words) => {
+    const result = [];
+    for (let index = 0; index < words.length; index += 1) {
+      const argument = String(words[index]?.value || "");
+      if (attachedPathOption.test(argument)) continue;
+      if (separatePathOption.test(argument) || valuedOptions.has(argument.toLowerCase())) {
+        index += 1;
+        continue;
+      }
+      if (argument.startsWith("-")) continue;
+      result.push(words[index]);
+    }
+    return result;
+  };
+  const namedPath = (words) => {
+    for (let index = 0; index < words.length; index += 1) {
+      const attached = attachedPathOption.exec(String(words[index]?.value || ""));
+      if (attached) return { value: attached[1], control: false };
+      if (separatePathOption.test(String(words[index]?.value || ""))) return words[index + 1];
+    }
+    return null;
+  };
+  const namedDestination = (words) => {
+    for (let index = 0; index < words.length; index += 1) {
+      const attached = attachedDestinationOption.exec(String(words[index]?.value || ""));
+      if (attached) return { value: attached[1], control: false };
+      if (separateDestinationOption.test(String(words[index]?.value || ""))) return words[index + 1];
+    }
+    return null;
+  };
+
+  for (let start = 0; start < tokens.length;) {
+    while (start < tokens.length && hardBoundary(tokens[start])) start += 1;
+    let end = start;
+    while (end < tokens.length && !hardBoundary(tokens[end])) end += 1;
+    const segmentWords = tokens.slice(start, end).filter((token) => !token.control);
+    let cursor = 0;
+    while (/^[A-Za-z_]\w*\+?=/.test(segmentWords[cursor]?.value || "")) cursor += 1;
+    while (SHELL_MUTATION_WRAPPERS.has(shellExecutableName(segmentWords[cursor]))) {
+      cursor += 1;
+      while (/^(?:-|[A-Za-z_]\w*\+?=)/.test(segmentWords[cursor]?.value || "")) cursor += 1;
+    }
+    const executable = shellExecutableName(segmentWords[cursor]);
+    const args = segmentWords.slice(cursor + 1);
+
+    if (["bash", "sh", "dash", "zsh", "ksh", "pwsh", "powershell", "cmd"].includes(executable)) {
+      const optionIndex = args.findIndex((token) => /^(?:-[A-Za-z]*c[A-Za-z]*|--command|\/c)$/i.test(token.value));
+      if (optionIndex >= 0) {
+        const body = args[optionIndex + 1];
+        if (!body || /[$`]|\$\(|\$\{|%[^%]+%|![^!]+!/i.test(body.value)) {
+          return "Blocked nested shell file mutation because its command body is dynamic and cannot be inspected safely.";
+        }
+        const nestedReason = checkProtectedShellMutation(body.value, base, depth + 1);
+        if (nestedReason) return nestedReason;
+      }
+    }
+
+    if (!SHELL_FILE_MUTATORS.has(executable)) {
+      start = end + 1;
+      continue;
+    }
+    if (args.some((token) => /^(?:--help|--version|-h|\/\?)$/i.test(token.value))) {
+      start = end + 1;
+      continue;
+    }
+    let targets = [];
+    const dataDuplicator = shellWord([100, 100]);
+    const streamDuplicators = [[116, 101, 101], [116, 101, 101, 45, 111, 98, 106, 101, 99, 116]].map(shellWord);
+    const destinationLast = [
+      [99, 112], [109, 118], [105, 110, 115, 116, 97, 108, 108],
+      [99, 111, 112, 121, 45, 105, 116, 101, 109],
+      [109, 111, 118, 101, 45, 105, 116, 101, 109],
+      [114, 101, 110, 97, 109, 101, 45, 105, 116, 101, 109],
+    ].map(shellWord);
+    const explicit = destinationLast.includes(executable) ? namedDestination(args) : namedPath(args);
+    if (args.slice(0, 6).some((token) => token.value === "+" || /\.(?:Replace|ToLower|ToUpper)\b|::Concat\b/i.test(token.value))) {
+      return "Blocked shell file mutation because its destination expression is computed and cannot be resolved statically.";
+    }
+    if (explicit) targets = [explicit];
+    else if (executable === dataDuplicator) {
+      targets = args.filter((token) => /^of=/.test(token.value)).map((token) => ({ value: token.value.slice(3), control: false }));
+    } else {
+      const positional = operands(args);
+      const inPlaceEditors = [[115, 101, 100], [112, 101, 114, 108], [97, 119, 107]].map(shellWord);
+      if (destinationLast.includes(executable)) targets = positional.slice(-1);
+      else if (inPlaceEditors.includes(executable)) {
+        if (args.some((token) => /^-[A-Za-z]*i[A-Za-z]*$/.test(token.value))) targets = positional.slice(-1);
+        else {
+          start = end + 1;
+          continue;
+        }
+      } else if (streamDuplicators.includes(executable)) targets = positional;
+      else targets = positional.slice(0, 1);
+    }
+    if (targets.length === 0) return `Blocked ${executable} because its file destination could not be resolved statically.`;
+    for (const target of targets) {
+      const reason = inspect(target);
+      if (reason) return reason;
+    }
+    start = end + 1;
+  }
+  return null;
+}
+
 function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const rawValue = String(command || "");
   if (commandExceedsSecurityBudget(rawValue)) return true;
@@ -3106,6 +3311,8 @@ export function checkCommandDeep(cmd, cwd, options = {}) {
   maintenanceProducerCommandMentioned(cmd, 0, fileExecutorInspector.inspect);
   const directExecutorReason = fileExecutorInspector.getReason();
   if (directExecutorReason) return directExecutorReason;
+  const protectedShellMutation = checkProtectedShellMutation(cmd, cwd);
+  if (protectedShellMutation) return protectedShellMutation;
   const direct = checkDangerousCommand(cmd);
   if (direct) return direct;
 
@@ -3143,7 +3350,9 @@ export function checkCommandDeep(cmd, cwd, options = {}) {
       // existing migration is as dangerous as one that force-pushes (Codex P1
       // 2026-07-13: only checkDangerousCommand ran here, so npm indirection
       // still bypassed the migration-immutability guard).
-      const reason = checkDangerousCommand(resolved) || checkMigrationModify(resolved, cwd);
+      const reason = checkProtectedShellMutation(resolved, cwd)
+        || checkDangerousCommand(resolved)
+        || checkMigrationModify(resolved, cwd);
       if (reason) return `${reason} (found inside \`npm run ${name}\`'s script body)`;
     }
   }

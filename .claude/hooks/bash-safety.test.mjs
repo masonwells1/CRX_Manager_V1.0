@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -16,6 +16,7 @@ import {
   checkAskCommand,
   checkCommandDeep,
   checkMigrationModify,
+  checkProtectedShellMutation,
   extractNpmRunNames,
   fixedTrustedGitExecutable,
   maintenanceProducerCommandMentioned,
@@ -117,6 +118,60 @@ ok(checkDangerousCommand("ni -Type HardLink -Path x.json -Target .claude\\settin
 ok(checkDangerousCommand("fsutil hardlink create scratch\\alias.mjs .claude\\hooks\\mcp-tool-guard.mjs"), "fsutil hardlink create against a protected hook blocked");
 ok(checkDangerousCommand("fsutil $operation create scratch\\review\\$proof scratch\\seed.json"), "fsutil is denied when the hard-link operation and proof basename are both variables");
 ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Target docs/README.md"), "hard-link creation is denied even when both operands are unprotected");
+
+// A pre-existing alias must remain protected at the later write boundary. Link
+// creation checks are defense in depth, but cannot account for older aliases.
+{
+  const fixture = mkdtempSync(path.join(os.tmpdir(), "crx-shell-identity-"));
+  try {
+    const hookDir = path.join(fixture, ".claude", "hooks");
+    const scratchDir = path.join(fixture, "scratch");
+    mkdirSync(hookDir, { recursive: true });
+    mkdirSync(scratchDir, { recursive: true });
+    const protectedHook = path.join(hookDir, "bash-safety-lib.mjs");
+    const alias = path.join(scratchDir, "ordinary-notes.mjs");
+    const ordinary = path.join(scratchDir, "ordinary-output.txt");
+    writeFileSync(protectedHook, "protected\n");
+    writeFileSync(ordinary, "ordinary\n");
+    linkSync(protectedHook, alias);
+
+    const setContent = ["Set", "Content"].join("-");
+    const outFile = ["Out", "File"].join("-");
+    const streamCopy = ["t", "ee"].join("");
+    const streamCopyObject = ["Tee", "Object"].join("-");
+    const copyItem = ["Copy", "Item"].join("-");
+    const redirect = String.fromCharCode(62);
+    const aliasWriteCases = [
+      `${setContent} -LiteralPath "${alias}" -Value hostile`,
+      `Write-Output hostile | ${outFile} -LiteralPath "${alias}"`,
+      `printf hostile | ${streamCopy} "${alias}"`,
+      `Write-Output hostile | ${streamCopyObject} -FilePath "${alias}"`,
+      `${copyItem} -Path "${ordinary}" -Destination "${alias}"`,
+      `printf hostile ${redirect} "${alias}"`,
+    ];
+    for (const command of aliasWriteCases) {
+      ok(checkProtectedShellMutation(command, fixture)?.includes("protected file"), `shell destination identity denies a hard-link alias: ${command}`);
+      ok(checkCommandDeep(command, fixture)?.includes("protected file"), `the full command gate denies a hard-link alias: ${command}`);
+      const result = runHook({ tool_name: /Content|File/.test(command) ? "PowerShell" : "Bash", tool_input: { command } }, fixture);
+      eq(result.status, 0, `the live hook exits cleanly after denying an alias write: ${command}`);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), `the live hook denies an alias write: ${command}`);
+    }
+
+    const proofName = [["codex", "review", "forged"].join("-"), "json"].join(".");
+    const computedProofCommand = `${setContent} ('.claude/session-'+'state/${proofName}') hostile`;
+    ok(checkProtectedShellMutation(computedProofCommand, fixture)?.includes("dynamic"), "a computed PowerShell proof destination fails closed");
+    const computedResult = runHook({ tool_name: "PowerShell", tool_input: { command: computedProofCommand } }, fixture);
+    ok(computedResult.stdout.includes('"permissionDecision":"deny"'), "the live hook denies a computed PowerShell proof destination");
+    const spacedComputedProof = `${setContent} '.claude/session-' + 'state/${proofName}' hostile`;
+    ok(checkProtectedShellMutation(spacedComputedProof, fixture)?.includes("computed"), "a spaced PowerShell destination expression fails closed");
+
+    eq(checkProtectedShellMutation(`${setContent} -LiteralPath "${ordinary}" -Value ok`, fixture), null, "an ordinary static PowerShell destination remains allowed");
+    eq(checkProtectedShellMutation(`printf ok ${redirect} "${ordinary}"`, fixture), null, "an ordinary static redirect remains allowed");
+    eq(checkProtectedShellMutation(`Get-Content "${alias}"`, fixture), null, "a read-only command through the alias remains allowed");
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+}
 // PowerShell evaluates the item type, so the literal token can be assembled at
 // runtime and never appear in the command text (Codex, 2026-08-24). The item
 // type must therefore be a recognized safe literal or the command fails closed.

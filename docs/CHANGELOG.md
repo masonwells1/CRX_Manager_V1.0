@@ -18,6 +18,10 @@ All significant development milestones, in reverse chronological order.
 - Git helper dispatch is closed at both routes: `difftool`, `mergetool`, global
   `--exec-path` overrides, and executable diff/merge tool configuration are
   denied before Git can launch mutable code.
+- Shell write routes now resolve static destinations, canonicalize their
+  ancestors, and compare filesystem identity before execution. Hard-link
+  aliases of protected files and computed proof destinations fail closed across
+  Bash, PowerShell, and process-based MCP execution.
 - The exact-review proof directory can no longer be aliased through a Windows
   junction and populated by a dynamically assembled final hard-link write.
   Agent shell routes deny filesystem link/reparse creators as a class, including
