@@ -18,10 +18,9 @@ customer, item, preview, save, or submission made.
 `20260825142708`, effective ordering high-water `20260820120000`. The draw-down rollout itself
 closed the ledger at 975 rows / `20260825034622`; the 976th row is
 `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` (history row 891), applied
-live later on 2026-08-25 by a **concurrent session** and unrelated to the draw-down chain. Only the
-ledger fact is recorded here — that apply's approval record, proofs, and postflight belong to the
-session that ran it. Note that `.claude/schema-registry.json` is stamped `20260825034622` and is
-therefore **one migration behind live** until it is refreshed.
+live later on 2026-08-25 and unrelated to the draw-down chain. Only the ledger fact is recorded here;
+its full apply record — approval, proofs, postflight — landed separately in PR #475, from the session
+that ran it, and `.claude/schema-registry.json` was refreshed to `20260825142708` in that same PR.
 
 **Stated precisely:** that screen observation is reachability and UI-render evidence only. It is
 **not** a booking-draw transaction and **not** an end-to-end draw allocation proof. No end-to-end
@@ -59,6 +58,32 @@ Documents corrected in this pass:
 - `docs/manual/DECISION_LOG.md` — new 2026-08-25 entry recording the resume decision.
 
 No code, schema, live data, or migration was changed by this entry.
+## 2026-08-25 — save_job chem-unit invariant + derived totals applied live
+
+With Mason's explicit in-chat approval,
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` (merged as PR #446) was
+applied to production through the gated file-bytes apply door (`scripts/apply-migration-file.mjs`)
+→ ledger version `20260825142708`, ledger 975 → 976 rows. The Supabase management-API token was
+sourced in-process from the Windows Credential Manager (`Supabase CLI:supabase`) and never entered
+chat or a file. Fresh same-session CLEAN proof pair (`write-apply-proofs.mjs`,
+`gpt-5.6-sol`/high) was minted immediately before the apply; the transmitted bytes matched the
+reviewed sha256 `f2e0404e…`.
+
+`save_job` now refuses mismatched or unrecognized chemical rate units (the 8×/16× pint-vs-gallon
+over-bill class) and derives `total_cost_cents` / `total_price_cents` from the chemical lines
+server-side instead of trusting the caller. Post-apply proof: installed body carries
+`chem_unit_invariant_v2`; idempotency helpers unchanged by md5; registered smoke
+`smoke-save-job-parity.sql` returned `SMOKE_PASS_ROLLBACK` on live with the derived-total and both
+unit-refusal assertions active; nine function/money invariant sweeps clean (zero unallowlisted
+rows). The smoke fixture was updated in this change: the governed-pricing trigger
+(`require_governed_product_pricing`) now refuses `current_cost` on product INSERT, so the fixture
+creates pricing-free product shells. Tracked follow-up: the function `COMMENT` still says ELEVEN
+refusal families while the body raises twelve — needs a tiny COMMENT-only migration (the applied
+file is never edited).
+
+- **Migrations applied live this session:**
+  - `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
+
 ## 2026-08-25 — `/patrol`: the fsmonitor override now covers every Git launch
 
 Follow-up on PR #473, closing three defects the mandatory gates returned. The previous

@@ -13,16 +13,14 @@ proofs, and postflight — is the block at the top of `docs/reference/migration-
 matching issue entries are in `docs/manual/KNOWN_ISSUES.md`.
 
 **The 976th row is not part of the draw-down chain.** `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`
-(history row 891) applied live on 2026-08-25 as ledger version `20260825142708`, from a concurrent
-session, after the draw-down rollout closed. This document records only the ledger fact, read
-directly from `supabase_migrations.schema_migrations`; its approval record, proofs, and postflight
-belong to the session that ran it and are **not** reproduced or vouched for here.
+(history row 891) applied live on 2026-08-25 as ledger version `20260825142708`, after the
+draw-down rollout closed. Its full apply record — approval, proofs, postflight — is carried by
+history row 891 and the `KNOWN_ISSUES.md` entry, both landed by PR #475 from the session that ran
+it. This document states only the ledger fact and defers to those.
 
-**The schema registry is now ONE migration behind live.** `.claude/schema-registry.json` was
-regenerated from live introspection on 2026-08-25 and records `migrations_high_water`
-`20260825034622` — the draw-down boundary, taken before the `save_job` apply above. It does not yet
-carry `20260825142708`. Refresh it from live introspection before trusting any registry-derived
-hook or reviewer on `jobs`/`job_chemicals` shape.
+**The schema registry matches live.** `.claude/schema-registry.json` records `migrations_high_water`
+`20260825142708`, refreshed after the `save_job` apply. (It was briefly one migration behind, at the
+`20260825034622` draw-down boundary; PR #475 closed that gap.)
 
 **Booking draws are RESUMED** — Mason released the pause in chat on 2026-08-25. The decision, the
 evidence it rests on, and what was explicitly *not* proven are recorded in

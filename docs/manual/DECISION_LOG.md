@@ -52,8 +52,11 @@ creates. This closes **draw-time allocation only**. Do not call it end-to-end.
    cents. **Not one row per booked tier.** A partial draw stops once the requested quantity is
    exhausted: `20260816120000` skips any tier where the remaining allocation or the tier take is
    zero, so tiers past the drawn quantity produce **no row**. Their absence is correct behavior, not
-   a failure — expect rows only for the consumed tiers, in price order, with units summing to the
-   drawn quantity.
+   a failure — expect rows only for the consumed tiers, with units summing to the drawn quantity.
+   **Consumption follows document order, not price order**: the loop reads
+   `ORDER BY t.section_ord, t.ord, t.quote_item_id` (the quote-item id being a deterministic
+   tiebreak, since `(section_ord, ord)` is not unique). A booking whose tiers are not already sorted
+   by price will therefore consume a higher-priced tier before a lower one, and that is correct.
 2. **Line money.** `order_items.total_price` is the authoritative stored line amount and is whole
    cents (`order_items_total_price_whole_cents_chk` enforces it). Check the order header total
    equals the sum of its own lines to the cent.
