@@ -2518,6 +2518,12 @@ BEGIN
 END;
 $function$;
 
+-- CREATE OR REPLACE preserves the restricted live ACL, but restate the deny
+-- here so a fresh or rehearsed database cannot inherit PostgreSQL's default
+-- PUBLIC EXECUTE grant for this mutating SECURITY DEFINER helper.
+REVOKE EXECUTE ON FUNCTION public._restore_quote_version_owner_impl(uuid, uuid, uuid, text)
+  FROM anon, PUBLIC;
+
 -- --- Postflight: prove the shape and the security posture --------------------
 DO $postflight$
 DECLARE
