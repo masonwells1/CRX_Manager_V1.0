@@ -11,6 +11,7 @@ import {
   gitPushCwd,
   isGitPush,
   mainPushSource,
+  normalizeToolInput,
   proofSearchDirs,
   proofValid,
   pushContextIsAmbiguous,
@@ -625,13 +626,14 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
 
 export function evaluateProductionAction({
   toolName = "",
-  toolInput = {},
+  toolInput: rawToolInput = {},
   branch = "",
   repoDir = process.cwd(),
   nowMs = Date.now(),
   runGit = defaultRunGit,
   runGh = defaultRunGh,
 } = {}) {
+  const { input: toolInput, rawBody: rawPatchBody } = normalizeToolInput(rawToolInput);
   const name = String(toolName);
   const baseRepoDir = path.resolve(repoDir);
   const requestedWorkingDir = toolInput.workdir ?? toolInput.cwd ?? "";
@@ -650,7 +652,7 @@ export function evaluateProductionAction({
   // Classify patch payloads by their DESTINATION headers, not the whole body —
   // documentation patches legitimately mention guard/proof paths in prose
   // (Codex round-5 false positive).
-  const patchDestinations = [toolInput.patch, toolInput.diff, toolInput.input, toolInput.changes]
+  const patchDestinations = [rawPatchBody, toolInput.patch, toolInput.diff, toolInput.input, toolInput.changes]
     .flatMap((payloadText) => extractPatchDestinations(payloadText));
   if ([...pathCandidates, ...patchDestinations].some((candidate) => reviewProofPathMentioned(candidate))) {
     return denied("CODEX PRODUCTION GATE: review proof files are wrapper-owned and cannot be written, edited, moved, or deleted directly.");
