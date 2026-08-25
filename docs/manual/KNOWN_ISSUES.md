@@ -13,11 +13,32 @@ Git's conversion pipeline, patrol now *refuses* to run status in any worktree wh
 config defines a `filter.*.clean/smudge/process`, `core.fsmonitor` command, `textconv`, or
 ssh/proxy override — and fails closed when that config is unreadable. Same pattern PR #455
 established for the proof wrapper.
-(2) **Forgeable parked state.** Any PR author can suppress an actionable PR by putting
-`PARKED` / `ON HOLD` / `DO NOT MERGE` in the title; `isParked()` requires no actor
-provenance, and the parked rule runs before the security checks. On a public repo an
-outside contributor could hide their own PR from the report. A trusted-actor label, or a
-label applied only by Mason, would close it.
+(2) **Forgeable parked state — CLOSED 2026-08-24.** `isParked()` now honours **labels
+only**; a `PARKED` title is ignored. Applying a label requires write access, so it carries
+authorization a self-authored title does not. **Consequence Mason should know:** PRs #361
+and #441, which were parked via title markers, are actionable again in the report — add a
+`hold`/`parked` label to either one to park it properly.
+
+**RESOLVED BY SCOPING 2026-08-24 (Mason's decision) — `/patrol` is interactive only.**
+The unattended-execution surface below did not converge, so the tool no longer claims that
+capability: no OS scheduled task, no unattended `/loop`. Every finding in that surface
+matters *only* because patrol would run hourly under Mason's account unwatched; run by hand
+it is no riskier than any other script in this repo, and by hand is where its value already
+is. The `trusted-exec.mjs` hardening stays as defence in depth. **Scheduling it later needs
+its own design pass on the execution surface, not another patch.** The history below is
+kept because it is the evidence for that decision.
+
+**The unattended-execution surface did not converge.** Three consecutive
+Codex rounds each found a *new* hole in the previous round's fix: round 3 (PATH lookups and
+repo-local filters), round 4 (a missed `execFileSync("git")` in `patrol-report.mjs`, plus
+producer validation failing open on an unbound app id), round 5 (`collectorBuild()` calling
+status without the filter check, and the guard reading only `--local` while Git also
+consumes per-worktree config when `extensions.worktreeConfig` is on). Each fix was correct
+and each was incomplete. **Recommendation on the table for Mason: scope `/patrol` to
+interactive use and drop the OS-scheduled task.** Every one of these findings matters
+*because* the tool would run hourly unattended under his account; run by hand inside a
+session it carries no more risk than any other script he runs. That removes the threat
+model rather than patching it one hole at a time.
 
 **Last verified: 2026-08-19 UTC, read-only live re-read.** **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
 of the stored ledger name), and `docs/reference/migration-history.md` uses the 14-digit definition, so this file now matches it. A plain `max(name)` returns the slug `year_end_summary`. The ordering claim holds over the prefixed subset, not over the raw column.) Two things this pass corrected in this file: (1) the header below claimed `20260812003315` / 962 rows, **nine applies** and six days of ledger staleness out of date — the six 2026-08-12 recoveries listed below, then `20260812212323`, `20260813011751` and `20260816174353`, which is 962 + 9 = 971; (2) CRX-SEC-1 **applied live on 2026-08-16** — see the new CLOSED entry immediately below — while `docs/reference/migration-history.md` row 886 still called it an unapplied local candidate. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, matching this ledger; it was **not** re-derived in this pass. **The 2026-08-10 money figures quoted further down this file are stale** — a read-only re-measure on 2026-08-18 finds `order_items.total_price`, `order_items.profit`, `commissions.commission_amount` and `commissions.order_profit` all at **0** sub-cent rows, with only `quotes.total_cost` still holding **2**; the "43 dirty rows" and "49 rows" figures below are superseded by that measurement (recorded in full in `docs/manual/CURRENT_STATE.md` section 2). Everything else below was left as separately dated historical evidence and was not re-verified in this pass.

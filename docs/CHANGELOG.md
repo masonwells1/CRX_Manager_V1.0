@@ -42,6 +42,14 @@ needs Mason?" and is built so that its silence is trustworthy.
   worktrees into the fallback, and a cited "full queue" path that was never written.
   153 assertions pass, including a mutation set that flips each all-clear condition
   individually and asserts the phrase disappears every time.
+- **`/patrol` is interactive only — Mason's scoping decision, 2026-08-24.** It is not
+  scheduled and must not be. Three adversarial review rounds each found a *new* hole in the
+  previous round's fix of the unattended-execution surface; every fix was correct and every
+  one was incomplete by one step. All of those findings exist only because the tool would
+  run hourly under his account unwatched, so the capability was dropped rather than patched
+  a fourth time. Run by hand it is no riskier than any other script here, and by hand is
+  where its value already is. The `trusted-exec.mjs` hardening stays as defence in depth;
+  scheduling it later needs its own design pass, not another patch.
 - **Loop liveness, parked migrations, and gate health are implemented.** Parked discovery
   reuses `.claude/hooks/worktree-awareness-lib.mjs` — the library `/fleet` composes — so
   the two can never report different parked counts; when that library cannot determine a

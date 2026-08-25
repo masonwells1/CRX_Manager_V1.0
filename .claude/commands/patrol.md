@@ -39,38 +39,48 @@ node scripts/patrol/patrol-report.mjs
 - **Negative claims only.** It reports blockers it can see. It never says a pull request is
   ready to merge — GitHub's merge button is the authority.
 - **It cannot see decisions that live outside GitHub.** A pull request held back by a
-  judgement call looks unblocked to patrol unless the hold is marked on GitHub itself —
-  a `hold` / `parked` / `do-not-merge` label, or `PARKED` in the title. When Mason parks
-  something, add the marker, or patrol will keep raising it.
+  judgement call looks unblocked to patrol unless the hold is marked on GitHub itself.
+  Use a **label** — `hold`, `parked`, `on-hold`, `do-not-merge`, or `blocked`. A `PARKED`
+  title is deliberately NOT honoured: a title is written by the PR author, so honouring it
+  would let any contributor hide their own pull request from the report, while applying a
+  label requires write access and is therefore an authorization signal.
 - **Parked migrations come from the same library `/fleet` uses**, so the two never
   disagree. When that library reports parked state as unknown for a worktree, patrol marks
   the source incomplete rather than reporting a clean zero.
 - **It reports gates, it does not run them.** "Codex gate down" means reviews cannot run —
   a different thing from a review finding problems.
 
-## Recurring use and the dead-man alarm
+## Interactive only — do NOT schedule this (Mason's decision, 2026-08-24)
 
-To have it check on a schedule, run `/loop 30m /patrol`.
+Run `/patrol` when Mason asks. **Do not** register it as an OS scheduled task, and do not
+set it running unattended with `/loop`.
 
-Patrol cannot report its own death: if the loop stops, the laptop sleeps, or auth expires,
-it just goes quiet — and quiet looks exactly like "nothing needs you". `patrol-monitor.mjs`
-is the independent check. It reads the heartbeat patrol writes on every **completed** scan
-and alarms when it is missing, stale, malformed, or future-dated.
+That is a deliberate scoping decision, not an oversight. Three consecutive adversarial
+review rounds each found a *new* hole in the previous round's fix of the unattended
+execution surface — PATH-resolved binaries, repository-local content filters, a missed
+`execFileSync`, check producers failing open, an unguarded `git status`, per-worktree Git
+config. Every fix was correct; every one was incomplete by one step. All of those findings
+matter *only because* the tool would run hourly under Mason's account with no one watching.
+Run by hand inside a session, patrol carries no more risk than any other script here — and
+by hand is where its value already is, since he reads the report when he sits down.
 
-Check it any time:
+The hardening in `trusted-exec.mjs` stays (fixed executables, minimal environment, refusing
+worktrees whose local config could execute a filter). It is defence in depth, not a licence
+to schedule.
+
+**If scheduling is ever wanted, it needs its own design pass on the execution surface —
+not another patch.** See `docs/manual/KNOWN_ISSUES.md`.
+
+### The heartbeat and the monitor
+
+Patrol still writes a heartbeat on every completed scan, and `patrol-monitor.mjs` reports
+whether one is recent:
 
 ```bash
 node scripts/patrol/patrol-monitor.mjs
 ```
 
-For it to work while nobody is at the machine it must run from the **OS scheduler**, not
-from an agent session — a session-triggered check cannot fire when no session starts, which
-is precisely the case it exists to catch. Registering a scheduled task changes system
-settings, so **Mason runs this himself**, once, in an elevated PowerShell:
-
-```powershell
-schtasks /Create /TN "CRX Patrol Monitor" /SC MINUTE /MO 60 /TR "node C:\CRX_Manager\scripts\patrol\patrol-monitor.mjs" /F
-```
-
-Until that task exists, a scheduled patrol is **not** a safety net — say so plainly rather
-than implying the queue is being watched.
+Interactively that is a convenience — "is the last scan I ran still current?" — **not** a
+dead-man alarm. Nothing fires it while nobody is at the machine, which is exactly the case
+a real dead-man switch exists to cover. Never describe patrol as watching the queue for
+him; it reports when he runs it.

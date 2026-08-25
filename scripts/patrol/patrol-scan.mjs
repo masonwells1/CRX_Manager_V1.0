@@ -137,8 +137,36 @@ export function coderabbitStateFrom(statuses) {
   // which the gate-health source reads to tell "gate down" from "gate says no".
   const description = latest.description ?? null;
   if (latest.state === "pending") return { state: "in_flight", description };
-  if (latest.state === "success") return { state: "complete", description };
+  if (latest.state === "success") return { state: "success_claimed", description };
   return { state: "failed", description }; // failure / error → fail closed
+}
+
+// A GREEN CodeRabbit status is not evidence a review happened. docs/reference/gotchas.md
+// records PR #411: the check row read "Review completed" while CodeRabbit's own comment
+// said "Review failed" and zero findings were ever submitted (PR #402 was the milder
+// rate-limited version). Trusting the status row would let patrol hide a missing mandatory
+// review behind "no blockers found".
+export function coderabbitCompletion({ statusState, evidence }) {
+  if (statusState !== "success_claimed") return statusState; // missing / in_flight / failed
+  if (!evidence?.ok) return "unknown";                       // could not verify → fail closed
+  if (evidence.reviewCount > 0) return "complete";           // a review really was submitted
+  if (evidence.latestSaysFailed) return "failed";            // green row, failure in the body
+  return "unknown";                                          // green row, nothing submitted
+}
+
+const CODERABBIT_ACTOR = /^coderabbitai(\[bot\])?$/i;
+const CR_FAILURE_TEXT = /review failed|rate limit|error occurred during the review/i;
+
+function coderabbitEvidence(repo, number) {
+  try {
+    const d = ghJson(["pr", "view", String(number), "--repo", repo, "--json", "reviews,comments"]);
+    const mine = (d?.reviews ?? []).filter((r) => CODERABBIT_ACTOR.test(r?.author?.login ?? ""));
+    const comments = (d?.comments ?? []).filter((c) => CODERABBIT_ACTOR.test(c?.author?.login ?? ""));
+    const latest = comments[comments.length - 1];
+    return { ok: true, reviewCount: mine.length, latestSaysFailed: CR_FAILURE_TEXT.test(latest?.body ?? "") };
+  } catch {
+    return { ok: false };
+  }
 }
 
 // ── pull requests ───────────────────────────────────────────────────────────
@@ -150,13 +178,13 @@ export function coderabbitStateFrom(statuses) {
 // come from the REST check-runs and statuses endpoints instead.
 const PR_FIELDS = "number,title,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergeable,mergeStateStatus,updatedAt,author,labels";
 
-// Markers that mean "held by a decision". Patrol can only honour a marker that exists on
-// GitHub; a decision recorded only in notes or memory is invisible to it.
+// Markers that mean "held by a decision". LABELS ONLY — a PR title is written by the PR
+// author, so honouring a title marker let any contributor move their own PR out of the
+// actionable lane just by naming it "PARKED". Applying a label needs write access, so it
+// is an authorization signal; a title is not. Documenting that risk was not mitigating it.
 const PARKED_LABELS = new Set(["hold", "parked", "on-hold", "do-not-merge", "blocked"]);
-const PARKED_TITLE = /\bPARKED\b|\bON HOLD\b|\bDO NOT MERGE\b/i;
-function isParked(pr) {
-  if ((pr.labels ?? []).some((l) => PARKED_LABELS.has(String(l.name).toLowerCase()))) return true;
-  return PARKED_TITLE.test(pr.title ?? "");
+export function isParked(pr) {
+  return (pr.labels ?? []).some((l) => PARKED_LABELS.has(String(l.name).toLowerCase()));
 }
 
 function collectPullRequests(repo) {
@@ -213,8 +241,16 @@ function collectPullRequests(repo) {
       const checks = cd.checkRuns === null || cd.statuses === null
         ? "unknown"
         : checksVerdict({ required, checkRuns: cd.checkRuns, statuses: cd.statuses });
-      const cr = cd.statuses === null ? { state: "missing", description: null } : coderabbitStateFrom(cd.statuses);
-      if (cr.description) crDescriptions.push(cr.description);
+      const crStatus = cd.statuses === null ? { state: "missing", description: null } : coderabbitStateFrom(cd.statuses);
+      if (crStatus.description) crDescriptions.push(crStatus.description);
+      // Only pay for the extra review lookup when the status CLAIMS success — that is the
+      // only case where the status row and reality can disagree.
+      const cr = {
+        state: coderabbitCompletion({
+          statusState: crStatus.state,
+          evidence: crStatus.state === "success_claimed" ? coderabbitEvidence(repo, a.number) : null,
+        }),
+      };
       return {
         number: a.number, title: a.title, state: a.state, isDraft: a.isDraft,
         headRefName: a.headRefName, headRefOid: a.headRefOid,

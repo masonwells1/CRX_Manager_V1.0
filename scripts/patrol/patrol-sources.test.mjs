@@ -19,7 +19,7 @@ import {
   collectGateHealth,
 } from "./patrol-sources.mjs";
 import { judgeHeartbeat, alarmText, ALARM_EXIT } from "./patrol-monitor.mjs";
-import { checksVerdict, coderabbitStateFrom } from "./patrol-scan.mjs";
+import { checksVerdict, coderabbitStateFrom, coderabbitCompletion, isParked } from "./patrol-scan.mjs";
 import { HEARTBEAT_OVERDUE_MS, prBlockers as prBlockersFor } from "./patrol-classify.mjs";
 
 let pass = 0;
@@ -203,7 +203,9 @@ for (const state of ["neutral", "skipped", "stale", ""]) {
 
 // ── CodeRabbit completion (Codex HIGH #2) ───────────────────────────────────
 const crStatus = (state) => [{ context: "CodeRabbit", state, creator: { id: 136622811 }, updated_at: "2026-08-24T20:00:00Z", description: "d" }];
-eq(coderabbitStateFrom(crStatus("success")).state, "complete", "only a successful review is complete");
+// The status layer reports what the ROW claims; whether a review actually happened is
+// decided by coderabbitCompletion() below, against the reviews themselves.
+eq(coderabbitStateFrom(crStatus("success")).state, "success_claimed", "a green row only CLAIMS success — it is not yet 'complete'");
 eq(coderabbitStateFrom(crStatus("pending")).state, "in_flight", "a pending review is in flight");
 eq(coderabbitStateFrom(crStatus("failure")).state, "failed", "a FAILED review is not a completed review");
 eq(coderabbitStateFrom(crStatus("error")).state, "failed", "an ERRORED review is not a completed review");
@@ -251,6 +253,42 @@ eq(coderabbitStateFrom([{ context: "CodeRabbit", state: "success", creator: { id
   ok(/parkedMainlineDiscoveryFrom\(/.test(src), "parked collection runs the same mainline discovery /fleet uses");
   ok(/mainlineState = "unknown"/.test(src), "and has an explicit unknown state");
   ok(/mainline parked state unknown/.test(src), "which marks the source incomplete rather than reporting a clean zero");
+}
+
+// ── a green CodeRabbit row is not proof a review happened ───────────────────
+// docs/reference/gotchas.md records PR #411: check row "Review completed" while
+// CodeRabbit's own comment said "Review failed" and nothing was ever submitted.
+{
+  const complete = coderabbitCompletion({ statusState: "success_claimed", evidence: { ok: true, reviewCount: 1, latestSaysFailed: false } });
+  eq(complete, "complete", "a green row WITH a submitted review is genuinely complete");
+
+  eq(coderabbitCompletion({ statusState: "success_claimed", evidence: { ok: true, reviewCount: 0, latestSaysFailed: true } }), "failed",
+    "green row + zero reviews + a 'Review failed' comment is FAILED — the PR #411 shape");
+  eq(coderabbitCompletion({ statusState: "success_claimed", evidence: { ok: true, reviewCount: 0, latestSaysFailed: false } }), "unknown",
+    "green row + zero reviews is unknown, never complete");
+  eq(coderabbitCompletion({ statusState: "success_claimed", evidence: { ok: false } }), "unknown",
+    "if the review evidence could not be fetched, a green row is NOT trusted");
+  for (const s of ["missing", "in_flight", "failed"]) {
+    eq(coderabbitCompletion({ statusState: s, evidence: null }), s, `a ${s} status passes through unchanged`);
+  }
+}
+{
+  const blockers = prBlockersFor({ checks: "green", coderabbit: "unknown", solProof: "valid", requiresSolProof: false });
+  ok(blockers.some((b) => /no submitted review could be confirmed/.test(b)),
+    "an unconfirmed green review becomes a visible blocker rather than silence");
+}
+
+// ── parked status must not be forgeable by a PR author ──────────────────────
+{
+  // A title is written by the PR author; a label needs write access. Honouring titles let
+  // any contributor move their own PR out of the actionable lane.
+  eq(isParked({ title: "feat: something PARKED", labels: [] }), false,
+    "a PARKED title no longer parks a PR — an author must not be able to hide their own work");
+  eq(isParked({ title: "DO NOT MERGE yet", labels: [] }), false, "nor DO NOT MERGE in the title");
+  eq(isParked({ title: "ordinary", labels: [{ name: "hold" }] }), true, "a hold LABEL parks it");
+  eq(isParked({ title: "ordinary", labels: [{ name: "Parked" }] }), true, "label matching is case-insensitive");
+  eq(isParked({ title: "ordinary", labels: [{ name: "enhancement" }] }), false, "an unrelated label does not park it");
+  eq(isParked({ title: "ordinary" }), false, "a PR with no labels is not parked");
 }
 
 // ── dead-man monitor ────────────────────────────────────────────────────────

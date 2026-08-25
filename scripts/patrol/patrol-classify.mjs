@@ -116,6 +116,9 @@ export function prBlockers(pr) {
   // A review that errored is not a review. Treating any non-pending status as complete
   // cleared this blocker and could yield "no blockers found" with nothing having passed.
   if (pr.coderabbit === "failed") out.push("the CodeRabbit review did not succeed at the head commit");
+  // A green status row with no submitted review is the PR #411 shape recorded in
+  // docs/reference/gotchas.md. Reporting it as complete would hide a missing mandatory review.
+  if (pr.coderabbit === "unknown") out.push("CodeRabbit's status is green but no submitted review could be confirmed — read the PR comments before trusting it");
   if (pr.solProof === "stale") out.push("Sol proof is stale — reviewed base no longer matches the live base");
   if (pr.solProof === "missing" && pr.requiresSolProof) out.push("no valid Sol proof at the head commit");
   // Patrol cannot evaluate the exact-SHA Sol proof registry. Reporting that as silence
