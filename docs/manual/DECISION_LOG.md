@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-08-24
+Last verified: 2026-08-25
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -896,12 +896,23 @@ entry as precedent for publishing any other live data; a fresh owner decision is
 Mason's stated basis was that the data in this system is not real or operational, so the basis does
 not carry to data that is.
 
-**Related, and deliberately not restated here:** the narrow live-ledger recovery exception (the rule
-that lets an already-applied migration be recovered to Git without its already-live SQL blocking the
-push proof) was settled the same day, but its Decision Log entry lives on PR #403 and **is not on
-`main` yet**. Until #403 merges, `main`'s Decision Log does not record that approval. That entry is
-also what makes this change necessary: as amended in #403, the exception is **byte-verbatim only** —
-a redacted recovery cannot attest — so publishing this file in full is what makes it eligible.
+**Related, and closed — not an open thread.** An earlier version of this paragraph pointed at a
+narrow live-ledger recovery exception (the rule that would let an already-applied migration be
+recovered to Git without its already-live SQL blocking the push proof) as a pending approval on
+PR #403. **PR #403 was closed on 2026-08-25 by Mason's explicit decision and will not merge.** That
+exception is therefore **not in force**, and no Decision Log entry for it exists on `main`. Do not
+cite it as approved policy, and do not treat it as unfinished work to be resurrected. The recovery
+it existed to enable had already been completed by hand on 2026-08-14 — commit `3a2a0ca0`, via
+PR #392 — the need has not recurred across the 188 commits since, and the attestation machinery
+needed five Sol adversarial rounds before it was no longer forgeable. A future byte-verbatim
+recovery uses that same manual path, or requires a fresh owner decision. Evidence:
+https://github.com/masonwells1/CRX_Manager_V1.0/pull/403#issuecomment-5416488045
+
+**This override does not depend on #403.** Publishing `20260812115238` in full rests on Mason's own
+explicit 2026-08-14 instruction recorded under **Source** above, and on the byte-for-byte match
+against the live ledger recorded under **Decision** — a redacted file could not have been checked
+against those ledger bytes at all. That reasoning is self-contained and is unaffected by #403's
+closure.
 
 ---
 
