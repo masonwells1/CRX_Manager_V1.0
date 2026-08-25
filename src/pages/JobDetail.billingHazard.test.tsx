@@ -225,9 +225,13 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     const save = saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement;
     fireEvent.click(save);
 
-    await waitFor(() => expect(mockToast).toHaveBeenCalled());
-    const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
-    expect(errors.some((m) => /counted in dry oz|cannot be saved/i.test(m))).toBe(true);
+    // Wait for the MATCHING toast, not merely the first toast of any kind — under CI
+    // load an unrelated toast can land first, and asserting on a snapshot taken at that
+    // moment reads as "the guard didn't fire" when it fires one tick later.
+    await waitFor(() => {
+      const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
+      expect(errors.some((m) => /counted in dry oz|cannot be saved/i.test(m))).toBe(true);
+    }, { timeout: 15000 });
     // The real proof: save_job never ran, so no wrong row could reach job_chemicals.
     // (The page calls unrelated read RPCs such as get_notes_for_entity on mount.)
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
@@ -250,11 +254,13 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
 
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
     fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
-    await waitFor(() => expect(mockToast).toHaveBeenCalled());
-
-    const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
-    const hazardToast = errors.find((m) => /quantity counted in/i.test(m)) || '';
-    expect(hazardToast).not.toBe('');
+    // Wait for the MATCHING toast, not the first toast of any kind (CI-interleaving race).
+    const hazardToast = await waitFor(() => {
+      const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
+      const found = errors.find((m) => /quantity counted in/i.test(m)) || '';
+      expect(found).not.toBe('');
+      return found;
+    }, { timeout: 15000 });
     expect(hazardToast).toMatch(/re-enter the rate/i);
     expect(hazardToast).toMatch(/does not change the amount/i);
     // The specific dangerous shape: a bare "or change the rate unit to X/ac." that ENDS the
@@ -563,9 +569,11 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
 
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
     fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
-    await waitFor(() => expect(mockToast).toHaveBeenCalled());
-    const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
-    expect(errors.some((m) => /its price is blank, negative, or not a whole number of cents/i.test(m))).toBe(true);
+    // Wait for the MATCHING toast, not the first toast of any kind (CI-interleaving race).
+    await waitFor(() => {
+      const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
+      expect(errors.some((m) => /its price is blank, negative, or not a whole number of cents/i.test(m))).toBe(true);
+    }, { timeout: 15000 });
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
   }, 30000);
 
