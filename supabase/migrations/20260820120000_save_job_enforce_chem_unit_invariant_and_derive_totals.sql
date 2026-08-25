@@ -165,8 +165,8 @@
 -- first written (2026-08-25 review): CHEM_UNIT_MISMATCH, CHEM_RATE_DENOMINATOR_NOT_ACRES,
 -- CHEM_UNIT_FORM_MISMATCH, CHEM_QUANTITY_NOT_FINITE, CHEM_UNIT_UNSUPPORTED_CHARACTER,
 -- CHEM_RATE_UNIT_UNRECOGNIZED (including its punctuation-only folded-empty arm),
--- CHEM_STOCK_UNIT_IS_A_RATE, CHEM_QUANTITY_ZERO_BUT_EXPECTED, CHEM_QUANTITY_NOT_DERIVED /
--- unverifiable quantities, and JOB_ACRES_NOT_FINITE. A zero here therefore means "no live
+-- CHEM_STOCK_UNIT_IS_A_RATE, CHEM_QUANTITY_ZERO_BUT_EXPECTED, CHEM_QUANTITY_NOT_DERIVED,
+-- CHEM_QUANTITY_UNVERIFIABLE, and JOB_ACRES_NOT_FINITE. A zero here therefore means "no live
 -- row trips change 5", NOT "no live row is refused". Whoever applies must satisfy BOTH:
 -- this count returns zero AND every live job_chemicals row clears EVERY other refusal in
 -- the CURRENT body -- enumerate them from the body at apply time, not from this comment,
@@ -314,7 +314,7 @@ BEGIN
   -- does not close it: a later migration that copies this marker verbatim would still
   -- pass, so any body change must bump the marker.
   IF md5(v_src) <> '7e1668161ae287086e76a8ba5bd313d6'
-     AND position('chem_unit_invariant_v1' IN v_src) = 0 THEN
+     AND position('chem_unit_invariant_v2' IN v_src) = 0 THEN
     RAISE EXCEPTION
       'PREFLIGHT_BODY_DRIFT: live body md5 is %, expected 7e1668161ae287086e76a8ba5bd313d6. The job-save RPC changed out of band since review. Diff the live body against 20260706080000 and re-review; applying this migration now would silently revert that change.',
       md5(v_src);
@@ -509,11 +509,15 @@ BEGIN
   -- Use the canonical live helper.
   v_season := compute_season(v_job_date);
 
-  -- BODY MARKER: chem_unit_invariant_v1
+  -- BODY MARKER: chem_unit_invariant_v2
   -- Do not remove or reword this string. The preflight pin at the top of this file keys
   -- its re-apply no-op on it, and any future revision of this body MUST bump it to
-  -- chem_unit_invariant_v2 so that replaying this migration is refused rather than
-  -- silently reverting that revision.
+  -- chem_unit_invariant_v3 so that replaying this migration is refused rather than
+  -- silently reverting that revision. (v1 -> v2 on 2026-08-25, when round 26 added the
+  -- punctuation-only folded-empty arm -- the drift reviewer caught that the revision had
+  -- not bumped it, which would have let a pre-round-26 copy of this file replay over the
+  -- revised body unrefused. No v1 body was ever applied anywhere, so no live or ledgered
+  -- state distinguishes the two; the bump exists so that stays true.)
   -- ==========================================================================
   -- CHEMICAL UNIT INVARIANT. Runs BEFORE any write, so a refusal leaves the job
   -- exactly as it was. This predicate is SERVER-AUTHORED AND HAS NO SHIPPED CLIENT
