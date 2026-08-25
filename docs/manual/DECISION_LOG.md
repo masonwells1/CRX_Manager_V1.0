@@ -63,10 +63,12 @@ and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 
    `CLAUDE.md`, `.coderabbit.yaml`, `package.json`, `scripts/**`, `supabase/migrations/**`, and
    `.claude/schema-registry.json`.
 7. **A first push no longer rescans all reachable repository history when the destination proves a
-   usable default-branch boundary.** For a configured named remote, pre-push reads the remote's
-   actually advertised `HEAD` and excludes that ancestry only when the same commit object is
-   already available locally. Direct URLs, missing/unavailable remote heads, malformed responses,
-   and unfetched heads retain the conservative full-history fallback. New commits after the remote
+   usable default-branch boundary.** Git's hook-supplied actual push location is mandatory. For a
+   configured named remote, optimization occurs only when its sole fetch URL and sole push URL both
+   match that exact location; pre-push then reads the remote's advertised `HEAD` and excludes that
+   ancestry only when the same commit object is already available locally. Direct URLs, divergent
+   `pushurl` configuration, missing/unavailable remote heads, malformed responses, and unfetched
+   heads retain the conservative full-history fallback. New commits after the remote
    boundary are still scanned completely, including private content added and deleted before the
    new branch tip.
 

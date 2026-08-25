@@ -4,7 +4,7 @@ echo ""
 echo "Checking Phase 3C private-artifact containment..."
 # Read the real pre-push ref updates from stdin and inspect every outgoing
 # commit, including a packet that was committed and later deleted at tip.
-if ! node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-push "${1:-}" 2>&1; then
+if ! node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-push "${1:-}" "${2:-}" 2>&1; then
   echo ""
   echo "❌ PRIVATE ARTIFACT CONTAINMENT FAILED — push blocked."
   exit 1

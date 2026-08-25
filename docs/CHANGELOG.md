@@ -42,8 +42,9 @@ failed or cancelled dependency cannot be accepted as a skipped required check.
 **First-push containment performance** — a new remote branch previously scanned up to 4,096
 reachable commits even when nearly all were already advertised by the destination remote. Named
 remotes now use their actually advertised, locally available default-branch HEAD as the exclusion
-boundary. Direct URLs or unavailable/unfetched heads keep the conservative full-history fallback;
-all commits after the advertised boundary remain fully scanned.
+boundary only when their configured fetch URL and push URL both exactly match Git's hook-supplied
+actual destination. Direct URLs, divergent `pushurl` settings, or unavailable/unfetched heads keep
+the conservative full-history fallback; all commits after the advertised boundary remain fully scanned.
 
 **Two git-config settings were falsifying local state** and were fixed with Mason's approval. Both
 were invisible to every existing guard because neither is a file in the repository:
