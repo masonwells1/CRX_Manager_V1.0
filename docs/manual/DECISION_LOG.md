@@ -52,8 +52,8 @@ local state, both invisible to every file-watching guard because neither is a fi
 - `core.fsmonitor` at repository scope pointed at a 3-line `patrol` script under the user temp
   directory (`<temp-dir>/patrol-fsmon-<id>/fsmon.cmd`) that reported "nothing changed". Proven by
   controlled test: `git status` reported clean while `git -c core.fsmonitor=false status` reported
-  ` M .claude/settings.json`; blob hashes confirmed the file genuinely differed
-  (`f9032e03…` on disk vs `296744f8…` in index/HEAD). `git update-index --refresh` did not fix it.
+  the file as modified; blob hashes confirmed it genuinely differed (`f9032e03…` on disk vs
+  `296744f8…` in index/HEAD). `git update-index --refresh` did not fix it.
   **Unset with Mason's approval.**
 - `core.hooksPath` in one worktree's config pointed at a **separate checkout outside this
   repository** (`<other-repo-root>/.husky`), so a commit there would have run that repository's

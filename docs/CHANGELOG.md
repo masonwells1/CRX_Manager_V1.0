@@ -25,7 +25,7 @@ were invisible to every existing guard because neither is a file in the reposito
 
 - `core.fsmonitor` (repo config) pointed at a temp-directory script reporting "nothing changed".
   `git status` reported a clean tree while `git -c core.fsmonitor=false status` reported
-  ` M .claude/settings.json`; blob hashes confirmed a real difference (`f9032e03…` vs
+  the file as modified; blob hashes confirmed a real difference (`f9032e03…` vs
   `296744f8…`). `git update-index --refresh` did not clear it. Now unset. Previous value was a
   `patrol` fsmonitor script under the user temp directory
   (`<temp-dir>/patrol-fsmon-<id>/fsmon.cmd`).
@@ -39,6 +39,7 @@ enumerate every configured hook path with
 from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
 stop-and-report. Inspecting `config.worktree` alone is insufficient — `core.hooksPath` also takes
 system, global and local scope, and precedence decides which one wins.
+
 ## 2026-08-25 — `/patrol`: the fsmonitor override now covers every Git launch
 
 Follow-up on PR #473, closing three defects the mandatory gates returned. The previous
