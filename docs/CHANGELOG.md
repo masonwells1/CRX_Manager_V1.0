@@ -8,13 +8,20 @@ Documentation-only follow-up to the 2026-08-24 rollout below. It records the pos
 verification that was actually performed, and it stops three canonical documents from disagreeing
 about live state.
 
-**Observed on 2026-08-25 (read-only, no writes):** the live migration ledger at **975 rows**,
-`max(version)` `20260825034622`, effective ordering high-water `20260819232000`; **zero unexpired
-and zero unbound `draw_down_quote` receipts**; the draw-down function ACL and `search_path` posture
-as recorded in the rollout block; `.claude/schema-registry.json` regenerated from live introspection
-and stamped to the same `20260825034622` high-water; production root returning **HTTP 200**; and
-Mason opening the production Quote Builder initial screen (`Q-2026-2062`), which rendered normally
-with no visible error and with no customer, item, preview, save, or submission made.
+**Observed on 2026-08-25 (read-only, no writes):** **zero unexpired and zero unbound
+`draw_down_quote` receipts**; the draw-down function ACL and `search_path` posture as recorded in
+the rollout block; production root returning **HTTP 200**; and Mason opening the production Quote
+Builder initial screen (`Q-2026-2062`), which rendered normally with no visible error and with no
+customer, item, preview, save, or submission made.
+
+**Ledger reading at the time this entry was written:** **976 rows**, `max(version)`
+`20260825142708`, effective ordering high-water `20260820120000`. The draw-down rollout itself
+closed the ledger at 975 rows / `20260825034622`; the 976th row is
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` (history row 891), applied
+live later on 2026-08-25 by a **concurrent session** and unrelated to the draw-down chain. Only the
+ledger fact is recorded here — that apply's approval record, proofs, and postflight belong to the
+session that ran it. Note that `.claude/schema-registry.json` is stamped `20260825034622` and is
+therefore **one migration behind live** until it is refreshed.
 
 **Stated precisely:** that screen observation is reachability and UI-render evidence only. It is
 **not** a booking-draw transaction and **not** an end-to-end draw allocation proof. No end-to-end
