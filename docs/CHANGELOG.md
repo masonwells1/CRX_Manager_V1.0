@@ -1,6 +1,6 @@
 # CRX Manager V1.0 — Development Changelog
 
-All significant development milestones, in reverse chronological order.
+All significant development milestones, in reverse chronological order within each merged workstream.
 
 ## 2026-08-24 — PR #432 Git hook indirection hardening
 
@@ -778,6 +778,489 @@ Blend Recipes was never affected; it selects `*`.
   also has a separate generated maintenance-execution matcher owned by its
   checked-in generator; this change hardens the shared shell/MCP layer and does
   not implicitly regenerate that independent matcher.
+## 2026-08-22 — The chemical-unit and job-money invariants move out of React and into `save_job` (parked)
+
+**Round 22 (2026-08-24) — the thing none of this catches, written down where it cannot be**
+**missed.** Every check in this migration confirms that units agree with each other. Not one
+confirms that a rate makes sense. During the product cleanup, the answer given for a product
+costing $931 a pound was "MG per acre" — milligrams. That is a perfectly valid unit, so it would
+have passed every single check built over twenty-one rounds, and invoiced roughly a millionth of
+the right amount. The only reason it did not happen is that a reviewer refused to write down an
+answer that looked wrong. That limit is now stated plainly at the top of the migration, so nobody
+mistakes the file's length for coverage of that question. Closing it properly means setting
+sensible rate limits per product, which is separate work.
+
+The related point is recorded beside it: giving a product the same rate unit as its stock unit
+makes the arithmetic safe, because no conversion happens and so no conversion can be wrong. It
+does not confirm the rate itself is right.
+
+The catalogue cleanup finished with Mason's approval and is re-measured here independently:
+active products with no rate unit went from 25 to **zero**, across 25 rows, with pricing across
+all 604 products identical to the cent before and after. So this migration would now refuse
+nothing an operator can currently sell — reached by fixing the data, not by weakening the rule.
+That is a fact about the data today, not about the migration, which is exactly why the rule stays.
+
+Still parked; nothing has been applied to live.
+
+**Round 21 (2026-08-24) — the tidying-up was doing the attacker's work.** Someone can write a unit
+using Cyrillic letters that look identical to ours on screen — `oz∕сԝт`, where the "cwt" is not
+the letters c, w and t at all. The rule stripped out anything it did not recognise as a letter or
+number. Against Cyrillic that did not leave a suspicious remnant behind; it **erased the whole
+thing**, leaving a clean, innocent-looking `oz`, which is a real unit. So it passed, and a rate
+quoted per hundredweight would have billed as per-acre.
+
+Every earlier round assumed that tidying up leaves something behind to catch. Against letters
+from another alphabet it leaves nothing. The rule now refuses any unit containing a character it
+cannot read, on lines where money is at stake, with a plain message about copy-and-paste from a
+spreadsheet.
+
+The important part is the reversal: getting the list of known-harmless characters wrong can now
+only cause a **refusal**, never an acceptance. Every round before this one had the opposite
+property, which is why each one was beaten by the next character along. Checked against the live
+database: the attack is refused, and every real unit still works.
+
+Still parked; nothing has been applied to live.
+
+**Round 20 (2026-08-24) — a false alarm worth recording, and the fix that ends a whole class.**
+
+The reviewer raised its most serious warning yet: that this work had stripped the security out
+of the tool that certifies code as reviewed. That would matter enormously — it is the thing
+standing between unreviewed code and your database. It was wrong, and one command proved it:
+this branch never touched that file. What actually happened is that the main line of work moved
+forward while this was in progress, and one of those changes *improved* that very file — so the
+comparison showed the improvement as though this branch had deleted it. The fix was to catch up
+with the main line, not to "restore" anything. Rewriting a security-critical file by hand to
+match a version never actually read is how you introduce the very hole the warning describes.
+
+The second finding was real. A division slash — a character that looks almost identical to the
+ordinary one but is not — let a rate quoted per hundredweight be billed as though it were per
+acre. Rather than add another lookalike character to a list, which is the same game already lost
+four times, the rule now asks a different question: not "is there a divider in here?" but "does
+this actually name a unit we know?" `oz∕cwt` reduces to `oz cwt`, which is not a unit, so it is
+refused — and so is any separator nobody has thought of yet.
+
+Checked against the live unit list: every real unit still works, and a test now covers all six
+of them specifically, because a rule this broad could otherwise start rejecting ordinary jobs.
+
+Still parked; nothing has been applied to live.
+
+**Round 19 (2026-08-24) — one side of a comparison was measured differently from the other.**
+The rule that stops a powder being priced in fluid ounces trimmed the "per acre" part off the
+rate before checking it, but not off the stock unit. So writing the stock unit as `fl oz/ac`
+rather than `fl oz` slipped straight past — the check saw something it did not recognise, while
+the rest of the system still treated both sides as the same unit and billed a volume price on a
+product sold by weight. Both sides are now reduced the same way before they are compared.
+Checked across 21 spellings on the live database: every fluid-ounce form is refused, and every
+ordinary unit still works, including the per-acre forms and the near-miss "flour oz/ac".
+
+A smaller one alongside it: the "don't process this twice" key did not take account of who is
+recorded as having created the job. Retrying with a different person named would quietly reuse
+the earlier result and discard the new name. It now refuses instead of pretending it saved.
+
+That is the third defect in this file of the form "the system accepts it and silently discards
+what you actually asked for" — the most dangerous kind here, because nothing looks wrong.
+
+Still parked; nothing has been applied to live.
+
+**Round 18 (2026-08-24) — the rounding allowance was a percentage.** The check that the amount
+on a chemical line matches rate × acres allowed a tiny mismatch for rounding, which is sensible.
+But it was written as "one part per million", which *scales with the number*. On a small job that
+is a fraction of an ounce. On a 10,000-acre job expecting 10 million units it quietly permits a
+10-unit discrepancy — real product, real money, waved through by a rule whose whole purpose was
+rounding. It is now a fixed amount: exactly the precision the quantity is stored at, and nothing
+more. One test proves a large discrepancy is now refused; another proves a genuine rounding
+difference on that same large job still saves, because tightening a money rule too far is its own
+kind of failure.
+
+The second finding was the same enumeration mistake as the fluid-ounce rounds, in a different
+rule: the per-acre check looked for the word "per" surrounded by spaces or hyphens, so writing it
+as `oz_per_cwt` slipped through and a per-hundredweight rate would have billed as per-acre. Fixed
+the same way — fold the separators rather than list them. That is now the third separate place in
+this file where listing characters failed, which is a pattern, not a coincidence.
+
+Still parked; nothing has been applied to live.
+
+**Round 17 (2026-08-24) — the opposite leak, and Mason's rule for both.** The reviewer found the
+mirror image of the earlier problem: a chemical line could record that *nothing* was applied while
+still carrying a price, and the job would happily bill the customer nothing for a product the rate
+and acreage say went out. Where the earlier hole let a request charge too much, this one let it
+charge too little.
+
+Mason's decision was to refuse only where a customer's money is genuinely at stake, and that is
+what shipped. A line that records nothing applied is refused **if it carries a price and a real
+amount was expected**. A priced line whose amount cannot be checked at all is also refused — that
+one matters, because a hand-built request could previously switch the entire check off just by
+leaving the rate blank.
+
+Three situations stay allowed, because zero is genuinely the right answer in each: a
+customer-supplied product, a line with no price (nothing can be under-charged — this is what keeps
+the existing JOB-2026-0001 saveable), and a line with no rate or no acreage, where nothing was
+expected in the first place. That last one is the ordinary case of picking a product before
+entering acreage, and it is now pinned by a test so a future tightening cannot quietly break it.
+
+One known trade-off, stated rather than buried: a line with a cost but no price can still misstate
+margin. That follows directly from tying the rule to what the customer is charged.
+
+Still parked; nothing has been applied to live.
+
+**Round 16 (2026-08-24) — stopped patching and fixed the approach.** Four times running, the
+rule that stops a powder being priced in fluid ounces was defeated by a punctuation mark nobody
+had listed yet: first a period, then an invisible character, then a hyphen, then a *different*
+kind of hyphen that looks identical on screen. Each fix listed the characters that had just been
+named, and each lost to the next one along. There are thousands of these characters, and whoever
+sends the request picks which one — so that approach was never going to finish.
+
+The list is now gone. The rule strips out everything that is not a letter or a number and checks
+that what remains is the actual word. There is nothing left to hide a fluid ounce behind.
+Checked against 31 ways of writing units on the real database: all 19 fluid-ounce spellings are
+caught, including every one that beat the earlier rounds, and all 12 ordinary units still work —
+including "flour oz", which a careless version of this rule would have started rejecting.
+
+The difference that matters: the previous four fixes each closed one hole. This one closes the
+kind of hole. Still parked; nothing has been applied to live.
+
+**Round 15 (2026-08-24) — the independent reviewer found the biggest hole yet, and it was not a
+spelling.** Until now the database only checked the *amount* on a line when the two units
+disagreed. When they matched, it accepted whatever amount the request claimed. So a job of 10
+acres at 2 oz per acre — 20 oz — could be submitted claiming 200 oz, and because both sides said
+"oz" it went straight through and the database stored $200 instead of $20. That is the caller
+setting the price, which is the exact thing this whole change exists to prevent. The rule already
+existed for lines whose units disagreed; applying it only there was the inconsistency. Your live
+data was checked first: all three billing lines already match exactly, so nothing that exists
+today is affected. Two smaller escapes were closed with it — a rate written as `per cwt` slipped
+past every check, and `fl-oz` with a hyphen slipped past the fluid-ounce rule.
+
+**One gap is deliberately left open for Mason to decide.** If a line has no acreage entered,
+there is nothing to check the amount against, so it still saves on trust. Closing it means
+ruling that a priced chemical line with no acreage is invalid — which would start refusing saves
+that operators can make today. That is an operating decision, not a review fix, so it is not
+taken here.
+
+Still parked; nothing has been applied to live.
+
+**Round 14 (2026-08-24) — and then the same mistake again, one layer down.** Hours after round
+13 shipped, the automated reviewer found that writing the unit with an *invisible* character
+inside it — a zero-width space, which can arrive from a copy-paste out of a spreadsheet or a
+web page — slipped past the new rule just as the period had. The honest lesson is not about
+zero-width characters: round 13 fixed the one spelling a reviewer happened to name, when the
+app already had a complete list of "differences that don't change which unit is meant". The
+guard now uses that whole list. Invisible characters are deleted; a non-breaking space is
+turned into a normal space instead, because it really does separate two words — so `dry oz`
+typed with one still saves, and a test now pins that so a future widening can't quietly start
+blocking ordinary jobs. Four smaller review points were fixed alongside: the safety checks that
+run at the end of the migration now give a clear named error instead of a raw database error if
+an expected user role is missing; the proof now applies the migration the same all-or-nothing
+way the real system does, which it previously only claimed; the proof no longer deletes another
+copy of itself running at the same time; and two comments naming the wrong test were corrected.
+Still parked; nothing has been applied to live.
+
+**Round 13 (2026-08-24) — the same fluid-ounce rule, caught incomplete a third time.** The
+previous round refused a dry product measured in fluid ounces by matching three exact spellings.
+Writing it with a period — `fl. oz` — slipped past all three, and because the database's unit
+normaliser has no entry for that spelling it hands the text back untouched, so both sides of the
+line looked identical to each other and the line was billed with nothing actually checked. The
+app's own code says periods do not matter (`src/lib/blendMathValidator.ts`), so the screen and the
+database disagreed about what had been typed. The rule now strips periods and spaces from both
+sides and recognises fluid ounces as an idea rather than a list of spellings, so it no longer
+depends on guessing every way someone might write it. Checked against 23 spellings on PostgreSQL
+17.6: every fluid-ounce form is refused, and ordinary dry units — `oz`, `dry oz`, `lb`, `ton` — are
+not. Nothing about liquid products changed. Still parked; nothing has been applied to live.
+
+`EXECUTE` on `save_job` is granted to `authenticated`. Every logged-in user can therefore call it
+directly, and the old body took `total_cost_cents` / `total_price_cents` straight out of the
+caller's payload with `COALESCE` and inserted `job_chemicals` rows without ever comparing `unit`
+against `rate_unit`. Nothing anywhere refused the bad shape. That is the standing
+adversarial-review finding — *the financial/unit invariant is enforced only in React* — except
+that on `main` it is not enforced in React either.
+
+**Read this before approving an apply: it is a real behaviour change, and PR #436 must land
+first.** `main` has no save-blocking unit guard in `JobDetail.tsx`. The client-side counterpart
+(`chemLineBillingHazard`, `rateDenominatorIsUnrecognized`, and the exact-cents
+`centsTimesQuantity`) exists only on the **unmerged** PR #436 branch. Worse,
+`reconcileChemAutofillUnits` has a documented "SAFE FALLBACK: keep the STOCK unit" path that
+actively *creates* the refused shape — including the 16x dry-oz-on-pound-stock case. Applied
+first, the first operator to hit this gets a hard save failure with no prior on-screen warning, on
+a job the app showed as fine; and because the page re-sends the whole chemical grid on every save,
+one bad legacy line makes the entire job unsaveable — they cannot even edit its memo — until that
+line is corrected. Earlier drafts of this entry claimed the predicate mirrored those client
+functions "condition for condition" and that "nothing the page accepts today becomes unsaveable".
+Both were false, all four review gates caught it, and both are retracted.
+
+One new migration,
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`. Authored 2026-08-22,
+revised 2026-08-23; the file keeps its 2026-08-20 sequence stamp, which is what the disk ordering
+guard keys on, and it still sorts after every existing candidate. It is a `CREATE OR REPLACE` on
+the **identical six-argument signature** — a body replacement, never a new overload, so the frozen
+contract `JobDetail.tsx` depends on is untouched and the existing grants are preserved.
+
+It opens with an in-file **preflight pin**: the live body must hash to the md5 that was reviewed,
+or the migration aborts and changes nothing. A **postflight** block then re-asserts one overload,
+`SECURITY DEFINER`, pinned `search_path`, `authenticated` and `service_role` still holding EXECUTE,
+and neither `anon` nor `PUBLIC` holding it.
+
+An earlier draft put that pin in a *separate* migration and justified the split by a claimed lexer
+defect in the repo's `idempotency-body-check` guard. **Both claims are withdrawn.** Codex and the
+drift reviewer independently found that two separately ledgered migrations are not atomic — if the
+pin commits and the replacement does not, the ledger records the pin as done and the next run
+overwrites an unvalidated body, which is exactly what the pin exists to prevent. And the guard has
+no such defect: it lexes the *edit fragment*, and the fragment under test had ended mid-signature
+on an unclosed parenthesis, so the guard was correctly reporting an unbalanced parameter list in
+what it was handed. Re-tested with a balanced fragment, the pin is accepted exactly where it
+belongs, and idempotency inspection stays fully armed.
+
+- **A line whose units provably disagree is refused** (`CHEM_UNIT_MISMATCH`), naming the product
+  and both units. It skips a row with no product, skips a zero quantity, *refuses* a billing line
+  whose unit is blank (see below — that used to be a skip), skips when the two units are equal, and
+  treats `quantity = rate x acres` carried into the price's unit as the *only* proof of safety. Note what it does **not** do: an
+  *unrecognised* unit is not skipped — it cannot be sized, so the line is refused. That is
+  deliberate (an unpriceable unit must not bill), but it also means a metric pair such as `g/ac`
+  against `kg` is refused even though the conversion is well defined, because the live size tables
+  carry no metric entries. Acreage is summed from `p_fields` — deliberately not the caller-supplied
+  `total_acres`.
+- **A rate measured per anything but an acre is refused** (`CHEM_RATE_DENOMINATOR_NOT_ACRES`), in
+  the slash form (`oz/cwt`), the spelled-out form (`oz per cwt`) and the hyphenated form
+  (`oz-per-cwt`) — and in **stacked** forms such as `oz/cwt/ac` and `oz per cwt per acre`, which is
+  the sharpest version of this bug and the one the exact-SHA proof gate caught last. Asking "does
+  the rate unit *end in* a per-acre suffix?" accepts `oz/cwt/ac`, and the code that derives the unit
+  then takes everything before the *first* slash and throws `cwt` away — so the line became a plain
+  `oz`, matched a stock unit of `oz`, and saved: a per-hundredweight rate billed as if it were
+  per-acre. The rule is now written subtractively — strip one per-acre suffix, then refuse if any
+  denominator *survives* — which is strictly stronger and refuses nothing the old form accepted.
+  Testing only for a slash was a real hole Codex caught earlier: a spelled-out denominator
+  whose `unit` carries the same text normalizes *equal*, so the row sailed through with a quantity
+  already derived against a denominator that is not acres. The hyphen form was the same escape one
+  separator away. The per-acre exclusion is plural-tolerant on both sides, so `gal per acres` still
+  saves. This step goes beyond the literal plan and is called out rather than slipped in: leaving
+  it client-only would let the review gate legitimately re-raise the finding this migration exists
+  to close.
+- **A quantity that is negative, `NaN` or `Infinity` is refused outright**
+  (`CHEM_QUANTITY_NOT_FINITE`), *before* the unit comparison and regardless of its outcome. A
+  negative quantity reaches the money totals whether or not the units agree, so checking it only on
+  the units path left the matching-units case open.
+- **The money totals are derived here**, from `p_chemicals` via `safe_cents_qty`, rounded per line
+  then summed, and the caller's totals are ignored outright. That is what makes a stale tab
+  harmless. The page and the server do **not** agree to the cent, and an earlier draft wrongly
+  said they did: `main` computes the displayed totals with `Math.round(parseFloat(qty) *
+  parseInt(cents))` — binary float, half-up — against exact decimal, half-away-from-zero here.
+  25c x 0.58 displays 14c and stores 15c. Per-line-then-sum ordering *does* match; only the
+  arithmetic base differs. The stored value is authoritative and is what the invoice bills, so the
+  money is right — but the on-screen figure can be a cent off until PR #436 lands the exact-cents
+  client path. Second reason that PR goes first.
+
+**The NaN bypass, which is worth stating plainly because it is not intuitive.** PostgreSQL orders
+numeric `NaN` *above* every other value, and `NaN` compares equal to itself. So a single field
+carrying `acres_to_treat: "NaN"` made the old `acres > 0` test true, the carried quantity came back
+`NaN`, and the tolerance test then compared `NaN <= NaN` — true — waving a genuinely mismatched
+line straight through. Codex found it; the arithmetic was confirmed directly against PostgreSQL 17
+rather than reasoned about, and every operand on that path is now bounded to a finite range.
+
+The live unit tables are **reused, not reimplemented** (`normalize_rate_unit`,
+`field_app_priced_quantity`, `safe_cents_qty`). Divergence between the client's copy of the unit
+table and the server's is the original 16x bug; a second server-side copy would repeat it.
+
+**Blast radius measured, not estimated**, re-verified read-only on 2026-08-23. All four
+`job_chemicals` rows in the live database clear the *mismatch*, *denominator* and *finiteness*
+refusals — none negative, none non-finite, no unit disagreement — and the derived totals reproduce
+every stored total to the cent. The blank-unit refusal added below *was* the one exception — one of
+those four rows would have been refused by it — and that row was corrected on 2026-08-24, so all
+four now clear every refusal. It stays tracked as a pre-apply obligation rather than folded into
+this sentence, because the data can change again between now and the apply.
+
+**A blank unit is refused too, and that one is Mason's call rather than a review finding.** A blank
+`unit` used to be skipped — nothing can be disproved about it — while `transfer_job_to_invoice`
+billed the line anyway. An unprovable line that still bills is the same hazard as a provably wrong
+one, so it now raises `CHEM_UNIT_UNSPECIFIED`. Exempt, deliberately, and all three for the same
+reason — a line that cannot bill cannot bill *wrongly*: customer-supplied lines, lines with neither
+a cost nor a price, and zero-quantity lines. The test covers the cost side as well as the price,
+since cost drives margin and not just the customer bill.
+
+**Pre-apply data obligation — one live row, and it has now been corrected.** Exactly one
+`job_chemicals` row was in the refused shape: a pint-per-acre rate, no Unit, and both a cost and a
+price. Mason chose to fix the data before closing the hole, so the guard lands with zero operational
+impact, and **that correction was made on 2026-08-24 with his explicit OK** — one row, Unit set to
+`Pt`. The count now returns zero, and the job totals did not move (`219930` / `278578` before and
+after): the per-unit amounts were already quoted per pint, so only the label was missing. In
+proportion: that row belonged to a **test product** on a job already marked `invoiced`, not to live
+customer work.
+
+Both sides of it are held up by executable tests rather than by this paragraph. `T1` keeps the
+pre-correction shape and asserts the refusal — the policy statement survives even though no live row
+is in that shape any more, because a legacy import or a hand-built call can recreate it at any time.
+`T28` replays the *corrected* row and asserts it saves with derived totals of exactly `219930` /
+`278578`, which is the stronger claim: correcting the label did not move the money. With `T2` and
+`T3` that now covers **all four** live rows by execution.
+
+The count is deliberately **not** deleted. Zero rows is a property of the data on one day, not of the
+migration, so whoever applies it re-runs the check in the migration header and requires zero.
+
+**Remaining residuals, stated rather than hidden.** `job_fields.acres_to_treat` still carries no
+CHECK, so a `NaN` acreage can no longer bypass the invariant but can still be stored. And `save_job`
+is not the only writer: the close-quote-as-applied and recipe-pricing paths both insert priced
+chemical rows without running any of these checks, so "the database is the boundary" is true of the
+job-save path and not yet true of the table.
+
+**Proof — committed and re-runnable, not asserted.** `node
+scripts/smoke/prove-save-job-chem-unit-invariant.mjs`, with fixtures under
+`scripts/smoke/fixtures/`. The first version of this work claimed "eight behaviour tests passed"
+with nothing committed to run, so no reviewer could re-run or falsify it; that gap was itself a
+review finding. It runs on **PostgreSQL 17**, matching production's 17.6 — the earlier run used
+15, two majors behind, and said so nowhere.
+
+Seven phases. The real-shape schema loads with the three helper bodies copied verbatim from the
+live catalog. The reviewed pre-change body is then installed *from the repo* and its md5 is checked
+against the pin the prover parses out of the migration itself — so the pin is proved against
+source, not against a comment. Against a *different* body the migration aborts with
+`PREFLIGHT_BODY_DRIFT` **and the installed function is confirmed unchanged — same md5 and same exact
+byte length** — which is the atomicity property the single-file design exists to give. Over the
+reviewed body it applies and its postflight passes. Re-applying is safe, and the wording there is
+deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
+marker only suppresses the drift error while the replacement, the grants and the postflight all
+still run; the prover fingerprints the function before and after a replay and requires them equal.
+Sixty-five behaviour tests pass; and thirty-seven mutation phases each fail in a **named** way — thirty
+turn a named behaviour test red, and six must abort the apply with the specific security assertion
+that exists to catch them.
+
+That apply phase deliberately starts from a **bad** permission state — `anon` granted, `service_role`
+revoked — and proves the migration corrects it. That came out of the round-4 security review: the
+file *asserted* the permissions but never *set* them, and no migration in this repo has ever revoked
+this function from `anon`. On the live database it is a no-op (checked read-only: `anon` holds
+nothing, `authenticated` and `service_role` hold EXECUTE, exactly one version of the function
+exists), but a database rebuilt from migrations alone would have carried an inherited `anon` grant
+on a function that writes with elevated privilege, with only an assertion standing against it. A
+file that asserts a security property should also establish it.
+
+Also from that round: the per-acre spellings are now symmetric with the slash form, because
+`gal per ac` — an ordinary way to write a per-acre rate — was being **refused**, and a refusal
+blocks the whole job rather than the one line. And the file now states that it must be applied
+through Supabase MCP `apply_migration` and not `execute_sql`, which returns only the last statement
+and would silently skip the pin, the replacement and the postflight.
+
+That naming matters. An earlier version asserted only "the suite went red", and the moment the
+named-test check was added it immediately caught two false detections: one mutant was being scored
+by a test that broke incidentally, and another was "detected" while the guard under test was still
+holding, because two independent checks each close the `NaN` path and removing one leaves the other
+standing. Both are fixed — the mutant now removes both bounds together. A test that still passes
+against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
+nothing at all.
+
+The sixty-five tests: all four live row shapes save with derived totals reproducing the live stored
+values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
+by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
+`T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate
+oz-rate/lb-price conversion saves; the 16x shape is refused *and* its remedy text is asserted to
+name both numbers the operator must re-enter; `oz/cwt`, `lb per cwt` and `lb-per-cwt` are all
+refused, as are the stacked `oz/cwt/ac` and `oz per cwt per acre`; `gal per acre`, `gal per acres`,
+`gal per ac` and `gal-per-acre` all still save; a `NaN`
+acreage no longer waves a mismatch through; a negative quantity is refused; a caller claiming totals
+of 1 cent still stores `187632` / `206395`; a billing line with a blank unit is refused in all three
+wordings (blank stock `unit`, blank rate unit, both blank) and a cost with no price is refused too,
+because `total_cost_cents` feeds margin; the three exemptions all still save — a line with neither
+cost nor price, a `customer_supplied` line, and a zero-quantity line carrying a price; and every
+refused save leaves no `jobs` or `job_chemicals` row behind.
+
+That last one is not padding. When the blank-unit refusal was first written the zero-quantity skip
+sat **below** it, so a line with a blank unit, a filled-in price and quantity 0 was refused — and
+because `performSave` re-sends the whole chemical grid, one such line makes the entire job
+unsaveable. It is reachable from the ordinary UI: `reconcileChemAutofillUnits` leaves `unit` blank
+on its fallback path while the tier price is already populated, so a product picked before any
+acreage is entered lands exactly there. Three independent reviewers found it; the skip moved above
+the refusal, and a mutant that moves it back turns that test red by name.
+
+**Retracted from the earlier draft:** that `55 x 3752.64 = 206395.2` "pins
+ROUND-half-away-from-zero". A `.2` fraction rounds down under every rounding mode, so it pins
+nothing about rounding, and the companion figure is exact. Both are kept because they reproduce
+live stored values, which is what they actually prove.
+
+**The registered smoke chain is fixed in the same commit.** `scripts/smoke/smoke-save-job-parity.sql`
+carried a chemical line of 240 *pints* recorded as 240 *gallons* and priced per gallon — an 8x
+over-bill sitting in the repo's own parity fixture, unnoticed for as long as it has existed,
+because nothing on either side of the wire compared the two units. The new invariant refuses
+exactly that shape, which is how it was found. Corrected to 30 GL, with new assertions for the
+derived totals and both refusals, all gated on whether the migration is installed so the chain
+stays green while it is parked.
+
+**A pre-existing duplicate-job hole was found and closed in the same file (rounds 8 and 9, Mason's
+call both times).** This is not part of the unit invariant; it is a second defect the review of that
+invariant uncovered in the surrounding body, and Mason chose to close it here rather than in a
+follow-up migration, because a second migration replacing this same function body is exactly the
+non-atomic hazard round 3 already caught.
+
+`save_job` did its own idempotency lookup — an unlocked `SELECT` filtered to
+`operation = 'save_job'`, recorded with `ON CONFLICT (idempotency_key) DO NOTHING` — while the live
+uniqueness constraint is on the **key alone**. In plain terms: an idempotency key is the receipt
+number the app sends so that clicking Save twice, or a retry after a dropped connection, records the
+work once instead of twice. Because the lookup filtered by operation but the constraint did not, a
+key already spent by some *other* operation was invisible to the lookup — so the job was created,
+the receipt was silently swallowed by the conflict, and the very next retry found nothing again and
+created a **second job**, which is a second bill. Two callers racing on one key could likewise both
+get past an unlocked lookup. That block was byte-identical to the live pre-change body, so the
+migration inherited the defect rather than causing it.
+
+Round 8 routed the lookup through the canonical advisory-locking helper, which serialises same-key
+callers and refuses cross-operation reuse outright. Round 9 went further, to
+`check_idempotency_intent` — the same helper nine live money RPCs already use (the whole return
+family plus create/post/void commission payment), and the same fix already shipped for commission
+payouts in PR #378. Round 8 alone still matched on key and operation only, so a key spent by an
+earlier `save_job` and then reused for a **different job or an edited payload** returned the earlier
+success: nothing duplicated, but the current request never saved and the operator told it was. The
+key is now bound to the calling actor and to a sha256 fingerprint of what was actually asked for, so
+another user's receipt is refused, a changed payload is refused, and an unchanged retry still
+replays to the same job — which is the whole point of the key. Both halves are pinned by tests, and
+by mutants that turn those tests red when the binding is removed.
+
+One of those mutants exposed a defect in the test suite itself, which is worth recording because it
+is the second time the mutation phase has found what no reviewer did. With the receipt binding
+removed, the helper's fail-closed behaviour turns an *ordinary retry* into a hard refusal, and the
+replay test had no handler — so the file aborted on a raw database error and the mutation phase
+could not attribute the failure to any test. A mutant that reddens the suite without reddening its
+own test proves nothing; the test now converts an outright refusal into a named failure.
+
+**Fluid ounces could have been billed as dry ounces, and that is now refused.** The unit helper
+`normalize_rate_unit` turns `fl oz` into `oz` without knowing what the product is. On a liquid
+product that is exactly right — the live conversion table records `oz` as an alias for `fl oz`. On a
+**dry** product it is wrong: there `oz` means a dry ounce, a weight, while `fl oz` is a volume. The
+guard compared the two units *before* it looked up whether the product was dry, so a dry line with a
+`fl oz` rate against an `oz` stock unit looked identical and billed with nothing checked — while the
+app's own pricing converter refuses that pair as unconvertible. A guard that is more permissive than
+the code that does the billing is not a guard. The product's form is now read first, and **any** use of fluid
+ounces on a dry product is refused.
+
+That rule started out narrower and had to be widened, which is the part worth keeping. The first
+version only refused the case where the two units *looked identical* after the alias. But that was
+not the only way a fluid ounce reached the money, and the case it missed was worse: a dry product
+with a `fl oz` rate priced per **pound** doesn't look identical at all, so it skipped straight past
+the new check and into the converter — which had already been handed `oz` instead of `fl oz`, and
+dutifully converted sixteen fluid ounces into one pound. A volume became a weight, and the stored
+cost and price were calculated from it.
+
+One of the round's own tests had to be reversed as part of that. It had required a dry line quoted
+in fluid ounces on *both* sides to save, on the grounds that the numbers at least agreed with each
+other. Agreeing with yourself in a unit the invoice cannot convert is not the same as being right —
+and writing that exemption into a test is what would have kept the half-fix alive through the next
+review. The one test that must never change is the liquid one: on a liquid product `fl oz` and `oz`
+genuinely are the same unit, and refusing that pair would block ordinary jobs.
+
+No live product is in that shape today — the 85 dry products use `dry oz`, `lb`, `mg` and `oz` — but
+the units being compared arrive in the request, not from the product catalog, and any logged-in user
+can call this function directly, which is the whole reason it exists.
+
+**The rule against rates measured per something other than an acre was reopened, and the reason is
+worth keeping.** It was stated correctly — strip one trailing "per acre" off the end, then refuse if
+any other denominator is still there — and then written to strip *every* spelling of "per acre"
+before looking. Those are different rules. A rate written `oz per acre/ac` carries the denominator
+twice, once in each spelling; both were stripped, nothing was left to object to, and a rate that is
+really "per acre per acre" was billed as an ordinary per-acre rate. Now exactly one comes off, and
+whatever survives is refused. Two new tests pin both spellings, and a mutant that puts the old
+behaviour back turns the first of them red by name.
+
+One more fix from the same review, unrelated to money: the proof script force-deleted a Docker
+container by a fixed name before checking the container was its own, so it could have destroyed an
+unrelated container on a developer's machine that happened to share the name. Each run now uses its
+own name and labels what it creates, and only ever removes containers carrying that label.
+
+No frontend change, and there is no client-side warning to fall back on: until PR #436 lands, this
+refusal is the operator's first indication that anything is wrong. **Parked: not applied to
+production.** An interactive session still needs Mason's explicit in-chat approval for a live apply.
 
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
