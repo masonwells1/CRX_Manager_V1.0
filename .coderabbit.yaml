@@ -4,11 +4,34 @@
 
 language: en-US
 
-# "chill" = fewer style nitpicks, focus on real problems. Mason is a solo,
-# non-coder owner running a live money app; signal matters more than volume.
+# "assertive" = report everything and let a later pass filter. Mason's call,
+# 2026-08-24, reversing the earlier "chill" setting.
+#
+# Why the reversal: `chill` is not a cost control, it is an instruction to the
+# reviewer to report less. That is the exact anti-pattern the Opus-5 tuning
+# section of AGENTS.md forbids for review prompts - ask for every finding and
+# filter afterwards, because a model told to be conservative obeys literally and
+# finds less. Billing is per FILE REVIEWED (25c/file over the included limit),
+# never per comment, so this buys coverage for nothing but extra reading.
 reviews:
-  profile: chill
-  request_changes_workflow: false
+  profile: assertive
+
+  # Makes CodeRabbit withhold approval until its comments are resolved AND - the
+  # part that matters here - "the latest commit has been reviewed" (schema
+  # description, verified 2026-08-24). That clause is first-party enforcement of
+  # the exact-head problem this repo keeps hitting, where a review earned by an
+  # earlier commit reads as a green light for the final one. It is also the
+  # switch that gives the `mode: error` checks below any force at all: per
+  # CodeRabbit's docs, an error-mode check only holds a PR when this is enabled.
+  #
+  # Scope, stated honestly: this is pressure, NOT a hard block. The protect-main
+  # ruleset requires exactly three contexts - Vercel, "Lint, Type Check, Test,
+  # Build", and "SQL Migration Validation" - with required_approving_review_count
+  # 0 and CodeRabbit absent from the required list. A failing check therefore
+  # shows red and refuses approval; it does not disable the merge button. Making
+  # it a true gate means adding the CodeRabbit context to that ruleset, which is
+  # a separate deliberate change and needs Mason's OK.
+  request_changes_workflow: true
   high_level_summary: true
   poem: false
   review_status: true
@@ -136,6 +159,212 @@ reviews:
         Supabase Edge Functions. Flag missing or inconsistent CORS handling,
         and any secret/service-role key that is logged or returned to the
         client.
+
+  # Pre-merge checks turn the CRX Hard Rules from prose in AGENTS.md into
+  # something a PR is measured against before it lands. Custom checks require
+  # the Pro+ plan; this org is on Pro Plus (verified 2026-08-24).
+  #
+  # Approved by Mason 2026-08-24 after being shown that these produce a red X
+  # and a withheld approval rather than a disabled merge button - see the
+  # `request_changes_workflow` note above for why, and do not describe these as
+  # a hard gate anywhere.
+  pre_merge_checks:
+    # FALSE ON PURPOSE. False lets the PR AUTHOR override a failing check by
+    # ticking "Ignore failed checks" in the Walkthrough comment. Mason authors
+    # every PR in this repo, so flipping this to true would lock the only human
+    # here out of his own override and turn a red check into a dead end.
+    override_requested_reviewers_only: false
+
+    # Off: this repo has no docstring convention, so an 80%-coverage warning on
+    # every PR is pure noise - and noise on a review budget billed per file.
+    docstrings:
+      mode: "off"
+
+    title:
+      mode: warning
+      requirements: >-
+        Title must follow Conventional Commits: `type(scope): summary`, where
+        type is one of feat, fix, chore, docs, test, refactor, perf, or build.
+        The summary must describe what the change does, not which review round
+        or PR iteration it came from.
+
+    # Warning rather than error: a PR body that no longer matches its diff has
+    # bitten this repo before, but blocking a real fix over prose is worse.
+    description:
+      mode: warning
+
+    issue_assessment:
+      mode: warning
+
+    # ---- error mode: red X + withheld approval -----------------------------
+    # Every instruction below opens with an explicit skip clause, so a PR that
+    # touches none of the named files passes trivially. That is deliberate: a
+    # check that fires on unrelated docs and hook work gets ignored, and an
+    # ignored check protects nothing.
+    custom_checks:
+      - name: New table without RLS
+        mode: error
+        instructions: >-
+          Scope: only files ADDED under supabase/migrations/. If this pull
+          request adds no new file under supabase/migrations/, PASS immediately
+          and state that the check did not apply.
+
+          FAIL if any added migration contains a CREATE TABLE - in ANY schema,
+          not only `public` - without BOTH of the following in the SAME file:
+          (1) ALTER TABLE ... ENABLE ROW LEVEL SECURITY for that table, and (2)
+          at least one CREATE POLICY targeting that table. A table created in a
+          non-public schema such as `private` or `internal` is NOT exempt;
+          AGENTS.md requires RLS and policies for every new table regardless of
+          schema.
+
+          Temporary tables are exempt. A permanent PARTITION is exempt ONLY when
+          it inherits protection in practice: the parent carries RLS and the
+          migration grants no direct access to the child. RLS is
+          relation-specific, so a grant on a child partition reaches rows
+          without going through the parent's policies - if this migration grants
+          on the partition, or the parent's RLS cannot be confirmed, require RLS
+          and a policy on the child too. Otherwise PASS.
+
+      - name: SECURITY DEFINER without search_path
+        mode: error
+        instructions: >-
+          Scope: only files ADDED under supabase/migrations/. If this pull
+          request adds no new file under supabase/migrations/, PASS immediately
+          and state that the check did not apply.
+
+          FAIL if any added migration defines a SECURITY DEFINER function that
+          does not also carry an explicit SET search_path. Exactly two forms are
+          acceptable, and nothing else:
+
+          (a) the normal form `SET search_path = public, pg_temp`; or
+          (b) an EXACTLY EMPTY search path (`SET search_path = ''`), which is the
+          narrow exception approved 2026-07-30 and permitted ONLY when the
+          function body is fully schema-qualified on every single reference. If
+          the diff alone does not let you confirm that, FAIL and name the
+          reference you could not confirm.
+
+          Any OTHER value - for example `SET search_path = private, pg_temp` or
+          any other non-empty custom path - is a FAIL even when every reference
+          is schema-qualified. The approved exception is for an empty path, not
+          for arbitrary restricted paths. Otherwise PASS.
+
+      - name: Mutating RPC without idempotency key
+        mode: error
+        instructions: >-
+          Scope: only files ADDED under supabase/migrations/. If this pull
+          request adds no new file under supabase/migrations/, PASS immediately
+          and state that the check did not apply.
+
+          The rule being enforced is AGENTS.md: "Mutating RPCs must accept and
+          actually enforce `p_idempotency_key text DEFAULT NULL`." Apply that
+          rule with judgement; the notes below exist to stop known
+          misclassifications, not to replace reading the migration.
+
+          CALLABLE. Do not infer callability from the presence of a GRANT, and
+          split the two cases - `CREATE OR REPLACE FUNCTION` preserves the
+          EXISTING ACL, so the same silence means opposite things:
+
+          NEW function (no prior definition in the repo): PostgreSQL grants
+          EXECUTE to PUBLIC by default, so silence means CALLABLE. Absence of a
+          grant is not an exemption.
+
+          RE-EMITTED via `CREATE OR REPLACE` (a definition already exists in an
+          earlier migration): the prior ACL persists, INCLUDING an earlier
+          REVOKE. Do NOT declare it callable merely because this migration does
+          not repeat the REVOKE. Look for the earlier definition and its
+          grants/revokes; a helper previously revoked from client roles stays
+          private and is EXEMPT. If you cannot find the earlier ACL, say so and
+          treat it as callable, naming what you could not resolve.
+
+          DROPPED AND RECREATED (`DROP FUNCTION` then `CREATE FUNCTION`, the
+          pattern this repo uses when consolidating overloads): this is a NEW
+          object and the old ACL is GONE. It reverts to PostgreSQL's default
+          PUBLIC EXECUTE. Treat it as CALLABLE unless this migration re-applies
+          the REVOKE. Do not carry the dropped function's privacy forward.
+
+          MUTATING. Include DELEGATED writes. A thin wrapper whose own body
+          contains no INSERT/UPDATE/DELETE/MERGE but which calls a helper that
+          performs them IS mutating - this repository uses the public-wrapper /
+          internal-implementation pattern heavily. Inspect the callee before
+          granting any exemption; if you cannot determine what the callee does,
+          FAIL and say which callee you could not resolve.
+
+          EXEMPT: trigger functions (RETURNS trigger), which cannot accept a
+          caller-supplied key - `notify_team_note_assignment()` is a legitimate
+          example already in this repo - and genuinely read-only functions.
+
+          FAIL if any added migration creates or replaces a callable mutating
+          function that does not both (1) accept `p_idempotency_key text DEFAULT
+          NULL` and (2) actually use it to short-circuit or de-duplicate a
+          repeated call. A parameter accepted and then ignored is a FAIL - the
+          signature alone proves nothing.
+
+          The claim must be SERIALIZED against concurrent callers. Two forms
+          satisfy this and neither is a failure:
+
+          (a) THE HOUSE PATTERN, which is the normal answer here:
+          `check_idempotency()` / `check_idempotency_intent()` -> mutate ->
+          `save_idempotency()`. Recording the key AFTER the mutation is correct
+          in this form because the helper serializes the claim; several hundred
+          migrations in this repository use it. PASS it. Do not demand
+          `INSERT ... ON CONFLICT` from a migration that already uses the shared
+          helpers - that would fail the repo's own audited standard and turn
+          this check into noise.
+
+          But check the WIRING, not just that both helper names appear. The
+          exemption applies only when (i) the check and the save use the SAME
+          operation key - checking `A` and saving under `B` means a retry never
+          matches and the mutation runs again - and (ii) the function actually
+          RETURNS the cached result when the check reports a prior receipt,
+          rather than falling through and mutating anyway. If either is missing,
+          FAIL and say which one.
+
+          (b) A self-contained atomic claim, such as
+          `INSERT ... ON CONFLICT DO NOTHING` against a unique idempotency
+          record, with the mutation proceeding only when the claim was won.
+
+          FAIL a HAND-ROLLED check-then-write that uses NEITHER: a plain SELECT
+          for an existing key, then mutate, then record, with no shared helper
+          and no unique-constraint claim. Two concurrent calls can both observe
+          no prior key and both write. AGENTS.md requires the key to be
+          "actually enforced", and a race that duplicates a money or inventory
+          write enforces nothing. Otherwise PASS.
+
+      - name: Money not exact whole cents
+        mode: error
+        instructions: >-
+          Scope: files under supabase/migrations/, src/, AND
+          supabase/functions/. Edge Functions are TypeScript and are an
+          authoritative money surface in this repo - process-document and
+          process-blend-ticket already handle `unit_cost` and `price_per_unit` -
+          so they are inside this guard, not outside it. If this pull request
+          changes no file in any of those three locations, PASS immediately.
+
+          FAIL on any of the following. (1) A NEWLY ADDED money column that is
+          not bigint cents. This has NO numeric exception: AGENTS.md states that
+          new money storage uses bigint cents, and the PostgreSQL numeric-dollar
+          allowance is a compatibility exception for storage that ALREADY
+          EXISTS, never a licence to add more. A new numeric money column fails
+          even when it carries a correctly named whole-cent CHECK. (2) A change
+          to a PRE-EXISTING numeric-dollar money column that leaves it without an
+          active finite whole-cent CHECK constraint named
+          `<table>_<column>_whole_cents_chk`, or that widens/rewrites its units.
+          (3) Money arithmetic in TypeScript performed on floats, or on decimal
+          strings, without first parsing the operands into integer cents. (4) Any
+          write to a generated column such as invoices.balance_cents. (5) Money
+          rounding done in binary floating point. Otherwise PASS.
+
+      - name: Edit to an already-applied migration
+        mode: error
+        instructions: >-
+          Scope: only supabase/migrations/. If this pull request modifies no
+          existing file there, PASS immediately.
+
+          FAIL if the diff MODIFIES or DELETES any pre-existing file under
+          supabase/migrations/. Database changes ship as brand-new migration
+          files only; rewriting a migration that already ran leaves the live
+          database and the repository permanently out of sync. ADDING a new file
+          there is correct and is never a failure. Otherwise PASS.
 
 # Teach CodeRabbit this repo's own written rules so it reviews against the
 # actual house standard instead of only the path instructions above.
