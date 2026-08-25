@@ -204,6 +204,15 @@ function renderQuoteBuilder(id?: string) {
   );
 }
 
+// A RECENT timestamp, not a literal. These fixtures once hardcoded
+// a fixed created_at of 2026‑07‑25T00:00:00Z — a time bomb: useStaleQuoteCheck computes
+// floor((Date.now() − created_at) / day) > 30, so on 2026-08-25T00:00:00Z (exactly
+// created + 31 days) every conversion-path test silently detoured into the
+// stale-quote guard and CI went permanently red on EVERY branch at midnight UTC.
+// Five days old keeps the fixtures far from the staleness threshold forever, and a
+// midnight-anchored ISO string keeps the rendered date deterministic within a run.
+const RECENT_QUOTE_CREATED_AT = `${new Date(Date.now() - 5 * 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z`;
+
 function makeQuoteFixture(status: 'draft' | 'sent' | 'accepted' = 'draft', rowVersion?: number) {
   const quote = {
     id: `quote-${status}-${rowVersion ?? 'legacy'}`,
@@ -216,7 +225,7 @@ function makeQuoteFixture(status: 'draft' | 'sent' | 'accepted' = 'draft', rowVe
     status,
     is_planned: false,
     commission_split: { splits: [] },
-    created_at: '2026-07-25T00:00:00.000Z',
+    created_at: RECENT_QUOTE_CREATED_AT,
     ...(rowVersion === undefined ? {} : { row_version: rowVersion }),
   };
   const product = {
@@ -500,7 +509,7 @@ describe('QuoteBuilder', () => {
       status: 'draft',
       is_planned: false,
       commission_split: null,
-      created_at: '2026-07-25T00:00:00.000Z',
+      created_at: RECENT_QUOTE_CREATED_AT,
     };
     const section = {
       id: 'section-1',
@@ -567,7 +576,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('preserves a stale edit until Reload Quote replaces it and sends the refreshed version on the next save', async () => {
-    const quote = { id: 'quote-stale', quote_number: 'Q-stale', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const quote = { id: 'quote-stale', quote_number: 'Q-stale', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const reloadedQuote = { ...quote, header_notes: 'Newer header', row_version: 8 };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
@@ -865,7 +874,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('keeps a committed direct decline visible and opens recovery when its returned version jumps from 7 to 9', async () => {
-    const quote = { id: 'quote-direct-jump', quote_number: 'Q-direct-jump', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Keep this local note', footer_notes: '', status: 'sent', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const quote = { id: 'quote-direct-jump', quote_number: 'Q-direct-jump', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Keep this local note', footer_notes: '', status: 'sent', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
@@ -892,7 +901,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('keeps the conflict dialog and every local quote edit when Reload cannot read sections', async () => {
-    const quote = { id: 'quote-partial', quote_number: 'Q-partial', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const quote = { id: 'quote-partial', quote_number: 'Q-partial', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
@@ -915,7 +924,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('keeps the conflict dialog and local quote when the header version changes during Reload', async () => {
-    const quote = { id: 'quote-unstable-reload', quote_number: 'Q-unstable', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const quote = { id: 'quote-unstable-reload', quote_number: 'Q-unstable', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const changedQuote = { ...quote, header_notes: 'Other writer header', row_version: 8 };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
@@ -940,7 +949,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('uses the reread token after reopening before the next revise/save', async () => {
-    const quote = { id: 'quote-reopen', quote_number: 'Q-reopen', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const quote = { id: 'quote-reopen', quote_number: 'Q-reopen', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
@@ -961,7 +970,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('fails closed instead of adopting a jumped post-reopen token', async () => {
-    const quote = { id: 'quote-jumped-token', quote_number: 'Q-jumped', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const quote = { id: 'quote-jumped-token', quote_number: 'Q-jumped', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
@@ -983,7 +992,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('keeps the committed reopened status and gives refresh guidance when its token reread fails', async () => {
-    const quote = { id: 'quote-reopen-read-fail', quote_number: 'Q-reopen-read-fail', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const quote = { id: 'quote-reopen-read-fail', quote_number: 'Q-reopen-read-fail', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     let quoteReads = 0;
     mockFrom.mockImplementation((table: string) => {
       if (table === 'quotes') {
@@ -1005,7 +1014,7 @@ describe('QuoteBuilder', () => {
   });
 
   it('uses the reread token after freezing a quote before the next revise/save', async () => {
-    const quote = { id: 'quote-freeze', quote_number: 'Q-freeze', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const quote = { id: 'quote-freeze', quote_number: 'Q-freeze', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
     const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
@@ -1301,7 +1310,7 @@ describe('QuoteBuilder', () => {
   it('stops on an unconfirmed accepted save and safely resumes conversion after reload', async () => {
     const fixture = makeQuoteFixture('draft', 7);
     const { product, section, item } = fixture;
-    const quote = { ...fixture.quote, status: 'sent' };
+    const quote = { ...fixture.quote, status: 'sent', created_at: new Date().toISOString() };
     let reloaded = false;
     let saveCalls = 0;
     mockFrom.mockImplementation((table: string) => buildChain({
@@ -1336,9 +1345,14 @@ describe('QuoteBuilder', () => {
     });
 
     renderQuoteBuilder(quote.id);
-    fireEvent.click(await screen.findByRole('button', { name: 'Create Order ▾' }));
+    const createOrderOpener = await screen.findByRole('button', { name: 'Create Order ▾' });
+    await waitFor(() => expect(createOrderOpener).toBeEnabled());
+    fireEvent.click(createOrderOpener);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Convert whole booking' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create Order' }));
+    const initialConvertDialog = await screen.findByRole('dialog', { name: /Convert to.*Order/ });
+    const initialConvertButton = within(initialConvertDialog).getByRole('button', { name: 'Create Order' });
+    await waitFor(() => expect(initialConvertButton).toBeEnabled());
+    fireEvent.click(initialConvertButton);
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'warning',
@@ -1353,7 +1367,8 @@ describe('QuoteBuilder', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Create Order ▾' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Convert whole booking' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create Order' }));
+    const resumedConvertDialog = await screen.findByRole('dialog', { name: /Convert to.*Order/ });
+    fireEvent.click(within(resumedConvertDialog).getByRole('button', { name: 'Create Order' }));
 
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith(
       'convert_quote_to_order',
