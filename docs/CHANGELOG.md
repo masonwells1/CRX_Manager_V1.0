@@ -10,11 +10,14 @@ All significant development milestones, in reverse chronological order.
 - Protected identity resolution covers hook files beneath both ordinary and
   linked-worktree Git directories; native Write/Edit and MCP regressions prove
   creating or modifying those hooks is denied.
-- Reviewed-executor provenance now gives every inner Git subprocess one shared
-  3.5-second monotonic deadline, below the unchanged 5-second host-hook limit.
-  Each call receives only the remaining time, exhaustion starts no further Git
-  process, and timeout/error paths deny execution; clock-exhaustion and forced-
-  timeout mutation regressions prove the fail-closed path.
+- Reviewed-executor provenance now gives Git subprocesses, tracked-tree reads,
+  hashing, and runtime-closure inspection one shared 3.5-second monotonic
+  deadline, below the unchanged 5-second host-hook limit. Per-file, total-byte,
+  and file-count ceilings bound individual synchronous reads; exhaustion starts
+  no further Git process or tracked-file read and denies execution.
+- Git helper dispatch is closed at both routes: `difftool`, `mergetool`, global
+  `--exec-path` overrides, and executable diff/merge tool configuration are
+  denied before Git can launch mutable code.
 - The Quote Builder save-resume concurrency regression now creates a fresh
   quote, so crossing the 30-day stale-price threshold cannot bypass the path
   that the test is intended to prove.

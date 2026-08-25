@@ -21,7 +21,7 @@ import {
   maintenanceProducerCommandMentioned,
   resolveNpmScriptChain,
   readPackageScripts,
-  REVIEWED_EXECUTOR_GIT_BUDGET_MS,
+  REVIEWED_EXECUTOR_PROVENANCE_BUDGET_MS,
   SECURITY_COMMAND_CHAR_BUDGET,
   SECURITY_COMMAND_TOKEN_BUDGET,
 } from "./bash-safety-lib.mjs";
@@ -61,7 +61,7 @@ const reviewedExecutorHostHooks = codexHookManifest.hooks.PreToolUse
   .filter((hook) => /\.(?:claude[\\/]hooks[\\/])?(?:bash-safety|mcp-tool-guard)\.mjs/i.test(`${hook.command || ""} ${hook.commandWindows || ""}`));
 eq(reviewedExecutorHostHooks.length, 2, "the Codex host manifest wires both reviewed-executor guard entrypoints");
 for (const hook of reviewedExecutorHostHooks) {
-  ok(Number(hook.timeout) * 1_000 > REVIEWED_EXECUTOR_GIT_BUDGET_MS, "the shared inner Git deadline stays below each outer host-hook deadline");
+  ok(Number(hook.timeout) * 1_000 > REVIEWED_EXECUTOR_PROVENANCE_BUDGET_MS, "the shared inner provenance deadline stays below each outer host-hook deadline");
 }
 
 // ── direct dangerous-command patterns (unchanged behavior) ────────────────
@@ -442,10 +442,10 @@ for (const command of [
         return result;
       },
     });
-    ok(exhaustedBudgetReason?.includes("committed tree"), "exhausting the shared Git provenance deadline denies the reviewed executor");
+    ok(exhaustedBudgetReason?.includes("exact HEAD"), "exhausting the shared Git provenance deadline denies the reviewed executor");
     eq(observedTimeouts.length, 2, "no Git subprocess starts after the shared provenance deadline is exhausted");
-    eq(observedTimeouts[0], REVIEWED_EXECUTOR_GIT_BUDGET_MS, "the first Git subprocess is capped by the full shared deadline");
-    eq(observedTimeouts[1], REVIEWED_EXECUTOR_GIT_BUDGET_MS - 1_800, "the next Git subprocess receives only the remaining shared deadline");
+    eq(observedTimeouts[0], REVIEWED_EXECUTOR_PROVENANCE_BUDGET_MS, "the first Git subprocess is capped by the full shared deadline");
+    eq(observedTimeouts[1], REVIEWED_EXECUTOR_PROVENANCE_BUDGET_MS - 1_800, "the next Git subprocess receives only the remaining shared deadline");
 
     let forcedTimeoutCap = 0;
     const forcedTimeoutReason = checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, {
@@ -457,7 +457,19 @@ for (const command of [
       },
     });
     ok(forcedTimeoutReason?.includes("repository root"), "a timed-out Git provenance subprocess denies instead of allowing the reviewed executor");
-    eq(forcedTimeoutCap, REVIEWED_EXECUTOR_GIT_BUDGET_MS, "even a hung first Git subprocess is capped below the outer hook deadline");
+    eq(forcedTimeoutCap, REVIEWED_EXECUTOR_PROVENANCE_BUDGET_MS, "even a hung first Git subprocess is capped below the outer hook deadline");
+    let filesystemNow = 0;
+    let trackedFilesVisited = 0;
+    const exhaustedFilesystemReason = checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, {
+      ...reviewOptions,
+      nowForTest: () => filesystemNow,
+      onTrackedFileForTest: () => {
+        trackedFilesVisited += 1;
+        filesystemNow += 1_000;
+      },
+    });
+    ok(exhaustedFilesystemReason?.includes("provenance deadline"), "tracked-tree filesystem verification shares the same fail-closed provenance deadline");
+    eq(trackedFilesVisited, 4, "deadline exhaustion stops before reading the next tracked worktree file");
     const injectedGitShimDir = path.join(integrityRepo, "output", "git-shim");
     const localGitShimMarker = path.join(integrityRepo, "local-git-shim-ran.txt");
     const pathGitShimMarker = path.join(integrityRepo, "path-git-shim-ran.txt");
@@ -710,10 +722,28 @@ for (const command of [
       ["git -c diff.", "external=node output/ignored-wrapper.mjs diff HEAD HEAD"].join(""),
       ["git -cdiff.", "external=node diff HEAD HEAD"].join(""),
       ["git config diff.", "external 'node output/ignored-wrapper.mjs'"].join(""),
+      "git -c 'difftool.untrusted.cmd=node output/ignored-wrapper.mjs' difftool HEAD HEAD",
+      "git config mergetool.untrusted.cmd 'node output/ignored-wrapper.mjs'",
     ]) {
       ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes("executable Git configuration"), "Git executable configuration dispatch is denied: " + command);
       const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
       ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies Git executable configuration dispatch: " + command);
+    }
+    for (const command of [
+      "git difftool --no-prompt HEAD HEAD",
+      "git mergetool --no-prompt",
+    ]) {
+      ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes("Git helper dispatch"), "Git helper-driven subcommands are denied: " + command);
+      const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies Git helper-driven subcommands: " + command);
+    }
+    for (const command of [
+      "git --exec-path=output/git-shim status --short",
+      "git --exec-path output/git-shim status --short",
+    ]) {
+      ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes("exec-path override"), "Git exec-path override is denied: " + command);
+      const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies Git exec-path override: " + command);
     }
     ok(checkCommandDeep("git run", integrityRepo, reviewOptions)?.includes("alias or external helper"), "unknown Git aliases and executable helpers fail closed");
     eq(checkCommandDeep("git status --short", integrityRepo, reviewOptions), null, "an ordinary built-in Git read remains allowed");

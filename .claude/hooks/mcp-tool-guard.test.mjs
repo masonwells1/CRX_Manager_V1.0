@@ -105,10 +105,22 @@ for (const command of [
   ["git -c diff.", "external=node output/ignored-wrapper.mjs diff HEAD HEAD"].join(""),
   ["git -cdiff.", "external=node diff HEAD HEAD"].join(""),
   ["git config diff.", "external 'node output/ignored-wrapper.mjs'"].join(""),
+  "git -c 'difftool.untrusted.cmd=node output/ignored-wrapper.mjs' difftool HEAD HEAD",
+  "git config mergetool.untrusted.cmd 'node output/ignored-wrapper.mjs'",
 ]) {
   const result = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
   eq(result.status, 0, `mcp-tool-guard exits 0 after Git executable configuration injection: ${command}`);
   ok(isDeny(result), `MCP start_process denies Git executable configuration injection: ${command}`);
+}
+for (const command of [
+  "git difftool --no-prompt HEAD HEAD",
+  "git mergetool --no-prompt",
+  "git --exec-path=output/git-shim status --short",
+  "git --exec-path output/git-shim status --short",
+]) {
+  const result = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  eq(result.status, 0, `mcp-tool-guard exits 0 after Git helper/exec-path dispatch: ${command}`);
+  ok(isDeny(result), `MCP start_process denies Git helper/exec-path dispatch: ${command}`);
 }
 const reviewBootstrap = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
 for (const command of [

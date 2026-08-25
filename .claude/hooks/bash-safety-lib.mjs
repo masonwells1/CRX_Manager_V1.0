@@ -19,7 +19,11 @@ import path from "node:path";
 
 export const SECURITY_COMMAND_CHAR_BUDGET = 16_384;
 export const SECURITY_COMMAND_TOKEN_BUDGET = 512;
-export const REVIEWED_EXECUTOR_GIT_BUDGET_MS = 3_500;
+export const REVIEWED_EXECUTOR_PROVENANCE_BUDGET_MS = 3_500;
+export const REVIEWED_EXECUTOR_MAX_TRACKED_FILES = 4_096;
+export const REVIEWED_EXECUTOR_MAX_TRACKED_BYTES = 128 * 1024 * 1024;
+export const REVIEWED_EXECUTOR_MAX_TRACKED_FILE_BYTES = 16 * 1024 * 1024;
+const SECURITY_CONFIG_FILE_BUDGET_BYTES = 1024 * 1024;
 const AUTHORITATIVE_REPOSITORY_URL = "https://github.com/masonwells1/CRX_Manager_V1.0.git";
 const commandExceedsSecurityBudget = (command) => String(command || "").length > SECURITY_COMMAND_CHAR_BUDGET;
 const normalizePosixLineContinuations = (command) => String(command || "").replace(/\\\r?\n/g, "");
@@ -64,7 +68,7 @@ function sameExecutablePath(left, right) {
   return normalize(left) === normalize(right);
 }
 
-function bootstrapGitSafetyReason(root, gitExecutable, runGit, gitEnv) {
+function bootstrapGitSafetyReason(root, gitExecutable, runGit, gitEnv, provenanceDeadlineExhausted) {
   const inherited = Object.keys(process.env).find((name) => DANGEROUS_GIT_ENV_NAME_RE.test(name));
   if (inherited) return `Git control environment variable ${inherited} is present`;
   const bareGit = resolvedBareGitExecutable(root);
@@ -106,12 +110,16 @@ function bootstrapGitSafetyReason(root, gitExecutable, runGit, gitEnv) {
   if (gitInfoAttributes.error || gitInfoAttributes.status !== 0) return "Git info attributes path could not be verified";
   const rawInfoAttributesPath = String(gitInfoAttributes.stdout || "").trim();
   const infoAttributesPath = path.isAbsolute(rawInfoAttributesPath) ? rawInfoAttributesPath : path.resolve(root, rawInfoAttributesPath);
+  if (provenanceDeadlineExhausted()) return "reviewed provenance deadline expired before Git info attributes verification";
   if (infoAttributesPath && existsSync(infoAttributesPath)) {
     try {
+      const stat = lstatSync(infoAttributesPath);
+      if (!stat.isFile() || stat.size > SECURITY_CONFIG_FILE_BUDGET_BYTES) return "Git info/attributes exceeds the auditable configuration boundary";
       if (readFileSync(infoAttributesPath, "utf8").trim()) return "unreviewed Git info/attributes can activate executable filters before review";
     } catch {
       return "Git info/attributes could not be verified inert";
     }
+    if (provenanceDeadlineExhausted()) return "reviewed provenance deadline expired while reading Git info attributes";
   }
   const replacements = runGit(
     ["-C", root, "--no-replace-objects", "for-each-ref", "--format=%(refname)", "refs/replace"],
@@ -347,12 +355,16 @@ function createReviewedExecutorInspector(cwd, options = {}) {
   // entrypoints never accept or forward inspector options.
   const clock = typeof options.nowForTest === "function" ? options.nowForTest : performance.now.bind(performance);
   const spawnGitForTest = typeof options.spawnGitForTest === "function" ? options.spawnGitForTest : spawnSync;
-  const deadline = clock() + REVIEWED_EXECUTOR_GIT_BUDGET_MS;
+  const onTrackedFileForTest = typeof options.onTrackedFileForTest === "function" ? options.onTrackedFileForTest : null;
+  const deadline = clock() + REVIEWED_EXECUTOR_PROVENANCE_BUDGET_MS;
+  const remainingProvenanceMs = () => Math.floor(deadline - clock());
+  const provenanceDeadlineExhausted = () => remainingProvenanceMs() <= 0;
   const runGit = (args, spawnOptions = {}) => {
-    const remaining = Math.floor(deadline - clock());
+    const remaining = remainingProvenanceMs();
     if (remaining <= 0) return { status: null, error: new Error("reviewed Git provenance deadline exhausted") };
-    const result = spawnGitForTest(gitExecutable, args, { ...spawnOptions, timeout: Math.min(remaining, REVIEWED_EXECUTOR_GIT_BUDGET_MS) });
+    const result = spawnGitForTest(gitExecutable, args, { ...spawnOptions, timeout: Math.min(remaining, REVIEWED_EXECUTOR_PROVENANCE_BUDGET_MS) });
     if (result?.error || result?.signal === "SIGTERM") return { ...result, error: result.error || new Error("reviewed Git provenance timed out") };
+    if (provenanceDeadlineExhausted()) return { ...result, status: null, error: new Error("reviewed Git provenance deadline exhausted") };
     return result;
   };
   let gitExecutable = "";
@@ -472,6 +484,10 @@ function createReviewedExecutorInspector(cwd, options = {}) {
     }
     const indexEntries = new Map();
     for (const record of indexResult.stdout.toString("utf8").split("\0").filter(Boolean)) {
+      if (provenanceDeadlineExhausted()) {
+        trackedTreeError = "the reviewed provenance deadline expired while parsing the exact index";
+        return trackedTreeError;
+      }
       const match = /^(\d+)\s+([a-f0-9]{40})\s+(\d)\t([\s\S]+)$/i.exec(record);
       if (!match || match[3] !== "0") {
         trackedTreeError = "the index contains an unparseable or conflicted entry";
@@ -484,11 +500,25 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       }
       indexEntries.set(key, { mode: match[1], blob: match[2].toLowerCase(), repoPath: match[4] });
     }
+    if (indexEntries.size > REVIEWED_EXECUTOR_MAX_TRACKED_FILES) {
+      trackedTreeError = "the tracked tree exceeds the reviewed provenance file-count limit";
+      return trackedTreeError;
+    }
     if (indexEntries.size !== headEntries.size) {
       trackedTreeError = "the index path set differs from exact HEAD";
       return trackedTreeError;
     }
+    let trackedBytes = 0;
     for (const [key, expectedEntry] of headEntries) {
+      if (provenanceDeadlineExhausted()) {
+        trackedTreeError = "the reviewed provenance deadline expired while verifying tracked worktree bytes";
+        return trackedTreeError;
+      }
+      onTrackedFileForTest?.(expectedEntry.repoPath);
+      if (provenanceDeadlineExhausted()) {
+        trackedTreeError = "the reviewed provenance deadline expired before reading the next tracked worktree file";
+        return trackedTreeError;
+      }
       const entry = indexEntries.get(key);
       if (!entry || entry.mode !== expectedEntry.mode || entry.blob !== expectedEntry.blob) {
         trackedTreeError = "the index differs from exact HEAD";
@@ -503,18 +533,41 @@ function createReviewedExecutorInspector(cwd, options = {}) {
           diskBytes = Buffer.from(readlinkSync(diskPath), "utf8");
         } else {
           if (!stat.isFile()) throw new Error("tracked path is not a regular file");
+          if (stat.size > REVIEWED_EXECUTOR_MAX_TRACKED_FILE_BYTES) {
+            trackedTreeError = "a tracked file exceeds the reviewed provenance per-file byte limit";
+            return trackedTreeError;
+          }
+          trackedBytes += stat.size;
+          if (trackedBytes > REVIEWED_EXECUTOR_MAX_TRACKED_BYTES) {
+            trackedTreeError = "the tracked tree exceeds the reviewed provenance cumulative byte limit";
+            return trackedTreeError;
+          }
           diskBytes = readFileSync(diskPath);
         }
       } catch {
         trackedTreeError = "the tracked worktree file set is missing or has a mode mismatch";
         return trackedTreeError;
       }
-      const rawHash = gitBlobHash(diskBytes);
-      const normalizedBytes = Buffer.from(diskBytes.toString("latin1").replace(/\r\n/g, "\n"), "latin1");
-      const normalizedHash = gitBlobHash(normalizedBytes);
-      if (rawHash !== expectedEntry.blob && normalizedHash !== expectedEntry.blob) {
-        trackedTreeError = "the tracked dependency tree worktree bytes differ from exact HEAD";
+      if (provenanceDeadlineExhausted()) {
+        trackedTreeError = "the reviewed provenance deadline expired while reading tracked worktree bytes";
         return trackedTreeError;
+      }
+      const rawHash = gitBlobHash(diskBytes);
+      if (provenanceDeadlineExhausted()) {
+        trackedTreeError = "the reviewed provenance deadline expired while hashing tracked worktree bytes";
+        return trackedTreeError;
+      }
+      if (rawHash !== expectedEntry.blob) {
+        const normalizedBytes = Buffer.from(diskBytes.toString("latin1").replace(/\r\n/g, "\n"), "latin1");
+        const normalizedHash = gitBlobHash(normalizedBytes);
+        if (provenanceDeadlineExhausted()) {
+          trackedTreeError = "the reviewed provenance deadline expired while normalizing tracked worktree bytes";
+          return trackedTreeError;
+        }
+        if (normalizedHash !== expectedEntry.blob) {
+          trackedTreeError = "the tracked dependency tree worktree bytes differ from exact HEAD";
+          return trackedTreeError;
+        }
       }
     }
     return trackedTreeError;
@@ -531,15 +584,26 @@ function createReviewedExecutorInspector(cwd, options = {}) {
     const queued = [entryRepoPath];
     const visited = new Set();
     while (queued.length > 0) {
+      if (provenanceDeadlineExhausted()) {
+        return "the reviewed provenance deadline expired while verifying the runtime dependency closure";
+      }
       const repoPath = queued.pop();
       const key = process.platform === "win32" ? repoPath.toLowerCase() : repoPath;
       if (visited.has(key)) continue;
       visited.add(key);
       let source = "";
       try {
-        source = readFileSync(path.join(root, ...repoPath.split("/")), "utf8");
+        const dependencyPath = path.join(root, ...repoPath.split("/"));
+        const dependencyStat = lstatSync(dependencyPath);
+        if (!dependencyStat.isFile() || dependencyStat.size > REVIEWED_EXECUTOR_MAX_TRACKED_FILE_BYTES) {
+          return `the reviewed runtime dependency ${repoPath} exceeds the auditable file boundary`;
+        }
+        source = readFileSync(dependencyPath, "utf8");
       } catch {
         return `the reviewed runtime dependency ${repoPath} is unreadable`;
+      }
+      if (provenanceDeadlineExhausted()) {
+        return "the reviewed provenance deadline expired while reading the runtime dependency closure";
       }
       if (/\b(?:eval|Function)\s*\(|\bprocess\.(?:binding|_linkedBinding|dlopen)\s*\(|\b(?:Bun\.spawn|Deno\.Command)\b|\b(?:getBuiltinModule|mainModule|createRequire)\b/.test(source)) {
         return `the reviewed runtime dependency ${repoPath} contains a dynamic code or native-process escape`;
@@ -558,6 +622,9 @@ function createReviewedExecutorInspector(cwd, options = {}) {
         specifiers.push(literal[1]);
       }
       for (const specifier of specifiers) {
+        if (provenanceDeadlineExhausted()) {
+          return "the reviewed provenance deadline expired while parsing the runtime dependency closure";
+        }
         const normalizedBuiltin = specifier.replace(/^node:/, "").split("/")[0];
         if (unsafeBuiltins.has(normalizedBuiltin)) {
           return `the reviewed runtime dependency ${repoPath} can launch or evaluate mutable child code through ${specifier}`;
@@ -599,6 +666,10 @@ function createReviewedExecutorInspector(cwd, options = {}) {
     }
     let resolvedCandidates = [path.resolve(base, rawPath)];
     if (!/[\\/]/.test(rawPath) && !/\.[A-Za-z0-9]+$/.test(rawPath)) {
+      if (provenanceDeadlineExhausted()) {
+        reason = "the reviewed provenance deadline expired before resolving the file-backed executor";
+        return true;
+      }
       try {
         const bareName = rawPath.toLowerCase();
         const executableExtensions = new Set([
@@ -614,6 +685,10 @@ function createReviewedExecutorInspector(cwd, options = {}) {
           .map((entry) => path.join(base, entry.name));
       } catch {
         return false;
+      }
+      if (provenanceDeadlineExhausted()) {
+        reason = "the reviewed provenance deadline expired while resolving the file-backed executor";
+        return true;
       }
       if (resolvedCandidates.length === 0) return false;
     }
@@ -637,7 +712,8 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       }
       try {
         const stat = lstatSync(resolved);
-        if (expectedHeadEntry.mode === "120000" || !stat.isFile() || stat.isSymbolicLink()) {
+        if (expectedHeadEntry.mode === "120000" || !stat.isFile() || stat.isSymbolicLink()
+          || stat.size > REVIEWED_EXECUTOR_MAX_TRACKED_FILE_BYTES) {
           reason = "the file-backed executor type differs from a regular file at exact HEAD";
           return true;
         }
@@ -649,6 +725,10 @@ function createReviewedExecutorInspector(cwd, options = {}) {
         reason = "the file-backed executor is missing or unreadable";
         return true;
       }
+      if (provenanceDeadlineExhausted()) {
+        reason = "the reviewed provenance deadline expired while verifying the file-backed executor";
+        return true;
+      }
       const bootstrapPath = REVIEW_BOOTSTRAP_REPO_PATH;
       if (repoPath === bootstrapPath && options.exactReviewBootstrapInvocation !== true) {
         reason = "the exact-review bootstrap was invoked with runtime options, wrappers, chaining, alternate spelling, or extra arguments instead of its one exact Node command";
@@ -658,7 +738,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       const bootstrapMatchesMain = expectedMainEntry?.mode === expectedHeadEntry.mode
         && expectedMainEntry?.blob === expectedHeadEntry.blob;
       if (repoPath === bootstrapPath && bootstrapMatchesMain) {
-        const bootstrapReason = bootstrapGitSafetyReason(root, gitExecutable, runGit, gitEnv);
+        const bootstrapReason = bootstrapGitSafetyReason(root, gitExecutable, runGit, gitEnv, provenanceDeadlineExhausted);
         if (bootstrapReason) {
           reason = bootstrapReason;
           return true;
@@ -686,6 +766,10 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       }
       let proofValid = false;
       try {
+        if (provenanceDeadlineExhausted()) {
+          reason = "the reviewed provenance deadline expired before verifying the exact-SHA review proof";
+          return true;
+        }
         const proofName = [["codex", "review", headSha].join("-"), "json"].join(".");
         const proof = JSON.parse(readFileSync(path.join(root, ".claude", "session-state", proofName), "utf8"));
         const timestamp = Date.parse(proof?.timestamp);
@@ -2878,7 +2962,7 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     }
     if (gitCursor < 0) return null;
     const args = words.slice(gitCursor + 1).map((token) => token.value);
-    const executableConfigNamed = (value) => /^(?:alias\.[^=\s]+|diff\.external|core\.(?:fsmonitor|pager|editor|sshcommand|hookspath)|include(?:if\.[^=\s]+)?\.path|pager\.[^=\s]+|interactive\.difffilter|diff\.[^=\s]+\.textconv|filter\.[^=\s]+\.(?:clean|smudge|process)|sequence\.editor|gpg\.program|credential\.helper)\s*(?:=|$)/i.test(String(value || "").trim());
+    const executableConfigNamed = (value) => /^(?:alias\.[^=\s]+|diff\.external|core\.(?:fsmonitor|pager|editor|askpass|gitproxy|sshcommand|hookspath|attributesfile)|include(?:if\.[^=\s]+)?\.path|pager\.[^=\s]+|interactive\.difffilter|diff\.[^=\s]+\.(?:textconv|command)|difftool\.[^=\s]+\.(?:cmd|path)|merge\.[^=\s]+\.driver|mergetool\.[^=\s]+\.(?:cmd|path)|filter\.[^=\s]+\.(?:clean|smudge|process)|sequence\.editor|gpg(?:\.[^=\s]+)?\.program|credential\.helper|tar\.[^=\s]+\.command)\s*(?:=|$)/i.test(String(value || "").trim());
     for (let index = 0; index < args.length; index += 1) {
       const argument = args[index];
       if (/^(?:-c|--config-env)$/i.test(argument)) {
@@ -2897,9 +2981,12 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     for (let index = 0; index < args.length; index += 1) {
       const argument = args[index];
       if (/^(?:--help|--version|-h)$/i.test(argument)) return null;
+      if (/^--exec-path(?:=|$)/i.test(argument)) {
+        return "Blocked Git exec-path override because it can replace built-in subcommands with unreviewed helpers.";
+      }
       if (/^(?:-c|-C|--config-env)$/i.test(argument)) { index += 1; continue; }
-      if (/^(?:--exec-path|--git-dir|--work-tree|--namespace|--super-prefix)$/i.test(argument)) { index += 1; continue; }
-      if (/^(?:--exec-path|--git-dir|--work-tree|--namespace|--super-prefix|--config-env)=/i.test(argument)) continue;
+      if (/^(?:--git-dir|--work-tree|--namespace|--super-prefix)$/i.test(argument)) { index += 1; continue; }
+      if (/^(?:--git-dir|--work-tree|--namespace|--super-prefix|--config-env)=/i.test(argument)) continue;
       if (/^-[cC].+/.test(argument)) continue;
       if (/^(?:--bare|--no-pager|--paginate|--literal-pathspecs|--no-literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-replace-objects|--no-optional-locks)$/i.test(argument)) continue;
       if (argument.startsWith("-")) return "Blocked Git execution because its subcommand could not be resolved safely.";
@@ -2913,6 +3000,9 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     }
     if (!gitBuiltinCommands.has(subcommand)) {
       return "Blocked Git alias or external helper execution because it can launch an unreviewed executable.";
+    }
+    if (subcommand === "difftool" || subcommand === "mergetool") {
+      return "Blocked Git helper dispatch because difftool and mergetool can launch unreviewed executables.";
     }
     if (subcommand === "hook") {
       return "Blocked Git hook execution because hooks can launch an unreviewed executable.";
