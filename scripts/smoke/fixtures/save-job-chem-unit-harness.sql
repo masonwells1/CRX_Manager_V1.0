@@ -125,6 +125,18 @@ CREATE OR REPLACE FUNCTION compute_season(p_d date) RETURNS integer
 -- copy matches it in BEHAVIOUR, not byte for byte). This is the canonical guard
 -- the rest of the app already routes through -- draw_down_quote and others call
 -- it -- and save_job did not, which is the defect T26 and T27 pin.
+--
+-- DRIFT RISK, stated rather than closed (review, 2026-08-25): the hashes recorded here
+-- and at the check_idempotency_intent copy below are OBSERVATIONS of the live bodies on
+-- their read dates, and the CONTAINER prover deliberately cannot re-verify them -- it is
+-- network-isolated by design, so it proves the migration against these copies, not
+-- against live. If a live helper changes after its read date, this suite stays green
+-- while testing stale behaviour. The boundary that catches that is the APPLY path, not
+-- this prover: immediately before a live apply, re-read both helpers from pg_proc
+-- (read-only), compare md5 against the two hashes recorded here, and treat a mismatch
+-- as review-invalidating drift -- re-copy, re-prove, re-review. The migration's own
+-- preflight asserts the helpers EXIST; equality with the reviewed copies is this
+-- documented apply-time obligation.
 CREATE OR REPLACE FUNCTION public.check_idempotency(p_key text, p_operation text)
  RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
 AS $function$

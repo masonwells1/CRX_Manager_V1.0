@@ -71,6 +71,8 @@ Sequence, in this order:
 
 **Supabase MCP `apply_migration` ONLY.** The file is **seven** top-level statements (`DO $preflight$`, `CREATE OR REPLACE`, two `REVOKE`s, a `GRANT`, `DO $postflight$`, `COMMENT ON FUNCTION`). `execute_sql` returns only the last statement, so through that channel the pin, the replacement, the ACL correction and the postflight would all be silently skipped.
 
+**Immediately before the apply, re-verify the two copied helpers against live** (review obligation, 2026-08-25): read `check_idempotency` and `check_idempotency_intent` from `pg_proc` read-only and compare md5 against the hashes recorded in `scripts/smoke/fixtures/save-job-chem-unit-harness.sql` (`2c93efc82ad63c906eab944e8b70c88e` / `edc73be809069669e8441eba7acf443d`). The container prover is network-isolated and proves against its COPIES; a live helper that changed since its 2026-08-24 read date leaves the suite green while it tests stale behaviour. A mismatch is review-invalidating drift — re-copy, re-prove, re-review before applying.
+
 ## What review actually caught — read before trusting a "clean" round
 
 Twelve rounds; **every** round found something real, including the ones that felt finished.
