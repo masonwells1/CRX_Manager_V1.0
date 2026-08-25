@@ -9,6 +9,41 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-24 — A priced job line with no rate typed yet and quantity 0 still SAVES; it is not an underbill to refuse
+
+**Source:** Mason's in-chat decision, 2026-08-24, answering a repeated exact-SHA `gpt-5.6-sol`
+finding on the `save_job` chem-unit branch. Reaffirms and extends the 2026-08-24 zero-quantity
+rule ("refuse only where a customer's money is actually at stake") against a narrower re-raise.
+
+**The question.** The gate found (HIGH) that `save_job` exempts a zero-quantity line whenever no
+usable rate is present, *even when field acreage is positive and the line carries a price*. Its
+proposed fix: exempt zero quantity only when the line is customer-supplied, unpriced, or the
+acreage is genuinely zero — otherwise raise `CHEM_QUANTITY_UNVERIFIABLE`.
+
+**Why it is not free.** That shape is what the screen produces mid-entry. The ordinary order of
+work is fields first, then products: choosing fields sets the acreage, adding a product auto-fills
+the tier price, and the rate is typed after. Between those two moments the line is priced, has
+acreage, has no rate and carries quantity 0. Refusing it does not refuse a line — one refused line
+rolls back the WHOLE job save, which is the round-7 defect three separate reviews already caught
+on this same migration.
+
+**The decision.** **It keeps saving.** A line with no quantity bills zero and shows on the invoice
+as a zero line; nothing is charged wrongly, and the operator can see it. That is the same judgement
+as the original rule: refuse where a customer's money is actually at stake, not wherever a value is
+merely unproven.
+
+**The operative rule.** The three zero-quantity exemptions stand as written — `customer_supplied`,
+no price, and no usable rate *or* acreage. The recorded residual stands with them: a priced line
+whose quantity cannot be derived can still record zero, and a cost-only line can still misstate
+margin. Both are accepted, not overlooked.
+
+**Why it is written down.** The gate re-raised this after the same branch had already been marked
+CLEAN on byte-identical SQL. It cannot converge on an owner's judgement about acceptable friction —
+nothing in the diff settles it — so the decision has to live here. A reviewer raising it again is
+not finding something new.
+
+---
+
 ## 2026-08-24 — Job totals, acreage and product costs are NOT sensitive in the public repo; customer identity and per-order profit still are
 
 **Source:** Mason's in-chat decision, 2026-08-24, answering a reviewer finding on the `save_job`

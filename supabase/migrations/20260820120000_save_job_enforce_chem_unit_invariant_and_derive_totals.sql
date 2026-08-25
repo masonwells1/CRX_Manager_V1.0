@@ -728,6 +728,19 @@ BEGIN
     --
     -- What is left is exactly the harmful shape: priced, a positive quantity was expected,
     -- and none was recorded.
+    --
+    -- RE-RAISED AND RE-SETTLED (Mason, 2026-08-24). A later gate round asked for the third
+    -- exemption to be narrowed to "acreage is genuinely zero", so that a priced line with
+    -- POSITIVE acreage and no usable rate would be refused as unverifiable. Mason declined,
+    -- and the reason is operational rather than theoretical: that shape is what the screen
+    -- produces MID-ENTRY. The ordinary order of work is fields first, then products --
+    -- choosing the fields sets the acreage, adding a product auto-fills the tier price, and
+    -- the rate is typed afterwards. Between those two moments the line is priced, has
+    -- acreage, has no rate, and carries quantity 0. Refusing it does not refuse a line; it
+    -- rolls back the WHOLE job save, which is the round-7 defect three separate reviews
+    -- already caught on this very migration. A zero-quantity line bills zero and appears on
+    -- the invoice as a zero line, so nothing is charged wrongly and the operator can see it.
+    -- Recorded in docs/manual/DECISION_LOG.md; do not re-narrow this without him.
     IF v_qty = 0 THEN
       CONTINUE WHEN COALESCE((v_chem->>'customer_supplied')::boolean, false);
       CONTINUE WHEN COALESCE(NULLIF(v_chem->>'price_per_unit_cents', '')::bigint, 0) = 0;

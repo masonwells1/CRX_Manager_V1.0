@@ -2,16 +2,23 @@
 
 **Date:** 2026-08-23
 **Branch:** `claude/save-job-server-side-chem-unit` (worktree `.claude/worktrees/save-job-enforcement`)
-**Head:** see `git log -1` — round 13 landed on 2026-08-24 on `claude/save-job-server-side-chem-unit` (PR #446). Tree clean. (Push state is deliberately not recorded here: it is volatile, it was wrong in this header for a full round, and `git status -sb` answers it exactly.)
+**Head:** see `git log -1` — round 26 landed on 2026-08-25 (PR #446). Tree and push state are volatile; `git status -sb` answers both exactly, and this header was wrong about them for a full round once already.
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-**SQL sha256:** `a2866b485d38aa8e0eb40df376ed93bd0e10a13f7a5383361b321dd08ec54b43`
-**Status: PARTIAL — written, proven, and parked at two gates that are not mine to open.**
+**SQL sha256:** `af0b5086050e20c633ea57c24d6fda685e2a6beb0ea22f05efae32b63271d631`
+**Status: PARTIAL — written, proven, gate-CLEAN once, pushed, waiting on a merge that something else is blocking.**
 
 ## Approval state — carries nothing forward
 
-- **Nothing has been applied to the live database.** Live is untouched.
-- **Nothing has been pushed.** PR #446 is open and still shows only the first commit (`cd625238`); its body describes a two-migration design that no longer exists.
-- A live apply, a push, a merge, and any live-data edit each need Mason's explicit OK **in the conversation where they happen**. This document is not that OK.
+- **Nothing has been applied to the live database.** Live is untouched; the migration high-water mark is unchanged.
+- The branch **is** pushed and PR #446 carries the current work. A **merge** and a **live apply** each still need Mason's explicit OK **in the conversation where they happen**. This document is not that OK, and neither is the fact that the gate came back clean.
+- Mason pre-authorised "merge once fully green" for #446 on 2026-08-24. Treat that as intent, not a standing key — re-confirm before merging, because a merge deploys production through Vercel.
+
+## Where it stands after rounds 23-26 (2026-08-25)
+
+- The exact-SHA `gpt-5.6-sol` gate returned **CLEAN — VERDICT: COMPLETE** at commit `da38eee8` and minted the proof. A later run against **byte-identical SQL** returned a fresh HIGH. That is the important thing to know about the tool: **it is not deterministic, so "keep re-running until it comes back clean" does not terminate on its own.** Judge each finding on its merits instead of treating a clean run as a finish line or a new finding as a regression.
+- Rounds 23-26 closed four real defects it found, three of them introduced by earlier rounds of this same work: a tolerance the caller could size through acreage, a header acreage taken from the payload instead of derived from the fields, a denominator rule that had only ever examined the rate side, and an unpinned function owner. Full narrative in `docs/reference/migration-history.md` row 891.
+- **THE MERGE IS BLOCKED, and not by this branch.** `main` went red at midnight UTC on 2026-08-25: a QuoteBuilder test fixture aged past a 30-day real-clock guardrail. The fix is **PR #468**. #446 cannot merge until that lands, because the failing job is a required check. Nothing in #446 causes it — the same test fails identically on a clean checkout of `main`.
+- **Two gate findings are settled owner decisions, not open work.** A priced zero-quantity line with no rate typed yet still SAVES; and live job figures stay in this public repo. Both are recorded in `docs/manual/DECISION_LOG.md` (2026-08-24). The gate re-raises both because nothing in a diff can settle a business judgement — point it at the log rather than re-arguing or "fixing" them.
 
 ## What the migration does
 
