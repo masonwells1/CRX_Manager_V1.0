@@ -507,9 +507,11 @@ PostgreSQL 17.6 in Docker, the same version live runs:
   shape **aborts** under the old non-deferrable rule and **silently wipes the stamp** under the
   retired SET NULL rule; and the residual case above **fails closed** with no orphan committed.
 
-**Not verified: the file has never been applied end-to-end by a server** — the preflight requires
-the cutover barrier (`20260816110000`) committed in a prior transaction. That happens only at
-apply, which needs Mason's OK.
+**(Historical pre-rollout note, superseded 2026-08-24.)** At review time the file had never been
+applied end-to-end by a server — the preflight requires the cutover barrier (`20260816110000`)
+committed in a prior transaction. That gap closed on 2026-08-24: the file applied live with Mason's
+explicit approval as ledger version `20260825025241` and its preflight/postflight passed in that
+committed transaction.
 
 ---
 
@@ -854,9 +856,9 @@ rejected, its remaining soft-delete change is already delivered by both the tier
 the successor wrapper, and its live-body `md5(prosrc)` pin cannot match after that wrapper cutover.
 It is fully superseded: never "repair" it into a later `CREATE OR REPLACE public.draw_down_quote`,
 because that would overwrite the actor binding, required-key guard and receipt binding. All four
-successor migrations are now applied live (the barrier on 2026-08-24 midday, the remaining three
-later that day with Mason's explicit approval — see `docs/reference/migration-history.md`); the
-do-not-rebuild instruction above still stands.
+migrations in the chain — the barrier and its three successors — are now applied live (the barrier
+on 2026-08-24 midday, the remaining three later that day with Mason's explicit approval — see
+`docs/reference/migration-history.md`); the do-not-rebuild instruction above still stands.
 
 **THE FIX IS THE TIER SPLIT, NOT THE ROUNDING — Mason changed his answer on 2026-08-16, and the
 later answer governs.** Two options were put to him. The first, at 09:51 Central, was mine: keep the
@@ -898,17 +900,18 @@ regression risk on this path:
    `total_price`.
 
 Mason's decision 2026-08-14 was to log this bug and fix it separately rather than entangle it with
-the recovery PR. **No migration here is approved for apply** — PR #404 landing on `main` does not
-apply anything; the live apply is a separate, explicit decision. Do not re-diagnose this from
-scratch; the live evidence is above.
+the recovery PR. **(Historical: the "no migration here is approved for apply" caveat that stood
+with this entry is superseded — see below.)** Do not re-diagnose this from scratch; the live
+evidence is above.
 
-**Status of the tier-split candidate: LOCAL CANDIDATE — NOT APPLIED.** Both required gate reviewers
-returned zero blockers and a further adversarial pass found one HIGH, since fixed in-file (a draw
-against a soft-deleted booking — see the CRX-RLS-001 note on row 887). Every scenario was re-proven
-end-to-end on throwaway PostgreSQL 17 databases and the full typecheck/lint/test/build pipeline is
-green. **Nothing has touched the live database.** The live apply still needs Mason's explicit
-approval and the standard apply-guard proof. Row 887 of `docs/reference/migration-history.md`
-carries the file's pinned SQL hash and the apply obligations.
+**Status of the tier-split candidate: APPLIED LIVE 2026-08-24** (superseding the LOCAL CANDIDATE
+status this paragraph carried before the rollout). Both required gate reviewers returned zero
+blockers and a further adversarial pass found one HIGH, since fixed in-file (a draw against a
+soft-deleted booking — see the CRX-RLS-001 note on row 887); every scenario was re-proven
+end-to-end on throwaway PostgreSQL 17 databases before the apply. On 2026-08-24, with Mason's
+explicit in-chat approval and fresh apply-guard + Codex proofs, it applied live as ledger version
+`20260825025241`. Row 887 of `docs/reference/migration-history.md` carries the file's pinned SQL
+hash and the apply record.
 
 The first rounding attempt's branch, `claude/draw-down-price-rounding`, was deleted on 2026-08-16;
 its tip is preserved as tag `abandoned/draw-down-price-rounding` so the abandoned work stays
