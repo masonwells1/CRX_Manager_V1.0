@@ -118,6 +118,15 @@ needs Mason?" and is built so that its silence is trustworthy.
   ledgers as "stalled"; and ledgers older than a week are now `ARCHIVED` rather than
   presented as loops that just died.
 
+## 2026-08-24 — Fleet shipping sprint: schema registry refreshed from live…
+
+Fleet shipping sprint: schema registry refreshed from live introspection, two Sol findings fixed on the PR 436 client money guard, PR 461 verified merge-ready, landing batch queued for Mason.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `chore(registry): refresh schema registry from live introspection after the barrier apply` (hash omitted — the commit was later amended to fold in this changelog entry, so any hash recorded here would not survive)
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-24 — Migration ordering review now matches the deterministic ledger guard
 
 The draw-down cutover review exposed two opposite bookkeeping hazards in the
