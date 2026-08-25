@@ -7,7 +7,7 @@ All significant development milestones, in reverse chronological order.
 Fleet shipping sprint: schema registry refreshed from live introspection, two Sol findings fixed on the PR 436 client money guard, PR 461 verified merge-ready, landing batch queued for Mason.
 
 - **Commits this session** (git log origin/main..HEAD):
-  - `36ccf4cd chore(registry): refresh schema registry from live introspection after the barrier apply`
+  - `chore(registry): refresh schema registry from live introspection after the barrier apply` (hash omitted — the commit was later amended to fold in this changelog entry, so any hash recorded here would not survive)
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
 

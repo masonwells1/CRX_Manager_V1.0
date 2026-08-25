@@ -138,12 +138,30 @@ try {
       const appliedSet = new Set(appliedNames.map(n => String(n).replace(/\.sql$/, "")));
       const inAppliedSet = (baseName) =>
         appliedSet.has(baseName) || appliedSet.has(baseName.replace(/^\d{14}_/, ""));
+      // The candidate-window boundary must be the max AUTHORED stamp among applied
+      // migrations (the 14-digit prefix of the ledger `name`), NOT the raw
+      // migrations_high_water. The server assigns apply-TIME versions, so an MCP
+      // apply can stamp a version DAYS AHEAD of every authored filename (the
+      // 2026-08-24 barrier apply landed as version 20260824185408 while its name
+      // is 20260816110000_...). A boundary read from max(version) then swallows
+      // written-but-UNAPPLIED migrations authored in between (20260819232000_...)
+      // before the name check ever sees them — the warning this check exists to
+      // emit goes silent. Same rule as the migration-drift reviewer's CHECK 6:
+      // ordering compares the ledger NAME high-water; `version` is only the
+      // fallback when no name carries a stamp.
+      let windowBoundary = String(highWater);
+      const authoredStamps = appliedNames
+        .map(n => (String(n).match(/^(\d{14})_/) || [])[1])
+        .filter(Boolean);
+      if (authoredStamps.length > 0) {
+        windowBoundary = authoredStamps.reduce((a, b) => (b > a ? b : a));
+      }
       const migDir = path.join(projectDir, "supabase", "migrations");
       const missing = [];
       if (existsSync(migDir)) {
         for (const f of readdirSync(migDir)) {
           const m = f.match(/^(\d{14})_.+\.sql$/);
-          if (!m || m[1] <= String(highWater)) continue;
+          if (!m || m[1] <= windowBoundary) continue;
           const baseName = f.replace(/\.sql$/, "");
           if (inAppliedSet(baseName)) continue; // applied live, just under a different version number
           const sql = readFileSync(path.join(migDir, f), "utf8");
@@ -155,7 +173,7 @@ try {
         const sample = missing.slice(0, 5).map(f => "      " + f).join("\n");
         warnings.push(
           `📅 Schema registry is BEHIND the migrations on disk: ${missing.length} migration file(s) carry a ` +
-          `newer stamp than the registry high-water (${highWater}) AND are not in the registry's applied-migration name list:\n` + sample +
+          `newer stamp than the applied-migration authored high-water (${windowBoundary}) AND are not in the registry's applied-migration name list:\n` + sample +
           (missing.length > 5 ? `\n      ... and ${missing.length - 5} more` : "") +
           `\n   If these were applied live, the 4 schema-aware hooks are validating against a stale schema —\n` +
           `   invoke /regen-schema-registry. If they are written-but-unapplied, apply (or park) them first.`
