@@ -104,16 +104,17 @@ function paramMode(decl) {
   return /^(in|out|inout|variadic)$/i.test(first) ? first.toLowerCase() : "in";
 }
 
-function isTrustedUuidParameterDeclaration(declaration) {
+function isTrustedUuidParameterDeclaration(declaration, allowUnqualifiedUuid = true) {
   const normalized = normalizedRoutineIdentityArgs(declaration, true);
-  return normalized === "uuid" || normalized === "pg_catalog.uuid";
+  return normalized === "pg_catalog.uuid" ||
+    (allowUnqualifiedUuid && normalized === "uuid");
 }
 
 /** PostgreSQL lets routine bodies reference parameters by both their declared
  * name and their one-based positional alias ($1, $2, ...). PL/pgSQL positional
  * aliases follow full declaration order, including OUT parameters, even though
  * OUT-only values are not caller inputs and are skipped as actor candidates. */
-function actorParameterDescriptors(maskedParams, rawParams) {
+function actorParameterDescriptors(maskedParams, rawParams, allowUnqualifiedUuid = true) {
   const declarations = splitTopLevelArgs(maskedParams, rawParams);
   const actors = [];
   for (const [index, declaration] of declarations.entries()) {
@@ -131,7 +132,7 @@ function actorParameterDescriptors(maskedParams, rawParams) {
     actors.push({
       name,
       references,
-      trustedUuid: isTrustedUuidParameterDeclaration(declaration),
+      trustedUuid: isTrustedUuidParameterDeclaration(declaration, allowUnqualifiedUuid),
     });
   }
   return actors;
@@ -463,6 +464,50 @@ function normalizedQualifiedIdentifier(identifier) {
     while (/\s/.test(value[cursor] || "")) cursor++;
   }
   return parts.join(".");
+}
+
+function hasSchemaBeforeExplicitPgCatalog(structuralSql, statementOnly = false) {
+  if (structuralSql === null || structuralSql === undefined) return false;
+  const boundary = statementOnly ? "(?:^|;)\\s*" : "\\b";
+  const searchPath = new RegExp(
+    `${boundary}SET\\s+(?:LOCAL\\s+)?search_path\\s*(?:=|TO)\\s*([^;]+)`,
+    "gi"
+  );
+  let match;
+  while ((match = searchPath.exec(structuralSql)) !== null) {
+    // Routine attributes can follow the path without a semicolon (`...,
+    // pg_catalog AS $body$`). Locate pg_catalog inside the captured value
+    // instead of requiring the final list item to consume the whole suffix.
+    const catalog = /(?:^|,)\s*(?:"pg_catalog"|pg_catalog)(?=\s*(?:,|$|\b(?:AS|LANGUAGE|SECURITY|SET|RESET|CALLED|RETURNS|STRICT|IMMUTABLE|STABLE|VOLATILE|PARALLEL|COST|ROWS|SUPPORT)\b))/i
+      .exec(match[1]);
+    if (catalog && match[1].slice(0, catalog.index).trim() !== "") return true;
+  }
+  return false;
+}
+
+/** Bare `uuid` normally resolves to pg_catalog.uuid because PostgreSQL searches
+ * pg_catalog first. A migration can defeat that guarantee by creating its own
+ * uuid type/domain or by explicitly placing another schema before pg_catalog.
+ * In either case, actor declarations and legacy local bindings must spell
+ * pg_catalog.uuid so equality cannot dispatch through an attacker-controlled
+ * type or operator. */
+function hasUnqualifiedUuidShadowRisk(...structuralSqlVariants) {
+  const typeHead = new RegExp(
+    `\\bCREATE\\s+(?:DOMAIN|TYPE)\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?` +
+      `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})(?=\\s|$)`,
+    "gi"
+  );
+  for (const structuralSql of structuralSqlVariants) {
+    if (structuralSql === null || structuralSql === undefined) continue;
+    let match;
+    typeHead.lastIndex = 0;
+    while ((match = typeHead.exec(structuralSql)) !== null) {
+      const normalized = normalizedQualifiedIdentifier(match[1]);
+      if (normalized === null || normalized.split(".").at(-1) === "uuid") return true;
+    }
+    if (hasSchemaBeforeExplicitPgCatalog(structuralSql, true)) return true;
+  }
+  return false;
 }
 
 function isPgCronJobName(identifier) {
@@ -1293,7 +1338,7 @@ function actorReferencePattern(reference) {
  * binding, but only when that local is initialized unconditionally from
  * auth.uid() exactly once and is not overwritten through assignment or
  * SELECT ... INTO. */
-function stableAuthUidBindings(structuralBody, beforeIndex) {
+function stableAuthUidBindings(structuralBody, beforeIndex, allowUnqualifiedUuid = true) {
   const prefix = structuralBody.slice(0, beforeIndex);
   const bindings = new Set();
   const controlBody = blankQuotedControlIdentifiers(structuralBody);
@@ -1315,9 +1360,12 @@ function stableAuthUidBindings(structuralBody, beforeIndex) {
     if (!isOuterDeclarationInitializer && !isTopLevelBodyAssignment) continue;
     const name = match[1];
     const ref = identifierReferencePattern(name);
+    const uuidType = allowUnqualifiedUuid
+      ? `(?:pg_catalog\\s*\\.\\s*)?uuid`
+      : `pg_catalog\\s*\\.\\s*uuid`;
     const declarationRe = new RegExp(
       `(?:^|;|\\bDECLARE\\b)\\s*${ref}\\s+` +
-        `(?:pg_catalog\\s*\\.\\s*)?uuid\\b(?:\\s+NOT\\s+NULL)?\\s*` +
+        `${uuidType}\\b(?:\\s+NOT\\s+NULL)?\\s*` +
         `(?=;|:=|=(?!=)|DEFAULT\\b)`,
       "i"
     );
@@ -1521,7 +1569,8 @@ function hasEnforcedActorRefusal(
   body,
   actorParam,
   actorReferences = [actorParam],
-  trustedUuid = false
+  trustedUuid = false,
+  allowUnqualifiedUuid = true
 ) {
   // IS DISTINCT FROM and <> dispatch through PostgreSQL equality operators.
   // A custom actor type can overload equality and claim a forged identity is
@@ -1546,7 +1595,11 @@ function hasEnforcedActorRefusal(
     const condition = structuralBody.slice(block.index + 2, block.index + then.index);
     const actionStart = block.index + then.index + then[0].length;
     const actionEnd = block.index + endIf.index;
-    const bindings = stableAuthUidBindings(structuralBody, block.index);
+    const bindings = stableAuthUidBindings(
+      structuralBody,
+      block.index,
+      allowUnqualifiedUuid
+    );
     if (!isTopLevelPlpgsqlStatement(controlBody, block.index)) continue;
     if (hasRecognizedMutationBefore(controlBody, block.index, actorReferences)) continue;
     if (!actorReferences.some((reference) =>
@@ -1564,6 +1617,12 @@ function hasEnforcedActorRefusal(
 function carriesRoutineHeader(payload) {
   return CREATE_ROUTINE_HEAD_RE.test(payload) ||
     CREATE_ROUTINE_HEAD_RE.test(blankComments(payload));
+}
+
+function carriesSecurityRelevantRoutineDdl(payload) {
+  if (carriesRoutineHeader(payload)) return true;
+  return /\bALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b[\s\S]*?\bSECURITY\s+DEFINER\b/i
+    .test(blankComments(payload));
 }
 
 /** Decode PostgreSQL U&'...' string escapes only for header detection. The
@@ -2052,13 +2111,13 @@ function maskSqlNoise(text, inProceduralCode = false) {
         if (close === -1) return null;
         const payload = text.slice(i + tag.length, close);
         const isProceduralContainer = isProceduralContainerPrefix(out);
-        const hasRoutineHeader = carriesRoutineHeader(payload);
-        const isKnownSqlExecutor = hasRoutineHeader &&
+        const hasSecurityRelevantRoutineDdl = carriesSecurityRelevantRoutineDdl(payload);
+        const isKnownSqlExecutor = hasSecurityRelevantRoutineDdl &&
           isExecuteSqlReadonlyLiteralPrefix(out);
-        const callablePrefix = hasRoutineHeader
+        const callablePrefix = hasSecurityRelevantRoutineDdl
           ? maskSqlForCallNames(text.slice(0, i))
           : "";
-        if (hasRoutineHeader && callablePrefix !== null &&
+        if (hasSecurityRelevantRoutineDdl && callablePrefix !== null &&
             hasUnprovenCallableContext(
               callablePrefix, out, text, close + tag.length
             )) {
@@ -2067,8 +2126,8 @@ function maskSqlNoise(text, inProceduralCode = false) {
         }
         const isExecutable = isProceduralContainer || /\bEXECUTE\s+$/i.test(out) ||
           isKnownSqlExecutor ||
-          (inProceduralCode && hasRoutineHeader) ||
-          (hasRoutineHeader && inExecuteStatement(out, text, close + tag.length));
+          (inProceduralCode && hasSecurityRelevantRoutineDdl) ||
+          (hasSecurityRelevantRoutineDdl && inExecuteStatement(out, text, close + tag.length));
         const inner = isExecutable
           ? maskSqlNoise(payload, inProceduralCode || isProceduralContainer)
           : " ".repeat(payload.length);
@@ -2096,19 +2155,22 @@ function maskSqlNoise(text, inProceduralCode = false) {
         ? unicodeStringForHeaderDetection(text, i, end, payload)
         : null;
       if (unicodePayload?.error) return null;
-      const hasRoutineHeader = carriesRoutineHeader(unicodePayload?.payload ?? payload);
-      const isKnownSqlExecutor = ch === "'" && hasRoutineHeader &&
+      const hasSecurityRelevantRoutineDdl = carriesSecurityRelevantRoutineDdl(
+        unicodePayload?.payload ?? payload
+      );
+      const isKnownSqlExecutor = ch === "'" && hasSecurityRelevantRoutineDdl &&
         isExecuteSqlReadonlyLiteralPrefix(out);
-      const callablePrefix = ch === "'" && hasRoutineHeader
+      const callablePrefix = ch === "'" && hasSecurityRelevantRoutineDdl
         ? maskSqlForCallNames(text.slice(0, i))
         : "";
-      if (ch === "'" && hasRoutineHeader && callablePrefix !== null &&
+      if (ch === "'" && hasSecurityRelevantRoutineDdl && callablePrefix !== null &&
           hasUnprovenCallableContext(callablePrefix, out, text, end)) {
         sawOpaqueRoutineCallable = true;
         return null;
       }
       const isDynamicSql = ch === "'" && (isProceduralContainer || isKnownSqlExecutor ||
-        (hasRoutineHeader && (inProceduralCode || inExecuteStatement(out, text, end))));
+        (hasSecurityRelevantRoutineDdl &&
+          (inProceduralCode || inExecuteStatement(out, text, end))));
       if (isDynamicSql) {
         // Recursing into the raw payload is safe only when it needs no SQL
         // quote decoding. In an outer standard string, doubled quotes represent
@@ -2325,6 +2387,12 @@ try {
     );
   }
   const masked = maskSqlNoise(content);
+  const callNameMasked = maskSqlForCallNames(content);
+  const allowUnqualifiedUuid = !hasUnqualifiedUuidShadowRisk(
+    callNameMasked,
+    masked,
+    blankComments(content)
+  );
   const alteredSecurityModes = masked === null
     ? []
     : alteredRoutineSecurityModes(masked);
@@ -2406,7 +2474,9 @@ try {
       }
       if (lits.length === 0) return false;
       const ddlLiterals = directExecuteLiteral ? [directExecuteLiteral.literal] : lits;
-      if (!carriesRoutineHeader(ddlLiterals.map((l) => l.payload).join(""))) return false;
+      if (!carriesSecurityRelevantRoutineDdl(
+        ddlLiterals.map((l) => l.payload).join("")
+      )) return false;
       const hasUnprovenCallable = lits.some((lit) => {
         const callablePrefix = maskSqlForCallNames(content.slice(0, lit.start));
         return callablePrefix !== null && hasUnprovenCallableContext(
@@ -2423,16 +2493,18 @@ try {
       // one literal while substituting the actor parameter or body at runtime.
       // Replace the literal with a marker and accept only the three deliberately
       // supported direct shapes. Fancy but valid builders use the exemption.
-      if (lits.length === 1 && carriesRoutineHeader(lits[0].payload)) {
+      if (lits.length === 1 && carriesSecurityRelevantRoutineDdl(lits[0].payload)) {
         const lit = lits[0];
         const skeleton = singleLiteralSkeleton;
         const directAssign = /^(?:BEGIN\s+)?(?:"[^"]+"|[\w.]+)\s*(?::=|=(?!=))\s*__ACTOR_DDL_LITERAL__$/i.test(skeleton);
         const directSelectInto = /^(?:BEGIN\s+)?SELECT\s+__ACTOR_DDL_LITERAL__\s+INTO\s+(?:"[^"]+"|[\w.]+)$/i.test(skeleton);
         if (directAssign || directSelectInto) return false;
       }
-      if (directExecuteLiteral && carriesRoutineHeader(directExecuteLiteral.literal.payload)) return false;
+      if (directExecuteLiteral &&
+          carriesSecurityRelevantRoutineDdl(directExecuteLiteral.literal.payload)) return false;
       violations.push(
-        "This migration builds a CREATE FUNCTION/PROCEDURE statement at runtime, and the actor-binding guard " +
+        "This migration builds a CREATE FUNCTION/PROCEDURE or security-elevating ALTER routine " +
+        "statement at runtime, and the actor-binding guard " +
         "cannot read it as one complete literal — the definition is split across fragments, transformed " +
         "through format/concatenation/conditional logic, or not parseable on its own. Built that way, " +
         "the guard cannot tell whether the " +
@@ -2563,7 +2635,11 @@ try {
     // cron.schedule remain visible. This intentionally accepts false positives:
     // if a definer function with a forgeable actor parameter contains mutation
     // text anywhere outside a comment, it must bind the actor or use exemption.
-    const actorDescriptors = actorParameterDescriptors(maskedParams, blankComments(params));
+    const actorDescriptors = actorParameterDescriptors(
+      maskedParams,
+      blankComments(params),
+      allowUnqualifiedUuid
+    );
     const actorParams = actorDescriptors.map(({ name }) => name);
     if (actorParams.length === 0) continue;
 
@@ -2597,8 +2673,19 @@ try {
       actorForwardedSymbolicOperator;
     if (!hasMutation) continue;
 
+    // IS DISTINCT FROM resolves its equality operator through the routine's
+    // runtime search_path. Explicitly putting a user schema before pg_catalog
+    // lets a same-signature user operator lie even when both operands spell
+    // pg_catalog.uuid, so that order cannot establish caller identity.
+    const trustedUuidOperatorResolution = !hasSchemaBeforeExplicitPgCatalog(attrs);
     const hasRecognizedActorRefusal = actorDescriptors.every(({ name, references, trustedUuid }) =>
-      hasEnforcedActorRefusal(body, name, references, trustedUuid)
+      hasEnforcedActorRefusal(
+        body,
+        name,
+        references,
+        trustedUuid && trustedUuidOperatorResolution,
+        allowUnqualifiedUuid
+      )
     );
     if (hasRecognizedActorRefusal) continue;
 

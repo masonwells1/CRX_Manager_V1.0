@@ -560,6 +560,24 @@ trailing operator to replace the trusted identity. Declaration initializers and
 later assignments must now end immediately after the exact `auth.uid()` call;
 both forged forms are pinned, bringing the focused suite to 440 assertions.
 
+A later bounded security review found two more exact bypasses. Executable SQL
+could hide `ALTER FUNCTION/PROCEDURE/ROUTINE ... SECURITY DEFINER` inside a
+string and elevate an existing unreadable actor mutator after the lexer masked
+the statement. A migration could also create a shadow `uuid` domain, place its
+schema ahead of `pg_catalog`, and overload equality so a bare-`uuid` actor or
+legacy local appeared to match `auth.uid()`. The lexer now preserves both
+routine creation and security-elevating ALTER DDL at dynamic execution
+boundaries. Bare `uuid` is no longer trusted when the migration creates a
+same-named type/domain or explicitly searches another schema before
+`pg_catalog`. An explicit `pg_catalog.uuid` remains reviewable only when the
+routine's runtime path also keeps catalog operators first; otherwise a
+user-schema `=(pg_catalog.uuid, pg_catalog.uuid)` operator can lie about the
+comparison too. Five regressions cover the dynamic elevation, shadowed actor
+parameter, shadowed local, explicit-catalog operator impersonation, and the safe
+implicit-catalog-first control. Each load-bearing defense was removed in turn
+and its exact regression failed; the restored focused suite now passes 445
+assertions.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —

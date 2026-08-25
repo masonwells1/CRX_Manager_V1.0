@@ -2043,6 +2043,79 @@ GRANT EXECUTE ON FUNCTION public.bound_actor(uuid) TO authenticated, service_rol
 r = runHook(SECURE_GRANTED_FUNCTION);
 ok(!isDeny(r), "a complete bound SECURITY DEFINER migration with deliberate grants remains allowed");
 
+const SHADOWED_UUID_SETUP = `CREATE DOMAIN public.uuid AS pg_catalog.uuid;
+SET search_path = public, pg_catalog;
+CREATE FUNCTION public.shadowed_uuid_eq(public.uuid, pg_catalog.uuid)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $eq$SELECT true$eq$;
+CREATE OPERATOR public.= (
+  LEFTARG = public.uuid,
+  RIGHTARG = pg_catalog.uuid,
+  FUNCTION = public.shadowed_uuid_eq
+);
+CREATE FUNCTION public.shadowed_local_uuid_eq(pg_catalog.uuid, public.uuid)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $eq$SELECT true$eq$;
+CREATE OPERATOR public.= (
+  LEFTARG = pg_catalog.uuid,
+  RIGHTARG = public.uuid,
+  FUNCTION = public.shadowed_local_uuid_eq
+);
+CREATE FUNCTION public.shadowed_catalog_uuid_eq(pg_catalog.uuid, pg_catalog.uuid)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $eq$SELECT true$eq$;
+CREATE OPERATOR public.= (
+  LEFTARG = pg_catalog.uuid,
+  RIGHTARG = pg_catalog.uuid,
+  FUNCTION = public.shadowed_catalog_uuid_eq
+);`;
+
+r = runHook(`${SHADOWED_UUID_SETUP}
+CREATE FUNCTION public.shadowed_actor_parameter(p_actor uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $body$
+BEGIN
+  IF p_actor IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor);
+END
+$body$;`);
+ok(isDeny(r), "a search-path shadowed bare uuid actor cannot prove caller identity");
+
+r = runHook(`${SHADOWED_UUID_SETUP}
+CREATE FUNCTION public.shadowed_actor_local(p_actor pg_catalog.uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $body$
+DECLARE v_actor uuid := auth.uid();
+BEGIN
+  IF p_actor IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor);
+END
+$body$;`);
+ok(isDeny(r), "a search-path shadowed bare uuid local cannot prove caller identity");
+
+r = runHook(`${SHADOWED_UUID_SETUP}
+CREATE FUNCTION public.shadowed_uuid_operator(p_actor pg_catalog.uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog AS $body$
+BEGIN
+  IF p_actor IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor);
+END
+$body$;`);
+ok(isDeny(r), "a user-schema equality operator cannot impersonate pg_catalog uuid identity");
+
+r = runHook(`${SHADOWED_UUID_SETUP}
+CREATE FUNCTION public.catalog_first_uuid_actor(p_actor pg_catalog.uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $body$
+BEGIN
+  IF p_actor IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor);
+END
+$body$;`);
+ok(!isDeny(r), "implicit catalog-first lookup keeps explicit pg_catalog uuid identity reviewable");
+
 r = runHook(`DO $do$ DECLARE v_ddl text := $ddl$SELECT 1$ddl$; BEGIN EXECUTE v_ddl; END $do$;`);
 ok(isDeny(r), "the privilege exception does not allow indirect procedural EXECUTE");
 
@@ -2952,6 +3025,13 @@ ok(isDeny(r), "an invoker function wrapper cannot hide an unbound SECURITY DEFIN
 
 r = runHook("ALTER PROCEDURE public.existing_actor_proc(uuid) SECURITY DEFINER;");
 ok(isDeny(r), "ALTER PROCEDURE cannot elevate an existing unreadable routine past the guard");
+
+r = runHook(`DO $do$
+BEGIN
+  EXECUTE 'ALTER FUNCTION public.existing_actor(uuid) SECURITY DEFINER';
+END
+$do$;`);
+ok(isDeny(r), "direct dynamic ALTER FUNCTION cannot elevate an unreadable routine past the guard");
 
 r = runHook(proc(BOUND));
 ok(!isDeny(r), "a correctly bound SECURITY DEFINER procedure remains allowed");
