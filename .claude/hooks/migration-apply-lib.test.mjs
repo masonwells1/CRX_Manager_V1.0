@@ -251,6 +251,8 @@ denies(evaluate(fixture({ proof: { migration: MIG, timestamp: iso(60 * 60 * 1000
   "without subagent review proof", "FUTURE-dated reviewer proof is not 'fresh forever'");
 denies(evaluate(fixture({ proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "blockers", queryHash: HASH } })),
   "without subagent review proof", "reviewer proof whose findings are not clean/blockers-fixed");
+denies(evaluate(fixture(), { name: `99999999999999_${MIG}` }),
+  "without subagent review proof", "a future-prefixed migration name cannot reuse an old proof by substring");
 // The edited-after-review case: proof is fresh and clean but bound to other SQL.
 denies(evaluate(fixture({ proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: "0".repeat(64) } })),
   "without subagent review proof", "reviewer proof bound to DIFFERENT SQL (edited after review)");
@@ -381,6 +383,23 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   ok(!otherProject.stdout.includes("Transmitting"), "--project never reaches transmission");
   const otherProjectConfirm = runScript(okRoot, ["--project", "someotherprojectref", "--confirm"]);
   ok(otherProjectConfirm.status === 1, "--project is refused even with --confirm");
+
+  // Identity comes from the checked-out filename, never a caller-supplied
+  // alias. Without this, a reviewed old migration could be renamed to a future
+  // timestamp and pass ordering while reusing its content hash proof.
+  const renamed = runScript(okRoot, ["--name", `99999999999999_${MIG}`]);
+  ok(renamed.status === 1, `--name is refused (got ${renamed.status})`);
+  ok(renamed.stderr.includes("--name is not supported"), "the --name refusal names the unsafe flag");
+  ok(!renamed.stdout.includes("APPLY GATE PASSED"), "--name cannot reach a passing gate");
+
+  const outside = path.join(okRoot, "outside.sql");
+  writeFileSync(outside, SQL, "utf8");
+  const outsideRun = spawnSync(process.execPath, [scriptPath, outside], {
+    encoding: "utf8",
+    env: { ...scratchHookEnvironment(okRoot), SUPABASE_ACCESS_TOKEN: "" },
+  });
+  ok(outsideRun.status === 1, `an outside SQL file is refused (got ${outsideRun.status})`);
+  ok(outsideRun.stderr.includes("checked-out supabase/migrations"), "outside-file refusal names the containment boundary");
 }
 
 // ── WRAPPABILITY: the precondition the atomicity promise depends on ─────────

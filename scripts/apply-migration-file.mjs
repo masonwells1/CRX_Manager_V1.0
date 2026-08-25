@@ -35,8 +35,11 @@
 //
 //   Flags:
 //     --confirm            actually transmit. Without it this is a dry run.
-//     --name <name>        ledger name (default: file basename without .sql)
 //     --created-by <who>   ledger created_by (default: the CRX ledger convention)
+//
+//   The ledger name is always the exact basename of a checked-out
+//   supabase/migrations/*.sql file, without .sql. It is deliberately NOT a
+//   flag: ordering and reviewer proof identity both depend on that name.
 //
 //   There is deliberately NO --project flag; the target is pinned to CRX
 //   production. See TARGET below.
@@ -48,7 +51,7 @@
 //   the per-migration ask (settled 2026-07-13), and destructive migrations never
 //   apply autonomously at all. That policy is enforced inside the rule book.
 
-import { readFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -125,6 +128,33 @@ if (argv.includes("--project")) {
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const absFile = path.resolve(process.cwd(), filePath);
 if (!existsSync(absFile)) die(1, `apply-migration-file: no such file — ${absFile}`);
+if (argv.includes("--name")) {
+  die(1,
+    "apply-migration-file: --name is not supported. Migration identity is the exact checked-out " +
+    "supabase/migrations filename, so a caller cannot relabel reviewed SQL to bypass ordering or proof binding.");
+}
+
+// This second door accepts repository migration bytes only. Resolve both paths
+// first so a relative traversal or symlink cannot make an outside file appear
+// to be a migration in this checkout. The name below is derived only after
+// that containment check, never accepted from the caller.
+let migrationDir;
+let resolvedFile;
+try {
+  migrationDir = realpathSync(path.resolve(projectDir, "supabase", "migrations"));
+  resolvedFile = realpathSync(absFile);
+} catch (err) {
+  die(1, `apply-migration-file: could not resolve the checked-out migration path (${err?.message || err}). Refusing.`);
+}
+const migrationRelative = path.relative(migrationDir, resolvedFile);
+if (!migrationRelative || migrationRelative.startsWith(`..${path.sep}`) || path.isAbsolute(migrationRelative) || path.dirname(migrationRelative) !== ".") {
+  die(1,
+    "apply-migration-file: the file must be a direct checked-out supabase/migrations/*.sql file. " +
+    "Refusing an outside, nested, or symlinked path because its identity cannot be bound to repository review evidence.");
+}
+if (!/\.sql$/i.test(migrationRelative)) {
+  die(1, `apply-migration-file: migration files must end in .sql — ${migrationRelative}`);
+}
 
 // CRLF→LF so the transmitted string is byte-identical to what
 // scripts/write-apply-proofs.mjs hashed. This single line is what makes the
@@ -132,7 +162,7 @@ if (!existsSync(absFile)) die(1, `apply-migration-file: no such file — ${absFi
 const sql = readFileSync(absFile, "utf8").replace(/\r\n/g, "\n");
 if (!sql.trim()) die(1, `apply-migration-file: ${absFile} is empty.`);
 
-const migName = flagValue(argv, "--name") || path.basename(absFile).replace(/\.sql$/i, "");
+const migName = path.basename(resolvedFile).replace(/\.sql$/i, "");
 const queryHash = createHash("sha256").update(sql).digest("hex");
 
 console.log(`migration : ${migName}`);

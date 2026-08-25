@@ -3284,6 +3284,24 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
       failures.push('  round-38 Git-C-quoted migration filename was not rejected before scanning');
     }
     rmSync(cQuotedPath, { force: true });
+
+    // An applied migration is immutable by path as well as bytes. Rename
+    // detection used to classify this as R and omit it from the deletion guard,
+    // letting a candidate relabel old SQL and evade the ledger/proof identity
+    // that every apply-time check relies on.
+    const oldMigration = 'supabase/migrations/20200101000000_base.sql';
+    const renamedMigration = 'supabase/migrations/20990101000000_relabelled_base.sql';
+    if (git(['mv', oldMigration, renamedMigration]).status !== 0) {
+      failures.push('  round-65 rename fixture could not rename the committed migration');
+    } else {
+      const renamed = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
+        cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+      });
+      const renamedOut = `${renamed.stdout || ''}\n${renamed.stderr || ''}`;
+      if (renamed.status === 0 || !renamedOut.includes('Migration DELETED vs')) {
+        failures.push('  round-65 an applied migration rename was not rejected as append-only history violation');
+      }
+    }
   } finally {
     removeFixtureTree(dir);
   }
@@ -3663,7 +3681,7 @@ function run() {
     console.error(out);
     process.exit(1);
   }
-  console.log(`✅ approved-set guard: ${CASES.length + 20} mutation cases behaved correctly`);
+  console.log(`✅ approved-set guard: ${CASES.length + 21} mutation cases behaved correctly`);
 }
 
 if (process.argv.includes('--bootstrap-pins-only')) {

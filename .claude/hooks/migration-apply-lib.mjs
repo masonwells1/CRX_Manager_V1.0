@@ -1656,13 +1656,12 @@ for (const dir of proofDirs) {
     // (clock skew, typo, or a fabricated far-future stamp) must not stay
     // "fresh" forever (Codex P2 2026-07-13 round 5). NaN fails this too.
     if (!(ageMs >= 0 && ageMs <= MAX_AGE_MS)) continue;
-    // Match if proof migration name appears in the apply_migration `name` field
-    // or if the apply_migration name matches.
+    // A reviewer proof authorizes exactly one migration identity. The MCP API's
+    // name is caller-controlled, so substring matching lets an old proof for P
+    // authorize `99999999999999_P`: the SQL hash still matches P while ordering
+    // sees a future name. Exact equality is the only safe binding here.
     const proofName = (data.migration || "").toString();
-    if (
-      proofName &&
-      (migName.includes(proofName) || proofName.includes(migName) || migName === proofName)
-    ) {
+    if (proofName && migName === proofName) {
       const findings = (data.findings || "").toString();
       if (findings === "clean" || findings === "blockers-fixed") {
         // Content-binding: if the proof recorded a queryHash, it must match the SQL

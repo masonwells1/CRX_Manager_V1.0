@@ -9,6 +9,23 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-25 — File-based migration apply binds identity to an immutable checkout path
+
+**Source:** exact-head Sol/high review CRX-SEC-001 and CRX-SEC-002 on PR #364.
+
+**Decision.** The gated file-bytes apply path derives its ledger/proof identity only from a direct,
+realpath-resolved `supabase/migrations/*.sql` file in the active checkout. It rejects `--name`,
+outside or symlinked paths, and reviewer proofs whose migration identifier is not an exact match.
+Changed-only SQL validation treats every migration rename as an append-only history violation.
+
+**Operative rule.** Do not add an identity override or substring proof matching. A hash proves
+content, not ordering identity: relabelling old reviewed SQL with a future timestamp can otherwise
+replay superseded safeguards. Never rename an applied repository migration; create a new migration
+for every new change. The regression suite proves both attempted bypasses deny. No live migration,
+Edge Function, production data, secret, or permission changed.
+
+---
+
 ## 2026-08-25 — Session-dependent event triggers constrain DDL, not ordinary row repairs
 
 **Source:** exact-head Sol/high review CRX-SEC-1 on PR #364.

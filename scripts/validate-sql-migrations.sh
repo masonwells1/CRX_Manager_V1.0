@@ -1197,9 +1197,11 @@ if [ "$CHANGED_ONLY" = true ]; then
   # turns the sweep sub-second. Untracked files MUST be unioned in (`git diff` omits
   # them, and a brand-new migration starts untracked). Renames are included via
   # --diff-filter=AMR, whose --name-only output is the rename DESTINATION, so a
-  # renamed-AND-edited migration is still scanned (a B7 content-identical rename just
-  # re-scans already-clean SQL). DELETED migrations (classified D, never R) are caught
-  # separately below as a red-line violation — never a clean no-op. Falls back to a
+  # renamed-and-edited migration is still scanned. The separate deletion scan
+  # deliberately uses --no-renames: an applied migration rename becomes a
+  # deletion plus addition, and the deletion is a red-line violation. A candidate
+  # must never relabel historical SQL merely because its bytes did not change.
+  # Falls back to a
   # full scan (loudly) if git or the base ref is unavailable.
   if git rev-parse --verify --quiet "$BASE_REF" >/dev/null 2>&1; then
     # Diff against the MERGE BASE, not the tip of BASE_REF. A branch that is behind
@@ -1243,7 +1245,7 @@ if [ "$CHANGED_ONLY" = true ]; then
           fi
           ;;
       esac
-    done < <(git diff -M --name-only -z --diff-filter=D "$MB" -- "$MIGRATION_DIR" 2>/dev/null || true)
+    done < <(git diff --no-renames --name-only -z --diff-filter=D "$MB" -- "$MIGRATION_DIR" 2>/dev/null || true)
     if [ "$UNSAFE_CHANGED_NAME" = true ]; then exit 1; fi
     CHANGED=$(printf '%s' "$CHANGED" | sort -u)
     DELETED=$(printf '%s' "$DELETED" | sort -u)
@@ -1291,9 +1293,10 @@ else
   ALL_SQL=$(find "$MIGRATION_DIR" -name '*.sql' -type f | sort)
 fi
 
-# Deleted migrations are a red-line violation (history is append-only) — report each
-# so --changed-only can never silently bless a destructive change. Renames are
-# classified R (not D) by rename detection, so legitimate B7 renames are exempt.
+# Deleted or renamed migrations are a red-line violation (history is append-only).
+# The deletion scan disables rename detection, so a rename is intentionally reported
+# as the disappearance of its original applied path; no B7 reconciliation may rename
+# historical repository migrations.
 for d in $DELETED; do
   echo "VIOLATION: $d"
   echo "  Migration DELETED vs $BASE_REF — migrations are append-only; NEVER delete an existing migration file."
