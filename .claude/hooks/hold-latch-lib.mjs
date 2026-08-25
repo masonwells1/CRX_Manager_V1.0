@@ -24,7 +24,14 @@ export function isResumePhrase(prompt) {
 // Reads, tests, builds, and writes to session-state/scratchpad/SCOPE.md stay
 // allowed so Claude can still answer, checkpoint, and write a plan.
 const ALLOW_WRITE_PATH_RE = /(\.claude[\\/]session-state|scratchpad|SCOPE\.md$|PROGRESS|\.md$)/i;
-const BUILD_BASH_RE = /(git\s+(commit|push|merge|rebase|cherry-pick|tag)\b|supabase\s+db|apply_migration|deploy|npm\s+publish|vercel\s)/i;
+// `apply-migration-file` (2026-08-24) is the file-bytes live-apply door added for
+// migrations too large to transmit through apply_migration. It is a Bash command,
+// not an MCP tool, so the tool-name set below never sees it — Codex (P1, PR #460)
+// verified this predicate returned false for the exact
+// `node scripts/apply-migration-file.mjs … --confirm` invocation, meaning a
+// mid-session "stop" from Mason would NOT have paused a live migration through the
+// new spelling. Any future live-apply spelling must be added here too.
+const BUILD_BASH_RE = /(git\s+(commit|push|merge|rebase|cherry-pick|tag)\b|supabase\s+db|apply_migration|apply-migration-file|deploy|npm\s+publish|vercel\s)/i;
 
 // hold-latch's mutate-tool set must be a SUPERSET of autopilot's deny set (2026-07-13
 // audit, FIX 3): a "stop" from Mason should pause at least every tool autopilot
