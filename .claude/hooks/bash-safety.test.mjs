@@ -767,14 +767,24 @@ for (const command of [
     else process.env.HOME = originalHome;
     if (originalUserProfile === undefined) delete process.env.USERPROFILE;
     else process.env.USERPROFILE = originalUserProfile;
-    const originalGitConfigCount = process.env.GIT_CONFIG_COUNT;
-    process.env.GIT_CONFIG_COUNT = "1";
+    for (const [name, value] of [["GIT_CONFIG_COUNT", "1"], ["GIT_SSH", "output/ignored-wrapper.mjs"]]) {
+      const originalValue = process.env[name];
+      process.env[name] = value;
+      ok(
+        checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions)?.includes(name),
+        `the bootstrap is denied when inherited Git executable control ${name} is present`,
+      );
+      if (originalValue === undefined) delete process.env[name];
+      else process.env[name] = originalValue;
+    }
+    const originalGitEditor = process.env.GIT_EDITOR;
+    process.env.GIT_EDITOR = ":";
     ok(
-      checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions)?.includes("GIT_CONFIG_COUNT"),
-      "the bootstrap is denied when inherited Git configuration injection is present",
+      !checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions)?.includes("GIT_EDITOR"),
+      "Git's inherited no-editor sentinel remains inert during a commit hook",
     );
-    if (originalGitConfigCount === undefined) delete process.env.GIT_CONFIG_COUNT;
-    else process.env.GIT_CONFIG_COUNT = originalGitConfigCount;
+    if (originalGitEditor === undefined) delete process.env.GIT_EDITOR;
+    else process.env.GIT_EDITOR = originalGitEditor;
     const gitEnvItemWriter = String.fromCharCode(83, 101, 116, 45, 73, 116, 101, 109);
     const gitEnvApiWriter = String.fromCharCode(83, 101, 116, 69, 110, 118, 105, 114, 111, 110, 109, 101, 110, 116, 86, 97, 114, 105, 97, 98, 108, 101);
     for (const command of [
@@ -783,6 +793,11 @@ for (const command of [
       `set GIT_CONFIG_COUNT=1 && node ${bootstrapRelative}`,
       `${gitEnvItemWriter} Env:GIT_CONFIG_COUNT 1; node ${bootstrapRelative}`,
       `[Environment]::${gitEnvApiWriter}('GIT_CONFIG_COUNT', '1'); node ${bootstrapRelative}`,
+      `GIT_SSH=output/ignored-wrapper.mjs git fetch ssh://example.invalid/repo.git`,
+      `$env:GIT_SSH_COMMAND = 'output/ignored-wrapper.mjs'; git fetch ssh://example.invalid/repo.git`,
+      `set GIT_PAGER=output/ignored-wrapper.mjs && git log -1`,
+      `${gitEnvItemWriter} Env:GIT_EDITOR output/ignored-wrapper.mjs; git commit`,
+      `[Environment]::${gitEnvApiWriter}('GIT_SEQUENCE_EDITOR', 'output/ignored-wrapper.mjs'); git rebase --continue`,
     ]) {
       ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes("Git control environment mutation"), `command-local Git configuration injection is denied: ${command}`);
       const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
@@ -852,8 +867,12 @@ for (const command of [
     for (const command of [
       "git difftool --no-prompt HEAD HEAD",
       "git mergetool --no-prompt",
+      "git instaweb --start",
+      "git send-email --smtp-server=output/ignored-wrapper.mjs patch.eml",
+      "git gui",
+      "git web--browse https://example.invalid",
     ]) {
-      ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes("Git helper dispatch"), "Git helper-driven subcommands are denied: " + command);
+      ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes("alias or external helper"), "Git helper-driven subcommands are denied: " + command);
       const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
       ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies Git helper-driven subcommands: " + command);
     }

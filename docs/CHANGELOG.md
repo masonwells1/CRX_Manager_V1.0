@@ -30,6 +30,10 @@ All significant development milestones, in reverse chronological order.
   PowerShell filesystem-drive mappings and unresolved providers fail closed.
 - npm global options are parsed with their operands before resolving the
   subcommand; hidden `exec`/`x`, ambiguous options, and `audit fix` are denied.
+- Git executable-control environment variables, including SSH commands,
+  pagers, editors, and askpass/proxy helpers, fail closed. The accepted Git
+  subcommand set is deliberately audited and excludes helper dispatchers such
+  as `instaweb`, `send-email`, `gui`, and `web--browse`.
 - Windows device and file IDs stay in full-precision bigint form so unrelated
   files cannot collide after numeric rounding and be mistaken for hard links.
 - The exact-review proof directory can no longer be aliased through a Windows

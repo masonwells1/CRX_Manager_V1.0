@@ -116,6 +116,11 @@ for (const command of [
   "set GIT_CONFIG_COUNT=1 && git status",
   `${gitEnvItemWriter} Env:GIT_CONFIG_COUNT 1; git status`,
   `[Environment]::${gitEnvApiWriter}('GIT_CONFIG_COUNT', '1'); git status`,
+  "GIT_SSH=output/ignored-wrapper.mjs git fetch ssh://example.invalid/repo.git",
+  "$env:GIT_SSH_COMMAND = 'output/ignored-wrapper.mjs'; git fetch ssh://example.invalid/repo.git",
+  "set GIT_PAGER=output/ignored-wrapper.mjs && git log -1",
+  `${gitEnvItemWriter} Env:GIT_EDITOR output/ignored-wrapper.mjs; git commit`,
+  `[Environment]::${gitEnvApiWriter}('GIT_SEQUENCE_EDITOR', 'output/ignored-wrapper.mjs'); git rebase --continue`,
 ]) {
   const result = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
   eq(result.status, 0, `mcp-tool-guard exits 0 after Git control environment injection: ${command}`);
@@ -135,6 +140,10 @@ for (const command of [
 for (const command of [
   "git difftool --no-prompt HEAD HEAD",
   "git mergetool --no-prompt",
+  "git instaweb --start",
+  "git send-email --smtp-server=output/ignored-wrapper.mjs patch.eml",
+  "git gui",
+  "git web--browse https://example.invalid",
   "git --exec-path=output/git-shim status --short",
   "git --exec-path output/git-shim status --short",
 ]) {

@@ -50,7 +50,8 @@ export function fixedTrustedGitExecutable() {
   return executable;
 }
 
-const DANGEROUS_GIT_ENV_NAME_RE = /^GIT_(?:CONFIG(?:_.+)?|DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|REPLACE_REF_BASE|COMMON_DIR|NAMESPACE|EXEC_PATH|EXTERNAL_DIFF|DIFF_OPTS)$/i;
+const DANGEROUS_GIT_ENV_NAME_SOURCE = "GIT_(?:CONFIG(?:_.+)?|DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|REPLACE_REF_BASE|COMMON_DIR|NAMESPACE|EXEC_PATH|EXTERNAL_DIFF|DIFF_OPTS|SSH(?:_COMMAND|_VARIANT)?|PAGER|EDITOR|SEQUENCE_EDITOR|ASKPASS|PROXY_COMMAND)";
+const DANGEROUS_GIT_ENV_NAME_RE = new RegExp(`^${DANGEROUS_GIT_ENV_NAME_SOURCE}$`, "i");
 
 function resolvedBareGitExecutable(cwd) {
   const directories = [cwd, ...String(process.env.PATH || "").split(path.delimiter).filter(Boolean)];
@@ -77,7 +78,18 @@ function sameExecutablePath(left, right) {
 }
 
 function bootstrapGitSafetyReason(root, gitExecutable, runGit, gitEnv, provenanceDeadlineExhausted) {
-  const inherited = Object.keys(process.env).find((name) => DANGEROUS_GIT_ENV_NAME_RE.test(name));
+  // Codex supplies GIT_PAGER=cat as an inert non-interactive default, and Git
+  // itself exports GIT_EDITOR=: while running hooks for commands that will not
+  // launch an editor. These exact argument-free sentinels are inert; every
+  // other executable-control value remains forbidden. Command-local overrides
+  // are always denied below, including these two values.
+  const inherited = Object.keys(process.env).find((name) =>
+    DANGEROUS_GIT_ENV_NAME_RE.test(name)
+      && !(
+        (name.toUpperCase() === "GIT_PAGER" && process.env[name] === "cat")
+        || (name.toUpperCase() === "GIT_EDITOR" && process.env[name] === ":")
+      )
+  );
   if (inherited) return `Git control environment variable ${inherited} is present`;
   const bareGit = resolvedBareGitExecutable(root);
   if (!bareGit || !sameExecutablePath(bareGit, gitExecutable)) {
@@ -139,7 +151,7 @@ function bootstrapGitSafetyReason(root, gitExecutable, runGit, gitEnv, provenanc
 }
 
 function gitControlEnvironmentAssignmentReason(command) {
-  const names = "GIT_(?:CONFIG(?:_[A-Z0-9_]+)?|DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|REPLACE_REF_BASE|COMMON_DIR|NAMESPACE|EXEC_PATH|EXTERNAL_DIFF|DIFF_OPTS)";
+  const names = DANGEROUS_GIT_ENV_NAME_SOURCE;
   const directAssignment = new RegExp(`\\b${names}\\b\\s*=`, "i");
   const providerAssignment = new RegExp(`(?:\\$?env:)${names}\\b[^\\r\\n;&|]*=`, "i");
   const itemWriterNames = [[115, 101, 116], [110, 101, 119], [99, 111, 112, 121], [109, 111, 118, 101]]
@@ -3236,23 +3248,26 @@ function executionContextShiftReason(command, cwd, depth = 0) {
       || /\$env\s*:\s*(?:path|pathext)\s*\+?=/i.test(text)
       || /(?:set-item|si)\s+(?:-path\s+)?["']?env\s*:\s*(?:path|pathext)\b/i.test(text);
   };
-  const gitBuiltinCommands = new Set([
-    "add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bugreport", "bundle",
+  // Keep this list deliberately small. Unknown commands may be aliases or
+  // git-<name> helpers from PATH, while several commands shipped with Git
+  // (for example send-email, instaweb, gui, and web--browse) are themselves
+  // executable dispatchers. Additions require an option-level dispatch audit.
+  const auditedGitCommands = new Set([
+    "add", "am", "annotate", "apply", "bisect", "blame", "branch", "bugreport", "bundle",
     "cat-file", "check-attr", "check-ignore", "check-mailmap", "check-ref-format", "checkout", "checkout-index",
     "cherry", "cherry-pick", "clean", "clone", "column", "commit", "commit-graph", "config", "count-objects",
-    "credential", "credential-cache", "credential-store", "describe", "diagnose", "diff", "diff-files", "diff-index",
-    "diff-tree", "difftool", "fast-export", "fast-import", "fetch", "fetch-pack", "filter-branch", "fmt-merge-msg",
-    "for-each-ref", "for-each-repo", "format-patch", "fsck", "gc", "get-tar-commit-id", "grep", "gui",
-    "hash-object", "help", "hook", "index-pack", "init", "init-db", "instaweb", "interpret-trailers", "log",
+    "describe", "diagnose", "diff", "diff-files", "diff-index", "diff-tree", "fast-export", "fast-import", "fetch",
+    "fetch-pack", "fmt-merge-msg", "for-each-ref", "format-patch", "fsck", "gc", "get-tar-commit-id", "grep",
+    "hash-object", "index-pack", "init", "init-db", "interpret-trailers", "log",
     "ls-files", "ls-remote", "ls-tree", "mailinfo", "mailsplit", "maintenance", "merge", "merge-base", "merge-file",
-    "merge-index", "merge-one-file", "merge-tree", "mergetool", "mktag", "mktree", "multi-pack-index", ["m", "v"].join(""),
+    "merge-tree", "mktag", "mktree", "multi-pack-index", ["m", "v"].join(""),
     "name-rev", "notes", "pack-objects", "pack-redundant", "pack-refs", "patch-id", "prune", "prune-packed",
     "pull", "push", "range-diff", "read-tree", "rebase", "reflog", "refs", "remote", "repack", "replace",
-    "request-pull", "rerere", "reset", "restore", "rev-list", "rev-parse", "revert", ["r", "m"].join(""), "scalar", "send-email",
+    "request-pull", "rerere", "reset", "restore", "rev-list", "rev-parse", "revert", ["r", "m"].join(""),
     "shortlog", "show", "show-branch", "show-index", "show-ref", "sparse-checkout", "stage", "stash", "status",
     "stripspace", "submodule", "switch", "symbolic-ref", "tag", "unpack-file", "unpack-objects", "update-index",
-    "update-ref", "update-server-info", "upload-archive", "upload-pack", "var", "verify-commit", "verify-pack",
-    "verify-tag", "version", "web--browse", "whatchanged", "worktree", "write-tree",
+    "update-ref", "update-server-info", "upload-pack", "var", "verify-commit", "verify-pack", "verify-tag", "version",
+    "whatchanged", "worktree", "write-tree",
   ]);
   const localPackageBinary = (name) => Boolean(name)
     && ["", ".cmd", ".ps1", ".exe"].some((extension) =>
@@ -3340,14 +3355,8 @@ function executionContextShiftReason(command, cwd, depth = 0) {
       || (subcommand === "update-ref" && args.some((argument) => /^refs\/replace(?:\/|$)/i.test(argument) || /^--stdin(?:=|$)/i.test(argument)))) {
       return "Blocked Git replacement-object mutation because provenance reads must use the canonical committed object graph.";
     }
-    if (!gitBuiltinCommands.has(subcommand)) {
+    if (!auditedGitCommands.has(subcommand)) {
       return "Blocked Git alias or external helper execution because it can launch an unreviewed executable.";
-    }
-    if (subcommand === "difftool" || subcommand === "mergetool") {
-      return "Blocked Git helper dispatch because difftool and mergetool can launch unreviewed executables.";
-    }
-    if (subcommand === "hook") {
-      return "Blocked Git hook execution because hooks can launch an unreviewed executable.";
     }
     if (subcommand === "config" && args.some((argument) => /^--rename-section(?:=|$)/i.test(argument))) {
       return "Blocked Git configuration section rename because an inert key can become executable after its section is renamed.";
