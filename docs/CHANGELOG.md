@@ -73,6 +73,11 @@ All significant development milestones, in reverse chronological order within ea
   identity set, so native Write/Edit/patch and MCP file routes deny a pre-existing
   hard-link alias that could otherwise repoint the checkout under an innocent
   filename. Ordinary checkouts safely ignore the `.git` directory.
+- Protected files with more than one hard link now fail closed through every
+  pathname, removing scan-order ambiguity over which entry is the legitimate
+  one. Nine regressions place aliases for a worktree pointer, migration, and
+  exact-review proof inside the hook directory and prove Write, Edit, and raw
+  patch routes all deny; disabling the link-count rule makes the suite fail.
 - The Quote Builder save-resume concurrency regression now creates a fresh
   quote, so crossing the 30-day stale-price threshold cannot bypass the path
   that the test is intended to prove.

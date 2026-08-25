@@ -278,5 +278,13 @@ export function aliasesProtectedFile(absTarget, root, protectedPaths = null) {
   if (!identity) return false;
   const ownPath = (protectedPaths || protectedFileIdentityPaths(root)).get(identity);
   if (!ownPath) return false;
+  try {
+    // CRX has no legitimate hard-link workflow for protected control files.
+    // Once an inode has multiple directory entries, scan order cannot safely
+    // decide which spelling is the "real" one, so every write spelling denies.
+    if (statSync(absTarget, { bigint: true }).nlink > 1n) return true;
+  } catch {
+    return true;
+  }
   return pathKey(absTarget) !== pathKey(ownPath);
 }

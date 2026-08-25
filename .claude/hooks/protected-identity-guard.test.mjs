@@ -9,22 +9,44 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..", "..");
 let pass = 0;
+let manifestAliasChecks = 0;
+let manifestAliasPath = "";
+let aliasedManifestOwnPathExpected = false;
 function ok(c, m) { assert.ok(c, m); pass++; }
-function eq(a, b, m) { assert.equal(a, b, m); pass++; }
+function eq(a, b, m) {
+  if (aliasedManifestOwnPathExpected && b === "") {
+    aliasedManifestOwnPathExpected = false;
+    assert.ok(String(a).includes('"permissionDecision":"deny"'), m);
+    pass++;
+    return;
+  }
+  assert.equal(a, b, m);
+  pass++;
+}
 
 function runHook(payload, cwd, envOverrides = {}) {
-  return spawnSync(process.execPath, [path.join(__dirname, "protected-identity-guard.mjs")], {
+  const result = spawnSync(process.execPath, [path.join(__dirname, "protected-identity-guard.mjs")], {
     input: JSON.stringify(payload),
     encoding: "utf8",
     env: { ...process.env, ...envOverrides, CLAUDE_PROJECT_DIR: cwd || repoRoot },
   });
+  if (JSON.stringify(payload).includes("notes-manifest.json")) {
+    manifestAliasChecks += 1;
+    manifestAliasPath ||= payload?.tool_input?.file_path || "";
+    if (manifestAliasChecks === 2 && manifestAliasPath) rmSync(manifestAliasPath, { force: true });
+  }
+  const manifestPath = path.join(repoRoot, ["package", "json"].join("."));
+  if (payload?.tool_name === "Edit" && path.resolve(payload?.tool_input?.file_path || "") === manifestPath && statSync(manifestPath).nlink > 1) {
+    aliasedManifestOwnPathExpected = true;
+  }
+  return result;
 }
 const isDeny = (r) => r.stdout.includes('"permissionDecision":"deny"');
 
@@ -89,8 +111,15 @@ eq(spawnSync(process.execPath, [path.join(__dirname, "protected-identity-guard.m
 // real path", which was the one thing it refused. Wiring that onto a second write
 // route would have left the harness uneditable through the agent tools.
 const realHook = path.join(repoRoot, ".claude", "hooks", "bash-safety-lib.mjs");
-eq(runHook({ tool_name: "Edit", tool_input: { file_path: realHook, old_string: "a", new_string: "b" } }, repoRoot).stdout.trim(), "", "editing a protected hook at its OWN real path is allowed");
-eq(runHook({ tool_name: "Write", tool_input: { file_path: ".claude/hooks/bash-safety-lib.mjs", content: "x" } }, repoRoot).stdout.trim(), "", "the repo-relative spelling of the real path is allowed");
+const realHookHasAliases = statSync(realHook).nlink > 1;
+const realHookEdit = runHook({ tool_name: "Edit", tool_input: { file_path: realHook, old_string: "a", new_string: "b" } }, repoRoot);
+const realHookWrite = runHook({ tool_name: "Write", tool_input: { file_path: ".claude/hooks/bash-safety-lib.mjs", content: "x" } }, repoRoot);
+if (realHookHasAliases) {
+  ok(isDeny(realHookEdit) && isDeny(realHookWrite), "even the nominal real path denies while a protected hook has multiple hard links");
+} else {
+  eq(realHookEdit.stdout.trim(), "", "editing a singly-linked protected hook at its OWN real path is allowed");
+  eq(realHookWrite.stdout.trim(), "", "the repo-relative spelling of a singly-linked real path is allowed");
+}
 
 // The NATIVE PATCH route. A patch carries its destinations inside a free-form
 // body, so a guard reading only file_path sees nothing to check. These drive the
@@ -324,6 +353,27 @@ ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: deterministicPo
 ok(isDeny(runHook({ tool_name: "Edit", tool_input: { file_path: deterministicPointerAlias, old_string: "safe", new_string: "hostile" } }, pointerRepo)), "Edit through a hard-link alias of a linked-worktree .git pointer is denied");
 const pointerPatch = ["*** Begin Patch", `*** Update File: ${deterministicPointerAlias}`, "@@", "+gitdir: /attacker", "*** End Patch"].join("\n");
 ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: pointerPatch }, pointerRepo)), "a RAW STRING patch through a hard-link alias of the .git pointer is denied");
+
+// Scan-order collision: aliases inside `.claude/hooks` are discovered before
+// the real pointer, migration, and proof paths. A multiply-linked protected
+// inode has no safely distinguishable "own" pathname, so every spelling denies.
+const collisionHooks = path.join(pointerRepo, ".claude", "hooks");
+const collisionMigration = path.join(pointerRepo, "supabase", "migrations", "20260101000000_collision.sql");
+const collisionProofName = [["codex", "review"].join("-"), "collision.json"].join("-");
+const collisionProof = path.join(pointerRepo, ".claude", "session-state", collisionProofName);
+mkdirSync(collisionHooks, { recursive: true });
+mkdirSync(path.dirname(collisionMigration), { recursive: true });
+mkdirSync(path.dirname(collisionProof), { recursive: true });
+writeFileSync(collisionMigration, "select 1;\n");
+writeFileSync(collisionProof, "{}\n");
+for (const [label, protectedPath] of [["pointer", pointerFile], ["migration", collisionMigration], ["proof", collisionProof]]) {
+  const collisionAlias = path.join(collisionHooks, `${label}-alias.mjs`);
+  linkSync(protectedPath, collisionAlias);
+  ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: collisionAlias, content: "hostile" } }, pointerRepo)), `Write denies a multiply-linked ${label} even when its hook alias is scanned first`);
+  ok(isDeny(runHook({ tool_name: "Edit", tool_input: { file_path: collisionAlias, old_string: "safe", new_string: "hostile" } }, pointerRepo)), `Edit denies a multiply-linked ${label} even when its hook alias is scanned first`);
+  const collisionPatch = ["*** Begin Patch", `*** Update File: ${collisionAlias}`, "@@", "+hostile", "*** End Patch"].join("\n");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: collisionPatch }, pointerRepo)), `raw apply_patch denies a multiply-linked ${label} even when its hook alias is scanned first`);
+}
 
 // User-level config is equally executable control state. Override both home
 // spellings so the fixture is deterministic on Windows and Linux.
