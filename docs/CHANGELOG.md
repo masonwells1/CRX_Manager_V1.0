@@ -2,6 +2,30 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-25 — Decision Log: the dangling PR #403 reference now records a closure
+
+`docs/manual/DECISION_LOG.md` still described the narrow live-ledger recovery exception as a
+settled approval whose entry was "not on `main` yet", pending PR #403. PR #403 was closed on
+2026-08-25 by Mason's explicit decision and will never merge, so as written that paragraph read as
+unfinished work — a future agent could have tried to resurrect the exception, or cited it as
+policy in force. Neither is true.
+
+- The paragraph inside the 2026-08-14 "One-time override" entry now states the closure directly:
+  the exception is **not in force**, no entry for it exists on `main`, and a future byte-verbatim
+  recovery uses the manual path proven on 2026-08-14 (commit `3a2a0ca0`, via PR #392) or requires
+  a fresh owner decision.
+- A second paragraph separates the two decisions that the old text had entangled. Publishing
+  `20260812115238` in full rests on Mason's own 2026-08-14 instruction and on the byte-for-byte
+  ledger match recorded in the same entry — not on #403's byte-verbatim rule. That override stands
+  unchanged and is unaffected by the closure.
+- Nothing else in the override entry changed: **Source**, **Decision**, and **Operative rule** are
+  untouched.
+
+Evidence: <https://github.com/masonwells1/CRX_Manager_V1.0/pull/403#issuecomment-5416488045>.
+Verified before writing — #403 `CLOSED`, `mergedAt: null`; #392 merged `4381c460`; `3a2a0ca0` is an
+ancestor of `origin/main` with 188 commits after it; the migration file is present on `main`; and
+`git grep` finds no other reference to #403 or to the recovery exception anywhere in the repo.
+
 ## 2026-08-25 — save_job chem-unit invariant + derived totals applied live
 
 With Mason's explicit in-chat approval,
