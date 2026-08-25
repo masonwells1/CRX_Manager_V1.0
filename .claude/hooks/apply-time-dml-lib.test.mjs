@@ -657,6 +657,21 @@ eq(T(null), [], "a null body does not throw");
   ok(!escapedDefinitionOnly.unresolved,
     "round-60 MUTANT: the same plain-quoted body remains deferred until invocation");
 
+  // PostgreSQL treats \101 as octal A while standard_conforming_strings is
+  // disabled. The raw literal does not visibly contain UPDATE, so a dynamic
+  // statement reader that trusts it would silently miss a money-table rewrite.
+  // The setting and executable dynamic SQL must therefore fail closed together.
+  const escapedDynamicSql = applyTimeWriteTargets(
+    "SET standard_conforming_strings = off; " +
+    "DO $$ BEGIN EXECUTE 'UPD\\101TE public.order_items SET total_price = 0'; END $$;",
+  );
+  ok(escapedDynamicSql.unresolved,
+    "round-60: disabled standard strings make executable dynamic SQL unresolved");
+  eq([...escapedDynamicSql.targets], [],
+    "round-60: the raw escaped dynamic literal is not mistaken for a readable target");
+  eq(escapedDynamicSql.dynamicWrites, [],
+    "round-60: the escaped dynamic literal is not mistaken for a readable write");
+
   for (const setting of ["E'off'", "U&'off'"]) {
     const prefixedSetting = applyTimeWriteTargets(
       `SET standard_conforming_strings = ${setting}; ` +

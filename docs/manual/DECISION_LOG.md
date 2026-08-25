@@ -9,6 +9,22 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-25 — A session string-mode change makes executable dynamic SQL opaque
+
+**Source:** exact-head Sol/high review CRX-SEC-001 on PR #364.
+
+**Decision.** When `standard_conforming_strings` is disabled, PostgreSQL can decode a backslash
+escape into a DML verb that the static literal reader cannot see. The analyzer preserves that
+session-mode fact and marks executable dynamic SQL in that scope, or an invoked routine that changes
+the mode, unresolved. Deferred definitions remain deferred.
+
+**Operative rule.** Never treat raw dynamic SQL as readable after a string-conformance mode change;
+refuse through the existing one-shot override path instead. The exact `UPD\101TE` mutation is
+tested at both analyzer and production-guard transport layers. No migration, Edge Function,
+production data, secret, or permission changed.
+
+---
+
 ## 2026-08-25 — A live-evidence read timeout is a denial, not a missing hook decision
 
 **Source:** exact-head Sol/high review CRX-SEC-001 on PR #364.

@@ -250,14 +250,15 @@ export function applyTimeCode(sql, depth = 0) {
   const literals = [];
   const routines = [];
   let unsupportedDoBody = false;
+  let standardConformingStringsDisabled = false;
   if (typeof sql !== "string") {
-    return { code, literals, routines, unsupportedDoBody };
+    return { code, literals, routines, unsupportedDoBody, standardConformingStringsDisabled };
   }
   // Guard against a pathological nest; 8 is far past anything real. This is a
   // denial boundary, never a silent truncation boundary: a deeper executable
   // body may contain the only money write in the migration.
   if (depth > 8) {
-    return { code, literals, routines, unsupportedDoBody: true };
+    return { code, literals, routines, unsupportedDoBody: true, standardConformingStringsDisabled };
   }
   const n = sql.length;
   let i = 0;
@@ -356,6 +357,7 @@ export function applyTimeCode(sql, depth = 0) {
             code: inner.code,
             literals: inner.literals,
             unresolved: unsupportedBodyLanguage || inner.unsupportedDoBody,
+            standardConformingStringsDisabled: inner.standardConformingStringsDisabled,
             unsupportedBodyLanguage,
             unsupportedDoBody: inner.unsupportedDoBody,
             callableDefault: routineHasCallableParameterDefault(stmt),
@@ -368,6 +370,7 @@ export function applyTimeCode(sql, depth = 0) {
           literals.push(...inner.literals);
           routines.push(...inner.routines);
           if (inner.unsupportedDoBody) unsupportedDoBody = true;
+          if (inner.standardConformingStringsDisabled) standardConformingStringsDisabled = true;
         }
         i = close === -1 ? n : close + tag.length;
         continue;
@@ -466,6 +469,7 @@ export function applyTimeCode(sql, depth = 0) {
             // instead of trusting only its first fragment.
             unresolved: unsupportedBodyLanguage || unsafeRoutineLiteral || inner.unsupportedDoBody ||
               hasNewlineContinuedString(sql, i),
+            standardConformingStringsDisabled: inner.standardConformingStringsDisabled,
             unsupportedBodyLanguage,
             unsupportedDoBody: inner.unsupportedDoBody,
             plainQuotedBody: !unsafeRoutineLiteral,
@@ -509,18 +513,20 @@ export function applyTimeCode(sql, depth = 0) {
     i += 1;
   }
 
-  // PostgreSQL can reinterpret backslashes in an otherwise plain '...'
-  // routine body after this session setting is disabled. We do not attempt to
-  // decode that alternate grammar: keep definitions deferred, but make any
-  // same-migration invocation opaque. Quoted setting values become '' in the
+  // PostgreSQL can reinterpret backslashes in an otherwise plain '...' after
+  // this session setting is disabled. We do not decode that alternate grammar.
+  // Keep the setting as an explicit fact so callers can refuse any executable
+  // dynamic SQL reached in this scope; a deferred routine carries that fact
+  // until the routine is invoked. Quoted setting values become '' in the
   // sanitized stream, so they are conservatively included as well.
   if (DISABLES_STANDARD_CONFORMING_STRINGS.test(code)) {
+    standardConformingStringsDisabled = true;
     for (const routine of routines) {
       if (routine.plainQuotedBody) routine.unresolved = true;
     }
   }
 
-  return { code, literals, routines, unsupportedDoBody };
+  return { code, literals, routines, unsupportedDoBody, standardConformingStringsDisabled };
 }
 
 function readIdent(s, pos) {
@@ -1950,11 +1956,11 @@ export function applyTimeWriteTargets(
     trustedUnqualifiedRoutines = [],
   } = {},
 ) {
-  const { code, literals, routines, unsupportedDoBody } = applyTimeCode(sql || "");
+  const { code, literals, routines, unsupportedDoBody, standardConformingStringsDisabled } = applyTimeCode(sql || "");
   let encounteredUnsupportedDoBody = unsupportedDoBody;
   let encounteredUnsupportedBodyLanguage = false;
   const top = targetsFromCode(code, literals);
-  if (unsupportedDoBody) top.unresolved = true;
+  if (unsupportedDoBody || (standardConformingStringsDisabled && top.dynamicExec)) top.unresolved = true;
   const routineCatalogChanges = new Map();
   let routineCatalogUnparsed = false;
   const recordRoutineCatalog = (sourceCode) => {
@@ -2178,6 +2184,7 @@ export function applyTimeWriteTargets(
       for (const t of inner.tables) top.tables.add(t);
       top.dynamicWrites.push(...inner.dynamicWrites);
       if (inner.unresolved) top.unresolved = true;
+      if (parsed.standardConformingStringsDisabled && inner.dynamicExec) top.unresolved = true;
       if (inner.eventTriggerChange) top.eventTriggerChange = true;
       if (inner.materializedViewRefresh) top.materializedViewRefresh = true;
       if (inner.domainConstraintValidation) top.domainConstraintValidation = true;
@@ -2467,7 +2474,7 @@ export function applyTimeWriteTargets(
         // invoked. Argument binding is deliberately not reimplemented here;
         // if a default can call code, the invocation is unresolved rather than
         // silently treating the deferred header expression as inert.
-        if (r.unresolved || r.callableDefault) top.unresolved = true;
+        if (r.unresolved || r.callableDefault || r.standardConformingStringsDisabled) top.unresolved = true;
         if (r.unsupportedBodyLanguage) encounteredUnsupportedBodyLanguage = true;
         if (r.unsupportedDoBody) encounteredUnsupportedDoBody = true;
         // Creating/replacing/altering/dropping a routine from an invoked body

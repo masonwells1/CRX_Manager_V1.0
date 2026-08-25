@@ -1171,6 +1171,18 @@ function armAutopilot(stateDir, hoursFromNow) {
       ok(isDeny(r) && isOneShotDeny(r),
         "round-60: disabled standard strings cannot hide an invoked plain-body replay");
 
+      // PostgreSQL decodes \101 as A once standard_conforming_strings is off.
+      // The raw literal therefore contains no readable UPDATE token even though
+      // the anonymous block executes an UPDATE of the registered money table.
+      // This must reach the real one-shot denial, not merely an analyzer unit.
+      r = apply(
+        "20990601000061_r60_dynamic_octet_escape",
+        "SET standard_conforming_strings = off; " +
+        "DO $$ BEGIN EXECUTE 'UPD\\101TE public.orders SET total_profit = 0'; END $$;",
+      );
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-60: a standard-string octal escape cannot hide a dynamic one-shot replay");
+
       for (const [suffix, setting] of [["e", "E'off'"], ["u", "U&'off'"]]) {
         r = apply(
           `2099060100006${suffix === "e" ? "2" : "3"}_r60_prefixed_setting_${suffix}`,
