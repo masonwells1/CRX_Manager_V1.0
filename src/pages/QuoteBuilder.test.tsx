@@ -1336,9 +1336,14 @@ describe('QuoteBuilder', () => {
     });
 
     renderQuoteBuilder(quote.id);
-    fireEvent.click(await screen.findByRole('button', { name: 'Create Order ▾' }));
+    const createOrderOpener = await screen.findByRole('button', { name: 'Create Order ▾' });
+    await waitFor(() => expect(createOrderOpener).toBeEnabled());
+    fireEvent.click(createOrderOpener);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Convert whole booking' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create Order' }));
+    const initialConvertDialog = await screen.findByRole('dialog', { name: /Convert to.*Order/ });
+    const initialConvertButton = within(initialConvertDialog).getByRole('button', { name: 'Create Order' });
+    await waitFor(() => expect(initialConvertButton).toBeEnabled());
+    fireEvent.click(initialConvertButton);
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'warning',
@@ -1353,7 +1358,8 @@ describe('QuoteBuilder', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Create Order ▾' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Convert whole booking' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create Order' }));
+    const resumedConvertDialog = await screen.findByRole('dialog', { name: /Convert to.*Order/ });
+    fireEvent.click(within(resumedConvertDialog).getByRole('button', { name: 'Create Order' }));
 
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith(
       'convert_quote_to_order',
