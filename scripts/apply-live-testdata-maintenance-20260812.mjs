@@ -58,7 +58,7 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // every OTHER migration path was already blocked here (P1), so the guard had to
   // learn the new spelling. The transform anchors below are untouched by that
   // edit; only the pinned blobs move.
-  codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
+  codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
   pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
