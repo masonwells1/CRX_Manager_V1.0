@@ -1,6 +1,16 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-19 UTC, read-only live re-read.** **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
+**Last verified: 2026-08-25 UTC, read-only live re-read after the draw-down rollout completed.**
+**Live ledger is 975 rows, `max(version)` `20260825034622`, effective ordering high-water
+`20260819232000`** (name `20260819232000_bind_draw_down_receipts_to_intent`). All four migrations
+of the draw-down chain are applied live — the cutover barrier (2026-08-24 midday, version
+`20260824185408`) and, later that day with Mason's explicit in-chat approval, the tier split
+(`20260825025241`), the allocated-line-cents lifecycle carry (`20260825033106`), and the receipt
+intent binding (`20260825034622`). See the rollout block at the top of
+`docs/reference/migration-history.md`. This pass re-read the ledger and updated the draw-down
+entries only; it does not re-certify unrelated issue narratives below.
+
+**Superseded 2026-08-19 header, kept for provenance.** **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
 of the stored ledger name), and `docs/reference/migration-history.md` uses the 14-digit definition, so this file now matches it. A plain `max(name)` returns the slug `year_end_summary`. The ordering claim holds over the prefixed subset, not over the raw column.) Two things this pass corrected in this file: (1) the header below claimed `20260812003315` / 962 rows, **nine applies** and six days of ledger staleness out of date — the six 2026-08-12 recoveries listed below, then `20260812212323`, `20260813011751` and `20260816174353`, which is 962 + 9 = 971; (2) CRX-SEC-1 **applied live on 2026-08-16** — see the new CLOSED entry immediately below — while `docs/reference/migration-history.md` row 886 still called it an unapplied local candidate. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, matching this ledger; it was **not** re-derived in this pass. **The 2026-08-10 money figures quoted further down this file are stale** — a read-only re-measure on 2026-08-18 finds `order_items.total_price`, `order_items.profit`, `commissions.commission_amount` and `commissions.order_profit` all at **0** sub-cent rows, with only `quotes.total_cost` still holding **2**; the "43 dirty rows" and "49 rows" figures below are superseded by that measurement (recorded in full in `docs/manual/CURRENT_STATE.md` section 2). Everything else below was left as separately dated historical evidence and was not re-verified in this pass.
 
 **Superseded 2026-08-17 header, kept for provenance — ledger high-water only.** Live ledger high-water is **`20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc`. This pass re-read the live ledger and nothing else: it corrects a high-water this document was stating wrongly, and it does **not** re-certify the issue narrative below, which keeps its own older dates. **The schema registry is NOT refreshed to this high-water** — it is still stamped to the 962-row mark and is now nine migrations behind. Beyond the six migrations named in the next paragraph, three more have landed since: ledger versions `20260812212323`, `20260813011751`, `20260816174353`, carrying submitted names `20260812130145_bind_return_receipts_to_intent_and_restore_overdue`, `20260813070000_pin_return_idempotency_helper_contract`, `20260813080000_lock_quote_versions_writes_to_rpc`. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded **name** when reconciling an apply.
@@ -760,9 +770,15 @@ So: 12 gaps → 11 closed by the reconcile → 1 `cancelled` left by design → 
 
 ---
 
-## OPEN 2026-08-14 — `draw_down_quote` never rounds the weighted average PRICE, and the whole-cent guard rejects it
+## RESOLVED 2026-08-24 (opened 2026-08-14) — `draw_down_quote` never rounds the weighted average PRICE, and the whole-cent guard rejects it
 
-**Severity: HIGH, live in production, currently latent (0 reachable rows).** Found by the
+**Status: RESOLVED — the weighted average itself was eliminated by
+`20260816120000_draw_down_split_order_lines_by_price_tier`, applied live 2026-08-24 as ledger
+version `20260825025241` (one order line per booked price tier; the migration's postflight refuses
+any body that reintroduces the averaging identifier). The description below is the pre-rollout
+record of the defect.**
+
+**Severity at time of finding: HIGH, live in production, currently latent (0 reachable rows).** Found by the
 independent Codex review of PR #392 and re-verified directly against live `pg_proc` and live data
 on 2026-08-14. **This is a defect in already-applied SQL — it is not caused by the recovery PR, and
 it cannot be fixed by editing the recovered files, which must stay byte-identical to what ran.**
