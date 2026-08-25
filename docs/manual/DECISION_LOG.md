@@ -45,6 +45,18 @@ and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 
    gate executes are writable by the same identity that runs them. The durable boundary is the one
    already outside agent reach: the `protect-main` ruleset, the three required GitHub checks, and
    CodeRabbit review on every PR.
+5. **Local proof is proportionate and external proof remains complete.** Pre-commit now keeps the
+   staged-file safeguards that fail fast on ledger omissions, private artifacts, SQL/frontend
+   anti-patterns, Claude/Codex manifest drift, and dependency changes. Full lint, typecheck,
+   guard/unit tests, coverage, and build run in GitHub CI; pre-push still runs containment,
+   typecheck, and build. Workflow-map generation and automatic staging were removed from commit.
+6. **CI cancels superseded PR work, never `main` proof.** The `edited` trigger was replaced with
+   `ready_for_review`, and concurrency cancels an older run only when a newer event belongs to the
+   same pull request. Push runs on `main` use a unique group so the durable deployment record cannot
+   be cancelled by another push. No docs-only shortcut is part of this phase; a future shortcut
+   must explicitly exclude `.claude/**`, `.codex/**`, `.github/**`, `.husky/**`, `AGENTS.md`,
+   `CLAUDE.md`, `.coderabbit.yaml`, `package.json`, `scripts/**`, `supabase/migrations/**`, and
+   `.claude/schema-registry.json`.
 
 **Incident found during implementation (same session).** Two git-config settings were falsifying
 local state, both invisible to every file-watching guard because neither is a file in the repo:
@@ -55,9 +67,9 @@ local state, both invisible to every file-watching guard because neither is a fi
   ` M .claude/settings.json`; blob hashes confirmed the file genuinely differed
   (`f9032e03…` on disk vs `296744f8…` in index/HEAD). `git update-index --refresh` did not fix it.
   **Unset with Mason's approval.**
-- `core.hooksPath` in the `codex-claude-migrations-2-4-33493c` worktree config pointed at the Codex
-  evidence checkout's `.husky`, so a commit there would have run another repository's pre-commit
-  hooks. One worktree of ~37 was affected. **Repointed to `C:\CRX_Manager\.husky\_`.**
+- `core.hooksPath` in the `codex-claude-migrations-2-4-33493c` worktree config pointed first at the
+  Codex evidence checkout's `.husky`, then at the primary checkout's absolute `.husky` path. Both
+  values executed another checkout's hook. **Repointed to the worktree-relative `.husky/_`.**
 
 This is the PR #432 threat class — hook trust bound to the wrong repository, and a subvertible
 certifying gate — arriving live through a route none of its five splits covered. It reinforces

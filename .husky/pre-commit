@@ -1,157 +1,60 @@
 #!/usr/bin/env sh
 
-# --- Ledger guard (HARD, Mason 2026-07-13): an agent-surface/policy change must
-# carry a ledger update (CHANGELOG / DECISION_LOG / KNOWN_ISSUES / manual doc /
-# loop ledger) in the SAME commit. Cheap check, so it runs FIRST — fail fast
-# before the expensive lint/build steps. sh -e note: the || branch makes the
-# block message print before the exit.
-echo "📒 Checking ledger requirement (agent-surface changes must be logged)..."
+# Keep commits fast and deterministic. This hook checks only staged, high-risk
+# surfaces. Full lint, typecheck, unit/guard tests, coverage, and build remain
+# durable PR gates in GitHub CI; typecheck and build also remain in pre-push.
+
+STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMRD)"
+
+if [ -z "$STAGED_FILES" ]; then
+  echo "✅ Nothing staged — skipping pre-commit checks."
+  exit 0
+fi
+
+echo "📒 Checking ledger requirement..."
 node scripts/check-ledger-update.mjs || {
   echo ""
-  echo "❌ LEDGER MISSING — commit blocked. Stage a CHANGELOG/DECISION_LOG/KNOWN_ISSUES update describing this change."
+  echo "❌ LEDGER MISSING — stage the real CHANGELOG/decision/reference update for this policy change."
   exit 1
 }
 
-# --- Phase 3C private-artifact containment (HARD) ---
-# Commits scan tracked, staged, modified, and untracked paths. When Git is
-# committing through an alternate GIT_INDEX_FILE, the checker preserves that
-# one authoritative redirect while stripping every other inherited GIT_* value.
-# The slower ignored-tool-output sweep remains mandatory at pre-push and in CI.
-echo "🔒 Checking Phase 3C private-artifact containment..."
+# This is the one repository-wide local check retained at commit time. It must
+# inspect untracked and modified paths too, not only staged files.
+echo "🔒 Checking private-artifact containment..."
 node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit || {
   echo ""
   echo "❌ PRIVATE ARTIFACT CONTAINMENT FAILED — move the artifact outside this repository."
   exit 1
 }
 
-# --- SQL Migration Validation (prevents known anti-patterns) ---
-echo "🛡️ Validating SQL migrations..."
-bash scripts/validate-sql.sh
-SQL_EXIT=$?
+# Both validators already restrict themselves to staged files and exit quickly
+# when their file type is absent.
+echo "🛡️ Validating staged SQL migrations..."
+bash scripts/validate-sql.sh || exit 1
 
-if [ $SQL_EXIT -ne 0 ]; then
-  echo ""
-  echo "❌ SQL VALIDATION FAILED — commit blocked. Fix SQL anti-patterns first."
-  exit 1
-fi
+echo "🛡️ Validating staged frontend files..."
+bash scripts/validate-frontend.sh || exit 1
 
-# --- Frontend Code Validation (prevents known anti-patterns) ---
-echo "🛡️ Validating frontend code..."
-bash scripts/validate-frontend.sh
-FE_EXIT=$?
-
-if [ $FE_EXIT -ne 0 ]; then
-  echo ""
-  echo "❌ FRONTEND VALIDATION FAILED — commit blocked. Fix anti-patterns first."
-  exit 1
-fi
-
-echo "🔍 Running ESLint..."
-npm run lint 2>&1
-LINT_EXIT=$?
-
-if [ $LINT_EXIT -ne 0 ]; then
-  echo ""
-  echo "❌ LINT FAILED — commit blocked. Fix lint errors first."
-  exit 1
-fi
-
-echo ""
-echo "🔎 Running type-check (tsc --noEmit)..."
-# build (vite/esbuild) only TRANSPILES — it never type-checks. A pure type error
-# (e.g. calling a Record as a function, TS2349) shipped a prod runtime crash in
-# Field Mode 2026-06-14 because this gate stopped at build. typecheck is the fix.
-npm run typecheck 2>&1
-TYPECHECK_EXIT=$?
-
-if [ $TYPECHECK_EXIT -ne 0 ]; then
-  echo ""
-  echo "❌ TYPE-CHECK FAILED — commit blocked. (build = transpile only; this catches TS errors build misses.)"
-  exit 1
-fi
-
-echo ""
-echo "🔨 Running build check..."
-npm run build 2>&1
-BUILD_EXIT=$?
-
-if [ $BUILD_EXIT -ne 0 ]; then
-  echo ""
-  echo "❌ BUILD FAILED — commit blocked. Fix build errors first."
-  exit 1
-fi
-
-echo ""
-echo "🧪 Running unit tests..."
-npx vitest run 2>&1
-TEST_EXIT=$?
-
-if [ $TEST_EXIT -ne 0 ]; then
-  echo ""
-  echo "❌ TESTS FAILED — commit blocked. Fix failing tests first."
-  exit 1
-fi
-
-echo ""
-echo "🤝 Checking agent workflow wiring..."
-npm run test:agent-workflows 2>&1
-AGENT_EXIT=$?
-
-if [ $AGENT_EXIT -ne 0 ]; then
-  echo ""
-  echo "❌ AGENT WORKFLOW CHECKS FAILED — commit blocked. Fix Claude/Codex workflow drift first."
-  exit 1
-fi
-
-echo ""
-echo "🛡️  Running guard-hook regression tests..."
-npm run test:correction-guards 2>&1
-GUARD_EXIT=$?
-
-if [ $GUARD_EXIT -ne 0 ]; then
-  echo ""
-  echo "❌ GUARD-HOOK TESTS FAILED — commit blocked. A safety hook regressed; fix it before committing."
-  exit 1
-fi
-
-echo ""
-echo "📋 Checking doc drift (counts in CLAUDE.md / migration-history.md vs disk)..."
-# husky runs this script under `sh -e`, so a bare failing command aborts the
-# whole hook before any $? check — the || branch is what makes this step
-# genuinely non-blocking (2026-06-11: five commit attempts died here silently).
-node scripts/check-doc-drift.mjs || {
-  echo ""
-  echo "⚠️  DOC DRIFT DETECTED (non-blocking) — update migration-history.md / CLAUDE.md counts before next session."
-}
-
-echo ""
-echo "🔗 Verifying dependency integrity (vitest/vite peer ranges)..."
-# Same sh -e note as above: the || branch guarantees the friendly message
-# prints before the (intentional) block.
-node scripts/verify-deps.mjs || {
-  echo ""
-  echo "❌ DEPENDENCY PROBLEMS — commit blocked. Run \`npm ci\` or fix peer ranges first."
-  exit 1
-}
-
-echo ""
-echo "🗺  Regenerating workflow map..."
-node scripts/generate-workflow-map.mjs
-MAP_EXIT=$?
-
-if [ $MAP_EXIT -ne 0 ]; then
-  echo ""
-  echo "⚠️  Workflow map generation failed — committing anyway (non-blocking)."
-else
-  # Stage the updated map so it's included in this commit automatically
-  git add docs/app-workflow-map.html
-  echo "🔒 Rechecking containment after staging the generated workflow map..."
-  node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit || {
+# Hook/settings changes can silently become one-sided between Claude and Codex.
+# Run the focused manifest/sync check only when that control surface changed.
+if printf '%s\n' "$STAGED_FILES" | grep -Eq '^((\.claude|\.codex)/(hooks|commands|skills|workflows|agents)/|\.claude/settings\.json$|\.codex/hooks\.json$|AGENTS\.md$|CLAUDE\.md$|scripts/(agent-manifest-parity|check-agent-workflows|sync-agent-workflows|normalize-eol)\.mjs$)'; then
+  echo "🤝 Checking Claude/Codex workflow and hook parity..."
+  node scripts/check-agent-workflows.mjs || {
     echo ""
-    echo "❌ GENERATED MAP CONTAINMENT FAILED — inspect docs/app-workflow-map.html before committing."
+    echo "❌ AGENT WORKFLOW PARITY FAILED — keep the effective Claude/Codex guard sets aligned."
+    exit 1
+  }
+fi
+
+# Dependency integrity is relevant only when the dependency contract changed.
+if printf '%s\n' "$STAGED_FILES" | grep -Eq '^(package(-lock)?\.json|\.nvmrc)$'; then
+  echo "🔗 Verifying dependency integrity..."
+  node scripts/verify-deps.mjs || {
+    echo ""
+    echo "❌ DEPENDENCY PROBLEMS — run npm ci or fix peer ranges before committing."
     exit 1
   }
 fi
 
 echo ""
-echo "✅ Lint, build, tests, and map passed — committing."
+echo "✅ Fast staged-file safety checks passed. Full product proof runs at pre-push and in CI."

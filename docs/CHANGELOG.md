@@ -2,9 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-25 — PR #432 closed unmerged; control-file edits now prompt; two git-config falsifications fixed
+## 2026-08-25 — PR #432 closed; control-file edits prompt; local/CI proof de-duplicated
 
-Mason ended the PR #432 repair loop (130 commits, +7,329 lines, four adversarial review rounds,
+Mason ended the PR #432 repair loop (well over 100 commits, thousands of added lines, four
+adversarial review rounds,
 never merged) after a symbol sweep showed all five planned splits target code absent from
 `origin/main`, and one split repaired a regression the branch itself introduced. Agent-self-
 protection guardrail work is frozen; business-rule guards are unaffected. Full rationale and the
@@ -20,6 +21,18 @@ Deliberately `ask`, not `deny`: a hard deny recreates the maintenance dead-end t
 tamper prevention** — harness-enforced, not OS-enforced, and it cannot stop `git apply`,
 `git checkout -- <path>` or a shell write. Do not cite it as a security control.
 
+**`.husky/pre-commit`** — reduced from 14 overlapping stages to staged-file safety checks:
+ledger, private-artifact containment, staged SQL/frontend validation, conditional Claude/Codex
+manifest parity, and conditional dependency integrity. Full lint, typecheck, guard/unit tests,
+coverage, and build remain in GitHub CI; typecheck and build also remain in pre-push. Commit no
+longer regenerates or auto-stages the workflow map.
+
+**`.github/workflows/ci.yml`** — removed the non-code `edited` PR trigger, added
+`ready_for_review`, and added concurrency that cancels stale runs only for the same PR. Pushes to
+`main` use unique run groups and are never cancelled, preserving the deployment proof record. No
+docs-only bypass was added: control files, scripts, migrations, package files, and the schema
+registry still require the normal full CI path.
+
 **Two git-config settings were falsifying local state** and were fixed with Mason's approval. Both
 were invisible to every existing guard because neither is a file in the repository:
 
@@ -28,9 +41,10 @@ were invisible to every existing guard because neither is a file in the reposito
   ` M .claude/settings.json`; blob hashes confirmed a real difference (`f9032e03…` vs
   `296744f8…`). `git update-index --refresh` did not clear it. Now unset. Previous value:
   `C:/Users/mason/AppData/Local/Temp/patrol-fsmon-FmF0xX/fsmon.cmd`.
-- `core.hooksPath` in the `codex-claude-migrations-2-4-33493c` worktree pointed at the Codex
-  evidence checkout's `.husky`; a commit there would have run another repository's pre-commit
-  hooks. One worktree of ~37. Now `C:\CRX_Manager\.husky\_`, matching the rest.
+- `core.hooksPath` in the `codex-claude-migrations-2-4-33493c` worktree pointed first at the Codex
+  evidence checkout's `.husky`, then at the primary checkout's absolute `.husky` path. Either value
+  made this worktree run another checkout's pre-commit. It is now the worktree-relative `.husky/_`,
+  so the exact reviewed branch hook runs.
 
 Before trusting a clean tree, re-test with `git -c core.fsmonitor=false status --short` and check
 `.git/worktrees/<name>/config.worktree` for a `hooksPath` outside `C:\CRX_Manager`.
