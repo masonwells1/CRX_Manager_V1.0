@@ -51,10 +51,11 @@ and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 
    guard/unit tests, coverage, and build run in GitHub CI; pre-push still runs containment,
    typecheck, and build. Workflow-map generation and automatic staging were removed from commit.
 6. **CI cancels superseded PR work, never `main` proof.** `ready_for_review` was added; `edited` is
-   retained only to rerun when the PR base branch changes, while title/body edits produce a
-   zero-runner skipped workflow. Concurrency cancels an older run only when a newer event belongs
-   to the same pull request. Push runs on `main` use a unique group so the durable deployment record
-   cannot be cancelled by another push. Lightweight doc-drift and date-normalized workflow-map
+   retained so base-branch retargets rerun proof. All edits run full CI because GitHub treats a
+   conditionally skipped required job as successful; a zero-runner edit path would bypass branch
+   protection. Concurrency cancels an older run only when a newer event belongs to the same pull
+   request. Push runs on `main` use a unique group so the durable deployment record cannot be
+   cancelled by another push. Lightweight doc-drift and date-normalized workflow-map
    freshness checks now run in CI. No docs-only shortcut is part of this phase; a future shortcut
    must explicitly exclude `.claude/**`, `.codex/**`, `.github/**`, `.husky/**`, `AGENTS.md`,
    `CLAUDE.md`, `.coderabbit.yaml`, `package.json`, `scripts/**`, `supabase/migrations/**`, and

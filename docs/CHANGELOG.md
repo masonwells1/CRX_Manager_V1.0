@@ -29,9 +29,10 @@ longer regenerates or auto-stages the workflow map. The containment regression c
 preflight/ship/gauntlet/bug-hunt instructions were updated to the same no-index-mutation model;
 generated Codex adapters remain synchronized from the canonical Claude commands.
 
-**`.github/workflows/ci.yml`** — added `ready_for_review`, retained `edited` only for base-branch
-retargets (title/body edits create a zero-runner skipped workflow), and added concurrency that
-cancels stale runs only for the same PR. Pushes to `main` use unique run groups and are never
+**`.github/workflows/ci.yml`** — added `ready_for_review`, retained `edited` so base-branch
+retargets rerun proof, and added concurrency that cancels stale runs only for the same PR. All edits
+run full CI because GitHub treats conditionally skipped required jobs as successful; a zero-runner
+edit path would bypass branch protection. Pushes to `main` use unique run groups and are never
 cancelled, preserving the deployment proof record. Lightweight doc-drift and normalized
 workflow-map freshness checks now run in CI. No docs-only bypass was added: control files, scripts,
 migrations, package files, and the schema registry still require the normal full CI path.

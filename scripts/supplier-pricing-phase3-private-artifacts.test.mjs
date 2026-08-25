@@ -1455,12 +1455,9 @@ git() { return 0; }
   assert.match(ci, /^  pull_request:\r?\n    branches: \[main\]\r?$/m, 'CI pull-request trigger must restrict exactly to main so containment dependencies cannot skip open');
   assert(ci.includes('permissions:\n  contents: read'));
   assert(ci.includes('types: [opened, reopened, synchronize, ready_for_review, edited]'));
-  assert(candidateContainmentJob.includes("github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'"));
-  assert(candidateContainmentJob.includes("github.event.action != 'edited' || github.event.changes.base.ref.from != ''"), 'title/body edits must skip runner work while base retargets rerun containment');
-  assert(
-    ci.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}"),
-    'only meaningful pull-request events may cancel stale proof runs; title/body edits must not',
-  );
+  assert(!/^    if:/m.test(candidateContainmentJob), 'candidate containment must not conditionally skip: GitHub treats skipped required jobs as successful');
+  assert(!ci.includes('github.event.changes.base.ref.from'), 'PR metadata edits must run full CI rather than emitting skipped required checks');
+  assert(ci.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"), 'only pull-request concurrency groups may cancel stale proof runs');
   const ciCheckoutBlocks = ci.split('uses: actions/checkout@v7').slice(1);
   assert.equal(ciCheckoutBlocks.length, 5, 'CI checkout count changed; review least-privilege settings');
   for (const block of ciCheckoutBlocks) {
