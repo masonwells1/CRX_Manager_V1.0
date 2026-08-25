@@ -1,11 +1,30 @@
 # Decision Log
 
-Last verified: 2026-08-24
+Last verified: 2026-08-25
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-25 — A live-evidence read timeout is a denial, not a missing hook decision
+
+**Source:** exact-head Sol/high review CRX-SEC-001 on PR #364.
+
+**Decision.** The fixed linked Supabase reads that produce migration-ledger and trigger/fan-out
+evidence have a 15-second internal process deadline. A timeout throws a bounded, non-diagnostic
+failure that the production migration-apply transport turns into its structured deny. The Claude
+and Codex registrations each allow 60 seconds so two sequential bounded reads and the remaining
+fail-closed analysis can complete; neither host timeout is allowed to stand in for the guard's own
+decision.
+
+**Operative rule.** A slow, hung, failed, or malformed linked read supplies no evidence and
+refuses the apply. Do not remove the subprocess deadline, lower the outer registered budgets below
+the two-read path, or interpret an expired host hook as an allow. The linked-read regression runs a
+real hung child process and asserts the timeout denial; the production-transport suite pins both
+registered budgets. No migration, Edge Function, production data, secret, or permission changed.
 
 ---
 

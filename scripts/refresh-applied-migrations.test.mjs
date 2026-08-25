@@ -2,6 +2,7 @@
 // Mutation-focused tests for the applied-ledger capture.
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,7 @@ import {
 import {
   copyValidatedLinkedMetadata,
   CRX_SUPABASE_PROJECT_ID,
+  LINKED_READ_TIMEOUT_MS,
   runLinkedRead,
 } from './supabase-linked-read.mjs';
 // The two capture producers share the same linked-project trust boundary and
@@ -450,6 +452,35 @@ check('a failed linked query never echoes database or process diagnostic text', 
       assert.equal(markers.some((marker) => error.message.includes(marker)), false);
       return true;
     });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+check('a timed-out linked query fails closed before its outer hook budget expires', () => {
+  const dir = linkedFixture();
+  const hang = path.join(dir, 'hung-linked-read.mjs');
+  try {
+    writeFileSync(hang, 'setInterval(() => {}, 1000);\n');
+    assert.equal(LINKED_READ_TIMEOUT_MS, 15_000,
+      'production linked reads retain the bounded 15-second deadline');
+    assert.throws(() => runLinkedRead({
+      projectRoot: dir,
+      linkedRoot: dir,
+      queryId: 'applied_migrations',
+      run: (_command, _args, options) => {
+        assert.equal(options.timeout, 100);
+        return spawnSync(process.execPath, [hang], {
+          cwd: options.cwd,
+          encoding: options.encoding,
+          shell: false,
+          stdio: options.stdio,
+          maxBuffer: options.maxBuffer,
+          timeout: options.timeout,
+        });
+      },
+      timeoutMs: 100,
+    }), /timed out after 100ms/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

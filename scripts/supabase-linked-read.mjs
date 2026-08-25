@@ -21,6 +21,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 export const CRX_SUPABASE_PROJECT_ID = 'rhyzpcqhnizqbxphqdkr';
+// Every caller of this module is a fail-closed production guard.  A linked
+// query that waits forever must become an explicit refusal while the outer
+// hook still has time to deliver it, never an outer-hook timeout that the host
+// might interpret as no decision.
+export const LINKED_READ_TIMEOUT_MS = 15_000;
 
 export const APPLIED_MIGRATIONS_SQL = `
 WITH ledger AS (
@@ -361,7 +366,11 @@ export function runLinkedRead(options = {}) {
   runGit = spawnSync,
   expectedProjectId = CRX_SUPABASE_PROJECT_ID,
   maxBuffer = 50 * 1024 * 1024,
+  timeoutMs = LINKED_READ_TIMEOUT_MS,
   } = options;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    fail('linked read timeout must be a positive whole number of milliseconds');
+  }
   if (Object.hasOwn(options, 'sql')) {
     fail('caller-supplied SQL is refused; linked capture accepts named built-in queries only');
   }
@@ -385,9 +394,16 @@ export function runLinkedRead(options = {}) {
         shell: false,
         stdio: ['ignore', 'pipe', 'pipe'],
         maxBuffer,
+        timeout: timeoutMs,
       },
     );
     if (result.error || result.status !== 0) {
+      if (result.error?.code === 'ETIMEDOUT') {
+        fail(
+          `Supabase CLI read-only linked capture timed out after ${timeoutMs}ms; ` +
+          'no evidence was written',
+        );
+      }
       fail(
         `Supabase CLI read-only linked capture failed (exit ${result.status ?? 'unknown'}); ` +
         'diagnostic output was withheld; no evidence was written',

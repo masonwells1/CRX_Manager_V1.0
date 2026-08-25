@@ -90,7 +90,7 @@
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/migration-apply-guard.mjs\"",
             "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/migration-apply-guard.mjs'\"",
-            "timeout": 5
+            "timeout": 60
           },
           {
             "type": "command",

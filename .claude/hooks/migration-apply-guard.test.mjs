@@ -103,15 +103,34 @@ eq(destructiveMigrationCheck("").destructive, false, "empty SQL is not destructi
 // ── live hook: proof gate + armed-run destructive carve-out ─────────────────
 const PRODUCTION_HOOK = path.join(__dirname, "migration-apply-guard.mjs");
 const HOOK = path.join(__dirname, "migration-apply-guard-test-entry.mjs");
-for (const manifestPath of [
-  path.join(__dirname, "..", "settings.json"),
-  path.join(__dirname, "..", "..", ".codex", "hooks.json"),
-]) {
+const CLAUDE_MANIFEST = path.join(__dirname, "..", "settings.json");
+const CODEX_MANIFEST = path.join(__dirname, "..", "..", ".codex", "hooks.json");
+for (const manifestPath of [CLAUDE_MANIFEST, CODEX_MANIFEST]) {
   ok(
     !readFileSync(manifestPath, "utf8").includes("migration-apply-guard-test-entry"),
     `${manifestPath} invokes the fixed-read production entry, never the fixture entry`,
   );
 }
+function registeredMigrationGuardTimeout(manifestPath) {
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const hooks = manifest.hooks?.PreToolUse || [];
+  for (const registration of hooks) {
+    for (const hook of registration.hooks || []) {
+      if (hook.command?.includes("migration-apply-guard.mjs")) return hook.timeout;
+    }
+  }
+  return null;
+}
+eq(
+  registeredMigrationGuardTimeout(CLAUDE_MANIFEST),
+  60,
+  "Claude's registered migration-apply hook has time for two bounded linked reads and a deny",
+);
+eq(
+  registeredMigrationGuardTimeout(CODEX_MANIFEST),
+  60,
+  "Codex's registered migration-apply hook has time for two bounded linked reads and a deny",
+);
 {
   const attemptedModeSwitch = spawnSync(process.execPath, [PRODUCTION_HOOK, "--cached"], {
     encoding: "utf8",
