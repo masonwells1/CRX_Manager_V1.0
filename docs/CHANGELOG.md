@@ -2,6 +2,41 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-25 — Draw-down rollout closeout: documentation reconciled, booking draws still paused
+
+Documentation-only follow-up to the 2026-08-24 rollout below. It records the post-rollout
+verification that was actually performed, and it stops three canonical documents from disagreeing
+about live state.
+
+**Observed on 2026-08-25 (read-only, no writes):** the live migration ledger at **975 rows**,
+`max(version)` `20260825034622`, effective ordering high-water `20260819232000`; **zero unexpired
+and zero unbound `draw_down_quote` receipts**; the draw-down function ACL and `search_path` posture
+as recorded in the rollout block; `.claude/schema-registry.json` regenerated from live introspection
+and stamped to the same `20260825034622` high-water; production root returning **HTTP 200**; and
+Mason opening the production Quote Builder initial screen (`Q-2026-2062`), which rendered normally
+with no visible error and with no customer, item, preview, save, or submission made.
+
+**Stated precisely:** that screen observation is reachability and UI-render evidence only. It is
+**not** a booking-draw transaction and **not** an end-to-end draw allocation proof. No end-to-end
+production draw has been observed, and none was manufactured — creating, updating, or submitting a
+real quote or order purely to produce evidence was ruled out.
+
+**Booking draws therefore remain PAUSED.** Releasing the pause is Mason's decision and has not been
+made. Documents corrected in this pass:
+
+- `docs/manual/CURRENT_STATE.md` — its header still reported 971 ledger rows at high-water
+  `20260816174353` with a registry matching that older boundary, contradicting `KNOWN_ISSUES.md`
+  and `migration-history.md`. Restamped to the 975-row/`20260825034622` reading; the old figures
+  are kept only inside an explicitly superseded provenance block.
+- `docs/audits/2026-08-24-codex-to-claude-draw-down-live-rollout-handoff.md` — its banner called
+  the handoff "fully executed" with "no instruction … actionable", which retired the two closeout
+  steps that had not happened. The banner now supersedes only the apply/reconciliation steps (1–7)
+  and states items 8 and 9 as outstanding, with the booking-draw pause explicitly still in force.
+
+No code, schema, live data, or migration was changed by this entry. The parked `save_job`
+chemical-unit migration `20260820120000` (history row 891) remains written, proven, and **not
+applied** — unaffected by this rollout.
+
 ## 2026-08-24 — Draw-down rollout completed live: migrations 2, 3 and 4 applied
 
 With Mason's explicit in-chat approval (Codex→Claude handoff
