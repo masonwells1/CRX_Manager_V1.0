@@ -145,33 +145,31 @@ BEGIN
   IF v_jrow.remaining_acres <> 160 THEN RAISE EXCEPTION 'FAIL: remaining_acres % (expected 160)', v_jrow.remaining_acres; END IF;
 
   -- ============================================ 3b) DERIVED MONEY TOTALS
-  -- Gated on whether 20260820120000 is actually installed, because this chain runs
-  -- against live and that migration is PARKED. Asserting unconditionally would turn
-  -- the registered smoke red today for a change that has not been applied yet.
+  -- 20260820120000 was APPLIED LIVE 2026-08-25 as ledger version 20260825142708, so the
+  -- derived-total behaviour is a permanent property of save_job, not a pending change.
+  -- The former "not applied yet" fallback is deliberately GONE: it accepted the
+  -- caller-supplied totals and skipped every unit refusal, so a stale re-emission that
+  -- dropped the overbilling guard would still have reached SMOKE_PASS_ROLLBACK. A guard
+  -- that cannot go red for the regression it exists to catch is worse than no guard.
+  -- Absence of the marker is now a hard failure (Codex review, PR #475).
   SELECT position('CHEM_UNIT_MISMATCH' IN p.prosrc) INTO v_n
     FROM pg_proc p
    WHERE p.oid = to_regprocedure('public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text)');
 
-  IF v_n > 0 THEN
-    -- The payload above deliberately CLAIMS 200000 / 350000. Those are lies, and the
-    -- point of 20260820120000 is that the server no longer believes them: it derives
-    -- both totals from the chemical lines with safe_cents_qty.
-    --   cost  = 1250 x 30 + 400 x 80 =  37500 + 32000 =  69500
-    --   price = 1800 x 30 + 650 x 80 =  54000 + 52000 = 106000
-    IF v_jrow.total_cost_cents <> 69500 THEN
-      RAISE EXCEPTION 'FAIL: total_cost_cents % (expected derived 69500, NOT the payload 200000)', v_jrow.total_cost_cents;
-    END IF;
-    IF v_jrow.total_price_cents <> 106000 THEN
-      RAISE EXCEPTION 'FAIL: total_price_cents % (expected derived 106000, NOT the payload 350000)', v_jrow.total_price_cents;
-    END IF;
-  ELSE
-    -- Pre-apply the caller's totals are stored verbatim. Pin THAT, so the branch is
-    -- not a silent no-op that could hide a regression while the migration is parked.
-    IF v_jrow.total_cost_cents <> 200000 OR v_jrow.total_price_cents <> 350000 THEN
-      RAISE EXCEPTION 'FAIL: pre-apply totals % / % (expected the caller-supplied 200000 / 350000)',
-        v_jrow.total_cost_cents, v_jrow.total_price_cents;
-    END IF;
-    RAISE NOTICE 'SMOKE_NOTE: 20260820120000 is not applied; derived-total and unit-refusal assertions are SKIPPED.';
+  IF v_n = 0 THEN
+    RAISE EXCEPTION 'FAIL: installed save_job carries no CHEM_UNIT_MISMATCH. Migration 20260820120000 is applied live (ledger 20260825142708), so its absence is a REGRESSION, not a pre-apply state.';
+  END IF;
+
+  -- The payload above deliberately CLAIMS 200000 / 350000. Those are lies, and the
+  -- point of 20260820120000 is that the server no longer believes them: it derives
+  -- both totals from the chemical lines with safe_cents_qty.
+  --   cost  = 1250 x 30 + 400 x 80 =  37500 + 32000 =  69500
+  --   price = 1800 x 30 + 650 x 80 =  54000 + 52000 = 106000
+  IF v_jrow.total_cost_cents <> 69500 THEN
+    RAISE EXCEPTION 'FAIL: total_cost_cents % (expected derived 69500, NOT the payload 200000)', v_jrow.total_cost_cents;
+  END IF;
+  IF v_jrow.total_price_cents <> 106000 THEN
+    RAISE EXCEPTION 'FAIL: total_price_cents % (expected derived 106000, NOT the payload 350000)', v_jrow.total_price_cents;
   END IF;
 
   -- ============================================ ASSERT job_fields agronomy
@@ -250,12 +248,15 @@ BEGIN
   END IF;
 
   -- ============================================ 7) CHEM-UNIT INVARIANT (20260820120000)
-  -- Same gate as step 3b: only assert the refusals once the migration is installed.
+  -- Unconditional since the 2026-08-25 live apply. The marker is re-read here rather
+  -- than trusting step 3b's read, and its absence fails closed.
   SELECT position('CHEM_UNIT_MISMATCH' IN p.prosrc) INTO v_n
     FROM pg_proc p
    WHERE p.oid = to_regprocedure('public.save_job(uuid,jsonb,jsonb,jsonb,uuid,text)');
 
-  IF v_n > 0 THEN
+  IF v_n = 0 THEN
+    RAISE EXCEPTION 'FAIL: installed save_job carries no CHEM_UNIT_MISMATCH at the refusal checks - regression against applied migration 20260820120000.';
+  END IF;
   -- The 16x shape: a pt/ac rate whose quantity is counted in PINTS while cost and price
   -- are quoted per GALLON. This is what chem A wrongly looked like before 2026-08-23.
   BEGIN
@@ -305,7 +306,6 @@ BEGIN
   -- A refusal must leave nothing behind: still exactly the one job from step 1.
   SELECT count(*) INTO v_n FROM jobs WHERE consultant_id = v_admin AND job_date = v_job_date AND customer_id = v_cust_a AND job_number LIKE 'JOB-%';
   IF v_n <> 1 THEN RAISE EXCEPTION 'FAIL: a refused save left a job row behind (% found)', v_n; END IF;
-  END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
 END $$;
