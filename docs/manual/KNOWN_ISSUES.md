@@ -1,9 +1,16 @@
 # Known Issues — Consolidated
 
 
-**Last verified: 2026-08-25 UTC, read-only live re-read after the draw-down rollout completed.**
-**Live ledger is 975 rows, `max(version)` `20260825034622`, effective ordering high-water
-`20260819232000`** (name `20260819232000_bind_draw_down_receipts_to_intent`). All four migrations
+**Last verified: 2026-08-25 UTC, read-only live re-read after the save_job chem-unit apply.**
+**Live ledger is 976 rows, `max(version)` `20260825142708`, effective ordering high-water
+`20260820120000`** (name `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
+That migration applied live on 2026-08-25 on Mason's explicit in-chat approval; because its ledger
+`name` carries a `20260820120000` prefix, the effective ordering high-water advances past the
+draw-down chain's `20260819232000` even though the assigned `version` is later. History row 891
+and the header of `docs/reference/migration-history.md` carry the full apply record.
+(Superseded reading, kept for provenance: 975 rows / `max(version)` `20260825034622` /
+high-water `20260819232000` — correct until the save_job apply, one migration behind live.)
+All four migrations
 of the draw-down chain are applied live — the cutover barrier (2026-08-24 midday, version
 `20260824185408`) and, later that day with Mason's explicit in-chat approval, the tier split
 (`20260825025241`), the allocated-line-cents lifecycle carry (`20260825033106`), and the receipt
@@ -11,6 +18,69 @@ intent binding (`20260825034622`). See the rollout block at the top of
 `docs/reference/migration-history.md`. This pass re-read the ledger and updated the draw-down
 entries only; it does not re-certify unrelated issue narratives below.
 
+
+**RESOLVED 2026-08-25 — the two `/patrol` findings first deferred at the round-3 review cap
+are both closed.** Kept as history because the reasoning is the evidence for the
+interactive-only scoping decision, and because a future change that "simplifies" either
+one would reopen a security property. Detail below.
+(1) **Ambient-code path — CLOSED 2026-08-24** (Mason approved the extra review round).
+`scripts/patrol/trusted-exec.mjs` now binds `git`, `gh`, and `powershell` to fixed absolute
+executables under one minimal environment (system/global Git config disabled, replacement
+objects off, system attributes off, no terminal prompt, `PATH` narrowed to the trusted Git
+directory plus the system directory, inherited `GIT_*` overrides dropped by allowlist).
+**Repository-local config — PARTIALLY closed, revised 2026-08-25. Read this before
+believing the sentence above covers everything.** `git status` runs Git's conversion
+pipeline, so repo-local command-bearing config executes. Measured against real repositories
+on 2026-08-25 rather than assumed:
+
+| vector | plain `git status` | with a command-line `-c` override |
+|---|---|---|
+| `core.fsmonitor` | **executes** | **blocked** (`-c core.fsmonitor=false`) |
+| `filter.*.clean` | **executes** | **still executes** (`-c core.attributesFile=NUL` does not help; suppressing it requires naming the driver, which requires reading the config first) |
+
+So patrol closes the fsmonitor half **by construction** — a fixed flag, no config read,
+nothing that can fail open — and leaves the filter half open, declared rather than
+half-guarded.
+
+A scanner (`worktreeFilterRisk` / `dangerousConfigKeys`) did previously refuse to run status
+in a worktree whose config defined a filter. **It was deleted on 2026-08-25** because it
+failed **open** in three consecutive review rounds (an unguarded call site; error-text
+matching that swallowed every failure; unrecognised Git boolean spellings), and because the
+residual exposure is the repo's existing baseline rather than something patrol adds:
+`scripts/fleet-status.mjs` runs `git status --porcelain -uall` across **every** worktree
+through a bare `execFileSync("git", …)` — a PATH lookup inheriting the full ambient
+environment, with no scan and none of patrol's hardening. Patrol after the deletion is
+strictly better protected than a command already run whenever Mason asks "where are we at?".
+**Open follow-up: apply the same one-line fsmonitor override to `fleet-status.mjs`.**
+**Scheduling patrol later reopens this in full and needs its own design pass — do not
+reinstate the scanner piecemeal.** Same fixed-executable pattern PR #455 established for the
+review wrapper still applies and stays.
+(2) **Forgeable parked state — CLOSED 2026-08-24.** `isParked()` now honours **labels
+only**; a `PARKED` title is ignored. Applying a label requires write access, so it carries
+authorization a self-authored title does not. **Consequence Mason should know:** PRs #361
+and #441, which were parked via title markers, are actionable again in the report — add a
+`hold`/`parked` label to either one to park it properly.
+
+**RESOLVED BY SCOPING 2026-08-24 (Mason's decision) — `/patrol` is interactive only.**
+The unattended-execution surface below did not converge, so the tool no longer claims that
+capability: no OS scheduled task, no unattended `/loop`. Every finding in that surface
+matters *only* because patrol would run hourly under Mason's account unwatched; run by hand
+it is no riskier than any other script in this repo, and by hand is where its value already
+is. The `trusted-exec.mjs` hardening stays as defence in depth. **Scheduling it later needs
+its own design pass on the execution surface, not another patch.** The history below is
+kept because it is the evidence for that decision.
+
+**The unattended-execution surface did not converge.** Three consecutive
+Codex rounds each found a *new* hole in the previous round's fix: round 3 (PATH lookups and
+repo-local filters), round 4 (a missed `execFileSync("git")` in `patrol-report.mjs`, plus
+producer validation failing open on an unbound app id), round 5 (`collectorBuild()` calling
+status without the filter check, and the guard reading only `--local` while Git also
+consumes per-worktree config when `extensions.worktreeConfig` is on). Each fix was correct
+and each was incomplete. **Recommendation on the table for Mason: scope `/patrol` to
+interactive use and drop the OS-scheduled task.** Every one of these findings matters
+*because* the tool would run hourly unattended under his account; run by hand inside a
+session it carries no more risk than any other script he runs. That removes the threat
+model rather than patching it one hole at a time.
 
 **Superseded 2026-08-22 header, kept for provenance — was last-verified 2026-08-22 UTC, read-only live re-read of the ledger and of every `job_chemicals` row.** The ledger figures below are unchanged from the 2026-08-19 pass; issue entries not named in the 2026-08-22 changes were not individually re-verified in this pass. **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
 
@@ -342,9 +412,9 @@ documents why at `rateBaseUnit`. That sidesteps the problem for blend tickets on
 real-world exposure on the job path is currently zero — but that is a fact about today's four rows,
 not a guarantee, and free-text entry can produce one at any time.
 
-**Half closed, PARKED.** Migration `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-(history row 891, branch `claude/save-job-server-side-chem-unit`, **written and proven, NOT applied
-to live**) makes `save_job` refuse a chemical line whose rate unit has a non-acre denominator, with
+**CLOSED — APPLIED LIVE 2026-08-25.** Migration `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
+(history row 891, merged as PR #446, applied to production 2026-08-25 as ledger version
+`20260825142708` on Mason's explicit in-chat approval) makes `save_job` refuse a chemical line whose rate unit has a non-acre denominator, with
 `CHEM_RATE_DENOMINATOR_NOT_ACRES`. That turns the dangerous direction — nothing on screen, hard
 failure at billing — into a refusal at save time, naming the product and the offending unit. Proven
 in a throwaway container: an `oz/cwt` line is refused and leaves no `jobs` or `job_chemicals` row.
@@ -476,10 +546,11 @@ and never run this check. A mismatched-unit priced line can still be created thr
 billed by `transfer_job_to_invoice`. "The database is now the boundary" is therefore true of the
 job-save path and not yet true of the table.
 
-**Still open after that migration applies:** (a) `baseUnitOfRate` itself still collapses `oz/cwt` to
-`oz` on the client — the guard that stops such a row reaching `save_job` (`rateDenominatorIsUnrecognized`
-in `chemRowDefects`) rides on PR #436 and is **not on `main`**, so until that PR lands the operator
-still sees "convertible, priced fine" and only learns otherwise when the save is rejected; and (b)
+**Still open after that migration applied:** (a) is now **closed** — `rateDenominatorIsUnrecognized`
+in `chemRowDefects` landed with PR #436 (merged to `main` as `c302d296`), so the client half no
+longer shows "convertible, priced fine" for an `oz/cwt` row; the server refusal is the backstop,
+not the only signal. (`baseUnitOfRate` still collapses `oz/cwt` to `oz`, which is why the
+server-side denominator test is deliberately wider — see the residuals in the handoff.) And (b)
 the blend-ticket path is untouched — `create_invoice_from_blend_ticket` still raises
 `BLEND_TICKET_UNIT_UNCONVERTIBLE` at billing time, and `blendMathValidator.ts` still does its own
 suffix stripping.
