@@ -46,6 +46,14 @@ const TRIGGER_RES = [
 // Any ONE of these staged alongside satisfies the ledger requirement.
 const LEDGER_RES = [
   /^docs\/CHANGELOG\.md$/,
+  // One file per change (2026-08-25). docs/CHANGELOG.md is a single 15k-line file
+  // that every parallel session appends to, so concurrent agent-surface work
+  // collided there constantly - 12 of 13 open PRs touched one of the shared ledger
+  // docs. A per-change entry file removes the contention by construction: two
+  // sessions never write the same path. README.md is deliberately NOT accepted -
+  // otherwise editing the folder's own instructions would satisfy the guard while
+  // recording nothing.
+  /^docs\/changelog\.d\/(?!README\.md$)[^/]+\.md$/,
   /^docs\/manual\/[^/]+\.md$/,
   /^docs\/reference\/agent-guardrails\.md$/,
   /^docs\/reference\/migration-history\.md$/,
@@ -104,6 +112,7 @@ if (isMain) {
   if (result.triggers.length > 20) console.error(`  … and ${result.triggers.length - 20} more`);
   console.error("");
   console.error("Fix: stage at least ONE ledger update in the same commit —");
+  console.error("  • docs/changelog.d/<date>-<slug>.md   (PREFERRED — one file per change, no merge conflicts)");
   console.error("  • docs/CHANGELOG.md            (what changed, for shipped work)");
   console.error("  • docs/manual/DECISION_LOG.md  (a settled decision)");
   console.error("  • docs/manual/KNOWN_ISSUES.md  (a finding / parked item)");
