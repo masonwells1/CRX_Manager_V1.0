@@ -269,6 +269,95 @@ enforcement separately rather than hold the config behind it.
 
 ---
 
+## 2026-08-24 — Oversized migrations get a second door, not a second lock
+
+**Source:** Mason's in-chat approval, 2026-08-24, after the draw-down cutover half 2 could not be
+applied.
+
+**The problem.** `mcp__supabase__apply_migration` accepts `{project_id, name, query}` — a pasted
+string, no file path. `migration-apply-guard.mjs` binds the reviewer proof to
+`sha256(transmitted query)`, and `scripts/write-apply-proofs.mjs` pins that hash to the on-disk
+file (CRLF→LF normalized). Those two facts are good and stay: together they guarantee the SQL that
+runs is the SQL that was reviewed. But they made
+`20260816120000_draw_down_split_order_lines_by_price_tier.sql` — 162,022 bytes / 2,891 lines —
+**unappliable**. No single tool call re-emits that byte-exact, so the hash never matched. The
+migration was blocked by its own size, not by any review finding; both charters had returned CLEAN.
+
+Splitting it was not available: its preflight compares `pg_proc.xmin` on the barrier wrapper
+against its own transaction id and aborts with `DRAW_DOWN_CUTOVER_BARRIER_UNCOMMITTED` if the two
+halves share a transaction. The management-API direct-POST channel would have carried the bytes but
+bypasses the PreToolUse hook entirely — no ordering preflight, no reviewer proof, no Codex gate —
+and was deliberately not used.
+
+**Decision.** Move the apply rules into a shared module, `.claude/hooks/migration-apply-lib.mjs`,
+and give the file bytes their own gated caller, `scripts/apply-migration-file.mjs`. Both the
+PreToolUse hook and the script ask the identical `evaluateMigrationApply()` for a verdict. The
+transform of the existing checks is mechanical; block-message text is preserved verbatim and
+`migration-apply-guard.test.mjs` still passes unchanged at 86 assertions.
+
+**Operative rules.**
+
+1. **One rule book.** Never reimplement or copy the apply checks beside a caller. Two copies drift,
+   and the looser copy becomes the way in. A new caller imports `evaluateMigrationApply` or it does
+   not ship.
+2. **No ungated transmission path.** `apply-migration-file.mjs` must have no route to `fetch()`
+   that skips the gate, and a throw inside the rule book is a REFUSAL, never a pass. The
+   direct-POST management-API channel remains for read-only `BEGIN..ROLLBACK` proof bundles only —
+   do not reach for it to land a migration.
+3. **The door that applies invalidates the snapshot BEFORE transmitting, then rebuilds it.** The
+   script writes the ledger row `apply_migration` would have written (`statements` as ONE element,
+   matching live rows) inside the same transaction, deletes `applied-migrations.json` before the
+   request, and rebuilds it from a fresh ledger read after. Refresh-on-success-only is NOT enough:
+   an apply that commits followed by a failed ledger re-read leaves a snapshot still "fresh" by the
+   clock but missing the row just written, so the next apply can replay a migration older than the
+   one just applied. An apply is the real invalidator, not elapsed time. Both post-apply failure
+   paths exit non-zero and say plainly that the migration IS applied.
+4. **A dry run is the default.** `--confirm` is required to transmit, and passing the gate remains
+   a FLOOR, not authorization — an interactive session still needs Mason's explicit in-chat OK.
+5. **Migrations that manage their own transactions must not use this door — enforced in code.**
+   `.claude/hooks/migration-wrappability-lib.mjs` refuses top-level transaction control and
+   non-transactional statements before anything is wrapped, and refuses anything it cannot tokenize.
+   The first revision only *documented* this and hand-checked the one target migration; CodeRabbit
+   (Major) and Codex (P2) both caught that nothing re-checked it, so the next caller would have
+   inherited a promise the code did not keep.
+6. **The Codex production guard must know every live-apply spelling.** Codex's own review found
+   `scripts/apply-migration-file.mjs` reached production while every other migration path was blocked
+   in `.codex/hooks/production-action-guard.mjs` (P1). Adding a new production-mutating command
+   without wiring it into that guard is the defect, not an oversight to fix later. Editing that guard
+   re-pins its blobs in `scripts/apply-live-testdata-maintenance-20260812.mjs` in the same change.
+
+7. **The apply target is pinned to CRX production; there is no `--project` flag.** Round 4 found
+   that parameterizing the ref was unsound: `applied-migrations.json`, the reviewer/Codex proofs and
+   the `AUTOPILOT.on` flag are all checkout-wide and assume ONE project. Applying elsewhere would
+   overwrite the snapshot production ordering is judged against with a foreign ledger, and CRX-local
+   proofs would authorize a target they never reviewed. Restricting is the honest fix. If another
+   target is ever needed, scope those three things to the ref FIRST — never re-add the flag alone.
+   (A concrete instance of the standing lesson that parameterizing a constant breaks its downstream
+   assumers.)
+8. **A wrong entry in a "cannot run in a transaction" list is a defect, not a safe over-refusal.**
+   Round 3 removed `ALTER TYPE … ADD VALUE` (transaction-safe since PostgreSQL 12; live server
+   verified at 17.6, and the error advised an impossible split that hit the same rule) and
+   `DROP OWNED` (destructive but transactional — that is the destructive gate's job). Over-refusal
+   rejects legitimate work and teaches the operator something false about PostgreSQL.
+
+**What this round cost, and why it is recorded.** Three reviewer findings on PR #460 were all real:
+an unenforced precondition, an unguarded production spelling, and an `allow`-by-default branch in the
+hook (`decision === "block"` blocked, so any unrecognised verdict passed). None were style. The
+enforcement fix then failed on its first run against the real 162KB migration — it reused the
+destructive classifier's stripper, which keeps `CREATE FUNCTION` bodies visible, and read a PL/pgSQL
+`END;` as a transaction commit. That was caught by **running the real file**, not by the unit tests,
+which had passed by luck because their function body ended `END` with no semicolon. The regression
+cases now pin the terminated form and were mutation-proved to fail without the fix.
+
+**Verification standard applied.** The guard was mutation-tested, not just run green: each check
+was disabled in turn and the suite was required to go red. The first pass exposed a real weakness in
+the *tests* — disabling the missing-snapshot check still produced a refusal (the read threw and the
+catch failed closed), so a banner-only assertion stayed green while the check it named was gone.
+Assertions now pin the specific message per condition. `.claude/hooks/migration-apply-lib.test.mjs`
+is wired into `test:correction-guards`.
+
+---
+
 ## 2026-08-20 — The project no longer pins `autoCompactWindow`; the user-level value governs
 
 **Source:** Mason's in-chat decision, 2026-08-20, while setting up switchable context profiles.
