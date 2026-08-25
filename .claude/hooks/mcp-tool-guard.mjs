@@ -200,7 +200,7 @@ try {
         || Boolean(controlPathReason) || Boolean(proofCreationReason);
       // Checked last, and only when every name-shaped pattern missed, so a
       // hard-link alias cannot present an innocuous pathname for a protected file.
-      const matchedByIdentity = !matchedByName && aliasesProtectedFile(abs, cwd);
+      const matchedByIdentity = !matchedByName && aliasesProtectedFile(abs, projectRoot);
 
       if (matchedByName || matchedByIdentity) {
         if (proofCreationReason) {

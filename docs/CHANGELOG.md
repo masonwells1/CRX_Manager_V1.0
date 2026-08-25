@@ -34,10 +34,10 @@ All significant development milestones, in reverse chronological order within ea
   pagers, editors, and askpass/proxy helpers, fail closed. The accepted Git
   subcommand set is deliberately audited and excludes helper dispatchers such
   as `instaweb`, `send-email`, `gui`, and `web--browse`.
-- Relative executors are resolved from the tool's actual `cwd`/`workdir`, while
-  Git provenance remains anchored to the repository root. Missing or conflicting
-  execution-directory fields fail closed, including the Codex adapter and MCP
-  process routes.
+- Relative executors and write destinations are resolved from the tool's actual
+  `cwd`/`workdir`, while Git provenance and protected-file identity sets remain
+  anchored to the repository root. Missing or conflicting execution-directory
+  fields fail closed, including the Codex adapter and MCP routes.
 - Windows device and file IDs stay in full-precision bigint form so unrelated
   files cannot collide after numeric rounding and be mistaken for hard links.
 - The exact-review proof directory can no longer be aliased through a Windows

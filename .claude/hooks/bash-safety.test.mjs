@@ -170,6 +170,17 @@ ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Targ
       eq(result.status, 0, `the live hook exits cleanly after denying an alias write: ${command}`);
       ok(result.stdout.includes('"permissionDecision":"deny"'), `the live hook denies an alias write: ${command}`);
     }
+    const relativeAliasWrite = `${setContent} -LiteralPath ordinary-notes.mjs -Value hostile`;
+    ok(
+      checkCommandDeep(relativeAliasWrite, scratchDir, { repositoryRoot: fixture })?.includes("protected file"),
+      "a nested execution cwd resolves the relative alias while identities remain rooted at the repository",
+    );
+    const relativeAliasResult = runHook({
+      tool_name: "PowerShell",
+      cwd: fixture,
+      tool_input: { command: relativeAliasWrite, workdir: scratchDir },
+    }, fixture);
+    ok(relativeAliasResult.stdout.includes('"permissionDecision":"deny"'), "the live Bash/PowerShell hook denies a relative hard-link alias from a nested tool workdir");
     const windowsCopyCases = [
       `${treeCopy} "${scratchDir}" "${hookDir}" ordinary-output.txt`,
       `${legacyCopy} "${ordinary}" "${protectedHook}"`,

@@ -717,7 +717,7 @@ ok(isDeny(r), "DC write_file targeting the linked-worktree .git pointer is denie
 // alias edits the protected hook. Identity (device + inode/file-ID) is what a
 // hard link cannot disguise (Codex CRX-SEC-01, 2026-08-23).
 {
-  const aliasDir = mkdtempSync(path.join(os.tmpdir(), "crx-hardlink-guard-"));
+  const aliasDir = mkdtempSync(path.join(projectRoot, "output", "mcp-hardlink-workdir-"));
   const protectedHook = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".claude", "hooks", "bash-safety-lib.mjs");
   const aliasPath = path.join(aliasDir, "innocuous-notes.mjs");
   const unrelatedPath = path.join(aliasDir, "unrelated.mjs");
@@ -735,6 +735,12 @@ ok(isDeny(r), "DC write_file targeting the linked-worktree .git pointer is denie
     ok(isDeny(r), "DC write_file through a hard-link alias of a protected hook is denied by file identity");
     r = runHook({ tool_name: "mcp__Desktop_Commander__edit_block", tool_input: { path: aliasPath } });
     ok(isDeny(r), "DC edit_block through a hard-link alias of a protected hook is denied by file identity");
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__write_file",
+      cwd: projectRoot,
+      tool_input: { path: "innocuous-notes.mjs", workdir: aliasDir },
+    }, projectRoot);
+    ok(isDeny(r), "MCP file writes keep protected identities rooted at the repository while resolving a relative alias from nested workdir");
   }
   // The identity check must not turn every temporary file into a protected one.
   r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: unrelatedPath } });

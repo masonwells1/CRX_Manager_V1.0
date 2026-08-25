@@ -1779,7 +1779,7 @@ const shellExecutableName = (token) => String(token?.value || "")
   .replace(/\.(?:exe|cmd|bat|ps1)$/i, "")
   .toLowerCase();
 
-function protectedShellDestinationReason(token, cwd, protectedIdentities) {
+function protectedShellDestinationReason(token, cwd, repositoryRoot, protectedIdentities) {
   const raw = String(token?.value || "").trim();
   const fullyQuoted = token?.sawQuoted && !token?.sawUnquoted;
   const expressionSyntax = !fullyQuoted && /[()]|@\(|\[[^\]]+\]::/i.test(raw);
@@ -1802,7 +1802,7 @@ function protectedShellDestinationReason(token, cwd, protectedIdentities) {
   if (controlReason) return `Blocked shell file mutation because ${candidate} is ${controlReason}.`;
   const proofReason = protectedProofCreationReason(abs);
   if (proofReason) return `Blocked shell file mutation because ${candidate} resolves into ${proofReason}.`;
-  if (aliasesProtectedFile(abs, base)) {
+  if (aliasesProtectedFile(abs, repositoryRoot)) {
     return `Blocked shell file mutation because ${candidate} is a second pathname for a protected file.`;
   }
   const identity = fileIdentity(abs);
@@ -1815,18 +1815,19 @@ function protectedShellDestinationReason(token, cwd, protectedIdentities) {
 // Process tools carry filesystem destinations inside command text instead of
 // explicit path fields. Resolve those destinations before execution and apply
 // the same canonical-path and file-identity boundary as native file tools.
-export function checkProtectedShellMutation(command, cwd, depth = 0) {
+export function checkProtectedShellMutation(command, cwd, depth = 0, repositoryRoot = cwd) {
   const value = String(command || "");
   if (!value) return null;
   if (depth > 4 || commandExceedsSecurityBudget(value)) {
     return "Blocked shell file mutation because the command is too complex to resolve its destinations safely.";
   }
   const base = cwd || process.cwd();
+  const protectedRoot = repositoryRoot || base;
   let protectedIdentities = null;
   const tokens = tokenizeShellWords(value);
   const inspect = (token) => {
-    if (protectedIdentities === null) protectedIdentities = protectedFileIdentities(base);
-    return protectedShellDestinationReason(token, base, protectedIdentities);
+    if (protectedIdentities === null) protectedIdentities = protectedFileIdentities(protectedRoot);
+    return protectedShellDestinationReason(token, base, protectedRoot, protectedIdentities);
   };
   const redirect = shellWord([62]);
   const expressionPathOption = /^(?:--?|\/)(?:literalpath|filepath|path|destination|dest)(?::|=)?$/i;
@@ -1905,7 +1906,7 @@ export function checkProtectedShellMutation(command, cwd, depth = 0) {
         if (!body || /[$`]|\$\(|\$\{|%[^%]+%|![^!]+!/i.test(body.value)) {
           return "Blocked nested shell file mutation because its command body is dynamic and cannot be inspected safely.";
         }
-        const nestedReason = checkProtectedShellMutation(body.value, base, depth + 1);
+        const nestedReason = checkProtectedShellMutation(body.value, base, depth + 1, protectedRoot);
         if (nestedReason) return nestedReason;
       }
     }
@@ -3459,7 +3460,7 @@ export function checkCommandDeep(cmd, cwd, options = {}) {
   maintenanceProducerCommandMentioned(cmd, 0, fileExecutorInspector.inspect);
   const directExecutorReason = fileExecutorInspector.getReason();
   if (directExecutorReason) return directExecutorReason;
-  const protectedShellMutation = checkProtectedShellMutation(cmd, cwd);
+  const protectedShellMutation = checkProtectedShellMutation(cmd, cwd, 0, options.repositoryRoot || cwd);
   if (protectedShellMutation) return protectedShellMutation;
   const direct = checkDangerousCommand(cmd);
   if (direct) return direct;
@@ -3498,7 +3499,7 @@ export function checkCommandDeep(cmd, cwd, options = {}) {
       // existing migration is as dangerous as one that force-pushes (Codex P1
       // 2026-07-13: only checkDangerousCommand ran here, so npm indirection
       // still bypassed the migration-immutability guard).
-      const reason = checkProtectedShellMutation(resolved, cwd)
+      const reason = checkProtectedShellMutation(resolved, cwd, 0, options.repositoryRoot || cwd)
         || checkDangerousCommand(resolved)
         || checkMigrationModify(resolved, cwd);
       if (reason) return `${reason} (found inside \`npm run ${name}\`'s script body)`;
