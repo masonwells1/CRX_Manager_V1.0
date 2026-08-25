@@ -33,14 +33,32 @@ and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 
    *integrity safeguards* (a small, understandable layer keeping those from being silently
    disabled) — keep thin; *recursive safeguards* (machinery protecting the machinery) — stop.
    PR #432 was entirely the third tier.
-3. **Control-file edits go to `ask`, not `deny`.** `.claude/hooks/**`, `.codex/hooks/**`,
-   `.claude/settings.json`, `.husky/**`, `package.json`, `.github/workflows/**`,
-   `scripts/{check,validate,verify}-*` and `scripts/remove-applied-ledger-entry.mjs` now prompt
-   rather than hard-block. A `deny` would recreate the maintenance dead-end that PR #432's
-   Finding 2c identified, which is what forced the "reviewed producer" design (split E) we have
-   just declined to build. **This is an accidental-edit tripwire, not tamper prevention** — it is
-   enforced by the agent harness, not the OS, and cannot stop `git apply`, `git checkout -- <path>`
-   or a shell write. It must never be described as if it can.
+3. **Control-file edits move to the `ask` tier.** The complete protected set, `Edit` and `Write`
+   for each: `.claude/hooks/**`, `.codex/hooks/**`, `.codex/hooks.json`, `.codex/config.toml`,
+   `.claude/settings.json`, `.claude/settings.local.json`, `.coderabbit.yaml`, `.husky/**`,
+   `package.json`, `.github/workflows/**`, `AGENTS.md`, `CLAUDE.md`,
+   `scripts/{check,validate,verify}-*`, `scripts/remove-applied-ledger-entry.mjs`,
+   `scripts/write-codex-push-proof.mjs` and `scripts/run-claude-review.mjs`.
+
+   **What the `ask` tier actually does here, corrected 2026-08-25 after a CodeRabbit finding:**
+   this repository sets `permissions.defaultMode: "dontAsk"` (`.claude/settings.json:3`, a
+   deliberate PR #352 decision on 2026-08-08 to stop constant prompting). In `dontAsk` mode an
+   `ask` rule is **auto-denied, not prompted**. So in an ordinary session these paths are
+   **blocked**, and a deliberate control-file edit requires a session started in a permission mode
+   that honours prompts. Mason's decision, 2026-08-25: **keep `dontAsk`** and describe the effect
+   accurately, rather than change harness-wide permission behaviour to make the word "prompt"
+   true. The same applies to every pre-existing `ask` entry — `Bash(gh pr merge:*)`,
+   `Bash(vercel --prod:*)`, `supabase functions deploy`, the edge-function and merge MCP tools:
+   under `dontAsk` those are denials, not prompts, and have been since 2026-08-08.
+
+   `ask` was still chosen over an explicit `deny` because the two differ once the mode changes: a
+   `deny` can never be satisfied, whereas these become prompts in a prompting mode. An explicit
+   `deny` would permanently recreate the maintenance dead-end PR #432's Finding 2c identified,
+   which is what forced the "reviewed producer" design (split E) we have just declined to build.
+
+   **This is an accidental-edit tripwire, not tamper prevention** — it is enforced by the agent
+   harness, not the OS, and cannot stop `git apply`, `git checkout -- <path>` or a shell write.
+   It must never be described as if it can.
 4. **Local pre-commit results are advisory, not independent certification.** The ~14 scripts the
    gate executes are writable by the same identity that runs them. The durable boundary is the one
    already outside agent reach: the `protect-main` ruleset, the three required GitHub checks, and
@@ -66,7 +84,10 @@ decision 4 rather than reopening decision 2: the answer is the external gate, no
 one.
 
 **Operative rule:** before committing, and before reporting a tree clean, re-test with
-`git -c core.fsmonitor=false status --short`, then enumerate every configured hook path with
+`git -c core.fsmonitor=false status --short --untracked-files=all` — the `--untracked-files` flag
+is required, because a repository or user setting `status.showUntrackedFiles=no` makes plain
+`git status --short` omit untracked files, so an empty result would not prove a clean tree. Then
+enumerate every configured hook path with
 `git config --show-origin --show-scope --get-all core.hooksPath` and confirm the effective value
 from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
 stop-and-report. Checking `config.worktree` alone is insufficient — `core.hooksPath` also takes

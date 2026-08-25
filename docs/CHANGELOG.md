@@ -22,13 +22,28 @@ the closed PR.
 | `.claude/settings.local.json` | tracked, and **higher precedence** than `settings.json` |
 | `.coderabbit.yaml` | configures the every-PR reviewer; the repo file outranks both dashboards |
 | `.husky/**`, `package.json`, `.github/workflows/**` | the commit gate, the script table, and two of the three required checks |
+| `AGENTS.md`, `CLAUDE.md` | the canonical shared contract and Claude routing — they define the approval gates themselves |
 | `scripts/{check,validate,verify}-*`, `remove-applied-ledger-entry.mjs` | the deterministic validators and the ledger mutator |
 | `scripts/write-codex-push-proof.mjs`, `scripts/run-claude-review.mjs` | mint the exact-SHA evidence the risky-change gates consume |
 
-Deliberately `ask`, not `deny`: a hard deny recreates the maintenance dead-end that forced
-PR #432's "reviewed producer" design, which was declined. This is an **accidental-edit tripwire,
-not tamper prevention** — harness-enforced, not OS-enforced, and it cannot stop `git apply`,
-`git checkout -- <path>` or a shell write. Do not cite it as a security control.
+**What this actually does — read this before citing it.** The repo sets
+`permissions.defaultMode: "dontAsk"` (`.claude/settings.json:3`, a deliberate PR #352 decision on
+2026-08-08). In `dontAsk` mode an `ask` rule is **auto-denied, not prompted**. So in an ordinary
+session these paths are **blocked**; a deliberate control-file edit needs a session started in a
+permission mode that honours prompts. Mason's decision, 2026-08-25: keep `dontAsk` and state the
+effect accurately rather than change harness-wide permission behaviour. The same is true of every
+pre-existing `ask` entry — `Bash(gh pr merge:*)`, `Bash(vercel --prod:*)`,
+`supabase functions deploy`, the edge-function and merge MCP tools — which have been denials
+rather than prompts since 2026-08-08.
+
+`ask` was still chosen over an explicit `deny` because the two diverge once the mode changes: a
+`deny` can never be satisfied, whereas these become prompts under a prompting mode. A permanent
+`deny` would recreate the maintenance dead-end that forced PR #432's "reviewed producer" design,
+which was declined.
+
+This is an **accidental-edit tripwire, not tamper prevention** — harness-enforced, not
+OS-enforced, and it cannot stop `git apply`, `git checkout -- <path>` or a shell write. Do not
+cite it as a security control.
 
 The last four rows were added across three review rounds, each closing the same class of gap: a
 rule naming one control file while a sibling with equal or greater authority stayed unguarded.
@@ -49,7 +64,10 @@ were invisible to every existing guard because neither is a file in the reposito
   (`<other-repo-root>/.husky`); a commit there would have run that repository's pre-commit hooks
   instead of this one's. One worktree of ~37. Now `<repo-root>/.husky/_`, matching the rest.
 
-Before trusting a clean tree, re-test with `git -c core.fsmonitor=false status --short`, then
+Before trusting a clean tree, re-test with
+`git -c core.fsmonitor=false status --short --untracked-files=all` — `--untracked-files` is
+required because `status.showUntrackedFiles=no` would otherwise hide untracked files and make an
+empty result look clean. Then
 enumerate every configured hook path with
 `git config --show-origin --show-scope --get-all core.hooksPath` and confirm the effective value
 from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
