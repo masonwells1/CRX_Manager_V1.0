@@ -27,6 +27,7 @@ file is never edited).
 
 - **Migrations applied live this session:**
   - `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
+
 ## 2026-08-25 — `/patrol`: the fsmonitor override now covers every Git launch
 
 Follow-up on PR #473, closing three defects the mandatory gates returned. The previous
