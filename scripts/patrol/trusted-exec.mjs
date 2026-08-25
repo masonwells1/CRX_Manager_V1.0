@@ -135,13 +135,18 @@ export function worktreeFilterRisk(wtPath, runGit = git) {
   } catch (e) {
     return `local Git configuration is unreadable (${String(e.message).slice(0, 80)}) — not scanned`;
   }
-  try {
-    text += `\n${runGit(["config", "--worktree", "--list"], { cwd: wtPath, timeout: 10_000 })}`;
-  } catch (e) {
-    const msg = String(e.message ?? "");
-    const extensionOff = /worktreeConfig|extension is not enabled|--worktree/i.test(msg);
-    if (!extensionOff) {
-      return `per-worktree Git configuration is unreadable (${msg.slice(0, 80)}) — not scanned`;
+  // Whether the per-worktree scope EXISTS is decided from the local config we just read,
+  // not from error text. An execFileSync failure message embeds the whole command line —
+  // which contains "--worktree" — so pattern-matching the error treated EVERY failure
+  // (not a repository, permission denied, timeout) as "extension disabled" and failed
+  // OPEN. The unit test missed it because a hand-written Error lacks that command line.
+  const worktreeScopeEnabled = /^extensions\.worktreeconfig=true$/im.test(text);
+  if (worktreeScopeEnabled) {
+    try {
+      text += `\n${runGit(["config", "--worktree", "--list"], { cwd: wtPath, timeout: 10_000 })}`;
+    } catch (e) {
+      // The scope is enabled, so this read had to succeed. Any failure is unknown config.
+      return `per-worktree Git configuration is unreadable (${String(e.message ?? "").slice(0, 80)}) — not scanned`;
     }
   }
   const keys = dangerousConfigKeys(text);

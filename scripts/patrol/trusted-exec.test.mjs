@@ -85,27 +85,39 @@ eq(worktreeFilterRisk("C:/whatever", () => "user.name=Mason"), null, "an ordinar
   const risk = worktreeFilterRisk("C:/whatever", (args) => {
     calls.push(args.join(" "));
     if (args.includes("--worktree")) return "filter.sneaky.clean=cmd /c calc";
-    return "user.name=Mason";
+    return "user.name=Mason\nextensions.worktreeconfig=true";
   });
   ok(calls.some((c) => c.includes("--local")), "the guard reads local config");
-  ok(calls.some((c) => c.includes("--worktree")), "AND per-worktree config");
+  ok(calls.some((c) => c.includes("--worktree")), "AND per-worktree config when the extension is enabled");
   ok(risk !== null, "a filter hiding in per-worktree scope is caught");
 }
 {
-  // The extension being OFF makes `--worktree` error; that is the common case, not a risk.
-  const risk = worktreeFilterRisk("C:/whatever", (args) => {
-    if (args.includes("--worktree")) throw new Error("fatal: --worktree can only be used inside a linked worktree with extensions.worktreeConfig enabled");
-    return "user.name=Mason";
-  });
-  eq(risk, null, "a disabled worktreeConfig extension is not treated as a risk");
+  // Extension OFF: the worktree scope is never consulted at all, so no error can occur.
+  const calls = [];
+  const risk = worktreeFilterRisk("C:/whatever", (args) => { calls.push(args.join(" ")); return "user.name=Mason"; });
+  eq(risk, null, "with the extension absent, an ordinary repo is safe");
+  ok(!calls.some((c) => c.includes("--worktree")), "and the --worktree scope is not read at all when the extension is off");
 }
 {
-  // But any OTHER failure of that scope fails closed.
+  // A REAL execFileSync error embeds the whole command line — which contains "--worktree".
+  // The previous implementation pattern-matched that text and so treated EVERY failure as
+  // "extension disabled", failing OPEN. This message is the literal one Git produces.
+  const realError = new Error(
+    'Command failed: C:\\Program Files\\Git\\cmd\\git.exe -C C:/x config --worktree --list\nfatal: --worktree can only be used inside a git repository\n');
   const risk = worktreeFilterRisk("C:/whatever", (args) => {
-    if (args.includes("--worktree")) throw new Error("permission denied reading config");
-    return "user.name=Mason";
+    if (args.includes("--worktree")) throw realError;
+    return "user.name=Mason\nextensions.worktreeconfig=true";
   });
-  ok(risk !== null, "an unreadable per-worktree scope fails CLOSED");
+  ok(risk !== null, "with the extension ENABLED, a failing worktree read fails CLOSED even though the error text contains '--worktree'");
+  ok(/unreadable/.test(risk), "and says the configuration could not be read");
+}
+{
+  // Enabled + readable + a filter hiding there → caught.
+  const risk = worktreeFilterRisk("C:/whatever", (args) => {
+    if (args.includes("--worktree")) return "filter.sneaky.clean=cmd /c calc";
+    return "extensions.worktreeconfig=true";
+  });
+  ok(risk !== null, "a filter in an ENABLED per-worktree scope is caught");
 }
 {
   // The collector's own provenance check must be guarded too — it was the missed call.
