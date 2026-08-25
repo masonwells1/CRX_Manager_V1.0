@@ -101,7 +101,10 @@ export function powershell(script, { timeout = 30_000 } = {}) {
 const DANGEROUS_KEY = /^(filter\.[^=]*\.(clean|smudge|process)|core\.fsmonitor|diff\.[^=]*\.textconv|core\.sshcommand|core\.gitproxy|uploadpack\.packobjectshook)=/i;
 
 export function dangerousConfigKeys(configListText) {
-  const out = [];
+  // A Set, not an array: without the worktreeConfig extension Git's `--worktree` scope
+  // falls back to reporting local config, so the two reads overlap and a key would
+  // otherwise be listed twice in the refusal message.
+  const out = new Set();
   for (const line of String(configListText ?? "").split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -111,9 +114,9 @@ export function dangerousConfigKeys(configListText) {
     // `core.fsmonitor=false|true` is a boolean, not a command — only a command is a risk.
     if (/^core\.fsmonitor$/i.test(key) && /^(true|false|)$/i.test(value)) continue;
     if (value === "") continue; // an empty value disables the filter rather than running one
-    out.push(key);
+    out.add(key);
   }
-  return out;
+  return [...out];
 }
 
 // Returns null when the worktree is safe to scan, or a reason string when it is not.
