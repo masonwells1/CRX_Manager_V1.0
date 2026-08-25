@@ -183,6 +183,13 @@ allows(evaluate(fixture()), "known-good interactive fixture is allowed");
     "session-dependent DDL helper does not reject harmless DML");
   denies(evaluate(root, { query: "COMMENT ON TABLE public.orders IS 'guarded';" }),
     "session-dependent PostgreSQL event trigger helper", "session-dependent DDL helper rejects DDL");
+  denies(evaluate(root, { query: "IMPORT FOREIGN SCHEMA remote FROM SERVER s INTO public;" }),
+    "session-dependent PostgreSQL event trigger helper", "session-dependent DDL helper rejects IMPORT FOREIGN SCHEMA");
+  const selectInto = "SELECT 1 INTO public.scratch;";
+  review.queryHash = createHash("sha256").update(selectInto).digest("hex");
+  writeFileSync(reviewPath, JSON.stringify(review));
+  denies(evaluate(root, { query: selectInto }),
+    "session-dependent PostgreSQL event trigger helper", "session-dependent DDL helper rejects SELECT INTO");
 }
 
 // ── CHECK 1: ordering preflight ─────────────────────────────────────────────

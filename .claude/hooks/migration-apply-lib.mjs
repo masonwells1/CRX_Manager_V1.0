@@ -931,7 +931,12 @@ const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unkno
     // would disable the only sanctioned repair path and invite a bypass. Keep
     // the fail-closed rule for every statement that can be DDL (including
     // procedural/dynamic execution, whose effect cannot be proved here).
-    const hasPotentialDdl = /\b(?:alter|analyze|call|cluster|comment|create|do|drop|execute|grant|refresh|reindex|revoke|security\s+label|truncate|vacuum)\b/i.test(query);
+    // PostgreSQL's ddl_command_start/end set is CREATE, ALTER, DROP, COMMENT,
+    // GRANT, IMPORT FOREIGN SCHEMA, REINDEX, REFRESH MATERIALIZED VIEW,
+    // REVOKE, SECURITY LABEL, and SELECT INTO. Keep the extra command forms
+    // below conservative: an unmodeled procedural or table-rewrite shape must
+    // never be mistaken for the ordinary row-DML exception.
+    const hasPotentialDdl = /\b(?:alter|analyze|call|cluster|comment|create|do|drop|execute|grant|import\s+foreign\s+schema|refresh|reindex|revoke|security\s+label|truncate|vacuum)\b|\bselect\b[\s\S]*?\binto\b/i.test(query);
     if (fanoutEvidence.sessionDependentEventTriggers.length && hasPotentialDdl) {
       return block(
         `ONE-SHOT REPLAY GUARD: linked production session-dependent PostgreSQL event trigger helper(s) ` +

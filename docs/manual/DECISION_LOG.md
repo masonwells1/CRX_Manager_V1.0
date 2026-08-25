@@ -18,6 +18,8 @@ unprovable across evidence and apply sessions, so those shapes remain denied. Pl
 fire a DDL event trigger and remains eligible for the existing review and one-shot safeguards.
 
 **Operative rule.** Never broaden the DML allowance to DDL-like, `DO`, dynamic, or callable SQL.
+The DDL matcher includes PostgreSQL's complete `ddl_command_start`/`ddl_command_end` command set,
+including `IMPORT FOREIGN SCHEMA` and `SELECT INTO`; direct regression fixtures prove both deny.
 The guard test proves both sides: a harmless UPDATE allows and COMMENT DDL denies under the same
 trigger evidence. No live migration, Edge Function, production data, secret, or permission changed.
 
