@@ -31,6 +31,16 @@ the cost this entry's test was exposed to with no timeout of its own. Mutation p
 change and passes after, confirming the per-test timeout overrides the global. All 5
 xlsx-touching files green (48 tests); target test 346ms before, 373ms after.
 
+## 2026-08-25 — Booking-draw pause released
+
+Mason released the booking-draw pause in-chat after the full draw-down chain and the save_job
+chem-unit guard went live. The pause was procedural (a team agreement during the rollout, never a
+code flag), so the release is a recorded decision, not a deploy. Read-only pre-release checks:
+one `draw_down_quote` overload, intent-bound body installed, zero retry receipts in the prior
+24 hours, function-surface sweeps clean. No test draw was fabricated; the first real draw is the
+final end-to-end proof and should be read back read-only when it happens. Canonical record:
+`docs/manual/DECISION_LOG.md` (2026-08-25 entry).
+
 ## 2026-08-25 — Decision Log: the dangling PR #403 reference now records a closure
 
 `docs/manual/DECISION_LOG.md` still described the narrow live-ledger recovery exception as a
