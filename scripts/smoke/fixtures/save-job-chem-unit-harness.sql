@@ -2,7 +2,7 @@
 -- and derived money totals) in an isolated throwaway PostgreSQL container.
 --
 -- This is NOT a schema definition for the app. It is the minimum real-shape surface the
--- function touches, plus the three unit/money helpers copied VERBATIM from the live
+-- function touches, plus the five unit/money helpers copied VERBATIM from the live
 -- catalog (pg_get_functiondef, read 2026-08-23). Copying them verbatim is the point: the
 -- bug this migration exists to stop was a client-side COPY of the unit table drifting
 -- from the server's, so a prover that reimplements them would prove nothing.

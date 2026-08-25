@@ -161,10 +161,16 @@
 --
 -- SCOPE, stated because it was previously implied and a reader could over-trust this count:
 -- these terms mirror the CHEM_UNIT_UNSPECIFIED refusal (change 5) ONLY. They do not model
--- CHEM_UNIT_MISMATCH, CHEM_RATE_DENOMINATOR_NOT_ACRES, CHEM_UNIT_FORM_MISMATCH or
--- CHEM_QUANTITY_NOT_FINITE. A zero here therefore means "no live row trips change 5", NOT
--- "no live row is refused". Whoever applies must satisfy BOTH: this count returns zero AND
--- every live job_chemicals row clears the other four rules.
+-- ANY of the other refusals this body enforces, whose list has GROWN since this note was
+-- first written (2026-08-25 review): CHEM_UNIT_MISMATCH, CHEM_RATE_DENOMINATOR_NOT_ACRES,
+-- CHEM_UNIT_FORM_MISMATCH, CHEM_QUANTITY_NOT_FINITE, CHEM_UNIT_UNSUPPORTED_CHARACTER,
+-- CHEM_RATE_UNIT_UNRECOGNIZED (including its punctuation-only folded-empty arm),
+-- CHEM_STOCK_UNIT_IS_A_RATE, CHEM_QUANTITY_ZERO_BUT_EXPECTED, CHEM_QUANTITY_NOT_DERIVED /
+-- unverifiable quantities, and JOB_ACRES_NOT_FINITE. A zero here therefore means "no live
+-- row trips change 5", NOT "no live row is refused". Whoever applies must satisfy BOTH:
+-- this count returns zero AND every live job_chemicals row clears EVERY other refusal in
+-- the CURRENT body -- enumerate them from the body at apply time, not from this comment,
+-- which can go stale the same way its first draft did.
 --
 -- That second half was done row by row on 2026-08-24 (read-only) rather than by predicate,
 -- which is stronger while the table is this small -- all FOUR live rows were inspected
@@ -198,9 +204,13 @@
 -- price, is never refused for a blank unit.
 --
 -- KNOWN RESIDUALS -- stated, not hidden:
---   * A NaN acreage can no longer bypass the invariant, but job_fields.acres_to_treat
---     still carries no CHECK, so a hand-built payload can still STORE one. Pre-existing
---     and unchanged by this migration.
+--   * job_fields.acres_to_treat still carries no TABLE-level CHECK. Through THIS RPC a
+--     non-finite acreage can neither bypass the invariant NOR be stored -- the body
+--     checks every field acreage and raises JOB_ACRES_NOT_FINITE before any insert --
+--     so the residual is the table, not the path: another writer or direct DML can
+--     still store one. (An earlier draft said a hand-built save_job payload could
+--     "still STORE one"; that was true of the round it was written in and is not true
+--     of this body -- corrected 2026-08-25 on review.)
 --   * save_job is not the only writer of priced job_chemicals rows. Migrations
 --     20260703200000 (close-quote-as-applied) and 20260618230000 (recipe pricing) both
 --     INSERT cost_per_unit_cents / price_per_unit_cents without running any of these
@@ -995,15 +1005,27 @@ BEGIN
     -- zero-quantity and unverifiable-quantity rules, following from the same decision. Live
     -- JOB-2026-0001 carries rate_unit '32' with price 0 and is exempt for exactly that
     -- reason; T3 and T47 pin that it still saves.
+    -- The '' arm below is NOT an exemption -- round 26 (P1, 2026-08-25). It used to be:
+    -- `v_base_folded <> '' AND ...` skipped this whole check when the fold left nothing,
+    -- reading an empty fold as "the blank-unit rule's territory". That was true only for a
+    -- unit that was blank BEFORE folding. A punctuation-only unit -- rate_unit '.' against
+    -- stock '.' -- is nonblank raw (so CHEM_UNIT_UNSPECIFIED passed it), folds to '' (so
+    -- this check skipped it), survives the unsupported-character probe (periods are
+    -- allowed), and the two sides then compare EQUAL -- a priced line whose unit names no
+    -- measurement saved, and job completion cannot convert what it deducts. A nonblank
+    -- base that folds to nothing IS the strongest form of "not a unit the system
+    -- recognises", so it now takes this refusal; a raw-blank base still belongs to the
+    -- blank-unit rule and its deliberate zero-quantity/customer-supplied exemptions.
     IF COALESCE(NULLIF(v_chem->>'price_per_unit_cents', '')::bigint, 0) <> 0 THEN
       v_base_folded := btrim(regexp_replace(lower(COALESCE(v_rate_base, '')), '[^a-z0-9]+', ' ', 'g'));
-      IF v_base_folded <> ''
-         AND normalize_rate_unit(v_base_folded) NOT IN
-             ('oz', 'pt', 'qt', 'gal', 'lb', 'ton', 'g', 'kg', 'l', 'ml')
-         AND NOT EXISTS (
-               SELECT 1 FROM unit_conversions uc
-                WHERE btrim(regexp_replace(lower(COALESCE(uc.unit, '')), '[^a-z0-9]+', ' ', 'g'))
-                      = v_base_folded)
+      IF (v_base_folded = '' AND btrim(COALESCE(v_rate_base, '')) <> '')
+         OR (v_base_folded <> ''
+             AND normalize_rate_unit(v_base_folded) NOT IN
+                 ('oz', 'pt', 'qt', 'gal', 'lb', 'ton', 'g', 'kg', 'l', 'ml')
+             AND NOT EXISTS (
+                   SELECT 1 FROM unit_conversions uc
+                    WHERE btrim(regexp_replace(lower(COALESCE(uc.unit, '')), '[^a-z0-9]+', ' ', 'g'))
+                          = v_base_folded))
       THEN
         SELECT p.product_name INTO v_product_name
           FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;

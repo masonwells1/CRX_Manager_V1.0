@@ -66,7 +66,7 @@ const TEST_IDS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10",
                   "T31", "T32", "T33", "T34", "T35", "T36", "T37", "T38", "T39",
                   "T40", "T41", "T42", "T43", "T44", "T45", "T46", "T47", "T48",
                   "T49", "T50", "T51", "T52", "T53", "T54", "T55", "T56", "T57", "T58", "T59",
-                  "T60", "T61", "T62", "T63", "T64", "T65"];
+                  "T60", "T61", "T62", "T63", "T64", "T65", "T66"];
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const docker = (args, opts = {}) =>
@@ -830,6 +830,16 @@ const MUTANTS = [
     edits: [],
     stage: "DROP FUNCTION public.check_idempotency_intent(text, text, uuid, text);",
     expectApplyAbort: "PREFLIGHT_MISSING_HELPER",
+  },
+  {
+    // Reverts the round-26 folded-empty arm to the pre-fix shape: with the arm false, the
+    // condition collapses back to `v_base_folded <> '' AND ...`, and a punctuation-only
+    // rate unit ('.') folds to '', skips the recognized-unit refusal, and the equal-unit
+    // path saves a priced line whose unit names no measurement. T66 must go red by name.
+    name: "punctuation-only units exempted from the recognized-unit refusal again",
+    from: "      IF (v_base_folded = '' AND btrim(COALESCE(v_rate_base, '')) <> '')\n",
+    to: "      IF (false)\n",
+    expect: "T66",
   },
 ];
 

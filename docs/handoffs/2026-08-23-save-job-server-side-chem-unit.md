@@ -4,7 +4,7 @@
 **Branch:** `claude/save-job-server-side-chem-unit` (worktree `.claude/worktrees/save-job-enforcement`)
 **Head:** see `git log -1` — round 26 landed on 2026-08-25 (PR #446). Tree and push state are volatile; `git status -sb` answers both exactly, and this header was wrong about them for a full round once already.
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-**SQL sha256:** `af0b5086050e20c633ea57c24d6fda685e2a6beb0ea22f05efae32b63271d631`
+**SQL sha256:** `b6d6c7aa125e7a4ca96ee37cdff9414737941c72fb096199044d5a8c7453d6f4`
 **Status: PARTIAL — written, proven, gate-CLEAN once, pushed, waiting on a merge that something else is blocking.**
 
 ## Approval state — carries nothing forward
@@ -95,7 +95,7 @@ Twelve rounds; **every** round found something real, including the ones that fel
 
 ## Known residuals, stated not hidden
 
-- `job_fields.acres_to_treat` still carries no CHECK — a `NaN` acreage can no longer bypass the invariant but can still be stored.
+- `job_fields.acres_to_treat` still carries no TABLE-level CHECK. Through `save_job` itself a non-finite acreage can neither bypass the invariant nor be stored (`JOB_ACRES_NOT_FINITE` raises before any insert) — the residual is other writers and direct DML, not this path. (Corrected 2026-08-25: an earlier version of this line said a hand-built payload could still store one through this RPC; that stopped being true when the acreage checks landed.)
 - `save_job` is not the only writer. `_close_quote_as_applied` (`20260703200000`) and the recipe-pricing path (`20260618230000`) both `INSERT INTO job_chemicals` with prices and run none of these checks. "The database is the boundary" is true of the job-save path, **not yet of the table**.
 - The page and the server do not agree to the cent until PR #436 lands the exact-cents client math: `main` displays totals via binary-float half-up, the server stores exact decimal half-away-from-zero. The stored value is authoritative and is what the invoice bills.
 - `normalize_rate_unit` strips only `\s+per\s+acre$`; this migration's stripper is deliberately **wider**. The divergence runs in the permissive direction and cannot mis-bill (nothing downstream multiplies money by `rate_unit`). Aligning `normalize_rate_unit` and the client `baseUnitOfRate` is the correct follow-up and is deliberately not bundled into a money migration.

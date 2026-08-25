@@ -1637,12 +1637,37 @@ BEGIN
   END IF;
 END $$;
 
+-- T66: a PUNCTUATION-ONLY unit is refused, not treated as the blank rule's territory --
+-- round 26 (P1, 2026-08-25). rate_unit '.' against stock '.' is nonblank raw (so
+-- CHEM_UNIT_UNSPECIFIED passes it), folds to '' (so the old recognized-unit check's
+-- `v_base_folded <> ''` arm skipped it), survives the unsupported-character probe
+-- (periods are allowed), and the two sides then compare EQUAL -- a priced line whose
+-- unit names no measurement saved, and job completion cannot convert what it deducts.
+-- The folded-empty arm of CHEM_RATE_UNIT_UNRECOGNIZED now refuses it.
+DO $$
+DECLARE ok boolean := false; msg text;
+BEGIN
+  BEGIN
+    PERFORM save_job(NULL,
+      '{"customer_id":"22222222-2222-2222-2222-222222222222","job_date":"2026-05-01","total_acres":10}'::jsonb,
+      '[{"field_id":"33333366-3333-3333-3333-333333333366","acres_to_treat":10}]'::jsonb,
+      '[{"product_id":"aaaaaaaa-0000-0000-0000-000000000003","quantity":100,"unit":".","rate_per_acre":10,"rate_unit":".","cost_per_unit_cents":100,"price_per_unit_cents":200}]'::jsonb,
+      '11111111-1111-1111-1111-111111111111'::uuid, NULL);
+  EXCEPTION WHEN OTHERS THEN ok := true; msg := SQLERRM;
+  END;
+  IF ok AND msg LIKE 'CHEM_RATE_UNIT_UNRECOGNIZED%' THEN
+    RAISE NOTICE 'T66 PASS  a punctuation-only unit is refused as unrecognised: %', msg;
+  ELSE
+    RAISE EXCEPTION 'T66 FAIL  refused=% msg=%  -- a priced line whose unit names no measurement must not save', ok, msg;
+  END IF;
+END $$;
+
 -- T8: every refused save must have left NOTHING behind.
 DO $$
 DECLARE n_jobs int; n_chem int;
 BEGIN
   SELECT count(*) INTO n_jobs FROM jobs;
   SELECT count(*) INTO n_chem FROM job_chemicals;
-  IF n_jobs = 29 AND n_chem = 29 THEN RAISE NOTICE 'T8 PASS  29 jobs / 29 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18), T59 (the quantity-driven UI path, added in round 23) T61 (a correctly derived line on an enormous acreage, added in round 24 so that capping the tolerance could not be mistaken for refusing large jobs outright) and T64 (a job whose header acreage disagrees with its fields must be CORRECTED, not refused). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48, T60, T62, T63 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
+  IF n_jobs = 29 AND n_chem = 29 THEN RAISE NOTICE 'T8 PASS  29 jobs / 29 chemical rows -- every refused save wrote nothing; the T27 and T30 replays each added exactly one, and the false-refusal guards that MUST save are T33 (liquid fl oz/oz), T41 (dry oz carrying a non-breaking space) T47 (the live JOB-2026-0001 shape: quantity 0 with a cost but no price) and T51 (a genuine 0.0001 rounding difference on a 10,000,000-unit line, added in round 18), T59 (the quantity-driven UI path, added in round 23) T61 (a correctly derived line on an enormous acreage, added in round 24 so that capping the tolerance could not be mistaken for refusing large jobs outright) and T64 (a job whose header acreage disagrees with its fields must be CORRECTED, not refused). Every refusal test -- T34, T39, T40, T44, T45, T42, T43, T46, T48, T60, T62, T63, T66 -- writes nothing, which is why a round that adds refusals leaves this count alone and only a new SAVING test moves it';
   ELSE RAISE EXCEPTION 'T8 FAIL  jobs=% chem=% (expected 29/29)', n_jobs, n_chem; END IF;
 END $$;
