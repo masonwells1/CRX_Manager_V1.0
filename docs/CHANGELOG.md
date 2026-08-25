@@ -39,6 +39,12 @@ migrations, package files, and the schema registry still require the normal full
 The unrequired containment job is also fail-closed into the required SQL Validation context, so a
 failed or cancelled dependency cannot be accepted as a skipped required check.
 
+**First-push containment performance** — a new remote branch previously scanned up to 4,096
+reachable commits even when nearly all were already advertised by the destination remote. Named
+remotes now use their actually advertised, locally available default-branch HEAD as the exclusion
+boundary. Direct URLs or unavailable/unfetched heads keep the conservative full-history fallback;
+all commits after the advertised boundary remain fully scanned.
+
 **Two git-config settings were falsifying local state** and were fixed with Mason's approval. Both
 were invisible to every existing guard because neither is a file in the repository:
 

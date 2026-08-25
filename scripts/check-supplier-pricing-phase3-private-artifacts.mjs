@@ -1995,8 +1995,32 @@ export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execut
   return { checked_path_count: visible.size, checked_commit_count: checkedCommits.length, checked_ignored_count: worktree.ignoredCount, worktree_scan_duration_ms: worktree.durationMs, scanned_candidate_count: budget.candidates, scanned_logical_bytes: budget.logicalBytes };
 }
 
-function outgoingCommitsForNewRemoteRef(localSha, root, execute) {
-  return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(localSha, 'local')], root, execute);
+function advertisedRemoteHeadCommit(remoteName, root, execute) {
+  // A direct URL has no stable local remote identity. Keep the conservative
+  // full-ancestry fallback for that case, and never pass URL-like hook metadata
+  // into a new Git argv position.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(remoteName) || remoteName.includes('..')) return null;
+  let remoteNames;
+  try { remoteNames = gitLines(['remote'], root, execute); } catch (_error) { return null; }
+  if (!remoteNames.includes(remoteName)) return null;
+  let advertised;
+  try { advertised = gitLines(['ls-remote', '--symref', remoteName, 'HEAD'], root, execute); } catch (_error) { return null; }
+  const headShas = advertised
+    .map(line => /^(?:([0-9a-f]{40}|[0-9a-f]{64}))\s+HEAD$/i.exec(line)?.[1] ?? null)
+    .filter(Boolean)
+    .map(sha => assertCommitSha(sha, 'advertised remote HEAD'));
+  if (headShas.length > 1) throw new Error('private Phase 3C pre-push containment received multiple advertised remote HEAD objects');
+  if (headShas.length === 0) return null;
+  // A remote may have advanced beyond the caller's last fetch. Exclude only an
+  // advertised boundary whose object is already available locally; otherwise
+  // retain the conservative full-ancestry scan.
+  return peeledCommitSha(headShas[0], root, execute);
+}
+function outgoingCommitsForNewRemoteRef(localSha, root, execute, remoteName) {
+  const argv = ['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(localSha, 'local')];
+  const remoteHead = advertisedRemoteHeadCommit(remoteName, root, execute);
+  if (remoteHead) argv.push('--not', remoteHead);
+  return gitLines(argv, root, execute);
 }
 function peeledCommitSha(objectSha, root, execute) {
   try {
@@ -2070,10 +2094,10 @@ export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT,
     const inspected = await inspectOutgoingRefObject({ localRef, localSha, root, execute, budget: outgoingBudget });
     objectViolations.push(...inspected.violations);
     if (inspected.commit === null) continue;
-    if (isZeroSha(remoteSha)) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
+    if (isZeroSha(remoteSha)) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute, remoteName));
     else {
       const remoteCommit = peeledCommitSha(assertCommitSha(remoteSha, 'remote'), root, execute);
-      if (remoteCommit === null) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
+      if (remoteCommit === null) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute, remoteName));
       else ranges.push(`${remoteCommit}..${inspected.commit}`);
     }
   }
