@@ -84,6 +84,7 @@ ok(checkDangerousCommand("ln supabase/migrations/20260101000000_x.sql /tmp/m.sql
 // attacker does not have to run them in one command.
 ok(checkDangerousCommand("mklink /J scratch\\hooks .claude\\hooks"), "the junction hop that launders a protected path is blocked");
 ok(checkDangerousCommand("mklink /H scratch\\alias.mjs scratch\\hooks\\mcp-tool-guard.mjs"), "the laundered hard link is blocked even though its text names no protected path");
+ok(checkDangerousCommand("mklink %LINK_KIND% scratch\\review scratch\\target"), "mklink is denied even when its link kind and operands are assembled dynamically");
 // Aliases aimed at a protected location are blocked whatever kind they are.
 ok(checkDangerousCommand("ln -s .claude/hooks/mcp-tool-guard.mjs /tmp/alias.mjs"), "a symlink aimed at a protected hook is blocked");
 ok(checkDangerousCommand("mklink /D scratch\\hooks .claude\\hooks"), "a directory symlink aimed at the protected hooks directory is blocked");
@@ -104,15 +105,17 @@ ok(checkDangerousCommand("busybox cp -l docs/README.md scratch/a.md"), "busybox 
 eq(checkDangerousCommand("cp -r src scratch/src"), null, "an ordinary recursive copy is allowed");
 eq(checkDangerousCommand("cp docs/README.md scratch/a.md"), null, "an ordinary copy is allowed");
 eq(checkDangerousCommand("cp -p docs/README.md scratch/a.md"), null, "a preserving copy is allowed");
-// Ordinary symlinks away from protected locations still work.
-eq(checkDangerousCommand("ln -s docs/README.md /tmp/readme.md"), null, "an ordinary symlink to an unprotected file is allowed");
-eq(checkDangerousCommand("mklink /D scratch\\docs docs"), null, "a directory symlink to an unprotected directory is allowed");
+// Link creators are denied as a class. A proof does not exist until its alias
+// is created, so there may be no later write for file identity to intercept.
+ok(checkDangerousCommand("ln -s docs/README.md /tmp/readme.md"), "an ordinary symlink command is denied because its target can be assembled dynamically");
+ok(checkDangerousCommand("mklink /D scratch\\docs docs"), "an ordinary mklink command is denied because its target can be assembled dynamically");
 // Other spellings of the same alias. A guard that knows only `mklink`/`ln`
 // leaves the route open through PowerShell and fsutil.
 ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\notes.mjs -Target .claude\\hooks\\bash-safety-lib.mjs"), "PowerShell New-Item HardLink to a protected hook blocked");
 ok(checkDangerousCommand("New-Item -Target .claude\\hooks\\bash-safety-lib.mjs -ItemType HardLink -Path scratch\\notes.mjs"), "PowerShell New-Item HardLink blocked with the target named first");
 ok(checkDangerousCommand("ni -Type HardLink -Path x.json -Target .claude\\settings.json"), "the ni alias and -Type spelling are blocked too");
 ok(checkDangerousCommand("fsutil hardlink create scratch\\alias.mjs .claude\\hooks\\mcp-tool-guard.mjs"), "fsutil hardlink create against a protected hook blocked");
+ok(checkDangerousCommand("fsutil $operation create scratch\\review\\$proof scratch\\seed.json"), "fsutil is denied when the hard-link operation and proof basename are both variables");
 ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Target docs/README.md"), "hard-link creation is denied even when both operands are unprotected");
 // PowerShell evaluates the item type, so the literal token can be assembled at
 // runtime and never appear in the command text (Codex, 2026-08-24). The item
@@ -126,7 +129,8 @@ ok(checkDangerousCommand("New-Item -ItemType ([char]72+'ardLink') -Path a -Targe
 eq(checkDangerousCommand("New-Item -ItemType Directory -Path scratch/output"), null, "creating a directory is allowed");
 eq(checkDangerousCommand("New-Item -ItemType File -Path scratch/notes.txt"), null, "creating a file is allowed");
 eq(checkDangerousCommand("New-Item -Path scratch/notes.txt"), null, "New-Item without an item type is allowed");
-eq(checkDangerousCommand("New-Item -ItemType SymbolicLink -Path scratch/a -Target docs/README.md"), null, "a symlink to an unprotected target is still allowed");
+ok(checkDangerousCommand("New-Item -ItemType SymbolicLink -Path scratch/a -Target docs/README.md"), "PowerShell symbolic-link creation is denied as a class");
+ok(checkDangerousCommand("New-Item -ItemType Junction -Path scratch/review -Target .claude/session-state"), "PowerShell junction creation into the proof directory is denied");
 ok(checkDangerousCommand("rm -rf src"), "rm -rf src blocked");
 ok(checkDangerousCommand("rm -rf supabase"), "rm -rf supabase blocked");
 ok(checkDangerousCommand("git add file.txt .env"), "staging .env blocked");

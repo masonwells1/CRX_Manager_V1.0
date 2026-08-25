@@ -2515,8 +2515,15 @@ export const DANGEROUS_CMD_CHECKS = [
   // link() binding will never appear here), so the real boundary is the
   // file-identity check enforced on every write route by mcp-tool-guard.mjs and
   // protected-identity-guard.mjs. Do not read this list as exhaustive.
-  [/\bmklink\b(?=[^\r\n;&|]*\/[hH]\b)/, "Blocked hard-link creation. A hard link is a second pathname for the same file, which defeats every path-based guard; this project has no workflow that needs one."],
-  [/\bln\b(?![^\r\n;&|]*\s-[A-Za-z]*s)(?=[^\r\n;&|]*\s\S)/, "Blocked hard-link creation. A hard link is a second pathname for the same file, which defeats every path-based guard; use `ln -s` for a symbolic link instead."],
+  // Proof files do not exist until the wrapper mints them, so a junction into
+  // session-state followed by a dynamically assembled hard-link command can
+  // make the alias AS the final write. There is then no later file-tool write
+  // for the identity guard to catch. Link creators are therefore denied as a
+  // class, including spellings whose option/subcommand is supplied through a
+  // shell variable. CRX has no agent workflow that requires filesystem links.
+  [/\bmklink\b/i, "Blocked filesystem-link creation. Junctions, symbolic links, and hard links can alias a wrapper-owned proof or control path; CRX agent workflows do not require `mklink`."],
+  [/(?:^|[\s;&|])(?:(?:busybox|toybox)\s+)?ln(?:\.exe)?\b/i, "Blocked filesystem-link creation. Junctions, symbolic links, and hard links can alias a wrapper-owned proof or control path; CRX agent workflows do not require `ln`."],
+  [/\bfsutil(?:\.exe)?\b/i, "Blocked `fsutil`. Its link and reparse-point operations can alias wrapper-owned proof or control paths, including when the subcommand is assembled dynamically."],
   // `cp` links instead of copying under -l/--link (and inside combined short
   // clusters like -al), and the standalone `link` utility calls link(2)
   // directly. BusyBox/Toybox reach both through a multi-call binary.
@@ -2530,16 +2537,11 @@ export const DANGEROUS_CMD_CHECKS = [
   // variable hides it entirely (Codex CRX-SEC-01, 2026-08-24). Enumerating the
   // ways to compute a string is unwinnable, so this inverts the test — an item
   // type must be a RECOGNIZED SAFE LITERAL or the command is denied. Computed
-  // expressions, variables, and unknown future item types all fail closed.
+  // expressions, variables, link/reparse-point types, and unknown future item
+  // types all fail closed. Only ordinary File/Directory creation is needed.
   // Abbreviated parameter spellings (`-Type`, `-ty`, `-ItemT`) are covered;
   // `-Target` is not, because its name cannot reduce to this shape.
-  [/\b(?:New-Item|ni)\b[^\r\n;&|]*\s-(?:item)?ty?p?e?\b[\s:]+(?!["']?(?:File|Directory|SymbolicLink|Junction)\b)/i, "Blocked unrecognized New-Item item type. Only a literal File, Directory, SymbolicLink, or Junction is allowed here — a computed or variable item type can resolve to a hard link, which defeats every path-based guard."],
-  // Directory junctions and symlinks stay available in general — canonicalization
-  // resolves them — but not when they are AIMED at a protected location, because
-  // that is the hop that launders a protected path out of later command text.
-  [/\bmklink\b[^\r\n;&|]*\/[dDjJ]\b[^\r\n;&|]*(?:\.claude\b|supabase[\\/]migrations\b|[\\/]?scripts\b)|(?:\.claude\b|supabase[\\/]migrations\b)[^\r\n;&|]*\bmklink\b[^\r\n;&|]*\/[dDjJ]\b/i, "Blocked directory junction or symlink aimed at a protected location. An alias directory hides the protected path from later commands; work through the real path instead."],
-  [/\bln\s+-[A-Za-z]*s[A-Za-z]*\s[^\r\n;&|]*(?:\.claude(?:\/|\b)|supabase\/migrations\b)/, "Blocked symbolic link aimed at a protected location. An alias hides the protected path from later commands; work through the real path instead."],
-  [/\bSymbolicLink\b[^\r\n;&|]*(?:\.claude\b|supabase[\\/]migrations\b)|(?:\.claude\b|supabase[\\/]migrations\b)[^\r\n;&|]*\bSymbolicLink\b/i, "Blocked symbolic link aimed at a protected location. An alias hides the protected path from later commands; work through the real path instead."],
+  [/\b(?:New-Item|ni)\b[^\r\n;&|]*\s-(?:item)?ty?p?e?\b[\s:]+(?!["']?(?:File|Directory)\b)/i, "Blocked link-capable or unrecognized New-Item item type. Only a literal File or Directory is allowed here; links and reparse points can alias wrapper-owned proof or control paths, and computed item types cannot be inspected safely."],
   [/\brm\s+-[A-Za-z]*r[A-Za-z]*f?[A-Za-z]*\s+(?:\.\.?\s*(?:$|;|&|\|)|\.\.?\/(?:src|supabase|docs)(?:\b|\/)|\/?(?:src|supabase|docs)(?:\b|\/))/, "Blocked recursive deletion of project source/migrations/docs."],
   // Long/split option spellings of the same recursive delete — `rm --recursive
   // --force src`, `rm -r --force src` (Codex P1 round 4, PR #352). A lookahead

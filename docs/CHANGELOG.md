@@ -18,6 +18,11 @@ All significant development milestones, in reverse chronological order.
 - Git helper dispatch is closed at both routes: `difftool`, `mergetool`, global
   `--exec-path` overrides, and executable diff/merge tool configuration are
   denied before Git can launch mutable code.
+- The exact-review proof directory can no longer be aliased through a Windows
+  junction and populated by a dynamically assembled final hard-link write.
+  Agent shell routes deny filesystem link/reparse creators as a class, including
+  variable-driven `mklink`, `fsutil`, `ln`, and PowerShell item-type spellings;
+  ordinary file and directory creation remains available.
 - The Quote Builder save-resume concurrency regression now creates a fresh
   quote, so crossing the 30-day stale-price threshold cannot bypass the path
   that the test is intended to prove.

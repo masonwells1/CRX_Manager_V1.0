@@ -675,6 +675,10 @@ ok(isDeny(r), "DC write_file targeting the linked-worktree .git pointer is denie
   // The variable form has no literal to match at all.
   r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "New-Item -ItemType $t -Path a -Target .claude/hooks/bash-safety-lib.mjs" } });
   ok(isDeny(r), "MCP start_process denies a variable item type");
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "New-Item -ItemType Junction -Path scratch/review -Target .claude/session-state" } });
+  ok(isDeny(r), "MCP start_process denies a junction into the wrapper-owned proof directory");
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "fsutil $operation create scratch/review/$proof scratch/seed.json" } });
+  ok(isDeny(r), "MCP start_process denies the final proof hard-link write when its operation and basename are variables");
   // Ordinary directory creation through the same route stays available.
   r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "New-Item -ItemType Directory -Path scratch/output" } });
   eq(r.stdout.trim(), "", "MCP start_process still allows ordinary directory creation");
