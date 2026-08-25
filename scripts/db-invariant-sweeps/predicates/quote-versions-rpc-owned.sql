@@ -536,6 +536,23 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
           ELSE has_function_privilege('authenticated', to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)'), 'EXECUTE')
         END
         AND p.prosrc LIKE '%_create_quote_version_owner_impl%'
+        -- CodeRabbit 2026-08-25 (P2): the checks around this one prove the
+        -- marker UPDATE EXISTS with the reviewed spelling and that it is the
+        -- only quote_versions write, but NOT that it runs AFTER the owner-side
+        -- writer. A later re-emission could select an arbitrary legacy row into
+        -- v_version_id, run this exact UPDATE before calling the owner
+        -- implementation, and still leave this sweep green while blessing an
+        -- untrusted snapshot. Pin the ordering positionally, the same way the
+        -- restore-side contract further down already does: the owner impl must
+        -- be called first, v_version_id must be derived from THAT call's
+        -- result, and only then may the marker be set.
+        AND strpos(lower(p.prosrc), 'v_result := public._create_quote_version_owner_impl') > 0
+        AND strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid') > 0
+        AND strpos(lower(p.prosrc), 'update public.quote_versions') > 0
+        AND strpos(lower(p.prosrc), 'v_result := public._create_quote_version_owner_impl')
+            < strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
+        AND strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
+            < strpos(lower(p.prosrc), 'update public.quote_versions')
         AND regexp_count(
           p.prosrc,
           'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null\s*;',

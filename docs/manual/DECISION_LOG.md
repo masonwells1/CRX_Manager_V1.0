@@ -9,6 +9,77 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-25 — ACCEPTED RISK: the quote-version trust-marker cutover race stays open
+
+**Source:** Mason's explicit in-chat decision, 2026-08-25, chosen from a plain-English trade-off
+after both adversarial reviewers independently flagged the same defect on PR #401 head `9b2d86a5`.
+
+**The finding, stated accurately.** Migration `20260825190000_quote_version_restore_trust_boundary`
+adds `quote_versions.restore_trusted_at` (taking an ACCESS EXCLUSIVE lock) and re-emits the
+create/restore functions **inside one transaction**. An invocation that has already entered an old
+function body blocks on that lock and then resumes on its OLD body after the migration commits.
+Both reviewers found this, from opposite ends:
+
+- **Sol (exact-SHA gate, `CODEX_PROOF_VERDICT: BLOCKERS`, base `43e141a` head `9b2d86a`)** — the
+  restore side. An in-flight restore finishes without `QUOTE_VERSION_LEGACY_UNTRUSTED` and can
+  restore an untrusted legacy cost snapshot. This is the security-relevant direction.
+- **CodeRabbit (CHANGES_REQUESTED, P2, same head commit)** — the create side. An in-flight create
+  finishes without the marker update, so a legitimately created version is written with
+  `restore_trusted_at` NULL and is thereafter rejected as legacy-untrusted. This direction fails
+  **closed** — it is a usability defect, not an exposure.
+
+Sol's asked-for remediation was a drainable two-phase cutover.
+
+**Decision.** The race is **accepted and recorded, not fixed.** The migration lands and applies as
+a single transaction.
+
+**Basis, measured live on 2026-08-25 immediately before the decision:**
+
+| Fact | Value |
+|---|---|
+| Rows in `quote_versions` | 3, across 2 quotes |
+| `restore_quote_version` invocations, ever | 0 |
+| `create_quote_version` invocations, ever | 1 |
+
+Exploiting or tripping this race requires a user to be mid-create or mid-restore at the instant the
+migration commits. Restore has never been called in production. The remediation — a two-phase
+cutover with a drain barrier — is new machinery on the money path, and guard changes in this
+repository have historically needed 4–8 review rounds (#423 took 8; #432 stalled at 4 and was
+closed). Mason judged that cost disproportionate to a race that needs a user who does not exist.
+
+**Operative rule.** This acceptance is scoped to **this migration's apply window only**. It is not
+a precedent for single-transaction cutovers generally, and it does not apply if the facts change.
+**If `restore_quote_version` or `create_quote_version` ever comes into regular use, a re-emission of
+either function must use a two-phase drainable cutover** — re-read the two counts above before
+assuming this entry still holds. The one-time mitigation available at apply time is to apply during
+a period of no user activity, which costs nothing and removes the window in practice.
+
+**Not accepted, and fixed in the same PR.** The two lower-severity findings were real and cheap, so
+they were corrected rather than accepted:
+
+- `scripts/db-invariant-sweeps/predicates/quote-versions-rpc-owned.sql` proved the trust-marker
+  `UPDATE` existed with the reviewed spelling but never that it ran **after** the owner-side writer.
+  A re-emission could have selected an arbitrary legacy row into `v_version_id`, run that exact
+  `UPDATE` first, and left the standing sweep green while blessing an untrusted snapshot. Now pinned
+  positionally (owner impl call → `v_version_id` derived from its result → marker `UPDATE`), the
+  same technique the restore-side contract already used. **Mutation-tested against live PostgreSQL
+  17.6:** the real body returns true; the reordered attack body returns false.
+- `scripts/smoke/smoke-quote-version-restore-trust.sql` selected its fixture on
+  `quote_product_draws.quantity_drawn > 0`, which is not the predicate the restore path enforces.
+  `_restore_quote_version_owner_impl` raises `QUOTE_RESTORE_BLOCKED_BY_DRAW` from an unfiltered
+  `order_items → quote_items` join, so a quote whose draws were later cancelled or voided would be
+  admitted by the fixture and then rejected by the guard, reporting `SMOKE_FAIL` on a correct
+  migration. The fixture now mirrors the guard's own predicate.
+
+**Why this entry exists rather than a clean gate verdict.** The Sol gate cannot return CLEAN on a
+defect the owner has chosen to accept — no amount of re-running converges, because the finding is
+correct and the code deliberately still contains it. Per the standing pattern for owner decisions
+the adversarial gate cannot resolve, the decision is recorded here and the BLOCKERS verdict stands
+on the record alongside it. Do not re-run the gate expecting a different answer, and do not edit the
+migration to silence it.
+
+---
+
 ## 2026-08-24 — CodeRabbit reviews assertively and enforces the Hard Rules, without a hard merge block
 
 **Source:** Mason's in-chat decisions, 2026-08-24, after a live audit of the CodeRabbit dashboard,

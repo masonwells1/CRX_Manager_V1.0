@@ -65,6 +65,25 @@ BEGIN
         WHERE qpd.quote_id = quotes.id
           AND qpd.quantity_drawn > 0
      )
+     -- CodeRabbit 2026-08-25 (P2): filtering only on a positive drawn ledger is
+     -- NOT the predicate the restore path actually enforces.
+     -- `_restore_quote_version_owner_impl` raises QUOTE_RESTORE_BLOCKED_BY_DRAW
+     -- from an UNFILTERED `order_items -> quote_items` join, so a quote whose
+     -- draws were later cancelled or voided -- quantity_drawn back to 0, but the
+     -- reversed order_items rows retained for audit and still carrying their
+     -- quote_item_id stamp -- is admitted by the filter above and then rejected
+     -- by the guard. The trusted-restore half of this smoke would report
+     -- SMOKE_FAIL even though the migration works correctly. Mirror the guard's
+     -- own predicate verbatim so the fixture can only pick a genuinely
+     -- restorable quote. (That over-breadth is itself a deliberate, recorded
+     -- decision -- Mason 2026-08-20 -- so this filter tracks it rather than
+     -- second-guessing it.)
+     AND NOT EXISTS (
+       SELECT 1
+         FROM public.order_items oi
+         JOIN public.quote_items qi2 ON qi2.id = oi.quote_item_id
+        WHERE qi2.quote_id = quotes.id
+     )
    ORDER BY created_at, id
    LIMIT 1;
   IF v_quote_id IS NULL THEN
