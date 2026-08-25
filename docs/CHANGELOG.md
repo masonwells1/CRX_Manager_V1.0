@@ -39,6 +39,41 @@ enumerate every configured hook path with
 from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
 stop-and-report. Inspecting `config.worktree` alone is insufficient — `core.hooksPath` also takes
 system, global and local scope, and precedence decides which one wins.
+## 2026-08-25 — `/patrol`: the fsmonitor override now covers every Git launch
+
+Follow-up on PR #473, closing three defects the mandatory gates returned. The previous
+commit claimed the fsmonitor vector was closed by construction; it was closed for the
+centralized `git()` helper only. `patrol-sources.mjs` built its own `spawnSync` argument
+list for the `ownDraftPaths` reader — trusted binary, trusted environment, but no
+`-c core.fsmonitor=false`. That reader runs index-refreshing `git diff` commands inside
+every worktree, so a repository-local `core.fsmonitor` could execute a program there
+under Mason's account. Found by the exact-SHA `gpt-5.6-sol` gate (HIGH) and confirmed
+against the source before fixing.
+
+- `SAFE_BY_CONSTRUCTION` is now exported and applied at both direct launchers. The
+  second — `git cat-file --batch` — was surfaced by the new regression sweep rather than
+  by the review. `cat-file` never refreshes the index so it was not a live vector, but an
+  exempt launcher is an exception to remember, which is how the first one was missed.
+- New static sweep: every direct `spawnSync(trustedGitPath(), [...])` in a patrol module
+  must carry the override. The property is "no call site is exempt", which an
+  execution test of one path cannot establish.
+- CI (required check) was failing on Linux: the fsmonitor CONTROL wrote a Windows `.cmd`
+  payload the runner cannot execute, so the control could not fire. The fixture was
+  broken on that platform, not the hardening. It now writes a `#!/bin/sh` payload with
+  the executable bit off-Windows, so the control is real on both platforms.
+- `.claude/commands/patrol.md` still claimed the hardening refuses "worktrees whose local
+  config could execute a filter". That scanner was deleted the day before. The text now
+  matches the code and names the residual `filter.*.clean/smudge` exposure as accepted
+  interactive-only baseline risk — the same risk `scripts/fleet-status.mjs` already carries.
+
+Sol's remaining medium (source `expected`/`received` counts recorded but never enforced)
+changes reporter behaviour rather than fixing a defect in this diff, and is left for
+Mason to schedule.
+
+Proof: patrol's four suites pass (classify 110, render 82, sources 128, trusted-exec 35 —
+up from 33 by the two sweep assertions); `npm run test:agent-workflows` green;
+`patrol-report.mjs` ran end to end against live data (52 items, "needs you 3 · scan
+errors 1") and still withheld the all-clear because a source failed.
 
 ## 2026-08-24 — Draw-down rollout completed live: migrations 2, 3 and 4 applied
 
@@ -63,6 +98,130 @@ updated. Booking draws stayed paused throughout the rollout.
   - `20260816120000_draw_down_split_order_lines_by_price_tier.sql`
   - `20260817120000_carry_allocated_line_cents_through_lifecycle.sql`
   - `20260819232000_bind_draw_down_receipts_to_intent.sql`
+
+## 2026-08-24 — `/patrol`: a read-only queue reporter that cannot fake an all-clear
+
+Mason runs 28 worktrees and ~20 open PRs at once, and `/fleet` reports all of it without
+filtering — he reads everything or nothing. `/patrol` answers the narrower question "what
+needs Mason?" and is built so that its silence is trustworthy **about the things it can
+observe** — it never reports an all-clear over a source it failed to read, a condition it
+could not determine, or an item it hid. It cannot speak to decisions that live outside
+GitHub: a pull request held back by a judgement call recorded only in session notes looks
+unblocked to patrol, which is why parking must be marked with a label on the PR itself.
+
+- **Read-only by construction.** The collector issues GETs and read-only `git` queries —
+  read-only in the sense that no tracked file and no business data changes. `git status`
+  and `git diff` still refresh Git's index metadata under `.git/` as a side effect of
+  reading, which is why the fsmonitor override matters on every call site.
+  An earlier design proposed one automatic `gh pr update-branch` action; two adversarial
+  Codex (`gpt-5.6-sol`, high effort) review rounds on the plan established that the
+  classify-then-act window could not be made race-free against 28 concurrent sessions or
+  against exact-SHA review proofs, so every mutation was removed rather than guarded.
+- **The renderer, not a language model, owns every safety-critical line** — the lanes, the
+  counts, the emergency text, and the exact phrase `Nothing waiting on you`. The reporting
+  agent may append one labelled paragraph; it cannot suppress a lane, soften an error, or
+  paraphrase an all-clear. Round 2 of the review flagged the previous "the agent is
+  instructed not to…" wording as an assertion without a mechanism.
+- **Exhaustive fallback.** Any unmatched condition combination resolves to `INDETERMINATE`;
+  `IDLE` is never a fallback and is downgraded automatically if it carries a blocker.
+- **Freshness is proved, not assumed.** Merge state requires two reads a minimum interval
+  apart, cross-checked against a different GitHub API, so two responses from one cache
+  cannot pass as agreement.
+- **Required checks are the union of branch protection AND active rulesets.** This repo's
+  `protect-main` ruleset requires a `Vercel` check that branch protection does not list;
+  resolving from protection alone would have read a PR as green with a required check
+  unrun. Duplicate check contexts resolve to the newest run so a stale green cannot win,
+  and the CodeRabbit status is validated by creating App id rather than context name.
+- **A failed source emits a visible `SCAN_ERROR` item**, so an empty list from a broken
+  source can never be mistaken for a genuinely empty list.
+- **Negative claims only.** Patrol reports blockers it can see and never asserts a PR is
+  ready to merge — a complete readiness predicate would have to model every current and
+  future GitHub ruleset. GitHub's merge button stays the authority.
+- **Parking must be marked on GitHub.** A PR held by a judgement call is invisible to
+  patrol unless it carries a `hold`/`parked`/`do-not-merge` label or `PARKED` in the title.
+  Verified live: patrol reported "no blockers found" for PR #445, which is deliberately
+  parked as a net regression, because that decision exists only in session notes.
+- Proven by running against the live queue, not only by tests: the run surfaced two real
+  defects unit tests would not have — a decision-table hole routing nine ordinary
+  worktrees into the fallback, and a cited "full queue" path that was never written.
+  153 assertions pass at this checkpoint (355 by the end of the branch: classify 110,
+  render 82, sources 128, trusted-exec 35), including a mutation set that flips each all-clear condition
+  individually and asserts the phrase disappears every time.
+- **`/patrol` is interactive only — Mason's scoping decision, 2026-08-24.** It is not
+  scheduled and must not be. Three adversarial review rounds each found a *new* hole in the
+  previous round's fix of the unattended-execution surface; every fix was correct and every
+  one was incomplete by one step. All of those findings exist only because the tool would
+  run hourly under his account unwatched, so the capability was dropped rather than patched
+  a fourth time. Run by hand it is no riskier than any other script here, and by hand is
+  where its value already is. The `trusted-exec.mjs` hardening stays as defence in depth;
+  scheduling it later needs its own design pass, not another patch.
+- **Loop liveness, parked migrations, and gate health are implemented.** Parked discovery
+  reuses `.claude/hooks/worktree-awareness-lib.mjs` — the library `/fleet` composes — so
+  the two can never report different parked counts; when that library cannot determine a
+  worktree's parked state, patrol marks the source incomplete instead of reporting a clean
+  zero. The process probe fails **closed**: zero `powershell` rows in its own output means
+  the probe broke, never that nothing is running.
+- **`patrol-monitor.mjs` reports heartbeat freshness** — missing, stale, malformed, or
+  future-dated. **Superseded by the interactive-only decision above:** it is a convenience
+  check ("is the scan I last ran still current?"), *not* a dead-man alarm, because nothing
+  fires it while nobody is at the machine. It is deliberately NOT registered as a scheduled
+  task. The design note that produced it still holds for any future attempt: an earlier
+  version hung the alarm on `SessionStart`, which only fires when someone starts a session
+  — no alarm in exactly the cases (machine asleep, nobody working) a dead-man switch exists
+  to cover.
+- **An independent Codex (`gpt-5.6-sol`, high effort) review of the code returned
+  BLOCKERS and found two real review-gate defects, both now fixed.** (1) Required checks
+  were matched by context name with the producing app discarded, so any integration with
+  status-write access could post a lookalike success and make patrol report green — the
+  actor-forgery shape CRX treats as a red line. Checks now resolve from the REST
+  check-runs and statuses endpoints and bind each required context to its expected app;
+  the GraphQL rollup was dropped because it omits the producer entirely. Commit statuses
+  expose no app id, so the one status-based required check has its producing account
+  pinned, and any unverifiable producer fails closed. (2) Any CodeRabbit status other than
+  `pending` counted as a completed review, so `failure` and `error` cleared the
+  missing-review blocker and could yield "no blockers found" with nothing having passed;
+  only a verified `success` now counts, and a failed review is an explicit blocker.
+  A third, medium finding corrected the command doc, which claimed patrol had "no write
+  capability" when it does write its own local state.
+- **A second Codex round found two more false-all-clear paths, both fixed.** (1) Parked
+  discovery ran only the worktree-owned pass, which deliberately exempts drafts inherited
+  from `origin/main` — so patrol could report zero parked migrations while an unapplied
+  mainline migration still waited. It now runs the same mainline discovery `/fleet` does
+  and marks the source incomplete when that state is unknown; the live count went from
+  "source errored" to a real 16. (2) `patrol-report.mjs` kept a good in-memory snapshot
+  when persisting it threw, rendered it normally, and exited 0 — able to print the
+  reserved all-clear while citing a queue file that did not exist. Any persistence failure
+  now discards the snapshot and produces the emergency result.
+- **A third Codex round found the Sol gate failing open; fixed.** Patrol cannot evaluate
+  the exact-SHA proof registry, and reported that as silence — so a risky money/RLS/
+  migration PR with **no** proof reached "no blockers found" and was handed to Mason as
+  his decision while CRX's hard gate had never been checked. An unsupported check now
+  reads as UNVERIFIED rather than passed: every PR carries an explicit blocker naming the
+  gate patrol cannot see, which also makes the all-clear unreachable while that is true.
+  Verified live — PR #460 (oversized-migration apply path) now surfaces the warning.
+- **The ambient-code path is closed** (Mason approved a fourth review round for it).
+  `scripts/patrol/trusted-exec.mjs` binds `git`, `gh`, and `powershell` to fixed absolute
+  executables under one minimal environment — the pattern PR #455 set for the proof
+  wrapper. Since no environment switch disables *repository-local* filters, and
+  `git status` runs Git's conversion pipeline, patrol now **refuses to scan** any worktree
+  whose local config defines an executable filter, fsmonitor command, textconv, or
+  ssh/proxy override, and fails closed when that config is unreadable. This matters
+  because this hardening was written while unattended scheduling was still intended: a `PATH` shim or a configured content filter
+  would otherwise execute hourly under Mason's account.
+- **One round-3 finding remains open and is Mason's call** (see `KNOWN_ISSUES.md`): any PR
+  author can forge parked state by putting `PARKED` in a title, since no actor provenance
+  is required. Real, but not a false-all-clear.
+- **Patrol then caught a false positive in itself.** It reported the Codex gate as down
+  because the review capture embeds the reviewed diff, and this change's own source
+  contains a usage-limit pattern. The gate probe now anchors to a real error line rather
+  than matching text anywhere in the capture — the same "matches text, not effect" trap
+  the merge guard has hit before.
+- Three further defects were found only by running it, not by tests: both CLI entry points
+  never executed at all on Windows (a hand-built `file://C:/…` never equals Node's
+  `file:///C:/…`); the main checkout is a path prefix of every nested worktree, so a bare
+  substring match credited every nested process to the parent and reported twelve July
+  ledgers as "stalled"; and ledgers older than a week are now `ARCHIVED` rather than
+  presented as loops that just died.
 
 ## 2026-08-24 — Fleet shipping sprint: schema registry refreshed from live…
 
