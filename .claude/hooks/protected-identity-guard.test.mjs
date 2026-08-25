@@ -262,6 +262,21 @@ if (commonDir) {
 // attacker-chosen gitdir. In a linked worktree it is an ordinary file.
 ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: path.join(repoRoot, ".git"), content: "gitdir: /tmp/evil" } }, repoRoot)), "writing the .git pointer is denied");
 ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: ".git", content: "gitdir: /tmp/evil" } }, repoRoot)), "the relative .git pointer spelling is denied");
+const pointerAlias = path.join(scratch, "ordinary-checkout-note.txt");
+let pointerLinked = false;
+try {
+  linkSync(path.join(repoRoot, ".git"), pointerAlias);
+  pointerLinked = true;
+} catch {
+  // An ordinary checkout has a .git directory; restricted/cross-volume
+  // environments may also reject the link. The linked-worktree exploit is
+  // absent in either case.
+}
+if (pointerLinked) {
+  ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: pointerAlias, content: "gitdir: /tmp/evil" } }, repoRoot)), "writing the linked-worktree .git pointer through a hard-link alias is denied");
+  ok(isDeny(runHook({ tool_name: "Edit", tool_input: { file_path: pointerAlias, old_string: "gitdir:", new_string: "owned:" } }, repoRoot)), "editing the linked-worktree .git pointer through a hard-link alias is denied");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: { patch: ["*** Begin Patch", `*** Update File: ${pointerAlias}`, "@@", "+gitdir: /tmp/evil", "*** End Patch"].join("\n") } }, repoRoot)), "patching the linked-worktree .git pointer through a hard-link alias is denied");
+}
 eq(runHook({ tool_name: "Write", tool_input: { file_path: path.join(scratch, "notes.git"), content: "x" } }).stdout.trim(), "", "an unrelated file merely ending in .git is allowed");
 
 rmSync(scratch, { recursive: true, force: true });

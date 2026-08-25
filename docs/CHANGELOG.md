@@ -23,6 +23,10 @@ All significant development milestones, in reverse chronological order.
   Agent shell routes deny filesystem link/reparse creators as a class, including
   variable-driven `mklink`, `fsutil`, `ln`, and PowerShell item-type spellings;
   ordinary file and directory creation remains available.
+- Linked-worktree `.git` pointer files are now registered in the protected file
+  identity set, so native Write/Edit/patch and MCP file routes deny a pre-existing
+  hard-link alias that could otherwise repoint the checkout under an innocent
+  filename. Ordinary checkouts safely ignore the `.git` directory.
 - The Quote Builder save-resume concurrency regression now creates a fresh
   quote, so crossing the 30-day stale-price threshold cannot bypass the path
   that the test is intended to prove.

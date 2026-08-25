@@ -245,6 +245,12 @@ link creators as a class (`mklink`, `ln`, `fsutil`, and PowerShell link/reparse
 item types), even when the operation or basename is supplied through a variable.
 A regression drives that exact junction→dynamic-final-hard-link chain.
 
+Linked-worktree `.git` pointer files are also part of the protected identity
+map. Direct path rules protect the real `.git` spelling, while identity protects
+native Write/Edit/patch and MCP file routes when the same pointer inode is
+presented through a pre-existing hard-link alias. Ordinary repositories have a
+`.git` directory, which the file-only identity helper deliberately ignores.
+
 Matching the literal `HardLink` token is not sufficient for PowerShell, which
 evaluates an expression in that position: `-ItemType ("Hard"+"Link")` never spells
 the word, and a variable hides it entirely. Enumerating the ways to compute a

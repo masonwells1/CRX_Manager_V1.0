@@ -606,6 +606,27 @@ eq(r.stdout.trim(), "", "DC write_file to the stop-wrap ack valve stays allowed"
 r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: ".git", content: "gitdir: C:/attacker-controlled/.git" } });
 ok(isDeny(r), "DC write_file targeting the linked-worktree .git pointer is denied");
 
+{
+  const projectRoot = path.resolve(__dirname, "..", "..");
+  const pointerAliasDir = mkdtempSync(path.join(os.tmpdir(), "crx-mcp-git-pointer-"));
+  const pointerAlias = path.join(pointerAliasDir, "ordinary-checkout-note.txt");
+  let pointerLinked = false;
+  try {
+    linkSync(path.join(projectRoot, ".git"), pointerAlias);
+    pointerLinked = true;
+  } catch {
+    // An ordinary checkout has a .git directory; restricted/cross-volume
+    // environments may also reject the link.
+  }
+  if (pointerLinked) {
+    r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: pointerAlias, content: "gitdir: C:/attacker-controlled/.git" } }, projectRoot);
+    ok(isDeny(r), "MCP write_file denies a hard-link alias of the linked-worktree .git pointer");
+    r = runHook({ tool_name: "mcp__Desktop_Commander__edit_block", tool_input: { path: pointerAlias, old_string: "gitdir:", new_string: "owned:" } }, projectRoot);
+    ok(isDeny(r), "MCP edit_block denies a hard-link alias of the linked-worktree .git pointer");
+  }
+  rmSync(pointerAliasDir, { recursive: true, force: true });
+}
+
 // A JUNCTION launders the destination out of the supplied pathname: nothing in
 // the string spells `session-state`, and identity cannot help because the proof
 // file does not exist yet. Canonicalising through the existing ancestor is what

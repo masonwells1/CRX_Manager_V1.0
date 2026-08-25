@@ -135,6 +135,11 @@ export function protectedFileIdentityPaths(root) {
   add(path.join(root, ".claude", "settings.json"));
   add(path.join(root, "scripts", protectedProducerName));
   add(path.join(root, ".gitignore"));
+  // In a linked worktree this is a regular POINTER FILE. Path matching blocks
+  // the real `.git` spelling, but a pre-existing hard-link alias keeps an
+  // innocuous pathname and would otherwise be absent from this identity map.
+  // In an ordinary checkout `.git` is a directory, so add() safely ignores it.
+  add(path.join(root, ".git"));
   // Git's own control files decide what Git EXECUTES: `core.fsmonitor`,
   // `core.attributesfile`, and filter definitions all run a program on the next
   // ordinary Git command. A write here is arbitrary code execution on the next
