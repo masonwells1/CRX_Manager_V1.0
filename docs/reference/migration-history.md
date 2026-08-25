@@ -12,8 +12,12 @@ else that row's `version`). All four migrations of the approved draw-down chain 
 
 **APPLIED LIVE 2026-08-24 — draw-down rollout halves 2, 3 and 4** (continuation of the barrier
 apply recorded below, per the Codex→Claude handoff
-`docs/audits/2026-08-24-codex-to-claude-draw-down-live-rollout-handoff.md`, with Mason's explicit
-in-chat approval for exactly these three migrations, booking draws paused throughout). Each apply
+`docs/audits/2026-08-24-codex-to-claude-draw-down-live-rollout-handoff.md`). That handoff
+deliberately did not carry authorization forward; the required fresh approval was then given by
+Mason in the continuation Claude session on 2026-08-24 (evening, Central), verbatim: *"I explicitly
+approve applying only migrations 2, 3, and 4 in that handoff, in order, through the guarded
+Supabase MCP path. Booking draws remain paused. Do not apply any other migration."* This block is
+the durable record of that approval; booking draws stayed paused throughout. Each apply
 ran separately, in order, through the gated file-bytes door `scripts/apply-migration-file.mjs`
 (PR #460) — the same `evaluateMigrationApply` rule book as the MCP `apply_migration` hook — after a
 fresh same-session `/migration-review` workflow (rls-security + migration-drift + types-drift
