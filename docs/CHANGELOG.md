@@ -11,14 +11,30 @@ protection guardrail work is frozen; business-rule guards are unaffected. Full r
 three-tier guardrail classification are in `docs/manual/DECISION_LOG.md` (2026-08-25 entry) and on
 the closed PR.
 
-**`.claude/settings.json`** — added `.claude/hooks/**`, `.codex/hooks/**`, `.claude/settings.json`,
-`.husky/**`, `package.json`, `.github/workflows/**`, `scripts/{check,validate,verify}-*` and
-`scripts/remove-applied-ledger-entry.mjs` to `permissions.ask` for `Edit`/`Write`.
+**`.claude/settings.json`** — added these to `permissions.ask` for `Edit`/`Write`:
+
+| Path | Why it is control-plane |
+|---|---|
+| `.claude/hooks/**`, `.codex/hooks/**` | the guard implementations |
+| `.codex/hooks.json` | the manifest that **registers** the Codex guards; `.codex/hooks/**` cannot match it |
+| `.codex/config.toml` | selects the production Supabase project and sets `read_only=false` |
+| `.claude/settings.json` | the Claude permission and hook manifest |
+| `.claude/settings.local.json` | tracked, and **higher precedence** than `settings.json` |
+| `.coderabbit.yaml` | configures the every-PR reviewer; the repo file outranks both dashboards |
+| `.husky/**`, `package.json`, `.github/workflows/**` | the commit gate, the script table, and two of the three required checks |
+| `scripts/{check,validate,verify}-*`, `remove-applied-ledger-entry.mjs` | the deterministic validators and the ledger mutator |
+| `scripts/write-codex-push-proof.mjs`, `scripts/run-claude-review.mjs` | mint the exact-SHA evidence the risky-change gates consume |
 
 Deliberately `ask`, not `deny`: a hard deny recreates the maintenance dead-end that forced
 PR #432's "reviewed producer" design, which was declined. This is an **accidental-edit tripwire,
 not tamper prevention** — harness-enforced, not OS-enforced, and it cannot stop `git apply`,
 `git checkout -- <path>` or a shell write. Do not cite it as a security control.
+
+The last four rows were added across three review rounds, each closing the same class of gap: a
+rule naming one control file while a sibling with equal or greater authority stayed unguarded.
+`.claude/settings.local.json` was the sharpest — being higher precedence, an edit there could have
+overridden this entire tripwire without triggering it. **When protecting configuration, enumerate
+the precedence chain, not just the file you have in mind.**
 
 **Two git-config settings were falsifying local state** and were fixed with Mason's approval. Both
 were invisible to every existing guard because neither is a file in the repository:
