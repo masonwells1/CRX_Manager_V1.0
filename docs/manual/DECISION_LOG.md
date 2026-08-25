@@ -97,6 +97,34 @@ worktree-only inspection sees one of them.)
 
 ---
 
+## 2026-08-25 — Booking-draw pause RELEASED; draws are back in normal use
+
+**Source:** Mason's explicit in-chat decision, 2026-08-25 ("Ok un pause them then"), after being
+told the draw-down chain was fully live and the release was his call.
+
+**What the pause was:** procedural, not mechanical. During the four-migration draw-down rollout
+(2026-08-24 → 2026-08-25) Mason and the team agreed not to perform booking draws; no code flag,
+schema switch, or RPC guard ever blocked them. "Un-pausing" is therefore this recorded decision,
+not a code change.
+
+**Release preconditions verified read-only against live immediately before recording this
+(2026-08-25):** all four draw-down migrations applied (ledger through `20260825034622`) plus the
+save_job chem-unit apply (`20260825142708`); exactly ONE `draw_down_quote` overload, SECURITY
+DEFINER, with the receipt-intent binding (`check_idempotency_intent`) present in the installed
+body; both private implementation stages present; **zero `draw_down_quote` retry receipts in the
+prior 24 hours** (the clean-slate condition the receipts migration required); function-surface
+invariant sweeps (overloads, search_path, plpgsql-check, anon grants) all clean the same day.
+
+**Deliberately NOT claimed:** no end-to-end booking draw was executed as a test — that would have
+created real order/money rows, and manufacturing production data for a smoke test is prohibited.
+The first real draw is the final proof; whoever is in a session when it happens should read the
+resulting order lines read-only and confirm per-tier pricing and whole-cent amounts.
+
+**Operative rule:** stop telling operators draws are paused. Historical documents that say "keep
+draws paused" describe the rollout window and are superseded by this entry.
+
+---
+
 ## 2026-08-24 — CodeRabbit reviews assertively and enforces the Hard Rules, without a hard merge block
 
 **Source:** Mason's in-chat decisions, 2026-08-24, after a live audit of the CodeRabbit dashboard,
