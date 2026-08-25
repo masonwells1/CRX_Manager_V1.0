@@ -1,5 +1,12 @@
 # Codex to Claude Handoff - Draw-Down Live Rollout
 
+> **SUPERSEDED — DO NOT APPLY. HISTORICAL RECORD ONLY.** This handoff was fully executed on
+> 2026-08-24: migrations 2, 3, and 4 named below are ALL APPLIED LIVE (ledger versions
+> `20260825025241`, `20260825033106`, `20260825034622`) under Mason's explicit continuation-session
+> approval. No instruction in this document remains actionable. Current status lives in
+> `docs/reference/migration-history.md` (top rollout block) and `docs/CHANGELOG.md`. It is
+> committed as the durable provenance record the rollout documentation cites.
+
 **Date:** 2026-08-24
 **Requested by:** Mason (CRX Manager)
 **Author:** Codex
