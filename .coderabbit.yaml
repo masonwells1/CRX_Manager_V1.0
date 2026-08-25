@@ -252,13 +252,21 @@ reviews:
           rule with judgement; the notes below exist to stop known
           misclassifications, not to replace reading the migration.
 
-          CALLABLE. Do not infer callability from the presence of a GRANT.
-          PostgreSQL grants EXECUTE to PUBLIC by default, so a function with NO
-          explicit grant is callable, and `CREATE OR REPLACE FUNCTION` preserves
-          grants an earlier migration made. Treat a function as callable UNLESS
-          the migration actively removes client access (for example REVOKE
-          EXECUTE ... FROM PUBLIC/authenticated/anon with no compensating
-          grant). Absence of evidence is not an exemption.
+          CALLABLE. Do not infer callability from the presence of a GRANT, and
+          split the two cases - `CREATE OR REPLACE FUNCTION` preserves the
+          EXISTING ACL, so the same silence means opposite things:
+
+          NEW function (no prior definition in the repo): PostgreSQL grants
+          EXECUTE to PUBLIC by default, so silence means CALLABLE. Absence of a
+          grant is not an exemption.
+
+          RE-EMITTED function (a definition already exists in an earlier
+          migration): the prior ACL persists, INCLUDING an earlier REVOKE. Do
+          NOT declare it callable merely because this migration does not repeat
+          the REVOKE. Look for the earlier definition and its grants/revokes; a
+          helper previously revoked from client roles stays private and is
+          EXEMPT. If you cannot find the earlier ACL, say so and treat it as
+          callable, naming what you could not resolve.
 
           MUTATING. Include DELEGATED writes. A thin wrapper whose own body
           contains no INSERT/UPDATE/DELETE/MERGE but which calls a helper that
@@ -277,15 +285,28 @@ reviews:
           repeated call. A parameter accepted and then ignored is a FAIL - the
           signature alone proves nothing.
 
-          The claim must be ATOMIC. A check-then-write flow - SELECT for an
-          existing key, then mutate, then record the key - is a FAIL even though
-          it mentions the key, because two concurrent calls can both observe no
-          prior key and both perform the write. AGENTS.md requires the key to be
+          The claim must be SERIALIZED against concurrent callers. Two forms
+          satisfy this and neither is a failure:
+
+          (a) THE HOUSE PATTERN, which is the normal answer here:
+          `check_idempotency()` / `check_idempotency_intent()` -> mutate ->
+          `save_idempotency()`. Recording the key AFTER the mutation is correct
+          in this form because the helper serializes the claim; several hundred
+          migrations in this repository use it. PASS it. Do not demand
+          `INSERT ... ON CONFLICT` from a migration that already uses the shared
+          helpers - that would fail the repo's own audited standard and turn
+          this check into noise.
+
+          (b) A self-contained atomic claim, such as
+          `INSERT ... ON CONFLICT DO NOTHING` against a unique idempotency
+          record, with the mutation proceeding only when the claim was won.
+
+          FAIL a HAND-ROLLED check-then-write that uses NEITHER: a plain SELECT
+          for an existing key, then mutate, then record, with no shared helper
+          and no unique-constraint claim. Two concurrent calls can both observe
+          no prior key and both write. AGENTS.md requires the key to be
           "actually enforced", and a race that duplicates a money or inventory
-          write does not enforce anything. Require the key to be claimed in a
-          single atomic step - for example `INSERT ... ON CONFLICT DO NOTHING`
-          against a unique idempotency record, with the mutation proceeding only
-          when the claim was won. Otherwise PASS.
+          write enforces nothing. Otherwise PASS.
 
       - name: Money not exact whole cents
         mode: error
