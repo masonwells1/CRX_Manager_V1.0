@@ -6,11 +6,6 @@
 
 STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMRD)"
 
-if [ -z "$STAGED_FILES" ]; then
-  echo "✅ Nothing staged — skipping pre-commit checks."
-  exit 0
-fi
-
 echo "📒 Checking ledger requirement..."
 node scripts/check-ledger-update.mjs || {
   echo ""
@@ -26,6 +21,11 @@ node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit ||
   echo "❌ PRIVATE ARTIFACT CONTAINMENT FAILED — move the artifact outside this repository."
   exit 1
 }
+
+if [ -z "$STAGED_FILES" ]; then
+  echo "✅ No staged paths — containment passed; skipping staged-file checks."
+  exit 0
+fi
 
 # Both validators already restrict themselves to staged files and exit quickly
 # when their file type is absent.

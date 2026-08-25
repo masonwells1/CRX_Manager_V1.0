@@ -27,11 +27,12 @@ manifest parity, and conditional dependency integrity. Full lint, typecheck, gua
 coverage, and build remain in GitHub CI; typecheck and build also remain in pre-push. Commit no
 longer regenerates or auto-stages the workflow map.
 
-**`.github/workflows/ci.yml`** — removed the non-code `edited` PR trigger, added
-`ready_for_review`, and added concurrency that cancels stale runs only for the same PR. Pushes to
-`main` use unique run groups and are never cancelled, preserving the deployment proof record. No
-docs-only bypass was added: control files, scripts, migrations, package files, and the schema
-registry still require the normal full CI path.
+**`.github/workflows/ci.yml`** — added `ready_for_review`, retained `edited` only for base-branch
+retargets (title/body edits create a zero-runner skipped workflow), and added concurrency that
+cancels stale runs only for the same PR. Pushes to `main` use unique run groups and are never
+cancelled, preserving the deployment proof record. Lightweight doc-drift and normalized
+workflow-map freshness checks now run in CI. No docs-only bypass was added: control files, scripts,
+migrations, package files, and the schema registry still require the normal full CI path.
 
 **Two git-config settings were falsifying local state** and were fixed with Mason's approval. Both
 were invisible to every existing guard because neither is a file in the repository:

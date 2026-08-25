@@ -8,7 +8,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, edited]
 
 # Supersede stale runs only for the same pull request. Pushes to main receive a
 # run-id group and are never cancelled, preserving the durable deploy record.
@@ -24,7 +24,11 @@ permissions:
 jobs:
   phase3-private-artifact-containment:
     name: Phase 3C Candidate Containment (CI)
-    if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'
+    # Keep the edited webhook only for a base-branch retarget. Title/body edits
+    # produce a zero-runner skipped workflow instead of repeating full CI.
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main') &&
+      (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
     runs-on: ubuntu-latest
     timeout-minutes: 12
     # This is intentionally the first content-processing job. It uses only
@@ -187,6 +191,20 @@ jobs:
 
       - name: Agent workflow truth-state and sync tests
         run: npm run test:agent-workflows
+
+      - name: Documentation consistency
+        run: npm run check:docs
+
+      - name: Workflow map freshness (ignore generated date stamp)
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(mktemp)"
+          after="$(mktemp)"
+          sed -E 's/Updated [^<]+/Updated <date>/' docs/app-workflow-map.html > "$before"
+          node scripts/generate-workflow-map.mjs
+          sed -E 's/Updated [^<]+/Updated <date>/' docs/app-workflow-map.html > "$after"
+          diff -u "$before" "$after"
 
       - name: RPC contract and idempotency inventory tests
         run: npm run test:contracts
