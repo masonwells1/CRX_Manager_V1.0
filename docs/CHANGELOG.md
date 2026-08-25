@@ -72,7 +72,10 @@ could not determine, or an item it hid. It cannot speak to decisions that live o
 GitHub: a pull request held back by a judgement call recorded only in session notes looks
 unblocked to patrol, which is why parking must be marked with a label on the PR itself.
 
-- **Read-only by construction.** The collector issues GETs and non-mutating `git` queries.
+- **Read-only by construction.** The collector issues GETs and read-only `git` queries —
+  read-only in the sense that no tracked file and no business data changes. `git status`
+  and `git diff` still refresh Git's index metadata under `.git/` as a side effect of
+  reading, which is why the fsmonitor override matters on every call site.
   An earlier design proposed one automatic `gh pr update-branch` action; two adversarial
   Codex (`gpt-5.6-sol`, high effort) review rounds on the plan established that the
   classify-then-act window could not be made race-free against 28 concurrent sessions or
@@ -104,7 +107,8 @@ unblocked to patrol, which is why parking must be marked with a label on the PR 
 - Proven by running against the live queue, not only by tests: the run surfaced two real
   defects unit tests would not have — a decision-table hole routing nine ordinary
   worktrees into the fallback, and a cited "full queue" path that was never written.
-  153 assertions pass at this checkpoint (327 by the end of the branch), including a mutation set that flips each all-clear condition
+  153 assertions pass at this checkpoint (355 by the end of the branch: classify 110,
+  render 82, sources 128, trusted-exec 35), including a mutation set that flips each all-clear condition
   individually and asserts the phrase disappears every time.
 - **`/patrol` is interactive only — Mason's scoping decision, 2026-08-24.** It is not
   scheduled and must not be. Three adversarial review rounds each found a *new* hole in the

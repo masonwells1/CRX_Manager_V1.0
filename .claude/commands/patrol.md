@@ -30,9 +30,12 @@ node scripts/patrol/patrol-report.mjs
 ## What patrol does and does not do
 
 - **Read-only against everything that matters, and precise about what that means.** Patrol
-  issues only read requests to GitHub and non-mutating `git` queries: it never updates a
+  issues only read requests to GitHub and read-only `git` queries: it never updates a
   branch, merges, comments, labels, applies a migration, deploys, or restarts a loop, and
-  it never writes to the repository or the database. It *does* write its own local state —
+  it never changes tracked repository content or the database. Precisely: `git status` and
+  `git diff` refresh Git's own index metadata inside `.git/` as a side effect of reading,
+  so "read-only" means nothing tracked and no business data changes — not that no byte
+  under `.git/` is touched. It *does* write its own local state —
   the per-run snapshot, a heartbeat, a lock, and rotated logs, all under
   `%LOCALAPPDATA%\crx-patrol\`, outside every Git worktree. If a request is "run nothing
   that writes anything at all", say that, rather than calling patrol write-free.
