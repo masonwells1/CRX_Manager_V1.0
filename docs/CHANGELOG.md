@@ -51,6 +51,12 @@ All significant development milestones, in reverse chronological order within ea
   before that hook can execute. The exact safe worktree-local
   `core.hooksPath=.husky` setting remains available; other executable Git
   configuration stays denied.
+- Native patch identity inspection now has a one-million-character payload
+  ceiling and a 256-unique-destination ceiling, deduplicates destinations by
+  resolved path, and builds the protected identity map only once per hook
+  invocation. A real 2,000-repeat patch regression proves a protected target at
+  the end is still identified well below the 15-second host timeout; removing
+  deduplication makes that regression fail.
 - Windows device and file IDs stay in full-precision bigint form so unrelated
   files cannot collide after numeric rounding and be mistaken for hard links.
 - The exact-review proof directory can no longer be aliased through a Windows

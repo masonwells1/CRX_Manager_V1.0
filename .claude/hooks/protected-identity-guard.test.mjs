@@ -119,6 +119,35 @@ if (linked) {
   ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: unified })), "a RAW STRING unified-diff patch destination is denied");
   ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: mixed })), "a RAW STRING patch is denied when ANY destination aliases a protected file");
   eq(runHook({ tool_name: "apply_patch", tool_input: benign }).stdout.trim(), "", "a RAW STRING patch touching only ordinary files is allowed");
+  // Worst-case duplicate-target regression from the exact review: a protected
+  // destination after 2,000 valid repeated destinations must still deny well
+  // below the 15-second host deadline. The identity map is built once and the
+  // repeated ordinary destination is checked once.
+  const repeatedHeader = "*** Update File: ordinary.txt";
+  const repeatedPatch = [
+    "*** Begin Patch",
+    ...Array.from({ length: 2_000 }, () => repeatedHeader),
+    `*** Update File: ${alias}`,
+    "@@",
+    "+hostile",
+    "*** End Patch",
+  ].join("\n");
+  ok(repeatedPatch.length < 100_000, "the duplicate-target probe stays below the payload budget");
+  const repeatedStartedAt = process.hrtime.bigint();
+  const repeatedResult = runHook({ tool_name: "apply_patch", tool_input: repeatedPatch });
+  const repeatedElapsedMs = Number(process.hrtime.bigint() - repeatedStartedAt) / 1_000_000;
+  ok(isDeny(repeatedResult) && repeatedResult.stdout.includes("second pathname"), "deduplication still reaches and identifies the protected destination after 2,000 repeats");
+  ok(repeatedElapsedMs < 5_000, `the worst-case duplicate-target check stays safely below the 15s host timeout (actual ${repeatedElapsedMs.toFixed(0)}ms)`);
+
+  const excessiveTargetsPatch = [
+    "*** Begin Patch",
+    ...Array.from({ length: 257 }, (_, index) => `*** Update File: ${path.join(scratch, `ordinary-${index}.txt`)}`),
+    "*** End Patch",
+  ].join("\n");
+  const excessiveTargetsResult = runHook({ tool_name: "apply_patch", tool_input: excessiveTargetsPatch });
+  ok(isDeny(excessiveTargetsResult) && excessiveTargetsResult.stdout.includes("256 unique destinations"), "more than 256 unique patch destinations fail closed before identity work");
+  const oversizedResult = runHook({ tool_name: "apply_patch", tool_input: "x".repeat(1_000_001) });
+  ok(isDeny(oversizedResult) && oversizedResult.stdout.includes("1000000-character inspection budget"), "an oversized payload fails closed before JSON or patch parsing");
   // Hosts that JSON-encode the object form must still be understood as an object
   // rather than mistaken for a patch body.
   ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: JSON.stringify({ patch: beginPatch }) })), "a JSON-encoded string tool_input is decoded and denied");

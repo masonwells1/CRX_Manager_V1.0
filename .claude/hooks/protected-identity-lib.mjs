@@ -272,10 +272,10 @@ export function protectedProofCreationReason(absTarget) {
 //
 // The protected file's own path is not a second name for itself — that edit is
 // the legitimate one every other guard is there to inspect.
-export function aliasesProtectedFile(absTarget, root) {
+export function aliasesProtectedFile(absTarget, root, protectedPaths = null) {
   const identity = fileIdentity(absTarget);
   if (!identity) return false;
-  const ownPath = protectedFileIdentityPaths(root).get(identity);
+  const ownPath = (protectedPaths || protectedFileIdentityPaths(root)).get(identity);
   if (!ownPath) return false;
   return pathKey(absTarget) !== pathKey(ownPath);
 }

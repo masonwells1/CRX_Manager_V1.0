@@ -26,14 +26,22 @@ import {
   aliasesProtectedFile,
   canonicalizeThroughExistingAncestor,
   protectedControlPathReason,
+  protectedFileIdentityPaths,
   protectedProofCreationReason,
 } from "./protected-identity-lib.mjs";
 import { extractPatchDestinations, normalizeToolInput } from "./codex-push-lib.mjs";
 import path from "node:path";
 
+const MAX_PAYLOAD_CHARS = 1_000_000;
+const MAX_UNIQUE_TARGETS = 256;
 let raw = "";
 process.stdin.setEncoding("utf8");
-for await (const chunk of process.stdin) raw += chunk;
+for await (const chunk of process.stdin) {
+  raw += chunk;
+  if (raw.length > MAX_PAYLOAD_CHARS) {
+    out("deny", `PROTECTED IDENTITY GUARD: payload exceeds the ${MAX_PAYLOAD_CHARS}-character inspection budget and is denied fail-closed.`);
+  }
+}
 
 function out(decision, reason) {
   if (decision === "allow") {
@@ -68,7 +76,7 @@ try {
   // so parse the patch's destination headers as well. Only the headers, never
   // the whole body: added prose may legitimately mention a protected path, and
   // scanning content would deny ordinary documentation edits.
-  const targets = [
+  const candidates = [
     input.file_path,
     input.path,
     input.filePath,
@@ -79,12 +87,24 @@ try {
       .flatMap((body) => extractPatchDestinations(body)),
   ].filter((candidate) => typeof candidate === "string" && candidate);
 
-  if (targets.length === 0) out("allow");
+  if (candidates.length === 0) out("allow");
 
   const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-
-  for (const target of targets) {
+  const seen = new Set();
+  const targets = [];
+  for (const target of candidates) {
     const abs = path.isAbsolute(target) ? path.resolve(target) : path.resolve(cwd, target);
+    const key = process.platform === "win32" ? abs.toLowerCase() : abs;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    targets.push({ target, abs });
+    if (targets.length > MAX_UNIQUE_TARGETS) {
+      out("deny", `PROTECTED IDENTITY GUARD: payload names more than ${MAX_UNIQUE_TARGETS} unique destinations and is denied fail-closed.`);
+    }
+  }
+  const protectedIdentities = protectedFileIdentityPaths(cwd);
+
+  for (const { target, abs } of targets) {
 
     // Git control files decide what Git EXECUTES on the next ordinary command, so
     // they are checked by pathname as well as identity: a file that does not exist
@@ -112,7 +132,7 @@ try {
       );
     }
 
-    if (aliasesProtectedFile(abs, cwd)) {
+    if (aliasesProtectedFile(abs, cwd, protectedIdentities)) {
       out(
         "deny",
         `PROTECTED IDENTITY GUARD: ${target} is a second pathname for a protected file (same device and inode). Edit the real path so the guard hooks can inspect the change.`,
