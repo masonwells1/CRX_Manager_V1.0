@@ -38,6 +38,11 @@ All significant development milestones, in reverse chronological order within ea
   `cwd`/`workdir`, while Git provenance and protected-file identity sets remain
   anchored to the repository root. Missing or conflicting execution-directory
   fields fail closed, including the Codex adapter and MCP routes.
+- Indirect patch and archive writers fail closed when their output paths come
+  from uninspected input bytes. This covers Git patch/index materializers and
+  common archive extractors while retaining explicit read-only listing modes;
+  real shell and MCP regressions prove an innocently named patch cannot create
+  a forged exact-review proof.
 - Windows device and file IDs stay in full-precision bigint form so unrelated
   files cannot collide after numeric rounding and be mistaken for hard links.
 - The exact-review proof directory can no longer be aliased through a Windows

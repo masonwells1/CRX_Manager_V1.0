@@ -181,7 +181,7 @@ function runtimeExecutionSegments(command) {
     .pop()
     .replace(/\.(?:exe|cmd|bat|ps1)$/i, "")
     .toLowerCase();
-  const wrappers = new Set(["command", "builtin", "env", "sudo", "doas", "exec", "nohup", "nice", "timeout", "wsl"]);
+  const wrappers = new Set(["command", "builtin", "env", "sudo", "doas", "exec", "nohup", "nice", "timeout", "wsl", "busybox", "toybox"]);
   const segments = [];
   for (let start = 0; start < tokens.length;) {
     while (start < tokens.length && hardBoundary(tokens[start])) start += 1;
@@ -198,6 +198,90 @@ function runtimeExecutionSegments(command) {
     start = end + 1;
   }
   return segments;
+}
+
+// Some tools derive their output paths from bytes that are not present in the
+// command line (patch headers, archive members, or a Git object/index). Path
+// guards cannot prove those destinations safe without opening and validating
+// the input artifact first, so fail closed on the mutating modes. Read-only
+// listing/test modes remain available where the command has an unambiguous one.
+function indirectFilesystemWriterReason(command) {
+  const reason = "Blocked indirect filesystem writer because its output paths come from uninspected patch, archive, or Git-object content.";
+  for (const { executable, args } of runtimeExecutionSegments(command)) {
+    const lowerArgs = args.map((argument) => String(argument || "").toLowerCase());
+    if (["bash", "sh", "dash", "zsh", "ksh"].includes(executable)) {
+      const optionIndex = lowerArgs.findIndex((argument) => /^-[a-z]*c[a-z]*$/.test(argument));
+      const nested = optionIndex >= 0 ? args[optionIndex + 1] || "" : "";
+      if (nested && nested !== command) {
+        const nestedReason = indirectFilesystemWriterReason(nested);
+        if (nestedReason) return nestedReason;
+      }
+    }
+    if (["powershell", "pwsh"].includes(executable)) {
+      const optionIndex = lowerArgs.findIndex((argument) => /^(?:-{1,2}c|\/c|-{1,2}command(?:withargs)?|\/command(?:withargs)?)(?::|=|$)/.test(argument));
+      if (optionIndex >= 0) {
+        const attached = /^(?:-{1,2}command(?:withargs)?|\/command(?:withargs)?|-{1,2}c|\/c)(?:(?::|=)(.*)|$)/i.exec(args[optionIndex])?.[1] || "";
+        const nested = attached || args[optionIndex + 1] || "";
+        if (nested && nested !== command) {
+          const nestedReason = indirectFilesystemWriterReason(nested);
+          if (nestedReason) return nestedReason;
+        }
+      }
+    }
+    if (executable === "cmd") {
+      const optionIndex = lowerArgs.findIndex((argument) => /^(?:\/[a-z](?::[a-z]+)?)*\/[ck]/.test(argument));
+      if (optionIndex >= 0) {
+        const attached = args[optionIndex].replace(/^(?:\/[a-z](?::[a-z]+)?)*\/[ck]/i, "");
+        const nested = attached || args[optionIndex + 1] || "";
+        if (nested && nested !== command) {
+          const nestedReason = indirectFilesystemWriterReason(nested);
+          if (nestedReason) return nestedReason;
+        }
+      }
+    }
+    if (executable === "git") {
+      let index = 0;
+      while (index < lowerArgs.length) {
+        const argument = lowerArgs[index];
+        if (["-c", "--config-env", "--git-dir", "--work-tree", "--namespace", "--super-prefix"].includes(argument)) {
+          index += 2;
+          continue;
+        }
+        if (/^-c.+/.test(argument)
+          || /^(?:--config-env|--git-dir|--work-tree|--namespace|--super-prefix)=/.test(argument)
+          || /^(?:--bare|--no-pager|--paginate|--literal-pathspecs|--no-literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-replace-objects|--no-optional-locks)$/.test(argument)) {
+          index += 1;
+          continue;
+        }
+        if (argument.startsWith("-")) break;
+        if (["apply", "am", "checkout-index", "clone"].includes(argument)) return reason;
+        if (argument === "read-tree" && lowerArgs.slice(index + 1).some((value) => /^-[^-]*u/.test(value))) return reason;
+        break;
+      }
+    }
+    if (executable === "patch") return reason;
+    if (["expand-archive", "cabextract", "extrac32"].includes(executable)) return reason;
+    if (["tar", "bsdtar"].includes(executable)) {
+      const first = lowerArgs[0] || "";
+      if (lowerArgs.some((argument) => /^(?:--extract|--get)(?:=|$)/.test(argument) || /^-[^-]*x/.test(argument))
+        || (/^[a-z]+$/.test(first) && first.includes("x"))) return reason;
+    }
+    if (executable === "unzip") {
+      const readOnlyMode = lowerArgs.some((argument) => /^(?:-l|-t|-v|-z|-p|-c|--help|--version)$/.test(argument));
+      if (!readOnlyMode) return reason;
+    }
+    if (["7z", "7za", "7zr"].includes(executable)
+      && lowerArgs.find((argument) => !argument.startsWith("-"))?.match(/^[xe]$/)) return reason;
+    if (executable === "jar") {
+      const first = lowerArgs.find((argument) => !argument.startsWith("--")) || "";
+      if (/^-?[a-z]*x[a-z]*$/.test(first) || lowerArgs.some((argument) => argument === "--extract")) return reason;
+    }
+    if (executable === "cpio" && lowerArgs.some((argument) => argument === "--extract" || /^-[^-]*i/.test(argument))) return reason;
+    if (executable === "pax" && lowerArgs.some((argument) => /^-[^-]*r/.test(argument))) return reason;
+    if (["ar", "llvm-ar"].includes(executable)
+      && /^-?[a-z]*x[a-z]*$/.test(lowerArgs.find((argument) => !argument.startsWith("--")) || "")) return reason;
+  }
+  return null;
 }
 
 function runtimePreloadControlReason(command) {
@@ -2932,6 +3016,8 @@ export function checkDangerousCommand(cmd) {
   }
   const producerReason = checkMaintenanceProducerInvocation(rawText);
   if (producerReason) return producerReason;
+  const indirectWriterReason = indirectFilesystemWriterReason(rawText);
+  if (indirectWriterReason) return indirectWriterReason;
   if (nodeOptionsAssignmentMentioned(rawText)) {
     return "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks.";
   }
@@ -3377,13 +3463,10 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     }
     if (["powershell", "pwsh"].includes(commandName)) {
       const optionIndex = args.findIndex((token) =>
-        /^(?:(?:--?|\/)c|(?:--?|\/)command(?:w(?:ithargs)?)?)(?::|=|$)/i.test(token.value)
+        /^(?:-{1,2}c|\/c|-{1,2}command(?:withargs)?|\/command(?:withargs)?)(?::|=|$)/i.test(token.value)
       );
       if (optionIndex < 0) return "";
-      const attached = args[optionIndex].value.replace(
-        /^(?:(?:--?|\/)c|(?:--?|\/)command(?:w(?:ithargs)?)?)(?::|=)?/i,
-        ""
-      );
+      const attached = /^(?:-{1,2}command(?:withargs)?|\/command(?:withargs)?|-{1,2}c|\/c)(?:(?::|=)(.*)|$)/i.exec(args[optionIndex].value)?.[1] || "";
       return attached || args[optionIndex + 1]?.value || "";
     }
     if (commandName === "cmd") {
@@ -3427,6 +3510,8 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     }
     const body = nestedBody(words, cursor);
     if (body) {
+      const nestedIndirectWriter = indirectFilesystemWriterReason(body);
+      if (nestedIndirectWriter) return nestedIndirectWriter;
       const nestedReason = executionContextShiftReason(body, base, depth + 1);
       if (nestedReason) return nestedReason;
     }
@@ -3447,6 +3532,8 @@ export function checkCommandDeep(cmd, cwd, options = {}) {
   if (npmLifecycleReason) return npmLifecycleReason;
   const gitEnvironmentReason = gitControlEnvironmentAssignmentReason(cmd);
   if (gitEnvironmentReason) return gitEnvironmentReason;
+  const indirectWriterReason = indirectFilesystemWriterReason(cmd);
+  if (indirectWriterReason) return indirectWriterReason;
   const contextShift = executionContextShiftReason(cmd, cwd);
   if (contextShift) return contextShift;
   const fileExecutorInspector = createReviewedExecutorInspector(cwd, {
