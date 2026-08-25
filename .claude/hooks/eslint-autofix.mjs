@@ -2,7 +2,7 @@
 // Auto-eslint --fix on TypeScript/TSX edits in src/.
 // PostToolUse hook — runs AFTER a successful Write/Edit. Cannot block (the file is already written).
 // Purpose: catch import-order, semi, prefer-const, and the local-rules warnings (assertRpcResult, etc.)
-// at edit time instead of at pre-commit time, so the model sees the lint output immediately.
+// at edit time instead of waiting for explicit preflight or CI, so the model sees the lint output immediately.
 //
 // Behavior:
 //   - Only acts on .ts / .tsx files in src/
@@ -54,8 +54,8 @@ if (!isTs || isTest || !inSrc || excluded) emit();
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const eslintBin = path.join(projectDir, "node_modules", "eslint", "bin", "eslint.js");
 
-// No local eslint (deps not installed yet) — skip silently; pre-commit lint is
-// the real gate. Deliberately no npx fallback: interpolating the edited file's
+// No local eslint (deps not installed yet) — skip silently; explicit preflight
+// and CI lint are the durable gates. Deliberately no npx fallback: interpolating the edited file's
 // path into a shell string is a command-injection surface (CodeRabbit, PR #413).
 if (!existsSync(eslintBin)) emit();
 

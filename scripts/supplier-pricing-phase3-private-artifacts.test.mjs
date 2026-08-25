@@ -1389,10 +1389,10 @@ git() { return 0; }
   const preCommit = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-commit'), 'utf8'); const commitMsg = readFileSync(path.join(REPO_ROOT, '.husky', 'commit-msg'), 'utf8'); const prePush = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-push'), 'utf8'); const ci = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'); const packageScripts = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).scripts;
   const trustedTargetWorkflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'phase3-private-artifact-containment.yml'), 'utf8');
   assert(preCommit.indexOf('check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit') < preCommit.indexOf('validate-sql.sh'));
-  const workflowMapStage = preCommit.indexOf('git add docs/app-workflow-map.html');
-  const workflowMapContainment = preCommit.indexOf('check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit', workflowMapStage);
-  assert(workflowMapStage >= 0 && workflowMapContainment > workflowMapStage, 'the real pre-commit hook must rerun Phase 3C containment after staging docs/app-workflow-map.html');
-  assert.equal((preCommit.match(/check-supplier-pricing-phase3-private-artifacts\.mjs --pre-commit/g) ?? []).length, 2, 'pre-commit must run containment exactly once before validation and once after staging the generated workflow map');
+  assert(!preCommit.includes('git add docs/app-workflow-map.html'), 'pre-commit must not mutate or auto-stage the reviewed index');
+  assert.equal((preCommit.match(/check-supplier-pricing-phase3-private-artifacts\.mjs --pre-commit/g) ?? []).length, 1, 'pre-commit must run containment exactly once before every staged-file check');
+  assert(ci.includes('Workflow map freshness (ignore generated date stamp)'), 'CI must verify workflow-map freshness after pre-commit stops generating it');
+  assert(ci.includes('npm run check:docs'), 'CI must retain the lightweight documentation consistency check');
   assert(commitMsg.includes('check-supplier-pricing-phase3-private-artifacts.mjs --commit-msg "${1:-}"'));
   const benignMessageFile = path.join(temp, 'benign-commit-message.txt'); writeFileSync(benignMessageFile, 'ordinary synthetic commit message\n');
   assert.deepEqual(checkCommitMessagePrivateArtifactContainment(benignMessageFile), { scanned_logical_bytes: 34 });
@@ -1454,8 +1454,10 @@ git() { return 0; }
   assert(ci.includes('needs: [phase3-private-artifact-containment, sql-validation]'));
   assert.match(ci, /^  pull_request:\r?\n    branches: \[main\]\r?$/m, 'CI pull-request trigger must restrict exactly to main so containment dependencies cannot skip open');
   assert(ci.includes('permissions:\n  contents: read'));
-  assert(ci.includes('types: [opened, reopened, synchronize, edited]'));
-  assert(ci.includes("if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'"));
+  assert(ci.includes('types: [opened, reopened, synchronize, ready_for_review, edited]'));
+  assert(candidateContainmentJob.includes("github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'"));
+  assert(candidateContainmentJob.includes("github.event.action != 'edited' || github.event.changes.base.ref.from != ''"), 'title/body edits must skip runner work while base retargets rerun containment');
+  assert(ci.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"), 'only pull-request concurrency groups may cancel stale runs');
   const ciCheckoutBlocks = ci.split('uses: actions/checkout@v7').slice(1);
   assert.equal(ciCheckoutBlocks.length, 5, 'CI checkout count changed; review least-privilege settings');
   for (const block of ciCheckoutBlocks) {

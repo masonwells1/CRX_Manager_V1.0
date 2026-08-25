@@ -12,7 +12,8 @@
  * content (lifecycle SVGs, problem descriptions, CSS) is preserved.
  *
  * Run manually : node scripts/generate-workflow-map.mjs
- * Auto-run     : wired into .husky/pre-commit (runs before every commit)
+ * CI check     : regenerated in CI and compared after normalizing the date stamp
+ * Pre-commit   : never auto-runs or stages this file; callers stage it explicitly
  */
 
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'fs';

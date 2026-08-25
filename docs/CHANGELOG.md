@@ -25,7 +25,9 @@ tamper prevention** — harness-enforced, not OS-enforced, and it cannot stop `g
 ledger, private-artifact containment, staged SQL/frontend validation, conditional Claude/Codex
 manifest parity, and conditional dependency integrity. Full lint, typecheck, guard/unit tests,
 coverage, and build remain in GitHub CI; typecheck and build also remain in pre-push. Commit no
-longer regenerates or auto-stages the workflow map.
+longer regenerates or auto-stages the workflow map. The containment regression contract and active
+preflight/ship/gauntlet/bug-hunt instructions were updated to the same no-index-mutation model;
+generated Codex adapters remain synchronized from the canonical Claude commands.
 
 **`.github/workflows/ci.yml`** — added `ready_for_review`, retained `edited` only for base-branch
 retargets (title/body edits create a zero-runner skipped workflow), and added concurrency that
