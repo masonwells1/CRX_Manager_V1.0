@@ -578,6 +578,14 @@ implicit-catalog-first control. Each load-bearing defense was removed in turn
 and its exact regression failed; the restored focused suite now passes 445
 assertions.
 
+The next exact-head review found that `GET STACKED DIAGNOSTICS` could overwrite
+an otherwise trusted `auth.uid()` local without using the assignment forms the
+reader tracked. A caught exception could therefore copy caller-controlled text
+into the actor local before the refusal and make a forged actor appear equal.
+Diagnostics targets, including block-qualified and opaque Unicode spellings,
+now invalidate the trusted local binding. The reviewer-supplied laundering flow
+is covered directly; the focused suite now passes 446 assertions.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —

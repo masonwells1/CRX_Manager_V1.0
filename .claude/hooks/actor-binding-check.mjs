@@ -1336,8 +1336,8 @@ function actorReferencePattern(reference) {
 
 /** A legacy guard may compare the actor parameter to a local v_actor-style
  * binding, but only when that local is initialized unconditionally from
- * auth.uid() exactly once and is not overwritten through assignment or
- * SELECT ... INTO. */
+ * auth.uid() exactly once and is not overwritten through assignment,
+ * SELECT ... INTO, or GET [STACKED] DIAGNOSTICS. */
 function stableAuthUidBindings(structuralBody, beforeIndex, allowUnqualifiedUuid = true) {
   const prefix = structuralBody.slice(0, beforeIndex);
   const bindings = new Set();
@@ -1392,6 +1392,17 @@ function stableAuthUidBindings(structuralBody, beforeIndex, allowUnqualifiedUuid
       `\\b(?:FOR|FOREACH)\\b\\s+[^;]*?${ref}[^;]*?\\bIN\\b`,
       "i"
     );
+    // GET DIAGNOSTICS and GET STACKED DIAGNOSTICS assign their status items
+    // into PL/pgSQL variables without using the ordinary assignment or INTO
+    // forms above. In an exception handler, MESSAGE_TEXT can therefore launder
+    // a caller-controlled UUID into a local that was initialized from
+    // auth.uid(). Treat any diagnostics assignment to this trusted binding as
+    // an overwrite, including function/block-qualified targets.
+    const diagnosticsTargetRe = new RegExp(
+      `\\bGET\\s+(?:(?:CURRENT|STACKED)\\s+)?DIAGNOSTICS\\b[^;]*?` +
+        `${optionalBlockQualifier}${ref}\\s*(?::=|=(?!=))`,
+      "i"
+    );
     // PostgreSQL decodes U&"..." identifiers before resolving a PL/pgSQL
     // variable. This reader deliberately treats that spelling as opaque, so a
     // Unicode-escaped assignment target cannot preserve a trusted local bind.
@@ -1410,13 +1421,20 @@ function stableAuthUidBindings(structuralBody, beforeIndex, allowUnqualifiedUuid
       `\\b(?:FOR|FOREACH)\\b\\s+${opaqueUnicodeTarget}[^;]*?\\bIN\\b`,
       "i"
     );
+    const opaqueUnicodeDiagnosticsTargetRe = new RegExp(
+      `\\bGET\\s+(?:(?:CURRENT|STACKED)\\s+)?DIAGNOSTICS\\b[^;]*?` +
+        `${opaqueUnicodeTarget}\\s*(?::=|=(?!=))`,
+      "i"
+    );
     if (assignments.length === 1 &&
         !equalsAssignmentRe.test(structuralBody) &&
         !intoRe.test(structuralBody) &&
         !loopTargetRe.test(structuralBody) &&
+        !diagnosticsTargetRe.test(structuralBody) &&
         !opaqueUnicodeAssignmentRe.test(structuralBody) &&
         !opaqueUnicodeIntoRe.test(structuralBody) &&
-        !opaqueUnicodeLoopTargetRe.test(structuralBody)) {
+        !opaqueUnicodeLoopTargetRe.test(structuralBody) &&
+        !opaqueUnicodeDiagnosticsTargetRe.test(structuralBody)) {
       bindings.add(name);
     }
   }

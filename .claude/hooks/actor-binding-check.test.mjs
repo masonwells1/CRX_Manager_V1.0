@@ -2349,6 +2349,23 @@ ok(!isDeny(r), "the current-August stable v_actor refusal remains compatible");
 
 r = runHook(fn(`
   DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
+    BEGIN
+      RAISE EXCEPTION '%', p_performed_by;
+    EXCEPTION WHEN OTHERS THEN
+      GET STACKED DIAGNOSTICS v_actor = MESSAGE_TEXT;
+    END;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    INSERT INTO financial_audit_log (actor_user_id) VALUES (v_actor);
+  END
+`));
+ok(isDeny(r), "GET STACKED DIAGNOSTICS cannot launder a forged actor into a trusted auth.uid local");
+
+r = runHook(fn(`
+  DECLARE
     v_actor uuid := auth.uid() OPERATOR(public.##) p_target;
   BEGIN
     IF p_performed_by IS DISTINCT FROM v_actor THEN
