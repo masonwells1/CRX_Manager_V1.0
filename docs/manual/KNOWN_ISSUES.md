@@ -1406,7 +1406,18 @@ REFUSES               "proxy.invalid/git/masonwells1/crx_backups" <- http://prox
 
 Same root cause as the push-guard instance above — no notion of an approved rewrite target — and the same safe failure direction: it refuses rather than writing private notes to an unverified address. Parked for the same reason, with one addition specific to this script: verifying a fix needs both a proxy-carrying session **and** a real private `CRX_Backups` clone to stage into, so the end-to-end proof is not available from an ordinary session at all. Fix both instances together; one approved-rewrite-target notion should serve both call sites.
 
-### Third instance — the executable-config classifier misses `core.hooksPath` — (b) FIXED 2026-08-05, (a) still parked
+### Third instance — the executable-config classifier misses `core.hooksPath` — RESOLVED 2026-08-25
+
+**2026-08-25 resolution:** PR #432 now treats hooks as executable provenance,
+not merely configuration text. Git template/init and hidden-path materializers
+are denied. Every commit/merge/push/checkout/rebase-style command must resolve
+all active hooks to this checkout's tracked `.husky` directory, and each hook's
+bytes must match a pinned trusted main-branch blob. A real regression uses Git
+to install a hostile `pre-commit` from an innocently named template, then proves
+the production guard denies the second `git commit` before the hook executes.
+The one permitted configuration write is the exact worktree-local
+`core.hooksPath=.husky` value; generated `.husky/_` dispatchers and external or
+shared-checkout hook paths are not trusted.
 
 **Found 2026-08-05 by Codex on PR #313 (P1), reproduced the same day. Two separate defects; Codex's report names one and reproduces the other.**
 

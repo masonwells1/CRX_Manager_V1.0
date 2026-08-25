@@ -107,6 +107,8 @@ ok(checkDangerousCommand("npm test -- --no-verify"), "--no-verify blocked");
       "git am ordinary.patch",
       "git checkout-index -a",
       "git read-tree -u HEAD",
+      "git init --template=output/template .",
+      "git init --separate-git-dir=output/gitdir .",
       "patch -i ordinary.patch",
       "tar -xf ordinary.tar",
       "unzip ordinary.zip",
@@ -130,6 +132,48 @@ ok(checkDangerousCommand("npm test -- --no-verify"), "--no-verify blocked");
     rmSync(tmp, { recursive: true, force: true });
   }
 }
+
+// Real two-call Git-hook escape: Git itself installs a hidden hook from an
+// ordinary template, then the production command guard must deny the later
+// commit before Git can execute it.
+{
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "bash-safety-git-template-"));
+  const template = path.join(tmp, "template");
+  const repo = path.join(tmp, "repo");
+  const marker = path.join(repo, "hook-ran.txt");
+  try {
+    const hookDirectory = path.join(template, "hooks");
+    mkdirSync(hookDirectory, { recursive: true });
+    const hostileHook = path.join(hookDirectory, "pre-commit");
+    writeFileSync(hostileHook, `#!/bin/sh\nprintf hostile > "${marker.replaceAll("\\", "/")}"\n`);
+    chmodSync(hostileHook, 0o755);
+    const initialized = spawnSync(fixedTrustedGitExecutable(), ["init", `--template=${template}`, repo], { encoding: "utf8", windowsHide: true });
+    eq(initialized.status, 0, "fixture Git init installs the ordinary template hook");
+    ok(existsSync(path.join(repo, ".git", "hooks", "pre-commit")), "the real Git template materialized the hidden hook destination");
+    const commitCommand = "git commit --allow-empty -m probe";
+    ok(checkCommandDeep(commitCommand, repo, { repositoryRoot: repo })?.includes("effective hook directory"), "a later commit refuses the untrusted installed hook");
+    const result = runHook({ tool_name: "Bash", tool_input: { command: commitCommand, workdir: repo } }, repo);
+    ok(result.stdout.includes('"permissionDecision":"deny"'), "the production Bash hook denies the second call");
+    ok(!existsSync(marker), "the installed hook never executes after the guarded second call");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+eq(
+  checkCommandDeep("git commit --dry-run -m probe", process.cwd(), { repositoryRoot: process.cwd() }),
+  null,
+  "the repository's pinned main-branch Husky hooks keep legitimate commits available",
+);
+eq(
+  checkCommandDeep("git config --worktree core.hooksPath .husky", process.cwd(), { repositoryRoot: process.cwd() }),
+  null,
+  "the exact worktree-local pinned Husky path remains configurable",
+);
+ok(
+  checkCommandDeep("git config --worktree core.hooksPath output/hooks", process.cwd(), { repositoryRoot: process.cwd() })?.includes("persisted executable Git configuration"),
+  "an alternate persisted hook path remains denied",
+);
 // Hard-link aliasing of a protected file (Codex CRX-SEC-01, 2026-08-23). The
 // alias gets an innocuous pathname for the same file data, so a later write
 // through it edits the protected file while every path pattern sees nothing.

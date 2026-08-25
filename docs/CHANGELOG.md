@@ -43,6 +43,14 @@ All significant development milestones, in reverse chronological order within ea
   common archive extractors while retaining explicit read-only listing modes;
   real shell and MCP regressions prove an innocently named patch cannot create
   a forged exact-review proof.
+- Git initialization/template materializers are denied, and commit, merge,
+  push, checkout, rebase, and related hook-triggering commands run only when
+  every active hook is in the repository's `.husky` directory and byte-equal
+  to its pinned trusted main-branch blob. A real two-call regression installs a
+  hostile template hook with Git itself and proves the later commit is denied
+  before that hook can execute. The exact safe worktree-local
+  `core.hooksPath=.husky` setting remains available; other executable Git
+  configuration stays denied.
 - Windows device and file IDs stay in full-precision bigint form so unrelated
   files cannot collide after numeric rounding and be mistaken for hard links.
 - The exact-review proof directory can no longer be aliased through a Windows

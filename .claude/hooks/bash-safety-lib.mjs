@@ -151,7 +151,7 @@ function bootstrapGitSafetyReason(root, gitExecutable, runGit, gitEnv, provenanc
 }
 
 function gitControlEnvironmentAssignmentReason(command) {
-  const names = DANGEROUS_GIT_ENV_NAME_SOURCE;
+  const names = `(?:${DANGEROUS_GIT_ENV_NAME_SOURCE}|HOME|USERPROFILE|XDG_CONFIG_HOME)`;
   const directAssignment = new RegExp(`\\b${names}\\b\\s*=`, "i");
   const providerAssignment = new RegExp(`(?:\\$?env:)${names}\\b[^\\r\\n;&|]*=`, "i");
   const itemWriterNames = [[115, 101, 116], [110, 101, 119], [99, 111, 112, 121], [109, 111, 118, 101]]
@@ -254,7 +254,7 @@ function indirectFilesystemWriterReason(command) {
           continue;
         }
         if (argument.startsWith("-")) break;
-        if (["apply", "am", "checkout-index", "clone"].includes(argument)) return reason;
+        if (["apply", "am", "checkout-index", "clone", "init"].includes(argument)) return reason;
         if (argument === "read-tree" && lowerArgs.slice(index + 1).some((value) => /^-[^-]*u/.test(value))) return reason;
         break;
       }
@@ -1811,6 +1811,64 @@ function tokenizeShellWords(text) {
   return tokens;
 }
 
+const TRUSTED_MAIN_GIT_HOOK_BLOBS = new Map([
+  ["commit-msg", "565950ef6b71f1a822b632600c739c253bf2b3ee"],
+  ["pre-commit", "32abe8ffb383ab521844106862e7fe35ecdb75d2"],
+  ["pre-push", "d0bb99c5dc83ab3f29c2454268c5f5c019ea8512"],
+]);
+const GIT_HOOK_NAMES = [
+  "applypatch-msg", "commit-msg", "fsmonitor-watchman", "post-applypatch", "post-checkout", "post-commit",
+  "post-merge", "post-receive", "post-rewrite", "post-update", "pre-applypatch", "pre-auto-gc", "pre-commit",
+  "pre-merge-commit", "pre-push", "pre-rebase", "pre-receive", "prepare-commit-msg", "proc-receive", "push-to-checkout",
+  "reference-transaction", "sendemail-validate", "update",
+];
+
+function trustedGitHooksReason(cwd, repositoryRoot) {
+  const root = path.resolve(repositoryRoot || cwd || process.cwd());
+  let executable;
+  try { executable = fixedTrustedGitExecutable(); } catch { return "Blocked hook-triggering Git command because the fixed trusted Git executable is unavailable."; }
+  const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GIT_OPTIONAL_LOCKS: "0" };
+  for (const name of Object.keys(env)) {
+    if (/^GIT_(?:CONFIG(?:_.+)?|DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|REPLACE_REF_BASE|COMMON_DIR|NAMESPACE|EXEC_PATH|EXTERNAL_DIFF|DIFF_OPTS|SSH(?:_COMMAND|_VARIANT)?|ASKPASS|PROXY_COMMAND)$/i.test(name)) delete env[name];
+  }
+  const config = spawnSync(executable, ["-C", root, "--no-replace-objects", "config", "--path", "--get", "core.hooksPath"], {
+    encoding: "utf8", windowsHide: true, env, timeout: 2_000,
+  });
+  let rawHookDirectory = String(config.stdout || "").trim();
+  if (config.error || ![0, 1].includes(config.status)) return "Blocked hook-triggering Git command because core.hooksPath could not be verified.";
+  if (!rawHookDirectory) {
+    const defaultHooks = spawnSync(executable, ["-C", root, "--no-replace-objects", "rev-parse", "--git-path", "hooks"], {
+      encoding: "utf8", windowsHide: true, env, timeout: 2_000,
+    });
+    rawHookDirectory = String(defaultHooks.stdout || "").trim();
+    if (defaultHooks.error || defaultHooks.status !== 0 || !rawHookDirectory) {
+      return "Blocked hook-triggering Git command because the default hook directory could not be verified.";
+    }
+  }
+  const hookDirectory = path.isAbsolute(rawHookDirectory) ? path.resolve(rawHookDirectory) : path.resolve(root, rawHookDirectory);
+  const activeHooks = GIT_HOOK_NAMES.filter((name) => existsSync(path.join(hookDirectory, name)));
+  if (activeHooks.length === 0) return null;
+  const trustedDirectory = path.resolve(root, ".husky");
+  const comparable = (value) => process.platform === "win32" ? value.toLowerCase() : value;
+  if (comparable(hookDirectory) !== comparable(trustedDirectory)) {
+    return "Blocked hook-triggering Git command because its effective hook directory is not the repository's pinned .husky directory.";
+  }
+  for (const name of activeHooks) {
+    const expectedBlob = TRUSTED_MAIN_GIT_HOOK_BLOBS.get(name);
+    if (!expectedBlob) return `Blocked hook-triggering Git command because ${name} is not a pinned trusted hook.`;
+    try {
+      const hookPath = path.join(hookDirectory, name);
+      const stat = lstatSync(hookPath);
+      if (!stat.isFile() || stat.isSymbolicLink() || gitBlobHash(readFileSync(hookPath)) !== expectedBlob) {
+        return `Blocked hook-triggering Git command because ${name} differs from its pinned main-branch blob.`;
+      }
+    } catch {
+      return `Blocked hook-triggering Git command because ${name} could not be verified.`;
+    }
+  }
+  return null;
+}
+
 const shellWord = (codes) => String.fromCharCode(...codes);
 const SHELL_FILE_MUTATORS = new Set([
   [115, 101, 116, 45, 99, 111, 110, 116, 101, 110, 116],
@@ -3301,7 +3359,7 @@ function packageExecutionBoundaryReason(command, cwd, inspector) {
   return "Blocked mutable local package executable outside the committed tree; ignored node_modules bytes cannot satisfy exact-HEAD review.";
 }
 
-function executionContextShiftReason(command, cwd, depth = 0) {
+function executionContextShiftReason(command, cwd, depth = 0, repositoryRoot = cwd) {
   if (depth > 4) return "Blocked executor after an unresolved nested working-directory change.";
   const tokens = tokenizeShellWords(command);
   const base = cwd || process.cwd();
@@ -3423,6 +3481,7 @@ function executionContextShiftReason(command, cwd, depth = 0) {
       }
     }
     let subcommand = "";
+    let subcommandIndex = -1;
     for (let index = 0; index < args.length; index += 1) {
       const argument = args[index];
       if (/^(?:--help|--version|-h)$/i.test(argument)) return null;
@@ -3436,6 +3495,7 @@ function executionContextShiftReason(command, cwd, depth = 0) {
       if (/^(?:--bare|--no-pager|--paginate|--literal-pathspecs|--no-literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-replace-objects|--no-optional-locks)$/i.test(argument)) continue;
       if (argument.startsWith("-")) return "Blocked Git execution because its subcommand could not be resolved safely.";
       subcommand = executableName({ value: argument });
+      subcommandIndex = index;
       break;
     }
     if (!subcommand) return null;
@@ -3449,8 +3509,17 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     if (subcommand === "config" && args.some((argument) => /^--rename-section(?:=|$)/i.test(argument))) {
       return "Blocked Git configuration section rename because an inert key can become executable after its section is renamed.";
     }
-    if (subcommand === "config" && args.some(executableConfigNamed)) {
+    const configTail = subcommandIndex >= 0 ? args.slice(subcommandIndex + 1) : [];
+    const safePinnedHooksPathWrite = subcommand === "config"
+      && configTail.filter((argument) => !/^(?:--local|--worktree)$/i.test(argument)).length === 2
+      && /^core\.hookspath$/i.test(configTail.filter((argument) => !/^(?:--local|--worktree)$/i.test(argument))[0] || "")
+      && /^\.husky[\\/]?$/i.test(configTail.filter((argument) => !/^(?:--local|--worktree)$/i.test(argument))[1] || "");
+    if (subcommand === "config" && args.some(executableConfigNamed) && !safePinnedHooksPathWrite) {
       return "Blocked persisted executable Git configuration because it can redirect later Git commands into unreviewed code.";
+    }
+    if (["am", "checkout", "cherry-pick", "commit", "merge", "pull", "push", "rebase", "revert", "switch", "worktree"].includes(subcommand)) {
+      const hookReason = trustedGitHooksReason(base, repositoryRoot || base);
+      if (hookReason) return hookReason;
     }
     return null;
   };
@@ -3512,7 +3581,7 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     if (body) {
       const nestedIndirectWriter = indirectFilesystemWriterReason(body);
       if (nestedIndirectWriter) return nestedIndirectWriter;
-      const nestedReason = executionContextShiftReason(body, base, depth + 1);
+      const nestedReason = executionContextShiftReason(body, base, depth + 1, repositoryRoot);
       if (nestedReason) return nestedReason;
     }
     start = end + 1;
@@ -3534,7 +3603,7 @@ export function checkCommandDeep(cmd, cwd, options = {}) {
   if (gitEnvironmentReason) return gitEnvironmentReason;
   const indirectWriterReason = indirectFilesystemWriterReason(cmd);
   if (indirectWriterReason) return indirectWriterReason;
-  const contextShift = executionContextShiftReason(cmd, cwd);
+  const contextShift = executionContextShiftReason(cmd, cwd, 0, options.repositoryRoot || cwd);
   if (contextShift) return contextShift;
   const fileExecutorInspector = createReviewedExecutorInspector(cwd, {
     ...options,
