@@ -6,7 +6,11 @@ All significant development milestones, in reverse chronological order.
 
 Mason runs 28 worktrees and ~20 open PRs at once, and `/fleet` reports all of it without
 filtering — he reads everything or nothing. `/patrol` answers the narrower question "what
-needs Mason?" and is built so that its silence is trustworthy.
+needs Mason?" and is built so that its silence is trustworthy **about the things it can
+observe** — it never reports an all-clear over a source it failed to read, a condition it
+could not determine, or an item it hid. It cannot speak to decisions that live outside
+GitHub: a pull request held back by a judgement call recorded only in session notes looks
+unblocked to patrol, which is why parking must be marked with a label on the PR itself.
 
 - **Read-only by construction.** The collector issues GETs and non-mutating `git` queries.
   An earlier design proposed one automatic `gh pr update-branch` action; two adversarial
