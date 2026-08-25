@@ -78,6 +78,14 @@ All significant development milestones, in reverse chronological order within ea
   one. Nine regressions place aliases for a worktree pointer, migration, and
   exact-review proof inside the hook directory and prove Write, Edit, and raw
   patch routes all deny; disabling the link-count rule makes the suite fail.
+- Multi-target shell mutators now consume known option values, reject ambiguous
+  option arity, and inspect every effective destination instead of only the
+  first. Live Bash and PowerShell regressions put a harmless file first and a
+  protected hard-link alias later for removal, truncation, timestamp, and item
+  removal routes; restoring first-target-only behavior makes the suite fail.
+- Guard fixtures now create their own ignored package configuration file and
+  wrapper-state directory, eliminating false passes that depended on artifacts
+  left by an earlier interrupted test or review run.
 - The Quote Builder save-resume concurrency regression now creates a fresh
   quote, so crossing the 30-day stale-price threshold cannot bypass the path
   that the test is intended to prove.

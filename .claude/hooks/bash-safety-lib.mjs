@@ -1990,7 +1990,11 @@ export function checkProtectedShellMutation(command, cwd, depth = 0, repositoryR
   const separatePathOption = /^(?:--?|\/)(?:literalpath|filepath|path|destination|dest)$/i;
   const attachedDestinationOption = /^(?:--?|\/)(?:destination|dest)(?::|=)(.+)$/i;
   const separateDestinationOption = /^(?:--?|\/)(?:destination|dest)$/i;
-  const valuedOptions = new Set(["-value", "-inputobject", "-encoding", "-width", "-stream", "-filter", "-include", "-exclude", "-credential"]);
+  const valuedOptions = new Set([
+    "-value", "-inputobject", "-encoding", "-width", "-stream", "-filter", "-include", "-exclude", "-credential",
+    "-erroraction", "-warningaction", "-informationaction", "-progressaction",
+    "-errorvariable", "-warningvariable", "-informationvariable", "-outvariable", "-outbuffer", "-pipelinevariable",
+  ]);
   const operands = (words) => {
     const result = [];
     for (let index = 0; index < words.length; index += 1) {
@@ -2020,6 +2024,72 @@ export function checkProtectedShellMutation(command, cwd, depth = 0, repositoryR
       if (separateDestinationOption.test(String(words[index]?.value || ""))) return words[index + 1];
     }
     return null;
+  };
+  const multiTargetDestinationFirst = new Set([
+    [99, 108, 101, 97, 114, 45, 99, 111, 110, 116, 101, 110, 116],
+    [116, 111, 117, 99, 104], [116, 114, 117, 110, 99, 97, 116, 101],
+    [114, 101, 109, 111, 118, 101, 45, 105, 116, 101, 109],
+    [114, 109], [117, 110, 108, 105, 110, 107],
+  ].map(shellWord));
+  const multiTargetOperands = (words, commandName) => {
+    const result = [];
+    let optionsEnded = false;
+    const consumesNext = commandName === shellWord([116, 114, 117, 110, 99, 97, 116, 101])
+      ? /^(?:-s|--size|-r|--reference)$/i
+      : commandName === shellWord([116, 111, 117, 99, 104])
+        ? /^(?:-d|--date|-r|--reference|-t|--time|-A)$/i
+        : null;
+    const attachedValue = commandName === shellWord([116, 114, 117, 110, 99, 97, 116, 101])
+      ? /^(?:-[sr].+|--(?:size|reference)=.+)$/i
+      : commandName === shellWord([116, 111, 117, 99, 104])
+        ? /^(?:-[drtA].+|--(?:date|reference|time)=.+)$/i
+        : null;
+    const switchOnly = commandName === shellWord([114, 109])
+      ? /^(?:-[fIrRvWd]+|--(?:force|interactive(?:=.*)?|one-file-system|no-preserve-root|preserve-root(?:=.*)?|recursive|dir|verbose))$/i
+      : commandName === shellWord([117, 110, 108, 105, 110, 107])
+        ? /^(?:--help|--version)$/i
+        : commandName === shellWord([116, 114, 117, 110, 99, 97, 116, 101])
+          ? /^(?:-[co]+|--(?:no-create|io-blocks))$/i
+          : commandName === shellWord([116, 111, 117, 99, 104])
+            ? /^(?:-[achm]+|--(?:no-create|no-dereference))$/i
+            : /^(?:-(?:force|recurse|confirm|whatif|verbose|debug))$/i;
+    for (let index = 0; index < words.length; index += 1) {
+      const token = words[index];
+      const argument = String(token?.value || "");
+      if (!optionsEnded && argument === "--") {
+        optionsEnded = true;
+        continue;
+      }
+      const attachedPath = attachedPathOption.exec(argument);
+      if (!optionsEnded && attachedPath) {
+        result.push({ value: attachedPath[1], control: false });
+        continue;
+      }
+      if (!optionsEnded && separatePathOption.test(argument)) {
+        const target = words[index + 1];
+        if (!target || target.control) return { reason: `Blocked ${commandName} because a path option has no static value.` };
+        result.push(target);
+        index += 1;
+        continue;
+      }
+      if (!optionsEnded && (valuedOptions.has(argument.toLowerCase()) || consumesNext?.test(argument))) {
+        if (!words[index + 1] || words[index + 1].control) {
+          return { reason: `Blocked ${commandName} because an option value could not be resolved statically.` };
+        }
+        index += 1;
+        continue;
+      }
+      if (!optionsEnded && attachedValue?.test(argument)) continue;
+      if (!optionsEnded && argument.startsWith("-")) {
+        if (switchOnly.test(argument)) continue;
+        return { reason: `Blocked ${commandName} because option ${argument} has ambiguous destination arity.` };
+      }
+      if (argument.includes(",") && !token?.sawQuoted) {
+        return { reason: `Blocked ${commandName} because a destination list could not be resolved statically.` };
+      }
+      result.push(token);
+    }
+    return { targets: result };
   };
 
   for (let start = 0; start < tokens.length;) {
@@ -2124,7 +2194,11 @@ export function checkProtectedShellMutation(command, cwd, depth = 0, repositoryR
     if (args.slice(0, 6).some((token) => token.value === "+" || /\.(?:Replace|ToLower|ToUpper)\b|::Concat\b/i.test(token.value))) {
       return "Blocked shell file mutation because its destination expression is computed and cannot be resolved statically.";
     }
-    if (explicit) targets = [explicit];
+    if (multiTargetDestinationFirst.has(executable)) {
+      const parsed = multiTargetOperands(args, executable);
+      if (parsed.reason) return parsed.reason;
+      targets = parsed.targets;
+    } else if (explicit) targets = [explicit];
     else if (executable === dataDuplicator) {
       targets = args.filter((token) => /^of=/.test(token.value)).map((token) => ({ value: token.value.slice(3), control: false }));
     } else if (executable === shellWord([114, 111, 98, 111, 99, 111, 112, 121])) {

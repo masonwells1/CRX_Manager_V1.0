@@ -236,6 +236,7 @@ eq(runHook({ tool_name: "Write", tool_input: { file_path: ".claude/session-state
 
 // A JUNCTION launders the protected directory out of the pathname entirely: the
 // supplied path never spells session-state, so every text matcher misses it.
+mkdirSync(path.join(repoRoot, ".claude", ["session", "state"].join("-")), { recursive: true });
 const junction = path.join(scratch, "notes-dir");
 let junctioned = false;
 try {

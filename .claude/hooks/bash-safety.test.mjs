@@ -296,6 +296,25 @@ ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Targ
       eq(result.status, 0, `the live hook exits cleanly after denying an alias write: ${command}`);
       ok(result.stdout.includes('"permissionDecision":"deny"'), `the live hook denies an alias write: ${command}`);
     }
+    const removeMany = String.fromCharCode(114, 109);
+    const sizeWriter = String.fromCharCode(116, 114, 117, 110, 99, 97, 116, 101);
+    const timestampWriter = String.fromCharCode(116, 111, 117, 99, 104);
+    const multiTargetCases = [
+      { tool: "Bash", command: `${removeMany} "${ordinary}" "${alias}"` },
+      { tool: "Bash", command: `${sizeWriter} -s 0 "${ordinary}" "${alias}"` },
+      { tool: "Bash", command: `${timestampWriter} -r "${ordinary}" "${ordinary}" "${alias}"` },
+      { tool: "PowerShell", command: `${removeItem} -Force "${ordinary}" "${alias}"` },
+    ];
+    for (const { tool, command } of multiTargetCases) {
+      ok(checkProtectedShellMutation(command, fixture)?.includes("protected file"), `every effective destination is inspected after a benign first target: ${command}`);
+      ok(checkCommandDeep(command, fixture)?.includes("protected file"), `the full command gate inspects every effective destination: ${command}`);
+      const result = runHook({ tool_name: tool, tool_input: { command } }, fixture);
+      eq(result.status, 0, `the live hook exits cleanly after denying a later protected destination: ${command}`);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), `the live hook denies a protected destination after a benign target: ${command}`);
+    }
+    eq(checkProtectedShellMutation(`${sizeWriter} -s 0 "${ordinary}"`, fixture), null, "the size option is consumed before an ordinary destination");
+    eq(checkProtectedShellMutation(`${timestampWriter} -r "${ordinary}" "${ordinary}"`, fixture), null, "the reference option is consumed before an ordinary destination");
+    ok(checkProtectedShellMutation(`${sizeWriter} --unknown "${ordinary}"`, fixture)?.includes("ambiguous destination arity"), "an unknown multi-target option fails closed");
     const relativeAliasWrite = `${setContent} -LiteralPath ordinary-notes.mjs -Value hostile`;
     ok(
       checkCommandDeep(relativeAliasWrite, scratchDir, { repositoryRoot: fixture })?.includes("protected file"),
@@ -1737,9 +1756,13 @@ for (const command of npmParserBypassCases) {
   ok(result.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies a parsed npm bypass: " + command);
 }
 eq(checkCommandDeep("npm --cache output --version", process.cwd()), null, "a value-taking npm global option followed by a safe version read remains allowed");
-r = runHook({ tool_name: "Bash", tool_input: { command: ["vite --con", "fig output/ignored-config.mjs"].join("") } });
+const liveIgnoredConfig = path.join("output", "ignored-config-live.mjs");
+mkdirSync(path.dirname(liveIgnoredConfig), { recursive: true });
+writeFileSync(liveIgnoredConfig, "export default {};\n");
+r = runHook({ tool_name: "Bash", tool_input: { command: ["vite --con", `fig ${liveIgnoredConfig.replaceAll("\\", "/")}`].join("") } });
 eq(r.status, 0, "bash-safety.mjs exits 0 after denying an untracked explicit package configuration file");
 ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies an untracked explicit package configuration file");
+rmSync(liveIgnoredConfig, { force: true });
 for (const command of ["rg -n npx docs", "git log --grep npm --grep exec", "echo vite"]) {
   r = runHook({ tool_name: "Bash", tool_input: { command } });
   eq(r.status, 0, "bash-safety.mjs exits 0 when a read-only argument names package tooling: " + command);
