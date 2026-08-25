@@ -67,7 +67,12 @@ export function normalizeRateUnit(unit: string | null | undefined): string | nul
     l: 'l', liter: 'l', liters: 'l', litre: 'l', litres: 'l',
     ml: 'ml',
   };
-  return SYNONYMS[base] ?? base;
+  // Own-property lookup ONLY. A plain object literal inherits 'constructor', '__proto__',
+  // 'toString', 'valueOf', etc; SYNONYMS['constructor'] returns the Object CONSTRUCTOR, which is
+  // non-nullish so '??' does not fire and this function silently breaks its string return
+  // contract. A product rate_unit is free text (the CSV import writes it unvalidated), so those
+  // names are reachable. hasOwnProperty.call keeps the contract for every input.
+  return Object.prototype.hasOwnProperty.call(SYNONYMS, base) ? SYNONYMS[base] : base;
 }
 
 // ── Rate-vs-max comparison ───────────────────────────────────────────────────

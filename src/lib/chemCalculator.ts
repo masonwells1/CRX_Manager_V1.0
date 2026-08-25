@@ -9,6 +9,8 @@
  *  • change the ACRES         → the row's DRIVER side is held and the other re-derived
  */
 
+import { normalizeRateUnit } from './labelGuardrails';
+
 export type ChemDriver = 'rate' | 'qty';
 
 /** The minimal row shape the calculator reads/writes. JobDetail's ChemRow is a superset. */
@@ -85,6 +87,14 @@ export function recomputeChemRowForAcres<T extends ChemCalcRow>(row: T, acres: n
   }
   return row;
 }
+
+// `inferChemDriver` USED TO LIVE HERE AND WAS REMOVED AS UNSOUND. It tried to recover a
+// reloaded row's lost `driver` by testing whether quantity == rate × acres. That test cannot
+// work: applyChemEdit back-solves rate_per_acre whenever the user types a quantity, so a
+// HAND-ENTERED total satisfies the same equality by construction. Acting on it would rewrite
+// an operator's typed chemical amount whenever the acreage changed. Do not reintroduce a
+// heuristic here — the driver must be PERSISTED on job_chemicals to be trustworthy.
+// (Codex P1, 2026-08-20)
 
 // ── Total Applied + gallon/lb-equivalent conversion (ChemMan parity #1) ──────
 //
@@ -254,6 +264,40 @@ export function fieldAppPricedQuantity(
 // per-base-unit with the SAME server-parity factor tables above.
 
 /**
+ * Does this raw unit spelling name a FLUID ounce *explicitly*?
+ *
+ * A CONCEPT TEST, NOT A SPELLING LIST. The first version of this matched six literal
+ * strings, and the escape is the PERIOD form: 'fl. oz'. normalizeRateUnit knows nothing
+ * about it — its SYNONYMS table has no such key, so the string falls through and comes back
+ * unchanged — which means a dry line quoted 'fl. oz/ac' against a stock unit of 'fl. oz'
+ * normalizes to 'fl. oz' on BOTH sides, misses a literal-list test, and reaches the money.
+ * That is not an exotic spelling: src/lib/blendMathValidator.ts documents in so many words
+ * that periods are insignificant and "'fl. oz' is 'fl oz'".
+ *
+ * So both sides are folded to a canonical form FIRST — every run of whitespace and periods
+ * collapses to one space — and then matched as a concept: {fl|fluid} × {oz|ozs|ounce|ounces},
+ * separator optional. 'fl. oz', 'fl.oz', 'fluid oz', 'fl ounces' and 'fl oz.' all land on
+ * the rule. A bare 'oz' does NOT: on a dry product that is a legitimate dry ounce, and on a
+ * liquid one it means fluid ounces, and that ambiguity is exactly why the caller must know
+ * the product's form.
+ *
+ * This mirrors the predicate in migration 20260820120000 (PR #446) deliberately, down to the
+ * regex: `'^(fl|fluid) ?(oz|ozs|ounce|ounces)$'` applied over
+ * `regexp_replace(lower(btrim(u)), '[[:space:].]+', ' ', 'g')`. A client guard that is MORE
+ * LENIENT than the SQL that does the billing is the exact bug class this branch exists to
+ * close — the operator would pass the browser and then hit a hard save refusal with nothing
+ * on screen explaining it.
+ *
+ * Kept LOCAL to this file rather than folded into normalizeRateUnit: that function mirrors
+ * the live SQL normalize_rate_unit, and the label-rate guardrail compares against it.
+ * Changing the shared normalizer would drift the client away from the server.
+ */
+function isExplicitlyFluidUnit(unit: string | null | undefined): boolean {
+  const canonical = String(unit ?? '').toLowerCase().replace(/[\s.]+/g, ' ').trim();
+  return /^(fl|fluid) ?(oz|ozs|ounce|ounces)$/.test(canonical);
+}
+
+/**
  * Strip a per-acre suffix ('/ac', '/acre', '/a', ' per acre') from a rate_unit and
  * return the bare base measure unit (e.g. 'pt/ac' → 'pt', 'GAL' → 'gal'). Empty in →
  * empty out.
@@ -349,5 +393,257 @@ export function reconcileChemAutofillUnits(
     unit: baseKey,
     costPerUnitCents: Math.round(costPerStockCents * perBaseFactor),
     pricePerUnitCents: Math.round(pricePerStockCents * perBaseFactor),
+  };
+}
+
+// ── Billing-hazard guard (production fail-closed) ─────────────────────────────
+//
+// THE LIVE DEFECT this closes. A job chem row carries TWO units:
+//   • rate_unit ('Dry oz/ac') — quantity is filled as rate × acres, so the NUMBER is
+//     expressed in the RATE's base unit ('dry oz').
+//   • unit      ('Lb')        — the unit the row's per-unit cost/price is quoted in.
+// transfer_job_to_invoice bills safe_cents_qty(price_per_unit_cents, quantity) with NO unit
+// conversion, so those two units MUST describe the same measure or the invoice is wrong by
+// exactly their ratio.
+//
+// reconcileChemAutofillUnits normally keeps them aligned, but it sizes units off
+// DRY_TO_POUNDS / LIQUID_TO_GALLONS, which mirror the DISPLAY function convert_to_gl_lb.
+// That dry table has no 'dry oz' entry, so a 'Dry oz' rate against pound stock cannot be
+// reconciled and takes the SAFE-FALLBACK branch: `unit` stays 'Lb' and the price stays per
+// pound while the quantity is counted in ounces. 32 Dry oz/ac × 100 ac then bills
+// 3,200 × $1.50 = $4,800 against a true $300 — 16× — and nothing on screen says so.
+// 75 live products carry a 'Dry oz' rate (61 of them against pound stock).
+//
+// This guard deliberately changes NO money math — carrying the quantity into the selling
+// unit is the separate, parked redesign. It only detects a row we can PROVE is mislabelled,
+// so the save can be refused and a wrong invoice never created.
+
+/**
+ * True when a rate unit carries a denominator that is NOT acres — 'oz/cwt', 'fl oz/100 gal',
+ * 'L/ha'. baseUnitOfRate strips everything after the first '/', so such a rate is silently
+ * treated as per-ACRE and quantity is filled as rate × acres. For 'oz/cwt' (per hundredweight)
+ * that is not merely a unit mismatch, it is the wrong quantity entirely, and it saves.
+ *
+ * This is the divergence the original investigation was opened for. The live SQL
+ * `normalize_rate_unit` deliberately keeps such a string WHOLE so it can never match a bare
+ * unit; the client's split-on-first-slash does the opposite. Measured across all 33
+ * unit-bearing columns in the live database, NO stored value carries a non-acre denominator
+ * (the only 3 slash values are 'pt/ac'), so this is hardening against a value the CSV product
+ * import could introduce, not a defect with live rows behind it today.
+ */
+export function rateDenominatorIsUnrecognized(rateUnit: string | null | undefined): boolean {
+  const raw = (rateUnit || '').trim().toLowerCase();
+  if (raw === '') return false;
+  // SUBTRACTIVE, mirroring the server's round-8/round-11 rule exactly: remove ONE trailing
+  // per-acre suffix, then refuse if ANY denominator survives. The previous form asked only
+  // whether the string ENDS in a per-acre suffix — which 'oz/cwt/ac' satisfies — while
+  // baseUnitOfRate then discards everything after the FIRST slash, so a per-hundredweight
+  // rate sailed through as a plain per-acre 'oz' (Codex Medium, 2026-08-25; the server
+  // shipped and fixed this same bug as its worst round-8 finding). The second strip is
+  // conditional on the first not firing — round 11's lesson: "remove one and refuse what
+  // survives" is not the same rule as "remove every spelling and then look", and only the
+  // first is safe ('oz per acre/ac' must lose ONE suffix, not both).
+  let stripped = raw.replace(/\s*\/\s*(?:ac|acre|acres|a)\s*$/, '');
+  if (stripped === raw) stripped = raw.replace(/(?:^|[\s-])per[\s-]+(?:acres|acre|ac|a)$/, '');
+  return stripped.includes('/') || /(?:^|[\s-])per(?:[\s-]|$)/.test(stripped);
+}
+
+/** Which side(s) of a chemical line name no unit at all. See chemUnitUnspecifiedSides. */
+export interface ChemUnitBlankSides {
+  /** The stock `unit` (what the per-unit cost/price is quoted per) names no unit. */
+  stockBlank: boolean;
+  /** The rate unit's numerator (what the quantity is counted in) names no unit. */
+  rateBlank: boolean;
+}
+
+// The three spellings the server's blank-unit refusal recognises, verbatim from the
+// CHEM_UNIT_UNSPECIFIED check in 20260820120000_save_job_enforce_chem_unit_invariant
+// (PR #446): a stock unit that is ONLY a per-acre denominator ('/ac'), a rate whose
+// numerator vanishes once its per-acre suffix is stripped ('per acre', ' - per ac'),
+// and a rate that is a bare denominator with no leading separator at all ('per acre').
+const STOCK_ACRE_DENOM_ONLY = /\s*\/\s*(?:ac|acre|acres|a)\s*$/;
+const RATE_PER_ACRE_SUFFIX = /[\s-]+per[\s-]+(?:acres|acre|ac|a)$/;
+const RATE_PER_ACRE_ONLY = /^[\s-]*per[\s-]+(?:acres|acre|ac|a)$/;
+
+/**
+ * Detect a line where either unit is BLANK — the rate names nothing to count the quantity
+ * in, or the stock `unit` names nothing to price it per. A blank unit proves nothing, and
+ * chemLineBillingHazard deliberately stays silent on it (it can only flag a PROVEN
+ * mismatch), so without this rule clearing a unit was an off switch for the whole guard:
+ * the warning vanished while the same quantity × price still billed (Codex High,
+ * 2026-08-24). This mirrors the server's CHEM_UNIT_UNSPECIFIED refusal in PR #446's
+ * save_job migration, character-class for character-class — the client mirror must never
+ * be MORE lenient than the SQL that refuses the save.
+ *
+ * Blankness only — a PRESENT but unrecognised unit ('MG') is deliberately not flagged
+ * here, matching the server: these guards prove inconsistency, not plausibility.
+ *
+ * Returns null when both sides name something. The BILLING-shape gate (quantity ≠ 0, not
+ * customer-supplied, a nonzero cost or price) lives at the caller, exactly as it does in
+ * the SQL — a line that cannot bill cannot bill wrongly, so refusing it would be friction.
+ */
+export function chemUnitUnspecifiedSides(
+  rateUnit: string | null | undefined,
+  unit: string | null | undefined,
+): ChemUnitBlankSides | null {
+  const u = String(unit ?? '').trim().toLowerCase();
+  const stockBlank = u === ''
+    || (STOCK_ACRE_DENOM_ONLY.test(u) && u.replace(STOCK_ACRE_DENOM_ONLY, '').trim() === '');
+
+  const rFirst = String(rateUnit ?? '').trim().toLowerCase().split('/')[0].trim();
+  const rateBlank = rFirst.replace(RATE_PER_ACRE_SUFFIX, '').trim() === ''
+    || RATE_PER_ACRE_ONLY.test(rFirst);
+
+  return stockBlank || rateBlank ? { stockBlank, rateBlank } : null;
+}
+
+export interface ChemBillingHazard {
+  /** true only when the mislabelling is PROVEN (see below), never on suspicion. */
+  hazard: boolean;
+  /** The unit the quantity is actually counted in (the rate's base unit). */
+  quantityUnit: string;
+  /** The unit the per-unit cost/price is quoted in (the row's `unit`). */
+  priceUnit: string;
+  /** How many times too high the bill would be, when both units size in a known form. */
+  billedRatio: number | null;
+}
+
+const NO_HAZARD: ChemBillingHazard = { hazard: false, quantityUnit: '', priceUnit: '', billedRatio: null };
+
+/**
+ * Detect a row whose quantity is measured in one unit but priced per another.
+ *
+ * PROOF STANDARD — FAIL CLOSED. The units disagreeing IS the hazard. We stay silent only
+ * for a row that is provably fine:
+ *  • either unit blank/unrecognized — blank on a BILLING line is refused separately by
+ *    chemUnitUnspecifiedSides (above) via chemRowDefects, so silence here is not an off
+ *    switch; a PRESENT-but-unknown unit stays unflagged (consistency, not plausibility), or
+ *  • the two units are the same, or
+ *  • the quantity is exactly what rate × acres becomes once carried into the price's unit
+ *    — the one thing that actually proves the quantity is expressed in the price's unit.
+ * Everything else is flagged. An unprovable row is not a safe row.
+ *
+ * THE BYPASS THIS CLOSES (Codex, 2026-08-20). The previous version also returned safe when
+ * the quantity matched NEITHER value, reasoning that it was "unprovable, so do not block".
+ * That handed the guard an everyday off switch: a reloaded row deliberately keeps its saved
+ * quantity when the acreage changes, so the quantity stops equalling rate × acres and the
+ * warning vanished — on the very row that was mislabelled to begin with. Open a hazardous
+ * job, edit the acres, and the protection disappeared silently.
+ *
+ * The trade is deliberate. A hand-entered quantity in a third unit is now flagged too. That
+ * is a false positive the operator can clear by making the units agree; the alternative was
+ * a guard that switched itself off during ordinary work.
+ *
+ * `billedRatio` is derived from the QUANTITY, not from rate × acres, so it stays truthful on
+ * a stale row where the acreage has since moved.
+ *
+ * Driver-independent on purpose: `driver` is UI-only and is NOT persisted, so every
+ * reloaded row has driver === undefined and a driver-gated check would miss them all.
+ */
+export function chemLineBillingHazard(
+  row: { quantity: string; rate_per_acre: string; rate_unit?: string | null; unit?: string | null },
+  acres: number,
+  productForm?: 'liquid' | 'dry' | null,
+): ChemBillingHazard {
+  const rateBaseRaw = baseUnitOfRate(row.rate_unit);
+  const quantityUnit = normalizeRateUnit(rateBaseRaw);
+  const priceUnit = normalizeRateUnit(row.unit);
+  if (quantityUnit == null || priceUnit == null) return NO_HAZARD;
+
+  const qty = parseFloat(row.quantity);
+  if (!Number.isFinite(qty) || qty <= 0) return NO_HAZARD;
+
+  // VOLUME PRICED AS WEIGHT — caught BEFORE the equality fast path (Codex P2, 2026-08-23).
+  //
+  // normalizeRateUnit folds 'fl oz' into 'oz' (its SYNONYMS table, mirroring the live SQL
+  // normalize_rate_unit). For a LIQUID product that is right: a bare 'oz' there means fluid
+  // ounces, so the two spellings really are the same unit. For a DRY product it is not —
+  // 'oz' is a WEIGHT and 'fl oz' is a VOLUME, and the two normalize equal, so a dry line
+  // rated in 'fl oz/ac' and priced per 'oz' took the units-are-equal exit and was declared
+  // safe. Product rate units are unvalidated free text (the CSV import writes them as-is),
+  // so this shape is reachable, and it prices a volume as though it were a weight.
+  //
+  // There is no conversion to offer: volume→weight needs the product's density, which we do
+  // not store. So this is refused outright with billedRatio null rather than a ratio we
+  // cannot compute. The RAW spellings are reported, not the normalized ones — telling the
+  // operator "measured in oz but priced per oz" would be unreadable.
+  //
+  // REFUSED WHENEVER EITHER SIDE IS A FLUID OUNCE — not only when the two sides disagree.
+  // The first version of this test was `fluid(rate) !== fluid(unit)`, an exclusive-or, and
+  // that was a half-fix of exactly the kind PR #446's gate returned as a fresh HIGH one
+  // round later on the SQL side. Two shapes escape an XOR:
+  //
+  //   - Both sides fluid. A dry line rated 'fl oz/ac' and priced per 'fl oz' is
+  //     self-consistent, so the XOR is false and it took the equality exit below. But
+  //     self-consistent arithmetic in a unit the inventory and invoice sides cannot convert
+  //     is not a saving grace — fieldAppPricedQuantity's dry branch sizes 'fl oz' as null,
+  //     i.e. unpriceable, so the totals were derived from a volume on a product billed by
+  //     weight. An earlier test in this file required that shape to SAVE; it was wrong and
+  //     is now inverted.
+  //   - The CONVERSION path, which is worse than the one the XOR closed. Below,
+  //     fieldAppPricedQuantity is handed the NORMALIZED units, so 'fl oz' has already become
+  //     'oz' before the converter sees it. Handed the raw 'fl oz' the dry branch refuses;
+  //     handed 'oz' it sizes it 1 and happily converts 16:1 into pounds. So a dry product
+  //     rated 'fl oz/ac' against a stock unit of 'lb' never took the shortcut at all — it
+  //     went through the conversion and turned a VOLUME into a WEIGHT. Normalization erased
+  //     the very distinction the converter would have refused on.
+  //
+  // The unconditional form is both simpler and strictly stronger, and it has no precondition
+  // left to get wrong: a dry product has no density in this system, so NOTHING downstream can
+  // carry a fluid ounce into a weight honestly. It stays gated on the DRY form and touches
+  // liquid lines not at all — there 'oz' IS 'fl oz' (the live unit_conversions table records
+  // both at factor 1), and widening it beyond fluid ounces would refuse ordinary lines.
+  if ((productForm ?? null) === 'dry'
+      && (isExplicitlyFluidUnit(rateBaseRaw) || isExplicitlyFluidUnit(row.unit))) {
+    return {
+      hazard: true,
+      quantityUnit: (rateBaseRaw ?? '').trim() || quantityUnit,
+      priceUnit: String(row.unit ?? '').trim() || priceUnit,
+      billedRatio: null,
+    };
+  }
+
+  if (quantityUnit === priceUnit) return NO_HAZARD;
+
+  // `quantity` is stored through fmt4, so allow 4-dp slack plus a relative epsilon.
+  // PROOF OF SAFETY, and the only one: the quantity is what rate × acres reads once carried
+  // into the unit the price is quoted in. Requires a usable rate and acreage — without them
+  // nothing is proven, so the row stays flagged rather than escaping.
+  //
+  // THE TOLERANCE MIRRORS THE SERVER'S RULE EXACTLY (PR #446, rounds 23 AND 24):
+  // GREATEST(0.0001, LEAST(convert(0.00005 × acres), convert(0.1))). Three terms, each
+  // earning its place — 0.0001 is the quantity's own 4-dp storage precision; 0.00005 ×
+  // acres is the error a 4-decimal RATE introduces when the operator drives the line by
+  // total, carried through the SAME converter as the values being compared; and the 0.1
+  // ceiling (also converted, so it stays the same physical amount in the compared unit)
+  // stops the acreage term from being sized by the acreage figure itself — uncapped it is
+  // a caller-sized allowance, the exact defect class as the relative epsilon (|carried| ×
+  // 1e-6) this replaced, which at a carried 100,000 accepted a 0.1 gap (CodeRabbit Major,
+  // 2026-08-24). Both converted terms fall back to the flat 0.0001 when the converter
+  // cannot size them — the strict reading — and LEAST against that fallback tightens, not
+  // widens. No term scales with the number under test, and no term is unbounded.
+  const rate = parseFloat(row.rate_per_acre);
+  if (Number.isFinite(rate) && rate > 0 && acres > 0) {
+    const carried = fieldAppPricedQuantity(rate * acres, quantityUnit, priceUnit, productForm ?? null);
+    if (carried != null) {
+      const slack = Math.max(
+        1e-4,
+        Math.min(
+          fieldAppPricedQuantity(0.00005 * acres, quantityUnit, priceUnit, productForm ?? null) ?? 1e-4,
+          fieldAppPricedQuantity(0.1, quantityUnit, priceUnit, productForm ?? null) ?? 1e-4,
+        ),
+      );
+      if (Math.abs(qty - carried) <= slack) return NO_HAZARD;
+    }
+  }
+
+  // What this quantity SHOULD read if it were carried into the price's unit. Acreage plays
+  // no part, so a stale row reports the same honest ratio as a fresh one.
+  const correctlyPriced = fieldAppPricedQuantity(qty, quantityUnit, priceUnit, productForm ?? null);
+  return {
+    hazard: true,
+    quantityUnit,
+    priceUnit,
+    billedRatio: correctlyPriced != null && correctlyPriced !== 0 ? qty / correctlyPriced : null,
   };
 }
