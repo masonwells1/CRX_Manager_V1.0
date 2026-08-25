@@ -346,10 +346,13 @@ comment in `src/lib/blendMathValidator.ts` — but it means an operator who type
 row and `Gal` on another loses the check on that ticket.
 
 **Not started.** No migration, no live state, no money path.
-## OPEN 2026-08-19 — PR #404 stamps quote-line provenance, defers the FK, and settles superseded prices
+## RESOLVED 2026-08-24 (opened 2026-08-19) — PR #404 stamps quote-line provenance, defers the FK, and settles superseded prices
 
-**Status: reworked on branch `claude/draw-down-price-tier-lines`, NOT applied, NOT merged. Awaiting
-Mason's explicit approval for both.**
+**Status: RESOLVED — the reworked tier-split migration merged to `main` as the authoritative
+artifact (PR #461) and was applied live on 2026-08-24 with Mason's explicit in-chat approval as
+ledger version `20260825025241`, followed by its two successors (`20260825033106`,
+`20260825034622`). See the rollout block at the top of `docs/reference/migration-history.md`.
+The branch named below is a superseded draft; the description below is kept as history.**
 
 **FIXED in the same migration — `restore_quote_version` REFUSES a drawn booking.** Found by
 `rls-security-reviewer` and confirmed against live `prosrc`: `save_quote` was not the only path that
@@ -851,7 +854,9 @@ rejected, its remaining soft-delete change is already delivered by both the tier
 the successor wrapper, and its live-body `md5(prosrc)` pin cannot match after that wrapper cutover.
 It is fully superseded: never "repair" it into a later `CREATE OR REPLACE public.draw_down_quote`,
 because that would overwrite the actor binding, required-key guard and receipt binding. All four
-successor migrations remain pending; this correction authorizes no live apply.
+successor migrations are now applied live (the barrier on 2026-08-24 midday, the remaining three
+later that day with Mason's explicit approval — see `docs/reference/migration-history.md`); the
+do-not-rebuild instruction above still stands.
 
 **THE FIX IS THE TIER SPLIT, NOT THE ROUNDING — Mason changed his answer on 2026-08-16, and the
 later answer governs.** Two options were put to him. The first, at 09:51 Central, was mine: keep the
