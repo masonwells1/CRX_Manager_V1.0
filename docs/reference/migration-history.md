@@ -4,6 +4,24 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
+**Live-ledger re-read — 2026-08-25, after the full draw-down chain applied and immediately
+before the `save_job` chem-unit candidate.** Read read-only from
+`supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr` at ~12:15 UTC: **975 ledger
+rows** — three more than the 2026-08-24 block below, the overnight draw-down applies:
+`version 20260825025241` name `20260816120000_draw_down_split_order_lines_by_price_tier`,
+`version 20260825033106` name `20260817120000_carry_allocated_line_cents_through_lifecycle`,
+and `version 20260825034622` name `20260819232000_bind_draw_down_receipts_to_intent` (their
+row-887/889/890 closeouts belong to the session that applied them and are deliberately not
+rewritten here). `max(version)` is now `20260825034622` — an apply-time stamp, NOT the ordering
+basis. The current live effective ordering high-water, derived row by row (the 14-digit stamp
+embedded in each row's `name` when present, else that row's `version` as the conservative
+fallback, per `.claude/hooks/migration-ordering-lib.mjs`), is **`20260819232000`**. The
+`save_job` candidate's authored stamp **`20260820120000` is strictly greater**, so the ordering
+guard is satisfied for its next, separately committed apply. The local applied-migrations
+snapshot was refreshed from this same read (`scripts/refresh-applied-migrations.mjs`, 975 rows).
+This supersedes the 2026-08-24 block below as the latest observation; treat both as dated
+reads, and re-read before any apply that follows another apply.
+
 **Live-ledger re-read — 2026-08-24, after the draw-down cutover barrier applied and
 immediately before the tier-split candidate.** Read read-only from
 `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`: **972 ledger rows**,
