@@ -24,6 +24,8 @@ All significant development milestones, in reverse chronological order.
   ancestors, and compare filesystem identity before execution. Hard-link
   aliases of protected files and computed proof destinations fail closed across
   Bash, PowerShell, and process-based MCP execution.
+- PowerShell destination expressions and subexpressions fail closed instead of
+  being mistaken for literal paths, including resolver and item-object forms.
 - Windows device and file IDs stay in full-precision bigint form so unrelated
   files cannot collide after numeric rounding and be mistaken for hard links.
 - The exact-review proof directory can no longer be aliased through a Windows

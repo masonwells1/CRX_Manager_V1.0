@@ -1749,7 +1749,9 @@ const shellExecutableName = (token) => String(token?.value || "")
 
 function protectedShellDestinationReason(token, cwd, protectedIdentities) {
   const raw = String(token?.value || "").trim();
-  if (!raw || token?.control || /[*?\[\]{}$`]|\$\(|\$\{|%[^%]+%|![^!]+!|\+|\s-join(?:\s|$)/i.test(raw)) {
+  const fullyQuoted = token?.sawQuoted && !token?.sawUnquoted;
+  const expressionSyntax = !fullyQuoted && /[()]|@\(|\[[^\]]+\]::/i.test(raw);
+  if (!raw || token?.control || expressionSyntax || /[*?\[\]{}$`]|\$\(|\$\{|%[^%]+%|![^!]+!|\+|\s-join(?:\s|$)/i.test(raw)) {
     return "Blocked shell file mutation because its destination is dynamic and cannot be checked against protected filesystem identities.";
   }
   if (/^[A-Za-z][\w-]*:/.test(raw) && !/^[A-Za-z]:[\\/]/.test(raw) && !/^FileSystem::/i.test(raw)) return null;
@@ -1789,6 +1791,7 @@ export function checkProtectedShellMutation(command, cwd, depth = 0) {
     return protectedShellDestinationReason(token, base, protectedIdentities);
   };
   const redirect = shellWord([62]);
+  const expressionPathOption = /^(?:--?|\/)(?:literalpath|filepath|path|destination|dest)(?::|=)?$/i;
 
   for (let index = 0; index < tokens.length; index += 1) {
     if (!tokens[index].control || tokens[index].value !== redirect) continue;
@@ -1842,7 +1845,8 @@ export function checkProtectedShellMutation(command, cwd, depth = 0) {
     while (start < tokens.length && hardBoundary(tokens[start])) start += 1;
     let end = start;
     while (end < tokens.length && !hardBoundary(tokens[end])) end += 1;
-    const segmentWords = tokens.slice(start, end).filter((token) => !token.control);
+    const segmentTokens = tokens.slice(start, end);
+    const segmentWords = segmentTokens.filter((token) => !token.control);
     let cursor = 0;
     while (/^[A-Za-z_]\w*\+?=/.test(segmentWords[cursor]?.value || "")) cursor += 1;
     while (SHELL_MUTATION_WRAPPERS.has(shellExecutableName(segmentWords[cursor]))) {
@@ -1871,6 +1875,43 @@ export function checkProtectedShellMutation(command, cwd, depth = 0) {
     if (args.some((token) => /^(?:--help|--version|-h|\/\?)$/i.test(token.value))) {
       start = end + 1;
       continue;
+    }
+    const destinationFirst = [
+      [115, 101, 116, 45, 99, 111, 110, 116, 101, 110, 116],
+      [97, 100, 100, 45, 99, 111, 110, 116, 101, 110, 116],
+      [99, 108, 101, 97, 114, 45, 99, 111, 110, 116, 101, 110, 116],
+      [111, 117, 116, 45, 102, 105, 108, 101],
+      [115, 101, 116, 45, 105, 116, 101, 109],
+      [116, 111, 117, 99, 104], [116, 114, 117, 110, 99, 97, 116, 101],
+      [114, 101, 109, 111, 118, 101, 45, 105, 116, 101, 109],
+      [114, 109], [117, 110, 108, 105, 110, 107],
+    ].map(shellWord);
+    const rawExecutableIndex = segmentTokens.indexOf(segmentWords[cursor]);
+    const rawArgs = rawExecutableIndex >= 0 ? segmentTokens.slice(rawExecutableIndex + 1) : [];
+    for (let index = 0; index < rawArgs.length; index += 1) {
+      if (rawArgs[index].control || !expressionPathOption.test(rawArgs[index].value)) continue;
+      const destinationStart = rawArgs[index + 1];
+      const following = rawArgs[index + 2];
+      if ((destinationStart?.control && /^[({]$/.test(destinationStart.value))
+        || (!destinationStart?.control && /^[\@$]$/.test(destinationStart?.value || "")
+          && following?.control && following.value === "(")) {
+        return "Blocked shell file mutation because its destination is dynamic and cannot be checked against protected filesystem identities.";
+      }
+    }
+    if (destinationFirst.includes(executable)
+      && !rawArgs.some((token) => !token.control && /^(?:--?|\/)(?:literalpath|filepath|path)(?::|=|$)/i.test(token.value))) {
+      for (let index = 0; index < rawArgs.length; index += 1) {
+        const token = rawArgs[index];
+        if (token.control) {
+          if (token.value === "(") {
+            return "Blocked shell file mutation because its destination is dynamic and cannot be checked against protected filesystem identities.";
+          }
+          continue;
+        }
+        if (valuedOptions.has(token.value.toLowerCase())) { index += 1; continue; }
+        if (token.value.startsWith("-")) continue;
+        break;
+      }
     }
     let targets = [];
     const dataDuplicator = shellWord([100, 100]);

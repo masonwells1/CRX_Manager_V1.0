@@ -139,10 +139,13 @@ ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Targ
     eq(fileIdentity(protectedHook), fileIdentity(alias), "a real hard link retains the protected file identity");
 
     const setContent = ["Set", "Content"].join("-");
+    const addContent = ["Add", "Content"].join("-");
     const outFile = ["Out", "File"].join("-");
     const streamCopy = ["t", "ee"].join("");
     const streamCopyObject = ["Tee", "Object"].join("-");
     const copyItem = ["Copy", "Item"].join("-");
+    const removeItem = ["Remove", "Item"].join("-");
+    const resolvePath = ["Resolve", "Path"].join("-");
     const redirect = String.fromCharCode(62);
     const aliasWriteCases = [
       `${setContent} -LiteralPath "${alias}" -Value hostile`,
@@ -168,9 +171,26 @@ ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Targ
     const spacedComputedProof = `${setContent} '.claude/session-' + 'state/${proofName}' hostile`;
     ok(checkProtectedShellMutation(spacedComputedProof, fixture)?.includes("computed"), "a spaced PowerShell destination expression fails closed");
 
+    const expressionWriteCases = [
+      `${setContent} -Path (Get-Item "${alias}") -Value hostile`,
+      `${setContent} (Get-Item "${alias}") hostile`,
+      `${addContent} -LiteralPath (${resolvePath} "${alias}") -Value hostile`,
+      `${copyItem} -Path "${ordinary}" -Destination (Get-Item "${alias}")`,
+      `${removeItem} -Path (${resolvePath} "${alias}")`,
+      `${removeItem} (${resolvePath} "${alias}")`,
+    ];
+    for (const command of expressionWriteCases) {
+      ok(checkProtectedShellMutation(command, fixture)?.includes("dynamic"), `a PowerShell destination expression fails closed: ${command}`);
+      ok(checkCommandDeep(command, fixture)?.includes("dynamic"), `the full command gate denies a PowerShell destination expression: ${command}`);
+      const result = runHook({ tool_name: "PowerShell", tool_input: { command } }, fixture);
+      eq(result.status, 0, `the live hook exits cleanly after denying a PowerShell destination expression: ${command}`);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), `the live hook denies a PowerShell destination expression: ${command}`);
+    }
+
     eq(checkProtectedShellMutation(`${setContent} -LiteralPath "${ordinary}" -Value ok`, fixture), null, "an ordinary static PowerShell destination remains allowed");
     eq(checkProtectedShellMutation(`printf ok ${redirect} "${ordinary}"`, fixture), null, "an ordinary static redirect remains allowed");
     eq(checkProtectedShellMutation(`Get-Content "${alias}"`, fixture), null, "a read-only command through the alias remains allowed");
+    eq(checkProtectedShellMutation(`Get-Content -Path (${resolvePath} "${alias}")`, fixture), null, "a read-only PowerShell path expression remains allowed");
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
