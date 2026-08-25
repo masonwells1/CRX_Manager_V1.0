@@ -40,7 +40,7 @@ needs Mason?" and is built so that its silence is trustworthy.
 - Proven by running against the live queue, not only by tests: the run surfaced two real
   defects unit tests would not have — a decision-table hole routing nine ordinary
   worktrees into the fallback, and a cited "full queue" path that was never written.
-  153 assertions pass, including a mutation set that flips each all-clear condition
+  153 assertions pass at this checkpoint (327 by the end of the branch), including a mutation set that flips each all-clear condition
   individually and asserts the phrase disappears every time.
 - **`/patrol` is interactive only — Mason's scoping decision, 2026-08-24.** It is not
   scheduled and must not be. Three adversarial review rounds each found a *new* hole in the
@@ -101,7 +101,7 @@ needs Mason?" and is built so that its silence is trustworthy.
   `git status` runs Git's conversion pipeline, patrol now **refuses to scan** any worktree
   whose local config defines an executable filter, fsmonitor command, textconv, or
   ssh/proxy override, and fails closed when that config is unreadable. This matters
-  because patrol is meant to run unattended: a `PATH` shim or a configured clean filter
+  because this hardening was written while unattended scheduling was still intended: a `PATH` shim or a configured content filter
   would otherwise execute hourly under Mason's account.
 - **One round-3 finding remains open and is Mason's call** (see `KNOWN_ISSUES.md`): any PR
   author can forge parked state by putting `PARKED` in a title, since no actor provenance

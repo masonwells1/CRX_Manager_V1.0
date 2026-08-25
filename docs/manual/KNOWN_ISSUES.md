@@ -1,8 +1,9 @@
 # Known Issues — Consolidated
 
-**OPEN 2026-08-24 — two `/patrol` findings deferred to Mason (round-3 Codex review, not fixed).**
-Neither is a false-all-clear; both are real and both were left open deliberately at the
-three-round review cap rather than fixed under time pressure.
+**RESOLVED 2026-08-25 — the two `/patrol` findings first deferred at the round-3 review cap
+are both closed.** Kept as history because the reasoning is the evidence for the
+interactive-only scoping decision, and because a future change that "simplifies" either
+one would reopen a security property. Detail below.
 (1) **Ambient-code path — CLOSED 2026-08-24** (Mason approved the extra review round).
 `scripts/patrol/trusted-exec.mjs` now binds `git`, `gh`, and `powershell` to fixed absolute
 executables under one minimal environment (system/global Git config disabled, replacement

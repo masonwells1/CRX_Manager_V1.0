@@ -237,7 +237,21 @@ function collectPullRequests(repo) {
     const tB = new Date().toISOString();
 
     const byNumB = new Map(readB.map((p) => [p.number, p]));
-    const { required, degraded } = requiredContexts(repo, "main");
+    // Resolved PER BASE BRANCH, memoized. Resolving once for `main` and applying it to
+    // every PR meant a pull request targeting another base was judged against the wrong
+    // required set — a context that base requires would never be checked at all.
+    const requiredByBase = new Map();
+    let degraded = null;
+    const requiredFor = (baseRef) => {
+      const key = baseRef || "main";
+      if (!requiredByBase.has(key)) {
+        const r = requiredContexts(repo, key);
+        if (r.degraded) degraded = `${degraded ? `${degraded}; ` : ""}${key}: ${r.degraded}`;
+        requiredByBase.set(key, r.required);
+      }
+      return requiredByBase.get(key);
+    };
+    requiredFor("main"); // warm the common case and surface protection/ruleset errors early
     if (degraded) { src.status = "INCOMPLETE"; src.detail = degraded; }
 
     // Iterate the UNION of both reads, not readA alone. A pull request opened between the
@@ -267,7 +281,7 @@ function collectPullRequests(repo) {
       // fail closed to "unknown", never read as "nothing failing".
       const checks = cd.checkRuns === null || cd.statuses === null
         ? "unknown"
-        : checksVerdict({ required, checkRuns: cd.checkRuns, statuses: cd.statuses });
+        : checksVerdict({ required: requiredFor(a.baseRefName), checkRuns: cd.checkRuns, statuses: cd.statuses });
       const crStatus = cd.statuses === null ? { state: "missing", description: null } : coderabbitStateFrom(cd.statuses);
       if (crStatus.description) crDescriptions.push(crStatus.description);
       // Only pay for the extra review lookup when the status CLAIMS success — that is the
@@ -398,7 +412,10 @@ export function buildSnapshot({ repo, repoRoot, runId }) {
     runId,
     repoId: repo,
     collectorCommit: collectorBuild(),
-    ghVersion: (() => { try { return gh(["--version"]).split("\n")[0].trim(); } catch { return "unknown"; } })(),
+    // `trustedGh`, not `gh` — the latter is not defined in this module, so the call threw a
+    // ReferenceError that the catch swallowed and every snapshot recorded "unknown". A
+    // provenance field that silently never populates is worse than no field.
+    ghVersion: (() => { try { return trustedGh(["--version"]).split("\n")[0].trim(); } catch { return "unknown"; } })(),
     generatedAt: generatedAt.toISOString(),
     expiresAt: new Date(generatedAt.getTime() + SNAPSHOT_TTL_MS).toISOString(),
     // `complete` covers REQUIRED sources. An optional source that failed still emits a

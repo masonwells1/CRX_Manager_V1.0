@@ -22,12 +22,21 @@ const argOf = (flag, fallback) => {
 
 const repoRoot = argOf("--repo-root", path.resolve(SCRIPT_DIR, "..", ".."));
 let repo = argOf("--repo", null);
+// Inside a try, because this is the FIRST thing the documented command does and it can
+// throw: no trusted git executable, no `origin` remote, or a timeout. Uncaught, the
+// process died before the emergency block could print — the one path in this file that
+// would have failed WITHOUT saying "this is not an all-clear".
+let resolveFailure = null;
 if (!repo) {
-  // Trusted Git, not a PATH lookup. The documented command runs without --repo, so THIS
-  // is the line an unattended run hits first — a `git` shim earlier on PATH would have
-  // executed as Mason here, straight past the fixed-executable layer everywhere else.
-  const url = trustedGit(["-C", repoRoot, "remote", "get-url", "origin"], { cwd: repoRoot }).trim();
-  repo = /github\.com[:/](.+?)(?:\.git)?$/.exec(url)?.[1] ?? "";
+  try {
+    // Trusted Git, not a PATH lookup: a `git` shim earlier on PATH would otherwise execute
+    // here, straight past the fixed-executable layer used everywhere else.
+    const url = trustedGit(["-C", repoRoot, "remote", "get-url", "origin"], { cwd: repoRoot }).trim();
+    repo = /github\.com[:/](.+?)(?:\.git)?$/.exec(url)?.[1] ?? "";
+  } catch (e) {
+    resolveFailure = `could not resolve the repository from ${repoRoot}: ${String(e?.message ?? e)}`;
+  }
+  if (!repo && !resolveFailure) resolveFailure = `no GitHub remote found at ${repoRoot}`;
 }
 
 // A unique run id per invocation: the renderer refuses any snapshot that is not the one
@@ -38,6 +47,7 @@ let snapshot = null;
 let snapshotPath = null;
 let failure = null;
 try {
+  if (resolveFailure) throw new Error(resolveFailure);
   snapshot = buildSnapshot({ repo, repoRoot, runId });
   snapshotPath = writeSnapshot(snapshot); // the report cites this path; it must actually exist
 } catch (e) {

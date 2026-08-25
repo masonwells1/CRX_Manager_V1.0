@@ -44,6 +44,7 @@ resolves to `INDETERMINATE` (rule `*.fallback`).
 |---|---|---|
 | `STALE_DAYS` | 14 | two weeks with no human touch is an abandonment question |
 | `MIN_STABLE_INTERVAL_MS` | 2000 | two reads inside this window can be served from one cache |
+| `LEDGER_ARCHIVED_MS` | 604800000 (7 days) | a ledger untouched this long is history in `docs/loops/`, not a loop that just died |
 | `SNAPSHOT_TTL_MS` | 900000 (15 min) | a report older than this may misdescribe a moving queue |
 | `HEARTBEAT_OVERDUE_MS` | 5400000 (90 min) | 3× the intended 30-minute cadence |
 
@@ -153,7 +154,7 @@ Used solely to rank hidden items so nothing starves. Higher is more urgent.
 
 | Band | Value | Applies to |
 |---|---|---|
-| critical | 90 | `SCAN_ERROR`, dead loop, gate down |
+| critical | 90 | `SCAN_ERROR`, dead loop, **stalled loop**, gate down |
 | high | 70 | conflicted PR, failing checks |
 | normal | 50 | behind, blocked, no-blockers-found, parked migrations |
 | low | 30 | stale abandonment questions, dirty worktrees |

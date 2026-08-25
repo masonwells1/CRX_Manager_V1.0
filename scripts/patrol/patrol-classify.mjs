@@ -155,10 +155,10 @@ export function classifyPullRequest(pr, nowMs) {
     }));
   }
 
-  // A PR held by a deliberate decision must not be nagged about. Patrol can only see
-  // markers that exist ON GitHub — a "hold"/"parked" label, or a PARKED marker in the
-  // title. A decision recorded anywhere else is invisible to it, which is exactly why
-  // parking something needs a marker here rather than only in notes.
+  // A PR held by a deliberate decision must not be nagged about. Patrol honours a
+  // "hold"/"parked" LABEL only — never a title marker, which the PR author writes and can
+  // therefore forge (contract §4 rule 2a). A decision recorded only in notes is invisible
+  // to patrol, which is why parking needs a label here rather than a note elsewhere.
   if (pr.parked) {
     return finalize(item({
       ...base, rule: "pr.parked", disposition: "WAITING_EXTERNAL", severity: SEVERITY.low,

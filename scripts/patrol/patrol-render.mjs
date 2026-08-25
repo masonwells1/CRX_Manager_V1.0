@@ -132,9 +132,17 @@ export function renderReport(snapshot, items, { nowMs, expectedRunId, expectedRe
     lines.push("");
   }
 
-  // Every condition in §10 of the classifier contract. All seven must hold.
+  // Every condition in §10 of the classifier contract. All must hold.
+  //
+  // `sources` is checked HERE as well as by the classifier's SCAN_ERROR items. In the real
+  // pipeline a failed source produces such an item and that alone suppresses the phrase —
+  // but the renderer owns the all-clear, and a check that depends on another layer having
+  // done its job is two checks that do not bind. `complete` covers only REQUIRED sources,
+  // so an ERROR in an optional one would otherwise slip through here.
+  const allSourcesOk = (snapshot.sources ?? []).every((s) => s?.status === "OK");
   const allClear =
     snapshot.complete === true &&
+    allSourcesOk &&
     counts.NEEDS_MASON === 0 &&
     counts.SCAN_ERROR === 0 &&
     counts.INDETERMINATE === 0 &&
@@ -156,6 +164,10 @@ export function renderReport(snapshot, items, { nowMs, expectedRunId, expectedRe
     if (counts.NEEDS_MASON > 0) why.push(`${counts.NEEDS_MASON} item(s) need your decision`);
     if (counts.SCAN_ERROR > 0) why.push(`${counts.SCAN_ERROR} source(s) could not be read`);
     if (counts.INDETERMINATE > 0) why.push(`${counts.INDETERMINATE} item(s) could not be determined`);
+    if (!allSourcesOk) {
+      const bad = (snapshot.sources ?? []).filter((s) => s?.status !== "OK").map((s) => `${s?.name}=${s?.status}`);
+      why.push(`source(s) not fully read: ${bad.join(", ")}`);
+    }
     if (hiddenTotal > 0) why.push(`${hiddenTotal} item(s) hidden by the display cap (highest hidden severity ${highestHiddenSeverity})`);
     if (actionableBlockers > 0) why.push(`${actionableBlockers} open blocker(s)`);
     if (actionableAlerts > 0) why.push(`${actionableAlerts} open alert(s)`);

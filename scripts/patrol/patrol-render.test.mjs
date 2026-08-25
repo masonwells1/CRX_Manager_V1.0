@@ -51,6 +51,11 @@ const mutations = [
   ["an item could not be determined", snap(), [it({ disposition: "INDETERMINATE" })]],
   ["an item carries a blocker", snap(), [it({ blockers: ["no valid proof"] })]],
   ["an item carries an actionable alert", snap(), [it({ alerts: ["gate degraded"] })]],
+  // CodeRabbit on PR #473: renderReport checked `complete` but ignored `sources`, so an
+  // ERROR source carrying only idle items still emitted the all-clear. `complete` covers
+  // REQUIRED sources only, so an optional source's failure slipped straight through.
+  ["a source reported ERROR", snap({ sources: [{ name: "loops", status: "ERROR", detail: "probe died" }] }), [it()]],
+  ["a source reported INCOMPLETE", snap({ sources: [{ name: "parkedMigrations", status: "INCOMPLETE" }] }), [it()]],
 ];
 for (const [name, s, items] of mutations) {
   const r = render(s, items);
