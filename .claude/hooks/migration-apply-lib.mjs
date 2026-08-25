@@ -926,15 +926,21 @@ const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unkno
         `disabled/removed through a separately reviewed path or their exact current behavior is ` +
         `modeled and independently reviewed. The guard's live read will re-evaluate them on retry.`);
     }
-    if (fanoutEvidence.sessionDependentEventTriggers.length) {
+    // An event trigger fires on DDL, not on ordinary row DML. Treating its
+    // session-local catalog lookup as a reason to reject a simple UPDATE/INSERT
+    // would disable the only sanctioned repair path and invite a bypass. Keep
+    // the fail-closed rule for every statement that can be DDL (including
+    // procedural/dynamic execution, whose effect cannot be proved here).
+    const hasPotentialDdl = /\b(?:alter|analyze|call|cluster|comment|create|do|drop|execute|grant|refresh|reindex|revoke|security\s+label|truncate|vacuum)\b/i.test(query);
+    if (fanoutEvidence.sessionDependentEventTriggers.length && hasPotentialDdl) {
       return block(
-        `ONE-SHOT REPLAY GUARD: linked production event trigger(s) ` +
+        `ONE-SHOT REPLAY GUARD: linked production session-dependent PostgreSQL event trigger helper(s) ` +
         `${fanoutEvidence.sessionDependentEventTriggers.map((trigger) => trigger.name).join(", ")} ` +
         `resolve PostgreSQL catalog metadata helpers through the applying database session's ` +
         `search_path. The guard's evidence read and the later migration apply use different ` +
-        `sessions, so that catalog binding cannot be proved for any migration. Refusing every ` +
-        `migration apply until each trigger pins and proves a safe path or the applying session ` +
-        `is independently bound through a reviewed mechanism.`);
+        `sessions, so that catalog binding cannot be proved for DDL or procedural/dynamic migration ` +
+        `shapes. Refusing this apply until each trigger pins and proves a safe path or the applying ` +
+        `session is independently bound through a reviewed mechanism.`);
     }
 
     // Normalize for comparison: lowercase, strip comments, collapse whitespace.

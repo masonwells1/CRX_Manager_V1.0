@@ -9,6 +9,20 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-25 — Session-dependent event triggers constrain DDL, not ordinary row repairs
+
+**Source:** exact-head Sol/high review CRX-SEC-1 on PR #364.
+
+**Decision.** A session-dependent PostgreSQL event trigger makes DDL and procedural/dynamic SQL
+unprovable across evidence and apply sessions, so those shapes remain denied. Plain row DML cannot
+fire a DDL event trigger and remains eligible for the existing review and one-shot safeguards.
+
+**Operative rule.** Never broaden the DML allowance to DDL-like, `DO`, dynamic, or callable SQL.
+The guard test proves both sides: a harmless UPDATE allows and COMMENT DDL denies under the same
+trigger evidence. No live migration, Edge Function, production data, secret, or permission changed.
+
+---
+
 ## 2026-08-25 — Historic event-trigger findings are pinned per immutable migration
 
 **Source:** SQL Migration Validation evidence on PR #364.

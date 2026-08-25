@@ -155,6 +155,36 @@ const evaluate = (root, over = {}) => evaluateMigrationApplyWithCachedTestEviden
 // ── BASELINE: the fixture must ALLOW, or every deny below proves nothing ─────
 allows(evaluate(fixture()), "known-good interactive fixture is allowed");
 
+// A session-dependent DDL event helper cannot fire for a plain row update. The
+// gate must not disable the sanctioned data-repair path merely because that
+// separate DDL surface is uncertain.
+{
+  const root = fixture();
+  const manifestPath = path.join(root, "scripts", "trigger-fanout.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.event_triggers = [{
+    name: "session_bound_ddl_helper", enabled: true, enabled_mode: "O", event: "ddl_command_end",
+    routine_schema: "public", routine_name: "session_bound_ddl_helper", routine_oid: "1",
+    routine_hash: "a".repeat(64), routine_config: [], language: "plpgsql", has_sql_body: false,
+    effect: { safe: false, session_catalog_required: true, dynamic_write_count: 0, tables: [], targets: [], unknown_calls: [], unresolved: false, unsupported_routine_identity: false },
+  }];
+  const manifestBytes = Buffer.from(JSON.stringify(manifest));
+  writeFileSync(manifestPath, manifestBytes);
+  const attestationPath = path.join(root, ".claude", "session-state", "trigger-fanout-attestation.json");
+  const attestation = JSON.parse(readFileSync(attestationPath, "utf8"));
+  attestation.manifest.sha256 = createHash("sha256").update(manifestBytes).digest("hex");
+  writeFileSync(attestationPath, JSON.stringify(attestation));
+  const dml = "UPDATE public.orders SET status = status WHERE false;";
+  const reviewPath = path.join(root, ".claude", "session-state", `migration-review-${SAFE}.json`);
+  const review = JSON.parse(readFileSync(reviewPath, "utf8"));
+  review.queryHash = createHash("sha256").update(dml).digest("hex");
+  writeFileSync(reviewPath, JSON.stringify(review));
+  allows(evaluate(root, { query: dml }),
+    "session-dependent DDL helper does not reject harmless DML");
+  denies(evaluate(root, { query: "COMMENT ON TABLE public.orders IS 'guarded';" }),
+    "session-dependent PostgreSQL event trigger helper", "session-dependent DDL helper rejects DDL");
+}
+
 // ── CHECK 1: ordering preflight ─────────────────────────────────────────────
 // Each case asserts the SPECIFIC message for its condition, not just the guard
 // banner. Mutation testing earned this: disabling the missing-snapshot check
