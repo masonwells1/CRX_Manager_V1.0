@@ -4,6 +4,19 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
+**Live-ledger re-read — 2026-08-25, after the save_job chem-unit invariant apply.**
+Read read-only from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`:
+**976 ledger rows**, `max(version)` `20260825142708`, and current live effective ordering
+high-water **`20260820120000`** (derived row by row: timestamp embedded in `name` when present,
+else that row's `version`). The newest row is `version = 20260825142708`, `name =
+20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` — see history row 891.
+Because that `name` carries a `20260820120000` prefix, the effective ordering high-water advances
+past the draw-down chain's `20260819232000` even though the assigned `version` is later.
+
+**Superseded 2026-08-24 (evening) header, kept for provenance** — correct as of that read, but its
+975-row / `20260819232000` figures are one apply behind live and must not be used as the current
+ordering boundary:
+
 **Live-ledger re-read — 2026-08-24 (evening), after the full draw-down rollout completed.**
 Read read-only from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`:
 **975 ledger rows**, `max(version)` `20260825034622`, and current live effective ordering
