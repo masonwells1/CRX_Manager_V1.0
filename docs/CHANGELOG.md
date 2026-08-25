@@ -23,11 +23,39 @@ hard-blocks an unrelated commit — the exact pressure toward the forbidden `--n
 - `docs/manual/KNOWN_ISSUES.md` records this as a distinct root cause from the existing
   page-render full-suite flake, whose `waitFor`/`findAllBy` fix does not apply here.
 
-Proof: cold run after a fresh `npm ci` measured the first ExcelJS-loading test at **7013ms**
-— already over the 5s cap, and passing only because it had the 20s timeout. Mutation proof of
-the new timeout: with `--testTimeout=100` the target test fails `Test timed out in 100ms`
-before the change and passes after, confirming the per-test value overrides the global. All 5
-xlsx-touching files green (48 tests), target test 373ms warm.
+Proof: on the first `vitest` run after a fresh `npm ci`, the cold ExcelJS load landed on the
+sibling file `productPricingWorkbook.test.ts`, whose first test measured **7013ms** — already
+over the 5s default, and passing only because that file already carried a 20s timeout. That is
+the cost this entry's test was exposed to with no timeout of its own. Mutation proof of the new
+30s value: with `--testTimeout=100` the target test fails `Test timed out in 100ms` before the
+change and passes after, confirming the per-test timeout overrides the global. All 5
+xlsx-touching files green (48 tests); target test 346ms before, 373ms after.
+
+## 2026-08-25 — save_job chem-unit invariant + derived totals applied live
+
+With Mason's explicit in-chat approval,
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` (merged as PR #446) was
+applied to production through the gated file-bytes apply door (`scripts/apply-migration-file.mjs`)
+→ ledger version `20260825142708`, ledger 975 → 976 rows. The Supabase management-API token was
+sourced in-process from the Windows Credential Manager (`Supabase CLI:supabase`) and never entered
+chat or a file. Fresh same-session CLEAN proof pair (`write-apply-proofs.mjs`,
+`gpt-5.6-sol`/high) was minted immediately before the apply; the transmitted bytes matched the
+reviewed sha256 `f2e0404e…`.
+
+`save_job` now refuses mismatched or unrecognized chemical rate units (the 8×/16× pint-vs-gallon
+over-bill class) and derives `total_cost_cents` / `total_price_cents` from the chemical lines
+server-side instead of trusting the caller. Post-apply proof: installed body carries
+`chem_unit_invariant_v2`; idempotency helpers unchanged by md5; registered smoke
+`smoke-save-job-parity.sql` returned `SMOKE_PASS_ROLLBACK` on live with the derived-total and both
+unit-refusal assertions active; nine function/money invariant sweeps clean (zero unallowlisted
+rows). The smoke fixture was updated in this change: the governed-pricing trigger
+(`require_governed_product_pricing`) now refuses `current_cost` on product INSERT, so the fixture
+creates pricing-free product shells. Tracked follow-up: the function `COMMENT` still says ELEVEN
+refusal families while the body raises twelve — needs a tiny COMMENT-only migration (the applied
+file is never edited).
+
+- **Migrations applied live this session:**
+  - `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
 
 ## 2026-08-25 — `/patrol`: the fsmonitor override now covers every Git launch
 
