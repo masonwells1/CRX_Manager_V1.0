@@ -98,6 +98,27 @@ try {
   r = runHook(dirE);
   ok(!additionalContextOf(r).includes("BEHIND"), "FIX1: migration older than high-water is never a candidate, even if absent from the name list");
 
+  // ── FIX 2: a server-assigned version AHEAD of every authored stamp must not
+  // swallow written-but-unapplied migrations authored in between. The 2026-08-24
+  // barrier apply recorded version 20260824185408 against name 20260816110000_*;
+  // with the window boundary read from max(version), the unapplied
+  // 20260819232000_* fell below the boundary and the BEHIND warning went silent.
+  // The boundary must come from the max AUTHORED (name-prefix) stamp instead. ──
+  const dirVersionAhead = path.join(tmpRoot, "version-ahead");
+  scaffold(dirVersionAhead, {
+    _meta: {
+      migrations_high_water: "20260824185408", // apply-time version, days ahead
+      applied_migration_names: ["20260816110000_cutover_barrier"],
+    },
+  }, {
+    "20260816110000_cutover_barrier.sql": REGISTRY_RELEVANT_SQL,   // applied
+    "20260819232000_bind_receipts.sql": REGISTRY_RELEVANT_SQL,     // written, NOT applied
+  });
+  r = runHook(dirVersionAhead);
+  ok(additionalContextOf(r).includes("BEHIND"), "FIX2: version ahead of authored stamps still flags the in-between unapplied migration");
+  ok(additionalContextOf(r).includes("20260819232000_bind_receipts.sql"), "FIX2: names the swallowed migration");
+  ok(!additionalContextOf(r).includes("20260816110000_cutover_barrier.sql"), "FIX2: the applied migration itself is not flagged");
+
   // ── FIX 1: no applied_migration_names key at all -> falls back to the
   // original numeric-only compare (pre-FIX-1 registry shape) ──────────────
   const dirF = path.join(tmpRoot, "f");
