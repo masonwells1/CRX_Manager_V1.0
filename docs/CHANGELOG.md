@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-25 — PR #432 closed unmerged; control-file edits now prompt; two git-config falsifications fixed
+## 2026-08-25 — PR #432 closed unmerged; control-file edits move to the `ask` tier; two git-config falsifications fixed
 
 Mason ended the PR #432 repair loop (130 commits, +7,329 lines, four adversarial review rounds,
 never merged) after a symbol sweep showed all five planned splits target code absent from
@@ -73,6 +73,32 @@ enumerate every configured hook path with
 from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
 stop-and-report. Inspecting `config.worktree` alone is insufficient — `core.hooksPath` also takes
 system, global and local scope, and precedence decides which one wins.
+
+## 2026-08-25 — save_job chem-unit invariant + derived totals applied live
+
+With Mason's explicit in-chat approval,
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` (merged as PR #446) was
+applied to production through the gated file-bytes apply door (`scripts/apply-migration-file.mjs`)
+→ ledger version `20260825142708`, ledger 975 → 976 rows. The Supabase management-API token was
+sourced in-process from the Windows Credential Manager (`Supabase CLI:supabase`) and never entered
+chat or a file. Fresh same-session CLEAN proof pair (`write-apply-proofs.mjs`,
+`gpt-5.6-sol`/high) was minted immediately before the apply; the transmitted bytes matched the
+reviewed sha256 `f2e0404e…`.
+
+`save_job` now refuses mismatched or unrecognized chemical rate units (the 8×/16× pint-vs-gallon
+over-bill class) and derives `total_cost_cents` / `total_price_cents` from the chemical lines
+server-side instead of trusting the caller. Post-apply proof: installed body carries
+`chem_unit_invariant_v2`; idempotency helpers unchanged by md5; registered smoke
+`smoke-save-job-parity.sql` returned `SMOKE_PASS_ROLLBACK` on live with the derived-total and both
+unit-refusal assertions active; nine function/money invariant sweeps clean (zero unallowlisted
+rows). The smoke fixture was updated in this change: the governed-pricing trigger
+(`require_governed_product_pricing`) now refuses `current_cost` on product INSERT, so the fixture
+creates pricing-free product shells. Tracked follow-up: the function `COMMENT` still says ELEVEN
+refusal families while the body raises twelve — needs a tiny COMMENT-only migration (the applied
+file is never edited).
+
+- **Migrations applied live this session:**
+  - `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
 
 ## 2026-08-25 — `/patrol`: the fsmonitor override now covers every Git launch
 
