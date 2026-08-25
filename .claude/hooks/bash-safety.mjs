@@ -18,6 +18,7 @@
 
 import { readFileSync } from "node:fs";
 import { checkCommandDeep, checkMigrationModify, checkAskDeep } from "./bash-safety-lib.mjs";
+import { resolveCommandExecutionContext } from "./command-execution-context-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -39,10 +40,15 @@ try {
 const cmd = payload?.tool_input?.command || "";
 if (!cmd) out("allow");
 
-const cwd = process.cwd();
+const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const context = resolveCommandExecutionContext(payload, projectRoot);
+if (context.error || !context.cwd) {
+  out("block", `Blocked command because ${context.error || "its execution directory could not be established"}. Relative executors cannot be reviewed safely without the directory the tool will actually use.`);
+}
+const cwd = context.cwd;
 
 try {
-  const reason = checkCommandDeep(cmd, cwd);
+  const reason = checkCommandDeep(cmd, cwd, { repositoryRoot: projectRoot });
   if (reason) out("block", reason);
 
   const migReason = checkMigrationModify(cmd, cwd);

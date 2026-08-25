@@ -41,6 +41,7 @@ import {
   checkAskDeep,
   checkMigrationModify,
 } from "./bash-safety-lib.mjs";
+import { resolveCommandExecutionContext } from "./command-execution-context-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -77,7 +78,9 @@ const DC_WRITE_RE = /^mcp__[\w-]+__(write_file|write_text_file|append_file|edit_
 if (!DC_TOOL_RE.test(toolName)) nothing();
 
 const input = payload?.tool_input && typeof payload.tool_input === "object" ? payload.tool_input : {};
-const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const context = resolveCommandExecutionContext(payload, projectRoot);
+const cwd = context.cwd;
 const protectedProducerName = ["apply-live-testdata-maintenance-", "20260812.mjs"].join("");
 const protectedProducerRepoPath = `scripts/${protectedProducerName}`;
 // LATCHED safety boundary. Retirement requires an explicit reviewed change to
@@ -111,7 +114,10 @@ try {
     }
 
     if (text) {
-      const reason = checkCommandDeep(text, cwd);
+      if (context.error || !cwd) {
+        out("block", `MCP TOOL GUARD (${toolName}): command execution directory is unavailable or ambiguous (${context.error || "missing directory"}).`);
+      }
+      const reason = checkCommandDeep(text, cwd, { repositoryRoot: projectRoot });
       if (reason) out("block", `MCP TOOL GUARD (${toolName}): ${reason}`);
 
       const migReason = checkMigrationModify(text, cwd);

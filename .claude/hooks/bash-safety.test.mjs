@@ -50,10 +50,12 @@ function eq(a, b, m) { assert.equal(a, b, m); pass++; }
 // assertions test the deny they name instead of a missing-path accident.
 const nativeCommandPath = (relative) => (process.platform === "win32" ? relative.replaceAll("/", "\\") : relative);
 function runHook(payload, cwd) {
+  const hookCwd = cwd || process.cwd();
+  const inputPayload = payload?.cwd === undefined ? { ...payload, cwd: hookCwd } : payload;
   return spawnSync(process.execPath, [path.join(__dirname, "bash-safety.mjs")], {
-    input: JSON.stringify(payload),
+    input: JSON.stringify(inputPayload),
     encoding: "utf8",
-    cwd: cwd || process.cwd(),
+    cwd: hookCwd,
   });
 }
 
@@ -815,6 +817,44 @@ for (const command of [
     const shadowBootstrapPath = path.join(integrityRepo, "output", ...bootstrapRelative.split("/"));
     mkdirSync(path.dirname(shadowBootstrapPath), { recursive: true });
     writeFileSync(shadowBootstrapPath, "console.log('ignored shadow');\n");
+    const toolWorkdirResult = runHook({
+      tool_name: "Bash",
+      cwd: integrityRepo,
+      tool_input: { command: `node ${bootstrapRelative}`, workdir: path.join(integrityRepo, "output") },
+    }, integrityRepo);
+    ok(toolWorkdirResult.stdout.includes('"permissionDecision":"deny"'), "a tool-level workdir cannot redirect the approved relative command to an ignored shadow");
+    const ambiguousWorkdirResult = runHook({
+      tool_name: "Bash",
+      cwd: integrityRepo,
+      tool_input: { command: "git status --short", cwd: integrityRepo, workdir: path.join(integrityRepo, "output") },
+    }, integrityRepo);
+    ok(ambiguousWorkdirResult.stdout.includes("cwd and workdir disagree"), "conflicting tool-level execution directories fail closed");
+    const missingWorkdirResult = runHook({ tool_name: "Bash", cwd: null, tool_input: { command: "git status --short" } }, integrityRepo);
+    ok(missingWorkdirResult.stdout.includes("execution directory is missing"), "a missing command execution directory fails closed");
+
+    const projectRoot = path.resolve(__dirname, "..", "..");
+    mkdirSync(path.join(projectRoot, "output"), { recursive: true });
+    const adapterShadowRoot = mkdtempSync(path.join(projectRoot, "output", "cwd-shadow-"));
+    try {
+      const adapterShadowPath = path.join(adapterShadowRoot, ...bootstrapRelative.split("/"));
+      mkdirSync(path.dirname(adapterShadowPath), { recursive: true });
+      writeFileSync(adapterShadowPath, "console.log('ignored adapter shadow');\n");
+      const adapterPath = path.join(projectRoot, ".codex", "hooks", ["codex", "hook", "adapter.mjs"].join("-"));
+      const adapterResult = spawnSync(process.execPath, [adapterPath, ".claude/hooks/bash-safety.mjs"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+        input: JSON.stringify({
+          tool_name: "Bash",
+          cwd: projectRoot,
+          tool_input: { command: `node ${bootstrapRelative}`, workdir: adapterShadowRoot },
+        }),
+      });
+      eq(adapterResult.status, 0, "the Codex adapter exits cleanly after forwarding a tool-level workdir");
+      ok(adapterResult.stdout.includes('"permissionDecision":"deny"'), "the Codex adapter preserves the workdir that selects the ignored shadow");
+      ok(adapterResult.stdout.includes("ignored or untracked"), "the adapter end-to-end route verifies the actually executed shadow path");
+    } finally {
+      rmSync(adapterShadowRoot, { recursive: true, force: true });
+    }
     for (const shiftedCommand of [
       "cd output && node " + bootstrapRelative,
       "Set-Location output; node " + bootstrapRelative,

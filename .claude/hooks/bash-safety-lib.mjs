@@ -371,6 +371,7 @@ function gitBlobHash(buffer) {
 
 function createReviewedExecutorInspector(cwd, options = {}) {
   const base = cwd || process.cwd();
+  const repositoryBase = options.repositoryRoot || base;
   // The dependency seams are for direct unit tests only. Production hook
   // entrypoints never accept or forward inspector options.
   const clock = typeof options.nowForTest === "function" ? options.nowForTest : performance.now.bind(performance);
@@ -424,7 +425,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       ? path.join(gitEnv.SystemRoot || gitEnv.WINDIR || "C:\\Windows", "System32")
       : "/usr/bin:/bin";
     gitEnv.PATH = `${trustedGitPath}${path.delimiter}${systemPath}`;
-    const rootResult = runGit(["-C", base, "--no-replace-objects", "rev-parse", "--show-toplevel"], {
+    const rootResult = runGit(["-C", repositoryBase, "--no-replace-objects", "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       windowsHide: true,
       env: gitEnv,

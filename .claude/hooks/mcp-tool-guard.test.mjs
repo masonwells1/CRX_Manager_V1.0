@@ -26,10 +26,12 @@ function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
 
 function runHook(payload, cwd, envOverrides = {}) {
+  const hookCwd = cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const inputPayload = payload?.cwd === undefined ? { ...payload, cwd: hookCwd } : payload;
   return spawnSync(process.execPath, [path.join(__dirname, "mcp-tool-guard.mjs")], {
-    input: JSON.stringify(payload),
+    input: JSON.stringify(inputPayload),
     encoding: "utf8",
-    env: { ...process.env, ...envOverrides, CLAUDE_PROJECT_DIR: cwd || process.env.CLAUDE_PROJECT_DIR },
+    env: { ...process.env, ...envOverrides, CLAUDE_PROJECT_DIR: hookCwd },
   });
 }
 function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
@@ -152,6 +154,24 @@ for (const command of [
   ok(isDeny(result), `MCP start_process denies Git helper/exec-path dispatch: ${command}`);
 }
 const reviewBootstrap = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
+const projectRoot = path.resolve(__dirname, "..", "..");
+mkdirSync(path.join(projectRoot, "output"), { recursive: true });
+const mcpWorkdirShadow = mkdtempSync(path.join(projectRoot, "output", "mcp-cwd-shadow-"));
+try {
+  const shadowPath = path.join(mcpWorkdirShadow, ...reviewBootstrap.split("/"));
+  mkdirSync(path.dirname(shadowPath), { recursive: true });
+  writeFileSync(shadowPath, "console.log('ignored MCP workdir shadow');\n");
+  const workdirResult = runHook({
+    tool_name: "mcp__Desktop_Commander__start_process",
+    cwd: projectRoot,
+    tool_input: { command: `node ${reviewBootstrap}`, workdir: mcpWorkdirShadow },
+  }, projectRoot);
+  eq(workdirResult.status, 0, "mcp-tool-guard exits cleanly after a tool-level workdir selects an ignored shadow");
+  ok(isDeny(workdirResult), "MCP process execution denies the ignored shadow selected by tool-level workdir");
+  ok(workdirResult.stdout.includes("ignored or untracked"), "MCP provenance resolves the executable from its actual workdir");
+} finally {
+  rmSync(mcpWorkdirShadow, { recursive: true, force: true });
+}
 for (const command of [
   ["node --test --test-reporter=output/ignored-wrapper.mjs", reviewBootstrap].join(" "),
   ["node --env-file=output/ignored.env", reviewBootstrap].join(" "),
