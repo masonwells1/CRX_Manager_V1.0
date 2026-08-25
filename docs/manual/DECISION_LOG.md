@@ -1,12 +1,44 @@
 # Decision Log
 
-Last verified: 2026-08-24
+Last verified: 2026-08-25
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+
+## 2026-08-25 — Guard regions are closed allowlists, not blocklists of spellings
+
+**Decision.** When a SQL invariant sweep needs to prove that nothing unexpected happens between two
+points in a function body, pin the whole region to its exact reviewed text (whitespace-normalized)
+rather than counting the ways it could be subverted.
+
+**Why.** PR #401's `quote-versions-rpc-owned.sql` predicate reached four review rounds on the same
+few lines. Round 3 found that the region between the anchor assignment and the trust-marker `UPDATE`
+could be subverted by reassigning `v_version_id` or `v_result`, and was fixed by counting
+`v_version_id :=` and `v_result :=` inside the region. Round 4 then found `SELECT ... INTO
+v_version_id`, which that count does not see. PL/pgSQL has at least five assignment forms
+(`:=`, `SELECT ... INTO`, `EXECUTE ... INTO`, `... RETURNING ... INTO`, `GET DIAGNOSTICS ... =`), so
+a blocklist closes one spelling per review round and never terminates. A closed allowlist —
+"this region must be exactly this text" — closes every form at once, including forms nobody has
+enumerated, and it cannot be defeated by a spelling the reviewer did not think of.
+
+**Cost, accepted deliberately.** The pin is brittle by design: any legitimate re-emission that
+changes the region must update the literal. That is the review trigger the sweep exists to create,
+and the restore-side contract in the same file already uses the same technique (a prefix length plus
+an md5 digest).
+
+**Operative rule.** A guard that enumerates forbidden forms is a guard that will be reopened. Where
+the protected region is small and fixed, pin the region. Where it is not, say so explicitly rather
+than shipping a blocklist that reads like a proof.
+
+**Two mechanics worth keeping.** Collapse whitespace *before* trimming — `btrim()` first leaves the
+region's trailing newline to collapse into a single space, and the real body then fails its own
+guard; this was caught only by executing the expression against live PostgreSQL 17.6, not by review.
+And the test must tie the migration to the predicate: assert that the shipped function body
+normalizes to the pinned literal, not merely that the predicate contains it. A `toContain()` on the
+predicate alone pins a string while the function drifts away from it.
 ---
 
 ## 2026-08-25 — `regexp_count(text, text, 'i')` does not exist; it crashes the sweep it guards
@@ -19,7 +51,7 @@ flag as the **third** argument: `regexp_count(p.prosrc, '<pattern>', 'i')`. Post
 parameter is a **start position (integer)**, and the flags string is the **fourth**. The three-argument
 form with a text flag has no matching overload, so every one of those calls raises
 
-```
+```text
 ERROR: 22P02: invalid input syntax for type integer: "i"
 ```
 
@@ -49,7 +81,7 @@ diff-reading reviewer will not catch an argument-type error. Where a guard is me
 something, prove it both ways: run it against the real body (expect pass) and against a mutated
 body (expect reject). Both directions were verified here after the fix.
 
-**Related open risk, unchanged by this entry:** the accepted cutover race recorded above.
+**Related open risk, unchanged by this entry:** the accepted cutover race recorded in the entry immediately below.
 
 ---
 
@@ -1011,12 +1043,23 @@ entry as precedent for publishing any other live data; a fresh owner decision is
 Mason's stated basis was that the data in this system is not real or operational, so the basis does
 not carry to data that is.
 
-**Related, and deliberately not restated here:** the narrow live-ledger recovery exception (the rule
-that lets an already-applied migration be recovered to Git without its already-live SQL blocking the
-push proof) was settled the same day, but its Decision Log entry lives on PR #403 and **is not on
-`main` yet**. Until #403 merges, `main`'s Decision Log does not record that approval. That entry is
-also what makes this change necessary: as amended in #403, the exception is **byte-verbatim only** —
-a redacted recovery cannot attest — so publishing this file in full is what makes it eligible.
+**Related, and closed — not an open thread.** An earlier version of this paragraph pointed at a
+narrow live-ledger recovery exception (the rule that would let an already-applied migration be
+recovered to Git without its already-live SQL blocking the push proof) as a pending approval on
+PR #403. **PR #403 was closed on 2026-08-25 by Mason's explicit decision and will not merge.** That
+exception is therefore **not in force**, and no Decision Log entry for it exists on `main`. Do not
+cite it as approved policy, and do not treat it as unfinished work to be resurrected. The recovery
+it existed to enable had already been completed by hand on 2026-08-14 — commit `3a2a0ca0`, via
+PR #392 — the need has not recurred across the 188 commits since, and the attestation machinery
+needed five Sol adversarial rounds before it was no longer forgeable. A future byte-verbatim
+recovery uses that same manual path, or requires a fresh owner decision. Evidence:
+https://github.com/masonwells1/CRX_Manager_V1.0/pull/403#issuecomment-5416488045
+
+**This override does not depend on #403.** Publishing `20260812115238` in full rests on Mason's own
+explicit 2026-08-14 instruction recorded under **Source** above, and on the byte-for-byte match
+against the live ledger recorded under **Decision** — a redacted file could not have been checked
+against those ledger bytes at all. That reasoning is self-contained and is unaffected by #403's
+closure.
 
 ---
 

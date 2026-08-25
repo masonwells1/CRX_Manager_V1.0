@@ -714,6 +714,38 @@ describe('quote_versions write boundary — standing predicate', () => {
     expect(predicateCode).toContain('restore_trusted_at');
     expect(predicateCode).toContain('regexp_count(');
     expect(predicateCode).toContain("'\\mupdate\\s+(only\\s+)?(\"?public\"?\\s*\\.\\s*)?\"?quote_versions\\M'");
+
+    // CodeRabbit round 4 (2026-08-25): the region between the anchor assignment
+    // and the marker UPDATE is now a CLOSED allowlist rather than a blocklist of
+    // assignment spellings. Rounds 3 and 4 each closed exactly one spelling
+    // (`:=`, then `SELECT ... INTO`) and left the others open; pinning the whole
+    // region closes every form at once, including ones nobody has thought of.
+    const trustRegion =
+      "v_version_id := nullif(v_result->>'version_id', '')::uuid; " +
+      "if v_result->>'status' is distinct from 'created' or v_version_id is null then " +
+      "raise exception 'quote_version_trust_mark_failed'; end if;";
+    // The migration's real body must normalize to exactly that text. This is the
+    // assertion that catches a drift between the shipped function and the sweep
+    // that is supposed to police it — a toContain() on the predicate alone would
+    // pin the literal without proving the function still matches it.
+    const createBody =
+      restoreTrustMigration.match(
+        /CREATE OR REPLACE FUNCTION public\.create_quote_version\([\s\S]*?AS \$function\$([\s\S]*?)\$function\$;/,
+      )?.[1] ?? '';
+    expect(createBody).not.toBe('');
+    const loweredBody = createBody.toLowerCase();
+    const anchorAt = loweredBody.indexOf("v_version_id := nullif(v_result->>'version_id', '')::uuid");
+    const updateAt = loweredBody.indexOf('update public.quote_versions');
+    expect(anchorAt).toBeGreaterThan(-1);
+    expect(updateAt).toBeGreaterThan(anchorAt);
+    expect(loweredBody.slice(anchorAt, updateAt).replace(/\s+/g, ' ').trim()).toBe(trustRegion);
+    // ...and the predicate must compare against that same text, SQL-escaped.
+    expect(predicateCode).toContain(`= '${trustRegion.replace(/'/g, "''")}'`);
+    // Whitespace is collapsed BEFORE trimming. The reverse order lets the
+    // region's trailing newline collapse into a single space, and the real body
+    // then fails its own guard — verified against live PostgreSQL 17.6.
+    expect(predicateCode).toMatch(/AND btrim\(\s*regexp_replace\(/);
+    expect(predicateCode).not.toMatch(/regexp_replace\(\s*btrim\(/);
   });
 
   it('pins the restore trust rejection before the only owner-side restore call', () => {

@@ -569,30 +569,42 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
         -- stayed green.
         AND regexp_count(p.prosrc, '_create_quote_version_owner_impl\s*\(', 1, 'i') = 1
         --
-        -- Gap 2 (P2): strpos validates only the FIRST occurrence, so a body that
-        -- reassigns v_version_id or v_result BETWEEN the checked assignment and
-        -- the marker UPDATE still passed every check above — and the DML checks
-        -- ignore assignments and SELECTs entirely. Pin the region between the
-        -- anchor assignment and the UPDATE: it must hold that one assignment and
-        -- no other write to either variable.
-        AND regexp_count(
-              substring(
-                lower(p.prosrc)
-                FROM strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
-                FOR  strpos(lower(p.prosrc), 'update public.quote_versions')
-                     - strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
-              ),
-              'v_version_id\s*:=', 1, 'i'
-            ) = 1
-        AND regexp_count(
-              substring(
-                lower(p.prosrc)
-                FROM strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
-                FOR  strpos(lower(p.prosrc), 'update public.quote_versions')
-                     - strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
-              ),
-              'v_result\s*:=', 1, 'i'
-            ) = 0
+        -- Gap 2 (P2) — REOPENED by CodeRabbit round 4 (2026-08-25). The round-3
+        -- fix enumerated the FORBIDDEN ways to rewrite the marker variables: it
+        -- counted `v_version_id :=` and `v_result :=` inside the region. But
+        -- PL/pgSQL has several other assignment forms — `SELECT ... INTO`,
+        -- `EXECUTE ... INTO`, `... RETURNING ... INTO`, `GET DIAGNOSTICS ... =`
+        -- — so a blocklist closes exactly one spelling per review round and
+        -- leaves the rest open. Round 4 correctly pointed at `SELECT ... INTO
+        -- v_version_id`, which sailed through the round-3 checks.
+        --
+        -- Replaced with a CLOSED ALLOWLIST rather than a longer blocklist: the
+        -- region between the anchor assignment and the marker UPDATE must be
+        -- EXACTLY the reviewed text, modulo whitespace. Nothing else can appear
+        -- there in any spelling — not another assignment, not a comment — so
+        -- every form, including ones not yet thought of, is closed at once. A
+        -- legitimate future re-emission that changes this region must update
+        -- this literal, and that is the review trigger this sweep exists to
+        -- create.
+        --
+        -- Collapse whitespace BEFORE trimming, not after: btrim() first leaves
+        -- the region's trailing newline to collapse into a single space, and the
+        -- comparison fails on the real body. Verified against live PostgreSQL
+        -- 17.6 on 2026-08-25 — real body and a whitespace-reformatted body pass;
+        -- select-into, execute-into, `:=` reassignment of either variable, an
+        -- injected comment, a removed anchor, and a removed trust-mark failure
+        -- check are each rejected.
+        AND btrim(
+              regexp_replace(
+                substring(
+                  lower(p.prosrc)
+                  FROM strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
+                  FOR  strpos(lower(p.prosrc), 'update public.quote_versions')
+                       - strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
+                ),
+                '\s+', ' ', 'g'
+              )
+            ) = 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid; if v_result->>''status'' is distinct from ''created'' or v_version_id is null then raise exception ''quote_version_trust_mark_failed''; end if;'
         AND regexp_count(
           p.prosrc,
           'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null\s*;',
