@@ -52,11 +52,19 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // joined RISKY_PATH_RES so a Codex push touching it needs an exact-head
   // proof. The apply-live-testdata risky-path anchor this transform verifies is
   // still present exactly once; the transform is identity, so input == output.
-  codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
+  // Re-pinned 2026-08-24 (PR #460): the guard gained a deny for
+  // scripts/apply-migration-file.mjs, the new gated file-bytes live-apply path.
+  // Codex's own review of that PR found the new script reached production while
+  // every OTHER migration path was already blocked here (P1), so the guard had to
+  // learn the new spelling. The transform anchors below are untouched by that
+  // edit; only the pinned blobs move.
+  codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
   pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
+  // Re-pinned 2026-08-24 (PR #460) alongside the input blob above; taken from the
+  // producer test's reported candidate, not hand-computed.
+  codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
   pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
 };
 
