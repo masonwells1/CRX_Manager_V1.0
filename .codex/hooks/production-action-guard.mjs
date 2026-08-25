@@ -77,6 +77,47 @@ function protectedHarnessPathMentioned(value) {
   return PROTECTED_HARNESS_PATH_RE.test(String(value || "").trim());
 }
 
+// scripts/apply-migration-file.mjs mutates the LIVE database. It was added
+// 2026-08-24 as a gated door for migrations too large to transmit through
+// apply_migration, and Codex's review of that PR caught that the new spelling
+// reached production while every OTHER migration path was blocked here (P1).
+// Blocked outright rather than only on `--confirm`: matching a flag invites
+// quoting games, and Codex has no need for even the dry run.
+// Matched across quote-stripped and backslash-dropped views so `apply"-"migration-file`
+// and `apply\-migration-file` — which the shell runs identically — cannot slip past.
+const LIVE_APPLY_SCRIPT_RE = /apply-migration-file(?:\.mjs)?\b/i;
+function liveApplyScriptMentioned(command) {
+  const base = String(command || "").replace(/[\\`]\r?\n/g, "");
+  const views = [
+    base,
+    base.replace(/["']/g, ""),
+    base.replace(/\\(.)/g, "$1"),
+    base.replace(/["']/g, "").replace(/\\(.)/g, "$1"),
+  ];
+  return views.some((v) => LIVE_APPLY_SCRIPT_RE.test(v));
+}
+
+// The literal matcher above loses to a computed argument: `S=scripts/apply-migration-file.mjs; node $S`
+// never spells the name (CodeRabbit, PR #460 round 2 — the same class documented in
+// review-proof-guard, where a target hidden entirely from the command text defeats
+// any string matcher). A denylist cannot be completed by enumeration, so this
+// inverts: when a Node-family interpreter is invoked and ANY part of the command
+// is shell-expanded, the script it will run is statically unresolvable and the
+// command is refused. Codex has no need to launch an interpreter through an
+// expansion — `node -e`/`node -`/`| node` are already denied above — so the cost
+// is a clear error telling the operator to spell the path literally.
+// HONEST RESIDUAL: an interpreter that writes-then-runs a file, or any indirection
+// where no interpreter appears in the command text, is still outside what a
+// command-text guard can catch. The durable boundary stays the apply gate itself
+// plus Mason's in-chat approval, not this string match.
+const NODE_INTERPRETER_RE = /(?:^|[\s"'`\\/;&|(])(?:node|npx|tsx|ts-node|bun|deno)(?:\.exe)?["']?(?:\s|$)/i;
+const SHELL_EXPANSION_RE = /\$\{[^}]*\}|\$\(|`|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%|\$env:/i;
+function interpreterArgumentIsUnresolvable(command) {
+  const text = String(command || "");
+  if (!NODE_INTERPRETER_RE.test(text)) return false;
+  return SHELL_EXPANSION_RE.test(text);
+}
+
 function usesDynamicProcessEval(command) {
   const text = String(command || "");
   return /(?:^|[\s"'\\/])node(?:\.exe)?["']?\s+(?:(?:--[a-z-]+(?:=[^\s]+)?|-{1,2}[a-z-]+)\s+)*(?:-e|--eval|-p|--print)(?:\s|=|$)/i.test(text) ||
@@ -677,6 +718,20 @@ export function evaluateProductionAction({
   const changesDirectory = /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|set-location)\s+/i.test(command);
   if ((changesDirectory && reviewStateDirectoryMentioned(command)) || reviewStateDirectoryMentioned(actionRepoDir)) {
     return denied("CODEX PRODUCTION GATE: the wrapper-owned review state directory cannot be used as an interactive shell working directory.");
+  }
+  if (liveApplyScriptMentioned(command)) {
+    return denied(
+      "CODEX PRODUCTION GATE: scripts/apply-migration-file.mjs applies a migration to the LIVE database and is " +
+      "blocked, exactly like the MCP apply_migration and Supabase CLI migration paths. Its internal gate checks " +
+      "review evidence but cannot verify Mason's required in-chat approval, so it is not an alternative spelling " +
+      "for the reviewed migration path. Live migrations remain outside Codex's standing authorization.");
+  }
+  if (interpreterArgumentIsUnresolvable(command)) {
+    return denied(
+      "CODEX PRODUCTION GATE: a Node-family interpreter invoked with a shell-expanded argument is blocked — the " +
+      "script it would run cannot be resolved from the command text, so a live-apply path such as " +
+      "scripts/apply-migration-file.mjs can hide behind `$VAR`, `${VAR}`, `$(…)` or a backtick. Spell the script " +
+      "path literally so the gate can see what will run.");
   }
   if (usesDynamicProcessEval(command)) {
     return denied("CODEX PRODUCTION GATE: Node eval/print modes are blocked because generated code can hide uninspected git or GitHub writes. Put ordinary diagnostic code in a reviewed script instead.");
