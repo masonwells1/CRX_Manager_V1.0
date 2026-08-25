@@ -24,13 +24,19 @@ regenerated from live introspection on 2026-08-25 and records `migrations_high_w
 carry `20260825142708`. Refresh it from live introspection before trusting any registry-derived
 hook or reviewer on `jobs`/`job_chemicals` shape.
 
-**Booking draws remain PAUSED** as of this stamp. What has been observed since the rollout is:
-zero unexpired and zero unbound `draw_down_quote` receipts on a read-only live postflight
-(2026-08-25); production root returning HTTP 200 (2026-08-25); and Mason opening the production
-Quote Builder initial screen (`Q-2026-2062`) on 2026-08-25, which rendered normally with no visible
-error and with no customer, item, preview, save, or submission made. That last item is
-**reachability and UI-render evidence only — it is not a booking-draw transaction and not an
-end-to-end draw allocation proof.** Resuming booking draws is Mason's decision and has not been made.
+**Booking draws are RESUMED** — Mason released the pause in chat on 2026-08-25. The decision, the
+evidence it rests on, and what was explicitly *not* proven are recorded in
+`docs/manual/DECISION_LOG.md` (2026-08-25 entry).
+
+What was observed before the release: zero unexpired and zero unbound `draw_down_quote` receipts on
+a read-only live postflight (2026-08-25); production root returning HTTP 200 (2026-08-25); and Mason
+opening the production Quote Builder initial screen (`Q-2026-2062`) on 2026-08-25, which rendered
+normally with no visible error and with no customer, item, preview, save, or submission made. That
+last item is **reachability and UI-render evidence only — it is not a booking-draw transaction and
+not an end-to-end draw allocation proof.** No end-to-end production draw has been observed since the
+rollout; Mason resumed knowing that, and manufacturing the proof by submitting a real quote or order
+was ruled out. Do not re-impose the pause on the strength of that gap alone — only on new evidence
+of an actual defect.
 
 **This pass re-read the ledger and the registry stamp only.** It does not re-certify any other
 figure in this document; every section below keeps its own older date. In particular, any statement

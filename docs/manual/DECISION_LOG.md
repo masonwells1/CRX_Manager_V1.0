@@ -1,11 +1,46 @@
 # Decision Log
 
-Last verified: 2026-08-24
+Last verified: 2026-08-25
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-25 — Booking draws RESUME; the draw-down pause is released
+
+**Source:** Mason's in-chat decision, 2026-08-25, closing out the four-migration draw-down rollout.
+Releases the pause held since the 2026-08-24 rollout began.
+
+**Decision.** Booking draws are **back on**. The pause imposed for the draw-down migration chain is
+lifted; sales reps may draw down bookings normally.
+
+**Evidence the decision rests on** — stated exactly, because it is not a complete proof:
+
+- All four draw-down migrations applied live and recorded with per-migration SHA-256 pins, fresh
+  reviewer proofs, and independent postflight (top rollout block of
+  `docs/reference/migration-history.md`).
+- Read-only live postflight, 2026-08-25: **zero unexpired** and **zero unbound**
+  `draw_down_quote` receipts; the draw-down function ACL and `search_path` posture as designed.
+- Production root returning HTTP 200, 2026-08-25.
+- Mason opened the production Quote Builder initial screen (`Q-2026-2062`) on 2026-08-25; it
+  rendered normally with no visible error, and no customer, item, preview, save, or submission was
+  made.
+
+**What was NOT proven.** No end-to-end booking draw has been observed in production since the
+rollout. The Quote Builder observation is **reachability and UI-render evidence only** — not a draw
+transaction and not a draw allocation proof. Manufacturing that proof was explicitly ruled out: it
+would have required creating or submitting a real quote or order in live production purely to
+generate evidence.
+
+**Operative rule.** Draws are resumed on the evidence above, accepting the residual risk knowingly.
+The recommended precaution — Mason's to run or skip — is that the **first** real draw after resuming
+be treated as the end-to-end proof and watched (Sentry / live error monitoring) while it happens, so
+a defect surfaces on draw #1 rather than draw #20. Do not re-open this decision or re-impose the
+pause on the grounds that "no end-to-end draw was observed"; that gap is recorded here and was
+accepted. Re-impose a pause only on new evidence of an actual defect.
 
 ---
 

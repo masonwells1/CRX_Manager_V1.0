@@ -28,21 +28,25 @@ therefore **one migration behind live** until it is refreshed.
 production draw has been observed, and none was manufactured — creating, updating, or submitting a
 real quote or order purely to produce evidence was ruled out.
 
-**Booking draws therefore remain PAUSED.** Releasing the pause is Mason's decision and has not been
-made. Documents corrected in this pass:
+**Booking draws are RESUMED.** Mason released the pause in chat on 2026-08-25, on the evidence
+above and knowing that no end-to-end production draw was observed. The decision and its accepted
+residual risk are recorded in `docs/manual/DECISION_LOG.md` (2026-08-25 entry). Recommended
+precaution, Mason's to run or skip: treat the **first** real draw after resuming as the end-to-end
+proof and watch live error monitoring while it happens.
+
+Documents corrected in this pass:
 
 - `docs/manual/CURRENT_STATE.md` — its header still reported 971 ledger rows at high-water
   `20260816174353` with a registry matching that older boundary, contradicting `KNOWN_ISSUES.md`
-  and `migration-history.md`. Restamped to the 975-row/`20260825034622` reading; the old figures
-  are kept only inside an explicitly superseded provenance block.
+  and `migration-history.md`. Restamped to the current live reading; the old figures are kept only
+  inside an explicitly superseded provenance block.
 - `docs/audits/2026-08-24-codex-to-claude-draw-down-live-rollout-handoff.md` — its banner called
   the handoff "fully executed" with "no instruction … actionable", which retired the two closeout
   steps that had not happened. The banner now supersedes only the apply/reconciliation steps (1–7)
-  and states items 8 and 9 as outstanding, with the booking-draw pause explicitly still in force.
+  and carries the resume decision for step 9.
+- `docs/manual/DECISION_LOG.md` — new 2026-08-25 entry recording the resume decision.
 
-No code, schema, live data, or migration was changed by this entry. The parked `save_job`
-chemical-unit migration `20260820120000` (history row 891) remains written, proven, and **not
-applied** — unaffected by this rollout.
+No code, schema, live data, or migration was changed by this entry.
 
 ## 2026-08-24 — Draw-down rollout completed live: migrations 2, 3 and 4 applied
 

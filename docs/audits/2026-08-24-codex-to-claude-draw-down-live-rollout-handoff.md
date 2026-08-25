@@ -11,8 +11,9 @@
 > remains actionable. The authoritative apply record is the top rollout block of
 > `docs/reference/migration-history.md`, with `docs/CHANGELOG.md` carrying the dated summary.
 >
-> **Still outstanding ("Not Started" items 8 and 9):** step 8's practical application verification
-> is only **partly** met, and step 9 has **not** happened. What was actually observed on 2026-08-25:
+> **Items 8 and 9 — closed 2026-08-25, with a stated gap.** Step 8's practical application
+> verification is only **partly** met; step 9 was settled by Mason's decision, not by an
+> end-to-end proof. What was actually observed on 2026-08-25:
 > a read-only live postflight finding 975 ledger rows, zero unexpired and zero unbound
 > `draw_down_quote` receipts, and the expected draw-down function ACL/search-path posture;
 > production root returning HTTP 200; and Mason opening the production Quote Builder initial screen
@@ -22,11 +23,13 @@
 > proof.** No such end-to-end proof exists, and none may be manufactured by creating, updating, or
 > submitting a real quote or order.
 >
-> **BOOKING DRAWS THEREFORE REMAIN PAUSED.** Line 22 and "Not Started" item 9 below still bind:
-> nobody has told Mason that draws may resume, and only Mason can decide to resume them. He may
-> release the pause on the evidence above, accepting that no end-to-end draw has been observed in
-> production, or he may require a safe no-write observation first. Until he decides, treat the pause
-> as in force.
+> **BOOKING DRAWS ARE RESUMED.** Mason released the pause in chat on 2026-08-25, on the evidence
+> above and knowing that no end-to-end production draw was observed. Line 22 and "Not Started"
+> item 9 below are therefore **discharged** — read them as history, not as a standing instruction to
+> keep draws paused. The decision, the evidence, and the accepted residual risk are recorded in
+> `docs/manual/DECISION_LOG.md` (2026-08-25 entry), which is canonical; this banner only points at
+> it. Do not re-impose the pause because no end-to-end draw was observed — that gap was known and
+> accepted. Re-impose only on new evidence of an actual defect.
 >
 > This file is committed as the durable provenance record the rollout documentation cites.
 
