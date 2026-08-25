@@ -289,6 +289,20 @@ transform of the existing checks is mechanical; block-message text is preserved 
     migration through it. `apply-migration-file` is now in `BUILD_BASH_RE`; add any future spelling
     there in the same change that creates it.
 
+11. **The ledger name must be CANONICAL — one 14-digit stamp, at the start, none elsewhere.**
+    Removing `--name` (rule 9) was only half the fix, and half a fix is the same bug. The *filename*
+    is caller-controlled too: Codex copied a reviewed migration to
+    `99999999999999_alias_<old-name>.sql` and reproduced the whole replay — the proof still matched
+    (names compare by SUBSTRING and the alias CONTAINS the original name), the queryHash still
+    matched (same SQL), and ordering read the alias's FIRST stamp as newest. The real script exited
+    0. An alias needs a *second* stamp to carry the original name, so requiring exactly one rejects
+    the attack by construction while every real migration passes unchanged. Fix the mechanism —
+    name-to-proof substring matching feeding a name-derived ordering stamp — not the spelling.
+12. **Reject a removed flag in EVERY spelling, before resolving anything else.**
+    `argv.includes("--name")` matched only a standalone token, so `--name=alias` slipped through,
+    and the check ran after file resolution so a missing file reported a path error instead of the
+    refusal. Match `^--flag(=|$)` and refuse first.
+
 **Three instances of ONE root cause.** `--project` (round 4), `--name` (round 5), and the
 wrappability list's wrong entries all came from the same mistake: adding flexibility, or asserting a
 restriction, without checking what downstream already assumed. A parameter is not free — every check

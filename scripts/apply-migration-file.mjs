@@ -78,6 +78,30 @@ function flagValue(argv, flag) {
 }
 
 const argv = process.argv.slice(2);
+
+// ── REMOVED FLAGS ARE REJECTED FIRST, IN EVERY SPELLING ────────────────────
+// `argv.includes("--name")` only matched a standalone token, so `--name=alias`
+// slipped through; and the check used to run AFTER file resolution, so
+// `--name alias` with no file reported a path error instead of the refusal
+// (CodeRabbit, PR #470). Both flags are now matched as `^--flag(=|$)` and refused
+// before anything else is resolved. Why each was removed is documented at TARGET
+// and LEDGER NAME below.
+const rejectedFlag = (flag, why) => {
+  if (argv.some((a) => new RegExp(`^${flag}(?:=|$)`).test(a))) die(1, why);
+};
+rejectedFlag("--project",
+  "apply-migration-file: --project is not supported. The target is pinned to CRX production " +
+  `(${CRX_PRODUCTION_REF}).\n` +
+  "The applied-migration snapshot, the reviewer/Codex proofs, and the autopilot authorization flag are all " +
+  "checkout-wide and assume a single project; pointing this script elsewhere would let a foreign ledger " +
+  "overwrite the snapshot production ordering is judged against. If another target is ever genuinely needed, " +
+  "scope those three things to the project ref FIRST — do not re-add the flag on its own.");
+rejectedFlag("--name",
+  "apply-migration-file: --name is not supported. The ledger name is derived from the migration filename.\n" +
+  "A caller-supplied name can carry a timestamp that disagrees with the file: the reviewer proof still matches " +
+  "by substring while the ordering gate reads the supplied stamp, so stale SQL can be presented as the newest " +
+  "migration. Rename the FILE if the ledger name must change.");
+
 const positional = argv.filter((a, i) => !a.startsWith("--") && !argv[i - 1]?.startsWith("--"));
 const filePath = positional[0];
 if (!filePath) {
@@ -104,16 +128,9 @@ const createdBy = flagValue(argv, "--created-by") || DEFAULT_CREATED_BY;
 // Parameterizing the ref quietly broke every one of those assumers. Restricting is
 // the honest fix; binding snapshot + proofs + authorization per-ref would be a much
 // larger change and nothing needs it — this repo has one production project.
+// (The `--project` refusal itself fires earlier, with the other removed flags, so
+// it cannot be reached by a spelling that slips past this point.)
 const projectId = CRX_PRODUCTION_REF;
-if (argv.includes("--project")) {
-  die(1,
-    "apply-migration-file: --project is not supported. The target is pinned to CRX production " +
-    `(${CRX_PRODUCTION_REF}).\n` +
-    "The applied-migration snapshot, the reviewer/Codex proofs, and the autopilot authorization flag are all " +
-    "checkout-wide and assume a single project; pointing this script elsewhere would let a foreign ledger " +
-    "overwrite the snapshot production ordering is judged against. If another target is ever genuinely needed, " +
-    "scope those three things to the project ref FIRST — do not re-add the flag on its own.");
-}
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const absFile = path.resolve(process.cwd(), filePath);
@@ -135,13 +152,33 @@ if (!sql.trim()) die(1, `apply-migration-file: ${absFile} is empty.`);
 // stop. The name is caller-controlled input that two separate checks trusted, so it
 // is now derived from the file being applied and cannot disagree with it.
 const migName = path.basename(absFile).replace(/\.sql$/i, "");
-if (argv.includes("--name")) {
+
+// Removing the flag was only HALF the fix, and half a fix is the same bug. The
+// FILENAME is caller-controlled too: Codex (P1, PR #470) copied an old reviewed
+// migration to `99999999999999_alias_<old-name>.sql` and reproduced the whole
+// replay against a snapshot whose high-water was 20270101000000 — the reviewer
+// proof still matched (names compare by SUBSTRING, and the alias CONTAINS the
+// original name), the queryHash still matched (the SQL is unchanged), and the
+// ordering check read the alias's FIRST stamp, 99999999999999, as newest. The
+// real script exited 0.
+//
+// The mechanism, not the spelling, is the problem: a name that embeds another
+// migration's name inherits its proof while presenting a different ordering
+// timestamp. So the ledger name must be CANONICAL — exactly one 14-digit stamp,
+// at the very start, and none anywhere else. An alias needs a second stamp to
+// carry the original name, so this rejects the attack by construction while every
+// real repository migration (`<stamp>_snake_case_words`) passes unchanged.
+const CANONICAL_MIGRATION_NAME = /^\d{14}_[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+const stampCount = (migName.match(/\d{14}/g) || []).length;
+if (!CANONICAL_MIGRATION_NAME.test(migName) || stampCount !== 1) {
   die(1,
-    "apply-migration-file: --name is not supported. The ledger name is derived from the migration " +
-    `filename (here: ${migName}).\n` +
-    "A caller-supplied name can carry a timestamp that disagrees with the file: the reviewer proof " +
-    "still matches by substring while the ordering gate reads the supplied stamp, so stale SQL can be " +
-    "presented as the newest migration. Rename the FILE if the ledger name must change.");
+    `apply-migration-file: "${migName}" is not a canonical migration name.\n` +
+    `Required: exactly one 14-digit timestamp, at the start, followed by an underscore and a ` +
+    `descriptive suffix — e.g. 20260816120000_draw_down_split_order_lines_by_price_tier. ` +
+    `Found ${stampCount} timestamp(s).\n\n` +
+    `A name that embeds ANOTHER migration's name inherits that migration's reviewer proof (names are ` +
+    `matched by substring) while presenting its own leading timestamp to the ordering gate — which is how ` +
+    `stale SQL gets replayed as the newest migration. Apply the migration under its real filename.`);
 }
 const queryHash = createHash("sha256").update(sql).digest("hex");
 

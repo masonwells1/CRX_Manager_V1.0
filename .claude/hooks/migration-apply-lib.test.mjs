@@ -274,6 +274,44 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   ok(!aliased.stdout.includes("Transmitting"), "--name never reaches transmission");
   const aliasedConfirm = runScript(okRoot, ["--name", `99999999999999_alias_${MIG}`, "--confirm"]);
   ok(aliasedConfirm.status === 1, "--name is refused even with --confirm");
+  // `argv.includes` matched only a standalone token, so the `=` spelling slipped
+  // through; and the check ran after file resolution, so a missing file reported a
+  // path error instead of the refusal. (CodeRabbit, PR #470.)
+  const aliasedEquals = runScript(okRoot, [`--name=99999999999999_alias_${MIG}`]);
+  ok(aliasedEquals.status === 1, "--name=alias is refused too");
+  ok(aliasedEquals.stderr.includes("--name is not supported"), "the = spelling gets the same refusal");
+  const projectEquals = runScript(okRoot, ["--project=someotherref"]);
+  ok(projectEquals.status === 1, "--project=ref is refused too");
+  const nameNoFile = spawnSync(process.execPath, [
+    path.resolve(__scriptsDir, "apply-migration-file.mjs"), "--name", "whatever",
+  ], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: okRoot, SUPABASE_ACCESS_TOKEN: "" } });
+  ok(nameNoFile.stderr.includes("--name is not supported"),
+    "the flag refusal fires BEFORE file resolution, not a path error");
+
+  // REMOVING THE FLAG WAS HALF A FIX. The filename is caller-controlled too: copy an
+  // old reviewed migration to `99999999999999_alias_<old-name>.sql` and the proof
+  // still matches by substring, the queryHash still matches, and ordering reads the
+  // alias's FIRST stamp as newest. Codex reproduced the full replay (P1, PR #470).
+  // A canonical name — exactly one 14-digit stamp, at the start — kills it by
+  // construction, because an alias needs a second stamp to carry the original name.
+  {
+    const aliasRoot = fixture();
+    mkdirSync(path.join(aliasRoot, "supabase", "migrations"), { recursive: true });
+    const aliasName = `99999999999999_alias_${MIG}`;
+    writeFileSync(path.join(aliasRoot, "supabase", "migrations", `${aliasName}.sql`), SQL, "utf8");
+    const res = spawnSync(process.execPath, [
+      path.resolve(__scriptsDir, "apply-migration-file.mjs"),
+      path.join(aliasRoot, "supabase", "migrations", `${aliasName}.sql`),
+      "--confirm",
+    ], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: aliasRoot, SUPABASE_ACCESS_TOKEN: "" } });
+    ok(res.status === 1, `an aliased FILENAME is refused (got ${res.status})`);
+    ok(res.stderr.includes("not a canonical migration name"), "the refusal names the canonical-name rule");
+    ok(!res.stdout.includes("Transmitting"), "an aliased filename never transmits");
+    ok(existsSync(path.join(aliasRoot, ".claude", "session-state", "applied-migrations.json")),
+      "a refused aliased filename leaves the snapshot intact");
+  }
+  // A real repository migration name still passes unchanged.
+  ok(dry.status === 0, "the canonical-name rule does not reject a real migration filename");
   // The derived name still works — the removal must not break the normal path.
   ok(dry.stdout.includes(`migration : ${MIG}`), "the ledger name is derived from the filename");
 }
