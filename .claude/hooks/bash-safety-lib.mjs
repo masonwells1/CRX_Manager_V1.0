@@ -3015,7 +3015,9 @@ function npmDependencyLifecycleReason(command) {
   for (const { executable, args } of runtimeExecutionSegments(command)) {
     if (executable !== "npm") continue;
     const lowerArgs = args.map((argument) => argument.toLowerCase());
-    const action = lowerArgs.find((argument) => unsafeActions.has(argument)) || "";
+    const parsed = parseNpmInvocation(args);
+    if (parsed.unresolved) return parsed.reason;
+    const action = parsed.action;
     if (lowerArgs.includes("config") && lowerArgs.includes("edit")) {
       return "Blocked npm config edit because it launches an arbitrary editor outside exact-HEAD review.";
     }
@@ -3031,11 +3033,57 @@ function npmDependencyLifecycleReason(command) {
     if (unsafeActions.has(action)) {
       return "Blocked npm dependency and lifecycle execution outside the reviewed tree because it can run ignored package scripts.";
     }
-    if (action === "audit" && args.some((argument) => argument.toLowerCase() === "fix")) {
+    if (action === "audit" && parsed.rest.some((argument) => /^(?:fix|--fix)$/i.test(argument))) {
       return "Blocked npm audit fix because it can run ignored package lifecycle code.";
     }
   }
   return null;
+}
+
+function parseNpmInvocation(args) {
+  const valueOptions = new Set([
+    "--cache", "--prefix", "-c", "--userconfig", "--globalconfig", "--registry",
+    "--scope", "--workspace", "-w", "--loglevel", "--logs-dir", "--script-shell",
+    "--node-options", "--location", "--omit", "--include", "--tag", "--otp",
+    "--proxy", "--https-proxy",
+  ]);
+  const flagOptions = new Set([
+    "--version", "-v", "--versions", "--help", "-h", "--silent", "-s", "--quiet",
+    "-q", "--verbose", "-d", "--global", "-g", "--force", "-f", "--yes", "-y",
+    "--json", "--dry-run", "--ignore-scripts", "--foreground-scripts", "--workspaces",
+    "--include-workspace-root", "--if-present", "--no-audit", "--no-fund",
+  ]);
+  for (let index = 0; index < args.length; index += 1) {
+    const raw = String(args[index] || "");
+    const value = raw.toLowerCase();
+    if (value === "--") {
+      const action = String(args[index + 1] || "").toLowerCase();
+      return action
+        ? { action, rest: args.slice(index + 2), unresolved: false, reason: "" }
+        : { action: "", rest: [], unresolved: true, reason: "Blocked npm execution because its subcommand is missing after the option terminator." };
+    }
+    if (!value.startsWith("-")) {
+      return { action: value, rest: args.slice(index + 1), unresolved: false, reason: "" };
+    }
+    const attached = /^(--[^=]+)=(.*)$/.exec(value);
+    if (attached) {
+      if (!valueOptions.has(attached[1]) || !attached[2]) {
+        return { action: "", rest: [], unresolved: true, reason: "Blocked npm execution because a global option could not be resolved safely." };
+      }
+      continue;
+    }
+    if (valueOptions.has(value)) {
+      const operand = args[index + 1];
+      if (!operand || String(operand).startsWith("-")) {
+        return { action: "", rest: [], unresolved: true, reason: "Blocked npm execution because a global option operand is missing or ambiguous." };
+      }
+      index += 1;
+      continue;
+    }
+    if (flagOptions.has(value) || value.startsWith("--no-")) continue;
+    return { action: "", rest: [], unresolved: true, reason: "Blocked npm execution because an unknown global option makes its subcommand ambiguous." };
+  }
+  return { action: "", rest: [], unresolved: false, reason: "" };
 }
 
 // Resolve one script name to an array of script-body texts: itself, plus every
@@ -3130,7 +3178,9 @@ function packageExecutionBoundaryReason(command, cwd, inspector) {
     }
     const executable = executableName(words[cursor]);
     const args = words.slice(cursor + 1).map((token) => token.value);
-    const action = args.find((argument) => !argument.startsWith("-"))?.toLowerCase() || "";
+    const parsedNpm = executable === "npm" ? parseNpmInvocation(args) : null;
+    if (parsedNpm?.unresolved) return parsedNpm.reason;
+    const action = parsedNpm?.action || args.find((argument) => !argument.startsWith("-"))?.toLowerCase() || "";
     if (["npx", "bunx"].includes(executable)
       || (executable === "npm" && ["exec", "x"].includes(action))
       || (["pnpm", "yarn", "bun"].includes(executable) && ["dlx", "exec", "x"].includes(action))) {

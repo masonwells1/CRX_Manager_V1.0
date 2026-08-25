@@ -28,6 +28,8 @@ All significant development milestones, in reverse chronological order.
   being mistaken for literal paths, including resolver and item-object forms.
 - Windows copy-family commands and aliases resolve their destinations, while
   PowerShell filesystem-drive mappings and unresolved providers fail closed.
+- npm global options are parsed with their operands before resolving the
+  subcommand; hidden `exec`/`x`, ambiguous options, and `audit fix` are denied.
 - Windows device and file IDs stay in full-precision bigint form so unrelated
   files cannot collide after numeric rounding and be mistaken for hard links.
 - The exact-review proof directory can no longer be aliased through a Windows
