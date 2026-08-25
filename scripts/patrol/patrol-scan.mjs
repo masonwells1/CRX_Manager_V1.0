@@ -146,24 +146,32 @@ export function coderabbitStateFrom(statuses) {
 // said "Review failed" and zero findings were ever submitted (PR #402 was the milder
 // rate-limited version). Trusting the status row would let patrol hide a missing mandatory
 // review behind "no blockers found".
+// `reviewsAtHead` counts ONLY reviews bound to the head commit being judged. Counting every
+// historical review on the PR meant a review of commit A validated commit B: push B, let
+// CodeRabbit post its known false-green status with no review submitted, and A's old review
+// silently cleared the blocker for an unreviewed head.
 export function coderabbitCompletion({ statusState, evidence }) {
   if (statusState !== "success_claimed") return statusState; // missing / in_flight / failed
   if (!evidence?.ok) return "unknown";                       // could not verify → fail closed
-  if (evidence.reviewCount > 0) return "complete";           // a review really was submitted
+  if (evidence.reviewsAtHead > 0) return "complete";         // a review of THIS head exists
   if (evidence.latestSaysFailed) return "failed";            // green row, failure in the body
-  return "unknown";                                          // green row, nothing submitted
+  return "unknown";                                          // green row, nothing at this head
 }
 
 const CODERABBIT_ACTOR = /^coderabbitai(\[bot\])?$/i;
 const CR_FAILURE_TEXT = /review failed|rate limit|error occurred during the review/i;
 
-function coderabbitEvidence(repo, number) {
+// REST rather than `gh pr view`: the reviews endpoint exposes `commit_id`, which is the
+// only way to bind a review to the head being judged.
+function coderabbitEvidence(repo, number, headSha) {
   try {
-    const d = ghJson(["pr", "view", String(number), "--repo", repo, "--json", "reviews,comments"]);
-    const mine = (d?.reviews ?? []).filter((r) => CODERABBIT_ACTOR.test(r?.author?.login ?? ""));
-    const comments = (d?.comments ?? []).filter((c) => CODERABBIT_ACTOR.test(c?.author?.login ?? ""));
-    const latest = comments[comments.length - 1];
-    return { ok: true, reviewCount: mine.length, latestSaysFailed: CR_FAILURE_TEXT.test(latest?.body ?? "") };
+    const reviews = ghJson(["api", `repos/${repo}/pulls/${number}/reviews`, "--paginate"]) ?? [];
+    const atHead = reviews.filter((r) =>
+      CODERABBIT_ACTOR.test(r?.user?.login ?? "") && r?.commit_id === headSha);
+    const comments = ghJson(["api", `repos/${repo}/issues/${number}/comments`, "--paginate"]) ?? [];
+    const mine = comments.filter((c) => CODERABBIT_ACTOR.test(c?.user?.login ?? ""));
+    const latest = mine[mine.length - 1];
+    return { ok: true, reviewsAtHead: atHead.length, latestSaysFailed: CR_FAILURE_TEXT.test(latest?.body ?? "") };
   } catch {
     return { ok: false };
   }
@@ -248,7 +256,7 @@ function collectPullRequests(repo) {
       const cr = {
         state: coderabbitCompletion({
           statusState: crStatus.state,
-          evidence: crStatus.state === "success_claimed" ? coderabbitEvidence(repo, a.number) : null,
+          evidence: crStatus.state === "success_claimed" ? coderabbitEvidence(repo, a.number, a.headRefOid) : null,
         }),
       };
       return {

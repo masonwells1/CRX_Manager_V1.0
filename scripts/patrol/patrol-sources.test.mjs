@@ -259,15 +259,20 @@ eq(coderabbitStateFrom([{ context: "CodeRabbit", state: "success", creator: { id
 // docs/reference/gotchas.md records PR #411: check row "Review completed" while
 // CodeRabbit's own comment said "Review failed" and nothing was ever submitted.
 {
-  const complete = coderabbitCompletion({ statusState: "success_claimed", evidence: { ok: true, reviewCount: 1, latestSaysFailed: false } });
-  eq(complete, "complete", "a green row WITH a submitted review is genuinely complete");
+  const complete = coderabbitCompletion({ statusState: "success_claimed", evidence: { ok: true, reviewsAtHead: 1, latestSaysFailed: false } });
+  eq(complete, "complete", "a green row WITH a review of THIS head is genuinely complete");
 
-  eq(coderabbitCompletion({ statusState: "success_claimed", evidence: { ok: true, reviewCount: 0, latestSaysFailed: true } }), "failed",
-    "green row + zero reviews + a 'Review failed' comment is FAILED — the PR #411 shape");
-  eq(coderabbitCompletion({ statusState: "success_claimed", evidence: { ok: true, reviewCount: 0, latestSaysFailed: false } }), "unknown",
-    "green row + zero reviews is unknown, never complete");
+  eq(coderabbitCompletion({ statusState: "success_claimed", evidence: { ok: true, reviewsAtHead: 0, latestSaysFailed: true } }), "failed",
+    "green row + no review at this head + a 'Review failed' comment is FAILED — the PR #411 shape");
+  eq(coderabbitCompletion({ statusState: "success_claimed", evidence: { ok: true, reviewsAtHead: 0, latestSaysFailed: false } }), "unknown",
+    "green row + no review at this head is unknown, never complete");
   eq(coderabbitCompletion({ statusState: "success_claimed", evidence: { ok: false } }), "unknown",
     "if the review evidence could not be fetched, a green row is NOT trusted");
+
+  // The round-6 finding: an OLD review of commit A must not validate a newer, unreviewed
+  // commit B that merely carries CodeRabbit's known false-green status.
+  eq(coderabbitCompletion({ statusState: "success_claimed", evidence: { ok: true, reviewsAtHead: 0, latestSaysFailed: false } }), "unknown",
+    "a PR with historical reviews but NONE at the current head does not count as reviewed");
   for (const s of ["missing", "in_flight", "failed"]) {
     eq(coderabbitCompletion({ statusState: s, evidence: null }), s, `a ${s} status passes through unchanged`);
   }

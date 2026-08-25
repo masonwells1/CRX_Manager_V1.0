@@ -56,12 +56,14 @@ needs Mason?" and is built so that its silence is trustworthy.
   worktree's parked state, patrol marks the source incomplete instead of reporting a clean
   zero. The process probe fails **closed**: zero `powershell` rows in its own output means
   the probe broke, never that nothing is running.
-- **A dead-man monitor now exists** (`patrol-monitor.mjs`), alarming when patrol's
-  heartbeat is missing, stale, malformed, or future-dated. It must run from the OS
-  scheduler rather than a Claude hook: an earlier design hung it on `SessionStart`, which
-  only fires when someone starts a session — no alarm in exactly the cases (machine
-  asleep, nobody working) it existed to catch. Registering the scheduled task changes
-  system settings and is Mason's to run; the command is in `.claude/commands/patrol.md`.
+- **`patrol-monitor.mjs` reports heartbeat freshness** — missing, stale, malformed, or
+  future-dated. **Superseded by the interactive-only decision above:** it is a convenience
+  check ("is the scan I last ran still current?"), *not* a dead-man alarm, because nothing
+  fires it while nobody is at the machine. It is deliberately NOT registered as a scheduled
+  task. The design note that produced it still holds for any future attempt: an earlier
+  version hung the alarm on `SessionStart`, which only fires when someone starts a session
+  — no alarm in exactly the cases (machine asleep, nobody working) a dead-man switch exists
+  to cover.
 - **An independent Codex (`gpt-5.6-sol`, high effort) review of the code returned
   BLOCKERS and found two real review-gate defects, both now fixed.** (1) Required checks
   were matched by context name with the producing app discarded, so any integration with
