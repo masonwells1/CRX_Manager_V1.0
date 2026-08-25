@@ -1,9 +1,20 @@
 # Known Issues — Consolidated
 
 
-**Last verified: 2026-08-25 UTC, read-only live re-read after the draw-down rollout completed.**
-**Live ledger is 975 rows, `max(version)` `20260825034622`, effective ordering high-water
-`20260819232000`** (name `20260819232000_bind_draw_down_receipts_to_intent`). All four migrations
+**Last verified: 2026-08-25 UTC, read-only live re-read.**
+**Live ledger is 976 rows, `max(version)` `20260825142708`, effective ordering high-water
+`20260820120000`** (name `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
+**Use `20260820120000` as the ordering boundary, not `20260819232000`** — a candidate stamped
+between the two is behind live, not ahead of it. That 976th row is **not** part of the draw-down
+chain: it applied on 2026-08-25 as ledger version `20260825142708` from a **concurrent session**,
+after the draw-down rollout closed. Only the ledger fact is recorded here; its approval record,
+proofs and postflight belong to the session that ran it. Note also that
+`.claude/schema-registry.json` is stamped `20260825034622` and is therefore **one migration behind
+live** until refreshed.
+
+The draw-down rollout itself closed the ledger at 975 rows / `20260825034622` / high-water
+`20260819232000`; those figures remain correct **for that rollout** and are what the block below
+describes. All four migrations
 of the draw-down chain are applied live — the cutover barrier (2026-08-24 midday, version
 `20260824185408`) and, later that day with Mason's explicit in-chat approval, the tier split
 (`20260825025241`), the allocated-line-cents lifecycle carry (`20260825033106`), and the receipt

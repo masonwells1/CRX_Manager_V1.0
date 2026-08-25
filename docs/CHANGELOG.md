@@ -31,11 +31,14 @@ real quote or order purely to produce evidence was ruled out.
 **Booking draws are RESUMED.** Mason released the pause in chat on 2026-08-25, on the evidence
 above and knowing that no end-to-end production draw was observed. The decision and its accepted
 residual risk are recorded in `docs/manual/DECISION_LOG.md` (2026-08-25 entry), which also specifies
-how the outstanding gap actually closes: a **read-only postflight on the first real draw** —
-idempotency binding, one order line per booked price tier at whole-cent prices, allocated cents
-carried through with the header equal to the sum of its lines, and the inventory/booking movement.
-Error monitoring alone does not close it; a clean error log proves nothing threw, not that money and
-inventory allocated correctly. Running that postflight is Mason's call, not a gate — draws are
+how the outstanding gap actually closes: a **read-only postflight on the first real draw** — one
+order line per booked price tier at whole-cent prices, `order_items.total_price` summing to the
+header to the cent, allocation read through the derived helpers `_allocated_cumulative_cents` /
+`_allocated_delivery_cents` (there is no `allocated_line_cents` column), the `idempotency_keys`
+receipt bound to intent, and the inventory/booking movement. Two limits are stated there rather than
+glossed: error monitoring alone does not close the gap (a clean error log proves nothing threw, not
+that money and inventory allocated correctly), and the **retry** path cannot be proven by any
+`SELECT` — it needs an actual replay. Running the postflight is Mason's call, not a gate — draws are
 resumed either way.
 
 Documents corrected in this pass:

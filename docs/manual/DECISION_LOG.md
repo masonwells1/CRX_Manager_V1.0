@@ -45,17 +45,29 @@ monitoring. Sentry and the live error log prove only that nothing threw; they sa
 whether money and inventory allocated correctly, which is the whole risk this chain addressed.
 Against the resulting order, read:
 
-1. the `idempotency_keys` row for `operation = 'draw_down_quote'` — bound to the intent, and the
-   retry path returns the same order rather than a second one;
-2. `order_items` — **one line per booked price tier**, each carrying the quote's own
-   `price_per_unit` (whole cents, no weighted average anywhere);
-3. `allocated_line_cents` carried through the lifecycle, and the order header total equal to the
-   sum of its own lines to the cent;
-4. the inventory movement for the drawn quantity, and the booking's remaining balance reduced by
-   exactly that amount.
+1. **Tier split.** `order_items` carries **one row per booked price tier**, each with the quote's own
+   `price_per_unit`. No unit price is a weighted average, and each is whole cents.
+2. **Line money.** `order_items.total_price` is the authoritative stored line amount and is whole
+   cents (`order_items_total_price_whole_cents_chk` enforces it). Check the order header total
+   equals the sum of its own lines to the cent.
+3. **Allocation slices.** These are **derived, not stored**: there is no `allocated_line_cents`
+   column. Migration `20260817120000` carries allocation through the lifecycle via the STABLE
+   helpers `_allocated_cumulative_cents` and `_allocated_delivery_cents` (verified live 2026-08-25:
+   single-overload, STABLE, not `SECURITY DEFINER`, EXECUTE revoked from `anon` and `authenticated`),
+   with downstream invoice results landing in `invoice_items.extended_cents`. Read those, not an
+   invented column name.
+4. **Receipt binding.** The `idempotency_keys` row for `operation = 'draw_down_quote'` exists and is
+   bound to the intent. **This is binding only — it does NOT prove retry behavior.** A `SELECT`
+   cannot establish that a replay returns the cached order rather than creating a second one,
+   because on an ordinary first draw no replay has run. That claim requires an actual retry:
+   compare the order id it returns against the first, and confirm the `orders`/`order_items` row
+   counts did not increase. Do not mark the retry path observed without that.
+5. **Inventory.** The inventory movement for the drawn quantity, and the booking's remaining balance
+   reduced by exactly that amount.
 
-All four are `SELECT`s against the live row the draw just created — no writes, no fixtures, nothing
-manufactured. **Running this is Mason's call, not a gate**: draws are already resumed and are not
+Items 1-3 and 5 are `SELECT`s against the live row the draw just created — no writes, no fixtures,
+nothing manufactured. Item 4 is a `SELECT` for the binding half; its retry half is only observable
+if and when a retry naturally occurs, and is explicitly **not** closed by this postflight. **Running this is Mason's call, not a gate**: draws are already resumed and are not
 contingent on it. It is recorded here so that whoever does run it knows what actually constitutes
 proof, and so a later reader does not mistake a clean error log for a verified draw.
 

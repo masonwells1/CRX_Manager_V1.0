@@ -4,11 +4,28 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
+**Live-ledger re-read — 2026-08-25. THIS IS THE CURRENT READING; the 2026-08-24 block below is
+superseded for currency.** Read read-only from `supabase_migrations.schema_migrations` on
+`rhyzpcqhnizqbxphqdkr`: **976 ledger rows**, `max(version)` `20260825142708`, and current live
+effective ordering high-water **`20260820120000`** (name
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
+
+**Use `20260820120000` as the ordering boundary for any migration review.** A candidate stamped
+between `20260819232000` and `20260820120000` is *behind* live, not ahead of it.
+
+That 976th row is **not** part of the draw-down chain. It applied on 2026-08-25 as ledger version
+`20260825142708` from a **concurrent session**, after the draw-down rollout closed. Only the ledger
+fact is recorded here; its approval record, proofs, and postflight belong to the session that ran it
+and are neither reproduced nor vouched for by this block. `.claude/schema-registry.json` is stamped
+`20260825034622` and is therefore **one migration behind live** until refreshed.
+
 **Live-ledger re-read — 2026-08-24 (evening), after the full draw-down rollout completed.**
-Read read-only from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`:
-**975 ledger rows**, `max(version)` `20260825034622`, and current live effective ordering
-high-water **`20260819232000`** (derived row by row: timestamp embedded in `name` when present,
-else that row's `version`). All four migrations of the approved draw-down chain are live.
+*Superseded for currency by the 2026-08-25 reading above; accurate as the record of where the
+draw-down rollout itself closed.* Read read-only from `supabase_migrations.schema_migrations` on
+`rhyzpcqhnizqbxphqdkr`: **975 ledger rows**, `max(version)` `20260825034622`, and live effective
+ordering high-water at that time **`20260819232000`** (derived row by row: timestamp embedded in
+`name` when present, else that row's `version`). All four migrations of the approved draw-down chain
+are live.
 
 **APPLIED LIVE 2026-08-24 — draw-down rollout halves 2, 3 and 4** (continuation of the barrier
 apply recorded below, per the Codex→Claude handoff
