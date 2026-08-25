@@ -26,6 +26,11 @@ shape without executing the fixed linked query.
   Because the evidence read and later apply are separate sessions, runtime now refuses every
   migration in that state, and CI refuses every candidate migration rather than only path-changing
   or unresolved SQL. Ordinary DDL mutation cases prove both lanes fail closed.
+- Final exact-head review closed the remaining shadowing variant: the session-dependent marker now
+  covers every trusted unqualified event-trigger helper, including general read-only builtins such
+  as version(), jsonb_build_object(), and split_part(), not only the event-metadata functions. A
+  regression proves an unpinned routine using those names is unsafe even when its body has no
+  direct write target.
 - Isolating that global condition exposed an older CI dependency: ALTER DOMAIN VALIDATE CONSTRAINT
   had relied on the session-trigger block even though it independently executes an unreadable
   stored CHECK. The shared scanner now reports that construct directly, and the validator refuses

@@ -222,4 +222,17 @@ current-head gate is green or an explicitly expected neutral result.
 - All 36 QuoteBuilder tests pass after the repair. The complete protected commit hook still must be
   rerun before this handoff can be closed.
 
+## NINTH RESUME REPAIR — ALL UNPINNED TRUSTED EVENT HELPERS FAIL CLOSED
+
+- Exact-SHA Sol/high review of 06afceb4 returned one High: an enabled event trigger with an
+  applying-session search_path could call an unqualified trusted read-only builtin such as
+  version(), jsonb_build_object(), or split_part() without receiving session_catalog_required.
+  A migration could shadow that name in public and make later DDL invoke attacker-controlled code.
+- The generator now marks every trusted unqualified event-trigger routine call as session-bound
+  unless the routine pins a catalog-first search_path. The narrow trust list still helps parse the
+  body, but can no longer make an unpinned proof safe.
+- A direct regression using version(), jsonb_build_object(), and split_part() passes and classifies
+  the otherwise write-free body as unsafe and session-dependent. Full owning proof and a fresh
+  exact-SHA review still remain after commit.
+
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

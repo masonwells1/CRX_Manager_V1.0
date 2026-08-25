@@ -71,10 +71,12 @@ issue_pg_graphql_access currently has an enabled, catalog-changing event-trigger
 static analyzer cannot prove harmless for arbitrary DDL. Migration applies now refuse on that
 current live fact until the exact behavior is modeled and independently reviewed or the trigger is
 changed through a separately reviewed path. A stale checked-in capture may not suppress the block.
-The same global refusal applies when any enabled event-trigger routine resolves catalog metadata
-helpers through the applying session's unpinned search_path: a separate evidence-read session
-cannot prove that later binding. CI refuses every candidate migration in that state as well; it may
-not narrow the block to migrations that explicitly change search_path or look unresolved.
+The same global refusal applies when any enabled event-trigger routine resolves any trusted
+unqualified helper through the applying session's unpinned search_path. This includes both the
+event-metadata functions and otherwise read-only builtins such as version(), jsonb_build_object(),
+and split_part(): a separate evidence-read session cannot prove that later binding, and a migration
+could shadow those names. CI refuses every candidate migration in that state as well; it may not
+narrow the block to migrations that explicitly change search_path or look unresolved.
 
 ---
 

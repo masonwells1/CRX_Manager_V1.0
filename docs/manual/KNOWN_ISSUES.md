@@ -50,12 +50,14 @@ routine identity/body/config, then obtain independent exact-SHA review. Until th
 migration should be described as apply-ready.
 
 Exact-head review also confirmed that six enabled event triggers use unqualified PostgreSQL
-catalog helpers without a pinned routine search_path. Their evidence is captured in one session,
-but a migration applies in another whose initial path is not independently bound. The runtime
+helpers without a pinned routine search_path. Their evidence is captured in one session, but a
+migration applies in another whose initial path is not independently bound. Every trusted
+unqualified helper is treated this way, including otherwise read-only version(),
+jsonb_build_object(), and split_part(), because a migration can shadow those names. The runtime
 guard therefore globally refuses them, and CI refuses every candidate migration while they remain
-session-dependent; a plain COMMENT ON TABLE mutation is covered in both owning suites. This is an
-additional reason migration apply remains blocked, not a reason to relax the issue_pg_graphql
-block or increase the SQL-audit allowance.
+session-dependent; plain COMMENT ON TABLE and unpinned-builtin mutations are covered in the owning
+suites. This is an additional reason migration apply remains blocked, not a reason to relax the
+issue_pg_graphql block or increase the SQL-audit allowance.
 
 ## OPEN 2026-08-23 — `codex review <scope>` self-recurses, kills its own process, and exits 0
 

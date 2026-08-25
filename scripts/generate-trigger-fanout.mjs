@@ -83,6 +83,10 @@ const EVENT_READONLY_BUILTINS = Object.freeze([
   'split_part',
   'version',
 ]);
+const EVENT_TRUSTED_UNQUALIFIED_ROUTINES = Object.freeze([
+  ...EVENT_METADATA_HELPERS,
+  ...EVENT_READONLY_BUILTINS,
+]);
 
 function routineConfig(value) {
   if (!Array.isArray(value) || value.some((entry) =>
@@ -98,7 +102,8 @@ function routineConfig(value) {
 
 // PostgreSQL implicitly searches pg_catalog first unless it is explicitly
 // placed later in search_path. Event routines without a pinned search_path are
-// caller-dependent, so they do not receive this narrow builtin exemption.
+// caller-dependent: their trusted helpers may be parsed as read-only, but any
+// unqualified use makes the proof applying-session dependent and fail-closed.
 function eventCatalogBinding(config) {
   const setting = [...config].reverse().find((entry) => /^search_path\s*=/.test(entry));
   if (!setting) return 'session';
@@ -110,9 +115,9 @@ function eventCatalogBinding(config) {
   return catalogIndex === -1 || catalogIndex === 0 ? 'pinned' : 'unsafe';
 }
 
-function usesUnqualifiedEventMetadataHelper(source) {
+function usesUnqualifiedTrustedEventRoutine(source) {
   const code = applyTimeCode(`DO $crx_event_helper$ ${source} $crx_event_helper$;`).code.toLowerCase();
-  return EVENT_METADATA_HELPERS.some((name) =>
+  return EVENT_TRUSTED_UNQUALIFIED_ROUTINES.some((name) =>
     new RegExp(`(?<![a-z0-9_.])${name}\\s*\\(`).test(code));
 }
 
@@ -354,12 +359,12 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       !trigger.has_sql_body && Boolean(trigger.source.trim());
     const sessionCatalogRequired =
       readablePlpgsqlBody && catalogBinding === 'session' &&
-      usesUnqualifiedEventMetadataHelper(trigger.source);
+      usesUnqualifiedTrustedEventRoutine(trigger.source);
     const effect = applyTimeWriteTargets(
       `DO $crx_event$ ${trigger.source} $crx_event$;`,
       {
         trustedUnqualifiedRoutines: catalogBinding !== 'unsafe'
-          ? [...EVENT_METADATA_HELPERS, ...EVENT_READONLY_BUILTINS]
+          ? [...EVENT_TRUSTED_UNQUALIFIED_ROUTINES]
           : [],
       },
     );

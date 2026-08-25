@@ -249,6 +249,20 @@ check('an unpinned event helper is conditional on the applying session catalog p
   assert.equal(entry.effect.session_catalog_required, true);
   assert.deepEqual(entry.effect.unknown_calls, []);
 });
+check('unpinned read-only builtins are conditional on the applying session catalog path', () => {
+  const changed = structuredClone(payload);
+  changed.event_triggers[0] = {
+    ...changed.event_triggers[0],
+    enabled: true,
+    enabled_mode: 'O',
+    routine_config: [],
+    source: "BEGIN PERFORM version(), jsonb_build_object('part', split_part('a.b', '.', 1)); END;",
+  };
+  const entry = buildTriggerFanoutManifest(changed).event_triggers[0];
+  assert.equal(entry.effect.safe, false);
+  assert.equal(entry.effect.session_catalog_required, true);
+  assert.deepEqual(entry.effect.unknown_calls, []);
+});
 check('fixed capture includes event-trigger catalog and routine configuration', () => {
   assert.match(TRIGGER_FANOUT_SQL, /\bFROM pg_event_trigger\b/);
   assert.match(TRIGGER_FANOUT_SQL, /\bp\.proconfig\b/);
