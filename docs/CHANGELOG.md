@@ -86,6 +86,12 @@ All significant development milestones, in reverse chronological order within ea
 - Guard fixtures now create their own ignored package configuration file and
   wrapper-state directory, eliminating false passes that depended on artifacts
   left by an earlier interrupted test or review run.
+- Bare-string native patches now deny canonical protected control files and fan
+  each added/updated file section through the existing SQL, money, idempotency,
+  actor-binding, RLS, status, generated-column, environment, and grant guards.
+  The shared inspection has file-count and deadline ceilings that fail closed;
+  six live probes cover control hooks, agent settings, existing/new migrations,
+  environment files, and frontend cents logic, and both routing mutations fail.
 - The Quote Builder save-resume concurrency regression now creates a fresh
   quote, so crossing the 30-day stale-price threshold cannot bypass the path
   that the test is intended to prove.

@@ -25,15 +25,30 @@
 import {
   aliasesProtectedFile,
   canonicalizeThroughExistingAncestor,
+  fileIdentity,
   protectedControlPathReason,
   protectedFileIdentityPaths,
   protectedProofCreationReason,
 } from "./protected-identity-lib.mjs";
 import { extractPatchDestinations, normalizeToolInput } from "./codex-push-lib.mjs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 const MAX_PAYLOAD_CHARS = 1_000_000;
 const MAX_UNIQUE_TARGETS = 256;
+const MAX_PATCH_CONTENT_TARGETS = 16;
+const PATCH_CONTENT_BUDGET_MS = 10_000;
+const PATCH_CONTENT_HOOKS = [
+  "sql-safety.mjs",
+  "money-safety.mjs",
+  "idempotency-body-check.mjs",
+  "actor-binding-check.mjs",
+  "rls-on-new-tables.mjs",
+  "status-enum-check.mjs",
+  "generated-column-check.mjs",
+  "env-guard.mjs",
+  "grant-change-guard.mjs",
+];
 let raw = "";
 process.stdin.setEncoding("utf8");
 for await (const chunk of process.stdin) {
@@ -58,6 +73,84 @@ function out(decision, reason) {
   process.exit(0);
 }
 
+function extractPatchEdits(text) {
+  const sections = [];
+  let current = null;
+  const finish = () => {
+    if (!current) return;
+    for (const filePath of current.paths) {
+      if (!filePath || filePath === "/dev/null") continue;
+      sections.push({ filePath, operation: current.operation, content: current.added.join("\n") });
+    }
+    current = null;
+  };
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const native = /^\*{3}\s*(Add|Update|Delete)\s+File:\s*(.+?)\s*$/i.exec(line);
+    if (native) {
+      finish();
+      current = { operation: native[1].toLowerCase(), paths: [native[2]], added: [] };
+      continue;
+    }
+    const moved = /^\*{3}\s*Move(?:\s+to)?(?:\s+File)?:\s*(.+?)\s*$/i.exec(line);
+    if (moved && current) {
+      current.paths.push(moved[1]);
+      continue;
+    }
+    const unified = /^\+{3}\s+(?:b\/)?(\S+)\s*$/.exec(line);
+    if (unified) {
+      finish();
+      current = { operation: "update", paths: [unified[1]], added: [] };
+      continue;
+    }
+    if (current && /^\+(?!\+\+)/.test(line)) current.added.push(line.slice(1));
+  }
+  finish();
+  return sections;
+}
+
+function patchContentGuardReason(payload, patchBodies, cwd) {
+  const edits = patchBodies.flatMap((body) => extractPatchEdits(body));
+  if (edits.length === 0) return "Raw patch input named destinations but no per-file content sections could be resolved.";
+  if (edits.length > MAX_PATCH_CONTENT_TARGETS) {
+    return `Raw patch input touches more than ${MAX_PATCH_CONTENT_TARGETS} content targets and is denied fail-closed.`;
+  }
+  const deadline = Date.now() + PATCH_CONTENT_BUDGET_MS;
+  for (const edit of edits) {
+    const resolvedFilePath = path.isAbsolute(edit.filePath) ? path.resolve(edit.filePath) : path.resolve(cwd, edit.filePath);
+    const toolInput = edit.operation === "add"
+      ? { file_path: resolvedFilePath, content: edit.content }
+      : { file_path: resolvedFilePath, new_string: edit.content };
+    const synthetic = JSON.stringify({ ...payload, tool_name: edit.operation === "add" ? "Write" : "Edit", tool_input: toolInput });
+    for (const hookName of PATCH_CONTENT_HOOKS) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return "Raw patch content inspection exceeded its shared deadline and is denied fail-closed.";
+      const result = spawnSync(process.execPath, [path.join(cwd, ".claude", "hooks", hookName)], {
+        cwd,
+        encoding: "utf8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: cwd },
+        input: synthetic,
+        timeout: Math.min(remaining, 1_500),
+      });
+      if (result.stderr) process.stderr.write(result.stderr);
+      if (result.error || result.status !== 0) {
+        return `Raw patch content inspection could not run ${hookName} and is denied fail-closed.`;
+      }
+      const output = String(result.stdout || "").trim();
+      if (!output) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse(output);
+      } catch {
+        return `Raw patch content inspection received invalid output from ${hookName} and is denied fail-closed.`;
+      }
+      if (parsed?.hookSpecificOutput?.permissionDecision === "deny") {
+        return parsed.hookSpecificOutput.permissionDecisionReason || `${hookName} denied the patch content.`;
+      }
+    }
+  }
+  return "";
+}
+
 try {
   const payload = raw.trim() ? JSON.parse(raw) : null;
 
@@ -69,6 +162,9 @@ try {
   // The normalizer is shared with review-proof-guard so neither route can learn
   // this and leave the other behind.
   const { input, rawBody: rawStringBody } = normalizeToolInput(payload?.tool_input);
+  const isPatchTool = /apply[_-]?patch/i.test(String(payload?.tool_name || ""));
+  const patchBodies = [input.patch, input.diff, input.input, input.changes, rawStringBody]
+    .filter((body) => typeof body === "string" && body);
 
   // Write uses file_path; Edit uses file_path too. Accept the common spellings
   // so a future tool shape cannot slip past by naming the field differently.
@@ -83,7 +179,7 @@ try {
     input.target,
     input.source,
     input.destination,
-    ...[input.patch, input.diff, input.input, input.changes, rawStringBody]
+    ...patchBodies
       .flatMap((body) => extractPatchDestinations(body)),
   ].filter((candidate) => typeof candidate === "string" && candidate);
 
@@ -132,12 +228,28 @@ try {
       );
     }
 
+    // A patch changes bytes before the content-specific hooks can see a normal
+    // Write/Edit payload. Existing protected control files therefore deny even
+    // at their canonical pathname; allowing only aliases here would let a raw
+    // patch rewrite the guard that decides whether its next action is safe.
+    if (isPatchTool && protectedIdentities.has(fileIdentity(abs))) {
+      out(
+        "deny",
+        `PROTECTED IDENTITY GUARD: raw patch input cannot modify the protected canonical file ${target}. Use the guarded Write/Edit route.`,
+      );
+    }
+
     if (aliasesProtectedFile(abs, cwd, protectedIdentities)) {
       out(
         "deny",
         `PROTECTED IDENTITY GUARD: ${target} is a second pathname for a protected file (same device and inode). Edit the real path so the guard hooks can inspect the change.`,
       );
     }
+  }
+
+  if (isPatchTool) {
+    const contentReason = patchContentGuardReason(payload, patchBodies, cwd);
+    if (contentReason) out("deny", `PROTECTED IDENTITY GUARD: ${contentReason}`);
   }
 } catch (err) {
   // FAIL-OPEN, but loud: a broken guard must never brick the session. The

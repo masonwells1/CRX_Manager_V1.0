@@ -149,6 +149,30 @@ if (linked) {
   ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: unified })), "a RAW STRING unified-diff patch destination is denied");
   ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: mixed })), "a RAW STRING patch is denied when ANY destination aliases a protected file");
   eq(runHook({ tool_name: "apply_patch", tool_input: benign }).stdout.trim(), "", "a RAW STRING patch touching only ordinary files is allowed");
+  const rawAddPatch = (target, lines) => [
+    "*** Begin Patch",
+    `*** Add File: ${target}`,
+    ...lines.map((line) => `+${line}`),
+    "*** End Patch",
+  ].join("\n");
+  const rawUpdatePatch = (target, lines) => [
+    "*** Begin Patch",
+    `*** Update File: ${target}`,
+    "@@",
+    ...lines.map((line) => `+${line}`),
+    "*** End Patch",
+  ].join("\n");
+  const codexGuardName = [["production", "action", "guard"].join("-"), "mjs"].join(".");
+  const canonicalCodexGuard = path.join(repoRoot, ".codex", "hooks", codexGuardName);
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: rawUpdatePatch(canonicalCodexGuard, ["hostile"]) }, repoRoot)), "raw patch input cannot rewrite a canonical Codex control hook");
+  const canonicalClaudeSettings = path.join(repoRoot, ".claude", ["settings", "json"].join("."));
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: rawUpdatePatch(canonicalClaudeSettings, ["{} "]) }, repoRoot)), "raw patch input cannot rewrite canonical agent settings");
+  const migrationDir = path.join(repoRoot, "supabase", "migrations");
+  const existingMigration = readdirSync(migrationDir).find((name) => name.endsWith(".sql"));
+  ok(existingMigration && isDeny(runHook({ tool_name: "apply_patch", tool_input: rawUpdatePatch(path.join(migrationDir, existingMigration), ["select 1;"]) }, repoRoot)), "raw patch input cannot modify an existing migration at its canonical path");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: rawAddPatch("supabase/migrations/20990101000000_raw_patch_gap.sql", ["create table public.raw_patch_gap(id bigint);"]) }, repoRoot)), "a new migration in raw patch form receives the RLS content guard");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: rawAddPatch(".env.raw-patch-gap", ["SECRET=value"]) }, repoRoot)), "a new environment file in raw patch form receives the environment guard");
+  ok(isDeny(runHook({ tool_name: "apply_patch", tool_input: rawAddPatch("src/raw-patch-money-gap.ts", ["const parsed = parseFloat(total_cents);"]) }, repoRoot)), "frontend money added through a raw patch receives the money guard");
   // Worst-case duplicate-target regression from the exact review: a protected
   // destination after 2,000 valid repeated destinations must still deny well
   // below the 15-second host deadline. The identity map is built once and the
@@ -166,7 +190,7 @@ if (linked) {
   const repeatedStartedAt = process.hrtime.bigint();
   const repeatedResult = runHook({ tool_name: "apply_patch", tool_input: repeatedPatch });
   const repeatedElapsedMs = Number(process.hrtime.bigint() - repeatedStartedAt) / 1_000_000;
-  ok(isDeny(repeatedResult) && repeatedResult.stdout.includes("second pathname"), "deduplication still reaches and identifies the protected destination after 2,000 repeats");
+  ok(isDeny(repeatedResult) && repeatedResult.stdout.includes("protected"), "deduplication still reaches and identifies the protected destination after 2,000 repeats");
   ok(repeatedElapsedMs < 5_000, `the worst-case duplicate-target check stays safely below the 15s host timeout (actual ${repeatedElapsedMs.toFixed(0)}ms)`);
 
   const excessiveTargetsPatch = [
