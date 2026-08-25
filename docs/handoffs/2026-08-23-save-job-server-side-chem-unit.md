@@ -5,9 +5,21 @@
 **Head:** see `git log -1` — round 26 landed on 2026-08-25 (PR #446). Tree and push state are volatile; `git status -sb` answers both exactly, and this header was wrong about them for a full round once already.
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
 **SQL sha256:** `f2e0404e83f8249aa99696a1974180adcdec0d7aad9ed8f5bb9fc36a7181c791`
-**Status: PARTIAL — written, proven, gate-CLEAN once, pushed, waiting on a merge that something else is blocking.**
+**Status: COMPLETE — merged (PR #446, 2026-08-25) and APPLIED LIVE 2026-08-25 as ledger version `20260825142708`, on Mason's explicit in-chat approval.**
 
-## Approval state — carries nothing forward
+> **2026-08-25 closeout.** The apply went through the gated file-bytes door
+> (`scripts/apply-migration-file.mjs`) with a fresh same-session CLEAN proof pair; transmitted
+> bytes matched the sha256 above. Post-apply proof: installed body carries
+> `chem_unit_invariant_v2`; helper md5s exactly match the values pinned below; registered smoke
+> `smoke-save-job-parity.sql` returned `SMOKE_PASS_ROLLBACK` on live with the derived-total and
+> both unit-refusal assertions active; nine function/money invariant sweeps returned zero
+> unallowlisted rows. Fixture note: the governed-pricing trigger now refuses `current_cost` on
+> product INSERT, so the smoke fixture creates pricing-free product shells (fixed in the closeout
+> PR). Open follow-up: the function `COMMENT` says ELEVEN refusal families, the body raises
+> twelve — needs a tiny COMMENT-only migration. The approval-state text below is preserved as
+> history of the pre-apply state.
+
+## Approval state — carries nothing forward *(historical, superseded by the 2026-08-25 closeout above)*
 
 - **Nothing has been applied to the live database.** Live is untouched; the migration high-water mark is unchanged.
 - The branch **is** pushed and PR #446 carries the current work. A **merge** and a **live apply** each still need Mason's explicit OK **in the conversation where they happen**. This document is not that OK, and neither is the fact that the gate came back clean.

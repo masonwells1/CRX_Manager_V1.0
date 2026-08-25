@@ -63,11 +63,16 @@ BEGIN
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] Parity Farm A ' || v_sfx) RETURNING id INTO v_cust_a;
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] Parity Farm B ' || v_sfx) RETURNING id INTO v_cust_b;
 
-  INSERT INTO products (product_name, unit_size, epa_registration, product_form, current_cost, vendor, rei_hours, phi_days, rate_per_acre, rate_unit)
-  VALUES ('[SMOKE] Parity Chem A ' || v_sfx, 'GL', '[SMOKE]-EPA-PA', 'liquid', 12.50, 'Acme Chem', 24, 7, 1.5, 'pt/ac')
+  -- No current_cost here: require_governed_product_pricing() (supplier-pricing
+  -- governance) refuses any pricing field on a product INSERT — creation must be
+  -- a pricing-free shell. The chain never reads products.current_cost anyway;
+  -- job cost/price come from the per-line cents in v_chems. (Verified live
+  -- 2026-08-25 when the old fixture aborted on PRODUCT_PRICING_GOVERNED_PATH_REQUIRED.)
+  INSERT INTO products (product_name, unit_size, epa_registration, product_form, vendor, rei_hours, phi_days, rate_per_acre, rate_unit)
+  VALUES ('[SMOKE] Parity Chem A ' || v_sfx, 'GL', '[SMOKE]-EPA-PA', 'liquid', 'Acme Chem', 24, 7, 1.5, 'pt/ac')
   RETURNING id INTO v_prod_a;
-  INSERT INTO products (product_name, unit_size, epa_registration, product_form, current_cost, vendor, rei_hours, phi_days)
-  VALUES ('[SMOKE] Parity Chem B ' || v_sfx, 'LB', '[SMOKE]-EPA-PB', 'dry', 4.00, 'Beta Supply', 12, 14)
+  INSERT INTO products (product_name, unit_size, epa_registration, product_form, vendor, rei_hours, phi_days)
+  VALUES ('[SMOKE] Parity Chem B ' || v_sfx, 'LB', '[SMOKE]-EPA-PB', 'dry', 'Beta Supply', 12, 14)
   RETURNING id INTO v_prod_b;
 
   INSERT INTO fields (customer_id, field_name, crop_type, total_acres)
