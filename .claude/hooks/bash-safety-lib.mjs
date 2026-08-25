@@ -1725,6 +1725,8 @@ const SHELL_FILE_MUTATORS = new Set([
   [115, 99], [97, 99], [99, 108, 99], [115, 105],
   [116, 111, 117, 99, 104], [116, 114, 117, 110, 99, 97, 116, 101],
   [100, 100], [99, 112], [109, 118], [105, 110, 115, 116, 97, 108, 108],
+  [114, 111, 98, 111, 99, 111, 112, 121], [120, 99, 111, 112, 121],
+  [99, 111, 112, 121], [99, 112, 105],
   [99, 111, 112, 121, 45, 105, 116, 101, 109],
   [109, 111, 118, 101, 45, 105, 116, 101, 109],
   [114, 101, 110, 97, 109, 101, 45, 105, 116, 101, 109],
@@ -1732,6 +1734,23 @@ const SHELL_FILE_MUTATORS = new Set([
   [114, 109], [117, 110, 108, 105, 110, 107],
   [115, 101, 100], [112, 101, 114, 108], [97, 119, 107],
 ].map(shellWord));
+const SHELL_FILESYSTEM_MAPPING_COMMANDS = new Set([
+  [110, 101, 119, 45, 112, 115, 100, 114, 105, 118, 101],
+  [115, 117, 98, 115, 116],
+  [110, 101, 119, 45, 115, 109, 98, 109, 97, 112, 112, 105, 110, 103],
+].map(shellWord));
+// These executables either cannot write files themselves or already pass
+// through a stronger, command-specific provenance/parser boundary below.
+// Everything else still gets its path-shaped arguments checked so adding a new
+// copy utility cannot silently re-open a protected hard-link destination.
+const SHELL_EXECUTORS_WITH_DEDICATED_GUARDS = new Set([
+  "bash", "sh", "dash", "zsh", "ksh", "cmd", "powershell", "pwsh",
+  "node", "npm", "npx", "pnpm", "yarn", "bun", "deno",
+  "python", "python3", "py", "ruby", "git", "gh",
+  "rg", "grep", "find", "fd", "ls", "dir", "cat", "type", "more", "less",
+  "head", "tail", "stat", "where", "where.exe", "get-content", "gc",
+  "get-item", "gi", "get-childitem", "gci", "resolve-path", "test-path",
+]);
 const SHELL_MUTATION_WRAPPERS = new Set([
   "command", "builtin", "env", "sudo", "doas", "exec", "nohup", "nice",
   "timeout", "wsl", "busybox", "toybox", "stdbuf",
@@ -1754,13 +1773,19 @@ function protectedShellDestinationReason(token, cwd, protectedIdentities) {
   if (!raw || token?.control || expressionSyntax || /[*?\[\]{}$`]|\$\(|\$\{|%[^%]+%|![^!]+!|\+|\s-join(?:\s|$)/i.test(raw)) {
     return "Blocked shell file mutation because its destination is dynamic and cannot be checked against protected filesystem identities.";
   }
-  if (/^[A-Za-z][\w-]*:/.test(raw) && !/^[A-Za-z]:[\\/]/.test(raw) && !/^FileSystem::/i.test(raw)) return null;
+  if (/^[A-Za-z][\w-]*:/.test(raw) && !/^[A-Za-z]:[\\/]/.test(raw) && !/^FileSystem::/i.test(raw)) {
+    return "Blocked shell file mutation because its PowerShell provider destination cannot be proven to be a safe filesystem path.";
+  }
   const candidate = raw.replace(/^FileSystem::/i, "");
   if (!candidate || candidate === "-" || /^(?:NUL|CON|PRN|AUX|COM\d|LPT\d|\/dev\/(?:null|stdout|stderr))$/i.test(candidate)) return null;
   const base = cwd || process.cwd();
   const abs = path.isAbsolute(candidate) ? path.resolve(candidate) : path.resolve(base, candidate);
+  const surface = canonicalizeThroughExistingAncestor(abs).replace(/\\/g, "/");
+  if (/(^|\/)\.(?:claude|codex)\/hooks(?:\/|$)/i.test(surface)) {
+    return `Blocked shell file mutation because ${candidate} resolves into a protected agent-hook directory.`;
+  }
   const controlReason = protectedControlPathReason(abs)
-    || protectedControlPathReason(canonicalizeThroughExistingAncestor(abs));
+    || protectedControlPathReason(surface);
   if (controlReason) return `Blocked shell file mutation because ${candidate} is ${controlReason}.`;
   const proofReason = protectedProofCreationReason(abs);
   if (proofReason) return `Blocked shell file mutation because ${candidate} resolves into ${proofReason}.`;
@@ -1856,6 +1881,10 @@ export function checkProtectedShellMutation(command, cwd, depth = 0) {
     const executable = shellExecutableName(segmentWords[cursor]);
     const args = segmentWords.slice(cursor + 1);
 
+    if (SHELL_FILESYSTEM_MAPPING_COMMANDS.has(executable)) {
+      return "Blocked filesystem drive/provider mapping because it can make a protected destination appear under an unresolved shell path.";
+    }
+
     if (["bash", "sh", "dash", "zsh", "ksh", "pwsh", "powershell", "cmd"].includes(executable)) {
       const optionIndex = args.findIndex((token) => /^(?:-[A-Za-z]*c[A-Za-z]*|--command|\/c)$/i.test(token.value));
       if (optionIndex >= 0) {
@@ -1869,6 +1898,18 @@ export function checkProtectedShellMutation(command, cwd, depth = 0) {
     }
 
     if (!SHELL_FILE_MUTATORS.has(executable)) {
+      if (!SHELL_EXECUTORS_WITH_DEDICATED_GUARDS.has(executable)) {
+        for (const token of args) {
+          if (token.control || token.value.startsWith("-")) continue;
+          const raw = String(token.value || "");
+          const candidate = /^(?:\/[^:=]+:|[^=]+=)(.+)$/.exec(raw)?.[1] || raw;
+          const abs = path.isAbsolute(candidate) ? path.resolve(candidate) : path.resolve(base, candidate);
+          const pathShaped = /[\\/]/.test(candidate) || /^\.?\.?$/.test(candidate) || Boolean(fileIdentity(abs));
+          if (!pathShaped) continue;
+          const reason = inspect({ ...token, value: candidate });
+          if (reason) return `Blocked unclassified executable destination: ${reason}`;
+        }
+      }
       start = end + 1;
       continue;
     }
@@ -1918,6 +1959,7 @@ export function checkProtectedShellMutation(command, cwd, depth = 0) {
     const streamDuplicators = [[116, 101, 101], [116, 101, 101, 45, 111, 98, 106, 101, 99, 116]].map(shellWord);
     const destinationLast = [
       [99, 112], [109, 118], [105, 110, 115, 116, 97, 108, 108],
+      [120, 99, 111, 112, 121], [99, 111, 112, 121], [99, 112, 105],
       [99, 111, 112, 121, 45, 105, 116, 101, 109],
       [109, 111, 118, 101, 45, 105, 116, 101, 109],
       [114, 101, 110, 97, 109, 101, 45, 105, 116, 101, 109],
@@ -1929,6 +1971,8 @@ export function checkProtectedShellMutation(command, cwd, depth = 0) {
     if (explicit) targets = [explicit];
     else if (executable === dataDuplicator) {
       targets = args.filter((token) => /^of=/.test(token.value)).map((token) => ({ value: token.value.slice(3), control: false }));
+    } else if (executable === shellWord([114, 111, 98, 111, 99, 111, 112, 121])) {
+      targets = operands(args).slice(1, 2);
     } else {
       const positional = operands(args);
       const inPlaceEditors = [[115, 101, 100], [112, 101, 114, 108], [97, 119, 107]].map(shellWord);

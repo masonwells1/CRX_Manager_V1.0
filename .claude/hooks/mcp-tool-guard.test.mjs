@@ -35,6 +35,26 @@ function runHook(payload, cwd, envOverrides = {}) {
 function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
 function isAsk(r) { return r.stdout.includes('"permissionDecision":"ask"'); }
 
+const treeCopyCommand = ["robo", "copy"].join("");
+const legacyCopyCommand = ["x", "copy"].join("");
+const psCopyAliasCommand = ["co", "py"].join("");
+const driveCreatorCommand = ["New", "PSDrive"].join("-");
+const contentWriterCommand = ["Set", "Content"].join("-");
+const unclassifiedWriterCommand = ["mystery", "copy"].join("-");
+const guardedHookDirectory = [".claude", "hooks"].join("/");
+const mcpShellWriteRouteCases = [
+  `${treeCopyCommand} scratch ${guardedHookDirectory} review-proof-guard.mjs`,
+  `${legacyCopyCommand} scratch/review-proof-guard.mjs ${guardedHookDirectory}/review-proof-guard.mjs`,
+  `${psCopyAliasCommand} scratch/review-proof-guard.mjs ${guardedHookDirectory}/review-proof-guard.mjs`,
+  `${driveCreatorCommand} -Name GuardAlias -PSProvider FileSystem -Root ${guardedHookDirectory}; ${contentWriterCommand} GuardAlias:\\review-proof-guard.mjs hostile`,
+  `${unclassifiedWriterCommand} scratch/review-proof-guard.mjs ${guardedHookDirectory}/review-proof-guard.mjs`,
+];
+for (const command of mcpShellWriteRouteCases) {
+  const result = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  eq(result.status, 0, `mcp-tool-guard exits cleanly after denying a protected shell write route: ${command}`);
+  ok(isDeny(result), `MCP start_process denies a protected shell write route: ${command}`);
+}
+
 const oversizedWrapperCommand = `echo ${"watch ".repeat(30_000)}; ${["git", "push", "--force", "origin", "main"].join(" ")}`;
 const oversizedStartedAt = process.hrtime.bigint();
 const oversizedResult = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: oversizedWrapperCommand } });

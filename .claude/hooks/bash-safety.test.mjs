@@ -144,8 +144,14 @@ ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Targ
     const streamCopy = ["t", "ee"].join("");
     const streamCopyObject = ["Tee", "Object"].join("-");
     const copyItem = ["Copy", "Item"].join("-");
+    const treeCopy = ["robo", "copy"].join("");
+    const legacyCopy = ["x", "copy"].join("");
+    const psCopyAlias = ["co", "py"].join("");
+    const psCopyItemAlias = ["cp", "i"].join("");
     const removeItem = ["Remove", "Item"].join("-");
     const resolvePath = ["Resolve", "Path"].join("-");
+    const driveCreator = ["New", "PSDrive"].join("-");
+    const unclassifiedWriter = ["mystery", "copy"].join("-");
     const redirect = String.fromCharCode(62);
     const aliasWriteCases = [
       `${setContent} -LiteralPath "${alias}" -Value hostile`,
@@ -162,6 +168,27 @@ ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Targ
       eq(result.status, 0, `the live hook exits cleanly after denying an alias write: ${command}`);
       ok(result.stdout.includes('"permissionDecision":"deny"'), `the live hook denies an alias write: ${command}`);
     }
+    const windowsCopyCases = [
+      `${treeCopy} "${scratchDir}" "${hookDir}" ordinary-output.txt`,
+      `${legacyCopy} "${ordinary}" "${protectedHook}"`,
+      `${psCopyAlias} "${ordinary}" "${alias}"`,
+      `${psCopyItemAlias} "${ordinary}" "${alias}"`,
+    ];
+    for (const command of windowsCopyCases) {
+      ok(checkProtectedShellMutation(command, fixture), `a Windows copy-family route cannot target a protected path: ${command}`);
+      const result = runHook({ tool_name: "PowerShell", tool_input: { command } }, fixture);
+      eq(result.status, 0, `the live hook exits cleanly after denying a Windows copy-family route: ${command}`);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), `the live hook denies a Windows copy-family route: ${command}`);
+    }
+    const mappedDriveWrite = `${driveCreator} -Name GuardAlias -PSProvider FileSystem -Root "${hookDir}"; ${setContent} GuardAlias:\\bash-safety-lib.mjs hostile`;
+    ok(checkProtectedShellMutation(mappedDriveWrite, fixture)?.includes("mapping"), "a same-command PowerShell filesystem drive mapping is denied");
+    const mappedDriveResult = runHook({ tool_name: "PowerShell", tool_input: { command: mappedDriveWrite } }, fixture);
+    ok(mappedDriveResult.stdout.includes('"permissionDecision":"deny"'), "the live hook denies a same-command PowerShell filesystem drive mapping");
+    ok(checkProtectedShellMutation(`${setContent} GuardAlias:\\bash-safety-lib.mjs hostile`, fixture)?.includes("provider"), "an unresolved multi-character PowerShell drive fails closed");
+    const unclassifiedAliasWrite = `${unclassifiedWriter} "${ordinary}" "${alias}"`;
+    ok(checkProtectedShellMutation(unclassifiedAliasWrite, fixture)?.includes("unclassified executable"), "an unclassified writer cannot silently receive a protected alias path");
+    const unclassifiedResult = runHook({ tool_name: "PowerShell", tool_input: { command: unclassifiedAliasWrite } }, fixture);
+    ok(unclassifiedResult.stdout.includes('"permissionDecision":"deny"'), "the live hook denies an unclassified writer targeting a protected alias");
 
     const proofName = [["codex", "review", "forged"].join("-"), "json"].join(".");
     const computedProofCommand = `${setContent} ('.claude/session-'+'state/${proofName}') hostile`;
