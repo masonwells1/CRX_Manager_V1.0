@@ -9,6 +9,50 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-25 — `regexp_count(text, text, 'i')` does not exist; it crashes the sweep it guards
+
+**Found:** 2026-08-25, while closing CodeRabbit's round-3 findings on PR #401.
+
+**The bug.** Every `regexp_count` call added to
+`scripts/db-invariant-sweeps/predicates/quote-versions-rpc-owned.sql` passed the case-insensitive
+flag as the **third** argument: `regexp_count(p.prosrc, '<pattern>', 'i')`. PostgreSQL's third
+parameter is a **start position (integer)**, and the flags string is the **fourth**. The three-argument
+form with a text flag has no matching overload, so every one of those calls raises
+
+```
+ERROR: 22P02: invalid input syntax for type integer: "i"
+```
+
+Confirmed by executing the file's own expression against live PostgreSQL 17.6. Ten call sites were
+affected. The correct form is `regexp_count(src, pattern, 1, 'i')`.
+
+**Why it matters more than a typo.** This predicate is a standing security sweep: it is what
+detects a second authoritative writer to `quote_versions`, whose `snapshot_data` is an authoritative
+cost basis. A crashing predicate does not report "clean" — it reports nothing at all, and whether
+that is treated as a pass depends entirely on how the sweep runner handles a failing statement. The
+guard that was supposed to protect the trust marker could not execute.
+
+**How it got in, and why neither reviewer caught it.**
+- `origin/main`'s copy of this predicate contains **zero** `regexp_count` calls. Every one was
+  introduced by PR #401 itself.
+- The exact-SHA `gpt-5.6-sol` gate reviewed the diff and found a genuine concurrency defect, but it
+  reasons about the code as text — it did not execute the SQL.
+- CodeRabbit reviewed the same lines three times and its round-3 remediation **proposed adding
+  another** `regexp_count(..., 'i')` call, reproducing the bug.
+- `src/lib/quoteVersionWriteBoundary.test.ts` asserted `toContain(...)` on the literal broken
+  string, so the test suite actively **pinned the defect in place** and went green on it.
+
+**Operative lesson.** A static assertion that a SQL file *contains* a given string proves only that
+the string is present, never that the SQL runs. Any predicate or guard expressed as SQL must be
+**executed** against a real PostgreSQL — a `toContain` test is not a substitute, and a
+diff-reading reviewer will not catch an argument-type error. Where a guard is meant to reject
+something, prove it both ways: run it against the real body (expect pass) and against a mutated
+body (expect reject). Both directions were verified here after the fix.
+
+**Related open risk, unchanged by this entry:** the accepted cutover race recorded above.
+
+---
+
 ## 2026-08-25 — ACCEPTED RISK: the quote-version trust-marker cutover race stays open
 
 **Source:** Mason's explicit in-chat decision, 2026-08-25, chosen from a plain-English trade-off

@@ -719,7 +719,7 @@ describe('quote_versions write boundary — standing predicate', () => {
   it('pins the restore trust rejection before the only owner-side restore call', () => {
     expect(predicateCode).toContain("'_restore_quote_version_below_cost_impl_20260810:trust-check-contract' AS violation_key");
     expect(predicateCode).toContain("'QUOTE_VERSION_LEGACY_UNTRUSTED'");
-    expect(predicateCode).toContain("regexp_count(p.prosrc, '_restore_quote_version_owner_impl\\s*\\(', 'i') = 1");
+    expect(predicateCode).toContain("regexp_count(p.prosrc, '_restore_quote_version_owner_impl\\s*\\(', 1, 'i') = 1");
     const predicateComparator =
       "strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''')\n          < strpos(lower(p.prosrc), 'v_result := public._restore_quote_version_owner_impl')";
     const predicateDmlGuard =

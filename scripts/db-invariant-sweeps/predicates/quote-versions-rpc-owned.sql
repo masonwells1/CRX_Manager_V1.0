@@ -553,15 +553,55 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
             < strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
         AND strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
             < strpos(lower(p.prosrc), 'update public.quote_versions')
+        -- CodeRabbit round 3 (2026-08-25) found two REAL gaps the positional
+        -- checks above still left open. Both are closed here rather than
+        -- accepted. NOTE the four-argument regexp_count form: the third
+        -- parameter is a START POSITION, not flags. Every call in this file
+        -- originally passed 'i' as the third argument, which raises
+        -- `invalid input syntax for type integer: "i"` at runtime — the sweep
+        -- would have CRASHED rather than reported. Verified against live
+        -- PostgreSQL 17.6 on 2026-08-25 and corrected throughout.
+        --
+        -- Gap 1 (Major): the strpos ordering proves only that ONE matching owner
+        -- call appears before the marker. It does not require exactly one. A
+        -- re-emitted wrapper could mark the first snapshot, create a SECOND
+        -- unmarked snapshot, and return that second version_id while this sweep
+        -- stayed green.
+        AND regexp_count(p.prosrc, '_create_quote_version_owner_impl\s*\(', 1, 'i') = 1
+        --
+        -- Gap 2 (P2): strpos validates only the FIRST occurrence, so a body that
+        -- reassigns v_version_id or v_result BETWEEN the checked assignment and
+        -- the marker UPDATE still passed every check above — and the DML checks
+        -- ignore assignments and SELECTs entirely. Pin the region between the
+        -- anchor assignment and the UPDATE: it must hold that one assignment and
+        -- no other write to either variable.
+        AND regexp_count(
+              substring(
+                lower(p.prosrc)
+                FROM strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
+                FOR  strpos(lower(p.prosrc), 'update public.quote_versions')
+                     - strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
+              ),
+              'v_version_id\s*:=', 1, 'i'
+            ) = 1
+        AND regexp_count(
+              substring(
+                lower(p.prosrc)
+                FROM strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
+                FOR  strpos(lower(p.prosrc), 'update public.quote_versions')
+                     - strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
+              ),
+              'v_result\s*:=', 1, 'i'
+            ) = 0
         AND regexp_count(
           p.prosrc,
           'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null\s*;',
-          'i'
+            1, 'i'
         ) = 1
         AND regexp_count(
           p.prosrc,
           '\mupdate\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M',
-          'i'
+            1, 'i'
         ) = 1
         AND p.prosrc !~* '(insert\s+into|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
       )
@@ -600,12 +640,12 @@ SELECT 'create_quote_version:trusted-marker-writer-contract' AS violation_key,
       AND regexp_count(
         p.prosrc,
         'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null\s*;',
-        'i'
+          1, 'i'
       ) = 1
       AND regexp_count(
         p.prosrc,
         '\mupdate\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M',
-        'i'
+          1, 'i'
       ) = 1
       AND p.prosrc !~* '(insert\s+into|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
  )
@@ -632,14 +672,14 @@ SELECT '_restore_quote_version_below_cost_impl_20260810:trust-check-contract' AS
       AND regexp_count(
         p.prosrc,
         'select\s+restore_trusted_at\s+into\s+v_restore_trusted_at\s+from\s+public\.quote_versions\s+where\s+id\s*=\s*p_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+for\s+key\s+share\s*;',
-        'i'
+          1, 'i'
       ) = 1
       AND regexp_count(
         p.prosrc,
         'if\s+v_restore_trusted_at\s+is\s+null\s+then\s+raise\s+exception\s+''QUOTE_VERSION_LEGACY_UNTRUSTED''\s*;\s+end\s+if\s*;',
-        'i'
+          1, 'i'
       ) = 1
-      AND regexp_count(p.prosrc, '_restore_quote_version_owner_impl\s*\(', 'i') = 1
+      AND regexp_count(p.prosrc, '_restore_quote_version_owner_impl\s*\(', 1, 'i') = 1
       AND strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''')
           < strpos(lower(p.prosrc), 'v_result := public._restore_quote_version_owner_impl')
       -- The owner call is not the only possible write shape. Keep the entire
