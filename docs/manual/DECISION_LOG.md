@@ -9,6 +9,55 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-24 — CodeRabbit reviews assertively and enforces the Hard Rules, without a hard merge block
+
+**Source:** Mason's in-chat decisions, 2026-08-24, after a live audit of the CodeRabbit dashboard,
+plan, and usage. Refines the 2026-07-30 CodeRabbit policy; does not touch the throttle decision in
+the entry below.
+
+**Decisions.**
+
+1. **`profile: chill` → `assertive`.** `chill` is not a cost control; it instructs the reviewer to
+   report less, which is the anti-pattern the Opus-5 tuning rules forbid for review prompts.
+   Billing is per file reviewed, never per comment, so the change buys coverage for nothing but
+   extra reading.
+2. **`request_changes_workflow: false` → `true`.** CodeRabbit now withholds approval until its
+   comments are resolved *and the latest commit has been reviewed*. That second clause is
+   first-party enforcement of the exact-head problem this repo repeatedly hits, and it is the
+   switch that gives error-mode checks any force at all.
+3. **Five `mode: error` custom pre-merge checks** encoding existing CRX Hard Rules: RLS on new
+   tables, `SECURITY DEFINER` search_path, mutating-RPC idempotency, exact whole-cent money, and
+   no edits to already-applied migrations. Each opens with an explicit skip clause so unrelated
+   PRs pass trivially — a check that fires on docs work gets ignored, and an ignored check
+   protects nothing. Custom checks require Pro+; the org is on Pro Plus.
+4. **`docstrings` check off**, `title`/`description`/`issue_assessment` left at warning.
+   `override_requested_reviewers_only` stays **false** on purpose: false lets the PR *author*
+   override a failing check, and Mason authors every PR here.
+
+**The limit, stated so nobody oversells it later.** These produce a red X and a withheld approval.
+They do **not** disable the merge button. `protect-main` requires exactly `Vercel`,
+`Lint, Type Check, Test, Build`, and `SQL Migration Validation`, with
+`required_approving_review_count: 0` and CodeRabbit absent from the required list. The status
+context name is confirmed to be `CodeRabbit`, so promoting it is now only a decision, not a
+discovery — deferred deliberately until the error-mode checks have run long enough to show their
+false-positive rate, and it needs Mason's explicit OK when that time comes.
+
+**Also settled: the dashboard is inert and must not be used.** CodeRabbit config sources do not
+merge. The repo `.coderabbit.yaml` outranks the repository and organization UI settings, and any
+key it omits falls through to CodeRabbit's defaults rather than to the dashboard, unless
+"Inheritance" is enabled per level. Verified 2026-08-24: org config YAML empty, Global Overrides
+empty, repo set to "Use Organization Settings" with Inheritance off. Every switch in the web UI —
+including the "Personalize CodeRabbit" onboarding wizard — currently changes nothing.
+
+**Open item owned by this change.** Whether the five custom checks draw down the usage budget is
+undocumented and was not resolved. Baseline to diff against, captured 2026-08-24: $55.00 of an
+$80.00 monthly cap, 100 of 320 files remaining, 41% of reviews rate-limited (148 of 358), cycle
+resets Sep 16. Mason declined raising the cap. If the checks consume budget, they drop to
+`mode: warning` until the next cycle — with the cap held, a check that cannot run is an outage,
+not a gate.
+
+---
+
 ## 2026-08-24 — A priced job line with no rate typed yet and quantity 0 still SAVES; it is not an underbill to refuse
 
 **Source:** Mason's in-chat decision, 2026-08-24, answering a repeated exact-SHA `gpt-5.6-sol`
