@@ -1,7 +1,12 @@
 -- ============================================================================
 -- SMOKE TEST (rolled back by design): save_job field-app parity extension
 -- ----------------------------------------------------------------------------
--- Field-app parity #1 (migration 20260624120000). Proves the EXTENDED save_job
+-- Field-app parity #1. PREREQUISITE MIGRATIONS: 20260624120000 AND
+-- 20260820120000 (chem-unit invariant + derived money totals, applied live
+-- 2026-08-25 as ledger version 20260825142708). Steps 3b and 7 are FAIL-CLOSED
+-- on the second one: against a restored or staging database that lacks it this
+-- chain FAILS BY DESIGN rather than reporting a supported pre-apply result.
+-- Proves the EXTENDED save_job
 -- persists everything the tabbed editor now captures, through the REAL RPC:
 --
 --   1. CREATE a new job via save_job (NULL p_job_id) carrying scheduling dates
