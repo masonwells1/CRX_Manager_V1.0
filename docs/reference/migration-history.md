@@ -15,6 +15,13 @@ version `20260824185408`, name `20260816110000_draw_down_cutover_barrier`; migra
 stamp `20260816120000` is strictly greater than the effective high-water, so the ordering guard is
 satisfied for its next, separately committed apply.
 
+**Authoritative migration-2 artifact (2026-08-24):** review and apply only the
+`20260816120000_draw_down_split_order_lines_by_price_tier.sql` blob on `origin/main` at squash
+commit `db41cc912ef2739f87e798f207b5c2d8dceb9879` (PR #461), normalized SHA-256
+`134f2f00f46a16c35a87ca529bc723ad373b19988664816c62255abbd324cd27`. The older
+`claude/draw-down-price-tier-lines` branch named in the historical row below contains a superseded
+draft and is not an apply or review source.
+
 **APPLIED LIVE 2026-08-24 — `20260816110000_draw_down_cutover_barrier` (half 1 of 2).** Applied with
 Mason's explicit in-chat approval through the governed `apply_migration` gate, after both reviewer
 charters returned CLEAN machine verdicts from `gpt-5.6-sol` at high reasoning effort. Supabase
@@ -33,12 +40,12 @@ present so the barrier refuses rather than waits, the barrier positioned **befor
 money gate, EXECUTE held by `authenticated`, and EXECUTE absent for `anon`.
 
 **Half 2 (`20260816120000_draw_down_split_order_lines_by_price_tier`) is NOT applied.** Its apply
-proof minted CLEAN in the same session, but the transmission channel blocked it: the migration is
-162,022 bytes / 2,891 lines, and `migration-apply-guard.mjs` requires the transmitted SQL to hash
-byte-identically to the on-disk file, which is not achievable in a single re-emitted tool call. The
-management-API direct-POST channel would carry the bytes but bypasses the apply guard, so it was not
-used. **This is a blocked transmission path, not a review finding** — nothing about the migration's
-content is in question. Per the barrier's own header it is safe alone and may sit in production
+earlier CLEAN apply proof expired without an apply. A 2026-08-24 rerun found no SQL/schema drift but
+correctly withheld proof because this history still pointed at the superseded feature-branch draft;
+the authoritative-artifact notice above closes that provenance ambiguity before another proof run.
+The governed Supabase connector can receive the exact merged file bytes from an in-process file read,
+and `migration-apply-guard.mjs` still requires the transmitted SQL hash to match before allowing the
+call. Per the barrier's own header it is safe alone and may sit in production
 indefinitely: nothing takes key `(20260816, 1)` in EXCLUSIVE mode until half 2 applies, so every
 `pg_try_advisory_xact_lock_shared` call succeeds on the first try and draw-down behaviour is
 unchanged from before this apply.
