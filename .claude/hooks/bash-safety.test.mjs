@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { chmodSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -21,6 +21,7 @@ import {
   maintenanceProducerCommandMentioned,
   resolveNpmScriptChain,
   readPackageScripts,
+  REVIEWED_EXECUTOR_GIT_BUDGET_MS,
   SECURITY_COMMAND_CHAR_BUDGET,
   SECURITY_COMMAND_TOKEN_BUDGET,
 } from "./bash-safety-lib.mjs";
@@ -52,6 +53,15 @@ function runHook(payload, cwd) {
     encoding: "utf8",
     cwd: cwd || process.cwd(),
   });
+}
+
+const codexHookManifest = JSON.parse(readFileSync(path.resolve(__dirname, "..", "..", ".codex", "hooks.json"), "utf8"));
+const reviewedExecutorHostHooks = codexHookManifest.hooks.PreToolUse
+  .flatMap((entry) => entry.hooks)
+  .filter((hook) => /\.(?:claude[\\/]hooks[\\/])?(?:bash-safety|mcp-tool-guard)\.mjs/i.test(`${hook.command || ""} ${hook.commandWindows || ""}`));
+eq(reviewedExecutorHostHooks.length, 2, "the Codex host manifest wires both reviewed-executor guard entrypoints");
+for (const hook of reviewedExecutorHostHooks) {
+  ok(Number(hook.timeout) * 1_000 > REVIEWED_EXECUTOR_GIT_BUDGET_MS, "the shared inner Git deadline stays below each outer host-hook deadline");
 }
 
 // ── direct dangerous-command patterns (unchanged behavior) ────────────────
@@ -420,6 +430,34 @@ for (const command of [
     const authoritativeResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
     eq(authoritativeResult.status, 0, "producer fixture authoritative main SHA resolves");
     const reviewOptions = { authoritativeMainShaForTest: authoritativeResult.stdout.trim() };
+    let syntheticNow = 0;
+    const observedTimeouts = [];
+    const exhaustedBudgetReason = checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, {
+      ...reviewOptions,
+      nowForTest: () => syntheticNow,
+      spawnGitForTest: (executable, args, options) => {
+        observedTimeouts.push(options.timeout);
+        const result = spawnSync(executable, args, options);
+        syntheticNow += 1_800;
+        return result;
+      },
+    });
+    ok(exhaustedBudgetReason?.includes("committed tree"), "exhausting the shared Git provenance deadline denies the reviewed executor");
+    eq(observedTimeouts.length, 2, "no Git subprocess starts after the shared provenance deadline is exhausted");
+    eq(observedTimeouts[0], REVIEWED_EXECUTOR_GIT_BUDGET_MS, "the first Git subprocess is capped by the full shared deadline");
+    eq(observedTimeouts[1], REVIEWED_EXECUTOR_GIT_BUDGET_MS - 1_800, "the next Git subprocess receives only the remaining shared deadline");
+
+    let forcedTimeoutCap = 0;
+    const forcedTimeoutReason = checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, {
+      ...reviewOptions,
+      nowForTest: () => 0,
+      spawnGitForTest: (_executable, _args, options) => {
+        forcedTimeoutCap = options.timeout;
+        return { status: null, stdout: "", stderr: "", error: Object.assign(new Error("synthetic Git timeout"), { code: "ETIMEDOUT" }) };
+      },
+    });
+    ok(forcedTimeoutReason?.includes("repository root"), "a timed-out Git provenance subprocess denies instead of allowing the reviewed executor");
+    eq(forcedTimeoutCap, REVIEWED_EXECUTOR_GIT_BUDGET_MS, "even a hung first Git subprocess is capped below the outer hook deadline");
     const injectedGitShimDir = path.join(integrityRepo, "output", "git-shim");
     const localGitShimMarker = path.join(integrityRepo, "local-git-shim-ran.txt");
     const pathGitShimMarker = path.join(integrityRepo, "path-git-shim-ran.txt");

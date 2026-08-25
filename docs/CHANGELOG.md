@@ -10,6 +10,14 @@ All significant development milestones, in reverse chronological order.
 - Protected identity resolution covers hook files beneath both ordinary and
   linked-worktree Git directories; native Write/Edit and MCP regressions prove
   creating or modifying those hooks is denied.
+- Reviewed-executor provenance now gives every inner Git subprocess one shared
+  3.5-second monotonic deadline, below the unchanged 5-second host-hook limit.
+  Each call receives only the remaining time, exhaustion starts no further Git
+  process, and timeout/error paths deny execution; clock-exhaustion and forced-
+  timeout mutation regressions prove the fail-closed path.
+- The Quote Builder save-resume concurrency regression now creates a fresh
+  quote, so crossing the 30-day stale-price threshold cannot bypass the path
+  that the test is intended to prove.
 
 ## 2026-08-24 — The identity guard now covers the shape Codex actually sends, and both write routes share one rule set
 

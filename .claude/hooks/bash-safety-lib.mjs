@@ -14,10 +14,12 @@ import { readFileSync, existsSync, readdirSync, realpathSync, lstatSync, readlin
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { builtinModules } from "node:module";
+import { performance } from "node:perf_hooks";
 import path from "node:path";
 
 export const SECURITY_COMMAND_CHAR_BUDGET = 16_384;
 export const SECURITY_COMMAND_TOKEN_BUDGET = 512;
+export const REVIEWED_EXECUTOR_GIT_BUDGET_MS = 3_500;
 const AUTHORITATIVE_REPOSITORY_URL = "https://github.com/masonwells1/CRX_Manager_V1.0.git";
 const commandExceedsSecurityBudget = (command) => String(command || "").length > SECURITY_COMMAND_CHAR_BUDGET;
 const normalizePosixLineContinuations = (command) => String(command || "").replace(/\\\r?\n/g, "");
@@ -62,7 +64,7 @@ function sameExecutablePath(left, right) {
   return normalize(left) === normalize(right);
 }
 
-function bootstrapGitSafetyReason(root, gitExecutable, gitEnv) {
+function bootstrapGitSafetyReason(root, gitExecutable, runGit, gitEnv) {
   const inherited = Object.keys(process.env).find((name) => DANGEROUS_GIT_ENV_NAME_RE.test(name));
   if (inherited) return `Git control environment variable ${inherited} is present`;
   const bareGit = resolvedBareGitExecutable(root);
@@ -73,10 +75,9 @@ function bootstrapGitSafetyReason(root, gitExecutable, gitEnv) {
   // call. Global/system config and system attributes stay disabled in gitEnv,
   // so only repository-local settings can be effective here.
   const configInspectionEnv = { ...gitEnv };
-  const readConfig = (key) => spawnSync(
-    gitExecutable,
+  const readConfig = (key) => runGit(
     ["-C", root, "--no-replace-objects", "config", "--includes", "--get-all", key],
-    { encoding: "utf8", windowsHide: true, timeout: 5_000, env: configInspectionEnv },
+    { encoding: "utf8", windowsHide: true, env: configInspectionEnv },
   );
   const fsmonitor = readConfig("core.fsmonitor");
   if (fsmonitor.error || ![0, 1].includes(fsmonitor.status)) return "effective Git fsmonitor configuration could not be verified";
@@ -86,24 +87,21 @@ function bootstrapGitSafetyReason(root, gitExecutable, gitEnv) {
   const externalDiff = readConfig("diff.external");
   if (externalDiff.error || ![0, 1].includes(externalDiff.status)) return "effective Git diff.external configuration could not be verified";
   if (externalDiff.status === 0 && String(externalDiff.stdout || "").trim()) return "effective Git diff.external can execute code before review";
-  const executableFilters = spawnSync(
-    gitExecutable,
+  const executableFilters = runGit(
     ["-C", root, "--no-replace-objects", "config", "--includes", "--get-regexp", "^filter\\..*\\.(clean|smudge|process)$"],
-    { encoding: "utf8", windowsHide: true, timeout: 5_000, env: configInspectionEnv },
+    { encoding: "utf8", windowsHide: true, env: configInspectionEnv },
   );
   if (executableFilters.error || ![0, 1].includes(executableFilters.status)) return "effective Git executable filters could not be verified";
   if (executableFilters.status === 0 && String(executableFilters.stdout || "").trim()) return "effective Git filter clean, smudge, or process configuration can execute code before review";
-  const attributesFile = spawnSync(
-    gitExecutable,
+  const attributesFile = runGit(
     ["-C", root, "--no-replace-objects", "config", "--includes", "--get-all", "core.attributesfile"],
-    { encoding: "utf8", windowsHide: true, timeout: 5_000, env: configInspectionEnv },
+    { encoding: "utf8", windowsHide: true, env: configInspectionEnv },
   );
   if (attributesFile.error || ![0, 1].includes(attributesFile.status)) return "effective Git attributes override could not be verified";
   if (attributesFile.status === 0 && String(attributesFile.stdout || "").trim()) return "effective Git core.attributesfile can activate unreviewed filters before review";
-  const gitInfoAttributes = spawnSync(
-    gitExecutable,
+  const gitInfoAttributes = runGit(
     ["-C", root, "--no-replace-objects", "rev-parse", "--git-path", "info/attributes"],
-    { encoding: "utf8", windowsHide: true, timeout: 5_000, env: gitEnv },
+    { encoding: "utf8", windowsHide: true, env: gitEnv },
   );
   if (gitInfoAttributes.error || gitInfoAttributes.status !== 0) return "Git info attributes path could not be verified";
   const rawInfoAttributesPath = String(gitInfoAttributes.stdout || "").trim();
@@ -115,10 +113,9 @@ function bootstrapGitSafetyReason(root, gitExecutable, gitEnv) {
       return "Git info/attributes could not be verified inert";
     }
   }
-  const replacements = spawnSync(
-    gitExecutable,
+  const replacements = runGit(
     ["-C", root, "--no-replace-objects", "for-each-ref", "--format=%(refname)", "refs/replace"],
-    { encoding: "utf8", windowsHide: true, timeout: 5_000, env: gitEnv },
+    { encoding: "utf8", windowsHide: true, env: gitEnv },
   );
   if (replacements.error || replacements.status !== 0) return "Git replacement refs could not be verified absent";
   if (String(replacements.stdout || "").trim()) return "Git replacement refs are present";
@@ -346,6 +343,18 @@ function gitBlobHash(buffer) {
 
 function createReviewedExecutorInspector(cwd, options = {}) {
   const base = cwd || process.cwd();
+  // The dependency seams are for direct unit tests only. Production hook
+  // entrypoints never accept or forward inspector options.
+  const clock = typeof options.nowForTest === "function" ? options.nowForTest : performance.now.bind(performance);
+  const spawnGitForTest = typeof options.spawnGitForTest === "function" ? options.spawnGitForTest : spawnSync;
+  const deadline = clock() + REVIEWED_EXECUTOR_GIT_BUDGET_MS;
+  const runGit = (args, spawnOptions = {}) => {
+    const remaining = Math.floor(deadline - clock());
+    if (remaining <= 0) return { status: null, error: new Error("reviewed Git provenance deadline exhausted") };
+    const result = spawnGitForTest(gitExecutable, args, { ...spawnOptions, timeout: Math.min(remaining, REVIEWED_EXECUTOR_GIT_BUDGET_MS) });
+    if (result?.error || result?.signal === "SIGTERM") return { ...result, error: result.error || new Error("reviewed Git provenance timed out") };
+    return result;
+  };
   let gitExecutable = "";
   const gitEnv = {};
   for (const name of ["SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE"]) {
@@ -383,10 +392,9 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       ? path.join(gitEnv.SystemRoot || gitEnv.WINDIR || "C:\\Windows", "System32")
       : "/usr/bin:/bin";
     gitEnv.PATH = `${trustedGitPath}${path.delimiter}${systemPath}`;
-    const rootResult = spawnSync(gitExecutable, ["-C", base, "--no-replace-objects", "rev-parse", "--show-toplevel"], {
+    const rootResult = runGit(["-C", base, "--no-replace-objects", "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       windowsHide: true,
-      timeout: 5_000,
       env: gitEnv,
     });
     root = String(rootResult.stdout || "").trim();
@@ -394,10 +402,9 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       initializationError = "the repository root could not be verified";
       return;
     }
-    const headResult = spawnSync(gitExecutable, ["-C", root, "--no-replace-objects", "rev-parse", "HEAD"], {
+    const headResult = runGit(["-C", root, "--no-replace-objects", "rev-parse", "HEAD"], {
       encoding: "utf8",
       windowsHide: true,
-      timeout: 5_000,
       env: gitEnv,
     });
     headSha = String(headResult.stdout || "").trim().toLowerCase();
@@ -416,11 +423,10 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       }
       baseSha = injectedMainSha;
     } else {
-      const remoteResult = spawnSync(gitExecutable, ["ls-remote", "--exit-code", AUTHORITATIVE_REPOSITORY_URL, "refs/heads/main"], {
+      const remoteResult = runGit(["ls-remote", "--exit-code", AUTHORITATIVE_REPOSITORY_URL, "refs/heads/main"], {
         cwd: path.parse(root).root,
         encoding: "utf8",
         windowsHide: true,
-        timeout: 5_000,
         env: gitEnv,
       });
       const remoteMatch = /^([a-f0-9]{40})\s+refs\/heads\/main\s*$/i.exec(String(remoteResult.stdout || ""));
@@ -435,10 +441,9 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       return;
     }
     for (const [ref, entries] of [[headSha, headEntries], [baseSha, mainEntries]]) {
-      const treeResult = spawnSync(gitExecutable, ["-C", root, "--no-replace-objects", "ls-tree", "-r", "--full-tree", ref], {
+      const treeResult = runGit(["-C", root, "--no-replace-objects", "ls-tree", "-r", "--full-tree", ref], {
         encoding: "utf8",
         windowsHide: true,
-        timeout: 5_000,
         env: gitEnv,
       });
       if (treeResult.status !== 0) {
@@ -457,10 +462,9 @@ function createReviewedExecutorInspector(cwd, options = {}) {
   const verifyTrackedTreeExact = () => {
     if (trackedTreeChecked) return trackedTreeError;
     trackedTreeChecked = true;
-    const indexResult = spawnSync(
-      gitExecutable,
+    const indexResult = runGit(
       ["-C", root, "--no-replace-objects", "ls-files", "--stage", "-z"],
-      { windowsHide: true, timeout: 5_000, env: gitEnv, maxBuffer: 16 * 1024 * 1024 },
+      { windowsHide: true, env: gitEnv, maxBuffer: 16 * 1024 * 1024 },
     );
     if (indexResult.error || indexResult.status !== 0 || !Buffer.isBuffer(indexResult.stdout)) {
       trackedTreeError = "the exact index could not be verified without worktree filters";
@@ -654,7 +658,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       const bootstrapMatchesMain = expectedMainEntry?.mode === expectedHeadEntry.mode
         && expectedMainEntry?.blob === expectedHeadEntry.blob;
       if (repoPath === bootstrapPath && bootstrapMatchesMain) {
-        const bootstrapReason = bootstrapGitSafetyReason(root, gitExecutable, gitEnv);
+        const bootstrapReason = bootstrapGitSafetyReason(root, gitExecutable, runGit, gitEnv);
         if (bootstrapReason) {
           reason = bootstrapReason;
           return true;
