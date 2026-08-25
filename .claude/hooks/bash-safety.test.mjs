@@ -165,6 +165,33 @@ eq(
   null,
   "the repository's pinned main-branch Husky hooks keep legitimate commits available",
 );
+
+// Git's post-index-change hook runs on index writers that do not look like
+// commit operations. A newly created untracked hook must be caught before both
+// `git add` and `git reset` can execute it.
+{
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "bash-safety-index-hook-"));
+  const marker = path.join(tmp, "index-hook-ran.txt");
+  try {
+    eq(spawnSync(fixedTrustedGitExecutable(), ["init", tmp], { encoding: "utf8", windowsHide: true }).status, 0, "index-hook fixture repository initializes");
+    eq(spawnSync(fixedTrustedGitExecutable(), ["config", "core.hooksPath", ".husky"], { cwd: tmp, encoding: "utf8", windowsHide: true }).status, 0, "index-hook fixture activates its Husky directory");
+    mkdirSync(path.join(tmp, ".husky"), { recursive: true });
+    const indexHook = path.join(tmp, ".husky", "post-index-change");
+    writeFileSync(indexHook, `#!/bin/sh\nprintf hostile > "${marker.replaceAll("\\", "/")}"\n`);
+    chmodSync(indexHook, 0o755);
+    writeFileSync(path.join(tmp, "ordinary.txt"), "ordinary\n");
+    for (const command of ["git add ordinary.txt", "git reset -- ordinary.txt"]) {
+      ok(checkCommandDeep(command, tmp, { repositoryRoot: tmp })?.includes("not a pinned trusted hook"), `hook trust denies index writer before post-index-change: ${command}`);
+      const result = runHook({ tool_name: "Bash", tool_input: { command, workdir: tmp } }, tmp);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), `the production Bash hook denies index writer: ${command}`);
+      ok(!existsSync(marker), `post-index-change never executes through: ${command}`);
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+ok(checkProtectedShellMutation("echo hostile > .husky/post-index-change", process.cwd(), 0, process.cwd())?.includes("Git hook path"), "shell redirection cannot create a new Husky hook");
 eq(
   checkCommandDeep("git config --worktree core.hooksPath .husky", process.cwd(), { repositoryRoot: process.cwd() }),
   null,

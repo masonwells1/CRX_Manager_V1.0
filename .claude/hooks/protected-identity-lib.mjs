@@ -242,6 +242,7 @@ export function protectedControlPathReason(absTarget) {
   if (/(^|\/)\.git(\/[^/]+)*\/config(\.worktree)?$/i.test(surface)) return "a Git configuration file";
   if (/(^|\/)\.git(\/[^/]+)*\/info\/(attributes|exclude)$/i.test(surface)) return "a Git attributes or exclude file";
   if (/(^|\/)\.git(\/[^/]+)*\/hooks(?:\/|$)/i.test(surface)) return "a Git hook path";
+  if (/(^|\/)\.husky(?:\/|$)/i.test(surface)) return "a Git hook path";
   if (/(^|\/)\.gitattributes$/i.test(surface)) return "a Git attributes file";
   if (/(^|\/)\.gitconfig$/i.test(surface)) return "a Git configuration file";
   if (/(^|\/)\.config\/git\/(config|ignore)$/i.test(surface)) return "a Git configuration file";

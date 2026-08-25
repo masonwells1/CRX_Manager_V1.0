@@ -1418,6 +1418,9 @@ the production guard denies the second `git commit` before the hook executes.
 The one permitted configuration write is the exact worktree-local
 `core.hooksPath=.husky` value; generated `.husky/_` dispatchers and external or
 shared-checkout hook paths are not trusted.
+New `.husky/*` paths are pathname-protected before they acquire an identity,
+and index-writing commands such as `git add` and `git reset` receive the same
+trust check for Git's `post-index-change` hook.
 
 **Found 2026-08-05 by Codex on PR #313 (P1), reproduced the same day. Two separate defects; Codex's report names one and reproduces the other.**
 

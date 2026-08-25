@@ -1818,7 +1818,7 @@ const TRUSTED_MAIN_GIT_HOOK_BLOBS = new Map([
 ]);
 const GIT_HOOK_NAMES = [
   "applypatch-msg", "commit-msg", "fsmonitor-watchman", "post-applypatch", "post-checkout", "post-commit",
-  "post-merge", "post-receive", "post-rewrite", "post-update", "pre-applypatch", "pre-auto-gc", "pre-commit",
+  "post-index-change", "post-merge", "post-receive", "post-rewrite", "post-update", "pre-applypatch", "pre-auto-gc", "pre-commit",
   "pre-merge-commit", "pre-push", "pre-rebase", "pre-receive", "prepare-commit-msg", "proc-receive", "push-to-checkout",
   "reference-transaction", "sendemail-validate", "update",
 ];
@@ -3517,7 +3517,7 @@ function executionContextShiftReason(command, cwd, depth = 0, repositoryRoot = c
     if (subcommand === "config" && args.some(executableConfigNamed) && !safePinnedHooksPathWrite) {
       return "Blocked persisted executable Git configuration because it can redirect later Git commands into unreviewed code.";
     }
-    if (["am", "checkout", "cherry-pick", "commit", "merge", "pull", "push", "rebase", "revert", "switch", "worktree"].includes(subcommand)) {
+    if (subcommand !== "config" && !safePinnedHooksPathWrite) {
       const hookReason = trustedGitHooksReason(base, repositoryRoot || base);
       if (hookReason) return hookReason;
     }

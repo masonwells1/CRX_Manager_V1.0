@@ -75,6 +75,7 @@ for (const control of [
 ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: ".git/info/attributes", content: "* filter=x" } }, repoRoot)), "a relative Git attributes path is denied even when the file does not exist yet");
 ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: ".git/hooks/pre-commit", content: "hostile" } }, repoRoot)), "a real Write payload cannot create a Git pre-commit hook");
 ok(isDeny(runHook({ tool_name: "Edit", tool_input: { file_path: ".git/hooks/pre-commit", old_string: "safe", new_string: "hostile" } }, repoRoot)), "a real Edit payload cannot modify a Git pre-commit hook");
+ok(isDeny(runHook({ tool_name: "Write", tool_input: { file_path: ".husky/post-index-change", content: "hostile" } }, repoRoot)), "a real Write payload cannot create a new Husky hook");
 eq(runHook({ tool_name: "Write", tool_input: { file_path: path.join(scratch, "config"), content: "x" } }).stdout.trim(), "", "an unrelated file merely named config is allowed");
 
 // Malformed and empty payloads must not throw; the guard fails open loudly and

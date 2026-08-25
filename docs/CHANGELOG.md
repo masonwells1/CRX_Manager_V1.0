@@ -51,6 +51,11 @@ All significant development milestones, in reverse chronological order within ea
   before that hook can execute. The exact safe worktree-local
   `core.hooksPath=.husky` setting remains available; other executable Git
   configuration stays denied.
+- New `.husky/*` paths are protected before they have a filesystem identity,
+  the complete supported hook inventory includes `post-index-change`, and hook
+  trust is checked before every Git subcommand that could reach repository
+  state. A real executable marker regression proves both `git add` and
+  `git reset` are denied before an untracked index-change hook can run.
 - Native patch identity inspection now has a one-million-character payload
   ceiling and a 256-unique-destination ceiling, deduplicates destinations by
   resolved path, and builds the protected identity map only once per hook
