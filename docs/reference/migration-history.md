@@ -99,15 +99,24 @@ unchanged from before this apply.
 
 ---
 
-**Live-ledger re-read — 2026-08-24, immediately before the draw-down cutover apply.** Read
-read-only from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`. This
-**re-confirms** the 2026-08-18 block below rather than superseding it — every figure is unchanged:
-**971 ledger rows**, `max(version)` `20260816174353`, and current live effective ordering high-water
-**`20260813080000`**. That ordering value was derived row by row: use the timestamp embedded in
+**Live-ledger re-read — 2026-08-24, immediately before the draw-down cutover BARRIER apply.
+SUPERSEDED, not current** — the barrier this block was taken ahead of has since applied, which moved
+every figure below. Current state is in the live-ledger block at the TOP of this file. Read
+read-only from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`. As at that
+pre-barrier moment it **re-confirmed** the 2026-08-18 block below rather than superseding it — every
+figure was then unchanged: **971 ledger rows**, `max(version)` `20260816174353`, and effective
+ordering high-water **`20260813080000`**.
+That ordering value was derived row by row: use the timestamp embedded in
 `name` when present, otherwise fall back to that row's `version`. Neither `20260816110000_draw_down_cutover_barrier` nor
-`20260816120000_draw_down_split_order_lines_by_price_tier` is present in the ledger. Both authored
-stamps are strictly greater than the effective ordering high-water, so the ordering guard is satisfied for a
+`20260816120000_draw_down_split_order_lines_by_price_tier` was present in the ledger **at that
+moment**. Both authored
+stamps were strictly greater than the effective ordering high-water, so the ordering guard was satisfied for a
 sequential apply of the barrier followed by the candidate.
+
+**Deliberately no "now" figures in this block.** An earlier draft carried the then-current values
+inline and they went stale within hours, when the rest of the draw-down chain applied. A superseded
+block must not restate current state in any form — it points at the top of the file and stops. That
+is the whole defect this labelling exists to prevent.
 
 Re-read because the `migration-drift-reviewer` charter refuses to rely on a dated observation across
 a live apply (finding H1, 2026-08-23: "the migration-history document explicitly says this dated
@@ -146,11 +155,23 @@ applied live on 2026-08-16 and is the 971st ledger row — see row 886 below. (T
 17:43:53 UTC is **inferred** from the Supabase-assigned version stamp, not observed — the ledger has
 no timestamp column. The *fact* of the apply is the row itself.)
 
-| Measure | Value |
+| Measure | Value **as at 2026-08-18 — SUPERSEDED, not current** |
 |---|---|
-| **Current live effective ordering high-water (timestamped `name`, else that row's `version`)** | **`20260813080000`** |
-| `max(version)` | `20260816174353` |
+| Effective ordering high-water **as at 2026-08-18** (timestamped `name`, else that row's `version`) | `20260813080000` |
+| `max(version)` as at 2026-08-18 | `20260816174353` |
 | Row holding both | `20260813080000_lock_quote_versions_writes_to_rpc` |
+
+> **Do not read the table above as current state.** It was accurate on 2026-08-18 and was overtaken
+> by the draw-down chain applying on 2026-08-24/25. **The current effective ordering high-water is
+> stated only in the live-ledger block at the TOP of this file — it is deliberately not repeated
+> here**, because a copy in a superseded block is exactly what goes stale (an earlier draft of this
+> warning named a value that was overtaken hours later, by the very migration it discusses).
+> This distinction is not pedantry. On 2026-08-24 `migration-drift-reviewer` refused
+> `20260816120000_draw_down_split_order_lines_by_price_tier` on CHECK 6 three consecutive times: this
+> table was the only place in an ~872 KB file that stated an effective high-water, a reviewer reading
+> part of the file landed here, read the superseded value, and correctly refused. The refusals were
+> right; the label was wrong. Whoever moves the high-water updates the block at the top and leaves
+> this one frozen as history.
 
 **These two figures are not interchangeable, and `version` can land on either side of `name`.**
 Supabase assigns a fresh `version` at apply time while `name` preserves the authored filename stamp,
