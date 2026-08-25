@@ -64,9 +64,13 @@ matter *only because* the tool would run hourly under Mason's account with no on
 Run by hand inside a session, patrol carries no more risk than any other script here — and
 by hand is where its value already is, since he reads the report when he sits down.
 
-The hardening in `trusted-exec.mjs` stays (fixed executables, minimal environment, refusing
-worktrees whose local config could execute a filter). It is defence in depth, not a licence
-to schedule.
+The hardening in `trusted-exec.mjs` stays (fixed executables, minimal environment, and a
+fixed `core.fsmonitor=false` override on every Git call). It is defence in depth, not a
+licence to schedule. Note what it does **not** do: the config scanner that refused
+worktrees whose local config could execute a filter was deliberately removed on 2026-08-25
+after failing open three review rounds running. Repository-local `filter.*.clean/smudge`
+has no generic off switch, so that exposure is accepted interactive-only baseline risk —
+the same risk `scripts/fleet-status.mjs` already carries on every run.
 
 **If scheduling is ever wanted, it needs its own design pass on the execution surface —
 not another patch.** See `docs/manual/KNOWN_ISSUES.md`.

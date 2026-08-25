@@ -90,7 +90,10 @@ export function trustedGhEnv() {
 // requires naming its driver, which means reading the config first. That read is exactly
 // the scanner deleted at the foot of this file for failing open three rounds running.
 // So: take the vector that closes for free, and do not pretend the other one is closed.
-const SAFE_BY_CONSTRUCTION = ["-c", "core.fsmonitor=false"];
+// Exported so a caller that must use its OWN spawn (different failure semantics) still
+// applies the identical override. A second launcher that rebuilt the argument list by
+// hand is exactly how the fsmonitor vector stayed open in patrol-sources.mjs.
+export const SAFE_BY_CONSTRUCTION = ["-c", "core.fsmonitor=false"];
 
 export function git(args, { cwd, timeout = 20_000, maxBuffer = 32 * 1024 * 1024 } = {}) {
   return execFileSync(trustedGit(), ["--no-replace-objects", ...SAFE_BY_CONSTRUCTION, ...args], {

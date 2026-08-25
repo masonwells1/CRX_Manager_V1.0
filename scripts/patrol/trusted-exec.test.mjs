@@ -5,7 +5,7 @@
 // it runs unattended: fixed executables, a stripped environment, and a refusal to run
 // Git's conversion pipeline anywhere a repo-local filter command could execute.
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -70,8 +70,17 @@ const eq = (a, b, m) => { assert.deepEqual(a, b, m); pass++; };
   raw(["config", "user.email", "t@t"]);
   raw(["config", "user.name", "t"]);
   const marker = path.join(dir, "FSMON_FIRED.txt");
-  const hook = path.join(dir, "fsmon.cmd");
-  writeFileSync(hook, `@echo off\r\necho fired > "${marker}"\r\necho /\r\n`);
+  // The payload has to be runnable by THIS platform or the control cannot fire, and then
+  // the measurement below proves nothing. A Windows-only .cmd made this control fail on
+  // Linux CI - the fixture was broken there, not the hardening under test.
+  const isWin = process.platform === "win32";
+  const hook = path.join(dir, isWin ? "fsmon.cmd" : "fsmon.sh");
+  if (isWin) {
+    writeFileSync(hook, `@echo off\r\necho fired > "${marker}"\r\necho /\r\n`);
+  } else {
+    writeFileSync(hook, `#!/bin/sh\necho fired > "${marker}"\necho /\n`);
+    chmodSync(hook, 0o755);
+  }
   raw(["config", "core.fsmonitor", hook.replace(/\\/g, "/")]);
   writeFileSync(path.join(dir, "a.txt"), "hello\n");
 
@@ -123,6 +132,12 @@ const eq = (a, b, m) => { assert.deepEqual(a, b, m); pass++; };
     // A bare-name first argument to execFileSync/spawnSync is a PATH lookup.
     const bare = src.match(/(?:execFileSync|spawnSync)\(\s*["'](git|gh|powershell|pwsh|cmd|bash|sh)["']/g) ?? [];
     eq(bare, [], `${name} never resolves git/gh/powershell from PATH`);
+    // Using the trusted BINARY is not enough: a module that builds its own argument list
+    // must still apply the override, or it reopens the fsmonitor vector git() closes.
+    // patrol-sources.mjs's ownDraftPaths launcher was missed in exactly that way.
+    for (const launch of src.match(/(?:execFileSync|spawnSync)\(\s*trustedGitPath\(\)[\s\S]{0,240}?\]/g) ?? []) {
+      ok(launch.includes("SAFE_BY_CONSTRUCTION"), `${name} applies the fsmonitor override on every direct git spawn`);
+    }
   }
 }
 

@@ -2,6 +2,42 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-25 — `/patrol`: the fsmonitor override now covers every Git launch
+
+Follow-up on PR #473, closing three defects the mandatory gates returned. The previous
+commit claimed the fsmonitor vector was closed by construction; it was closed for the
+centralized `git()` helper only. `patrol-sources.mjs` built its own `spawnSync` argument
+list for the `ownDraftPaths` reader — trusted binary, trusted environment, but no
+`-c core.fsmonitor=false`. That reader runs index-refreshing `git diff` commands inside
+every worktree, so a repository-local `core.fsmonitor` could execute a program there
+under Mason's account. Found by the exact-SHA `gpt-5.6-sol` gate (HIGH) and confirmed
+against the source before fixing.
+
+- `SAFE_BY_CONSTRUCTION` is now exported and applied at both direct launchers. The
+  second — `git cat-file --batch` — was surfaced by the new regression sweep rather than
+  by the review. `cat-file` never refreshes the index so it was not a live vector, but an
+  exempt launcher is an exception to remember, which is how the first one was missed.
+- New static sweep: every direct `spawnSync(trustedGitPath(), [...])` in a patrol module
+  must carry the override. The property is "no call site is exempt", which an
+  execution test of one path cannot establish.
+- CI (required check) was failing on Linux: the fsmonitor CONTROL wrote a Windows `.cmd`
+  payload the runner cannot execute, so the control could not fire. The fixture was
+  broken on that platform, not the hardening. It now writes a `#!/bin/sh` payload with
+  the executable bit off-Windows, so the control is real on both platforms.
+- `.claude/commands/patrol.md` still claimed the hardening refuses "worktrees whose local
+  config could execute a filter". That scanner was deleted the day before. The text now
+  matches the code and names the residual `filter.*.clean/smudge` exposure as accepted
+  interactive-only baseline risk — the same risk `scripts/fleet-status.mjs` already carries.
+
+Sol's remaining medium (source `expected`/`received` counts recorded but never enforced)
+changes reporter behaviour rather than fixing a defect in this diff, and is left for
+Mason to schedule.
+
+Proof: patrol's four suites pass (classify 110, render 82, sources 128, trusted-exec 35 —
+up from 33 by the two sweep assertions); `npm run test:agent-workflows` green;
+`patrol-report.mjs` ran end to end against live data (52 items, "needs you 3 · scan
+errors 1") and still withheld the all-clear because a source failed.
+
 ## 2026-08-24 — Draw-down rollout completed live: migrations 2, 3 and 4 applied
 
 With Mason's explicit in-chat approval (Codex→Claude handoff

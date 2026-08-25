@@ -15,6 +15,7 @@ import {
   powershell as trustedPowershell,
   trustedGit as trustedGitPath,
   trustedEnv,
+  SAFE_BY_CONSTRUCTION,
 } from "./trusted-exec.mjs";
 import {
   parseWorktreePorcelain,
@@ -212,7 +213,11 @@ export function collectParkedMigrations(repoRoot) {
       // Hash the bytes Git stores (LF), not what a Windows checkout materializes.
       sha256Text: (text) => createHash("sha256").update(text.replace(/\r\n/g, "\n"), "utf8").digest("hex"),
       run: (args, cwd) => {
-        const r = spawnSync(trustedGitPath(), ["--no-replace-objects", ...args], {
+        // SAFE_BY_CONSTRUCTION, not just the trusted binary/environment: this launcher
+        // runs index-refreshing commands (`git diff`) inside every worktree, so without
+        // the override a repo-local `core.fsmonitor` executes here even though the
+        // centralized git() closes it.
+        const r = spawnSync(trustedGitPath(), ["--no-replace-objects", ...SAFE_BY_CONSTRUCTION, ...args], {
           encoding: "utf8", timeout: 5000, cwd, env: trustedEnv(), windowsHide: true, shell: false,
         });
         return r.status === 0 ? String(r.stdout || "").split("\n") : null;
@@ -254,7 +259,7 @@ export function collectParkedMigrations(repoRoot) {
             historyCandidates.state === "known" ? historyCandidates.paths : [],
           ),
           (input) => {
-            const r = spawnSync(trustedGitPath(), ["--no-replace-objects", "cat-file", "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)"], {
+            const r = spawnSync(trustedGitPath(), ["--no-replace-objects", ...SAFE_BY_CONSTRUCTION, "cat-file", "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)"], {
               cwd: repoRoot, input, timeout: 20_000, maxBuffer: ORIGIN_MAIN_CAT_FILE_MAX_BUFFER,
               stdio: ["pipe", "pipe", "ignore"], env: trustedEnv(), windowsHide: true, shell: false,
             });
