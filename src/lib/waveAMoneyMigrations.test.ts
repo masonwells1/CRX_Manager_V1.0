@@ -3,15 +3,15 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 const ROUND_HEADER_PATH =
-  'supabase/migrations/20260813020000_round_order_header_money.sql';
+  'scripts/.staging-migrations/20260813020000_round_order_header_money.sql';
 const COMMISSION_MATH_PATH =
-  'supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql';
+  'scripts/.staging-migrations/20260813040000_clamp_negative_commission_remainder.sql';
 const SPLIT_CORRECTION_PATH =
-  'supabase/migrations/20260813050000_guard_job_commission_split_immutable.sql';
+  'scripts/.staging-migrations/20260813050000_guard_job_commission_split_immutable.sql';
 const FINITENESS_PATH =
-  'supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql';
+  'scripts/.staging-migrations/20260813030000_reject_non_finite_money_and_quantities.sql';
 const DELIVERY_BILLING_PATH =
-  'supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql';
+  'scripts/.staging-migrations/20260813060000_require_completed_delivery_before_invoice_post.sql';
 
 const roundHeaderSql = readFileSync(ROUND_HEADER_PATH, 'utf8').replace(/\r\n/g, '\n');
 const commissionMathSql = readFileSync(COMMISSION_MATH_PATH, 'utf8').replace(/\r\n/g, '\n');

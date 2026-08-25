@@ -1,0 +1,9 @@
+const DDL_STMT_RE = /(?:^|;)\s*(?:create(?!\s+(?:temp|temporary)\s+table\b)(?:\s+or\s+replace)?|alter|drop)\s+\S+/im;
+const GRANT_REVOKE_RE = /(?:^|;)\s*(?:grant|revoke)\b/im;
+const TRUNCATE_RE = /(?:^|;)\s*truncate\b/im;
+const COPY_RE = /(?:^|;)\s*copy\b/im;
+const COMMENT_ON_RE = /^\s*comment\s+on\b/i;
+const SELECT_INTO_PERSISTENT_RE =
+  /\bselect\b[\s\S]*?\binto\s+(?!(?:temp(?:orary)?\s+|(?:pg_temp|pg_temp_\d+)\s*\.))/i;
+const DML_TARGET_RE =
+  /\b(insert\s+into|update|delete\s+from|merge(?:\s+into)?)\s+(?:only\s+)?(?:(?:"?([a-z_][a-z0-9_]*)"?\s*\.\s*)?)"?([a-z_][a-z0-9_]*)"?/i;

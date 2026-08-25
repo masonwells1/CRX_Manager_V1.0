@@ -10,6 +10,7 @@ import { CRX_GREEN, CHARCOAL, GRAY, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import { COMPANY_FOOTER_THANKS } from './companyInfo';
 import { formatUSD as fmtMoney } from './money';
+import { stripBelowCostApprovalNote } from './belowCostApproval';
 
 
 
@@ -150,14 +151,15 @@ function renderOrderSummaryPage(
   y += 20;
 
   // Notes
-  if (data.notes) {
+  const visibleNotes = stripBelowCostApprovalNote(data.notes);
+  if (visibleNotes) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
     doc.setTextColor(...CHARCOAL);
     doc.text('NOTES', margin, y);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(...GRAY);
-    const lines = doc.splitTextToSize(data.notes, pageW - margin * 2);
+    const lines = doc.splitTextToSize(visibleNotes, pageW - margin * 2);
     doc.text(lines, margin, y + 14);
     y += lines.length * 12 + 24;
   }

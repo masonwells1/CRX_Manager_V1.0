@@ -5,28 +5,36 @@
 --
 -- THE DEFECT
 -- 20260810151000 added validated CHECK constraints requiring whole cents on
--- orders.total_cost and orders.total_profit. Raised by Codex on PR #371 and
--- independently confirmed against live pg_proc/pg_trigger/pg_constraint:
--- create_order_from_blend_ticket accumulates
+-- orders.total_cost and orders.total_profit. Nothing guarantees that the values
+-- written into those columns are whole cents, so any writer that computes a
+-- sub-cent header aborts its whole RPC with a raw `violates check constraint`
+-- error instead of doing its job.
 --
---     v_total_price := v_total_price + (v_price * v_qty_conv);
---     v_total_cost  := v_total_cost  + (v_cost  * v_qty_conv);
+-- WHAT CHANGED SINCE THIS FILE WAS FIRST WRITTEN — read this before judging the
+-- severity, because the original example is no longer the live one.
 --
--- and writes those straight into the header with no ROUND anywhere:
+-- Drafted 2026-08-09, this header cited create_order_from_blend_ticket, which at
+-- the time accumulated `v_total_price + (v_price * v_qty_conv)` over a
+-- unit-converted (routinely fractional) quantity and wrote the raw sum straight
+-- into the header with no ROUND. A concurrent session has since rewritten that
+-- function as part of the blend-ticket whole-cent fix. Read from live pg_proc on
+-- 2026-08-13 (md5 344532c6522cce26857ce4ffd9597125, 12146 chars): it now inserts
+-- the header with literal zeros in all four money columns and lets the
+-- order_items triggers populate them, and it no longer UPDATEs orders anywhere.
+-- The blend-ticket example in the original draft is therefore FIXED and is
+-- retained above only as the illustration of the class of bug.
 --
---     SET total_price = v_total_price,
---         total_cost  = v_total_cost,
---         total_profit = v_total_price - v_total_cost, ...
---
--- v_qty_conv is a UNIT-CONVERTED quantity, so it is routinely fractional. A
--- fractional converted quantity therefore produces a sub-cent total_cost, which
--- the new constraint rejects — aborting the whole RPC with a raw
--- `violates check constraint` error instead of creating the order.
---
--- SEVERITY — latent, not currently firing. Verified on live: blend_tickets holds
--- 0 rows and blend_ticket_products holds 0 rows, so this path has never run in
--- production. That is also why 20260810151000 validated cleanly. The first blend
--- ticket ever created would have hit it.
+-- SEVERITY — the class is live, the original example is not.
+--   * The blend-ticket path: closed by the sibling fix. Also still unexercised —
+--     blend_tickets and blend_ticket_products both held 0 rows on live, which is
+--     why 20260810151000 validated cleanly in the first place.
+--   * _update_order_items_impl: STILL OPEN, and it is the ordinary "edit an
+--     order's lines" path rather than an unused one. It ends with an unrounded
+--     header write of the raw line sum; the exact live body is quoted in SCOPE
+--     below, together with the live counts of the rows it can affect. This is the
+--     writer that makes this migration change stored values.
+--   * Any future writer: uncovered by construction until something intercepts
+--     the column itself, which is what this migration installs.
 --
 -- WHY A TRIGGER RATHER THAN FIXING THE WRITER
 -- Two reasons, and the second is decisive.
@@ -36,19 +44,23 @@
 --      frontend writes. Chasing individual writers is a bigger diff with a worse
 --      guarantee.
 --
---   2. create_order_from_blend_ticket CANNOT be safely rewritten right now. Its
---      live body (md5 19e08adc9d62e13b7482210f6167734d, 10064 chars) matches NO
---      tracked migration on disk. All 8 on-disk definitions were extracted and
---      hashed; the newest (20260714230200_blend_ticket_order_lifecycle.sql) is
---      9812 chars and no migration after that date so much as mentions the
---      function, so the live body was changed outside the migration trail. A
---      CREATE OR REPLACE written against the newest disk copy would silently
---      revert 252 characters of untracked live behaviour. This is the same
---      disk-vs-live drift already recorded for _update_order_items_impl in
---      docs/reference/migration-history.md, and it is tracked as an open issue
---      rather than resolved here.
+--   2. The order-header writers CANNOT all be safely rewritten right now,
+--      because their live bodies drift from the migration trail. When this file
+--      was drafted, create_order_from_blend_ticket was the example: its live body
+--      matched none of the 8 on-disk definitions, and a CREATE OR REPLACE
+--      written against the newest disk copy would have silently reverted
+--      untracked live behaviour. That particular function has since been
+--      rewritten by a sibling session (live md5 on 2026-08-13:
+--      344532c6522cce26857ce4ffd9597125, 12146 chars), so the numbers in the
+--      original note are stale — but the same drift is still recorded for
+--      _update_order_items_impl in docs/reference/migration-history.md, and
+--      _update_order_items_impl is now the writer that matters here. The
+--      reasoning survives the example changing under it, which is itself the
+--      argument: a fix that depends on any one body's text keeps going stale,
+--      and this one does not.
 --
--- The trigger closes the defect WITHOUT needing to read or trust that body.
+-- The trigger closes the defect WITHOUT needing to read or trust any of those
+-- bodies.
 --
 -- SCOPE
 --   * Rounds orders.total_price and orders.total_cost first, then DERIVES
@@ -113,9 +125,10 @@
 --     NULL. A future schema change that wants NULL to mean zero must make that
 --     business decision explicitly rather than smuggling it into this trigger.
 --   * total_margin_pct is a percentage, not money, and is excluded — matching the
---     existing exclusion of order_items.net_margin. Note this means a header
---     written by the blend-ticket path keeps a margin percentage computed from
---     the pre-rounding numbers; it is a derived display figure, and correcting it
+--     existing exclusion of order_items.net_margin. Note this means that wherever
+--     a writer computes the margin percentage from its own pre-rounding numbers,
+--     that stored percentage can disagree in the last digit with the rounded
+--     price and cost beside it. It is a derived display figure, and correcting it
 --     remains a separate display-accuracy change.
 --
 -- NO-OP ON EXISTING DATA. This migration rewrites nothing. It installs a trigger
@@ -242,37 +255,56 @@ BEGIN
     RAISE EXCEPTION 'PRECOND: orders_total_profit_whole_cents_chk is missing or not validated';
   END IF;
 
-  -- THE TRIGGER BELOW IS COLUMN-SCOPED, so it closes the defect only if the real
-  -- writer actually names those columns in its SET list. That cannot be taken on
-  -- faith: the live create_order_from_blend_ticket body matches no tracked
-  -- migration (see the note above), so its disk copy is not evidence of what runs.
-  -- Asserted against the LIVE body instead. Read from live pg_proc while writing
-  -- this file (md5 19e08adc9d62e13b7482210f6167734d, 10064 chars) and confirmed to
-  -- contain all three assignments. Matching the assignments rather than pinning
-  -- the whole-body md5 is deliberate: an md5 pin would block this fix on any
-  -- unrelated future edit to a 10KB function, whereas these three patterns are
-  -- exactly the property the fix depends on. If a later edit moves the header
-  -- write off these columns, this fails closed and says so.
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'public' AND p.proname = 'create_order_from_blend_ticket'
-      AND p.prosrc LIKE '%total_price = v_total_price%'
-      AND p.prosrc LIKE '%total_cost = v_total_cost%'
-      AND p.prosrc LIKE '%total_profit = v_total_price - v_total_cost%'
-  ) THEN
-    RAISE EXCEPTION 'PRECOND: the live create_order_from_blend_ticket no longer writes the order header through total_price/total_cost/total_profit. A column-scoped trigger would not intercept it — re-read that function before applying.';
-  END IF;
+  -- NO WRITER-SHAPE ASSERTION HERE, and that is deliberate. Recorded in full
+  -- because two successive drafts of this file got it wrong in opposite ways.
+  --
+  -- Draft 1 asserted three exact assignment strings in
+  -- create_order_from_blend_ticket (`total_price = v_total_price` and two
+  -- matching lines). A concurrent session rewrote that function as part of the
+  -- blend-ticket whole-cent fix, all three strings went false, and this migration
+  -- self-aborted on a precondition that had nothing to do with its remedy.
+  --
+  -- Draft 2 loosened it to "the function still INSERTs into orders naming
+  -- total_price/total_cost/total_profit". Read from the live body on 2026-08-13,
+  -- that assertion is VACUOUS: the rewritten function inserts the header with
+  -- literal zeros in all four money columns and lets the order_items triggers
+  -- populate them afterwards. A predicate that passes on an insert of zeros
+  -- proves nothing about rounding, so it bought friction and no safety.
+  --
+  -- The honest position is that this remedy does not depend on ANY function's
+  -- shape, for two reasons:
+  --
+  --   * The trigger attaches to the orders TABLE, not to a writer. It intercepts
+  --     every writer of these columns — present, future, and direct frontend
+  --     writes alike. That is the whole argument for a trigger over a rewrite.
+  --   * `BEFORE INSERT OR UPDATE OF (...)` fires on EVERY insert; the column list
+  --     restricts the UPDATE event only. So an insert-only writer is covered
+  --     unconditionally and needs nothing proven about it.
+  --
+  -- The writer that actually makes this migration change stored values is
+  -- _update_order_items_impl, whose unrounded trailing header write is quoted in
+  -- the SCOPE section above. It is deliberately NOT asserted either: pinning it
+  -- would assert the CONTINUED EXISTENCE OF THE BUG, so that whoever fixes that
+  -- function properly would break this migration's replay. Assert invariants, not
+  -- defects.
+  --
+  -- What proves this migration works is the behavioural probe in the
+  -- postcondition, which inserts a sub-cent header inside the migration, reads
+  -- back whole-cent values, and rolls the probe row away. That is real evidence
+  -- about the trigger; a prosrc LIKE was only ever evidence about prose. The
+  -- preconditions kept above — the pinned _round_money_to_whole_cents body and
+  -- the two validated whole-cent CHECKs — are the ones this file's remedy is
+  -- genuinely built on.
 END;
 $precond$;
 
--- Extends the existing canonical rounding point with an `orders` branch. The
--- order_items and commissions branches are carried forward SEMANTICALLY
--- IDENTICAL to 20260809230500: every executable statement is unchanged, and the
--- only textual difference is one reworded comment line ("see this file's header"
--- became "see 20260809230500", which is what that phrase now refers to). Stated
--- precisely because comments live in prosrc and this file's whole discipline is
--- md5 pinning — a reader who took "byte-identical" literally would be misled.
--- Only the ELSIF for 'orders' is new logic.
+-- Compared with reviewed 20260809230500, the order_items and commissions
+-- branches of the replacement function are carried forward semantically
+-- unchanged. This repaired Wave A draft does change other executable SQL: its
+-- precondition block no longer asserts any writer-specific shape, because the
+-- table trigger covers every INSERT and every UPDATE naming these columns; the
+-- postcondition's behavioral probe is the proof that rounding works. Within the
+-- replacement function itself, only the ELSIF for 'orders' is new logic.
 CREATE OR REPLACE FUNCTION public._round_money_to_whole_cents()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -359,9 +391,14 @@ REVOKE ALL ON FUNCTION public._round_money_to_whole_cents() FROM PUBLIC, anon, a
 
 -- BEFORE INSERT OR UPDATE OF the three header money columns. Scoping the UPDATE
 -- to those columns keeps the trigger off the many order updates that touch only
--- status, notes or delivery fields. The precondition above asserts that the live
--- create_order_from_blend_ticket really does write through these column names —
--- a column-scoped trigger is only as good as that assumption.
+-- status, notes or delivery fields.
+--
+-- The column list narrows the UPDATE event ONLY; every INSERT fires this trigger
+-- regardless of which columns the insert names. So the scoping can only ever miss
+-- an UPDATE that changes header money without naming one of these three columns,
+-- which is not expressible in SQL. No assumption about any particular writer is
+-- being made here — see the precondition block above for why the earlier attempts
+-- to assert one were removed.
 DROP TRIGGER IF EXISTS trg_orders_round_money ON public.orders;
 CREATE TRIGGER trg_orders_round_money
   BEFORE INSERT OR UPDATE OF total_price, total_cost, total_profit ON public.orders

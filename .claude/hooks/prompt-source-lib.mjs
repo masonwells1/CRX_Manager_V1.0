@@ -15,11 +15,33 @@
 // push without Mason's explicit approval") that contradicted the authorized
 // auto-push — a single shared constant means the wording can't drift again.
 
-const MACHINE_TAG_NAMES = [
+// KEEP THIS LIST CURRENT. Every entry here was added because a real automated
+// prompt was mistaken for something Mason typed. The 2026-07-04 incident above
+// recurred on 2026-08-16 for exactly the same reason: <heartbeat> — the envelope
+// the crx-active-session-fleet-monitor automation arrives in — was not listed,
+// so its <instructions> body latched hold.json three times in one session and
+// blocked an approved live migration apply, with no human involved.
+//
+// Audited the project's transcripts (786 user-prompt records) after that
+// incident to find every tag that actually opens a prompt here. Four were
+// missing from this list; three are added below. The tags that open a prompt in
+// practice are: task-notification, scheduled-task, system-reminder,
+// local-command-caveat, command-name, cross-session-message, heartbeat.
+//
+// DELIBERATELY NOT LISTED: "cross-session-message". A sibling Claude/Codex
+// session is behind that envelope, not the harness, so unlike the entries below
+// there IS an agent choosing the words. Listing it would stop a sibling from
+// latching a hold on this session — a loosening, not a tightening — and that is
+// Mason's call to make, not this file's. Left out on purpose; do not "complete"
+// the list from the audit above without asking him first.
+export const MACHINE_TAG_NAMES = [
   "task-notification",
+  "scheduled-task",
   "system-reminder",
+  "local-command-caveat",
   "command-name",
   "local-command-stdout",
+  "heartbeat",
 ];
 
 // Full envelope tags anywhere in the prompt...

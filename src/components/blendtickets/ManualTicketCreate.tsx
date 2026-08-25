@@ -7,11 +7,13 @@ import SearchableSelect from '../ui/SearchableSelect';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
-import { validateBlendMath } from '../../lib/blendMathValidator';
+import { validateBlendMath, type BlendMathWarning } from '../../lib/blendMathValidator';
 import { localToday } from '../../lib/dateUtils';
-import type { Customer, Product, BlendRecipe, BlendRecipeItem } from '../../types';
+import type { Customer, Product, BlendRecipe, BlendRecipeItem, UnitConversion } from '../../types';
 import { Sentry } from '../../lib/sentry';
+import { blockedUnitSaveMessage, type UnitLoadState } from '../../lib/units';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../products/ProductOptionPresentation';
+import UnitSelect from './UnitSelect';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
 
@@ -183,12 +185,14 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
   const [products, setProducts] = useState<ManualProduct[]>([]);
   const [allProducts, setAllProducts] = useState<PickerProduct[]>([]);
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+  const [unitLoad, setUnitLoad] = useState<UnitLoadState>('pending');
   const [recipes, setRecipes] = useState<(BlendRecipe & { items: BlendRecipeItem[] })[]>([]);
   const [selectedRecipeId, setSelectedRecipeId] = useState('');
   const [saving, setSaving] = useState(false);
   const [attemptUncertain, setAttemptUncertain] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [warnings, setWarnings] = useState<string[]>([]);
+  const [warnings, setWarnings] = useState<BlendMathWarning[]>([]);
 
   const clearPersistedAttempt = () => {
     persistedAttemptRef.current = null;
@@ -268,6 +272,21 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
   }, [profile?.id, resetCreateKey]);
 
   useEffect(() => {
+    supabase.from('unit_conversions').select('*').order('unit').then(({ data, error }) => {
+      if (error) {
+        // The unit fields are pickers, not free text, so an empty list leaves the
+        // operator no way to enter a unit at all. Say so instead of failing quietly.
+        Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_unit_conversions' } });
+        setUnitLoad('failed');
+        setError('Failed to load Units. Retry before creating this ticket.');
+        return;
+      }
+      setUnitConversions((data || []) as UnitConversion[]);
+      setUnitLoad('loaded');
+    });
+  }, []);
+
+  useEffect(() => {
     const loadData = async () => {
       const { data: prodData, error: prodError } = await supabase
         .from('products')
@@ -303,16 +322,19 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
     const recipeProducts: ManualProduct[] = recipe.items
       .sort((a, b) => a.sort_order - b.sort_order)
-      .map((item) => ({
-        tempId: crypto.randomUUID(),
-        product_id: item.product_id,
-        product_name: item.product_name,
-        quantity: item.quantity,
-        unit: item.unit,
-        rate_per_acre: item.rate_per_acre,
-        rate_per_acre_unit: '',
-        lot_number: '',
-      }));
+      .map((item) => {
+        const catalog = allProducts.find((candidate) => candidate.id === item.product_id);
+        return {
+          tempId: crypto.randomUUID(),
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit: item.unit,
+          rate_per_acre: item.rate_per_acre,
+          rate_per_acre_unit: catalog?.rate_unit || '',
+          lot_number: '',
+        };
+      });
 
     setProducts(recipeProducts);
   }
@@ -322,16 +344,29 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
       total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
       total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
       total_volume_unit: formData.total_volume_unit || null,
+      application_rate: formData.application_rate || null,
     };
-    const productData = products.map(p => ({
-      product_name: p.product_name,
-      quantity: p.quantity,
-      unit: p.unit || null,
-      rate_per_acre: p.rate_per_acre,
-      rate_per_acre_unit: p.rate_per_acre_unit || null,
-    }));
+    const productData = products.map(p => {
+      // The rate check guards a billing path: create_invoice_from_blend_ticket
+      // prices each line from rate_per_acre and its unit, falling back to the
+      // product's own rate_unit when the line leaves it blank. Hand the catalog
+      // row's units over so the warning and the invoice agree about the line.
+      const catalog = allProducts.find((candidate) => candidate.id === p.product_id);
+      return {
+        product_name: p.product_name,
+        quantity: p.quantity,
+        unit: p.unit || null,
+        rate_per_acre: p.rate_per_acre,
+        rate_per_acre_unit: p.rate_per_acre_unit || null,
+        product_form: catalog?.product_form ?? null,
+        product_rate_unit: catalog?.rate_unit ?? null,
+        product_inventory_unit: catalog?.inventory_unit || catalog?.unit_size || null,
+      };
+    });
     setWarnings(validateBlendMath(ticketData, productData));
-  }, [products, formData.total_acres, formData.total_volume, formData.total_volume_unit]);
+    // application_rate belongs in these deps: the tank check reads it, so leaving
+    // it out would freeze the warning at whatever it was before the operator typed.
+  }, [products, allProducts, formData.total_acres, formData.total_volume, formData.total_volume_unit, formData.application_rate]);
 
   function addProduct() {
     setProducts([
@@ -367,6 +402,19 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
     if (!formData.customer_id) {
       setError('Please select a customer before saving.');
+      return;
+    }
+
+    // Only block when the missing list is actually costing the ticket a unit. A
+    // blank rate unit bills off the product's own rate_unit, but it should be a
+    // choice the operator made, not one a failed fetch made for them.
+    const unitBlock = blockedUnitSaveMessage(
+      unitLoad,
+      unitConversions,
+      products.some((p) => !p.unit || !p.rate_per_acre_unit),
+    );
+    if (unitBlock) {
+      setError(unitBlock);
       return;
     }
 
@@ -695,7 +743,10 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
         </div>
 
         <div className="space-y-4">
-          {products.map((product) => (
+          {products.map((product) => {
+            const catalog = allProducts.find((candidate) => candidate.id === product.product_id);
+            const productForm = catalog?.product_form ?? null;
+            return (
             <div key={product.tempId} className="grid grid-cols-12 gap-3 items-start p-4 bg-gray-50 rounded-lg">
               <div className="col-span-12 md:col-span-3">
                 <label className="block text-xs font-medium text-gray-700 mb-1">Product</label>
@@ -728,11 +779,13 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
               <div className="col-span-4 md:col-span-1">
                 <label className="block text-xs font-medium text-gray-700 mb-1">Unit</label>
-                <Input
-                  type="text"
+                <UnitSelect
+                  unitConversions={unitConversions}
+                  form={productForm}
                   value={product.unit}
-                  onChange={(e) => updateProduct(product.tempId, 'unit', e.target.value)}
-                  placeholder="gal"
+                  onChange={(value) => updateProduct(product.tempId, 'unit', value)}
+                  disabled={saving || attemptUncertain}
+                  ariaLabel={`Quantity unit for ${product.product_name || 'product'}`}
                 />
               </div>
 
@@ -747,12 +800,14 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
               </div>
 
               <div className="col-span-4 md:col-span-1">
-                <label className="block text-xs font-medium text-gray-700 mb-1">Rate Unit</label>
-                <Input
-                  type="text"
+                <label className="block text-xs font-medium text-gray-700 mb-1">Rate unit (per acre)</label>
+                <UnitSelect
+                  unitConversions={unitConversions}
+                  form={productForm}
                   value={product.rate_per_acre_unit}
-                  onChange={(e) => updateProduct(product.tempId, 'rate_per_acre_unit', e.target.value)}
-                  placeholder="oz/ac"
+                  onChange={(value) => updateProduct(product.tempId, 'rate_per_acre_unit', value)}
+                  disabled={saving || attemptUncertain}
+                  ariaLabel={`Rate unit per acre for ${product.product_name || 'product'}`}
                 />
               </div>
 
@@ -777,7 +832,8 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
                 </Button>
               </div>
             </div>
-          ))}
+            );
+          })}
 
           {products.length === 0 && (
             <p className="text-center text-gray-500 py-8">
@@ -789,14 +845,27 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
       </fieldset>
 
-      {warnings.length > 0 && (
+      {/* Two tiers, deliberately. A "couldn't check this" note is the COMMON case
+          on a real ticket, and rendering it in the same alarmed amber as a genuine
+          mismatch is how a banner gets trained into wallpaper. Only a comparison
+          that actually ran and disagreed gets the warning styling. */}
+      {warnings.some((w) => w.level === 'mismatch') && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 space-y-1">
           <div className="flex items-center gap-2 text-yellow-800 font-medium text-sm">
             <AlertCircle className="h-4 w-4" />
             Math Validation Warnings
           </div>
-          {warnings.map((w, i) => (
-            <p key={i} className="text-sm text-yellow-700 ml-6">- {w}</p>
+          {warnings.filter((w) => w.level === 'mismatch').map((w, i) => (
+            <p key={i} className="text-sm text-yellow-700 ml-6">- {w.message}</p>
+          ))}
+        </div>
+      )}
+
+      {warnings.some((w) => w.level === 'unchecked') && (
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-1">
+          <div className="text-gray-600 font-medium text-sm">Not automatically checked</div>
+          {warnings.filter((w) => w.level === 'unchecked').map((w, i) => (
+            <p key={i} className="text-sm text-gray-500 ml-2">- {w.message}</p>
           ))}
         </div>
       )}

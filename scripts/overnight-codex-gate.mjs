@@ -9,14 +9,16 @@
  *
  * - <promptFile>: a UTF-8 text file containing the full Codex prompt (candidate
  *   findings for the finding-gate, or a staged diff + ask for the fix-gate).
- *   Passing the prompt via a FILE avoids argv-escaping landmines.
+ *   Passing the prompt via a FILE avoids argv-escaping landmines; the contents
+ *   are then fed to codex on STDIN (like codex-hunt.mjs), so a large staged
+ *   diff never hits the Windows ~32K command-line length cap.
  * - Resolves the newest codex.exe (version-hashed dir) and falls back to the
  *   `codex` shim on PATH. Runs an ephemeral, user-config-isolated
  *   `codex exec --model gpt-5.6-sol -c model_reasoning_effort="high"`
  *   review under the read-only sandbox. Adversarial reviews never inherit a
  *   cheaper builder model or reasoning level from workstation configuration.
- *   with stdin closed (non-TTY stdin otherwise blocks "Reading additional input
- *   from stdin…" → hang). Prints Codex's output to stdout; exits with its code.
+ *   spawnSync writes the prompt to stdin and closes it, so codex never blocks
+ *   waiting on input. Prints Codex's output to stdout; exits with its code.
  *
  * READ-ONLY by construction: `--sandbox read-only` means Codex cannot edit files,
  * run mutating SQL, push, or deploy. This wrapper adds no write capability — it is
@@ -69,21 +71,35 @@ const codex = resolveCodex()
 const args = [
   'exec', '--ephemeral', '--ignore-user-config',
   '--model', CODEX_REVIEW_MODEL, '-c', `model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`,
-  '--sandbox', 'read-only', '-C', repoRoot, prompt,
+  '--sandbox', 'read-only', '-C', repoRoot,
 ]
 
 const res = spawnSync(codex, args, {
+  input: prompt, // prompt via stdin — a large diff would blow the Windows ~32K argv cap
   encoding: 'utf8',
-  stdio: ['ignore', 'pipe', 'pipe'], // stdin IGNORED so codex never blocks on it
+  stdio: ['pipe', 'pipe', 'pipe'], // spawnSync writes `input` then closes stdin, so codex cannot block on it
   timeout: timeoutSec * 1000,
   maxBuffer: 64 * 1024 * 1024,
   windowsHide: true,
 })
 
-if (res.error) {
-  if (res.error.code === 'ETIMEDOUT') fail(`codex timed out after ${timeoutSec}s — split into a smaller batch`, 124)
-  fail(`failed to launch codex (${codex}): ${res.error.message}`)
-}
+// Preserve whatever output we got — even on timeout/error — so a partial Codex run
+// is never silently mistaken for "clean" (same discipline as codex-hunt.mjs).
 process.stdout.write(res.stdout || '')
 if (res.stderr) process.stderr.write(res.stderr)
+
+if (res.error) {
+  // GATE-FAILED goes to STDOUT: overnight runs redirect stdout to the verdict file
+  // and stderr to a trace file, so a stderr-only failure would leave the verdict
+  // file empty — indistinguishable from "gate found nothing".
+  if (res.error.code === 'ETIMEDOUT') {
+    process.stdout.write(`\nGATE-FAILED: codex timed out after ${timeoutSec}s — split into a smaller batch\n`)
+    fail(`codex timed out after ${timeoutSec}s — split into a smaller batch`, 124)
+  }
+  process.stdout.write(`\nGATE-FAILED: failed to launch codex (${codex}): ${res.error.message}\n`)
+  fail(`failed to launch codex (${codex}): ${res.error.message}`)
+}
+if (res.status !== 0) {
+  process.stdout.write(`\nGATE-FAILED: codex exited with code ${res.status == null ? 'null' : res.status}\n`)
+}
 process.exit(res.status == null ? 1 : res.status)

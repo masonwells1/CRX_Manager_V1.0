@@ -2,10 +2,2728 @@
 
 All significant development milestones, in reverse chronological order.
 
-## Unreleased
+## 2026-08-25 — Quote-version restore trust boundary (PR #401): rebased, renumbered, verified against live
 
-- Security: quote-version restores now require a server-issued trust marker. Existing snapshots remain visible but cannot be restored into money-bearing quote lines because their pre-boundary provenance cannot be proven. This is repository-only work: neither quote-version security migration has been applied live.
-- Security proof: the standing quote-version invariant now fingerprints the complete whitespace-normalized prefix before the legacy trust rejection, so any added, removed, renamed, or reordered statement fails closed without attempting to parse PostgreSQL identifier syntax. Mutation tests exercise the actual comparator and fingerprint against direct DML, SELECT-list helpers, conditional helpers, quoted identifiers, and dollar identifiers; the rollback runtime smoke contains no table-level trigger DDL that could block production quote writes.
+Landing the long-stale PR #401. `20260813080000` closed the browser write path to
+`quote_versions` and applied live on 2026-08-16, but the rows written *before* that
+boundary are still there and nothing distinguishes them from RPC-created ones. Restoring
+a version rebuilds `quote_items.cost_at_quote_cents`, so an unprovable legacy row must not
+become a trusted cost source merely because the door is now shut.
+
+- **New nullable `quote_versions.restore_trusted_at timestamptz`.** `create_quote_version`
+  stamps it on its own first successful insert, after the owner-side writer has built the
+  snapshot from typed database rows; a cached idempotent replay returns before that point
+  and so cannot bless a pre-boundary row with a reused key. The private
+  `_restore_quote_version_below_cost_impl_20260810` raises
+  `QUOTE_VERSION_LEGACY_UNTRUSTED` when the marker is NULL, before any quote, section or
+  item row is touched.
+- **No backfill, deliberately.** Backfilling would convert an unprovable assertion into
+  trust. Pre-boundary snapshots stay fully readable; they just stop being restorable.
+  Measured live on 2026-08-25 before landing: 3 quote versions across 2 quotes, and
+  `restore_quote_version` has been invoked zero times in production — the behavioral
+  change lands on a path no one has used.
+- **Renumbered `20260813180000` → `20260825190000`.** The original stamp had fallen below
+  the live high-water name `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`,
+  so `.claude/hooks/migration-ordering-lib.mjs` would have refused the apply outright —
+  correctly, since replaying a stale file is how the `batch_apply_prepayments` actor guard
+  was silently reverted on 2026-07-15. All seven in-repo references were moved with it.
+- **Re-emission verified non-regressive.** The migration re-emits
+  `create_quote_version` with `CREATE OR REPLACE`, so its proposed body was diffed against
+  the live `prosrc` on 2026-08-25 rather than trusted. Every existing guard survives:
+  actor identity, active-role membership, quote ownership both before and after the
+  `FOR UPDATE` lock, row-version staleness, the full idempotency payload check including
+  `_method` and version-id existence, and the cache-write row-count assertion. The only
+  additions are the trust-mark `UPDATE` and its `QUOTE_VERSION_TRUST_MARK_FAILED` guard.
+- **Rebase decisions.** Merging current `main` produced eight conflicts. `main` won every
+  documentation conflict — the branch's headers still claimed `20260813080000` was
+  unapplied, which stopped being true on 2026-08-16. In `rpcContracts.test.ts` `main` also
+  won outright: the private restore implementation holds no `authenticated`, `anon` or
+  `service_role` EXECUTE grant live, so it never reaches the generated client types and
+  needs no exemption, and the two Wave A guard entries the branch carried are still parked.
+  `smoke-specs.json` kept both sides — each added a different new spec.
+
+Migration is written and reviewed but **NOT APPLIED**; it is entry 892 in
+`docs/reference/migration-history.md`.
+## 2026-08-25 — `/patrol`: the fsmonitor override now covers every Git launch
+
+Follow-up on PR #473, closing three defects the mandatory gates returned. The previous
+commit claimed the fsmonitor vector was closed by construction; it was closed for the
+centralized `git()` helper only. `patrol-sources.mjs` built its own `spawnSync` argument
+list for the `ownDraftPaths` reader — trusted binary, trusted environment, but no
+`-c core.fsmonitor=false`. That reader runs index-refreshing `git diff` commands inside
+every worktree, so a repository-local `core.fsmonitor` could execute a program there
+under Mason's account. Found by the exact-SHA `gpt-5.6-sol` gate (HIGH) and confirmed
+against the source before fixing.
+
+- `SAFE_BY_CONSTRUCTION` is now exported and applied at both direct launchers. The
+  second — `git cat-file --batch` — was surfaced by the new regression sweep rather than
+  by the review. `cat-file` never refreshes the index so it was not a live vector, but an
+  exempt launcher is an exception to remember, which is how the first one was missed.
+- New static sweep: every direct `spawnSync(trustedGitPath(), [...])` in a patrol module
+  must carry the override. The property is "no call site is exempt", which an
+  execution test of one path cannot establish.
+- CI (required check) was failing on Linux: the fsmonitor CONTROL wrote a Windows `.cmd`
+  payload the runner cannot execute, so the control could not fire. The fixture was
+  broken on that platform, not the hardening. It now writes a `#!/bin/sh` payload with
+  the executable bit off-Windows, so the control is real on both platforms.
+- `.claude/commands/patrol.md` still claimed the hardening refuses "worktrees whose local
+  config could execute a filter". That scanner was deleted the day before. The text now
+  matches the code and names the residual `filter.*.clean/smudge` exposure as accepted
+  interactive-only baseline risk — the same risk `scripts/fleet-status.mjs` already carries.
+
+Sol's remaining medium (source `expected`/`received` counts recorded but never enforced)
+changes reporter behaviour rather than fixing a defect in this diff, and is left for
+Mason to schedule.
+
+Proof: patrol's four suites pass (classify 110, render 82, sources 128, trusted-exec 35 —
+up from 33 by the two sweep assertions); `npm run test:agent-workflows` green;
+`patrol-report.mjs` ran end to end against live data (52 items, "needs you 3 · scan
+errors 1") and still withheld the all-clear because a source failed.
+
+## 2026-08-24 — Draw-down rollout completed live: migrations 2, 3 and 4 applied
+
+With Mason's explicit in-chat approval (Codex→Claude handoff
+`docs/audits/2026-08-24-codex-to-claude-draw-down-live-rollout-handoff.md`) the remaining three
+migrations of the four-part draw-down chain were applied to production, one at a time, through the
+gated file-bytes apply door (`scripts/apply-migration-file.mjs`, PR #460). Each apply followed a
+fresh same-session `/migration-review` (three reviewer subagents, zero real blockers) plus fresh
+CLEAN `gpt-5.6-sol`/high machine verdicts hash-bound to the transmitted bytes, and passed its
+in-transaction postflight plus independent live catalog/ACL checks.
+
+- `20260816120000_draw_down_split_order_lines_by_price_tier` → ledger version `20260825025241`
+- `20260817120000_carry_allocated_line_cents_through_lifecycle` → ledger version `20260825033106`
+- `20260819232000_bind_draw_down_receipts_to_intent` → ledger version `20260825034622`
+  (applied after re-verifying zero unexpired `draw_down_quote` retry receipts)
+
+Ledger 972 → 975 rows; effective ordering high-water now `20260819232000`. Schema registry
+refreshed from live introspection (`migrations_high_water = 20260825034622`); migration history
+updated. Booking draws stayed paused throughout the rollout.
+
+- **Migrations applied live this session:**
+  - `20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+  - `20260817120000_carry_allocated_line_cents_through_lifecycle.sql`
+  - `20260819232000_bind_draw_down_receipts_to_intent.sql`
+
+## 2026-08-24 — `/patrol`: a read-only queue reporter that cannot fake an all-clear
+
+Mason runs 28 worktrees and ~20 open PRs at once, and `/fleet` reports all of it without
+filtering — he reads everything or nothing. `/patrol` answers the narrower question "what
+needs Mason?" and is built so that its silence is trustworthy **about the things it can
+observe** — it never reports an all-clear over a source it failed to read, a condition it
+could not determine, or an item it hid. It cannot speak to decisions that live outside
+GitHub: a pull request held back by a judgement call recorded only in session notes looks
+unblocked to patrol, which is why parking must be marked with a label on the PR itself.
+
+- **Read-only by construction.** The collector issues GETs and read-only `git` queries —
+  read-only in the sense that no tracked file and no business data changes. `git status`
+  and `git diff` still refresh Git's index metadata under `.git/` as a side effect of
+  reading, which is why the fsmonitor override matters on every call site.
+  An earlier design proposed one automatic `gh pr update-branch` action; two adversarial
+  Codex (`gpt-5.6-sol`, high effort) review rounds on the plan established that the
+  classify-then-act window could not be made race-free against 28 concurrent sessions or
+  against exact-SHA review proofs, so every mutation was removed rather than guarded.
+- **The renderer, not a language model, owns every safety-critical line** — the lanes, the
+  counts, the emergency text, and the exact phrase `Nothing waiting on you`. The reporting
+  agent may append one labelled paragraph; it cannot suppress a lane, soften an error, or
+  paraphrase an all-clear. Round 2 of the review flagged the previous "the agent is
+  instructed not to…" wording as an assertion without a mechanism.
+- **Exhaustive fallback.** Any unmatched condition combination resolves to `INDETERMINATE`;
+  `IDLE` is never a fallback and is downgraded automatically if it carries a blocker.
+- **Freshness is proved, not assumed.** Merge state requires two reads a minimum interval
+  apart, cross-checked against a different GitHub API, so two responses from one cache
+  cannot pass as agreement.
+- **Required checks are the union of branch protection AND active rulesets.** This repo's
+  `protect-main` ruleset requires a `Vercel` check that branch protection does not list;
+  resolving from protection alone would have read a PR as green with a required check
+  unrun. Duplicate check contexts resolve to the newest run so a stale green cannot win,
+  and the CodeRabbit status is validated by creating App id rather than context name.
+- **A failed source emits a visible `SCAN_ERROR` item**, so an empty list from a broken
+  source can never be mistaken for a genuinely empty list.
+- **Negative claims only.** Patrol reports blockers it can see and never asserts a PR is
+  ready to merge — a complete readiness predicate would have to model every current and
+  future GitHub ruleset. GitHub's merge button stays the authority.
+- **Parking must be marked on GitHub.** A PR held by a judgement call is invisible to
+  patrol unless it carries a `hold`/`parked`/`do-not-merge` label or `PARKED` in the title.
+  Verified live: patrol reported "no blockers found" for PR #445, which is deliberately
+  parked as a net regression, because that decision exists only in session notes.
+- Proven by running against the live queue, not only by tests: the run surfaced two real
+  defects unit tests would not have — a decision-table hole routing nine ordinary
+  worktrees into the fallback, and a cited "full queue" path that was never written.
+  153 assertions pass at this checkpoint (355 by the end of the branch: classify 110,
+  render 82, sources 128, trusted-exec 35), including a mutation set that flips each all-clear condition
+  individually and asserts the phrase disappears every time.
+- **`/patrol` is interactive only — Mason's scoping decision, 2026-08-24.** It is not
+  scheduled and must not be. Three adversarial review rounds each found a *new* hole in the
+  previous round's fix of the unattended-execution surface; every fix was correct and every
+  one was incomplete by one step. All of those findings exist only because the tool would
+  run hourly under his account unwatched, so the capability was dropped rather than patched
+  a fourth time. Run by hand it is no riskier than any other script here, and by hand is
+  where its value already is. The `trusted-exec.mjs` hardening stays as defence in depth;
+  scheduling it later needs its own design pass, not another patch.
+- **Loop liveness, parked migrations, and gate health are implemented.** Parked discovery
+  reuses `.claude/hooks/worktree-awareness-lib.mjs` — the library `/fleet` composes — so
+  the two can never report different parked counts; when that library cannot determine a
+  worktree's parked state, patrol marks the source incomplete instead of reporting a clean
+  zero. The process probe fails **closed**: zero `powershell` rows in its own output means
+  the probe broke, never that nothing is running.
+- **`patrol-monitor.mjs` reports heartbeat freshness** — missing, stale, malformed, or
+  future-dated. **Superseded by the interactive-only decision above:** it is a convenience
+  check ("is the scan I last ran still current?"), *not* a dead-man alarm, because nothing
+  fires it while nobody is at the machine. It is deliberately NOT registered as a scheduled
+  task. The design note that produced it still holds for any future attempt: an earlier
+  version hung the alarm on `SessionStart`, which only fires when someone starts a session
+  — no alarm in exactly the cases (machine asleep, nobody working) a dead-man switch exists
+  to cover.
+- **An independent Codex (`gpt-5.6-sol`, high effort) review of the code returned
+  BLOCKERS and found two real review-gate defects, both now fixed.** (1) Required checks
+  were matched by context name with the producing app discarded, so any integration with
+  status-write access could post a lookalike success and make patrol report green — the
+  actor-forgery shape CRX treats as a red line. Checks now resolve from the REST
+  check-runs and statuses endpoints and bind each required context to its expected app;
+  the GraphQL rollup was dropped because it omits the producer entirely. Commit statuses
+  expose no app id, so the one status-based required check has its producing account
+  pinned, and any unverifiable producer fails closed. (2) Any CodeRabbit status other than
+  `pending` counted as a completed review, so `failure` and `error` cleared the
+  missing-review blocker and could yield "no blockers found" with nothing having passed;
+  only a verified `success` now counts, and a failed review is an explicit blocker.
+  A third, medium finding corrected the command doc, which claimed patrol had "no write
+  capability" when it does write its own local state.
+- **A second Codex round found two more false-all-clear paths, both fixed.** (1) Parked
+  discovery ran only the worktree-owned pass, which deliberately exempts drafts inherited
+  from `origin/main` — so patrol could report zero parked migrations while an unapplied
+  mainline migration still waited. It now runs the same mainline discovery `/fleet` does
+  and marks the source incomplete when that state is unknown; the live count went from
+  "source errored" to a real 16. (2) `patrol-report.mjs` kept a good in-memory snapshot
+  when persisting it threw, rendered it normally, and exited 0 — able to print the
+  reserved all-clear while citing a queue file that did not exist. Any persistence failure
+  now discards the snapshot and produces the emergency result.
+- **A third Codex round found the Sol gate failing open; fixed.** Patrol cannot evaluate
+  the exact-SHA proof registry, and reported that as silence — so a risky money/RLS/
+  migration PR with **no** proof reached "no blockers found" and was handed to Mason as
+  his decision while CRX's hard gate had never been checked. An unsupported check now
+  reads as UNVERIFIED rather than passed: every PR carries an explicit blocker naming the
+  gate patrol cannot see, which also makes the all-clear unreachable while that is true.
+  Verified live — PR #460 (oversized-migration apply path) now surfaces the warning.
+- **The ambient-code path is closed** (Mason approved a fourth review round for it).
+  `scripts/patrol/trusted-exec.mjs` binds `git`, `gh`, and `powershell` to fixed absolute
+  executables under one minimal environment — the pattern PR #455 set for the proof
+  wrapper. Since no environment switch disables *repository-local* filters, and
+  `git status` runs Git's conversion pipeline, patrol now **refuses to scan** any worktree
+  whose local config defines an executable filter, fsmonitor command, textconv, or
+  ssh/proxy override, and fails closed when that config is unreadable. This matters
+  because this hardening was written while unattended scheduling was still intended: a `PATH` shim or a configured content filter
+  would otherwise execute hourly under Mason's account.
+- **One round-3 finding remains open and is Mason's call** (see `KNOWN_ISSUES.md`): any PR
+  author can forge parked state by putting `PARKED` in a title, since no actor provenance
+  is required. Real, but not a false-all-clear.
+- **Patrol then caught a false positive in itself.** It reported the Codex gate as down
+  because the review capture embeds the reviewed diff, and this change's own source
+  contains a usage-limit pattern. The gate probe now anchors to a real error line rather
+  than matching text anywhere in the capture — the same "matches text, not effect" trap
+  the merge guard has hit before.
+- Three further defects were found only by running it, not by tests: both CLI entry points
+  never executed at all on Windows (a hand-built `file://C:/…` never equals Node's
+  `file:///C:/…`); the main checkout is a path prefix of every nested worktree, so a bare
+  substring match credited every nested process to the parent and reported twelve July
+  ledgers as "stalled"; and ledgers older than a week are now `ARCHIVED` rather than
+  presented as loops that just died.
+
+## 2026-08-24 — Fleet shipping sprint: schema registry refreshed from live…
+
+Fleet shipping sprint: schema registry refreshed from live introspection, two Sol findings fixed on the PR 436 client money guard, PR 461 verified merge-ready, landing batch queued for Mason.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `chore(registry): refresh schema registry from live introspection after the barrier apply` (hash omitted — the commit was later amended to fold in this changelog entry, so any hash recorded here would not survive)
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-24 — Migration ordering review now matches the deterministic ledger guard
+
+The draw-down cutover review exposed two opposite bookkeeping hazards in the
+human-review charter. It first treated Supabase's apply-time `version` as the
+authored migration high-water and falsely blocked a correctly ordered money
+migration. The first correction then went too far and discarded `version` even
+for legacy ledger rows whose `name` contains no timestamp.
+
+- Migration ordering evidence is now derived row by row: prefer the authored
+  14-digit stamp embedded in `name`, and use that row's 14-digit `version` only
+  when the name has no timestamp. A bare `max(version)` or schema-registry
+  version is not sufficient ordering evidence because it loses that context.
+- The fallback premise is real: a read-only live check found 626 of 971 ledger
+  rows have bare-slug names. The newest such row remains older than the current
+  authored-name high-water, so this was a latent guard contradiction rather
+  than a change to today's migration verdict.
+- Post-apply B7 handling now reconciles the new ledger row instead of always
+  renaming the disk file. When the normalized live `name` already matches the
+  authored basename, the filename stays unchanged; a differing apply-time
+  version alone must not manufacture drift. The version rename remains the
+  fallback when the live name does not preserve the authored basename.
+- The canonical `/ship` workflow and the migration-drift reviewer use the same
+  rule. Deterministic guidance checks pin both edge cases and were mutation-
+  tested by removing the timestamp-less-name fallback and by restoring the
+  obsolete always-rename instruction; both mutations failed the intended
+  assertions.
+- Exact-head Codex review found that CHECK 6 still cited the schema-registry
+  staleness heuristic and a name-only history paragraph as if they implemented
+  the fallback. The reviewer now cites the executable ordering library and
+  snapshot producer; both the library commentary and migration history spell
+  out the same row-by-row effective-stamp calculation. Deterministic assertions
+  pin the citations and both corroborating explanations.
+- All agent workflow and correction-guard suites passed. No live migration or
+  business-data change was performed while correcting these gates.
+
+## 2026-08-24 — Phase 3C containment tolerates rebuilt ignored `dist/` entries
+
+The private-artifact containment guard now skips only the narrow race where Git lists an ignored,
+tool-owned generated file and the build removes it before inspection. It immediately re-lists and
+rescans after that race, so a rebuilt file cannot be hidden; a second disappearance and a missing
+worktree root are explicitly fail-closed. Stable generated files and direct forbidden filenames
+remain blocking. The recovery scan de-duplicates candidates already inspected, preserving the
+normal structural scan budget for newly reappeared or grown files.
+
+## 2026-08-24 — The push-proof wrapper runs Git through one trusted executable and a sanitized environment
+
+Landed on its own so the exact-review bootstrap exception can be restored. The
+bootstrap rule only trusts `scripts/write-codex-push-proof.mjs` while it
+byte-matches its protected-`main` blob, so a branch that hardens the wrapper
+cannot mint its own proof — this change reaches `main` first, by design, and
+carries no other work.
+
+- All Git calls in the proof wrapper — repository discovery, clean-tree status,
+  ref binding, tree/blob enumeration, candidate listing, and packet diffing —
+  now run one fixed trusted Git executable under a single minimal environment.
+  Global and system configuration, the system attributes file, replacement
+  objects, credential prompts, and optional locks are disabled, and `PATH` is
+  narrowed to the trusted installation plus the platform system directory.
+  Inherited `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG_*` overrides are dropped by
+  construction rather than filtered. No ownership allowance is re-supplied: a
+  checkout Git considers to be of dubious ownership is refused outright and the
+  wrapper mints no proof. Suppressing that refusal with a command-scoped
+  `safe.directory` would let Git proceed on a root the wrapper guessed from a
+  bare `.git` entry while that repository's own executable configuration stayed
+  active, so the wrapper fails closed and the operator fixes the checkout
+  instead.
+- Previously the shared `runGit()` helper invoked bare `git`, so `PATH` decided
+  which binary inspected the tree that gates a push, and every call inherited
+  the ambient environment — letting a global `core.attributesfile` plus a
+  `filter.<name>.process` run arbitrary code inside the process that decides
+  whether a push is trustworthy.
+- Regression: `scripts/write-codex-push-proof.test.mjs` plants a hostile global
+  attributes file plus a quoted process filter outside the source repository,
+  first proves through a control conversion that the filter can execute, and
+  then proves the marker is never written during clean-status reads or
+  proof-packet construction. Structural coverage also fails if any Git call
+  bypasses the common trusted helper or if anything at all is added to the
+  trusted argument list — including a reintroduced ownership allowance — and
+  cleanup restores process state even when an assertion fails. Mutation-tested —
+  re-enabling global configuration turns it red.
+
+## 2026-08-23 — Live Foundation Gauntlet Section 9 reviewed (NOT settled): three open HIGH findings
+
+Section 9 (purchase orders, receiving, vendor bills, vendor payments, AP safety) was re-audited
+against verified remote `main` `780e88aa` plus the live PostgreSQL function bodies. Verdict:
+**INCOMPLETE — 0 BLOCKER / 3 HIGH / 0 MED / 0 LOW.** The previously recorded vendor-bill /
+accounting-period close race is resolved live; RLS, routine grants, search paths, the PO
+serialization wrappers, and the core AP locks all remain present.
+
+- **HIGH — AP aging buckets by bill date, not days past due.** `get_ap_aging` ages every bucket from
+  `vb.bill_date`; `vb.due_date` is never read. A bill issued March 1 on 60-day terms reports in
+  `31-60 Days` on April 15, two weeks before it is due. **Contract settled by Mason 2026-08-24: AP
+  aging measures days past due** — recorded in `docs/manual/DECISION_LOG.md` so a later session does
+  not re-ask him. The report exposes only four buckets and has no `1-30`, so days-past-due must be
+  *mapped* onto them, and **that mapping is a second decision Mason has not made** (does `Current`
+  mean "not yet due" only, with a new `1-30 Days` column?). It is left explicitly open. See the
+  classification note below.
+- **HIGH — "Due This Month" is a rolling 30-day window.** The dashboard card is labelled as a
+  calendar month but computes the next 30 days, so it disagrees with the month it names.
+- **HIGH — AP/receiving receipts replay by operation.** Retries are keyed to the operation rather
+  than bound to the authenticated actor plus the exact payload, so an uncertain response can
+  replay a prior success for a different request. Note the corrected remediation: binding the key
+  to the payload is necessary but **not sufficient**, because editing the payload after a lost
+  response mints a *new* key and the server then executes a genuine second mutation. The caller
+  must freeze the unresolved intent and reconcile it before any new key may be minted.
+**Classification note on the AP aging finding.** It briefly left HIGH during review. CodeRabbit's P2
+on PR #457 correctly objected that the evidence proved only *which* basis `get_ap_aging` uses, not
+that the basis was wrong — invoice-date and due-date aging are both standard accounting views, and
+neither the UI nor `docs/reference/rpc-functions.md` stated which one these buckets express. Scoring
+it a defect on that footing would have committed Mason to an accounting policy by implication, so it
+was re-classified to an open product decision and put to him directly. **Mason settled it on
+2026-08-24: AP aging measures days past due.** With the contract stated, the live implementation
+provably contradicts it, so the finding returns to HIGH. The UI labels and exported CSV should also
+state the basis — they do not today, and that held under either answer.
+
+This entry records the audit only; **no remediation is included.** All three findings remain open,
+which is why no predicate or test lands beside them — the executable checks belong with the fix, not
+with the write-up. The AP-aging smoke additionally **must not be written until Mason settles the
+bucket mapping**: asserting the proposed mapping now would lock an unapproved policy into an
+executable check, the same error as scoring the aging basis a defect before the contract existed.
+Once settled, its boundary cases are not-yet-due, **due today (`0` days past due)**, and exactly
+30/31/60/61/90/91 — "not yet due" does not cover `0`, and omitting it leaves an off-by-one at the
+due-date boundary untested. It needs **no** null-`due_date` case: live introspection on 2026-08-24
+confirms `public.vendor_bills.due_date` is `NOT NULL`, so an earlier draft's requirement for one
+would have asserted invented behavior for an input that cannot occur.
+
+- **Section 9 did NOT settle and remains the current queue position.** The deterministic section
+  gate's contract rejects a checkout that is behind `origin/main` and cannot settle a dirty tree;
+  the audit ran from a checkout 50 commits behind with 7 uncommitted paths. The findings were
+  reverified independently against the exact remote-`main` objects and the live function bodies,
+  which makes them credible evidence — but evidence is not a settlement. Section 9 must be re-run
+  from a clean, current checkout before it counts as refreshed.
+- Once Section 9 settles, Section 10 is next in the manual refresh sequence (blend tickets,
+  OCR/review/payment status, order linking, repository-only Edge Function handoff contracts).
+  Sections 10–15 share the same 2026-07-28 last-reviewed date, so Section 10 is not uniquely oldest.
+
+## 2026-08-23 — Smoke fixtures use governed catalog pricing, and the proof gates stop excusing themselves
+
+Five quote-based smoke chains had silently rotted after product pricing became
+governed and quote items began requiring a positive catalog cost. They created
+pricing-free product shells (or tried to create a product with pricing), so the
+current schema rejected the fixture before the behavior under test ran.
+
+- The chains now borrow real positive whole-cent catalog costs without writing
+  to those products, and use the borrowed cost in each quote line.
+- The planned-holds chain also preserves current quote-item IDs and governed
+  tier pricing across saves and refreshes replacement IDs after version restore,
+  matching the current quote editor contract.
+- The disposable current-live-schema prover now directly runs all five chains,
+  including the auth template and job-from-quote chain that previously had no
+  runner. Its schema-only catalog seeds priced products with the pricing trigger
+  disabled only for the seed, then restores the trigger before any smoke runs.
+- Proof observed: all five chains reached `SMOKE_PASS_ROLLBACK`; the parked
+  draw-down candidate emitted its required pre-apply prerequisite signal and
+  passed its post-apply restore guard, including cancellation of both draw
+  orders; both row-version provers remained green.
+
+Review round (Codex P2 findings on the PR, all three in the fixtures themselves):
+
+- The planned-holds chain accepted **either** restore outcome, so a post-cutover
+  regression that restored a drawn booking fell into the pre-cutover success
+  branch and still reached `SMOKE_PASS_ROLLBACK`. It now detects whether
+  `20260816120000` is installed and requires the outcome that schema owes.
+- That chain's success branch asserted only product A's rebuilt hold. It now
+  asserts both A and B, because the later unplanning step only checks that every
+  hold is gone and would not have noticed a dropped or altered B hold.
+- `smoke-order-draw-lock.sql` scenario (f) required the live catalog to contain a
+  cheap product with no Main Warehouse inventory row — data the fixture does not
+  control, so a healthy database could fail at `SMOKE_SETUP` (67 products qualify
+  today). It now runs when the catalog allows and emits `SMOKE_SCENARIO_SKIPPED`
+  when it cannot; the container prover seeds inventory-free products, so (f) is
+  still proven on every container run. Manufacturing the precondition by deleting
+  a live inventory row was rejected: an all-zero row still carries a real reorder
+  point and minimum stock level.
+- Both new guards were mutation-tested. Forcing the cutover flag on produced
+  `SMOKE_FAIL: (e) post-cutover restore of a drawn booking succeeded`; demanding a
+  B total the correct code never yields produced `pa=150.00 pb=100.00`, proving B
+  is genuinely queried and compared rather than ignored.
+
+Second review round (gpt-5.6-sol, high effort, against `origin/main`) — two more P2
+findings, both accepted:
+
+- The prover copied the checkout's own bytes into PostgreSQL. On Windows that is CRLF,
+  so a function created by a CRLF migration got a CRLF `prosrc` and the *next*
+  migration's LF-based md5 preflight failed — which this proof had been approving as
+  "historical live-base drift". It was a line-ending artifact, not drift. `copySql()`
+  now normalizes every replayed migration and smoke to LF (matching
+  `prove-draw-down-quote-intent-binding.mjs`), binary baseline artifacts still copy
+  verbatim, and the candidate is asserted LF byte-verbatim so what applies in the
+  container is what applies live. **All 56 post-baseline migrations now replay and the
+  approved-skip list is empty**, where it previously replayed 55 and excused one.
+- `smoke-order-draw-lock` (f) emitted a notice and continued to
+  `SMOKE_PASS_ROLLBACK` when the catalog could not supply an inventory-free product.
+  `run-smoke.mjs` does not recognize that notice, so a live `--spec update_order_items`
+  run reported PASS with scenario (f) never executed — incomplete evidence counted as
+  verified, which `docs/workflows/CODEX_REVIEW_GAUNTLET.md` forbids. It now raises
+  `SMOKE_PREREQ`, the recognized "this proved nothing" result, which exits nonzero.
+
+## 2026-08-23 — Replaced the last two free-text unit-of-measure inputs (Field App Split…
+
+Replaced the last two free-text unit-of-measure inputs (Field App Split Invoice Editor rate unit, Blend Recipes item unit) with the shared UnitSelect dropdown, so a unit can no longer be typed or pasted on those screens. Both now load unit_conversions, filter options by the product liquid/dry form, block a save whose unit is blank only because the list failed to load, and clear a unit the newly picked product form cannot offer. Fixed two pre-existing defects in the same path: the new-recipe-item seed was the invalid lowercase gal (live stores Gal), and BlendRecipes updateItem copied a stale closure so picking a product kept its name while silently reverting product_id to empty. Verified by driving both real screens in a browser via a throwaway stubbed Vite harness, plus live grounding that products use exactly liquid/dry/null and every form yields a non-empty option list. Frontend only: no migrations, no database writes.
+
+**Correction to the paragraph above (same session).** The form filtering it claims was *not*
+actually working in the Split Invoice Editor when that paragraph was written. The picker read
+`product_form`, but the products query never selected the column, and the
+`as Array<ProductOption>` cast hid it from TypeScript — so at runtime the value was always
+`undefined`, every unit stayed on offer, and the clear-on-form-change guard never fired. Neither
+the jsdom tests nor the browser harness could catch it: both feed the component a fixture row
+that carries `product_form` no matter which columns the query asked for. Fixed in `c461493b`,
+which also adds a test that asserts the requested column list itself (mutation-tested red/green)
+and re-grounds the claim against live — the exact column list returns real `product_form` values.
+Blend Recipes was never affected; it selects `*`.
+
+- **Substantive commits** — this list cannot be exhaustive, because the commits that edit this
+  entry cannot contain their own hashes. PR #447 is the complete record.
+  - `874e028a feat(units): replace last free-text unit boxes with UnitSelect`
+  - `670358cb docs: record the unit-picker work in CHANGELOG and KNOWN_ISSUES`
+  - `c461493b fix(units): actually select product_form for the rate-unit filter`
+  - `c4923d6e docs(changelog): correct the form-filtering claim and list all commits`
+  - plus the CodeRabbit round: rejects a unit that is blank or unusable for the product form
+    once the list has loaded, and drops the seeded `'Gal'` default that slipped past the
+    blank-only guard during an outage
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-22 — The chemical-unit and job-money invariants move out of React and into `save_job` (parked)
+
+**Round 22 (2026-08-24) — the thing none of this catches, written down where it cannot be**
+**missed.** Every check in this migration confirms that units agree with each other. Not one
+confirms that a rate makes sense. During the product cleanup, the answer given for a product
+costing $931 a pound was "MG per acre" — milligrams. That is a perfectly valid unit, so it would
+have passed every single check built over twenty-one rounds, and invoiced roughly a millionth of
+the right amount. The only reason it did not happen is that a reviewer refused to write down an
+answer that looked wrong. That limit is now stated plainly at the top of the migration, so nobody
+mistakes the file's length for coverage of that question. Closing it properly means setting
+sensible rate limits per product, which is separate work.
+
+The related point is recorded beside it: giving a product the same rate unit as its stock unit
+makes the arithmetic safe, because no conversion happens and so no conversion can be wrong. It
+does not confirm the rate itself is right.
+
+The catalogue cleanup finished with Mason's approval and is re-measured here independently:
+active products with no rate unit went from 25 to **zero**, across 25 rows, with pricing across
+all 604 products identical to the cent before and after. So this migration would now refuse
+nothing an operator can currently sell — reached by fixing the data, not by weakening the rule.
+That is a fact about the data today, not about the migration, which is exactly why the rule stays.
+
+Still parked; nothing has been applied to live.
+
+**Round 21 (2026-08-24) — the tidying-up was doing the attacker's work.** Someone can write a unit
+using Cyrillic letters that look identical to ours on screen — `oz∕сԝт`, where the "cwt" is not
+the letters c, w and t at all. The rule stripped out anything it did not recognise as a letter or
+number. Against Cyrillic that did not leave a suspicious remnant behind; it **erased the whole
+thing**, leaving a clean, innocent-looking `oz`, which is a real unit. So it passed, and a rate
+quoted per hundredweight would have billed as per-acre.
+
+Every earlier round assumed that tidying up leaves something behind to catch. Against letters
+from another alphabet it leaves nothing. The rule now refuses any unit containing a character it
+cannot read, on lines where money is at stake, with a plain message about copy-and-paste from a
+spreadsheet.
+
+The important part is the reversal: getting the list of known-harmless characters wrong can now
+only cause a **refusal**, never an acceptance. Every round before this one had the opposite
+property, which is why each one was beaten by the next character along. Checked against the live
+database: the attack is refused, and every real unit still works.
+
+Still parked; nothing has been applied to live.
+
+**Round 20 (2026-08-24) — a false alarm worth recording, and the fix that ends a whole class.**
+
+The reviewer raised its most serious warning yet: that this work had stripped the security out
+of the tool that certifies code as reviewed. That would matter enormously — it is the thing
+standing between unreviewed code and your database. It was wrong, and one command proved it:
+this branch never touched that file. What actually happened is that the main line of work moved
+forward while this was in progress, and one of those changes *improved* that very file — so the
+comparison showed the improvement as though this branch had deleted it. The fix was to catch up
+with the main line, not to "restore" anything. Rewriting a security-critical file by hand to
+match a version never actually read is how you introduce the very hole the warning describes.
+
+The second finding was real. A division slash — a character that looks almost identical to the
+ordinary one but is not — let a rate quoted per hundredweight be billed as though it were per
+acre. Rather than add another lookalike character to a list, which is the same game already lost
+four times, the rule now asks a different question: not "is there a divider in here?" but "does
+this actually name a unit we know?" `oz∕cwt` reduces to `oz cwt`, which is not a unit, so it is
+refused — and so is any separator nobody has thought of yet.
+
+Checked against the live unit list: every real unit still works, and a test now covers all six
+of them specifically, because a rule this broad could otherwise start rejecting ordinary jobs.
+
+Still parked; nothing has been applied to live.
+
+**Round 19 (2026-08-24) — one side of a comparison was measured differently from the other.**
+The rule that stops a powder being priced in fluid ounces trimmed the "per acre" part off the
+rate before checking it, but not off the stock unit. So writing the stock unit as `fl oz/ac`
+rather than `fl oz` slipped straight past — the check saw something it did not recognise, while
+the rest of the system still treated both sides as the same unit and billed a volume price on a
+product sold by weight. Both sides are now reduced the same way before they are compared.
+Checked across 21 spellings on the live database: every fluid-ounce form is refused, and every
+ordinary unit still works, including the per-acre forms and the near-miss "flour oz/ac".
+
+A smaller one alongside it: the "don't process this twice" key did not take account of who is
+recorded as having created the job. Retrying with a different person named would quietly reuse
+the earlier result and discard the new name. It now refuses instead of pretending it saved.
+
+That is the third defect in this file of the form "the system accepts it and silently discards
+what you actually asked for" — the most dangerous kind here, because nothing looks wrong.
+
+Still parked; nothing has been applied to live.
+
+**Round 18 (2026-08-24) — the rounding allowance was a percentage.** The check that the amount
+on a chemical line matches rate × acres allowed a tiny mismatch for rounding, which is sensible.
+But it was written as "one part per million", which *scales with the number*. On a small job that
+is a fraction of an ounce. On a 10,000-acre job expecting 10 million units it quietly permits a
+10-unit discrepancy — real product, real money, waved through by a rule whose whole purpose was
+rounding. It is now a fixed amount: exactly the precision the quantity is stored at, and nothing
+more. One test proves a large discrepancy is now refused; another proves a genuine rounding
+difference on that same large job still saves, because tightening a money rule too far is its own
+kind of failure.
+
+The second finding was the same enumeration mistake as the fluid-ounce rounds, in a different
+rule: the per-acre check looked for the word "per" surrounded by spaces or hyphens, so writing it
+as `oz_per_cwt` slipped through and a per-hundredweight rate would have billed as per-acre. Fixed
+the same way — fold the separators rather than list them. That is now the third separate place in
+this file where listing characters failed, which is a pattern, not a coincidence.
+
+Still parked; nothing has been applied to live.
+
+**Round 17 (2026-08-24) — the opposite leak, and Mason's rule for both.** The reviewer found the
+mirror image of the earlier problem: a chemical line could record that *nothing* was applied while
+still carrying a price, and the job would happily bill the customer nothing for a product the rate
+and acreage say went out. Where the earlier hole let a request charge too much, this one let it
+charge too little.
+
+Mason's decision was to refuse only where a customer's money is genuinely at stake, and that is
+what shipped. A line that records nothing applied is refused **if it carries a price and a real
+amount was expected**. A priced line whose amount cannot be checked at all is also refused — that
+one matters, because a hand-built request could previously switch the entire check off just by
+leaving the rate blank.
+
+Three situations stay allowed, because zero is genuinely the right answer in each: a
+customer-supplied product, a line with no price (nothing can be under-charged — this is what keeps
+the existing JOB-2026-0001 saveable), and a line with no rate or no acreage, where nothing was
+expected in the first place. That last one is the ordinary case of picking a product before
+entering acreage, and it is now pinned by a test so a future tightening cannot quietly break it.
+
+One known trade-off, stated rather than buried: a line with a cost but no price can still misstate
+margin. That follows directly from tying the rule to what the customer is charged.
+
+Still parked; nothing has been applied to live.
+
+**Round 16 (2026-08-24) — stopped patching and fixed the approach.** Four times running, the
+rule that stops a powder being priced in fluid ounces was defeated by a punctuation mark nobody
+had listed yet: first a period, then an invisible character, then a hyphen, then a *different*
+kind of hyphen that looks identical on screen. Each fix listed the characters that had just been
+named, and each lost to the next one along. There are thousands of these characters, and whoever
+sends the request picks which one — so that approach was never going to finish.
+
+The list is now gone. The rule strips out everything that is not a letter or a number and checks
+that what remains is the actual word. There is nothing left to hide a fluid ounce behind.
+Checked against 31 ways of writing units on the real database: all 19 fluid-ounce spellings are
+caught, including every one that beat the earlier rounds, and all 12 ordinary units still work —
+including "flour oz", which a careless version of this rule would have started rejecting.
+
+The difference that matters: the previous four fixes each closed one hole. This one closes the
+kind of hole. Still parked; nothing has been applied to live.
+
+**Round 15 (2026-08-24) — the independent reviewer found the biggest hole yet, and it was not a
+spelling.** Until now the database only checked the *amount* on a line when the two units
+disagreed. When they matched, it accepted whatever amount the request claimed. So a job of 10
+acres at 2 oz per acre — 20 oz — could be submitted claiming 200 oz, and because both sides said
+"oz" it went straight through and the database stored $200 instead of $20. That is the caller
+setting the price, which is the exact thing this whole change exists to prevent. The rule already
+existed for lines whose units disagreed; applying it only there was the inconsistency. Your live
+data was checked first: all three billing lines already match exactly, so nothing that exists
+today is affected. Two smaller escapes were closed with it — a rate written as `per cwt` slipped
+past every check, and `fl-oz` with a hyphen slipped past the fluid-ounce rule.
+
+**One gap is deliberately left open for Mason to decide.** If a line has no acreage entered,
+there is nothing to check the amount against, so it still saves on trust. Closing it means
+ruling that a priced chemical line with no acreage is invalid — which would start refusing saves
+that operators can make today. That is an operating decision, not a review fix, so it is not
+taken here.
+
+Still parked; nothing has been applied to live.
+
+**Round 14 (2026-08-24) — and then the same mistake again, one layer down.** Hours after round
+13 shipped, the automated reviewer found that writing the unit with an *invisible* character
+inside it — a zero-width space, which can arrive from a copy-paste out of a spreadsheet or a
+web page — slipped past the new rule just as the period had. The honest lesson is not about
+zero-width characters: round 13 fixed the one spelling a reviewer happened to name, when the
+app already had a complete list of "differences that don't change which unit is meant". The
+guard now uses that whole list. Invisible characters are deleted; a non-breaking space is
+turned into a normal space instead, because it really does separate two words — so `dry oz`
+typed with one still saves, and a test now pins that so a future widening can't quietly start
+blocking ordinary jobs. Four smaller review points were fixed alongside: the safety checks that
+run at the end of the migration now give a clear named error instead of a raw database error if
+an expected user role is missing; the proof now applies the migration the same all-or-nothing
+way the real system does, which it previously only claimed; the proof no longer deletes another
+copy of itself running at the same time; and two comments naming the wrong test were corrected.
+Still parked; nothing has been applied to live.
+
+**Round 13 (2026-08-24) — the same fluid-ounce rule, caught incomplete a third time.** The
+previous round refused a dry product measured in fluid ounces by matching three exact spellings.
+Writing it with a period — `fl. oz` — slipped past all three, and because the database's unit
+normaliser has no entry for that spelling it hands the text back untouched, so both sides of the
+line looked identical to each other and the line was billed with nothing actually checked. The
+app's own code says periods do not matter (`src/lib/blendMathValidator.ts`), so the screen and the
+database disagreed about what had been typed. The rule now strips periods and spaces from both
+sides and recognises fluid ounces as an idea rather than a list of spellings, so it no longer
+depends on guessing every way someone might write it. Checked against 23 spellings on PostgreSQL
+17.6: every fluid-ounce form is refused, and ordinary dry units — `oz`, `dry oz`, `lb`, `ton` — are
+not. Nothing about liquid products changed. Still parked; nothing has been applied to live.
+
+`EXECUTE` on `save_job` is granted to `authenticated`. Every logged-in user can therefore call it
+directly, and the old body took `total_cost_cents` / `total_price_cents` straight out of the
+caller's payload with `COALESCE` and inserted `job_chemicals` rows without ever comparing `unit`
+against `rate_unit`. Nothing anywhere refused the bad shape. That is the standing
+adversarial-review finding — *the financial/unit invariant is enforced only in React* — except
+that on `main` it is not enforced in React either.
+
+**Read this before approving an apply: it is a real behaviour change, and PR #436 must land
+first.** `main` has no save-blocking unit guard in `JobDetail.tsx`. The client-side counterpart
+(`chemLineBillingHazard`, `rateDenominatorIsUnrecognized`, and the exact-cents
+`centsTimesQuantity`) exists only on the **unmerged** PR #436 branch. Worse,
+`reconcileChemAutofillUnits` has a documented "SAFE FALLBACK: keep the STOCK unit" path that
+actively *creates* the refused shape — including the 16x dry-oz-on-pound-stock case. Applied
+first, the first operator to hit this gets a hard save failure with no prior on-screen warning, on
+a job the app showed as fine; and because the page re-sends the whole chemical grid on every save,
+one bad legacy line makes the entire job unsaveable — they cannot even edit its memo — until that
+line is corrected. Earlier drafts of this entry claimed the predicate mirrored those client
+functions "condition for condition" and that "nothing the page accepts today becomes unsaveable".
+Both were false, all four review gates caught it, and both are retracted.
+
+One new migration,
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`. Authored 2026-08-22,
+revised 2026-08-23; the file keeps its 2026-08-20 sequence stamp, which is what the disk ordering
+guard keys on, and it still sorts after every existing candidate. It is a `CREATE OR REPLACE` on
+the **identical six-argument signature** — a body replacement, never a new overload, so the frozen
+contract `JobDetail.tsx` depends on is untouched and the existing grants are preserved.
+
+It opens with an in-file **preflight pin**: the live body must hash to the md5 that was reviewed,
+or the migration aborts and changes nothing. A **postflight** block then re-asserts one overload,
+`SECURITY DEFINER`, pinned `search_path`, `authenticated` and `service_role` still holding EXECUTE,
+and neither `anon` nor `PUBLIC` holding it.
+
+An earlier draft put that pin in a *separate* migration and justified the split by a claimed lexer
+defect in the repo's `idempotency-body-check` guard. **Both claims are withdrawn.** Codex and the
+drift reviewer independently found that two separately ledgered migrations are not atomic — if the
+pin commits and the replacement does not, the ledger records the pin as done and the next run
+overwrites an unvalidated body, which is exactly what the pin exists to prevent. And the guard has
+no such defect: it lexes the *edit fragment*, and the fragment under test had ended mid-signature
+on an unclosed parenthesis, so the guard was correctly reporting an unbalanced parameter list in
+what it was handed. Re-tested with a balanced fragment, the pin is accepted exactly where it
+belongs, and idempotency inspection stays fully armed.
+
+- **A line whose units provably disagree is refused** (`CHEM_UNIT_MISMATCH`), naming the product
+  and both units. It skips a row with no product, skips a zero quantity, *refuses* a billing line
+  whose unit is blank (see below — that used to be a skip), skips when the two units are equal, and
+  treats `quantity = rate x acres` carried into the price's unit as the *only* proof of safety. Note what it does **not** do: an
+  *unrecognised* unit is not skipped — it cannot be sized, so the line is refused. That is
+  deliberate (an unpriceable unit must not bill), but it also means a metric pair such as `g/ac`
+  against `kg` is refused even though the conversion is well defined, because the live size tables
+  carry no metric entries. Acreage is summed from `p_fields` — deliberately not the caller-supplied
+  `total_acres`.
+- **A rate measured per anything but an acre is refused** (`CHEM_RATE_DENOMINATOR_NOT_ACRES`), in
+  the slash form (`oz/cwt`), the spelled-out form (`oz per cwt`) and the hyphenated form
+  (`oz-per-cwt`) — and in **stacked** forms such as `oz/cwt/ac` and `oz per cwt per acre`, which is
+  the sharpest version of this bug and the one the exact-SHA proof gate caught last. Asking "does
+  the rate unit *end in* a per-acre suffix?" accepts `oz/cwt/ac`, and the code that derives the unit
+  then takes everything before the *first* slash and throws `cwt` away — so the line became a plain
+  `oz`, matched a stock unit of `oz`, and saved: a per-hundredweight rate billed as if it were
+  per-acre. The rule is now written subtractively — strip one per-acre suffix, then refuse if any
+  denominator *survives* — which is strictly stronger and refuses nothing the old form accepted.
+  Testing only for a slash was a real hole Codex caught earlier: a spelled-out denominator
+  whose `unit` carries the same text normalizes *equal*, so the row sailed through with a quantity
+  already derived against a denominator that is not acres. The hyphen form was the same escape one
+  separator away. The per-acre exclusion is plural-tolerant on both sides, so `gal per acres` still
+  saves. This step goes beyond the literal plan and is called out rather than slipped in: leaving
+  it client-only would let the review gate legitimately re-raise the finding this migration exists
+  to close.
+- **A quantity that is negative, `NaN` or `Infinity` is refused outright**
+  (`CHEM_QUANTITY_NOT_FINITE`), *before* the unit comparison and regardless of its outcome. A
+  negative quantity reaches the money totals whether or not the units agree, so checking it only on
+  the units path left the matching-units case open.
+- **The money totals are derived here**, from `p_chemicals` via `safe_cents_qty`, rounded per line
+  then summed, and the caller's totals are ignored outright. That is what makes a stale tab
+  harmless. The page and the server do **not** agree to the cent, and an earlier draft wrongly
+  said they did: `main` computes the displayed totals with `Math.round(parseFloat(qty) *
+  parseInt(cents))` — binary float, half-up — against exact decimal, half-away-from-zero here.
+  25c x 0.58 displays 14c and stores 15c. Per-line-then-sum ordering *does* match; only the
+  arithmetic base differs. The stored value is authoritative and is what the invoice bills, so the
+  money is right — but the on-screen figure can be a cent off until PR #436 lands the exact-cents
+  client path. Second reason that PR goes first.
+
+**The NaN bypass, which is worth stating plainly because it is not intuitive.** PostgreSQL orders
+numeric `NaN` *above* every other value, and `NaN` compares equal to itself. So a single field
+carrying `acres_to_treat: "NaN"` made the old `acres > 0` test true, the carried quantity came back
+`NaN`, and the tolerance test then compared `NaN <= NaN` — true — waving a genuinely mismatched
+line straight through. Codex found it; the arithmetic was confirmed directly against PostgreSQL 17
+rather than reasoned about, and every operand on that path is now bounded to a finite range.
+
+The live unit tables are **reused, not reimplemented** (`normalize_rate_unit`,
+`field_app_priced_quantity`, `safe_cents_qty`). Divergence between the client's copy of the unit
+table and the server's is the original 16x bug; a second server-side copy would repeat it.
+
+**Blast radius measured, not estimated**, re-verified read-only on 2026-08-23. All four
+`job_chemicals` rows in the live database clear the *mismatch*, *denominator* and *finiteness*
+refusals — none negative, none non-finite, no unit disagreement — and the derived totals reproduce
+every stored total to the cent. The blank-unit refusal added below *was* the one exception — one of
+those four rows would have been refused by it — and that row was corrected on 2026-08-24, so all
+four now clear every refusal. It stays tracked as a pre-apply obligation rather than folded into
+this sentence, because the data can change again between now and the apply.
+
+**A blank unit is refused too, and that one is Mason's call rather than a review finding.** A blank
+`unit` used to be skipped — nothing can be disproved about it — while `transfer_job_to_invoice`
+billed the line anyway. An unprovable line that still bills is the same hazard as a provably wrong
+one, so it now raises `CHEM_UNIT_UNSPECIFIED`. Exempt, deliberately, and all three for the same
+reason — a line that cannot bill cannot bill *wrongly*: customer-supplied lines, lines with neither
+a cost nor a price, and zero-quantity lines. The test covers the cost side as well as the price,
+since cost drives margin and not just the customer bill.
+
+**Pre-apply data obligation — one live row, and it has now been corrected.** Exactly one
+`job_chemicals` row was in the refused shape: a pint-per-acre rate, no Unit, and both a cost and a
+price. Mason chose to fix the data before closing the hole, so the guard lands with zero operational
+impact, and **that correction was made on 2026-08-24 with his explicit OK** — one row, Unit set to
+`Pt`. The count now returns zero, and the job totals did not move (`219930` / `278578` before and
+after): the per-unit amounts were already quoted per pint, so only the label was missing. In
+proportion: that row belonged to a **test product** on a job already marked `invoiced`, not to live
+customer work.
+
+Both sides of it are held up by executable tests rather than by this paragraph. `T1` keeps the
+pre-correction shape and asserts the refusal — the policy statement survives even though no live row
+is in that shape any more, because a legacy import or a hand-built call can recreate it at any time.
+`T28` replays the *corrected* row and asserts it saves with derived totals of exactly `219930` /
+`278578`, which is the stronger claim: correcting the label did not move the money. With `T2` and
+`T3` that now covers **all four** live rows by execution.
+
+The count is deliberately **not** deleted. Zero rows is a property of the data on one day, not of the
+migration, so whoever applies it re-runs the check in the migration header and requires zero.
+
+**Remaining residuals, stated rather than hidden.** `job_fields.acres_to_treat` still carries no
+CHECK, so a `NaN` acreage can no longer bypass the invariant but can still be stored. And `save_job`
+is not the only writer: the close-quote-as-applied and recipe-pricing paths both insert priced
+chemical rows without running any of these checks, so "the database is the boundary" is true of the
+job-save path and not yet true of the table.
+
+**Proof — committed and re-runnable, not asserted.** `node
+scripts/smoke/prove-save-job-chem-unit-invariant.mjs`, with fixtures under
+`scripts/smoke/fixtures/`. The first version of this work claimed "eight behaviour tests passed"
+with nothing committed to run, so no reviewer could re-run or falsify it; that gap was itself a
+review finding. It runs on **PostgreSQL 17**, matching production's 17.6 — the earlier run used
+15, two majors behind, and said so nowhere.
+
+Seven phases. The real-shape schema loads with the three helper bodies copied verbatim from the
+live catalog. The reviewed pre-change body is then installed *from the repo* and its md5 is checked
+against the pin the prover parses out of the migration itself — so the pin is proved against
+source, not against a comment. Against a *different* body the migration aborts with
+`PREFLIGHT_BODY_DRIFT` **and the installed function is confirmed unchanged — same md5 and same exact
+byte length** — which is the atomicity property the single-file design exists to give. Over the
+reviewed body it applies and its postflight passes. Re-applying is safe, and the wording there is
+deliberately precise: a replay **reinstalls the identical body** rather than skipping, because the
+marker only suppresses the drift error while the replacement, the grants and the postflight all
+still run; the prover fingerprints the function before and after a replay and requires them equal.
+Sixty-five behaviour tests pass; and thirty-seven mutation phases each fail in a **named** way — thirty
+turn a named behaviour test red, and six must abort the apply with the specific security assertion
+that exists to catch them.
+
+That apply phase deliberately starts from a **bad** permission state — `anon` granted, `service_role`
+revoked — and proves the migration corrects it. That came out of the round-4 security review: the
+file *asserted* the permissions but never *set* them, and no migration in this repo has ever revoked
+this function from `anon`. On the live database it is a no-op (checked read-only: `anon` holds
+nothing, `authenticated` and `service_role` hold EXECUTE, exactly one version of the function
+exists), but a database rebuilt from migrations alone would have carried an inherited `anon` grant
+on a function that writes with elevated privilege, with only an assertion standing against it. A
+file that asserts a security property should also establish it.
+
+Also from that round: the per-acre spellings are now symmetric with the slash form, because
+`gal per ac` — an ordinary way to write a per-acre rate — was being **refused**, and a refusal
+blocks the whole job rather than the one line. And the file now states that it must be applied
+through Supabase MCP `apply_migration` and not `execute_sql`, which returns only the last statement
+and would silently skip the pin, the replacement and the postflight.
+
+That naming matters. An earlier version asserted only "the suite went red", and the moment the
+named-test check was added it immediately caught two false detections: one mutant was being scored
+by a test that broke incidentally, and another was "detected" while the guard under test was still
+holding, because two independent checks each close the `NaN` path and removing one leaves the other
+standing. Both are fixed — the mutant now removes both bounds together. A test that still passes
+against a broken guard is not holding that guard up, and a mutant credited to the wrong test proves
+nothing at all.
+
+The sixty-five tests: all four live row shapes save with derived totals reproducing the live stored
+values exactly — including the one whose blank unit was corrected on 2026-08-24, which is replayed
+by `T28` at its real totals — while the *pre-correction* shape of that row is still **refused** by
+`T1`, so the pre-apply data obligation stays pinned by an executable test rather than by prose; a legitimate
+oz-rate/lb-price conversion saves; the 16x shape is refused *and* its remedy text is asserted to
+name both numbers the operator must re-enter; `oz/cwt`, `lb per cwt` and `lb-per-cwt` are all
+refused, as are the stacked `oz/cwt/ac` and `oz per cwt per acre`; `gal per acre`, `gal per acres`,
+`gal per ac` and `gal-per-acre` all still save; a `NaN`
+acreage no longer waves a mismatch through; a negative quantity is refused; a caller claiming totals
+of 1 cent still stores `187632` / `206395`; a billing line with a blank unit is refused in all three
+wordings (blank stock `unit`, blank rate unit, both blank) and a cost with no price is refused too,
+because `total_cost_cents` feeds margin; the three exemptions all still save — a line with neither
+cost nor price, a `customer_supplied` line, and a zero-quantity line carrying a price; and every
+refused save leaves no `jobs` or `job_chemicals` row behind.
+
+That last one is not padding. When the blank-unit refusal was first written the zero-quantity skip
+sat **below** it, so a line with a blank unit, a filled-in price and quantity 0 was refused — and
+because `performSave` re-sends the whole chemical grid, one such line makes the entire job
+unsaveable. It is reachable from the ordinary UI: `reconcileChemAutofillUnits` leaves `unit` blank
+on its fallback path while the tier price is already populated, so a product picked before any
+acreage is entered lands exactly there. Three independent reviewers found it; the skip moved above
+the refusal, and a mutant that moves it back turns that test red by name.
+
+**Retracted from the earlier draft:** that `55 x 3752.64 = 206395.2` "pins
+ROUND-half-away-from-zero". A `.2` fraction rounds down under every rounding mode, so it pins
+nothing about rounding, and the companion figure is exact. Both are kept because they reproduce
+live stored values, which is what they actually prove.
+
+**The registered smoke chain is fixed in the same commit.** `scripts/smoke/smoke-save-job-parity.sql`
+carried a chemical line of 240 *pints* recorded as 240 *gallons* and priced per gallon — an 8x
+over-bill sitting in the repo's own parity fixture, unnoticed for as long as it has existed,
+because nothing on either side of the wire compared the two units. The new invariant refuses
+exactly that shape, which is how it was found. Corrected to 30 GL, with new assertions for the
+derived totals and both refusals, all gated on whether the migration is installed so the chain
+stays green while it is parked.
+
+**A pre-existing duplicate-job hole was found and closed in the same file (rounds 8 and 9, Mason's
+call both times).** This is not part of the unit invariant; it is a second defect the review of that
+invariant uncovered in the surrounding body, and Mason chose to close it here rather than in a
+follow-up migration, because a second migration replacing this same function body is exactly the
+non-atomic hazard round 3 already caught.
+
+`save_job` did its own idempotency lookup — an unlocked `SELECT` filtered to
+`operation = 'save_job'`, recorded with `ON CONFLICT (idempotency_key) DO NOTHING` — while the live
+uniqueness constraint is on the **key alone**. In plain terms: an idempotency key is the receipt
+number the app sends so that clicking Save twice, or a retry after a dropped connection, records the
+work once instead of twice. Because the lookup filtered by operation but the constraint did not, a
+key already spent by some *other* operation was invisible to the lookup — so the job was created,
+the receipt was silently swallowed by the conflict, and the very next retry found nothing again and
+created a **second job**, which is a second bill. Two callers racing on one key could likewise both
+get past an unlocked lookup. That block was byte-identical to the live pre-change body, so the
+migration inherited the defect rather than causing it.
+
+Round 8 routed the lookup through the canonical advisory-locking helper, which serialises same-key
+callers and refuses cross-operation reuse outright. Round 9 went further, to
+`check_idempotency_intent` — the same helper nine live money RPCs already use (the whole return
+family plus create/post/void commission payment), and the same fix already shipped for commission
+payouts in PR #378. Round 8 alone still matched on key and operation only, so a key spent by an
+earlier `save_job` and then reused for a **different job or an edited payload** returned the earlier
+success: nothing duplicated, but the current request never saved and the operator told it was. The
+key is now bound to the calling actor and to a sha256 fingerprint of what was actually asked for, so
+another user's receipt is refused, a changed payload is refused, and an unchanged retry still
+replays to the same job — which is the whole point of the key. Both halves are pinned by tests, and
+by mutants that turn those tests red when the binding is removed.
+
+One of those mutants exposed a defect in the test suite itself, which is worth recording because it
+is the second time the mutation phase has found what no reviewer did. With the receipt binding
+removed, the helper's fail-closed behaviour turns an *ordinary retry* into a hard refusal, and the
+replay test had no handler — so the file aborted on a raw database error and the mutation phase
+could not attribute the failure to any test. A mutant that reddens the suite without reddening its
+own test proves nothing; the test now converts an outright refusal into a named failure.
+
+**Fluid ounces could have been billed as dry ounces, and that is now refused.** The unit helper
+`normalize_rate_unit` turns `fl oz` into `oz` without knowing what the product is. On a liquid
+product that is exactly right — the live conversion table records `oz` as an alias for `fl oz`. On a
+**dry** product it is wrong: there `oz` means a dry ounce, a weight, while `fl oz` is a volume. The
+guard compared the two units *before* it looked up whether the product was dry, so a dry line with a
+`fl oz` rate against an `oz` stock unit looked identical and billed with nothing checked — while the
+app's own pricing converter refuses that pair as unconvertible. A guard that is more permissive than
+the code that does the billing is not a guard. The product's form is now read first, and **any** use of fluid
+ounces on a dry product is refused.
+
+That rule started out narrower and had to be widened, which is the part worth keeping. The first
+version only refused the case where the two units *looked identical* after the alias. But that was
+not the only way a fluid ounce reached the money, and the case it missed was worse: a dry product
+with a `fl oz` rate priced per **pound** doesn't look identical at all, so it skipped straight past
+the new check and into the converter — which had already been handed `oz` instead of `fl oz`, and
+dutifully converted sixteen fluid ounces into one pound. A volume became a weight, and the stored
+cost and price were calculated from it.
+
+One of the round's own tests had to be reversed as part of that. It had required a dry line quoted
+in fluid ounces on *both* sides to save, on the grounds that the numbers at least agreed with each
+other. Agreeing with yourself in a unit the invoice cannot convert is not the same as being right —
+and writing that exemption into a test is what would have kept the half-fix alive through the next
+review. The one test that must never change is the liquid one: on a liquid product `fl oz` and `oz`
+genuinely are the same unit, and refusing that pair would block ordinary jobs.
+
+No live product is in that shape today — the 85 dry products use `dry oz`, `lb`, `mg` and `oz` — but
+the units being compared arrive in the request, not from the product catalog, and any logged-in user
+can call this function directly, which is the whole reason it exists.
+
+**The rule against rates measured per something other than an acre was reopened, and the reason is
+worth keeping.** It was stated correctly — strip one trailing "per acre" off the end, then refuse if
+any other denominator is still there — and then written to strip *every* spelling of "per acre"
+before looking. Those are different rules. A rate written `oz per acre/ac` carries the denominator
+twice, once in each spelling; both were stripped, nothing was left to object to, and a rate that is
+really "per acre per acre" was billed as an ordinary per-acre rate. Now exactly one comes off, and
+whatever survives is refused. Two new tests pin both spellings, and a mutant that puts the old
+behaviour back turns the first of them red by name.
+
+One more fix from the same review, unrelated to money: the proof script force-deleted a Docker
+container by a fixed name before checking the container was its own, so it could have destroyed an
+unrelated container on a developer's machine that happened to share the name. Each run now uses its
+own name and labels what it creates, and only ever removes containers carrying that label.
+
+No frontend change, and there is no client-side warning to fall back on: until PR #436 lands, this
+refusal is the operator's first indication that anything is wrong. **Parked: not applied to
+production.** An interactive session still needs Mason's explicit in-chat approval for a live apply.
+
+
+## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
+
+`node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —
+so the parked-migration count could not be read at all. That blocks stamping a new migration into
+a queue nobody can count, which is how two branches collide on the same schema.
+
+The check was unsatisfiable by construction. `parkedDraftPathsFrom` reconciled the
+`LOCAL CANDIDATE — NOT APPLIED` rows of `docs/reference/migration-history.md` against the branch's
+own-draft diff (`base..HEAD`) — but that history file is **shared, and arrives from `origin/main`**.
+An inherited candidate row naming SQL that also came with `origin/main`, with no net change since
+the branch point, does not appear in that diff. (`base..HEAD` is a *net* diff: a file touched and
+then reverted is likewise absent, while one genuinely changed **is** present and reconciles
+normally.) A guard that always answers UNKNOWN answers nothing.
+
+- **Fixed the check's domain, not by adding a bypass.** `createOwnDraftPathsReader` now exempts a
+  row **only when `origin/main`'s own shared history REGISTERS it as a LOCAL CANDIDATE** — because
+  then mainline discovery owns it and verifies its pin/header against the same immutable tree. One
+  rule, reading a structured registry. Everything else stays reconciled.
+- **"Exists on `origin/main`" is deliberately NOT sufficient**, and this is the sharp edge. A first
+  draft exempted any candidate whose SQL was present in `origin/main`'s tree; the Codex reviewer
+  raised it as a P1 on PR #437 and it reproduced. A branch may newly register an ordinary
+  already-committed migration as a LOCAL CANDIDATE via the supported SHA-pin form, changing only
+  `migration-history.md`. The SQL is then absent from `base..HEAD`, `origin/main`'s older history
+  does not list it, and its blob carries no parked header — so mainline discovery reports nothing
+  either, and `/fleet` would have **confidently hidden a genuinely pending migration**. Existing on
+  main is not the same as being *accounted for* by main. A dedicated test pins this.
+- **A second exemption arm — "`origin/main` records this migration as settled" — was tried twice
+  and CUT.** Codex blocked both attempts on PR #437, correctly. A bare substring test read
+  `NOT YET APPLIED LIVE` as settled (and `migration-history.md` really carries six such rows).
+  Rejecting an *adjacent* negator still read `will be applied live`, `not successfully applied
+  live` and `not considered superseded` as settled — and worse, row 887, which is genuinely
+  pending (`**LOCAL CANDIDATE — NOT APPLIED.**`), matched purely on later prose mentioning
+  "applied live" and a "superseded price". Every version could flip a conservative UNKNOWN into a
+  **confident zero** over pending SQL. The arm cleared exactly one worktree, so it was removed
+  rather than iterated a third time; the lib carries a DELIBERATELY-ABSENT note stating that any
+  re-add must parse a structurally anchored status field, never prose.
+- **One pinned `origin/main` object id for a whole scan.** Codex raised this same invariant three
+  times on PR #437, and the first two fixes each satisfied it in one component while another still
+  resolved the moving ref on its own — a narrower race is not a fixed one. `origin/main` is shared
+  with every concurrent session, so a `git fetch` landing mid-scan can put two phases on different
+  commits: if the fetch adds a SHA-pinned LOCAL CANDIDATE whose SQL carries no parked header, the
+  older history does not name it, the newer tree holds it, the grep never sees it, and mainline
+  discovery answers `known` while **omitting a pending migration**. Both consumers now resolve
+  `origin/main` to a single object id up front and pass it to every mainline read — history, tree,
+  grep, blobs, mtime, merge-base, and the fallback diff. The lib's readers take that id as an
+  argument defaulting to the symbolic name, so an unpinned caller keeps its previous behaviour.
+  Ten assertions pin it, and reverting any single call site to `origin/main` reddens them.
+- **The pin then broke the grep prefilter, and Codex caught that too.** `git grep <rev>` prefixes
+  every hit with `<rev>:`. The prefilter stripped the literal `origin/main:`, so pinning made the
+  prefix `<sha>:`, every hit came back malformed, `originMainForwardBlobPaths` rejected it, no SQL
+  was opened, and discovery answered `known` with **no paths** — a confident zero over a parked
+  migration, reintroduced inside the fix for confident zeroes. It now strips whatever revision was
+  actually searched and treats a hit missing that prefix as UNKNOWN rather than dropping it. Only
+  the function's two error paths had ever been tested; the success path had no coverage at all,
+  which is how it shipped. It has coverage now. **This one is latent in the current repo** — it
+  needs a parked migration on `main` with no `LOCAL CANDIDATE` history row, which does not exist
+  today — so the fleet run looks identical either way and does not prove it; the tests do.
+- **The exemption compares the row, not just the path.** Codex P2: matching on path alone let a
+  branch rewrite an existing mainline candidate row in place — swapping its SQL sha256 pin for a
+  different 64-hex value — and still report KNOWN, because the SQL file is untouched and the
+  SQL-only `base..HEAD` diff never names it. That branch's own history-to-SQL cross-reference was
+  invalid, and merging it would turn the mainline scan UNKNOWN. A row is exempt only when
+  `origin/main` registers the same path **and** the branch's pin still agrees with mainline's.
+  Absent on both sides counts as agreement; present on one side only, or differing, does not.
+- **A structural guard now enforces the pinning, because prose did not.** Codex raised the "one
+  snapshot per scan" invariant **four** times; each manual fix satisfied the call sites in view and
+  missed a sibling. The last was `mergedLabel()` in `fleet-status.mjs`, still on the symbolic ref
+  after its twin in the SessionStart hook was pinned — visible in my own grep output and skipped.
+  A test now scans both consumers and fails on any revision-consuming git subcommand
+  (`merge-base`, `ls-tree`, `show`, `log`, `diff`, `grep`, `cat-file`, `rev-list`) that names
+  `"origin/main"` instead of the pinned id. `rev-parse` is exempt — that is where the symbolic
+  name is correct — and display strings are not git arguments. Mutation-tested: reverting that one
+  call site reddens it by file and rule.
+- **The exemption reads nothing of its own** (Codex HIGH, round 4). It consumes the exact
+  `origin/main` history text the caller's mainline discovery pass verified against, injected via
+  `readOriginMainHistory`. When the reader resolved `origin/main` independently, a concurrent
+  `git fetch` between the two phases meant mainline discovery could inspect commit A and report
+  no candidate while the exemption saw that candidate registered in commit B and suppressed
+  reconciliation — again a **confident zero** over pending SQL, reproduced by Codex. Both callers
+  (`scripts/fleet-status.mjs`, `.claude/hooks/worktree-awareness.mjs`) now read that history once
+  per run and share the same bytes with both phases, so the two cannot disagree about the
+  registry. A caller supplying no history exempts nothing.
+- **Not a relaxation.** An unreadable `origin/main` history exempts nothing and keeps the old
+  conservative answer. Under-reporting — a confident zero over real pending migrations — is the
+  dangerous direction, so every branch of this is pinned by tests and was mutation-tested,
+  including an aggregate false-zero regression test reproducing Codex's exact scenario.
+- **One lib, both consumers.** `scripts/fleet-status.mjs` and the SessionStart banner share
+  `.claude/hooks/worktree-awareness-lib.mjs` by design (2026-07-29), so the change is in the lib.
+- **Real settled-row case.** `origin/main` row 886 records
+  `20260813080000_lock_quote_versions_writes_to_rpc.sql` `APPLIED LIVE` (live `list_migrations`
+  agrees) while a branch still carried it as a LOCAL CANDIDATE. That row even notes the file's own
+  `-- STATUS: NOT APPLIED` header is stale and deliberately uncorrected, because CRX never edits an
+  applied migration.
+- **Cost.** The ~840 KiB shared history is parsed once per worktree, and `origin/main`'s history is
+  read once per reader.
+
+**Proof:** the structural defect is gone — every worktree reported UNKNOWN before; **6 of 23** do
+now (measured 2026-08-20; the fleet churns, so treat the denominator as a snapshot). Those six are
+named, specific, and real (see below). Note the honest cost: **3 of the 6 come from this PR's own
+pin comparison** — an A/B at one moment measured 3 UNKNOWN with the comparison disabled and 6 with
+it enabled. Three branches carry a candidate row whose sha256 pin disagrees with `origin/main`'s.
+The scan cannot distinguish "this branch rewrote the pin" (the Codex P2 tampering case) from "this
+branch is stale and mainline changed the row underneath it", so it declines to answer for both.
+That is the fail-closed direction and it is deliberate, but it means this PR buys a smaller
+reduction than the structural fix alone would suggest. All mainline candidates are still listed by
+name — attributed, not hidden. 230 lib assertions pass, including the original
+rule's own UNKNOWN test, the tree-vs-history regression, the cross-phase snapshot regression, and
+an aggregate false-zero regression. A standalone end-to-end probe drives all seven false-zero
+shapes Codex raised across four review rounds (negated, future, qualified, qualified-negation,
+prose-only, stale snapshot, no history) through the real reader and gets UNKNOWN for every one,
+plus a registered-candidate control that still exempts and an assertion that the reader issues no
+ref-resolving git call of its own. Both real consumers were run: `fleet-status.mjs` and the
+SessionStart hook, which agree.
+
+**Still open, and NOT a code defect.** Of the six, three are the pin-disagreement cases described
+above. The others are stale checkouts — **70–104 commits behind `origin/main`**
+and still hold its older wording of rows 872–877/886. `main` has since re-worded those same rows —
+PR #393 restaged the Wave A drafts into `scripts/.staging-migrations/` ("PARKED DRAFT (STAGED)")
+and row 886 became "APPLIED LIVE" — so the stale copies still read "LOCAL CANDIDATE" for SQL those
+branches never touched. Nothing on those branches needs editing; they are simply stale, and the
+work they name is already counted via the staging-draft path. Until they are refreshed or retired,
+`/fleet` reports `PARKED STATE UNKNOWN` rather than a number — by design, because a confident zero
+over pending SQL is the worse failure.
+
+Scope: guard/reporting tooling only. No schema change, no migration, no live data, no money path.
+Diagnosis: `docs/reference/parked-migration-scan-unknown-diagnosis.md`. PR #437.
+
+Also filed (diagnosis only, deliberately not bundled): the Phase 3C containment scanner walks the
+repository's own gitignored `dist/` and opens each file with no `ENOENT` tolerance, so a concurrent
+rebuild refuses the push with a misleading "containment failed" — `docs/manual/KNOWN_ISSUES.md`.
+## 2026-08-20 — Blend-ticket unit fields are now dropdowns instead of free text,…
+
+Blend-ticket unit fields are now dropdowns instead of free text, removing the cause of the unit bug class rather than warning about it. Built by headless Codex (gpt-5.6-sol) from a Claude-authored spec, with Claude reviewing the diff and running every check; Codex never touched git, the live database, or a deploy. A shared UnitSelect offers only units the live unit_conversions table carries, filtered to the product's form, and grandfathers an odd saved value so opening an old ticket can never silently blank it. The product form is resolved from each row's current product_id rather than a joined object captured at load. Applying a recipe now pre-selects the product's catalog rate unit instead of saving blank, so the ticket shows the unit it will actually bill in. Proved in a real browser through Vite, not only under vitest; 107 tests green; blendMathValidator deliberately untouched. No schema change, no migration, no edge function.
+
+Review round 2 (CodeRabbit Major, confirmed against source): the picker made a failed
+`unit_conversions` load *unrecoverable* — the list is empty, so the only option is the disabled
+`--` and the operator can no longer type a unit the way free text allowed, while the save still
+persisted the blank. Both screens now surface the failed load (an error banner on manual create,
+a toast on the detail page) and refuse a save that left a unit blank because the list never
+arrived. The block is deliberately narrow: it fires only when the list is empty *and* a row is
+actually missing a unit, so a deliberate blank on a healthy list still saves as before. Both
+guards are mutation-tested — reverting either turns its regression test red. Two existing test
+harnesses returned `[]` for `unit_conversions`, which read as a failed fetch to the new guard;
+they now return the fixture, matching live, where the table is never empty.
+
+Review round 3 (CodeRabbit Minor, also confirmed): that first guard read an empty array as the
+failure signal, but an empty array means three different things — the request is still in
+flight, it failed, or the table really is empty — and only one of them is "refresh the page". A
+fast operator could be told to refresh for a request that was about to succeed. Both screens now
+carry an explicit `pending | loaded | failed` state and route it through one shared
+`blockedUnitSaveMessage()` in `src/lib/units.ts`, so the message names the state that is actually
+true. Verified by calling the shipped function in a real browser through Vite, not only under
+vitest.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `5beda01a feat(blend): pick units from a list instead of typing them`
+  - `fix(blend): surface a failed unit load and block the blank-unit save it causes`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+## 2026-08-19 — draw-down retries are bound to the actor and exact booking intent
+
+Pending migration `20260819232000_bind_draw_down_receipts_to_intent.sql` closes the stale-receipt
+hole in `draw_down_quote`: the same key can replay only for the same authenticated actor, quote and
+ordered canonical draw quantities. A changed quantity fails with `IDEMPOTENCY_INTENT_MISMATCH`; a
+different actor fails with `IDEMPOTENCY_ACTOR_MISMATCH`. Numeric-equivalent quantities such as
+`1`, `1.0` and `1.00` remain exact replay, while draw-array order and duplicates remain meaningful.
+The below-cost reason is approval metadata and is deliberately not part of mutation identity.
+
+The migration does **not** copy or change the large money/inventory implementation introduced by
+the pending price-tier work. It renames the current governed five-argument wrapper to an owner-only
+private function and adds a small public wrapper in front of it. The preserved chain still owns the
+cutover lock, below-cost approval, exact quote-tier price/cost/profit calculation, commissions,
+inventory prebooking and draw ledger. Active admins and sales reps can still cover another rep's
+live booking; actor binding is not an ownership restriction. Soft-deleted quotes remain hidden.
+Preflight and postflight now SHA-256-pin the exact reviewed intent helper, preserved cutover wrapper,
+new outer wrapper, tier-split implementation and all five allocated-cent lifecycle bodies. The helper
+must also remain the only overload, owned by `postgres`, `SECURITY DEFINER`, search-path-pinned and
+owner-only executable, so a signature-compatible drift or partial apply is refused fail-closed.
+The migration header records the separately approved emergency revert sequence: drain draws under
+the cutover lock, drop only the new public wrapper, rename the preserved private wrapper back, and
+restore its prior grants. It also warns that this intentionally restores the stale-receipt risk and
+must never be approximated with `CREATE OR REPLACE`.
+
+All six registered smoke chains that create booking draws now supply unique per-run retry keys.
+Their fixtures also follow the current governed pricing, immutable cost-snapshot and row-version
+contracts. The planned-holds fixture deliberately echoes quote-item IDs so duplicate products in
+different sections stay identifiable across repeated ordinary saves; after the merged tier-split
+restore guard, its drawn-version restore case now proves `QUOTE_RESTORE_BLOCKED_BY_DRAW` leaves
+holds unchanged. The restore-version chain likewise expects that provenance refusal for every
+drawn snapshot, while its no-draw control still restores. The separate save-quote-drawn guard
+retains the production id-less fallback shape. Because these chains end in rollback, they do not
+claim to validate commit-time deferred foreign keys. A separate
+container-only proof now confirms a duplicate-product id-less revision is still refused by
+`QUOTE_ITEM_AMBIGUOUS_COST`, then draws two separately identifiable products across two sections,
+sends the production id-less `save_quote` payload, and reaches a real `COMMIT` before printing its
+pass marker. That forces the deferred `order_items.quote_item_id` foreign key to validate both
+stamped lines. The network-isolated restored-schema prover executes all six registered draw chains
+after the candidate and confirms each reaches `SMOKE_PASS_ROLLBACK`, then runs the committing
+supported multi-line id-less proof.
+
+The draw modal now consumes the shared intent-binding recovery contract. A permanently refused key
+is retired instead of trapping the operator until reload; when the mismatch receipt proves an order
+already committed, the page opens that exact order rather than offering another draw. Ambiguous
+receipt/actor cases reload the booking balance and explain the next step, and auth/role failures are
+shown in plain English. Non-numeric and non-finite quantities fail closed with
+`BOOKING_QUANTITY_INVALID`; malformed product identifiers fail with the governed
+`BOOKING_PRODUCT_INVALID` token instead of a raw PostgreSQL cast error. If a changed-intent receipt
+cannot identify the committed order, the operator is sent to Orders before any retry. The new
+public wrapper is executable only by `authenticated`; the unusable `service_role` grant is removed
+because the wrapper requires an authenticated user id and no service caller exists.
+
+The re-review closed the remaining release-proof gaps. The idempotency-key advisory lock is now
+taken before the quote row lock, aligning draw-down with `save_quote`, `convert_quote_to_order`,
+`create_quote_version` and `restore_quote_version`; draw-down was the only lock-order inversion.
+The shared helper re-takes that lock reentrantly before reading the receipt. The money path now
+requires a 1-200 character printable-ASCII retry key, so
+a direct keyless PostgREST call cannot double-create an order, inventory prebooking or ledger row.
+At apply time the migration takes the existing draw-cutover key exclusively, draining legacy calls
+that reached the shared barrier and refusing new barrier participants before it scans for unexpired
+legacy receipts. A cached-plan backend paused before its first wrapper statement is outside that
+lock guarantee; if it finishes after commit, the shared helper treats its unbound receipt as an
+intent mismatch and the UI opens the committed order instead of drawing twice. A temporary-table
+transaction guard refuses autocommit execution before that lock is taken. The
+shared helper's receipt DETAIL is intentionally sales-rep reachable here, following the already-live
+return lifecycle RPC precedent: keys are high-entropy and active reps already share the
+booking/order visibility boundary. The hash-bearing lifecycle migration, this migration, its rollback
+smoke and its prover are all pinned to LF in `.gitattributes`. The already-live migration that
+defines `check_idempotency_intent` is now pinned too: a read-only 2026-08-20 catalog read confirmed
+production stores that helper LF-only (`stores_crlf = false`), matching the reviewed SHA-256. The
+static proof binds each hash to its exact catalog variable instead of merely finding the same value
+somewhere in the candidate.
+
+Operator consequence for the later apply: draw receipts live 24 hours, so the preflight requires a
+deliberate 24-hour window with no successful booking draws before this fourth migration can land.
+Plan that freeze for an off-season or weekend window, verify the read-only receipt count is zero,
+and keep draws paused through commit. The fail-closed choice is recorded in the decision log, the
+older ownership draft is marked fully superseded in known issues, and the container prover now
+executes the candidate under `REPEATABLE READ` to prove the stale-snapshot guard refuses it before
+the legacy-receipt scan. This PR still does not start or authorize that freeze/apply.
+
+Added focused migration/RPC contracts, real QuoteBuilder component recovery tests, and a
+container-only rollback smoke covering exact replay, changed quantity, changed actor,
+cross-representative success, replay after a later soft delete, required-key refusal, one $10 sale / $5 cost / $5 profit
+order, one inventory reservation, one draw-ledger row, and a bound receipt. Keyless calls are now
+refused before the money implementation. The component tests also
+exposed and fixed an initial-load timing defect that could mark a freshly loaded saved quote dirty
+and block its first draw; existing-quote load-generation state now releases suppression from React's post-commit
+effect, so a slow or coverage-instrumented render cannot release it on elapsed time. Mismatch recovery
+now reports a successful balance reload
+only when all three reload reads actually succeed. This migration must follow `20260816110000`,
+`20260816120000` and
+`20260817120000`. **It has not been applied live and this PR does not authorize applying it.**
+
+`node scripts/smoke/prove-draw-down-quote-intent-binding.mjs` applied the migration verbatim on a
+network-isolated PostgreSQL 17 container. Its compact mutation database installs the exact reviewed
+helper/wrapper/pricing/lifecycle prerequisites, executes every hash gate, and swaps in an effect-recording stand-in
+only for adversarial wrapper schedules. A second database restores the supported
+`20260727174805` full schema, replays every default replay-eligible ledger-selected migration
+through this candidate while surfacing the quarantined one-shot set, and
+executes `smoke-draw-down-quote-intent-binding.sql` against the real tier-split money, commission,
+inventory and draw-ledger implementation to `SMOKE_PASS_ROLLBACK`. It proves one $10 sale / $5 cost
+/ $5 profit line and header, one exact $5 commission, one inventory prebooking, one bound receipt
+and one draw-ledger row.
+The compact schedules pass admin/rep authorization, inactive,
+missing-profile, unauthenticated and actor-parameter refusals, key-required and keyed input guards,
+exact replay, changed/non-numeric/non-finite quantity, changed receipt actor,
+deleted quote, ACL, and both same-key concurrency cases. Mutation proof is non-vacuous: removing
+draw quantities is refused by the exact outer-body postflight; a NULL-returning helper, disabled
+actor/fingerprint comparisons, comment-only wrapper calls, an extra helper overload and a drifted
+tier-split body are all refused; and a simulated in-flight legacy draw is drained by
+the exclusive cutover lock before its new receipt blocks cutover. The replay selector also prints
+its one-shot quarantine notice instead of silently implying those data-specific files were replayed. The
+container used `--network none` and tmpfs;
+production was untouched.
+
+The protected merged-main verification pipeline passed ESLint, TypeScript type checking, the
+production build, 336 test files with 4,634 tests passed and 123 intentionally skipped, agent
+workflow/guard regressions, documentation drift checks, and private-artifact containment. Focused
+post-review migration/RPC contract checks passed 102/102 before the full pipeline reran.
+
+## 2026-08-20 — Merged main's zero-width unit fix into the blend-ticket rate/unit…
+
+Merged main's zero-width unit fix into the blend-ticket rate/unit check, keeping main's delete-don't-space normalizer and re-applying the unit-aware rate arm on top of it. Found that the fix does not reach the money path: rateBaseUnit, which every billing-related unit lookup routes through, still leaves zero-width characters intact, so a unit pasted from a PDF can silently skip the rate check or fire a false 'this ticket will fail when you invoice it' alarm. Main's 5 zero-width regression tests were displaced by the merge and still need porting to the new warning shape. 77 tests green and typecheck clean; nothing pushed, no migration, no edge function.
+
+> **CORRECTION, same day, after the PR #439 review.** Two claims in the paragraph above are wrong and
+> the fix they describe was reverted before merge. (1) The "false alarm" was **true**: live
+> `normalize_rate_unit` is `lower(btrim(...))`, `btrim` strips outer spaces only, so the database
+> really does refuse `m<ZWSP>g` and the invoice really would fail — confirmed by reading live
+> `pg_proc.prosrc`. (2) Stripping zero-width inside `rateBaseUnit` was therefore backwards: that
+> function predicts the server, and making it more permissive turns an accurate early warning into a
+> ticket that fails at invoicing instead. Raised as `CRX-MONEY-PARITY-001` by gpt-5.6-sol. The strip
+> is reverted, the parity contract is now pinned by tests that fail if it is re-added, and the real
+> remaining fix is a migration hardening the SQL with the client relaxed in the same change. See the
+> OPEN entry in `docs/manual/KNOWN_ISSUES.md`.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `25e5f9a3 Merge branch 'claude/blend-unit-rebuild-step1' into claude/blend-ticket-rate-unit-check-ccbba2`
+  - `91051d74 feat(blend): tier the math warnings so "couldn't check" reads differently`
+  - `c4f24e06 Merge branch 'claude/loving-hofstadter-6b1f5e' into claude/blend-unit-rebuild-step1`
+  - `4a3ebe40 fix(blend): delete the wrong total-volume equation, add three true ones`
+  - `7b4cf67c Merge branch 'claude/loving-hofstadter-6b1f5e' into claude/blend-unit-rebuild-step1`
+  - `b22d14e1 fix(blend): make the per-acre rate check unit-aware on a billing path`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-19 — Blend-ticket warnings are tiered, so "couldn't check" stops looking like "you're wrong"
+
+`validateBlendMath` returned `string[]`, and both callers rendered every entry in the same amber
+"Math Validation Warnings" block. After the total-volume rebuild the **common** entry on a real
+ticket is a "could not be checked" note, so rendering it identically to a genuine error is exactly
+how a banner gets trained into wallpaper — the main risk an adversarial review raised against the
+whole redesign.
+
+- The return type is now `BlendMathWarning[]`, each carrying `level: 'mismatch' | 'unchecked'`.
+  `mismatch` means a comparison **ran and disagreed**; `unchecked` means one **could not run** and
+  nothing is known to be wrong.
+- Both callers render two blocks: amber and alerted for `mismatch`, quiet grey headed "Not
+  automatically checked" for `unchecked`.
+- The predicted **invoice failure** is classified `mismatch`, not `unchecked`, even though no
+  comparison disagreed — `create_invoice_from_blend_ticket` will hard-raise on that line, so it is
+  a real problem rather than an unverified one.
+- Each of the 12 warning sites was classified individually rather than by pattern-matching its
+  message text, and the tier of each is now pinned by its own test: promoting an `unchecked` to a
+  `mismatch` relights the permanent banner and must fail loudly.
+- **Closed a real coverage gap:** both caller test files mock the validator away, so *nothing* had
+  ever verified a warning reaching the screen. Two tests now render the real component and assert
+  the tiers stay visually distinct; mutation-tested by collapsing the two blocks back into one and
+  confirming the quiet-note test goes red.
+
+41 validator tests, 77 across the three affected suites.
+
+
+## 2026-08-19 — The blend-ticket total-volume check was the wrong equation; replaced with three true ones
+
+Mason confirmed on 2026-08-19 that a blend ticket's total volume is **"everything in the sprayer,
+so water + product"**. The products are therefore meant to come to *far less* than the total — a
+1,000 gal tank might carry 50 gal of actual product. `sum(product quantities) ≈ total_volume` was
+never a true statement about a spray ticket, so unit-converting it would only have made a false
+alarm more precise. **The equality check is deleted, not fixed.** Three statements that are
+actually true replace it:
+
+- **The tank equation.** The header's own `application_rate` × `total_acres` is the finished tank,
+  with water on both sides cancelling. Runs only when the free-text rate parses unambiguously.
+  **`parseApplicationRate` deliberately declines** a range, a sum of two terms, a bare number or
+  prose rather than taking the first number it sees — a confident guess about operator intent is
+  the exact bug class this rebuild exists to remove. In practice this means the tank check often
+  will not run at all; that is a bonus check, not the primary one.
+- **A dry blend's parts must equal its whole.** A total in a weight unit means no water (Mason,
+  2026-08-19), so products are converted into the ticket's unit and compared for equality. If any
+  product is not in a comparable weight unit the check says it was abandoned, rather than quietly
+  comparing a subset — dropping a row would break the claim rather than soften it.
+- **A spray tank can never hold more product than its total.** One-sided, so it cannot false-alarm
+  whatever the water volume happens to be, and it still works on a ticket mixing liquid and dry.
+
+**Net effect, stated plainly: most spray tickets now carry no total-volume check at all.** Before,
+they carried a noisy wrong one. This is the deliberate trade — a check that lies is worse than no
+check — and it was raised with Mason rather than presented as an upgrade.
+
+- **Banner fatigue was designed against.** A dry product sitting in a liquid tank is the ordinary
+  case, not an anomaly, and is silently excluded from the bound rather than warned about. Only a
+  quantity with **no unit at all** — a real data gap, and the hole three separate reviews found —
+  still produces a message.
+- `application_rate` was added to `TicketData` and to **both callers' effect dependency arrays**;
+  omitting it would have frozen the warning at whatever it was before the operator typed.
+- The obsolete tests that encoded the deleted equation were removed rather than adjusted to pass.
+  35 tests; the tank equation, the dry equality and the spray bound were each mutation-tested by
+  disabling them and confirming exactly the expected test went red. Verified by driving the real
+  module in a browser across all ten cases, including both dry-blend shapes and a scanned-ticket
+  shape.
+
+
+## 2026-08-19 — Blend-ticket rate check is unit-aware, and it guards a billing path
+
+**Correction to the entry below: this file is not display-only.** `create_invoice_from_blend_ticket`
+bills each line from `rate_per_acre` and its unit — never from `quantity` (verified against live
+`pg_proc`). A rate recorded in the wrong unit becomes a wrong invoice, not just a wrong number on
+screen. Earlier notes calling `blendMathValidator` "warning text only, severity low" were describing
+its output, not the fields it validates, and understated the risk.
+
+The per-acre rate check was completely unit-blind: it compared `quantity` against
+`rate_per_acre × total_acres` without ever looking at `unit` or `rate_per_acre_unit`. A product
+dosed at 2 gal/ac over 100 acres and entered as `200 oz` — a 128× error — was reported as a perfect
+match. It now converts before comparing, and refuses rather than guessing when it cannot.
+
+- **Conversion goes through `fieldAppPricedQuantity`** (`src/lib/chemCalculator.ts`), which mirrors
+  the live SQL `field_app_priced_quantity` the invoice bills through. Using `unit_conversions.factor_oz`
+  instead was considered and rejected: it knows grams and milligrams that billing cannot price, so the
+  warning and the invoice would disagree about the same line.
+- **`oz` is read by the product's form** — a weight ounce for a dry product, a fluid ounce for a
+  liquid, matching both the server and Mason's 2026-08-19 answer. A null form is treated as liquid,
+  as the server does.
+- **A blank line rate unit falls back to the product's own `rate_unit`,** mirroring billing's
+  `COALESCE(NULLIF(btrim(rate_per_acre_unit), ''), p.rate_unit)`. Refusing instead would have gone
+  silent on recipe-applied rows, which *always* arrive with a blank rate unit, and which bill anyway.
+- **New invoice pre-flight warning.** When a line's rate unit cannot reach the unit the product is
+  sold in, `create_invoice_from_blend_ticket` hard-raises `BLEND_TICKET_UNIT_UNCONVERTIBLE`. That is
+  now surfaced while the ticket is open instead of surfacing weeks later at invoicing.
+- **MG is deliberately supported.** No MG size exists anywhere, but the pricing function returns the
+  quantity untouched when the rate unit already equals the sold unit. All 3 live MG products are
+  MG-rated and MG-sold, so they price correctly through that identity path. MG only fails when paired
+  with a different sold unit — which is exactly what the pre-flight warning now catches.
+- **Per-acre suffix stripping is done here rather than reusing `baseUnitOfRate`,** which splits on the
+  first `/` unconditionally and so reads `oz/cwt` as `oz`. The live `normalize_rate_unit` keeps a
+  non-acre denominator whole so it can never match a bare unit. The existing helper's behaviour fails
+  in the dangerous direction — silent on screen, hard error at billing — so this file mirrors the
+  server instead. **The same divergence exists in `chemCalculator` itself, which the job chemical grid
+  uses; recorded as an open issue rather than changed here.**
+- **Callers now pass the catalog product's form and units** (`ManualTicketCreate.tsx`,
+  `BlendTicketDetail.tsx`). The fields are required on `ProductData`, so the compiler forces any future
+  caller to supply them rather than silently weakening the check on a billing path.
+- 10 new tests (43 in the file); the form split, the billing fallback, and the `oz/cwt` guard were each
+  mutation-tested by reverting them and confirming exactly the expected test went red. Verified by
+  driving the real module in a browser across all nine cases, including both MG shapes.
+## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
+
+`validateBlendMath` summed every product quantity regardless of unit, so a ticket holding
+10 Gal + 32 oz + 5 Lb summed to 47 and was compared against a total volume expressed in
+gallons — a spurious warning, or a masked real mismatch when the errors cancelled.
+`ProductData.unit` was declared but never read. The check now runs only when every quantity
+feeding the sum is *known* to be in the ticket's unit, and otherwise says the check was
+skipped and why.
+
+- **`unit_conversions` deliberately NOT joined.** It cannot bridge a mixed-unit ticket:
+  `factor_oz` is within-family only (Lb = 16 **dry** oz, Gal = 128 **fluid** oz, Ea/Unit = a
+  dimensionless count), and crossing liquid↔dry needs a per-product density the table does not
+  carry. Not joining it also sidesteps a duplicate-row join risk on its case aliases
+  (`Lb`/`LB`, `oz`/`Oz`, `qt`/`Qt`) — the same frozen-key surface `save_quote` joins on. That
+  risk was raised in a prior review; it is not otherwise recorded in this repo, and it is a
+  pre-existing money-path concern independent of this change (see the open item below).
+- **Unit equality rules.** Only *lossless* differences are folded away — case (the live rows
+  carry deliberate case aliases with identical factors), zero-width characters (deleted
+  outright), any run of real whitespace including the non-breaking space (collapsed to one
+  space), and periods (`fl. oz` = `fl oz`, `gal.` = `gal`) —
+  plus the two synonym pairs the live rows themselves declare (`oz`/`fl oz`, `Ea`/`Unit`,
+  identical `factor_oz` *and* `unit_type`). `oz` vs `Dry oz` stays correctly separate. The
+  alias map holds no factors: it decides only *whether* to compare, never rescales a quantity.
+  It is deliberately **not** extended to guessed spellings — the fields are free text, and
+  merging `ounces` into liquid `oz` would restore the silent bad arithmetic. An unrecognised
+  spelling costs one "verify by hand" message instead.
+- **A quantity with no unit recorded blocks the comparison** rather than being absorbed into
+  the ticket's unit. The unit fields are free text and a new row starts blank, so "quantity
+  typed, unit left blank" is a likely real state; treating it as agreement would mask exactly
+  the cross-unit mismatch this change exists to catch. A ticket with no units recorded
+  *anywhere* still gets the plain comparison it always had, so unit-less tickets stay quiet.
+- **Zero-quantity rows ignored** when deciding whether units agree — a half-entered row
+  (unit typed, quantity still blank) no longer suppresses the check for the whole ticket.
+- **Scope: warning text only.** No change to stored quantities, pricing, or inventory; the
+  callers (`ManualTicketCreate.tsx:333`, `BlendTicketDetail.tsx:433`) only render the result,
+  and it never gates a save. Severity **low** — `blend_tickets` and `blend_ticket_products` are
+  both empty on live.
+- **Zero-width characters are deleted, not turned into a space.** A unit pasted from a PDF can
+  carry U+200B/200C/200D or a BOM *inside* the abbreviation. Collapsing it to a space split
+  `gal` into `g al`, which matched nothing: the check was skipped and the message listed two
+  units that look identical on screen. Fail-safe (never a wrong sum) but confusing, so the
+  zero-width run is now removed before real whitespace is collapsed.
+- **Verified by running it, not by tests alone.** The real `blendMathValidator` module was
+  imported into a page served by the dev server and driven through the mixed-unit, alias,
+  blank-unit and half-entered-row cases, with each returned warning read back in the browser;
+  the zero-width cases were driven the same way and read back after the fix above.
+  The production banner component itself was not exercised (both caller test files mock the
+  validator away), so that rendering path remains unverified. 27 new tests (38 total in the
+  file); mutation-tested by reverting each guard in turn and confirming exactly the expected
+  tests went red.
+- **Reviewed** by two independent adversarial Opus passes, which confirmed the display-only
+  blast radius by exhaustive caller trace and drove the blank-unit hole, the free-text
+  spelling drift, and several doc inaccuracies above; then by CodeRabbit, which found the
+  missing-`total_volume_unit` half of the blank-unit hole; then by an independent
+  `gpt-5.6-sol` high-effort review at head `cdee7d9b`, which found the zero-width defect
+  above. CodeRabbit was rate-limited by the time of the final head and did not re-review.
+- **Known gaps, deliberately out of scope:** the per-product `rate_per_acre × total_acres`
+  check in the same file is still unit-blind, and the unit fields are free text rather than
+  the picker the Field App already uses. Both recorded in `docs/manual/KNOWN_ISSUES.md`.
+
+- **Lands via** [PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426) from
+  `claude/loving-hofstadter-6b1f5e`, which is still **open** as this entry is written — merging
+  that PR is what actually ships the change. (Commit SHAs are deliberately not cited here —
+  this branch was rebased, and an earlier version of this entry cited a SHA that the rebase
+  orphaned.)
+## 2026-08-20 — Worktree/review-proof-guard collision: documented, not fixed (5 review rounds, 8 holes)
+
+`review-proof-guard.mjs` denies destructive shell commands that NAME a path inside a **Claude-managed**
+worktree, because Claude creates them at `<repo>/.claude/worktrees/<name>/` and the guard protects any
+`.claude` path component. Codex worktrees live outside the repo and have no such collision. Bisected
+to `f3e06c52` (PR #423 round-3/5 hardening); `c64ea3d4` and `4b302050` are not implicated.
+
+**Impact is much smaller than first reported.** *For this collision*, the guard fires only when the
+command *spells out* the worktree path — the agent's shell already starts in the worktree, so
+`rm -f scratch.tmp`, `rm probe-dir/x.txt`, `mv a.txt b.txt` and `Write` (relative or absolute) all
+ran live in a worktree. That describes the collision, not the guard's whole matching rule: it also
+blocks commands naming `.claude`/`.claude/session-state` anywhere, with `rm`/`mv`/`git clean`/
+`rsync --delete`/`find -delete` as destructive verbs when the state directory is named. Two claims
+in the original report were wrong: the blocked `Write` to `stop-wrap-ack.json` came from a different
+hook, and `find … -delete` is blocked everywhere by a separate safety layer rather than by this
+guard. Note `rm -rf` and `git clean -f` never run anywhere in this repo — `permissions.deny` in
+`.claude/settings.json` refuses both before any hook sees them.
+
+**A fix was built and abandoned.** Five successive versions of a text-stripping carve-out were each
+reviewed by an independent `gpt-5.6-sol` high-effort pass. Every round found at least one real
+security hole — eight in total, each a different spelling of the same path (trailing separator,
+`../..`, `$var`, `/.`, `."."` quote-joining, an operand named `cd`, `%VAR:~0%`/`!VAR!`, caret
+escapes). Each round's suite was green over the next round's hole; mutation testing reached 14/15
+without surfacing round 5. Mason's call (2026-08-20): document, don't fix. **The guard is unchanged
+— zero behaviour change ships in this entry.**
+
+What landed: the workaround in `docs/reference/gotchas.md`; the full analysis and three ranked
+options (lead option: move worktrees out from under `.claude`) in `docs/manual/KNOWN_ISSUES.md`; and
+all eight holes pinned as denials in `review-proof-guard.test.mjs` — in every spelling, so the two
+cmd.exe expansion forms of the one finding are pinned separately — meaning a future carve-out attempt
+trips on them immediately. The cmd.exe exploits (`%VAR:~0%`, `!VAR!`, caret escapes) are pinned
+through the `cmd` tool name and a `cmd /c` form as well as Bash: those strings only carry their
+exploit semantics in cmd.exe, so a Bash-only tripwire would have stayed green while a future
+shell-specific carve-out opened the real route. Pinning both routes is deliberate — the guard must
+not decide by tool name, and the tests should fail if a change makes it do so.
+
+- **Files changed**: `.claude/hooks/review-proof-guard.test.mjs` (tests only), `docs/reference/gotchas.md`, `docs/manual/KNOWN_ISSUES.md`, `docs/CHANGELOG.md`
+- **Guard logic changed**: none
+- **Migrations touched**: none
+
+## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
+
+Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `7c9be949 docs(plans): revision 2 — fold in the Fable adversarial review and two owner decisions`
+  - `e2da4754 docs(plans): add product data model build plan and coverage scoresheet`
+  - `4c7f3184 docs(products): generalize the design past glyphosate`
+  - `921b727e docs(products): compile the product data master record for owner approval`
+  - `c166b3de docs(products): sweep the full session transcript for missed owner decisions`
+  - `7a81f0c9 docs(products): defer the return-policy screen at Mason's direction`
+  - `4959b5f2 docs(products): fold missing owner decisions into the game plan`
+  - `e37693fd chore(claude): pin CRX autoCompactWindow to 500k`
+  - `678b9d0a docs(products): add consolidated plain-English game plan`
+  - `24bd4c68 docs(products): retract lot-number-based brand tracking; Mason's correction + live evidence`
+  - `97317375 docs(products): fold third review round + Mason's four decisions into plan, PRD and gotchas`
+  - `fbbec46b docs(products): fold second review round + Mason's decisions into plan and PRD`
+  - `6f90e60d docs(products): settle phase 3 sequencing - comparison tool after rate cleanup`
+  - `cfbbc3e1 docs(changelog): log 2026-08-18 product data model plan + PRD session`
+  - `09573605 docs(products): product data model plan + PRD, amended after adversarial review`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-18 — Product data model: design plan + PRD written and amended after…
+
+Product data model: design plan + PRD written and amended after adversarial review (canonical ingredient/ae_fraction, product_rates child table, density warn band, phases re-ordered). Docs only - no code, schema, or data changed.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `09573605 docs(products): product data model plan + PRD, amended after adversarial review`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+## 2026-08-19 — draw-down: the provenance stamp now SURVIVES a quote revision, and a price change never rebills delivered product
+
+Reworked PR #404. Two committed decisions were reviewed and found wrong; both are replaced here.
+
+**1. The foreign key is deferred, not nulled.** `order_items_quote_item_id_fkey` becomes
+`ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED` instead of `ON DELETE SET NULL`. `save_quote`
+deletes and reinserts a quote's lines on *every* save, so SET NULL wiped every provenance stamp
+every time — even on a save that changed nothing. Deferring the check to COMMIT lets the link be
+broken transiently inside that one transaction; by COMMIT the same `quote_items` ids are back, so
+the stamp survives. The earlier draft rejected DEFERRABLE on the belief that id reuse required the
+client to echo ids. Live `prosrc` read this session shows that is wrong twice over: no current page
+echoes ids, and `save_quote`'s id-less fallback reuses prior ids without them.
+
+**2. A superseded price is settled, not re-based.** Each tier's billed history is now partitioned by
+whether the order line was billed at the price the quote line carries today. Units billed at the
+current price stay in the telescoping rounding basis; units billed at any other price are settled —
+they still consume the tier's capacity, so nothing can be re-sold, but they are never re-based.
+New units bill at the new price from a fresh basis. Without this split, raising a price on a
+partly-drawn booking silently rebilled the units already delivered.
+
+**Proof (throwaway PostgreSQL 17.6 in Docker; live was never written to).** The tier query was
+lifted verbatim from the migration and exercised directly. Seven money scenarios pass against
+expected values, including `40 × $1.00 + 60 × $1.50 = $130.00` after a mid-booking price rise, the
+`$1.01`-unit telescoping case, and a two-tier booking billing `$350.00`. Mutation-tested: the
+pre-rework projection bills `$150.00` on that first scenario — a silent $20 rebill — so the test
+detects the regression rather than passing vacuously. The migration's real FK `DO` block was
+executed: it installs the deferred rule, is idempotent, and refuses a drifted SET NULL rule. A
+`save_quote`-shaped revision preserves the stamp under the new rule, aborts under the old
+non-deferrable rule, and silently wipes the stamp under the retired SET NULL rule.
+
+A postflight tripwire (`units_current` / `units_settled`) refuses the apply if the price split is
+ever dropped, because that failure is silent — the allocation still sums, so
+`DRAW_ALLOCATION_MISMATCH` would not catch it.
+
+Not applied and not merged; both still need Mason's explicit approval. One residual is recorded
+rather than fixed: `save_quote`'s id-less fallback can reassign line ids on a quote carrying two
+lines of one product, which in one narrow shape aborts the save at COMMIT. It fails closed, and
+fixing it properly is the same defect as `QUOTE_ITEM_AMBIGUOUS_COST`, with its own PR.
+
+## 2026-08-19 — `agent-health` and the sync generator now agree on line endings
+
+Harness only — no app source, migration, or live-state change.
+
+`compareSyncedFiles()` in `scripts/agent-health-check.mjs` compared the `.claude/skills/**` sources
+with their `.agents/**` mirrors **byte-for-byte**, while `scripts/sync-agent-workflows.mjs` compared
+them **EOL-normalized**. Both compared raw bytes until 2026-07-16, when `be4f00a7` (#147) normalized
+the generator side only; from that date one commit could FAIL `npm run agent-health` while the
+generator reported everything already in sync. Two reviewers on the same commit hit exactly that
+during the PR #414 review — a session observation with no durable artifact, but the condition itself
+was live in a worktree here and is reproducible.
+
+This was already on the books. `docs/audits/2026-07-16-scaffolding-design-review.md:89` recorded the
+CRLF false-"stale" failure and prescribed newline-normalizing before compare; line 191 carries the
+still-open LOW "agent-health sync-failure remedy … duplicates CRLF-fragile byte-compare". Only the
+generator half was fixed at the time. This closes the other half.
+
+Why the state survives: `.gitattributes` pins these paths `text eol=lf`, so a CRLF working-tree file
+hashes to the same blob as its LF committed form — `git diff` is empty and committing it changes
+nothing, so ordinary Git operations never rewrite it. It is not literally unreachable: `git checkout
+-- <path>` does repair it, and `git status` may or may not flag it depending on the stat cache.
+Neither happens on its own. What wrote CRLF into `.claude/skills/**` in that worktree is not
+established.
+
+- Both comparisons import one `normalizeEol` from **`scripts/normalize-eol.mjs`**. It is deliberately
+  narrow — CRLF to LF, nothing else — so a lone CR, a BOM, or a trailing-newline difference still
+  reports as drift. It fails closed: it can raise a false alarm, never grant a false pass.
+- `sync-agent-workflows.mjs --write` now writes the LF form and compares the target's **raw** bytes
+  against it, so the "run `--write`" remedy the health check prints actually repairs a smudged mirror.
+  **The first attempt at this bullet was wrong and shipped that way.** It normalized the target before
+  comparing, which is a no-op on the case that matters: a CRLF mirror normalizes equal to the
+  canonical form, the write is skipped, and the file stays CRLF while `--write` prints "Synced". The
+  live proof taken at the time used a CRLF *source* against an LF *mirror* — the half that did work —
+  so it passed. Two independent Opus reviewers also missed it. **CodeRabbit caught it on PR #425.**
+  Proved on the real tree afterwards: `.agents/README.md` smudged to CRLF stayed CRLF through the old
+  `--write` and came back LF through the fixed one, and the same run repaired four `.agents/**`
+  mirrors that had been sitting CRLF on disk — an empty `git diff` throughout, exactly the invisible
+  state this entry describes.
+- `scripts/sync-agent-workflows.test.mjs` is new and pins that repair: a CRLF mirror must come out
+  LF, a CRLF source must land as LF, real content drift must still be written, and a second run must
+  change nothing. Mutation-tested — restoring the normalize-before-compare line turns it red on the
+  CRLF-mirror assertion. `writeExpected` now takes an explicit `targetRoot` so the test runs against a
+  temp directory, and the CLI block is guarded by a resolved-path `isMain` check so importing the
+  module cannot regenerate `.agents/**` as a side effect. Both invocation paths were re-verified:
+  `node scripts/sync-agent-workflows.mjs --check` (husky/CI, relative) and the absolute-path spawn
+  from `check-agent-workflows.mjs`.
+- `scripts/agent-health-check.test.mjs` pins the contract: CRLF-vs-LF is PASS, real content drift is
+  still FAIL, the normalizer's narrowness is asserted, and both callers are checked for importing the
+  shared module instead of redefining it. Mutation-tested — each assertion goes red when the behavior
+  it guards is reverted.
+- `scripts/normalize-eol.mjs` is registered in the required-file lists of `check-agent-workflows.mjs`
+  and `agent-health-check.mjs`, so deleting it reports a clean failure rather than crashing, and is
+  added to the ledger guard's triggers along with `agent-health-check.mjs`.
+- Rewrote the `.gitattributes` header, which described the check as byte-for-byte, misattributed the
+  comparison to `check-agent-workflows.mjs` (it delegates), and carried a "keep both sides on the same
+  ending" rule that this change itself made unenforced. The pinning is unchanged.
+- Verified by reproducing the FAIL against the live CRLF/LF split in this worktree, confirming PASS
+  after the fix with that split still in place, then `npm run agent-health` and
+  `npm run test:agent-workflows` clean.
+- **A second fail-silent path, found while reviewing the fix itself.** `check-agent-workflows.mjs`
+  spawned `--check` and passed on `sync.status === 0` alone. A subprocess that does nothing also
+  exits 0, so any silent no-op in the generator would have been reported as a green "synced" that
+  checked nothing — and the new `isEntryPoint` guard is exactly the kind of thing that could
+  mis-detect (Windows carries drive-letter casing from whatever launched the shell, so a `C:` vs `c:`
+  mismatch would skip the CLI). Both halves are closed: the check now requires the `PASS - N Codex
+  workflow file(s) match` line, and `isEntryPoint` case-folds on win32. Mutation-tested by forcing the
+  CLI guard to `false` — `--check` produced no output and exit 0, and the check reported
+  `FAIL … --check exited 0 without its PASS line (produced no output) — the generator may not have
+  run at all`. `sync-agent-workflows.test.mjs` pins entry-point detection for absolute, relative,
+  wrong-file, absent-argv, and flipped-drive-letter inputs.
+- **Two more CodeRabbit findings, both the same shape, both taken.** (1) The raw comparison decoded
+  the target to a string first, and decoding maps any invalid UTF-8 byte to U+FFFD — so a corrupt
+  mirror could compare equal to canonical text containing that character and be skipped. Now
+  compares `Buffer`s. (2) The idempotency assertion checked only the file's *content*, which also
+  passes if `--write` rewrites every file with identical bytes on every run — the exact thing the
+  assertion claimed to disprove. Now pins mtime; mutation-tested by forcing an unconditional write,
+  which turns it red on that assertion. Both are the recurring theme of this entry: **the check was
+  looser than the claim it was making.**
+- **Lesson, and the reason the `--write` correction is written out in full above:** a proof that
+  exercises one half of a two-sided repair reads exactly like a proof that covers both. The source
+  side and the mirror side fail differently, and "I watched it work" was true and still insufficient.
+  Prove each direction separately, or the observation is weaker than it looks.
+
+## 2026-08-19 — Corrected the false "Codex cannot reach the live DB" premise in the bug-hunt commands
+
+Harness only — no app source, migration, or live-state change. `codex-driven-bug-hunt.md:17`
+justified the Claude/Codex division of labor with "Codex's read-only sandbox cannot reach the live
+database." That is false as a capability statement, and it is the same sentence that propagated into
+`docs/plans/2026-08-18-product-data-model-PRD.md` on 2026-08-18 and told an executor Codex "cannot
+re-derive" live facts (Mason caught it; the PRD was fixed, the source was not).
+
+- **What is actually true.** Codex's Supabase access is **write-enabled** by Mason's 2026-08-14
+  decision (`docs/manual/DECISION_LOG.md`); `.codex/config.toml` declares `read_only=false` with
+  `features=database,...`. The bug-hunt runs genuinely have no database connector, but because
+  `scripts/codex-hunt.mjs` and `scripts/overnight-codex-gate.mjs` both pass **`--ignore-user-config`**,
+  which drops the Supabase/Vercel/GitHub plugins for that invocation — a deliberate launch flag for
+  those runs, not a limit on Codex.
+- **Current-state caveats, verified 2026-08-19 and now recorded inline.** The tracked
+  `.codex/config.toml` entry's OAuth grant is **still dead** — real
+  `failed to refresh OAuth tokens for server supabase` / `invalid_grant` runtime errors in
+  `~/.codex/sessions` as recently as 2026-08-17 — so it carries essentially no traffic. The channel
+  last observed serving real Supabase calls is the built-in `codex_apps/supabase` App connector,
+  whose scope is an **owner-only toggle in the Codex app's settings, not represented in or verified
+  by any repo file**. Capability is therefore unproven in both directions, and the command now carries
+  an explicit "do not restate this as 'Codex cannot reach the live database'" warning.
+- **The design rationale survives on its original footing.** The load-bearing independence argument
+  was always the two-model split — the model that *finds* is not the model that *verifies*, and the
+  model that *writes* the fix is not the model that *reviews* it. That never depended on DB reach.
+  Keeping the hunter connector-free stays the deliberate choice: it keeps a write-capable connector
+  out of an unattended loop and forces the Claude-side live grounding to actually happen.
+- Same wrong reason fixed in two downstream copies (the hunter prompt at `:73`, Claude's verify step
+  at `:100`) and in `overnight-bug-hunt.md`'s mirrored Codex finding-gate prompt. **The first sweep
+  missed two more copies** because it searched the long phrasing ("cannot reach") and not the
+  contraction: `codex-driven-bug-hunt.md:1` — the description line, the first sentence any agent
+  reads — still said "which Codex's sandbox can't reach", contradicting the new warning 20 lines
+  below it, and `overnight-bug-hunt.md:92` said "since Codex's sandbox can't". Both are now fixed;
+  an adversarial `claude-fable-5` review of the branch caught them. Sweep the *concept*
+  (`can't reach`, `cannot reach`, `sandbox can't`, `Codex can't`), not one phrasing. The remaining
+  `CHANGELOG`/`KNOWN_ISSUES` mentions are correct historical records of the old state and are
+  deliberately left alone. Adapters regenerated (`sync-agent-workflows --write`, 37 files — the two
+  bug-hunt adapters are pointer stubs, so their content is unchanged) and
+  `npm run test:agent-workflows` green.
+- **Still open (owner-only):** nobody can verify from this repo whether the `codex_apps/supabase`
+  App connector is currently read-only or write-enabled. Mason's 2026-08-14 approval may or may not
+  have been applied to that toggle; recording its actual state would close the blind spot.
+## 2026-08-19 — The purchase-order "mirror" whole-cent CHECK is settled as a closed two-column exception
+
+Documentation only — no app source, no migration, no schema or live-state change; every live read
+was read-only.
+
+PR #420 left one money-policy question open: the AGENTS.md gate requires "an active **finite**
+whole-cent CHECK", and the two purchase-order constraints
+(`purchase_orders_total_cost_whole_cents`, `purchase_order_items_unit_cost_whole_cents`) carry no
+finiteness clause of their own — what rejects `NaN`/`Infinity` there is the generated cents column's
+cast to bigint, not the CHECK. An earlier revision had resolved this by asserting "Both forms clear
+the gate" and was withdrawn, because that widened a gate Mason had not decided.
+
+The cast argument was proven read-only against live on 2026-08-19 — non-finite and overflowing
+values raise in the generation expression before the CHECK is consulted, fractional cents are
+rejected by the CHECK itself, the cents columns are unwritable (`attgenerated = 's'`), and all 228
+live rows are clean — and **Mason accepted the two constraints as a closed exception**. The mirror
+form is explicitly **not** a second approved shape; new or changed money columns use the rounding
+form. Recorded in `docs/manual/DECISION_LOG.md` (2026-08-19 entry), with the 2026-08-10 entry's
+"Open, not settled" paragraph flipped to point at it, a one-sentence pointer added to the always-
+loaded `AGENTS.md` money bullet, and the exception noted in
+`docs/workflows/SAFE_DEVELOPMENT_RULES.md` so its "means exactly this predicate" wording no longer
+contradicts the settlement.
+
+Adversarial review of the entry (Fable, read-only) confirmed every live claim — constraint
+definitions, generated columns, cast SQLSTATEs, the 34/194/0 row counts, the 11-rounding + 2-mirror
+split of 13, and the NaN/NULL semantics — and caught four errors that were fixed before merge: the
+`AGENTS.md` sentence claimed *every other* money column carries the rounding form (false — ~29
+`numeric` money columns carry no scale CHECK at all), the precision-loss ceiling was stated as
+$9.2 × 10¹⁶ when `numeric` division loses the second decimal from about $10¹⁶, one sentence said
+every bad route was closed before the CHECK when fractional cents are closed *by* it, and
+`SAFE_DEVELOPMENT_RULES.md` had not been updated.
+
+## 2026-08-18 — Hook audit fixes: C3 source-containment guard, worktree-sweep unblock, cd-target fix
+
+Harness only — no app source, migration, or live-state change. The 30-day hook-vs-reality audit
+found one unguarded mistake class that reached production three times and two false-positive/noise
+defects; Mason approved fixing all three:
+
+- **NEW guard — applied-migration source containment (C3):** `applied-snapshot-invalidate.mjs`
+  now records every Supabase MCP `apply_migration` into
+  `.claude/session-state/applied-source-ledger.json`, and `stop-wrap.mjs` blocks session end while
+  any recorded apply has no `supabase/migrations/*.sql` match committed to HEAD (basename or
+  stamp-stripped slug). Entries persist across sessions until the file is committed, then prune;
+  unresolved applies fold into the stop-wrap ack signature so a stale acknowledgment can't mask a
+  new one. Previously the only defence was "someone notices" (2026-08-09, PR #371, and the
+  six-file 2026-08-12 incident). Tests: `.claude/hooks/applied-source-containment.test.mjs`,
+  added to `test:correction-guards`.
+- **worktree-cleanup ignores harness noise:** a machine-local `.claude/settings.local.json`
+  modification as the SOLE dirt no longer classifies a worktree as dirty
+  (`meaningfulDirt()`/`IGNORABLE_DIRT_PATH` in `worktree-cleanup-lib.mjs`) — that one file kept 11
+  fully-merged agent worktrees unsweepable. Removal re-checks porcelain at delete time and, only
+  when the ignorable file is still the only dirt, restores it from HEAD (or deletes it if
+  untracked) before one plain-`remove` retry — never `--force`. Dry run against the real fleet:
+  10 zombie worktrees + 1 dead branch now classified removable.
+- **review-proof-guard cd fix:** the shell-cd rule now checks the ACTUAL
+  `cd`/`pushd`/`Set-Location` target instead of denying any command containing both a cd token and
+  a state-dir mention (which blocked legitimate work like
+  `cd <worktree-root> && ls .claude/session-state`). Component steps (`cd .claude` +
+  `cd session-state`) and unresolvable `$VAR` targets alongside a state-dir mention still deny.
+
+Docs updated in `docs/reference/agent-guardrails.md` (four rows). `test:correction-guards` green
+(all suites, 1,200+ assertions incl. the new file).
+
+CodeRabbit review round (2026-08-19, PR #423 — all three findings confirmed and fixed): the
+applied-source ledger's read-modify-write is now serialized by a cross-process lock
+(`ledger-lock-lib.mjs`; mutation-proved — in one measured run with the lock disabled, 4 of 12
+concurrent recorder processes lost their entries; the loss count is nondeterministic, the point
+is that unlocked losses are real and reproducible); stop-wrap's containment check reads `git ls-tree HEAD` instead of
+`ls-files`, so an intent-to-add (`git add -N`) or staged-only filename can no longer satisfy or
+prune the guard; and review-proof-guard's cd parser resolves targets past option tokens
+(`cd --`, `-P`, `-Path:`) and shell-joined quoting (`.claude/"session-state"`), which previously
+bypassed the deny.
+
+Round 2 (same PR, incremental review of the fixes — all three findings confirmed and fixed,
+each mutation-proved red-without/green-with): review-proof-guard also checks the
+Bash-escape-decoded cd target (`session-\state` executes as `session-state`; the raw form still
+covers Windows `\` paths); stop-wrap skips the containment check when the git call itself fails
+(binary missing/timeout) instead of phantom-blocking on an empty listing — an unborn HEAD still
+blocks, since nothing-committed is exactly the uncontained case; and the guard test's allow case
+now asserts exit code 0, not just empty output. Round 3 (one Minor follow-up, confirmed and
+fixed): the `ls-tree` listing itself is now failure-aware — a transient git failure despite a
+valid HEAD skips the check instead of reading as "no committed migrations", while an unborn HEAD
+keeps blocking. Both failure branches are regression-tested and mutation-proved: an unborn-HEAD
+case (fresh repo → still blocks) and a failed-`ls-tree`-with-valid-HEAD case (deleted tree
+object → skips without pruning the ledger). Round 4 (one Major, confirmed with a narrower fix
+than proposed): on a ledger-lock timeout the callback now receives `locked=false` — the
+recorder still appends (dropping the record would silently disarm the guard), but the
+stop-wrap prune skips its rewrite, since an unlocked rewrite could erase a concurrent
+recorder's append (lock-held regression test added, mutation-proved).
+
+Blind adversarial Opus round (2026-08-19, PR #423 — Codex usage exhausted, so per the settled
+PR #413/#414 precedent two independent blind Opus reviewers substituted for the Codex gate; both
+returned BLOCKERS, all confirmed findings fixed and the new protections mutation-proved
+red-without/green-with):
+
+- **cd-guard newline bypass (proven):** the argument-run separator swallowed line breaks, so in
+  `cd /tmp` ⏎ `cd .claude/session-state` only the FIRST target was ever resolved. Separator is
+  now horizontal-whitespace-only; newline-separated invocations each get checked. Also fixed:
+  split-quote runs (`".claude/session"-state`) now join like the shell joins them,
+  `Push-Location` counts as a cd verb, and glob/brace metacharacters make a target unresolvable
+  (fail closed when the command also mentions the state dir). Accepted residual: a pure-glob cd
+  with no literal state-dir mention anywhere still passes.
+- **Slug containment time-gated:** the repo has duplicate migration slugs years apart, so a bare
+  slug match could let an OLD same-named file contain a FRESH apply. A slug-only match now
+  requires a committed file stamped within 7 days before the recorded apply (or later); exact
+  stamped basenames still always match; an unparseable entry timestamp stays blocked.
+- **Recorder correctness:** applies whose tool response carries the explicit `isError` marker
+  are not recorded (error-shaped text still records — fail closed); same-name re-applies dedup;
+  both ledger writers write atomically (temp + rename) so a crash can't leave truncated JSON
+  that would disarm the guard.
+- **Ack valve hard-gated:** a signature-matching stop-wrap acknowledgment can never end the
+  session while any apply is uncontained; entry names are sanitized and truncated before they
+  reach the signature or the block message. Malformed ledger rows prune without masking real
+  entries beside them, and the block message now distinguishes "commit the source file" from
+  "the apply never really happened — verify live and remove the ledger entry".
+- **Unborn-HEAD discriminator tightened:** only a `git rev-parse` failure with the specific
+  unborn-revision error counts as unborn (blocks); any other git failure skips the check for
+  that stop instead of misreading, e.g., "not a repository" as "nothing committed".
+- **worktree-cleanup:** a worktree whose applied-source ledger still holds unresolved entries is
+  kept even when merged+clean (the gitignored ledger is invisible to those gates; sweeping would
+  destroy the only record), and a failed removal retry restores the settings.local.json content
+  it deleted.
+
+Documented follow-ups deliberately not fixed in this PR: ledger-lock holder-token eviction and
+the stale-eviction/timeout window mismatch (single-machine harness, bounded impact), and the
+empty-`tool_input.name` recorder skip (no observed producer).
+
+Second blind adversarial Opus round (2026-08-19, PR #423, commit `61e946af`): both reviewers
+again returned BLOCKERS with one shared root cause — the cd-scanner already ran over normalized
+command views, but the sibling destructive-verb net and the proof/ledger path matcher scanned the
+raw string only. A `shellCommandViews` helper now yields four views (raw, quote-stripped,
+backslash-dropped, both) and both nets run over every view, closing quote-composed verbs
+(`r"m" -rf`), a backslash-dropped `.claude` ancestor (`.clau\de`), and quote/backslash-split
+ledger/proof filenames. `find` used as a traversal delete (`-delete`/`-exec`/`-execdir`) is now a
+destructive verb (a traversal delete never names the basename). stop-wrap forces the C locale
+around its unborn-HEAD probe so the English-stderr match holds on a non-English git, and its
+dedup key uses a visible escape sequence instead of a raw control byte (byte-identical, keeps the
+file clean text). All mutation-proved red-without/green-with.
+
+Third blind adversarial Opus round (2026-08-19, PR #423): both reviewers found the round-2 net
+still matched the state-dir path and the destructive verbs LITERALLY, missing three evasion
+classes, all now fixed and each mutation-proved load-bearing (neutering the detector lets the
+exploit through; the shipped guard denies it):
+
+- **Glob on a protected path component:** a wildcard whose literal prefix could expand to
+  `.claude`, `session-state`, or `applied-source-ledger.json` (`rm -rf .clau*/session-state`,
+  `rm -rf .clau*/sess*`, `find .clau*/session-state -delete`) is now treated as naming the state
+  dir. The path matcher is component-aware (splits on shell separators) and fails closed on any
+  glob whose leading literal is a prefix of a protected name — a bare-`*` glob with no such prefix
+  (`rm dist/*.js`) still passes.
+- **Redirect INTO the state dir with no destructive verb:** a `>`/`>>` write that lands a file in
+  the state dir overwrites a wrapper-owned proof or the ledger even though the verb (`printf`,
+  `echo`) is not destructive and the basename may be globbed
+  (`printf "[]" > .claude/session-state/x.jso*`). Such a redirect target is now its own deny
+  trigger, independent of the verb net.
+- **Omitted deleting verbs:** `git clean`, `rsync --delete`, and `truncate` delete or zero files
+  but were absent from the destructive-verb set; all three are added, and each denies only when it
+  also names the state dir (`git clean -fdx dist`, `rsync --delete /tmp/a/ /tmp/b/`,
+  `truncate -s0 /tmp/log` all still pass).
+
+**worktree-cleanup fail-closed on an unreadable ledger (CodeRabbit Major, 2026-08-19):** the
+applied-source-ledger read now keeps the worktree unless the ledger is provably absent. Only
+`ENOENT` (truly no file) is sweepable; a present-but-unreadable ledger (EACCES/EISDIR/I/O) or a
+malformed/unparseable one keeps the worktree, because a read or parse failure is exactly when the
+worktree can least be proven safe to destroy and sweeping it could erase the sole record of an
+un-committed live apply. The decision is a pure `ledgerKeepsWorktree` helper in
+`worktree-cleanup-lib.mjs` with unit tests for every branch (absent / unreadable / malformed /
+real-entry / empty / junk-only). This reverses the earlier "corrupt reads as no entries" stance,
+which was wrong.
+
+**Accepted residual ceiling (both reviewers, independently):** a destructive-verb/path DENYLIST is
+inherently incomplete and cannot be finished by enumeration. Proof FORGERY is content-bound
+(hash-checked) and fully contained; ledger DELETION has partial tamper-evidence (C3 source
+containment) but no local hook can catch every possible deleter — a repo-root `git clean -fdx`
+that names nothing, interpreter indirection (`node -e`, write-a-script-then-run), or a novel tool
+can still remove local state. These are LOCAL dev-machine defense-in-depth. The real boundary is
+GitHub branch protection (`protect-main`: no direct pushes, PR + passing checks required) plus the
+C3 tamper-evidence that makes an un-committed live apply visible at session end — not the shell
+denylist. The denylist raises the cost of the easy paths; it is explicitly not claimed to be
+exhaustive.
+
+Blind adversarial Opus round 2 (2026-08-19, same PR — two fresh independent blind Opus
+reviewers, both returned BLOCKERS; every confirmed finding fixed and each new protection
+mutation-proved red-without/green-with, 7 mutations total):
+
+- **cd-guard, seven more proven bypasses closed:** quoted/escaped/eval-wrapped/composed verbs
+  (`"cd"`, `'cd'`, `\cd`, `c"d"`, `eval "cd …"`) via a widened prefix class plus a second
+  quote-stripped scan pass; PowerShell's default `sl` alias (lookahead keeps `sleep` from
+  matching); `$IFS` glued to the verb (empty argument run + expansion char → unresolvable, fail
+  closed); backslash line continuations spliced into one invocation; and ANSI-C `$'…'` quoting
+  statically decoded before scanning.
+- **Ledger deletability closed (both reviewers proved deletion was unguarded):** a destructive
+  verb (`rm`, `Remove-Item`, `mv`, `del`, …) in any shell command that also mentions the state
+  directory is denied outright, and the applied-source ledger's basename joined the proof-file
+  name guard on every channel. The sanctioned stale-entry path is the new
+  `scripts/remove-applied-ledger-entry.mjs` (`--list` / `--name <exact>`, lock-held atomic
+  rewrite, sanitized output, exit 1 on no match) — used only after verifying the live migration
+  ledger.
+- **Content binding:** the recorder now fingerprints the applied SQL (EOL-normalized hash), and
+  containment requires a committed file whose content hash MATCHES — a same-named empty or
+  unrelated file no longer satisfies or prunes the guard. Legacy hashless entries keep the
+  name/slug rules.
+- **isError decision reversed:** a failed apply IS recorded, flagged `failed: true` — an error
+  response cannot prove nothing landed (non-transactional/multi-statement SQL can change live
+  state before erroring). Round-1 had skipped these; the reviewers showed that skip was itself
+  a bypass. Dedup still prevents retry stacking; stale failed rows go through the removal
+  script.
+- **Injection/robustness:** ledger `ts` values are sanitized before reaching the block message
+  or ack signature (names already were); implausible candidate stamps (month 99, hour 99)
+  satisfy NO slug window instead of parsing as garbage; recorder and stop-wrap both prefer the
+  hook payload's `cwd` over `CLAUDE_PROJECT_DIR` so a worktree session's ledger can't land in a
+  directory the checks never read; the guard's shell-tool matcher widened to
+  cmd/shell/terminal/exec/run_command.
+- **worktree-cleanup:** the applied-ledger gate moved to a tested pure helper
+  (`ledgerHasEntries`) — junk-only rows no longer pin a worktree forever — and the docs now
+  state honestly that it is a presence check, not a containment check.
+
+Documented follow-ups deliberately not fixed in this round (in addition to the round-1 list,
+which still stands): raw `execute_sql` DDL is not recorded in the ledger (only `apply_migration`
+is; the interactive rules and live-data guard cover that channel); a worktree with any real
+ledger entry stays kept until stop-wrap prunes it or the removal script clears it, even when the
+source is already committed (presence-not-containment, accepted); the theoretical prune/append
+race when a prune proceeds after a lock timeout (the prune skips its rewrite, so the failure
+mode is a kept-too-long entry, never a lost one); the worktree-cleanup settings-restore branch
+remains untested (exercising it needs a throwaway git worktree fixture); and a stale
+`CLAUDE_PROJECT_DIR`-first comment in `migration-apply-guard.mjs` (behavior there is unchanged
+and correct for the current harness).
+
+Blind adversarial Opus round 3 (2026-08-19, same PR — two fresh independent blind Opus
+reviewers; every confirmed finding fixed and each new protection mutation-proved
+red-without/green-with):
+
+- **cd-guard, three more proven bypasses closed:** the scan now de-glues a cmd.exe verb fused to
+  its target (`cd/d …`, `cd.claude\session-state`, composed `c"d".claude\…`) before resolving; a
+  location verb (`sl`, `cd`) left with an EMPTY target run by a move/pipe (`… | sl`) is treated as
+  statically unresolvable and fails closed when the state dir is named elsewhere; and the
+  destructive-verb deny now also fires on the `.claude` PARENT directory itself (`rm -rf .claude`,
+  `mv .claude /tmp`), not just the `session-state` subpath — while a `.claude`-PREFIXED but
+  distinct path (`.claude-cache`, `.clauderc`) stays allowed.
+- **Removal script hard-gated behind an explicit verify flag:** `remove-applied-ledger-entry.mjs`
+  now REFUSES to remove anything without `--i-verified-against-live`, printing the live
+  `supabase_migrations.schema_migrations` query to confirm against first — so the C3 alarm can't
+  be cleared by reflex, only after a human checks the live ledger. Its lock callback no longer
+  calls `process.exit()` inside `withFileLock` (that bypassed the `finally` and leaked the lock
+  dir); output and exit now happen after the lock releases. The script joined `RISKY_PATH_RES` in
+  `codex-push-lib.mjs`, so a Codex push touching it needs an exact-head proof; the
+  maintenance-producer blob pins were re-pinned to match (verified against the real builder).
+- **Recorder dedup keys on name AND content-hash:** an identical-SQL retry still collapses to one
+  row, but a same-name apply with DIFFERENT SQL — a distinct change that hit live — is retained,
+  not evicted, and a later hashless re-record can't erase a fingerprinted entry (the v2→v1
+  downgrade-erase bypass).
+- **Per-entry fail-closed containment:** a git-show/hash failure for ONE ledger entry now marks
+  only THAT entry uncontained (blocks, naming it) instead of throwing out of the whole check;
+  a genuinely git-unavailable environment still skips loudly (a non-blocking stderr notice that
+  live applies were NOT verified this session) rather than silently disarming. Classification runs
+  on a snapshot outside the lock; the prune re-reads and rewrites under the lock keyed on
+  name+hash.
+- **cwd normalization:** recorder and stop-wrap both resolve the project dir to its git top-level
+  (`git rev-parse --show-toplevel`), so a hook invoked from a subdirectory of the worktree still
+  reads/writes the one canonical ledger.
+- **Docs honesty:** `agent-guardrails.md` now states the guard's honest scope plainly — it stops
+  NAMED destruction and accidental self-certification, not a determined interpreter that hides the
+  target from the command text; the durable boundary is GitHub `protect-main` branch protection
+  plus the C3 tamper-EVIDENCE (an uncontained apply blocks session end and pins the worktree), not
+  command-string prevention.
+
+Documented follow-up deliberately not chased (all rounds): interpreter-indirection where the
+ledger path never appears literally in the command (`node -e`, write-script-then-run, base64) is
+outside any command-text guard — accepted, with the honest-scope note above and branch protection
+as the real boundary.
+
+Blind adversarial Opus round 4 (2026-08-19, same PR — two fresh independent blind Opus reviewers,
+both returned BLOCKERS; every confirmed finding fixed and each new protection mutation-proved
+red-without/green-with). Shared root cause: the cd-scanner already ran its checks over several
+NORMALIZED views of the command (quote-stripped, backslash-decoded, ANSI-C-decoded), but the
+sibling destructive-verb net and the proof-path matcher still scanned the RAW string only — so the
+same disguises the cd-scanner defeats slipped past them:
+
+- **Proof-path / ledger-name matcher normalized (proven bypass, disarms C3):** the shell joins
+  quote-split and backslash-escaped tokens into the real filename before running the command, so
+  `printf "[]" > .claude/session-state/applied-source"-"ledger.json` and
+  `printf {} > codex-review"-"forged.json` executed as writes to the protected ledger/proof while a
+  raw-string regex missed them. The shell-`command` path matcher now tests every normalized view
+  (raw + quote-stripped + backslash-dropped) via a shared `shellCommandViews` helper and denies if
+  any matches. The literal filesystem-path predicates (`file_path`, patch destinations, `cwd`) stay
+  raw — they are real paths, not shell syntax, so quote-stripping them would be wrong.
+- **Destructive-verb net normalized (proven bypasses):** a quote-composed verb
+  (`r"m" -rf .claude/session-state`) and a backslash-dropped `.claude` ancestor
+  (`rm -rf .clau\de`, which bash runs as `.claude`) both reached the state dir undenied. The
+  destructive check now runs over the same `shellCommandViews`, so the verb and the state-dir
+  mention are seen in whichever view the shell would actually execute; the raw view still covers
+  Windows `\`-separated paths, where the backslash is a real separator.
+- **`find`-traversal delete closed (proven bypass):** `find` deletes by traversal and never names
+  the basename, so neither the destructive-verb regex nor the basename guard fired —
+  `find .claude/session-state -delete` (and `-exec rm` / `-execdir rm`) wiped the exact ledger +
+  proofs that `rm -rf .claude/session-state` is blocked for. `find` paired with a delete/exec
+  action is now treated as a destructive verb; a `find … -delete` on an unrelated `.claudex` glob
+  stays allowed (only bare `.claude` as a whole path component counts).
+- **Unborn-HEAD probe made locale-independent (fail-open closed):** `stop-wrap.mjs` detects an
+  unborn HEAD by matching git's English stderr; without a forced locale a non-English git would
+  fail the match and SKIP containment (fail open). The `git rev-parse --verify HEAD` probe now runs
+  with `LC_ALL=C`/`LANG=C` so the English match holds everywhere.
+- **NUL delimiter made reviewable:** the dedup key in `stop-wrap.mjs` joined name and SQL-hash with
+  a raw NUL byte, which made git classify the file binary past its 8 KB sniff window and left the
+  delimiter invisible to reviewers. Switched to the byte-identical visible escape `"\u0000"` — same
+  runtime delimiter, clean text, line-level diffs restored (this is why this file shows a one-time
+  whole-file rewrite in the diff: the old blob had a NUL and diffed as binary).
+- **worktree-cleanup failed-remove restore hardened:** the restore branch now captures the exact
+  prior `settings.local.json` bytes before the checkout and, on a failed `worktree remove`, restores
+  those bytes (or deletes the file if it did not exist before) instead of a blind `checkout HEAD`.
+
+CodeRabbit precision language (finding #7): C3 records only qualifying non-error
+`apply_migration` responses; a slug-only containment match must satisfy the ±7-day stamp window;
+ledger entries are pruned only after a successful git content-hash verify AND under the
+cross-process lock. CodeRabbit findings deliberately dismissed with reason: #2 (variable/interpreter
+indirection, e.g. `X=…; cd "$X"`) is the same accepted interpreter-indirection residual documented
+above — the guard denies on the visible mention, prevention of a hidden target is out of scope; #5
+(worktree-cleanup treats a missing/corrupt ledger as "no entries" and sweeps) is the DELIBERATE,
+documented fail-open — a machine-local, unreadable ledger must not pin the whole fleet forever, and
+neither Opus reviewer corroborated it as a real risk.
+
+CodeRabbit re-review (2026-08-19, PR #423 — variable-target cd, auto-"addressed" marker overturned):
+CodeRabbit finding 3813087972 flagged `part=state; cd .claude/session-$part`. The target resolves to
+`.claude/session-state`, but the contiguous `.claude/session-state` string is never spelled out in
+the command, so the cd-scanner's second-literal-reference test missed it and the command was still
+ALLOWED — despite CodeRabbit's own auto-"✅ Addressed" marker, which an empirical test overturned (per
+"done = ran and proven", the marker was not trusted). This is DISTINCT from the earlier-dismissed
+`X=…; cd "$X"` residual: there the whole path hides in a variable with no literal skeleton, whereas
+here the target's OWN literal skeleton (`.claude/session-…`) already names a protected component. The
+cd-scanner's unresolvable-target branch now fails closed when the target's literal skeleton hits a
+protected component (`segmentsHitStateDir` on the target and its Bash-escape-decoded form, parity
+with the destructive-verb net), so `part=state; cd .claude/session-$part`,
+`X=session-state; cd .claude/$X`, and `cd .clau[d]e/session-state` all deny; a fully-hidden
+`cd "$X"` (no literal `.claude` in the target) stays the accepted interpreter-indirection residual,
+and benign `.claude`-prefixed siblings (`cd .claude-cache/$sub`, `cd $HOME/session-state-notes`) stay
+allowed. Mutation-proved load-bearing (detector neutered → ALLOW, live → DENY).
+
+Blind adversarial Opus round 8 (2026-08-19, PR #423, commit `8c4a07ac` — Codex usage exhausted,
+two fresh independent blind Opus reviewers): both flagged a short-lead glob bypass; one also flagged
+a directory-level MCP-tool bypass. Two proven holes, both fixed:
+
+- **Short-lead glob on the `.claude` component.** The component-aware glob detector floored a glob
+  segment's literal lead at length 3, so a DOTTED 2-char lead (`.c`) fell through — yet the only
+  protected name starting with `.` is `.claude`, and `.c*` is already a real glob for it. `rm -rf
+  .c*/s*`, `rm -rf .c*`, `mv .c*/s* /tmp/x`, `find .c*/s* -delete`, and `cd .c*/s* && …` all expand
+  to `.claude` / `.claude/session-state` at runtime and were ALLOWED. The floor is now dotted-aware
+  (min lead 2 when the lead starts with `.`, 3 otherwise), so those deny while ordinary deletes
+  whose lead is a bare `s`/`a` (`rm s*.o`, `rm a*.log`) stay allowed.
+- **Directory-level file-tool bypass.** A native or MCP file-mutation tool (`Write`/`Edit`,
+  `move_file`, `delete_directory`) whose path field is the state DIRECTORY itself — not a protected
+  basename — moves or deletes the whole ledger + every proof at once, and the basename matcher never
+  sees a protected filename. `move_file source=".claude/session-state"`, `move_file source=".claude"`,
+  `delete_directory path=".claude/session-state"`, and a forge-by-move whose DESTINATION lands in the
+  state dir all slipped through. The guard now denies any path candidate that ENTERS the state dir
+  (`cdTargetEntersStateDir` over `pathCandidates`), which leaves an edit to a file inside `.claude`
+  but outside `session-state` (`.claude/settings.json`, `.claude/hooks/*.mjs`, a hook-file move)
+  still allowed. Both detectors mutation-proved load-bearing (detector neutered → exploit ALLOW,
+  live → DENY); 9 new DENY + 6 new ALLOW regression cases added to `review-proof-guard.test.mjs`.
+  Both reviewers again noted a verb/path denylist is inherently incompletable; the real boundary
+  remains GitHub `protect-main` branch protection plus C3 tamper-evidence, both in place.
+
+## 2026-08-18 — CRX-SEC-1 is LIVE (applied 2026-08-16); seven docs corrected, two claims retracted, and both RLS matrices reconciled against live
+
+Documentation only — no app source, migration, or live-state change; every live read in this entry
+was read-only.
+
+**On the two dates in this entry.** Work started on the local afternoon of 2026-08-18, when UTC was
+also 08-18; reads taken later the same local evening fall on 2026-08-19 in UTC. Both stamps describe
+one working session. A date written without a `UTC` suffix is the local working date; the handful
+stamped `2026-08-19 UTC` say so explicitly so they do not read as a freshness date pushed forward to
+clear `check:docs`.
+
+**The apply.** `20260813080000_lock_quote_versions_writes_to_rpc` (**CRX-SEC-1**) is **APPLIED LIVE**
+as ledger version `20260816174353`. The 2026-08-14 entry below carries a `**STATUS: NOT APPLIED**`
+marker; that was accurate when written and is now superseded by this entry. The ledger has no
+timestamp column, so the commonly quoted 2026-08-16 17:43:53 UTC is read off the version stamp — the
+apply is observed, the clock time is inferred.
+
+**Five docs were stale about it, not three — and only two of them called it unapplied.** (Seven
+docs are corrected overall; the other two are covered under "Also corrected" below.)
+
+The **two that actually asserted "unapplied"** were `docs/reference/migration-history.md` row 886
+(`LOCAL CANDIDATE — NOT APPLIED`) and the RLS Policy Matrix in
+`docs/reference/database-schema.md`, which listed `quote_versions` INSERT as `Admin / Sales Rep`
+behind a `LOCAL ONLY pending apply` marker — the canonical "who can write what" reference asserting
+the exact inverse of live.
+
+The **other three were stale in two further ways**. `docs/manual/CURRENT_STATE.md` and
+`docs/manual/KNOWN_ISSUES.md` were stale **by omission**: neither carried an entry for CRX-SEC-1 at
+all — KNOWN_ISSUES by its own text "never entered in this file while it was open" — behind a ledger
+high-water nine applies out of date. Neither asserted the fix was unapplied; both left it out. The
+RLS Policy Matrix in `docs/workflows/RLS_SECURITY_GUIDE.md` was stale a third way again: it carried
+the pre-fix write model with **no pending marker of any kind**, so nothing in it said "unapplied"
+for a reader to notice.
+
+They were **not found together**, which is the point. A doc pass on 2026-08-18 found three
+(`CURRENT_STATE.md`, `KNOWN_ISSUES.md`, history row 886). Adversarial review then found the
+`database-schema.md` matrix — `npm run check:docs` does not cover that row, so nothing caught it.
+CodeRabbit then found the `RLS_SECURITY_GUIDE.md` matrix, corrected in line with that matrix's own
+banner convention of naming superseding migrations inline.
+
+**A grant claim retracted.** Those same docs stated as post-apply proof that `authenticated` holds
+"SELECT only" on `quote_versions` and `anon` "holds nothing". **Both are wrong.** `pg_class.relacl` is
+`{postgres=arwdDxtm/postgres,anon=m/postgres,authenticated=rm/postgres,service_role=arwdDxtm/postgres,metabase_ro=r/postgres}`
+— `authenticated` holds SELECT **and MAINTAIN**, `anon` holds **MAINTAIN**. The migration retains
+MAINTAIN deliberately and says so in its own body, so the claim contradicted the source it described.
+The cause was reading grants from `information_schema.role_table_grants`, which does not report
+MAINTAIN at all, and presenting that as a complete grant proof. **No security impact:** MAINTAIN
+permits VACUUM/ANALYZE/CLUSTER/REINDEX/LOCK and reaches no row.
+
+**The write lock itself was re-proved independently**, not inferred from the ledger row: exactly one
+policy (`qversions_select`) remains, `has_table_privilege('authenticated', …)` returns INSERT/UPDATE/
+DELETE false, the only function that inserts into the table is a postgres-owned SECURITY DEFINER with
+no `authenticated` EXECUTE, and its only caller takes **no client cost snapshot** and enforces
+`auth.uid()`, active-profile role, quote ownership and row version. No triggers, no view, no other
+writer. A sales rep cannot forge a cost basis.
+
+**Both RLS matrices reconciled against live — the fix for the pattern, not just the row.** Four
+consecutive adversarial passes each found one more wrong claim, because each pass corrected the row
+it was pointed at rather than the table it lived in. So every row of both matrices was compared
+against live `pg_policies`, per command, on 2026-08-19 UTC:
+112 of the 116 rows mechanically, and the 4 deny-all tables by reading their policy bodies, for the
+reason in the trap note below. **29 of 79 rows** in `docs/reference/database-schema.md` and **12 of
+37** in `docs/workflows/RLS_SECURITY_GUIDE.md` disagreed with live, and all were corrected from the
+live policy expressions. Three further schema-matrix rows — `idempotency_keys`,
+`product_cost_basis` and `product_cost_basis_change_rows` — changed for notation only, with no
+change in access, which is why that file's banner counts 32 changed rows against 29 corrections.
+Both now read zero presence disagreements. Those are per-pass figures, not totals — re-measured
+against `origin/main` at this branch's head by keying both matrices on table name and comparing all
+four command cells, the guide matrix carries **26 changed rows of 37** and the schema matrix **62 of
+79**. A 13th guide row, `quotes`, was
+corrected afterwards by hand — its SELECT cell claimed sales reps see only their own quotes where
+live `quotes_select` is `is_admin() OR is_sales_rep()` with no ownership test. That was a
+role-wording error, which is exactly what the second trap below says the mechanical pass cannot
+catch. Wrong in both directions: `vendors`, `quote_items`, `payments` and others documented
+write access that live grants to nobody, while `rate_limit_log` documented no access where live
+grants admin `SELECT` — one permissive admin SELECT policy, plus a RESTRICTIVE `FOR ALL` that
+narrows rather than grants, so no browser role writes it directly. Two traps worth recording — a `-` cell is correct both when no policy
+exists *and* when a deny-all `USING (false)` policy exists (`idempotency_keys` and the three
+`product_cost_basis*` tables are the second kind, so a naive presence-diff would have *introduced*
+errors there), and what was verified mechanically is policy presence per command, not the role
+wording inside each cell.
+
+**And then the role wording too.** That second trap stood for four more passes. A classifier
+re-derived every cell's role set from the live `USING`/`WITH CHECK` expressions, and every flag it
+raised was then read against live `pg_policies` by hand — the classifier locates candidates, it does
+not prove anything. Flags fell 162 (`origin/main`) → 89 (after the presence pass) → 61 (after the
+"All authenticated" class) → 33, and all 33 survivors were confirmed correct: policies that inline
+`profiles.role = 'admin'` instead of calling `is_admin()`, cells that name a role by how the row is
+reached (`assigned_driver = auth.uid()`), and cells that defer to a parent table's RLS. The count is
+a proxy, not a defect count — correcting `rup_sales_records` SELECT from `Admin` to
+`Admin / Sales Rep` *raised* it by one. Newly corrected in that triage: `invoices`/`invoice_items`
+SELECT (there is no `is_sales_rep()` branch — live is admin, creator, or assigned salesman),
+`blend_recipe_items` writes (recipe-creator-gated, the same shape as the `blend_recipes` parent row
+this PR had already fixed while missing the child), `applicator_licenses` (wrong in both directions
+at once), `cycle_count_items` and `field_billing_defaults` and `rup_sales_records` SELECT (live
+grants a role the doc omitted), and four cells that named the right roles but dropped a condition
+live enforces. `docs/manual/KNOWN_ISSUES.md` now records that entry as CLOSED, and both matrix
+banners define **"All authenticated"** as live `is_active_profile()` — signed in *and*
+`profiles.is_active`, re-read across all 17 cells that use the phrase. (An earlier revision of this entry said three of
+them "used to render the identical live expression as *Any active profile*"; that phrase never
+appeared in any committed matrix on `origin/main` and the claim is withdrawn.) A final sweep then
+covered the one
+shape the classifier structurally cannot flag — a cell that names the right roles but omits a
+condition live also enforces — and corrected six more: `field_obstacles` INSERT, `vendors` and
+`vendor_bills` SELECT, `invoice_shares` and `order_shares` SELECT, and `team_notes` INSERT.
+Against `origin/main` the `database-schema.md` matrix now carries **62** changed rows out of
+79, re-measured by comparing all four command cells of all 79 rows (an earlier figure of 61 summed
+the per-pass counts instead of re-running the comparison).
+Also re-read the guide's "Common RLS Policy Patterns" section against live, which the earlier
+passes had left alone while rewriting the matrix above it. **All seven patterns were wrong**, in two
+different ways. Patterns 1, 2, 3, 4 and 7 each described a policy *shape* live does not have —
+including Pattern 3, which taught `quotes_select` **with** an ownership test that the same file's
+own banner corrects. Patterns 5 and 6 had correct predicates but named policies that do not exist:
+`notifications_select` for live `notif_select`, `activity_feed_insert` for live
+`activity_insert`. An earlier revision of this entry said five were wrong and that the section had
+been re-read; the sweep behind it compared predicates and never compared names, so 5 and 6 passed
+while wrong. All seven are fixed.
+
+**Also corrected:** the `migration-history.md` header claim 885 → 886 (a high-water row number, not a
+file count — the two `check:docs` rows measure different things), both manual freshness stamps, live
+counts in `CURRENT_STATE.md` section 2, the live signatures of `create_quote_version` and
+`restore_quote_version` in `docs/reference/rpc-functions.md` (both had drifted, and
+`restore_quote_version` takes `p_quote_id` first, which the doc had wrong), a supersession marker on
+the now-stale money table in `docs/manual/DECISION_LOG.md`, and a whole-cent money re-measure showing
+2 dirty column-values where 43 were recorded — 43 being a sum across four columns rather than four
+disjoint row sets, so the distinct-row count then was 40–43, not 43.
+
+**One rendering fix, pre-existing rather than introduced here.** In `migration-history.md`'s
+"Staged 2026-06-11" section a `>` blockquote banner sat *between* two rows of a pipe table. A
+blockquote line ends a Markdown table the same way a blank line does, so the 11 rows below it
+rendered as loose text instead of table rows. The banner moved up to sit beside the batch banner it
+is already cross-referenced from; no row text changed, and the table is now 12 unbroken rows. This
+was the last such break in the file.
+
+**The three files nobody had reviewed turned out to carry the worst error on the branch.** Passes 1
+through 13 reviewed 6 of the 9 files this change touches. A fourteenth pass over the other three
+found 16 findings. The one that mattered: the `KNOWN_ISSUES.md` entry filing the session-staleness
+hook bug justified *not* fixing it by claiming `.claude/schema-registry.json` stores only a version
+"and nothing else, so the hook has no name to compare against", leaving a choice between a registry
+format change and a live ledger read. The registry already stores `_meta.applied_migration_names`
+— 964 names, including the one the entry says is unavailable — and the hook already loads it. The
+stated blocker did not exist. Also corrected: `DECISION_LOG.md` called the purchase-order pair
+"converted" fifty lines before proving from live that it is not; the "mirror form" constraint shape
+was recommended on a precondition **zero** live instances meet, without noting that it fails open on
+a nullable cents column; "Both forms clear the gate" was withdrawn as a widening of a money gate that
+Mason never decided, and is now recorded as an open question for him; "none of those are constrained"
+was refuted by three live `*_cent_scale_chk` constraints; two deferred-column row counts still read
+as present-tense when live measures 0; and `rpc-functions.md` called `create_quote_version` "the
+only write path" when `service_role` and `postgres` retain direct write grants and bypass RLS.
+The "(evening of 2026-08-18 local)" gloss was dropped from all 9 places it appeared — the branch's
+commits straddle both local dates, so it was unreliable and added nothing to the UTC stamp beside it.
+
+**A money column was recorded as unapproved debt while live was enforcing it.**
+`docs/manual/DECISION_LOG.md` listed `order_items.total_price` among the deferred columns under
+"no CHECK, therefore not an approved exception". Live disagrees:
+`order_items_total_price_whole_cents_chk` exists and is `convalidated`, added alongside the 35-row
+repair by `20260812115238_repair_historical_order_line_cents` on 2026-08-12 with Mason's in-chat
+approval. The enforced/deferred counts are now **8 and 4**, not 7 and 5. The same paragraph also named
+`purchase_orders.total_cost` as neither converted nor constrained; that column has carried a `bigint`
+`total_cost_cents` companion and a validated CHECK pinning the numeric to `cents / 100.0` since
+`20260716183501_purchase_order_integer_cents` — 25 days *before* the 2026-08-10 evaluation that
+declined conversion — as has `purchase_order_items.unit_cost`. Both errors pointed the same way:
+they told a future agent that settled, enforced money work was still open, which is how a closed
+decision gets re-opened. The 2026-08-10 **decision** itself is unchanged; what moved is which columns
+pass its gate. Read-only live checks, 2026-08-19 UTC.
+
+**One new tracked issue, not fixed here.** `docs/manual/KNOWN_ISSUES.md` gains an OPEN LOW entry:
+`.claude/hooks/session-staleness.mjs` compares migration *filename* stamps on disk against
+`schema-registry.json`'s `migrations_high_water`, which is a server-assigned ledger *version*. Because
+a version runs ahead of the authored stamp, unapplied migration files can be skipped silently. Hook
+logic is out of scope for a documentation-only PR and needs its own guard test.
+
+**A second claim retracted.** That money re-measure was first written up as a new OPEN incident —
+"stored commission money changed on live with no identified cause". It was wrong, and adversarial
+review caught it. Both writers are tracked, approved, applied migrations:
+`reconcile_pending_commission_snapshots` (ledger `20260810235207`, 2026-08-10) rounded `order_profit`
+to whole cents and recomputed `commission_amount` across exactly 11 pending rows, deliberately
+skipping cancelled ones; and `20260812115238_repair_historical_order_line_cents` (ledger
+`20260812154757`, 2026-08-12) rewrote order lines, whose trigger-refreshed order header re-opened a
+single $0.01 gap on one pending snapshot. The first draft asserted an absence without searching for
+the writer, which the retracted entry in `docs/manual/KNOWN_ISSUES.md` was already describing further
+down the same file. No production money moved outside a recorded decision.
+
+**One deliberate non-fix.** `20260813080000`'s own first line still reads `-- STATUS: NOT APPLIED`.
+That header is stale and is deliberately left alone, because CRX Manager never edits an applied
+migration.
+
+## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
+
+Harness only — no app source, migration, or live-state change. A four-agent audit of every
+`.claude/skills/` and `.claude/commands/` file (plus the global handoff/new-project skills) found
+~60 findings; all confirmed ones are fixed (the remainder were duplicates or refuted on
+verification). Highlights:
+
+- **Landing mechanics current everywhere:** `/ship`, `/deploy-check`, `/codex-gauntlet`, and the
+  review-family files now all state the post-2026-07-30 chain — branch → PR → Vercel check →
+  **read and resolve CodeRabbit's review** → merge — and the hands-free-migration carve-outs
+  reference the settled 2026-07-13 policy instead of contradicting it.
+- **Model pins:** `scripts/codex-hunt.mjs` now pins `gpt-5.3-codex-spark` explicitly (was falling
+  to the CLI default under `--ignore-user-config`); codex-cross-review's template pins
+  `gpt-5.6-sol`/high with an exact SHA; the global handoff skill (outside this repo, at
+  `~/.claude/skills/handoff` — noted here for the audit record only) no longer claims Codex
+  cannot reach the live DB (its Supabase connector is write-enabled, 2026-08-14).
+- **Renamed/stale tool references:** Supabase `get_logs` → `query_logs` (settings allowlist +
+  deploy-edge-function + spot-check-prod); hard-coded connector UUID prefixes replaced with
+  suffix-resolution; `moddatetime` trigger template replaced with the house
+  `public.update_updated_at()` in create-migration/explain-migration.
+- **Registry/review accuracy:** regen-schema-registry now checks registry_version 2 and all
+  8 top-level keys; review prompts ask for EVERY finding with filtering moved to reconciliation;
+  migration-review gained the post-apply Step 5 (smoke chains, registry refresh, sweeps);
+  backup-db documents both backup evidence channels.
+- Codex adapters regenerated (`sync-agent-workflows --write`, 37 files) and
+  `npm run test:agent-workflows` green. Proposed wordings that would have added unscoped
+  carve-outs to hard safety-gate approval lines were rejected; the two gate sentences that were
+  reworded (`agent-pair-review`, `codex-gauntlet`) were then re-tightened in the blind
+  double-Opus review round below.
+- **CodeRabbit follow-up (PR #421):** completed the approval-gate lists in `agent-pair-review`
+  and `/ship` (added non-green pushes, billing, customer-visible production state); both bug-hunt
+  handoffs now spell out the read/fix/dismiss CodeRabbit gate; packet dates pinned to
+  `TZ='America/Chicago'`; rollback's edge-function check excludes `_shared/`; regen-schema-registry
+  diffs/summarizes all 8 registry sections; spot-check-prod reports unversioned functions as
+  `NO BASELINE`; probe rewrites must retain both SQLs with read-only equivalence; review-workflow's
+  GROUND_RULE points at the manual/reference lifecycle docs instead of `CLAUDE.md`.
+- **Blind double-Opus adversarial rounds (PR #421, Codex usage-limited):** independent blind
+  Opus reviewer pairs re-audited the full diff, one round per fix commit until clean. Fixed from
+  their findings: the `agent-pair-review` and `codex-gauntlet` gate sentences re-tightened
+  (live-data changes and destructive actions are never hands-free; the 2026-07-13 proof gate
+  named explicitly); `query_logs` call shapes corrected to the real `sql`-based schema
+  (deploy-edge-function, spot-check-prod) and stale `project_id`/`get_logs` params/allowlist
+  entries dropped; `codex-gauntlet` no longer claims preflight/deploy-check invoke it
+  automatically; `overnight-codex-gate.mjs` now feeds the prompt via stdin (Windows ~32K argv
+  cap) and emits an explicit `GATE-FAILED:` line on stdout for timeout/launch/non-zero exits so
+  an empty verdict file is never mistaken for "nothing found" (overnight-bug-hunt's read
+  instructions say the same); log checks now verify the log `source` exists before trusting an
+  empty result (this project has no `function_edge_logs`); migration-review's read-only carve-out
+  now enumerates everything post-apply Step 5 actually does (registry write, B7 rename,
+  rolled-back live smoke transactions); the last `.codex\sync-from-claude.ps1` remedies replaced
+  with `node scripts/sync-agent-workflows.mjs --write`; audit-report dates pinned to
+  `TZ='America/Chicago'`; stale map-count figures dropped from the architecture-audit prompt.
+
+## 2026-08-18 — pre-push private-artifact scan no longer ENOBUFS on nested worktrees
+
+Harness only — no app source, migration, or live-state change. Every `git push` from
+`C:\CRX_Manager` was failing at the pre-push hook with `spawnSync git ENOBUFS`. Unlike pre-commit
+mode, pre-push mode enumerates ignored files repo-wide, and with 16+ session worktrees nested
+under `.claude/worktrees/`, a stale/orphaned sibling directory Git no longer registers (removed
+by hand instead of `git worktree remove`) gets fully recursed into instead of collapsed to one
+line like a live registered worktree — its dependency tree alone was 88MB of ignored-file output,
+overflowing the 64MB Git output buffer.
+
+`check-supplier-pricing-phase3-private-artifacts.mjs` now excludes only the specific tool-owned
+bulk directory names (`node_modules`, `dist`, etc.) nested under a verified worktree's own parent
+directory, scoped narrowly via a real Git pathspec built from `git worktree list`. Non-bulk
+content sitting in an orphaned worktree directory, and any same-named decoy directory outside a
+worktree container, remains fully scanned — the existing anti-decoy containment design (only
+top-level-named generated roots are tool-owned) is unchanged. `GIT_OUTPUT_MAX_BUFFER` was not
+raised — moving the cliff wasn't the fix.
+
+Added a regression test reproducing a stale sibling worktree with a large ignored dependency
+tree. Reproduced the original ENOBUFS crash and confirmed the fix against the real
+`C:\CRX_Manager` checkout (53,850 paths, ~1GB scanned, no crash) via direct invocation of the
+same `--pre-push` code path the hook calls.
+
+CodeRabbit's review of the PR caught a follow-on bug in the fix itself: the worktree container
+path is filesystem-derived, not a literal this file wrote, and was spliced unescaped into the
+new `:(exclude,glob)` pathspec. A container name containing `*`, `?`, `[`, or `\` would have let
+Git treat it as a glob instead of a literal path — e.g. a bracketed name could accidentally
+exclude an unrelated top-level directory sharing only a coincidental single-character match,
+hiding a private artifact planted there from the ignored-file scan. Now escaped before
+interpolation. Added a regression fixture with a bracketed worktree container plus an outside
+decoy directory; confirmed the new test fails without the escaping fix and passes with it.
+
+## 2026-08-18 — Mission loops get a standing model/context budget
+
+Agent-surface docs only — no source, migration, or live-state change.
+
+Mason's 30-day usage analysis attributed the bulk of the month's token spend (estimated at
+roughly 40%) to a handful of marathon loop sessions — almost entirely premium-model context
+re-reads, because every message re-reads the whole conversation. `/run-loop` now carries two
+standing rules, recorded as Mason's 2026-08-18 decision in `docs/manual/DECISION_LOG.md`:
+mechanical cycle steps (status checks, doc syncs, read sweeps, evidence gathering) may be
+delegated to cheaper-model subagents *within the loop's existing structure* — ledger PROOF
+lines, money/RLS/migration judgment, and pinned reviewer models/effort are explicitly
+excluded, and no agents are added on top of a workflow's defined fan-out; and every loop
+obeys the session-size sentinel's marathon cap (advisory at 12MB of transcript; at 25MB:
+finish only the atomic step already in flight, checkpoint the ledger, write a handoff,
+continue in a fresh session, wind down). The sentinel is a global user-scope hook outside
+this repo (`~/.claude/hooks/session-size-sentinel.mjs`), and after adversarial review of
+PR #416 it fires both on prompt submission and mid-turn after tool calls, so unattended
+loops — which may run for hours off one prompt — actually see it; where the hook is absent
+(Codex sandbox, remote runners) the written cap in `run-loop.md` binds on its own. Hard
+gates transfer unchanged across a handoff; a handoff never launders an approval, and a
+lapsed autopilot flag stays lapsed in the successor session.
+
+## 2026-08-18 — Fixed stale moddatetime references in…
+
+Fixed stale moddatetime references in docs/workflows/DATABASE_CHANGE_CHECKLIST.md to the house public.update_updated_at trigger convention; PR 419 green and parked at the Sol merge gate until Codex credits return Aug 19.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `a8b03228 docs(workflows): use house update_updated_at() trigger in database change checklist`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-18 — session-staleness backup check now consults the real off-site workflow
+
+Harness only — no app source, migration, or live-state change. The SessionStart backup-staleness
+warning was driven solely by the per-checkout `backups/LATEST-OK.json` marker, which only a
+locally-run `/backup-db` stamps — the scheduled backup runs as the "Off-site DB backup" GitHub
+Actions workflow in `masonwells1/CRX_Backups` and never touches that file, so every fresh worktree
+cried "backup died" (2026-08-18: claimed 9 days stale while the workflow had succeeded on schedule
+on 2026-08-16 and again on 2026-08-18).
+
+The check now uses two evidence sources, newest wins: the local marker and the workflow's last
+successful run via `gh run list` — consulted only when the marker alone would alarm, with a 1.5s
+timeout and an owner-only cache in the user's home directory (6h TTL on success, 10min on failure)
+so the hook stays inside its ~2s budget and one answer serves the whole worktree fleet. When `gh` is unreachable
+(offline/unauthenticated) the marker-only warning still fires, explicitly labeled unverified.
+Six new offline-deterministic test cases (seeded cache + bogus `gh` binary) cover the veto, the
+real-alarm, the fallback, both TTL directions, and the never-succeeded answer.
+
+## 2026-08-18 — Hook performance cleanup (Phase 1): matcher gating, dead prompt hooks replaced, eslint/fetch speedups
+
+Harness only — no app source, migration, or live-state change. No guard logic changed; every
+narrowed matcher keeps the guard's own in-script tool-name gate as the safety boundary.
+
+A timing audit of the last 50 session transcripts (all projects) found the SessionStart hook set
+re-running in full on every auto-compact — 1,228 compact firings, p90 ~11s, 14% timeout rate —
+plus `eslint-autofix` re-resolving eslint through `npx` on every edit (p90 ~15.5s) and seven
+`*`-matched PreToolUse guards spawning a node process on every single tool call. Five fixes,
+approved by Mason as Phase 1:
+
+1. **SessionStart matcher gating.** `session-snapshot`, `session-staleness`, and
+   `worktree-awareness` now run on `startup|resume|clear` only; `worktree-cleanup` on `startup`
+   only. This also fixes a correctness bug: re-running `session-snapshot` on compact overwrote
+   the pre-session dirty-file baseline mid-session, degrading `stop-wrap`'s comparison. Like the
+   PreToolUse narrowing in item 5, this gating is **Claude-side only**: `.codex/hooks.json`'s
+   SessionStart group carries no `matcher` key, so the three hooks Codex wires there
+   (`session-snapshot`, `session-staleness`, `worktree-awareness`) are not source-gated there.
+   Counting these, six hooks are wired on different matchers across the two manifests, not three.
+2. **Dead prompt hooks replaced.** The PreCompact money/RLS re-anchor and SessionStart onboarding
+   were `"type": "prompt"` hooks, which fail outside the interactive REPL ("Prompt stop hooks are
+   not yet supported outside REPL") — both silently dead in the desktop harness. New
+   `session-context-reminder.mjs` command hook emits content via SessionStart `additionalContext`,
+   branching on source (`compact` → rule re-anchor; otherwise onboarding). It carries the rules
+   half of the old PreCompact prompt forward — not verbatim: the old "Always include these
+   reminders:" lead-in became a "POST-COMPACT RULE RE-ANCHOR" header, `.update/.delete` gained
+   parentheses and one semicolon became a period,
+   and it adds one rule with no ancestor in the old prompt ("treat files changed
+   before the compact as UNVERIFIED unless the summary says they were run and observed"). The old
+   prompt's other half asked the summarizer to cover "files modified this session; migrations
+   created (and whether src/types/index.ts was updated); current task and next step; last
+   build/test status" — that half was dropped with no replacement. The repo doesn't record why, and
+   it records no test of whether a PreCompact *command* hook could have carried it. Declared in
+   `CLAUDE_ONLY_HOOKS`. The note recorded alongside that declaration read "Codex has no
+   SessionStart event; its contract comes from AGENTS.md." The first clause is false:
+   `.codex/hooks.json` registers three SessionStart hooks
+   (`session-snapshot`, `session-staleness`, `worktree-awareness`), two of which
+   (`session-staleness`, `worktree-awareness`) emit `additionalContext` in the same output shape
+   this hook does — the registration is verified; whether the Codex harness consumes that
+   `additionalContext` is not. The second clause stands as recorded, but nothing establishes it as
+   the operative reason for leaving this hook Claude-only.
+3. **worktree-cleanup fetch TTL.** Its `git fetch origin` now runs at most once per 30 minutes
+   (FETCH_HEAD mtime); a stale `origin/main` only makes the merged-branch classifier more
+   conservative.
+4. **eslint-autofix invoked directly.** Invokes the project's local eslint binary directly instead
+   of through `npx`, removing an npx package re-resolve on every edit. PR #413 timed the hook at
+   1.1–1.2s afterward against the audit's ~15.5s p90 before — but that figure was recorded on a
+   *warm cached run*, and this hook's real path is a guaranteed cache miss (below), so the
+   real-path latency has not been separately measured. `--cache` is still passed but cannot hit
+   here: the hook only ever runs right after the file it checks was just edited, and
+   `--cache-strategy` defaults to `metadata` (size + mtime), so the just-written file never matches
+   its cache entry. The hook has one registration per manifest and nothing else (PostToolUse
+   `Write|Edit`, in `.claude/settings.json` and again in `.codex/hooks.json`), so no other
+   invocation path could hit it either; it costs a small cache read plus a full rewrite on every
+   edit and is left in only because removing it is out of scope for a docs-only pass. A timeout
+   kill now stays silent instead of reporting a fake lint failure. Post-review (CodeRabbit on PR
+   #413): the npx fallback was removed entirely — it interpolated the edited file's path into a
+   shell string (injection surface); with no local eslint the hook now skips silently. The hook
+   creates the cache file's parent directory defensively, though ESLint's flat-cache (4.0.1) does
+   it too in `writeJSON`.
+5. **PreToolUse matcher narrowing (Claude side only).** In `.claude/settings.json`,
+   `migration-apply-guard`, `mcp-tool-guard`, and `live-testdata-guard` moved to the `mcp__.*`
+   matcher; `pr-merge-guard` to `Bash|PowerShell|mcp__.*`; `review-proof-guard`, `hold-latch-guard`,
+   and `unattended-autopilot` stay on `*` because they must see every call. Patterns chosen to work
+   under both anchored and unanchored matcher-regex semantics. `.codex/hooks.json` was not touched
+   by this pass, so three *PreToolUse* guards are wired on different matchers across the two
+   harnesses (item 1 adds
+   three more on SessionStart, for six total): `migration-apply-guard`,
+   `mcp-tool-guard`, and `live-testdata-guard` are narrowed to `mcp__.*` for Claude but still run on
+   `*` for Codex, where only the shared in-script tool-name filter narrows them. (`review-proof-guard`
+   and `hold-latch-guard` are wired in `.codex/hooks.json` too, but they sit on `*` in both manifests
+   by design — no matcher difference.) `pr-merge-guard` and `unattended-autopilot` aren't wired in
+   `.codex/hooks.json` at all — both are declared Claude-only in `scripts/agent-manifest-parity.mjs`,
+   for two different reasons recorded there: Codex has its own merge guard
+   (`production-action-guard.mjs`, covering pushes and PR merges), whereas autopilot is a
+   Claude-session mechanism and Codex has no autopilot flag. (Codex does have its own hands-free
+   mode — `approval_policy="never"` in `scripts/codex-build.mjs` — it just isn't gated by this
+   hook.) Either way, the narrowing question doesn't apply to them there.
+
+Verified: `sync-agent-workflows --write`, `test:agent-workflows` (all pass, parity included), plus
+manual stdin runs of the new/changed hooks (compact/startup/garbage payloads; dry-run cleanup).
+Residual risk stated in
+the PR: the narrowed matchers themselves cannot fire in the
+session that edits them (hook config loads at session start); a safe next-session mutation test is
+documented there.
+
+## 2026-08-17 — Codex fleet inventory preserved; two CI-signal traps recorded
+
+Docs only — no source, migration, or live-state change.
+
+A Codex session left a 22-worktree ownership inventory in a worktree that was about to be
+deleted. The document is preserved as `docs/audits/2026-08-17-codex-to-claude-fleet-takeover-handoff.md`
+and is treated strictly as data: its own recommendation (take over the actor-binding lane in
+`codex/actor-binding-mixed-notation-repair-20260810`) is exactly what Mason declined this session,
+alongside his decision to keep Sol-gated money/RLS/migration work parked until `gpt-5.6-sol`
+credits return. Spark (`gpt-5.3-codex-spark`) does not substitute for that gate.
+
+Landing that one docs commit surfaced two CI-signal traps, now in `docs/reference/gotchas.md`:
+CodeRabbit's check row can read `pass` / "Review completed" while its own PR comment says the
+review failed — so the standing "read CodeRabbit's review" policy cannot be satisfied by looking
+at the check; and the `Vercel` required status can arrive more than an hour after the deployment is
+already `READY`, so a PR sits `BLOCKED` on a build that has in fact succeeded. The second entry was
+first written as a causal failure of creating the branch ref through the GitHub API, and that was
+wrong — the status turned up on its own, on the same commit, with no push event of its own. The
+entry now records the lag and the wrong turn, since a close/reopen and an extra commit were both
+spent chasing a problem that did not exist.
+
+Both traps then resolved themselves in ways worth recording. A `@coderabbitai review` comment
+turned the failed review into a real one — so a CodeRabbit failure is recoverable by asking again,
+not a dead end for the standing pre-merge policy — and it returned six findings against these very
+docs. Five were applied. The substantive one: the entry's own copy-paste example read
+`gh pr view <N>`, which a shell parses as input redirection and never runs; both `bash` blocks now
+define variables, and both were executed verbatim rather than assumed. The others corrected
+overclaiming in prose written earlier the same session — "no review ran" became "the review did not
+complete", and a `READY` Vercel deployment no longer stands in for "the pipeline is fine" when it
+proves only that one required check finished. The one-hour lag now rests on two measurements
+(`711aecfb` ~69 min, `8b1e86f8` ~56 min) and is framed as an escalation threshold rather than a
+timing guarantee. The sixth finding — a wording change inside the preserved Codex handoff document
+— was declined on the PR: that file is a verbatim record, and editing its prose would falsify the
+archive it exists to be.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `0a15eab4 docs(gotchas): resolve CodeRabbit review on PR #411`
+  - `8b1e86f8 docs(gotchas): correct the Vercel-status entry — it is a lag, not a lost status`
+  - `732d516d docs(changelog): log the 2026-08-17 docs-only session`
+  - `84505a65 docs(gotchas): record two CI-signal traps found landing PR #411`
+  - `711aecfb docs(audits): preserve Codex fleet-takeover handoff inventory (2026-08-17)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-17 — fix(tests): strip comments before extracting fixture RPC-name arrays in…
+
+fix(tests): strip comments before extracting fixture RPC-name arrays in rpcFixtureLiveDiff.test.ts, so a quoted word in an explanatory comment can no longer become a phantom entry that fails the live-pg_proc ghost check (PR #410)
+
+The follow-up commit closes the other half of the same bug, raised by CodeRabbit as Major: the lazy
+`[\s\S]*?\];` capture ran over the raw source, so a `];` or `};` inside a comment ended the
+captured literal early and every real entry after it was silently dropped — comment stripping only
+ever saw the already-truncated body. Injecting such a comment near the top of the real
+`MUTATING_RPCS_WITH_IDEMPOTENCY` made the old regex read 3 entries instead of 126, which below a
+bucket's floor fails confusingly and above it quietly narrows the fixture-vs-live drift check. The
+regex capture is now a balanced-bracket scanner that skips string literals and comments as it
+walks, anchors the const name on a word boundary, and throws rather than guessing on an
+unterminated or mismatched literal. Entry counts on the real fixtures are unchanged (126 / 0 / 82 /
+32 / 2), so no `toBeGreaterThanOrEqual` floor had been propped up by phantom matches.
+
+Pre-existing and deliberately not changed: deleting a real entry from `HELPER_SCOPED` turns nothing
+red — 82 entries against a floor of 70 tolerate up to 12 removals by design (shrink-only snapshot).
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `fc385ad0 fix(tests): stop comments in fixture arrays creating phantom RPC entries`
+  - `172e09e1 fix(tests): find the fixture literal boundary before stripping comments`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-17 — carry the allocated line cents through the whole invoice lifecycle
+
+Closed CRX-MONEY-LIFECYCLE-001, a High the adversarial reviewer raised against the tier-split work. Once a booking is split across price tiers, an order line's stored total is a deliberate allocation that no longer equals unit price × quantity. Four downstream sites re-derived the money by multiplying again, so each fractional delivery rounded on its own and the customer was billed a cent more than the order said. The fix adds two read-only helpers that carry a cumulative integer-cent allocation and telescope on cents *actually billed* — path-independent through a void or reversal, which recomputing from units is not — and rewires delivery invoicing, the invoice backfill path, and Cancel Remaining onto them. A fifth site inside the below-cost trigger is deliberately left alone: that path is an explicit admin repricing decision, not a lifecycle draw.
+
+The reviewer asked for execution tests, not algebra. There are now six, in the repo's own smoke idiom, driving the real production function bodies (md5-pinned to live, including the one live copy stored with CRLF line endings) inside a throwaway PostgreSQL 17.10 container: repeated fractional draws, one line delivered in two parts, a three-way split, both invoicing paths, partial cancellation, and deliver → void → deliver. Observed **7 failed assertions across all six scenarios before the fix and 12 of 12 passing after**. The prover has a built-in negative control — if the chain passes against the pre-fix bodies it aborts rather than certify, so it cannot rubber-stamp a test that could never fail. Reproduce with `node scripts/smoke/prove-allocated-line-cents.mjs`.
+
+Fixed a second consequence of the same tier split, this one in the app rather than the database. Because a split booking puts one product on several order lines, every inventory-shortage warning in the app was comparing each line on its own against the product's whole free stock, so two half-sized lines both looked covered while together they exceeded what was on hand. The warning went quiet on exactly the orders the split creates. All five affected screens are fixed: New Delivery, Delivery Detail, the bulk pick list on Orders, the single-order pick list on Order Detail, and the shortage badge on the Deliveries list. The per-product summing now lives in one shared function, `src/lib/inventoryShortage.ts`, and every screen calls it, so they cannot drift apart again. Each pick list and the badge are proven by driving the real page — render it, click the button, read the shortage flags the page hands the PDF writer, or count the warning triangles the operator sees — rather than by a mirrored copy of the logic that could pass while the page stayed broken. Mutation-checked: reverting the summing turns all three shortage cases red while both "genuinely covered" controls stay green. One deliberate non-change: the Deliveries badge compares against warehouse stock without subtracting prebooked units, a separate pre-existing choice left alone here.
+
+Also corrected the two live-state manual docs, which were stale by nine applied migrations (they claimed a high-water that concurrent sessions had overtaken). Both stamps now say plainly that this pass re-read the ledger only and that the schema registry is still behind. Migration remains a **LOCAL CANDIDATE — NOT APPLIED**; live apply not approved.
+
+- **Migrations touched:**
+  - `supabase/migrations/20260817120000_carry_allocated_line_cents_through_lifecycle.sql`
+
+## 2026-08-16 — draw-down tier split: closed two adversarial money findings
+
+draw-down tier split: closed two adversarial money findings — bill each line against the cents already standing on surviving lines rather than a recomputed figure (makes the total independent of which draw was reversed), and compute line cost with the canonical profit trigger own per-line expression so header, lines, and commission basis agree. Drove the real draw_down_quote end to end for the first time on an extended fixture, which caught an unprojected CTE column that every model-level proof had missed. Both migrations remain local candidates; live apply not approved.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `b82e1338 fix(draw-down): bill on cents already standing, and keep line cost per-line`
+  - `f16d205e fix(draw-down): bill each tier off its running total, not per draw`
+  - `3c41dfac fix(draw-down): split order lines by booked price tier, with a proven cutover barrier`
+  - `3d194aab Refuse a draw when a price tier is billed past what it holds`
+  - `24a3bf67 Refuse a tier draw when a billed line names no tier`
+  - `22c10c7f Guard the mixed-tier cutover on a stable predicate, and serialize it`
+  - `c54946f0 Prove the quantity constraint by definition, not by substring`
+  - `7c205ee6 Merge remote-tracking branch 'origin/main' into claude/draw-down-price-tier-lines`
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816110000_draw_down_cutover_barrier.sql`
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+## 2026-08-16 — draw-down tier split: eighth adversarial pass closed
+
+draw-down tier split: eighth adversarial pass closed. Added DRAW_TIER_OVERCONSUMED, a second runtime refusal that catches a tier billed for more units than it now holds. This covers two confirmed HIGHs: a legacy weighted average that coincidentally equals a real tier key (which slipped past the seventh pass's unmatched-line guard), and a supported quote revision that reattributes already-drawn units between tiers (save_quote's drawn-product guard is aggregate-only and preserves no per-tier attribution). The per-tier GREATEST clamp used to discard the overhang silently; it is now carried out of the tier query and refused. Postflight asserts both new guard identifiers, mutation-checked. Also corrected a documentation defect: five earlier ledger claims described the throwaway proof server as PostgreSQL 17 when it was 16.14; the two version-sensitive claims were re-proven on a real 17.10 throwaway and the CHECK normalisation is byte-identical on both. Migration remains a LOCAL CANDIDATE, not applied.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `24a3bf67 Refuse a tier draw when a billed line names no tier`
+  - `22c10c7f Guard the mixed-tier cutover on a stable predicate, and serialize it`
+  - `c54946f0 Prove the quantity constraint by definition, not by substring`
+  - `7c205ee6 Merge remote-tracking branch 'origin/main' into claude/draw-down-price-tier-lines`
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+## 2026-08-16 — Draw-down tier split, seventh adversarial pass: refuse a draw when a…
+
+Draw-down tier split, seventh adversarial pass: refuse a draw when a mixed-tier booking carries a billed line matching no tier (an edited price/cost snapshot could otherwise re-sell its own units), extend the apply-time scan to soft-deleted bookings, and correct the cutover-lock comment, which claimed a guarantee the lock does not provide. Migration remains a LOCAL CANDIDATE; nothing applied to the live database.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `22c10c7f Guard the mixed-tier cutover on a stable predicate, and serialize it`
+  - `c54946f0 Prove the quantity constraint by definition, not by substring`
+  - `7c205ee6 Merge remote-tracking branch 'origin/main' into claude/draw-down-price-tier-lines`
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+## 2026-08-16 — Draw-down tier split: closed a sixth-pass money finding
+
+Draw-down tier split: closed a sixth-pass money finding — the pre-migration mixed-tier guard only scanned drawable bookings, but a fully-drawn 'accepted' booking reopens via every void/cancel path, so it could pass the guard and misbill its remainder later. Status filter removed; cutover now takes SHARE ROW EXCLUSIVE on the draw ledger so a concurrent legacy draw cannot slip past the scan. Both proven on throwaway PostgreSQL 17. Still a LOCAL CANDIDATE — not applied.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `c54946f0 Prove the quantity constraint by definition, not by substring`
+  - `7c205ee6 Merge remote-tracking branch 'origin/main' into claude/draw-down-price-tier-lines`
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+## 2026-08-16 — Draw-down tier split: closed two adversarial-review money findings on…
+
+Draw-down tier split: closed two adversarial-review money findings on the unapplied candidate migration. CRX-MONEY-001 guard widened past its price-match test after review showed a weighted average can coincidentally equal a real tier; it now refuses to apply over any still-drawable mixed-tier booking already drawn under the averaging code, proven across seven scenarios. CRX-MONEY-002 added: a negative or non-finite booked quantity let the split bill a booking worth nothing, closed by a fail-closed refusal in the draw body plus a validated CHECK on quote_items.total_units_needed, mutation-checked against the pre-fix body. Migration remains a LOCAL CANDIDATE; no live apply, no merge.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+## 2026-08-16 — Draw-down tier split: fixed two adversarial-review findings on PR #404
+
+Draw-down tier split: fixed two adversarial-review findings on PR #404. A tier appearing in two quote sections could report a document position no line occupies, billing the wrong price tier on a partial draw; both halves of the position now come from one row under a shared ordering. The quote lock also selected on id alone, so a soft-deleted booking still read as sent and stayed drawable by anyone holding its id -- a pre-existing hole carried from 20260702172000, now closed with deleted_at IS NULL. Cross-representative access deliberately unchanged per owner decision. Added a focused idempotency-forwarding test and a soft-delete guard test, both mutation-checked. Proven in both directions on throwaway PostgreSQL 17 databases. Migration remains a LOCAL CANDIDATE; not applied, no apply approved.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+## 2026-08-16 — Draw-down now splits a booking into one order line per booked price…
+
+Draw-down now splits a booking into one order line per booked price tier instead of averaging them, fixing a live defect where any booking holding one product at two prices could not be converted to an order at all. The stored weighted-average unit price landed off a whole cent and the below-cost guard refused the whole transaction; splitting the lines removes the average, so there is nothing to round and every unit bills at a price the customer actually booked. Rounding the average was rejected as a repair because a unit price is multiplied by quantity, so rounding it overcharges in proportion to the order size. The migration is a LOCAL CANDIDATE and is NOT applied - the live apply is held for Mason's separate approval. Also records two owner decisions from 2026-08-16: the tier-split choice, and that any sales rep may draw down any rep's booking.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+
+## 2026-08-14 — CRX-SEC-1: quote versions become RPC-owned (folded into the recovery PR)
+
+`public.quote_versions` was client-writable. Its RLS INSERT policy (`qversions_insert`) checked
+only WHO owned the quote — never what the row contained — and the browser roles still held the
+raw table write grants, so a sales rep could PostgREST-INSERT a version row of their own
+construction onto their own quote, including a forged `sent_by`.
+
+That turned into a money defect once `20260812115236` made `snapshot_data` an authoritative cost
+source: the restore path arms the cost-snapshot passthrough and writes the snapshot's
+`current_cost` straight into the immutable `quote_items.cost_at_quote_cents`, whose only check is
+`<= 0`. `convert_quote_to_order` then copies that into the order line, and canonical profit and
+commission derive from it. The below-cost approval trigger from `20260812115237` does not catch
+this — it compares the SALE PRICE against the LIVE product cost, and understating the historical
+cost basis raises apparent margin, so the trigger never fires. Net effect: a sales rep could
+understate COGS on their own quote and inflate margin reporting and their own commission with no
+admin approval in the path. Live since 2026-08-12; the read-only exploitation check against live
+came back CLEAN, so nothing needs repairing — only closing.
+
+That clean result is now proven exactly rather than approximately. The first revision of the
+migration's pre-apply check flagged a snapshot line only when its stored cost sat below HALF the
+product's catalog cost, and the independent review of 2026-08-14 (finding CRX-QV-001, High) was
+right to refuse it: a basis forged at 60% of a $100 cost clears a 50% band, and a percentage
+threshold cannot prove provenance at all. The check is now exact equality against
+`products.current_cost`, which the only legitimate writer copies verbatim, so any line that does
+not match to the last digit aborts the apply for a human read. Re-measured read-only against live
+on 2026-08-14: three version rows, five snapshot lines, every stored basis exactly equal to its
+product's catalog cost. The exact test is deliberately fail-closed — a legitimate catalog price
+move between measurement and apply will also abort it, and the answer there is to re-measure and
+read the differing line, not to widen the test.
+
+`20260813080000_lock_quote_versions_writes_to_rpc.sql` closes it with the same RPC-owned shape
+`20260715203911` used for returns: drop the ownership-only INSERT policy, revoke the six
+write-capable table grants from the browser roles (MAINTAIN deliberately kept and explained at the
+REVOKE), leave `qversions_select` and the authenticated SELECT grant untouched so version history
+keeps rendering, and re-state the callable boundary on `create_quote_version` and
+`restore_quote_version`. The legitimate writer is a SECURITY DEFINER owned by `postgres` with no
+authenticated EXECUTE, so it bypasses RLS and holds its own grants — dropping the policy cannot
+reach it. Ships with a write-boundary smoke test, RLS contract assertions, and a DB-invariant
+predicate. **STATUS: NOT APPLIED** — the file lands on `main` as source; the live apply is a
+separate approval.
+
+This PR also folds in what was PR #394 (split 3/3 of #389). The recovery split and this fix land
+together because the adversarial review correctly refused to clear migrations that create a
+client-writable authoritative cost path without the fix present in the same diff.
+
+## 2026-08-14 — Codex Supabase guard: exact read-only allowlist (Sol HIGH finding)
+
+Sol's adversarial review of the write-scope PR found that the Codex production-action guard
+blocked only three Supabase tool suffixes (apply_migration, deploy_edge_function, delete_branch),
+so branch-lifecycle mutations like merge_branch and reset_branch would have passed once the
+connector went write-enabled. The guard now governs every `supabase__`-prefixed tool with an
+exact read-only allowlist that fails closed on unrecognized tools; `execute_sql` remains the one
+pass-through to the existing read-only SQL content gate. A defense-in-depth suffix blocklist
+(mirroring the Claude-side autopilot deny set) covers connectors whose MCP prefix is a UUID rather
+than the literal server name. Regression tests assert every lifecycle mutation is blocked under
+both prefixes, an unknown future tool is blocked, and each read-only tool still passes. The
+protected-producer blob pins were re-pinned to the hardened guard.
+
+CodeRabbit follow-up on the same PR: the app connector's UUID MCP prefix now hits the same
+fail-closed allowlist (unknown tools under that prefix previously fell through to the suffix
+blocklist only), with regression tests for unknown, read-only, and `execute_sql` tools under both
+prefixes. The two agent-guidance checkers also parse `.codex/config.toml` line-by-line and match
+`read_only` at query-parameter boundaries, so commented headings, `backup_url` keys, later-table
+urls, and `read_only=false0`-style decoys can no longer satisfy the write-access assertion
+(mutation-tested against seven decoy configs).
+
+Codex-review P1 follow-up on the same PR: the built-in `codex_apps/supabase` channel — the one
+actually serving Codex's Supabase traffic per `docs/manual/KNOWN_ISSUES.md` — normalizes tool
+names with a single underscore (`mcp__codex_apps__supabase_<leaf>`), which the allowlist regex
+did not match, so an unknown write tool on that channel would have bypassed the fail-closed gate
+(only the suffix blocklist applied). The regex now accepts both naming forms (`_{1,2}`, the same
+dual-form handling the guard already uses for GitHub tools), with regression tests for unknown,
+mutating, read-only, and `execute_sql` tools under the `codex_apps` name, and the producer blob
+pins re-pinned.
+
+Second Codex-review P1 on the same PR: PostgreSQL's `SELECT ... INTO new_table` creates and
+populates a table while beginning with `SELECT`, so it passed the read-only SQL gate's
+leading-keyword and deny-keyword checks. The deny list now includes bare `INTO` — in a statement
+that begins with `SELECT`, that word is only ever the table-creating form (string literals are
+blanked before the check, and `INTO` is a reserved word, so read-only queries cannot contain it).
+Regression tests cover plain and `TEMP` `SELECT INTO` denial plus an `'into'`-in-a-string query
+that stays readable.
+
+## 2026-08-14 — Write-access assertion scoped to the Supabase connector url
+
+CodeRabbit follow-up on the Codex write-scope PR: the two agent-guidance checkers asserted the
+connector's write-enabled state with a whole-file substring match on `read_only=false`, which a
+stale comment anywhere in `.codex/config.toml` could satisfy while the active connector stayed
+read-only. Both checkers now extract the `[mcp_servers.supabase]` `url` value and require it to
+contain `read_only=false` and not `read_only=true`. Mutation-tested: a reverted flag fails the
+check even with a decoy comment present.
 
 ## 2026-08-12 — Six migrations were running in production with no file in the repository
 
@@ -31,15 +2749,19 @@ exactly, at identical length, for `_guard_below_cost_approval_immutable`,
 `_guard_quote_item_cost_snapshot`. `bash scripts/validate-sql-migrations.sh --changed-only` reports
 0 violations across the six.
 
-**One deliberate exception to that fidelity, and it is the only one.** `20260812115238` is published
-with its approved preimage removed: the applied payload embedded a 35-row map of live order-line
-identifiers with their prices and profit, and this repository is public. Nothing else in that file
-changed, its SHA-256 `APPROVED_SET_DIGEST` still binds the exact preimage, and no reachable code path
-is affected — an empty database returns early before the map is read, and an already-repaired
-database (which is every database that now exists, including production) raises
-`APPROVED_SET_DRIFTED` before the map is read. The only branch that reads the map now fails closed
-with `APPROVED_SET_WITHHELD` instead of running on a partial map. The file defines no functions, so
-the md5 fidelity proof above is unaffected.
+**All six are published byte-identical, including the one that carries live figures.**
+`20260812115238` embedded a 35-row map of the exact order lines it repaired, with their prices and
+profit. That map was withheld when the file first landed, because this repository is public. On
+2026-08-14 Mason directed that it be published in full, on his stated basis that the figures in this
+system are not real or operational, so the file now matches the applied payload exactly. Fidelity is
+measured, not asserted: this one was recovered from the live ledger rather than a transcript —
+`statements[1]` of ledger version `20260812154757` in `supabase_migrations.schema_migrations`, 18,770
+bytes, md5 `f31409684f7f01eee19042468f1e6998`, LF endings — and the committed file hashes identically.
+The two edits the earlier redaction required are gone with it: the publication note in the header, and
+the `APPROVED_SET_WITHHELD` guard that existed only to fail closed when the map had been emptied. The
+file defines no functions, so the md5 fidelity proof above is unaffected. This decision covers this
+map and nothing else; the standing rule against publishing live financial data is unchanged
+(`docs/manual/DECISION_LOG.md`, 2026-08-14).
 
 **What the six do**, in apply order (full detail in `docs/reference/migration-history.md`, rows
 880-885):
@@ -62,8 +2784,8 @@ the md5 fidelity proof above is unaffected.
   confirmation was never an authorization boundary; a direct API caller skipped it.
 - `20260812115238` — the one live-data correction in the group, approved by Mason in chat on
   2026-08-12: rounds the historical order lines that still carried fractions of a cent, recomputes
-  the affected order headers, and installs the whole-cent rule as a validated constraint.
-  Per-line and per-order figures are deliberately withheld from this public repository.
+  the affected order headers, and installs the whole-cent rule as a validated constraint. Published
+  in full, including the 35-row map of the lines it repaired, per Mason's 2026-08-14 decision.
 
 Also in this change: the six files are pinned `text eol=lf` in `.gitattributes` — several carry md5
 pins computed against the live catalog, and a Windows checkout under `core.autocrlf=true` would
@@ -114,6 +2836,140 @@ Both reviewers also noted that the already-applied files assert privileges again
 without first checking `pg_roles`, and that the non-finite money guard in `20260812011000` covers only
 the constrained fields. Both are correct and both are **forward-only**: an applied migration is never
 edited, so these belong in a future migration.
+
+## 2026-08-12 — Wave A round 5: four migrations self-aborted, all for the same reason
+
+The 2026-08-12 Wave A apply attempt refused four of the six Wave A migrations. That rejected
+attempt wrote nothing to the live database, and this change applies none of those migrations either
+— these are file fixes only. (This statement is about the Wave A attempt alone; it does not cover
+the six unrelated migrations applied live on 2026-08-12 from another session, described at the end
+of this entry.)
+
+All four failures were one defect wearing four costumes: **an assertion broader than its own
+remedy**. A migration that asserts a state it never enforces is a migration that aborts itself on
+first apply. Each file is now scoped to what it actually does.
+
+`20260813010000` — the rewrite is retargeted off `public.create_direct_order` and onto
+`_create_direct_order_below_cost_impl_20260810`. Rewriting the wrapper would have silently deleted
+the below-cost approval gate a concurrent session installed there. Both the pre- and postcondition
+now assert that the wrapper still declares below-cost operation context, so if that gate is ever
+removed this retarget stops rather than proceeding into a shape it no longer fits. The file also now
+emits the `REVOKE` its postcondition asserts: `CREATE OR REPLACE` preserves the existing ACL, so
+asserting an owner-only grant state without revoking anything was an assertion with nothing behind
+it. Finally the file is deliberately single-shot: only the pinned pre-apply baseline may proceed. A
+draft that also accepted "any body carrying this migration's marker variables" as a replay was
+withdrawn after adversarial review — a later security or money fix to the same function would keep
+those markers too, so the structural test would have accepted the newer body and this file would
+have overwritten it with its own older text, silently, in a `SECURITY DEFINER` money writer. Pinning
+the post-apply hash instead is not honestly available: obtaining it requires applying. A re-run now
+aborts and names what to diff, which costs one human comparison; the alternative cost a reverted
+money fix nobody would have seen.
+
+`20260813020000` — the `create_order_from_blend_ticket` precondition is removed rather than
+corrected. It was vacuous in both directions: the concurrent fix to that function no longer updates
+order headers at all, and a `prosrc LIKE` was only ever evidence about prose. The remedy here is a
+table-attached `BEFORE INSERT OR UPDATE` trigger, which covers every writer regardless of its name,
+and what proves it works is the behavioural probe already in the postcondition. Two stale claims in
+the file's own prose are corrected in the same pass: the live open writer is `_update_order_items_impl`,
+and `BEFORE INSERT OR UPDATE OF (columns)` fires on *every* insert — the column list restricts the
+update event only, never the insert.
+
+`20260813040000` — same assertion-without-remedy defect, same fix: emit `REVOKE ALL` on
+`_save_invoice_scoped_impl`.
+
+Two test registries move with the retarget. `_create_direct_order_below_cost_impl_20260810` is
+registered in `src/lib/rpcIdempotencyScope.test.ts` as sharing the public `create_direct_order`
+operation literal — the guard flags a mismatch between function name and operation literal, and here
+the mismatch is the correct state. Renaming the literal to match the function is the dangerous
+change: it would strand every idempotency key written under the old literal, so a client retry would
+re-execute and duplicate an order. It is also registered in `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY`
+in `src/lib/rpcContracts.test.ts`, which becomes inert once the migration applies.
+
+The drift review of this round returned no blockers. Its findings are owner-facing rather than code
+fixes and are recorded in `docs/manual/KNOWN_ISSUES.md`. The first is material and was widened during
+verification: the review reported one applied-but-unpushed migration and named a carrier branch that
+does not exist. Checking the live ledger against every remote branch found **six** migrations applied
+on 2026-08-12 whose files are on no branch and in no worktree. `main` does not currently describe
+production. That is somebody else's session to close, not this wave's, but no one should be planning
+against `main` as if it were accurate until it is.
+
+*(Update, 2026-08-13: the six file-less migrations flagged at the end of this entry were recovered and landed on `main` by PR #392 — see the entry above.)*
+
+## 2026-08-12 — Restore a governed maintenance path for the live SQL safety boundary
+
+The weekly adversarial review confirmed two active fail-open paths in the live SQL classifier, but
+the repository's direct-write guard also made its documented "reviewed maintenance workflow"
+impossible: the former governed producer was removed and no replacement existed. This change adds a
+single-purpose, one-use producer for the exact reviewed classifier repair. It accepts no arbitrary
+path or patch, verifies the current input Git blob, verifies three checked-in source snippets by
+SHA-256, builds one pinned output blob, refuses dirty/detached/protected branches, and requires
+Mason's dated approval token before writing. The producer itself does not activate the repair; it
+must first pass an exact-head Sol review and the normal protected pull-request pipeline. The follow-up
+change will run the producer on a feature branch and remove the temporary producer after use; the
+generated-module regression harness is already checked in and exercises 87 classifier cases. PR
+review also moved the tracked-and-untracked dirty-worktree check ahead of every temporary or target
+write, so verification mode follows the same fail-closed cleanliness contract as write mode. Input
+blob verification normalizes Windows CRLF bytes before hashing, matching the producer's normalized
+assembly path and the reviewed Git blob on every checkout.
+
+The final PR review also closed opaque script-file, dynamic process/script-block launch, inline-interpreter, alternate-runtime preload, and decoded-stdin bootstrap paths before
+merge, while preserving quoted search text as data. The shared preload rule now treats `NODE_OPTIONS=` as dangerous
+only in an executable assignment position, and producer retirement verifies the worktree removal and
+states plainly that the deletion still must be committed.
+
+The final governance review found a bootstrap flaw: the one-use producer could write the protected
+classifier but was not itself covered by the outer direct-edit or exact-review guards. Its new
+hash-pinned `--protect-producer` mode first verifies the exact committed inputs, then installs only
+the reviewed outer protections. After that one-time bootstrap, any later producer edit is blocked by
+the direct-write guard and is always classified as risky for exact-head review; executing the clean
+committed producer also requires a fresh Sol-high proof bound to the current HEAD and base.
+
+Repeated exact-head adversarial passes have progressively hardened the candidate before activation. Recent
+passes found that ordinary shell quoting and dynamically reconstructed preload arguments behind execution
+wrappers could bypass the producer invocation matcher. The generated
+guard now recognizes quoted, absolute, alternate-separator, wrapper-prefixed, and escaped spellings, and
+fails closed whenever a Node command uses dynamic shell syntax anywhere in its complete command text, while
+the producer itself independently requires its exact committed blob plus a fresh HEAD-and-base-bound
+Sol-high proof before any write mode can run. Two hundred sixty-four counted producer assertions pin those boundaries,
+including option-prefixed, value-taking-option, redirection, opaque substitution, escaped-newline, and
+standalone Node tokens behind shell builtins, external wrappers, grouping, `env -S`, and quoted `cmd` strings
+while preserving quoted-data and environment-assignment negatives. The
+generated guard also normalizes `Function#toString()` line endings before hashing, so Windows worktrees and
+the isolated exact-review snapshot reproduce the same protected output blob.
+The latest review found that a decoded command stream could be piped to a generic argument executor before
+the producer's own argument and proof checks ran. The shared matcher now fails closed for pipeline-fed
+`xargs` and `parallel` invocations, and exercises that boundary in the outer shell hook, the focused
+producer harness, and the generated production guard. The current focused proof covers 87 classifier and
+308 producer assertions, with 411 shell-safety assertions.
+next pass found PostgreSQL's optional `ONLY` keyword could hide persistent targets from CTE-wrapped
+`UPDATE`, `DELETE`, and `MERGE`. Target enumeration now accepts `ONLY`, and any `WITH` statement that still
+contains an unaccounted DML verb fails closed. Three exact regressions pin those forms.
+After the corrected producer received a clean exact-head review, its pinned bootstrap installed the outer
+protections. The producer now recognizes the complete reviewed pre-install or post-install blob pair, so the
+focused harness remains repeatable after protection without accepting a mixed or stale state. The owning
+production-guard suite executes that focused harness and proves an invocation without exact-head proof is denied;
+the risky-path suite also pins the producer's exact-review classification. Rollback attempts every protected-file
+restore and reports any incomplete restoration without hiding the original failure.
+The current outer shell-safety hook now independently permits only the four exact repository-relative
+producer commands and denies chaining, wrappers, alternate spellings, unknown arguments, and npm/MCP
+indirection. This closes the pre-bootstrap check-to-execution gap before the generated production-action
+guard hardening is installed; live hook regressions pin the original chained rewrite reproduction.
+Earlier passes closed a Unicode identifier boundary that could conceal destructive SQL and removed the
+unsafe assumption that any `pg_temp`-qualified DML is harmless: PostgreSQL temporary views can be
+updatable proxies for persistent tables. The candidate now permits temporary DML only for a base temp
+table created earlier in the same batch, clears that exemption after any intervening schema operation,
+and rejects server-side `COPY` categorically because rollback cannot undo process or filesystem effects.
+The former blanket rollback exemption is now an object-specific allowlist of transaction-safe smoke
+commands. Temporary DML now earns an exemption only after a direct CTAS scratch-table declaration,
+preventing cloned production defaults from advancing persistent financial sequences. The function
+scanner also distinguishes a table declaration from a function call without hiding column expressions.
+Unicode-escaped SQL identifiers now fail closed because the database decodes them after the guard's
+raw-text classification. An `IF NOT EXISTS` CTAS no longer earns a temp-write exemption because it can
+be a no-op behind a same-named updatable view. `EXPLAIN` now fails closed because its `ANALYZE` form
+executes the wrapped command. The eighteenth pass closed PostgreSQL's optional-`INTO` `MERGE` grammar,
+including the exact `WITH ... MERGE customers ... WHEN MATCHED THEN DELETE` payload. The 87-assertion generated-module harness pins the exact
+Unicode identifier, temp-view, standalone-target, table-to-view replacement, server-program,
+server-file, cloned-default, encoded-function, view-collision, and unrecognized-command cases.
 
 ## 2026-08-12 — Wave A re-stamped to 20260813: a concurrent apply moved the high-water under us
 
@@ -268,6 +3124,97 @@ aborted the migration on every apply. It now seeds the rows it needs inside its 
 rolled-back subtransaction, so it exercises the reconciliation for real on any database state rather
 than skipping, and proves it left nothing behind by whole-row fingerprint, row count, and explicit
 absence of the synthetic ids.
+
+## 2026-08-12 — Live SQL maintenance producer: first Sol findings closed
+
+The first exact-head Sol pass found two candidate defects before push: a `DO` block could execute
+transaction control before its abort marker, and safe target-bound fixtures were re-blocked by the
+final default-deny loop. The producer now rejects `COMMIT` or `ROLLBACK` inside the special `DO`
+smoke form, recognizes already-vetted DML in its final pass, and executes 21 assertions directly
+against the pinned generated module, including both Sol reproductions.
+
+The second exact-head Sol pass found four more bypasses before push: conditional or caught abort
+markers, literal-vs-literal E2E predicates, custom mutators invoked through `VALUES`, and CTE-wrapped
+`SELECT INTO`. Rollback proof now requires the marker to be the final executable statement in the
+outer `DO` block and rejects transaction control or earlier exits; E2E writes require a real column
+predicate without `OR` or joined-table broadening; custom calls are scanned per `SELECT`, `VALUES`,
+or `WITH` statement; and persistent `SELECT INTO` is detected behind CTEs. The generated candidate
+suite now covers 28 allow/deny cases including every Sol reproduction from both passes.
+
+The third exact-head pass proved that trying to preserve a regex-based persistent `[E2E]` exemption
+was itself unsafe: negation could invert a seemingly positive predicate, a marker in a non-identity
+insert column could bless a real entity, and a safe first CTE write could hide a later mass delete.
+The raw SQL connector now has the simpler enforceable boundary: production reads, explicit
+`pg_temp` scratch writes, and structurally proven rollback smoke only. Persistent E2E fixtures must
+use the governed app/RPC path. Every DML operation in a statement is enumerated, so a safe first CTE
+cannot hide a second mutation. The generated suite now covers 31 cases including all third-pass
+reproductions and the deliberate denial of persistent E2E raw writes.
+
+The fourth exact-head pass found that valid PostgreSQL `E'…'` escape strings could desynchronize the
+new scanner and hide any following mutation. All single-quote scans now recognize backslash escapes
+only for an actual `E`-prefixed literal, and the generated suite exercises the exact escape-string
+prefix before `DROP`, `TRUNCATE`, `GRANT`, `INSERT`, `UPDATE`, and `DELETE`. It now covers 37 direct
+candidate cases.
+
+The fifth exact-head pass found nested mutating RPCs could still execute inside otherwise allowed
+`EXPLAIN ANALYZE`, `CREATE TEMP … AS`, and `pg_temp` DML. The custom-function scanner is no longer
+activated by a statement-prefix allowlist; it inspects every executable statement before any safe
+exception is considered. All three exact payloads are regressions, bringing the generated candidate
+suite to 40 cases.
+
+The sixth exact-head pass found that a structurally valid aborting `DO` block still was not rollback
+proof: PostgreSQL sequence operations such as `nextval` and `setval` survive both a raised exception
+and an outer transaction rollback. Raw `DO` blocks now fail closed categorically and must use the
+reviewed migration smoke harness instead. The obsolete abort-marker parser was removed, and four
+sequence reproductions bring the pinned generated-module suite to 43 cases.
+
+The seventh exact-head pass found a platform-independent line-ending bypass: both comment scanners
+stopped `--` comments only at `\n`, while PostgreSQL also ends them at a lone `\r`. An attacker could
+therefore hide a following mutation, destructive DDL, grant, or mutating RPC from the candidate.
+Both scanners now stop at the earliest `\r` or `\n`; five exact payloads bring the pinned suite to
+48 cases.
+
+The eighth exact-head pass found a split-brain lexer: the new escape-aware statement scanner still
+delegated dollar-body removal to the legacy scanner, whose ordinary-string handling was not
+escape-aware. An `E'…'` string could therefore manufacture a fake `$tag$…$tag$` span around a CTE
+`DELETE`. The classifier no longer uses that legacy scanner path; statement splitting, dollar-body
+blanking, comments, and DML discovery all use the same escape-aware rules. The exact payload is pinned,
+bringing the generated-module suite to 49 cases. Current main was merged at the same time so this
+branch preserves PR #387's already-reviewed `20260813…` Wave A names rather than reversing them.
+
+The ninth exact-head pass found two ways to forge rollback proof with transaction boundaries. `END`
+is PostgreSQL's alias for `COMMIT`, and an intermediate `ROLLBACK` can terminate the protected
+transaction before later SQL; in both cases a decoy `BEGIN; ROLLBACK` at the end still satisfied the
+old first/last shape. Rollback smoke now requires exactly one outer transaction and rejects every
+intermediate `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, or
+`PREPARE TRANSACTION`. Both exact RLS-disabling payloads are pinned, bringing the suite to 51 cases.
+
+The tenth exact-head pass found two lexer mismatches with PostgreSQL. The trivia skipper still ended
+line comments only at `\n` even though the statement and keyword scanners already honored a lone
+`\r`, and the dollar-tag recognizer treated `$tag$` embedded in an unquoted identifier as the start
+of a dollar-quoted body. Either mismatch could hide destructive SQL from later classifier passes.
+All lexer paths now share the carriage-return comment boundary, and a dollar tag is recognized only
+at a valid token boundary with PostgreSQL's empty-or-identifier tag grammar. Four exact destructive
+payloads are pinned, bringing the generated-module suite to 55 cases; the producer's helper SHA-256
+and generated Git blob were re-bound to the corrected source.
+
+The eleventh exact-head pass found that a rollback-wrapped temporary function with a trusted `get_`
+name could hide `setval()` or `nextval()` inside its dollar-quoted body, execute the function, and be
+classified as allowed. Rolling back removes the temporary function but does not undo PostgreSQL
+sequence changes, so the smoke boundary was still fail-open. Raw function and procedure definitions
+now fail closed categorically, matching the existing raw-`DO` rule and requiring the reviewed
+migration smoke harness instead. The exact `pg_temp.get_pwn()` sequence payload is pinned, bringing
+the generated-module suite to 56 cases; the classifier SHA-256 and generated Git blob were re-bound.
+
+## 2026-08-12 — Return retries are actor/payload-bound and credit reversal restores overdue immediately (applied live)
+
+Section 08 of the refreshed Returns/Credit Memos gauntlet found six return RPCs whose receipts were keyed only by operation and key text, an Apply Credit dialog that discarded the only safe retry key when reopened, a shared reversal helper that reopened every fully credited invoice as `posted`, and a stale Returns schema row. Migration `20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql` moves the verified current return and reversal bodies behind postgres-only implementations and adds thin public guards: every return key is required and bound to the authenticated actor plus the exact return id or exact create JSON payload; cancel also binds its exact reason. Exact retries replay once, while a changed actor, return, reason, header, or ordered line payload raises and performs no second mutation. The existing source-derived credit math, locks, immutable ledger, generated balances, period gates, RLS, grants, search paths, and statement history remain in the renamed bodies.
+
+The Returns page now records and locks an unresolved create header, ordered line payload, and key before sending; after an uncertain response, close/reopen restores that exact request even if fresh server data changed. A pre-migration unbound receipt is reconciled from the fail-closed mismatch detail instead of issuing another create or trapping the form. Lifecycle keys likewise remain scoped per return. Apply Credit records the unresolved memo, target invoice, parsed integer-cent amount, and key before sending; after an uncertain response it restores and locks that exact intent across close/reopen even when a fresh server read shows a changed or exhausted memo balance. These keys and locks retire only after a confirmed replay result. Escape, backdrop, X, and Cancel are also blocked while Apply Credit is pending. The shared reversal boundary derives an open invoice status from its due date (`overdue` when past due, otherwise `posted`) and scopes the established transition override to that status-only re-derivation so a corrected-forward due date can safely restore `overdue` to `posted` without widening the global transition matrix.
+
+The final exact-head review caught that nonblank runtime codes such as `ECONNRESET` and `ETIMEDOUT` were being mistaken for definitive database refusals. Coded transport failures and unusable-receipt errors now retain the unresolved key; only recognized PostgreSQL SQLSTATE or PostgREST codes can unlock the intent, and focused React tests prove a coded lost response reuses the exact key. A forward-only assertion migration plus the durable invariant now also pin the shared intent helper's exact body, overload count, owner, security mode, search path, and browser/service grants without editing the already-applied migration. The assertion-only migration applied live on 2026-08-12 as ledger version `20260813011751`, name `20260813070000_pin_return_idempotency_helper_contract`; post-apply catalog verification matched the exact reviewed helper contract, and a real live-introspection registry refresh recorded the new high-water/name. A later exact-head review then found that the parked completed-delivery posting migration's paid-only reversal precondition would reject this new wrapper during forward replay. That parked precondition now accepts only the exact legacy body or the exact reviewed wrapper/private topology, and the Section 08 disposable prover applies that later migration with synthetic rows before rerunning the invariant and rollback smoke. The smoke now completes its delivery through the canonical RPC, so the forward proof does not depend on a direct status-write escape hatch.
+
+The Apply Credit and reversal cases were added after the first exact-SHA adversarial review blocked the earlier implementation; the Create Return lock/reconciliation followed a second blocking review. A later proof-renewal review found that the existing Returns lifecycle invariant still expected attribution writes directly in the public bodies and that migration preflight did not pin overload count, owner, security mode, search path, and ACLs. The invariant now verifies the strict wrapper and private attribution-writing implementation together, and the migration fails closed on each catalog attribute both before rename and after installation. The fresh migration-security proof then caught that the recreated reversal helper had lost its explicit internal-idempotency exemption marker and still accepted its audit actor without validating it; the helper now derives `auth.uid()`, rejects missing or mismatched attribution, and has mutation coverage for both protections. PR review then found four more fail-closed details: definitive database refusals must release Create/Apply retry locks while uncertain transport failures retain them; Cancel keys must include the normalized reason available only at submit time; reversal-only invoice status changes must not create a second split-billing post snapshot; and the rollback prover must neither disable product triggers nor expose CLI credentials on failure. Focused behavior tests, exact-body/static mutation guards, the governed pricing fixture, and snapshot-count assertions now cover those paths. The real-schema prover runs both the new and pre-existing Returns invariants before the rollback smoke. The Returns reference row now matches the live-regenerated registry, and the docs check derives its required status set and high-risk columns from that registry. **Applied live 2026-08-12** with Mason's explicit approval, through the governed proof gate: renewed migration-security and drift reviews were clean, the apply ran through `apply_migration`, and the ledger recorded version `20260812212323` carrying name `20260812130145_bind_return_receipts_to_intent_and_restore_overdue` (the apply tool stamps its own clock, so this row matches on name, not on the file timestamp; the disk filename is deliberately left unrenamed so the ledger name and the file stay in sync). Post-apply verification against live: the ledger grew by exactly one row (968 → 969), all eight function bodies match the migration file byte-for-byte, the seven renamed private implementations kept their pre-migration body hashes — proving rename-not-retype rather than a silent rewrite — and owner, security mode, fixed search path, overload count, and grants all match what was reviewed. A disposable-PostgreSQL replay of a fresh read-only dump of the live schema returned `RETURN_CREDIT_POSTAPPLY_LIVE_PASS invariant_violations=0 smoke=SMOKE_PASS_ROLLBACK residue=0`, and the schema registry was rebuilt from live introspection to high-water `20260812212323`.
 
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 

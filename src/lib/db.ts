@@ -109,6 +109,36 @@ export const RpcErrorCodes = {
   BOOKING_FULLY_DRAWN: 'BOOKING_FULLY_DRAWN',
   BOOKING_DRAW_ORDER_LOCKED: 'BOOKING_DRAW_ORDER_LOCKED',
   EMPTY_DRAW: 'EMPTY_DRAW',
+  // restore_quote_version, once 20260816120000 is applied. A version restore
+  // mints brand-new quote_items ids, so it cannot carry the per-line billing
+  // provenance a draw stamps. Rather than drop that provenance (which was
+  // proven to overbill across a restore that changes the line partition), the
+  // server refuses the restore outright once the booking has been drawn.
+  QUOTE_RESTORE_BLOCKED_BY_DRAW: 'QUOTE_RESTORE_BLOCKED_BY_DRAW',
+  // draw_down_quote per-tier order lines (migration 20260816120000). A booked
+  // line with no unit price cannot be billed, and the split lines must add back
+  // up to the quantity requested.
+  BOOKED_PRICE_REQUIRED: 'BOOKED_PRICE_REQUIRED',
+  COST_BASIS_REQUIRED: 'COST_BASIS_REQUIRED',
+  DRAW_ALLOCATION_MISMATCH: 'DRAW_ALLOCATION_MISMATCH',
+  // Same migration: a draw line that matches no booked price tier, and a tier
+  // asked to give up more units than were booked at it. Both are fail-closed
+  // refusals with plain-English server messages, surfaced verbatim by the draw
+  // modal's generic error branch — registered here so they are inside the typed
+  // contract rather than only inside the SQL.
+  DRAW_MIXED_TIER_UNMATCHED_LINE: 'DRAW_MIXED_TIER_UNMATCHED_LINE',
+  DRAW_TIER_OVERCONSUMED: 'DRAW_TIER_OVERCONSUMED',
+  // Same migration: a booked line carrying a negative or non-finite quantity
+  // has no honest value to draw against. Runtime-reachable by the same draw
+  // modal path as the two above, so it belongs in the typed contract too.
+  BOOKING_QUANTITY_INVALID: 'BOOKING_QUANTITY_INVALID',
+  // draw_down_quote intent wrapper: reject malformed product identifiers with
+  // a governed token before PostgreSQL attempts the UUID cast.
+  BOOKING_PRODUCT_INVALID: 'BOOKING_PRODUCT_INVALID',
+  // draw_down_quote cutover barrier (migration 20260816110000). Raised only
+  // while the tier-split cutover holds its advisory key; the draw is refused
+  // instantly having written nothing, and retrying after the cutover succeeds.
+  DRAW_DOWN_CUTOVER_IN_PROGRESS: 'DRAW_DOWN_CUTOVER_IN_PROGRESS',
   // close_quote_as_short — refuses while scheduled/in-progress jobs still exist (U5 #1)
   BOOKING_HAS_ACTIVE_JOBS: 'BOOKING_HAS_ACTIVE_JOBS',
   // create_job_from_quote_section — an accepted booking is a chemical sale; make a standalone job (U5 #103)
@@ -189,7 +219,7 @@ export const RpcErrorCodes = {
   QUOTE_NOT_FOUND: 'QUOTE_NOT_FOUND',
   // save_quote / save_customer whole-record optimistic concurrency.
   QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE',
-  // restore_quote_version trust boundary (20260813180000). Legacy snapshots
+  // restore_quote_version trust boundary (20260825190000). Legacy snapshots
   // remain visible, but cannot re-enter the quote write path as authoritative cost.
   QUOTE_VERSION_LEGACY_UNTRUSTED: 'QUOTE_VERSION_LEGACY_UNTRUSTED',
   CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE',

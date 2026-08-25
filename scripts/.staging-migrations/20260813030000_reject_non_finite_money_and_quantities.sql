@@ -273,6 +273,7 @@ DECLARE
   v_quote_id uuid;
   v_section_id uuid;
   v_product_id uuid;
+  v_probe_cost numeric;
 BEGIN
   -- 1. SEMANTIC PROOF of the predicate itself. This is the part that is easy to
   -- get wrong: the bounds clause is load-bearing precisely because the usual
@@ -378,16 +379,49 @@ BEGIN
   -- schema-only restore with ZERO rows — and a DR restore is the worst possible
   -- moment for a migration to refuse to replay. The semantic and structural
   -- proofs above do not depend on any data and still run.
-  SELECT qi.quote_id, qi.section_id, qi.product_id
-    INTO v_quote_id, v_section_id, v_product_id
-  FROM public.quote_items qi LIMIT 1;
+  -- The probe row must clear the below-cost wall before the CHECK it is meant to
+  -- prove is ever evaluated. zz_crx_below_cost_quote_items is a BEFORE INSERT
+  -- ROW trigger, and BEFORE triggers run ahead of CHECK constraints, so a bare
+  -- four-column row never reaches quote_items_acres_finite_chk at all:
+  -- price_per_unit defaults to 0 NOT NULL, every live product carries a positive
+  -- cost, and a migration has no below-cost operation context, so the trigger
+  -- raises BELOW_COST_CONTEXT_REQUIRED with ERRCODE P0001. P0001 is not
+  -- check_violation, so the handler below would not catch it and the whole
+  -- migration would abort on its own probe.
+  --
+  -- The fix is to price the probe row exactly AT the locked product cost. The
+  -- trigger returns early on v_price_cents >= v_cost_cents, so the row is not a
+  -- below-cost sale, needs no operation context, no admin actor, and no reason,
+  -- and writes no below_cost_approvals audit row. Sourcing the price from
+  -- products.current_cost — the same value the trigger locks FOR SHARE — is what
+  -- makes that equality hold rather than assuming an existing line is still
+  -- above a cost that may have risen since.
+  --
+  -- The cost filter mirrors the trigger's own COST_BASIS_REQUIRED and
+  -- COST_BASIS_CENTS_REQUIRED gates. A product failing either would make the
+  -- trigger raise before the CHECK for a second, unrelated reason.
+  SELECT qi.quote_id, qi.section_id, qi.product_id, p.current_cost
+    INTO v_quote_id, v_section_id, v_product_id, v_probe_cost
+  FROM public.quote_items qi
+  JOIN public.products p ON p.id = qi.product_id
+  WHERE p.current_cost IS NOT NULL
+    AND p.current_cost::text NOT IN ('NaN', 'Infinity', '-Infinity')
+    AND p.current_cost > 0
+    AND p.current_cost = round(p.current_cost, 2)
+  LIMIT 1
+  -- Hold the product row so a concurrent cost increase between this read and
+  -- the INSERT below cannot turn the at-cost probe into a below-cost row (the
+  -- trigger takes the same FOR SHARE lock when it reads the cost).
+  FOR SHARE OF p;
 
   IF v_quote_id IS NULL THEN
-    RAISE NOTICE 'POSTCOND: no quote_items row available to source FK values from — behavioural probe SKIPPED (semantic and structural proofs still ran)';
+    RAISE NOTICE 'POSTCOND: no quote_items row with a costed product available to source FK values from — behavioural probe SKIPPED (semantic and structural proofs still ran)';
   ELSE
     BEGIN
-      INSERT INTO public.quote_items (quote_id, section_id, product_id, acres)
-      VALUES (v_quote_id, v_section_id, v_product_id, 'NaN'::numeric);
+      INSERT INTO public.quote_items
+        (quote_id, section_id, product_id, price_per_unit, acres)
+      VALUES
+        (v_quote_id, v_section_id, v_product_id, v_probe_cost, 'NaN'::numeric);
 
       RAISE EXCEPTION 'POSTCOND: a NaN acres value was ACCEPTED — quote_items_acres_finite_chk is not taking effect';
     EXCEPTION

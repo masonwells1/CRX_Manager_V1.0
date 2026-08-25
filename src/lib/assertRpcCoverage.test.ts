@@ -30,6 +30,17 @@ function findSourceFiles(dir: string): string[] {
 // must satisfy the same assertRpcResult contract.
 const RPC_CAPTURE_PATTERN = /=\s*await\s+supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*['"]([^'"]+)['"]/g;
 
+// Wrapped capture: `= await someRunner((reason) => supabase.rpc('name', ...))`.
+// Introduced by the below-cost approval flow (2026-08-13):
+// `runWithBelowCostApproval((reason) => supabase.rpc(...))` and the offlineSync
+// `execute((reason) => supabase.rpc(...))` alias. The runner resolves to the
+// rpc response, so the caller HAS captured it and the assertRpcResult contract
+// applies exactly as for the direct form. The runner name is deliberately
+// generic (`\w+`): any single-arg arrow returning a literal-named supabase.rpc
+// call is a real capture, and matching more call sites only tightens the guard.
+const RPC_WRAPPED_CAPTURE_PATTERN =
+  /=\s*await\s+\w+\s*\(\s*(?:async\s*)?\(?\s*\w+\s*\)?\s*=>\s*supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*['"]([^'"]+)['"]/g;
+
 // `assertRpcResult(...)` invocations. The optional `<...>` group handles
 // generic-type uses like `assertRpcResult<{ id: string }>(data, 'rpc_name')`,
 // which the previous regex silently missed.
@@ -96,7 +107,10 @@ describe('assertRpcResult coverage', () => {
       for (const file of files) {
         const content = readFileSync(file, 'utf-8');
 
-        const rpcMatches = Array.from(content.matchAll(RPC_CAPTURE_PATTERN));
+        const rpcMatches = [
+          ...content.matchAll(RPC_CAPTURE_PATTERN),
+          ...content.matchAll(RPC_WRAPPED_CAPTURE_PATTERN),
+        ];
         const rpcNames = rpcMatches.map((m) => m[1]);
 
         const assertMatches = Array.from(content.matchAll(ASSERT_PATTERN));

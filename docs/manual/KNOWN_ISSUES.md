@@ -1,19 +1,103 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-13 UTC, read-only.** Live ledger high-water is version `20260813011751` at 970 rows, carrying submitted name `20260813070000_pin_return_idempotency_helper_contract`. The pending `20260813080000` quote-version write boundary and `20260813180000` restore trust boundary are not applied: `quote_versions.restore_trusted_at` is absent, RLS remains enabled, and one mutating policy remains. The schema registry still records `20260812003315`; this is known staleness while newer candidates are parked/unapplied, not evidence that those candidates ran live. Ledger versions are UTC and can differ from submitted filename stamps, so reconcile by recorded name. Historical Team Board, money, and commission-payout details below remain separately dated evidence.
 
-**Repository/production gap reopened and re-closed on 2026-08-12 — six migrations, and the prevention gap is still OPEN.** The high-water quoted in the paragraph above (`20260812003315`, 962 rows) was overtaken the same day. Six further migrations applied live on 2026-08-12 — ledger versions `20260812034831`, `20260812034951`, `20260812145628`, `20260812151606`, `20260812154028`, `20260812154757`, carrying submitted names `20260812010000_blend_ticket_order_header_runtime_assert`, `20260812011000_restore_quote_version_whole_cent_money`, `20260812115235_snapshot_cost_reporting`, `20260812115236_quote_items_cost_at_quote_snapshot`, `20260812115237_enforce_below_cost_admin_approval`, `20260812115238_repair_historical_order_line_cents` — **applied by concurrent sessions that never landed their files.** For part of that day none of the six existed on `main`, on any pushed branch, or in any local worktree, so SQL touching order money, quote cost, report math and a new approval table was running against production with no one able to review it, and a clean rebuild from `main` would have produced a schema without it. The **files** side is now closed: all six were recovered verbatim from the applying sessions' transcripts (not reconstructed from live `prosrc`, which loses the header, preconditions and review history), md5-verified against live `pg_proc.prosrc`, and landed as history rows 880-885. **The prevention side is not closed.** Nothing yet stops the next session from applying a migration and not landing its file; this is the third occurrence (2026-08-09, 2026-08-11 via PR #371, 2026-08-12) and the only current defence is that someone notices. A durable fix — a hard guard that reconciles the live ledger against tracked files and fails a check when they disagree — is not written.
+**Last verified: 2026-08-25 UTC, read-only live re-read after the draw-down rollout completed.**
+**Live ledger is 975 rows, `max(version)` `20260825034622`, effective ordering high-water
+`20260819232000`** (name `20260819232000_bind_draw_down_receipts_to_intent`). All four migrations
+of the draw-down chain are applied live — the cutover barrier (2026-08-24 midday, version
+`20260824185408`) and, later that day with Mason's explicit in-chat approval, the tier split
+(`20260825025241`), the allocated-line-cents lifecycle carry (`20260825033106`), and the receipt
+intent binding (`20260825034622`). See the rollout block at the top of
+`docs/reference/migration-history.md`. This pass re-read the ledger and updated the draw-down
+entries only; it does not re-certify unrelated issue narratives below.
+
+
+**RESOLVED 2026-08-25 — the two `/patrol` findings first deferred at the round-3 review cap
+are both closed.** Kept as history because the reasoning is the evidence for the
+interactive-only scoping decision, and because a future change that "simplifies" either
+one would reopen a security property. Detail below.
+(1) **Ambient-code path — CLOSED 2026-08-24** (Mason approved the extra review round).
+`scripts/patrol/trusted-exec.mjs` now binds `git`, `gh`, and `powershell` to fixed absolute
+executables under one minimal environment (system/global Git config disabled, replacement
+objects off, system attributes off, no terminal prompt, `PATH` narrowed to the trusted Git
+directory plus the system directory, inherited `GIT_*` overrides dropped by allowlist).
+**Repository-local config — PARTIALLY closed, revised 2026-08-25. Read this before
+believing the sentence above covers everything.** `git status` runs Git's conversion
+pipeline, so repo-local command-bearing config executes. Measured against real repositories
+on 2026-08-25 rather than assumed:
+
+| vector | plain `git status` | with a command-line `-c` override |
+|---|---|---|
+| `core.fsmonitor` | **executes** | **blocked** (`-c core.fsmonitor=false`) |
+| `filter.*.clean` | **executes** | **still executes** (`-c core.attributesFile=NUL` does not help; suppressing it requires naming the driver, which requires reading the config first) |
+
+So patrol closes the fsmonitor half **by construction** — a fixed flag, no config read,
+nothing that can fail open — and leaves the filter half open, declared rather than
+half-guarded.
+
+A scanner (`worktreeFilterRisk` / `dangerousConfigKeys`) did previously refuse to run status
+in a worktree whose config defined a filter. **It was deleted on 2026-08-25** because it
+failed **open** in three consecutive review rounds (an unguarded call site; error-text
+matching that swallowed every failure; unrecognised Git boolean spellings), and because the
+residual exposure is the repo's existing baseline rather than something patrol adds:
+`scripts/fleet-status.mjs` runs `git status --porcelain -uall` across **every** worktree
+through a bare `execFileSync("git", …)` — a PATH lookup inheriting the full ambient
+environment, with no scan and none of patrol's hardening. Patrol after the deletion is
+strictly better protected than a command already run whenever Mason asks "where are we at?".
+**Open follow-up: apply the same one-line fsmonitor override to `fleet-status.mjs`.**
+**Scheduling patrol later reopens this in full and needs its own design pass — do not
+reinstate the scanner piecemeal.** Same fixed-executable pattern PR #455 established for the
+review wrapper still applies and stays.
+(2) **Forgeable parked state — CLOSED 2026-08-24.** `isParked()` now honours **labels
+only**; a `PARKED` title is ignored. Applying a label requires write access, so it carries
+authorization a self-authored title does not. **Consequence Mason should know:** PRs #361
+and #441, which were parked via title markers, are actionable again in the report — add a
+`hold`/`parked` label to either one to park it properly.
+
+**RESOLVED BY SCOPING 2026-08-24 (Mason's decision) — `/patrol` is interactive only.**
+The unattended-execution surface below did not converge, so the tool no longer claims that
+capability: no OS scheduled task, no unattended `/loop`. Every finding in that surface
+matters *only* because patrol would run hourly under Mason's account unwatched; run by hand
+it is no riskier than any other script in this repo, and by hand is where its value already
+is. The `trusted-exec.mjs` hardening stays as defence in depth. **Scheduling it later needs
+its own design pass on the execution surface, not another patch.** The history below is
+kept because it is the evidence for that decision.
+
+**The unattended-execution surface did not converge.** Three consecutive
+Codex rounds each found a *new* hole in the previous round's fix: round 3 (PATH lookups and
+repo-local filters), round 4 (a missed `execFileSync("git")` in `patrol-report.mjs`, plus
+producer validation failing open on an unbound app id), round 5 (`collectorBuild()` calling
+status without the filter check, and the guard reading only `--local` while Git also
+consumes per-worktree config when `extensions.worktreeConfig` is on). Each fix was correct
+and each was incomplete. **Recommendation on the table for Mason: scope `/patrol` to
+interactive use and drop the OS-scheduled task.** Every one of these findings matters
+*because* the tool would run hourly unattended under his account; run by hand inside a
+session it carries no more risk than any other script he runs. That removes the threat
+model rather than patching it one hole at a time.
+
+**Superseded 2026-08-22 header, kept for provenance — was last-verified 2026-08-22 UTC, read-only live re-read of the ledger and of every `job_chemicals` row.** The ledger figures below are unchanged from the 2026-08-19 pass; issue entries not named in the 2026-08-22 changes were not individually re-verified in this pass. **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
+
+of the stored ledger name), and `docs/reference/migration-history.md` uses the 14-digit definition, so this file now matches it. A plain `max(name)` returns the slug `year_end_summary`. The ordering claim holds over the prefixed subset, not over the raw column.) Two things this pass corrected in this file: (1) the header below claimed `20260812003315` / 962 rows, **nine applies** and six days of ledger staleness out of date — the six 2026-08-12 recoveries listed below, then `20260812212323`, `20260813011751` and `20260816174353`, which is 962 + 9 = 971; (2) CRX-SEC-1 **applied live on 2026-08-16** — see the new CLOSED entry immediately below — while `docs/reference/migration-history.md` row 886 still called it an unapplied local candidate. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, matching this ledger; it was **not** re-derived in this pass. **The 2026-08-10 money figures quoted further down this file are stale** — a read-only re-measure on 2026-08-18 finds `order_items.total_price`, `order_items.profit`, `commissions.commission_amount` and `commissions.order_profit` all at **0** sub-cent rows, with only `quotes.total_cost` still holding **2**; the "43 dirty rows" and "49 rows" figures below are superseded by that measurement (recorded in full in `docs/manual/CURRENT_STATE.md` section 2). Everything else below was left as separately dated historical evidence and was not re-verified in this pass.
+
+**Superseded 2026-08-17 header, kept for provenance — ledger high-water only.** Live ledger high-water is **`20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc`. This pass re-read the live ledger and nothing else: it corrects a high-water this document was stating wrongly, and it does **not** re-certify the issue narrative below, which keeps its own older dates. **The schema registry is NOT refreshed to this high-water** — it is still stamped to the 962-row mark and is now nine migrations behind. Beyond the six migrations named in the next paragraph, three more have landed since: ledger versions `20260812212323`, `20260813011751`, `20260816174353`, carrying submitted names `20260812130145_bind_return_receipts_to_intent_and_restore_overdue`, `20260813070000_pin_return_idempotency_helper_contract`, `20260813080000_lock_quote_versions_writes_to_rpc`. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded **name** when reconciling an apply.
+
+
+**Superseded 2026-08-12 header, kept for provenance:** live ledger high-water was `20260812003315` at 962 rows, carrying submitted name `20260811230423_log_customer_sales_rep_assignment`. The Customer 360 assignment RPC is live with atomic customer timestamp/activity logging, one overload, the reviewed security/search-path/grant shape, and no table, column, enum, generated-column, signature, or public-function-name-count change. The schema registry was genuinely refreshed through the same high-water. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded name when reconciling an apply. The historical Team Board, money, and commission-payout details below remain separately dated evidence rather than claims that their older high-waters are current.
+
+**Repository/production gap reopened and re-closed on 2026-08-12 — six migrations, and the prevention gap is still OPEN.** The high-water quoted in the paragraph above (`20260812003315`, 962 rows) was overtaken the same day. Six further migrations applied live on 2026-08-12 — ledger versions `20260812034831`, `20260812034951`, `20260812145628`, `20260812151606`, `20260812154028`, `20260812154757`, carrying submitted names `20260812010000_blend_ticket_order_header_runtime_assert`, `20260812011000_restore_quote_version_whole_cent_money`, `20260812115235_snapshot_cost_reporting`, `20260812115236_quote_items_cost_at_quote_snapshot`, `20260812115237_enforce_below_cost_admin_approval`, `20260812115238_repair_historical_order_line_cents` — **applied by concurrent sessions that never landed their files.** For part of that day none of the six existed on `main`, on any pushed branch, or in any local worktree, so SQL touching order money, quote cost, report math and a new approval table was running against production with no one able to review it, and a clean rebuild from `main` would have produced a schema without it. The **files** side is now closed: all six were recovered verbatim from the applying sessions' transcripts (not reconstructed from live `prosrc`, which loses the header, preconditions and review history), md5-verified against live `pg_proc.prosrc`, and landed as history rows 880-885. **The prevention side is not closed.** Nothing yet stops the next session from applying a migration and not landing its file; this is the third occurrence of a migration applying live with **no file landed anywhere** (2026-08-09, 2026-08-11 via PR #371, 2026-08-12) and the only current defence is that someone notices. A durable fix — a hard guard that reconciles the live ledger against tracked files and fails a check when they disagree — is not written.
 
 **`quote_items.cost_at_quote_cents` — declaration gap CLOSED.** Added by `20260812115236`; `src/types/index.ts` now declares it as an optional field because partial projections may omit it. The column is trigger-stamped and the browser never writes it. This branch is based on `origin/main`, whose schema registry already carries `cost_at_quote_cents`, so the type layer and registry now agree.
 
-**Wave A — six parked, unapplied migration drafts.** PR #393 moved the drafts from `supabase/migrations/` to `scripts/.staging-migrations/`. The 2026-08-13 read-only ledger check confirms none is live. Their parked `20260813010000`–`20260813060000` names are not apply candidates; if the work resumes, the coordinated target is `20260813100000`–`20260813150000`, after a fresh high-water read and the full migration proof gate. Nothing in this document describes state those drafts would create.
+**Wave A — six parked migration drafts.** This branch carries `20260813010000` through `20260813060000` under `scripts/.staging-migrations/`. They are intentionally absent from `supabase/migrations/`, are not armed for apply, and create no live state. Nothing in this document describes state they created.
 
 **Repository/production gap on the whole-cent migrations: CLOSED 2026-08-11.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`; ledger versions `20260810152935`, `20260810154721`, `20260810155629`) were applied live before they existed on `main`. **PR #371 landed as merge `465458a0`**, bringing those three plus `20260811200000_blend_ticket_order_whole_cent_totals` (applied live as ledger `20260811220045`) onto `main`. Disk and production now agree on all four — independently re-verified against live `pg_proc` on 2026-08-11.
 The remaining fractional historical rows described below are still tracked data debt and were not rewritten by that repository closeout.
 
-**2026-08-10 money re-measure (read-only, live).** Whole-cent conformance by column, which is what history rows 868–870 are scoped against: `orders.total_price` 0 dirty, `orders.total_cost` 0, `orders.total_profit` 0, `order_items.profit` 0, `quotes.total_price` 0, `quotes.total_profit` 0, `quote_items.total_price` 0, `quote_items.profit` 0 — and still dirty: **`order_items.total_price` 35/288, `quotes.total_cost` 2/4, `commissions.commission_amount` 3/35, `commissions.order_profit` 3/35.** The `order_items` figure moved 46 → 35 because `20260810025159` (above) backfilled stale line profit through the canonical trigger; the 3 fractional `commissions` rows are unchanged and still deliberately unrepaired. **43 dirty rows remain and repairing them rewrites stored money — still Mason's separate decision, still not done.** Under the 2026-08-10 fail-closed money policy those columns are tracked debt, not an approved exception.
+**2026-08-10 money re-measure (read-only, live).** Whole-cent conformance by column, which is what history rows 868–870 are scoped against: `orders.total_price` 0 dirty, `orders.total_cost` 0, `orders.total_profit` 0, `order_items.profit` 0, `quotes.total_price` 0, `quotes.total_profit` 0, `quote_items.total_price` 0, `quote_items.profit` 0 — and still dirty: **`order_items.total_price` 35/288, `quotes.total_cost` 2/4, `commissions.commission_amount` 3/35, `commissions.order_profit` 3/35.** The `order_items` figure moved 46 → 35 because `20260810025159` (above) backfilled stale line profit through the canonical trigger; the 3 fractional `commissions` rows are unchanged and still deliberately unrepaired. **43 dirty *column-values* remain** (35 + 2 + 3 + 3, summed across four columns, not four disjoint row sets) — the two `commissions` counts are 3/35 each and may well be the same 3 rows, so the number of distinct dirty **rows** is somewhere in **40–43**. The overlap can no longer be re-derived: live has since moved to 2 dirty, so the 2026-08-10 row identities are gone. **Repairing them rewrites stored money — still Mason's separate decision, still not done.** Under the 2026-08-10 fail-closed money policy those columns are tracked debt, not an approved exception. **SUPERSEDED 2026-08-18:** the live re-measure now returns `order_items.total_price` 0, `order_items.profit` 0, `commissions.commission_amount` 0, `commissions.order_profit` 0, and only `quotes.total_cost` 2 — so **2 dirty column-values remain, against the 43 counted the same way**, and the "3 fractional `commissions` rows unchanged and deliberately unrepaired" claim is no longer true of live. Figures and the enforced-vs-measured distinction are in `CURRENT_STATE.md` section 2. What rewrote the `commissions` rows is **established, not open**: `reconcile_pending_commission_snapshots` (ledger `20260810235207`, applied live 2026-08-10 with Mason's approval) — see the RETRACTED entry below, which corrects a first draft that called this change unexplained.
 
-**2026-08-10 commission-basis measurement, correctly characterized.** **12 of 35** order commissions have `order_profit ≠ orders.total_profit` (exact `IS DISTINCT FROM`; an earlier pass this session compared cent-rounded values and reported 10, hiding three sub-cent rows). Do not read that as a live emergency: **8 are `pending` with a gap of exactly $0.01 and 3 are `pending` with a sub-cent gap** (the disclosed backfill residual from `a0a69a62`, which deliberately did not rewrite commission rows), and the **1 materially larger gap is on a `cancelled` row** (dollar figure deliberately withheld — this repository is public; it is in the access-controlled session record). The underlying mint-time code defect is real and confirmed from live function source — `_convert_quote_to_order_owner_impl` and `create_direct_order` mint from a cached/local profit after the item triggers already rewrote the canonical header — and history row 868 is the fix, **applied live 2026-08-10**. It stops future drift; it does not repair the present rows, and the measurement above is the pre-fix state.
+**2026-08-10 commission-basis measurement, correctly characterized.** **12 of 35** order commissions have `order_profit ≠ orders.total_profit` (exact `IS DISTINCT FROM`; an earlier pass this session compared cent-rounded values and reported 10, hiding **two of the three** sub-cent rows — only a sub-cent gap can vanish under cent-rounding, and a gap of exactly $0.01 always survives it, so 12 exact → 10 rounded means two rows were masked and the third straddled a cent boundary and survived). Do not read that as a live emergency: **8 are `pending` with a gap of exactly $0.01 and 3 are `pending` with a sub-cent gap** (the disclosed backfill residual from `a0a69a62`, which deliberately did not rewrite commission rows), and the **1 materially larger gap is on a `cancelled` row** (dollar figure deliberately withheld — this repository is public; it is in the access-controlled session record). The underlying mint-time code defect is real and confirmed from live function source — `_convert_quote_to_order_owner_impl` and `create_direct_order` mint from a cached/local profit after the item triggers already rewrote the canonical header — and history row 868 is the fix, **applied live 2026-08-10**. It stops future drift; it does not repair the present rows, and the measurement above is the pre-fix state.
+
+**SUPERSEDED — 2026-08-18 live re-measure of the same predicate (read-only).** The 12/35 figure and its 8-penny / 3-sub-cent split above are **no longer current**. Re-running `commissions c JOIN orders o ON o.id = c.order_id WHERE c.order_profit IS DISTINCT FROM o.total_profit` on 2026-08-18 returns **2 of 35** rows: **1 `pending` with a gap of exactly $0.01**, and the same **1 `cancelled` row with the materially larger gap** (figure still withheld — public repository). **Zero rows carry a sub-cent gap**, the arithmetic consequence of both sides of the predicate being whole-cent: `commissions.order_profit` measures 0 sub-cent rows in the `CURRENT_STATE.md` section 2 re-measure, and `orders.total_profit` measures **0 of 65** sub-cent rows on live (read-only, 2026-08-18 — that column is *not* one of the five in the section 2 re-measure, so it is measured here rather than inherited from it). The difference of two whole-cent numbers cannot be sub-cent. Do not read line 18's "3 pending with a sub-cent gap" as live state and do not draft a repair migration against those rows — they are already clean. **What changed and why is established:** two approved applied migrations — see the RETRACTED entry below.
 
 **2026-08-09 historical baseline.** The live re-read then covered the ledger, `CURRENT_STATE.md` counts, and all 27 invariant predicates: 26 CLEAN and the documented `fin-money-whole-cents` historical-data violation. The five foundation-ultra-review migrations applied later that day as ledger versions `20260809203222` through `20260809205423`. The formerly missing Team Board migration file and history row are now reconciled on PR #351.
 
@@ -23,6 +107,1092 @@ The remaining fractional historical rows described below are still tracked data 
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
+
+---
+
+## OPEN 2026-08-23 — `codex review <scope>` self-recurses, kills its own process, and exits 0
+
+**Severity: HIGH. Not a crash — a silent false "gate passed".** `codex review --base origin/main`
+run from the repo root loads `AGENTS.md`, `CLAUDE.md`, and `.claude/commands/codex-gauntlet.md`
+as project context. Those files instruct an agent to "run a Codex review", so the reviewer follows
+them literally: it spawns a **nested** `codex review`, enumerates `codex.exe` processes, sees
+duplicates, and `Stop-Process`/`taskkill`s the tree — **including its own PID**. Reproduced twice
+on 2026-08-23 during PR #447 (PIDs 39564 and 36244), identical both times.
+
+**Why it is dangerous rather than merely annoying:** the pipeline still **exits 0**. `tee`
+succeeds, the harness reports success, and the ~1 MB capture is almost entirely echoed context
+files with no findings anywhere in it. Any check that reads exit status — a script, a hook, or an
+agent in a hurry — records a clean Codex review when Codex reviewed nothing. That is precisely the
+false-clean the gauntlet's `UNVERIFIED`/`BLOCKED` rule exists to prevent.
+
+**Workaround (in place, documented in `.claude/skills/codex-review/SKILL.md`):** use
+`node scripts/write-codex-push-proof.mjs`. It runs `codex exec` inside a sanitized
+`%TEMP%\crx-codex-review-*` workspace holding only `BASE_SNAPSHOT`/`CANDIDATE_SNAPSHOT`, so there
+are no agent-instruction files present to recurse on. It returned a real CLEAN verdict with cited
+`file:line` evidence on the first try for the same diff that killed `codex review` twice.
+
+The wrapper covers the `--base origin/main` scope only — its base is pinned to `origin/main...HEAD`
+by design and it fails closed on a dirty worktree, so `--uncommitted` and `--commit <sha>` need a
+committed branch or `/codex-cross-review` instead.
+
+**The gate is the proof file, not the exit code and not the bare token** — the token also spells
+`BLOCKERS`. The wrapper mints the proof only on a terminal `CODEX_PROOF_VERDICT: CLEAN`; no proof
+for the current HEAD means not passed. Secondary check on the capture, matching `CLEAN` itself:
+
+```bash
+grep -cE '^CODEX_PROOF_VERDICT:[[:space:]]*CLEAN[[:space:]]*$' .claude/session-state/codex-review-latest.txt
+```
+
+`0` means no clean verdict. **Two drafting errors were made here on 2026-08-23 and both are worth
+keeping visible**, because each is the same false-clean shape this entry is about:
+
+1. The first draft grepped `CODEX_PROOF_VERDICT|^VERDICT:` — presence only, so it reported a pass
+   on a `BLOCKERS` verdict. Caught by CodeRabbit on PR #448.
+2. The correction then demanded *exactly* `1` match, reasoning from the parser's one-token rule.
+   That rule governs Codex's stdout, not this capture file, which holds a structured section
+   **and** the raw transcript — so a genuinely clean run reports `2` (verified at lines 18 and
+   33671 of a real clean capture) and the "fix" would have raised a false alarm on every pass.
+   Caught by running the command instead of reasoning about it.
+
+**Prevention gap — still OPEN.** The fix shipped is documentation, which is soft scaffolding: it
+advises, it does not block. The hard boundary would be a hook denying (a) a Codex session spawning
+another `codex review`/`codex exec` and (b) `taskkill`/`Stop-Process` aimed at a `codex.exe`. No
+such guard exists — `.claude/hooks/` has nothing matching either pattern today, and one of the two
+kill attempts was stopped only incidentally, by the maintenance-producer guard reacting to the
+command's shape rather than its target. Wiring that guard touches both hook manifests and needs
+Mason's approval.
+
+## OPEN 2026-08-20 — the Phase 3C containment scanner walks `dist/`, so a concurrent rebuild refuses the push
+
+**Severity: MEDIUM. Not a containment hole — a false refusal.** The pre-push hook
+(`.husky/pre-push:7`) runs `scripts/check-supplier-pricing-phase3-private-artifacts.mjs`, which
+enumerates ignored files at
+`scripts/check-supplier-pricing-phase3-private-artifacts.mjs:1751-1752` and then stats and opens
+every candidate through `scanWorktreeCandidate` (line 1797). The repository's own top-level
+`dist/` build output is **not** excluded from that enumeration:
+
+- `worktreeContainerToolOwnedExcludePathspecs` (line 1683) excludes `dist/` **only** where it sits
+  nested under a registered worktree *container* directory — deliberately narrow, and it does not
+  cover the checkout's own `dist/`.
+- Line 1795 fully skips only `isOperatorOwnedIgnoredPath`. For `isToolOwnedIgnoredPath` (which is
+  what `dist/` is, line 72) line 1796 only sets `checkArchives = false` — the file is still
+  enumerated and still opened.
+
+`scanWorktreeCandidate` runs a whole pre-open sequence — `lstatSync`, `statSync`, `realpathSync`,
+`openSync`, then `fstatSync` (lines 605-686) — and **none** of it tolerates `ENOENT`. So if anything
+rewrites `dist/` between enumeration and the stat — a dev server, a `npm run build`, a parallel
+session in the same checkout — the scanner throws and the push is refused with a **misleading
+"containment failed"**, which reads as "a private packet leaked" when nothing leaked. Phase 3C's
+containment scan is ~98 seconds on its own, so the window is wide.
+
+**Verified from source 2026-08-20** (the call chain and the missing exclusion, cited above); the
+crash itself was **observed directly in an earlier session** and was not reproduced here. Nothing
+about this weakens containment: `dist/` files still get the structural-signature scan, and a
+force-added file becomes tracked and gets the full scan regardless.
+
+**Likely fix, not yet written and deliberately not bundled with the 2026-08-20 fleet-scan repair:**
+tolerate `ENOENT` across the **whole** pre-open sequence above — not just the `stat`/`open`
+boundary — for `source === 'ignored'` tool-owned paths, **and re-check that the path is still
+absent from the index before skipping it**. That re-check is the load-bearing half: the candidate
+list is collected before scanning, so "it vanished" and "it was force-added and is now tracked"
+are indistinguishable at scan time. Without it, "a file that vanished mid-scan cannot be a staged
+private packet" is an overclaim, not a guarantee. The alternative — widening the exclude pathspec —
+would stop scanning `dist/` altogether and is a real loss of coverage. Whoever picks this up should
+confirm which the containment charter actually wants before choosing.
+## OPEN (WONTFIX for now) 2026-08-20 — `review-proof-guard` denies destructive shell commands that NAME a worktree path
+
+**Severity: LOW — cosmetic, with a zero-cost workaround. Mason chose "document, don't fix"
+(2026-08-20) after five review rounds found the fix more dangerous than the bug.**
+
+**Scope: Claude-managed worktrees only.** Claude creates them at `<repo>/.claude/worktrees/<name>/`;
+Codex worktrees live outside the repo (`~/.codex/worktrees/…`) and have no such collision — see the
+Claude-only list in `scripts/agent-manifest-parity.mjs`. The guard is wired for both agents, but only
+a Claude worktree path trips it this way, and the `permissions.deny` layer referenced below is
+Claude-side (Codex is governed by `.codex/hooks.json`).
+
+Every file inside a Claude worktree carries a `.claude` path component. `review-proof-guard.mjs`
+protects any `.claude` component and cannot distinguish the repo's review state from an ordinary
+scratch file under a worktree.
+Introduced by `f3e06c52` (PR #423 round-3/5 hardening) — bisected, not guessed; the later ack-valve
+commits `c64ea3d4` and `4b302050` are not implicated.
+
+**Actual impact is much smaller than first reported.** *For this collision*, the guard fires only
+when the command *spells out* the worktree path — the agent's shell already starts inside the
+worktree, so relative commands avoid it: `rm -f scratch.tmp`, `rm probe-dir/x.txt`,
+`mv a.txt b.txt` and `Write` (relative or absolute) all **ran live in a worktree**, while
+`rm -f <full-worktree-path>\file` and `cd <full-worktree-path> && rm file` are denied. That is a
+statement about the worktree collision, **not** the guard's complete matching rule — the guard
+independently blocks commands naming `.claude` or `.claude/session-state` anywhere, and treats
+`rm`/`mv`/`git clean`/`rsync --delete`, and `find` paired with `-delete`/`-exec`, as destructive
+verbs *when the command also names the state directory*; the full rule is the
+`review-proof-guard.mjs` row in `docs/reference/agent-guardrails.md`.
+
+Four lookalikes are **different layers**, so relative paths do not help: `rm -rf`/`rm -fr` never run
+at all (`permissions.deny` in `.claude/settings.json`); `git clean -f/-fd/-fdx` is blocked twice
+over, by `permissions.deny` and by `bash-safety-lib.mjs`; a bare `find … -delete` is blocked by a
+separate safety layer independent of the state-dir rule above (not `bash-safety-lib.mjs` — that
+library allows it); and the blocked `Write` to `stop-wrap-ack.json` in the original report came from
+a different hook (this guard deliberately allows that write — it is the designed acknowledgment
+valve).
+
+**Correction, PR #434 review (twice).** Successive drafts of this entry and of `gotchas.md` listed
+`git clean -fd src`, then `rm -rf node_modules/.cache`, as allowed workarounds. Both were wrong, and
+both were wrong the same way: verified against `review-proof-guard` alone rather than the whole
+stack — `permissions.deny`, then the PreToolUse hooks, then the harness's own safety layer, any of
+which can refuse a command. Every example is now something that was actually executed in a worktree.
+**Run the command; do not reason about it.**
+
+**Workaround (use this):** never name the worktree path in a destructive shell command. Recorded in
+`docs/reference/gotchas.md`.
+
+**Do not attempt a text-stripping carve-out.** Five successive versions were built on 2026-08-19/20
+and each was reviewed by an independent `gpt-5.6-sol` high-effort pass. **Every round found at least
+one real hole — eight in total**, each a different spelling of the same path: a trailing separator
+consuming the whole target; `../..` traversal after the reference was blanked; a `$var` descendant;
+a `/.` dot alias; `."."` quote-joined traversal; an *operand* named `cd`; cmd.exe `%VAR:~0%` and
+`!VAR!`; and cmd.exe caret escapes `.^.`. All eight reached the repo's own review state, the
+applied-source ledger, or a whole worktree's state directory. Each round's test suite was green over
+the next round's hole, and mutation testing reached 14/15 without surfacing round 5. The root lesson:
+**rewriting command text inside a security guard is the wrong mechanism** — the guard reasons over
+shell text, and shell text has unbounded ways to spell one path. All eight spellings are now pinned
+as denials in `review-proof-guard.test.mjs`, so a future attempt trips on them immediately.
+
+**If this is ever worth fixing properly, ranked by risk:**
+1. **Move worktrees out from under `.claude`** (e.g. `<repo>/../crx-worktrees/`). The collision
+   disappears and no carve-out is needed — a configuration change, not security logic. *Unverified
+   prerequisite:* the worktree location may be set by the Claude Code harness rather than repo
+   config; check that first. Also touches `worktree-awareness.mjs`, `worktree-cleanup`, `fleet`, and
+   needs the live worktrees drained.
+2. **Strict allowlist** — apply a carve-out only when the whole command matches a deliberately
+   boring grammar (one verb, literal paths, no quotes/globs/`$`/`%`/`!`/backtick/caret/dot-segments).
+   Fail-closed by construction; a survivor is a false positive, not a hole.
+3. **Resolve real paths** — tokenize, `path.resolve()` against cwd, compare against the protected
+   directories actually on disk. The correct answer and the largest rewrite of a live security guard.
+
+---
+
+## OPEN 2026-08-19 — the per-product rate check in `blendMathValidator.ts` is still unit-blind
+
+**Severity: LOW, warning text only, currently unreachable (0 rows in `blend_tickets` and
+`blend_ticket_products` on live, verified read-only 2026-08-19).** The sibling total-volume defect
+in the same file was fixed on 2026-08-19 via
+[PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426); this one was left
+deliberately out of scope and is recorded here so it is not re-discovered as new.
+
+`validateBlendMath` compares each product's `quantity` against `rate_per_acre × total_acres`
+without ever comparing `unit` to `rate_per_acre_unit`. Both fields exist on `ProductData`, but the
+rate arm reads neither. A product entered as 25 **Gal** at a rate of 32 **oz**/acre over 100 acres
+is arithmetically correct — 32 × 100 = 3200 fl oz = 25 gal — yet the check compares the bare
+numbers 25 vs 3200 and flags it. The mirror case hides a real error: quantities that happen to be
+numerically close across different units pass silently.
+
+Three things a fix must handle that the total-volume arm did not:
+
+- `rate_per_acre_unit` is a **per-acre** string — the form's placeholder is literally `oz/ac` — so
+  it will never match `unit_conversions.unit` directly. `chemCalculator.ts` already has
+  `baseUnitFromRateUnit` to strip the `/ac` suffix; reuse it rather than writing a second parser.
+- `rate_per_acre_unit` is **not always populated**: the recipe-load path in
+  `ManualTicketCreate.tsx` hardcodes `rate_per_acre_unit: ''`, so recipe-derived rows carry none.
+  A missing unit must skip the check, never be assumed to match.
+- `unit_conversions` **can** legitimately serve this arm, unlike the total-volume arm: a rate and a
+  quantity for the *same product* are usually in the same family, so `factor_oz` converts exactly
+  within liquid or within dry. But the fix must still refuse the liquid↔dry crossing (no density
+  column), must not treat `Ea`/`Unit` (`factor_oz = 1`, `unit_type = 'both'`) as convertible — they
+  are a dimensionless count, and converting a jug count to fluid ounces 1:1 is nonsense — and must
+  not join `LOWER(unit)` naively, because the case-alias rows (`Lb`/`LB`, `oz`/`Oz`, `qt`/`Qt`)
+  duplicate on that join.
+
+**Not started.** No migration, no live state, no money path. Fix alongside the next blend-ticket
+change rather than on its own.
+
+---
+
+## OPEN 2026-08-20 — a zero-width character in a rate unit makes a ticket un-invoiceable, and only the SQL can fix it
+
+**Severity: LOW-MED, currently unreachable (0 rows in `blend_tickets` and `blend_ticket_products` on
+live, verified read-only 2026-08-19).** Raised as `CRX-MONEY-PARITY-001` by gpt-5.6-sol on
+[PR #439](https://github.com/masonwells1/CRX_Manager_V1.0/pull/439) and then confirmed directly
+against live `pg_proc.prosrc`.
+
+**The finding, and the wrong turn that produced it.** [PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426)
+taught `normalizeUnit` to **delete** zero-width characters, so `g<ZWSP>al` reads as `gal`. That is
+correct and stays: `normalizeUnit` only ever compares two client-side strings.
+
+A first pass at PR #439 extended the same strip to `rateBaseUnit` on the theory that the money path
+had been left unprotected. **That was backwards**, and the review caught it. `rateBaseUnit` is not a
+client-side comparator — it is a *prediction of the server*, and the server does not close these up:
+
+```
+normalize_rate_unit := lower(btrim(COALESCE(p_unit,''))) + a CASE over known spellings
+```
+
+`btrim` strips **outer spaces only**. Live therefore returns `m<ZWSP>g` intact, matches no size
+table, and `create_invoice_from_blend_ticket` raises `BLEND_TICKET_UNIT_UNCONVERTIBLE`. Stripping
+zero-width client-side made the preflight **more permissive than the database it predicts**, turning
+an accurate early warning into a silent ticket that fails weeks later at invoicing. The strip was
+reverted before merge; the parity contract is now pinned by tests in
+`describe('zero-width characters must not out-run the database')`, which go red if anyone re-adds it.
+
+**So the remaining real defect is server-side.** An operator who pastes a rate unit out of a PDF gets
+a correct-looking ticket that the database will refuse, and the warning naming the offending unit
+shows two strings that look identical on screen. Nothing misbills — the RPC fails closed — but the
+ticket cannot be invoiced until the unit is retyped.
+
+**The fix is a migration, not a client change:** harden `normalize_rate_unit` to delete
+U+200B/200C/200D (and decide the BOM and interior-whitespace cases at the same time), then relax
+`rateBaseUnit` **in the same change** so the two never drift. Doing either side alone re-creates this
+bug in one direction or the other.
+
+Three adjacent parity gaps to settle in that same migration rather than piecemeal:
+
+- JS `.trim()` strips the BOM (U+FEFF) and tabs; PostgreSQL `btrim` does not. Pre-existing, predates
+  PR #439. (gpt-5.6-sol MED #2.)
+- The live CASE lists `'fl oz'` with a single space; neither side collapses interior whitespace, so
+  `'fl  oz'` matches nothing on either side. Consistent today, but by accident rather than design.
+- **The invoice pre-flight stays silent when the rate unit or the sold unit is blank**, although the
+  SQL calls its converter regardless and `normalize_rate_unit` returns NULL for an empty string, so
+  live refuses that line too (gpt-5.6-sol MED #1). Warning on blank was **tried and deliberately
+  reverted** on PR #439: client-side, an empty string does not reliably mean "the catalog has no
+  unit" — it equally means *this caller never resolved the catalog row*, since the pages filter
+  `allProducts` to `is_active` and an inactive product is simply absent. A live read on 2026-08-20
+  says the innocent reading dominates: **0 of 595** active products lack a sold unit (25 lack a rate
+  unit). Warning on blank would therefore mostly emit false "not recorded" notes from load gaps —
+  the wallpaper effect the two-tier design exists to prevent. The real fix is to tell
+  `validateBlendMath` whether the catalog row RESOLVED, instead of inferring it from an empty
+  string; until then the server's fail-closed refusal is the backstop.
+
+**Fixed on PR #439, not deferred:** gpt-5.6-sol MED #3 — the unit-family sets listed only US
+spellings, so a total in `kg`, `g`, `l`, `ml` or their long forms matched neither family, ran no
+total check at all, and said nothing about it. That was a silent hole and a regression against the
+older same-unit sum comparison. The sets now track the live `normalize_rate_unit` CASE, and a total
+unit that still belongs to no family earns an explicit `unchecked` note naming the unit.
+
+**Narrowed, not closed (2026-08-23).** The two remaining free-text unit boxes — the Field App
+Split Invoice Editor's rate unit and the Blend Recipes item unit — became `UnitSelect` dropdowns,
+so on those two screens a unit can no longer be pasted or typed at all and a zero-width character
+cannot enter that way. This changes the *reachability* of the defect, not the defect: the server
+is still the only place that can fix it, and every other way a rate unit reaches the database
+(the OCR path in `process-blend-ticket`, direct SQL, an import) is untouched. Do not read the
+narrower entry surface as a reason to close this.
+
+**Not started.** No migration written, no live state, and a live apply would need Mason's explicit
+approval plus a migration review.
+
+---
+
+## OPEN 2026-08-19 — `baseUnitOfRate` reads `oz/cwt` as `oz`; the database refuses it
+
+**Severity: MED, money path, not yet reproduced on live data.** `baseUnitOfRate`
+(`src/lib/chemCalculator.ts`) strips a per-acre suffix by splitting on the first `/`
+unconditionally, so any non-acre denominator collapses to its numerator: `oz/cwt` → `oz`.
+
+The live `normalize_rate_unit` does the opposite. When a denominator other than acres is present it
+returns the **whole string**, precisely so it cannot match a bare unit and the conversion refuses.
+
+So for a rate unit like `oz/cwt` the client says "convertible, priced fine" while
+`create_invoice_from_blend_ticket` raises `BLEND_TICKET_UNIT_UNCONVERTIBLE`. That is the dangerous
+direction: nothing on screen, a hard failure at billing.
+
+`baseUnitOfRate` is **not** confined to blend tickets — it is used by the job chemical grid, in code
+whose own comments describe it as a P1 money fix. Whether any live rate unit actually carries a
+non-acre denominator has **not** been checked, so the real-world exposure is unknown.
+
+`blendMathValidator.ts` deliberately does its own suffix stripping rather than reuse this helper, and
+documents why at `rateBaseUnit`. That sidesteps the problem for blend tickets only.
+
+**Live `rate_unit` values checked 2026-08-22 (read-only).** All four `job_chemicals` rows carry
+`pt/ac`, `oz`, `oz`, and the junk string `32`. **None has a non-acre denominator**, so the
+real-world exposure on the job path is currently zero — but that is a fact about today's four rows,
+not a guarantee, and free-text entry can produce one at any time.
+
+**Half closed, PARKED.** Migration `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
+(history row 891, branch `claude/save-job-server-side-chem-unit`, **written and proven, NOT applied
+to live**) makes `save_job` refuse a chemical line whose rate unit has a non-acre denominator, with
+`CHEM_RATE_DENOMINATOR_NOT_ACRES`. That turns the dangerous direction — nothing on screen, hard
+failure at billing — into a refusal at save time, naming the product and the offending unit. Proven
+in a throwaway container: an `oz/cwt` line is refused and leaves no `jobs` or `job_chemicals` row.
+
+**All three spellings are covered, and the word and hyphen forms are new findings.** The migration
+refuses `oz/cwt`, `oz per cwt` *and* `oz-per-cwt`. A slash-only test was the first draft and Codex
+blocked it (P1, 2026-08-23): a spelled-out denominator whose `unit` carries the same text
+normalizes EQUAL, so the row was accepted with its quantity already derived against a non-acre
+denominator. The hyphen form was the same escape one separator away and was found in the following
+review round. The per-acre exclusion is plural-tolerant on both sides, so `gal per acres` still
+saves. **The same gap exists in the client half on PR #436** — `rateDenominatorIsUnrecognized` ends
+in `return raw.includes('/')`, so it flags neither the word nor the hyphen form. That is unfixed and
+belongs to PR #436.
+
+**A BLANK `unit` is now REFUSED when the line bills — settled by Mason, 2026-08-23.** The invariant
+can only disprove what it can measure, so a blank unit on either side used to be *skipped* — while
+`transfer_job_to_invoice` billed the line at `price_per_unit_cents x quantity` regardless. An
+unprovable line that still bills is the same hazard class as a provably wrong one, so migration
+`20260820120000` now raises `CHEM_UNIT_UNSPECIFIED` for it.
+
+Three exemptions, all deliberate and all the same rule — a line that cannot bill cannot bill
+*wrongly*, so refusing it would be pure friction: a `customer_supplied` line (contributes 0 to both
+totals), a line carrying neither a cost nor a price, and a line whose quantity is 0. The test covers
+the **cost** side as well as the price, because `total_cost_cents` feeds margin and not just the
+customer bill.
+
+The zero-quantity exemption is third for a reason worth recording. When the refusal was first
+written, the zero-quantity skip sat *below* it, so a line with a blank unit, a filled-in price and
+quantity 0 was refused — and because `performSave` re-sends the whole chemical grid, one such line
+makes the **entire job** unsaveable, not just that line. It is reachable from the ordinary UI:
+`reconcileChemAutofillUnits` leaves `unit` blank on its fallback path while the tier price is
+already populated, so a product picked before any acreage is entered lands exactly there. Three
+independent reviewers found it on the same round; the skip moved above the refusal, test `T20` pins
+it, and a mutant that moves it back turns `T20` red by name.
+
+**PRE-APPLY DATA OBLIGATION — SATISFIED 2026-08-24, and still re-run it before any apply.** Of the
+four live `job_chemicals` rows, exactly one (JOB-2026-0002) carried a `pt/ac` rate, a **blank** unit
+and both a cost and a price, so the new rule refused it. Mason chose to fix the data first and then
+close the hole. **That correction was made on 2026-08-24 with his explicit OK** — one row, `unit` set
+to `'Pt'` — and re-verified read-only: the count below now returns **zero**, and the job totals did
+not move (`219930` / `278578` before and after), because the per-unit amounts were already quoted
+per pint; only the label was missing. Behaviour test `T28` replays the corrected row and asserts
+those same two totals, so the claim is proved by execution rather than asserted.
+
+Do **not** treat that as retiring the check. "Zero rows today" is a property of the data on one day,
+not of the migration: a legacy import, a hand-built RPC call, or any save made before this migration
+applies can recreate the shape. Re-run this immediately before the apply and require **zero** rows:
+
+**The query is deliberately NOT reproduced here. Copy it from the header of
+`supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`,
+which is the only authoritative copy.** This page used to carry a second copy claiming to match it
+"character for character", and on 2026-08-24 the exact-SHA gate found the copy had gone stale: it
+was missing the fourth term, the one for a rate that is ONLY a denominator (`per acre`, naming no
+unit at all). A stale pre-apply count fails in the worst direction — it reports a false zero, and
+the apply then makes live jobs unsaveable. One rule written in two places is exactly how that
+happens, so the second place is now a pointer instead of a copy.
+
+What the query looks for, so whoever pastes it can sanity-check what they pasted: a **blank stock
+unit**; a stock unit that is nothing but a per-acre denominator; a **rate unit** that strips to
+nothing once its per-acre suffix is removed; or a rate unit that is only a denominator with no
+leading separator — all counted only on lines that actually bill (non-zero quantity, not
+customer-supplied, carrying a cost or a price). **Four terms. If the block you pasted has three, it
+is the stale version.**
+
+It took **four** versions to get right. The first three tested only a blank stock `unit`, so they missed the rate
+side entirely: `normalize_rate_unit` returns NULL whenever its base strips to empty, which a rate
+unit of `/ac` or `per acre` does — those rows are refused too, and a `unit`-only count reports zero
+while a live row is still refused. Every wrong version failed in the same direction, which is the
+dangerous one: it reads as "no operational impact on apply day" when in fact a job would become
+unsaveable. All four versions happened to return the same **one** live row, so Mason's actual data
+obligation never changed — but that was luck, not correctness.
+
+Context that keeps the risk in proportion: the affected row belongs to a **test product** on a job
+already in `invoiced` status, not to live customer work. Had it not been corrected, the cost would
+have been one operator seeing a message naming the product and asking for the Unit — but one bad
+line blocks the *whole* job, because the page re-sends the entire chemical grid on every save.
+
+**A "narrower" option was floated and does not work — recorded so it is not re-proposed.** The
+obvious softening is to refuse a blank unit only when the line carries a non-zero price. That buys
+**nothing** here: the one live blank-unit row carries both a cost *and* a price, so the narrow gate
+refuses exactly the same row as the broad one.
+
+Test `T1` in `scripts/smoke/fixtures/save-job-chem-unit-tests.sql` replays that row's
+**pre-correction** shape and asserts the refusal, so the obligation is pinned by an executable test
+rather than by this paragraph; `T28` replays the corrected row and asserts it saves at the real
+totals. `T1` is deliberately kept now that production is clean — deleting it because no row happens
+to be in that shape today would retire the only executable statement of the policy. Note this does
+**not** close the class on its own, because of the scope limit below.
+
+**A SECOND, UNRELATED LIVE DEFECT IS OPEN IN THE SAME FUNCTION, and the same parked migration
+closes it — `save_job` can create a DUPLICATE JOB, and can silently discard an edit.** Found by the
+exact-SHA `gpt-5.6-sol` proof gate on 2026-08-24; live today, since nothing has been applied. This
+is a defect in the idempotency handling, not in the unit invariant, and it is recorded here so it is
+not re-discovered as new.
+
+An *idempotency key* is the receipt number the app sends with a save so that a double-click, or a
+retry after a dropped connection, records the work once instead of twice. The live `save_job` body
+looks that key up with an unlocked `SELECT` filtered to `operation = 'save_job'`, then records the
+receipt with `ON CONFLICT (idempotency_key) DO NOTHING` — but the live uniqueness constraint is
+`idempotency_keys_idempotency_key_key`, on the **key alone**, not on the pair (verified read-only
+2026-08-24). Those two facts together are the bug. A key already spent by a *different* operation is
+invisible to the filtered lookup, so the job is created, the receipt INSERT is swallowed by the
+conflict, and the **next** retry with that key finds nothing again and creates a **second job** — a
+duplicate job is a duplicate bill. Two callers racing on one key could also both pass the unlocked
+lookup.
+
+The quieter half: even scoped correctly, a key+operation lookup matches on the key, so a key spent
+by an earlier `save_job` and then reused for a **different job or an edited payload** returns the
+earlier success. Nothing is duplicated, but the current request is never saved and the operator is
+told it was — an edited quantity, cent amount or job header silently discarded. Any caller could
+likewise replay another user's receipt. This is the identical defect shape already fixed for
+commission payouts (finding 3.5 below, PR #378, applied live 2026-08-11).
+
+Migration `20260820120000` closes both halves by routing the lookup through
+`check_idempotency_intent(text, text, uuid, text)` — installed live and already called by nine money
+RPCs (the whole return family plus create/post/void commission payment) — which advisory-locks the
+key and binds it to the calling actor and to a sha256 fingerprint of the request. Cross-operation
+reuse raises `IDEMPOTENCY_CROSS_OP_KEY_REUSE`, another actor's receipt `IDEMPOTENCY_ACTOR_MISMATCH`,
+a changed payload `IDEMPOTENCY_INTENT_MISMATCH`; an unchanged retry still replays to the same job.
+Tests `T26`, `T27`, `T29` and `T30` pin all four behaviours. **Parked with the rest of the
+migration — the hole is open on production until it applies.**
+
+**A THIRD hole in the same function, found 2026-08-24 and closed by the same parked migration: fluid ounces could be billed as dry ounces.** `normalize_rate_unit` collapses `fl oz` to `oz` without knowing the product's form. That is correct for a **liquid** product (`unit_conversions` records `oz` as "alias for fl oz", both liquid, both factor 1) and wrong for a **dry** one, where `oz` is a dry ounce — a weight — and `fl oz` is a volume. `field_app_priced_quantity`, the authoritative converter, refuses the pair outright: its dry branch sizes `fl oz` as NULL. The guard compared the normalised units **before** loading `product_form`, so a dry line with `rate_unit = 'fl oz/ac'` and `unit = 'oz'` compared equal, took the fast path, and billed with nothing proven — the guard being more lenient than the SQL that bills. Note an earlier round of this work examined this exact alias and cleared it; that clearance was right for liquids and never covered dry, which is why it is recorded here rather than treated as new. **The first fix was a HALF-fix and the gate returned the other half as a fresh HIGH.** Moving the form lookup above the equality shortcut closed only the shortcut. The path it missed is worse: `field_app_priced_quantity` is called with the **normalised** units, so `fl oz` is already `oz` before the converter sees it — handed the raw spelling its dry branch sizes it NULL and refuses, handed `oz` it sizes it 1 and converts **16:1 into pounds**. A dry line with `rate_unit = 'fl oz/ac'` against a stock `unit` of `'lb'` therefore does **not** normalise equal, skipped the new check entirely, went down the conversion path, and turned a VOLUME into a WEIGHT that the authoritative totals were derived from. The rule is now **unconditional**: on a dry product, a fluid-ounce spelling on either side is refused whatever the other side says. `T31`/`T32` pin the aliased pair both ways, `T37`/`T38` the conversion path, and `T33` pins that the LIQUID `fl oz`/`oz` pair still saves — the one line that must not move, because widening further ("the converter must agree") would refuse a liquid product priced in pounds and block whole jobs. **A test had to be INVERTED, and that is the durable lesson:** the half-fix round had written a test *requiring* the both-sides-`fl oz` dry shape to SAVE, on the reasoning that identical spellings are self-consistent. That froze the half-fix in place and would have defended it against the next reviewer. Self-consistent arithmetic in a unit the invoice cannot convert is not a saving grace. **No live product is in the refused shape** (read read-only 2026-08-24: the 85 dry products use `dry oz`, `lb`, `mg` and `oz`), but the compared units arrive in the RPC payload rather than from the catalog, so catalog cleanliness does not bound it. **A THIRD round was needed on this same rule, and it is the reason the rule is no longer a list.** The round-12 fix matched three literal spellings (`fl oz`, `floz`, `fluid ounce`). The gate returned `fl. oz` as a fresh P1: `normalize_rate_unit` has no arm for the period form, so it hands the string back unchanged, both sides of a dry line match each other, the equality shortcut fires, and the line bills with nothing proven. The app's own `src/lib/blendMathValidator.ts` states that periods are insignificant, so the client and server disagreed about what the operator typed. The rule now folds whitespace **and periods** on both sides and matches the fluid-ounce CONCEPT rather than an enumerated list; `T39` pins it. **A FOURTH round followed within hours, and it is the one worth remembering.** CodeRabbit found that the round-13 fold handled periods but not ZERO-WIDTH characters, so `fl<U+200B>oz` escaped exactly as `fl. oz` had — the same mistake twice running, because round 13 fixed the single spelling a reviewer named instead of adopting the complete rule the app already had. `src/lib/blendMathValidator.ts` defines the full lossless set (case; zero-width U+200B/200C/200D/FEFF deleted outright; any run of real whitespace including the non-breaking space; periods) and the guard now mirrors it exactly. Measured on live PostgreSQL 17.6, the round-13 expression missed five real forms. Zero-width characters are DELETED because they separate nothing (`fl<ZWSP>oz` must close up to `floz`); the non-breaking space is MAPPED TO A SPACE because it does separate, so the legitimate `dry<NBSP>oz` unit still saves — `T40` pins the refusal and `T41` pins that non-refusal, because widening a guard is never free. **Parked with the rest of the migration.**
+
+**Scope limit: `save_job` is not the only writer.** The invariant binds `save_job` alone, but
+`_close_quote_as_applied` (migration 20260703200000) and the recipe-pricing path (migration
+20260618230000) both `INSERT INTO job_chemicals` with `cost_per_unit_cents` / `price_per_unit_cents`
+and never run this check. A mismatched-unit priced line can still be created through those paths and
+billed by `transfer_job_to_invoice`. "The database is now the boundary" is therefore true of the
+job-save path and not yet true of the table.
+
+**Still open after that migration applies:** (a) `baseUnitOfRate` itself still collapses `oz/cwt` to
+`oz` on the client — the guard that stops such a row reaching `save_job` (`rateDenominatorIsUnrecognized`
+in `chemRowDefects`) rides on PR #436 and is **not on `main`**, so until that PR lands the operator
+still sees "convertible, priced fine" and only learns otherwise when the save is rejected; and (b)
+the blend-ticket path is untouched — `create_invoice_from_blend_ticket` still raises
+`BLEND_TICKET_UNIT_UNCONVERTIBLE` at billing time, and `blendMathValidator.ts` still does its own
+suffix stripping.
+
+---
+
+## OPEN 2026-08-19 — blend-ticket unit fields are free text, so spellings drift
+
+**Severity: LOW, data-quality.** The `unit` and `rate_per_acre_unit` inputs on
+`ManualTicketCreate.tsx` and `BlendTicketDetail.tsx` are plain `<Input type="text">` boxes with a
+placeholder, and a new product row starts with `unit: ''`. Nothing constrains an operator to the
+vocabulary in `unit_conversions`, so `gallons`, `lbs`, `gal`, and a blank are all equally storable.
+
+The Field App already solves this: `FieldAppChemicalEntry.tsx` renders a picker from
+`unitOptionsForForm(unitConversions, product_form)` and uses `isKnownUnit` to grandfather existing
+odd values. Making the blend-ticket fields use the same helpers is the real fix and would turn a
+prose rule into a hard guard.
+
+Until then the total-volume check fails safe: an unrecognised spelling or a missing unit produces a
+"verify the total by hand" message instead of a comparison. That is deliberate — see the alias-map
+comment in `src/lib/blendMathValidator.ts` — but it means an operator who types `gallons` on one
+row and `Gal` on another loses the check on that ticket.
+
+**Not started.** No migration, no live state, no money path.
+## RESOLVED 2026-08-24 (opened 2026-08-19) — PR #404 stamps quote-line provenance, defers the FK, and settles superseded prices
+
+**Status: RESOLVED — the reworked tier-split migration merged to `main` as the authoritative
+artifact (PR #461) and was applied live on 2026-08-24 with Mason's explicit in-chat approval as
+ledger version `20260825025241`, followed by its two successors (`20260825033106`,
+`20260825034622`). See the rollout block at the top of `docs/reference/migration-history.md`.
+The branch named below is a superseded draft; the description below is kept as history.**
+
+**FIXED in the same migration — `restore_quote_version` REFUSES a drawn booking.** Found by
+`rls-security-reviewer` and confirmed against live `prosrc`: `save_quote` was not the only path that
+deletes and reinserts a quote's lines. `_restore_quote_version_owner_impl` does the same, and its
+reinsert **omits the `id` column entirely** — every restored line takes a fresh
+`gen_random_uuid()`, so no id is ever reused. Under the deferred FK that would leave every stamp
+dangling at COMMIT and abort the restore with a raw foreign-key error, on a UI-reachable path that
+works today.
+
+**Mason chose option (A) — release the stamps — on 2026-08-19, and it was then REFUTED by the
+`gpt-5.6-sol` gate the same day.** Releasing discards the telescoping rounding basis. Reproduced on
+PostgreSQL 17.6: two 0.5-unit lines at `$1.01`, draw 0.5, restore to a single 1-unit version, draw
+the rest → the customer is billed **`$1.02` against a booking whose own arithmetic says `$1.01`**.
+`DRAW_MIXED_TIER_UNMATCHED_LINE` cannot catch it, because that guard fires only when the product
+carries **more than one** distinct `(price, cost)` — and after the restore it carries exactly one.
+The release also fired `after_order_items_change` → `trg_recalc_order_totals`, locking the order row
+while restore holds the quote row, crossing the order→quote order that cancel/void takes.
+
+**Mason then chose option (B), which is what ships:** restore raises
+`QUOTE_RESTORE_BLOCKED_BY_DRAW` — a plain-English refusal — when the booking already has drawn
+lines, **before** any destructive work. 
+
+**Its real scope, stated accurately (Codex round 3 — an earlier version of this entry called it
+"narrow", and that was wrong):** the check joins `order_items` **unfiltered by order status**, so
+once a booking has **ever** been drawn it can never restore a version again — even if every draw
+order was afterwards cancelled or voided, the quantity returned to `quote_product_draws` and the
+booking reopened. Those reversed rows are retained for audit and still carry their stamp, so the
+check stays true forever.
+
+**Mason accepted that over-breadth on 2026-08-20 rather than narrow it.** Narrowing means letting a
+reversed line past the guard, whose stamp would then dangle at COMMIT exactly as before — so
+restore would have to **release** the stamps on those dead lines. Releasing is money-neutral for
+them (a voided line is filtered out of `billed_stamped` and `v_unmatched` entirely; a cancelled
+line contributes only its delivered quantity, zero here), but it puts back an `order_items` UPDATE,
+which fires `after_order_items_change` → `trg_recalc_order_totals` and locks the order row under
+the quote lock — the deadlock this rework just removed. Trading a rare capability for a
+reintroduced lock cycle is the wrong trade. A regression case in
+`scripts/smoke/smoke-restore-version-drawn-guard.sql` pins the accepted behaviour, so a later
+narrowing must change this decision consciously rather than by accident.
+
+What is unaffected: a booking never drawn restores freely, and editing the quote directly still
+works on **any** booking, because `save_quote` reuses the same line ids and the deferred FK keeps
+the stamps. Doing (A) properly means carrying the
+line-level billing basis across a restore, which needs a real snapshot→live identity mapping — the
+same missing capability `QUOTE_ITEM_AMBIGUOUS_COST` is about, and it gets its own PR.
+
+**A second `gpt-5.6-sol` finding was a guaranteed-rollback blocker.** The postflight denied
+`service_role` EXECUTE on the restore impl, copied from the draw impl. That is wrong for this
+function: live carries `{postgres=X/postgres,service_role=X/postgres}`, a grant `20260813080000`
+deliberately retained, and `CREATE OR REPLACE` preserves ACLs — so the assertion fired and rolled
+the **entire migration** back on every attempt. It went unnoticed because the first rehearsal
+created the function fresh, with no inherited ACL, so the check passed **vacuously**. The deny list
+is now the browser roles only, and `service_role` is asserted **present** so an accidental REVOKE is
+caught too.
+
+**Proven on PostgreSQL 17.6 (2026-08-19; live never written to), with a fixture that reproduces
+live's ACL exactly:** the old assertion trips on `service_role` (so the blocker was real and the
+test is not vacuous) while the corrected one passes; the shipped body installs over that preimage,
+the ACL survives `CREATE OR REPLACE`, and all four restore postflight predicates hold; the restore
+writes `order_items` nowhere, so `after_order_items_change` cannot fire; a drawn booking is refused,
+an undrawn one is not, the guard is scoped per quote, and the `$1.02` overbill is unreachable. All
+15 money assertions still pass, re-lifted verbatim from the edited file.
+
+**Also fixed in the same pass (both gate reviewers, 2026-08-19):** the migration locked
+`quote_product_draws` before `order_items` while the draw path writes `order_items` first — a real
+deadlock cycle against any in-flight pre-barrier draw, which neither the advisory key nor the
+quiet-gate prevents (the quiet gate runs *below* those locks). The order is now
+`quote_items` → `order_items` → `quote_product_draws`, matching the draw path, and the header's
+false "no deadlock is possible" claim is corrected along with its lock count (six acquisitions,
+~90s worst case, not three and ~45s). The FK postflight now also asserts `convalidated` and the
+full key shape — proven by mutation: a `NOT VALID` constraint passed the old predicate and is
+rejected by the new one. The price-partition tripwire now matches the `IS NOT DISTINCT FROM
+ti.price` predicate rather than two identifiers that also appear in the file's own comments.
+
+**Live facts confirmed read-only on 2026-08-19**, because the price partition depends on them:
+`quote_items_price_per_unit_cent_scale_chk` and `order_items_price_per_unit_cent_scale_chk` are
+both `convalidated` (so the price comparison is exact whole cents); `order_items.price_per_unit` is
+NOT NULL with zero NULL rows; and there are zero cancelled orders carrying delivered units, so the
+cancelled-branch money case stays dormant.
+
+PR #404's tier split originally identified a price tier by the `(price_per_unit,
+cost_at_quote_cents)` pair. That key is neither unique (two booked lines at the same price collapse
+into one tier) nor immutable (three separate paths rewrite the cost snapshot), so attributing
+already-billed units to tiers was a guess. The rework makes a tier **one booked quote line** and
+stamps `order_items.quote_item_id` on every line the partial-draw path writes, so the next draw
+resolves attribution by identity.
+
+**The blocker that discovery surfaced, verified link by link against live on 2026-08-19.**
+`_save_quote_below_cost_impl_20260810` begins every quote edit with `DELETE FROM quote_sections
+WHERE quote_id = v_quote_id`, and `quote_items_section_id_fkey` is `ON DELETE CASCADE`, so that one
+statement removes every `quote_items` row for the quote. `order_items_quote_item_id_fkey` was plain
+`NO ACTION` and not deferrable (`confdeltype 'a'`, `condeferrable false`), so it is checked at the
+end of that DELETE — before any reinsert. **Any stamped order line therefore made its quote
+un-editable, with a raw foreign-key violation surfacing to the user.** `save_quote` carries no
+guard that would catch this first: its body contains no reference to `orders`, `booking_draw`, or a
+`QUOTE_LOCKED` refusal. Live blast radius before this migration was 1 stamped line of 288 (written
+by the full-conversion path); after it, every partially drawn booking would be affected.
+
+**Resolution: `ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED`** — the check moves to COMMIT, by
+which time `save_quote` has reinserted the same `quote_items` ids, so an ordinary revision leaves
+every stamp intact. **This replaces the `ON DELETE SET NULL` rule an earlier draft of this entry
+described, which was reviewed and found wrong.** SET NULL fires on *every* save of an existing
+quote, including a save that changes nothing, so it wiped every stamp every time: that resets the
+telescoping rounding basis (re-opening the fractional overbill the migration exists to close) and
+strands a partly-drawn two-price booking behind `DRAW_MIXED_TIER_UNMATCHED_LINE`, whose message
+tells the operator to undo a revision SET NULL has already made impossible to undo. The old draft
+rejected DEFERRABLE on the belief that id reuse required the client to echo ids; live `prosrc` read
+on 2026-08-19 shows that is wrong in both halves — no current page echoes ids, and `save_quote`'s
+id-less fallback reuses prior ids without them. The constraint is matched **structurally on catalog
+columns**, not on `pg_get_constraintdef` text, because that rendering depends on the applying
+session's `search_path` and a text match could raise a false drift abort. A postflight asserts both
+halves of the rule (still NO ACTION, now deferred), and the block refuses to adopt a SET NULL rule
+if it finds one.
+
+**Pricing rule (Mason, 2026-08-19): a price change never rebills delivered product.** Each tier's
+billed history is partitioned by whether the order line was billed at the price the quote line
+carries *today*. Units billed at the current price stay in the telescoping rounding basis. Units
+billed at any other price are **settled**: they still consume the tier's capacity, so the product
+cannot be re-sold, but they are never re-based and their money never enters the basis. New units
+bill at the new price from a fresh basis. Genuine early-price errors are corrected with a credit
+memo. A postflight name tripwire (`units_current` / `units_settled`) refuses the apply if that
+split is ever dropped, because the failure is silent — the allocation still sums, so
+`DRAW_ALLOCATION_MISMATCH` would not catch it.
+
+**Residual, deliberately NOT fixed here.** `save_quote`'s id-less fallback reuses the *lowest*
+unconsumed prior id for a product, not the operator's line. On a quote carrying two lines of one
+product this is normally unreachable — re-saving such a quote already fails closed on
+`QUOTE_ITEM_AMBIGUOUS_COST`. The one crack is deleting one of the two lines (which sends a single
+id-less row, so the ambiguity test passes) while the two lines share a cost: one prior id never
+returns, and if an order line was stamped with it the save aborts at COMMIT on a raw foreign-key
+error. That is **fail-closed** — the whole save rolls back, no money moves, no stamp is silently
+lost. Closing it properly means giving `save_quote` real line identity, which is the same defect
+`QUOTE_ITEM_AMBIGUOUS_COST` already is, with its own blast radius and its own PR.
+
+**Proof standing behind the rework (2026-08-19; live was never written to).** Ran on a throwaway
+PostgreSQL 17.6 in Docker, the same version live runs:
+
+- The reworked tier query — lifted **verbatim** out of the migration, not retyped — parses and runs.
+- Seven money scenarios all pass against expected values: a price raised mid-booking bills
+  `40 × $1.00 + 60 × $1.50 = $130.00`; four 0.25-unit draws on a `$1.01` unit still telescope to
+  exactly `$1.01`; a price changed and changed back bills `80 × $1.00 + 20 × $1.50`; a two-tier
+  booking with a price change between draws bills `100 × $1 + 50 × $2 + 50 × $3 = $350.00`; and a
+  fully drawn line whose price is then changed is **refused** (`DRAW_ALLOCATION_MISMATCH`) rather
+  than re-sold.
+- **Mutation-tested:** restoring the pre-rework projection makes that first scenario bill
+  `$150.00` instead of `$130.00` — a silent $20 rebill of 40 already-delivered units — so the
+  scenario genuinely detects the regression rather than passing vacuously.
+- The migration's **real FK `DO` block** was executed: it installs `confdeltype 'a'`,
+  `condeferrable true`, `condeferred true`; it is idempotent on a second run; and it refuses a
+  drifted `ON DELETE SET NULL` rule instead of adopting it.
+- A `save_quote`-shaped delete-and-reinsert **preserves the stamp** under the new rule; the same
+  shape **aborts** under the old non-deferrable rule and **silently wipes the stamp** under the
+  retired SET NULL rule; and the residual case above **fails closed** with no orphan committed.
+
+**(Historical pre-rollout note, superseded 2026-08-24.)** At review time the file had never been
+applied end-to-end by a server — the preflight requires the cutover barrier (`20260816110000`)
+committed in a prior transaction. That gap closed on 2026-08-24: the file applied live with Mason's
+explicit approval as ledger version `20260825025241` and its preflight/postflight passed in that
+committed transaction.
+
+---
+
+## OPEN 2026-08-19 — blend-ticket linkage picks ONE order line per product, which multi-tier orders break
+
+Confirmed against live `pg_proc` on 2026-08-19. Not caused by PR #404 and not fixed by it; PR #404
+makes the first one reachable more often by emitting several order lines per product.
+
+1. **`link_blend_ticket_to_order`** attaches a blend ticket product to a single order line via
+   `ORDER BY oi.sort_order NULLS LAST, oi.id LIMIT 1` and records the ticket's whole quantity as
+   `quantity_applied` against it. On a tier-split order the product now has several lines, so the
+   link lands entirely on the first tier. **Money impact is currently nil**: `quantity_applied` is
+   written by this function and by `create_order_from_blend_ticket` and is read by nothing —
+   no other function, and no frontend code outside type declarations and a test fixture. It is an
+   audit/linkage record, so this is a correctness and traceability defect, not a billing one.
+2. **`create_invoice_from_blend_ticket`** prices a ticket product from the quote with `SELECT
+   qi.price_per_unit ... WHERE qi.section_id = ... AND qi.product_id = ... ORDER BY qi.id LIMIT 1`.
+   `qi.id` is a random uuid, so on a booking with two lines for one product at different prices the
+   invoice picks an **arbitrary** tier's price for the whole ticket quantity. This is a live money
+   defect today, independent of PR #404 — multi-line bookings already exist as quote data whether or
+   not the draw splits order lines. Deliberately not fixed in PR #404: it needs its own design
+   decision about how a ticket quantity is split across tiers.
+
+## CLOSED 2026-08-16 — CRX-SEC-1: a sales rep could forge a quote-version cost basis and inflate their own commission
+
+**Severity: was HIGH (money + privilege). Closed live by `20260813080000_lock_quote_versions_writes_to_rpc`, ledger version `20260816174353`.** The apply is observed in the ledger; the commonly quoted clock time of 2026-08-16 17:43:53 UTC is **inferred** from that version stamp, because `supabase_migrations.schema_migrations` has no timestamp column. Recorded here on 2026-08-18 because it was never entered in this file while it was open, and because `docs/reference/migration-history.md` row 886 had gone on describing the migration as an unapplied local candidate for **two days** after it went live (2026-08-16 inferred apply → 2026-08-18 correction). That drift is fixed: row 886 has read **APPLIED LIVE** since the 2026-08-18 correction, and this sentence records what it used to say, not what it says now. The file was authored under the stamp `20260813080000`, five days before that correction; neither of *those two* intervals is six days. (The six-day figure in this file's header measures how stale the recorded ledger high-water was, which is a different quantity.)
+
+**What the hole was.** `public.quote_versions` is an append-only snapshot table. Its RLS INSERT policy `qversions_insert` checked only *who owned the quote* — never what the row contained — and the browser roles still held raw table write grants, so a sales rep could PostgREST-INSERT a version row of their own construction onto their own quote. That became a money problem once `20260812115236` made `snapshot_data` an authoritative cost source: the restore path writes the snapshot's cost straight into the immutable `quote_items.cost_at_quote_cents`, `convert_quote_to_order` copies it onto the order line, and canonical profit and commission derive from there. The below-cost approval trigger added by `20260812115237` does **not** catch it, because that trigger compares the sale price against the *live product* cost — understating the historical cost basis raises apparent margin, so it never fires.
+
+**What the fix does.** Drops the ownership-only INSERT policy, revokes the write-capable table grants from the browser roles, and leaves `qversions_select` and the authenticated SELECT grant untouched — reading versions is unchanged, writing them is reachable only through the reviewed SECURITY DEFINER RPCs.
+
+**Post-apply live proof, read read-only 2026-08-18:** `public.quote_versions` carries exactly one policy, `qversions_select`; `qversions_insert` is gone; and `has_table_privilege('authenticated', 'public.quote_versions', …)` returns INSERT **false**, UPDATE **false**, DELETE **false**, SELECT true, with `anon` SELECT **false**. On grants, state the ACL and not a summary: `pg_class.relacl` is `{postgres=arwdDxtm/postgres,anon=m/postgres,authenticated=rm/postgres,service_role=arwdDxtm/postgres,metabase_ro=r/postgres}`. So `authenticated` holds SELECT **and MAINTAIN**, and `anon` holds **MAINTAIN** — an earlier draft of this line said "SELECT only" and "`anon` holds nothing", and both were wrong, contradicting the migration's own retained-MAINTAIN comment and the `anon=m` reading already recorded further down this file. MAINTAIN permits VACUUM/ANALYZE/CLUSTER/REINDEX/LOCK and can neither read nor write a row, so the write-lock conclusion stands unchanged; the error was one of evidence, not of security — `information_schema.role_table_grants` silently omits MAINTAIN, so reading grants there and calling it a complete proof overstates it. `metabase_ro` holds SELECT, has no policy, and does not bypass RLS, so it reads zero rows. **Write-path probe, independent of the grant read:** the only function in the database that inserts into `quote_versions` is `_create_quote_version_owner_impl(uuid,uuid,text,text)` — SECURITY DEFINER, postgres-owned, `search_path=public, pg_temp`, EXECUTE false for both `anon` and `authenticated`. Its only caller is `create_quote_version(uuid,uuid,text,text,bigint)`, whose parameters carry **no client cost snapshot** — the basis is built server-side — and whose body enforces `auth.uid()`, active-profile role, quote ownership and row version. No triggers on the table, no view over it, no UPDATE or DELETE writer, and `anon`/`authenticated` are members of no other role. No non-admin write path remains. The live ledger row stores this migration as a single statement that is **byte-for-byte identical** to the tracked file — `md5(array_to_string(statements, E'\n'))` on live returns `dd6554fa6f819f9e5b96b8244f73f8ee`, which equals `md5sum` of both the working-tree file and the committed blob, at 88,098 bytes on every side (the file is LF-terminated on disk, so no end-of-line normalization was applied). Matching lengths alone would not have proved this; the hash does. The file is on `origin/main`. A live exploitation check over existing rows came back clean when the fix was written — the migration's own header dates that re-confirmation **2026-08-14 UTC** and notes UTC runs one calendar day ahead of the local evening, so do not read it as 08-13; there are 3 `quote_versions` rows live.
+
+**Not closed by this.** The migration file's own first line still reads `-- STATUS: NOT APPLIED`. That comment is stale. It is deliberately **not** corrected, because CRX Manager never edits an applied migration — trust history row 886 and the live ledger instead. Separately, this is the fourth time a migration's real live status was discoverable only by querying the ledger — a wider count than the "third occurrence" above, which counts only the cases where the file itself never landed; the durable "reconcile live ledger against tracked files" guard named in the prevention-gap entry above is still **not built**, and it is what would have caught this **two days** earlier (2026-08-16 inferred apply → 2026-08-18 correction), the same interval retracted above.
+
+---
+
+## CLOSED 2026-08-19 — the RLS matrices' *named roles*, verified cell by cell against live
+
+**Severity: LOW-MED (documentation accuracy in a security reference; no live access defect
+implied).** Two documents carry an RLS permission matrix: `docs/reference/database-schema.md` (79
+rows) and `docs/workflows/RLS_SECURITY_GUIDE.md` (37 rows). PR #420 machine-compared both against
+live `pg_policies` and fixed every **presence** disagreement — which commands have a policy at all
+— so each cell's "grants something" vs "grants nothing" shape is verified as of 2026-08-19 UTC.
+
+**The role wording inside each cell was a weaker claim; it has since been closed.** A second
+mechanical pass re-derived each cell's role set from the live `USING`/`WITH CHECK` expressions and
+corrected the unambiguous class — every cell claiming **"All authenticated"** where live is in fact
+role-gated (`profiles`, `blend_tickets`, `blend_recipes`, `blend_ticket_to_order_items`,
+`blend_ticket_fields`, `vendors`, `financial_audit_log`, `team_note_tags`, `field_app_locations`,
+`field_app_location_shares`, plus `field_crop_history` and `notifications`, which the earlier
+presence pass had already corrected), and `rate_limit_log`, whose three write cells had been
+"corrected" *into* existence by a presence-diff that mistook a RESTRICTIVE policy for a granting
+one.
+
+**Flag counts, and why the number is a proxy rather than a defect count.** The classifier scans
+**113 rows / 452 cells**. (113 = the 79 rows of the `database-schema.md` matrix plus the 37 of the
+`RLS_SECURITY_GUIDE.md` matrix, minus the 3 whose table-name cell carries an inline annotation —
+`product_cost_basis`, `product_cost_basis_change_rows` and `product_cost_basis_rollout` — which the
+classifier's bare identifier match skips. 113 rows x 4 commands = 452 cells.) Measured at each
+revision of PR #420:
+
+| Revision | Flags | What changed |
+|---|---|---|
+| `origin/main` | 162 | pre-PR baseline |
+| `7d5d5d80` | 89 | after the presence pass (`a4b4e9ce`), which incidentally closed 73 |
+| `21f29c4a` | 61 | role-wording pass — the "All authenticated" class, 28 cells |
+| this commit | 33 | hand-triage of every remaining flag against live |
+
+Earlier drafts of this entry quoted **89** and **61** with no baseline attached, which is why the 89
+could not be reproduced against `origin/main`. Quote the revision with the count. And the count
+tracks accuracy only loosely: correcting `rup_sales_records` SELECT from `Admin` to
+`Admin / Sales Rep` — live is `role = ANY (ARRAY['admin','sales_rep'])`, so the fix is real —
+*raised* the count by one, because the classifier detects roles by matching helper-function names
+(`is_admin()`, `is_sales_rep()`, `is_applicator()`, `is_driver()`) and that policy inlines its
+role test as a scalar subquery.
+
+**All 33 remaining flags were read individually against live `pg_policies` on 2026-08-19 UTC and
+are false positives**, in three families:
+
+1. **Inlined role test.** A policy that spells out a `profiles.role` test as a subquery instead
+   of calling `is_admin()` or `is_sales_rep()` reads as "no role named", so a cell saying `Admin`
+   is right while the classifier flags it. Worked example: `email_log` INSERT is governed by the
+   single policy `email_log_admin_insert`, whose `WITH CHECK` is `EXISTS (SELECT 1 FROM profiles
+   WHERE profiles.id = (SELECT auth.uid()) AND profiles.role = 'admin' AND profiles.is_active =
+   true)` — quoted verbatim, because `docs/workflows/RLS_SECURITY_GUIDE.md` makes wrapping
+   `auth.uid()` in a subselect a rule and an earlier draft of this line transcribed it away. The
+   matrix
+   cell reads `Admin` and is correct. Same family, inlined as `= 'admin'`:
+   `ar_reminder_tracking` SELECT, `failed_notifications` (one `FOR ALL` policy covering all
+   four commands), `team_note_attachments` DELETE, `vendor_bills` SELECT/INSERT/UPDATE,
+   `vendor_payments` SELECT/INSERT, and the
+   soft-deleted-rows policy on `vendors`. Inlined as `= ANY (ARRAY['admin','sales_rep'])`:
+   `rup_sales_records`, `offline_action_receipts` SELECT, and the main `vendors` SELECT policy
+   (`vendors` carries two policies — live rows for admin and sales_rep, soft-deleted rows for
+   admin only). An earlier draft of this entry defined the family as `= 'admin'` only, which did
+   not describe three of its own members, and listed the tables without commands. The commands
+   matter: `ar_reminder_tracking` INSERT, `vendor_bills` DELETE and `vendor_payments` DELETE
+   are governed by a bare `is_admin()`, so those cells name a role the classifier *can* see and
+   are not members of this family.
+2. **Role named by how the row is reached.** The `Driver` cells on `deliveries`, `delivery_items`,
+   `delivery_photos` and `delivery_remainders`, where live is `assigned_driver = auth.uid()` — for
+   `delivery_remainders`, the *original* delivery's assigned driver. Correct English, unmatched
+   role name. (An earlier draft of this entry gave the column as `driver_id`; live is
+   `assigned_driver`.)
+3. **Deferred to another table's RLS.** One member: `invoice_items` SELECT, an `EXISTS` over the
+   parent invoice carrying exactly the `invoices_select` predicate and no auth test of its own.
+   An earlier draft also filed `offline_action_receipts` here. That was wrong — its `EXISTS` is
+   over `profiles`, with `role = ANY (ARRAY['admin','sales_rep'])` inlined and an
+   `actor_id = p.id` owner branch. It defers to nothing, and belongs in family 1. (The matrix
+   cell itself, `Owner / Admin / Sales via sanitized RPC only`, is correct: `authenticated` holds
+   no SELECT grant on the table, so the permissive policy is unreachable from the browser.)
+
+**What the hand-triage corrected**, each verified against live `pg_policies` before the cell was
+rewritten:
+
+- `customers`, `delivery_items`, `delivery_photos`, `cycle_counts`, `rebate_programs`,
+  `rebate_claims`, `prepay_applications`, `fields`, `email_log`, `note_tags`, `team_note_tags`,
+  `note_activity_log` — cells naming a role live does not grant, or omitting one it does.
+- `invoices` / `invoice_items` SELECT: live is `is_admin() OR created_by = auth.uid() OR
+  salesman_id = auth.uid()`. There is no `is_sales_rep()` branch, so a sales rep who is neither
+  the creator nor the assigned salesman cannot read the invoice; `Admin / Sales Rep` overstated it.
+- `blend_recipe_items` writes: `is_admin() OR parent recipe.created_by = auth.uid()` — the same
+  shape as the `blend_recipes` parent row this PR had already corrected. The child row was missed
+  in that sweep.
+- `applicator_licenses`: SELECT is `is_active_profile()` with no role test, and INSERT/UPDATE are
+  `is_admin() OR is_sales_rep()`. The row was wrong in both directions at once.
+- `field_billing_defaults` SELECT, `cycle_count_items` SELECT, `rup_sales_records` SELECT — live
+  grants a role the doc omitted.
+- `deliveries` UPDATE, `delivery_remainders` SELECT, `job_loader_worksheets` INSERT,
+  `cycle_count_items` writes — the cell named the right roles but dropped a condition live
+  enforces (delivery status `in_progress`/`completed`, the original delivery's driver,
+  `created_by = auth.uid()`, parent count `in_progress`).
+- That last shape is the one the classifier structurally cannot flag — the role names match, so
+  nothing is raised — so a final sweep read every matrix cell that is a bare role list against its
+  live expression, looking only for conditions the cell omitted. Six more turned up:
+  `field_obstacles` INSERT (`created_by = auth.uid()`, so an admin cannot insert a row
+  attributed to someone else), `vendors` and `vendor_bills` SELECT (`deleted_at IS NULL`),
+  `invoice_shares` and `order_shares` SELECT (the parent invoice or order must also be
+  un-deleted), and `team_notes` INSERT (an active profile as well as ownership).
+
+**"All authenticated"** in both matrices means live `is_active_profile()`: signed in *and*
+`profiles.is_active`. A deactivated profile is authenticated but denied. **One** cell newly reads
+it: `inventory_holds` SELECT, which read `Admin / Sales Rep` on `origin/main`.
+`team_note_attachments` and `team_note_comments` SELECT already read `All authenticated` there.
+(An earlier draft named all three and said they had "rendered that same live expression as *Any
+active profile*". Both halves are withdrawn: `git log -S` finds that phrase nowhere in
+`origin/main`'s history — it existed only in branch-internal prose — and the other two cells did
+not change.) That makes **17**
+distinct table/command pairs carrying the phrase — 17 cells in the `database-schema.md` matrix and
+8 of them repeated in `RLS_SECURITY_GUIDE.md`, 25 cell instances in all. An earlier draft of this
+entry said "all 14 cells ... in both matrices", which was the count for one matrix described as
+covering two. Every one was re-read on 2026-08-19 UTC and is governed by exactly one policy whose
+`USING` is `( SELECT is_active_profile() )`. Both matrix banners now say so, and the claim can be
+re-checked without the classifier:
+
+```sql
+select tablename, policyname, cmd, qual from pg_policies
+ where schemaname = 'public' and cmd = 'SELECT' and qual like '%is_active_profile%';
+```
+
+That returns **27** rows live (2026-08-19 UTC), not 17 — every SELECT policy in `public` built on
+`is_active_profile()`. The 17 are the subset whose tables the matrices carry; all 17 are in the
+result.
+
+**If this is ever re-run, do not bulk-apply the classifier's output** — that is exactly the mistake
+that produced the `rate_limit_log` row. The classifier locates candidates; live `pg_policies` is
+the proof.
+
+**The classifier is not checked in.** It was an ad-hoc script run against a live `pg_policies`
+snapshot, so the flag counts above cannot be reproduced from this repository alone — treat them as
+a narrative of the sweep, not as evidence. Everything that actually rests on them is enumerated by
+name instead: each false-positive family lists its members above, each corrected cell is named, and
+every one can be re-checked with a direct read of `pg_policies` for that table.
+
+---
+
+## OPEN 2026-08-18 — the session-staleness hook measures disk filename stamps against a server-assigned ledger version
+
+**Severity: LOW (latent silent skip; no incident observed).** `.claude/schema-registry.json` stores
+`"migrations_high_water": "20260816174353"`. That value is a Supabase-assigned ledger **version**, not
+a migration **filename** stamp — the same version/name split described in the CRX-SEC-1 entry above,
+where a file authored `20260813080000` was recorded live as version `20260816174353`.
+`.claude/hooks/session-staleness.mjs` then uses that value as the floor for disk *filename* stamps:
+it walks `supabase/migrations/`, matches `^(\d{14})_`, and does `if (!m || m[1] <= String(highWater))
+continue;`. The two sides are not the same clock.
+
+That `continue` is only the candidate-window filter; files that survive it are then checked for name
+membership against `_meta.applied_migration_names`, with a comment explaining that a pure name check
+over all history was tried and rejected (~100+ historical ledger rows carry prefix-less names). The
+skip still happens **before** the name check ever runs, which is what makes the finding real — but
+quoting the numeric compare on its own makes the hook look simpler than it is.
+
+**Why that can skip a real finding.** Because Supabase assigns the version at apply time, the recorded
+high-water runs ahead of the authored stamp whenever a migration sits on disk before it is applied — by
+three days in the CRX-SEC-1 case. Every migration file stamped at or below `20260816174353` is
+therefore skipped without being checked, including a genuinely unapplied file that would change the
+schema registry. The hook stays silent rather than reporting, which is the failure mode hardest to
+notice.
+
+**Not fixed here.** This was found during a documentation-only pass; changing hook logic belongs in its
+own change with a guard test that fails before the fix and passes after. The fix is to compare against
+the high-water **name** stamp, which `docs/reference/migration-history.md` records alongside the
+version for exactly this reason, or to resolve the version to its name before comparing.
+
+**Correction, 2026-08-19 — the fix is smaller than this entry first claimed.** An earlier revision
+said the fix was "not a one-line hook edit" because `.claude/schema-registry.json` stores
+`"migrations_high_water"` as a version "and nothing else, so the hook has no name to compare
+against", leaving a choice between a registry format change and a live ledger read on an offline
+path. **That premise is false, and it was the entire stated reason this was filed rather than
+fixed.** The registry already stores `_meta.applied_migration_names` — 964 ledger names, 344 of
+them carrying a 14-digit prefix — and it already contains
+`20260813080000_lock_quote_versions_writes_to_rpc`. `session-staleness.mjs` already loads that
+array (line 115) and already uses it for the membership check (lines 139-148). The name high-water is
+therefore derivable in-process as the largest `^\d{14}_` entry of the array, which evaluates to
+exactly the CRX-SEC-1 name the entry says is unavailable. No format change and no live read are
+needed.
+
+So the remaining work is local: compare disk stamps against that derived name high-water instead of
+against the server-assigned version. It is still filed rather than patched here for the reason given
+above — this is a documentation-only pass, and a hook-logic change belongs in its own commit with a
+guard test that fails before the fix and passes after — but it is a bounded hook change, not a
+registry redesign.
+
+---
+
+## CLOSED 2026-08-18 — RETRACTED: the "unexplained commission money change" was two approved, applied migrations
+
+**This entry was first published in PR #420 as an OPEN production-money incident — "stored commission money changed on live and no statement has been identified as the cause". That framing was wrong and is retracted.** The writer was already recorded in this same file (the 2026-08-10 team-board closeout entry below, which names `reconcile_pending_commission_snapshots` and Mason's approval of it) and in `docs/CHANGELOG.md`. The entry asserted an absence without searching for the writer, which is the same overstated-evidence error as the `role_table_grants` grant claim retracted earlier on that PR. It is kept here, corrected, because the wrong version was published and because the attribution is worth having written down.
+
+**What moved, and what moved it** (all verified read-only against live):
+
+- `20260810183629_reconcile_pending_commission_snapshots`, **ledger version `20260810235207`**, applied live 2026-08-10 with Mason's approval. The ordering the rest of this entry depends on — that the reconcile post-dates the 2026-08-10 measurements — rests on that version stamp reading 23:52 UTC, which is an **inferred** clock time (the ledger has no timestamp column), not an observed one. It is an apply-time `DO` block running `UPDATE public.commissions SET order_profit = ROUND(COALESCE(o.total_profit, 0), 2), commission_amount = public.compute_commission_amount(o.total_profit, c.split_percentage)`, and it hard-asserts it wrote **exactly 11 rows** — precisely the two columns and roughly the row count in question. That statement takes both columns from **3 sub-cent rows to 0**, and closes **11 of the 12** basis gaps — but by two different mechanisms, and the quoted `ROUND(…, 2)` is only half of it. It rounds `order_profit`; `commission_amount` is computed from the **un-rounded** `o.total_profit`, and reaches whole cents because `compute_commission_amount` rounds internally — live `pg_proc.prosrc` reads `SELECT GREATEST(ROUND(COALESCE(p_profit, 0) * COALESCE(p_percentage, 0) / 100, 2), 0)` (`supabase/migrations/20260526151856_execute_full_codebase_ultra_review.sql:177`, originally `20260513020000_canonical_commission_math.sql`). Crediting the visible `ROUND` for both columns would be the same overstated-evidence error this entry exists to retract. Its declared scope treats paid, **cancelled**, deleted and payment-batched rows as immutable history, which is why the 12th gap — on a `cancelled` row — was left untouched by design.
+- The single **`pending`** row that still carries a gap of exactly $0.01 re-opened *after* that reconcile. Its order header was last written **2026-08-12 15:47:57 UTC**, which is exactly the ledger version of `20260812115238_repair_historical_order_line_cents` (**`20260812154757`**, applied live 2026-08-12 with Mason's in-chat approval). That migration rewrites `order_items`; the canonical `trg_recalc_order_totals` trigger refreshed `orders.total_profit` in the same statement, and the commission snapshot was not re-derived alongside it.
+
+So: 12 gaps → 11 closed by the reconcile → 1 `cancelled` left by design → 1 re-opened by the 2026-08-12 line repair = the **2 of 35** measured on 2026-08-18. Both writers are tracked, approved, applied migrations. Nothing moved outside a recorded decision.
+
+**Correcting the "two independent measurements" claim.** The retracted entry offered the basis-gap movement (12/35 → 2/35) as independent confirmation that *commission* money was rewritten. It is not independent: that predicate compares `commissions.order_profit` against `orders.total_profit`, and the order side is rewritten by the `trg_recalc_order_totals` trigger, so the count can move with **zero** writes to `commissions`. Only the sub-cent measurement requires a commission write.
+
+**What is genuinely still open, and it is small.** One `pending` commission carries a $0.01 stale basis inherited from the 2026-08-12 line repair, and one `cancelled` commission carries the materially larger historical gap (figure withheld — this repository is public). Neither is a new incident. Both are the already-tracked data debt: repairing them rewrites stored money, which remains Mason's separate decision.
+
+**Note the durability gap.** `order_items` carries validated whole-cent CHECK constraints on `total_price` and `profit`, so those zeros cannot regress. `commissions` carries **no** whole-cent constraint on either money column (only `chk_commission_amount (commission_amount >= 0)`), and `quotes.total_cost` has none either. The commission zeros are a measurement, not an invariant.
+
+**Decision owed by Mason.** Whether to add whole-cent CHECK constraints to `commissions.commission_amount` and `commissions.order_profit` now that both columns measure clean — which would make the current state enforced instead of merely observed — and whether to re-derive the one $0.01 `pending` snapshot. Both stay read-only until Mason approves a migration.
+
+
+---
+
+## RESOLVED 2026-08-24 (opened 2026-08-14) — `draw_down_quote` never rounds the weighted average PRICE, and the whole-cent guard rejects it
+
+**Status: RESOLVED — the weighted average itself was eliminated by
+`20260816120000_draw_down_split_order_lines_by_price_tier`, applied live 2026-08-24 as ledger
+version `20260825025241` (one order line per booked price tier; the migration's postflight refuses
+any body that reintroduces the averaging identifier). The description below is the pre-rollout
+record of the defect.**
+
+**Severity at time of finding: HIGH, live in production, currently latent (0 reachable rows).** Found by the
+independent Codex review of PR #392 and re-verified directly against live `pg_proc` and live data
+on 2026-08-14. **This is a defect in already-applied SQL — it is not caused by the recovery PR, and
+it cannot be fixed by editing the recovered files, which must stay byte-identical to what ran.**
+
+Live `_draw_down_quote_below_cost_impl_20260810` aggregates the quote lines of one product into a
+quantity-weighted average price and a quantity-weighted average cost:
+
+```sql
+118    CASE WHEN SUM(COALESCE(qi.total_units_needed, 0)) > 0
+119      THEN SUM(qi.price_per_unit * COALESCE(qi.total_units_needed, 0)) / SUM(COALESCE(qi.total_units_needed, 0))
+...
+126  INTO v_booked, v_wavg_price, v_wavg_cost, v_total_acres, v_unit_size
+137  v_wavg_cost := ROUND(v_wavg_cost, 2);      -- cost settled to whole cents
+176    v_wavg_price, v_wavg_cost, v_acres,      -- price inserted UNROUNDED
+```
+
+Line 137 settles the weighted **cost** to whole cents, behind a seven-line comment explaining
+precisely why an average of several differently-priced lines lands on fractional cents. There is no
+matching `v_wavg_price := ROUND(v_wavg_price, 2);`. The unrounded price goes straight into
+`order_items.price_per_unit` at line 176.
+
+Live `_enforce_below_cost_line` then rejects exactly that value — twice, at lines 40–41 and 148–149:
+
+```sql
+       OR NEW.price_per_unit <> round(NEW.price_per_unit, 2) THEN
+      RAISE EXCEPTION 'INVALID_UNIT_PRICE_CENTS';
+```
+
+**Effect:** a quote with two lines of the same product at prices whose quantity-weighted average is
+not a whole number of cents — one unit at $1.00 and two at $1.01 average to $1.00666… — cannot be
+converted to an order at all. The booking-to-order transaction raises `INVALID_UNIT_PRICE_CENTS`
+and rolls back. Not a money-corruption bug: the guard does its job and nothing wrong is stored.
+It is an availability bug — a legitimate booking is refused with an opaque error.
+
+**Reachability measured live 2026-08-14: 0.** No quote/product group in the database currently has
+a fractional weighted average, so nothing is broken today. It is a trap waiting for the first quote
+with mixed pricing on one product, which is ordinary business behavior.
+
+**The obvious fix is wrong. Do not round the weighted average unit price.** Adding
+`v_wavg_price := ROUND(v_wavg_price, 2);` alongside line 137 — mirroring what the code already does
+on the cost side — makes the guard pass and silently mis-prices the line. The unit price is a
+*derived average* that is then multiplied by the quantity, so rounding it moves the line total by up
+to half a cent **times the quantity**, not by one cent. The direction follows the rounding: an
+average that rounds **up** overcharges the customer, one that rounds **down** undercharges and eats
+the margin. Both are wrong and both are silent. Measured in PostgreSQL 17 on 2026-08-14 with
+the body's own expressions: a quote holding 1,000 units at $1.00 and 2,000 units at $1.01 has an
+exact value of $3,020.00; rounding the average unit price to $1.01 and extending it produces
+$3,030.00, a **$10.00 overcharge** that flows into order revenue, profit, commissions and audit. The
+cost-side rounding at line 137 is not a precedent for this — a cost snapshot is not re-multiplied
+the same way. **Round after extension, never a per-unit figure.**
+
+Two attempts at this rounding fix were written and both are withdrawn, not applied:
+
+| Migration | Branch | Status |
+|---|---|---|
+| `20260814194500_round_draw_down_weighted_unit_price.sql` | `claude/draw-down-price-rounding` | **BLOCKED** by its own adversarial push-proof gate for this defect; unpushed, no PR |
+| `20260814210000_reconcile_draw_down_owner_and_price_rounding.sql` | `fix/draw-down-weighted-price-rounding` | **WITHDRAWN AND DELETED** 2026-08-14 — it merged the defect with the ownership fix and would have carried the mispricing forward |
+
+**The collision is dissolved, but a second blocker applies to everything here.** These two files
+previously collided with the ownership migration because all three `CREATE OR REPLACE` this function
+and each preflight pins the *current* live `md5(prosrc)`, so the second to apply fails closed. With
+both rounding attempts withdrawn, only one pending migration touches this function —
+`20260813161614_restrict_draw_down_quote_owner.sql` on `claude/restrict-draw-down-owner` — and it no
+longer needs reconciling with anything. It is a separate, sound security fix (quote ownership plus
+soft-delete exclusion), unaffected by the rounding defect.
+
+**CORRECTED 2026-08-16 — the source-control blocker is dissolved.** This section originally said no
+tracked migration defined `_draw_down_quote_below_cost_impl_20260810` or the five-argument
+`draw_down_quote` wrapper, so every candidate's `md5(prosrc)` preflight pinned a body that existed
+only in the live database and could never survive a clean rebuild. That was true when written and is
+false now: PR #392 merged on 2026-08-15 — the recovery tracked in the CLOSED section immediately
+below — and both definitions are on `origin/main`, re-verified there on 2026-08-16:
+
+| Definition | Tracked at |
+|---|---|
+| four-argument body (the one later renamed) | `20260812115236_quote_items_cost_at_quote_snapshot.sql:1516` |
+| `RENAME TO _draw_down_quote_below_cost_impl_20260810` | `20260812115237_enforce_below_cost_admin_approval.sql:779` |
+| five-argument `draw_down_quote` wrapper | `20260812115237_enforce_below_cost_admin_approval.sql:815` |
+
+A clean rebuild now reproduces both bodies, so the `md5` pins are satisfiable from source rather than
+only from live state. `20260813161614_restrict_draw_down_quote_owner.sql` is therefore unblocked on
+this ground. Confirm the pinned hash still matches live at apply time — recovery restores the source,
+it does not by itself prove the live body has not since drifted.
+
+**SUPERSEDED 2026-08-20 — do not apply or rebuild `20260813161614`.** The pending
+`20260819232000_bind_draw_down_receipts_to_intent.sql` successor preserves the owner-approved
+authorization boundary (active admins and sales reps may cover any live booking), keeps the
+soft-delete exclusion, and replaces the public five-argument wrapper while moving the reviewed money
+implementation behind an owner-only private function. The old ownership draft's owner gate was
+rejected, its remaining soft-delete change is already delivered by both the tier-split migration and
+the successor wrapper, and its live-body `md5(prosrc)` pin cannot match after that wrapper cutover.
+It is fully superseded: never "repair" it into a later `CREATE OR REPLACE public.draw_down_quote`,
+because that would overwrite the actor binding, required-key guard and receipt binding. All four
+migrations in the chain — the barrier and its three successors — are now applied live (the barrier
+on 2026-08-24 midday, the remaining three later that day with Mason's explicit approval — see
+`docs/reference/migration-history.md`); the do-not-rebuild instruction above still stands.
+
+**THE FIX IS THE TIER SPLIT, NOT THE ROUNDING — Mason changed his answer on 2026-08-16, and the
+later answer governs.** Two options were put to him. The first, at 09:51 Central, was mine: keep the
+exact line total and round only the stored unit price. He answered "Option a". Later the same
+morning a concurrent session re-explained both options and he chose the other one — **write one
+order line per booked price tier and stop averaging them at all**. That session's work is
+`supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql` on branch
+`claude/draw-down-price-tier-lines` (PR #404, commits 11:59–13:16 Central). The canonical record is
+the 2026-08-16 entry "Draw-down writes one order line per booked price tier" in
+`docs/manual/DECISION_LOG.md`.
+
+**The rounding fix is therefore withdrawn and must not be built.** Both branches that attempted it
+are already dead (table above). A third attempt would `CREATE OR REPLACE` the same function as the
+tier-split migration, and each preflight pins the *current* live `md5(prosrc)`, so whichever applied
+second would fail closed — the collision this file has been tracking all along.
+
+Why the split is the better answer, in one line: rounding a *unit* price and then multiplying it by
+the quantity moves the line total by up to half a cent **per unit**, so on a large mixed-price
+booking it is a real mispricing in whichever direction the average happens to round — an overcharge
+when it rounds up, a silent margin loss when it rounds down. Splitting the lines removes the average
+entirely, so every unit is billed at a price the customer actually booked and there is no per-unit
+figure left to round; the existing post-extension rounding of the line total stays exactly as it is.
+
+Three facts verified against live `pg_proc` and live catalogs on 2026-08-16 stay recorded, because
+the tier-split migration depends on the second one and a future change to any of them is a
+regression risk on this path:
+
+1. `draw_down_quote` computes `v_line_total := ROUND(v_wavg_price * v_qty, 2)` — the total is rounded
+   **after** extension, never before. That ordering is preserved by the tier-split
+   (`ROUND(v_tier.price * v_take, 2)`) and must not be inverted.
+2. `_enforce_below_cost_line` re-derives `NEW.total_price := round(NEW.price_per_unit *
+   NEW.total_units_needed, 2)` **only** when the operation is one of `create_direct_order`,
+   `bulk_import_order`, `update_order_items`, `price_order`. The five-argument `draw_down_quote`
+   wrapper declares the operation `draw_down_quote`, outside that list, so the per-tier price and
+   cost written by the draw survive the trigger. **If `draw_down_quote` is ever added to that list,
+   the tier split's snapshot costs get overwritten with today's catalog cost.**
+3. `trg_order_items_round_money` → `_round_money_to_whole_cents` rounds `total_price` and derives
+   `profit`, but never touches `price_per_unit`. No CHECK constraint ties `price_per_unit * qty` to
+   `total_price`.
+
+Mason's decision 2026-08-14 was to log this bug and fix it separately rather than entangle it with
+the recovery PR. **(Historical: the "no migration here is approved for apply" caveat that stood
+with this entry is superseded — see below.)** Do not re-diagnose this from scratch; the live
+evidence is above.
+
+**Status of the tier-split candidate: APPLIED LIVE 2026-08-24** (superseding the LOCAL CANDIDATE
+status this paragraph carried before the rollout). Both required gate reviewers returned zero
+blockers and a further adversarial pass found one HIGH, since fixed in-file (a draw against a
+soft-deleted booking — see the CRX-RLS-001 note on row 887); every scenario was re-proven
+end-to-end on throwaway PostgreSQL 17 databases before the apply. On 2026-08-24, with Mason's
+explicit in-chat approval and fresh apply-guard + Codex proofs, it applied live as ledger version
+`20260825025241`. Row 887 of `docs/reference/migration-history.md` carries the file's pinned SQL
+hash and the apply record.
+
+The first rounding attempt's branch, `claude/draw-down-price-rounding`, was deleted on 2026-08-16;
+its tip is preserved as tag `abandoned/draw-down-price-rounding` so the abandoned work stays
+recoverable without a live branch inviting a third attempt.
+
+**Ignore the contrary record on `claude/known-issues-drawdown-defect`.** That local-only, unpushed
+branch records the opposite choice ("keep the exact line total, round only the stored unit price")
+and attributes it to Mason, who did not make it. It has no pull request and cannot reach `main`. One
+finding on it is genuine and worth keeping: the live ledger's ordering high-water must be read from
+the `name` stamp, not `max(version)` — on 2026-08-16 those read `20260813070000` and
+`20260813011751` respectively, a three-day understatement.
+
+---
+
+## CLOSED 2026-08-13 — six migrations applied live on 2026-08-12 have no file on `main`
+
+**Severity: was MATERIAL — resolved by PR #392 (files landed on `main`).** Six migrations
+were applied live on 2026-08-12 from another session and their files are absent from
+`origin/main` (verified by `git ls-tree` against the live ledger on 2026-08-13):
+
+| Submitted name | Ledger version |
+|---|---|
+| `20260812010000_blend_ticket_order_header_runtime_assert` | `20260812034831` |
+| `20260812011000_restore_quote_version_whole_cent_money` | `20260812034951` |
+| `20260812115235_snapshot_cost_reporting` | `20260812145628` |
+| `20260812115236_quote_items_cost_at_quote_snapshot` | `20260812151606` |
+| `20260812115237_enforce_below_cost_admin_approval` | `20260812154028` |
+| `20260812115238_repair_historical_order_line_cents` | `20260812154757` |
+
+CLOSED by PR #392 (2026-08-13): the recovery branch `recovery/live-no-file-six` merged into
+`main`, landing all six files under `supabase/migrations/` (history rows 880-885, recovered
+verbatim from the applying sessions' transcripts and md5-verified against live `pg_proc.prosrc`).
+`20260812130145_bind_return_receipts_to_intent_and_restore_overdue` and
+`20260813070000_pin_return_idempotency_helper_contract` from the same window were already on
+`main` and were never part of this gap. **The prevention gap remains OPEN** — see the header
+paragraph above: nothing yet reconciles the live ledger against tracked files automatically, and
+this was the third occurrence.
+
+---
+
+## OPEN 2026-08-12 — `20260813060000`'s guarded-function set has a fragile membership rule
+
+**Severity: LOW, but it is a live tripwire on an unapplied file.** The delivery-before-billing
+migration `20260813060000` asserts over a set of four function names. `_save_invoice_scoped_impl`
+qualifies for that set only because the string `'posted'` appears in its body — and in the current
+body it appears inside a **code comment**, not in executable SQL. `20260813040000`, which rewrites
+that function, deliberately preserves the comment.
+
+The migration is therefore one comment edit away from silently dropping a function out of its own
+assertion set. Nothing is wrong today and the two files are consistent as written; this is recorded
+so that whoever next edits `_save_invoice_scoped_impl` knows that deleting an innocuous-looking
+comment changes what `20260813060000` checks. The durable fix is to select that set by a structural
+property rather than a substring match, which is a rewrite of an unapplied file and not worth doing
+mid-wave.
 
 ---
 
@@ -92,11 +1262,16 @@ semantics.
 
 ---
 
-## OPEN — the Codex `read_only=true` guard may not describe the connection Codex actually uses
+## CLOSED 2026-08-14 — Codex Supabase read-only guard withdrawn: write access is now the deliberate policy
 
-**Found 2026-08-10.** No production write was performed during the investigation.
-Production write capability remains unverified. This affects how much assurance
-the read-only guard is entitled to claim.
+**Found 2026-08-10; closed by owner decision 2026-08-14.** Mason explicitly approved
+write-enabled Supabase access for Codex (see `docs/manual/DECISION_LOG.md`, 2026-08-14).
+`.codex/config.toml` now declares `read_only=false`, and both guard assertions were
+updated to pin the new declared state. The original finding below is preserved because
+its core observation — the tracked entry's OAuth grant is dead and real traffic flows
+through the separate `codex_apps/supabase` App — is still true and still matters:
+enabling write for the App is a toggle in the Codex app's own connector settings that
+only Mason can perform, and no guard in this repository verifies that channel's scope.
 
 `check-agent-workflows.mjs:92` and `check-agent-guidance.mjs:121` both assert
 that `.codex/config.toml` contains `read_only=true`, and that assertion is the
@@ -132,13 +1307,14 @@ attempting a write against the production database, which is not an acceptable
 test. A capability probe (asking Codex to list its Supabase tool names without
 calling them) was attempted twice and produced no usable output.
 
-**Owed to Mason (owner decision):** confirm in the Codex app's own connector
-settings whether the Supabase App is scoped read-only. If it is not, Codex has
-had unverified write capability against production for as long as the App has
-been serving traffic, and the guard has been reporting green throughout.
-
-**Do not** "fix" this by deleting the `read_only=true` line or by relaxing either
-check — both guards correctly refused the change that prompted this entry.
+**Closure (2026-08-14).** Mason decided Codex should have write access, which
+dissolves the false-assurance problem: the repository no longer claims Codex is
+read-only. Remaining owner action: if the `codex_apps/supabase` App is scoped
+read-only in the Codex app's connector settings, Mason flips it there — no file
+in this repository controls that channel. Operative safety note: the migration
+apply-guard proof system gates Claude's applies only; Codex writes to production
+are gated by Codex-side discipline (AGENTS.md hard rules and the standing
+"Codex builds files, gated operator applies" workflow), not by a repo hook.
 
 ---
 

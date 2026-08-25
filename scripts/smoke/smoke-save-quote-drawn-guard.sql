@@ -5,8 +5,10 @@
 -- drawn booking cannot be edited below — or out of — its drawn history.
 --
 -- HOW TO RUN: execute this whole file as a SINGLE statement (Supabase MCP
--- execute_sql, or psql -1) as postgres/service_role AFTER the migration is
--- applied. The block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
+-- execute_sql, or psql -1) as postgres after the migration under test is
+-- applied. Once the pending 20260819232000 cutover is also present, the draw
+-- wrapper is authenticated-only and service_role cannot execute it. The block
+-- ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
 -- so every fixture, order, ledger row and audit row created here is rolled
 -- back — nothing persists. Any other exception text = a real failure.
 --
@@ -74,12 +76,31 @@ BEGIN
   VALUES ('[SMOKE] Drawn Guard Farm ' || v_suffix)
   RETURNING id INTO v_customer_id;
 
-  -- Product creation is pricing-free after the governed-pricing cutover. This
-  -- smoke supplies an explicit quote-line override, so no product pricing
-  -- mutation is needed to exercise the drawn-booking guard.
+  -- Establish the cost through the governed pricing path so the real immutable
+  -- quote-cost snapshot remains enabled during this rollback-only smoke.
   INSERT INTO products (product_name, unit_size)
   VALUES ('[SMOKE] Drawn Guard Product ' || v_suffix, 'gal')
   RETURNING id INTO v_product_id;
+  v_res := preview_product_pricing_changes(
+    'product_page', NULL,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_product_id,
+      'row_version', (SELECT pricing_version FROM products WHERE id = v_product_id),
+      'pricing_mode', 'margin_driven',
+      'new_cost', '6.00',
+      'tier1_margin_percent', '20',
+      'tier2_margin_percent', '25',
+      'tier3_margin_percent', '30',
+      'change_reason', 'Rollback smoke save-quote fixture setup'
+    )),
+    v_admin, 'smk-sqdg-price-preview-' || v_suffix
+  );
+  PERFORM apply_product_pricing_change_set(
+    (v_res->>'change_set_id')::uuid,
+    v_res->>'request_fingerprint',
+    v_admin,
+    'smk-sqdg-price-apply-' || v_suffix
+  );
 
   v_item_base := jsonb_build_object(
     'product_id', v_product_id,
@@ -135,7 +156,7 @@ BEGIN
   -- --------------------------------------------------------------------
   v_res := draw_down_quote(v_quote_id,
     jsonb_build_array(jsonb_build_object('product_id', v_product_id, 'quantity', 200)),
-    v_admin, NULL);
+    v_admin, 'smk-sqdg-first-' || v_suffix);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'SMOKE_FAIL: draw 200/500 reported fully_drawn: %', v_res;
   END IF;
@@ -219,7 +240,7 @@ BEGIN
 
   v_res := draw_down_quote(v_quote_id,
     jsonb_build_array(jsonb_build_object('product_id', v_product_id, 'quantity', 200)),
-    v_admin, NULL);
+    v_admin, 'smk-sqdg-final-' || v_suffix);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (c) draw to 400/400 not reported fully drawn: %', v_res;
   END IF;

@@ -21,7 +21,7 @@
 - `quotes` - Quote headers (quote_number, customer_id, status, tier, totals, is_planned, expires_at, `row_version bigint`). The trigger increments the stored version on every quote update; clients use the value returned by `save_quote`, never calculate an increment. Applied live 2026-07-30 alongside the `customers` half above — same migration, same ledger version `20260730235031`.
 - `quote_sections` - Sections within a quote (section_name, sort_order, field_id)
 - `quote_items` - Line items (product_id, section_id, pricing, rates, acres, totals)
-- `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb)
+- `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb). Client-writable no longer: `20260813080000_lock_quote_versions_writes_to_rpc` (**CRX-SEC-1**) applied live as ledger version `20260816174353` and dropped the `qversions_insert` policy, leaving `qversions_select` as the only policy and `create_quote_version` as the only **browser-reachable** writer. `service_role` and `postgres` retain direct INSERT/UPDATE/DELETE grants and bypass RLS, so an edge function or the table owner can still write directly — verified live 2026-08-19 against `information_schema.role_table_grants`. Re-read live 2026-08-18: `has_table_privilege('authenticated', …, 'INSERT'/'UPDATE'/'DELETE')` all false. The "LOCAL ONLY pending apply" marker that stood on the RLS matrix row below was stale from that apply. **Pending (`20260825190000`, PR #401, NOT APPLIED):** adds nullable `restore_trusted_at timestamptz`, a server-issued marker stamped only by `create_quote_version` on its own first successful insert. `restore_quote_version` then refuses an unmarked version with `QUOTE_VERSION_LEGACY_UNTRUSTED` before any quote or money row is rebuilt. Existing rows are deliberately NOT backfilled, so pre-boundary snapshots stay readable but non-restorable.
 - `quote_product_draws` - Per-(quote, product) booking draw-down ledger (quantity_drawn, UNIQUE(quote_id, product_id)). Survives quote edits (save_quote recreates quote_items); written only by `draw_down_quote`/`convert_quote_to_order` SECDEF RPCs. Added `20260610145253`
 - `quote_pdf_templates` - Saved column presets for quote PDF generation (template_name, columns jsonb)
 - `quote_templates` - Reusable quote structures (template_name, description, created_by)
@@ -184,91 +184,254 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 
 ## RLS Policy Matrix
 
+> ⚠️ **Hand-kept snapshot — `pg_policies` on live is the source of truth.** If you
+> are debugging a silent RLS denial, believe live, not this table, and never
+> "fix" reality to match a row here (re-adding a revoked permissive policy
+> re-opens a closed hole).
+>
+> **Last full reconcile: 2026-08-19 UTC** (
+> UTC runs one calendar day ahead here). All 79 rows were compared against
+> live `pg_policies` (read-only), per command — 75 of them mechanically, and
+> the 4 deny-all tables by reading their policy bodies instead, for the reason
+> given below. 29 rows disagreed with live and were corrected from the live
+> policy expressions: 12 shared with the matrix in
+> `docs/workflows/RLS_SECURITY_GUIDE.md` (`cost_history`, `quote_items`,
+> `quote_versions`, `inventory_holds`, `receiving_records`, `delivery_photos`,
+> `commissions`, `payments`, `team_note_comments`, `notifications`, `returns`,
+> `return_items`) and 17 appearing only here (`receiving_photos`,
+> `team_note_attachments`, `blend_tickets`, `allocation_sets`,
+> `order_line_allocations`, `invoice_line_allocations`, `prepay_credits`,
+> `prepay_applications`, `blend_ticket_to_order_items`, `vendors`,
+> `vendor_payments`, `ar_reminder_tracking`, `failed_notifications`,
+> `invoice_shares`, `order_shares`, `rate_limit_log`, `field_crop_history`).
+>
+> Three further rows changed here for **notation only, with no change in
+> access**: `idempotency_keys`, `product_cost_basis` and
+> `product_cost_basis_change_rows` were each stating their deny-all shape one
+> way in some commands and another way in the rest, and now state it
+> consistently across all four. That is 32 rows from the presence pass — 29
+> corrections plus 3 notation fixes. The role-wording pass described below
+> then changed 12 rows, 7 of them *further* rows (the other 5 were already
+> among the 32), and the hand-triage after it changed 31 rows, 22 of them new
+> again. Re-measured by keying both matrices on table name and comparing all
+> four command cells, this file's matrix carries **62 changed rows against
+> `main` overall**, out of 79. Two earlier revisions of this banner were
+> wrong: **39** counted only the presence and role-wording passes and stopped
+> before the hand-triage, and **61** came from summing the per-pass figures
+> 32 + 7 + 22 rather than re-running the comparison. That sum is one short of
+> the measured total, so one changed row is not attributable to a named pass.
+> **The 62 is the measurement and is what to trust**; the per-pass split is
+> approximate bookkeeping. No row was *added or removed* by any pass:
+> `main` and this revision carry the same 79 table rows, every one of them
+> rewritten in place or left alone. One caveat, because an earlier revision of
+> this banner rejected a review finding too broadly: on `main` a **blank line**
+> sat between `field_crop_history` and `field_app_locations`, and a blank line
+> terminates a Markdown table — so `main` *rendered* 77 rows and showed the last
+> two as loose text. This revision removed it, so all 79 render. The reviewer who
+> reported "77 → 79" was reading the rendered table and was right about that; the
+> claim that two rows were newly *added* is what does not hold. It is the same
+> defect this PR fixes in the guide's roles table.
+>
+> Two shapes to read carefully. A cell reading `-` **or** `RPC only` means the
+> same thing: **no direct browser-role path**. That is true both when no
+> policy exists and when a deny-all policy (`USING (false)` / `WITH CHECK
+> (false)`) exists. `idempotency_keys` and the three `product_cost_basis*`
+> tables are the deny-all kind — one `ALL` policy is present, and it grants
+> nothing — so a mechanical presence-diff would have "corrected" them into
+> appearing to grant access. They were excluded from the mechanical pass and
+> checked by reading their policy bodies against live instead.
+>
+> **The same trap has a second form, and the presence-diff fell into it.** A
+> policy row in `pg_policies` carries a `permissive` column, and a
+> **RESTRICTIVE** policy never grants anything — it only subtracts from what
+> permissive policies already allow. `rate_limit_log` carries exactly one
+> permissive policy (`SELECT`, admin) plus one restrictive `FOR ALL`
+> (`rate_limit_log_restrictive_admin_only`). A diff keyed on `cmd` alone
+> read that restrictive row as four granted commands and "corrected" the row
+> to `Admin` across all four; in fact no browser role can insert, update or
+> delete. That is fixed above, and it is the only row affected: a live read on
+> 2026-08-19 UTC confirms this is the **only** restrictive policy in the whole
+> `public` schema.
+>
+> **Role wording — mechanically re-derived, then hand-verified.** Policy
+> *presence* per command is what the original sweep compared. The role wording
+> inside each cell was transcribed by hand. A later mechanical pass re-derived
+> each cell's role set from live `USING`/`WITH CHECK` expressions and corrected
+> every cell in both matrices that claimed **"All authenticated"** where live
+> is role-gated, plus the `rate_limit_log` row above and the `blend_recipes`
+> INSERT/UPDATE cells, where live is `is_admin() OR created_by = auth.uid()` —
+> narrower than the `Admin / Sales Rep` those two cells had claimed. Every flag
+> that pass left standing has since been read against live `pg_policies` by
+> hand and either corrected or confirmed, so as of **2026-08-19 UTC** both the
+> presence shape *and* the named roles are verified.
+>
+> **What the classifier cannot see, and how those were found.** It compares
+> role *names*, so a cell that names the right roles but omits a condition
+> live *also* enforces raises no flag at all — the roles match. Those were
+> found by reading live expressions directly rather than from the flag list:
+> `field_obstacles` INSERT (live also requires `created_by = auth.uid()`, so
+> an admin cannot insert a row attributed to someone else), `vendors` and
+> `vendor_bills` SELECT (live also requires `deleted_at IS NULL`, with a
+> second policy handing admin the soft-deleted `vendors` rows),
+> `invoice_shares` and `order_shares` SELECT (the parent invoice or order must
+> also be un-deleted), and `team_notes` INSERT (live requires an active
+> profile as well as ownership). All six are corrected in the matrix above.
+> Only three of them — `field_obstacles` INSERT, `vendors` SELECT,
+> `vendor_bills` SELECT — were *bare* role lists, which is all an automated
+> bare-cell sweep can match on. The other three already named a qualifier
+> alongside the roles, so no sweep flagged them; they were found by reading the
+> neighbouring policies while fixing the first three.
+>
+> The classifier's flag count across both matrices, measured at each revision:
+> **162** on `origin/main`, **89** measured at `7d5d5d80` (the presence pass
+> itself is `a4b4e9ce`; nothing between them touched a role word), **61**
+> after the role-wording pass (`21f29c4a`), **33** now. Read that as a *proxy*,
+> not a defect count: correcting `rup_sales_records` SELECT from `Admin` to
+> `Admin / Sales Rep` — live is `role = ANY (ARRAY['admin','sales_rep'])`, so
+> the fix is real — *raised* it by one, because the classifier matches
+> helper-function names (`is_admin()`, `is_sales_rep()`, `is_applicator()`,
+> `is_driver()`) and that policy inlines its role test as a scalar subquery.
+>
+> All **33** surviving flags are false positives of three kinds. (1) A policy
+> that inlines a `profiles.role` test rather than calling `is_admin()` or
+> `is_sales_rep()` reads as "no role named". The inlined form is
+> `= 'admin'` on `ar_reminder_tracking`, `email_log`, `failed_notifications`,
+> `team_note_attachments`, `vendor_bills`, `vendor_payments` and the
+> soft-deleted-rows policy on `vendors`; it is
+> `= ANY (ARRAY['admin','sales_rep'])` on `rup_sales_records`,
+> `offline_action_receipts` and the main `vendors` SELECT policy. (2) A cell
+> that names a role by *how the row is reached* rather than by a role check —
+> the `Driver` cells on `deliveries`, `delivery_items`, `delivery_photos` and
+> `delivery_remainders`, where live is `assigned_driver = auth.uid()`. (3) A
+> cell that defers to another table's RLS — `invoice_items`, whose `EXISTS`
+> carries exactly the `invoices_select` predicate and no auth test of its own.
+> That third family has exactly one member: an earlier revision of this banner
+> also listed `offline_action_receipts` there, but its `EXISTS` is over
+> `profiles` with the role test inlined, which makes it family 1. The per-cell
+> working is in the now-CLOSED entry in `docs/manual/KNOWN_ISSUES.md`.
+>
+> **"All authenticated"** in these matrices is shorthand for live
+> `is_active_profile()`: any signed-in user whose `profiles.is_active` is true.
+> A deactivated profile is authenticated but denied, so "all authenticated" is
+> the looser of the two readings. **One** cell here newly reads it:
+> `inventory_holds` SELECT, which read `Admin / Sales Rep` on `origin/main`.
+> `team_note_attachments` and `team_note_comments` SELECT already read
+> `All authenticated` there, so the term is not new to them.
+>
+> An earlier revision of this banner named all three and said they "used to
+> render that identical live expression as *Any active profile*". **Both halves
+> are withdrawn** — the second and third cells did not change at all, and the
+> provenance is not this file's history: `git log -S"Any active profile" origin/main`
+> returns nothing: the phrase never appeared in any committed version of either
+> matrix. It existed only in banner prose on an intermediate commit of this
+> branch (`76e755d2`), never in a matrix cell. On `origin/main` those three
+> cells read `Admin / Sales Rep`, `All authenticated` and `All
+> authenticated`. In a banner whose whole purpose is auditable provenance,
+> presenting an intra-branch scratch state as file history was the wrong error
+> to make.
+>
+> Counting the defined term itself: **17** cells in this file's matrix use it, of which 8 also
+> appear in the `RLS_SECURITY_GUIDE.md` matrix — 25 cell instances across the
+> two matrices, covering the same 17 table/command pairs. Every one was
+> re-read on 2026-08-19 UTC and is governed by exactly one policy whose
+> `USING` is `( SELECT is_active_profile() )`. That does not depend on the
+> classifier and can be re-checked directly:
+>
+> ```sql
+> select tablename, policyname, cmd, qual from pg_policies
+>  where schemaname = 'public' and cmd = 'SELECT'
+>    and qual like '%is_active_profile%';
+> ```
+>
+> That query returns **27** rows live (read 2026-08-19 UTC), not 17. It finds
+> every SELECT policy in `public` built on `is_active_profile()`; the 17 cells
+> counted above are the subset whose tables this matrix carries. All 17 are in
+> the result — the extra 10 are on tables the matrix does not list.
+
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
-| profiles | All authenticated | Own/Admin | Own/Admin | - |
+| profiles | Own/Admin | Own/Admin | Own/Admin | - |
 | products | All authenticated | Admin | Admin | Admin |
-| cost_history | Admin | Admin | - | - |
-| product_cost_basis *(Phase 2 live)* | RPC only | RPC only | RPC only (close active row) | - |
-| product_cost_basis_change_rows *(Phase 2 live)* | RPC only | RPC only | - | - |
+| cost_history | Admin | - (no INSERT policy) | - | - |
+| product_cost_basis *(Phase 2 live)* | RPC only | RPC only | RPC only (close active row) | RPC only |
+| product_cost_basis_change_rows *(Phase 2 live)* | RPC only | RPC only | RPC only | RPC only |
 | product_cost_basis_rollout *(live Wells canary)* | RPC only | RPC only | RPC only | RPC only |
-| customers | Admin / Sales Rep (assigned) / Driver (has delivery) | Admin / Sales Rep | Admin / Sales Rep (assigned) | Admin |
+| customers | Admin / Sales Rep (assigned) / Driver (recent delivery) / Applicator (recent job) / dispatched to a job location | Admin / Sales Rep (assigned) | Admin / Sales Rep (assigned) | Admin |
 | customer_addresses | All authenticated | Admin / Sales Rep (own customer) | Admin / Sales Rep (own customer) | Admin |
 | quotes | Admin / Sales Rep | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_product_draws | Admin / Sales Rep | - (SECDEF RPCs only) | - (SECDEF RPCs only) | - (SECDEF RPCs only) |
-| quote_items | Admin / Sales Rep | RPC only | RPC only | RPC only |
-| quote_versions | Admin / Sales Rep | Admin / Sales Rep (own quote); **LOCAL ONLY pending apply** (`20260813080000`, CRX-SEC-1): becomes `create_quote_version` RPC only | - | - |
+| quote_items | Admin / Sales Rep | - (RPC only, since `20260812115236` dropped `qitems_insert`/`qitems_update`/`qitems_delete`) | - (RPC only) | - (RPC only) |
+| quote_versions | Admin / Sales Rep | - for browser roles (`create_quote_version` RPC only, since `20260813080000`, ledger version `20260816174353`; `service_role` and `postgres` retain direct write grants and bypass RLS) | - (same scope) | - (same scope) |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| order_items | Admin / Sales Rep | RPC only | RPC only | RPC only |
+| order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |
 | inventory_transactions | Admin / Sales Rep | Admin / Sales Rep | - | - |
-| inventory_holds | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| inventory_holds | All authenticated | - (no write policy; SECDEF RPCs only) | - (no write policy) | - (no write policy) |
 | purchase_orders | Admin / Sales Rep | Admin | Admin | Admin |
 | purchase_order_items | Admin / Sales Rep | Admin | Admin | Admin |
-| receiving_records | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| receiving_photos | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| deliveries | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin / Sales Rep / Driver (assigned) | Admin |
-| delivery_items | Admin / Sales Rep / Driver (via delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| delivery_photos | Admin / Sales Rep / Driver | Admin / Sales Rep / Driver | - | Admin |
-| delivery_remainders | Admin / Sales Rep / Driver | Admin / Sales Rep | Admin / Sales Rep | Admin |
-| commissions | Admin / Sales Rep (own recipient) | Admin | Admin | - |
-| payments | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| team_notes | All authenticated | Own created_by | Own created_by / Admin | Admin |
-| team_note_attachments | All authenticated | Own uploaded_by | Own uploaded_by / Admin | - |
-| team_note_comments | All authenticated | Own created_by | - | - |
+| receiving_records | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| receiving_photos | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| deliveries | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin / Sales Rep / Driver (assigned, while in_progress or completed) | Admin |
+| delivery_items | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin | Admin / Sales Rep |
+| delivery_photos | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep / active Driver (assigned) | Admin | Admin |
+| delivery_remainders | Admin / Sales Rep / Driver (assigned to the original delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| commissions | Admin / Sales Rep (own recipient) | Admin | Admin | Admin |
+| payments | Admin / Sales Rep | - (RPC only, since `20260714223000`) | - (RPC only) | - (RPC only) |
+| team_notes | All authenticated | Own created_by (active profile) | Own created_by / Admin | Admin |
+| team_note_attachments | All authenticated | Own uploaded_by | - (no UPDATE policy) | Own uploaded_by / Admin |
+| team_note_comments | All authenticated | Own created_by | Own created_by / Admin | Own created_by / Admin |
 | activity_feed | All authenticated | Own performed_by | - | - |
-| notifications | Own user_id | All authenticated | Own user_id | - |
+| notifications | Own user_id | Admin / Sales Rep / own user_id | Own user_id | Admin |
 | app_settings | All authenticated | Admin | Admin | - |
-| blend_tickets | All authenticated | Own uploaded_by | Own uploaded_by / Admin | - |
+| blend_tickets | Admin / Sales Rep | - (no INSERT policy) | Admin / Sales Rep | - |
 | ingredient_map | All authenticated | Admin | Admin | Admin |
 | unit_conversions | All authenticated | Admin | Admin | - |
-| invoices | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| invoice_items | Admin / Sales Rep | RPC only | RPC only | RPC only |
-| allocation_sets | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| order_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| invoice_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| prepay_credits | Admin / Sales Rep | Admin / Sales Rep | Admin | - |
-| prepay_applications | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| financial_audit_log | Admin | All authenticated | - | - |
-| blend_recipes | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin |
-| blend_recipe_items | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| blend_ticket_to_order_items | All authenticated | Admin / Sales Rep | - | Admin |
-| blend_ticket_fields | All authenticated | All authenticated | All authenticated | All authenticated |
+| invoices | Admin / Own created_by / Assigned salesman | Admin / Sales Rep | Admin | Admin |
+| invoice_items | Any visible invoice (inherits `invoices` RLS) | Admin / Sales Rep | Admin | Admin |
+| allocation_sets | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| order_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | - (no DELETE policy) |
+| invoice_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | - (no DELETE policy) |
+| prepay_credits | Admin / Sales Rep | Admin | Admin | Admin |
+| prepay_applications | Admin / Sales Rep | Admin | - | - (no DELETE policy) |
+| financial_audit_log | Admin | Admin / own actor_user_id | - | - |
+| blend_recipes | Admin / Sales Rep / Applicator | Admin / own created_by | Admin / own created_by | Admin |
+| blend_recipe_items | All authenticated | Admin / Recipe creator | Admin / Recipe creator | Admin / Recipe creator |
+| blend_ticket_to_order_items | Admin / Sales Rep | - (no INSERT policy) | - | - (no DELETE policy) |
+| blend_ticket_fields | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | warehouses | All authenticated | Admin | Admin | Admin |
-| cycle_counts | Admin | Admin | Admin | Admin |
-| cycle_count_items | Admin | Admin | Admin | Admin |
-| fields | Admin / Sales Rep (assigned customer) | Admin / Sales Rep | Admin / Sales Rep | Admin |
-| field_obstacles | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| job_loader_worksheets | Job-visible (Admin / Sales / assigned Applicator / dispatched) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| field_billing_defaults | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| returns | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| return_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| applicator_licenses | Admin / Sales Rep | Admin | Admin | Admin |
-| rebate_programs | Admin | Admin | Admin | Admin |
-| rebate_claims | Admin | Admin | Admin | Admin |
-| vendors | All authenticated | Admin | Admin | Admin |
-| vendor_bills | Admin | Admin | Admin | Admin |
-| vendor_payments | Admin | Admin | - | - |
-| rup_sales_records | Admin | Admin | - | - |
-| email_log | Admin | Admin | - | - |
-| ar_reminder_tracking | Admin | - | - | - |
-| failed_notifications | Admin | Admin | Admin | - |
-| invoice_shares | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| order_shares | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| idempotency_keys | - (SECURITY DEFINER only) | - (SECURITY DEFINER only) | - | - |
-| offline_action_receipts | Owner / Admin / Sales via sanitized RPC only | - (SECURITY DEFINER RPC only) | - (SECURITY DEFINER RPC only) | - |
-| rate_limit_log | - (SECURITY DEFINER only) | - (SECURITY DEFINER only) | - | - |
-| note_tags | All authenticated | All authenticated | Admin / Own | Admin |
-| team_note_tags | All authenticated | All authenticated | - | All authenticated |
-| note_activity_log | All authenticated | All authenticated | - | - |
-| field_crop_history | All authenticated | All authenticated | All authenticated | - |
-
-| field_app_locations | All authenticated | All authenticated | All authenticated | All authenticated |
-| field_app_location_shares | All authenticated | All authenticated | All authenticated | All authenticated |
+| cycle_counts | Admin / Sales Rep | Admin | Admin | Admin |
+| cycle_count_items | Admin / Sales Rep | Admin (count in progress) | Admin (count in progress) | Admin (count in progress) |
+| fields | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| field_obstacles | Admin / Sales Rep / Applicator | Admin / Sales Rep (own created_by) | Admin / Sales Rep | Admin / Sales Rep |
+| job_loader_worksheets | Job-visible (Admin / Sales Rep / assigned Applicator / dispatched) | Admin / Sales Rep (own created_by) | Admin / Sales Rep | Admin / Sales Rep |
+| field_billing_defaults | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| returns | Admin / Sales Rep / requester | - (RPC only, since `20260715203911`) | Admin / requester | Admin |
+| return_items | Admin / Sales Rep / return requester | - (RPC only, since `20260715203911`) | - (RPC only) | - (RPC only) |
+| applicator_licenses | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| rebate_programs | Admin / Sales Rep | Admin | Admin | Admin |
+| rebate_claims | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| vendors | Admin / Sales Rep (not soft-deleted) / Admin (soft-deleted) | - (no write policy) | - (no write policy) | - (no write policy) |
+| vendor_bills | Admin (not soft-deleted) | Admin | Admin | Admin |
+| vendor_payments | Admin | Admin | - | Admin |
+| rup_sales_records | Admin / Sales Rep | Admin | - | - |
+| email_log | Admin / Own created_by | Admin | - | - |
+| ar_reminder_tracking | Admin | Admin | - | - |
+| failed_notifications | Admin | Admin | Admin | Admin |
+| invoice_shares | Admin / invoice creator / salesman (invoice not soft-deleted) | Admin / Sales Rep | Admin | Admin |
+| order_shares | Admin / order salesman (order not soft-deleted) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| idempotency_keys | - (policy exists but is `USING (false)`; SECURITY DEFINER only) | - (same) | - (same) | - (same) |
+| offline_action_receipts | Owner / Admin / Sales Rep (app reads via a sanitized RPC) | - (SECURITY DEFINER RPC only) | - (SECURITY DEFINER RPC only) | - |
+| rate_limit_log | Admin | - (restrictive only) | - (restrictive only) | - (restrictive only) |
+| note_tags | All authenticated | Own created_by | Own created_by | Own created_by |
+| team_note_tags | Any visible team note (inherits `team_notes` RLS) | Note creator / Admin | - | Note creator / Admin |
+| note_activity_log | All authenticated | Own user_id | - | - |
+| field_crop_history | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| field_app_locations | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| field_app_location_shares | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 
 ## Field Application Workflow V2 / Phase 1 (2026-04-29)
-- `field_app_locations` - Links fields to invoices or jobs (id uuid PK, invoice_id, job_id, **invoice_group_id**, field_id, map_number, total_acres, planted_acres, applied_acres, crop_type, wind_direction, sort_order). **Phase 1:** added `invoice_group_id` and updated CHECK to allow `invoice_id IS NOT NULL OR job_id IS NOT NULL OR invoice_group_id IS NOT NULL`. For multi-customer grouped invoices, locations live at the group level; single-customer invoices keep `invoice_id`. RLS: all ops for authenticated.
-- `field_app_location_shares` - Per-location customer billing splits (id uuid PK, location_id FK, customer_id FK, split_pct numeric, acres numeric, amount_cents bigint). **Phase 1:** carries the TRUE per-customer split for each field — even for grouped invoices, each field has one row per customer with their actual `split_pct`. Canonical audit source for "what fields contributed to which customer's invoice." RLS: all ops for authenticated.
+- `field_app_locations` - Links fields to invoices or jobs (id uuid PK, invoice_id, job_id, **invoice_group_id**, field_id, map_number, total_acres, planted_acres, applied_acres, crop_type, wind_direction, sort_order). **Phase 1:** added `invoice_group_id` and updated CHECK to allow `invoice_id IS NOT NULL OR job_id IS NOT NULL OR invoice_group_id IS NOT NULL`. For multi-customer grouped invoices, locations live at the group level; single-customer invoices keep `invoice_id`. RLS: SELECT admin / sales rep / applicator; INSERT, UPDATE and DELETE admin / sales rep — see the matrix above.
+- `field_app_location_shares` - Per-location customer billing splits (id uuid PK, location_id FK, customer_id FK, split_pct numeric, acres numeric, amount_cents bigint). **Phase 1:** carries the TRUE per-customer split for each field — even for grouped invoices, each field has one row per customer with their actual `split_pct`. Canonical audit source for "what fields contributed to which customer's invoice." RLS: SELECT admin / sales rep / applicator; INSERT, UPDATE and DELETE admin / sales rep — see the matrix above.
 
 > **Note (Phase 1):** `invoice_shares` is still populated for every invoice (one 100% row per child invoice with `price_per_acre_cents`/`pricing_note` propagated when grower-share mode applies) for PDF/statement compatibility, but it is NOT the AR keying surface — AR is keyed off `invoices.customer_id` directly. For per-field per-customer audit, use `field_app_location_shares`.

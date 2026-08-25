@@ -177,13 +177,20 @@ it treats `NaN` as equal to `NaN` and greater than every finite value. That make
 `'NaN' = ROUND('NaN', 2)` true, so a rounding-only constraint lets `NaN` straight through. The
 `< 'Infinity'` bound is what rejects it. Name the constraint `<table>_<column>_whole_cents_chk`.
 
+**One closed exception, already settled — do not re-raise it.** `purchase_orders.total_cost` and
+`purchase_order_items.unit_cost` instead carry a "mirror" CHECK
+(`col >= 0 AND col = (col_cents::numeric / 100.0)`) against a `GENERATED ALWAYS ... STORED` cents
+column. Mason accepted those two on 2026-08-19 after the guarantee was proven read-only against
+live. That exception covers those two columns only; the mirror form is **not** a second approved
+shape, and anything new or changed uses the predicate above. See the 2026-08-19 entry.
+
 **Never add one as `NOT VALID` over a column that still holds dirty rows.** `NOT VALID` only skips
 the initial scan; a CHECK is re-evaluated against the whole new row on every later UPDATE, whatever
 column changed, so each legacy dirty row becomes permanently un-editable. Repair the data first,
 then add the constraint `VALID`.
 
 Which columns are constrained today, which are deferred and why:
-`docs/manual/DECISION_LOG.md` (2026-08-10 entry).
+`docs/manual/DECISION_LOG.md` (2026-08-10 and 2026-08-19 entries).
 
 | Operation | How |
 |-----------|-----|

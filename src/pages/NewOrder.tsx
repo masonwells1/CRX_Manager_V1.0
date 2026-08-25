@@ -16,7 +16,9 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { supabase, assertRpcResult } from '../lib/db';
+import { withBelowCostReason } from '../lib/belowCostApproval';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -78,6 +80,7 @@ export default function NewOrder() {
   const [searchParams] = useSearchParams();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const { runWithBelowCostApproval } = useBelowCostApproval();
   const createOrderIdem = useIdempotencyKey('create_direct_order', profile?.id || '');
   const rushOrderIdem = useIdempotencyKey('create_rush_order', profile?.id || '');
   const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
@@ -477,14 +480,14 @@ export default function NewOrder() {
           // INSERT as owner). The old follow-up `orders.update({customer_po_number})` hit
           // the is_admin()-only orders UPDATE RLS, so a sales_rep got a false failure
           // (order already created, PO lost, not retryable) — no direct order UPDATE here.
-          const { data, error } = await supabase.rpc('create_rush_order', {
+          const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('create_rush_order', withBelowCostReason('create_rush_order', {
             p_customer_id: customerId,
             p_items: validItems.map((item) => ({ product_id: item.product_id, qty: item.quantity })),
             p_notes: notes || undefined,
             p_customer_po_number: customerPoNumber.trim() || undefined,
             p_performed_by: profile.id,
             p_idempotency_key: rushKey,
-          });
+          }, reason)));
           if (error) throw error;
           const rushResult = assertRpcResult<{ order_id: string; order_number: string; warnings?: string[] }>(data, 'create_rush_order');
           const rushOrderId = rushResult.order_id;
@@ -513,7 +516,7 @@ export default function NewOrder() {
           unit_size: item.unit_size,
         }));
 
-        const { data, error } = await supabase.rpc('create_direct_order', {
+        const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('create_direct_order', withBelowCostReason('create_direct_order', {
           p_customer_id: customerId,
           p_order_date: orderDate,
           p_order_name: orderName || undefined,
@@ -522,7 +525,7 @@ export default function NewOrder() {
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
           p_customer_po_number: customerPoNumber.trim() || undefined,
-        });
+        }, reason)));
 
         if (error) throw error;
 

@@ -10,7 +10,7 @@ Wraps the Supabase MCP `deploy_edge_function` workflow with the safety checks Ma
 **Tool names:** the Supabase connector's tools are prefixed with a per-install UUID
 (`mcp__<uuid>__deploy_edge_function`). That UUID is not stable across machines or reinstalls, so
 this skill writes tool names as `mcp__<supabase>__<tool>`. Resolve the real prefix by matching the
-**name suffix** (`deploy_edge_function`, `get_edge_function`, `get_logs`) in the available tool
+**name suffix** (`deploy_edge_function`, `get_edge_function`, `query_logs`) in the available tool
 list at run time. If no Supabase tool is present, the connector is not connected — STOP and say
 so. Never deploy by another route.
 
@@ -26,7 +26,6 @@ If unsure of the current version, check via Supabase MCP:
 
 ```
 mcp__<supabase>__get_edge_function
-  project_id: rhyzpcqhnizqbxphqdkr
   function_slug: <name>
 ```
 
@@ -103,7 +102,7 @@ New:         v<N+1>
 Change:      <one-line description>
 
 Pre-flight:
-  CORS:           PASS (ALLOWED_ORIGIN read at line <X>)
+  CORS:           PASS (imports _shared/cors.ts; preflight handled)
   Callers found:  <count> in src/
   Caller match:   PASS / CONCERN: <details>
   Sentry shape:   PASS (imports _shared/sentry.ts)
@@ -124,7 +123,6 @@ Call:
 
 ```
 mcp__<supabase>__deploy_edge_function
-  project_id: rhyzpcqhnizqbxphqdkr
   name: <function name>
   files: [
     { name: "index.ts", content: "<full content>" },
@@ -143,7 +141,6 @@ returned version number.
 
 ```
 mcp__<supabase>__get_edge_function
-  project_id: rhyzpcqhnizqbxphqdkr
   function_slug: <name>
 ```
 
@@ -159,7 +156,7 @@ caller path:
   network tab. You cannot do this — only he can sign in to the live UI. Ask him, and wait.
 - Webhook/storage target (e.g. `process-blend-ticket` from a Storage trigger): tell him how to
   trigger it — "drop a test PDF into the blend-tickets bucket" — then confirm the invocation
-  yourself in `mcp__<supabase>__get_logs`.
+  yourself in `mcp__<supabase>__query_logs`.
 
 If the caller path has not been exercised, the deploy is **UNVERIFIED**, not complete. Say which
 proof is missing rather than printing a clean summary.
@@ -167,10 +164,12 @@ proof is missing rather than printing a clean summary.
 ### 5c. Recent logs check
 
 ```
-mcp__<supabase>__get_logs
-  project_id: rhyzpcqhnizqbxphqdkr
-  service: edge-function
+mcp__<supabase>__query_logs
+  sql: select timestamp, event_message from logs where source = 'edge_logs' and event_message like '%/functions/v1/%' order by timestamp desc limit 50
+  iso_timestamp_start: <5 minutes ago, ISO 8601 with Z>
 ```
+
+(The tool was previously named `get_logs` and took `service:`; `query_logs` instead takes a read-only ClickHouse `sql` query against the unified `logs` table, filtered by `source`. Resolve by suffix if the connector still exposes the old name.) **Empty is not clean:** run `select distinct source from logs` once first — sources vary by project, and a query against a source that doesn't exist (this project has NO `function_edge_logs`) returns zero rows with no error. If the invocation you just triggered doesn't appear, the check is UNVERIFIED, not passing.
 
 Scan for any error events from the new version in the last 5 minutes.
 
@@ -178,7 +177,7 @@ Scan for any error events from the new version in the last 5 minutes.
 
 Version numbers are volatile counts, so they do **not** go in `CLAUDE.md` or `AGENTS.md` —
 `npm run check:agent-guidance` fails on that. Update `docs/manual/CURRENT_STATE.md` instead
-(the Edge Functions section), e.g.:
+(the "Recent production deployments" section), e.g.:
 
 ```
 - **2026-MM-DD:** `<name>` Edge Function deployed to v<N+1> (<one-line change>); verified ACTIVE

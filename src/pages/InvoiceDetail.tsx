@@ -10,6 +10,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock } from '../lib/db';
 import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -18,6 +19,7 @@ import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
+import { withBelowCostReason } from '../lib/belowCostApproval';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
 import { runCriticalAction } from '../lib/criticalAction';
@@ -87,6 +89,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const [searchParams] = useSearchParams();
   const { profile } = useAuth();
   const { toast } = useToast();
+  const { runWithBelowCostApproval } = useBelowCostApproval();
   const isAdmin = profile?.role === 'admin';
   const isAdminOrRep = isAdmin || profile?.role === 'sales_rep';
   const saveIdem = useIdempotencyKey(
@@ -788,11 +791,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           }
           legacySaveIntentRef.current = { key: idemKey, intent };
         }
-        const { data, error } = await supabase.rpc('save_invoice', {
+        const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('save_invoice', withBelowCostReason('save_invoice', {
           p_invoice: payload,
           p_items: itemsPayload,
           p_idempotency_key: idemKey,
-        });
+        }, reason)));
 
         if (error) {
           const receipt = getIdempotencyMismatchResult(error, 'save_invoice');

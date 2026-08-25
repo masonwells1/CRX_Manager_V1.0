@@ -1037,6 +1037,89 @@ git() { return 0; }
     linkSync(path.join(collisionWorktrees, 'session', '.git'), path.join(collidingForeign, '.git'));
     await assert.rejects(() => fixtureContainment(collisionHost), /SESSION\/? \(embedded Git repository\)/);
   }
+  {
+    // A worktree's parent directory can also hold a *stale* sibling: a
+    // directory left behind after someone deleted a session by hand instead
+    // of running `git worktree remove`. Git no longer registers it, so
+    // (unlike the live worktree beside it, which collapses to one line)
+    // Git recurses fully into it — and a real dependency tree there is large
+    // enough to overflow the bounded Git output buffer and crash the
+    // containment check outright. This reproduces that shape and proves the
+    // fix excludes the bulk without losing coverage of real content.
+    const staleWorktreeHost = fixtureRepo('containment-stale-sibling-worktree');
+    writeFileSync(path.join(staleWorktreeHost, '.gitignore'), '.claude/worktrees/\n');
+    git(staleWorktreeHost, ['add', '.gitignore']);
+    git(staleWorktreeHost, ['commit', '--quiet', '-m', 'ignore session worktrees']);
+    const staleLiveWorktree = path.join(staleWorktreeHost, '.claude', 'worktrees', 'live-session');
+    git(staleWorktreeHost, ['worktree', 'add', '--quiet', '-b', 'stale-sibling-live-session', staleLiveWorktree]);
+    const staleOrphan = path.join(staleWorktreeHost, '.claude', 'worktrees', 'orphaned-session');
+    const staleOrphanDependencies = path.join(staleOrphan, 'node_modules');
+    for (let index = 0; index < 500; index += 1) {
+      const packagePath = path.join(staleOrphanDependencies, `synthetic-package-${index}`);
+      mkdirSync(packagePath, { recursive: true });
+      writeFileSync(path.join(packagePath, 'index.js'), 'module.exports = {};\n');
+    }
+    const staleResult = await fixtureContainment(staleWorktreeHost);
+    assert.ok(staleResult.checked_ignored_count < 500, `stale sibling worktree's dependency tree must be excluded from the ignored scan, got ${staleResult.checked_ignored_count}`);
+    // Non-dependency content in that same orphaned directory is still fully
+    // scanned: the exemption is scoped to named tool-owned bulk directories,
+    // not to the orphaned directory as a whole.
+    const staleOrphanPrivateFile = path.join(staleOrphan, 'private-packet.json');
+    writeFileSync(staleOrphanPrivateFile, JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+    await containmentFails(staleWorktreeHost, 'private-packet.json', 'private JSON format marker in malformed candidate');
+    rmSync(staleOrphanPrivateFile, { force: true });
+    // A private artifact planted inside the excluded dependency tree is missed
+    // by the ignored-file scan by design (the same tool-owned exemption every
+    // other ignored dependency tree already carries), but is still caught the
+    // moment it's force-added, since tracked/staged content never goes
+    // through the ignored-file listing at all.
+    const staleOrphanPrivateInDependencies = path.join(staleOrphanDependencies, 'private-packet.json');
+    writeFileSync(staleOrphanPrivateInDependencies, JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+    await fixtureContainment(staleWorktreeHost);
+    const staleOrphanPrivateInDependenciesRelative = path.relative(staleWorktreeHost, staleOrphanPrivateInDependencies).split(path.sep).join('/');
+    git(staleWorktreeHost, ['add', '--force', staleOrphanPrivateInDependenciesRelative]);
+    await containmentFails(staleWorktreeHost, 'private-packet.json', 'private JSON format marker in malformed candidate');
+    git(staleWorktreeHost, ['rm', '--quiet', '--cached', staleOrphanPrivateInDependenciesRelative]);
+    rmSync(staleOrphanDependencies, { recursive: true, force: true });
+    git(staleWorktreeHost, ['worktree', 'remove', '--force', staleLiveWorktree]);
+  }
+  {
+    // A worktree container directory name is filesystem-derived, not a
+    // literal this file wrote — it can contain Git glob metacharacters.
+    // Unescaped, a bracket in the name becomes a character class instead of
+    // a literal: "worktrees[legacy]" would accidentally also match
+    // "worktreesl", "worktreese", etc. (any single char from the bracket
+    // set), sweeping an unrelated top-level directory's own node_modules
+    // into the same exclude and hiding a private artifact planted there.
+    // This proves the escaped container still excludes its own real
+    // dependency bulk while a same-looking decoy outside the real container
+    // stays fully scanned.
+    const globHost = fixtureRepo('containment-worktree-glob-metacharacters');
+    writeFileSync(path.join(globHost, '.gitignore'), '.claude/\n');
+    git(globHost, ['add', '.gitignore']);
+    git(globHost, ['commit', '--quiet', '-m', 'ignore session state']);
+    const globContainer = path.join(globHost, '.claude', 'worktrees[legacy]');
+    const globLiveWorktree = path.join(globContainer, 'live-session');
+    git(globHost, ['worktree', 'add', '--quiet', '-b', 'glob-metacharacter-live-session', globLiveWorktree]);
+    const globOrphanDependencies = path.join(globContainer, 'orphaned-session', 'node_modules');
+    for (let index = 0; index < 50; index += 1) {
+      const packagePath = path.join(globOrphanDependencies, `synthetic-package-${index}`);
+      mkdirSync(packagePath, { recursive: true });
+      writeFileSync(path.join(packagePath, 'index.js'), 'module.exports = {};\n');
+    }
+    await fixtureContainment(globHost);
+    // "worktreesl" shares no real relationship with the bracketed container
+    // beyond the accidental single-character glob match: it sits alongside
+    // it, ignored the same way, but is not itself a registered worktree or
+    // named after a tool-owned root at its own top level.
+    const globDecoyPrivate = path.join(globHost, '.claude', 'worktreesl', 'node_modules', 'private-packet.json');
+    mkdirSync(path.dirname(globDecoyPrivate), { recursive: true });
+    writeFileSync(globDecoyPrivate, JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+    await containmentFails(globHost, 'private-packet.json', 'private JSON format marker in malformed candidate');
+    rmSync(path.dirname(globDecoyPrivate), { recursive: true, force: true });
+    rmSync(globOrphanDependencies, { recursive: true, force: true });
+    git(globHost, ['worktree', 'remove', '--force', globLiveWorktree]);
+  }
   const bareRepoHost = fixtureRepo('containment-bare-repository'); const bareRepoBase = git(bareRepoHost, ['rev-parse', 'HEAD']).trim(); const bareRepoPath = path.join(bareRepoHost, 'catalog.git'); git(bareRepoHost, ['init', '--bare', '--quiet', bareRepoPath]); execFileSync('git', ['--git-dir', bareRepoPath, 'hash-object', '-w', '--stdin'], { input: JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }), encoding: 'utf8', env: sanitizedFixtureGitEnv() }); mkdirSync(path.join(bareRepoPath, 'objects', 'info'), { recursive: true }); writeFileSync(path.join(bareRepoPath, 'objects', 'info', 'alternates'), '../alternate-objects\n');
   await assert.rejects(() => fixtureContainment(bareRepoHost), /catalog\.git \(bare Git repository\)/);
   git(bareRepoHost, ['add', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'synthetic bare repository']); git(bareRepoHost, ['rm', '--quiet', '-r', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'delete synthetic bare repository']); const bareRepoHead = git(bareRepoHost, ['rev-parse', 'HEAD']).trim();
@@ -1054,6 +1137,42 @@ git() { return 0; }
   const ignoredPrivateArchiveRepo = fixtureRepo('containment-ignored-private-archive'); const ignoredPrivateArchivePath = 'private-packet.json.gz'; writeFileSync(path.join(ignoredPrivateArchiveRepo, '.gitignore'), '*.gz\n'); git(ignoredPrivateArchiveRepo, ['add', '.gitignore']); git(ignoredPrivateArchiveRepo, ['commit', '--quiet', '-m', 'ignore gzip files']); writeFileSync(path.join(ignoredPrivateArchiveRepo, ignoredPrivateArchivePath), gzipHeader({ name: 'private-packet.json' })); await containmentFails(ignoredPrivateArchiveRepo, ignoredPrivateArchivePath, 'compressed archive container cannot be inspected');
   const toolOwnedIgnoredRoots = ['node_modules', 'dist', 'dist-ssr', 'coverage', 'playwright-report', '.playwright-mcp', '.playwright-cli', 'graphify-out'];
   const toolOwnedIgnoredPrefixes = [...toolOwnedIgnoredRoots.map(root => `${root}/`), 'test-results/', 'output/playwright/', 'output/phase1a-db/'];
+  const rebuiltDistRepo = fixtureRepo('containment-rebuilt-dist'); writeFileSync(path.join(rebuiltDistRepo, '.gitignore'), 'dist/\n'); git(rebuiltDistRepo, ['add', '.gitignore']); git(rebuiltDistRepo, ['commit', '--quiet', '-m', 'ignore generated dist']);
+  const stableDistPath = path.join(rebuiltDistRepo, 'dist', 'stable.js'); mkdirSync(path.dirname(stableDistPath), { recursive: true }); writeFileSync(stableDistPath, 'generated public output\n');
+  let vanishedDistIgnoredListings = 0;
+  const executeWithVanishedDistCandidate = (command, args, options = {}) => {
+    const output = fixtureGitExecute(command, args, options);
+    if (command === 'git' && args[0] === 'ls-files' && args.includes('--ignored') && ++vanishedDistIgnoredListings === 2) return Buffer.concat([output, Buffer.from('dist/rebuilt-during-scan.js\0')]);
+    return output;
+  };
+  const recoveryBudget = new ScanBudget(); const recoveryAdmissions = []; const admit = recoveryBudget.admit.bind(recoveryBudget); recoveryBudget.admit = (size, repoPath) => { recoveryAdmissions.push(repoPath); return admit(size, repoPath); };
+  await checkPrivateArtifactContainment({ root: rebuiltDistRepo, execute: executeWithVanishedDistCandidate, budget: recoveryBudget });
+  assert.equal(vanishedDistIgnoredListings, 3, 'a vanished ignored candidate must trigger one fresh recovery listing');
+  assert.equal(recoveryAdmissions.filter(repoPath => repoPath === 'dist/stable.js').length, 1, 'recovery must not double-charge already scanned candidates');
+  const recreatedDistRepo = fixtureRepo('containment-recreated-dist'); writeFileSync(path.join(recreatedDistRepo, '.gitignore'), 'dist/\n'); git(recreatedDistRepo, ['add', '.gitignore']); git(recreatedDistRepo, ['commit', '--quiet', '-m', 'ignore generated dist']);
+  let recreatedDistIgnoredListings = 0;
+  const executeWithRecreatedDistCandidate = (command, args, options = {}) => {
+    if (command === 'git' && args[0] === 'ls-files' && args.includes('--ignored')) {
+      if (++recreatedDistIgnoredListings === 2) return Buffer.concat([fixtureGitExecute(command, args, options), Buffer.from('dist/rebuilt-during-scan.js\0')]);
+      if (recreatedDistIgnoredListings === 3) {
+        const recreatedPath = path.join(recreatedDistRepo, 'dist', 'rebuilt-during-scan.js');
+        mkdirSync(path.dirname(recreatedPath), { recursive: true });
+        writeFileSync(recreatedPath, JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+      }
+    }
+    return fixtureGitExecute(command, args, options);
+  };
+  await assert.rejects(() => checkPrivateArtifactContainment({ root: recreatedDistRepo, execute: executeWithRecreatedDistCandidate }), /dist\/rebuilt-during-scan\.js \(private JSON format marker in malformed candidate\)/, 'a rebuilt ignored candidate must be re-listed and scanned before success');
+  assert.equal(recreatedDistIgnoredListings, 3, 'a rebuilt ignored candidate must be found by the recovery listing');
+  const repeatedlyVanishedDistRepo = fixtureRepo('containment-repeatedly-vanished-dist'); writeFileSync(path.join(repeatedlyVanishedDistRepo, '.gitignore'), 'dist/\n'); git(repeatedlyVanishedDistRepo, ['add', '.gitignore']); git(repeatedlyVanishedDistRepo, ['commit', '--quiet', '-m', 'ignore generated dist']);
+  let repeatedlyVanishedIgnoredListings = 0;
+  const executeWithRepeatedlyVanishedDistCandidate = (command, args, options = {}) => {
+    const output = fixtureGitExecute(command, args, options);
+    if (command === 'git' && args[0] === 'ls-files' && args.includes('--ignored') && ++repeatedlyVanishedIgnoredListings >= 2) return Buffer.concat([output, Buffer.from('dist/rebuilt-during-scan.js\0')]);
+    return output;
+  };
+  await assert.rejects(() => checkPrivateArtifactContainment({ root: repeatedlyVanishedDistRepo, execute: executeWithRepeatedlyVanishedDistCandidate }), /ENOENT/, 'a repeated ignored-entry disappearance must fail closed');
+  assert.equal(repeatedlyVanishedIgnoredListings, 3, 'a repeated disappearance must occur during the recovery listing before failing');
   const ignoredToolArchiveRepo = fixtureRepo('containment-ignored-tool-archives'); writeFileSync(path.join(ignoredToolArchiveRepo, '.gitignore'), `${[...toolOwnedIgnoredRoots, 'test-results', 'output'].join('\n')}\n`); git(ignoredToolArchiveRepo, ['add', '.gitignore']); git(ignoredToolArchiveRepo, ['commit', '--quiet', '-m', 'ignore tool-owned roots']); for (const prefix of toolOwnedIgnoredPrefixes) { const toolArchivePath = `${prefix}third-party.xlsx`; mkdirSync(path.dirname(path.join(ignoredToolArchiveRepo, toolArchivePath)), { recursive: true }); writeFileSync(path.join(ignoredToolArchiveRepo, toolArchivePath), compressedBytes); } await fixtureContainment(ignoredToolArchiveRepo);
   for (const prefix of toolOwnedIgnoredPrefixes) { const privateJsonPath = `${prefix}private.json`; mkdirSync(path.dirname(path.join(ignoredToolArchiveRepo, privateJsonPath)), { recursive: true }); writeFileSync(path.join(ignoredToolArchiveRepo, privateJsonPath), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); await containmentFails(ignoredToolArchiveRepo, privateJsonPath, 'private JSON format marker in malformed candidate'); rmSync(path.join(ignoredToolArchiveRepo, privateJsonPath)); const privateCsvPath = `${prefix}private.csv`; writeFileSync(path.join(ignoredToolArchiveRepo, privateCsvPath), `${OWNER_DECISION_HEADERS.join(',')}\n`); await containmentFails(ignoredToolArchiveRepo, privateCsvPath, 'owner decision sheet CSV header structure'); rmSync(path.join(ignoredToolArchiveRepo, privateCsvPath)); }
   for (const [name, bytes, reason] of [

@@ -26,6 +26,17 @@ export const CLAUDE_ONLY_HOOKS = new Set([
   // Claude-only.
   "worktree-cleanup.mjs",
   "session-heartbeat.mjs",
+  // SessionStart context injection (post-compact money/RLS re-anchor + session
+  // onboarding) replaces the former prompt-type hooks, which fail outside the
+  // REPL. The note recorded here before PR #414 read: "Codex has no SessionStart
+  // event; its contract comes from AGENTS.md." The first clause is false —
+  // .codex/hooks.json registers a SessionStart group (session-snapshot.mjs,
+  // session-staleness.mjs, worktree-awareness.mjs), so the event is wired on that
+  // side; what the Codex harness does with that registration, including whether it
+  // consumes additionalContext, is not verified here. The second clause stands as
+  // recorded (AGENTS.md is the shared contract for every agent), but nothing
+  // establishes it as the operative reason for leaving this hook Claude-only.
+  "session-context-reminder.mjs",
 ]);
 
 // Deliberately Codex-only shared hooks (in .codex/hooks.json but NOT settings.json).

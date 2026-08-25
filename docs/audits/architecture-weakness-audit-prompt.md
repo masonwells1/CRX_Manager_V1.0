@@ -1,7 +1,7 @@
 # Architecture-Weakness Audit — Reusable Prompt
 
 > **What this is (plain English):** A reusable instruction set that walks **every connection** in the
-> app-workflow-map (`docs/app-workflow-map.html` — ~103 nodes / ~181 edges as of 2026-06-16; read the live NODES/EDGES arrays for the exact worklist) and judges each
+> app-workflow-map (`docs/app-workflow-map.html` — read the live NODES/EDGES arrays for the exact, current worklist; counts drift as the app grows) and judges each
 > one for **fragility**, not correctness. For every connection and node it asks: *what breaks if this
 > fails, gets called twice, two people hit it at once, or it's left half-finished — and is there a
 > guard or recovery path?* It hunts single points of failure, double-submit gaps, silent failures,
@@ -27,7 +27,7 @@
 
 ## 0. Mission & non-goals
 
-**Mission:** Treat the map's ~181 connections + ~103 nodes as an exhaustive worklist. For each, ask the
+**Mission:** Treat the map's full NODES/EDGES arrays as an exhaustive worklist. For each, ask the
 **weakness questions** below and report every connection/node whose failure, double-invocation,
 concurrency, or partial completion is **unguarded**.
 

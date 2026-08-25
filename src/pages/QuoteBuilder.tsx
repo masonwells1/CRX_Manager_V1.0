@@ -36,8 +36,9 @@ import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
+import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, rpcAuthErrorMessage, RpcErrorCodes } from '../lib/db';
 import {
   convertQuoteToOrderWithRowVersion,
   createQuoteVersionWithRowVersion,
@@ -46,8 +47,10 @@ import {
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection, getIdempotencyMismatchResult } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
+import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
@@ -220,6 +223,7 @@ export default function QuoteBuilder() {
   const location = useLocation();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const { runWithBelowCostApproval } = useBelowCostApproval();
   const {
     getKey: getSaveQuoteIdempotencyKey,
     resetKey: resetSaveQuoteIdempotencyKey,
@@ -438,6 +442,8 @@ export default function QuoteBuilder() {
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
   const suppressDirtyUntilReloadSettlesRef = useRef(false);
+  const initialLoadGenerationRef = useRef(0);
+  const [installedLoadGeneration, setInstalledLoadGeneration] = useState(0);
   const blocker = useUnsavedChanges(isDirty);
 
   // Status-based guards
@@ -518,6 +524,18 @@ export default function QuoteBuilder() {
     if (suppressDirtyUntilReloadSettlesRef.current) return;
     setIsDirty(true);
   }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
+
+  // Release initial-load dirty suppression only after React has committed the
+  // complete installed snapshot. Timer/frame releases can run before that
+  // commit on a busy device and let a late passive update mark a saved quote
+  // dirty, blocking its first draw-down attempt.
+  useEffect(() => {
+    if (installedLoadGeneration === 0) return;
+    if (initialLoadGenerationRef.current !== installedLoadGeneration) return;
+    initialLoadDone.current = true;
+    suppressDirtyUntilReloadSettlesRef.current = false;
+    setIsDirty(false);
+  }, [installedLoadGeneration]);
 
   // Booking settlement (roadmap #6c): for an open booking (saved sent/revised
   // quote), load booked/drawn/remaining + prepay position. Re-runs when the
@@ -874,6 +892,7 @@ export default function QuoteBuilder() {
 
     // The complete snapshot is now known-good. Install its related form state
     // together so React never observes an error-path partial reload.
+    suppressDirtyUntilReloadSettlesRef.current = true;
     quoteRowVersionRef.current = finalRowVersion;
     quoteNumericVersionRequiredRef.current = finalRowVersion !== null;
     quoteVersionRecoveryRequiredRef.current = false;
@@ -926,8 +945,8 @@ export default function QuoteBuilder() {
     }
 
     setLoading(false);
-    // Allow a tick for state to settle before tracking changes
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
+    const loadGeneration = ++initialLoadGenerationRef.current;
+    setInstalledLoadGeneration(loadGeneration);
     return true;
   }, [toast, navigate]);
 
@@ -1475,13 +1494,13 @@ export default function QuoteBuilder() {
 
     try {
       const idemKey = getSaveQuoteIdempotencyKey();
-      const { data, error } = await supabase.rpc('save_quote', {
+      const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('save_quote', withBelowCostReason('save_quote', {
         p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
         p_quote_payload: quotePayload as Json,
         p_sections: sectionsPayload,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
-      });
+      }, reason)));
 
       if (error) {
         if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
@@ -1522,6 +1541,7 @@ export default function QuoteBuilder() {
       }
       return savedQuoteId;
     } catch (err: unknown) {
+      if (isBelowCostApprovalHandledError(err)) return null;
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_quote' } });
       toast('error', err instanceof Error ? err.message : 'Failed to save quote');
       return null;
@@ -2219,18 +2239,38 @@ export default function QuoteBuilder() {
       return;
     }
     const restoreAttempt = getRestoreVersionAttempt(versionId);
-    const { data, error } = await restoreQuoteVersionWithRowVersion({
-      p_quote_id: quoteId,
-      p_version_id: versionId,
-      p_performed_by: profile.id,
-      p_idempotency_key: restoreAttempt.key,
-      p_expected_row_version: restoreAttempt.expectedRowVersion,
-    });
+    let restoreResponse;
+    try {
+      restoreResponse = await runWithBelowCostApproval((reason) => restoreQuoteVersionWithRowVersion(
+        withBelowCostReason('restore_quote_version', {
+          p_quote_id: quoteId,
+          p_version_id: versionId,
+          p_performed_by: profile.id,
+          p_idempotency_key: restoreAttempt.key,
+          p_expected_row_version: restoreAttempt.expectedRowVersion,
+        }, reason),
+      ));
+    } catch (error: unknown) {
+      if (isBelowCostApprovalHandledError(error)) return;
+      throw error;
+    }
+    const { data, error } = restoreResponse;
     if (error) {
+      // Restore-after-draw refusal (migration 20260816120000). A version
+      // restore mints brand-new quote_items ids, so it cannot carry the
+      // per-line billing provenance a draw stamps; dropping that provenance was
+      // proven to overbill across a restore that changes the line partition, so
+      // the server refuses instead. The message explains the alternative (edit
+      // the quote directly), so surface it rather than the generic toast.
+      if (hasRpcCode(error, RpcErrorCodes.QUOTE_RESTORE_BLOCKED_BY_DRAW)) {
+        const errMsg = (error instanceof Error ? error.message : null)
+          || (typeof error.message === 'string' ? error.message : null)
+          || 'This booking has already been drawn down into an order, so an earlier version cannot be restored. Edit the quote directly instead.';
+        toast('error', errMsg);
       // Drawn-version guard (Codex r2 MED): the server blocks restoring a
       // snapshot that would drop a drawn product or fall below its drawn
       // quantity. The server message names the product and quantities.
-      if (hasRpcCode(error, RpcErrorCodes.BOOKING_OVERDRAWN)) {
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_OVERDRAWN)) {
         const errMsg = (error instanceof Error ? error.message : null)
           || (typeof error.message === 'string' ? error.message : null)
           || 'This version books less than what has already been drawn down to orders.';
@@ -2315,13 +2355,14 @@ export default function QuoteBuilder() {
 
   // Partial booking draw-down: open the modal with the per-product balance
   const openDrawDownModal = async () => {
-    if (!id) return;
+    if (!id) return false;
     // Draw-down bills at this quote's locked prices, so a current-price stale guard
     // would be misleading and block the first click without protecting the customer.
     if (isDirty) {
       toast('warning', 'Save the quote before drawing down the booking');
-      return;
+      return false;
     }
+    let loaded = false;
     setDrawLoading(true);
     setShowDrawModal(true);
     try {
@@ -2363,12 +2404,14 @@ export default function QuoteBuilder() {
         })
         .sort((a, b) => a.product_name.localeCompare(b.product_name));
       setDrawRows(rows);
+      loaded = true;
     } catch (error: unknown) {
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'draw_down_quote_load' } });
       toast('error', 'Failed to load the booking balance');
       setShowDrawModal(false);
     }
     setDrawLoading(false);
+    return loaded;
   };
 
   const handleDrawDown = async () => {
@@ -2387,12 +2430,12 @@ export default function QuoteBuilder() {
     }
     setDrawing(true);
     try {
-      const { data, error } = await supabase.rpc('draw_down_quote', {
+      const { data, error } = await runWithBelowCostApproval((reason) => supabaseUntyped.rpc('draw_down_quote', withBelowCostReason('draw_down_quote', {
         p_quote_id: id,
         p_draws: draws.map((d) => ({ product_id: d.product_id, quantity: d.quantity })),
         p_performed_by: profile!.id,
         p_idempotency_key: drawDownIdem.getKey(),
-      });
+      }, reason)));
       if (error) throw error;
       drawDownIdem.resetKey();
       const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string; warnings?: string[]; fully_drawn?: boolean }>(data, 'draw_down_quote');
@@ -2409,6 +2452,57 @@ export default function QuoteBuilder() {
       setShowDrawModal(false);
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
+      if (isBelowCostApprovalHandledError(error)) {
+        setDrawing(false);
+        return;
+      }
+
+      // A retained draw key is bound to one actor and one exact set of draw
+      // quantities. A binding refusal performed no work for THIS request and
+      // makes that key permanently unusable, so retire it before the operator
+      // tries again. If the receipt identifies an earlier committed order,
+      // open that order rather than suggesting a second draw.
+      const bindingRejection = getIdempotencyBindingRejection(error);
+      if (bindingRejection) {
+        drawDownIdem.resetKey();
+        const committedResult = bindingRejection === 'intent'
+          ? getIdempotencyMismatchResult(error, 'draw_down_quote')
+          : null;
+        const committedOrderId = typeof committedResult?.order_id === 'string'
+          && committedResult.order_id.length > 0
+          ? committedResult.order_id
+          : null;
+
+        if (committedOrderId) {
+          setShowDrawModal(false);
+          toast('warning', 'An earlier attempt with this retry already created an order. No new draw was made — opening that order now.');
+          navigate(`/orders/${committedOrderId}`);
+          setDrawing(false);
+          return;
+        }
+
+        if (bindingRejection !== 'intent') {
+          Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+            tags: { source: 'critical_action', action: `draw_down_quote_${bindingRejection}_mismatch` },
+          });
+        }
+        if (bindingRejection === 'intent') {
+          setShowDrawModal(false);
+          toast('warning', 'That retry key was already used, but its prior outcome could not be opened. Nothing new was drawn. Check Orders for this booking before drawing again.');
+          setDrawing(false);
+          return;
+        }
+        const balanceReloaded = await openDrawDownModal();
+        const recoveryStep = balanceReloaded
+          ? 'The booking balance was reloaded; try again.'
+          : 'The booking balance could not be reloaded; refresh the page and check Orders before drawing again.';
+        toast('warning', bindingRejection === 'actor'
+          ? `That retry belongs to another signed-in user, so nothing new was drawn. ${recoveryStep}`
+          : `The database could not confirm this retry outcome, so nothing was drawn now. ${recoveryStep}`);
+        setDrawing(false);
+        return;
+      }
+
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'draw_down_quote' } });
       const errObj = error as Record<string, unknown> | null;
       const errMsg = (error instanceof Error ? error.message : null)
@@ -2418,7 +2512,12 @@ export default function QuoteBuilder() {
       // Friendly mapping for the booking guards — UX parity with the convert
       // path (2026-06-10 error-prevention review §3 LOW). BOOKING_PARTIALLY_DRAWN
       // can't fire here: draw_down_quote IS the partial path.
-      if (hasRpcCode(error, RpcErrorCodes.BOOKING_OVERDRAWN)) {
+      const authError = rpcAuthErrorMessage(error);
+      if (authError) {
+        toast('error', authError);
+      } else if (hasRpcCode(error, RpcErrorCodes.INSUFFICIENT_ROLE)) {
+        toast('error', 'Only active administrators and sales representatives can draw down bookings.');
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_OVERDRAWN)) {
         // The server message already names the product and remaining balance
         // (e.g. another draw landed from a second tab) — surface it as-is.
         toast('error', errMsg);
@@ -2426,6 +2525,25 @@ export default function QuoteBuilder() {
         toast('error', 'This booking is closed — only sent or revised quotes can be drawn down.');
       } else if (hasRpcCode(error, RpcErrorCodes.EMPTY_DRAW)) {
         toast('warning', 'Enter a quantity for at least one product');
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_QUANTITY_INVALID)) {
+        toast('error', errMsg);
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_PRODUCT_INVALID)) {
+        toast('error', 'A draw line has an invalid product reference. Refresh the booking and try again.');
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKED_PRICE_REQUIRED)) {
+        // Server message names the product and says what to fix — surface as-is.
+        toast('error', errMsg);
+      } else if (hasRpcCode(error, RpcErrorCodes.COST_BASIS_REQUIRED)) {
+        // This one carries only a product id, which means nothing to an
+        // operator — say what to do instead. Cost is NOT editable here: this
+        // page only displays item.current_cost. The quote-time cost snapshot
+        // is stamped from the product when a line is inserted and is immutable
+        // after that, so the repair is to fix the product, then rebuild the
+        // line (CodeRabbit PR #404 — a reload alone changes nothing).
+        toast('error', 'A booked product on this quote has no cost recorded. Set the cost on the product under Products, then remove and re-add that line on this quote and save it, then draw down again.');
+      } else if (hasRpcCode(error, RpcErrorCodes.DRAW_ALLOCATION_MISMATCH)) {
+        // Safety net, not an operator mistake: the draw refused rather than
+        // billing units it could not match to a booked price.
+        toast('error', `${errMsg} — nothing was drawn. Check the quote's booked quantities, then try again.`);
       } else {
         toast('error', errMsg);
       }
@@ -2532,12 +2650,14 @@ export default function QuoteBuilder() {
       // Atomic RPC: order creation + items + inventory prebooking + commissions
       const idemKey = convertQuoteIdem.getKey();
       const expectedRowVersion = quoteRowVersionRef.current;
-      const { data, error } = await convertQuoteToOrderWithRowVersion({
-        p_quote_id: savedId,
-        p_performed_by: profile!.id,
-        p_idempotency_key: idemKey,
-        p_expected_row_version: expectedRowVersion,
-      });
+      const { data, error } = await runWithBelowCostApproval((reason) => convertQuoteToOrderWithRowVersion(
+        withBelowCostReason('convert_quote_to_order', {
+          p_quote_id: savedId,
+          p_performed_by: profile!.id,
+          p_idempotency_key: idemKey,
+          p_expected_row_version: expectedRowVersion,
+        }, reason),
+      ));
 
       if (error) throw error;
 
@@ -2597,6 +2717,10 @@ export default function QuoteBuilder() {
       setIsDirty(false);
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
+      if (isBelowCostApprovalHandledError(error)) {
+        setConverting(false);
+        return;
+      }
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'convert_quote_to_order' } });
 
       if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)

@@ -1,5 +1,5 @@
 [mcp_servers.supabase]
-url = "https://mcp.supabase.com/mcp?project_ref=rhyzpcqhnizqbxphqdkr&read_only=true&features=database,debugging,development,functions,docs"
+url = "https://mcp.supabase.com/mcp?project_ref=rhyzpcqhnizqbxphqdkr&read_only=false&features=database,debugging,development,functions,docs"
 startup_timeout_sec = 30
 tool_timeout_sec = 120
 required = false

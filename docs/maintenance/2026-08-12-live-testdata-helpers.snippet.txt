@@ -1,0 +1,200 @@
+function readQuoted(sql, start, quote, escapeBackslash = false) {
+  let i = start + 1;
+  let value = "";
+  while (i < sql.length) {
+    if (escapeBackslash && sql[i] === "\\" && i + 1 < sql.length) {
+      value += sql.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
+    if (sql[i] === quote && sql[i + 1] === quote) {
+      value += quote;
+      i += 2;
+      continue;
+    }
+    if (sql[i] === quote) return { end: i + 1, value };
+    value += sql[i++];
+  }
+  return { end: sql.length, value };
+}
+
+function skipTrivia(sql, start) {
+  let i = start;
+  for (;;) {
+    while (/\s/.test(sql[i] || "")) i++;
+    if (sql[i] === "-" && sql[i + 1] === "-") {
+      const end = lineCommentEnd(sql, i + 2);
+      i = end === sql.length ? end : end + 1;
+      continue;
+    }
+    if (sql[i] === "/" && sql[i + 1] === "*") {
+      let depth = 1;
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql[i] === "/" && sql[i + 1] === "*") { depth++; i += 2; continue; }
+        if (sql[i] === "*" && sql[i + 1] === "/") { depth--; i += 2; continue; }
+        i++;
+      }
+      continue;
+    }
+    return i;
+  }
+}
+
+function dollarTagAt(sql, index) {
+  // PostgreSQL requires a dollar-quoted string that follows an unquoted
+  // identifier or keyword to be separated by whitespace. A `$tag$` embedded
+  // in identifiers such as `open$x$` is ordinary identifier text, not a body
+  // delimiter. Tags are empty or follow unquoted-identifier grammar.
+  const previous = sql[index - 1] || "";
+  // PostgreSQL accepts high-bit characters in unquoted identifiers. Treat
+  // every non-ASCII predecessor conservatively as identifier text; a false
+  // negative here fails closed later, while a false dollar body fails open.
+  if (index > 0 && (/[A-Za-z0-9_$]/.test(previous) || previous.charCodeAt(0) >= 0x80)) return null;
+  if (sql[index + 1] === "$") return "$$";
+  const isIdentifierStart = (value) =>
+    value === "_" || /[A-Za-z]/.test(value || "") || (value || "").charCodeAt(0) >= 0x80;
+  const isIdentifierContinue = (value) => isIdentifierStart(value) || /[0-9]/.test(value || "");
+  if (!isIdentifierStart(sql[index + 1])) return null;
+  let end = index + 2;
+  while (end < sql.length && isIdentifierContinue(sql[end])) end++;
+  return sql[end] === "$" ? sql.slice(index, end + 1) : null;
+}
+
+function lineCommentEnd(sql, index) {
+  const carriageReturn = sql.indexOf("\r", index);
+  const newline = sql.indexOf("\n", index);
+  if (carriageReturn === -1) return newline === -1 ? sql.length : newline;
+  if (newline === -1) return carriageReturn;
+  return Math.min(carriageReturn, newline);
+}
+
+// Split only on terminators outside comments, quotes, and dollar bodies.
+function topLevelStatements(sql) {
+  const statements = [];
+  let start = 0;
+  let i = 0;
+  while (i < sql.length) {
+    if (sql[i] === "'") {
+      const escaped = i > 0 && /[eE]/.test(sql[i - 1]) && !/[A-Za-z0-9_$]/.test(sql[i - 2] || "");
+      i = readQuoted(sql, i, "'", escaped).end;
+      continue;
+    }
+    if (sql[i] === '"') { i = readQuoted(sql, i, '"').end; continue; }
+    if (sql[i] === "-" && sql[i + 1] === "-") {
+      const end = lineCommentEnd(sql, i + 2);
+      i = end === sql.length ? end : end + 1;
+      continue;
+    }
+    if (sql[i] === "/" && sql[i + 1] === "*") { i = skipTrivia(sql, i); continue; }
+    const tag = sql[i] === "$" ? dollarTagAt(sql, i) : null;
+    if (tag) {
+      const close = sql.indexOf(tag, i + tag.length);
+      i = close === -1 ? sql.length : close + tag.length;
+      continue;
+    }
+    if (sql[i] === ";") {
+      const statement = sql.slice(start, i).trim();
+      if (statement) statements.push(statement);
+      start = ++i;
+      continue;
+    }
+    i++;
+  }
+  const tail = sql.slice(start).trim();
+  if (tail) statements.push(tail);
+  return statements;
+}
+
+// A keyword-only view: comments and literal values become spaces, while
+// identifiers and SQL structure remain available to classifiers.
+function keywordView(sql) {
+  const src = String(sql || "");
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    if (src[i] === "'") {
+      const escaped = i > 0 && /[eE]/.test(src[i - 1]) && !/[A-Za-z0-9_$]/.test(src[i - 2] || "");
+      const quoted = readQuoted(src, i, "'", escaped);
+      out += " ".repeat(quoted.end - i);
+      i = quoted.end;
+      continue;
+    }
+    if (src[i] === '"') {
+      const quoted = readQuoted(src, i, '"');
+      out += src.slice(i, quoted.end);
+      i = quoted.end;
+      continue;
+    }
+    if (src[i] === "-" && src[i + 1] === "-") {
+      const end = lineCommentEnd(src, i + 2);
+      out += " ".repeat(end - i);
+      i = end;
+      continue;
+    }
+    if (src[i] === "/" && src[i + 1] === "*") {
+      const end = skipTrivia(src, i);
+      out += " ".repeat(end - i);
+      i = end;
+      continue;
+    }
+    const tag = src[i] === "$" ? dollarTagAt(src, i) : null;
+    if (tag) {
+      const close = src.indexOf(tag, i + tag.length);
+      const end = close === -1 ? src.length : close + tag.length;
+      out += " ".repeat(end - i);
+      i = end;
+      continue;
+    }
+    out += src[i++];
+  }
+  return out;
+}
+
+function dmlTargets(statement) {
+  const matcher = new RegExp(DML_TARGET_RE.source, "gi");
+  return [...keywordView(statement).matchAll(matcher)];
+}
+
+function isPgTempTarget(target) {
+  return /^(?:pg_temp|pg_temp_\d+)$/i.test(target?.[2] || "");
+}
+
+function tempBaseTableName(statement) {
+  // Only a direct CTAS scratch table earns a same-batch DML exemption. Column
+  // declarations, LIKE/OF clones, copied defaults, generated expressions, and
+  // domains can hide calls that mutate persistent state when a row is inserted.
+  const match = /^\s*create\s+(?:temp|temporary)\s+table\s+(?:(?:"?(?:pg_temp|pg_temp_\d+)"?)\s*\.\s*)?"?([a-z_][a-z0-9_$]*)"?\s+as\s+(?:select|with|values|table)\b/i.exec(statement);
+  return match?.[1]?.toLowerCase() || null;
+}
+
+function functionCallView(statement) {
+  // Type modifiers in explicit casts are grammar, not function calls. Remove
+  // only the precision/scale suffix; an explicitly schema-qualified public
+  // function with the same name stays visible to the default-deny scanner.
+  const withoutTypeModifiers = statement.replace(
+    /((?:::|\bas\s+)\s*(?:(?:"?pg_catalog"?)\s*\.\s*)?"?(?:numeric|decimal)"?)\s*\(\s*\d+\s*(?:,\s*\d+\s*)?\)/gi,
+    "$1",
+  );
+
+  // CREATE TABLE object names and CREATE INDEX target names can be followed by
+  // column/expression parentheses but are not calls. Strip only those DDL
+  // declaration tokens; defaults, generated expressions, and index expression
+  // bodies remain visible and are still scanned for mutating functions.
+  return withoutTypeModifiers
+    .replace(
+      /^\s*create\s+(?:(?:temp|temporary)\s+)?table(?:\s+if\s+not\s+exists)?\s+(?:(?:"?[a-z_][a-z0-9_$]*"?)\s*\.\s*)?"?[a-z_][a-z0-9_$]*"?(?=\s*\()/i,
+      "",
+    )
+    .replace(
+      /^\s*create\s+(?:unique\s+)?index(?:\s+concurrently)?(?:\s+if\s+not\s+exists)?\s+(?:(?:"?[a-z_][a-z0-9_$]*"?)\s*\.\s*)?"?[a-z_][a-z0-9_$]*"?\s+on(?:\s+only)?\s+(?:(?:"?[a-z_][a-z0-9_$]*"?)\s*\.\s*)?"?[a-z_][a-z0-9_$]*"?(?:\s+using\s+"?[a-z_][a-z0-9_$]*"?)?(?=\s*\()/i,
+      "",
+    );
+}
+
+function isRollbackSafeSmokeStatement(statement) {
+  // Keep this list narrow and object-specific. A transaction wrapper does not
+  // make commands with server, filesystem, process, subscription, or sequence
+  // side effects safe merely because their catalog changes roll back.
+  return /^(?:create(?:\s+or\s+replace)?\s+(?:(?:unique\s+)?index|table|view|materialized\s+view|type|domain|schema|policy|trigger|rule)\b|alter\s+(?:table|index|view|materialized\s+view|type|domain|schema|policy|trigger|rule|default\s+privileges)\b|drop\s+(?:index|table|view|materialized\s+view|type|domain|schema|policy|trigger|rule)\b|grant\b|revoke\b|comment\s+on\b|set\s+local\b|set\s+constraints\b)/i.test(statement);
+}

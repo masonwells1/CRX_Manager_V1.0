@@ -23,15 +23,51 @@ import {
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
 
-const LIVE_TOOL_ACTIONS = /(?:apply_migration|deploy_edge_function|delete_branch)$/i;
+// Sol HIGH finding (2026-08-14, write-scope review): with the Supabase connector
+// write-enabled, ANY mutating Supabase tool Codex can reach is a route to
+// production schema/data changes that bypasses the migration gates. Supabase
+// tools are therefore governed by an EXACT read-only allowlist — a tool this
+// guard has never heard of fails closed instead of failing open. execute_sql is
+// the one deliberate exception: it passes through to the content gate below,
+// which only admits clearly read-only SQL.
+// CodeRabbit follow-up: the app connector's MCP prefix is a UUID, not the
+// literal `supabase` server name, so the allowlist matches that known UUID
+// too. If the connector is ever re-created under a new UUID, its known
+// leaves stay covered by the suffix blocklist and the execute_sql content
+// gate below; add the new UUID here so unknown leaves fail closed again.
+// Codex-review follow-up: the built-in codex_apps/supabase channel (the one
+// actually serving Codex traffic per docs/manual/KNOWN_ISSUES.md) normalizes
+// to app-style names with a SINGLE underscore (mcp__codex_apps__supabase_<leaf>),
+// so `_{1,2}` accepts both naming forms — same dual-form handling as
+// GITHUB_TOOL below.
+const SUPABASE_TOOL_RE = /(?:^|__)(?:supabase|50e15046-cf2c-49da-b8df-ceef27768f63)_{1,2}([a-z0-9_]+)$/i;
+const SUPABASE_READ_ONLY_TOOLS = new Set([
+  "generate_typescript_types", "get_advisors", "get_cost", "get_edge_function",
+  "get_logs", "get_organization", "get_project", "get_project_url",
+  "get_publishable_keys", "list_branches", "list_edge_functions",
+  "list_extensions", "list_migrations", "list_organizations", "list_projects",
+  "list_tables", "query_logs", "search_docs",
+]);
+// Defense-in-depth for connectors whose MCP prefix is NOT the literal
+// `supabase` server name (e.g. UUID-named app connectors): the known mutating
+// lifecycle leaves stay blocked by suffix regardless of prefix. Mirrors the
+// branch/project lifecycle deny set in .claude/hooks/autopilot-lib.mjs.
+const LIVE_TOOL_ACTIONS = /(?:apply_migration|deploy_edge_function|delete_branch|merge_branch|reset_branch|rebase_branch|create_branch|create_project|pause_project|restore_project|confirm_cost)$/i;
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 // Both MCP naming (mcp__github__create_file) and app naming
 // (mcp__codex_apps__github_create_file) — Codex round-5.
 const GITHUB_TOOL = /(?:^|__)github_{1,2}/i;
 const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
-const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
+const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
 const PROTECTED_HARNESS_PATH_RE = new RegExp(String.raw`(?:^|[\\/])${PROTECTED_HARNESS_SOURCE}$`, "i");
 const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\w.-])`, "i");
+const MAINTENANCE_PRODUCER = "scripts/apply-live-testdata-maintenance-20260812.mjs";
+export function maintenanceProducerCommandMentioned(command) {
+  const compact = String(command || "")
+    .toLowerCase()
+    .replace(/[\s\\/"'`^]/g, "");
+  return compact.includes("apply-live-testdata-maintenance-20260812.mjs");
+}
 
 function normalize(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
@@ -39,6 +75,47 @@ function normalize(value) {
 
 function protectedHarnessPathMentioned(value) {
   return PROTECTED_HARNESS_PATH_RE.test(String(value || "").trim());
+}
+
+// scripts/apply-migration-file.mjs mutates the LIVE database. It was added
+// 2026-08-24 as a gated door for migrations too large to transmit through
+// apply_migration, and Codex's review of that PR caught that the new spelling
+// reached production while every OTHER migration path was blocked here (P1).
+// Blocked outright rather than only on `--confirm`: matching a flag invites
+// quoting games, and Codex has no need for even the dry run.
+// Matched across quote-stripped and backslash-dropped views so `apply"-"migration-file`
+// and `apply\-migration-file` — which the shell runs identically — cannot slip past.
+const LIVE_APPLY_SCRIPT_RE = /apply-migration-file(?:\.mjs)?\b/i;
+function liveApplyScriptMentioned(command) {
+  const base = String(command || "").replace(/[\\`]\r?\n/g, "");
+  const views = [
+    base,
+    base.replace(/["']/g, ""),
+    base.replace(/\\(.)/g, "$1"),
+    base.replace(/["']/g, "").replace(/\\(.)/g, "$1"),
+  ];
+  return views.some((v) => LIVE_APPLY_SCRIPT_RE.test(v));
+}
+
+// The literal matcher above loses to a computed argument: `S=scripts/apply-migration-file.mjs; node $S`
+// never spells the name (CodeRabbit, PR #460 round 2 — the same class documented in
+// review-proof-guard, where a target hidden entirely from the command text defeats
+// any string matcher). A denylist cannot be completed by enumeration, so this
+// inverts: when a Node-family interpreter is invoked and ANY part of the command
+// is shell-expanded, the script it will run is statically unresolvable and the
+// command is refused. Codex has no need to launch an interpreter through an
+// expansion — `node -e`/`node -`/`| node` are already denied above — so the cost
+// is a clear error telling the operator to spell the path literally.
+// HONEST RESIDUAL: an interpreter that writes-then-runs a file, or any indirection
+// where no interpreter appears in the command text, is still outside what a
+// command-text guard can catch. The durable boundary stays the apply gate itself
+// plus Mason's in-chat approval, not this string match.
+const NODE_INTERPRETER_RE = /(?:^|[\s"'`\\/;&|(])(?:node|npx|tsx|ts-node|bun|deno)(?:\.exe)?["']?(?:\s|$)/i;
+const SHELL_EXPANSION_RE = /\$\{[^}]*\}|\$\(|`|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%|\$env:/i;
+function interpreterArgumentIsUnresolvable(command) {
+  const text = String(command || "");
+  if (!NODE_INTERPRETER_RE.test(text)) return false;
+  return SHELL_EXPANSION_RE.test(text);
 }
 
 function usesDynamicProcessEval(command) {
@@ -67,7 +144,12 @@ export function isClearlyReadOnlySql(sql) {
   const statement = value.replace(/;+\s*$/, "");
   if (statement.includes(";")) return false;
   if (!/^(?:select|with|explain|show)\b/i.test(value)) return false;
-  if (/\b(?:insert|update|delete|merge|truncate|alter|drop|create|grant|revoke|comment|vacuum|reindex|cluster|refresh|call|copy|set|reset|notify|listen|unlisten|lock|discard|execute|perform)\b/i.test(value)) {
+  // `into` covers PostgreSQL's `SELECT ... INTO new_table`, which CREATES and
+  // populates a table from inside a statement that begins with SELECT — the
+  // one write form the leading-keyword check alone cannot see (Codex P1,
+  // 2026-08-14). String literals are blanked before this test, and bare
+  // `into` is a reserved word, so it cannot appear in read-only SELECTs.
+  if (/\b(?:insert|update|delete|merge|truncate|alter|drop|create|grant|revoke|comment|vacuum|reindex|cluster|refresh|call|copy|set|reset|notify|listen|unlisten|lock|discard|execute|perform|into)\b/i.test(value)) {
     return false;
   }
 
@@ -301,6 +383,40 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authorit
     );
   }
 
+  return { blocked: false };
+}
+
+function gateMaintenanceProducerExecution({ command, repoDir, nowMs, runGit }) {
+  if (!maintenanceProducerCommandMentioned(command)) return { blocked: false };
+
+  let headSha;
+  let baseSha;
+  let headBlob;
+  let worktreeBlob;
+  let status;
+  try {
+    headSha = runGit(["rev-parse", "HEAD"], repoDir);
+    baseSha = runGit(["rev-parse", "origin/main"], repoDir);
+    status = runGit(["status", "--porcelain", "--untracked-files=all", "--", MAINTENANCE_PRODUCER], repoDir);
+    headBlob = runGit(["rev-parse", `HEAD:${MAINTENANCE_PRODUCER}`], repoDir);
+    worktreeBlob = runGit(["hash-object", `--path=${MAINTENANCE_PRODUCER}`, MAINTENANCE_PRODUCER], repoDir);
+  } catch (error) {
+    return denied(`CODEX PRODUCTION GATE: cannot bind the maintenance producer to the current committed HEAD: ${error?.message || error}`);
+  }
+  if (status || headBlob !== worktreeBlob) {
+    return denied("CODEX PRODUCTION GATE: the maintenance producer differs from its exact committed HEAD blob. Commit it, obtain a fresh exact-head review, and retry.");
+  }
+
+  const proofPath = path.join(repoDir, ".claude", "session-state", `codex-review-${headSha}.json`);
+  let proof;
+  try {
+    proof = JSON.parse(readFileSync(proofPath, "utf8"));
+  } catch (error) {
+    return proofRequirement(headSha, "execution of the protected maintenance producer", `Missing or unreadable exact-head proof: ${proofPath}`, baseSha);
+  }
+  if (!proofValid(proof, headSha, nowMs, baseSha)) {
+    return proofRequirement(headSha, "execution of the protected maintenance producer", "The exact-head Sol-high proof is stale or does not match the current HEAD/base.", baseSha);
+  }
   return { blocked: false };
 }
 
@@ -551,7 +667,19 @@ export function evaluateProductionAction({
   }
 
   if (LIVE_TOOL_ACTIONS.test(name)) {
-    return denied("Live migrations, edge-function deployments, and protected-branch deletion remain outside Codex's standing authorization.");
+    return denied("Live migrations, edge-function deployments, and Supabase branch/project lifecycle mutations remain outside Codex's standing authorization.");
+  }
+
+  const supabaseTool = SUPABASE_TOOL_RE.exec(name);
+  if (supabaseTool) {
+    const leaf = supabaseTool[1].toLowerCase();
+    if (leaf !== "execute_sql" && !SUPABASE_READ_ONLY_TOOLS.has(leaf)) {
+      return denied(
+        `CODEX PRODUCTION GATE: Supabase tool "${leaf}" is not on the exact read-only allowlist and is denied (fail closed). ` +
+        "With the connector write-enabled, every mutating or unrecognized Supabase tool is blocked so production schema and data " +
+        "changes can only travel the reviewed migration path."
+      );
+    }
   }
 
   if (/execute_sql$/i.test(name)) {
@@ -591,9 +719,26 @@ export function evaluateProductionAction({
   if ((changesDirectory && reviewStateDirectoryMentioned(command)) || reviewStateDirectoryMentioned(actionRepoDir)) {
     return denied("CODEX PRODUCTION GATE: the wrapper-owned review state directory cannot be used as an interactive shell working directory.");
   }
+  if (liveApplyScriptMentioned(command)) {
+    return denied(
+      "CODEX PRODUCTION GATE: scripts/apply-migration-file.mjs applies a migration to the LIVE database and is " +
+      "blocked, exactly like the MCP apply_migration and Supabase CLI migration paths. Its internal gate checks " +
+      "review evidence but cannot verify Mason's required in-chat approval, so it is not an alternative spelling " +
+      "for the reviewed migration path. Live migrations remain outside Codex's standing authorization.");
+  }
+  if (interpreterArgumentIsUnresolvable(command)) {
+    return denied(
+      "CODEX PRODUCTION GATE: a Node-family interpreter invoked with a shell-expanded argument is blocked — the " +
+      "script it would run cannot be resolved from the command text, so a live-apply path such as " +
+      "scripts/apply-migration-file.mjs can hide behind `$VAR`, `${VAR}`, `$(…)` or a backtick. Spell the script " +
+      "path literally so the gate can see what will run.");
+  }
   if (usesDynamicProcessEval(command)) {
     return denied("CODEX PRODUCTION GATE: Node eval/print modes are blocked because generated code can hide uninspected git or GitHub writes. Put ordinary diagnostic code in a reviewed script instead.");
   }
+  const maintenanceProducerGate = gateMaintenanceProducerExecution({ command, repoDir: actionRepoDir, nowMs, runGit });
+  if (maintenanceProducerGate.blocked) return maintenanceProducerGate;
+
   if (/[\r\n]/.test(command) && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
     return denied("CODEX PRODUCTION GATE: multiline shell commands that reference the production/review harness are blocked.");
   }

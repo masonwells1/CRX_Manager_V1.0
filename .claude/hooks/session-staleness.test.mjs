@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -19,11 +19,14 @@ const isolatedGitEnv = Object.fromEntries(
   Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
 );
 
-function runHook(projectDir) {
+function runHook(projectDir, extraEnv = {}) {
   return spawnSync(process.execPath, [path.join(__dirname, "session-staleness.mjs")], {
     input: "",
     encoding: "utf8",
-    env: { ...isolatedGitEnv, CLAUDE_PROJECT_DIR: projectDir },
+    // CRX_OFFSITE_BACKUP_DISABLE keeps the legacy marker-only cases offline and
+    // deterministic; the OFFSITE cases below re-enable the check with a seeded
+    // cache file and a bogus gh binary so no test ever touches the network.
+    env: { ...isolatedGitEnv, CLAUDE_PROJECT_DIR: projectDir, CRX_OFFSITE_BACKUP_DISABLE: "1", ...extraEnv },
   });
 }
 
@@ -94,6 +97,27 @@ try {
   }, { "20260102000000_old_and_unnamed.sql": REGISTRY_RELEVANT_SQL });
   r = runHook(dirE);
   ok(!additionalContextOf(r).includes("BEHIND"), "FIX1: migration older than high-water is never a candidate, even if absent from the name list");
+
+  // ── FIX 2: a server-assigned version AHEAD of every authored stamp must not
+  // swallow written-but-unapplied migrations authored in between. The 2026-08-24
+  // barrier apply recorded version 20260824185408 against name 20260816110000_*;
+  // with the window boundary read from max(version), the unapplied
+  // 20260819232000_* fell below the boundary and the BEHIND warning went silent.
+  // The boundary must come from the max AUTHORED (name-prefix) stamp instead. ──
+  const dirVersionAhead = path.join(tmpRoot, "version-ahead");
+  scaffold(dirVersionAhead, {
+    _meta: {
+      migrations_high_water: "20260824185408", // apply-time version, days ahead
+      applied_migration_names: ["20260816110000_cutover_barrier"],
+    },
+  }, {
+    "20260816110000_cutover_barrier.sql": REGISTRY_RELEVANT_SQL,   // applied
+    "20260819232000_bind_receipts.sql": REGISTRY_RELEVANT_SQL,     // written, NOT applied
+  });
+  r = runHook(dirVersionAhead);
+  ok(additionalContextOf(r).includes("BEHIND"), "FIX2: version ahead of authored stamps still flags the in-between unapplied migration");
+  ok(additionalContextOf(r).includes("20260819232000_bind_receipts.sql"), "FIX2: names the swallowed migration");
+  ok(!additionalContextOf(r).includes("20260816110000_cutover_barrier.sql"), "FIX2: the applied migration itself is not flagged");
 
   // ── FIX 1: no applied_migration_names key at all -> falls back to the
   // original numeric-only compare (pre-FIX-1 registry shape) ──────────────
@@ -213,6 +237,99 @@ try {
   const sepContext = additionalContextOf(r);
   ok(!sepContext.includes("Last DB backup is 8 days old"), "FIX3: an unsupported layout never reports a backup marker found beside the Git directory");
   ok(sepContext.includes("No database backup exists yet"), "FIX3: an unsupported layout says no backup rather than claiming an unrelated one");
+
+  // ── OFFSITE (2026-08-18): the marker is per-checkout but the SCHEDULED backup
+  // runs as the "Off-site DB backup" workflow in masonwells1/CRX_Backups, so a
+  // fresh worktree's stale marker used to fire a false "backup died" alarm.
+  // Real evidence (gh, cached) must veto it. Every case here seeds the cache and
+  // points CRX_OFFSITE_BACKUP_GH at a nonexistent binary: a hit on the network,
+  // or a broken TTL that triggers a refetch, fails the test instead of passing
+  // it by accident. ─────────────────────────────────────────────────────────
+  const daysAgoIso = (d) => new Date(Date.now() - d * 24 * 60 * 60 * 1000).toISOString();
+  const seedCache = (file, entry, fetchedAt = new Date().toISOString()) =>
+    writeFileSync(file, JSON.stringify({ fetched_at: fetchedAt, ...entry }));
+  const offsiteEnv = (cacheFile) => ({
+    CRX_OFFSITE_BACKUP_DISABLE: "",
+    CRX_OFFSITE_BACKUP_CACHE: cacheFile,
+    CRX_OFFSITE_BACKUP_GH: "crx-no-such-gh-binary",
+  });
+  const REGISTRY_OK = { _meta: { migrations_high_water: "20260101000000", applied_migration_names: [] } };
+  function scaffoldWithMarker(dir, markerAgeDays) {
+    scaffold(dir, REGISTRY_OK, {});
+    if (markerAgeDays !== null) {
+      mkdirSync(path.join(dir, "backups"), { recursive: true });
+      writeFileSync(path.join(dir, "backups", "LATEST-OK.json"), JSON.stringify({
+        completed_at: daysAgoIso(markerAgeDays), tables: 1, total_rows: 1,
+      }));
+    }
+  }
+
+  // OFFSITE (a): the exact 2026-08-18 false alarm — stale local marker, but the
+  // off-site workflow succeeded 2 days ago → NO backup warning at all.
+  const dirH = path.join(tmpRoot, "h");
+  scaffoldWithMarker(dirH, 9);
+  const cacheH = path.join(tmpRoot, "cache-h.json");
+  seedCache(cacheH, { ok: true, completed_at: daysAgoIso(2) });
+  r = runHook(dirH, offsiteEnv(cacheH));
+  eq(r.status, 0, "OFFSITE(a): exits 0");
+  ok(!additionalContextOf(r).includes("💾"), "OFFSITE(a): a fresh off-site run vetoes the stale-marker false alarm");
+
+  // OFFSITE (b): no local marker at all (fresh worktree), fresh off-site run →
+  // no "No database backup exists yet" false alarm either.
+  const dirI = path.join(tmpRoot, "i");
+  scaffoldWithMarker(dirI, null);
+  const cacheI = path.join(tmpRoot, "cache-i.json");
+  seedCache(cacheI, { ok: true, completed_at: daysAgoIso(2) });
+  r = runHook(dirI, offsiteEnv(cacheI));
+  ok(!additionalContextOf(r).includes("💾"), "OFFSITE(b): a fresh off-site run vetoes the missing-marker false alarm");
+
+  // OFFSITE (c): BOTH sources stale → the alarm is real; newest evidence (the
+  // 9-day marker) sets the age and the off-site staleness is cited as proof.
+  const dirJ = path.join(tmpRoot, "j");
+  scaffoldWithMarker(dirJ, 9);
+  const cacheJ = path.join(tmpRoot, "cache-j.json");
+  seedCache(cacheJ, { ok: true, completed_at: daysAgoIso(20) });
+  r = runHook(dirJ, offsiteEnv(cacheJ));
+  const ctxJ = additionalContextOf(r);
+  ok(ctxJ.includes("Last DB backup is 9 days old"), "OFFSITE(c): both sources stale -> warns with the NEWEST evidence's age");
+  ok(ctxJ.includes("CRX_Backups") && ctxJ.includes("20 days ago"), "OFFSITE(c): warning cites the off-site workflow as verification");
+
+  // OFFSITE (d): gh previously failed (fresh failure cache) → fall back to the
+  // marker-only verdict, explicitly labeled unverified. The failure cache must
+  // be honored within its TTL: the file's content must NOT be rewritten.
+  const dirK = path.join(tmpRoot, "k");
+  scaffoldWithMarker(dirK, 9);
+  const cacheK = path.join(tmpRoot, "cache-k.json");
+  seedCache(cacheK, { ok: false });
+  const cacheKBefore = readFileSync(cacheK, "utf8");
+  r = runHook(dirK, offsiteEnv(cacheK));
+  const ctxK = additionalContextOf(r);
+  ok(ctxK.includes("Last DB backup is 9 days old"), "OFFSITE(d): gh unavailable -> marker-only warning still fires");
+  ok(ctxK.includes("could not verify") || ctxK.includes("gh unavailable"), "OFFSITE(d): fallback warning is labeled unverified");
+  eq(readFileSync(cacheK, "utf8"), cacheKBefore, "OFFSITE(d): a failure cache inside its TTL is honored, not refetched");
+
+  // OFFSITE (e): cache EXPIRED → refetch is attempted; with gh unavailable the
+  // failure is cached (so the next session start doesn't stall) and the verdict
+  // falls back to the marker.
+  const dirL = path.join(tmpRoot, "l");
+  scaffoldWithMarker(dirL, 9);
+  const cacheL = path.join(tmpRoot, "cache-l.json");
+  seedCache(cacheL, { ok: true, completed_at: daysAgoIso(2) }, new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString());
+  r = runHook(dirL, offsiteEnv(cacheL));
+  const ctxL = additionalContextOf(r);
+  ok(ctxL.includes("Last DB backup is 9 days old"), "OFFSITE(e): expired cache + failed refetch -> marker fallback fires");
+  const cacheLAfter = JSON.parse(readFileSync(cacheL, "utf8"));
+  eq(cacheLAfter.ok, false, "OFFSITE(e): the failed refetch is cached as a failure");
+
+  // OFFSITE (f): gh answers but the workflow has NO successful run on record —
+  // that is a real answer, and with no marker it must warn loudly.
+  const dirM = path.join(tmpRoot, "m");
+  scaffoldWithMarker(dirM, null);
+  const cacheM = path.join(tmpRoot, "cache-m.json");
+  seedCache(cacheM, { ok: true, completed_at: null });
+  r = runHook(dirM, offsiteEnv(cacheM));
+  const ctxM = additionalContextOf(r);
+  ok(ctxM.includes("💾") && ctxM.includes("never succeeded"), "OFFSITE(f): no marker + no successful off-site run -> real no-backup warning");
 
   console.log(`session-staleness: ${pass} assertions passed`);
 } finally {

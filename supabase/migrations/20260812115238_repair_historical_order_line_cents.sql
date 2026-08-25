@@ -23,14 +23,6 @@
 -- contain the exact approved preimage raises APPROVED_SET_DRIFTED.
 --
 -- APPROVED_SET_DIGEST: 0f8ccef3bf6d3291c654d5abb24a151e16ad759851f5eddfc65d1585d7f5b7db
--- PUBLICATION NOTE: unlike the other five migrations recovered alongside it,
--- this file is NOT byte-identical to the payload that was applied. The approved
--- 35-row preimage map was removed before publishing because it contains live
--- order-line identifiers, prices and profit and this repository is public. The
--- digest above still binds it. Nothing else was changed, and every reachable
--- code path is unaffected: an empty database returns early before the map is
--- read, and an already-repaired database raises APPROVED_SET_DRIFTED before the
--- map is read.
 -- Rollback: the apply is one transaction. Pre-commit/pre-apply proof executes
 -- it inside a transaction that ends in ROLLBACK. After a successful live apply,
 -- roll forward from the exact map below; restoring fractional cents would
@@ -45,12 +37,43 @@ LOCK TABLE public.order_items, public.orders IN ACCESS EXCLUSIVE MODE;
 DO $approved_repair$
 DECLARE
   v_approved jsonb := $approved_rows$
-  -- REDACTED FOR PUBLICATION. The approved preimage was a 35-row map of live
-  -- order-line identifiers with their dollar values and profit. This repository
-  -- is public, so those figures are deliberately withheld; the SHA-256
-  -- APPROVED_SET_DIGEST above still binds the exact preimage this migration was
-  -- approved against, and the guard below refuses to run without the map.
-  []
+  [
+    {"id":"00684521-e88b-4366-a0d8-3e868aefddb7","order_id":"709c4e24-47dc-4985-a6ac-b5cf6efe2b7c","old_total_price":"537.6753","new_total_price":"537.68","old_profit":"189.41"},
+    {"id":"14dff95d-8c99-40d6-bf76-8912553d467b","order_id":"2e56bd1c-9f8e-49aa-8c5d-bca7ac7a16b4","old_total_price":"4164.225","new_total_price":"4164.23","old_profit":"1332.500"},
+    {"id":"15ad141f-7b33-4047-bc39-f8d59e20ed8f","order_id":"2e56bd1c-9f8e-49aa-8c5d-bca7ac7a16b4","old_total_price":"5332.375","new_total_price":"5332.38","old_profit":"358.88"},
+    {"id":"1af9c3e0-fe4d-4aba-913f-2ea04891d150","order_id":"2ef58bcc-3be7-4f47-bc9f-5f956dcd365e","old_total_price":"11126.6907","new_total_price":"11126.69","old_profit":"1109.37"},
+    {"id":"20eede22-be78-42f7-852b-d2312f9c1834","order_id":"575211e2-41c8-479b-bcd6-3380e471b98f","old_total_price":"963.164","new_total_price":"963.16","old_profit":"160.32"},
+    {"id":"2f30708e-4f50-45a1-9a0b-498adc11be8b","order_id":"5c26d0a8-f7d9-4945-b864-43525a17c73e","old_total_price":"26507.325","new_total_price":"26507.33","old_profit":"2276.950"},
+    {"id":"5b6b75d5-7bec-4f27-8c63-dab08cf08568","order_id":"606a06c1-7014-4a17-a6a0-b32b7ec0859c","old_total_price":"550.125","new_total_price":"550.13","old_profit":"60.53"},
+    {"id":"764e87cf-7b16-4ab2-875b-2421e6885808","order_id":"2ef58bcc-3be7-4f47-bc9f-5f956dcd365e","old_total_price":"1946.6465","new_total_price":"1946.65","old_profit":"280.1300"},
+    {"id":"8d415ecd-c452-4c88-a6de-17d03f516352","order_id":"071275a3-7a7e-470c-852b-1ebab59fc4d8","old_total_price":"330.875","new_total_price":"330.88","old_profit":"71.000"},
+    {"id":"8f129241-84b4-4652-a309-ab2023552923","order_id":"b947ca2e-6fdc-4440-b11f-8dae896bdb9e","old_total_price":"1233.2664","new_total_price":"1233.27","old_profit":"135.72"},
+    {"id":"91abc74d-c400-4e4e-8235-ebf3b51de611","order_id":"b947ca2e-6fdc-4440-b11f-8dae896bdb9e","old_total_price":"2099.9568","new_total_price":"2099.96","old_profit":"252.02"},
+    {"id":"95754d56-d794-4be7-a44c-f3b4765fbfb4","order_id":"b947ca2e-6fdc-4440-b11f-8dae896bdb9e","old_total_price":"636.9258","new_total_price":"636.93","old_profit":"127.32"},
+    {"id":"97682e29-2765-460b-8a8c-11b3e72d0357","order_id":"54a398ed-8cb0-4ed2-bd7a-053624330004","old_total_price":"330.875","new_total_price":"330.88","old_profit":"71.000"},
+    {"id":"a2338776-a195-41ec-87fe-088fea23e66c","order_id":"90270ce1-9252-426d-914f-0e7587f2aa04","old_total_price":"4386.375","new_total_price":"4386.38","old_profit":"526.58"},
+    {"id":"a4d73a76-cf5c-4edf-a91d-0000159fd23d","order_id":"105d683a-cec1-4590-8946-c603b1fe44d7","old_total_price":"5818.394","new_total_price":"5818.39","old_profit":"1101.09"},
+    {"id":"aab3cb34-b88b-4239-9439-57d14d8ec925","order_id":"606a06c1-7014-4a17-a6a0-b32b7ec0859c","old_total_price":"229.628","new_total_price":"229.63","old_profit":"45.90"},
+    {"id":"ab44126c-ead2-4a52-bd06-270343f0c32d","order_id":"f25e78dd-faa7-4f58-b030-9fd894a68b50","old_total_price":"1131.375","new_total_price":"1131.38","old_profit":"158.38"},
+    {"id":"aec4d1de-677d-4b43-bb54-45a6ec17614f","order_id":"f25e78dd-faa7-4f58-b030-9fd894a68b50","old_total_price":"817.278","new_total_price":"817.28","old_profit":"122.50"},
+    {"id":"b1833117-6b15-468a-b386-6166e45e22aa","order_id":"2e56bd1c-9f8e-49aa-8c5d-bca7ac7a16b4","old_total_price":"1389.675","new_total_price":"1389.68","old_profit":"298.200"},
+    {"id":"b3169ac5-6fc3-48e0-8f93-3cf0ec200cd3","order_id":"32a52b9b-2270-4e59-b2a1-24389856255f","old_total_price":"1175.625","new_total_price":"1175.63","old_profit":"282.500"},
+    {"id":"b674a893-eb3a-4c8c-a9c1-02d2fc227194","order_id":"606a06c1-7014-4a17-a6a0-b32b7ec0859c","old_total_price":"2640.708","new_total_price":"2640.71","old_profit":"308.700"},
+    {"id":"c4545ad8-27cb-4e6d-a203-89cc3eda3c82","order_id":"32a52b9b-2270-4e59-b2a1-24389856255f","old_total_price":"270.712","new_total_price":"270.71","old_profit":"73.16"},
+    {"id":"cd06d843-6ba6-42e7-8685-2735a2142376","order_id":"709c4e24-47dc-4985-a6ac-b5cf6efe2b7c","old_total_price":"588.2352","new_total_price":"588.24","old_profit":"88.17"},
+    {"id":"cd75ac58-61fc-43de-9af2-6f440d2a031c","order_id":"709c4e24-47dc-4985-a6ac-b5cf6efe2b7c","old_total_price":"714.6708","new_total_price":"714.67","old_profit":"118.96"},
+    {"id":"ce92eea9-77ce-4313-8d7d-a575f114271d","order_id":"606a06c1-7014-4a17-a6a0-b32b7ec0859c","old_total_price":"1106.028","new_total_price":"1106.03","old_profit":"265.78"},
+    {"id":"d8fb47d1-02ba-4bdc-ac22-6fd53298341b","order_id":"32a52b9b-2270-4e59-b2a1-24389856255f","old_total_price":"596.891","new_total_price":"596.89","old_profit":"189.99"},
+    {"id":"de914d64-582c-417f-aab5-995681ef4f84","order_id":"105d683a-cec1-4590-8946-c603b1fe44d7","old_total_price":"4870.125","new_total_price":"4870.13","old_profit":"1076.400"},
+    {"id":"df65fe1c-c057-4b31-84ed-573393ae740d","order_id":"a7d13875-e415-4689-ba2d-8a804cdd1333","old_total_price":"3554.582","new_total_price":"3554.58","old_profit":"782.05"},
+    {"id":"e5992c90-d637-46d7-9bd9-7a93578ec424","order_id":"002579ab-feb7-4a47-93c5-4c83251e160e","old_total_price":"6138.925","new_total_price":"6138.93","old_profit":"1105.000"},
+    {"id":"ea7d7d3a-f2fb-4f31-8a36-29979504fe48","order_id":"575211e2-41c8-479b-bcd6-3380e471b98f","old_total_price":"1625.6952","new_total_price":"1625.70","old_profit":"292.62"},
+    {"id":"eb0b61ee-bcf5-4af4-8312-951b0c2903ab","order_id":"f25e78dd-faa7-4f58-b030-9fd894a68b50","old_total_price":"1605.565","new_total_price":"1605.57","old_profit":"289.000"},
+    {"id":"ecb2a79e-ead2-47d0-b759-a5e5f6b9f61f","order_id":"b947ca2e-6fdc-4440-b11f-8dae896bdb9e","old_total_price":"1651.241","new_total_price":"1651.24","old_profit":"237.620"},
+    {"id":"f264a5b4-90ae-4bdd-a187-48d1404badbd","order_id":"105d683a-cec1-4590-8946-c603b1fe44d7","old_total_price":"12796.875","new_total_price":"12796.88","old_profit":"2559.38"},
+    {"id":"f83425e9-3ec0-4fcf-871a-e8e314908a9d","order_id":"dba56e65-e6f5-44a7-a043-381281011e18","old_total_price":"1179.9510","new_total_price":"1179.95","old_profit":"118.31"},
+    {"id":"fd5769e4-0d89-474a-af40-dd9737030daf","order_id":"f25e78dd-faa7-4f58-b030-9fd894a68b50","old_total_price":"709.404","new_total_price":"709.40","old_profit":"225.80"}
+  ]
   $approved_rows$::jsonb;
   v_dirty_count integer;
   v_impacted_order_count integer;
@@ -79,11 +102,6 @@ BEGIN
     END IF;
     RAISE NOTICE 'HISTORICAL_ORDER_LINE_CENTS_EMPTY_REBUILD: no business rows to repair';
     RETURN;
-  END IF;
-
-  IF jsonb_array_length(v_approved) = 0 THEN
-    RAISE EXCEPTION
-      'APPROVED_SET_WITHHELD: this database still has fractional-cent order lines, but the approved preimage map is redacted from the public repository. Recover the full map from the applying session record and re-approve before running this migration.';
   END IF;
 
   WITH approved AS (

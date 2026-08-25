@@ -11,9 +11,11 @@ import RecordVersionConflictDialog from '../components/ui/RecordVersionConflictD
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { supabase, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { parseLocalDate, localToday } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
@@ -98,6 +100,7 @@ export default function CustomerDetail() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const { runWithBelowCostApproval } = useBelowCostApproval();
   const duplicateQuoteIdem = useIdempotencyKey('duplicate_quote', profile?.id || '');
   const {
     getKey: getSaveCustomerIdempotencyKey,
@@ -1413,17 +1416,21 @@ export default function CustomerDetail() {
                   {quotes.length > 0 && (
                     <button
                       onClick={async () => {
-                        const lastQuote = quotes[0];
-                        const idemKey = duplicateQuoteIdem.getKey();
-                        const { data, error } = await supabase.rpc('duplicate_quote', {
-                          p_source_quote_id: lastQuote.id,
-                          p_performed_by: profile?.id as string,
-                          p_idempotency_key: idemKey,
-                        });
-                        if (error) { toast('error', 'Failed to duplicate quote'); return; }
-                        const result = assertRpcResult<{ quote_id: string }>(data, 'duplicate_quote');
-                        duplicateQuoteIdem.resetKey();
-                        navigate(`/quotes/${result.quote_id}`);
+                        try {
+                          const lastQuote = quotes[0];
+                          const idemKey = duplicateQuoteIdem.getKey();
+                          const { data, error } = await runWithBelowCostApproval((reason) => supabaseUntyped.rpc('duplicate_quote', withBelowCostReason('duplicate_quote', {
+                            p_source_quote_id: lastQuote.id,
+                            p_performed_by: profile?.id as string,
+                            p_idempotency_key: idemKey,
+                          }, reason)));
+                          if (error) { toast('error', 'Failed to duplicate quote'); return; }
+                          const result = assertRpcResult<{ quote_id: string }>(data, 'duplicate_quote');
+                          duplicateQuoteIdem.resetKey();
+                          navigate(`/quotes/${result.quote_id}`);
+                        } catch (error: unknown) {
+                          if (!isBelowCostApprovalHandledError(error)) toast('error', 'Failed to duplicate quote');
+                        }
                       }}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-crx-green text-crx-green rounded-lg hover:bg-crx-green-tint"
                     >

@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-08-13",
+    "generated_at": "2026-08-25",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260813011751",
+    "migrations_high_water": "20260825034622",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -352,6 +352,11 @@
       "20260812115238_repair_historical_order_line_cents",
       "20260812130145_bind_return_receipts_to_intent_and_restore_overdue",
       "20260813070000_pin_return_idempotency_helper_contract",
+      "20260813080000_lock_quote_versions_writes_to_rpc",
+      "20260816110000_draw_down_cutover_barrier",
+      "20260816120000_draw_down_split_order_lines_by_price_tier",
+      "20260817120000_carry_allocated_line_cents_through_lifecycle",
+      "20260819232000_bind_draw_down_receipts_to_intent",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -3749,6 +3754,12 @@
       "table": "quote_items",
       "constraint": "quote_items_total_price_whole_cents_chk",
       "def": "CHECK (((total_price IS NULL) OR ((total_price = round(total_price, 2)) AND (total_price > '-Infinity'::numeric) AND (total_price < 'Infinity'::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "quote_items",
+      "constraint": "quote_items_total_units_needed_nonneg_finite_chk",
+      "def": "CHECK (((total_units_needed IS NULL) OR ((total_units_needed >= (0)::numeric) AND (total_units_needed < 'Infinity'::numeric))))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {

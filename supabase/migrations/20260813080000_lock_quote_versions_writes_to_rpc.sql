@@ -38,18 +38,35 @@
 -- quote/order profit, margin reporting, and their own commission, with no admin
 -- approval anywhere in the path.
 --
--- EXPLOITATION CHECK — CLEAN, re-confirmed against live 2026-08-13 UTC
+-- EXPLOITATION CHECK — CLEAN, re-confirmed against live 2026-08-14 UTC
 -- (read-only; UTC throughout this header, which is the business clock on live
 -- and is one calendar day ahead of local evening — the dates are not typos):
 -- five snapshot cost lines across three quote_versions rows. Every one carries a
--- numeric cost, resolves to a real product with a usable catalog cost, and sits
--- above half that cost. Nothing matches the forgery signature.
+-- numeric cost, resolves to a real product with a usable catalog cost, and its
+-- stored basis equals that product's live catalog cost EXACTLY — the measured
+-- stored-to-catalog ratio is 1.0000 at both ends of the range. Nothing is
+-- understated by any amount.
 --
--- Read that as "no forgery of the shape this precondition detects", not as
--- "no forgery". The threshold is half the catalog cost, so a line understated by
--- a third — still real money on a large order — passes it silently. A clean
--- result here is the reason to seal the boundary now, not evidence that sealing
--- it can be deferred.
+-- The test is exact equality, not a tolerance band, and that is a deliberate
+-- correction. An earlier revision of this file compared against half the catalog
+-- cost, and the independent review of 2026-08-14 (CRX-QV-001, High) was right to
+-- reject it: a basis forged at 60% of a $100 cost clears a 50% threshold, and a
+-- percentage band cannot prove provenance. Exact equality can. The only writer
+-- that can reach this table today is _create_quote_version_owner_impl, which
+-- copies quote_items.current_cost, which is itself copied from the catalog — so
+-- a legitimate line equals the catalog cost, and any line that does not is
+-- either forged or a stale snapshot taken before a catalog price move. Both
+-- deserve a human read before the boundary seals over them, and neither is
+-- something this file may decide on its own.
+--
+-- The exact test can therefore abort on a perfectly innocent cause: if a product
+-- cost legitimately changes between this measurement and the apply, the
+-- corresponding line stops matching and the migration refuses to run. That is
+-- fail-closed and correct. Re-measure, read the differing line, and re-apply.
+--
+-- Sealing the boundary is not deferrable on the strength of a clean result. A
+-- clean result is the reason to seal it NOW, while there is nothing to
+-- quarantine.
 --
 -- That read is a point-in-time observation, so it is ALSO re-run as a hard
 -- precondition below. The hole stays open until this file applies, and a row
@@ -248,7 +265,7 @@
 --
 -- AND READ A 'no_basis' ABORT CAREFULLY. That bucket means the product's
 -- catalog cost is missing, non-positive or non-finite TODAY, which makes the
--- below-half comparison unevaluable — it is not itself evidence of forgery. An
+-- exact-equality comparison unevaluable — it is not itself evidence of forgery. An
 -- ordinary discontinued product with its cost zeroed out lands there. The abort
 -- is deliberate (unevaluable means unverified, and this file's whole purpose is
 -- to avoid sealing a bad basis in place), but the first move on seeing one is to
@@ -799,9 +816,12 @@ BEGIN
              -- NaN and +Infinity must be routed here EXPLICITLY. In PostgreSQL
              -- numeric, NaN sorts ABOVE every finite value, so `NaN <= 0` is
              -- false and a non-finite catalog cost would fall through to
-             -- 'evaluable' — where `cost_num < NaN / 2` is TRUE for every line
-             -- naming that product, aborting the apply with a confident and
-             -- wrong forged-snapshot diagnosis.
+             -- 'evaluable' — where `cost_num <> NaN` is TRUE for every finite
+             -- line naming that product (in numeric, NaN equals only NaN), so
+             -- the apply would abort with a confident and wrong forged-snapshot
+             -- diagnosis. Note this arm is still required under the exact test:
+             -- switching from `<` to `<>` changed which comparison misfires, not
+             -- whether one does.
              --
              -- CORRECTION, checked against the applied source rather than
              -- carried forward: an earlier revision of this comment said no
@@ -827,8 +847,14 @@ BEGIN
   SELECT count(*) FILTER (WHERE bucket = 'unrestorable'),
          count(*) FILTER (WHERE bucket = 'exotic'),
          count(*) FILTER (WHERE bucket IN ('unparseable', 'no_basis')),
+         -- EXACT equality, not a tolerance band. See CRX-QV-001 in the header:
+         -- a percentage threshold cannot prove provenance, and the only writer
+         -- that can reach this table copies the catalog cost verbatim, so an
+         -- unforged line matches to the last digit. `<>` on numeric is safe here
+         -- because the non-finite and NULL cases were already routed to
+         -- 'no_basis'/'unparseable' above and cannot reach this arm.
          count(*) FILTER (WHERE bucket = 'evaluable'
-                            AND cost_num < current_cost / 2)
+                            AND cost_num <> current_cost)
     INTO v_unrestorable, v_exotic, v_unchecked, v_count
     FROM classified;
 
@@ -909,7 +935,7 @@ BEGIN
   END IF;
 
   IF v_count > 0 THEN
-    RAISE EXCEPTION 'PRECOND: % existing quote_versions snapshot line(s) carry a cost basis below half the product current cost. That is the signature of the forged-snapshot path this migration closes. Investigate those rows before applying — sealing the boundary would freeze the bad cost basis in place.', v_count;
+    RAISE EXCEPTION 'PRECOND: % existing quote_versions snapshot line(s) carry a stored cost basis that is not EXACTLY the live products.current_cost for that product. Every legitimate line matches to the last digit, because the only writer that can reach this table is _create_quote_version_owner_impl, which copies quote_items.current_cost, which is itself copied from the catalog. A mismatch is therefore either the forged-snapshot path this migration closes, or a stale snapshot taken before a legitimate catalog price move. Both need a human read; neither may be decided by this file. Note this test is deliberately EXACT rather than a percentage band — a band cannot prove provenance, and a basis forged at 60%% of a $100 cost would clear a 50%% one (independent review CRX-QV-001, 2026-08-14). Read the differing rows before applying — sealing the boundary would freeze an unverified cost basis in place permanently.', v_count;
   END IF;
 END;
 $precond$;

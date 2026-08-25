@@ -28,12 +28,16 @@
 //   sitting on disk. The comparison set must be what the DATABASE has already
 //   run.
 //
-// WHY THE FILENAME TIMESTAMP AND NOT THE LEDGER VERSION
+// WHY THE EFFECTIVE ROW STAMP AND NOT A BARE LEDGER VERSION
 //   This is the "B7 class" trap the audit documented: live ledger `name`
-//   values are inconsistently formatted — some carry the version prefix, some
-//   carry `.sql`, some carry neither. Comparing versions to versions
-//   manufactures false drift. normalizeMigrationName() reduces any of those
-//   shapes to the same form before the timestamp is read.
+//   values are inconsistently formatted — some carry the authored timestamp,
+//   some carry `.sql`, and some are bare slugs. The snapshot producer in
+//   scripts/refresh-applied-migrations.mjs keeps a timestamped `name` when one
+//   exists and otherwise synthesizes `<version>_<name>` for that row. This
+//   module then normalizes either shape and extracts the row's effective stamp.
+//   Comparing against a bare version aggregate loses the name context and
+//   manufactures false drift; dropping timestamp-less names loses their only
+//   conservative ordering signal.
 
 const TS_RE = /(\d{14})/;
 

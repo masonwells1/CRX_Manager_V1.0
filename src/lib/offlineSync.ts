@@ -5,6 +5,7 @@
 import { supabase, assertRpcResult } from './db';
 import { Sentry } from './sentry';
 import type { Database } from '../types/supabase';
+import { withBelowCostReason, type BelowCostApprovalRunner } from './belowCostApproval';
 import {
   getPendingActions,
   getActionOwnerUserId,
@@ -52,11 +53,14 @@ type FunctionArgs<N extends FunctionName> = Database['public']['Functions'][N] e
  */
 export function syncPendingActions(
   currentUserId: string,
-  options: { force?: boolean } = {}
+  options: { force?: boolean; runWithBelowCostApproval?: BelowCostApprovalRunner } = {}
 ): Promise<OfflineSyncResult> {
   if (activeSync) {
     if (activeSync.userId === currentUserId && !options.force) return activeSync.promise;
-    return activeSync.promise.then(() => syncPendingActions(currentUserId, options));
+    return activeSync.promise.then(
+      () => syncPendingActions(currentUserId, options),
+      () => syncPendingActions(currentUserId, options),
+    );
   }
 
   const promise: Promise<OfflineSyncResult> = processPendingActions(currentUserId, options).finally(() => {
@@ -68,7 +72,7 @@ export function syncPendingActions(
 
 async function processPendingActions(
   currentUserId: string,
-  { force = false }: { force?: boolean }
+  { force = false, runWithBelowCostApproval }: { force?: boolean; runWithBelowCostApproval?: BelowCostApprovalRunner }
 ): Promise<OfflineSyncResult> {
   const now = Date.now();
   const attemptTimestamp = new Date(now).toISOString();
@@ -173,7 +177,7 @@ async function processPendingActions(
       // Doing so would accept office edits made during the offline window as
       // the action's baseline. The durable server path stages these actions as
       // permanent LEGACY_OUTCOME_UNKNOWN review work instead.
-      await executeAction(action);
+      await executeAction(action, runWithBelowCostApproval);
       await removeAction(action.id!);
       synced++;
     } catch (error: unknown) {
@@ -344,7 +348,10 @@ function isPermanentFailure(message: string): boolean {
  * Execute a single queued action against Supabase.
  * Maps operation names to their corresponding RPC calls.
  */
-async function executeAction(action: PendingAction): Promise<void> {
+async function executeAction(
+  action: PendingAction,
+  runWithBelowCostApproval?: BelowCostApprovalRunner,
+): Promise<void> {
   const { operation, params } = action;
 
   // Conflict detection: if we captured a snapshot, check for server-side changes
@@ -410,7 +417,15 @@ async function executeAction(action: PendingAction): Promise<void> {
       return;
     }
     case 'update_order_items': {
-      const { data, error } = await supabase.rpc('update_order_items', params as FunctionArgs<'update_order_items'>);
+      const execute = runWithBelowCostApproval ?? ((attempt) => attempt(null));
+      const { data, error } = await execute((reason) => supabase.rpc(
+        'update_order_items',
+        withBelowCostReason(
+          'update_order_items',
+          params as FunctionArgs<'update_order_items'>,
+          reason,
+        ),
+      ));
       if (error) throw error;
       assertRpcResult(data, 'update_order_items');
       return;

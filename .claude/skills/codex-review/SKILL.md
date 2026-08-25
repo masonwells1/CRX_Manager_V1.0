@@ -27,7 +27,7 @@ newest one — never hard-code the hash:
 ```bash
 CODEX=$(ls -t /c/Users/mason/AppData/Local/OpenAI/Codex/bin/*/codex.exe 2>/dev/null | head -1)
 [ -x "$CODEX" ] || { echo "Codex CLI not found — fall back to /codex-cross-review"; exit 1; }
-"$CODEX" --version    # expect codex-cli 0.14x
+"$CODEX" --version    # confirm it prints a codex-cli version (any recent release)
 ```
 
 If not found, stop and use `/codex-cross-review` instead.
@@ -71,8 +71,68 @@ Skip this step for frontend-only / docs-only diffs.
 
 ## Step 3: Run Codex
 
-Codex `review` is read-only analysis of the diff. Run it from the repo root, pin
-no-approval so it can't hang unattended, and tee the output so Claude can parse it:
+> ### ⛔ `codex review <scope>` SELF-RECURSES IN THIS REPO — use the wrapper
+>
+> Observed twice on 2026-08-23 (PIDs 39564, 36244), identical both times. `codex review`
+> loads `AGENTS.md` / `CLAUDE.md` / `.claude/commands/codex-gauntlet.md` as project context.
+> Those files instruct an agent to "run a Codex review", so the reviewer follows them
+> **literally**: it spawns a *nested* `codex review`, then enumerates `codex.exe` processes,
+> sees duplicates, and `Stop-Process`/`taskkill`s the tree — **including its own PID**.
+>
+> **The lethal part: the pipeline still exits 0.** `tee` succeeds, the harness reports
+> success, and the ~1 MB capture is almost entirely echoed context files. An exit-code check
+> reads this as a clean review when Codex reviewed nothing.
+>
+> Any repo whose agent instructions say "run a review" can reproduce this. It is not a
+> transient failure and retrying the same command does not help.
+
+**Default path — the sanitized wrapper.** Run it bare from the repo root; the maintenance
+guard rejects `cd &&` chaining and every other wrapper form:
+
+```bash
+node scripts/write-codex-push-proof.mjs
+```
+
+It runs `codex exec` (not `review`) inside a throwaway `%TEMP%\crx-codex-review-*` workspace
+holding only `BASE_SNAPSHOT` / `CANDIDATE_SNAPSHOT` — **no repo agent-instruction files exist
+there to recurse on**. It SHA-256-binds every changed path, pins Sol at high effort, and writes
+the exact-SHA proof JSON the push guard wants;
+`review-proof-guard.mjs` blocks reading that JSON back through the shell by design.
+
+> **Scope contract — the wrapper covers ONE scope, not all three.** Its base is pinned to
+> `origin/main...HEAD` and is *deliberately* not a CLI option (`write-codex-push-proof.mjs`:
+> "a caller who could pass `--base HEAD` would get a clean review of nothing"). It also fails
+> closed on a dirty or shifted worktree and mints nothing. So it replaces Step 1's
+> `--base origin/main` row **only**. It cannot serve `--uncommitted` or `--commit <sha>`:
+> commit the work onto a branch and review it against `origin/main`, or use
+> `/codex-cross-review` for a scope the wrapper cannot express. Do not run the legacy
+> `codex review --uncommitted` as a substitute — it self-recurses exactly as above.
+
+**Verify the verdict. Presence of the *token* is NOT a pass — the token also spells `BLOCKERS`.**
+
+*Primary signal — the wrapper's own refusal.* It writes the proof JSON **only** on a terminal
+`CODEX_PROOF_VERDICT: CLEAN`, and mints nothing on `BLOCKERS`, on a duplicate token (treated as
+diff-injected), or on a worktree that was dirty or moved mid-review. So it prints
+`… (verdict: clean, head <sha>, base <sha>)` or it prints why it refused. **No proof file for the
+current HEAD = no pass**, regardless of exit status.
+
+*Secondary sanity check on the capture* — match `CLEAN` specifically, never the bare token:
+
+```bash
+grep -cE '^CODEX_PROOF_VERDICT:[[:space:]]*CLEAN[[:space:]]*$' .claude/session-state/codex-review-latest.txt
+```
+
+`0` means no clean verdict: either `BLOCKERS`, or — as in the self-recursion above — nothing at
+all while still exiting 0.
+
+**Do not tighten this to "exactly 1".** A clean run legitimately reports **2**: the wrapper writes
+a structured section *and* the raw transcript tail into the same capture, so the verdict appears
+twice (verified 2026-08-23 at lines 18 and 33671 of a real clean run). The parser's
+one-token rule applies to Codex's stdout, which is not what this file holds. Counting matches here
+is a smoke test; the proof file is the gate.
+
+<details>
+<summary>Legacy <code>codex review $SCOPE</code> form (kept for reference — expect self-recursion)</summary>
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -85,6 +145,8 @@ mkdir -p .claude/session-state
   -c approval_policy=never \
   2>&1 | tee .claude/session-state/codex-review-latest.txt
 ```
+
+</details>
 
 **A scope flag carries NO inline prompt.** `--base` / `--uncommitted` / `--commit` are each
 mutually exclusive with a `[PROMPT]` argument — passing both makes Codex exit 2 with e.g.

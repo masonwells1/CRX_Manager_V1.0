@@ -10,10 +10,10 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeEol } from "./normalize-eol.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const TARGET_ROOT = path.join(ROOT, ".agents");
-const MANIFEST_PATH = path.join(TARGET_ROOT, "generated-manifest.json");
 
 function unix(relativePath) {
   return relativePath.split(path.sep).join("/");
@@ -71,24 +71,42 @@ function buildExpected() {
   return expected;
 }
 
-function previousManagedFiles() {
+function previousManagedFiles(targetRoot = TARGET_ROOT) {
   try {
-    const parsed = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
+    const parsed = JSON.parse(readFileSync(path.join(targetRoot, "generated-manifest.json"), "utf8"));
     return Array.isArray(parsed.managed) ? parsed.managed : [];
   } catch {
     return [];
   }
 }
 
-function writeExpected(expected) {
+export function writeExpected(expected, targetRoot = TARGET_ROOT) {
   const expectedNames = new Set(expected.keys());
-  for (const stale of previousManagedFiles()) {
-    if (!expectedNames.has(stale)) rmSync(path.join(TARGET_ROOT, stale), { force: true });
+  for (const stale of previousManagedFiles(targetRoot)) {
+    if (!expectedNames.has(stale)) rmSync(path.join(targetRoot, stale), { force: true });
   }
   for (const [relative, content] of expected) {
-    const target = path.join(TARGET_ROOT, relative);
+    const target = path.join(targetRoot, relative);
     mkdirSync(path.dirname(target), { recursive: true });
-    if (!existsSync(target) || readFileSync(target, "utf8") !== content) writeFileSync(target, content);
+    // Write the LF form, then compare the target's RAW bytes against it. Skill and
+    // command mirrors are byte copies of their .claude sources, so a CRLF-smudged
+    // source used to make --write copy CRLF straight into .agents/**.
+    //
+    // Do NOT normalize the target before comparing. That was the first attempt at
+    // this fix and it is a no-op on the case that matters: a CRLF mirror
+    // normalizes to `canonical`, the write is skipped, and the file stays CRLF
+    // while --write prints "Synced". Comparing raw is what makes the "run
+    // --write" remedy the health check prints actually repair a smudged mirror.
+    // It is still idempotent - an already-LF mirror equals `canonical` byte for
+    // byte, so the common case writes nothing.
+    // Compare BYTES, not decoded strings. Decoding maps any invalid UTF-8 byte to
+    // U+FFFD, so a corrupt target could decode equal to canonical text containing
+    // that character and be skipped - the same shape of bug as the CRLF one above,
+    // where the comparison was looser than the write.
+    const canonical = Buffer.from(normalizeEol(content), "utf8");
+    if (!existsSync(target) || !readFileSync(target).equals(canonical)) {
+      writeFileSync(target, canonical);
+    }
   }
   console.log(`Synced ${expected.size - 2} Codex workflow file(s) from .claude.`);
 }
@@ -99,7 +117,9 @@ function writeExpected(expected) {
 // false failure that bricked commits in fresh worktrees (2026-07-16 scaffolding
 // review). Line endings are not content drift; the committed form is LF-pinned
 // regardless, so normalizing here tests what the check is FOR (real drift).
-const normalizeEol = (text) => String(text).replace(/\r\n/g, "\n");
+// `normalizeEol` is shared with scripts/agent-health-check.mjs: the two used to
+// define "in sync" differently, so the same commit could FAIL one and PASS the
+// other. Keep the single definition in scripts/normalize-eol.mjs.
 
 function checkExpected(expected) {
   const mismatches = [];
@@ -122,11 +142,34 @@ function checkExpected(expected) {
   console.log(`PASS - ${expected.size - 2} Codex workflow file(s) match .claude sources.`);
 }
 
-const mode = process.argv[2] || "--check";
-const expected = buildExpected();
-if (mode === "--write") writeExpected(expected);
-else if (mode === "--check") checkExpected(expected);
-else {
-  console.error("Usage: node scripts/sync-agent-workflows.mjs --write|--check");
-  process.exit(2);
+// Run the CLI only when this file IS the entry point. sync-agent-workflows.test.mjs
+// imports writeExpected to prove the CRLF-mirror repair, and importing a module
+// whose top level regenerates .agents/** would rewrite the real tree as a side
+// effect of running the test suite. Compare resolved paths rather than basenames:
+// .husky and CI invoke this as `node scripts/sync-agent-workflows.mjs --write`,
+// check-agent-workflows.mjs spawns it by absolute path, and both must still run.
+//
+// Case-fold on Windows. `path.resolve` builds the entry path from process.cwd(),
+// whose drive letter casing comes from whatever launched the shell, while
+// fileURLToPath returns the casing in the module URL. A `C:` vs `c:` mismatch
+// would silently skip the CLI, and the caller in check-agent-workflows.mjs keyed
+// off the exit code alone - so a skipped --check would exit 0 and be reported as
+// "synced" while checking nothing. That caller now also requires the PASS line;
+// this comparison is the other half of closing that fail-silent path.
+export function isEntryPoint(argvPath, moduleUrl) {
+  if (!argvPath) return false;
+  const normalize = (value) =>
+    process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
+  return normalize(argvPath) === normalize(fileURLToPath(moduleUrl));
+}
+
+if (isEntryPoint(process.argv[1], import.meta.url)) {
+  const mode = process.argv[2] || "--check";
+  const expected = buildExpected();
+  if (mode === "--write") writeExpected(expected);
+  else if (mode === "--check") checkExpected(expected);
+  else {
+    console.error("Usage: node scripts/sync-agent-workflows.mjs --write|--check");
+    process.exit(2);
+  }
 }

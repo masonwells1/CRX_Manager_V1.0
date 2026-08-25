@@ -1,11 +1,929 @@
 # Decision Log
 
-Last verified: 2026-08-10
+Last verified: 2026-08-24
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-24 — CodeRabbit reviews assertively and enforces the Hard Rules, without a hard merge block
+
+**Source:** Mason's in-chat decisions, 2026-08-24, after a live audit of the CodeRabbit dashboard,
+plan, and usage. Refines the 2026-07-30 CodeRabbit policy; does not touch the throttle decision in
+the entry below.
+
+**Decisions.**
+
+1. **`profile: chill` → `assertive`.** `chill` is not a cost control; it instructs the reviewer to
+   report less, which is the anti-pattern the Opus-5 tuning rules forbid for review prompts.
+   Billing is per file reviewed, never per comment, so the change buys coverage for nothing but
+   extra reading.
+2. **`request_changes_workflow: false` → `true`.** CodeRabbit now withholds approval until its
+   comments are resolved *and the latest commit has been reviewed*. That second clause is
+   first-party enforcement of the exact-head problem this repo repeatedly hits, and it is the
+   switch that gives error-mode checks any force at all.
+3. **Five `mode: error` custom pre-merge checks** encoding existing CRX Hard Rules: RLS on new
+   tables, `SECURITY DEFINER` search_path, mutating-RPC idempotency, exact whole-cent money, and
+   no edits to already-applied migrations. Each opens with an explicit skip clause so unrelated
+   PRs pass trivially — a check that fires on docs work gets ignored, and an ignored check
+   protects nothing. Custom checks require Pro+; the org is on Pro Plus.
+4. **`docstrings` check off**, `title`/`description`/`issue_assessment` left at warning.
+   `override_requested_reviewers_only` stays **false** on purpose: false lets the PR *author*
+   override a failing check, and Mason authors every PR here.
+
+**The limit, stated so nobody oversells it later.** These produce a red X and a withheld approval.
+They do **not** disable the merge button. `protect-main` requires exactly `Vercel`,
+`Lint, Type Check, Test, Build`, and `SQL Migration Validation`, with
+`required_approving_review_count: 0` and CodeRabbit absent from the required list. The status
+context name is confirmed to be `CodeRabbit`, so promoting it is now only a decision, not a
+discovery — deferred deliberately until the error-mode checks have run long enough to show their
+false-positive rate, and it needs Mason's explicit OK when that time comes.
+
+**Also settled: the dashboard is inert and must not be used.** CodeRabbit config sources do not
+merge. The repo `.coderabbit.yaml` outranks the repository and organization UI settings, and any
+key it omits falls through to CodeRabbit's defaults rather than to the dashboard, unless
+"Inheritance" is enabled per level. Verified 2026-08-24: org config YAML empty, Global Overrides
+empty, repo set to "Use Organization Settings" with Inheritance off. Every switch in the web UI —
+including the "Personalize CodeRabbit" onboarding wizard — currently changes nothing.
+
+**Open item owned by this change.** Whether the five custom checks draw down the usage budget is
+undocumented and was not resolved. Baseline to diff against, captured 2026-08-24: $55.00 of an
+$80.00 monthly cap, 100 of 320 files remaining, 41% of reviews rate-limited (148 of 358), cycle
+resets Sep 16. Mason declined raising the cap. If the checks consume budget, they drop to
+`mode: warning` until the next cycle — with the cap held, a check that cannot run is an outage,
+not a gate.
+
+---
+
+## 2026-08-24 — A priced job line with no rate typed yet and quantity 0 still SAVES; it is not an underbill to refuse
+
+**Source:** Mason's in-chat decision, 2026-08-24, answering a repeated exact-SHA `gpt-5.6-sol`
+finding on the `save_job` chem-unit branch. Reaffirms and extends the 2026-08-24 zero-quantity
+rule ("refuse only where a customer's money is actually at stake") against a narrower re-raise.
+
+**The question.** The gate found (HIGH) that `save_job` exempts a zero-quantity line whenever no
+usable rate is present, *even when field acreage is positive and the line carries a price*. Its
+proposed fix: exempt zero quantity only when the line is customer-supplied, unpriced, or the
+acreage is genuinely zero — otherwise raise `CHEM_QUANTITY_UNVERIFIABLE`.
+
+**Why it is not free.** That shape is what the screen produces mid-entry. The ordinary order of
+work is fields first, then products: choosing fields sets the acreage, adding a product auto-fills
+the tier price, and the rate is typed after. Between those two moments the line is priced, has
+acreage, has no rate and carries quantity 0. Refusing it does not refuse a line — one refused line
+rolls back the WHOLE job save, which is the round-7 defect three separate reviews already caught
+on this same migration.
+
+**The decision.** **It keeps saving.** A line with no quantity bills zero and shows on the invoice
+as a zero line; nothing is charged wrongly, and the operator can see it. That is the same judgement
+as the original rule: refuse where a customer's money is actually at stake, not wherever a value is
+merely unproven.
+
+**The operative rule.** The three zero-quantity exemptions stand as written — `customer_supplied`,
+no price, and no usable rate *or* acreage. The recorded residual stands with them: a priced line
+whose quantity cannot be derived can still record zero, and a cost-only line can still misstate
+margin. Both are accepted, not overlooked.
+
+**Why it is written down.** The gate re-raised this after the same branch had already been marked
+CLEAN on byte-identical SQL. It cannot converge on an owner's judgement about acceptable friction —
+nothing in the diff settles it — so the decision has to live here. A reviewer raising it again is
+not finding something new.
+
+---
+
+## 2026-08-24 — Job totals, acreage and product costs are NOT sensitive in the public repo; customer identity and per-order profit still are
+
+**Source:** Mason's in-chat decision, 2026-08-24, answering a reviewer finding on the `save_job`
+chem-unit branch. Refines the standing "public repo, no live financials" rule rather than replacing
+it.
+
+**The question.** The exact-SHA `gpt-5.6-sol` gate raised (MEDIUM) that the branch records live
+business data in a PUBLIC repository: internal job numbers, exact job cost and revenue totals, and
+one identifiable product's exact cost per pound. The proposed fix was to redact the identifiers and
+replace the figures with synthetic equivalents.
+
+**The decision.** **Leave them.** Job numbers, acreage, job totals and catalogue costs are not
+commercially sensitive at Crop RX's scale, and the figures are load-bearing in a way invented ones
+would not be: the tests that replay a live row's exact totals are what prove the migration bills the
+same money the database already holds. Substituting synthetic numbers would keep the shape of the
+proof while removing the thing it proves.
+
+**The operative rule.** Still redact, here and in FarmRx: customer and farm NAMES, contact details,
+order-level identifiers tied to a named customer, and per-order PROFIT or margin. Fine to record:
+product names and catalogue costs, job numbers, acreage, job-level cost and revenue totals, and row
+counts.
+
+**Why it is written down.** An adversarial gate cannot converge on an owner's business judgement —
+nothing in the diff can settle it, so it re-raises the finding every round. Recording the decision
+is what ends that loop; a reviewer raising it again is not finding something new.
+
+---
+
+## 2026-08-24 — AP aging measures DAYS PAST DUE; the bucket mapping is a separate, still-open decision
+
+**Source:** Mason's in-chat decision, 2026-08-24, answering the open product question raised by the
+Live Foundation Gauntlet Section 9 refresh (PR #457).
+
+**The question.** `get_ap_aging(date)` ages every bucket from `vendor_bills.bill_date`; `due_date`
+is never read. An audit initially scored that a HIGH defect. On review that scoring was wrong as
+stated: invoice-date aging and due-date aging are both standard accounting views, and nothing in
+this repository declared which one the `Current` / `31-60 Days` / `61-90 Days` / `90+ Days` buckets
+were meant to express. Calling the existing basis a defect — and queueing a live SQL change on that
+footing — would have committed Crop RX to an accounting policy by implication rather than by
+decision.
+
+**The decision.** **AP aging measures days past due.** Buckets are computed from each bill's
+`due_date`, so a bill inside its terms is not reported as aged no matter when it was issued. With
+that contract stated, the live implementation provably contradicts it, and the Section 9 finding is
+a genuine HIGH.
+
+**Explicitly NOT decided.** The report exposes only four buckets and has no `1-30`, so days-past-due
+must be *mapped* onto them, and the obvious mapping (`Current` = not yet due **through 30 days past
+due**) silently merges "not yet due" with "up to a month late". Whether those should be separated —
+which needs a fifth bucket and a UI change — is a **second decision Mason has not made**. Do not
+assume it, and do not write a test that locks either mapping in until he answers. The question to
+put to him: *should `Current` mean "not yet due" only, with a new `1-30 Days` column?*
+
+**Operative rules.**
+
+- Age AP buckets from `due_date`, not `bill_date`. Do not re-open this half.
+- Get Mason's answer on the bucket mapping **before** writing the migration or its smoke test.
+- `public.vendor_bills.due_date` is `NOT NULL` (verified by live introspection 2026-08-24), as is
+  `bill_date`. Do not add null-handling or a null test case; it would assert invented behavior for
+  an unreachable input. If that constraint is ever relaxed, revisit this contract first.
+- The AP Aging UI labels and CSV export state no basis today. They should state whichever is
+  adopted — that holds under either mapping.
+
+**Status.** Recorded only; **no code, SQL, or migration has been written.** Scope note for the
+implementing session: `.claude/handoffs/SCOPE-ap-aging-days-past-due.md`. Full finding: HIGH 1 in
+`docs/audits/gauntlet/2026-08-23-section-09-purchase-orders-receiving-vendor-bills-ap-refresh.md`.
+
+---
+
+## 2026-08-24 — CodeRabbit config: stop spending the review budget on half-finished commits
+
+**Source:** Mason's in-chat decisions, 2026-08-20 through 2026-08-24. Supersedes nothing; refines
+the mechanics of the 2026-07-17 / 2026-07-30 standing CodeRabbit review policy in `AGENTS.md`,
+which is unchanged. This entry covers the **configuration** half of the work opened as PR #441.
+The merge-gate enforcement half is parked — see "What is deliberately not here" below.
+
+**The problem.** CodeRabbit was refusing reviews for two *different* reasons, and the distinction
+matters because only one of them is fixable with money:
+
+1. **Fair-usage throttle.** 61 included review attempts in 7 days dropped the org from Pro's 5
+   reviews/hour to the floor — 1 review/hour, one at a time. Attempt *count* drives this, not spend.
+2. **Usage spending cap.** Separately, large reviews were refused with "This review is too large to
+   run within your organization's remaining usage spending cap."
+
+**What was measured.** The org was on **Pro** (CodeRabbit's own run-configuration block on PR #434
+reported `Plan: Pro`). After Mason raised the cap the same block reports **`Plan: Pro Plus`** on
+FarmRx PR #26 — the billing change moved the tier, not just the cap.
+`auto_pause_after_reviewed_commits` sat at its default of 5 and auto-review re-runs on every push,
+so each PR could spend five attempts on mid-work commits. Recent PRs are commit-heavy — #429 had 21
+commits, #433 had 11, #431 had 8 — across 12 PRs in roughly two days: 12 × 5 ≈ 60, the entire
+weekly allowance. The failure mode ran the dangerous direction: the budget was consumed by
+**half-finished intermediate commits**, and the runs that got refused were the ones on finished
+code. **PR #429 (21 commits) and PR #434 both posted "Review limit reached."** #429 merged with its
+later commits never auto-reviewed.
+
+**Decisions.**
+
+- **Mason raised the usage spending cap** (billing tab), then raised it again, stating he would
+  rather spend more than lose review quality.
+- **Report sections stay ON at their defaults** — sequence diagrams, related PRs/issues,
+  linked-issue assessment, suggested labels/reviewers, changed-files summary. Turning them off was
+  proposed as a cost saving and Mason declined: he will not trade any possible review context for a
+  cheaper report. Do not re-propose disabling them to save spend.
+- **`auto_pause_after_reviewed_commits: 2`.** Mason initially objected, on the belief that a higher
+  number meant "it reviews my changes before merge." It does not. The setting pauses *automatic*
+  review after N reviewed commits on a PR — ordinary non-draft PRs included, not only GitHub drafts
+  — after which later pushes are not auto-reviewed until someone comments `@coderabbitai review`,
+  which resumes it. So the number caps how many **intermediate** commits get reviewed for free; it
+  guarantees nothing about the final one, and at 5 it was actively starving the runs that mattered.
+  **Settled by Mason, 2026-08-22: keep 2.** (Wording in the config corrected after CodeRabbit
+  flagged the original "mid-work drafts" phrasing as inaccurate on FarmRx PR #26.)
+- **The actual pre-merge gate is a fresh review on the final commit, proven by SHA** — the standing
+  policy in `AGENTS.md`, with the procedure in `.claude/skills/deploy-check/SKILL.md`. A review
+  **with findings** creates a review object whose structured `commit_id` must equal the current
+  `headRefOid`. A **clean** review creates no review object at all, so its only evidence is
+  CodeRabbit's canonical walkthrough stamp naming that same head. Check both endpoints; if neither
+  binds, comment `@coderabbitai review`, wait, and read it. **`submitted_at` is not proof** — any
+  reviewer's timestamp satisfies a timestamp check, and a review of the previous commit can start
+  before the final push and finish after it. Never merge on a review that predates the final commit.
+- **A green `CodeRabbit` status check is not proof the head was reviewed.** On FarmRx PR #26 the
+  check read **pass** while the three reviewed commits were `358e3a8`, `cc28976`, and `ae0e6b1` —
+  not the head, `9abaf18`.
+- **Refresh a stale branch before spending a review attempt, and stop on any non-`CLEAN` state.**
+  `BEHIND` is the common case and `gh pr update-branch` fixes it, but `DIRTY`, `BLOCKED`,
+  `UNSTABLE`, and `UNKNOWN` all mean the merge cannot proceed as-is, and requesting a review while
+  in one of them can burn an attempt against a head that is about to move.
+- **`path_instructions` extended** with rules settled since the July config: integer-cent parsing
+  before money arithmetic, the `<table>_<column>_whole_cents_chk` naming, explicit UTC →
+  America/Chicago conversion for business-day logic, and **two** blend patterns
+  (`src/**/[Bb]lend*/**` and `src/**/*[Bb]lend*`) marking blend tickets as a money path. One
+  pattern alone misses files *inside* a blend-named folder, because `src/**/*[Bb]lend*` matches
+  only the filename component.
+- **`knowledge_base.code_guidelines`** now points CodeRabbit at `AGENTS.md`, `CLAUDE.md`,
+  `docs/reference/gotchas.md`, and `docs/workflows/`, so it reviews against the repo's own written
+  contract rather than only the inline path instructions.
+
+**A positive `path_filters` pattern switches off review for everything else.** Both CodeRabbit and
+the Codex reviewer recommended adding a positive `**/package-lock.json` filter, to override
+CodeRabbit's built-in ignore of lock files. Applied literally on FarmRx PR #26, the next review
+answered **"No files to review"** — on a PR whose one changed file was `.coderabbit.yaml` itself.
+Once *any* non-`!` pattern exists in `path_filters`, only files matching a positive pattern are
+reviewed. Two well-meant lines silently disabled code review for the whole repo, and the result
+reads as a clean pass rather than an error.
+
+A leading `**` restores default-include breadth, but it is not free: it also opts **out of
+CodeRabbit's curated default ignore list**, so dependencies, build output, generated code,
+binaries, media, and source maps become reviewable and must be re-excluded by hand or every review
+inflates. That is why the two repos differ. FarmRx carries the `**` + lockfile-include +
+hand-maintained-ignores form, because a lockfile there has shipped as the sole functional change.
+**CRX stays exclusion-only**, because its problem was review budget and hand-maintaining an ignore
+list CodeRabbit already curates is the worse trade. The lockfile-only blind spot on CRX is a
+documented, accepted gap, not something this change closed.
+
+**An exclusion must name a mechanism, not a directory.** The config opened with `path_filters`
+covering `docs/archive/`, `docs/audits/`, `docs/loops/`, `docs/build-loops/`, `docs/handoffs/`, and
+the generated `.agents/` adapters — 340+ files. Four review rounds took all of it apart, each time
+for the same reason:
+
+- A blanket `!docs/audits/**` also hid real executable programs
+  (`docs/audits/ordering-cycle-review-2026-08-09/workflow.mjs` and `build-report.mjs`).
+- Scoping to `*.md`/`*.json` still hid **live agent control files**:
+  `architecture-weakness-audit-prompt.md` and `foundation-ultra-review-prompt.md` are the canonical
+  instructions their slash commands tell an agent to "read that file and execute it exactly", and
+  `codex-driven-bug-hunt/LEDGER.json` is state automation reads and writes. On a **public** repo an
+  excluded agent-control file is a prompt-injection path into privileged automation, not a
+  cost-control question. The same defect then turned up untouched in `docs/loops/`,
+  `docs/build-loops/`, and `docs/handoffs/`.
+- A `[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md` carve-out inferred "inert report" from the
+  *shape of a filename*: of the 57 matches, 23 are prompts, handoffs, ledgers, plans, or go-live
+  execution docs.
+- `docs/archive/` went too. "Archive" is a naming convention, not a property, and automation does
+  read those files — `.claude/agents/rls-security-reviewer.md` sends a security-reviewing agent to
+  an archived incident disposition for the patterns it hunts.
+
+**`.codex/` was never excluded.** Only `.agents/` is generated (it is the sole `TARGET_ROOT` in
+`scripts/sync-agent-workflows.mjs`); every tracked file under `.codex/` is hand-maintained,
+including `production-action-guard.mjs`, which gates live mutations, pushes, and merges. Excluding
+it would let a PR that only weakens that guard skip review entirely.
+
+**Decision: this config ships with no `path_filters` block at all.** The exclusion list is empty,
+so **no repository-specific path is excluded**. That is not the same as "everything is reviewed":
+CodeRabbit's own curated default ignore list — lock files, binaries, generated code, media, source
+maps — still applies underneath, and declining to exclude those paths does not make them
+reviewable. Only an explicit positive pattern would, at the cost described above. That default list
+is exactly where the lockfile blind spot comes from. The remaining candidate — `!.agents/**` — is defensible
+(the adapter-drift check `scripts/check-agent-workflows.mjs` runs inside the required
+"Lint, Type Check, Test, Build" status check, so a hand-edit there cannot ship unreviewed), but it
+saves little review allowance and it is the one line that kept drawing High findings. It parks with
+the repository-walking test that enforces the rule.
+
+**What is deliberately not here.** PR #441 opened as this config change and, over eighteen review
+rounds, grew a second half: an **executable pre-merge gate** in
+`.claude/skills/deploy-check/SKILL.md`, `.claude/hooks/pr-merge-guard.mjs`, and
+`.codex/hooks/production-action-guard.mjs` that binds a merge to exact-head CodeRabbit evidence and
+`--match-head-commit`, plus the `path_filters` exclusion and its coverage test. **Mason parked that
+half on 2026-08-24** — the loop was self-sustaining (the PR edits guard machinery → guard machinery
+is a risky path → risky paths need a clean exact-SHA Codex proof → each guard fix is new guard code
+to review), and six CodeRabbit reviews in one day made the per-round cost real. Three Codex Highs
+are outstanding on it. It stays open as PR #441 in draft.
+
+**Known consequence of shipping this half alone, stated plainly.** Lowering
+`auto_pause_after_reviewed_commits` from 5 to 2 reduces *automatic* review coverage while the
+compensating control — reading a fresh review of the final commit before merging — remains a
+**written procedure, not enforcement**. Codex raised this as High and it is correct as stated.
+Mason's settled call (2026-08-22, reaffirmed at the park on 2026-08-24) is to keep 2 and land the
+enforcement separately rather than hold the config behind it.
+
+**Operative rules.**
+
+- Never add a positive (non-`!`) pattern to a `.coderabbit.yaml` without testing it on FarmRx first
+  and confirming a real source file still appears under "Files selected for processing".
+- Before adding any exclusion, name the mechanism that makes those files inert and point at the
+  check that fails if they stop being inert. A directory name is not a mechanism. If a document
+  really is inert, move it into `docs/archive/` after looking at it — a decision someone makes
+  about a specific file, not a pattern that guesses.
+- Do not treat `auto_pause_after_reviewed_commits` as the pre-merge gate. Read a fresh CodeRabbit
+  review of the final commit before merging, and bind it to the head SHA, not to a timestamp or to
+  a green status check.
+- "Review limit reached" is a *temporary* state that refills. It is never evidence that a PR was
+  reviewed, and never a reason to merge without one.
+- Treat reviewer advice as a hypothesis to test, not a patch to apply. On this work three findings
+  were right and fixed; the fourth would have switched off review for the whole repository.
+
+---
+
+## 2026-08-24 — Oversized migrations get a second door, not a second lock
+
+**Source:** Mason's in-chat approval, 2026-08-24, after the draw-down cutover half 2 could not be
+applied.
+
+**The problem.** `mcp__supabase__apply_migration` accepts `{project_id, name, query}` — a pasted
+string, no file path. `migration-apply-guard.mjs` binds the reviewer proof to
+`sha256(transmitted query)`, and `scripts/write-apply-proofs.mjs` pins that hash to the on-disk
+file (CRLF→LF normalized). Those two facts are good and stay: together they guarantee the SQL that
+runs is the SQL that was reviewed. But they made
+`20260816120000_draw_down_split_order_lines_by_price_tier.sql` — 162,022 bytes / 2,891 lines —
+**unappliable**. No single tool call re-emits that byte-exact, so the hash never matched. The
+migration was blocked by its own size, not by any review finding; both charters had returned CLEAN.
+
+Splitting it was not available: its preflight compares `pg_proc.xmin` on the barrier wrapper
+against its own transaction id and aborts with `DRAW_DOWN_CUTOVER_BARRIER_UNCOMMITTED` if the two
+halves share a transaction. The management-API direct-POST channel would have carried the bytes but
+bypasses the PreToolUse hook entirely — no ordering preflight, no reviewer proof, no Codex gate —
+and was deliberately not used.
+
+**Decision.** Move the apply rules into a shared module, `.claude/hooks/migration-apply-lib.mjs`,
+and give the file bytes their own gated caller, `scripts/apply-migration-file.mjs`. Both the
+PreToolUse hook and the script ask the identical `evaluateMigrationApply()` for a verdict. The
+transform of the existing checks is mechanical; block-message text is preserved verbatim and
+`migration-apply-guard.test.mjs` still passes unchanged at 86 assertions.
+
+**Operative rules.**
+
+1. **One rule book.** Never reimplement or copy the apply checks beside a caller. Two copies drift,
+   and the looser copy becomes the way in. A new caller imports `evaluateMigrationApply` or it does
+   not ship.
+2. **No ungated transmission path.** `apply-migration-file.mjs` must have no route to `fetch()`
+   that skips the gate, and a throw inside the rule book is a REFUSAL, never a pass. The
+   direct-POST management-API channel remains for read-only `BEGIN..ROLLBACK` proof bundles only —
+   do not reach for it to land a migration.
+3. **The door that applies invalidates the snapshot BEFORE transmitting, then rebuilds it.** The
+   script writes the ledger row `apply_migration` would have written (`statements` as ONE element,
+   matching live rows) inside the same transaction, deletes `applied-migrations.json` before the
+   request, and rebuilds it from a fresh ledger read after. Refresh-on-success-only is NOT enough:
+   an apply that commits followed by a failed ledger re-read leaves a snapshot still "fresh" by the
+   clock but missing the row just written, so the next apply can replay a migration older than the
+   one just applied. An apply is the real invalidator, not elapsed time. Both post-apply failure
+   paths exit non-zero and say plainly that the migration IS applied.
+4. **A dry run is the default.** `--confirm` is required to transmit, and passing the gate remains
+   a FLOOR, not authorization — an interactive session still needs Mason's explicit in-chat OK.
+5. **Migrations that manage their own transactions must not use this door — enforced in code.**
+   `.claude/hooks/migration-wrappability-lib.mjs` refuses top-level transaction control and
+   non-transactional statements before anything is wrapped, and refuses anything it cannot tokenize.
+   The first revision only *documented* this and hand-checked the one target migration; CodeRabbit
+   (Major) and Codex (P2) both caught that nothing re-checked it, so the next caller would have
+   inherited a promise the code did not keep.
+6. **The Codex production guard must know every live-apply spelling.** Codex's own review found
+   `scripts/apply-migration-file.mjs` reached production while every other migration path was blocked
+   in `.codex/hooks/production-action-guard.mjs` (P1). Adding a new production-mutating command
+   without wiring it into that guard is the defect, not an oversight to fix later. Editing that guard
+   re-pins its blobs in `scripts/apply-live-testdata-maintenance-20260812.mjs` in the same change.
+
+7. **The apply target is pinned to CRX production; there is no `--project` flag.** Round 4 found
+   that parameterizing the ref was unsound: `applied-migrations.json`, the reviewer/Codex proofs and
+   the `AUTOPILOT.on` flag are all checkout-wide and assume ONE project. Applying elsewhere would
+   overwrite the snapshot production ordering is judged against with a foreign ledger, and CRX-local
+   proofs would authorize a target they never reviewed. Restricting is the honest fix. If another
+   target is ever needed, scope those three things to the ref FIRST — never re-add the flag alone.
+   (A concrete instance of the standing lesson that parameterizing a constant breaks its downstream
+   assumers.)
+8. **A wrong entry in a "cannot run in a transaction" list is a defect, not a safe over-refusal.**
+   Round 3 removed `ALTER TYPE … ADD VALUE` (transaction-safe since PostgreSQL 12; live server
+   verified at 17.6, and the error advised an impossible split that hit the same rule) and
+   `DROP OWNED` (destructive but transactional — that is the destructive gate's job). Over-refusal
+   rejects legitimate work and teaches the operator something false about PostgreSQL.
+
+**What this round cost, and why it is recorded.** Three reviewer findings on PR #460 were all real:
+an unenforced precondition, an unguarded production spelling, and an `allow`-by-default branch in the
+hook (`decision === "block"` blocked, so any unrecognised verdict passed). None were style. The
+enforcement fix then failed on its first run against the real 162KB migration — it reused the
+destructive classifier's stripper, which keeps `CREATE FUNCTION` bodies visible, and read a PL/pgSQL
+`END;` as a transaction commit. That was caught by **running the real file**, not by the unit tests,
+which had passed by luck because their function body ended `END` with no semicolon. The regression
+cases now pin the terminated form and were mutation-proved to fail without the fix.
+
+**Verification standard applied.** The guard was mutation-tested, not just run green: each check
+was disabled in turn and the suite was required to go red. The first pass exposed a real weakness in
+the *tests* — disabling the missing-snapshot check still produced a refusal (the read threw and the
+catch failed closed), so a banner-only assertion stayed green while the check it named was gone.
+Assertions now pin the specific message per condition. `.claude/hooks/migration-apply-lib.test.mjs`
+is wired into `test:correction-guards`.
+
+---
+
+## 2026-08-20 — The project no longer pins `autoCompactWindow`; the user-level value governs
+
+**Source:** Mason's in-chat decision, 2026-08-20, while setting up switchable context profiles.
+
+**The problem.** `.claude/settings.json` carried `"autoCompactWindow": 500000` at the top level.
+Per the settings precedence chain (managed → CLI args → `settings.local.json` → `settings.json` →
+`~/.claude/settings.json`), that project value **beats** the user-level setting. The practical
+effect: running `/autocompact <n>` inside this repo appeared to succeed but changed nothing,
+because `/autocompact` writes to *user* settings, which the project file then overrode. The
+threshold was effectively frozen at 500k for every session in this repository.
+
+A second effect: the pin shortened the usable stretch before summarization. `autoCompactWindow`
+is a compaction *trigger*, not a ceiling on the model's context window — the window is set by the
+model and provider, not by this setting, and the pin does not change it. Capacity is 200K by
+default; 1M is available only where the model and route support it (native support, a `[1m]`
+alias, or gateway routing), so treat the suffix as a request that may be a no-op rather than a
+universal switch. On a session that *did* have 1M, the 500k pin still summarized at half the
+available room, so the span of unsummarized conversation was far shorter than the model could
+actually hold.
+
+**Decision.** Remove the `autoCompactWindow` key from `.claude/settings.json` entirely. The
+project no longer expresses an opinion on the compaction threshold; the user-level value in
+`~/.claude/settings.json` governs, and `/autocompact` works as documented inside this repo.
+
+**Operative rule.** Do not reintroduce a top-level `autoCompactWindow` into
+`.claude/settings.json` or `.claude/settings.local.json`. A project-level pin silently disables
+per-session threshold control for everyone working in the repo, including every parallel
+worktree. If a future task genuinely needs a fixed threshold, use the `--autocompact` flag, which
+applies only to the session it launches, or `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. Mind the scope
+difference on the environment variable: set inline for one invocation it affects only that run,
+but **exported** into a shell profile or a CI environment it applies to every Claude Code session
+launched from there. It also sits at the top of the precedence chain — it overrides
+`/autocompact`, `--autocompact`, and any `autoCompactWindow` in a settings file — so an
+accidentally exported value is harder to notice than a project pin, not easier.
+
+**Not changed by this entry.** Nothing about model selection, effort level, or any guard is
+affected. This is a harness-configuration change only; no money, schema, RLS, or migration
+surface is touched.
+
+---
+
+## 2026-08-20 — Draw-down intent cutover keeps the 24-hour zero-receipt freeze
+
+**Source:** Engineering fail-closed design choice, 2026-08-20. The 24-hour freeze window still
+requires Mason's scheduling approval before any separately authorized live apply.
+**Decision:** Keep the pending draw-down intent migration's fail-closed requirement that no
+unexpired legacy draw receipt exists before cutover; because receipts live for 24 hours, schedule a
+deliberate 24-hour no-successful-draw window before any separately authorized apply.
+**Why:** The shared retry helper would handle each legacy receipt safely — an exact retry refuses the
+duplicate business write and returns the already-committed receipt, rather than erroring or returning
+nothing (`scripts/smoke/smoke-draw-down-quote-intent-binding.sql`) — but a planned off-season or
+weekend freeze gives the wrapper a clean invariant and removes ambiguity from a money/inventory cutover.
+**What this forbids/implies:** do not weaken the zero-receipt preflight to avoid the wait. Verify zero
+read-only, keep draws paused through commit, and obtain separate live-apply authority; this PR applies nothing.
+
+---
+
+## 2026-08-19 — Two of Sol's review findings declined by the owner (D-W, D-X)
+
+An independent adversarial review of the product data model plan (Codex `sol`, `gpt-5.6-sol` at
+high effort; full text in `docs/audits/2026-08-19-sol-adversarial-review-product-data-plan.md`)
+returned **NOT SAFE AS WRITTEN** — 8 blockers, 22 high. Two findings asked for changes that are
+business calls rather than technical ones. Both were put to Mason and **both were declined.**
+
+**D-W — cancelled EPA registrations stay sellable.** Sol's finding 26 argued that "warn loudly,
+keep selling" is unsafe as a blanket rule, because sell-through rights depend on the specific
+cancellation order and some carry a hard sale cutoff date; it wanted the system to fail closed
+when authorization cannot be confirmed. Mason: *"Don't worry about it, let it be sold."* **D-T
+stands unchanged — warn, never block.** No sale-blocking gate is to be added, and this is not to
+be re-opened by a later session reading the review and treating finding 26 as outstanding.
+
+**D-X — the quality tier stays a display concern.** Sol's finding 19 argued the tier is a property
+of the sellable product, not of a brand record, and wanted it moved onto `products` with
+database-enforced cross-tier substitution rules. Mason: it only affects glufosinate and
+mesotrione, and that is too narrow an edge case to justify the work. **Accepted — no schema
+change.** The protection that matters survives at the display layer, where **D-O and D-P already
+put it**: the tier is always shown, the tiers are never presented as interchangeable on matching
+actives alone, and the adjuvant bias running against the premium product is stated on screen.
+A builder must not add `sourcing_tier` to `products` or build substitution rules.
+
+**Operative rule:** findings 19 and 26 are closed by owner decision, not by being fixed.
+
+*This paragraph was written before revision 3 landed and originally said 32 findings remained
+open, naming the WP-4 / D-A contradiction as unresolved. That is now stale, and the stale version
+understated the progress rather than the risk. Corrected on 2026-08-20 (CodeRabbit, PR #435).*
+**Current disposition:** all 8 blockers and 14 of the 22 high findings were fixed in revision 3,
+including the WP-4 / D-A contradiction that would have stored salt-form concentrations on the
+canonical acid and silently overstated active per gallon by ~35%. **Still open:** findings
+20, 21, 22 and 24 — all Phase 2/3 comparison and rate-source behavior, which must settle before
+Phase 2, not before WP-0 — plus 30 (parked-migration ownership, blocking WP-1's first migration)
+and the process-honesty items 32, 33, 34. **Finding 16 was moved out of that deferred set on
+2026-08-20**: it reads as Phase 2 comparison behavior, but which concentration is authoritative is
+decided by WP-4's live write in Phase 1, so it is now answered there as a database invariant.
+The ledger's cycle log is the authoritative record.
+
+**Source:** `docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md` §0 (D-W, D-X);
+`docs/audits/2026-08-19-sol-adversarial-review-product-data-plan.md`.
+
+---
+
+## 2026-08-19 — The purchase-order "mirror" CHECK clears the money gate, as a closed two-column exception
+
+**Source:** Mason's in-chat decision, 2026-08-19, answering the question PR #420 recorded as open in
+the 2026-08-10 entry below ("Open, not settled: whether the mirror form clears the AGENTS.md gate").
+That paragraph has been marked **SETTLED** and now points here; this entry is the operative text.
+
+**The question.** The AGENTS.md money gate requires "an active finite whole-cent CHECK". Eleven of
+the thirteen live money-scale CHECKs use the rounding form this log specifies. Two do not:
+
+```sql
+-- purchase_orders_total_cost_whole_cents
+CHECK (total_cost >= 0 AND total_cost = (total_cost_cents::numeric / 100.0))
+-- purchase_order_items_unit_cost_whole_cents
+CHECK (unit_cost >= 0 AND unit_cost = (unit_cost_cents::numeric / 100.0))
+```
+
+The **mirror form** carries no `round()` and no finiteness bound. Does a CHECK that never names
+`Infinity` satisfy a gate whose wording is "finite"?
+
+**What was measured, read-only against live on 2026-08-19.** The mirrored cents columns are
+`GENERATED ALWAYS AS (round(<dollars> * 100)::bigint) STORED` (`pg_attribute.attgenerated = 's'`),
+and both dollar columns are `numeric NOT NULL DEFAULT 0`. Every *non-finite or overflowing* route
+is closed before the CHECK is ever consulted, because the generation expression is computed first
+and its cast raises; fractional cents are what the CHECK itself rejects:
+
+| Probe | Live result |
+|---|---|
+| `round('NaN'::numeric * 100)::bigint` | ERROR `0A000: cannot convert NaN to bigint` |
+| `round('Infinity'::numeric * 100)::bigint` | ERROR `0A000: cannot convert infinity to bigint` |
+| `round('-Infinity'::numeric * 100)::bigint` | ERROR `0A000: cannot convert infinity to bigint` |
+| `round(1e17::numeric * 100)::bigint` | ERROR `22003: bigint out of range` |
+| Fractional cents `1.005`, `0.005`, `1.0000000001`, `0.001`, `0.0049999` | all fail the mirror predicate |
+| Whole cents `12.34`, `12.340000`, `0` | all pass (`numeric` equality ignores trailing scale) |
+| Direct write to `*_cents` | impossible — PostgreSQL forbids writing a `GENERATED ALWAYS` column |
+| Live data | 34 `purchase_orders`, 194 `purchase_order_items`, **0** fractional-cent rows; both constraints `convalidated = true` |
+
+**No fail-open exists.** An adversarial sweep for a non-whole-cent value the mirror form would
+*accept* found none. Two ceilings sit far above any real order, and both reject rather than accept.
+Above roughly $10¹⁶ `numeric` division stops carrying two decimals, so the form starts rejecting a
+few legitimate whole-cent values (`1234567890123456789 / 100.0` returns `12345678901234567.9`); the
+exact onset is leading-digit dependent, since `numeric` picks its result scale in four-digit groups
+(`1000000000000000899 / 100.0` is still exact at `10000000000000008.9900`). Higher still, at
+`9223372036854775807 / 100.0` = `92233720368547758.1`, the generated cents column overflows bigint
+outright. In both regimes the form errs closed, never open, and the nearer of the two ceilings is
+more than ten orders of magnitude above any real purchase order.
+
+**Decision.** The two constraints above **satisfy the money gate**, as a named exception covering
+those two columns only. The gate's purpose — no fractional cent and no non-finite value reaches
+storage — is met and was proven, and requiring a live migration on two money tables to restate a
+guarantee already enforced would spend real risk for no change in behavior.
+
+**Operative rule.**
+
+1. `purchase_orders.total_cost` and `purchase_order_items.unit_cost` are **approved compatibility
+   exceptions**, not tracked debt. Do not re-raise their **gate status**. This settles the gate
+   question only: converting them to authoritative bigint cents remains open programme work under
+   the standing rule, exactly as the 2026-08-10 entry says, and nothing here closes that.
+2. The exception is **closed**. The mirror form is not a second approved shape. Every new or
+   changed money column uses the rounding form this log specifies, named
+   `<table>_<column>_whole_cents_chk`. The mirror form only holds when the cents side is a
+   generated column that can never be independently NULL; copied onto an ordinary nullable cents
+   column it fails open silently, because `col = NULL` is NULL and a NULL CHECK passes. (The dollar
+   columns here are also `NOT NULL`, which is belt-and-braces rather than what closes the hole.)
+3. A money column with **neither** shape still does not clear the gate. Unchanged — and that is
+   most of them: 11 live columns carry the rounding form, these 2 carry the mirror form, and the
+   remaining ~29 `numeric` money columns carry no scale CHECK at all and stay tracked findings.
+
+**The obvious hardening is the wrong hardening.** Appending `> '-Infinity' AND < 'Infinity'` to the
+mirror constraints would look like a fix without being one. The genuine weak point is that
+enforcement here is split across three schema objects — the CHECK, the generation expression, and
+the dollar column's `NOT NULL` — and only the first is a CHECK an auditor would grep for.
+`ALTER TABLE ... ALTER COLUMN total_cost_cents DROP EXPRESSION` turns the cents column into an
+ordinary nullable column; from then on any row written without an explicit cents value — which is
+every write the app makes, since no caller names that column — evaluates the CHECK to NULL and
+passes unexamined. An appended finiteness clause would not prevent that; the rounding form would,
+because it is self-contained in one object.
+
+**Follow-up (low priority, not scheduled, needs its own approval).** If these two are ever
+hardened, the change is to **replace** each mirror predicate with the rounding form
+(`CHECK (col = ROUND(col, 2) AND col > '-Infinity' AND col < 'Infinity')`, plus `col >= 0` to keep
+the existing non-negative guarantee), renaming to the `_whole_cents_chk` convention — **not** to
+append a clause to the existing predicate. That is a live schema change on money tables and gets
+Mason's separate approval, a migration review, and the Codex gate. Live data is clean (0 dirty rows
+of 228), so it would go on `VALID` from the start, never `NOT VALID`.
+
+**Provenance worth knowing.** The mirror form arrived in
+`20260716183501_purchase_order_integer_cents` (2026-07-16), which **predates** the 2026-08-10
+whole-cent decision. Its header comment states purchase-order money "must be calculated in integer
+cents", but the implementation made cents a `GENERATED` mirror *derived from* dollars, leaving
+dollars authoritative. The shape was never chosen as an alternative to the gate — it simply arrived
+first, and no conversion to authoritative cents has happened anywhere on this schema.
+
+**Naming — the convention describes what to write next, not what is already there.** These two
+constraint names end in `_whole_cents`, not `_whole_cents_chk`. Three of the eleven rounding-form
+constraints diverge too, ending in `_cent_scale_chk`
+(`products_current_cost`, `order_items_price_per_unit`, `quote_items_price_per_unit`). All four
+divergences are pre-existing and none is evidence of a problem. Identify a constraint by its
+predicate shape, never by its name, and do not open a renaming migration on live money tables to
+chase the convention.
+
+---
+
+## 2026-08-19 — Product data model: eleven owner decisions taken up front so the executor never blocks
+
+**Source:** Mason answered eleven questions in one sitting, 2026-08-19, explicitly so that
+*"when codex starts to work it doesn't have to ask me anything."* Full text as **D-L … D-V** in
+`docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md` §0.
+
+**The three with consequences beyond their own question:**
+
+**D-O — the quality tiers are not clean substitutes.** Asked what actually differs between
+`Gen Liberty` and `Gen Liberty: Higher Quality`, Mason answered: *"same chemistry better
+manufacturer and usually higher surfactant loads, AI ingredient same but everything else is
+higher quality, it also costs more."* The active ingredients match; **the inerts do not.** This
+settles C-43 and constrains every later phase: family grouping, product matching, and the
+comparison tool must surface the tier and may never present the pair as interchangeable on the
+strength of matching actives alone.
+
+**D-P — the adjuvant exclusion is a biased exclusion, and the bias has a direction.** Mason
+previously excluded adjuvant cost from the comparison. D-O means the premium product carries
+built-in surfactant the generic would need added, so the exclusion systematically flatters the
+cheaper product. Decision: keep the exclusion, but **state on-screen wherever a total appears**
+when one product carries built-in surfactant and the other does not. An unstated bias in a
+comparison tool is the failure; a stated one is a caveat.
+
+**D-U — "prepare ahead, apply nothing" is not hands-free mode.** While Mason is unreachable the
+build may continue writing and reviewing the next package, but **every live database change
+still waits for his in-chat yes.** Autopilot is not armed by this decision and the 2026-07-13
+hands-free exception is not invoked. Do not read D-U as pre-authorization.
+
+**The other eight, briefly.** D-L typed data beats a later EPA lookup (difference flagged, never
+overwritten) · D-M density trust order is SDS → label → supplier, with a self-measured value
+outranking all three · D-N the entry screen is keyboard-driven save-and-advance, deliberate added
+scope against 33–56 hours of owner typing · D-Q the receiving change ships as soon as it is
+proven, made safe by the D-K escape hatch rather than by a staged rollout · D-R Mason assigns the
+13 blank SKUs personally, no generated placeholders · D-S only admins approve a crew-proposed
+brand into the permanent list · D-T a cancelled EPA registration warns loudly but never blocks
+selling, because existing stock is commonly still legal to move · D-V the ~2026-09-18 comparison
+target is real, and if it slips the thing protected is the quality of the Phase 2 rate review,
+never the date.
+
+**Proof accounts.** Mason directed that acceptance proofs run under his own account rather than
+create a separate non-admin user. Because an admin session cannot reveal a missing column grant
+(C-25), every migration package additionally records a direct `has_column_privilege` check per
+new column. Neither half alone satisfies the verification standard.
+
+---
+
+## 2026-08-19 — Product data model: chemistry edits are admin-only; an unlisted brand never blocks receiving
+
+**Source:** Mason's answers to two direct questions, 2026-08-19, during the product-data-model
+build-planning session, after an independent Fable review flagged both as unresolved
+(findings F-24 and F-7). Recorded as **D-J** and **D-K** in
+`docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md` §0.
+
+**Decision D-J — who may edit chemistry.** Active ingredients, concentrations, and density are
+**admin-write, all-read**. Sales reps and drivers can see the data and cannot change it. This is
+the RLS policy on `active_ingredients`, `product_active_ingredients`, `ingredient_moa_codes`, and
+the density columns; a builder does not get to infer the policy.
+
+**Why.** Density drives scale weights and ingredients drive rebuild/comparison math, so a wrong
+value here reaches a real mixer, not just a quote. The audit trail records who changed what
+either way, but auditing is detection, not prevention. Mason accepted the slower data-entry path
+(he enters the data personally — see the 33–56 hour estimate) in exchange for the narrower write
+surface.
+
+**Decision D-K — unlisted brand at receiving.** When a load arrives carrying a brand that is not
+among the product's brand rows, the crew **types the brand name free-hand and completes
+receiving immediately**. The typed name is captured on the receipt and lands in the
+`product_label_drafts`-shaped review queue as a **proposed** brand. It is never written to the
+permanent brand list unreviewed, and **receiving is never blocked**.
+
+**Why.** The plan's first revision made brand selection strictly required once a spec had brand
+rows, with the only relief being an admin-only global `app_settings` switch. That is a
+dock-blocking failure: a truck arrives with a newly sourced brand, the crew cannot complete the
+receipt, cannot add the brand, and cannot flip a global switch. Product would sit unreceived
+until Mason or an admin was reachable. Mason chose the capture-and-review path over both the
+blocking option and the looser option of letting crew create permanent brand rows outright — a
+mistyped EPA number on a permanent row reaches customer paperwork.
+
+**Operative rule.** Any later phase that touches receiving keeps the escape hatch: a required
+field at the dock must always have a capture-and-review path, never a hard stop. Any later
+surface that writes chemistry enforces admin-only, and machine-sourced data (EPA seeding, brand
+name parsing, crew-typed brands) always lands as a proposal, never as a direct write.
+
+---
+
+## 2026-08-18 — CRX pins `autoCompactWindow` to 500,000; other repos keep the 200,000 global
+
+**Source:** Mason's in-chat question and approval, 2026-08-18, during the product-data-model
+planning session — *"Should we change our context limit for these long winded large planning
+sessions?"*, then *"Yes add to crx manager."*
+
+**Decision.** `.claude/settings.json` sets `"autoCompactWindow": 500000`. Mason's user-scope
+`~/.claude/settings.json` keeps `200000`, so FarmRx and every other repo are unaffected. Settings
+precedence is managed → CLI args → `.claude/settings.local.json` → `.claude/settings.json` →
+`~/.claude/settings.json`, so the project value wins inside CRX without the global changing.
+
+**Why.** CRX's long-horizon work — design planning, `whole-codebase-audit`, overnight hunts,
+migration reviews — is exactly the work whose value comes from holding many details at once, and
+compaction flattens them. The product-data-model session compacted mid-plan and lost detail that
+had to be re-read from disk. Raising the threshold is **not** a general cost increase: the setting
+does nothing until a session actually passes it, so short routine sessions are unchanged.
+
+**Also set:** the same key in Mason's untracked `.claude/settings.local.json` in the main checkout,
+so the change is live before this branch merges. Once merged, that local copy is redundant but
+harmless (same value, higher precedence).
+
+**Operative rule.** Do not "toggle" the compaction window per session, and do not reach for
+`/autocompact` — it writes to **user** settings and would silently change every other project.
+Change the CRX value in `.claude/settings.json`. A genuine one-off needs the
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable or the `--autocompact` CLI flag, both of
+which are session-scoped. Valid range is 100,000–1,000,000.
+
+---
+
+## 2026-08-18 — Mission loops: cheaper-model delegation + hand off at the 25MB marathon cap
+
+**Source:** Mason's in-chat approvals, 2026-08-18 — "ok lets do this, cap the marathon and make it
+handoff after so long" and "can we automate this so i dont have to remembver" during the 30-day
+usage/setup review, reaffirmed with "fix them all" after adversarial review of PR #416.
+
+**Context.** The 30-day usage analysis attributed the bulk of the month's token spend (estimated at
+roughly 40%) to a handful of marathon loop sessions — almost entirely premium-model re-reads of an
+ever-growing conversation. The two habits that prevent it (delegate mechanical steps down-model;
+hand off before a session becomes a marathon) previously relied on someone remembering them
+mid-loop, which is exactly when nobody does.
+
+**Decision.**
+
+1. **Cheaper-model delegation is standing policy for mission loops.** Mechanical cycle steps
+   (status checks, doc syncs, read sweeps, evidence gathering) may run on cheaper subagent models,
+   *within the loop's existing structure* — it re-tiers work the loop already does; it never adds
+   agents beyond a workflow's defined fan-out. Excluded, always: ledger writes and PROOF lines
+   (the driver runs the decisive verification and records what it observed), money/RLS/migration
+   judgment (never below the session model, and never below `sonnet`), and any reviewer's pinned
+   model/effort.
+2. **Handing off at the marathon cap is pre-authorized.** At 25MB of transcript a loop session
+   finishes only the atomic step in flight, checkpoints its ledger, writes a handoff, continues in
+   a fresh session, and winds down — without waiting for a fresh in-chat OK. The cap is enforced
+   as advisory text by a global user-scope hook on Mason's machine
+   (`~/.claude/hooks/session-size-sentinel.mjs`, soft 12MB / hard 25MB, firing on prompt submission
+   and mid-turn after tool calls) plus a statusline flag; where the hook is absent the written cap
+   in `.claude/commands/run-loop.md` binds on its own.
+
+**What this does NOT authorize.** Nothing about a handoff widens authority: hard gates (push
+approval, deploys, live migration applies, deletes) transfer unchanged to the successor session; a
+lapsed or expired autopilot flag stays lapsed; the successor re-verifies the flag itself before any
+gated action; and the driver role transferred by an orchestrator is exactly the role the mission
+doc's Driver slot defined, no wider.
+
+**Operative rule.** Every `/run-loop` launch obeys the Model & Context Budget section of
+`.claude/commands/run-loop.md`. A capped session that keeps cycling is violating a settled decision,
+not exercising judgment.
+
+---
+
+## 2026-08-17 — The per-session CHANGELOG entry becomes a per-session *ledger* entry
+
+**Source:** Mason's in-chat agreement, 2026-08-17, after he asked whether the changelog entry was
+"worth the effort to maintain or should that be removed."
+
+**Decision.** Keep the written record, drop the requirement that it live in `docs/CHANGELOG.md`
+specifically. The end-of-session reminder in `.claude/hooks/stop-wrap.mjs` now accepts the same
+ledger set the HARD pre-commit guard (`scripts/check-ledger-update.mjs`) already accepts —
+`docs/CHANGELOG.md`, any `docs/manual/*.md`, `agent-guardrails.md`, `migration-history.md`, or a
+`docs/loops/` ledger — instead of demanding the CHANGELOG alone.
+
+**Why.** Three things were wrong with the old rule. It **misfiled records**: a policy call belongs
+in this file and a schema change in `migration-history.md`, but the reminder pushed both into the
+CHANGELOG. It **churned the one file Mason actually reads**, turning it into a session diary rather
+than a record of what changed and why it matters. And it cited a `CLAUDE.md` section — "Keeping Docs
+In Sync" — that **no longer exists anywhere in the repo**; the live requirement has been the hard
+guard for some time, so the soft layer was quoting a rule that had already been superseded.
+
+**What this does NOT fix.** It was considered as relief for the `PR MERGE GATE` firing on docs-only
+PRs, and measured against that: it is not. The gate scans the **whole content** of each changed
+file, and every candidate ledger file already carries money identifiers from past entries
+(`CHANGELOG.md` 142, `migration-history.md` 135, `KNOWN_ISSUES.md` 20, `agent-guardrails.md` 5,
+this file 4). Any count above zero arms the gate, so no choice of ledger file avoids it. Only
+changing the gate to scan **added lines** rather than whole files would — that is a change to a
+money-safety guard and is deliberately left for its own separately-reviewed PR. See
+`docs/reference/gotchas.md` and the 2026-08-17 CHANGELOG entry.
+
+**Operative rule.** A session that lands commits must update **one** ledger file, chosen by what the
+work was. Reach for `docs/CHANGELOG.md` for general work; do not force a policy or schema record
+into it. `scripts/log-session.mjs` remains the scaffold for the CHANGELOG case only.
+
+**Review round (PR #412).** CodeRabbit raised four findings against the first implementation and all
+four were real. The substantive one was a bug introduced by this very change: the accepted set was
+widened to a pattern list (any `docs/manual/*.md`, any `docs/loops/` ledger) while the on-disk
+fallback still stat'd a *hardcoded five-file list*, so committing `OWNER_PLAYBOOK.md` or a loop
+ledger — both valid — still produced a false "no ledger" warning. The fallback is gone; the check now
+unions the working-tree status with the files in this session's commits, which covers the accepted
+set by construction. Git rename records (`R old -> new`) are now normalized to the destination, the
+reminder text lists every accepted destination, and the `log-session.mjs` header no longer claims the
+hard guard fires on *every* commit — it fires on agent-surface and migration commits only.
+Verified by running the hook against purpose-built git repositories: with the pre-fix hook, a
+committed `OWNER_PLAYBOOK.md`, a committed `docs/loops/` ledger, and a rename into a ledger path each
+produced a false warning; with the fixed hook all three are silent, and a genuinely unlogged session
+still warns.
+
+---
+
+## 2026-08-16 — Any sales rep may draw down any customer's booking
+
+**Source:** Mason's explicit in-chat answer, 2026-08-16, verbatim: "Any rep" — given after the
+trade-off was put to him in plain English (owner-only tightens commission attribution and
+accountability; any-rep keeps a booking fulfillable when the rep who took it is unavailable).
+
+**Decision.** Draw-down is not restricted to the rep who created the quote. The parked migration
+`20260813161614_restrict_draw_down_quote_owner.sql` does **not** ship its owner gate: the
+`NOT_QUOTE_OWNER` check (`v_actor_role <> 'admin' AND v_quote.created_by IS DISTINCT FROM v_actor`)
+is removed before that migration is rebuilt and applied.
+
+**Operative rule.** Removing the owner gate removes *only* the owner gate. The other protections in
+that migration are unaffected by this decision and still ship: the five `DRAW_DOWN_OWNER_GUARD_DRIFT`
+preflights that refuse to run against an unexpected wrapper chain, overload set, implementation body
+or wrapper ACL; `AUTH_REQUIRED` and `ACTOR_MISMATCH` (an unauthenticated or forged actor is
+rejected); `INSUFFICIENT_ROLE` (the actor must resolve to `admin` or `sales_rep`); the soft-delete
+exclusion (a `deleted_at` quote reads as "Quote not found"); and the `BOOKING_CLOSED` status gate
+(only `sent` or `revised` quotes can be drawn down). Mason's basis was operational continuity in a
+seasonal business, not a judgement that draw-down needs less protection — attribution and audit of
+who drew a booking down are unchanged, because every draw is still logged against the acting user.
+
+**Sequencing this implies.** That migration and PR #404's price-tier split both
+`CREATE OR REPLACE` `_draw_down_quote_below_cost_impl_20260810`, and each pins the live
+`md5(prosrc)` it expects, so whichever applies second fails its own drift preflight. Settled order:
+**PR #404 first**, then the owner migration is rebuilt against #404's applied body. Do not re-derive
+this ordering from scratch — it is a consequence of the md5 pin, not a preference.
+
+---
+
+## 2026-08-16 — The draw-down price fix is the price-tier split, finally
+
+**Source:** Mason's explicit in-chat confirmation, 2026-08-16, verbatim: "Yes settle it your right",
+closing a conflict between two records — an earlier same-day "Option (a)" answer given to one
+session, and the price-tier split chosen later the same day in a concurrent session.
+
+**Decision.** The tier split (PR #404) is the answer of record. When a customer has booked the same
+product at more than one price, the draw-down emits **one order line per booked price tier** rather
+than one line at a quantity-weighted average price.
+
+**Operative rule.** Do not reopen this as an averaging-plus-rounding problem. The split is preferred
+precisely because it removes the average: with per-tier lines there is no derived per-unit figure
+left to round, so the whole-cent guard can no longer reject a legitimate draw-down, and no line is
+mispriced in either direction. The existing rounding of a line total *after* extension by quantity
+stays exactly as it is — rounding a *unit* price before multiplying is what this fix eliminates, and
+re-introducing it would move a line total by up to half a cent **per unit**. Background and the
+measured worked example are in `docs/manual/KNOWN_ISSUES.md`.
+
+**Implementation and structural guards.** Implemented by
+`supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`. Two guards stop
+the average returning under another variable name: the migration's postflight refuses a body
+containing the old averaging identifier, and `DRAW_ALLOCATION_MISMATCH` fails the draw closed if the
+per-tier quantities stop summing to the requested quantity. `DRAW_ALLOCATION_MISMATCH` proves
+*quantity* only — it is not a money assertion and must not be cited as one.
+
+**Supersedes.** The opposite conclusion recorded on the local-only branch
+`claude/known-issues-drawdown-defect` ("keep the exact line total, round only the stored unit
+price"). That entry was written by a concurrent session, was never pushed and has no pull request;
+it attributes a choice to Mason that he did not make. This log is authoritative. Its one genuinely
+useful finding is preserved separately: the live ledger's ordering high-water must be read from the
+`name` stamp, not `max(version)`.
+
+---
+
+## 2026-08-14 — One-time override: `20260812115238`'s order-line map is published in full
+
+**Source:** Mason's explicit in-chat instruction, 2026-08-14, verbatim: "I don't care all the numbers
+in my system arnt real or operational so do it all" — given after the trade-off was explained in
+plain English (publishing puts 35 real order-line identifiers, prices and profit figures into a
+permanently public Git history).
+
+**Decision.** The recovered migration
+`supabase/migrations/20260812115238_repair_historical_order_line_cents.sql` is committed
+byte-for-byte as applied, including the 35-row approved preimage map that was withheld when the file
+first landed. The redaction-era header note and the `APPROVED_SET_WITHHELD` guard — both added only
+because the map had been emptied — are removed with it. The committed bytes are verified against the
+live ledger: `statements[1]` of `supabase_migrations.schema_migrations` version `20260812154757`,
+18,770 bytes, md5 `f31409684f7f01eee19042468f1e6998`, LF endings.
+
+**Operative rule.** This override covers this one map and nothing else. The standing rule — no live
+financial data, customer identifiers, or operational figures in the public repository — is unchanged
+and still binds every other file, commit message, changelog entry and pull request. Do not cite this
+entry as precedent for publishing any other live data; a fresh owner decision is required each time.
+Mason's stated basis was that the data in this system is not real or operational, so the basis does
+not carry to data that is.
+
+**Related, and deliberately not restated here:** the narrow live-ledger recovery exception (the rule
+that lets an already-applied migration be recovered to Git without its already-live SQL blocking the
+push proof) was settled the same day, but its Decision Log entry lives on PR #403 and **is not on
+`main` yet**. Until #403 merges, `main`'s Decision Log does not record that approval. That entry is
+also what makes this change necessary: as amended in #403, the exception is **byte-verbatim only** —
+a redacted recovery cannot attest — so publishing this file in full is what makes it eligible.
+
+---
+
+## 2026-08-14 — Codex Supabase access is write-enabled by owner decision
+
+**Source:** Mason's explicit in-chat approval, 2026-08-14 ("Readable write scope for codex let
+it write"), after the risk was explained in plain English: the migration apply-guard proof
+system gates only the Claude-side apply path, so Codex writes to production are not covered by
+those repo hooks.
+
+**Decision.** The tracked `.codex/config.toml` Supabase MCP entry declares `read_only=false`,
+and the two guard assertions (`check-agent-workflows.mjs`, `check-agent-guidance.mjs`) pin the
+new declared state instead of the old read-only claim. The 2026-08-10 KNOWN_ISSUES finding
+about the dead OAuth grant vs the live `codex_apps/supabase` App is closed as a false-assurance
+problem (the repo no longer claims Codex is read-only); the App's actual scope is controlled in
+the Codex app's own connector settings, which only Mason can change.
+
+**Operative rule.** Codex may hold write-capable Supabase access. The workflow default remains
+"Codex builds migration files; a gated operator applies them" — AGENTS.md hard rules (no editing
+applied migrations, RLS on new tables, idempotency, destructive-migration refusals, per-apply
+approval outside armed hands-free runs) bind every agent regardless of connection scope. Do not
+reintroduce a `read_only=true` assertion without a fresh owner decision.
 
 ---
 
@@ -40,6 +958,64 @@ constraint is named `<table>_<column>_whole_cents_chk`.
 CHECK (col IS NULL OR (col = ROUND(col, 2) AND col > '-Infinity' AND col < 'Infinity'))
 ```
 
+That is the **rounding form**, and it is what eight of the ten live constraints *whose name
+contains* `whole_cents` use. That scoping matters: counted by shape rather than by name, live
+carries **13** money-scale CHECKs, **11** of them rounding-form — the extra three are named
+`*_cent_scale_chk` (see the correction further down). Two details, both read from live on
+2026-08-19 UTC:
+
+- On a `NOT NULL` column the `IS NULL` branch is redundant and may be omitted.
+  `order_items_total_price_whole_cents_chk` is live as
+  `CHECK (total_price = round(total_price, 2) AND total_price > '-Infinity' AND total_price <
+  'Infinity')` and clears the gate.
+- Within the rounding form, neither finiteness bound may be dropped. `round()` alone does not
+  exclude `Infinity` or `NaN` in `numeric`, which is the whole reason both bounds are written.
+
+**A second constraint shape exists live, and an earlier draft of this paragraph wrongly implied it
+could not.** The two constraints on the purchase-order pair — which is **not** converted; the detail
+block further down proves that from live — are live as:
+
+```sql
+-- purchase_orders_total_cost_whole_cents
+CHECK (total_cost >= 0 AND total_cost = (total_cost_cents::numeric / 100.0))
+-- purchase_order_items_unit_cost_whole_cents
+CHECK (unit_cost >= 0 AND unit_cost = (unit_cost_cents::numeric / 100.0))
+```
+
+These carry **no** `round()` and **no** finiteness bounds. Call this the **mirror form**. Pinning
+the numeric dollar column to `cents / 100.0` does make whole cents structural rather than asserted,
+and `>= 0` additionally forbids negatives, which the rounding form permits. Two caveats that an
+earlier draft of this paragraph left out, both of which change how it should be read:
+
+- **It only enforces anything while the cents column is non-NULL.** `col = NULL` evaluates to NULL,
+  and a NULL CHECK passes, so on a plain nullable `*_cents` column the mirror form **fails open** —
+  it would silently admit fractional dollars. Live is safe from this only because both cents columns
+  are `GENERATED ALWAYS`, so they are NULL exactly when the dollar column is. Copied onto a
+  hand-written nullable cents column it would not be. Pair it with `NOT NULL`, or with a generated
+  column.
+- **Its stated precondition is met by zero live instances.** The earlier draft said the form is
+  "available only where an *authoritative* `*_cents` bigint column exists — which is exactly the
+  converted state the whole programme is aiming at", and called it the preferred shape "wherever
+  conversion has happened". Both cents columns behind the only two live instances are
+  `GENERATED ALWAYS AS (round(<numeric dollars> * 100))::bigint` — **derived mirrors, not
+  authoritative stores**, exactly as the "Converted: no" block below states. So the form is
+  currently a derived-mirror shape, and no conversion has happened anywhere on this schema for it to
+  be preferred over.
+
+**SETTLED 2026-08-19 — see the 2026-08-19 entry at the top of this log.** The question was whether
+the mirror form clears the AGENTS.md gate: the gate's wording is "an active **finite** whole-cent
+CHECK", the mirror form carries no finiteness clause of its own, and what rejects `NaN`/`Infinity`
+here is the generated column's cast rather than the CHECK. It also does not follow the
+`<table>_<column>_whole_cents_chk` naming this entry sets out. An earlier revision resolved this by
+asserting "Both forms clear the gate", which was withdrawn as a **widening of a gate** that Mason
+had not decided.
+
+Mason decided it on 2026-08-19, after the cast argument was proven read-only against live: the two
+purchase-order constraints **do** clear the gate, as a closed two-column exception, and the mirror
+form is **not** a second approved shape. Read the 2026-08-19 entry for the probe results, the
+reason an appended finiteness clause would be the wrong fix, and the operative rule. What was never
+in question either way: a money column with **neither** shape does not clear the gate.
+
 **Both halves are load-bearing — a `ROUND`-only constraint does NOT clear the gate.** PostgreSQL
 `numeric` deliberately does not use IEEE-754 NaN semantics: so values stay sortable and indexable,
 it treats `NaN` as equal to `NaN` and greater than every finite value. `'NaN' = ROUND('NaN', 2)` is
@@ -52,30 +1028,101 @@ UPDATE, whatever column actually changed — so each legacy dirty row becomes pe
 and the damage is invisible until a user tries to edit an old record. Repair the data first, then
 add the constraint `VALID` from the start.
 
-**Where each audited column stands.** Verified read-only against the live database on 2026-08-11.
+**Where each audited column stands.** Verified read-only against the live database on 2026-08-11;
+the dirty-row counts were re-measured 2026-08-18 and the constraint inventory 2026-08-19 — both
+corrections are inline below, so do not read the 2026-08-11 date as covering the whole section.
 The 2026-08-10 order-profit evaluation measured 12 order/quote/commission columns; those are the
 only ones whose gate status is established. Other legacy dollar columns exist across the schema
-(`payments.amount`, `commission_payments.total_amount`, `commission_payment_items.amount`,
-`purchase_orders.total_cost`, the `products` price tiers, the `cost_history` snapshots and more).
-None of those are converted, and none are constrained — under the rule above they are unapproved
-tracked debt, not grandfathered. Extending the programme to them is unstarted work.
+(`payments.amount`, `commission_payments.total_amount`, `commission_payment_items.amount`, the
+`products` price tiers, the `cost_history` snapshots and more). None of those are converted.
+**Most, but not all, are unconstrained** — an earlier revision of this sentence said "none are
+constrained", and live refutes it: `products.current_cost`, `order_items.price_per_unit` and
+`quote_items.price_per_unit` each carry a validated rounding-form CHECK named
+`*_cent_scale_chk`. Those three are why the live money-scale CHECK count is 13 rather than 10.
+The unconstrained remainder is unapproved tracked debt under the rule above, not grandfathered.
+Extending the programme to it is unstarted work.
 
-**Gate satisfied — CHECK enforced (7):** `orders.total_cost`, `orders.total_profit`,
-`order_items.profit`, `quotes.total_price`, `quotes.total_profit`, `quote_items.total_price`,
-`quote_items.profit`.
+> **`purchase_orders.total_cost` was listed in that sentence as unconverted *and* unconstrained
+> until 2026-08-18. The "unconstrained" half was wrong; the "unconverted" half was right, and a
+> correction written on 2026-08-18 overshot by claiming the column was converted. Both halves are
+> restated here from live.** Read-only live check, 2026-08-19 UTC.
+>
+> **Constrained: yes.** `purchase_orders_total_cost_whole_cents` and
+> `purchase_order_items_unit_cost_whole_cents` are present and validated, and each pins its numeric
+> dollar column to `cents / 100.0`. Note the names end `_whole_cents`, not `_whole_cents_chk`.
+> That is why they are **not** part of the count of 8 below: that count is the eight
+> `*_whole_cents_chk` constraints on the twelve columns the 2026-08-10 evaluation measured, and
+> these two columns were never in that set of twelve.
+>
+> **Converted: no.** `purchase_orders.total_cost_cents` and `purchase_order_items.unit_cost_cents`
+> are `bigint`, and have been since `20260716183501_purchase_order_integer_cents` — 25 days before
+> the 2026-08-10 evaluation. But `information_schema.columns` reports `is_generated = ALWAYS` for
+> both: they are `GENERATED ALWAYS AS (round(<numeric dollars> * 100))` mirrors. The **numeric
+> dollar column is the authoritative store and the bigint is derived from it**, which is the
+> opposite of a conversion. `data_type = bigint` alone cannot tell the two apart; only
+> `is_generated`/`generation_expression` can. (One useful side effect: the generation expression
+> rejects non-finite input on its own — `round('NaN'::numeric * 100)::bigint` raises
+> `cannot convert NaN to bigint`, and the Infinity case raises `cannot convert infinity to
+> bigint` — so neither can ever reach the mirror column. Note that this cast, **not** the CHECK, is
+> where finiteness is actually enforced here: both constraints read
+> `CHECK (col >= 0 AND col = col_cents::numeric / 100.0)` and carry no explicit
+> `> '-Infinity' AND < 'Infinity'` bound of their own.)
+>
+> **So these two columns are the same approved compatibility exception as `orders.total_cost`** —
+> numeric-dollar authoritative storage, exact `numeric` math, clean whole-cent values, validated
+> whole-cent CHECK — **not** completed conversions, and not tracked debt either. Converting them to
+> authoritative bigint remains open work under the standing rule, exactly as it does for orders and
+> quotes; nothing here closes that, and nothing here re-opens the 2026-08-10 decision.
 
-**Gate NOT satisfied — no CHECK, therefore not an approved exception (5):**
+**Gate satisfied — CHECK enforced (8):** `orders.total_cost`, `orders.total_profit`,
+`order_items.total_price`, `order_items.profit`, `quotes.total_price`, `quotes.total_profit`,
+`quote_items.total_price`, `quote_items.profit`. Seven of these were constrained on 2026-08-10;
+`order_items.total_price` joined them on 2026-08-12 and is the row moved out of the table below.
+
+**Gate NOT satisfied — no CHECK, therefore not an approved exception (4):**
 
 | Column | Why deferred | Status |
 |---|---|---|
-| `order_items.total_price` | holds 35 of 288 legacy fractional-cent rows | awaiting data repair |
 | `quotes.total_cost` | holds 2 of 4 legacy fractional-cent rows | awaiting data repair |
-| `commissions.commission_amount` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
-| `commissions.order_profit` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
+| `commissions.commission_amount` | held 3 of 35 legacy fractional-cent rows **as measured 2026-08-10; live now reads 0** | see note below |
+| `commissions.order_profit` | held 3 of 35 legacy fractional-cent rows **as measured 2026-08-10; live now reads 0** | see note below |
 | `orders.total_price` | data is clean; `_update_order_items_impl` overwrites it with the raw un-rounded line sum, so constraining it would reject ordinary edits | blocked on fixing that writer |
 
-Repairing the 43 dirty rows across the first four rewrites stored money and needs Mason's separate
-approval on its own migration — it is **not** covered by the 2026-08-10 decision.
+Repairing the dirty values in the first three rows above — `quotes.total_cost`,
+`commissions.commission_amount` and `commissions.order_profit` — rewrites stored money and needs
+Mason's separate approval on its own migration; it is **not** covered by the 2026-08-10 decision.
+(`orders.total_price`, the fourth row, has clean data and is blocked on a writer fix, not a
+repair.) See the note directly below: two of those three now measure **0** dirty rows live, so
+**the only column still carrying unrepaired dirty money is `quotes.total_cost`, at 2 rows** —
+that, and not the three columns this paragraph names, is the whole of the open approval debt under
+this entry.
+
+> **The counts in the table above are the 2026-08-10 measurement and are stale as live state
+> (read-only re-measure, 2026-08-18).** Live now returns `commissions.commission_amount` **0**,
+> `commissions.order_profit` **0**, and only `quotes.total_cost` still **2**. The likely cause
+> of the two commission columns reaching 0 is the migration carried on disk as
+> `20260810235207_reconcile_pending_commission_snapshots`, which **is applied live** — though note
+> the ledger holds it at *version* `20260810235207` under the *name*
+> `20260810183629_reconcile_pending_commission_snapshots`, so the file was re-issued forward and
+> the two stamps disagree; searching the ledger by the disk filename finds nothing. It rewrites
+> `order_profit` and `commission_amount` on **pending** commissions to `ROUND(…, 2)`, which is
+> exactly the repair shape. Recorded as the likely cause and not a proven one: it skips any
+> commission already sitting in a payout batch, so it explains the observed 0 only if all three
+> rows measured on 2026-08-10 were still pending, which is not re-derivable now. The **0 is
+> measured; the attribution is inference** — do not restate it as settled provenance.
+> `order_items.total_price`, which this table listed as a deferred column until 2026-08-18, also
+> returns **0** — and it is no longer deferred at all:
+> `20260812115238_repair_historical_order_line_cents` repaired those 35 lines with Mason's in-chat
+> approval and added the validated CHECK `order_items_total_price_whole_cents_chk` in the same
+> migration, which is why it now sits in the enforced list above. Leaving it in the deferred table
+> told every later agent that an enforced money column was unapproved tracked debt. The 43 figure
+> was also a sum of *column-values* across four columns, not four disjoint row sets — the two
+> `commissions` counts are 3/35 each and may be the same 3 rows, so distinct dirty rows were
+> 40–43, and that overlap can no longer be re-derived.
+> Current figures and the enforced-vs-measured distinction live in `docs/manual/CURRENT_STATE.md`
+> section 2. All eight `*_whole_cents_chk` constraints read `convalidated` on live (read-only,
+> 2026-08-19 UTC). The **decision** recorded here still stands
+> unchanged — the gate is exactly what it was; what moved is that one more column now passes it.
 
 **Measured cost of the conversion that was declined** (live, 2026-08-10): 12 money columns, 46 live
 functions naming them, 101 functions touching those tables, 17 non-test `src/` files. Dollars→cents

@@ -5,6 +5,8 @@ import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
+import { useBelowCostApproval } from '../../contexts/BelowCostApprovalContext';
+import { isBelowCostApprovalHandledError, withBelowCostReason } from '../../lib/belowCostApproval';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 import { generateIdempotencyKey } from '../../lib/idempotency';
 import { Sentry } from '../../lib/sentry';
@@ -174,6 +176,7 @@ const rejectPartiallyInvalidQuoteGroups = (
 export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteImportProps) {
   const { toast } = useToast();
   const { profile } = useAuth();
+  const { runWithBelowCostApproval } = useBelowCostApproval();
   const [file, setFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -665,13 +668,13 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             };
 
             const idemKey = getImportIdempotencyKey(quoteNumber, idemPayloadScope);
-            const { data, error } = await supabase.rpc('save_quote', {
+            const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('save_quote', withBelowCostReason('save_quote', {
               p_quote_id: null as unknown as string,
               p_quote_payload: quotePayload as Json,
               p_sections: sectionsPayload as Json,
               p_performed_by: profile.id,
               p_idempotency_key: idemKey,
-            });
+            }, reason)));
 
             if (error) {
               details.push(`Quote ${quoteNumber}: Failed to create quote - ${error.message}`);
@@ -702,10 +705,12 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             failCount++;
           }
         } catch (error) {
-          Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
-            extra: { context: 'BulkQuoteImport.createQuote', quoteNumber },
-          });
-          details.push(`Quote ${quoteNumber}: ${error instanceof Error ? error.message : 'Unexpected error'}`);
+          if (!isBelowCostApprovalHandledError(error)) {
+            Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+              extra: { context: 'BulkQuoteImport.createQuote', quoteNumber },
+            });
+          }
+          details.push(`Quote ${quoteNumber}: ${isBelowCostApprovalHandledError(error) ? 'Below-cost save cancelled or requires an admin' : error instanceof Error ? error.message : 'Unexpected error'}`);
           failCount++;
         }
       }

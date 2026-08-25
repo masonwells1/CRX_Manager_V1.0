@@ -68,7 +68,7 @@ node scripts/verify-deps.mjs
 ```
 
 - `test:agent-workflows` failing → Claude/Codex handoff, review, hook, or health-check wiring drifted; fix it before commit.
-- `check-doc-drift` failing → a reference doc (CLAUDE.md counts, migration-history rows, etc.) is stale; fix the doc, don't commit around it.
+- `check-doc-drift` failing → a reference doc (migration-history rows, `docs/reference/` counts, etc.) is stale; fix the doc, don't commit around it.
 - `verify-deps` failing → `node_modules` doesn't match the lockfile (or a peer range is violated); run `npm ci` and re-check.
 
 **If `MIGRATION_CHANGED=true`,** also run the db-invariant sweeps: `npm run db-sweeps` prints each predicate's SQL — execute the blocks read-only via Supabase MCP `execute_sql` and compare `violation_key`s against `scripts/db-invariant-sweeps/allowlist.json`. Any unallowlisted violation is a BLOCKER.
@@ -81,7 +81,7 @@ node scripts/verify-deps.mjs
 echo "Pages: $(grep -c 'lazy(' src/App.tsx)" && echo "Migrations: $(ls supabase/migrations/*.sql | wc -l)"
 ```
 
-Compare to the counts in the CLAUDE.md "Snapshot" section (or just run `node scripts/check-doc-drift.mjs`, already run in Step 3b — it's the authoritative drift check). Flag mismatches.
+`node scripts/check-doc-drift.mjs` (already run in Step 3b) is the authoritative drift check — always-loaded agent files intentionally carry no counts. Flag any mismatch it reports.
 
 ## Step 5: Print the verdict
 

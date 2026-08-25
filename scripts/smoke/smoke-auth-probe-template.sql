@@ -43,6 +43,8 @@
 --     inside a sub-block would roll back with the probe's sub-transaction.
 --   * auth.uid() treats '' claims as NULL (live auth.uid() wraps
 --     current_setting in nullif(..., '')), so P1 uses ''.
+--   * Set both request.jwt.claims and the legacy request.jwt.claim.sub GUC;
+--     disposable baseline auth helpers can read the latter directly.
 --   * For READ RPCs the anon probe asserts the role-gate exception (e.g.
 --     get_customer_statement raises 'Access denied: admin or sales_rep role
 --     required') or zero returned rows - "no error" + rows = a leak.
@@ -51,9 +53,11 @@
 --
 -- ---------------------------------------------------------------------------
 -- WORKED EXAMPLE below: draw_down_quote(p_quote_id uuid, p_draws jsonb,
---   p_performed_by uuid DEFAULT NULL, p_idempotency_key text DEFAULT NULL)
--- Live body (read 2026-06-10): AUTH_REQUIRED -> ACTOR_MISMATCH -> role gate
--- (admin, sales_rep, is_active) -> FOR UPDATE lock -> idempotency -> guards.
+--   p_performed_by uuid DEFAULT NULL, p_idempotency_key text DEFAULT NULL,
+--   p_below_cost_reason text DEFAULT NULL)
+-- Pending post-cutover order: barrier -> AUTH_REQUIRED -> ACTOR_MISMATCH -> role
+-- gate (admin, sales_rep, is_active) -> key required -> payload validation ->
+-- intent replay -> live quote FOR UPDATE -> governed money/inventory call.
 -- Fixtures mirror smoke-draw-ledger-reversal.sql (quote 'sent', one section,
 -- one 500-unit item; no inventory rows needed - draws tolerate shortfalls).
 -- ============================================================================
@@ -66,6 +70,7 @@ DECLARE
   v_suffix   text := substr(md5(random()::text), 1, 8);
   v_customer uuid;
   v_product  uuid;
+  v_cost     numeric;
   v_quote    uuid;
   v_sec      uuid;
   v_lines    jsonb;
@@ -98,8 +103,18 @@ BEGIN
   INSERT INTO customers (farm_name)
   VALUES ('[SMOKE] Auth Probe Farm ' || v_suffix) RETURNING id INTO v_customer;
 
-  INSERT INTO products (product_name)
-  VALUES ('[SMOKE] Auth Probe Product ' || v_suffix) RETURNING id INTO v_product;
+  SELECT id, current_cost INTO v_product, v_cost
+  FROM products
+  WHERE is_active IS TRUE
+    AND current_cost IS NOT NULL
+    AND current_cost > 0
+    AND current_cost = round(current_cost, 2)
+    AND current_cost <= 10
+  ORDER BY current_cost, id
+  LIMIT 1;
+  IF v_product IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: need an active product with a positive whole-cent current_cost of 10.00 or less';
+  END IF;
 
   INSERT INTO quotes (quote_number, customer_id, created_by, status, commission_split)
   VALUES ('SMK-APT-' || v_suffix, v_customer, v_admin, 'sent', '{"splits": []}'::jsonb)
@@ -108,7 +123,7 @@ BEGIN
   VALUES (v_quote, 'Main') RETURNING id INTO v_sec;
   INSERT INTO quote_items (quote_id, section_id, product_id,
     price_per_unit, current_cost, total_units_needed, unit_size)
-  VALUES (v_quote, v_sec, v_product, 10, 6, 500, 'gal');
+  VALUES (v_quote, v_sec, v_product, 10, v_cost, 500, 'gal');
 
   v_lines := jsonb_build_array(
     jsonb_build_object('product_id', v_product, 'quantity', 100));
@@ -116,7 +131,9 @@ BEGIN
   -- --------------------------------------------------------------------
   -- P1: no-auth -> AUTH_REQUIRED
   -- --------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claim.sub', '', true);
   PERFORM set_config('request.jwt.claims', '', true);
+  PERFORM set_config('request.jwt.claim.sub', '', true);
   BEGIN
     PERFORM draw_down_quote(v_quote, v_lines, NULL, NULL);    -- __RPC_CALL__
     RAISE EXCEPTION 'SMOKE_FAIL: P1 no-auth call was ALLOWED';
@@ -130,7 +147,9 @@ BEGIN
   -- --------------------------------------------------------------------
   -- P2: anon-key (role claim, no sub) -> AUTH_REQUIRED, nothing written
   -- --------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claim.sub', '', true);
   PERFORM set_config('request.jwt.claims', '{"role":"anon"}', true);
+  PERFORM set_config('request.jwt.claim.sub', '', true);
   BEGIN
     PERFORM draw_down_quote(v_quote, v_lines, NULL, NULL);    -- __RPC_CALL__
     RAISE EXCEPTION 'SMOKE_FAIL: P2 anon call was ALLOWED';
@@ -144,8 +163,10 @@ BEGIN
   -- --------------------------------------------------------------------
   -- P3: wrong role (honest actor id, insufficient role) -> INSUFFICIENT_ROLE
   -- --------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claim.sub', v_wrong::text, true);
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_wrong, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_wrong::text, true);
   BEGIN
     PERFORM draw_down_quote(v_quote, v_lines, v_wrong, NULL); -- __RPC_CALL__ w/ honest __ACTOR_PARAM__
     RAISE EXCEPTION 'SMOKE_FAIL: P3 % call was ALLOWED', v_wrong_role;
@@ -160,8 +181,10 @@ BEGIN
   -- P4: forged actor (authenticated admin passing someone ELSE's id)
   --     -> ACTOR_MISMATCH
   -- --------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
   BEGIN
     PERFORM draw_down_quote(v_quote, v_lines, v_wrong, NULL); -- forged __ACTOR_PARAM__
     RAISE EXCEPTION 'SMOKE_FAIL: P4 forged p_performed_by was ALLOWED';

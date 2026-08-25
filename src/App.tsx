@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef } from 'react';
 import { createBrowserRouter, RouterProvider, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './components/ui/Toast';
+import { BelowCostApprovalProvider } from './contexts/BelowCostApprovalContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import LoginPage from './components/auth/LoginPage';
 import ForgotPasswordPage from './components/auth/ForgotPasswordPage';
@@ -161,13 +162,15 @@ function RootLayout() {
   return (
     <AuthProvider>
       <ToastProvider>
-        <UpdatePrompt />
-        <ErrorBoundary>
-          <NavigationTracker />
-          <Suspense fallback={<PageLoader />}>
-            <Outlet />
-          </Suspense>
-        </ErrorBoundary>
+        <BelowCostApprovalProvider>
+          <UpdatePrompt />
+          <ErrorBoundary>
+            <NavigationTracker />
+            <Suspense fallback={<PageLoader />}>
+              <Outlet />
+            </Suspense>
+          </ErrorBoundary>
+        </BelowCostApprovalProvider>
       </ToastProvider>
     </AuthProvider>
   );

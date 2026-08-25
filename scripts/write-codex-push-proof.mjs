@@ -27,7 +27,7 @@
 // This is defense-in-depth for an honest agent, not a cryptographic boundary.
 // GitHub branch protection remains the external hard wall.
 
-import { spawnSync, execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -51,14 +51,113 @@ const SCRIPT_DIR = path.resolve(fileURLToPath(new URL(".", import.meta.url)));
 const FALLBACK_ROOT = path.resolve(SCRIPT_DIR, "..");
 
 // ── git helpers ──────────────────────────────────────────────────────────────
+// Exported so the test suite's CONTROL run can drive the SAME binary without the
+// wrapper's isolation — proving the isolation is what blocks a hostile filter,
+// not an incidental difference in which Git was launched.
+export function fixedGitExecutable() {
+  const candidates = process.platform === "win32"
+    ? ["C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\bin\\git.exe"]
+    : ["/usr/bin/git", "/usr/local/bin/git"];
+  const executable = candidates.find((candidate) => existsSync(candidate));
+  if (!executable) throw new Error("A fixed trusted Git executable is required to build the sanitized review workspace.");
+  return executable;
+}
+
+// Every Git call this wrapper makes runs under ONE minimal environment, so an
+// ambient global/system Git configuration can never steer the process that
+// decides whether a push is trustworthy. Global and system config, the system
+// attributes file, replacement objects, credential prompts, and optional locks
+// are all disabled; PATH is narrowed to the trusted Git installation plus the
+// platform system directory. Inherited GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_* style
+// overrides are dropped by construction — only the names below survive.
+// Repository-local executable filters and attribute overrides remain denied by
+// the bootstrap classifier. The snapshot builders read raw objects (ls-tree /
+// cat-file) and copy bytes directly, so they never drive Git's worktree
+// conversion pipeline at all; `git status` DOES drive it, and the isolation
+// above is the only thing that keeps a global attributes file plus a
+// `filter.*.process` from executing an attacker-chosen program during it. The
+// test suite proves both halves: that the filter never runs here, and — via a
+// control run without this isolation — that the same filter really can run.
+function trustedGitEnv() {
+  const env = {};
+  for (const name of ["SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE"]) {
+    if (process.env[name]) env[name] = process.env[name];
+  }
+  env.GIT_NO_REPLACE_OBJECTS = "1";
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+  env.GIT_TERMINAL_PROMPT = "0";
+  env.GCM_INTERACTIVE = "never";
+  env.GIT_OPTIONAL_LOCKS = "0";
+  env.GIT_ATTR_NOSYSTEM = "1";
+  const systemPath = process.platform === "win32"
+    ? path.join(env.SystemRoot || env.WINDIR || "C:\\Windows", "System32")
+    : "/usr/bin:/bin";
+  env.PATH = `${path.dirname(fixedGitExecutable())}${path.delimiter}${systemPath}`;
+  return env;
+}
+
+// Ownership: FAIL CLOSED, deliberately. trustedGitEnv() discards the user's
+// global configuration, which is also the only place Git's ownership allowlist
+// normally lives. So on any checkout Git considers to be of "dubious ownership"
+// (a Windows profile owned by another account, a CI runner, a shared worktree)
+// every sanitized call below REFUSES to run, no proof is minted, and the
+// operator is told to fix the checkout rather than to trust it.
+//
+// This wrapper does NOT re-supply a command-scoped ownership allowance to keep
+// those checkouts working. Such an allowance would have to name a root this
+// process guessed for itself — from nothing more than the nearest `.git` entry,
+// which an attacker who can plant a checkout also controls — and it would
+// suppress Git's refusal while that repository's own local configuration,
+// including entries that make Git execute a chosen program, remains active.
+// Trading a hard ownership boundary for convenience is precisely the shape a
+// push proof must never have: an unverifiable checkout is not a reviewed one.
+
+// THE single Git invocation site. Every Git call this wrapper makes — status,
+// rev-parse, ls-tree, cat-file, ls-files, and the no-index packet diff — is
+// funnelled through here, so the fixed trusted executable, the sanitized
+// environment, --no-replace-objects, shell:false, and the hidden Windows
+// subprocess cannot be forgotten at an individual call site. Nothing else is
+// prepended to the argument list; in particular no ownership allowance is
+// injected (see above). Callers get the raw spawnSync result and decide what a
+// non-zero status means; this helper never interprets one.
+function runTrustedGit(args, {
+  cwd = FALLBACK_ROOT,
+  encoding = "utf8",
+  timeout = 120_000,
+  maxBuffer = 256 * 1024 * 1024,
+  stdio = ["ignore", "pipe", "pipe"],
+  input,
+} = {}) {
+  return spawnSync(fixedGitExecutable(), [
+    "--no-replace-objects",
+    ...args,
+  ], {
+    cwd,
+    encoding,
+    timeout,
+    maxBuffer,
+    // spawnSync requires a piped stdin when it supplies `input`, so the two are
+    // mutually exclusive rather than merged.
+    ...(input === undefined ? { stdio } : { input }),
+    env: trustedGitEnv(),
+    windowsHide: true,
+    shell: false,
+  });
+}
+
 function runGit(args, { cwd = FALLBACK_ROOT, fallback = "" } = {}) {
   try {
-    return execFileSync("git", args, {
+    const result = runTrustedGit(args, {
       cwd,
-      encoding: "utf8",
       timeout: 10_000,
       stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+    });
+    // spawnSync reports failure rather than throwing, so a non-zero exit must be
+    // mapped to the caller's fallback explicitly — otherwise partial stdout from
+    // a failed call would be read as a real answer.
+    if (result.error || result.status !== 0) return fallback;
+    return String(result.stdout ?? "").trim();
   } catch {
     return fallback;
   }
@@ -80,15 +179,6 @@ const STATUS_UNAVAILABLE = "__GIT_STATUS_UNAVAILABLE__";
 export function worktreeIsClean(cwd) {
   const out = runGit(["status", "--short"], { cwd, fallback: STATUS_UNAVAILABLE });
   return out !== STATUS_UNAVAILABLE && out.trim() === "";
-}
-
-function fixedGitExecutable() {
-  const candidates = process.platform === "win32"
-    ? ["C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\bin\\git.exe"]
-    : ["/usr/bin/git", "/usr/local/bin/git"];
-  const executable = candidates.find((candidate) => existsSync(candidate));
-  if (!executable) throw new Error("A fixed trusted Git executable is required to build the sanitized review workspace.");
-  return executable;
 }
 
 function assertSanitizedReviewRoot(reviewRoot) {
@@ -153,20 +243,14 @@ function verifySnapshotFiles(destination, entries) {
 }
 
 function parseCommitTree(sourceRoot, commitSha) {
-  const treeBytes = execFileSync(fixedGitExecutable(), [
-    "ls-tree",
-    "-r",
-    "-z",
-    "--full-tree",
-    commitSha,
-  ], {
+  const listing = runTrustedGit(["ls-tree", "-r", "-z", "--full-tree", commitSha], {
     cwd: sourceRoot,
     encoding: null,
-    timeout: 120_000,
-    stdio: ["ignore", "pipe", "pipe"],
-    maxBuffer: 256 * 1024 * 1024,
   });
-  const records = treeBytes.toString("utf8").split("\0").filter(Boolean);
+  if (listing.error || listing.status !== 0) {
+    throw listing.error || new Error(`Trusted commit-tree enumeration failed with exit ${listing.status}.`);
+  }
+  const records = listing.stdout.toString("utf8").split("\0").filter(Boolean);
   if (records.some((record) => record.includes("\uFFFD"))) {
     throw new Error("Commit tree contains a path that cannot be represented safely as UTF-8.");
   }
@@ -190,12 +274,10 @@ function parseCommitTree(sourceRoot, commitSha) {
 
 function readCommitBlobs(sourceRoot, entries) {
   if (entries.length === 0) return [];
-  const result = spawnSync(fixedGitExecutable(), ["cat-file", "--batch"], {
+  const result = runTrustedGit(["cat-file", "--batch"], {
     cwd: sourceRoot,
     input: `${entries.map((entry) => entry.objectId).join("\n")}\n`,
     encoding: null,
-    shell: false,
-    timeout: 120_000,
     maxBuffer: 512 * 1024 * 1024,
   });
   if (result.error || result.status !== 0) {
@@ -291,13 +373,13 @@ function writeTreeManifest(reviewRoot, name, manifest) {
 
 function copyWorkingTreeSnapshot(sourceRoot, destination) {
   mkdirSync(destination, { recursive: true });
-  const listed = execFileSync(fixedGitExecutable(), ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+  const listing = runTrustedGit(["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
     cwd: sourceRoot,
-    encoding: "utf8",
-    timeout: 120_000,
-    stdio: ["ignore", "pipe", "pipe"],
-    maxBuffer: 256 * 1024 * 1024,
-  }).split("\0").filter(Boolean);
+  });
+  if (listing.error || listing.status !== 0) {
+    throw listing.error || new Error(`Trusted working-tree enumeration failed with exit ${listing.status}.`);
+  }
+  const listed = String(listing.stdout ?? "").split("\0").filter(Boolean);
   const seenTargets = new Set();
   const copied = [];
   for (const relative of listed) {
@@ -354,7 +436,7 @@ export function createSanitizedReviewWorkspace({
     }
     writeTreeManifest(reviewRoot, "BASE_TREE_MANIFEST.json", baseTreeManifest);
     writeTreeManifest(reviewRoot, "CANDIDATE_TREE_MANIFEST.json", candidateTreeManifest);
-    const diff = spawnSync(fixedGitExecutable(), [
+    const diff = runTrustedGit([
       "diff",
       "--no-index",
       "--no-ext-diff",
@@ -364,13 +446,7 @@ export function createSanitizedReviewWorkspace({
       "--",
       path.basename(baseDir),
       path.basename(candidateDir),
-    ], {
-      cwd: reviewRoot,
-      encoding: "utf8",
-      shell: false,
-      timeout: 120_000,
-      maxBuffer: 256 * 1024 * 1024,
-    });
+    ], { cwd: reviewRoot });
     if (diff.error || ![0, 1].includes(diff.status)) {
       throw diff.error || new Error(`Sanitized review diff failed with exit ${diff.status}.`);
     }

@@ -285,6 +285,12 @@ assert.equal(gitPushCwd("git -C ../repo push origin HEAD:main", "C:/work/current
 assert.equal(gitPushCwd("git -C .. -C sibling push origin HEAD:main", "C:/work/current"), path.resolve("C:/work/sibling"));
 
 assert.deepEqual(riskyFiles(["src/pages/Home.tsx", "supabase/migrations/1.sql"]), ["supabase/migrations/1.sql"]);
+const maintenanceProducerPath = "scripts/apply-live-testdata-" + "maintenance-20260812.mjs";
+assert.deepEqual(
+  riskyFiles([maintenanceProducerPath]),
+  [maintenanceProducerPath],
+  "the protected maintenance producer always requires exact-head review",
+);
 // Codex round-7 (PR #142): reviewer charters + the proof-minting wrapper are
 // gate machinery — editing them must itself require the second-model verdict.
 assert.deepEqual(riskyFiles([".claude/agents/rls-security-reviewer.md"]), [".claude/agents/rls-security-reviewer.md"]);
@@ -322,6 +328,10 @@ assert.deepEqual(
 // The sole Codex-proof producer must itself be risky: a later edit to it cannot
 // slip to main without an independent second-model review of that edit.
 assert.deepEqual(riskyFiles(["scripts/write-codex-push-proof.mjs"]), ["scripts/write-codex-push-proof.mjs"]);
+// The sanctioned C3 ledger-mutation script is guard machinery: weakening its
+// --i-verified-against-live gate must itself require the second-model verdict
+// (Opus review 2026-08-19, round 3).
+assert.deepEqual(riskyFiles(["scripts/remove-applied-ledger-entry.mjs"]), ["scripts/remove-applied-ledger-entry.mjs"]);
 assert.equal(contentIsRisky("+ const total_cents = 100"), true);
 assert.equal(contentIsRisky("+ const title = 'ordinary'"), false);
 

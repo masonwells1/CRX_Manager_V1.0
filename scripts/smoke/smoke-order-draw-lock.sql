@@ -8,8 +8,10 @@
 -- still says 200 -> the same 100 could be drawn again).
 --
 -- HOW TO RUN: execute this whole file as a SINGLE statement (Supabase MCP
--- execute_sql, or psql -1) as postgres/service_role AFTER the migration is
--- applied. The block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
+-- execute_sql, or psql -1) as postgres after the migration under test is
+-- applied. Once the pending 20260819232000 cutover is also present, the draw
+-- wrapper is authenticated-only and service_role cannot execute it. The block
+-- ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
 -- so every fixture, order, ledger row and audit row created here is rolled
 -- back — nothing persists. Any other exception text = a real failure.
 --
@@ -29,8 +31,8 @@
 --   (d) control: a WHOLE-CONVERSION order (booking_draw = false, via
 --       convert_quote_to_order) edits freely — reduce 300 -> 250 succeeds
 --       (pre-existing behavior for non-draw orders, unchanged)
---   (e) active-actor guard (rls-review L2): a DEACTIVATED admin session
---       (profiles.is_active = false, flipped txn-locally) is rejected with
+--   (e) active-actor guard (rls-review L2): a separate INACTIVE admin session
+--       (profiles.is_active = false in the rollback-only fixture) is rejected with
 --       INSUFFICIENT_ROLE — the verbatim role gate alone would have passed it
 -- ============================================================================
 
@@ -46,6 +48,21 @@ AS $helper$
 DECLARE
   v_result jsonb;
 BEGIN
+  -- Signature-newest-first. The below-cost approval work (20260812115237)
+  -- widened this wrapper to (uuid,uuid,text,bigint,text) with
+  -- p_below_cost_reason last, and every argument after the first carries a
+  -- DEFAULT. That matters: the three-argument fallback at the bottom still
+  -- RESOLVES against the widened function, silently defaulting
+  -- p_expected_row_version to NULL, which the row-version guard rejects as
+  -- QUOTE_STALE_WRITE long before the logic this chain exists to prove.
+  -- Probing the widest signature first keeps the row version actually sent.
+  IF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint,text)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.convert_quote_to_order($1, $2, $3, $4, NULL::text)'
+      INTO v_result
+      USING p_quote_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  END IF;
   IF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint)') IS NOT NULL THEN
     EXECUTE
       'SELECT public.convert_quote_to_order($1, $2, $3, $4)'
@@ -64,9 +81,11 @@ $helper$;
 DO $smoke$
 DECLARE
   v_admin uuid;
+  v_inactive_admin uuid := gen_random_uuid();
   v_customer uuid;
   v_product uuid;
   v_product_2 uuid;
+  v_cost numeric;
   v_q uuid;
   v_q2 uuid;
   v_sec uuid;
@@ -95,6 +114,26 @@ BEGIN
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
+  INSERT INTO auth.users (id, email, raw_user_meta_data, created_at, updated_at)
+  VALUES (
+    v_inactive_admin,
+    'draw-lock-inactive-' || v_suffix || '@example.invalid',
+    '{"full_name":"[SMOKE] Inactive Draw Admin","role":"admin"}'::jsonb,
+    now(),
+    now()
+  );
+  -- handle_new_user may create an active profile; replace it with the inactive
+  -- fixture without exercising the unrelated auth-ban UPDATE trigger.
+  DELETE FROM profiles WHERE id = v_inactive_admin;
+  INSERT INTO profiles (id, email, full_name, role, is_active)
+  VALUES (
+    v_inactive_admin,
+    'draw-lock-inactive-' || v_suffix || '@example.invalid',
+    '[SMOKE] Inactive Draw Admin',
+    'admin',
+    false
+  );
+
   -- --------------------------------------------------------------------
   -- 1. Fixtures (txn-local; rolled back at the end)
   -- --------------------------------------------------------------------
@@ -102,9 +141,18 @@ BEGIN
   VALUES ('[SMOKE] Draw Lock Farm ' || v_suffix)
   RETURNING id INTO v_customer;
 
-  INSERT INTO products (product_name, unit_size)
-  VALUES ('[SMOKE] Draw Lock Product ' || v_suffix, 'gal')
-  RETURNING id INTO v_product;
+  SELECT id, current_cost INTO v_product, v_cost
+  FROM products
+  WHERE is_active IS TRUE
+    AND current_cost IS NOT NULL
+    AND current_cost > 0
+    AND current_cost = round(current_cost, 2)
+    AND current_cost <= 10
+  ORDER BY current_cost, id
+  LIMIT 1;
+  IF v_product IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: need an active product with a positive whole-cent current_cost of 10.00 or less';
+  END IF;
 
   -- --------------------------------------------------------------------
   -- 2. Open booking: 500 booked, draw 200 -> one draw order exists
@@ -116,11 +164,11 @@ BEGIN
   VALUES (v_q, 'Main') RETURNING id INTO v_sec;
   INSERT INTO quote_items (quote_id, section_id, product_id,
     price_per_unit, current_cost, total_units_needed, unit_size)
-  VALUES (v_q, v_sec, v_product, 10, 6, 500, 'gal');
+  VALUES (v_q, v_sec, v_product, 10, v_cost, 500, 'gal');
 
   v_res := draw_down_quote(v_q,
     jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 200)),
-    v_admin, NULL);
+    v_admin, 'smk-odl-first-' || v_suffix);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'SMOKE_FAIL: draw 200/500 reported fully_drawn: %', v_res;
   END IF;
@@ -190,7 +238,7 @@ BEGIN
   -- --------------------------------------------------------------------
   v_res := draw_down_quote(v_q,
     jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 300)),
-    v_admin, NULL);
+    v_admin, 'smk-odl-final-' || v_suffix);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (c) final draw not reported fully drawn: %', v_res;
   END IF;
@@ -213,7 +261,7 @@ BEGIN
   VALUES (v_q2, 'Main') RETURNING id INTO v_sec;
   INSERT INTO quote_items (quote_id, section_id, product_id,
     price_per_unit, current_cost, total_units_needed, unit_size)
-  VALUES (v_q2, v_sec, v_product, 10, 6, 300, 'gal');
+  VALUES (v_q2, v_sec, v_product, 10, v_cost, 300, 'gal');
 
   SELECT pg_temp.convert_quote_to_order_smoke(
     v_q2,
@@ -266,9 +314,37 @@ BEGIN
 
   -- (f) Adding a product with no inventory snapshot creates that row before
   -- prebooking, so the ledger and physical snapshot cannot diverge.
-  INSERT INTO products (product_name, unit_size)
-  VALUES ('[SMOKE] Draw Lock New Product ' || v_suffix, 'gal')
-  RETURNING id INTO v_product_2;
+  -- This scenario needs a product with NO Main Warehouse inventory row. Making
+  -- that a hard prerequisite tied the chain to data it does not control: once
+  -- every cheap active product has a warehouse row, a perfectly healthy live
+  -- database fails at SMOKE_SETUP. Deleting a live row to manufacture the
+  -- precondition is worse — an all-zero inventory row still carries a real
+  -- reorder point and minimum stock level. prove-draw-down-price-tier-real-schema.mjs
+  -- seeds two inventory-free products, so (f) is proven on every container run;
+  -- a live run exercises it when the catalog allows and says so loudly when it
+  -- cannot. Never downgrade this to a silent skip.
+  SELECT p.id INTO v_product_2
+  FROM products p
+  WHERE p.is_active IS TRUE
+    AND p.current_cost IS NOT NULL
+    AND p.current_cost > 0
+    AND p.current_cost = round(p.current_cost, 2)
+    AND p.current_cost <= 7
+    AND p.id IS DISTINCT FROM v_product
+    AND NOT EXISTS (
+      SELECT 1 FROM inventory i
+      WHERE i.product_id = p.id AND i.location = 'Main Warehouse'
+    )
+  ORDER BY p.current_cost, p.id
+  LIMIT 1;
+  IF v_product_2 IS NULL THEN
+    -- SMOKE_PREREQ, not a notice-and-continue. run-smoke.mjs does not recognize
+    -- a bare notice, so continuing here reported PASS for a chain in which (f)
+    -- never ran -- incomplete evidence counted as verified, which
+    -- docs/workflows/CODEX_REVIEW_GAUNTLET.md forbids. SMOKE_PREREQ is the
+    -- recognized "this proved nothing" result and exits nonzero.
+    RAISE EXCEPTION 'SMOKE_PREREQ: (f) needs a second active product costing 7.00 or less with no Main Warehouse inventory row; prove-draw-down-price-tier-real-schema.mjs seeds one, so run this chain there when the live catalog cannot supply it';
+  END IF;
   PERFORM update_order_items(v_o2,
     jsonb_build_array(
       jsonb_build_object(
@@ -285,16 +361,17 @@ BEGIN
   END IF;
 
   -- --------------------------------------------------------------------
-  -- (g) Deactivated admin: must be rejected by the active-actor guard
-  --     (txn-local flip — rolled back with everything else)
+  -- (g) Inactive admin: must be rejected by the active-actor guard.
   -- --------------------------------------------------------------------
-  UPDATE profiles SET is_active = false WHERE id = v_admin;
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub', v_inactive_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_inactive_admin::text, true);
   BEGIN
     PERFORM update_order_items(v_o2,
       jsonb_build_array(jsonb_build_object(
         'id', v_item_2, 'product_id', v_product,
         'price_per_unit', 10, 'total_units_needed', 240)),
-      v_admin, NULL);
+      v_inactive_admin, NULL);
     RAISE EXCEPTION 'SMOKE_FAIL: (g) deactivated admin was ALLOWED to edit';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;

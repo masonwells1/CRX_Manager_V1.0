@@ -6,7 +6,7 @@ It is **read-only**: it analyzes and writes ONE report file. It does not edit co
 
 The full, canonical instructions live in **`docs/audits/architecture-weakness-audit-prompt.md`** — read that file and execute it exactly. Do NOT paraphrase or duplicate its steps here (a second copy would drift).
 
-In summary, that prompt makes you walk the map's ~103 nodes + ~181 connections as a worklist and run **7 weakness passes** against the live DB (project `rhyzpcqhnizqbxphqdkr`) + `src/`:
+In summary, that prompt makes you walk the map's full node + connection inventory (regenerated each run — counts come from the map, not from here) as a worklist and run **7 weakness passes** against the live DB (project `rhyzpcqhnizqbxphqdkr`) + `src/`:
 
 1. SPOFs (fan-in blast radius) · 2. double-submit / idempotency · 3. silent failures · 4. race / concurrency · 5. atomicity of multi-write flows · 6. missing reversals · 7. missing defensive connections.
 

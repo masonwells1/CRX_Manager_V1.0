@@ -44,38 +44,86 @@
     "complete_team_note": {
       "chain": "smoke-complete-team-note-chain.sql",
       "description": "Team Board delegation chain (migrations 20260809130108 + 20260810010308): INSERT-with-assignee fires exactly one task_assigned notification; a rollback-only synthetic inactive auth/profile fixture proves inactive actors are rejected and inactive assignees stay silent without touching a real teammate's auth state; no-auth and anon calls raise AUTH_REQUIRED; an authenticated outsider (not creator/assignee/admin) is rejected; the non-admin ASSIGNEE completes a note they did not create with completed_by stamped from auth.uid(); exact idempotent replay returns the saved result without double activity logging; same-key different-payload raises COMPLETE_REPLAY_PAYLOAD_MISMATCH; the creator reopens; reassignment notifies only the new assignee; self-assignment and unchanged-assignee updates stay silent; a soft-deleted note raises NOTE_NOT_FOUND; anon EXECUTE is denied on the RPC and client roles cannot EXECUTE the trigger function. Terminal rollback.",
-      "covers": ["complete_team_note", "notify_team_note_assignment"],
-      "area": ["lifecycle", "security", "idempotency"]
+      "covers": [
+        "complete_team_note",
+        "notify_team_note_assignment"
+      ],
+      "area": [
+        "lifecycle",
+        "security",
+        "idempotency"
+      ]
     },
     "pending_commission_snapshot_reconcile": {
       "chain": "smoke-pending-commission-snapshot-reconcile.sql",
       "description": "Post-apply read-only invariant for the forward-only stale-profit follow-up: every eligible pending, non-deleted, unbatched order-channel commission matches the canonical order header and compute_commission_amount result; paid/cancelled/deleted/batched and job/application commissions remain outside the repair boundary. Terminal rollback marker.",
-      "covers": ["commissions"],
-      "area": ["billing", "regression"]
+      "covers": [
+        "commissions"
+      ],
+      "area": [
+        "billing",
+        "regression"
+      ]
     },
     "historical_ar_report_cutoffs": {
       "chain": "smoke-historical-ar-report-cutoffs.sql",
       "description": "Section 2 historical AR report proof: an overdue invoice remains visible in both AR Aging and Customer Balance Listing, a fully paid invoice remains in cumulative invoiced/paid/count totals without entering open balance, a future-dated invoice is excluded, a post-cutoff credit application is replayed to the exact gross/open-credit cutoff, later prepay activity fails closed, and anonymous/private-helper grants remain denied. Self-contained fixtures and terminal rollback.",
-      "covers": ["get_ar_aging", "get_customer_balance_listing", "assert_customer_balance_reconstructable_as_of"],
-      "area": ["billing", "security", "regression"]
+      "covers": [
+        "get_ar_aging",
+        "get_customer_balance_listing",
+        "assert_customer_balance_reconstructable_as_of"
+      ],
+      "area": [
+        "billing",
+        "security",
+        "regression"
+      ]
     },
     "save_quote_customer_row_version": {
       "chain": "smoke-save-quote-customer-row-version.sql",
       "description": "LOCAL ONLY pending-apply rollback fixture: executes the real save_quote/save_customer contracts for exact +1 tokens, payload-bound/current-token-verified idempotent replay, draft->sent->sent lifecycle persistence, stale header/child/address rejection, concurrent Customer money-path invalidation, split-conflict precedence, auth/role gates, sales-rep non-owner Customer rejection, and sales-rep non-owner Quote save, replay, version, and conversion rejection before mutation or result release, plus server-authoritative quote item math. As an authenticated browser role it proves stable parent-version reads while direct child INSERT/UPDATE/DELETE are denied; SECURITY DEFINER parent saves still replace child collections. The companion network-isolated PostgreSQL 17 prover demonstrates the pre-fix overwrite, both lock orders, payload-conflict and advanced-token replay rejection, exact split-conflict < stale-token < lifecycle/unplan < write ordering, mutation-resistant ownership gates, and normalized canonical-body preservation outside the audited row-version/security delta. Run smoke-planned-holds-drawn-sync.sql alongside this chain for planned-hold preservation; no PASS is a live-apply claim.",
-      "covers": ["save_quote", "save_customer"],
-      "area": ["lifecycle", "security", "idempotency"]
+      "covers": [
+        "save_quote",
+        "save_customer"
+      ],
+      "area": [
+        "lifecycle",
+        "security",
+        "idempotency"
+      ]
     },
     "save_field": {
       "chain": "smoke-save-field-actor-binding.sql",
       "description": "save_field actor-binding rollback proof: no-auth and forged actors fail before field writes, a legacy NULL actor is bound to the authenticated admin, request replay returns the same field without duplicate activity, and the sole SECURITY DEFINER overload retains its fixed search_path and narrow grants.",
-      "covers": ["save_field"],
-      "area": ["security", "idempotency"]
+      "covers": [
+        "save_field"
+      ],
+      "area": [
+        "security",
+        "idempotency"
+      ]
     },
     "supplier_pricing_phase3_return_policy": {
       "chain": "smoke-supplier-pricing-phase3-return-policy.sql",
       "description": "Supplier Pricing Phase 3 Stage A rollback matrix: dormant unknown/default Product compatibility; full returnable create/approve/receive/restock/credit lifecycle; governed metadata refusal at requested/approved/received; exact no-return create/re-credit and direct return-items refusals; received cancellation inventory reversal; linked and unrelated-credit-memo unapply boundaries; reject/cancel/unapply reversal boundaries; and forced late-failure atomic rollback for requested, approved, received/restock, credit-issued, rejected, cancelled, and credit-memo-unapplied effects. The companion prove-supplier-pricing-phase3-return-policy-concurrency.mjs proves autocommit and explicit deferred-FK timing plus two independent-session sorted advisory-lock races for wrappers, direct return_items writes, unapply, and a regression-sensitive received-cancel versus approved-receive race on the same Product/inventory row.",
-      "covers": ["create_return", "approve_return", "reject_return", "receive_return", "issue_return_credit", "set_product_phase3_metadata", "return_items", "product_families"],
-      "area": ["billing", "inventory", "lifecycle", "pricing", "security", "idempotency"]
+      "covers": [
+        "create_return",
+        "approve_return",
+        "reject_return",
+        "receive_return",
+        "issue_return_credit",
+        "set_product_phase3_metadata",
+        "return_items",
+        "product_families"
+      ],
+      "area": [
+        "billing",
+        "inventory",
+        "lifecycle",
+        "pricing",
+        "security",
+        "idempotency"
+      ]
     },
     "section9_po_ap_high_remediation": {
       "chain": "smoke-section9-po-ap-high-remediation.sql",
@@ -407,7 +455,8 @@
     },
     "save_job": {
       "chain": "smoke-save-job-parity.sql",
-      "description": "Field-app parity #1 (migration 20260624120000): the extended save_job round-trips scheduling dates (call/proposed/schedule/expires + time_proposed), consultant, three memo fields, per-field agronomy (planted_acres/crop/strip/pests), per-field customer shares, and chemical extras (diluent_rate/rei_hours/phi_days/warehouse/vendor); remaining_acres GENERATED = total - applied; field shares not totalling 100 raise SHARE_NOT_100; idempotent replay returns the same job_id with no second job; a forged p_performed_by raises ACTOR_MISMATCH.",
+      "container_prover": "prove-save-job-chem-unit-invariant.mjs",
+      "description": "Field-app parity #1 (migration 20260624120000): the extended save_job round-trips scheduling dates (call/proposed/schedule/expires + time_proposed), consultant, three memo fields, per-field agronomy (planted_acres/crop/strip/pests), per-field customer shares, and chemical extras (diluent_rate/rei_hours/phi_days/warehouse/vendor); remaining_acres GENERATED = total - applied; field shares not totalling 100 raise SHARE_NOT_100; idempotent replay returns the same job_id with no second job; a forged p_performed_by raises ACTOR_MISMATCH. Steps 3b and 7 additionally cover migration 20260820120000 (chemical-unit invariant + derived money totals) and are GATED on whether that migration is installed: pre-apply they pin the caller-supplied totals, post-apply they assert the derived totals and that a pint-quantity-priced-per-gallon line and a per-cwt rate are both refused leaving no row behind. Chem A's quantity was corrected from 240 to 30 on 2026-08-23 -- it had been 240 pints recorded as 240 gallons, an 8x over-bill living in the parity fixture itself. NOTE: this spec is NOT container_only (the SQL chain above runs normally), and run-smoke.mjs only EXECUTES a container_prover on the container-only skip path -- it merely checks that the file exists. So prove-save-job-chem-unit-invariant.mjs is a MANUAL proof: --all and --area will not run it. Run it by hand after any change to migration 20260820120000 or its fixtures: node scripts/smoke/prove-save-job-chem-unit-invariant.mjs",
       "covers": [
         "save_job"
       ],
@@ -549,7 +598,9 @@
     },
     "restore_quote_version": {
       "chain": "smoke-restore-version-drawn-guard.sql",
-      "description": "Drawn-version and row-version restore guard: restoring a snapshot below the drawn ledger raises BOOKING_OVERDRAWN (fall-below AND removes branches; the section DELETE rolls back atomically), while the row-version matrix separately proves owner-only access, stale-writer rejection before child replacement, exact N+1 success, and request-bound replay. A legal restore (>= drawn) succeeds to 'revised' with the ledger intact and then draws to closure; a no-draws control quote restores freely.",
+      "container_only": true,
+      "container_prover": "prove-draw-down-quote-intent-binding.mjs",
+      "description": "CONTAINER ONLY pending-apply post-tier-split restore guard: once a draw stamps per-line billing provenance, every version restore fails closed with QUOTE_RESTORE_BLOCKED_BY_DRAW before child replacement. The rollback smoke covers fall-below, removes-product, and quantity-safe snapshots; proves the quote remains usable to draw to closure; cancels both draw orders; requires the ledger to return to zero, the quote to reopen, and stamped audit rows to remain for each cancelled order; then pins the accepted post-cancellation refusal. Run only through prove-draw-down-quote-intent-binding.mjs after the pending cutover sequence; live still has the earlier restore behavior. The row-version matrix separately proves owner-only access, stale-writer rejection before child replacement, exact N+1 success, and request-bound replay. A no-draws control quote still restores freely.",
       "covers": [
         "restore_quote_version",
         "create_quote_version",
@@ -610,7 +661,9 @@
     },
     "create_planned_holds": {
       "chain": "smoke-planned-holds-drawn-sync.sql",
-      "description": "Authoritative planned-hold sync (Codex r2 #3, migration 20260611132115): active holds always equal booked − drawn per product after create_planned_holds, save_quote (Draft/Revise/Present), and restore_quote_version, with FIFO consumption so per-item expiry (needed_by+14d) follows the still-reserved tail; rebuild-after-draw no longer re-reserves drawn quantity; is_planned switched off + save releases all holds server-side.",
+      "container_only": true,
+      "container_prover": "prove-draw-down-quote-intent-binding.mjs",
+      "description": "CONTAINER ONLY pending-apply planned-hold/post-tier-split restore chain: active holds always equal booked − drawn per product after create_planned_holds and save_quote (Draft/Revise/Present), with FIFO consumption so per-item expiry (needed_by+14d) follows the still-reserved tail; rebuild-after-draw no longer re-reserves drawn quantity. A drawn booking's post-cutover restore_quote_version refusal is pinned to QUOTE_RESTORE_BLOCKED_BY_DRAW and leaves synchronized holds unchanged; is_planned switched off + save releases all holds server-side. Run only through prove-draw-down-quote-intent-binding.mjs after the pending cutover sequence; live still has the earlier restore behavior.",
       "covers": [
         "create_planned_holds",
         "release_planned_holds",
@@ -621,6 +674,23 @@
       ],
       "area": [
         "inventory"
+      ]
+    },
+    "draw_down_quote_intent_binding": {
+      "chain": "smoke-draw-down-quote-intent-binding.sql",
+      "container_only": true,
+      "container_prover": "prove-draw-down-quote-intent-binding.mjs",
+      "description": "CONTAINER ONLY pending-apply rollback proof for 20260819232000 after 20260816110000, 20260816120000 and 20260817120000: an active sales rep successfully covers a colleague's live booking through the real tier-split money/inventory path; numeric-equivalent exact replay returns one saved order; changed quantity and changed actor fail closed; the receipt is bound to actor plus fingerprint; line/header price, cost and profit remain exact; one exact $5 commission is written to the intended rep; inventory is prebooked once; and a deleted quote is hidden before replay. The network-isolated PostgreSQL 17 prover first applies 20260819232000 verbatim over exact reviewed helper/wrapper/pricing/lifecycle prerequisites, then uses an effect-recording stand-in for adversarial wrapper schedules covering admin/rep authorization, auth/role refusals, required-key plus keyed empty/non-numeric/non-finite guards, ACLs, same-key races, stale-replay mutation, helper/wrapper/prerequisite-body drift, overload drift, autocommit refusal, REPEATABLE READ stale-snapshot refusal and an in-flight legacy receipt drained by the exclusive cutover lock before refusal. A second database restores baseline 20260727174805, surfaces the one-shot quarantine notice, replays every default replay-eligible ledger-selected migration through this candidate, and executes this chain against the real money/commission/inventory/draw-ledger implementation to SMOKE_PASS_ROLLBACK. No PASS is a live-apply claim.",
+      "covers": [
+        "draw_down_quote"
+      ],
+      "area": [
+        "pricing",
+        "inventory",
+        "lifecycle",
+        "security",
+        "idempotency",
+        "regression"
       ]
     },
     "draw_down_quote": {
@@ -848,7 +918,7 @@
     "restore_quote_version_trust_boundary": {
       "chain": "smoke-quote-version-restore-trust.sql",
       "psql_only": true,
-      "description": "Rollback-only runtime proof for 20260813180000: an owner-created unmarked legacy version must raise the exact QUOTE_VERSION_LEGACY_UNTRUSTED error and leave quote/header/section/item state unchanged, while a newly RPC-created marked version restores successfully with the authoritative N+1 row-version token. The standing quote-versions-rpc-owned predicate separately pins that rejection before the sole owner-side restore call. EXPECT SMOKE_PREREQ until the trust-boundary migration is deployed.",
+      "description": "Rollback-only runtime proof for 20260825190000: an owner-created unmarked legacy version must raise the exact QUOTE_VERSION_LEGACY_UNTRUSTED error and leave quote/header/section/item state unchanged, while a newly RPC-created marked version restores successfully with the authoritative N+1 row-version token. The standing quote-versions-rpc-owned predicate separately pins that rejection before the sole owner-side restore call. EXPECT SMOKE_PREREQ until the trust-boundary migration is deployed.",
       "covers": [
         "create_quote_version",
         "restore_quote_version"
@@ -857,6 +927,27 @@
         "security",
         "regression",
         "lifecycle"
+      ]
+    },
+    "allocated_line_cents": {
+      "chain": "smoke-allocated-line-cents.sql",
+      "container_only": true,
+      "container_prover": "prove-allocated-line-cents.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-allocated-line-cents.mjs, never through run-smoke.mjs against the live database: the chain INSERTs orders, deliveries and invoices, which the LIVE-DATA GUARD correctly refuses, and it depends on the disposable scaffolding in fixtures/allocated-line-cents-base.sql. CRX-MONEY-LIFECYCLE-001 (fixed by 20260817120000): the tier-split draw-down deliberately makes an order line total_price differ from ROUND(price_per_unit * quantity, 2) - a drawn line carries the tier cumulative rounded value minus cents already committed - but delivery invoicing, the backfill invoicing path and Cancel Remaining each threw that allocation away and re-derived money by multiplying unit price by quantity again, so every fractional segment rounded independently and the total drifted from the booking (order says 25c, invoice bills 26c). Six scenarios: two draws off one booking both delivered; one line delivered as two deliveries; deliver-then-Cancel-Remaining; the backfill invoicing path; three fractional draws telescoping 4+3+4 to exactly 11c; and a voided invoice that must not consume allocation. The prover plants the three lifecycle bodies sliced byte-exact from their migration files (md5-pinned to the 2026-08-17 production snapshot, including the CRLF storage form of _close_undelivered_order_remainder_20260718 so the migration md5 preconditions are exercised for real), runs the chain against the PRE-FIX bodies and requires all six scenarios to report ALLOCATION_DRIFT, applies the migration verbatim in one transaction, then requires the same chain to reach SMOKE_PASS_ROLLBACK. A chain that passes pre-fix aborts the proof. Ends in SMOKE_PASS_ROLLBACK.",
+      "covers": [
+        "complete_delivery",
+        "_complete_delivery_authorized_impl",
+        "create_invoice_for_unbilled_delivery",
+        "_create_invoice_for_unbilled_delivery_impl_20260718",
+        "_close_undelivered_order_remainder_20260718",
+        "_allocated_cumulative_cents",
+        "_allocated_delivery_cents"
+      ],
+      "area": [
+        "billing",
+        "lifecycle",
+        "pricing",
+        "regression"
       ]
     }
   }

@@ -27,6 +27,10 @@ const TRIGGER_RES = [
   // verifiers, and the workflow mirror-sync.
   /^scripts\/(check-|validate-|verify-)[^/]+$/,
   /^scripts\/sync-agent-workflows\.mjs$/,
+  // Shared by both mirror comparisons: an edit here changes what "in sync"
+  // means for the whole agent surface (2026-08-19).
+  /^scripts\/normalize-eol\.mjs$/,
+  /^scripts\/agent-health-check\.mjs$/,
   /^scripts\/run-claude-review\.mjs$/,
   /^scripts\/write-codex-push-proof\.mjs$/,
   // A new database migration is a live-schema change — it must leave a ledger

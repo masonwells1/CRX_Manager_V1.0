@@ -17,6 +17,7 @@ import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { formatUSD as fmt } from '../lib/money';
+import { sumNeedByProduct } from '../lib/inventoryShortage';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { downloadBatchOrderSummaryPdf } from '../lib/orderSummaryPdf';
@@ -366,6 +367,21 @@ export default function Orders() {
       const dataList: PickListData[] = selectedRows.map((o) => {
         const cust = customerMap[o.customer_id] || { farm_name: '', contact_name: null, phone: null, billing_address: null };
         const orderItems = itemsByOrder[o.id] || [];
+        // Flag the shortage against the product's TOTAL remaining on this order.
+        // A tier-split booking puts the same product on several lines, and
+        // comparing each line alone against the full net-free stock lets two
+        // half-sized tier lines both look covered when together they are not.
+        // See src/lib/inventoryShortage.ts.
+        const remainingByProduct: Record<string, number> = {};
+        for (const need of sumNeedByProduct(
+          (orderItems as Array<Record<string, unknown>>).map((it) => ({
+            productId: it.product_id as string,
+            label: (it.product_name as string) || '',
+            quantity: Number(it.quantity_remaining),
+          }))
+        )) {
+          remainingByProduct[need.productId] = need.quantity;
+        }
         let addresses = addrByCustomer[o.customer_id] || [];
         if (addresses.length === 0 && cust.billing_address) {
           addresses = [cust.billing_address];
@@ -390,7 +406,7 @@ export default function Orders() {
               quantity_delivered: Number(it.quantity_delivered),
               quantity_remaining: remaining,
               inventory_available: netFree,
-              has_shortage: netFree !== null ? remaining > netFree : false,
+              has_shortage: netFree !== null ? (remainingByProduct[pid] ?? remaining) > netFree : false,
             };
           }),
           notes: o.notes,

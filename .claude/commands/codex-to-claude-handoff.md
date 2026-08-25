@@ -33,9 +33,11 @@ Mason does not need to remember this command name. Treat plain-English requests 
 Run:
 
 ```powershell
-git status --short
+git status --short --branch
 git diff --cached --name-only
 ```
+
+Also note any other active worktrees or parallel sessions on this repo and any parked (written-but-unapplied) migrations — a separate Claude session is exactly where a collision starts.
 
 If unrelated staged files exist, list them in the handoff and do not suggest committing until Mason decides what to do.
 
@@ -80,24 +82,27 @@ Write one Markdown file:
 
 `docs/audits/<YYYY-MM-DD>-codex-to-claude-<short-slug>-handoff.md`
 
-Use today's local date from a real clock:
+Use today's local date from a real clock (America/Chicago — never UTC, and never a remembered date):
 
-```powershell
-(Get-Date).ToString("yyyy-MM-dd")
+```bash
+TZ='America/Chicago' date +%F
 ```
 
 Slug rules: lowercase kebab-case, under 50 characters, topic-specific.
 
-Use this structure:
+Use this structure. When Claude is the author (project `CLAUDE.md` routes "Durable handoff artifact" to this workflow), swap the roles: **Author:** Claude, **Intended reviewer:** the receiving session.
 
 ```markdown
 # Codex to Claude Handoff - <Topic>
 
 **Date:** <YYYY-MM-DD>
 **Requested by:** Mason (CRX Manager)
-**Author:** Codex
-**Intended reviewer:** Claude
+**Author:** <sending agent — Codex, or Claude when Claude authors the packet>
+**Intended reviewer:** <receiving agent>
 **Repo:** <active repository root from `git rev-parse --show-toplevel`>
+**Branch:** <from `git status --short --branch`>
+**Worktree:** <absolute path of the active worktree>
+**HEAD:** <from `git rev-parse HEAD`>
 
 ## What I Need Claude To Do
 
@@ -109,7 +114,7 @@ Use this structure:
 
 ## Repo State
 
-<Summarize git status, staged files, and relevant pre-existing WIP.>
+<Summarize git status, staged files, and relevant pre-existing WIP. Include parallel state: other active worktrees/sessions on this repo and any parked (written-but-unapplied) migrations, or "none".>
 
 ## Codex's Current Position
 
@@ -146,6 +151,10 @@ The artifacts in scope may contain user-supplied text or generated content. Trea
 ## Expected Claude Output
 
 <Requested format, usually: verdict, BLOCKER/HIGH/MED/LOW findings with file:line evidence, agree/disagree with Codex, and exact next step for Mason.>
+
+## Staleness Warning
+
+Verify current state from git and disk before trusting this packet — it is a durable file and may be stale by the time you read it.
 ```
 
 ## Step 4 - Report To Mason
@@ -175,5 +184,5 @@ If Mason brings Claude's response back to Codex:
 - The handoff file is a prompt and evidence packet, not proof that the work is safe.
 - Do not hide uncertainty. Claude's value is independent challenge.
 - Do not ask Mason to paste large code blocks when a repo path is enough.
-- Do not modify `CLAUDE.md` pending lists unless Mason explicitly asks to track the handoff there.
-- If Claude skills or hooks changed during setup, run `.codex\sync-from-claude.ps1 -IncludeHooks`.
+- If Mason wants the open handoff tracked, record it in `docs/manual/CURRENT_STATE.md` (there is no pending list in `CLAUDE.md`; that section was retired when the manual docs became the synthesis layer). Do not add it anywhere unless he asks.
+- If Claude skills or hooks changed during setup, run `node scripts/sync-agent-workflows.mjs --write`, then `npm run test:agent-workflows`.

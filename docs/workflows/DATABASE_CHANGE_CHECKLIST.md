@@ -58,7 +58,7 @@ CREATE POLICY "my_new_table_select" ON public.my_new_table
 -- 4. Updated_at trigger
 CREATE TRIGGER set_updated_at
   BEFORE UPDATE ON public.my_new_table
-  FOR EACH ROW EXECUTE FUNCTION moddatetime('updated_at');
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
 
 -- 5. Indexes on frequently queried columns
 CREATE INDEX IF NOT EXISTS idx_my_new_table_created_at
@@ -183,7 +183,7 @@ If `typecheck` fails, it usually means you forgot to update `src/types/index.ts`
 | Mistake | Consequence | Prevention |
 |---------|------------|------------|
 | Forgetting RLS on new table | Data exposed to unauthorized users | Always add RLS + policies in the same migration |
-| Forgetting `updated_at` trigger | `updated_at` never changes | Always add `moddatetime` trigger for new tables |
+| Forgetting `updated_at` trigger | `updated_at` never changes | Always add a `public.update_updated_at()` trigger for new tables |
 | Modifying an existing migration | Migration won't re-run (already applied) | Create a NEW migration file |
 | Using `FLOAT` for money | Rounding errors in financial calculations | Always use `BIGINT` for cents |
 | Forgetting to update types | TypeScript compile errors or missing data | Always update `src/types/index.ts` |

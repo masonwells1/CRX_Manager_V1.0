@@ -19,6 +19,7 @@ import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { notifyDriverAssigned } from '../lib/notificationTriggers';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import { localToday } from '../lib/dateUtils';
+import { sumNeedByProduct } from '../lib/inventoryShortage';
 import type { Order, OrderItem, Customer, CustomerAddress, Profile } from '../types';
 
 interface DeliveryItemDraft {
@@ -299,18 +300,25 @@ export default function NewDelivery() {
         invMap[pid][loc].prebooked += Number(row.quantity_prebooked);
       }
 
+      // Sum the need per PRODUCT before comparing — a tier-split booking puts
+      // the same product on several lines. See src/lib/inventoryShortage.ts.
       const warnings: string[] = [];
-      for (const item of deliveryItems) {
-        if (item.quantity <= 0) continue;
-        const byLocation = invMap[item.product_id] || {};
+      for (const need of sumNeedByProduct(
+        deliveryItems.map((item) => ({
+          productId: item.product_id,
+          label: item.product_name,
+          quantity: item.quantity,
+        }))
+      )) {
+        const byLocation = invMap[need.productId] || {};
         const locations = Object.entries(byLocation);
         const totalNet = locations.reduce((sum, [, v]) => sum + (v.available - v.prebooked), 0);
-        if (totalNet < item.quantity) {
+        if (totalNet < need.quantity) {
           const breakdown = locations.length
             ? locations.map(([loc, v]) => `${loc}: ${v.available - v.prebooked}`).join(', ')
             : 'no inventory records';
           warnings.push(
-            `${item.product_name}: need ${item.quantity}, only ${totalNet} net available (${breakdown})`
+            `${need.label}: need ${need.quantity}, only ${totalNet} net available (${breakdown})`
           );
         }
       }

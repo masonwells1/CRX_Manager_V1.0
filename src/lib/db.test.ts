@@ -134,6 +134,7 @@ describe('rpcAuthErrorMessage', () => {
   });
 
   it('leaves unrelated RPC failures available for their normal handling', () => {
+    expect(rpcAuthErrorMessage({ message: 'IDEMPOTENCY_ACTOR_MISMATCH' })).toBeNull();
     expect(rpcAuthErrorMessage({ message: 'Billing splits must total 100%' })).toBeNull();
     expect(rpcAuthErrorMessage(null)).toBeNull();
   });

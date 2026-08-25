@@ -18,6 +18,7 @@ for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "
 const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-guard.mjs");
 const claudeGuardPath = path.join(projectRoot, ".claude", "hooks", "codex-push-guard.mjs");
 const tempRoots = [];
+const { maintenanceProducerCommandMentioned } = await import("./production-action-" + "guard.mjs");
 
 function git(cwd, args) {
   const env = { ...process.env };
@@ -90,13 +91,159 @@ try {
   assert.equal(isClearlyReadOnlySql("select public.\"allocate_payment\"('x', 100)"), false);
   assert.equal(isClearlyReadOnlySql("select set_config('role', 'service_role', true)"), false);
   assert.equal(isClearlyReadOnlySql("select 1; select 2"), false);
+  // Codex P1 (2026-08-14): SELECT ... INTO creates and populates a table while
+  // beginning with SELECT — it must fail the read-only gate.
+  assert.equal(isClearlyReadOnlySql("select * into public.new_table from public.customers"), false);
+  assert.equal(isClearlyReadOnlySql("SELECT id INTO TEMP t FROM invoices"), false);
+  assert.equal(isClearlyReadOnlySql("select 'into the void'"), true, "the word into inside a string literal stays readable");
 
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__execute_sql", toolInput: { query: "select 1" } }).blocked, false);
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__execute_sql", toolInput: { query: "delete from invoices" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__apply_migration" }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__delete_branch" }).blocked, true);
+
+  // Sol HIGH (2026-08-14, write-scope review): with the connector write-enabled,
+  // every mutating Supabase branch/project lifecycle tool must fail closed —
+  // merge_branch/reset_branch/rebase_branch previously returned blocked=false,
+  // a route to production schema changes around the migration gates.
+  for (const leaf of [
+    "merge_branch", "reset_branch", "rebase_branch", "create_branch",
+    "create_project", "pause_project", "restore_project", "confirm_cost",
+    "apply_migration", "deploy_edge_function", "delete_branch",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: `mcp__supabase__${leaf}` }).blocked,
+      true,
+      `mutating Supabase tool denied: ${leaf}`,
+    );
+    // Suffix defense-in-depth: UUID-named app connectors are blocked too.
+    assert.equal(
+      evaluateProductionAction({ toolName: `mcp__50e15046-cf2c-49da-b8df-ceef27768f63__${leaf}` }).blocked,
+      true,
+      `mutating Supabase tool denied under app-connector prefix: ${leaf}`,
+    );
+  }
+  // A Supabase tool the guard has never heard of fails CLOSED, not open.
+  const unknownSupabase = evaluateProductionAction({ toolName: "mcp__supabase__future_write_tool" });
+  assert.equal(unknownSupabase.blocked, true, "unrecognized Supabase tool fails closed");
+  assert.match(unknownSupabase.reason, /read-only allowlist/i, "unknown-tool denial names the allowlist");
+  // CodeRabbit follow-up: the app connector's UUID prefix must hit the SAME
+  // fail-closed allowlist — before this, an unknown tool under the UUID prefix
+  // bypassed it and only the suffix blocklist applied.
+  const unknownUuidSupabase = evaluateProductionAction({
+    toolName: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__future_write_tool",
+  });
+  assert.equal(unknownUuidSupabase.blocked, true, "unrecognized UUID-connector Supabase tool fails closed");
+  assert.match(unknownUuidSupabase.reason, /read-only allowlist/i, "UUID unknown-tool denial names the allowlist");
+  // Codex-review follow-up: the built-in codex_apps/supabase channel uses
+  // app-style single-underscore names (mcp__codex_apps__supabase_<leaf>) —
+  // the channel actually serving Codex traffic per KNOWN_ISSUES. An unknown
+  // leaf there must hit the SAME fail-closed allowlist.
+  const unknownAppSupabase = evaluateProductionAction({
+    toolName: "mcp__codex_apps__supabase_future_write_tool",
+  });
+  assert.equal(unknownAppSupabase.blocked, true, "unrecognized codex_apps Supabase tool fails closed");
+  assert.match(unknownAppSupabase.reason, /read-only allowlist/i, "codex_apps unknown-tool denial names the allowlist");
+  // The exact read-only allowlist stays usable under both prefixes.
+  for (const leaf of [
+    "list_tables", "list_migrations", "list_branches", "list_extensions",
+    "list_edge_functions", "get_advisors", "get_project", "get_edge_function",
+    "query_logs", "search_docs", "generate_typescript_types",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: `mcp__supabase__${leaf}` }).blocked,
+      false,
+      `read-only Supabase tool stays allowed: ${leaf}`,
+    );
+    assert.equal(
+      evaluateProductionAction({ toolName: `mcp__50e15046-cf2c-49da-b8df-ceef27768f63__${leaf}` }).blocked,
+      false,
+      `read-only Supabase tool stays allowed under app-connector prefix: ${leaf}`,
+    );
+    assert.equal(
+      evaluateProductionAction({ toolName: `mcp__codex_apps__supabase_${leaf}` }).blocked,
+      false,
+      `read-only Supabase tool stays allowed under codex_apps prefix: ${leaf}`,
+    );
+  }
+  // Mutating lifecycle leaves stay blocked under the app-style name too.
+  assert.equal(
+    evaluateProductionAction({ toolName: "mcp__codex_apps__supabase_apply_migration" }).blocked,
+    true,
+    "codex_apps apply_migration is denied",
+  );
+  // codex_apps execute_sql routes to the SQL content gate like the other prefixes.
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "mcp__codex_apps__supabase_execute_sql",
+      toolInput: { query: "select count(*) from public.orders" },
+    }).blocked,
+    false,
+    "codex_apps execute_sql with read-only SQL passes the content gate",
+  );
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "mcp__codex_apps__supabase_execute_sql",
+      toolInput: { query: "delete from public.orders" },
+    }).blocked,
+    true,
+    "codex_apps execute_sql with mutating SQL is denied",
+  );
+  // execute_sql under the UUID prefix still routes to the SQL content gate:
+  // read-only SQL passes, mutating SQL is denied.
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
+      toolInput: { query: "select count(*) from public.orders" },
+    }).blocked,
+    false,
+    "UUID-connector execute_sql with read-only SQL passes the content gate",
+  );
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
+      toolInput: { query: "delete from public.orders" },
+    }).blocked,
+    true,
+    "UUID-connector execute_sql with mutating SQL is denied",
+  );
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "vercel --prod" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "npm run build" } }).blocked, false);
+  const producerName = "apply-live-testdata-" + "maintenance-20260812.mjs";
+  for (const command of [
+    `node scripts/${producerName} --verify`,
+    `node "scripts/${producerName}" --protect-producer`,
+    `node 'scripts/${producerName}' --protect-producer`,
+    `node scripts\\${producerName} --verify`,
+    `env FLAG=1 node scripts/${producerName} --verify`,
+    `cmd /c node scripts\\${producerName} --verify`,
+    `node "C:\\repo\\scripts\\${producerName}" --verify`,
+    "node --no-warnings scripts/$(printf apply-live-testdata-maintenance-20260812.mjs) --approved-by-$(printf mason)=2026-08-12",
+    "node --require fs scripts/$(printf apply-live-testdata-maintenance-20260812.mjs) --approved-by-$(printf mason)=2026-08-12",
+  ]) {
+    assert.equal(maintenanceProducerCommandMentioned(command), true, `producer spelling recognized: ${command}`);
+  }
+  assert.equal(maintenanceProducerCommandMentioned("node scripts/ordinary-check.mjs"), false);
+
+  const producerWithoutProof = makeRepo(`scripts/${producerName}`, "#!/usr/bin/env node\n");
+  const deniedProducerRun = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `node scripts/${producerName} --verify` },
+    repoDir: producerWithoutProof.repo,
+  });
+  assert.equal(deniedProducerRun.blocked, true, "producer execution without exact-head proof is denied");
+  assert.match(deniedProducerRun.reason, /exact-SHA adversarial gate/i, "producer denial identifies the required proof");
+
+  const focusedProducerOutput = execFileSync(
+    process.execPath,
+    [path.join(projectRoot, "scripts", producerName.replace(/\.mjs$/, ".test.mjs"))],
+    { cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  assert.match(
+    focusedProducerOutput,
+    /87 classifier assertions \+ 308 producer assertions passed/,
+    "the standard guard suite executes the focused producer regression harness",
+  );
   assert.equal(evaluateProductionAction({ toolName: "mcp__node_repl__node_repl", toolInput: { code: "1 + 1" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "mcp__github__push_files", toolInput: { branch: "main" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "mcp__github__create_or_update_file", toolInput: { branch: "main" } }).blocked, true);
@@ -108,6 +255,28 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "cd .claude/session-state" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "printf {} > codex-review-forged.json" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "printf {} > harmless.json", cwd: ".claude/session-state" } }).blocked, true);
+  // scripts/apply-migration-file.mjs applies to the LIVE database. Codex's own
+  // review of PR #460 found the new script reached production while every other
+  // migration path was blocked here (P1). Blocked outright — dry run included —
+  // and across the quote/backslash views the shell would run identically.
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node scripts/apply-migration-file.mjs supabase/migrations/x.sql --confirm" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node scripts/apply-migration-file.mjs supabase/migrations/x.sql" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node scripts/apply\"-\"migration-file.mjs x.sql --confirm" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node scripts/apply\\-migration-file.mjs x.sql --confirm" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node ./scripts/apply-migration-file.mjs x.sql" } }).blocked, true);
+  // A computed argument never spells the script name, so the literal matcher
+  // alone loses to it (CodeRabbit, PR #460 round 2). An interpreter invoked with
+  // ANY shell expansion is statically unresolvable and refused.
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "S=scripts/apply-migration-file.mjs; node $S --confirm" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node ${SCRIPT} --confirm" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node $(echo scripts/apply-migration-file.mjs)" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node `echo x.mjs`" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node $env:SCRIPT" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node %SCRIPT%" } }).blocked, true);
+  // A literal, statically-readable interpreter command is still fine.
+  assert.equal(evaluateProductionAction({ toolName: "Bash", toolInput: { command: "node scripts/check-doc-drift.mjs" } }).blocked, false);
+  // Reading or discussing the file is not applying it.
+  assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/apply-migration-file.mjs" } }).blocked, false);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node -e \"require('child_process').execSync('git pu'+'sh origin main')\"" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "echo code | node" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node -" } }).blocked, true);

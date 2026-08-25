@@ -8,6 +8,7 @@ import { WifiOff, RefreshCw, CheckCircle2, ClipboardList } from 'lucide-react';
 import { Sentry } from '../../lib/sentry';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 import { useAuth } from '../../contexts/AuthContext';
+import { useBelowCostApproval } from '../../contexts/BelowCostApprovalContext';
 import {
   getOfflineStorageErrorMessage,
   getQueueSummary,
@@ -30,6 +31,7 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647;
 export default function OfflineBanner() {
   const isOnline = useOnlineStatus();
   const { profile } = useAuth();
+  const { runWithBelowCostApproval } = useBelowCostApproval();
   const currentUserId = profile?.id ?? null;
   const [summary, setSummary] = useState<OfflineQueueSummary>(EMPTY_SUMMARY);
   const [syncing, setSyncing] = useState(false);
@@ -68,7 +70,7 @@ export default function OfflineBanner() {
     setSyncResult(null);
     setSyncError(false);
     try {
-      const result = await syncPendingActions(currentUserId, { force });
+      const result = await syncPendingActions(currentUserId, { force, runWithBelowCostApproval });
       setSyncResult(result);
       setSyncRetryAt(null);
 
@@ -89,7 +91,7 @@ export default function OfflineBanner() {
       syncingRef.current = false;
       setSyncing(false);
     }
-  }, [checkQueue, currentUserId]);
+  }, [checkQueue, currentUserId, runWithBelowCostApproval]);
 
   // Schedule one replay when due. This deliberately does not depend on
   // `syncing`, so finishing a failed attempt cannot trigger an immediate loop.

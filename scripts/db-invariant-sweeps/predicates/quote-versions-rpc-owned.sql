@@ -31,10 +31,14 @@
 -- SCOPE: this is a BROWSER-role boundary. service_role keeps full write access,
 -- as it does on every table; "RPC-owned" means no anon/authenticated path.
 --
--- Historical catch: CRX-SEC-1, 2026-08-13. No evidence of exploitation: at
--- discovery every existing snapshot cost line parsed as a number and none sat
--- below half the product's current catalog cost. That is a check against
--- TODAY's cost, not proof no forged row was ever written.
+-- Historical catch: CRX-SEC-1, 2026-08-13. No evidence of exploitation: every
+-- existing snapshot cost line parsed as a number, resolved to a real product,
+-- and carried a stored basis EXACTLY equal to that product's catalog cost
+-- (3 version rows, 5 lines, re-measured read-only 2026-08-14). The first
+-- revision of that check used a below-half band and was rejected by review
+-- finding CRX-QV-001 — a basis forged at 60% of cost clears a 50% band, and a
+-- percentage cannot prove provenance. Even exact, this is a check against
+-- TODAY's cost, not proof no forged row was ever written and later reverted.
 -- Contract: EXPECT ZERO rows. Any row means the forged-version path is open
 -- again, or that it was "closed" by breaking the legitimate one.
 
@@ -512,7 +516,7 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
       AND p.prosecdef
       AND r.rolbypassrls
       AND NOT (n.nspname = 'public' AND p.proname = '_create_quote_version_owner_impl')
-      -- 20260813180000 adds a deliberately narrow second writer: after the
+      -- 20260825190000 adds a deliberately narrow second writer: after the
       -- owner-only implementation has constructed a fresh snapshot, the public
       -- create wrapper can set only that row's null trust marker. Do not exempt
       -- by name: any signature, definer, owner, search_path, browser-grant, or

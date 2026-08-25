@@ -40,3 +40,33 @@ export function isKnownUnit(
   if (!unit) return true;
   return unitOptionsForForm(conversions, form).some((uc) => uc.unit === unit);
 }
+
+/** Where the caller's `unit_conversions` request currently stands. */
+export type UnitLoadState = 'pending' | 'loaded' | 'failed';
+
+/**
+ * Why a save must be blocked because the unit list could not offer a unit, or null
+ * to allow it. The unit fields are pickers, not free text: when the list is
+ * unavailable the operator has no way to enter a unit at all, so a blank unit is the
+ * request's doing and not a choice they made. A blank unit on a healthy list still
+ * saves — that stayed legal when the fields were free text and it still is.
+ *
+ * An empty array is NOT the failure signal: it also means "still in flight" and
+ * "the table really is empty". Naming the wrong one tells the operator to refresh
+ * for a request that was about to succeed, so the caller passes its actual state.
+ */
+export function blockedUnitSaveMessage(
+  state: UnitLoadState,
+  conversions: UnitConversion[],
+  hasBlankUnit: boolean,
+): string | null {
+  if (!hasBlankUnit) return null;
+  if (state === 'pending') return 'Units are still loading. Try saving again in a moment.';
+  if (state === 'failed') {
+    return 'Units could not be loaded, so a unit is still blank. Refresh and retry before saving.';
+  }
+  if (conversions.length === 0) {
+    return 'No units are set up yet, so a unit is still blank. Add unit conversions before saving.';
+  }
+  return null;
+}

@@ -43,8 +43,9 @@ import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerat
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { applyChemEdit, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
-import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
+import { centsTimesQuantity, isExactDecimalText, quantitySurvivesSave } from '../lib/money';
+import { applyChemEdit, chemLineBillingHazard, chemUnitUnspecifiedSides, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
+import { compareToMaxRate, normalizeRateUnit, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
   LABEL_RATE_GUARDRAIL_MODE_KEY,
@@ -1240,7 +1241,14 @@ export default function JobDetail() {
   // §5: label max per product for the lines ON THIS JOB — fetched by product_id WITHOUT an
   // is_active filter (Codex P2), so a now-INACTIVE product on a saved job still gets its
   // label max for the guardrail (allProducts is active-only). Authoritative over allProducts.
-  const [jobProductLabels, setJobProductLabels] = useState<Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null }>>(new Map());
+  //
+  // Also carries product_form, for the same reason and a sharper one (Codex P2, 2026-08-23):
+  // the form picks which conversion table fieldAppPricedQuantity uses, so a MISSING form
+  // silently takes the liquid branch. On a discontinued DRY product that turns a correctly
+  // carried line (1 oz/ac × 100 ac stored as 6.25 lb) into one that cannot be proven safe —
+  // and chemLineBillingHazard fails closed, so the whole job becomes unsaveable. Resolving
+  // the form by id, inactive included, is what keeps the guard from firing on good rows.
+  const [jobProductLabels, setJobProductLabels] = useState<Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null; product_form: 'liquid' | 'dry' | null }>>(new Map());
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
 
   useEffect(() => {
@@ -1354,13 +1362,17 @@ export default function JobDetail() {
     (async () => {
       const { data, error } = await supabase
         .from('products')
-        .select('id, max_label_rate, max_label_rate_unit')
+        .select('id, max_label_rate, max_label_rate_unit, product_form')
         .in('id', ids);
       if (cancelled) return;
       if (error) { setJobProductLabels(new Map()); setJobLabelsLoaded(true); return; }
-      const m = new Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null }>();
-      for (const p of (data as unknown as Array<{ id: string; max_label_rate: number | null; max_label_rate_unit: string | null }> | null) ?? []) {
-        m.set(p.id, { max_label_rate: p.max_label_rate, max_label_rate_unit: p.max_label_rate_unit });
+      const m = new Map<string, { max_label_rate: number | null; max_label_rate_unit: string | null; product_form: 'liquid' | 'dry' | null }>();
+      for (const p of (data as unknown as Array<{ id: string; max_label_rate: number | null; max_label_rate_unit: string | null; product_form: string | null }> | null) ?? []) {
+        m.set(p.id, {
+          max_label_rate: p.max_label_rate,
+          max_label_rate_unit: p.max_label_rate_unit,
+          product_form: p.product_form === 'liquid' || p.product_form === 'dry' ? p.product_form : null,
+        });
       }
       setJobProductLabels(m);
       setJobLabelsLoaded(true);
@@ -1374,6 +1386,16 @@ export default function JobDetail() {
     if (fromJob) return fromJob;
     const lp = allProducts.find((p) => p.id === productId);
     return { max_label_rate: lp?.max_label_rate ?? null, max_label_rate_unit: lp?.max_label_rate_unit ?? null };
+  }, [jobProductLabels, allProducts]);
+
+  // Resolve a line's liquid/dry form the same inactive-safe way: the by-id fetch wins, then
+  // allProducts. Every caller that feeds a UNIT CONVERSION must come through here — reading
+  // allProducts directly is what mis-classified discontinued products (Codex P2, 2026-08-23).
+  const productFormFor = useCallback((productId: string): 'liquid' | 'dry' | null => {
+    const fromJob = jobProductLabels.get(productId);
+    if (fromJob) return fromJob.product_form;
+    const form = allProducts.find((p) => p.id === productId)?.product_form ?? null;
+    return form === 'liquid' || form === 'dry' ? form : null;
   }, [jobProductLabels, allProducts]);
 
   // §5: aggregate guardrail state from chemRows + allProducts (the live label max). Drives
@@ -1393,6 +1415,112 @@ export default function JobDetail() {
     }
     return { overRateCount: overRateProducts.length, overRateProducts, phiHarvestWarnCount };
   }, [chemRows, allProducts, labelMaxFor, jobEarliestHarvestDate, jobDate]);
+
+  // BILLING-HAZARD GUARD. A row whose quantity is counted in the RATE's unit but priced per a
+  // DIFFERENT `unit` invoices wrong by exactly their ratio, because transfer_job_to_invoice
+  // multiplies quantity × price_per_unit_cents with NO conversion. The live trigger is a
+  // 'Dry oz' rate on pound stock (75 live products): reconcileChemAutofillUnits cannot size
+  // 'dry oz' in DRY_TO_POUNDS, falls back to keeping the pound price, and the line bills 16×.
+  // Keyed by row index so the grid can mark the exact offending line.
+  const chemBillingHazards = useMemo(() => {
+    const byIndex = new Map<number, ChemBillingHazard>();
+    const acres = sumAcres(fieldRows);
+    chemRows.forEach((c, i) => {
+      if (!c.product_id) return;
+      const h = chemLineBillingHazard(c, acres, productFormFor(c.product_id));
+      if (h.hazard) byIndex.set(i, h);
+    });
+    return byIndex;
+  }, [chemRows, fieldRows, productFormFor]);
+
+  // Rows whose numbers are not fit to save at all, for reasons the billing-hazard guard
+  // does not cover. Both fail closed rather than being silently coerced:
+  //  • a rate unit with a NON-ACRE denominator ('oz/cwt'): baseUnitOfRate strips everything
+  //    after the first '/', so the rate is treated as per-acre and quantity = rate × acres
+  //    is simply the wrong amount. The live SQL normalize_rate_unit keeps such a string whole
+  //    precisely so it can never match; the client did the opposite.
+  //  • a blank / non-numeric / non-finite quantity or per-unit amount: buildJobChemicalsPayload
+  //    coerces these with `parseFloat(...) || 0` and `parseInt(...) || 0`, so a typo silently
+  //    saves a ZERO quantity or a ZERO price — a line that bills nothing and deducts nothing.
+  const chemRowDefects = useMemo(() => {
+    const byIndex = new Map<number, string>();
+    chemRows.forEach((c, i) => {
+      if (!c.product_id) return;
+      if (rateDenominatorIsUnrecognized(c.rate_unit)) {
+        byIndex.set(i, `the rate unit "${c.rate_unit}" is measured per something other than acres, so a per-acre quantity cannot be derived from it`);
+        return;
+      }
+      // BLANK UNIT on a line that BILLS. chemLineBillingHazard can only flag a PROVEN
+      // mismatch, so it stays silent when either unit is blank — which made clearing a
+      // unit an off switch for the guard: the warning vanished while the same quantity ×
+      // price still billed (Codex High, 2026-08-24). Mirrors the server's
+      // CHEM_UNIT_UNSPECIFIED refusal (PR #446), including its exemptions: a
+      // customer-supplied line and a line with neither a cost nor a price contribute
+      // nothing to either total, and a zero quantity bills nothing — a line that cannot
+      // bill cannot bill wrongly. parseFloat('') is NaN, which fails the ≠ 0 test toward
+      // BLOCKING, so an unparseable quantity stays gated (the grammar rule below also
+      // refuses it on its own).
+      const blankSides = chemUnitUnspecifiedSides(c.rate_unit, c.unit);
+      if (blankSides
+          && !(c.customer_supplied ?? false)
+          && parseFloat(c.quantity) !== 0
+          && ((parseInt(c.cost_per_unit_cents) || 0) !== 0 || (parseInt(c.price_per_unit_cents) || 0) !== 0)) {
+        const side = blankSides.stockBlank && blankSides.rateBlank
+          ? 'its Unit and its rate unit are both blank'
+          : blankSides.stockBlank
+            ? 'its Unit is blank'
+            : 'its rate unit names no unit';
+        byIndex.set(i, `${side} while the line still carries a cost or price, so there is no way to know what the quantity would be billed per — pick the unit, or clear the cost and price if the line should not bill`);
+        return;
+      }
+      // Gate on the money helper's OWN grammar, not on Number.isFinite. They are not the
+      // same test: Number('1e3') is a finite 1000, but centsTimesQuantity refuses exponent
+      // notation and returns 0. Gating on the looser test let a save persist quantity 1000
+      // on the line while writing 0 into jobs.total_cost_cents / total_price_cents — a
+      // nonzero line behind a zero total. `<input type="number">` accepts '1e3', so this
+      // is reachable by typing. One grammar, one gate. (Codex P2)
+      if (!isExactDecimalText(c.quantity)) {
+        byIndex.set(i, 'its quantity is blank, or is not written as a plain number, and would not be billed correctly');
+        return;
+      }
+      // The totals above multiply the exact decimal TEXT, but buildJobChemicalsPayload
+      // persists the same field as parseFloat(quantity). A quantity carrying more precision
+      // than a double can hold means those two are different numbers, so the stored total
+      // and the stored line disagree by a cent. Refused, not rounded. (Codex P2, 2026-08-23)
+      if (!quantitySurvivesSave(c.quantity)) {
+        byIndex.set(i, 'its quantity has more decimal places than can be saved exactly, so the line total and the job total would not agree — round it to 4 decimal places or fewer');
+        return;
+      }
+      // NEGATIVE amounts are refused outright (Codex High, 2026-08-25). The decimal and
+      // safe-integer gates test grammar and precision, not SIGN, and the input's
+      // HTML min="0" is advisory — a typed or pasted '-5' reaches the click handler
+      // untouched. A negative quantity times a positive price bills a NEGATIVE line, and
+      // negative cents invert it again; the server half (PR #446) refuses these shapes
+      // (CHEM_QUANTITY_NOT_FINITE covers sign), so the mirror must too — a mirror more
+      // lenient than the SQL is how a hard server failure ships with no on-screen warning.
+      if (parseFloat(c.quantity) < 0) {
+        byIndex.set(i, 'its quantity is negative — a line cannot apply or bill a negative amount; use a credit memo or a return for corrections');
+        return;
+      }
+      // Cents are WHOLE, so the gate has to be stricter for them than for a quantity.
+      // isExactDecimalText('150.7') is true, but the saved total (parseInt, below) and
+      // buildJobChemicalsPayload both TRUNCATE it to 150 — the operator's number would
+      // change under them silently, visible only after a reload. Refuse it instead.
+      const badCents = ([
+        ['cost', c.cost_per_unit_cents],
+        ['price', c.price_per_unit_cents],
+      //
+      // isSAFEInteger, not isInteger: Number('9007199254740993') silently rounds to
+      // ...992 and still reports as an integer, so the looser check would admit a value
+      // that has already lost precision before any arithmetic runs. Refusing above 2^53
+      // keeps every cents amount that reaches the total exactly representable.
+      ] as const).find(([, raw]) => !isExactDecimalText(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) < 0);
+      if (badCents) {
+        byIndex.set(i, `its ${badCents[0]} is blank, negative, or not a whole number of cents, and would not be billed correctly`);
+      }
+    });
+    return byIndex;
+  }, [chemRows]);
 
   // SAFE-SCOPE U7: a job is "multi-owner" when its fields' billed shares span more
   // than one distinct customer — the same customer set transfer_job_to_invoice
@@ -1634,25 +1762,42 @@ export default function JobDetail() {
     }
     setShareRows(savedShares);
 
+    // F06 IS STILL OPEN, DELIBERATELY. `driver` is UI-only and never persisted, so a reloaded
+    // row comes back driverless and recomputeChemRowForAcres leaves it STALE on an acreage
+    // change — a saved 1.5 pt/ac line over 100 acres still reads 150 pt at 200 acres.
+    //
+    // An earlier pass tried to RECOVER the provenance by testing quantity == rate x acres.
+    // That is unsound and was reverted: applyChemEdit back-solves rate_per_acre whenever the
+    // user types a quantity, so a hand-entered total satisfies that same equality BY
+    // CONSTRUCTION. The test cannot separate the two cases, and acting on it would rewrite a
+    // hand-entered total whenever acreage changed — the exact harm the driverless branch
+    // exists to prevent. Under-billing is bad; silently rewriting an operator's typed
+    // chemical amount is worse, so leaving the row as saved is the safe side. (Codex P1)
+    //
+    // The real fix is to PERSIST the driver on job_chemicals, which needs a migration.
     setChemRows(
-      (j.job_chemicals || []).map((c) => ({
-        id: c.id,
-        product_id: c.product_id,
-        product_name: c.product?.product_name || '',
-        quantity: c.quantity?.toString() || '0',
-        unit: c.unit || '',
-        rate_per_acre: c.rate_per_acre?.toString() || '',
-        rate_unit: c.rate_unit || '',
-        cost_per_unit_cents: c.cost_per_unit_cents?.toString() || '0',
-        price_per_unit_cents: c.price_per_unit_cents?.toString() || '0',
-        diluent_rate: c.diluent_rate?.toString() || '',
-        rei_hours: c.rei_hours?.toString() || '',
-        phi_days: c.phi_days?.toString() || '',
-        warehouse: c.warehouse || '',
-        vendor: c.vendor || '',
-        customer_supplied: c.customer_supplied ?? false,
-        sort_order: c.sort_order,
-      }))
+      (j.job_chemicals || []).map((c) => {
+        const quantity = c.quantity?.toString() || '0';
+        const rate_per_acre = c.rate_per_acre?.toString() || '';
+        return {
+          id: c.id,
+          product_id: c.product_id,
+          product_name: c.product?.product_name || '',
+          quantity,
+          unit: c.unit || '',
+          rate_per_acre,
+          rate_unit: c.rate_unit || '',
+          cost_per_unit_cents: c.cost_per_unit_cents?.toString() || '0',
+          price_per_unit_cents: c.price_per_unit_cents?.toString() || '0',
+          diluent_rate: c.diluent_rate?.toString() || '',
+          rei_hours: c.rei_hours?.toString() || '',
+          phi_days: c.phi_days?.toString() || '',
+          warehouse: c.warehouse || '',
+          vendor: c.vendor || '',
+          customer_supplied: c.customer_supplied ?? false,
+          sort_order: c.sort_order,
+        };
+      })
     );
 
     const aiData = Array.isArray(j.applied_info) ? j.applied_info[0] : j.applied_info;
@@ -1748,8 +1893,14 @@ export default function JobDetail() {
   const totalAcres = fieldRows.reduce((sum, f) => sum + (parseFloat(f.acres_to_treat) || 0), 0);
   // #53/#54: a customer-supplied product is applied but not billed and cost us
   // nothing — it contributes 0 to both job totals (mirrors the server's $0 line).
-  const totalCostCents = chemRows.reduce((sum, c) => sum + (c.customer_supplied ? 0 : Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.cost_per_unit_cents) || 0))), 0);
-  const totalPriceCents = chemRows.reduce((sum, c) => sum + (c.customer_supplied ? 0 : Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.price_per_unit_cents) || 0))), 0);
+  // EXACT MONEY. These two totals are SAVED (jobs.total_cost_cents / total_price_cents at
+  // the save_job call below), so they are authoritative, not display. They previously
+  // multiplied in binary floating point, which disagrees with the server's exact numeric
+  // `safe_cents_qty` whenever the true product lands on a half cent — e.g. 25c x 0.58 is
+  // exactly 14.50, which the server rounds to 15c while Math.round(0.58 * 25) gives 14c.
+  // centsTimesQuantity reproduces safe_cents_qty exactly (see money.ts).
+  const totalCostCents = chemRows.reduce((sum, c) => sum + (c.customer_supplied ? 0 : centsTimesQuantity(parseInt(c.cost_per_unit_cents) || 0, c.quantity)), 0);
+  const totalPriceCents = chemRows.reduce((sum, c) => sum + (c.customer_supplied ? 0 : centsTimesQuantity(parseInt(c.price_per_unit_cents) || 0, c.quantity)), 0);
 
   // Loader worksheet (#10) — the spray tank is sized by SPRAY VOLUME, not by the
   // sum of chemical gallons. Spray volume = total acres × the carrier rate (gal/
@@ -1903,6 +2054,46 @@ export default function JobDetail() {
       toast('error', 'Checking the label-rate policy — try Save again in a moment.');
       return;
     }
+    // FAIL CLOSED on a proven unit mismatch. There is NO admin override here: unlike an
+    // over-label rate (a judgement call an admin may own), this line is arithmetically
+    // wrong — its quantity is counted in one unit and priced per another, so saving it
+    // can only produce a wrong invoice and a wrong applied amount. Blocked for customer-
+    // supplied lines too: they bill nothing, but the dose still reaches the applicator's
+    // field sheet, and a 16x dose is an over-application hazard in its own right.
+    if (chemBillingHazards.size > 0) {
+      const [firstIndex, first] = [...chemBillingHazards.entries()][0];
+      const name = chemRows[firstIndex]?.product_name
+        || allProducts.find((p) => p.id === chemRows[firstIndex]?.product_id)?.product_name
+        || 'A chemical line';
+      const overBy = first.billedRatio && first.billedRatio > 1
+        ? ` — it would bill about ${fmt4(first.billedRatio)}x too much`
+        : '';
+      toast('error',
+        `${chemBillingHazards.size} chemical line(s) cannot be saved. On the Chemicals tab, "${name}" ` +
+        `has a quantity counted in ${first.quantityUnit} but a price quoted per ${first.priceUnit}${overBy}. ` +
+        // Must match the on-row banner EXACTLY in substance. An earlier version of this toast
+        // still carried the relabel-only remedy after the banner had been corrected, which
+        // handed the operator a working bypass at the very moment they were blocked: changing
+        // rate_unit alone makes the units match and silences the guard while the quantity and
+        // price stay put, saving the identical over-charge in silence. (Codex, 2026-08-20)
+        `Set the line's Unit to ${first.quantityUnit} (and its cost/price per ${first.quantityUnit}). ` +
+        `If the rate really is in ${first.priceUnit}, change the rate unit to ${first.priceUnit}/ac ` +
+        `AND re-enter the rate so the quantity is recalculated — relabelling the unit on its own ` +
+        `does not change the amount, and would bill the same wrong total silently.`,
+      );
+      return;
+    }
+    if (chemRowDefects.size > 0) {
+      const [firstIndex, reason] = [...chemRowDefects.entries()][0];
+      const name = chemRows[firstIndex]?.product_name
+        || allProducts.find((p) => p.id === chemRows[firstIndex]?.product_id)?.product_name
+        || 'A chemical line';
+      toast('error',
+        `${chemRowDefects.size} chemical line(s) cannot be saved. On the Chemicals tab, ` +
+        `"${name}" cannot be saved because ${reason}. Fix it and save again.`,
+      );
+      return;
+    }
     if (guardrailMode === 'block' && guardrailState.overRateCount > 0) {
       if (role !== 'admin') {
         toast('error',
@@ -1961,6 +2152,29 @@ export default function JobDetail() {
 
   const runJobSave = async (overrideReasonForAudit?: string) => {
     saveJobIdem.resetKey();
+    // Second layer of the billing-hazard guard. handleSave already blocks this and is the
+    // only path a user can reach today, but runJobSave is the chokepoint EVERY save funnels
+    // through (including the admin over-label-rate override), so the arithmetic guarantee
+    // lives here too: no future caller can route around it.
+    if (chemBillingHazards.size > 0) {
+      toast('error', 'A chemical line is counted in one unit but priced per another — fix the highlighted line before saving.');
+      return;
+    }
+    if (chemRowDefects.size > 0) {
+      toast('error', 'A chemical line has a unit or a number that cannot be saved — fix the highlighted line before saving.');
+      return;
+    }
+    // The SUMMED totals get their own gate. Every per-line cents amount is individually
+    // safe-integer-checked in chemRowDefects, but a line EXTENSION (cents × quantity) or
+    // the sum of extensions can still pass 2^53 − 1, where Number arithmetic silently
+    // lands on a neighbouring cent — and centsTimesQuantity now reports its own overflow
+    // as NaN for the same reason. Either way these two numbers are about to be SAVED as
+    // jobs.total_cost_cents / total_price_cents, so a total that is not an exact integer
+    // is refused, never rounded. (Codex Medium, 2026-08-24)
+    if (!Number.isSafeInteger(totalCostCents) || !Number.isSafeInteger(totalPriceCents)) {
+      toast('error', 'The job total is too large to save exactly — check the chemical quantities and per-unit amounts for a typo.');
+      return;
+    }
     if (!customerId) { toast('error', 'Customer is required'); return; }
     if (!jobDate) { toast('error', 'Job date is required'); return; }
     if (selectedFieldSharesLoading) {
@@ -2871,6 +3085,32 @@ export default function JobDetail() {
   };
   const updateChemRow = (i: number, key: keyof ChemRow, value: string) => {
     const updated = [...chemRows];
+    // RELABELLING THE STOCK UNIT MUST NOT KEEP THE OLD UNIT'S MONEY (Codex P1, 2026-08-24).
+    // The banner's remedy tells the operator to set the Unit AND re-enter its cost/price —
+    // but nothing enforced the second half: changing only `unit` from Lb to Dry oz swapped
+    // the label, the units then compared equal, the guard cleared, and the same 150¢
+    // figures billed per OUNCE — the 16× overbill wearing the fix as a disguise. The
+    // per-unit amounts were entered per the OLD unit, so once the unit's meaning changes
+    // they no longer state anything provable: clear them and say so, and the blank-cents
+    // save gate holds the row until amounts are re-entered per the new unit. Deliberately
+    // NOT auto-converted — 150¢/lb is 9.375¢/oz, which is not whole cents, and silently
+    // rounding money is the exact failure class this page exists to refuse.
+    // Labelling a BLANK or unrecognised unit is not a relabel — the operator is naming the
+    // unit their amounts were always meant in (the blank-unit defect's own remedy), so
+    // entered amounts are kept.
+    if (key === 'unit') {
+      const beforeRaw = updated[i]?.unit;
+      const beforeNorm = normalizeRateUnit(beforeRaw);
+      const afterNorm = normalizeRateUnit(value);
+      const carriesMoney = (parseInt(updated[i].cost_per_unit_cents) || 0) !== 0
+        || (parseInt(updated[i].price_per_unit_cents) || 0) !== 0;
+      if (carriesMoney && beforeNorm != null && afterNorm != null && beforeNorm !== afterNorm) {
+        updated[i] = { ...updated[i], cost_per_unit_cents: '', price_per_unit_cents: '' };
+        toast('info',
+          `The Unit changed from ${beforeRaw} to ${value}. The line's cost and price were entered per ${beforeRaw}, `
+          + `so they were cleared — re-enter them per ${value} before saving.`);
+      }
+    }
     updated[i] = { ...updated[i], [key]: value };
     if (key === 'product_id') {
       const p = allProducts.find(ap => ap.id === value);
@@ -3560,10 +3800,38 @@ export default function JobDetail() {
                 // in bare 'oz' takes the legacy branch and is mis-classified as POUNDS
                 // (oz = 1/16 lb) instead of FLUID ounces (1/128 gal) — the preview then
                 // disagrees with the saved/invoiced value.
-                const previewForm = allProducts.find((p) => p.id === c.product_id)?.product_form ?? null;
-                const conv = toGallonOrLbEquivalent(totalApplied, c.unit, previewForm === 'liquid' || previewForm === 'dry' ? previewForm : null);
+                // Inactive-safe (Codex P2, 2026-08-23): a discontinued product read straight
+                // out of allProducts has no form, which silently takes the liquid branch.
+                const previewForm = productFormFor(c.product_id);
+                const conv = toGallonOrLbEquivalent(totalApplied, c.unit, previewForm);
+                const hazard = chemBillingHazards.get(i);
+                const rowDefect = chemRowDefects.get(i);
                 return (
-                  <div key={i} className="border border-gray-200 rounded-lg p-3 space-y-2">
+                  <div key={i} className={`border rounded-lg p-3 space-y-2 ${hazard || rowDefect ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
+                    {rowDefect && (
+                      <div className="flex items-start gap-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded-lg px-3 py-2">
+                        <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                        <span><strong>This line cannot be saved</strong> because {rowDefect}.</span>
+                      </div>
+                    )}
+                    {hazard && (
+                      <div className="flex items-start gap-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded-lg px-3 py-2">
+                        <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                        <span>
+                          <strong>This line cannot be saved.</strong> Its quantity ({totalApplied}) is counted in{' '}
+                          <strong>{hazard.quantityUnit}</strong>, but its cost and price are quoted per{' '}
+                          <strong>{hazard.priceUnit}</strong>
+                          {hazard.billedRatio && hazard.billedRatio > 1
+                            ? <> — invoicing it would charge about <strong>{fmt4(hazard.billedRatio)}×</strong> too much</>
+                            : null}
+                          . Set <strong>Unit</strong> to {hazard.quantityUnit} and quote cost/price per{' '}
+                          {hazard.quantityUnit} — or, if the rate really is in {hazard.priceUnit},
+                          change the rate unit to {hazard.priceUnit}/ac <strong>and re-enter the rate</strong>{' '}
+                          so the quantity is recalculated. Relabelling the unit on its own does not change
+                          the amount, and would leave this line billing the same wrong total silently.
+                        </span>
+                      </div>
+                    )}
                     <div className="grid grid-cols-12 gap-2 items-end">
                       <div className="col-span-12 md:col-span-3">
                         <label className="block text-xs font-medium text-secondary mb-1">Chemical</label>

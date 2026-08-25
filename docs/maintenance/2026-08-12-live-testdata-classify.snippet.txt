@@ -1,0 +1,249 @@
+export function classifySql(query) {
+  const q = String(query || "");
+  if (!q) return { block: false };
+
+  // The scanner below intentionally uses PostgreSQL's default string rules.
+  // A batch that changes standard_conforming_strings can change how every
+  // later quote is parsed, so even mentioning that parser-mode setting fails
+  // closed before quote-aware tokenization can be confused by the new mode.
+  if (/\bstandard_conforming_strings\b/i.test(q)) {
+    return {
+      block: true,
+      kind: "raw-mutation",
+      reason: "Changing or inspecting standard_conforming_strings is not accepted through raw execute_sql because it changes how later SQL text is parsed. Use the reviewed maintenance path.",
+    };
+  }
+
+  const statements = topLevelStatements(q);
+  // topLevelStatements() and keywordView() share the same escape-aware quote,
+  // comment, and dollar-body rules. Do not hand this security path back to the
+  // legacy dollar-stripper: two scanners with different string semantics let
+  // one ordinary string manufacture a fake dollar span around real SQL.
+  const visibleStatements = statements;
+  const visibleKeywordStatements = visibleStatements.map((statement) => keywordView(statement));
+  const visibleKeywordText = visibleKeywordStatements.join(";\n");
+
+  // PostgreSQL decodes U&"..." identifiers after parsing. Classifying their
+  // raw escape text would let an encoded mutating function name evade the
+  // default-deny function scanner, so this maintenance surface fails closed.
+  if (/\bU&\s*"/i.test(visibleKeywordText)) {
+    return {
+      block: true,
+      kind: "raw-mutation",
+      reason: "Unicode-escaped SQL identifiers are not accepted through raw execute_sql because their decoded function or object name cannot be classified safely. Use ordinary identifiers or a reviewed maintenance path.",
+    };
+  }
+
+  // The append-only audit log never receives a raw write, including E2E data.
+  if (AUDIT_LOG_WRITE_RE.test(visibleKeywordText)) {
+    return {
+      block: true,
+      kind: "audit-log-write",
+      reason: "This writes to financial_audit_log by hand. The audit log is append-only and written ONLY by the database's own triggers/RPCs (Hard Red Line). If a correction is genuinely needed, it is Mason's call — surface the row IDs instead.",
+    };
+  }
+
+  if (TRUNCATE_RE.test(visibleKeywordText)) {
+    return {
+      block: true,
+      kind: "truncate",
+      reason: "TRUNCATE wipes a live table and is never done via raw SQL here. If data really must be cleared, that is Mason's explicit call via the migration path.",
+    };
+  }
+
+  const normalizedStatements = visibleKeywordStatements
+    .map((statement) => statement.trim().replace(/\s+/g, " "))
+    .filter(Boolean);
+  if (normalizedStatements.some((statement) => /^explain\b/i.test(statement))) {
+    return {
+      block: true,
+      kind: "raw-mutation",
+      reason: "EXPLAIN is not accepted through raw execute_sql because ANALYZE executes its wrapped command and PostgreSQL's option grammar is unsafe to approximate here. Run read-only analysis through a reviewed diagnostic path.",
+    };
+  }
+  if (normalizedStatements.some((statement) =>
+    /^create(?:\s+or\s+replace)?\s+(?:function|procedure)\b/i.test(statement)
+  )) {
+    return {
+      block: true,
+      kind: "raw-mutation",
+      reason: "Function and procedure definitions can hide non-transactional side effects such as sequence changes, so they are never permitted through raw execute_sql. Use the reviewed migration smoke harness instead.",
+    };
+  }
+
+  if (COPY_RE.test(visibleKeywordText)) {
+    return {
+      block: true,
+      kind: "raw-mutation",
+      reason: "COPY can read or write server files or launch a server-side program, and those external effects are not made safe by transaction rollback. Use a reviewed, purpose-built maintenance path instead.",
+    };
+  }
+  if (normalizedStatements.some((statement) => /^do\b/i.test(statement))) {
+    return {
+      block: true,
+      kind: "raw-mutation",
+      reason: "DO blocks can contain non-transactional side effects such as sequence changes, so they are never permitted through raw execute_sql. Use a reviewed migration smoke harness instead.",
+    };
+  }
+  const txWrapped = normalizedStatements.length >= 2 &&
+    /^begin(?:\s+(?:work|transaction))?$/i.test(normalizedStatements[0]) &&
+    /^rollback(?:\s+(?:work|transaction))?$/i.test(normalizedStatements.at(-1));
+  // Rollback proof is exactly one outer transaction. Any intermediate boundary
+  // can commit/end it, terminate it before later SQL, or replace it with a decoy
+  // transaction whose final ROLLBACK proves nothing about the earlier effects.
+  const hasIntermediateTransactionBoundary = normalizedStatements
+    .slice(1, -1)
+    .some((statement) => /^(?:begin|start\s+transaction|commit|end|rollback|abort|prepare\s+transaction)\b/i.test(statement));
+  const rolledBack = txWrapped && !hasIntermediateTransactionBoundary;
+
+  const hasRawDdl = DDL_STMT_RE.test(visibleKeywordText) ||
+    GRANT_REVOKE_RE.test(visibleKeywordText) ||
+    visibleKeywordStatements.some((statement) =>
+      COMMENT_ON_RE.test(statement) || SELECT_INTO_PERSISTENT_RE.test(statement)
+    );
+  if (!rolledBack && hasRawDdl) {
+    return {
+      block: true,
+      kind: "raw-ddl",
+      reason: "This changes the live database schema (or grants) via raw execute_sql, which routes around the entire migration review gauntlet. Put the change in a supabase/migrations/ file and go through apply_migration (with its reviews), or wrap the batch in BEGIN; ... ROLLBACK; if this is a smoke test.",
+    };
+  }
+
+  if (/\b(?:setval|nextval)\s*\(/i.test(visibleKeywordText)) {
+    return {
+      block: true,
+      kind: "sequence-mutation",
+      reason: "setval()/nextval() changes live sequence state (e.g. invoice numbering) even inside a SELECT. Read with currval()/last_value instead, or get Mason's explicit REAL-DATA-OK for a real sequence change.",
+    };
+  }
+
+  for (const statement of visibleKeywordStatements) {
+    const rpc = findNonReadFunctionCall(functionCallView(statement));
+    if (rpc) {
+      return {
+        block: true,
+        kind: "rpc-via-select",
+        reason: `This statement invokes "${rpc}()", which is not a known read-only function — calling an application RPC changes live data even when wrapped in SELECT, VALUES, or WITH. Use the app or the governed path.`,
+      };
+    }
+  }
+
+  // Raw execute_sql is a read/analysis surface, not a fixture writer. Enumerate
+  // EVERY DML operation in every statement and allow only explicit pg_temp
+  // scratch targets. Persistent E2E fixtures must use the app/RPC path, where
+  // authorization, invariants, and teardown identity are structural.
+  const persistentDml = [];
+  const safeTempTables = new Set();
+  for (let index = 0; index < visibleStatements.length; index++) {
+    const statement = visibleStatements[index];
+    const keywordStatement = visibleKeywordStatements[index];
+    const createdTempTable = tempBaseTableName(keywordStatement);
+    if (createdTempTable) {
+      safeTempTables.add(createdTempTable);
+    } else if (/^\s*(?:create|alter|drop)\b/i.test(keywordStatement)) {
+      // A view, rule, trigger, rename, or replacement can turn a previously
+      // safe temp-table name into a path back to persistent data. Forget all
+      // prior exemptions whenever any other schema operation intervenes.
+      safeTempTables.clear();
+    }
+    for (const target of dmlTargets(statement)) {
+      if (isPgTempTarget(target) && safeTempTables.has(target[3].toLowerCase())) continue;
+      persistentDml.push({ statement: keywordStatement, target });
+    }
+  }
+  const guardedDmlText = persistentDml.map(({ statement }) => statement).join(";\n");
+
+  let match;
+  if ((match = INSERT_RE.exec(guardedDmlText))) {
+    return {
+      block: true,
+      kind: "real-insert",
+      reason: `This INSERTs into the live business table "${match[1]}" without a target-bound [E2E] fake-data marker. Use the app or the governed migration path for real writes.`,
+    };
+  }
+  if ((match = DELETE_RE.exec(guardedDmlText))) {
+    return {
+      block: true,
+      kind: "financial-delete",
+      reason: `This DELETEs from the live financial table "${match[1]}". Deleting real financial records is Mason's call — surface the record IDs instead of acting.`,
+    };
+  }
+  if ((match = CANCEL_VOID_RE.exec(guardedDmlText))) {
+    return {
+      block: true,
+      kind: "financial-cancel",
+      reason: `This cancels or voids a real record in "${match[1]}". Surface the IDs and use the governed application path.`,
+    };
+  }
+  if ((match = FIN_UPDATE_RE.exec(guardedDmlText))) {
+    const afterSet = guardedDmlText.slice(match.index).match(/\bset\b([\s\S]*)/i);
+    const setClause = afterSet ? afterSet[1].split(/\bwhere\b/i)[0] : "";
+    if (MONEY_COL_RE.test(setClause)) {
+      return {
+        block: true,
+        kind: "financial-amount-update",
+        reason: `This UPDATEs a money column on the live financial table "${match[1]}" via raw SQL. Surface the row IDs and use the governed application path.`,
+      };
+    }
+  }
+  if ((match = DELETE_ANY_RE.exec(guardedDmlText))) {
+    return {
+      block: true,
+      kind: "real-delete",
+      reason: `This DELETEs from the live business table "${match[1]}" without a target-bound [E2E] predicate. Surface the record IDs instead of acting.`,
+    };
+  }
+  if ((match = UPDATE_ANY_RE.exec(guardedDmlText))) {
+    return {
+      block: true,
+      kind: "real-update",
+      reason: `This UPDATEs the live business table "${match[1]}" without a target-bound [E2E] predicate. Use the app or the governed migration path for real writes.`,
+    };
+  }
+
+  // Static table inventories drift. Any remaining persistent DML fails closed,
+  // while explicit pg_temp scratch work remains available for safe analysis.
+  for (const { target } of persistentDml) {
+    const verb = target[1].toLowerCase();
+    if (verb === "merge" || verb === "merge into") {
+      return {
+        block: true,
+        kind: "real-merge",
+        reason: "MERGE can insert, update, or delete persistent live records and is not permitted through raw execute_sql.",
+      };
+    }
+    return {
+      block: true,
+      kind: verb === "insert into" ? "real-insert" : verb === "update" ? "real-update" : "real-delete",
+      reason: `This ${verb.toUpperCase()} targets a persistent live table through raw execute_sql. Only explicit pg_temp scratch data is allowed; use the app/RPC fixture path for [E2E] entities.`,
+    };
+  }
+
+  // Fail closed for every other non-read statement. The explicit exceptions
+  // are transaction control, temporary scratch tables, and an explicit list
+  // of transaction-safe commands inside structurally proven rollback batches.
+  for (let index = 0; index < normalizedStatements.length; index++) {
+    const statement = normalizedStatements[index];
+    // Every DML operation already passed through the persistent-target loop.
+    // Reaching here means every target in this statement was explicit pg_temp.
+    if (dmlTargets(visibleStatements[index]).length > 0) continue;
+    if (/^with\b[\s\S]*\b(?:insert\s+into|update|delete\s+from|merge(?:\s+into)?)\b/i.test(statement)) {
+      return {
+        block: true,
+        kind: "raw-mutation",
+        reason: "This WITH statement contains a DML verb whose target could not be classified safely. Use the app/RPC fixture path or a reviewed maintenance workflow.",
+      };
+    }
+    if (/^(?:select|with|show|values)\b/i.test(statement)) continue;
+    if (/^(?:begin|rollback)(?:\s+(?:work|transaction))?$/i.test(statement)) continue;
+    if (/^create\s+(?:temp|temporary)\s+table\b/i.test(statement)) continue;
+    if (rolledBack && isRollbackSafeSmokeStatement(statement)) continue;
+    return {
+      block: true,
+      kind: "raw-mutation",
+      reason: "This is not a recognized read-only SQL statement. Use a governed application or migration path instead of raw execute_sql.",
+    };
+  }
+
+  return { block: false };
+}

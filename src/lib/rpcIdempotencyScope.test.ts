@@ -251,6 +251,19 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // migration 20260810150000 is the first to CREATE the function under its
   // post-rename name (the rename itself defined no function body on disk).
   _convert_quote_to_order_owner_impl: ['convert_quote_to_order'],
+  // Direct EXECUTE is revoked from anon/authenticated/service_role. This IS the
+  // original public draw_down_quote body: migration 20260812115237 renamed it
+  // with `ALTER FUNCTION ... RENAME TO
+  // _draw_down_quote_below_cost_impl_20260810` and created a thin public
+  // wrapper that declares the below-cost context and forwards p_idempotency_key
+  // to it, so both layers use the one 'draw_down_quote' cache namespace on
+  // purpose — a replay through the wrapper must find the result the impl saved.
+  // Giving the impl its own namespace would strand that cache and let a retried
+  // draw create a second order. The shape is pre-existing and unchanged; it
+  // entered this test's scope only because migration 20260816120000 is the
+  // first to CREATE the function under its post-rename name (the rename itself
+  // defined no function body on disk).
+  _draw_down_quote_below_cost_impl_20260810: ['draw_down_quote'],
   // Direct EXECUTE is revoked. This is the idempotent implementation behind
   // the public restore_quote_version wrapper; both intentionally use the one
   // public restore_quote_version cache namespace so a replay through the
@@ -275,6 +288,29 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // both intentionally share the wrapper's single 'save_field_app_split_invoice' cache
   // namespace, exactly like the save_purchase_order pair above.
   _save_field_app_split_invoice_impl: ['save_field_app_split_invoice'],
+  // Direct EXECUTE is revoked from anon/authenticated/service_role (postflight
+  // in mig 20260721014858 asserts it). This IS the original public
+  // complete_delivery body: migration 20260716173342 renamed it with
+  // `ALTER FUNCTION ... RENAME TO _complete_delivery_authorized_impl` and
+  // created a new public wrapper that authorizes and then delegates, so both
+  // layers use the one 'complete_delivery' cache namespace on purpose — a
+  // replay through the wrapper must find the result the impl saved. Giving the
+  // impl its own namespace would strand that cache and let a retried
+  // completion invoice the same delivery twice. The shape is pre-existing and
+  // unchanged; it entered this test's scope only because migration
+  // 20260817120000 is the first to CREATE the function under its post-rename
+  // name (the rename itself defined no function body on disk).
+  _complete_delivery_authorized_impl: ['complete_delivery'],
+  // Direct EXECUTE is revoked from anon/authenticated/service_role (same
+  // postflight). Implementation half of the public
+  // create_invoice_for_unbilled_delivery RPC, which delegates to it
+  // (mig 20260721014858); both layers intentionally share that one cache
+  // namespace. Pre-existing and unchanged — mig 20260817120000 re-emits the
+  // body only to consume the order line's allocated cents instead of
+  // re-extending price x quantity.
+  _create_invoice_for_unbilled_delivery_impl_20260718: ['create_invoice_for_unbilled_delivery'],
+  // Restore the Wave A alias exemption when its drafts are promoted from
+  // scripts/.staging-migrations/.
 };
 
 /**
@@ -418,7 +454,7 @@ function latestDiskDefinitions(): Map<string, DiskFnDef> {
 function operationLiterals(body: string): string[] {
   const out: string[] = [];
   const patterns = [
-    /check_idempotency\s*\(\s*[^,)]+,\s*'([^']+)'/gi,
+    /check_idempotency(?:_intent)?\s*\(\s*[^,)]+,\s*'([^']+)'/gi,
     /save_idempotency\s*\(\s*[^,)]+,\s*'([^']+)'/gi,
     /VALUES\s*\(\s*p_idempotency_key\s*,\s*'([^']+)'/gi,
   ];
@@ -438,6 +474,13 @@ function operationLiterals(body: string): string[] {
 
 describe('Idempotency operation literals in latest disk migrations', () => {
   const defs = latestDiskDefinitions();
+
+  it('reads operation literals from both canonical check helpers', () => {
+    expect(operationLiterals("PERFORM check_idempotency(p_key, 'save_quote')"))
+      .toContain('save_quote');
+    expect(operationLiterals("PERFORM check_idempotency_intent(p_key, 'draw_down_quote', p_actor, p_fingerprint)"))
+      .toContain('draw_down_quote');
+  });
 
   it('every operation literal equals the defining function name (or documented alias)', () => {
     const offenders: string[] = [];

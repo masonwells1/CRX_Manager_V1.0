@@ -39,6 +39,7 @@ import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
+import { sumNeedByProduct, type ProductLineNeed } from '../lib/inventoryShortage';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
 import DeliveryCalendar from '../components/deliveries/DeliveryCalendar';
@@ -381,10 +382,25 @@ export default function Deliveries() {
             invMap[row.product_id] = (invMap[row.product_id] || 0) + Number(row.quantity_available);
           }
 
-          const shortageIds = new Set<string>();
+          // Sum each product across the delivery's lines BEFORE comparing to
+          // stock. A tier-split booking puts the same product on several lines,
+          // so checking each line alone lets two half-sized lines both look
+          // covered when together they are not. See src/lib/inventoryShortage.ts.
+          const linesByDelivery = new Map<string, ProductLineNeed[]>();
           for (const item of (diData || []) as Array<{ delivery_id: string; product_id: string; quantity: number }>) {
-            if (item.quantity > 0 && (invMap[item.product_id] ?? 0) < item.quantity) {
-              shortageIds.add(item.delivery_id);
+            const lines = linesByDelivery.get(item.delivery_id);
+            const line = { productId: item.product_id, label: '', quantity: Number(item.quantity) };
+            if (lines) lines.push(line);
+            else linesByDelivery.set(item.delivery_id, [line]);
+          }
+
+          const shortageIds = new Set<string>();
+          for (const [deliveryId, lines] of linesByDelivery) {
+            for (const need of sumNeedByProduct(lines)) {
+              if ((invMap[need.productId] ?? 0) < need.quantity) {
+                shortageIds.add(deliveryId);
+                break;
+              }
             }
           }
           setShortageDeliveryIds(shortageIds);

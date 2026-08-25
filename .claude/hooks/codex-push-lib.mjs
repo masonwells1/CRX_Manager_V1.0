@@ -203,7 +203,14 @@ export function reviewProofPathMentioned(value) {
   // separators, commas, redirects, parentheses, and future punctuation all
   // delimit the protected basename, while embedded lookalikes such as
   // `my-claude-review-push.json.bak` do not match.
-  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)(?![\w.-])/i.test(text);
+  // The applied-source ledger is protected alongside the review proofs: a
+  // direct write, edit, or delete naming it would silently disarm the C3
+  // containment guard (Opus review 2026-08-19, round 2 — deletion was proven
+  // unguarded). Stale entries are removed through the sanctioned path,
+  // scripts/remove-applied-ledger-entry.mjs, which never names the file in a
+  // tool command. stop-wrap-ack.json is deliberately NOT protected — writing
+  // it is the designed acknowledgment valve.
+  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json|applied-source-ledger\.json)(?![\w.-])/i.test(text);
 }
 
 export function reviewStateDirectoryMentioned(value) {
@@ -373,6 +380,12 @@ const RISKY_PATH_RES = [
   /(^|\/)scripts\/run-claude-review\.mjs$/i,
   /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
   /(^|\/)scripts\/overnight-codex-gate\.mjs$/i,
+  /(^|\/)scripts\/apply-live-testdata-maintenance-20260812\.mjs$/i,
+  // The ONE sanctioned path that mutates the C3 source-containment ledger. A PR
+  // that weakened its --i-verified-against-live gate or its exact-name match
+  // would let a live-apply alarm be cleared without review, so its diff gets the
+  // same independent verdict (Opus review 2026-08-19, round 3).
+  /(^|\/)scripts\/remove-applied-ledger-entry\.mjs$/i,
   /(^|\/)package\.json$/i,
   // Reviewer charters are executable review instructions for the migration
   // proof gate (write-apply-proofs runs each .claude/agents/<reviewer>.md as a

@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 const root = process.cwd();
 const migration = readFileSync(path.join(root, 'supabase/migrations/20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql'), 'utf8');
 const helperGuardMigration = readFileSync(path.join(root, 'supabase/migrations/20260813070000_pin_return_idempotency_helper_contract.sql'), 'utf8');
-const completedDeliveryMigration = readFileSync(path.join(root, 'supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql'), 'utf8');
+const completedDeliveryMigration = readFileSync(path.join(root, 'scripts/.staging-migrations/20260813060000_require_completed_delivery_before_invoice_post.sql'), 'utf8');
 const predicate = readFileSync(path.join(root, 'scripts/db-invariant-sweeps/predicates/return-credit-intent-binding.sql'), 'utf8');
 const lifecyclePredicate = readFileSync(path.join(root, 'scripts/db-invariant-sweeps/predicates/returns-lifecycle-rpc-owned.sql'), 'utf8');
 const returnsSource = readFileSync(path.join(root, 'src/pages/Returns.tsx'), 'utf8').replace(/\r\n/g, '\n');

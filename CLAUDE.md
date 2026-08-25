@@ -19,7 +19,7 @@ Mason can ask in plain English; route to these skills/commands without requiring
 
 | Need | Workflow |
 |---|---|
-| Read-only second-model review | `claude-review` |
+| Read-only second-model review | `codex-review` (from a Claude session) / `claude-review` (from a Codex session) |
 | Claude + Codex reconciliation | `agent-pair-review` |
 | Durable handoff artifact | `codex-to-claude-handoff` |
 | Agent/tooling health | `agent-health` |

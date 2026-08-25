@@ -465,7 +465,7 @@ export function buildClaudeReviewPrompt({
     "- Agent workflow drift between .claude, .agents, and .codex.",
     "- Missing tests or checks for the changed workflow.",
     "- Any production, database, money, RLS, migration, Edge Function, or destructive-action risk.",
-    "- Flag correctness / red-line / requirement-gap issues only; do not pad the report with style or defensive-coding nitpicks.",
+    "- Report every finding you notice; put style, formatting, and defensive-coding suggestions in the NIT section rather than omitting them.",
     "",
     "Expected output:",
     "- use separate BLOCKER, HIGH, MED, LOW, and NIT sections; never combine severity headings",

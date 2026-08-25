@@ -12,6 +12,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { convertQuoteToOrderWithRowVersion } from '../lib/quoteLifecycleRpc';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -20,6 +21,7 @@ import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { formatUSD as fmt } from '../lib/money';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import { Sentry } from '../lib/sentry';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
@@ -47,6 +49,7 @@ export default function Quotes() {
   const [importModalOpen, setImportModalOpen] = useState(false);
   const { toast } = useToast();
   const { profile } = useAuth();
+  const { runWithBelowCostApproval } = useBelowCostApproval();
   const duplicateQuoteIdem = useIdempotencyKey('duplicate_quote', profile?.id || '');
   // F3 act-from-list: convert a sent/revised quote to an order in place (confirm popup).
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
@@ -109,11 +112,11 @@ export default function Quotes() {
     e.stopPropagation();
     try {
       const key = duplicateQuoteIdem.getKey();
-      const { data: result, error } = await supabase.rpc('duplicate_quote', {
+      const { data: result, error } = await runWithBelowCostApproval((reason) => supabaseUntyped.rpc('duplicate_quote', withBelowCostReason('duplicate_quote', {
         p_source_quote_id: quoteId,
         p_performed_by: profile!.id,
         p_idempotency_key: key,
-      });
+      }, reason)));
       if (error) {
         toast('error', `Failed to duplicate quote: ${error.message}`);
         return;
@@ -123,6 +126,7 @@ export default function Quotes() {
       toast('success', `Quote duplicated as ${dupResult.quote_number}`);
       navigate(`/quotes/${dupResult.quote_id}`);
     } catch (err: unknown) {
+      if (isBelowCostApprovalHandledError(err)) return;
       toast('error', `Failed to duplicate quote: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
@@ -182,12 +186,14 @@ export default function Quotes() {
     setConverting(true);
     try {
       const idemKey = convertQuoteIdem.getKey();
-      const { data, error } = await convertQuoteToOrderWithRowVersion({
-        p_quote_id: convertTarget.id,
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-        p_expected_row_version: convertTarget.row_version ?? null,
-      });
+      const { data, error } = await runWithBelowCostApproval((reason) => convertQuoteToOrderWithRowVersion(
+        withBelowCostReason('convert_quote_to_order', {
+          p_quote_id: convertTarget.id,
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+          p_expected_row_version: convertTarget.row_version ?? null,
+        }, reason),
+      ));
       if (error) throw error;
       convertQuoteIdem.resetKey();
       const result = data;
@@ -231,6 +237,7 @@ export default function Quotes() {
       if (result.order_id) navigate(`/orders/${result.order_id}`);
       else fetchQuotes();
     } catch (err: unknown) {
+      if (isBelowCostApprovalHandledError(err)) return;
       if (hasRpcCode(err, RpcErrorCodes.BOOKING_PARTIALLY_DRAWN)) {
         toast('warning', 'This booking has partial draw-downs — draw the remaining balance from the quote instead of converting.');
       } else if (hasRpcCode(err, RpcErrorCodes.BOOKING_CLOSED)) {

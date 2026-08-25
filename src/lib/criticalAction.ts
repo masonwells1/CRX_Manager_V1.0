@@ -1,5 +1,6 @@
 import { Sentry } from './sentry';
 import { sanitizeError } from './errorSanitizer';
+import { isBelowCostApprovalHandledError } from './belowCostApproval';
 
 type ToastFn = (type: 'success' | 'error' | 'info' | 'warning', message: string) => void;
 
@@ -45,6 +46,7 @@ export async function runCriticalAction<T = void>(
     onSuccess?.(result);
     return result;
   } catch (err: unknown) {
+    if (isBelowCostApprovalHandledError(err)) return undefined;
     toast('error', sanitizeError(err));
     Sentry.captureException(err, {
       tags: { source: 'critical_action', action: sentryTag ?? 'unknown' },

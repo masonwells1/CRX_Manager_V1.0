@@ -1,4 +1,4 @@
--- Rollback-only behavioral proof for 20260813180000.
+-- Rollback-only behavioral proof for 20260825190000.
 --
 -- This script creates one version through the trusted RPC, clones that snapshot
 -- as an unmarked legacy row under the database owner, and then proves:
@@ -37,7 +37,7 @@ BEGIN
           AND a.attname = 'restore_trusted_at'
           AND NOT a.attisdropped
      ) THEN
-    RAISE EXCEPTION 'SMOKE_PREREQ: 20260813180000 quote-version restore trust boundary is not deployed';
+    RAISE EXCEPTION 'SMOKE_PREREQ: 20260825190000 quote-version restore trust boundary is not deployed';
   END IF;
 
   SELECT id INTO v_admin

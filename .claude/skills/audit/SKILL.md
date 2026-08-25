@@ -180,4 +180,4 @@ If anything fails: list each issue and ask the user whether to fix them.
 - NEVER report "PASS" if a command returned errors — read the output carefully
 - NEVER report "PASS" for a step that was skipped or whose tool was unavailable; that is INCOMPLETE
 - NEVER treat a print-only `db-sweeps` exit 0 as evidence — use `db-sweeps:strict`
-- Run all independent steps (1-6) before the report — don't stop at the first failure
+- Run all steps (1–8, including 6a–6d) before the report — don't stop at the first failure

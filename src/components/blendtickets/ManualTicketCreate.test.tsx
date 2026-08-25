@@ -3,8 +3,15 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Customer } from '../../types';
 
 const TEST_PRODUCTS = [
-  { id: 'p1', product_name: 'Roundup PowerMax', is_active: true },
-  { id: 'p2', product_name: 'Atrazine 4L', is_active: true },
+  { id: 'p1', product_name: 'Roundup PowerMax', is_active: true, product_form: 'liquid', rate_unit: 'oz' },
+  { id: 'p2', product_name: 'Atrazine 4L', is_active: true, product_form: 'dry', rate_unit: 'Lb' },
+];
+
+const TEST_UNIT_CONVERSIONS = [
+  { id: 'u-oz', unit: 'oz', factor_oz: 1, unit_type: 'liquid', notes: null },
+  { id: 'u-gal', unit: 'Gal', factor_oz: 128, unit_type: 'liquid', notes: null },
+  { id: 'u-lb', unit: 'Lb', factor_oz: 16, unit_type: 'dry', notes: null },
+  { id: 'u-ea', unit: 'Ea', factor_oz: 1, unit_type: 'both', notes: null },
 ];
 
 const mocks = vi.hoisted(() => {
@@ -86,12 +93,19 @@ describe('ManualTicketCreate retry-safe atomic creation', () => {
   };
   let uuidIndex: number;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     window.sessionStorage.clear();
     for (const mock of [
       mocks.from, mocks.rpc, mocks.lookup, mocks.captureException,
       mocks.getKey, mocks.resetKey,
     ]) mock.mockReset();
+    // validateBlendMath was NOT in that list, so a `mockReturnValue` set by one of
+    // the two warning-tier tests below leaked into every test that ran after it —
+    // every later render came up carrying a stale warning banner. There is no global
+    // clearMocks in the vitest config, so it has to be reset explicitly.
+    const { validateBlendMath } = await import('../../lib/blendMathValidator');
+    vi.mocked(validateBlendMath).mockReset();
+    vi.mocked(validateBlendMath).mockReturnValue([]);
     mocks.idemState.current = null;
     mocks.idemState.sequence = 0;
     mocks.authState.profileId = 'user-1';
@@ -109,6 +123,8 @@ describe('ManualTicketCreate retry-safe atomic creation', () => {
     mocks.from.mockImplementation((table: string) => chainable(
       table === 'products'
         ? { data: TEST_PRODUCTS, error: null }
+        : table === 'unit_conversions'
+          ? { data: TEST_UNIT_CONVERSIONS, error: null }
         : { data: [], error: null },
     ));
     mocks.lookup.mockResolvedValue({ data: null, error: null });
@@ -120,6 +136,35 @@ describe('ManualTicketCreate retry-safe atomic creation', () => {
   });
 
   afterEach(() => vi.restoreAllMocks());
+
+  // The banner itself had NO coverage before this: both caller test files mock the
+  // validator away, so nothing verified that a warning ever reached the screen.
+  // These two render the real component and check that the tiers stay visually
+  // distinct — a "couldn't check this" note must not appear in the amber error
+  // block, which is what would retrain operators to ignore it.
+  it('renders a real mismatch in the warning block', async () => {
+    const { validateBlendMath } = await import('../../lib/blendMathValidator');
+    vi.mocked(validateBlendMath).mockReturnValue([
+      { level: 'mismatch', message: 'Total volume (250 gal) is wrong' },
+    ]);
+    render(<ManualTicketCreate {...defaultProps} />);
+    expect(await screen.findByText('Math Validation Warnings')).toBeTruthy();
+    // Assert the message itself, not just the heading — otherwise this passes even
+    // if the warning text never reaches the screen.
+    expect(screen.getByText(/Total volume \(250 gal\) is wrong/)).toBeTruthy();
+    expect(screen.queryByText('Not automatically checked')).toBeNull();
+  });
+
+  it('renders an unchecked note in the quiet block, never as a warning', async () => {
+    const { validateBlendMath } = await import('../../lib/blendMathValidator');
+    vi.mocked(validateBlendMath).mockReturnValue([
+      { level: 'unchecked', message: 'a product has a quantity but no unit' },
+    ]);
+    render(<ManualTicketCreate {...defaultProps} />);
+    expect(await screen.findByText('Not automatically checked')).toBeTruthy();
+    expect(screen.getByText(/a product has a quantity but no unit/)).toBeTruthy();
+    expect(screen.queryByText('Math Validation Warnings')).toBeNull();
+  });
 
   it('submits the header and products through one atomic create_blend_ticket RPC', async () => {
     render(<ManualTicketCreate {...defaultProps} />);
@@ -337,5 +382,100 @@ describe('ManualTicketCreate retry-safe atomic creation', () => {
     fireEvent.click(productInput);
     const selectedProductOption = await screen.findByRole('option', { name: /Roundup PowerMax/i });
     expect(selectedProductOption).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('filters both unit dropdowns by the current catalog product form and updates the row', async () => {
+    render(<ManualTicketCreate {...defaultProps} />);
+    fireEvent.click(screen.getByRole('button', { name: /add product/i }));
+    await chooseSearchOption('Select Product', 'Roundup PowerMax');
+
+    const quantityUnit = await screen.findByRole('combobox', {
+      name: 'Quantity unit for Roundup PowerMax',
+    }) as HTMLSelectElement;
+    const rateUnit = screen.getByRole('combobox', {
+      name: 'Rate unit per acre for Roundup PowerMax',
+    }) as HTMLSelectElement;
+    const offeredUnits = Array.from(quantityUnit.options, (option) => option.value);
+    expect(offeredUnits).toEqual(['', 'oz', 'Gal', 'Ea']);
+    expect(offeredUnits).not.toContain('Lb');
+
+    fireEvent.change(quantityUnit, { target: { value: 'Gal' } });
+    fireEvent.change(rateUnit, { target: { value: 'oz' } });
+    expect(quantityUnit).toHaveValue('Gal');
+    expect(rateUnit).toHaveValue('oz');
+  });
+
+  it('pre-selects the catalog rate unit when applying a recipe', async () => {
+    mocks.from.mockImplementation((table: string) => chainable(
+      table === 'products'
+        ? { data: TEST_PRODUCTS, error: null }
+        : table === 'unit_conversions'
+          ? { data: TEST_UNIT_CONVERSIONS, error: null }
+          : table === 'blend_recipes'
+            ? {
+                data: [{
+                  id: 'recipe-1',
+                  name: 'Starter Recipe',
+                  crop_type: null,
+                  timing: null,
+                  items: [{
+                    id: 'item-1',
+                    recipe_id: 'recipe-1',
+                    product_id: 'p1',
+                    product_name: 'Roundup PowerMax',
+                    quantity: 2,
+                    unit: 'Gal',
+                    rate_per_acre: 4,
+                    sort_order: 1,
+                    notes: null,
+                    created_at: '2026-08-20T00:00:00.000Z',
+                  }],
+                }],
+                error: null,
+              }
+            : { data: [], error: null },
+    ));
+
+    render(<ManualTicketCreate {...defaultProps} />);
+    const recipeSelect = await screen.findByDisplayValue('-- Choose a recipe --');
+    fireEvent.change(recipeSelect, { target: { value: 'recipe-1' } });
+
+    expect(await screen.findByRole('combobox', {
+      name: 'Rate unit per acre for Roundup PowerMax',
+    })).toHaveValue('oz');
+  });
+
+  // Switching the unit fields from free text to a picker made a failed unit load
+  // unrecoverable: the list is empty, so the only option is the disabled '--' and
+  // the operator cannot type a unit the way they used to. The failure has to be
+  // visible, and it must not be able to ride through into a saved ticket.
+  it('surfaces a failed unit_conversions load and blocks a save that left a unit blank', async () => {
+    mocks.from.mockImplementation((table: string) => chainable(
+      table === 'products'
+        ? { data: TEST_PRODUCTS, error: null }
+        : table === 'unit_conversions'
+          ? { data: null, error: { message: 'connection lost' } }
+          : { data: [], error: null },
+    ));
+
+    render(<ManualTicketCreate {...defaultProps} />);
+    expect(await screen.findByText('Failed to load Units. Retry before creating this ticket.'))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /add product/i }));
+    await chooseSearchOption('Select Product', 'Roundup PowerMax');
+    await chooseSearchOption('Select Customer', 'Smith Farm');
+
+    const quantityUnit = await screen.findByRole('combobox', {
+      name: 'Quantity unit for Roundup PowerMax',
+    }) as HTMLSelectElement;
+    expect(Array.from(quantityUnit.options, (option) => option.value)).toEqual(['']);
+
+    fireEvent.click(screen.getByRole('button', { name: /create ticket/i }));
+    expect(await screen.findByText(
+      'Units could not be loaded, so a unit is still blank. Refresh and retry before saving.',
+    )).toBeInTheDocument();
+    expect(mocks.rpc).not.toHaveBeenCalled();
+    expect(defaultProps.onComplete).not.toHaveBeenCalled();
   });
 });
