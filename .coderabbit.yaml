@@ -215,7 +215,15 @@ reviews:
           at least one CREATE POLICY targeting that table. A table created in a
           non-public schema such as `private` or `internal` is NOT exempt;
           AGENTS.md requires RLS and policies for every new table regardless of
-          schema. Partitions and temporary tables are exempt. Otherwise PASS.
+          schema.
+
+          Temporary tables are exempt. A permanent PARTITION is exempt ONLY when
+          it inherits protection in practice: the parent carries RLS and the
+          migration grants no direct access to the child. RLS is
+          relation-specific, so a grant on a child partition reaches rows
+          without going through the parent's policies - if this migration grants
+          on the partition, or the parent's RLS cannot be confirmed, require RLS
+          and a policy on the child too. Otherwise PASS.
 
       - name: SECURITY DEFINER without search_path
         mode: error
@@ -260,13 +268,19 @@ reviews:
           EXECUTE to PUBLIC by default, so silence means CALLABLE. Absence of a
           grant is not an exemption.
 
-          RE-EMITTED function (a definition already exists in an earlier
-          migration): the prior ACL persists, INCLUDING an earlier REVOKE. Do
-          NOT declare it callable merely because this migration does not repeat
-          the REVOKE. Look for the earlier definition and its grants/revokes; a
-          helper previously revoked from client roles stays private and is
-          EXEMPT. If you cannot find the earlier ACL, say so and treat it as
-          callable, naming what you could not resolve.
+          RE-EMITTED via `CREATE OR REPLACE` (a definition already exists in an
+          earlier migration): the prior ACL persists, INCLUDING an earlier
+          REVOKE. Do NOT declare it callable merely because this migration does
+          not repeat the REVOKE. Look for the earlier definition and its
+          grants/revokes; a helper previously revoked from client roles stays
+          private and is EXEMPT. If you cannot find the earlier ACL, say so and
+          treat it as callable, naming what you could not resolve.
+
+          DROPPED AND RECREATED (`DROP FUNCTION` then `CREATE FUNCTION`, the
+          pattern this repo uses when consolidating overloads): this is a NEW
+          object and the old ACL is GONE. It reverts to PostgreSQL's default
+          PUBLIC EXECUTE. Treat it as CALLABLE unless this migration re-applies
+          the REVOKE. Do not carry the dropped function's privacy forward.
 
           MUTATING. Include DELEGATED writes. A thin wrapper whose own body
           contains no INSERT/UPDATE/DELETE/MERGE but which calls a helper that
@@ -296,6 +310,14 @@ reviews:
           `INSERT ... ON CONFLICT` from a migration that already uses the shared
           helpers - that would fail the repo's own audited standard and turn
           this check into noise.
+
+          But check the WIRING, not just that both helper names appear. The
+          exemption applies only when (i) the check and the save use the SAME
+          operation key - checking `A` and saving under `B` means a retry never
+          matches and the mutation runs again - and (ii) the function actually
+          RETURNS the cached result when the check reports a prior receipt,
+          rather than falling through and mutating anyway. If either is missing,
+          FAIL and say which one.
 
           (b) A self-contained atomic claim, such as
           `INSERT ... ON CONFLICT DO NOTHING` against a unique idempotency
