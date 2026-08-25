@@ -36,11 +36,28 @@ would have required creating or submitting a real quote or order in live product
 generate evidence.
 
 **Operative rule.** Draws are resumed on the evidence above, accepting the residual risk knowingly.
-The recommended precaution — Mason's to run or skip — is that the **first** real draw after resuming
-be treated as the end-to-end proof and watched (Sentry / live error monitoring) while it happens, so
-a defect surfaces on draw #1 rather than draw #20. Do not re-open this decision or re-impose the
-pause on the grounds that "no end-to-end draw was observed"; that gap is recorded here and was
-accepted. Re-impose a pause only on new evidence of an actual defect.
+Do not re-open this decision or re-impose the pause because "no end-to-end draw was observed" — that
+gap is recorded here and was accepted. Re-impose a pause only on new evidence of an actual defect.
+
+**How the outstanding gap actually closes.** Treat the **first real draw after resuming** as the
+end-to-end proof, and close it with a **read-only postflight on that draw**, not with error
+monitoring. Sentry and the live error log prove only that nothing threw; they say nothing about
+whether money and inventory allocated correctly, which is the whole risk this chain addressed.
+Against the resulting order, read:
+
+1. the `idempotency_keys` row for `operation = 'draw_down_quote'` — bound to the intent, and the
+   retry path returns the same order rather than a second one;
+2. `order_items` — **one line per booked price tier**, each carrying the quote's own
+   `price_per_unit` (whole cents, no weighted average anywhere);
+3. `allocated_line_cents` carried through the lifecycle, and the order header total equal to the
+   sum of its own lines to the cent;
+4. the inventory movement for the drawn quantity, and the booking's remaining balance reduced by
+   exactly that amount.
+
+All four are `SELECT`s against the live row the draw just created — no writes, no fixtures, nothing
+manufactured. **Running this is Mason's call, not a gate**: draws are already resumed and are not
+contingent on it. It is recorded here so that whoever does run it knows what actually constitutes
+proof, and so a later reader does not mistake a clean error log for a verified draw.
 
 ---
 

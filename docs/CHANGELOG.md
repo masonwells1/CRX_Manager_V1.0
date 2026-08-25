@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-25 — Draw-down rollout closeout: documentation reconciled, booking draws still paused
+## 2026-08-25 — Draw-down rollout closeout: documentation reconciled, booking draws RESUMED
 
 Documentation-only follow-up to the 2026-08-24 rollout below. It records the post-rollout
 verification that was actually performed, and it stops three canonical documents from disagreeing
@@ -30,9 +30,13 @@ real quote or order purely to produce evidence was ruled out.
 
 **Booking draws are RESUMED.** Mason released the pause in chat on 2026-08-25, on the evidence
 above and knowing that no end-to-end production draw was observed. The decision and its accepted
-residual risk are recorded in `docs/manual/DECISION_LOG.md` (2026-08-25 entry). Recommended
-precaution, Mason's to run or skip: treat the **first** real draw after resuming as the end-to-end
-proof and watch live error monitoring while it happens.
+residual risk are recorded in `docs/manual/DECISION_LOG.md` (2026-08-25 entry), which also specifies
+how the outstanding gap actually closes: a **read-only postflight on the first real draw** —
+idempotency binding, one order line per booked price tier at whole-cent prices, allocated cents
+carried through with the header equal to the sum of its lines, and the inventory/booking movement.
+Error monitoring alone does not close it; a clean error log proves nothing threw, not that money and
+inventory allocated correctly. Running that postflight is Mason's call, not a gate — draws are
+resumed either way.
 
 Documents corrected in this pass:
 

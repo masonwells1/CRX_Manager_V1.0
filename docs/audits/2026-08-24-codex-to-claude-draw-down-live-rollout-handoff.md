@@ -1,7 +1,8 @@
 # Codex to Claude Handoff - Draw-Down Live Rollout
 
-> **THE APPLY INSTRUCTIONS ARE SUPERSEDED — DO NOT APPLY, DO NOT REPAIR, DO NOT RERUN. THE
-> CLOSEOUT IS NOT COMPLETE.**
+> **SUPERSEDED — DO NOT APPLY, DO NOT REPAIR, DO NOT RERUN. THE ROLLOUT IS CLOSED, WITH ONE
+> RECORDED VERIFICATION GAP (no end-to-end production draw was observed). NOTHING BELOW IS
+> ACTIONABLE — every "keep draws paused" line in the body is HISTORY, not a standing instruction.**
 >
 > **Executed on 2026-08-24 (steps 1–7 of "Not Started" below):** migrations 2, 3, and 4 named below
 > are ALL APPLIED LIVE (ledger versions `20260825025241`, `20260825033106`, `20260825034622`) under
