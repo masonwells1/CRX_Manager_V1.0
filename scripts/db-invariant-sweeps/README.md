@@ -42,6 +42,7 @@ This runner makes those queries **standing executable gates** that run **before*
 | `commission-admin-active.sql` | commission payment admin RLS uses the active-aware `is_admin()` helper | **zero** (missing or role-only policies are violations) |
 | `returns-lifecycle-rpc-owned.sql` | return lifecycle fields, creation, and line mutations stay behind canonical RPCs/triggers | **zero** (catches direct `returns` INSERT policy/grant drift and direct `return_items` mutation policy/grant drift) |
 | `save-field-actor-binding.sql` | exact reviewed `save_field(uuid,jsonb,jsonb,uuid,text)` actor-binding body | **zero** (missing signature or any body drift fails closed) |
+| `credit-memo-cogs-line-gates.sql` | once `_issue_return_credit_impl` writes credit-memo cost lines, the below-cost wall must be declared/exempted and `get_customer_year_end_summary` must stop reading credit memos unfiltered | **zero** (dormant while the impl stays header-only; mutation-tested 2026-08-25 — both keys fire when the impl is simulated active. See `docs/audits/2026-08-25-claude-pr361-cogs-adversarial-review.md`) |
 | `product-name-vs-return-policy.sql` | a product whose **name** asserts it cannot be returned is classified `return_policy = 'no_return'` | **zero** (a business-**data** predicate — emits the product **id** only, never the name or SKU; see *Output containment* below) |
 
 The `save_field` predicate also has a disposable mutation proof that deliberately installs unsafe,

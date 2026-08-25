@@ -2,6 +2,39 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-25 — PR 361 return-credit COGS: adversarial review + a standing guard
+
+Read-only review of Codex's uncommitted PR 361 rebuild (candidate migration
+`20260825161340`, SHA `b3ccbbc…`, branch `codex/pr361-current-rebuild`). Verdict **BLOCKED** —
+but not for over-reversal. The FIFO lot math is sound and provably cannot reverse more cost
+than the reports recognized: per-lot availability is clamped to posted quantity, per-return
+allocation is clamped to returned quantity, and `_create_return_intent_impl_20260812` caps
+cumulative returns at `quantity_delivered`. Full findings in
+`docs/audits/2026-08-25-claude-pr361-cogs-adversarial-review.md`.
+
+- **BLOCKER-1 — the reversal is inert on live data.** It gates on `return_items.restocked`,
+  which `_receive_return_impl_20260714` sets only when an `inventory` row exists at the exact
+  location `'Main Warehouse'`. Live: 487 of 604 products have no such row, and `restocked = true`
+  has **never** occurred. The smoke fixture creates that row on purpose, so it only ever
+  exercises the path where the gate opens.
+- **BLOCKER-2 — the new lines can abort the RPC.** Credit lines carry a negative `quantity`,
+  which defeats the `COALESCE(NEW.quantity, 0) >= 0` escape hatch in `_enforce_below_cost_line`.
+  The line then reaches the below-cost wall, which compares the *historical* `unit_price_cents`
+  against `products.current_cost` *today* and raises `BELOW_COST_CONTEXT_REQUIRED` or
+  `COST_BASIS_REQUIRED`. Latent now; armed by any future cost increase.
+- **HIGH-1 — the documented scope is wrong.** The change writes `invoice_items` rows, so it
+  alters every consumer of that table — including `get_customer_year_end_summary` (customer-facing,
+  EPA-registration-bearing, `status = 'posted'` only, no `invoice_type` filter) and
+  `get_detailed_statement_data`. Neither function's definition is touched, and neither is tested.
+- **New standing guard** (the lessons-to-checks ratchet):
+  `scripts/db-invariant-sweeps/predicates/credit-memo-cogs-line-gates.sql` encodes the two
+  decision-independent invariants from BLOCKER-2 and HIGH-1. Dormant while
+  `_issue_return_credit_impl` stays header-only. Verified against live: **zero rows** today, and
+  **both** violation keys fire under a mutation that simulates the candidate applied.
+
+Open and owner-blocked: whether a return whose goods came back but which the system never
+flagged as restocked should reverse cost. Nothing was applied; no live data was mutated.
+
 ## 2026-08-25 — `/patrol`: the fsmonitor override now covers every Git launch
 
 Follow-up on PR #473, closing three defects the mandatory gates returned. The previous
