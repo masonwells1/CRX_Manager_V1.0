@@ -39,59 +39,32 @@ generate evidence.
 Do not re-open this decision or re-impose the pause because "no end-to-end draw was observed" — that
 gap is recorded here and was accepted. Re-impose a pause only on new evidence of an actual defect.
 
-**How the outstanding gap actually closes — in two stages, not one.** The draw-down chain spans two
-moments in the order lifecycle, so no single observation covers it. Error monitoring covers neither:
-Sentry proves only that nothing threw, never that money and inventory allocated correctly, which is
-the whole risk this chain addressed.
+**If the gap is ever closed, close it with a read-only look at a real draw — not with error
+monitoring.** Sentry proves only that nothing threw; it says nothing about whether money and
+inventory allocated correctly, which is the whole risk this chain addressed. Two things to know
+before writing that check:
 
-**Stage A — at draw time (items 1, 2, 4, 5 below).** Read against the order the first real draw
-creates. This closes **draw-time allocation only**. Do not call it end-to-end.
+- **It spans two moments.** The order and its `order_items` exist at draw time;
+  `invoice_items.extended_cents` is written later, by `_complete_delivery_authorized_impl` at
+  delivery completion. A draw-time read closes draw-time allocation only, and "end-to-end" is
+  earned only once the invoice half and a genuine retry have both been seen — a `SELECT` on an
+  `idempotency_keys` row shows binding, never replay behavior.
+- **Derive the expected values from the code, not from intent.** Allocation is computed, not
+  stored: there is no `allocated_line_cents` column, and `_allocated_cumulative_cents` /
+  `_allocated_delivery_cents` telescope — they subtract quantity and cents already billed, so
+  split deliveries do not map to delivered quantity the obvious way. Tier consumption follows
+  document order (`ORDER BY t.section_ord, t.ord, t.quote_item_id`), not price order, and a partial
+  draw emits no row at all for untouched tiers.
 
-1. **Tier split.** `order_items` carries **one row per booked price tier that this draw actually
-   consumed** — each with the quote's own `price_per_unit`, never a weighted average, always whole
-   cents. **Not one row per booked tier.** A partial draw stops once the requested quantity is
-   exhausted: `20260816120000` skips any tier where the remaining allocation or the tier take is
-   zero, so tiers past the drawn quantity produce **no row**. Their absence is correct behavior, not
-   a failure — expect rows only for the consumed tiers, with units summing to the drawn quantity.
-   **Consumption follows document order, not price order**: the loop reads
-   `ORDER BY t.section_ord, t.ord, t.quote_item_id` (the quote-item id being a deterministic
-   tiebreak, since `(section_ord, ord)` is not unique). A booking whose tiers are not already sorted
-   by price will therefore consume a higher-priced tier before a lower one, and that is correct.
-2. **Line money.** `order_items.total_price` is the authoritative stored line amount and is whole
-   cents (`order_items_total_price_whole_cents_chk` enforces it). Check the order header total
-   equals the sum of its own lines to the cent.
-3. **Allocation slices — STAGE B, not observable at draw time.** These are **derived, not stored**:
-   there is no `allocated_line_cents` column. Migration `20260817120000` carries allocation through
-   the lifecycle via the STABLE helpers `_allocated_cumulative_cents` and `_allocated_delivery_cents`
-   (verified live 2026-08-25: single-overload, STABLE, not `SECURITY DEFINER`, EXECUTE revoked from
-   `anon` and `authenticated`). The downstream result lands in `invoice_items.extended_cents`, which
-   is written by `_complete_delivery_authorized_impl` **at delivery completion** — `draw_down_quote`
-   never writes it. So immediately after a draw there is nothing here to observe: calling the helpers
-   against a fresh, undelivered order evaluates a hypothetical slice and proves nothing about the
-   lifecycle wiring. **Defer this item until that order is actually delivered and invoiced**, then
-   check `invoice_items.extended_cents` against the delivered quantity.
-4. **Receipt binding.** The `idempotency_keys` row for `operation = 'draw_down_quote'` exists and is
-   bound to the intent. **This is binding only — it does NOT prove retry behavior.** A `SELECT`
-   cannot establish that a replay returns the cached order rather than creating a second one,
-   because on an ordinary first draw no replay has run. That claim requires an actual retry:
-   compare the order id it returns against the first, and confirm the `orders`/`order_items` row
-   counts did not increase. Do not mark the retry path observed without that.
-5. **Inventory.** The inventory movement for the drawn quantity, and the booking's remaining balance
-   reduced by exactly that amount.
+**Deliberately not specified further here.** An earlier draft of this entry spelled out exact
+predicates and was wrong six separate ways — an invented column, an unprovable retry claim, a tier
+count that false-alarms on a partial draw, a check aimed before its data exists, a wrong ordering
+rule, and a telescoping equality stated as a simple one. Each wrong version would have reported a
+failure on healthy live data, which is worse than having no checklist: it teaches the operator to
+distrust the check, and then it is ignored on the day something is genuinely wrong. Anyone writing
+those predicates should derive them from the migration bodies and prove them on a throwaway
+database first. **Running any of this is Mason's call, not a gate** — draws are resumed either way.
 
-**Stage B — after that order is delivered and invoiced (item 3).** Only then does the invoice half
-of the chain exist to be read.
-
-**What each stage does and does not settle.** Items 1, 2 and 5 are `SELECT`s against the live row
-the draw just created — no writes, no fixtures, nothing manufactured. Item 4 is a `SELECT` for the
-binding half only; its retry half needs a real replay. Item 3 needs a completed delivery. So Stage A
-alone closes **draw-time allocation**, not the lifecycle; the phrase "end-to-end" applies only once
-Stage B and a natural retry have both been seen.
-
-**Running any of this is Mason's call, not a gate**: draws are already resumed and are not
-contingent on it. It is recorded so that whoever does run it knows what each step can actually
-prove — and so a later reader does not mistake a clean error log, an undelivered order, or an
-unreplayed receipt for a verified draw.
 
 ---
 

@@ -29,21 +29,13 @@ real quote or order purely to produce evidence was ruled out.
 
 **Booking draws are RESUMED.** Mason released the pause in chat on 2026-08-25, on the evidence
 above and knowing that no end-to-end production draw was observed. The decision and its accepted
-residual risk are recorded in `docs/manual/DECISION_LOG.md` (2026-08-25 entry), which also specifies
-how the outstanding gap actually closes — **in two stages, because the chain spans two moments in
-the order lifecycle**. *Stage A, at draw time:* one order line per booked price tier **actually
-consumed** (a partial draw legitimately produces no row for untouched tiers) at whole-cent prices,
-`order_items.total_price` summing to the header to the cent, the `idempotency_keys` receipt bound to
-intent, and the inventory/booking movement. *Stage B, only once that order is delivered and
-invoiced:* `invoice_items.extended_cents`, which `_complete_delivery_authorized_impl` writes at
-delivery completion — `draw_down_quote` never writes it, so there is nothing to read at draw time.
-
-Three limits are stated rather than glossed: error monitoring alone closes nothing (a clean error log
-proves nothing threw, not that money allocated correctly); the **retry** path cannot be proven by any
-`SELECT` and needs a real replay; and Stage A by itself closes **draw-time allocation**, not the
-lifecycle — "end-to-end" applies only once Stage B and a natural retry have both been observed. There
-is no `allocated_line_cents` column. Running any of it is Mason's call, not a gate — draws are
-resumed either way.
+residual risk are recorded in `docs/manual/DECISION_LOG.md` (2026-08-25 entry). That entry also
+notes, without specifying exact predicates, what anyone closing the remaining gap needs to know:
+error monitoring proves only that nothing threw; the chain spans two moments (the order at draw
+time, `invoice_items.extended_cents` only at delivery completion); and the expected values must be
+derived from the migration bodies rather than from intent, because allocation is computed and
+telescoping rather than stored. Running any of it is Mason's call, not a gate — draws are resumed
+either way.
 
 Documents corrected in this pass:
 
