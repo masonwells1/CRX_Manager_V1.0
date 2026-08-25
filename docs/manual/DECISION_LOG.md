@@ -49,21 +49,30 @@ and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 
 **Incident found during implementation (same session).** Two git-config settings were falsifying
 local state, both invisible to every file-watching guard because neither is a file in the repo:
 
-- `core.fsmonitor` in `C:/CRX_Manager/.git/config` pointed at a 3-line script in a temp directory
-  (`…/patrol-fsmon-FmF0xX/fsmon.cmd`) that reported "nothing changed". Proven by controlled test:
-  `git status` reported clean while `git -c core.fsmonitor=false status` reported
+- `core.fsmonitor` at repository scope pointed at a 3-line `patrol` script under the user temp
+  directory (`<temp-dir>/patrol-fsmon-<id>/fsmon.cmd`) that reported "nothing changed". Proven by
+  controlled test: `git status` reported clean while `git -c core.fsmonitor=false status` reported
   ` M .claude/settings.json`; blob hashes confirmed the file genuinely differed
   (`f9032e03…` on disk vs `296744f8…` in index/HEAD). `git update-index --refresh` did not fix it.
   **Unset with Mason's approval.**
-- `core.hooksPath` in the `codex-claude-migrations-2-4-33493c` worktree config pointed at the Codex
-  evidence checkout's `.husky`, so a commit there would have run another repository's pre-commit
-  hooks. One worktree of ~37 was affected. **Repointed to `C:\CRX_Manager\.husky\_`.**
+- `core.hooksPath` in one worktree's config pointed at a **separate checkout outside this
+  repository** (`<other-repo-root>/.husky`), so a commit there would have run that repository's
+  pre-commit hooks instead of this one's. One worktree of ~37 was affected. **Repointed to
+  `<repo-root>/.husky/_`.**
 
 This is the PR #432 threat class — hook trust bound to the wrong repository, and a subvertible
 certifying gate — arriving live through a route none of its five splits covered. It reinforces
 decision 4 rather than reopening decision 2: the answer is the external gate, not a larger internal
-one. **Operative rule:** before committing, and before reporting a tree clean, re-test with
-`git -c core.fsmonitor=false status --short` and check `config.worktree` for a foreign `hooksPath`.
+one.
+
+**Operative rule:** before committing, and before reporting a tree clean, re-test with
+`git -c core.fsmonitor=false status --short`, then enumerate every configured hook path with
+`git config --show-origin --show-scope --get-all core.hooksPath` and confirm the effective value
+from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
+stop-and-report. Checking `config.worktree` alone is insufficient — `core.hooksPath` also takes
+system, global and local scope, and precedence decides which one wins. (Verified 2026-08-25: a
+single worktree carried two configured values, at `local` and `worktree` scope, so a
+worktree-only inspection sees one of them.)
 
 ---
 

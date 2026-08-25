@@ -15,9 +15,9 @@ the closed PR.
 `.husky/**`, `package.json`, `.github/workflows/**`, `scripts/{check,validate,verify}-*` and
 `scripts/remove-applied-ledger-entry.mjs` to `permissions.ask` for `Edit`/`Write`.
 
-Deliberately `ask`, not `deny`: a hard deny recreates the maintenance dead-end that forced PR
-#432's "reviewed producer" design, which was declined. This is an **accidental-edit tripwire, not
-tamper prevention** — harness-enforced, not OS-enforced, and it cannot stop `git apply`,
+Deliberately `ask`, not `deny`: a hard deny recreates the maintenance dead-end that forced
+PR #432's "reviewed producer" design, which was declined. This is an **accidental-edit tripwire,
+not tamper prevention** — harness-enforced, not OS-enforced, and it cannot stop `git apply`,
 `git checkout -- <path>` or a shell write. Do not cite it as a security control.
 
 **Two git-config settings were falsifying local state** and were fixed with Mason's approval. Both
@@ -26,14 +26,19 @@ were invisible to every existing guard because neither is a file in the reposito
 - `core.fsmonitor` (repo config) pointed at a temp-directory script reporting "nothing changed".
   `git status` reported a clean tree while `git -c core.fsmonitor=false status` reported
   ` M .claude/settings.json`; blob hashes confirmed a real difference (`f9032e03…` vs
-  `296744f8…`). `git update-index --refresh` did not clear it. Now unset. Previous value:
-  `C:/Users/mason/AppData/Local/Temp/patrol-fsmon-FmF0xX/fsmon.cmd`.
-- `core.hooksPath` in the `codex-claude-migrations-2-4-33493c` worktree pointed at the Codex
-  evidence checkout's `.husky`; a commit there would have run another repository's pre-commit
-  hooks. One worktree of ~37. Now `C:\CRX_Manager\.husky\_`, matching the rest.
+  `296744f8…`). `git update-index --refresh` did not clear it. Now unset. Previous value was a
+  `patrol` fsmonitor script under the user temp directory
+  (`<temp-dir>/patrol-fsmon-<id>/fsmon.cmd`).
+- `core.hooksPath` in one worktree pointed at a **separate checkout outside this repository**
+  (`<other-repo-root>/.husky`); a commit there would have run that repository's pre-commit hooks
+  instead of this one's. One worktree of ~37. Now `<repo-root>/.husky/_`, matching the rest.
 
-Before trusting a clean tree, re-test with `git -c core.fsmonitor=false status --short` and check
-`.git/worktrees/<name>/config.worktree` for a `hooksPath` outside `C:\CRX_Manager`.
+Before trusting a clean tree, re-test with `git -c core.fsmonitor=false status --short`, then
+enumerate every configured hook path with
+`git config --show-origin --show-scope --get-all core.hooksPath` and confirm the effective value
+from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
+stop-and-report. Inspecting `config.worktree` alone is insufficient — `core.hooksPath` also takes
+system, global and local scope, and precedence decides which one wins.
 
 ## 2026-08-24 — Draw-down rollout completed live: migrations 2, 3 and 4 applied
 
