@@ -2835,6 +2835,24 @@ function runTriggerFanoutFailsClosed() {
     const mirroredScript = join(mirror, 'validate-sql-migrations.sh');
     const manifestPath = join(mirror, 'trigger-fanout.json');
     const live = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const eventTemplate = live.event_triggers[0];
+    live.event_triggers = [{
+      ...eventTemplate,
+      effect: {
+        dynamic_write_count: 0,
+        safe: true,
+        session_catalog_required: false,
+        tables: [],
+        targets: [],
+        unknown_calls: [],
+        unresolved: false,
+        unsupported_routine_identity: false,
+      },
+      enabled: true,
+      enabled_mode: 'O',
+      name: 'pinned_no_write_event_fixture',
+      routine_config: ['search_path=pg_catalog'],
+    }];
 
     const runWith = (manifest, sql) => {
       const dir = mkdtempSync(join(tmpdir(), 'crx-fanout-case-'));
@@ -2912,9 +2930,9 @@ function runTriggerFanoutFailsClosed() {
       name: 'resident_unpinned_ddl_metadata_watch',
       routine_config: [],
     }];
-    expect('a session-dependent event helper refuses search_path-changing DDL',
+    expect('a session-dependent event helper globally refuses ordinary DDL',
       json(conditionalEvent),
-      "SET LOCAL search_path = public, pg_catalog; COMMENT ON TABLE public.orders IS 'fires';\n",
+      "COMMENT ON TABLE public.orders IS 'fires';\n",
       'Session-dependent PostgreSQL event trigger helper');
 
     if (!live.fanout?.fields?.some((r) =>
@@ -3315,6 +3333,10 @@ function runBootstrapFanoutHashPins() {
     ]) {
       copyFileSync(join(HERE, file), join(scripts, file));
     }
+    const bootstrapManifestPath = join(scripts, 'trigger-fanout.json');
+    const bootstrapManifest = JSON.parse(readFileSync(bootstrapManifestPath, 'utf8'));
+    bootstrapManifest.event_triggers = [];
+    writeFileSync(bootstrapManifestPath, `${JSON.stringify(bootstrapManifest, null, 2)}\n`, 'utf8');
     copyFileSync(
       join(HERE, '..', '.claude', 'hooks', 'apply-time-dml-lib.mjs'),
       join(root, '.claude', 'hooks', 'apply-time-dml-lib.mjs'),
@@ -3476,6 +3498,7 @@ function run() {
   // trying to mutate. Dedicated round-31/33 fixtures below attack fan-out itself.
   const isolatedManifest = JSON.parse(readFileSync(join(HERE, 'trigger-fanout.json'), 'utf8'));
   isolatedManifest.opaque_on_tables = [];
+  isolatedManifest.event_triggers = [];
   isolatedManifest.fanout = {
     'auth.users': [
       { target: 'profiles', via: 'foreign_key_auth_users_profiles' },

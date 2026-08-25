@@ -2165,9 +2165,9 @@ function armAutopilot(stateDir, hoursFromNow) {
     }];
     writeFanoutManifest(tmp, conditionalEventManifest);
     r = apply("20990601000046_event_session_path",
-      "SET LOCAL search_path = public, pg_catalog; COMMENT ON TABLE public.orders IS 'fires';");
-    ok(isDeny(r) && r.stdout.includes("applying session's search_path"),
-      "round-47: session-dependent event helper plus search_path mutation is refused");
+      "COMMENT ON TABLE public.orders IS 'fires';");
+    ok(isDeny(r) && r.stdout.includes("different sessions"),
+      "round-47: session-dependent event helper globally refuses ordinary DDL");
     writeFanoutManifest(tmp, FANOUT_FIXTURE);
 
     // ROUND 48. Dollar-quoted metadata after COMMENT ON FUNCTION used to be

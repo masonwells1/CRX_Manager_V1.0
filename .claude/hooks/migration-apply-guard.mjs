@@ -928,6 +928,16 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `disabled/removed through a separately reviewed path or their exact current behavior is ` +
         `modeled and independently reviewed. The guard's live read will re-evaluate them on retry.`);
     }
+    if (fanoutEvidence.sessionDependentEventTriggers.length) {
+      out("block",
+        `ONE-SHOT REPLAY GUARD: linked production event trigger(s) ` +
+        `${fanoutEvidence.sessionDependentEventTriggers.map((trigger) => trigger.name).join(", ")} ` +
+        `resolve PostgreSQL catalog metadata helpers through the applying database session's ` +
+        `search_path. The guard's evidence read and the later migration apply use different ` +
+        `sessions, so that catalog binding cannot be proved for any migration. Refusing every ` +
+        `migration apply until each trigger pins and proves a safe path or the applying session ` +
+        `is independently bound through a reviewed mechanism.`);
+    }
 
     // Normalize for comparison: lowercase, strip comments, collapse whitespace.
     //
@@ -1118,16 +1128,6 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
           `(OID ${trigger.routine_oid}, body ${trigger.routine_hash.slice(0, 12)}…)`).join(", ")}. ` +
         `The guard's in-memory linked read proves only the exact current routine bodies. Refusing ` +
         `the apply; review the event-trigger change independently before retrying.`);
-    }
-    if (fanoutEvidence.sessionDependentEventTriggers.length &&
-        (submitted.searchPathChange || submitted.eventTriggerChange || submitted.unresolved)) {
-      out("block",
-        `ONE-SHOT REPLAY GUARD: linked production event trigger(s) ` +
-        `${fanoutEvidence.sessionDependentEventTriggers.map((trigger) => trigger.name).join(", ")} ` +
-        `use PostgreSQL catalog metadata helpers through the applying session's search_path. ` +
-        `This migration changes that path or has an unresolved apply-time effect, so the ` +
-        `catalog binding cannot be proved. Refusing the apply; remove the ambiguous construct or ` +
-        `pin and independently review the event-trigger routine before retrying.`);
     }
     const submittedFanout = expandThroughFanout(submitted, fanoutEvidence);
 

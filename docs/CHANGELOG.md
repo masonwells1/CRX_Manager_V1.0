@@ -21,6 +21,20 @@ shape without executing the fixed linked query.
 - That live smoke surfaced an enabled, catalog-changing issue_pg_graphql_access event trigger. The
   guard now intentionally blocks migration applies on the current live body rather than trusting
   an older checked-in capture. No trigger, migration, data, secret, or permission was changed.
+- A follow-up exact-head review found a second event-trigger boundary: six enabled routines use
+  unqualified catalog helpers through the applying database session's unresolved search_path.
+  Because the evidence read and later apply are separate sessions, runtime now refuses every
+  migration in that state, and CI refuses every candidate migration rather than only path-changing
+  or unresolved SQL. Ordinary DDL mutation cases prove both lanes fail closed.
+- Isolating that global condition exposed an older CI dependency: ALTER DOMAIN VALIDATE CONSTRAINT
+  had relied on the session-trigger block even though it independently executes an unreadable
+  stored CHECK. The shared scanner now reports that construct directly, and the validator refuses
+  it on its own. All 225 approved-set mutation cases pass without using unsafe live event triggers
+  as an accidental test oracle.
+- The final repository-wide hook crossed a pre-existing QuoteBuilder fixture's fixed 30-day
+  validity boundary and exposed a permanent date-dependent test failure. General quote fixtures
+  now use a recent, midnight-anchored timestamp; all 36 QuoteBuilder tests pass without changing
+  production QuoteBuilder behavior.
 
 ## 2026-08-24 — Stored-default trust follows definition-time ordering
 

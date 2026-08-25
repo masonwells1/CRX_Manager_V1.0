@@ -49,6 +49,14 @@ safe repair is to model and mutation-test its exact early-return condition again
 routine identity/body/config, then obtain independent exact-SHA review. Until that lands, no live
 migration should be described as apply-ready.
 
+Exact-head review also confirmed that six enabled event triggers use unqualified PostgreSQL
+catalog helpers without a pinned routine search_path. Their evidence is captured in one session,
+but a migration applies in another whose initial path is not independently bound. The runtime
+guard therefore globally refuses them, and CI refuses every candidate migration while they remain
+session-dependent; a plain COMMENT ON TABLE mutation is covered in both owning suites. This is an
+additional reason migration apply remains blocked, not a reason to relax the issue_pg_graphql
+block or increase the SQL-audit allowance.
+
 ## OPEN 2026-08-23 — `codex review <scope>` self-recurses, kills its own process, and exits 0
 
 **Severity: HIGH. Not a crash — a silent false "gate passed".** `codex review --base origin/main`

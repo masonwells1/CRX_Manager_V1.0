@@ -1435,8 +1435,8 @@ fi
 UNSUPPORTED_ROUTINE_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "routine-identity" { print $1 }')
 UNSUPPORTED_PROCEDURAL_LANGUAGE_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "unsupported-procedural-language" { print $1 }')
 MATERIALIZED_VIEW_REFRESH_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "materialized-view-refresh" { print $1 }')
+DOMAIN_CONSTRAINT_VALIDATION_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "domain-constraint-validation" { print $1 }')
 EVENT_TRIGGER_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "event-trigger" { print $1 }')
-EVENT_CATALOG_RISK_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "event-catalog-risk" { print $1 }')
 PERSISTED_RULE_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "persisted-rule" { print $1 }')
 STORED_COLUMN_EFFECT_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "stored-column-effect" { print $1 }')
 TRIGGER_WHEN_EFFECT_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "trigger-when-effect" { print $1 }')
@@ -1475,6 +1475,14 @@ for file in $ALL_SQL; do
      printf '%s\n' "$MATERIALIZED_VIEW_REFRESH_FILES" | grep -Fqx -- "$file"; then
     echo "VIOLATION: $file"
     echo "  REFRESH MATERIALIZED VIEW executes a stored query that is absent from the linked proof packet."
+    echo "  Its resident routine and row effects cannot be bound to an approved set, so this apply is refused."
+    echo ""
+    VIOLATIONS=$((VIOLATIONS + 1))
+  fi
+  if [ -n "$DOMAIN_CONSTRAINT_VALIDATION_FILES" ] &&
+     printf '%s\n' "$DOMAIN_CONSTRAINT_VALIDATION_FILES" | grep -Fqx -- "$file"; then
+    echo "VIOLATION: $file"
+    echo "  ALTER DOMAIN VALIDATE CONSTRAINT executes a stored CHECK absent from the linked proof packet."
     echo "  Its resident routine and row effects cannot be bound to an approved set, so this apply is refused."
     echo ""
     VIOLATIONS=$((VIOLATIONS + 1))
@@ -3991,12 +3999,10 @@ process.stdout.write(out.join('\n'));
   # The ordinary migration diagnostics above are more specific. Report the
   # session-catalog boundary last so it cannot hide the direct write/dynamic
   # routine reason, but still before per-file hash reconciliation.
-  if [ "$MIG_IS_HISTORY" -eq 0 ] && [ -n "$TRIGGER_FANOUT_SESSION_EVENTS" ] &&
-     [ -n "$EVENT_CATALOG_RISK_FILES" ] &&
-     printf '%s\n' "$EVENT_CATALOG_RISK_FILES" | grep -Fqx -- "$file"; then
+  if [ "$MIG_IS_HISTORY" -eq 0 ] && [ -n "$TRIGGER_FANOUT_SESSION_EVENTS" ]; then
     echo "VIOLATION: $file"
-    echo "  Session-dependent PostgreSQL event trigger helper cannot be bound safely for this migration."
-    echo "  The migration changes search_path or has an unresolved apply-time effect."
+    echo "  Session-dependent PostgreSQL event trigger helper cannot be bound safely across the evidence-read and apply sessions."
+    echo "  Every candidate migration is refused until the applying session's catalog path is independently bound."
     echo "  Affected live trigger(s): $(printf '%s' "$TRIGGER_FANOUT_SESSION_EVENTS" | tr '\n' ' ')"
     echo ""
     VIOLATIONS=$((VIOLATIONS + 1))

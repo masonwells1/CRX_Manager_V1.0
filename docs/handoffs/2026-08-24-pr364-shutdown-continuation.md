@@ -188,4 +188,38 @@ current-head gate is green or an explicitly expected neutral result.
 - PR #364 remains HOLD. Broad gates, a new commit, fresh exact-SHA Sol review, push, current-head
   CodeRabbit/GitHub checks, merge, and production verification still remain.
 
+## SEVENTH RESUME REPAIR — APPLYING-SESSION CATALOG GAP CLOSED FAIL-CLOSED
+
+- Exact-head Sol/high review of 9ac446d4 returned one High: six enabled event triggers use
+  unqualified catalog helpers through the applying session's unresolved search_path. The
+  read-only evidence capture and later MCP apply are separate database sessions, so ordinary DDL
+  could previously pass without proving the trigger's eventual catalog binding.
+- Runtime now refuses every migration whenever any enabled trigger is marked
+  session_catalog_required. CI likewise refuses every candidate migration in that state; neither
+  lane limits the block to explicit search_path changes or unresolved SQL.
+- Mutation controls use ordinary COMMENT ON TABLE DDL and retain the safe control for an enabled
+  trigger whose exact routine body has a pinned, complete no-write proof.
+- Test isolation then exposed ALTER DOMAIN VALIDATE CONSTRAINT had been passing one expected-red
+  case only because the old session-trigger condition also fired. It now has its own direct
+  stored-CHECK refusal. The shared baseline and bootstrap hash-pin fixtures use safe/empty event
+  state, while the dedicated session-dependent mutation explicitly restores the unsafe trigger.
+- Proof: migration apply guard 352 assertions; apply-time analyzer 330 assertions; approved-set
+  validator 225 mutation cases; targeted bootstrap hash-pin mutations passed; lint, typecheck,
+  docs, and production build/PWA passed.
+- The live database and Supabase-managed triggers were not changed. This deliberately keeps live
+  migration apply blocked until the trigger behavior or applying-session binding is separately
+  modeled and reviewed.
+
+## EIGHTH RESUME REPAIR — DATE-DEPENDENT TEST FIXTURE UNBLOCKED
+
+- The protected commit hook crossed midnight UTC on 2026-08-25 and exposed a pre-existing fixed
+  QuoteBuilder fixture timestamp that had just aged beyond the 30-day validity window. The stale
+  quote guard correctly intercepted conversion, so the expected save-protection warning was never
+  reached; the failure reproduced in isolation.
+- General QuoteBuilder fixtures now derive a recent, midnight-anchored timestamp. This is test data
+  only and matches the independently prepared repair on PR #465 without modifying that sibling
+  checkout or branch.
+- All 36 QuoteBuilder tests pass after the repair. The complete protected commit hook still must be
+  rerun before this handoff can be closed.
+
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

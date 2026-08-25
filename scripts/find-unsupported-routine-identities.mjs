@@ -45,10 +45,10 @@ for (const file of paths) {
   if (analysed.materializedViewRefresh) {
     process.stdout.write(`${file}\tmaterialized-view-refresh\n`);
   }
-  if (analysed.eventTriggerChange) process.stdout.write(`${file}\tevent-trigger\n`);
-  if (analysed.searchPathChange || analysed.unresolved) {
-    process.stdout.write(`${file}\tevent-catalog-risk\n`);
+  if (analysed.domainConstraintValidation) {
+    process.stdout.write(`${file}\tdomain-constraint-validation\n`);
   }
+  if (analysed.eventTriggerChange) process.stdout.write(`${file}\tevent-trigger\n`);
   if (analysed.firedColumnEffects?.length) {
     const identities = analysed.firedColumnEffects.flatMap((effect) =>
       effect.kind === "default" ? (effect.routines || []) : [effect.domain],
