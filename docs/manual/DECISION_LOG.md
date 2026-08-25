@@ -9,62 +9,31 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
-## 2026-08-25 — Booking draws RESUME; the draw-down pause is released
+## 2026-08-25 — Booking-draw pause RELEASED; draws are back in normal use
 
-**Source:** Mason's in-chat decision, 2026-08-25, closing out the four-migration draw-down rollout.
-Releases the pause held since the 2026-08-24 rollout began.
+**Source:** Mason's explicit in-chat decision, 2026-08-25 ("Ok un pause them then"), after being
+told the draw-down chain was fully live and the release was his call.
 
-**Decision.** Booking draws are **back on**. The pause imposed for the draw-down migration chain is
-lifted; sales reps may draw down bookings normally.
+**What the pause was:** procedural, not mechanical. During the four-migration draw-down rollout
+(2026-08-24 → 2026-08-25) Mason and the team agreed not to perform booking draws; no code flag,
+schema switch, or RPC guard ever blocked them. "Un-pausing" is therefore this recorded decision,
+not a code change.
 
-**Evidence the decision rests on** — stated exactly, because it is not a complete proof:
+**Release preconditions verified read-only against live immediately before recording this
+(2026-08-25):** all four draw-down migrations applied (ledger through `20260825034622`) plus the
+save_job chem-unit apply (`20260825142708`); exactly ONE `draw_down_quote` overload, SECURITY
+DEFINER, with the receipt-intent binding (`check_idempotency_intent`) present in the installed
+body; both private implementation stages present; **zero `draw_down_quote` retry receipts in the
+prior 24 hours** (the clean-slate condition the receipts migration required); function-surface
+invariant sweeps (overloads, search_path, plpgsql-check, anon grants) all clean the same day.
 
-- All four draw-down migrations applied live and recorded with per-migration SHA-256 pins, fresh
-  reviewer proofs, and independent postflight (top rollout block of
-  `docs/reference/migration-history.md`).
-- Read-only live postflight, 2026-08-25: **zero unexpired** and **zero unbound**
-  `draw_down_quote` receipts; the draw-down function ACL and `search_path` posture as designed.
-- Production root returning HTTP 200, 2026-08-25.
-- Mason opened the production Quote Builder initial screen (`Q-2026-2062`) on 2026-08-25; it
-  rendered normally with no visible error, and no customer, item, preview, save, or submission was
-  made.
+**Deliberately NOT claimed:** no end-to-end booking draw was executed as a test — that would have
+created real order/money rows, and manufacturing production data for a smoke test is prohibited.
+The first real draw is the final proof; whoever is in a session when it happens should read the
+resulting order lines read-only and confirm per-tier pricing and whole-cent amounts.
 
-**What was NOT proven.** No end-to-end booking draw has been observed in production since the
-rollout. The Quote Builder observation is **reachability and UI-render evidence only** — not a draw
-transaction and not a draw allocation proof. Manufacturing that proof was explicitly ruled out: it
-would have required creating or submitting a real quote or order in live production purely to
-generate evidence.
-
-**Operative rule.** Draws are resumed on the evidence above, accepting the residual risk knowingly.
-Do not re-open this decision or re-impose the pause because "no end-to-end draw was observed" — that
-gap is recorded here and was accepted. Re-impose a pause only on new evidence of an actual defect.
-
-**If the gap is ever closed, close it with a read-only look at a real draw — not with error
-monitoring.** Sentry proves only that nothing threw; it says nothing about whether money and
-inventory allocated correctly, which is the whole risk this chain addressed. Two things to know
-before writing that check:
-
-- **It spans two moments.** The order and its `order_items` exist at draw time;
-  `invoice_items.extended_cents` is written later, by `_complete_delivery_authorized_impl` at
-  delivery completion. A draw-time read closes draw-time allocation only, and "end-to-end" is
-  earned only once the invoice half and a genuine retry have both been seen — a `SELECT` on an
-  `idempotency_keys` row shows binding, never replay behavior.
-- **Derive the expected values from the code, not from intent.** Allocation is computed, not
-  stored: there is no `allocated_line_cents` column, and `_allocated_cumulative_cents` /
-  `_allocated_delivery_cents` telescope — they subtract quantity and cents already billed, so
-  split deliveries do not map to delivered quantity the obvious way. Tier consumption follows
-  document order (`ORDER BY t.section_ord, t.ord, t.quote_item_id`), not price order, and a partial
-  draw emits no row at all for untouched tiers.
-
-**Deliberately not specified further here.** An earlier draft of this entry spelled out exact
-predicates and was wrong six separate ways — an invented column, an unprovable retry claim, a tier
-count that false-alarms on a partial draw, a check aimed before its data exists, a wrong ordering
-rule, and a telescoping equality stated as a simple one. Each wrong version would have reported a
-failure on healthy live data, which is worse than having no checklist: it teaches the operator to
-distrust the check, and then it is ignored on the day something is genuinely wrong. Anyone writing
-those predicates should derive them from the migration bodies and prove them on a throwaway
-database first. **Running any of this is Mason's call, not a gate** — draws are resumed either way.
-
+**Operative rule:** stop telling operators draws are paused. Historical documents that say "keep
+draws paused" describe the rollout window and are superseded by this entry.
 
 ---
 
