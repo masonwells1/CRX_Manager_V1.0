@@ -5,15 +5,27 @@
 **Head:** see `git log -1` — round 26 landed on 2026-08-25 (PR #446). Tree and push state are volatile; `git status -sb` answers both exactly, and this header was wrong about them for a full round once already.
 **Migration:** `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
 **SQL sha256:** `f2e0404e83f8249aa99696a1974180adcdec0d7aad9ed8f5bb9fc36a7181c791`
-**Status: PARTIAL — written, proven, gate-CLEAN once, pushed, waiting on a merge that something else is blocking.**
+**Status: COMPLETE — merged (PR #446, 2026-08-25) and APPLIED LIVE 2026-08-25 as ledger version `20260825142708`, on Mason's explicit in-chat approval.**
 
-## Approval state — carries nothing forward
+> **2026-08-25 closeout.** The apply went through the gated file-bytes door
+> (`scripts/apply-migration-file.mjs`) with a fresh same-session CLEAN proof pair; transmitted
+> bytes matched the sha256 above. Post-apply proof: installed body carries
+> `chem_unit_invariant_v2`; helper md5s exactly match the values pinned below; registered smoke
+> `smoke-save-job-parity.sql` returned `SMOKE_PASS_ROLLBACK` on live with the derived-total and
+> both unit-refusal assertions active; nine function/money invariant sweeps returned zero
+> unallowlisted rows. Fixture note: the governed-pricing trigger now refuses `current_cost` on
+> product INSERT, so the smoke fixture creates pricing-free product shells (fixed in the closeout
+> PR). Open follow-up: the function `COMMENT` says ELEVEN refusal families, the body raises
+> twelve — needs a tiny COMMENT-only migration. The approval-state text below is preserved as
+> history of the pre-apply state.
+
+## Approval state — carries nothing forward *(historical, superseded by the 2026-08-25 closeout above)*
 
 - **Nothing has been applied to the live database.** Live is untouched; the migration high-water mark is unchanged.
 - The branch **is** pushed and PR #446 carries the current work. A **merge** and a **live apply** each still need Mason's explicit OK **in the conversation where they happen**. This document is not that OK, and neither is the fact that the gate came back clean.
 - Mason pre-authorised "merge once fully green" for #446 on 2026-08-24. Treat that as intent, not a standing key — re-confirm before merging, because a merge deploys production through Vercel.
 
-## Where it stands after rounds 23-26 (2026-08-25)
+## Where it stands after rounds 23-26 (2026-08-25) *(historical — superseded by the 2026-08-25 closeout at the top. PR #436 and PR #446 have both merged and the migration is APPLIED LIVE; the merge-blocked statement below was true only until PR #468 landed.)*
 
 - The exact-SHA `gpt-5.6-sol` gate returned **CLEAN — VERDICT: COMPLETE** at commit `da38eee8` and minted the proof. A later run against **byte-identical SQL** returned a fresh HIGH. That is the important thing to know about the tool: **it is not deterministic, so "keep re-running until it comes back clean" does not terminate on its own.** Judge each finding on its merits instead of treating a clean run as a finish line or a new finding as a regression.
 - Rounds 23-26 closed four real defects it found, three of them introduced by earlier rounds of this same work: a tolerance the caller could size through acreage, a header acreage taken from the payload instead of derived from the fields, a denominator rule that had only ever examined the rate side, and an unpinned function owner. Full narrative in `docs/reference/migration-history.md` row 891.
@@ -43,17 +55,17 @@ node scripts/smoke/prove-save-job-chem-unit-invariant.mjs
 
 PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **65 behaviour tests** pass; **37 mutation phases** each fail in a *named* way — 30 turn a named test red, 7 abort the apply with the specific preflight/postflight assertion written to catch them.
 
-`scripts/smoke/smoke-save-job-parity.sql` is the registered live chain and is **gated** on whether this migration is installed. The container prover is **manual** — `run-smoke.mjs --all` will not run it.
+`scripts/smoke/smoke-save-job-parity.sql` is the registered live chain. It was gated on whether this migration is installed; since the 2026-08-25 apply it is **fail-closed** — a `save_job` body without `CHEM_UNIT_MISMATCH` is now a hard failure, not a pre-apply state. Running the chain against a restored or staging database that lacks `20260820120000` will therefore FAIL by design; apply the migration there first. The container prover is **manual** — `run-smoke.mjs --all` will not run it.
 
-## The two gates, and who opens them
+## The two gates, and who opens them *(historical — both gates are CLOSED. Gate 1: PR #436 landed. Gate 2: the one-row data obligation was met on 2026-08-24 and the zero-row count was re-verified immediately before the 2026-08-25 apply. Kept because the re-run obligation still binds any FUTURE re-emit of this function.)*
 
 **Gate 1 — ordering: PR #436 must land first.** This is a real behaviour change, not a mirror of a shipped client guard. `main` has no save-blocking unit guard at all; the client half (`chemLineBillingHazard`, `rateDenominatorIsUnrecognized`, `centsTimesQuantity`) exists only on the unmerged PR #436 branch. Apply this first and the next operator to touch an affected job gets a hard save failure with no prior on-screen warning — and because `performSave` re-sends the whole chemical grid, one bad legacy line makes the **entire job** unsaveable. *Mason's call: land #436.*
 
 **Gate 2 — pre-apply data obligation: DONE 2026-08-24.** One `job_chemicals` row was in the refused shape (**JOB-2026-0002**: `pt/ac` rate, blank Unit, both a cost and a price, not customer-supplied). Mason gave his explicit OK and a separate session made the one-row change — `unit` set to `'Pt'`. Re-verified read-only here: the count returns **zero**, and the job totals did not move (`219930` / `278578` before and after), because the per-unit amounts were already quoted per pint and only the label was missing. Test `T28` replays the corrected row and asserts those same two totals, so **all four live rows are now proved by execution** to save with the correct money, not merely asserted to.
 
-**The check is not retired.** Re-run the exact four-term count immediately before applying and require **zero** rows — zero today is a property of the data on one day, not of the migration, and a legacy import or hand-built call can recreate the shape. It is in the migration header and in `docs/manual/KNOWN_ISSUES.md`, character for character in both. Do **not** re-derive it from memory — three earlier versions of that query were wrong, all in the same direction (reporting zero while a live row was still refused).
+**The check is not retired.** Re-run the exact four-term count immediately before applying and require **zero** rows — zero today is a property of the data on one day, not of the migration, and a legacy import or hand-built call can recreate the shape. The migration header is the single authoritative copy of that query; `docs/manual/KNOWN_ISSUES.md` describes the four terms in prose and points to it. Do **not** re-derive it from memory — three earlier versions of that query were wrong, all in the same direction (reporting zero while a live row was still refused).
 
-## Blocked, not forgotten
+## Blocked, not forgotten *(historical — the block cleared: the QuoteBuilder fixture fix landed as PR #468, the proof was re-minted, PR #446 merged, and the four-step sequence below is complete. Retained for the Codex-wrapper operational note, which still applies.)*
 
 **Codex credits returned on 2026-08-24 and the gate has now run once — it returned BLOCKERS, and it was right.** `node scripts/write-codex-push-proof.mjs` refused to write a proof and captured the finding to `.claude/session-state/codex-review-latest.txt`; the stacked-denominator bug above came out of that run. It has been fixed and the container proof re-run green, so the proof must be **re-minted against the new HEAD** before any push.
 
@@ -67,7 +79,7 @@ Sequence, in this order:
 4. Merge only under the standing push policy — which deploys production.
 
 
-## Apply channel — this one bites
+## Apply channel — this one bites *(historical as to channel — the 2026-08-25 apply went through the gated file-bytes door `scripts/apply-migration-file.mjs`, NOT the MCP path described here. The multi-statement hazard and the helper-md5 re-verification obligation still bind any future re-emit, and both md5s were confirmed unchanged at apply time.)*
 
 **Supabase MCP `apply_migration` ONLY.** The file is **seven** top-level statements (`DO $preflight$`, `CREATE OR REPLACE`, two `REVOKE`s, a `GRANT`, `DO $postflight$`, `COMMENT ON FUNCTION`). `execute_sql` returns only the last statement, so through that channel the pin, the replacement, the ACL correction and the postflight would all be silently skipped.
 
@@ -99,9 +111,9 @@ Twelve rounds; **every** round found something real, including the ones that fel
 
 - `job_fields.acres_to_treat` still carries no TABLE-level CHECK. Through `save_job` itself a non-finite acreage can neither bypass the invariant nor be stored (`JOB_ACRES_NOT_FINITE` raises before any insert) — the residual is other writers and direct DML, not this path. (Corrected 2026-08-25: an earlier version of this line said a hand-built payload could still store one through this RPC; that stopped being true when the acreage checks landed.)
 - `save_job` is not the only writer. `_close_quote_as_applied` (`20260703200000`) and the recipe-pricing path (`20260618230000`) both `INSERT INTO job_chemicals` with prices and run none of these checks. "The database is the boundary" is true of the job-save path, **not yet of the table**.
-- The page and the server do not agree to the cent until PR #436 lands the exact-cents client math: `main` displays totals via binary-float half-up, the server stores exact decimal half-away-from-zero. The stored value is authoritative and is what the invoice bills.
+- ~~The page and the server do not agree to the cent until PR #436 lands the exact-cents client math.~~ **Resolved 2026-08-25: PR #436 merged**, so the client now mirrors the server's exact-cents math. The stored value remains authoritative and is what the invoice bills.
 - `normalize_rate_unit` strips only `\s+per\s+acre$`; this migration's stripper is deliberately **wider**. The divergence runs in the permissive direction and cannot mis-bill (nothing downstream multiplies money by `rate_unit`). Aligning `normalize_rate_unit` and the client `baseUnitOfRate` is the correct follow-up and is deliberately not bundled into a money migration.
 
 ## One next step
 
-**Re-mint the Codex proof against the new HEAD** (`node scripts/write-codex-push-proof.mjs`), then push and rewrite the PR #446 body. Landing PR #436 remains gate 1 for the *apply* and is Mason's call; nothing here should reach live before it does.
+**The work in this handoff is DONE — merged and applied live.** Nothing in this document is an outstanding instruction to push, merge, or apply; every step above is historical. The single open follow-up is a **COMMENT-only migration**: the `save_job` function `COMMENT` says ELEVEN refusal families while the body raises twelve. It changes no behaviour, no money, and no data — only the comment text.
