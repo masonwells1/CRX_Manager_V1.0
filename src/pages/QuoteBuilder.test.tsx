@@ -1306,7 +1306,7 @@ describe('QuoteBuilder', () => {
   it('stops on an unconfirmed accepted save and safely resumes conversion after reload', async () => {
     const fixture = makeQuoteFixture('draft', 7);
     const { product, section, item } = fixture;
-    const quote = { ...fixture.quote, status: 'sent' };
+    const quote = { ...fixture.quote, status: 'sent', created_at: new Date().toISOString() };
     let reloaded = false;
     let saveCalls = 0;
     mockFrom.mockImplementation((table: string) => buildChain({
@@ -1341,9 +1341,14 @@ describe('QuoteBuilder', () => {
     });
 
     renderQuoteBuilder(quote.id);
-    fireEvent.click(await screen.findByRole('button', { name: 'Create Order ▾' }));
+    const createOrderOpener = await screen.findByRole('button', { name: 'Create Order ▾' });
+    await waitFor(() => expect(createOrderOpener).toBeEnabled());
+    fireEvent.click(createOrderOpener);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Convert whole booking' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create Order' }));
+    const initialConvertDialog = await screen.findByRole('dialog', { name: /Convert to.*Order/ });
+    const initialConvertButton = within(initialConvertDialog).getByRole('button', { name: 'Create Order' });
+    await waitFor(() => expect(initialConvertButton).toBeEnabled());
+    fireEvent.click(initialConvertButton);
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'warning',
@@ -1358,7 +1363,8 @@ describe('QuoteBuilder', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Create Order ▾' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Convert whole booking' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create Order' }));
+    const resumedConvertDialog = await screen.findByRole('dialog', { name: /Convert to.*Order/ });
+    fireEvent.click(within(resumedConvertDialog).getByRole('button', { name: 'Create Order' }));
 
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith(
       'convert_quote_to_order',
