@@ -35,7 +35,7 @@
 //
 //   Flags:
 //     --confirm            actually transmit. Without it this is a dry run.
-//     --name <name>        ledger name (default: file basename without .sql)
+//     (no --name flag: the ledger name is derived from the filename — see LEDGER NAME)
 //     --created-by <who>   ledger created_by (default: the CRX ledger convention)
 //
 //   There is deliberately NO --project flag; the target is pinned to CRX
@@ -125,7 +125,24 @@ if (!existsSync(absFile)) die(1, `apply-migration-file: no such file — ${absFi
 const sql = readFileSync(absFile, "utf8").replace(/\r\n/g, "\n");
 if (!sql.trim()) die(1, `apply-migration-file: ${absFile} is empty.`);
 
-const migName = flagValue(argv, "--name") || path.basename(absFile).replace(/\.sql$/i, "");
+// ── LEDGER NAME: derived from the file, never supplied ─────────────────────
+// This had a `--name <name>` flag. Codex (P1, PR #460 round 5) showed it defeats
+// the ordering gate: pass `--name 99999999999999_alias_20260101000000_old_migration`
+// and the reviewer proof for `20260101000000_old_migration` STILL matches (the gate
+// matches proof-to-name by substring), while checkMigrationOrdering reads the FIRST
+// 14-digit stamp — 99999999999999 — and concludes the stale SQL is newer than
+// everything applied. That is precisely the out-of-order replay the gate exists to
+// stop. The name is caller-controlled input that two separate checks trusted, so it
+// is now derived from the file being applied and cannot disagree with it.
+const migName = path.basename(absFile).replace(/\.sql$/i, "");
+if (argv.includes("--name")) {
+  die(1,
+    "apply-migration-file: --name is not supported. The ledger name is derived from the migration " +
+    `filename (here: ${migName}).\n` +
+    "A caller-supplied name can carry a timestamp that disagrees with the file: the reviewer proof " +
+    "still matches by substring while the ordering gate reads the supplied stamp, so stale SQL can be " +
+    "presented as the newest migration. Rename the FILE if the ledger name must change.");
+}
 const queryHash = createHash("sha256").update(sql).digest("hex");
 
 console.log(`migration : ${migName}`);

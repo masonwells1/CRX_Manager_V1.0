@@ -277,6 +277,23 @@ transform of the existing checks is mechanical; block-message text is preserved 
    `DROP OWNED` (destructive but transactional — that is the destructive gate's job). Over-refusal
    rejects legitimate work and teaches the operator something false about PostgreSQL.
 
+9. **The ledger name is derived from the migration filename; there is no `--name` flag.** Round 5
+   (Codex P1, landed as a follow-up after #460 merged) found `--name` was caller-controlled input
+   that TWO checks trusted differently: `--name 99999999999999_alias_<oldstamp>_old_migration` still
+   matched the reviewer proof by SUBSTRING, while `checkMigrationOrdering` read the FIRST 14-digit
+   stamp and ruled the stale SQL newer than everything applied — the out-of-order replay the gate
+   exists to stop. Rename the FILE if the ledger name must change.
+10. **Every live-apply spelling must be registered with the hold latch.** `isBuildActionUnderHold()`
+    knew `apply_migration` and the Supabase CLI forms, but the file-bytes door is a *Bash command*,
+    so the tool-name set never saw it — a mid-session "stop" from Mason would not have paused a live
+    migration through it. `apply-migration-file` is now in `BUILD_BASH_RE`; add any future spelling
+    there in the same change that creates it.
+
+**Three instances of ONE root cause.** `--project` (round 4), `--name` (round 5), and the
+wrappability list's wrong entries all came from the same mistake: adding flexibility, or asserting a
+restriction, without checking what downstream already assumed. A parameter is not free — every check
+that reads it inherits a trust relationship nobody wrote down.
+
 **What this round cost, and why it is recorded.** Three reviewer findings on PR #460 were all real:
 an unenforced precondition, an unguarded production spelling, and an `allow`-by-default branch in the
 hook (`decision === "block"` blocked, so any unrecognised verdict passed). None were style. The

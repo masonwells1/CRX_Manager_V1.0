@@ -262,6 +262,20 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   ok(!otherProject.stdout.includes("Transmitting"), "--project never reaches transmission");
   const otherProjectConfirm = runScript(okRoot, ["--project", "someotherprojectref", "--confirm"]);
   ok(otherProjectConfirm.status === 1, "--project is refused even with --confirm");
+
+  // --name is refused for the same reason: it was caller-controlled input that TWO
+  // checks trusted. An alias like `99999999999999_alias_<oldstamp>_old_migration`
+  // still matches the reviewer proof by substring, while the ordering gate reads the
+  // FIRST 14-digit stamp and rules the stale SQL newer than everything applied —
+  // the out-of-order replay the gate exists to stop. (Codex P1, PR #460 round 5.)
+  const aliased = runScript(okRoot, ["--name", `99999999999999_alias_${MIG}`]);
+  ok(aliased.status === 1, `--name is refused (got ${aliased.status})`);
+  ok(aliased.stderr.includes("--name is not supported"), "the refusal names the flag");
+  ok(!aliased.stdout.includes("Transmitting"), "--name never reaches transmission");
+  const aliasedConfirm = runScript(okRoot, ["--name", `99999999999999_alias_${MIG}`, "--confirm"]);
+  ok(aliasedConfirm.status === 1, "--name is refused even with --confirm");
+  // The derived name still works — the removal must not break the normal path.
+  ok(dry.stdout.includes(`migration : ${MIG}`), "the ledger name is derived from the filename");
 }
 
 // ── WRAPPABILITY: the precondition the atomicity promise depends on ─────────
