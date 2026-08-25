@@ -8,8 +8,12 @@ import {
   fieldAppPricedQuantity,
   baseUnitOfRate,
   reconcileChemAutofillUnits,
+  chemLineBillingHazard,
+  chemUnitUnspecifiedSides,
+  rateDenominatorIsUnrecognized,
   type ChemCalcRow,
 } from './chemCalculator';
+import { normalizeRateUnit } from './labelGuardrails';
 
 const row = (over: Partial<ChemCalcRow> = {}): ChemCalcRow => ({
   quantity: '0',
@@ -365,3 +369,404 @@ describe('chemCalculator — fieldAppPricedQuantity (PARKED-010 field-app billin
     expect(extendedCents).toBe(40125);          // $401.25 (was 1600 × 3210 = $51,360)
   });
 });
+
+describe('chemCalculator — chemLineBillingHazard (production fail-closed guard)', () => {
+  // The live defect: 'Dry oz' is absent from DRY_TO_POUNDS, so reconcile bails to its
+  // safe fallback and leaves the price per POUND while the quantity counts OUNCES.
+  it('catches the live Dry oz/Lb 16x over-bill and reports the exact ratio', () => {
+    const h = chemLineBillingHazard(
+      { quantity: '3200', rate_per_acre: '32', rate_unit: 'Dry oz/ac', unit: 'Lb' },
+      100,
+      'dry',
+    );
+    expect(h.hazard).toBe(true);
+    expect(h.quantityUnit).toBe('dry oz');
+    expect(h.priceUnit).toBe('lb');
+    expect(h.billedRatio).toBe(16);
+    // Proves the money: 3,200 x $1.50 = $4,800 against a true 200 lb x $1.50 = $300.
+    expect(Math.round(3200 * 150)).toBe(480000);
+    expect(Math.round((3200 / (h.billedRatio as number)) * 150)).toBe(30000);
+  });
+
+  it('catches the liquid pt/Gal 8x case too', () => {
+    const h = chemLineBillingHazard(
+      { quantity: '240', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: 'GAL' },
+      160,
+      'liquid',
+    );
+    expect(h.hazard).toBe(true);
+    expect(h.billedRatio).toBe(8);
+  });
+
+  describe('the carried-proof tolerance is acreage-bounded, never value-relative (CodeRabbit Major, 2026-08-24)', () => {
+    // rate 12,800 oz/ac × 1,000 ac = 12,800,000 oz = exactly 100,000 gal carried.
+    const bigRow = (quantity: string) =>
+      ({ quantity, rate_per_acre: '12800', rate_unit: 'oz/ac', unit: 'Gal' });
+
+    it('no longer waves through a 0.05 gap at a carried 100,000 — the old relative epsilon did', () => {
+      // Old tolerance: max(1e-4, 100000 × 1e-6) = 0.1 → 100000.05 passed the proof.
+      // New tolerance: max(1e-4, fieldAppPricedQuantity(0.00005 × 1000, oz→gal)) ≈ 0.00039.
+      const h = chemLineBillingHazard(bigRow('100000.05'), 1000, 'liquid');
+      expect(h.hazard).toBe(true);
+    });
+
+    it('still accepts the exact carried figure at the same scale', () => {
+      expect(chemLineBillingHazard(bigRow('100000'), 1000, 'liquid').hazard).toBe(false);
+    });
+
+    it("still accepts a gap inside the rate's own 4-dp rounding error over the acreage", () => {
+      // 0.00005 oz/ac × 1,000 ac = 0.05 oz = 0.000390625 gal of legitimate slack.
+      expect(chemLineBillingHazard(bigRow('100000.0003'), 1000, 'liquid').hazard).toBe(false);
+    });
+
+    it('the 0.1-unit ceiling stops the acreage term from being caller-sized (server round 24 parity)', () => {
+      // 0.0016 oz/ac × 10,000,000 claimed acres = 16,000 oz = 125 gal carried. Uncapped,
+      // the acreage slack would be 500 oz ≈ 3.9 gal — a caller-sized allowance. Capped
+      // (0.1 oz, converted ≈ 0.00078 gal), a half-gallon gap is refused.
+      const row = (quantity: string) =>
+        ({ quantity, rate_per_acre: '0.0016', rate_unit: 'oz/ac', unit: 'Gal' });
+      expect(chemLineBillingHazard(row('125.5'), 10_000_000, 'liquid').hazard).toBe(true);
+      expect(chemLineBillingHazard(row('125.0005'), 10_000_000, 'liquid').hazard).toBe(false);
+    });
+
+    it('keeps the flat 4-dp floor at ordinary scale', () => {
+      // 128 oz/ac × 100 ac = 12,800 oz = 100 gal; acreage slack (0.005 oz ≈ 0.000039 gal)
+      // is below the floor, so max(1e-4, …) = 1e-4 governs.
+      const row = (quantity: string) =>
+        ({ quantity, rate_per_acre: '128', rate_unit: 'oz/ac', unit: 'Gal' });
+      // Values sit clear of the 1e-4 boundary itself — a gap of exactly 1e-4 is a
+      // float-representation coin flip, not a behavior worth pinning.
+      expect(chemLineBillingHazard(row('100.00005'), 100, 'liquid').hazard).toBe(false);
+      expect(chemLineBillingHazard(row('100.0003'), 100, 'liquid').hazard).toBe(true);
+    });
+  });
+
+  it('does NOT flag an aligned row (the common, correct case)', () => {
+    expect(chemLineBillingHazard(
+      { quantity: '240', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: 'pt' }, 160, 'liquid',
+    ).hazard).toBe(false);
+  });
+
+  it('does NOT flag a quantity already carried into the price unit', () => {
+    // 1.5 pt/ac x 100 ac = 150 pt = 18.75 gal — hand-converted correctly.
+    expect(chemLineBillingHazard(
+      { quantity: '18.75', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: 'Gal' }, 100, 'liquid',
+    ).hazard).toBe(false);
+  });
+
+  it('does NOT flag a blank unit (a separate, pre-existing condition)', () => {
+    expect(chemLineBillingHazard(
+      { quantity: '240', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: '' }, 160, 'liquid',
+    ).hazard).toBe(false);
+  });
+
+  describe('VOLUME PRICED AS WEIGHT — the units-are-equal fast path was a hole (Codex P2)', () => {
+    // normalizeRateUnit folds 'fl oz' into 'oz' (mirroring the live SQL normalize_rate_unit),
+    // so a DRY line rated in fl oz/ac and priced per oz compared EQUAL and exited "safe" —
+    // pricing a volume as though it were a weight. Product rate units are unvalidated free
+    // text from the CSV import, so this shape is reachable.
+    const DRY_FL_OZ = { quantity: '100', rate_per_acre: '1', rate_unit: 'fl oz/ac', unit: 'oz' };
+
+    it('proves the collapse that caused it: both spellings normalize to the same token', () => {
+      expect(normalizeRateUnit(baseUnitOfRate('fl oz/ac'))).toBe('oz');
+      expect(normalizeRateUnit('oz')).toBe('oz');
+    });
+
+    it('FLAGS a dry product measured in fl oz but priced per oz', () => {
+      const h = chemLineBillingHazard(DRY_FL_OZ, 100, 'dry');
+      expect(h.hazard).toBe(true);
+      // No ratio is claimed: volume→weight needs a density this app does not store.
+      expect(h.billedRatio).toBeNull();
+    });
+
+    it('reports the RAW spellings, so the message is readable', () => {
+      // Reporting the normalized units would read "measured in oz but priced per oz".
+      const h = chemLineBillingHazard(DRY_FL_OZ, 100, 'dry');
+      expect(h.quantityUnit).toBe('fl oz');
+      expect(h.priceUnit).toBe('oz');
+    });
+
+    it('leaves a LIQUID product alone — there, bare oz really does mean fluid ounces', () => {
+      expect(chemLineBillingHazard(DRY_FL_OZ, 100, 'liquid').hazard).toBe(false);
+      // and with the form unknown, nothing about volume-vs-weight is claimed either.
+      expect(chemLineBillingHazard(DRY_FL_OZ, 100, null).hazard).toBe(false);
+    });
+
+    it('leaves a dry product alone when both sides are a DRY ounce', () => {
+      expect(chemLineBillingHazard(
+        { quantity: '100', rate_per_acre: '1', rate_unit: 'oz/ac', unit: 'oz' }, 100, 'dry',
+      ).hazard).toBe(false);
+    });
+
+    it('does not fire on a blank or zero quantity — a fresh row is not born warning', () => {
+      for (const q of ['', '0']) {
+        expect(chemLineBillingHazard({ ...DRY_FL_OZ, quantity: q }, 100, 'dry').hazard).toBe(false);
+      }
+    });
+  });
+
+  describe('FLUID OUNCE ON A DRY PRODUCT — refused outright, on either side, however spelled', () => {
+    // Aligns this guard with the predicate in migration 20260820120000 (PR #446), which
+    // reached this shape over three review rounds. A client guard that is MORE LENIENT than
+    // the SQL doing the billing is worse than no client guard: the operator passes the
+    // browser, then hits a hard save refusal with nothing on screen explaining it — and
+    // because performSave re-sends the whole grid, one such line makes the entire job
+    // unsaveable, memo included.
+    const dry = (rate_unit: string, unit: string) =>
+      chemLineBillingHazard({ quantity: '100', rate_per_acre: '1', rate_unit, unit }, 100, 'dry');
+
+    it('refuses a dry line when BOTH sides are fluid ounces (this assertion was inverted)', () => {
+      // Self-consistent, so the old exclusive-or test read it as safe. But
+      // fieldAppPricedQuantity's dry branch sizes 'fl oz' as null — unpriceable — so the
+      // totals were being derived from a volume on a product billed by weight.
+      expect(dry('fl oz/ac', 'fl oz').hazard).toBe(true);
+      expect(dry('fl oz/ac', 'fl oz').billedRatio).toBeNull();
+    });
+
+    it('refuses the CONVERSION path the exclusive-or never even reached', () => {
+      // 'fl oz' normalizes to 'oz' before the converter sees it, which then sizes it 1 and
+      // converts 16:1 into pounds — turning a volume into a weight with nothing proven.
+      expect(dry('fl oz/ac', 'lb').hazard).toBe(true);
+    });
+
+    it('catches the PERIOD spellings that a literal list missed', () => {
+      // normalizeRateUnit has no SYNONYMS arm for these, so both sides normalize to the same
+      // token and the line sailed past both the spelling list and the equality fast path.
+      for (const spelling of ['fl. oz', 'fl.oz', 'Fl. Oz.', 'fl . oz']) {
+        expect(dry(`${spelling}/ac`, spelling).hazard).toBe(true);
+        expect(dry(`${spelling}/ac`, 'lb').hazard).toBe(true);
+      }
+    });
+
+    it('catches the long and plural spellings too', () => {
+      // Both sides carry the SAME spelling deliberately, so the units-are-equal exit would
+      // wave the line through and only the fluid rule can refuse it. Written against 'lb'
+      // instead, these would pass on the ordinary unit-mismatch rule even with the fluid
+      // helper broken — a test that goes green for the wrong reason pins nothing.
+      for (const spelling of ['fluid oz', 'fl ounces', 'fl ozs', 'fluid ounce', 'FLUID OUNCES', 'floz']) {
+        expect(dry(`${spelling}/ac`, spelling).hazard).toBe(true);
+      }
+    });
+
+    it('does NOT fire on a bare oz — on a dry product that is a legitimate dry ounce', () => {
+      // The rule must stay narrow. Refusing bare 'oz' would block ordinary dry jobs.
+      expect(dry('oz/ac', 'oz').hazard).toBe(false);
+      expect(dry('dry oz/ac', 'oz').hazard).toBe(false);
+    });
+
+    it('does not OVER-match — the regex is anchored, so a longer word is not a fluid ounce', () => {
+      // Both sides identical, so the units-are-equal exit is the only thing that can save
+      // these. If the anchored regex ever loosened to a substring test, the fluid rule would
+      // fire first and refuse them — which is what these pin.
+      for (const spelling of ['flour oz', 'oz fl', 'fluid', 'oz', 'gal fl oz']) {
+        expect(dry(`${spelling}/ac`, spelling).hazard).toBe(false);
+      }
+    });
+
+    it('leaves LIQUID and unknown-form products untouched', () => {
+      // On a liquid product 'oz' IS 'fl oz' — the live unit_conversions table records both
+      // at factor 1 — so this rule must not move a single liquid line.
+      for (const form of ['liquid', null] as const) {
+        expect(chemLineBillingHazard(
+          { quantity: '100', rate_per_acre: '1', rate_unit: 'fl oz/ac', unit: 'fl oz' }, 100, form,
+        ).hazard).toBe(false);
+      }
+    });
+  });
+
+  it('DOES flag a quantity matching neither reading — unprovable is not safe', () => {
+    // This assertion used to be inverted, and that inversion WAS the bypass: any row whose
+    // quantity drifted from rate x acres escaped the guard entirely. Fail closed instead.
+    // The deliberate cost is a false positive on a hand-entered third-unit quantity, which
+    // the operator clears by making the units agree.
+    expect(chemLineBillingHazard(
+      { quantity: '77', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: 'Gal' }, 160, 'liquid',
+    ).hazard).toBe(true);
+  });
+
+  it('SURVIVES AN ACREAGE CHANGE — the everyday off switch the guard used to have', () => {
+    // The live shape: 32 Dry oz/ac priced per Lb, saved over 100 acres as 3,200.
+    const row = { quantity: '3200', rate_per_acre: '32', rate_unit: 'Dry oz/ac', unit: 'Lb' };
+    expect(chemLineBillingHazard(row, 100, 'dry').hazard).toBe(true);
+
+    // A reloaded row deliberately KEEPS its saved quantity when the acreage moves (the
+    // driver is not persisted, so it must not be re-derived). The quantity therefore stops
+    // equalling rate x acres — which is exactly when the old guard fell silent, on the very
+    // row that was mislabelled to begin with.
+    const afterAcreageChange = chemLineBillingHazard(row, 200, 'dry');
+    expect(afterAcreageChange.hazard).toBe(true);
+    // And the ratio stays truthful: 3,200 oz is 200 lb, so the bill is still 16x.
+    expect(afterAcreageChange.billedRatio).toBe(16);
+  });
+
+  it('tolerates the 4-dp rounding fmt4 applies to a stored quantity', () => {
+    // 1.7 oz/ac x 137 ac = 232.9 exactly; fmt4 can store 232.9001 without hiding the hazard.
+    expect(chemLineBillingHazard(
+      { quantity: '232.9001', rate_per_acre: '1.7', rate_unit: 'oz/ac', unit: 'Gal' }, 137, 'liquid',
+    ).hazard).toBe(true);
+  });
+
+  it('is driver-independent — a reloaded row carries no driver and must still be caught', () => {
+    // Every row loaded from the database has driver === undefined; a driver-gated
+    // check would miss all of them. This row simply has no driver field at all.
+    expect(chemLineBillingHazard(
+      { quantity: '3200', rate_per_acre: '32', rate_unit: 'Dry oz/ac', unit: 'Lb' }, 100, 'dry',
+    ).hazard).toBe(true);
+  });
+
+  it('never throws on an inherited-property rate unit (CSV import writes rate_unit unvalidated)', () => {
+    for (const evil of ['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty']) {
+      expect(() => chemLineBillingHazard(
+        { quantity: '10', rate_per_acre: '1', rate_unit: evil, unit: 'Gal' }, 10, 'liquid',
+      )).not.toThrow();
+    }
+  });
+
+  it('STILL flags when acres are unknown or the rate is absent — no proof, no pass', () => {
+    // Also previously inverted. A missing rate or acreage means the safety proof cannot be
+    // computed; that is a reason to keep the warning up, not to drop it. Both of these are
+    // the live 16x shape with one input missing.
+    expect(chemLineBillingHazard(
+      { quantity: '3200', rate_per_acre: '32', rate_unit: 'Dry oz/ac', unit: 'Lb' }, 0, 'dry',
+    ).hazard).toBe(true);
+    expect(chemLineBillingHazard(
+      { quantity: '3200', rate_per_acre: '', rate_unit: 'Dry oz/ac', unit: 'Lb' }, 100, 'dry',
+    ).hazard).toBe(true);
+  });
+
+  it('stays silent on an empty or zero quantity, so a fresh row is not born warning', () => {
+    for (const q of ['', '0']) {
+      expect(chemLineBillingHazard(
+        { quantity: q, rate_per_acre: '', rate_unit: 'Dry oz/ac', unit: 'Lb' }, 0, 'dry',
+      ).hazard).toBe(false);
+    }
+  });
+
+  it('still flags when the form is unknown and no ratio can be computed', () => {
+    const h = chemLineBillingHazard(
+      { quantity: '3200', rate_per_acre: '32', rate_unit: 'Dry oz/ac', unit: 'Lb' }, 100, null,
+    );
+    expect(h.hazard).toBe(true);      // fail closed
+    expect(h.billedRatio).toBeNull(); // 'dry oz' is not a liquid unit — ratio unknowable
+  });
+});
+
+describe('chemCalculator — rateDenominatorIsUnrecognized (the original divergence)', () => {
+  it('flags a NON-acre denominator, which baseUnitOfRate silently strips', () => {
+    for (const u of ['oz/cwt', 'fl oz/100 gal', 'L/ha', 'oz/1000 sq ft', 'pt/ton']) {
+      expect(rateDenominatorIsUnrecognized(u)).toBe(true);
+      // The reason it matters: the base unit comes back as if it were a per-acre rate.
+      expect(baseUnitOfRate(u)).not.toContain('/');
+    }
+  });
+
+  it('accepts every per-acre spelling the app actually uses', () => {
+    for (const u of ['pt/ac', 'oz/acre', 'gal/a', 'lb/acres', 'GAL per acre', 'Dry oz/ac']) {
+      expect(rateDenominatorIsUnrecognized(u)).toBe(false);
+    }
+  });
+
+  it('accepts a bare unit and a blank', () => {
+    for (const u of ['oz', 'Dry oz', 'GAL', '', '   ', null, undefined]) {
+      expect(rateDenominatorIsUnrecognized(u)).toBe(false);
+    }
+  });
+
+  describe('STACKED denominators — subtractive, mirroring the server round-8/11 rule (Codex Medium, 2026-08-25)', () => {
+    it("flags a stacked denominator hiding behind a trailing '/ac'", () => {
+      // The old ends-with test passed these; baseUnitOfRate then kept only 'oz',
+      // billing a per-hundredweight rate as per-acre — the server's worst round-8 bug.
+      for (const u of ['oz/cwt/ac', 'fl oz/100 gal/acre', 'lb/ton/a']) {
+        expect(rateDenominatorIsUnrecognized(u)).toBe(true);
+      }
+    });
+
+    it('flags the spelled-out stacked form too', () => {
+      expect(rateDenominatorIsUnrecognized('oz per cwt per acre')).toBe(true);
+    });
+
+    it("strips exactly ONE suffix — 'oz per acre/ac' keeps its second denominator (round 11)", () => {
+      expect(rateDenominatorIsUnrecognized('oz per acre/ac')).toBe(true);
+    });
+
+    it("leaves the pure denominator-only strings to the blank-unit rule, not this one", () => {
+      // 'per acre' names no unit at all — chemUnitUnspecifiedSides owns that refusal,
+      // with a message about blankness rather than a wrong-denominator message.
+      for (const u of ['per acre', 'per-acre', ' per ac']) {
+        expect(rateDenominatorIsUnrecognized(u)).toBe(false);
+        expect(chemUnitUnspecifiedSides(u, 'oz')?.rateBlank).toBe(true);
+      }
+    });
+
+    it("does not misread 'per' inside a word", () => {
+      expect(rateDenominatorIsUnrecognized('supersack/ac')).toBe(false);
+    });
+  });
+});
+
+describe('chemCalculator — a RELOADED row is never rewritten (Codex P1 revert)', () => {
+  // An earlier pass inferred driver === 'rate' from `quantity == rate x acres` and let an
+  // acreage change re-derive the quantity. That is unsound: applyChemEdit back-solves
+  // rate_per_acre when the user TYPES a quantity, so a hand-entered total satisfies the
+  // same equality by construction. These pin the safe behaviour so it cannot regress.
+  it('a hand-entered quantity produces the very equality the heuristic relied on', () => {
+    // updateChemRow writes the typed value into the row FIRST, then calls applyChemEdit on
+    // it — applyChemEdit only back-solves the other side. Mirror that here.
+    const typed = applyChemEdit(row({ rate_per_acre: '', quantity: '150' }), 'quantity', '150', 100);
+    expect(typed.driver).toBe('qty');
+    expect(typed.rate_per_acre).toBe('1.5');
+    // 1.5 x 100 === 150 exactly — indistinguishable from a rate-driven row once reloaded.
+    expect(parseFloat(typed.rate_per_acre) * 100).toBe(parseFloat(typed.quantity));
+  });
+
+  it('leaves a driverless row exactly as saved when the acreage changes', () => {
+    const reloaded = row({ quantity: '150', rate_per_acre: '1.5' });  // no driver, as loaded
+    expect(recomputeChemRowForAcres(reloaded, 200).quantity).toBe('150');
+    expect(recomputeChemRowForAcres(reloaded, 50).quantity).toBe('150');
+  });
+});
+
+describe('chemCalculator — chemUnitUnspecifiedSides (blank units mirror CHEM_UNIT_UNSPECIFIED)', () => {
+  it('flags a blank stock unit', () => {
+    expect(chemUnitUnspecifiedSides('oz/ac', '')).toEqual({ stockBlank: true, rateBlank: false });
+    expect(chemUnitUnspecifiedSides('oz/ac', '   ')).toEqual({ stockBlank: true, rateBlank: false });
+    expect(chemUnitUnspecifiedSides('oz/ac', null)).toEqual({ stockBlank: true, rateBlank: false });
+    expect(chemUnitUnspecifiedSides('oz/ac', undefined)).toEqual({ stockBlank: true, rateBlank: false });
+  });
+
+  it('flags a stock unit that is ONLY a per-acre denominator — it names nothing to price per', () => {
+    for (const u of ['/ac', '/acre', '/acres', '/a', ' / ac ']) {
+      expect(chemUnitUnspecifiedSides('oz/ac', u)).toEqual({ stockBlank: true, rateBlank: false });
+    }
+  });
+
+  it('flags a rate whose numerator vanishes once the per-acre suffix is stripped', () => {
+    expect(chemUnitUnspecifiedSides('', 'oz')).toEqual({ stockBlank: false, rateBlank: true });
+    expect(chemUnitUnspecifiedSides(null, 'oz')).toEqual({ stockBlank: false, rateBlank: true });
+    expect(chemUnitUnspecifiedSides('/ac', 'oz')).toEqual({ stockBlank: false, rateBlank: true });
+  });
+
+  it('flags the v4 shapes: a rate that is ONLY a denominator with no unit before it', () => {
+    for (const r of ['per acre', 'per-acre', 'per ac', ' per acres', '-per acre']) {
+      expect(chemUnitUnspecifiedSides(r, 'oz')).toEqual({ stockBlank: false, rateBlank: true });
+    }
+  });
+
+  it('flags both sides at once', () => {
+    expect(chemUnitUnspecifiedSides('', '')).toEqual({ stockBlank: true, rateBlank: true });
+  });
+
+  it('stays silent when both sides name a unit — even an UNRECOGNISED one', () => {
+    expect(chemUnitUnspecifiedSides('oz/ac', 'oz')).toBeNull();
+    expect(chemUnitUnspecifiedSides('oz per acre', 'lb')).toBeNull();
+    expect(chemUnitUnspecifiedSides('pt/ac', 'Pt')).toBeNull();
+    // Consistency, not plausibility: a PRESENT-but-unknown unit is not "blank".
+    expect(chemUnitUnspecifiedSides('MG/ac', 'MG')).toBeNull();
+  });
+
+  it('does NOT treat a real unit with a per-acre suffix as blank', () => {
+    expect(chemUnitUnspecifiedSides('oz per acre', 'oz')).toBeNull();
+    expect(chemUnitUnspecifiedSides('fl oz/ac', 'fl oz')).toBeNull();
+  });
+});
+
