@@ -2,6 +2,33 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-25 — the last ExcelJS workbook test gets its cold-cache timeout
+
+`productPricingSupplierEvidenceWorkbook.test.ts` was the only one of the three ExcelJS test
+files without an explicit per-test timeout, so it inherited the 5s default. Its single test
+generates and re-parses a real `.xlsx`; that costs ~350ms warm but multi-seconds on the first
+ExcelJS load in a worker, which is why it failed on the first run in a fresh worktree and
+passed on every run after. Because `.husky/pre-commit` runs the full suite, that cold miss
+hard-blocks an unrelated commit — the exact pressure toward the forbidden `--no-verify`.
+
+- Added `}, 30000)` to the test, matching the treatment its two siblings already carried
+  (`productPricingWorkbook.test.ts` 20s/45s, `supplierPricingWorkbook.test.ts` 20s). The
+  global `testTimeout` is deliberately untouched, so the rest of the suite keeps its 5s
+  contract.
+- Audited every test that generates or parses `.xlsx`. `Products.pricing-flow.test.tsx` and
+  `SupplierPricing.test.tsx` mock the workbook modules and never load ExcelJS (≤454ms
+  measured), so they need nothing. None of the three lib files loads ExcelJS from a
+  `beforeAll` or module scope, so a per-test timeout is the correct lever and covering the
+  first test per file is sufficient for the gate.
+- `docs/manual/KNOWN_ISSUES.md` records this as a distinct root cause from the existing
+  page-render full-suite flake, whose `waitFor`/`findAllBy` fix does not apply here.
+
+Proof: cold run after a fresh `npm ci` measured the first ExcelJS-loading test at **7013ms**
+— already over the 5s cap, and passing only because it had the 20s timeout. Mutation proof of
+the new timeout: with `--testTimeout=100` the target test fails `Test timed out in 100ms`
+before the change and passes after, confirming the per-test value overrides the global. All 5
+xlsx-touching files green (48 tests), target test 373ms warm.
+
 ## 2026-08-25 — `/patrol`: the fsmonitor override now covers every Git launch
 
 Follow-up on PR #473, closing three defects the mandatory gates returned. The previous
