@@ -20,6 +20,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -3337,6 +3338,17 @@ function runBootstrapFanoutHashPins() {
     const bootstrapManifest = JSON.parse(readFileSync(bootstrapManifestPath, 'utf8'));
     bootstrapManifest.event_triggers = [];
     writeFileSync(bootstrapManifestPath, `${JSON.stringify(bootstrapManifest, null, 2)}\n`, 'utf8');
+    // This fixture removes the session-dependent event-trigger finding so it
+    // can isolate the original fan-out acknowledgement. The production
+    // manifest allows two findings for these files (fan-out + event trigger),
+    // whereas this synthetic catalogue has only the former.
+    const exemptionPath = join(scripts, 'sql-audit-hash-exemptions.txt');
+    const bootstrapFiles = new Set(files);
+    const fixtureExemptions = readFileSync(exemptionPath, 'utf8').split(/\r?\n/).map((line) => {
+      const match = line.match(/^([0-9a-f]{64}\s+(\S+)\s+)2(\s+#.*)$/);
+      return match && bootstrapFiles.has(match[2]) ? `${match[1]}1${match[3]}` : line;
+    }).join('\n');
+    writeFileSync(exemptionPath, `${fixtureExemptions}\n`, 'utf8');
     copyFileSync(
       join(HERE, '..', '.claude', 'hooks', 'apply-time-dml-lib.mjs'),
       join(root, '.claude', 'hooks', 'apply-time-dml-lib.mjs'),
@@ -3390,6 +3402,60 @@ function runBootstrapFanoutHashPins() {
     }
   } finally {
     removeFixtureTree(root);
+  }
+  return failures;
+}
+
+/**
+ * The linked event-trigger evidence is intentionally fail-closed when its
+ * session catalogue cannot be carried into the later apply session. That newly
+ * identifies one issue in each of these already-applied migrations. Pinning
+ * only the exact historic bytes is the narrow alternative to increasing the
+ * aggregate baseline; the three overlapping bootstrap pins must allow two,
+ * while every other file must allow exactly one.
+ *
+ * @returns {string[]} failure descriptions, empty when every exact pin remains valid
+ */
+function runHistoricalEventTriggerHashPins() {
+  const failures = [];
+  const expected = new Map([
+    ['20260810150000_commission_basis_from_canonical_order_header.sql', 1],
+    ['20260810150500_save_quote_whole_cent_total_cost.sql', 1],
+    ['20260810151000_whole_cent_money_check_constraints.sql', 1],
+    ['20260811130000_bind_commission_payout_idempotency_to_intent.sql', 1],
+    ['20260811183317_assign_customers_sales_rep.sql', 1],
+    ['20260811200000_blend_ticket_order_whole_cent_totals.sql', 1],
+    ['20260812003315_log_customer_sales_rep_assignment.sql', 1],
+    ['20260812010000_blend_ticket_order_header_runtime_assert.sql', 1],
+    ['20260812011000_restore_quote_version_whole_cent_money.sql', 1],
+    ['20260812115235_snapshot_cost_reporting.sql', 1],
+    ['20260812115236_quote_items_cost_at_quote_snapshot.sql', 2],
+    ['20260812115237_enforce_below_cost_admin_approval.sql', 2],
+    ['20260812115238_repair_historical_order_line_cents.sql', 2],
+    ['20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql', 1],
+    ['20260813070000_pin_return_idempotency_helper_contract.sql', 1],
+    ['20260813080000_lock_quote_versions_writes_to_rpc.sql', 1],
+    ['20260816110000_draw_down_cutover_barrier.sql', 1],
+    ['20260816120000_draw_down_split_order_lines_by_price_tier.sql', 1],
+    ['20260817120000_carry_allocated_line_cents_through_lifecycle.sql', 1],
+    ['20260819232000_bind_draw_down_receipts_to_intent.sql', 1],
+    ['20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql', 1],
+  ]);
+  const rows = new Map();
+  for (const line of readFileSync(join(HERE, 'sql-audit-hash-exemptions.txt'), 'utf8').split(/\r?\n/)) {
+    const match = line.match(/^([0-9a-f]{64})\s+(\S+)\s+(\d+)/);
+    if (match) rows.set(match[2], { hash: match[1], count: Number(match[3]) });
+  }
+  for (const [file, allowance] of expected) {
+    const bytes = Buffer.from(
+      readFileSync(join(HERE, '..', 'supabase', 'migrations', file), 'latin1').replace(/\r/g, ''),
+      'latin1',
+    );
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const row = rows.get(file);
+    if (!row || row.hash !== hash || row.count !== allowance) {
+      failures.push(`  event-trigger historic pin drifted for ${file} (expected hash ${hash}, allowance ${allowance})`);
+    }
   }
   return failures;
 }
@@ -3587,6 +3653,7 @@ function run() {
   failures.push(...runTriggerFanoutFailsClosed());
   failures.push(...runTriggerDefinitionRequiresFanoutRefresh());
   failures.push(...runBootstrapFanoutHashPins());
+  failures.push(...runHistoricalEventTriggerHashPins());
   failures.push(...runPersistedRuleAcrossMigrations());
 
   if (failures.length > 0) {

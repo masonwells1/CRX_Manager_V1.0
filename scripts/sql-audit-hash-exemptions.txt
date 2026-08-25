@@ -54,9 +54,38 @@
 # conservative check adds exactly one finding to each historical file. Pin that
 # finding to the exact LF-normalized bytes instead of raising the aggregate 61
 # baseline; any edit or any second finding in a file still fails closed.
-32dbf78a2efcd4c7e4f9f98fb7657ec472f6f6f0ff7a5cf811b7f028d21b9a08  20260812115236_quote_items_cost_at_quote_snapshot.sql  1  # quote_items fan-out intentionally opaque during bootstrap
-250e1bea81571eafc7402af7516d6a1833e778c70e03a359fa4be77bdeff49ba  20260812115237_enforce_below_cost_admin_approval.sql  1  # invoked repair routine is intentionally unbindable history
-7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca  20260812115238_repair_historical_order_line_cents.sql  1  # order_items fan-out intentionally opaque during bootstrap
+32dbf78a2efcd4c7e4f9f98fb7657ec472f6f6f0ff7a5cf811b7f028d21b9a08  20260812115236_quote_items_cost_at_quote_snapshot.sql  2  # quote_items fan-out plus session-dependent event helper in immutable history
+250e1bea81571eafc7402af7516d6a1833e778c70e03a359fa4be77bdeff49ba  20260812115237_enforce_below_cost_admin_approval.sql  2  # unbindable repair call plus session-dependent event helper in immutable history
+7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca  20260812115238_repair_historical_order_line_cents.sql  2  # order_items fan-out plus session-dependent event helper in immutable history
+
+# PR #364 event-trigger bootstrap acknowledgement (CI evidence 2026-08-25).
+# The linked production catalogue contains enabled event-trigger helpers whose
+# safe effect cannot be bound between the evidence-read and apply sessions.
+# The fail-closed validator therefore adds one finding to every historical DDL
+# migration below. Each file is already immutable, present on origin/main, and
+# recorded in the applied-migration ledger; pin this one known historical
+# finding to its exact bytes. The three rows above already carried a separate
+# bootstrap finding, hence their count of two. A new or edited migration cannot
+# use these pins: its bytes differ, and the changed-only CI path ignores every
+# pin with a zero baseline.
+09d438c528ddb74ccd38160afc5e92cb10c42874e1d45f2c59e207f710f5bf2e  20260810150000_commission_basis_from_canonical_order_header.sql  1  # session-dependent event helper in immutable history
+61b3e3d667562524350e93f9d6b93d8c37201d636b57db8a759bc247e9d9ca62  20260810150500_save_quote_whole_cent_total_cost.sql  1  # session-dependent event helper in immutable history
+acd883d824a13403e0a824457a3163a6d92ea25005015bd7730f7846f4515a69  20260810151000_whole_cent_money_check_constraints.sql  1  # session-dependent event helper in immutable history
+32073718c66d4e0ba71ba593ef9994fff47f32f0dc7b9b27e11b49f69f96c3d2  20260811130000_bind_commission_payout_idempotency_to_intent.sql  1  # session-dependent event helper in immutable history
+589da22a6d3207956758844d715b0df940764ba4ce56bd3905051cf0d12e338f  20260811183317_assign_customers_sales_rep.sql  1  # session-dependent event helper in immutable history
+1ccae23fe6ba6cad6e358e1fd642a2976b1caed2770d08fc51647b24933e5218  20260811200000_blend_ticket_order_whole_cent_totals.sql  1  # session-dependent event helper in immutable history
+4a26862a675b198ec8e928886fb688a7aac776ba412d192b9b8e6ab0e4f1e24a  20260812003315_log_customer_sales_rep_assignment.sql  1  # session-dependent event helper in immutable history
+050b0c959109c0df1bc87a6905b28e83e469cc3df813be3ff09dab778499646e  20260812010000_blend_ticket_order_header_runtime_assert.sql  1  # session-dependent event helper in immutable history
+5efc304d11e6abbfc338fad9256bf9117dd0d92d276087a67abafca01c838ce8  20260812011000_restore_quote_version_whole_cent_money.sql  1  # session-dependent event helper in immutable history
+a8835f7eb172f7f37d1f4d4227e29f44d8effdb86cc8f7dc7dd6f680a96ba07f  20260812115235_snapshot_cost_reporting.sql  1  # session-dependent event helper in immutable history
+acb747b244fb2afe59ce98e9ba165e35acbba02fdb58d11ca60eea6008537a15  20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql  1  # session-dependent event helper in immutable history
+5121eb23cbb1c564e1de411266ee46fca2e6d09c40882c40b46fcb343903f984  20260813070000_pin_return_idempotency_helper_contract.sql  1  # session-dependent event helper in immutable history
+c6ee5471711bf96b07b79626622a0ae633c9fb577f6ea820c933a7ac53a2a537  20260813080000_lock_quote_versions_writes_to_rpc.sql  1  # session-dependent event helper in immutable history
+bd0418446f0f39e919c60ee541cc9224aa0d0b181d72840965f5785aa9ad783a  20260816110000_draw_down_cutover_barrier.sql  1  # session-dependent event helper in immutable history
+134f2f00f46a16c35a87ca529bc723ad373b19988664816c62255abbd324cd27  20260816120000_draw_down_split_order_lines_by_price_tier.sql  1  # session-dependent event helper in immutable history
+ef61e34cf12b27ec4ec4e470509c1b7bbccdb2a7a43495b39c005e822e787a89  20260817120000_carry_allocated_line_cents_through_lifecycle.sql  1  # session-dependent event helper in immutable history
+8fc1665ed3a00750bf43ed01b4412c139dd2b56775a387465c99f44ce76a3199  20260819232000_bind_draw_down_receipts_to_intent.sql  1  # session-dependent event helper in immutable history
+f2e0404e83f8249aa99696a1974180adcdec0d7aad9ed8f5bb9fc36a7181c791  20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql  1  # session-dependent event helper in immutable history
 
 # Round 67 now refuses procedural languages other than SQL and PL/pgSQL. These
 # two already-applied 2026 repair migrations use anonymous DO blocks containing

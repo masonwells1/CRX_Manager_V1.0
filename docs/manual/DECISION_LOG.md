@@ -9,6 +9,22 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-25 — Historic event-trigger findings are pinned per immutable migration
+
+**Source:** SQL Migration Validation evidence on PR #364.
+
+**Decision.** The new session-dependent event-trigger check is fail-closed for every ordinary
+DDL migration, but it also identifies one newly visible issue in 21 immutable migrations already
+on `origin/main` and in the applied ledger. Each finding is hash-pinned to that migration's exact
+bytes; the aggregate baseline remains 61.
+
+**Operative rule.** Never raise the aggregate baseline for these findings. Any edit voids its
+pin, new migrations get zero tolerance on the changed-only path, and the test verifies all 21
+exact hashes plus the three files that separately carry an existing bootstrap finding. No live
+migration, Edge Function, production data, secret, or permission changed.
+
+---
+
 ## 2026-08-25 — A session string-mode change makes executable dynamic SQL opaque
 
 **Source:** exact-head Sol/high review CRX-SEC-001 on PR #364.
