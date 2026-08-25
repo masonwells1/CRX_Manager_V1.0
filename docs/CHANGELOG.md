@@ -32,7 +32,8 @@ real quote or order purely to produce evidence was ruled out.
 above and knowing that no end-to-end production draw was observed. The decision and its accepted
 residual risk are recorded in `docs/manual/DECISION_LOG.md` (2026-08-25 entry), which also specifies
 how the outstanding gap actually closes: a **read-only postflight on the first real draw** — one
-order line per booked price tier at whole-cent prices, `order_items.total_price` summing to the
+order line per booked price tier **actually consumed** (a partial draw legitimately produces no row
+for untouched tiers) at whole-cent prices, `order_items.total_price` summing to the
 header to the cent, allocation read through the derived helpers `_allocated_cumulative_cents` /
 `_allocated_delivery_cents` (there is no `allocated_line_cents` column), the `idempotency_keys`
 receipt bound to intent, and the inventory/booking movement. Two limits are stated there rather than

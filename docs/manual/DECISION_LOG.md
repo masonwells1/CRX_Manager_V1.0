@@ -45,8 +45,13 @@ monitoring. Sentry and the live error log prove only that nothing threw; they sa
 whether money and inventory allocated correctly, which is the whole risk this chain addressed.
 Against the resulting order, read:
 
-1. **Tier split.** `order_items` carries **one row per booked price tier**, each with the quote's own
-   `price_per_unit`. No unit price is a weighted average, and each is whole cents.
+1. **Tier split.** `order_items` carries **one row per booked price tier that this draw actually
+   consumed** — each with the quote's own `price_per_unit`, never a weighted average, always whole
+   cents. **Not one row per booked tier.** A partial draw stops once the requested quantity is
+   exhausted: `20260816120000` skips any tier where the remaining allocation or the tier take is
+   zero, so tiers past the drawn quantity produce **no row**. Their absence is correct behavior, not
+   a failure — expect rows only for the consumed tiers, in price order, with units summing to the
+   drawn quantity.
 2. **Line money.** `order_items.total_price` is the authoritative stored line amount and is whole
    cents (`order_items_total_price_whole_cents_chk` enforces it). Check the order header total
    equals the sum of its own lines to the cent.
