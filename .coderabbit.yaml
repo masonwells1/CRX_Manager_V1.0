@@ -225,11 +225,20 @@ reviews:
           and state that the check did not apply.
 
           FAIL if any added migration defines a SECURITY DEFINER function that
-          does not also carry an explicit SET search_path. The expected form is
-          `SET search_path = public, pg_temp`. An empty or restricted search
-          path is permitted ONLY when the function body is fully schema-qualified
-          on every reference; if the diff alone does not let you confirm that,
-          FAIL and say which reference you could not confirm. Otherwise PASS.
+          does not also carry an explicit SET search_path. Exactly two forms are
+          acceptable, and nothing else:
+
+          (a) the normal form `SET search_path = public, pg_temp`; or
+          (b) an EXACTLY EMPTY search path (`SET search_path = ''`), which is the
+          narrow exception approved 2026-07-30 and permitted ONLY when the
+          function body is fully schema-qualified on every single reference. If
+          the diff alone does not let you confirm that, FAIL and name the
+          reference you could not confirm.
+
+          Any OTHER value - for example `SET search_path = private, pg_temp` or
+          any other non-empty custom path - is a FAIL even when every reference
+          is schema-qualified. The approved exception is for an empty path, not
+          for arbitrary restricted paths. Otherwise PASS.
 
       - name: Mutating RPC without idempotency key
         mode: error
@@ -266,7 +275,17 @@ reviews:
           function that does not both (1) accept `p_idempotency_key text DEFAULT
           NULL` and (2) actually use it to short-circuit or de-duplicate a
           repeated call. A parameter accepted and then ignored is a FAIL - the
-          signature alone proves nothing. Otherwise PASS.
+          signature alone proves nothing.
+
+          The claim must be ATOMIC. A check-then-write flow - SELECT for an
+          existing key, then mutate, then record the key - is a FAIL even though
+          it mentions the key, because two concurrent calls can both observe no
+          prior key and both perform the write. AGENTS.md requires the key to be
+          "actually enforced", and a race that duplicates a money or inventory
+          write does not enforce anything. Require the key to be claimed in a
+          single atomic step - for example `INSERT ... ON CONFLICT DO NOTHING`
+          against a unique idempotency record, with the mutation proceeding only
+          when the claim was won. Otherwise PASS.
 
       - name: Money not exact whole cents
         mode: error
