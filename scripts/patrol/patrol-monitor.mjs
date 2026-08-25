@@ -61,7 +61,11 @@ export function alarmText(reason) {
     "Silence from patrol is NOT an all-clear. Nothing is currently checking which pull",
     "requests, worktrees, or loops need you.",
     "",
-    "Restart it with:  /loop 30m /patrol",
+    "Run it yourself:  /patrol",
+    "",
+    "Patrol is interactive-only by design (Mason, 2026-08-24) — it does not run on a",
+    "schedule, so this alarm means the last report you have is stale, not that a",
+    "background process died. Do not schedule it to silence this.",
   ].join("\n");
 }
 

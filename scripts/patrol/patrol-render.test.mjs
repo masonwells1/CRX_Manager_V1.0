@@ -6,7 +6,7 @@
 // phrase disappears every time. If any single flip still prints the all-clear, patrol
 // can lie to Mason.
 import assert from "node:assert/strict";
-import { ALL_CLEAR, EXIT, escapeUntrusted, renderReport, validateSnapshot } from "./patrol-render.mjs";
+import { ALL_CLEAR, EXIT, REQUIRED_SOURCES, escapeUntrusted, renderReport, shortBuild, sourceRoster, validateSnapshot } from "./patrol-render.mjs";
 import { SEVERITY } from "./patrol-classify.mjs";
 
 let pass = 0;
@@ -25,7 +25,9 @@ function snap(over = {}) {
     generatedAt: iso(NOW - 1000),
     complete: true,
     queuePath: "C:/queue.json",
-    sources: [{ name: "pullRequests", status: "OK" }],
+    // A COMPLETE roster. The baseline must represent a scan that actually read everything,
+    // otherwise the all-clear test is asserting the phrase over a partial scan.
+    sources: REQUIRED_SOURCES.map((name) => ({ name, status: "OK" })),
     ...over,
   };
 }
@@ -56,6 +58,13 @@ const mutations = [
   // REQUIRED sources only, so an optional source's failure slipped straight through.
   ["a source reported ERROR", snap({ sources: [{ name: "loops", status: "ERROR", detail: "probe died" }] }), [it()]],
   ["a source reported INCOMPLETE", snap({ sources: [{ name: "parkedMigrations", status: "INCOMPLETE" }] }), [it()]],
+  // Round 10: `every()` over an EMPTY array is TRUE, so "no source failed" was satisfied
+  // by a scan that read nothing. These four are the vacuous-truth family.
+  ["the sources list is EMPTY", snap({ sources: [] }), [it()]],
+  ["the sources key is missing entirely", snap({ sources: undefined }), [it()]],
+  ["the sources key is not an array", snap({ sources: "all fine" }), [it()]],
+  ["one required source is absent from the roster",
+    snap({ sources: REQUIRED_SOURCES.filter((n) => n !== "gateHealth").map((name) => ({ name, status: "OK" })) }), [it()]],
 ];
 for (const [name, s, items] of mutations) {
   const r = render(s, items);
@@ -63,6 +72,38 @@ for (const [name, s, items] of mutations) {
   ok(!r.text.includes(ALL_CLEAR), `the phrase is absent when ${name}`);
   ok(/NOT an all-clear/.test(r.text), `and the report says why when ${name}`);
 }
+
+// ── the collector-build qualifier survives shortening ──────────────────────
+// A real run printed `collector 65a1a4921dfa` from a DIRTY collector: `.slice(0, 12)` cut
+// the SHA to 12 chars and took `-dirty` with it. The suffix is the half that warns.
+{
+  const sha = "65a1a4921dfad40d132f875e4263ddf5b4668345";
+  eq(shortBuild(sha), "65a1a4921dfa", "a clean sha shortens to 12 characters");
+  eq(shortBuild(`${sha}-dirty`), "65a1a4921dfa-dirty", "and a DIRTY collector keeps its warning suffix");
+  eq(shortBuild(`${sha}-unverified`), "65a1a4921dfa-unverified", "as does an unverified one");
+  eq(shortBuild("unknown"), "unknown", "and an unknown build is passed through, not mangled");
+  eq(shortBuild(null), "", "a missing build does not throw");
+}
+{
+  const r = render(snap({ collectorCommit: "65a1a4921dfad40d132f875e4263ddf5b4668345-dirty" }), [it()]);
+  ok(/collector 65a1a4921dfa-dirty/.test(r.text), "the rendered header shows the dirty qualifier to the reader");
+}
+
+// ── the roster names what is missing vs what failed ────────────────────────
+// Merging the two would report a source that never ran as if it had errored transiently.
+{
+  const r = render(snap({ sources: [] }), [it()]);
+  ok(/missing from the scan entirely/.test(r.text), "an empty roster is reported as missing, not as failed");
+  for (const n of REQUIRED_SOURCES) ok(r.text.includes(n), `and names the missing source ${n}`);
+}
+{
+  const roster = sourceRoster(snap({ sources: [{ name: "loops", status: "ERROR" }] }));
+  eq(roster.failed, ["loops=ERROR"], "a present-but-failed source is reported as failed");
+  ok(roster.missing.includes("pullRequests"), "and the ones that never ran are reported as missing");
+  ok(!roster.missing.includes("loops"), "a source that ran and failed is not ALSO called missing");
+}
+eq(sourceRoster({}).missing, REQUIRED_SOURCES, "a snapshot with no sources key is missing all of them");
+eq(sourceRoster(null).missing, REQUIRED_SOURCES, "and a null snapshot does not throw");
 {
   // Hidden items: 6 waiting items against a lane cap of 5.
   const items = Array.from({ length: 6 }, (_, i) => it({ id: `pr:${i}`, disposition: "WAITING_EXTERNAL" }));

@@ -13,6 +13,32 @@ import { SNAPSHOT_TTL_MS, rankItems } from "./patrol-classify.mjs";
 
 export const SCHEMA_VERSION = 1;
 export const ALL_CLEAR = "Nothing waiting on you";
+
+// The scan surfaces patrol must have actually read before the reserved phrase above is
+// allowed. Adding a collector source means adding it here too — deliberately, so that
+// growing the scan cannot silently widen what "all clear" is willing to claim.
+export const REQUIRED_SOURCES = ["pullRequests", "worktrees", "loops", "parkedMigrations", "gateHealth"];
+
+// `collectorBuild()` returns `<sha>`, `<sha>-dirty`, `<sha>-unverified`, or `unknown`. A
+// blind `.slice(0, 12)` shortened the SHA and threw the SUFFIX away with it — so a report
+// produced by a modified, unverified collector was indistinguishable from one produced by
+// a clean checkout. Observed on a real run 2026-08-25: the header read `collector
+// 65a1a4921dfa` while the working tree carried uncommitted collector changes. Shorten the
+// SHA; never drop the qualifier, because the qualifier is the part that carries warning.
+export function shortBuild(build) {
+  const s = String(build ?? "");
+  const m = s.match(/^([0-9a-f]{7,40})(-.*)?$/i);
+  return m ? m[1].slice(0, 12) + (m[2] ?? "") : s.slice(0, 40);
+}
+
+export function sourceRoster(snapshot) {
+  const list = Array.isArray(snapshot?.sources) ? snapshot.sources : [];
+  const present = new Set(list.map((s) => s?.name));
+  return {
+    missing: REQUIRED_SOURCES.filter((n) => !present.has(n)),
+    failed: list.filter((s) => s?.status !== "OK").map((s) => `${s?.name}=${s?.status}`),
+  };
+}
 export const DEFAULT_LANE_CAP = 5;
 
 export const EXIT = Object.freeze({
@@ -134,12 +160,22 @@ export function renderReport(snapshot, items, { nowMs, expectedRunId, expectedRe
 
   // Every condition in §10 of the classifier contract. All must hold.
   //
+  // NOTE the roster below is spelled out here rather than imported from the collector.
+  // That duplication is deliberate: the renderer is the layer that must be unable to fake
+  // an all-clear, so it cannot take its idea of "what a complete scan looks like" from the
+  // very layer whose silent failure it exists to catch.
+  //
   // `sources` is checked HERE as well as by the classifier's SCAN_ERROR items. In the real
   // pipeline a failed source produces such an item and that alone suppresses the phrase —
   // but the renderer owns the all-clear, and a check that depends on another layer having
   // done its job is two checks that do not bind. `complete` covers only REQUIRED sources,
   // so an ERROR in an optional one would otherwise slip through here.
-  const allSourcesOk = (snapshot.sources ?? []).every((s) => s?.status === "OK");
+  // ...and `every()` over an EMPTY array is TRUE. A snapshot carrying `sources: []` — a
+  // collector that died before registering anything, a truncated write, a hand-authored
+  // file — therefore satisfied "no source failed" while having read NOTHING, and could
+  // reach the all-clear. Round 10. So the renderer now demands the roster BY NAME.
+  const { missing: missingSources, failed: failedSources } = sourceRoster(snapshot);
+  const allSourcesOk = missingSources.length === 0 && failedSources.length === 0;
   const allClear =
     snapshot.complete === true &&
     allSourcesOk &&
@@ -151,7 +187,7 @@ export function renderReport(snapshot, items, { nowMs, expectedRunId, expectedRe
     actionableAlerts === 0;
 
   const header = [
-    `PATROL — ${snapshot.generatedAt} (collector ${String(snapshot.collectorCommit).slice(0, 12)})`,
+    `PATROL — ${snapshot.generatedAt} (collector ${shortBuild(snapshot.collectorCommit)})`,
     `items ${ranked.length} · needs you ${counts.NEEDS_MASON} · agent ${counts.AGENT_OWNS} · waiting ${counts.WAITING_EXTERNAL} · undetermined ${counts.INDETERMINATE} · scan errors ${counts.SCAN_ERROR} · idle ${counts.IDLE}`,
     "",
   ];
@@ -164,10 +200,11 @@ export function renderReport(snapshot, items, { nowMs, expectedRunId, expectedRe
     if (counts.NEEDS_MASON > 0) why.push(`${counts.NEEDS_MASON} item(s) need your decision`);
     if (counts.SCAN_ERROR > 0) why.push(`${counts.SCAN_ERROR} source(s) could not be read`);
     if (counts.INDETERMINATE > 0) why.push(`${counts.INDETERMINATE} item(s) could not be determined`);
-    if (!allSourcesOk) {
-      const bad = (snapshot.sources ?? []).filter((s) => s?.status !== "OK").map((s) => `${s?.name}=${s?.status}`);
-      why.push(`source(s) not fully read: ${bad.join(", ")}`);
-    }
+    if (failedSources.length > 0) why.push(`source(s) not fully read: ${failedSources.join(", ")}`);
+    // Named separately from a failure: "the collector never ran this" and "the collector
+    // ran it and it errored" are different problems, and silently merging them is how a
+    // missing source reads as a transient blip.
+    if (missingSources.length > 0) why.push(`source(s) missing from the scan entirely: ${missingSources.join(", ")}`);
     if (hiddenTotal > 0) why.push(`${hiddenTotal} item(s) hidden by the display cap (highest hidden severity ${highestHiddenSeverity})`);
     if (actionableBlockers > 0) why.push(`${actionableBlockers} open blocker(s)`);
     if (actionableAlerts > 0) why.push(`${actionableAlerts} open alert(s)`);

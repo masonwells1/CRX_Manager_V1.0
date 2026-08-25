@@ -167,7 +167,16 @@ by the display cap gain +1 severity per full day hidden.
 
 The renderer emits the exact phrase `Nothing waiting on you` only when **all** hold:
 
-1. snapshot `complete === true` and every source `OK`
+1. snapshot `complete === true`, **every one of the five named sources present**
+   (`pullRequests`, `worktrees`, `loops`, `parkedMigrations`, `gateHealth`), and every
+   source `OK`
+   - Presence is checked **by name**, not by "none of them failed". `every()` over an empty
+     array is `true`, so a snapshot carrying `sources: []` — or a non-array, or a missing key —
+     previously satisfied condition 1 having read nothing at all (Codex round 10, finding 4).
+   - The roster is spelled out in the renderer rather than imported from the collector. The
+     renderer is the layer that must be unable to fake an all-clear, so it cannot take its
+     definition of a complete scan from the layer whose silent failure it is checking for.
+   - Adding a collector source means adding it to `REQUIRED_SOURCES` in the same change.
 2. snapshot not expired at emission time
 3. zero `NEEDS_MASON` items
 4. zero `SCAN_ERROR` items

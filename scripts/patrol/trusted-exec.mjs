@@ -1,20 +1,25 @@
 #!/usr/bin/env node
 // Trusted executable + minimal environment for patrol.
 //
-// Patrol is meant to run on a schedule, unattended, under Mason's OS account. That raises
-// the bar above "a script he runs by hand": resolving `git` / `gh` / `powershell` from
-// PATH lets anything earlier on PATH impersonate them, and inheriting Git configuration
-// lets global/system config steer the process. Worse, `git status` runs Git's worktree
-// conversion pipeline, so a repository-local `filter.<name>.clean` command executes —
-// hourly, across 28 worktrees, as him.
+// Resolving `git` / `gh` / `powershell` from PATH lets anything earlier on PATH impersonate
+// them, and inheriting Git configuration lets global/system config steer the process. Both
+// are removed here with fixed absolute executables under one minimal environment — the
+// pattern PR #455 established for the proof wrapper. Cheap, and it fails closed when a
+// trusted executable is absent rather than falling back to a lookup.
 //
-// This mirrors the pattern PR #455 established for the proof wrapper: fixed absolute
-// executables, one minimal environment, and no ambient configuration.
+// SCOPE, stated so it is not over-read: this does NOT fully defend against repository-LOCAL
+// Git configuration. `git status` runs Git's conversion pipeline, so a repo-local
+// `filter.*.clean` executes — verified by execution on 2026-08-25, not assumed. The
+// fsmonitor half of that surface IS closed, by a command-line override that cannot fail
+// open (see SAFE_BY_CONSTRUCTION below); the filter half has no generic off switch.
 //
-// What this does NOT do: `GIT_ATTR_NOSYSTEM` disables the *system* attributes file but
-// not an in-repo `.gitattributes`, and there is no environment switch that disables
-// repository-local filters. So a filter is handled by REFUSING to scan that worktree
-// (see `worktreeFilterRisk`) rather than by hoping it is benign.
+// That residual exposure is the repo's existing baseline, not something patrol adds:
+// `scripts/fleet-status.mjs` runs `git status --porcelain -uall` in EVERY worktree
+// (`dirtyCount()`, line 225) through a bare `execFileSync("git", …)` — a PATH lookup
+// inheriting the full ambient environment, with no config scan and none of the hardening
+// above. Patrol after this change is strictly better protected than a command Mason already
+// runs whenever he asks "where are we at?". See the note at the foot of this file for the
+// scanner that tried to close the filter half, and why it was deleted rather than fixed.
 
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -71,8 +76,24 @@ export function trustedGhEnv() {
   return trustedEnv(["GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "GH_CONFIG_DIR", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME"]);
 }
 
+// `-c core.fsmonitor=false` is SAFE BY CONSTRUCTION and belongs here rather than in a
+// scanner. Command-line `-c` outranks repository-local config, so this closes the
+// fsmonitor vector outright — no config read, no parsing, nothing that can fail open.
+//
+// Measured 2026-08-25 against real repositories rather than assumed:
+//   plain `git status`               → the configured command EXECUTED
+//   `git -c core.fsmonitor= status`  → blocked
+//   `git -c core.fsmonitor=false …`  → blocked
+//
+// It does NOT close the `filter.*.clean` vector, and no generic flag does — the same probe
+// showed `-c core.attributesFile=NUL` still executes the filter, and suppressing one
+// requires naming its driver, which means reading the config first. That read is exactly
+// the scanner deleted at the foot of this file for failing open three rounds running.
+// So: take the vector that closes for free, and do not pretend the other one is closed.
+const SAFE_BY_CONSTRUCTION = ["-c", "core.fsmonitor=false"];
+
 export function git(args, { cwd, timeout = 20_000, maxBuffer = 32 * 1024 * 1024 } = {}) {
-  return execFileSync(trustedGit(), ["--no-replace-objects", ...args], {
+  return execFileSync(trustedGit(), ["--no-replace-objects", ...SAFE_BY_CONSTRUCTION, ...args], {
     cwd, encoding: "utf8", timeout, maxBuffer,
     stdio: ["ignore", "pipe", "ignore"], env: trustedEnv(), windowsHide: true, shell: false,
   });
@@ -92,64 +113,26 @@ export function powershell(script, { timeout = 30_000 } = {}) {
   });
 }
 
-// ── repository-local filter / hook risk ─────────────────────────────────────
-// `git status` applies clean filters, so a worktree whose LOCAL config defines a filter
-// command can execute it. No environment variable disables repo-local filters, so the
-// only safe answer is not to run status there.
+// ── REMOVED 2026-08-25: the repository-config filter guard ──────────────────
 //
-// Reading config is itself safe: `git config --list` never runs a filter.
-const DANGEROUS_KEY = /^(filter\.[^=]*\.(clean|smudge|process)|core\.fsmonitor|diff\.[^=]*\.textconv|core\.sshcommand|core\.gitproxy|uploadpack\.packobjectshook)=/i;
-
-export function dangerousConfigKeys(configListText) {
-  // A Set, not an array: without the worktreeConfig extension Git's `--worktree` scope
-  // falls back to reporting local config, so the two reads overlap and a key would
-  // otherwise be listed twice in the refusal message.
-  const out = new Set();
-  for (const line of String(configListText ?? "").split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (!DANGEROUS_KEY.test(trimmed)) continue;
-    const [key, ...rest] = trimmed.split("=");
-    const value = rest.join("=").trim();
-    // `core.fsmonitor=false|true` is a boolean, not a command — only a command is a risk.
-    if (/^core\.fsmonitor$/i.test(key) && /^(true|false|)$/i.test(value)) continue;
-    if (value === "") continue; // an empty value disables the filter rather than running one
-    out.add(key);
-  }
-  return [...out];
-}
-
-// Returns null when the worktree is safe to scan, or a reason string when it is not.
-// Unreadable config fails CLOSED — an unknown configuration is not a safe one.
-export function worktreeFilterRisk(wtPath, runGit = git) {
-  // BOTH scopes. Reading only `--local` missed per-worktree configuration, which Git
-  // consumes whenever `extensions.worktreeConfig` is enabled — a command-bearing filter or
-  // fsmonitor there bypassed the guard entirely.
-  //
-  // `--worktree` errors when the extension is off, which is the common case and NOT a
-  // risk signal; that specific error is tolerated. Any other unreadable scope fails CLOSED,
-  // because an unknown configuration is not a safe one.
-  let text = "";
-  try {
-    text += runGit(["config", "--local", "--list"], { cwd: wtPath, timeout: 10_000 });
-  } catch (e) {
-    return `local Git configuration is unreadable (${String(e.message).slice(0, 80)}) — not scanned`;
-  }
-  // Whether the per-worktree scope EXISTS is decided from the local config we just read,
-  // not from error text. An execFileSync failure message embeds the whole command line —
-  // which contains "--worktree" — so pattern-matching the error treated EVERY failure
-  // (not a repository, permission denied, timeout) as "extension disabled" and failed
-  // OPEN. The unit test missed it because a hand-written Error lacks that command line.
-  const worktreeScopeEnabled = /^extensions\.worktreeconfig=true$/im.test(text);
-  if (worktreeScopeEnabled) {
-    try {
-      text += `\n${runGit(["config", "--worktree", "--list"], { cwd: wtPath, timeout: 10_000 })}`;
-    } catch (e) {
-      // The scope is enabled, so this read had to succeed. Any failure is unknown config.
-      return `per-worktree Git configuration is unreadable (${String(e.message ?? "").slice(0, 80)}) — not scanned`;
-    }
-  }
-  const keys = dangerousConfigKeys(text);
-  if (keys.length === 0) return null;
-  return `Git config defines executable ${keys.join(", ")} — patrol will not run status here`;
-}
+// `worktreeFilterRisk()` / `dangerousConfigKeys()` used to live here: they scanned each
+// worktree's Git config for command-bearing filters and refused to run `git status` where
+// one existed. Mason approved deleting them.
+//
+// Why: the guard existed for the SCHEDULED threat model — patrol running hourly, unattended,
+// under his account. That capability was dropped, and the guard was not re-justified against
+// what remained. Interactive patrol runs `git status` exactly as `/fleet` and every npm
+// script in this repo already do: PATH-resolved, unscanned. The guard bought no protection
+// over that existing baseline.
+//
+// What it cost: three consecutive adversarial review rounds each found it failing OPEN —
+// an unguarded provenance call, error-text matching that swallowed every failure, then
+// boolean forms (`yes`/`on`/`1`/valueless) it did not recognise. Each fix was right for the
+// case in hand and wrong for the next. A novel mechanism that repeatedly fails open, guarding
+// a door already open elsewhere, is worse than no mechanism: it invites false confidence.
+//
+// If patrol is ever scheduled, this is part of the design pass that decision requires —
+// see `docs/manual/KNOWN_ISSUES.md`. Do not reinstate it piecemeal.
+//
+// The fixed-executable + minimal-environment layer above STAYS. It is cheap, has never
+// misbehaved, and removes PATH impersonation and ambient Git configuration outright.

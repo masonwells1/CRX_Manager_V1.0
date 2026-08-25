@@ -9,11 +9,33 @@ one would reopen a security property. Detail below.
 executables under one minimal environment (system/global Git config disabled, replacement
 objects off, system attributes off, no terminal prompt, `PATH` narrowed to the trusted Git
 directory plus the system directory, inherited `GIT_*` overrides dropped by allowlist).
-Because no environment switch disables **repository-local** filters, and `git status` runs
-Git's conversion pipeline, patrol now *refuses* to run status in any worktree whose local
-config defines a `filter.*.clean/smudge/process`, `core.fsmonitor` command, `textconv`, or
-ssh/proxy override — and fails closed when that config is unreadable. Same pattern PR #455
-established for the proof wrapper.
+**Repository-local config — PARTIALLY closed, revised 2026-08-25. Read this before
+believing the sentence above covers everything.** `git status` runs Git's conversion
+pipeline, so repo-local command-bearing config executes. Measured against real repositories
+on 2026-08-25 rather than assumed:
+
+| vector | plain `git status` | with a command-line `-c` override |
+|---|---|---|
+| `core.fsmonitor` | **executes** | **blocked** (`-c core.fsmonitor=false`) |
+| `filter.*.clean` | **executes** | **still executes** (`-c core.attributesFile=NUL` does not help; suppressing it requires naming the driver, which requires reading the config first) |
+
+So patrol closes the fsmonitor half **by construction** — a fixed flag, no config read,
+nothing that can fail open — and leaves the filter half open, declared rather than
+half-guarded.
+
+A scanner (`worktreeFilterRisk` / `dangerousConfigKeys`) did previously refuse to run status
+in a worktree whose config defined a filter. **It was deleted on 2026-08-25** because it
+failed **open** in three consecutive review rounds (an unguarded call site; error-text
+matching that swallowed every failure; unrecognised Git boolean spellings), and because the
+residual exposure is the repo's existing baseline rather than something patrol adds:
+`scripts/fleet-status.mjs` runs `git status --porcelain -uall` across **every** worktree
+through a bare `execFileSync("git", …)` — a PATH lookup inheriting the full ambient
+environment, with no scan and none of patrol's hardening. Patrol after the deletion is
+strictly better protected than a command already run whenever Mason asks "where are we at?".
+**Open follow-up: apply the same one-line fsmonitor override to `fleet-status.mjs`.**
+**Scheduling patrol later reopens this in full and needs its own design pass — do not
+reinstate the scanner piecemeal.** Same fixed-executable pattern PR #455 established for the
+review wrapper still applies and stays.
 (2) **Forgeable parked state — CLOSED 2026-08-24.** `isParked()` now honours **labels
 only**; a `PARKED` title is ignored. Applying a label requires write access, so it carries
 authorization a self-authored title does not. **Consequence Mason should know:** PRs #361

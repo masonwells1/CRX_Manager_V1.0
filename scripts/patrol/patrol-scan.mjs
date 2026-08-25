@@ -23,7 +23,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { MIN_STABLE_INTERVAL_MS, SNAPSHOT_TTL_MS } from "./patrol-classify.mjs";
 import { collectLoops, collectParkedMigrations, collectGateHealth } from "./patrol-sources.mjs";
-import { git as trustedGit, gh as trustedGh, worktreeFilterRisk } from "./trusted-exec.mjs";
+import { git as trustedGit, gh as trustedGh } from "./trusted-exec.mjs";
 
 const SCHEMA_VERSION = 1;
 const CODERABBIT_CONTEXT = "CodeRabbit";
@@ -357,16 +357,13 @@ function collectWorktrees(repoRoot, openPrBranches) {
       const branch = /^branch refs\/heads\/(.+)$/m.exec(block)?.[1] ?? "(detached)";
       if (!wtPath) continue;
       const wt = { path: wtPath, branch, dirtyCount: 0, merged: false, hasOpenPr: openPrBranches.has(branch), lastHumanActivityAt: null };
-      // `git status` runs the worktree conversion pipeline, so a repository-local
-      // filter.<name>.clean command would EXECUTE here — hourly, under Mason's account,
-      // once patrol is scheduled. No environment switch disables repo-local filters, so a
-      // risky worktree is reported as unobservable instead of being scanned.
-      const risk = worktreeFilterRisk(wtPath);
-      if (risk) {
-        wt.observationError = risk;
-        out.push(wt);
-        continue;
-      }
+      // `git status` here enters Git's conversion pipeline, so a repository-local
+      // `filter.<name>.clean` executes — measured, not assumed (2026-08-25). The scanner
+      // that used to refuse such worktrees was deleted: it failed open in three consecutive
+      // review rounds, and `scripts/fleet-status.mjs` runs the same command across the same
+      // worktrees with strictly less protection. `trusted-exec.mjs` closes the fsmonitor
+      // half by construction; the filter half is the repo's existing baseline exposure and
+      // is recorded as such in docs/manual/KNOWN_ISSUES.md rather than half-guarded here.
       try {
         wt.dirtyCount = git(["status", "--porcelain"], wtPath).split("\n").filter((l) => l.trim()).length;
         const head = git(["rev-parse", "HEAD"], wtPath);
@@ -387,11 +384,11 @@ function collectWorktrees(repoRoot, openPrBranches) {
 function collectorBuild() {
   try {
     const head = git(["rev-parse", "HEAD"], SCRIPT_DIR);
-    // This `git status` enters Git's conversion pipeline exactly like the worktree scan
-    // does, so it needs the same guard. It was missed because it looks like harmless
-    // provenance bookkeeping — but a configured content filter would execute here on every
-    // run. Interactive-only scope removes UNATTENDED execution; it does not remove this.
-    if (worktreeFilterRisk(SCRIPT_DIR)) return `${head}-unverified`;
+    // Same conversion-pipeline exposure as the worktree scan above, and the same answer:
+    // hardened invocation, no scanner. This call site is called out because it is the one
+    // the deleted guard MISSED for a whole review round — it reads as harmless provenance
+    // bookkeeping, so any future guard work must start by enumerating call sites, not by
+    // patching the one in front of it.
     const dirty = git(["status", "--porcelain", "--", SCRIPT_DIR], SCRIPT_DIR).trim().length > 0;
     return dirty ? `${head}-dirty` : head;
   } catch { return "unknown"; }

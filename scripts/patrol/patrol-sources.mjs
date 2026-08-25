@@ -15,7 +15,6 @@ import {
   powershell as trustedPowershell,
   trustedGit as trustedGitPath,
   trustedEnv,
-  worktreeFilterRisk,
 } from "./trusted-exec.mjs";
 import {
   parseWorktreePorcelain,
@@ -197,13 +196,9 @@ export function collectParkedMigrations(repoRoot) {
     const dirtyCount = (wtPath) => {
       if (dirtyCache.has(wtPath)) return dirtyCache.get(wtPath);
       let n = null;
-      // Same conversion-pipeline hazard as the worktree collector: refuse rather than run
-      // status where a repo-local filter command could execute. `null` is the library's
-      // existing "unreadable" signal, which it already treats conservatively.
-      if (worktreeFilterRisk(wtPath, (a, o) => trustedGitRun(a, o))) {
-        dirtyCache.set(wtPath, null);
-        return null;
-      }
+      // Same conversion-pipeline exposure as the worktree collector, and the same answer:
+      // the hardened invocation in trusted-exec.mjs, no scanner. `null` remains the
+      // library's "unreadable" signal and is still treated conservatively downstream.
       try { n = gitOut(["status", "--porcelain", "-uall"], wtPath).split("\n").filter((l) => l.trim()).length; } catch { n = null; }
       dirtyCache.set(wtPath, n);
       return n;
@@ -334,6 +329,35 @@ function wrapperStdoutSection(captureText) {
   return end === -1 ? text.slice(start) : text.slice(start, end);
 }
 
+// The wrapper stamps the reviewer's real exit status in the capture HEADER, above its own
+// `## STDOUT` section. Read it from the header only: the reviewed diff is embedded further
+// down, so an `Exit code: 0` line appearing inside reviewed source would otherwise be as
+// convincing as the wrapper's own. `write-codex-push-proof.mjs` already refuses to mint a
+// verdict on a non-zero status (`codexReviewProofVerdict` returns null unless status === 0),
+// so a capture carrying one describes a run that did NOT complete — whatever its text says.
+const EXIT_CODE_LINE = /^Exit code:[ \t]*(\d+|unknown)[ \t]*$/m;
+
+export function captureExitStatus(captureText) {
+  const text = String(captureText ?? "");
+  const start = text.indexOf("## STDOUT");
+  const header = start === -1 ? text : text.slice(0, start);
+  const m = header.match(EXIT_CODE_LINE);
+  // Fail closed: a capture with no wrapper-stamped status is not evidence of a completed run.
+  if (!m) return { ok: false, reason: "the capture carries no wrapper-stamped exit code" };
+  if (m[1] === "unknown") return { ok: false, reason: "the wrapper could not determine the reviewer's exit status" };
+  const code = Number(m[1]);
+  if (code !== 0) return { ok: false, reason: `the reviewer exited ${code}, so the run did not complete` };
+  return { ok: true, reason: null };
+}
+
+// NOT bound to stderr CONTENT, deliberately. The wrapper runs stderr through
+// `safeReviewCaptureText`, which replaces the whole section with a hash when it contains
+// secret-shaped text — observed on the real capture of 2026-08-25T09:47:01Z, where the
+// entire STDERR body was omitted. A crash probe over a section that is routinely redacted
+// would read "no crash" from absence, which is exactly the fail-open shape this module
+// exists to avoid. Exit status is the honest signal; crash detection stays scoped to the
+// wrapper's STDOUT section in terminalVerdict() below.
+
 export function terminalVerdict(captureText) {
   const section = wrapperStdoutSection(captureText);
   // No wrapper-authored section means we cannot tell the reviewer's own words from the
@@ -360,6 +384,11 @@ export function judgeCodexGate({ captureText, captureAgeMs }, ttlMs = GATE_EVIDE
   if (captureText === null || captureAgeMs === null) return { state: "UNKNOWN", detail: "no recent Codex run to judge from" };
   if (captureAgeMs > ttlMs) return { state: "UNKNOWN", detail: "the most recent Codex evidence is over a day old" };
   if (USAGE_LIMIT.test(captureText)) return { state: "DOWN", detail: "the last Codex run stopped on a usage limit — the gate did not run, which is not the same as the gate saying no" };
+  // Exit status first: a well-formed verdict marker inside a run that crashed or was killed
+  // is not a review. This is the round-10 finding — health was read from output text alone,
+  // so a truncated run whose text happened to carry a marker reported HEALTHY.
+  const exit = captureExitStatus(captureText);
+  if (!exit.ok) return { state: "UNKNOWN", detail: `the last Codex run is not a completed review (${exit.reason})` };
   const { verdict, reason } = terminalVerdict(captureText);
   // A BLOCKERS verdict is a HEALTHY gate that found problems — the gate ran. Conflating
   // "gate down" with "gate says no" is the distinction this whole probe exists to keep.
