@@ -1457,7 +1457,10 @@ git() { return 0; }
   assert(ci.includes('types: [opened, reopened, synchronize, ready_for_review, edited]'));
   assert(candidateContainmentJob.includes("github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'"));
   assert(candidateContainmentJob.includes("github.event.action != 'edited' || github.event.changes.base.ref.from != ''"), 'title/body edits must skip runner work while base retargets rerun containment');
-  assert(ci.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"), 'only pull-request concurrency groups may cancel stale runs');
+  assert(
+    ci.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}"),
+    'only meaningful pull-request events may cancel stale proof runs; title/body edits must not',
+  );
   const ciCheckoutBlocks = ci.split('uses: actions/checkout@v7').slice(1);
   assert.equal(ciCheckoutBlocks.length, 5, 'CI checkout count changed; review least-privilege settings');
   for (const block of ciCheckoutBlocks) {

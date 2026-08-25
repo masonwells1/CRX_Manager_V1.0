@@ -178,7 +178,7 @@ current commit containing all bounded successor corrections.
 
 **Shared guidance:** edit `AGENTS.md` intentionally. `CLAUDE.md` imports it and contains only Claude-specific routing. Verify with `npm run check:agent-guidance`.
 
-**Refresh architecture map:** `npm run generate-map` (or `node scripts/generate-workflow-map.mjs`). Auto-runs in pre-commit hook and stages `docs/app-workflow-map.html` automatically.
+**Refresh architecture map:** `npm run generate-map` (or `node scripts/generate-workflow-map.mjs`). Run and stage the generated `docs/app-workflow-map.html` explicitly when workflow-bearing source changes; CI verifies freshness.
 
 **Migration version responsibility (2026-07-18):** `migration-drift-reviewer` checks disk timestamp ordering and reminds the orchestrator to run the mandatory live `list_migrations` check. Because that isolated reviewer cannot call Supabase MCP itself, unavailable or missing live high-water evidence is emitted as a **HIGH** finding; the orchestrator must supply/complete the live `list_migrations` check and clear that finding before `apply_migration`. Migration-history coverage accepts either the full filename or its unique timestamp prefix.
 

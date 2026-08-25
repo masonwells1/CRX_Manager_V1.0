@@ -60,4 +60,4 @@ if printf '%s\n' "$STAGED_FILES" | grep -Eq '^(package(-lock)?\.json|\.nvmrc)$';
 fi
 
 echo ""
-echo "✅ Fast staged-file safety checks passed. Full product proof runs at pre-push and in CI."
+echo "✅ Fast staged-file safety checks passed. Full product proof runs in CI; containment, typecheck, and build also run at pre-push."
