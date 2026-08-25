@@ -64,6 +64,7 @@ export function evaluateMigrationApply({
   cwd,
   now = Date.now(),
   gitWorktreeList,
+  requireExactProofName = false,
 } = {}) {
   const stateDir = path.join(projectDir, ".claude", "session-state");
 
@@ -330,11 +331,28 @@ export function evaluateMigrationApply({
         if (!(ageMs >= 0 && ageMs <= MAX_AGE_MS)) continue;
         // Match if proof migration name appears in the apply_migration `name` field
         // or if the apply_migration name matches.
+        // SUBSTRING MATCHING IS THE REPLAY MECHANISM (Codex P1, PR #470 round 7).
+        // A name that CONTAINS another migration's name inherits its reviewer proof:
+        // copy reviewed bytes to `99999999999999_alias_<old-name>.sql` and the proof
+        // for `<old-name>` still matches, the queryHash still matches (same SQL), and
+        // the ordering check reads the alias's leading stamp as newest. Codex
+        // reproduced `APPLY GATE PASSED` on a real dry run. Two earlier fixes — removing
+        // `--name`, then requiring one 14-digit stamp — each closed a SHAPE of the alias
+        // and left the mechanism intact; a legacy 8-digit name like
+        // `20260210_fix_rls_critical_issues` defeated the stamp-count rule outright.
+        //
+        // `requireExactProofName` makes the proof bind to exactly one migration.
+        // scripts/apply-migration-file.mjs sets it. The PreToolUse hook does NOT yet:
+        // that path's substring matching is a pre-existing documented weakness
+        // (see the sessionProofDirs note above), and tightening it repo-wide changes
+        // behaviour for every MCP apply, which deserves its own reviewed change rather
+        // than riding along at the end of this one. The same alias attack applies there
+        // — it is not introduced here, and it is not fixed here either.
         const proofName = (data.migration || "").toString();
-        if (
-          proofName &&
-          (migName.includes(proofName) || proofName.includes(migName) || migName === proofName)
-        ) {
+        const nameMatches = requireExactProofName
+          ? proofName === migName
+          : (migName.includes(proofName) || proofName.includes(migName) || migName === proofName);
+        if (proofName && nameMatches) {
           const findings = (data.findings || "").toString();
           if (findings === "clean" || findings === "blockers-fixed") {
             // Content-binding: if the proof recorded a queryHash, it must match the SQL
