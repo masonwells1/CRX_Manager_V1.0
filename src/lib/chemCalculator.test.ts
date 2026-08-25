@@ -661,6 +661,37 @@ describe('chemCalculator — rateDenominatorIsUnrecognized (the original diverge
       expect(rateDenominatorIsUnrecognized(u)).toBe(false);
     }
   });
+
+  describe('STACKED denominators — subtractive, mirroring the server round-8/11 rule (Codex Medium, 2026-08-25)', () => {
+    it("flags a stacked denominator hiding behind a trailing '/ac'", () => {
+      // The old ends-with test passed these; baseUnitOfRate then kept only 'oz',
+      // billing a per-hundredweight rate as per-acre — the server's worst round-8 bug.
+      for (const u of ['oz/cwt/ac', 'fl oz/100 gal/acre', 'lb/ton/a']) {
+        expect(rateDenominatorIsUnrecognized(u)).toBe(true);
+      }
+    });
+
+    it('flags the spelled-out stacked form too', () => {
+      expect(rateDenominatorIsUnrecognized('oz per cwt per acre')).toBe(true);
+    });
+
+    it("strips exactly ONE suffix — 'oz per acre/ac' keeps its second denominator (round 11)", () => {
+      expect(rateDenominatorIsUnrecognized('oz per acre/ac')).toBe(true);
+    });
+
+    it("leaves the pure denominator-only strings to the blank-unit rule, not this one", () => {
+      // 'per acre' names no unit at all — chemUnitUnspecifiedSides owns that refusal,
+      // with a message about blankness rather than a wrong-denominator message.
+      for (const u of ['per acre', 'per-acre', ' per ac']) {
+        expect(rateDenominatorIsUnrecognized(u)).toBe(false);
+        expect(chemUnitUnspecifiedSides(u, 'oz')?.rateBlank).toBe(true);
+      }
+    });
+
+    it("does not misread 'per' inside a word", () => {
+      expect(rateDenominatorIsUnrecognized('supersack/ac')).toBe(false);
+    });
+  });
 });
 
 describe('chemCalculator — a RELOADED row is never rewritten (Codex P1 revert)', () => {

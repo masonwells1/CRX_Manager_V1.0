@@ -480,6 +480,56 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     }, { timeout: 15000 });
   }, 30000);
 
+  it('refuses NEGATIVE quantities and NEGATIVE cents instead of billing a negative line (Codex High, 2026-08-25)', async () => {
+    // The decimal and safe-integer gates test grammar and precision, not SIGN, and the
+    // input's HTML min="0" is advisory — a typed or pasted '-5' reaches the click handler.
+    // A negative quantity times a positive price bills a NEGATIVE invoice line.
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        return buildChain({
+          data: makeJob({
+            ...HAZARD_CHEM,
+            quantity: 10, unit: 'pt', rate_per_acre: 0.1, rate_unit: 'pt/ac',
+          }),
+          error: null,
+        });
+      }
+      if (table === 'products') return buildChain({ data: [DRY_PRODUCT], error: null });
+      return buildChain({ data: [], error: null });
+    });
+    render(
+      <MemoryRouter initialEntries={['/jobs/job-1?tab=chemicals']}>
+        <Routes><Route path="/jobs/:id" element={<JobDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const qtyInput = await waitFor(() => {
+      const found = screen.getAllByRole('spinbutton')
+        .find((el) => (el as HTMLInputElement).value === '10');
+      if (!found) throw new Error('quantity input not found');
+      return found as HTMLInputElement;
+    }, { timeout: 15000 });
+    fireEvent.change(qtyInput, { target: { value: '-5' } });
+    expect(await screen.findByText(/quantity is negative/i, {}, { timeout: 15000 })).toBeTruthy();
+
+    // Restore the quantity; a negative PRICE must be refused by the cents gate.
+    fireEvent.change(qtyInput, { target: { value: '10' } });
+    const priceInput = await waitFor(() => {
+      const found = screen.getAllByRole('spinbutton')
+        .find((el) => (el as HTMLInputElement).value === '150');
+      if (!found) throw new Error('price input not found');
+      return found as HTMLInputElement;
+    }, { timeout: 15000 });
+    fireEvent.change(priceInput, { target: { value: '-150' } });
+    expect(await screen.findByText(/blank, negative, or not a whole number of cents/i, {}, { timeout: 15000 })).toBeTruthy();
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await waitFor(() => {
+      expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+    }, { timeout: 15000 });
+  }, 30000);
+
   it('refuses a rate unit measured per something other than acres', async () => {
     // 'oz/cwt' is per hundredweight. baseUnitOfRate strips everything after the first '/',
     // so the app treated it as oz PER ACRE and filled quantity = rate x acres — not a unit
@@ -515,7 +565,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     await waitFor(() => expect(mockToast).toHaveBeenCalled());
     const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
-    expect(errors.some((m) => /its price is blank, or is not a whole number of cents/i.test(m))).toBe(true);
+    expect(errors.some((m) => /its price is blank, negative, or not a whole number of cents/i.test(m))).toBe(true);
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
   }, 30000);
 

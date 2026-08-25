@@ -1491,6 +1491,17 @@ export default function JobDetail() {
         byIndex.set(i, 'its quantity has more decimal places than can be saved exactly, so the line total and the job total would not agree — round it to 4 decimal places or fewer');
         return;
       }
+      // NEGATIVE amounts are refused outright (Codex High, 2026-08-25). The decimal and
+      // safe-integer gates test grammar and precision, not SIGN, and the input's
+      // HTML min="0" is advisory — a typed or pasted '-5' reaches the click handler
+      // untouched. A negative quantity times a positive price bills a NEGATIVE line, and
+      // negative cents invert it again; the server half (PR #446) refuses these shapes
+      // (CHEM_QUANTITY_NOT_FINITE covers sign), so the mirror must too — a mirror more
+      // lenient than the SQL is how a hard server failure ships with no on-screen warning.
+      if (parseFloat(c.quantity) < 0) {
+        byIndex.set(i, 'its quantity is negative — a line cannot apply or bill a negative amount; use a credit memo or a return for corrections');
+        return;
+      }
       // Cents are WHOLE, so the gate has to be stricter for them than for a quantity.
       // isExactDecimalText('150.7') is true, but the saved total (parseInt, below) and
       // buildJobChemicalsPayload both TRUNCATE it to 150 — the operator's number would
@@ -1503,9 +1514,9 @@ export default function JobDetail() {
       // ...992 and still reports as an integer, so the looser check would admit a value
       // that has already lost precision before any arithmetic runs. Refusing above 2^53
       // keeps every cents amount that reaches the total exactly representable.
-      ] as const).find(([, raw]) => !isExactDecimalText(raw) || !Number.isSafeInteger(Number(raw)));
+      ] as const).find(([, raw]) => !isExactDecimalText(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) < 0);
       if (badCents) {
-        byIndex.set(i, `its ${badCents[0]} is blank, or is not a whole number of cents, and would not be billed correctly`);
+        byIndex.set(i, `its ${badCents[0]} is blank, negative, or not a whole number of cents, and would not be billed correctly`);
       }
     });
     return byIndex;

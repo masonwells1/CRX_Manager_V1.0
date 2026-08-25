@@ -434,9 +434,18 @@ export function reconcileChemAutofillUnits(
 export function rateDenominatorIsUnrecognized(rateUnit: string | null | undefined): boolean {
   const raw = (rateUnit || '').trim().toLowerCase();
   if (raw === '') return false;
-  if (/\s*\/\s*(?:ac|acre|acres|a)\s*$/.test(raw)) return false;  // a recognised per-acre rate
-  if (/\s+per\s+acre$/.test(raw)) return false;
-  return raw.includes('/');
+  // SUBTRACTIVE, mirroring the server's round-8/round-11 rule exactly: remove ONE trailing
+  // per-acre suffix, then refuse if ANY denominator survives. The previous form asked only
+  // whether the string ENDS in a per-acre suffix — which 'oz/cwt/ac' satisfies — while
+  // baseUnitOfRate then discards everything after the FIRST slash, so a per-hundredweight
+  // rate sailed through as a plain per-acre 'oz' (Codex Medium, 2026-08-25; the server
+  // shipped and fixed this same bug as its worst round-8 finding). The second strip is
+  // conditional on the first not firing — round 11's lesson: "remove one and refuse what
+  // survives" is not the same rule as "remove every spelling and then look", and only the
+  // first is safe ('oz per acre/ac' must lose ONE suffix, not both).
+  let stripped = raw.replace(/\s*\/\s*(?:ac|acre|acres|a)\s*$/, '');
+  if (stripped === raw) stripped = raw.replace(/(?:^|[\s-])per[\s-]+(?:acres|acre|ac|a)$/, '');
+  return stripped.includes('/') || /(?:^|[\s-])per(?:[\s-]|$)/.test(stripped);
 }
 
 /** Which side(s) of a chemical line name no unit at all. See chemUnitUnspecifiedSides. */
