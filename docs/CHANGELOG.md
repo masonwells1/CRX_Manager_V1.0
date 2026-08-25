@@ -92,6 +92,10 @@ All significant development milestones, in reverse chronological order within ea
   The shared inspection has file-count and deadline ceilings that fail closed;
   six live probes cover control hooks, agent settings, existing/new migrations,
   environment files, and frontend cents logic, and both routing mutations fail.
+- The MCP junction regression now materializes its review-state target before
+  linking it, so Linux CI exercises the same canonical-path denial as Windows
+  instead of accidentally creating a dangling symlink and testing a different
+  filesystem condition.
 - The Quote Builder save-resume concurrency regression now creates a fresh
   quote, so crossing the 30-day stale-price threshold cannot bypass the path
   that the test is intended to prove.

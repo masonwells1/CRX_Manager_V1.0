@@ -730,8 +730,13 @@ ok(isDeny(r), "DC write_file targeting the linked-worktree .git pointer is denie
   const junctionParent = mkdtempSync(path.join(os.tmpdir(), "crx-mcp-junction-"));
   const junction = path.join(junctionParent, "notes");
   const stateDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".claude", "session-state");
+  const stateDirExisted = existsSync(stateDir);
   let junctionMade = false;
   try {
+    // A POSIX symlink may point at a missing target, unlike a Windows
+    // junction. Materialize the target so this exercises canonicalization on
+    // every CI platform instead of constructing a dangling Linux symlink.
+    if (!stateDirExisted) mkdirSync(stateDir, { recursive: true });
     symlinkSync(stateDir, junction, "junction");
     junctionMade = true;
   } catch {
@@ -743,6 +748,7 @@ ok(isDeny(r), "DC write_file targeting the linked-worktree .git pointer is denie
     ok(isDeny(r), "DC write_file into the review state directory THROUGH A JUNCTION is denied");
   }
   rmSync(junctionParent, { recursive: true, force: true });
+  if (!stateDirExisted) rmSync(stateDir, { recursive: true, force: true });
 }
 
 // A hard link is a second directory entry for the SAME file data, so its
