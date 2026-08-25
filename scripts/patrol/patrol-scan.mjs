@@ -345,6 +345,11 @@ function collectWorktrees(repoRoot, openPrBranches) {
 function collectorBuild() {
   try {
     const head = git(["rev-parse", "HEAD"], SCRIPT_DIR);
+    // This `git status` enters Git's conversion pipeline exactly like the worktree scan
+    // does, so it needs the same guard. It was missed because it looks like harmless
+    // provenance bookkeeping — but a configured content filter would execute here on every
+    // run. Interactive-only scope removes UNATTENDED execution; it does not remove this.
+    if (worktreeFilterRisk(SCRIPT_DIR)) return `${head}-unverified`;
     const dirty = git(["status", "--porcelain", "--", SCRIPT_DIR], SCRIPT_DIR).trim().length > 0;
     return dirty ? `${head}-dirty` : head;
   } catch { return "unknown"; }

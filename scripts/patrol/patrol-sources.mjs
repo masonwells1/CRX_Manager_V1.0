@@ -312,7 +312,23 @@ export function collectParkedMigrations(repoRoot) {
 // reviewed code merely mentioned a usage limit — which is what happened the first time
 // patrol reviewed this very file. Same trap as a guard that matches text instead of effect.
 const USAGE_LIMIT = /^\s*(?:ERROR|error)\b[^\n]*(?:usage limit|quota exceeded|insufficient (?:credits|quota)|rate limit)/m;
-const CLEAN_VERDICT = /^CODEX_PROOF_VERDICT:\s*CLEAN\s*$/m;
+const VERDICT_LINE = /^CODEX_PROOF_VERDICT:\s*(CLEAN|BLOCKERS)\s*$/gm;
+
+// The verdict must be the LAST one in the transcript and must be the only marker of its
+// kind, because the capture embeds the reviewed diff: a fixture (or reviewed source) that
+// merely contains `CODEX_PROOF_VERDICT: CLEAN` would otherwise report the gate HEALTHY
+// even when the run that followed it failed. Both CLEAN and BLOCKERS prove the reviewer
+// actually ran — only an absent or ambiguous verdict is "unknown".
+export function terminalVerdict(captureText) {
+  const found = [...String(captureText ?? "").matchAll(VERDICT_LINE)];
+  if (found.length === 0) return { verdict: null, reason: "no verdict marker" };
+  // Duplicated markers mean the diff carried one; treat that as unproven rather than
+  // guessing which is the reviewer's. (A genuine clean run repeats the SAME verdict in the
+  // structured section and the transcript tail, so identical repeats are fine.)
+  const distinct = new Set(found.map((m) => m[1]));
+  if (distinct.size > 1) return { verdict: null, reason: "conflicting verdict markers — one likely came from the reviewed diff" };
+  return { verdict: found[found.length - 1][1], reason: null };
+}
 
 // Health is judged from evidence, never assumed. Proving Codex healthy would mean
 // spending a review, so "no recent evidence" stays UNKNOWN rather than becoming HEALTHY.
@@ -320,8 +336,11 @@ export function judgeCodexGate({ captureText, captureAgeMs }, ttlMs = GATE_EVIDE
   if (captureText === null || captureAgeMs === null) return { state: "UNKNOWN", detail: "no recent Codex run to judge from" };
   if (captureAgeMs > ttlMs) return { state: "UNKNOWN", detail: "the most recent Codex evidence is over a day old" };
   if (USAGE_LIMIT.test(captureText)) return { state: "DOWN", detail: "the last Codex run stopped on a usage limit — the gate did not run, which is not the same as the gate saying no" };
-  if (CLEAN_VERDICT.test(captureText)) return { state: "HEALTHY", detail: "the last Codex run returned a verdict" };
-  return { state: "UNKNOWN", detail: "the last Codex run produced no parseable verdict" };
+  const { verdict, reason } = terminalVerdict(captureText);
+  // A BLOCKERS verdict is a HEALTHY gate that found problems — the gate ran. Conflating
+  // "gate down" with "gate says no" is the distinction this whole probe exists to keep.
+  if (verdict) return { state: "HEALTHY", detail: `the last Codex run returned a ${verdict} verdict` };
+  return { state: "UNKNOWN", detail: `the last Codex run produced no trustworthy verdict (${reason})` };
 }
 
 export function judgeCodeRabbitGate(descriptions) {

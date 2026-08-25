@@ -78,6 +78,43 @@ eq(dangerousConfigKeys(null), [], "missing config text does not throw");
   ok(/will not run status/.test(risk), "and the reason states patrol refuses to run status there");
 }
 eq(worktreeFilterRisk("C:/whatever", () => "user.name=Mason"), null, "an ordinary worktree is safe to scan");
+{
+  // Per-worktree config (extensions.worktreeConfig) is a SEPARATE scope Git also consumes.
+  // Reading only --local missed a command-bearing filter living there.
+  const calls = [];
+  const risk = worktreeFilterRisk("C:/whatever", (args) => {
+    calls.push(args.join(" "));
+    if (args.includes("--worktree")) return "filter.sneaky.clean=cmd /c calc";
+    return "user.name=Mason";
+  });
+  ok(calls.some((c) => c.includes("--local")), "the guard reads local config");
+  ok(calls.some((c) => c.includes("--worktree")), "AND per-worktree config");
+  ok(risk !== null, "a filter hiding in per-worktree scope is caught");
+}
+{
+  // The extension being OFF makes `--worktree` error; that is the common case, not a risk.
+  const risk = worktreeFilterRisk("C:/whatever", (args) => {
+    if (args.includes("--worktree")) throw new Error("fatal: --worktree can only be used inside a linked worktree with extensions.worktreeConfig enabled");
+    return "user.name=Mason";
+  });
+  eq(risk, null, "a disabled worktreeConfig extension is not treated as a risk");
+}
+{
+  // But any OTHER failure of that scope fails closed.
+  const risk = worktreeFilterRisk("C:/whatever", (args) => {
+    if (args.includes("--worktree")) throw new Error("permission denied reading config");
+    return "user.name=Mason";
+  });
+  ok(risk !== null, "an unreadable per-worktree scope fails CLOSED");
+}
+{
+  // The collector's own provenance check must be guarded too — it was the missed call.
+  const src = readFileSync(new URL("./patrol-scan.mjs", import.meta.url), "utf8");
+  const build = src.slice(src.indexOf("function collectorBuild"));
+  const body = build.slice(0, build.indexOf("\n}"));
+  ok(/worktreeFilterRisk\(/.test(body), "collectorBuild() guards its status call");
+  ok(body.indexOf("worktreeFilterRisk(") < body.indexOf('"status"'), "and guards it BEFORE running status");
+}
 
 // ── no patrol module may resolve an executable from PATH ────────────────────
 // The hardening was incomplete once already: patrol-report.mjs still called

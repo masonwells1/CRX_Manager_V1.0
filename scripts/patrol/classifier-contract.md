@@ -53,7 +53,7 @@ resolves to `INDETERMINATE` (rule `*.fallback`).
 |---|---|---|---|
 | 1 | `pr.scan_error` | this PR's observation carries an error | `SCAN_ERROR` |
 | 2 | `pr.not_open` | `state !== 'OPEN'` | `IDLE` |
-| 2a | `pr.parked` | a `hold`/`parked`/`on-hold`/`do-not-merge`/`blocked` label, or `PARKED`/`ON HOLD`/`DO NOT MERGE` in the title | `WAITING_EXTERNAL` |
+| 2a | `pr.parked` | a `hold`/`parked`/`on-hold`/`do-not-merge`/`blocked` **label** | `WAITING_EXTERNAL` |
 | 3 | `pr.unstable` | merge state not stable, or `mergeStateStatus === 'UNKNOWN'` after bounded retry | `INDETERMINATE` |
 | 4 | `pr.conflicted` | `mergeStateStatus === 'DIRTY'` | `AGENT_OWNS` |
 | 5 | `pr.draft_stale` | `isDraft` and stale | `NEEDS_MASON` |
@@ -75,6 +75,12 @@ with an all-clear.
 
 Rule 14 is phrased as a negative claim: "no blockers found — the merge decision is yours." It is
 not an assertion of readiness.
+
+**Rule 2a is labels only, and that is a security property — not a style choice.** A pull
+request title is written by whoever opened the pull request, so honouring `PARKED` in a title
+would let any contributor move their own pull request out of the actionable lane. Applying a
+label requires write access, so it carries authorization a self-authored title does not. Do not
+"align" this rule by re-adding title matching.
 
 ## 5. Loop rules
 

@@ -119,13 +119,29 @@ export function dangerousConfigKeys(configListText) {
 // Returns null when the worktree is safe to scan, or a reason string when it is not.
 // Unreadable config fails CLOSED — an unknown configuration is not a safe one.
 export function worktreeFilterRisk(wtPath, runGit = git) {
-  let text;
+  // BOTH scopes. Reading only `--local` missed per-worktree configuration, which Git
+  // consumes whenever `extensions.worktreeConfig` is enabled — a command-bearing filter or
+  // fsmonitor there bypassed the guard entirely.
+  //
+  // `--worktree` errors when the extension is off, which is the common case and NOT a
+  // risk signal; that specific error is tolerated. Any other unreadable scope fails CLOSED,
+  // because an unknown configuration is not a safe one.
+  let text = "";
   try {
-    text = runGit(["config", "--local", "--list"], { cwd: wtPath, timeout: 10_000 });
+    text += runGit(["config", "--local", "--list"], { cwd: wtPath, timeout: 10_000 });
   } catch (e) {
     return `local Git configuration is unreadable (${String(e.message).slice(0, 80)}) — not scanned`;
   }
+  try {
+    text += `\n${runGit(["config", "--worktree", "--list"], { cwd: wtPath, timeout: 10_000 })}`;
+  } catch (e) {
+    const msg = String(e.message ?? "");
+    const extensionOff = /worktreeConfig|extension is not enabled|--worktree/i.test(msg);
+    if (!extensionOff) {
+      return `per-worktree Git configuration is unreadable (${msg.slice(0, 80)}) — not scanned`;
+    }
+  }
   const keys = dangerousConfigKeys(text);
   if (keys.length === 0) return null;
-  return `local Git config defines executable ${keys.join(", ")} — patrol will not run status here`;
+  return `Git config defines executable ${keys.join(", ")} — patrol will not run status here`;
 }
