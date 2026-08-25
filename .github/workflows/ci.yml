@@ -105,13 +105,24 @@ jobs:
   sql-validation:
     name: SQL Migration Validation
     runs-on: ubuntu-latest
-    # Keep this dependency unconditional: a skipped containment job also skips
-    # SQL validation, so the containment job's event filter must stay tautological.
     needs: phase3-private-artifact-containment
+    # SQL Validation is a required branch-protection context; containment is not.
+    # Always start this job so a failed/cancelled containment dependency becomes
+    # a required red result instead of a skipped result that GitHub may accept.
+    if: ${{ always() }}
     # Fast (no node_modules); runs on every push and PR. Catches commits that
     # bypassed husky locally (e.g. via --no-verify or a non-husky environment)
     # by re-running the full migration audit at the PR/push gate.
     steps:
+      - name: Bind containment result into this required check
+        env:
+          CONTAINMENT_RESULT: ${{ needs.phase3-private-artifact-containment.result }}
+        run: |
+          test "$CONTAINMENT_RESULT" = "success" || {
+            echo "Private-artifact containment did not pass: $CONTAINMENT_RESULT" >&2
+            exit 1
+          }
+
       - name: Checkout code
         uses: actions/checkout@v7
         with:

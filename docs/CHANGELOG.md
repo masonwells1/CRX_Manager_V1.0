@@ -36,6 +36,8 @@ edit path would bypass branch protection. Pushes to `main` use unique run groups
 cancelled, preserving the deployment proof record. Lightweight doc-drift and normalized
 workflow-map freshness checks now run in CI. No docs-only bypass was added: control files, scripts,
 migrations, package files, and the schema registry still require the normal full CI path.
+The unrequired containment job is also fail-closed into the required SQL Validation context, so a
+failed or cancelled dependency cannot be accepted as a skipped required check.
 
 **Two git-config settings were falsifying local state** and were fixed with Mason's approval. Both
 were invisible to every existing guard because neither is a file in the repository:

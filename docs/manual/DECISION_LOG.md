@@ -56,7 +56,9 @@ and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 
    protection. Concurrency cancels an older run only when a newer event belongs to the same pull
    request. Push runs on `main` use a unique group so the durable deployment record cannot be
    cancelled by another push. Lightweight doc-drift and date-normalized workflow-map
-   freshness checks now run in CI. No docs-only shortcut is part of this phase; a future shortcut
+   freshness checks now run in CI. Because containment itself is not a required ruleset context,
+   its result is fail-closed into the required SQL Validation job; failure or cancellation cannot
+   turn the required jobs into accepted skips. No docs-only shortcut is part of this phase; a future shortcut
    must explicitly exclude `.claude/**`, `.codex/**`, `.github/**`, `.husky/**`, `AGENTS.md`,
    `CLAUDE.md`, `.coderabbit.yaml`, `package.json`, `scripts/**`, `supabase/migrations/**`, and
    `.claude/schema-registry.json`.

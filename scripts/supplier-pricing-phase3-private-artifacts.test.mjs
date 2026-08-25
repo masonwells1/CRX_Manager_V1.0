@@ -1452,6 +1452,11 @@ git() { return 0; }
   assert(!ci.includes('name: Phase 3C Private Artifact Containment'));
   assert(ci.includes('needs: phase3-private-artifact-containment'));
   assert(ci.includes('needs: [phase3-private-artifact-containment, sql-validation]'));
+  const sqlValidationJob = ci.slice(ci.indexOf('  sql-validation:'), ci.indexOf('\n  lint-typecheck-test:'));
+  assert(sqlValidationJob.includes('if: ${{ always() }}'), 'required SQL check must run even when unrequired containment fails or is cancelled');
+  assert(sqlValidationJob.includes('CONTAINMENT_RESULT: ${{ needs.phase3-private-artifact-containment.result }}'));
+  assert(sqlValidationJob.includes('test "$CONTAINMENT_RESULT" = "success"'), 'required SQL check must fail closed on every non-success containment result');
+  assert(sqlValidationJob.indexOf('Bind containment result into this required check') < sqlValidationJob.indexOf('Checkout code'), 'containment result binding must be the first SQL-check step');
   assert.match(ci, /^  pull_request:\r?\n    branches: \[main\]\r?$/m, 'CI pull-request trigger must restrict exactly to main so containment dependencies cannot skip open');
   assert(ci.includes('permissions:\n  contents: read'));
   assert(ci.includes('types: [opened, reopened, synchronize, ready_for_review, edited]'));
