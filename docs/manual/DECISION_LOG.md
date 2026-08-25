@@ -9,6 +9,69 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-24 — A priced job line with no rate typed yet and quantity 0 still SAVES; it is not an underbill to refuse
+
+**Source:** Mason's in-chat decision, 2026-08-24, answering a repeated exact-SHA `gpt-5.6-sol`
+finding on the `save_job` chem-unit branch. Reaffirms and extends the 2026-08-24 zero-quantity
+rule ("refuse only where a customer's money is actually at stake") against a narrower re-raise.
+
+**The question.** The gate found (HIGH) that `save_job` exempts a zero-quantity line whenever no
+usable rate is present, *even when field acreage is positive and the line carries a price*. Its
+proposed fix: exempt zero quantity only when the line is customer-supplied, unpriced, or the
+acreage is genuinely zero — otherwise raise `CHEM_QUANTITY_UNVERIFIABLE`.
+
+**Why it is not free.** That shape is what the screen produces mid-entry. The ordinary order of
+work is fields first, then products: choosing fields sets the acreage, adding a product auto-fills
+the tier price, and the rate is typed after. Between those two moments the line is priced, has
+acreage, has no rate and carries quantity 0. Refusing it does not refuse a line — one refused line
+rolls back the WHOLE job save, which is the round-7 defect three separate reviews already caught
+on this same migration.
+
+**The decision.** **It keeps saving.** A line with no quantity bills zero and shows on the invoice
+as a zero line; nothing is charged wrongly, and the operator can see it. That is the same judgement
+as the original rule: refuse where a customer's money is actually at stake, not wherever a value is
+merely unproven.
+
+**The operative rule.** The three zero-quantity exemptions stand as written — `customer_supplied`,
+no price, and no usable rate *or* acreage. The recorded residual stands with them: a priced line
+whose quantity cannot be derived can still record zero, and a cost-only line can still misstate
+margin. Both are accepted, not overlooked.
+
+**Why it is written down.** The gate re-raised this after the same branch had already been marked
+CLEAN on byte-identical SQL. It cannot converge on an owner's judgement about acceptable friction —
+nothing in the diff settles it — so the decision has to live here. A reviewer raising it again is
+not finding something new.
+
+---
+
+## 2026-08-24 — Job totals, acreage and product costs are NOT sensitive in the public repo; customer identity and per-order profit still are
+
+**Source:** Mason's in-chat decision, 2026-08-24, answering a reviewer finding on the `save_job`
+chem-unit branch. Refines the standing "public repo, no live financials" rule rather than replacing
+it.
+
+**The question.** The exact-SHA `gpt-5.6-sol` gate raised (MEDIUM) that the branch records live
+business data in a PUBLIC repository: internal job numbers, exact job cost and revenue totals, and
+one identifiable product's exact cost per pound. The proposed fix was to redact the identifiers and
+replace the figures with synthetic equivalents.
+
+**The decision.** **Leave them.** Job numbers, acreage, job totals and catalogue costs are not
+commercially sensitive at Crop RX's scale, and the figures are load-bearing in a way invented ones
+would not be: the tests that replay a live row's exact totals are what prove the migration bills the
+same money the database already holds. Substituting synthetic numbers would keep the shape of the
+proof while removing the thing it proves.
+
+**The operative rule.** Still redact, here and in FarmRx: customer and farm NAMES, contact details,
+order-level identifiers tied to a named customer, and per-order PROFIT or margin. Fine to record:
+product names and catalogue costs, job numbers, acreage, job-level cost and revenue totals, and row
+counts.
+
+**Why it is written down.** An adversarial gate cannot converge on an owner's business judgement —
+nothing in the diff can settle it, so it re-raises the finding every round. Recording the decision
+is what ends that loop; a reviewer raising it again is not finding something new.
+
+---
+
 ## 2026-08-24 — AP aging measures DAYS PAST DUE; the bucket mapping is a separate, still-open decision
 
 **Source:** Mason's in-chat decision, 2026-08-24, answering the open product question raised by the
