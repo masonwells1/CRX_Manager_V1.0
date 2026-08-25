@@ -1527,8 +1527,12 @@ function hasRecognizedMutationBefore(structuralBody, beforeIndex, actorReference
   // A pre-guard control-flow exit can skip the identity check after evaluating
   // a side-effecting expression (for example RETURN helper(p_performed_by)).
   // Treat exits as disqualifying rather than trying to prove expressions pure.
+  // Quoted identifiers must remain visible to the callable scan above, while
+  // quoted keyword-like names must not impersonate control-flow syntax here.
+  const controlPrefix = blankQuotedControlIdentifiers(prefix);
+  if (controlPrefix === null) return true;
   return /\b(?:INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE\b|EXECUTE\b|CALL\b|PERFORM\b|RETURN\b|EXIT\b|CONTINUE\b)/i
-    .test(structuralBody.slice(0, beforeIndex));
+    .test(controlPrefix);
 }
 
 function hasExactLegacyMismatchCondition(condition, actorParam, identityBindings) {
@@ -1619,7 +1623,7 @@ function hasEnforcedActorRefusal(
       allowUnqualifiedUuid
     );
     if (!isTopLevelPlpgsqlStatement(controlBody, block.index)) continue;
-    if (hasRecognizedMutationBefore(controlBody, block.index, actorReferences)) continue;
+    if (hasRecognizedMutationBefore(structuralBody, block.index, actorReferences)) continue;
     if (!actorReferences.some((reference) =>
       hasExactLegacyMismatchCondition(condition, reference, bindings)
     )) continue;

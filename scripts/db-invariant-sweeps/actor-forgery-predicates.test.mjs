@@ -78,7 +78,8 @@ try {
   psql(`
 CREATE ROLE authenticated;
 CREATE SCHEMA auth;
-CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS 'SELECT gen_random_uuid()';
+CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS
+  'SELECT nullif(current_setting(''request.jwt.claim.sub'', true), '''')::uuid';
 CREATE TABLE public.financial_audit_log (actor_user_id uuid);
 CREATE FUNCTION public.forward_actor(uuid) RETURNS uuid
 LANGUAGE sql AS 'SELECT $1';
@@ -304,6 +305,22 @@ BEGIN
 END;
 $body$;
 
+CREATE FUNCTION public.actor_quoted_set_config_forgery(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_previous_subject text;
+BEGIN
+  v_previous_subject := pg_catalog."set_config"(
+    'request.jwt.claim.sub',
+    p_actor_source::text,
+    true
+  );
+  IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
 CREATE FUNCTION public.actor_custom_local_refusal_forward(p_actor_source uuid) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER AS $body$
 DECLARE v_actor public.actor_token;
@@ -327,10 +344,27 @@ END;
 $body$;
 `);
 
+  const forgedActor = '00000000-0000-0000-0000-000000000001';
+  psql(`TRUNCATE public.financial_audit_log;
+SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
+  assert.equal(
+    psql('SELECT actor_user_id::text FROM public.financial_audit_log;'),
+    forgedActor,
+    'quoted set_config exploit must be executable in disposable PostgreSQL before predicate detection',
+  );
+
   assertCoversNamedAndPositional(predicateRows(GENERAL), 'actor_forward_');
   assertCoversNamedAndPositional(predicateRows(FINANCIAL_AUDIT), 'actor_audit_');
   const generalRows = predicateRows(GENERAL);
   const financialRows = predicateRows(FINANCIAL_AUDIT);
+  assert.ok(
+    generalRows.some((row) => row.startsWith('actor_quoted_set_config_forgery(') && row.endsWith('|p_actor_source')),
+    `general predicate must catch quoted callable identity replacement before refusal: ${generalRows.join(', ')}`,
+  );
+  assert.ok(
+    financialRows.some((row) => row.startsWith('actor_quoted_set_config_forgery(') && row.endsWith('|p_actor_source')),
+    `financial predicate must catch quoted callable identity replacement before audit attribution: ${financialRows.join(', ')}`,
+  );
   assert.ok(
     generalRows.some((row) =>
       row.startsWith('actor_overloaded_equality(') && row.endsWith('|p_actor_source')

@@ -2366,6 +2366,23 @@ ok(isDeny(r), "GET STACKED DIAGNOSTICS cannot launder a forged actor into a trus
 
 r = runHook(fn(`
   DECLARE
+    v_previous_subject text;
+  BEGIN
+    v_previous_subject := pg_catalog."set_config"(
+      'request.jwt.claim.sub',
+      p_performed_by::text,
+      true
+    );
+    IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);
+  END
+`));
+ok(isDeny(r), "a quoted callable cannot replace the JWT subject before the actor refusal");
+
+r = runHook(fn(`
+  DECLARE
     v_actor uuid := auth.uid() OPERATOR(public.##) p_target;
   BEGIN
     IF p_performed_by IS DISTINCT FROM v_actor THEN

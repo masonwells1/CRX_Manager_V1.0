@@ -586,6 +586,16 @@ Diagnostics targets, including block-qualified and opaque Unicode spellings,
 now invalidate the trusted local binding. The reviewer-supplied laundering flow
 is covered directly; the focused suite now passes 446 assertions.
 
+A further exact-head review found that pre-refusal analysis blanked quoted
+callable names before checking actor forwarding. A routine could call
+`pg_catalog."set_config"` with a caller-supplied actor, replace the JWT subject,
+and then make the canonical `auth.uid()` refusal pass. Quoted identifiers now
+remain visible to callable analysis while staying blanked only for control-flow
+keyword parsing. Both live actor-forgery predicates now recognize quoted
+callable identities before a financial-audit refusal. The exact flow executes
+successfully in disposable PostgreSQL 17 and is then detected by both
+predicates; the focused hook suite now passes 447 assertions.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —

@@ -146,7 +146,7 @@ WHERE lex_error OR
        OR pre_refusal_src ~* ('role[^;]{0,120}(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')
        OR pre_refusal_src ~* ('(\m' || argname_pattern || '\M|\$' || argument_position || '\M)[^;]{0,120}role')
        OR pre_refusal_src ~* ('merge\s+into[^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')
-       OR pre_refusal_src ~* ('\m([[:alpha:]_][[:alnum:]_$]*\s*\.\s*)*[[:alpha:]_][[:alnum:]_$]*\s*\([^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')
+       OR pre_refusal_src ~* ('(?:(?:"(?:[^"]|"")*"|[[:alpha:]_][[:alnum:]_$]*)\s*\.\s*)*(?:"(?:[^"]|"")*"|[[:alpha:]_][[:alnum:]_$]*)\s*\([^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')
        OR pre_refusal_src ~* ('(\m' || argname_pattern || '\M|\$' || argument_position || '\M)[^;]{0,120}\mOPERATOR\s*\(')
        OR pre_refusal_src ~* ('\mOPERATOR\s*\([^;]{0,120}(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')
        OR EXISTS (
