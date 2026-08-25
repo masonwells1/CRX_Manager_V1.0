@@ -319,15 +319,39 @@ const VERDICT_LINE = /^CODEX_PROOF_VERDICT:\s*(CLEAN|BLOCKERS)\s*$/gm;
 // merely contains `CODEX_PROOF_VERDICT: CLEAN` would otherwise report the gate HEALTHY
 // even when the run that followed it failed. Both CLEAN and BLOCKERS prove the reviewer
 // actually ran — only an absent or ambiguous verdict is "unknown".
+// Anything that indicates the reviewer died AFTER emitting a verdict. A crafted marker
+// followed by a crash previously read as HEALTHY.
+const REVIEWER_CRASH = /^\s*(?:ERROR|error|FATAL|fatal|Traceback|panic:)\b|\bstream (?:disconnected|closed) unexpectedly\b|\bunexpected (?:EOF|end of)\b/m;
+
+// Scope the search to the wrapper's OWN structured section. The capture also embeds the
+// reviewed prompt and diff, and text there is attacker-influenceable — restricting to the
+// section the wrapper authored is what makes the marker evidence rather than input.
+function wrapperStdoutSection(captureText) {
+  const text = String(captureText ?? "");
+  const start = text.indexOf("## STDOUT");
+  if (start === -1) return null;
+  const end = text.indexOf("\n## STDERR", start);
+  return end === -1 ? text.slice(start) : text.slice(start, end);
+}
+
 export function terminalVerdict(captureText) {
-  const found = [...String(captureText ?? "").matchAll(VERDICT_LINE)];
+  const section = wrapperStdoutSection(captureText);
+  // No wrapper-authored section means we cannot tell the reviewer's own words from the
+  // material it was reviewing. Unknown, not healthy.
+  if (section === null) return { verdict: null, reason: "no wrapper-authored STDOUT section to read the verdict from" };
+
+  const found = [...section.matchAll(VERDICT_LINE)];
   if (found.length === 0) return { verdict: null, reason: "no verdict marker" };
-  // Duplicated markers mean the diff carried one; treat that as unproven rather than
-  // guessing which is the reviewer's. (A genuine clean run repeats the SAME verdict in the
-  // structured section and the transcript tail, so identical repeats are fine.)
   const distinct = new Set(found.map((m) => m[1]));
   if (distinct.size > 1) return { verdict: null, reason: "conflicting verdict markers — one likely came from the reviewed diff" };
-  return { verdict: found[found.length - 1][1], reason: null };
+
+  // A verdict followed by a crash is not a completed review, however well-formed it looks.
+  const last = found[found.length - 1];
+  const after = section.slice(last.index + last[0].length);
+  if (REVIEWER_CRASH.test(after)) {
+    return { verdict: null, reason: "the reviewer emitted a verdict and then failed — the run did not complete" };
+  }
+  return { verdict: last[1], reason: null };
 }
 
 // Health is judged from evidence, never assumed. Proving Codex healthy would mean

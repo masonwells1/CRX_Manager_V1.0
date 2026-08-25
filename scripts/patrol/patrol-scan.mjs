@@ -103,7 +103,13 @@ export function checksVerdict({ required, checkRuns = [], statuses = [] }) {
       // Producer verified generically: the run must come from the required app.
       if (r?.name !== context) continue;
       if (r?.app?.id !== appId) continue;
-      candidates.push({ at: Date.parse(r.started_at ?? r.completed_at ?? 0) || 0, state: String(r.conclusion ?? r.status ?? "").toUpperCase() });
+      // `created_at` first: a newly QUEUED rerun has neither started_at nor completed_at,
+      // so it scored 0 and lost the sort to an older successful run — a stale green beating
+      // the rerun that was meant to supersede it.
+      candidates.push({
+        at: Date.parse(r.created_at ?? r.started_at ?? r.completed_at ?? 0) || 0,
+        state: String(r.conclusion ?? r.status ?? "").toUpperCase(),
+      });
     }
     const expectedCreator = STATUS_CREATOR_BY_APP_ID.get(appId);
     for (const s of statuses) {
@@ -234,16 +240,29 @@ function collectPullRequests(repo) {
     const { required, degraded } = requiredContexts(repo, "main");
     if (degraded) { src.status = "INCOMPLETE"; src.detail = degraded; }
 
+    // Iterate the UNION of both reads, not readA alone. A pull request opened between the
+    // two reads exists only in readB, and building output from readA silently dropped it —
+    // patrol could then report an all-clear while omitting a brand-new PR. A PR present in
+    // only one read has no stable observation, so it lands as INDETERMINATE rather than
+    // being judged on half the evidence.
+    const byNumA = new Map(readA.map((p) => [p.number, p]));
+    const unionNumbers = [...new Set([...byNumA.keys(), ...byNumB.keys()])].sort((x, y) => y - x);
+
     const crDescriptions = [];
-    const prs = readA.map((a) => {
-      const b = byNumB.get(a.number);
-      const r = rest.get(a.number);
+    const prs = unionNumbers.map((number) => {
+      const a = byNumA.get(number) ?? byNumB.get(number);
+      // readA is what the per-PR REST/check lookups were keyed on. A PR seen only in readB
+      // has none of that evidence, so `mk(readA-side)` is null and the observation is
+      // unstable by construction — exactly the INDETERMINATE outcome that is honest here.
+      const inA = byNumA.get(number);
+      const b = byNumB.get(number);
+      const r = rest.get(number);
       const mk = (p, observedAt) => p && ({
         headRefOid: p.headRefOid, baseRefOid: p.baseRefOid,
         mergeable: p.mergeable, mergeStateStatus: p.mergeStateStatus, observedAt,
       });
-      const lastHuman = lastHumanActivity(a, headCommit.get(a.number));
-      const cd = checkData.get(a.number) ?? { checkRuns: null, statuses: null };
+      const lastHuman = lastHumanActivity(a, headCommit.get(number));
+      const cd = checkData.get(number) ?? { checkRuns: null, statuses: null };
       // An API that failed is not an empty result: unreadable check or status data must
       // fail closed to "unknown", never read as "nothing failing".
       const checks = cd.checkRuns === null || cd.statuses === null
@@ -256,7 +275,7 @@ function collectPullRequests(repo) {
       const cr = {
         state: coderabbitCompletion({
           statusState: crStatus.state,
-          evidence: crStatus.state === "success_claimed" ? coderabbitEvidence(repo, a.number, a.headRefOid) : null,
+          evidence: crStatus.state === "success_claimed" ? coderabbitEvidence(repo, number, a.headRefOid) : null,
         }),
       };
       return {
@@ -265,7 +284,7 @@ function collectPullRequests(repo) {
         baseRefName: a.baseRefName, baseRefOid: a.baseRefOid,
         mergeStateStatus: a.mergeStateStatus, mergeable: a.mergeable,
         mergeStateObservation: {
-          readA: mk(a, tA), readB: mk(b, tB),
+          readA: mk(inA, tA), readB: mk(b, tB),
           compareObserved: Boolean(r && r.head === a.headRefOid && r.state === a.mergeStateStatus),
         },
         parked: isParked(a),
@@ -277,9 +296,18 @@ function collectPullRequests(repo) {
         firstSeenAt: lastHuman,
       };
     });
-    src.expected = readA.length;
+    // The old check compared readA.length against readA.map(...).length — tautologically
+    // equal, so it could never fire. Compare the two INDEPENDENT reads instead: the union
+    // is what was emitted, and any PR missing from either read means the queue moved
+    // mid-scan and this snapshot is not a complete picture.
+    src.expected = unionNumbers.length;
     src.received = prs.length;
-    if (src.expected !== src.received) { src.status = "INCOMPLETE"; src.detail = "pull request count changed mid-scan"; }
+    const onlyInA = [...byNumA.keys()].filter((n) => !byNumB.has(n));
+    const onlyInB = [...byNumB.keys()].filter((n) => !byNumA.has(n));
+    if (onlyInA.length || onlyInB.length) {
+      src.status = "INCOMPLETE";
+      src.detail = `the open-pull-request set changed mid-scan (closed during scan: ${onlyInA.join(", ") || "none"}; opened during scan: ${onlyInB.join(", ") || "none"})`;
+    }
     return { src, prs, crDescriptions };
   } catch (e) {
     src.status = "ERROR";
