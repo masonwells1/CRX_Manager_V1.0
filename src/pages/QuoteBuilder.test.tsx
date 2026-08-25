@@ -204,9 +204,13 @@ function renderQuoteBuilder(id?: string) {
   );
 }
 
-// Keep general QuoteBuilder fixtures inside the valid quote window. A fixed
-// timestamp eventually expires and silently diverts conversion tests into the
-// stale-quote guard instead of exercising the behavior under test.
+// A RECENT timestamp, not a literal. These fixtures once hardcoded
+// a fixed created_at of 2026‑07‑25T00:00:00Z — a time bomb: useStaleQuoteCheck computes
+// floor((Date.now() − created_at) / day) > 30, so on 2026-08-25T00:00:00Z (exactly
+// created + 31 days) every conversion-path test silently detoured into the
+// stale-quote guard and CI went permanently red on EVERY branch at midnight UTC.
+// Five days old keeps the fixtures far from the staleness threshold forever, and a
+// midnight-anchored ISO string keeps the rendered date deterministic within a run.
 const RECENT_QUOTE_CREATED_AT = `${new Date(Date.now() - 5 * 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z`;
 
 function makeQuoteFixture(status: 'draft' | 'sent' | 'accepted' = 'draft', rowVersion?: number) {
