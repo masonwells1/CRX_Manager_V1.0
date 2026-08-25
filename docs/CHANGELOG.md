@@ -2,6 +2,39 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-25 — PR #432 closed unmerged; control-file edits now prompt; two git-config falsifications fixed
+
+Mason ended the PR #432 repair loop (130 commits, +7,329 lines, four adversarial review rounds,
+never merged) after a symbol sweep showed all five planned splits target code absent from
+`origin/main`, and one split repaired a regression the branch itself introduced. Agent-self-
+protection guardrail work is frozen; business-rule guards are unaffected. Full rationale and the
+three-tier guardrail classification are in `docs/manual/DECISION_LOG.md` (2026-08-25 entry) and on
+the closed PR.
+
+**`.claude/settings.json`** — added `.claude/hooks/**`, `.codex/hooks/**`, `.claude/settings.json`,
+`.husky/**`, `package.json`, `.github/workflows/**`, `scripts/{check,validate,verify}-*` and
+`scripts/remove-applied-ledger-entry.mjs` to `permissions.ask` for `Edit`/`Write`.
+
+Deliberately `ask`, not `deny`: a hard deny recreates the maintenance dead-end that forced PR
+#432's "reviewed producer" design, which was declined. This is an **accidental-edit tripwire, not
+tamper prevention** — harness-enforced, not OS-enforced, and it cannot stop `git apply`,
+`git checkout -- <path>` or a shell write. Do not cite it as a security control.
+
+**Two git-config settings were falsifying local state** and were fixed with Mason's approval. Both
+were invisible to every existing guard because neither is a file in the repository:
+
+- `core.fsmonitor` (repo config) pointed at a temp-directory script reporting "nothing changed".
+  `git status` reported a clean tree while `git -c core.fsmonitor=false status` reported
+  ` M .claude/settings.json`; blob hashes confirmed a real difference (`f9032e03…` vs
+  `296744f8…`). `git update-index --refresh` did not clear it. Now unset. Previous value:
+  `C:/Users/mason/AppData/Local/Temp/patrol-fsmon-FmF0xX/fsmon.cmd`.
+- `core.hooksPath` in the `codex-claude-migrations-2-4-33493c` worktree pointed at the Codex
+  evidence checkout's `.husky`; a commit there would have run another repository's pre-commit
+  hooks. One worktree of ~37. Now `C:\CRX_Manager\.husky\_`, matching the rest.
+
+Before trusting a clean tree, re-test with `git -c core.fsmonitor=false status --short` and check
+`.git/worktrees/<name>/config.worktree` for a `hooksPath` outside `C:\CRX_Manager`.
+
 ## 2026-08-24 — Draw-down rollout completed live: migrations 2, 3 and 4 applied
 
 With Mason's explicit in-chat approval (Codex→Claude handoff

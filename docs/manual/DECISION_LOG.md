@@ -9,6 +9,64 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-25 — PR #432 closed unmerged; agent-self-protection work frozen; control-file edits move to `ask`
+
+**Source:** Mason's in-chat decision, 2026-08-25, after a measured review of guardrail investment
+and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 repair loop
+(rounds 1–4 plus the five-part split plan) permanently.
+
+**Decisions.**
+
+1. **PR #432 is closed unmerged and will not be split, rehabilitated, or cherry-picked.** A
+   repo-wide symbol sweep against `origin/main` @ `0365cd8d` found that all five planned splits
+   (A–E) target code that does not exist on `main`: `trustedGitHooksReason`, `gitExecutionReason`,
+   `TRUSTED_MAIN_GIT_HOOK_BLOBS`, `protectedShellDestinationReason`,
+   `SHELL_EXECUTORS_WITH_DEDICATED_GUARDS` and `auditedGitCommands` are 0 hits repo-wide, and
+   `protected-identity-lib.mjs` does not exist. Split C would have repaired a regression the branch
+   itself introduced — `main`'s shared `extractPatchDestinations` (`codex-push-lib.mjs:352`)
+   already handles the `rename to` spelling. **Operative rule:** a split plan derived from a branch
+   review inherits that branch's line numbers; sweep the receiving base for every target symbol
+   before implementing.
+2. **Agent-self-protection guardrail work is frozen**, revisited only if a real incident
+   demonstrates a specific missing control. Guardrails are now classified in three tiers:
+   *business safeguards* (money, inventory, customer data, RLS, migrations) — keep and extend;
+   *integrity safeguards* (a small, understandable layer keeping those from being silently
+   disabled) — keep thin; *recursive safeguards* (machinery protecting the machinery) — stop.
+   PR #432 was entirely the third tier.
+3. **Control-file edits go to `ask`, not `deny`.** `.claude/hooks/**`, `.codex/hooks/**`,
+   `.claude/settings.json`, `.husky/**`, `package.json`, `.github/workflows/**`,
+   `scripts/{check,validate,verify}-*` and `scripts/remove-applied-ledger-entry.mjs` now prompt
+   rather than hard-block. A `deny` would recreate the maintenance dead-end that PR #432's
+   Finding 2c identified, which is what forced the "reviewed producer" design (split E) we have
+   just declined to build. **This is an accidental-edit tripwire, not tamper prevention** — it is
+   enforced by the agent harness, not the OS, and cannot stop `git apply`, `git checkout -- <path>`
+   or a shell write. It must never be described as if it can.
+4. **Local pre-commit results are advisory, not independent certification.** The ~14 scripts the
+   gate executes are writable by the same identity that runs them. The durable boundary is the one
+   already outside agent reach: the `protect-main` ruleset, the three required GitHub checks, and
+   CodeRabbit review on every PR.
+
+**Incident found during implementation (same session).** Two git-config settings were falsifying
+local state, both invisible to every file-watching guard because neither is a file in the repo:
+
+- `core.fsmonitor` in `C:/CRX_Manager/.git/config` pointed at a 3-line script in a temp directory
+  (`…/patrol-fsmon-FmF0xX/fsmon.cmd`) that reported "nothing changed". Proven by controlled test:
+  `git status` reported clean while `git -c core.fsmonitor=false status` reported
+  ` M .claude/settings.json`; blob hashes confirmed the file genuinely differed
+  (`f9032e03…` on disk vs `296744f8…` in index/HEAD). `git update-index --refresh` did not fix it.
+  **Unset with Mason's approval.**
+- `core.hooksPath` in the `codex-claude-migrations-2-4-33493c` worktree config pointed at the Codex
+  evidence checkout's `.husky`, so a commit there would have run another repository's pre-commit
+  hooks. One worktree of ~37 was affected. **Repointed to `C:\CRX_Manager\.husky\_`.**
+
+This is the PR #432 threat class — hook trust bound to the wrong repository, and a subvertible
+certifying gate — arriving live through a route none of its five splits covered. It reinforces
+decision 4 rather than reopening decision 2: the answer is the external gate, not a larger internal
+one. **Operative rule:** before committing, and before reporting a tree clean, re-test with
+`git -c core.fsmonitor=false status --short` and check `config.worktree` for a foreign `hooksPath`.
+
+---
+
 ## 2026-08-24 — CodeRabbit reviews assertively and enforces the Hard Rules, without a hard merge block
 
 **Source:** Mason's in-chat decisions, 2026-08-24, after a live audit of the CodeRabbit dashboard,
