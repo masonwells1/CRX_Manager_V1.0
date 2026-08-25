@@ -133,10 +133,20 @@ function makeJob(chem: Record<string, unknown>) {
   };
 }
 
+// Enough of the live unit_conversions table for the Unit dropdown to offer the dry
+// units the relabel tests exercise. Without rows, the select renders only the blank
+// option plus the grandfathered current value, and a change to any other unit is
+// coerced to '' by the DOM before React ever sees it.
+const UNIT_CONVERSIONS = [
+  { id: 'uc-lb', unit: 'Lb', factor_oz: 16, unit_type: 'dry' },
+  { id: 'uc-dryoz', unit: 'Dry oz', factor_oz: 1, unit_type: 'dry' },
+];
+
 function mountWith(chem: Record<string, unknown>) {
   mockFrom.mockImplementation((table: string) => {
     if (table === 'jobs') return buildChain({ data: makeJob(chem), error: null });
     if (table === 'products') return buildChain({ data: [DRY_PRODUCT], error: null });
+    if (table === 'unit_conversions') return buildChain({ data: UNIT_CONVERSIONS, error: null });
     return buildChain({ data: [], error: null });
   });
   return render(
@@ -250,6 +260,57 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     // The specific dangerous shape: a bare "or change the rate unit to X/ac." that ENDS the
     // sentence, with no instruction to re-enter the rate alongside it.
     expect(hazardToast).not.toMatch(/or change the rate unit to \S+\/ac\.\s*$/i);
+  }, 30000);
+
+  it('clears the per-unit money when the stock Unit is RELABELLED to a different unit (Codex P1, 2026-08-24)', async () => {
+    // THE OTHER HALF OF THE RELABEL BYPASS. The remedy's first option says to set the
+    // Unit to the rate's unit AND re-enter its cost/price — but nothing enforced the
+    // second half: changing only Unit from Lb to Dry oz made the units compare equal,
+    // the guard cleared, and the same 150¢ figures billed per OUNCE ($4,800 not $300).
+    // Relabelling between two REAL units now clears the amounts (they were entered per
+    // the old unit and no longer state anything provable), and the blank-cents save
+    // gate holds the row until they are re-entered.
+    mountWith(HAZARD_CHEM);
+    await screen.findByText(/This line cannot be saved/i, {}, { timeout: 15000 });
+
+    const unitSelect = screen.getByDisplayValue('Lb') as HTMLSelectElement;
+    fireEvent.change(unitSelect, { target: { value: 'Dry oz' } });
+
+    // The money is gone from the row, and the operator was told why.
+    await waitFor(() => {
+      const infos = mockToast.mock.calls.filter((c) => c[0] === 'info').map((c) => String(c[1]));
+      expect(infos.some((m) => /cost and price were entered per Lb/i.test(m) && /cleared/i.test(m))).toBe(true);
+    });
+
+    // The save is still refused — by the blank-cents gate now — and save_job never runs.
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/cannot be saved/i)));
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+  }, 30000);
+
+  it('KEEPS entered money when a BLANK Unit is labelled for the first time', async () => {
+    // Labelling is not relabelling: the blank-unit defect's own remedy is "pick the
+    // unit", and the operator's amounts were always meant per the unit they now name.
+    // Clearing them here would punish following the instruction.
+    mountWith({ ...HAZARD_CHEM, unit: '', rate_unit: 'Lb/ac' });
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    expect(saveButtons.length).toBeGreaterThan(0);
+
+    // Several inputs legitimately display '' — pick the SELECT whose options carry the
+    // stock units and whose current value is the blank one.
+    const unitSelect = screen.getAllByRole('combobox').find((s) => {
+      const sel = s as HTMLSelectElement;
+      return sel.value === '' && Array.from(sel.options).some((o) => o.value === 'Lb');
+    }) as HTMLSelectElement;
+    expect(unitSelect).toBeTruthy();
+    fireEvent.change(unitSelect, { target: { value: 'Lb' } });
+
+    await waitFor(() => {
+      expect(screen.getAllByDisplayValue('150').length).toBeGreaterThan(0);
+    });
+    const infos = mockToast.mock.calls.filter((c) => c[0] === 'info').map((c) => String(c[1]));
+    expect(infos.some((m) => /cleared/i.test(m))).toBe(false);
   }, 30000);
 
   it('SAVES an exactly-rounded total, matching the server rather than binary float', async () => {

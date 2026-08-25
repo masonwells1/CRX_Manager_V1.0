@@ -597,15 +597,28 @@ export function chemLineBillingHazard(
   if (quantityUnit === priceUnit) return NO_HAZARD;
 
   // `quantity` is stored through fmt4, so allow 4-dp slack plus a relative epsilon.
-  const near = (a: number, b: number): boolean => Math.abs(a - b) <= Math.max(1e-4, Math.abs(b) * 1e-6);
-
   // PROOF OF SAFETY, and the only one: the quantity is what rate × acres reads once carried
   // into the unit the price is quoted in. Requires a usable rate and acreage — without them
   // nothing is proven, so the row stays flagged rather than escaping.
+  //
+  // THE TOLERANCE MIRRORS THE SERVER'S RULE EXACTLY (PR #446, round 23): the slack is the
+  // error the rate's own 4-dp storage can introduce over this acreage — 0.00005 × acres —
+  // carried through the SAME converter as the values being compared, floored at the flat
+  // 4-dp slack. An earlier version used a relative epsilon (|carried| × 1e-6), which grew
+  // with the VALUE being checked: at a carried 100,000 it accepted a 0.1 gap — 500
+  // four-decimal units — a fail-open the review caught (CodeRabbit Major, 2026-08-24).
+  // Rounding error scales with ACREAGE, which is physically bounded and not the caller's
+  // to inflate; it never scales with the number under test.
   const rate = parseFloat(row.rate_per_acre);
   if (Number.isFinite(rate) && rate > 0 && acres > 0) {
     const carried = fieldAppPricedQuantity(rate * acres, quantityUnit, priceUnit, productForm ?? null);
-    if (carried != null && near(qty, carried)) return NO_HAZARD;
+    if (carried != null) {
+      const slack = Math.max(
+        1e-4,
+        fieldAppPricedQuantity(0.00005 * acres, quantityUnit, priceUnit, productForm ?? null) ?? 1e-4,
+      );
+      if (Math.abs(qty - carried) <= slack) return NO_HAZARD;
+    }
   }
 
   // What this quantity SHOULD read if it were carried into the price's unit. Acreage plays

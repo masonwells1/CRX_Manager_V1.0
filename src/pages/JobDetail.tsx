@@ -45,7 +45,7 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { centsTimesQuantity, isExactDecimalText, quantitySurvivesSave } from '../lib/money';
 import { applyChemEdit, chemLineBillingHazard, chemUnitUnspecifiedSides, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
-import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
+import { compareToMaxRate, normalizeRateUnit, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
   LABEL_RATE_GUARDRAIL_MODE_KEY,
@@ -3074,6 +3074,32 @@ export default function JobDetail() {
   };
   const updateChemRow = (i: number, key: keyof ChemRow, value: string) => {
     const updated = [...chemRows];
+    // RELABELLING THE STOCK UNIT MUST NOT KEEP THE OLD UNIT'S MONEY (Codex P1, 2026-08-24).
+    // The banner's remedy tells the operator to set the Unit AND re-enter its cost/price —
+    // but nothing enforced the second half: changing only `unit` from Lb to Dry oz swapped
+    // the label, the units then compared equal, the guard cleared, and the same 150¢
+    // figures billed per OUNCE — the 16× overbill wearing the fix as a disguise. The
+    // per-unit amounts were entered per the OLD unit, so once the unit's meaning changes
+    // they no longer state anything provable: clear them and say so, and the blank-cents
+    // save gate holds the row until amounts are re-entered per the new unit. Deliberately
+    // NOT auto-converted — 150¢/lb is 9.375¢/oz, which is not whole cents, and silently
+    // rounding money is the exact failure class this page exists to refuse.
+    // Labelling a BLANK or unrecognised unit is not a relabel — the operator is naming the
+    // unit their amounts were always meant in (the blank-unit defect's own remedy), so
+    // entered amounts are kept.
+    if (key === 'unit') {
+      const beforeRaw = updated[i]?.unit;
+      const beforeNorm = normalizeRateUnit(beforeRaw);
+      const afterNorm = normalizeRateUnit(value);
+      const carriesMoney = (parseInt(updated[i].cost_per_unit_cents) || 0) !== 0
+        || (parseInt(updated[i].price_per_unit_cents) || 0) !== 0;
+      if (carriesMoney && beforeNorm != null && afterNorm != null && beforeNorm !== afterNorm) {
+        updated[i] = { ...updated[i], cost_per_unit_cents: '', price_per_unit_cents: '' };
+        toast('info',
+          `The Unit changed from ${beforeRaw} to ${value}. The line's cost and price were entered per ${beforeRaw}, `
+          + `so they were cleared — re-enter them per ${value} before saving.`);
+      }
+    }
     updated[i] = { ...updated[i], [key]: value };
     if (key === 'product_id') {
       const p = allProducts.find(ap => ap.id === value);

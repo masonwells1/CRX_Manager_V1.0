@@ -398,6 +398,39 @@ describe('chemCalculator — chemLineBillingHazard (production fail-closed guard
     expect(h.billedRatio).toBe(8);
   });
 
+  describe('the carried-proof tolerance is acreage-bounded, never value-relative (CodeRabbit Major, 2026-08-24)', () => {
+    // rate 12,800 oz/ac × 1,000 ac = 12,800,000 oz = exactly 100,000 gal carried.
+    const bigRow = (quantity: string) =>
+      ({ quantity, rate_per_acre: '12800', rate_unit: 'oz/ac', unit: 'Gal' });
+
+    it('no longer waves through a 0.05 gap at a carried 100,000 — the old relative epsilon did', () => {
+      // Old tolerance: max(1e-4, 100000 × 1e-6) = 0.1 → 100000.05 passed the proof.
+      // New tolerance: max(1e-4, fieldAppPricedQuantity(0.00005 × 1000, oz→gal)) ≈ 0.00039.
+      const h = chemLineBillingHazard(bigRow('100000.05'), 1000, 'liquid');
+      expect(h.hazard).toBe(true);
+    });
+
+    it('still accepts the exact carried figure at the same scale', () => {
+      expect(chemLineBillingHazard(bigRow('100000'), 1000, 'liquid').hazard).toBe(false);
+    });
+
+    it("still accepts a gap inside the rate's own 4-dp rounding error over the acreage", () => {
+      // 0.00005 oz/ac × 1,000 ac = 0.05 oz = 0.000390625 gal of legitimate slack.
+      expect(chemLineBillingHazard(bigRow('100000.0003'), 1000, 'liquid').hazard).toBe(false);
+    });
+
+    it('keeps the flat 4-dp floor at ordinary scale', () => {
+      // 128 oz/ac × 100 ac = 12,800 oz = 100 gal; acreage slack (0.005 oz ≈ 0.000039 gal)
+      // is below the floor, so max(1e-4, …) = 1e-4 governs.
+      const row = (quantity: string) =>
+        ({ quantity, rate_per_acre: '128', rate_unit: 'oz/ac', unit: 'Gal' });
+      // Values sit clear of the 1e-4 boundary itself — a gap of exactly 1e-4 is a
+      // float-representation coin flip, not a behavior worth pinning.
+      expect(chemLineBillingHazard(row('100.00005'), 100, 'liquid').hazard).toBe(false);
+      expect(chemLineBillingHazard(row('100.0003'), 100, 'liquid').hazard).toBe(true);
+    });
+  });
+
   it('does NOT flag an aligned row (the common, correct case)', () => {
     expect(chemLineBillingHazard(
       { quantity: '240', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: 'pt' }, 160, 'liquid',
