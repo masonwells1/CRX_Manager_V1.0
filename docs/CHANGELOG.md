@@ -2,6 +2,30 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-24 — Draw-down rollout completed live: migrations 2, 3 and 4 applied
+
+With Mason's explicit in-chat approval (Codex→Claude handoff
+`docs/audits/2026-08-24-codex-to-claude-draw-down-live-rollout-handoff.md`) the remaining three
+migrations of the four-part draw-down chain were applied to production, one at a time, through the
+gated file-bytes apply door (`scripts/apply-migration-file.mjs`, PR #460). Each apply followed a
+fresh same-session `/migration-review` (three reviewer subagents, zero real blockers) plus fresh
+CLEAN `gpt-5.6-sol`/high machine verdicts hash-bound to the transmitted bytes, and passed its
+in-transaction postflight plus independent live catalog/ACL checks.
+
+- `20260816120000_draw_down_split_order_lines_by_price_tier` → ledger version `20260825025241`
+- `20260817120000_carry_allocated_line_cents_through_lifecycle` → ledger version `20260825033106`
+- `20260819232000_bind_draw_down_receipts_to_intent` → ledger version `20260825034622`
+  (applied after re-verifying zero unexpired `draw_down_quote` retry receipts)
+
+Ledger 972 → 975 rows; effective ordering high-water now `20260819232000`. Schema registry
+refreshed from live introspection (`migrations_high_water = 20260825034622`); migration history
+updated. Booking draws stayed paused throughout the rollout.
+
+- **Migrations applied live this session:**
+  - `20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+  - `20260817120000_carry_allocated_line_cents_through_lifecycle.sql`
+  - `20260819232000_bind_draw_down_receipts_to_intent.sql`
+
 ## 2026-08-24 — Fleet shipping sprint: schema registry refreshed from live…
 
 Fleet shipping sprint: schema registry refreshed from live introspection, two Sol findings fixed on the PR 436 client money guard, PR 461 verified merge-ready, landing batch queued for Mason.
