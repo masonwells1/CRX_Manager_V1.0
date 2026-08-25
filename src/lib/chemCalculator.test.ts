@@ -419,6 +419,16 @@ describe('chemCalculator — chemLineBillingHazard (production fail-closed guard
       expect(chemLineBillingHazard(bigRow('100000.0003'), 1000, 'liquid').hazard).toBe(false);
     });
 
+    it('the 0.1-unit ceiling stops the acreage term from being caller-sized (server round 24 parity)', () => {
+      // 0.0016 oz/ac × 10,000,000 claimed acres = 16,000 oz = 125 gal carried. Uncapped,
+      // the acreage slack would be 500 oz ≈ 3.9 gal — a caller-sized allowance. Capped
+      // (0.1 oz, converted ≈ 0.00078 gal), a half-gallon gap is refused.
+      const row = (quantity: string) =>
+        ({ quantity, rate_per_acre: '0.0016', rate_unit: 'oz/ac', unit: 'Gal' });
+      expect(chemLineBillingHazard(row('125.5'), 10_000_000, 'liquid').hazard).toBe(true);
+      expect(chemLineBillingHazard(row('125.0005'), 10_000_000, 'liquid').hazard).toBe(false);
+    });
+
     it('keeps the flat 4-dp floor at ordinary scale', () => {
       // 128 oz/ac × 100 ac = 12,800 oz = 100 gal; acreage slack (0.005 oz ≈ 0.000039 gal)
       // is below the floor, so max(1e-4, …) = 1e-4 governs.

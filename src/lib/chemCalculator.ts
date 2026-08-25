@@ -610,21 +610,28 @@ export function chemLineBillingHazard(
   // into the unit the price is quoted in. Requires a usable rate and acreage — without them
   // nothing is proven, so the row stays flagged rather than escaping.
   //
-  // THE TOLERANCE MIRRORS THE SERVER'S RULE EXACTLY (PR #446, round 23): the slack is the
-  // error the rate's own 4-dp storage can introduce over this acreage — 0.00005 × acres —
-  // carried through the SAME converter as the values being compared, floored at the flat
-  // 4-dp slack. An earlier version used a relative epsilon (|carried| × 1e-6), which grew
-  // with the VALUE being checked: at a carried 100,000 it accepted a 0.1 gap — 500
-  // four-decimal units — a fail-open the review caught (CodeRabbit Major, 2026-08-24).
-  // Rounding error scales with ACREAGE, which is physically bounded and not the caller's
-  // to inflate; it never scales with the number under test.
+  // THE TOLERANCE MIRRORS THE SERVER'S RULE EXACTLY (PR #446, rounds 23 AND 24):
+  // GREATEST(0.0001, LEAST(convert(0.00005 × acres), convert(0.1))). Three terms, each
+  // earning its place — 0.0001 is the quantity's own 4-dp storage precision; 0.00005 ×
+  // acres is the error a 4-decimal RATE introduces when the operator drives the line by
+  // total, carried through the SAME converter as the values being compared; and the 0.1
+  // ceiling (also converted, so it stays the same physical amount in the compared unit)
+  // stops the acreage term from being sized by the acreage figure itself — uncapped it is
+  // a caller-sized allowance, the exact defect class as the relative epsilon (|carried| ×
+  // 1e-6) this replaced, which at a carried 100,000 accepted a 0.1 gap (CodeRabbit Major,
+  // 2026-08-24). Both converted terms fall back to the flat 0.0001 when the converter
+  // cannot size them — the strict reading — and LEAST against that fallback tightens, not
+  // widens. No term scales with the number under test, and no term is unbounded.
   const rate = parseFloat(row.rate_per_acre);
   if (Number.isFinite(rate) && rate > 0 && acres > 0) {
     const carried = fieldAppPricedQuantity(rate * acres, quantityUnit, priceUnit, productForm ?? null);
     if (carried != null) {
       const slack = Math.max(
         1e-4,
-        fieldAppPricedQuantity(0.00005 * acres, quantityUnit, priceUnit, productForm ?? null) ?? 1e-4,
+        Math.min(
+          fieldAppPricedQuantity(0.00005 * acres, quantityUnit, priceUnit, productForm ?? null) ?? 1e-4,
+          fieldAppPricedQuantity(0.1, quantityUnit, priceUnit, productForm ?? null) ?? 1e-4,
+        ),
       );
       if (Math.abs(qty - carried) <= slack) return NO_HAZARD;
     }
