@@ -235,4 +235,33 @@ current-head gate is green or an explicitly expected neutral result.
   the otherwise write-free body as unsafe and session-dependent. Full owning proof and a fresh
   exact-SHA review still remain after commit.
 
+## TENTH RESUME — PR #460 INTEGRATED; ONE PROTECTED CONFLICT DEADLOCK REMAINS
+
+- Latest integrated base: `29d8b5619d2bb0727236f9aefa42ea3b15d571d9` (PR #460, guarded
+  file-bytes migration apply path).
+- PR #364's 1,700+ line production guard was mechanically extracted into PR #460's shared rule-book
+  architecture. Production uses fixed linked reads; cached evidence is exposed only through named
+  regression entries that are structurally unable to transmit.
+- Focused proof after integration:
+  - migration apply guard: 352 assertions passed;
+  - shared migration apply/file-bytes library: 90 assertions passed;
+  - the production file path explicitly refused local cached evidence;
+  - the simulated failed-transmission entry proved snapshot invalidation without network access.
+- Exact-head Sol/high review of pre-merge PR commit `2f59048d` against base `29d8b561` returned CLEAN
+  and minted the repository-required proof. An unrelated review of the dirty primary branch returned
+  two real High findings and was not used as proof.
+- All merge conflicts except one are resolved and staged. The sole unmerged file is the one-use
+  protected maintenance producer. Codex's patch and shell guards deliberately refuse every direct
+  edit of that producer, even after the CLEAN exact-head proof, while its sanctioned invocation has
+  no self-repin operation. Do not bypass either guard.
+- The conflict resolution is deterministic and must preserve these exact combined pins:
+  - protected input `codexGuard`: `b49b0cbda10ac55ad11249aeef50ccecbc06b896`;
+  - protected input `pushLib`: `6cc49038af588b0c6911e93ed64cb140ca9acd25`;
+  - protected output `codexGuard`: `d43e1b8975e56d29092d0dc1f469d572daf8346c`;
+  - protected output `pushLib`: `6cc49038af588b0c6911e93ed64cb140ca9acd25`.
+- A permitted editor must remove only the conflict markers/duplicate pin branches, retain
+  `exportedFunctionSource()` (PR #364's tests import it), and then run the exact producer test plus
+  both migration-apply suites. After that, Codex can resume the normal full-hook, exact-head,
+  push/checks/CodeRabbit/merge/production-verification path.
+
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

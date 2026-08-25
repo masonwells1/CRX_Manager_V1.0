@@ -55,11 +55,19 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // pushLib re-pinned 2026-08-22 (PR #364 exact-SHA repair): migration-safety
   // helpers, tests, manifests, exemptions, and the one-shot registry now join
   // the risky-path set. The protected transform remains an identity operation.
-  codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
+  // codexGuard re-pinned 2026-08-24 (PR #460): the guard gained a deny for
+  // scripts/apply-migration-file.mjs, the new gated file-bytes live-apply path.
+  // Codex's own review of that PR found the new script reached production while
+  // every OTHER migration path was already blocked here (P1), so the guard had to
+  // learn the new spelling. The transform anchors below are untouched by that
+  // edit; only the pinned blobs move.
+  codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
   pushLib: "6cc49038af588b0c6911e93ed64cb140ca9acd25",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
+  // codexGuard re-pinned 2026-08-24 (PR #460) alongside the input blob above;
+  // taken from the producer test's reported candidate, not hand-computed.
+  codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
   pushLib: "6cc49038af588b0c6911e93ed64cb140ca9acd25",
 };
 
