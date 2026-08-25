@@ -27,25 +27,50 @@ The handoff document lives in the Codex worktree, not in the branch I was launch
 
 **BLOCKED.**
 
-Not for the reason six earlier rounds hunted. **I could not construct any case where this candidate over-reverses COGS** — the FIFO lot math is sound and bounded (see §6). It is blocked for two different defects: the reversal is gated on a flag that is false for most of the live catalogue, so it silently does nothing; and the inserted lines can hard-fail the entire return-credit RPC through a pre-existing trigger.
+Not for the reason six earlier rounds hunted. **I could not construct any case where this candidate over-reverses COGS** — the FIFO lot math is sound and bounded (see §6).
+
+**Revised 2026-08-25:** it is blocked on **one** defect — the inserted negative-quantity lines can
+hard-fail the entire return-credit RPC through the pre-existing below-cost trigger (BLOCKER-2),
+plus an incorrect scope claim with untested customer-facing fallout (HIGH-1). The originally-filed
+second blocker (the `restocked` gate) is **withdrawn**: the gate is correct as designed, and every
+product that has ever transacted is covered. See the correction under §4.
 
 ---
 
 ## 3. FINDING COUNTS
 
-| Severity | Count |
-|---|---|
-| BLOCKER | 2 |
-| HIGH | 1 |
-| MEDIUM | 5 |
-| LOW | 3 |
-| NIT | 0 |
+| Severity | Count (as filed) | Count (revised 2026-08-25) |
+|---|---|---|
+| BLOCKER | 2 | **1** |
+| HIGH | 1 | 1 |
+| MEDIUM | 5 | **6** |
+| LOW | 3 | 3 |
+| NIT | 0 | 0 |
+
+Revision: BLOCKER-1 downgraded to MEDIUM after Mason confirmed the uncovered products are
+special-order and a follow-up live query showed **100% warehouse-row coverage of every product that
+has ever been sold or delivered** (17/17 and 93/93). The `restocked` gate is correct as designed.
+BLOCKER-2 and HIGH-1 are unaffected and still block.
 
 ---
 
 ## 4. FINDINGS
 
-### BLOCKER-1 — COGS reversal is gated on `restocked`, which is false for ~81% of the catalogue and has never been true in live data
+### ~~BLOCKER-1~~ → **REVISED to MEDIUM** (2026-08-25, after Mason's answer + a follow-up live query)
+
+> **Correction.** This was first filed as a BLOCKER on the framing "the gate is false for 81% of
+> the catalogue." That denominator was wrong. Mason confirmed those products are **special-order** —
+> ordered per customer, never shelved — and the live data backs him up completely:
+> **every product that has ever transacted already has a `'Main Warehouse'` row.** Products ever
+> sold: **17 of 17** covered. Products ever delivered: **93 of 93** covered. The 487 uncovered
+> products have never been sold or delivered, and for a special-order item that never reaches the
+> shelf, `restocked = false` → no COGS reversal is the **accounting-correct** outcome: the goods did
+> not re-enter sellable inventory, so the cost stays expensed.
+>
+> **The gate is therefore right, and no design change is needed.** What survives is the *silence*,
+> described below — a MEDIUM, not a blocker. The original finding text is kept below for the record.
+
+### (original text) COGS reversal is gated on `restocked`, which is false for ~81% of the catalogue and has never been true in live data
 
 **Where:** `supabase/migrations/20260825161340_return_credit_cogs_reversal_current.sql:352`
 
@@ -86,11 +111,20 @@ The deeper problem is that **the books now depend on whether an inventory row ha
 
 **Why the proof missed it.** The smoke fixture engineers the one path where the gate opens. `scripts/smoke/smoke-return-credit-chain.sql:173-177` inserts the `'Main Warehouse'` inventory row specifically "so `receive_return` exercises the real restock branch"; lines 597-599 then assert that **zero** return items remain `restocked = false`; line 634 explicitly resets `restock = true, restocked = true` immediately before the 6700 oracle. The `restock = true, restocked = false` case — 100% of current live returns — is never exercised against the COGS oracle.
 
-**Smallest safe fix.** This needs Mason's decision before code (see §8). Mechanically, either:
-- keep `restocked` as the gate (physically-back-in-stock is the defensible accounting trigger) and fix the silence — record the skipped-restock quantity in `financial_audit_log` and surface it in the RPC result so a zero reversal is visible; **or**
-- gate on `restock` (intent) instead, accepting that scrapped goods would then also reverse cost, which is wrong.
+**Smallest safe fix (revised).** Mason answered: keep `restocked` as the gate. The residual MEDIUM
+is that a zero reversal is **indistinguishable** from a legitimate scrapped-goods zero. Three real
+sequences still produce a silently wrong zero:
 
-Either way, add a smoke case with `restock = true, restocked = false` asserting the chosen behavior.
+1. a newly-stocked product **sold before** its inventory row is created (the row is what the gate
+   reads, and nothing enforces create-before-sell);
+2. a location renamed or added — the gate reads the literal string `'Main Warehouse'`, and there is
+   currently exactly one location, so any second location silently never restocks;
+3. `_create_return_intent_impl_20260812` passes `restock = false` when the client omits the field,
+   even though the column default is `true`.
+
+Fix: record the skipped-restock quantity in `financial_audit_log` and surface it in the RPC result
+so a zero reversal is visible rather than inferred, and add a smoke case with
+`restock = true, restocked = false` asserting the zero is deliberate.
 
 ---
 
@@ -250,10 +284,21 @@ The one qualification is MEDIUM-4: this is a *cumulative* bound, not a per-perio
 
 ## 8. SINGLE RECOMMENDED NEXT STEP
 
-**Do not apply. Take BLOCKER-1 to Mason as a business question, because the answer changes the code and no amount of further review can settle it.**
+*(Revised 2026-08-25. The owner question that originally stood here — whether a return with no
+warehouse record should reverse cost — is **answered and closed**: those products are special-order,
+100% of transacting products are covered, and the `restocked` gate is correct as designed. No design
+decision is outstanding.)*
 
-The question, in plain English: *when a customer returns product that we intended to restock but our system had no warehouse record for — which is 81% of the catalogue right now — should the books take the cost back off, or leave it as an expense?*
+**Do not apply. Hand BLOCKER-2 back to Codex as a mechanical fix — it is now the only thing blocking.**
 
-BLOCKER-2 is mechanical and should be fixed in the same round (declare a below-cost operation context for the return-credit path, or exempt negative-quantity credit-memo lines), and HIGH-1's scope statement should be corrected at the same time. Then re-run the real-schema harness with the three missing smoke cases — `restocked = false`, `current_cost > historical unit price`, and a second sequential credit against the same `order_item`.
+Declare a below-cost operation context on the return-credit path
+(`set_config('app.crx_below_cost_operation', 'issue_return_credit', true)`, matching the thin-wrapper
+pattern that migration already established), or exempt negative-quantity `credit_memo` lines inside
+`_enforce_below_cost_line`. Correct HIGH-1's scope statement in the same round and decide whether
+`get_customer_year_end_summary` / `get_detailed_statement_data` should exclude credit memos.
 
-The FIFO accounting core of this candidate is good work and should survive the fix largely unchanged.
+Then re-run the real-schema harness with the missing smoke cases: `current_cost > historical unit
+price`, `restock = true, restocked = false`, a cancelled/voided order, and a second sequential credit
+against the same `order_item`.
+
+The FIFO accounting core of this candidate is good work and should survive the fix unchanged.

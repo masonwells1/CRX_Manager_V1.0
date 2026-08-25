@@ -12,11 +12,15 @@ allocation is clamped to returned quantity, and `_create_return_intent_impl_2026
 cumulative returns at `quantity_delivered`. Full findings in
 `docs/audits/2026-08-25-claude-pr361-cogs-adversarial-review.md`.
 
-- **BLOCKER-1 — the reversal is inert on live data.** It gates on `return_items.restocked`,
-  which `_receive_return_impl_20260714` sets only when an `inventory` row exists at the exact
-  location `'Main Warehouse'`. Live: 487 of 604 products have no such row, and `restocked = true`
-  has **never** occurred. The smoke fixture creates that row on purpose, so it only ever
-  exercises the path where the gate opens.
+- **~~BLOCKER-1~~ → MEDIUM, withdrawn as a blocker (same day).** First filed as "the reversal is
+  inert on live data" because `return_items.restocked` is set only when an `inventory` row exists at
+  the exact location `'Main Warehouse'`, and 487 of 604 products have none. **That denominator was
+  wrong.** Mason confirmed those products are special-order — never shelved — and a follow-up live
+  query showed **100% coverage of every product that has ever transacted** (sold: 17/17; delivered:
+  93/93). For a special-order item that never reaches the shelf, no COGS reversal is the
+  accounting-correct outcome. The gate is right as designed. What survives is a MEDIUM: a zero
+  reversal is indistinguishable from a legitimate scrapped-goods zero, so the skip should be recorded
+  in `financial_audit_log` and surfaced in the RPC result.
 - **BLOCKER-2 — the new lines can abort the RPC.** Credit lines carry a negative `quantity`,
   which defeats the `COALESCE(NEW.quantity, 0) >= 0` escape hatch in `_enforce_below_cost_line`.
   The line then reaches the below-cost wall, which compares the *historical* `unit_price_cents`
@@ -32,8 +36,10 @@ cumulative returns at `quantity_delivered`. Full findings in
   `_issue_return_credit_impl` stays header-only. Verified against live: **zero rows** today, and
   **both** violation keys fire under a mutation that simulates the candidate applied.
 
-Open and owner-blocked: whether a return whose goods came back but which the system never
-flagged as restocked should reverse cost. Nothing was applied; no live data was mutated.
+**Owner question answered and closed the same day** (Mason, 2026-08-25): the products without
+warehouse rows are special-order, so the `restocked` gate needs no design change. **BLOCKER-2 is now
+the only thing blocking the apply**, and it is mechanical. Nothing was applied; no live data was
+mutated; Codex's worktree was never touched.
 
 ## 2026-08-25 — `/patrol`: the fsmonitor override now covers every Git launch
 
