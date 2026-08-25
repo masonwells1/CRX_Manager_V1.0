@@ -55,7 +55,7 @@ node scripts/smoke/prove-save-job-chem-unit-invariant.mjs
 
 PostgreSQL 17 in a throwaway container (production is 17.6). Ends in `SAVE_JOB_CHEM_UNIT_PROOF_PASS`: the md5 pin reproduces from migration `20260706080000`; a drifted body is refused with `PREFLIGHT_BODY_DRIFT` and the installed function is left byte-identical; the apply corrects a deliberately bad ACL; a replay reinstalls the identical body; **65 behaviour tests** pass; **37 mutation phases** each fail in a *named* way — 30 turn a named test red, 7 abort the apply with the specific preflight/postflight assertion written to catch them.
 
-`scripts/smoke/smoke-save-job-parity.sql` is the registered live chain and is **gated** on whether this migration is installed. The container prover is **manual** — `run-smoke.mjs --all` will not run it.
+`scripts/smoke/smoke-save-job-parity.sql` is the registered live chain. It was gated on whether this migration is installed; since the 2026-08-25 apply it is **fail-closed** — a `save_job` body without `CHEM_UNIT_MISMATCH` is now a hard failure, not a pre-apply state. Running the chain against a restored or staging database that lacks `20260820120000` will therefore FAIL by design; apply the migration there first. The container prover is **manual** — `run-smoke.mjs --all` will not run it.
 
 ## The two gates, and who opens them *(historical — both gates are CLOSED. Gate 1: PR #436 landed. Gate 2: the one-row data obligation was met on 2026-08-24 and the zero-row count was re-verified immediately before the 2026-08-25 apply. Kept because the re-run obligation still binds any FUTURE re-emit of this function.)*
 
