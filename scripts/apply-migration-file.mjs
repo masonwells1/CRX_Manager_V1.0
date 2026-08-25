@@ -215,6 +215,9 @@ try {
     projectId,
     projectDir,
     cwd: process.cwd(),
+    // The proof must name THIS migration exactly. Substring matching is what let an
+    // aliased filename inherit another migration's proof; see the note in the lib.
+    requireExactProofName: true,
   });
 } catch (err) {
   die(2,

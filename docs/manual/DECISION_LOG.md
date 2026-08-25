@@ -303,6 +303,20 @@ transform of the existing checks is mechanical; block-message text is preserved 
     and the check ran after file resolution so a missing file reported a path error instead of the
     refusal. Match `^--flag(=|$)` and refuse first.
 
+13. **Substring proof-matching WAS the replay mechanism; the file-bytes door requires exact
+    proof-name equality.** Rules 9 and 11 each closed a *shape* of the alias and left the mechanism
+    intact — round 7 defeated the stamp-count rule with a legacy 8-digit name
+    (`20260210_fix_rls_critical_issues` → `99999999999999_alias_20260210_fix_rls_critical_issues`
+    has exactly ONE 14-digit stamp), and Codex reproduced `APPLY GATE PASSED` on a real dry run.
+    `evaluateMigrationApply({requireExactProofName: true})` binds a proof to exactly one migration;
+    `scripts/apply-migration-file.mjs` sets it. Sharpening the point: that legacy name cannot be
+    applied honestly either — the ordering guard refuses any candidate without a 14-digit stamp — so
+    its proof was only ever useful to an alias that carried one.
+    **Known remaining weakness, stated not buried:** the PreToolUse hook still matches by substring,
+    so the same alias attack applies to the MCP `apply_migration` path. That is pre-existing, was not
+    introduced by this work, and is NOT fixed here — tightening it changes behaviour for every MCP
+    apply and deserves its own reviewed change.
+
 **Three instances of ONE root cause.** `--project` (round 4), `--name` (round 5), and the
 wrappability list's wrong entries all came from the same mistake: adding flexibility, or asserting a
 restriction, without checking what downstream already assumed. A parameter is not free — every check

@@ -312,6 +312,60 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   }
   // A real repository migration name still passes unchanged.
   ok(dry.status === 0, "the canonical-name rule does not reject a real migration filename");
+
+  // ROUND 7: the stamp-count rule closed a SHAPE, not the mechanism. A legacy
+  // 8-digit name (`20260210_fix_rls_critical_issues`) aliased to
+  // `99999999999999_alias_20260210_fix_rls_critical_issues` has exactly ONE 14-digit
+  // stamp, so it passed — while substring proof-matching still handed it the old
+  // migration's proof. Codex reproduced APPLY GATE PASSED. Exact proof-name equality
+  // is the actual fix.
+  {
+    const legacy = "20260210_fix_rls_critical_issues";
+    const alias = `99999999999999_alias_${legacy}`;
+    const legacySql = "ALTER TABLE public.t ENABLE ROW LEVEL SECURITY;\n";
+    const legacyHash = createHash("sha256").update(legacySql).digest("hex");
+    const root = mkdtempSync(path.join(os.tmpdir(), "crx-alias8-"));
+    roots.push(root);
+    const stateDir = path.join(root, ".claude", "session-state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(path.join(stateDir, "applied-migrations.json"),
+      JSON.stringify({ captured_at: iso(0), applied: [{ version: "20270101000000", name: "20270101000000_much_newer" }] }), "utf8");
+    // A genuine, fresh, clean proof for the LEGACY migration — nothing forged.
+    writeFileSync(path.join(stateDir, `migration-review-${legacy}.json`),
+      JSON.stringify({ migration: legacy, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: legacyHash }), "utf8");
+
+    // Substring matching (the hook's current behaviour) hands the alias that proof.
+    const lenient = evaluateMigrationApply({
+      name: alias, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
+      projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+    });
+    ok(lenient.decision === "allow", "substring matching DOES let the alias inherit the proof (the bug)");
+
+    // Exact matching refuses it.
+    const strict = evaluateMigrationApply({
+      name: alias, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
+      projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+      requireExactProofName: true,
+    });
+    denies(strict, "without subagent review proof", "exact proof-name matching refuses the aliased legacy name");
+
+    // Worth stating plainly, because it sharpens the bug: the legacy name cannot be
+    // applied HONESTLY either — the ordering guard refuses any candidate without a
+    // 14-digit stamp. So the only thing its proof was ever good for was being
+    // inherited by an alias that DID carry one. Exact matching removes that.
+    const honest = evaluateMigrationApply({
+      name: legacy, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
+      projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+      requireExactProofName: true,
+    });
+    denies(honest, "MIGRATION ORDERING GUARD",
+      "the legacy 8-digit name is refused by ordering regardless — its proof was only ever useful to an alias");
+
+    // Exact matching must not break the ordinary case: a canonical name whose proof
+    // names it exactly still passes.
+    allows(evaluate(fixture(), { requireExactProofName: true }),
+      "exact proof-name matching still allows a normal, correctly-named migration");
+  }
   // The derived name still works — the removal must not break the normal path.
   ok(dry.stdout.includes(`migration : ${MIG}`), "the ledger name is derived from the filename");
 }
