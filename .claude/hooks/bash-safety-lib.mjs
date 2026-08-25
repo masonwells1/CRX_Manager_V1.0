@@ -3214,6 +3214,9 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     if (subcommand === "hook") {
       return "Blocked Git hook execution because hooks can launch an unreviewed executable.";
     }
+    if (subcommand === "config" && args.some((argument) => /^--rename-section(?:=|$)/i.test(argument))) {
+      return "Blocked Git configuration section rename because an inert key can become executable after its section is renamed.";
+    }
     if (subcommand === "config" && args.some(executableConfigNamed)) {
       return "Blocked persisted executable Git configuration because it can redirect later Git commands into unreviewed code.";
     }

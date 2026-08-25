@@ -26,6 +26,7 @@ import {
   SECURITY_COMMAND_CHAR_BUDGET,
   SECURITY_COMMAND_TOKEN_BUDGET,
 } from "./bash-safety-lib.mjs";
+import { fileIdentity } from "./protected-identity-lib.mjs";
 import { gitLocalEnvironmentNames } from "./git-test-env.mjs";
 
 // Husky invokes this suite from a Git hook and exports repository/index
@@ -134,6 +135,8 @@ ok(checkDangerousCommand("New-Item -ItemType HardLink -Path scratch\\a.txt -Targ
     writeFileSync(protectedHook, "protected\n");
     writeFileSync(ordinary, "ordinary\n");
     linkSync(protectedHook, alias);
+    assert.notEqual(fileIdentity(protectedHook), fileIdentity(ordinary), "distinct Windows files retain distinct full-precision identities");
+    eq(fileIdentity(protectedHook), fileIdentity(alias), "a real hard link retains the protected file identity");
 
     const setContent = ["Set", "Content"].join("-");
     const outFile = ["Out", "File"].join("-");
@@ -788,6 +791,17 @@ for (const command of [
       const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
       ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies Git executable configuration dispatch: " + command);
     }
+    const stagedSectionRename = "git config safe.fsmonitor output/evil.cmd && git config --rename-section safe core && git status --short";
+    ok(
+      checkCommandDeep(stagedSectionRename, integrityRepo, reviewOptions)?.includes("section rename"),
+      "an executable setting cannot be staged under an inert section and renamed into core",
+    );
+    for (const command of ["git config --rename-section safe core", stagedSectionRename]) {
+      const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
+      eq(result.status, 0, "the Bash hook exits cleanly after denying a Git configuration section rename");
+      ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies Git configuration section renames: " + command);
+    }
+    eq(checkCommandDeep("git config safe.fsmonitor output/evil.cmd", integrityRepo, reviewOptions), null, "an inert section assignment alone remains non-executable");
     for (const command of [
       "git difftool --no-prompt HEAD HEAD",
       "git mergetool --no-prompt",

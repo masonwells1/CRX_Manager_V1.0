@@ -41,11 +41,14 @@ function pathKey(candidate) {
 
 export function fileIdentity(target) {
   try {
-    const stat = statSync(target);
+    // Windows file IDs can exceed Number.MAX_SAFE_INTEGER. Keep device and
+    // inode values as bigint so two distinct files cannot collapse to the same
+    // rounded JavaScript number and create a false alias match.
+    const stat = statSync(target, { bigint: true });
     if (!stat.isFile()) return "";
     // A filesystem that cannot report a real inode/file-ID (reported as 0) gives
     // no identity signal; never let that read as "matches nothing".
-    if (!stat.ino) return "";
+    if (stat.ino === 0n) return "";
     return `${stat.dev}:${stat.ino}`;
   } catch {
     return "";
