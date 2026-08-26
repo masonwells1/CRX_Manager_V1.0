@@ -63,7 +63,7 @@ const rules = [
   {
     pattern: /\b(no\s*-?verify|skip\s+(the\s+)?(pre\s*-?commit\s+)?hook|--no-verify)\b/,
     label: "SKIP PRE-COMMIT HOOK",
-    why: "The pre-commit hook (lint + build + vitest + SQL/frontend validation) exists because skipping it has shipped bugs to production before. Bypassing it is almost never the right answer.",
+    why: "The fast pre-commit staged safety checks plus pre-push/CI product proof exist because bypassing verification has shipped bugs before. Skipping them is almost never the right answer.",
     alternatives: "Tell Claude what error the hook is producing — there's usually a 1-line fix. Only legitimate `--no-verify` use is when the hook itself is broken (rare)."
   },
   {

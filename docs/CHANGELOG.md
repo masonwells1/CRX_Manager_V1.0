@@ -2,6 +2,37 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-26 — a guard self-test was re-initializing the real repository as bare
+
+`scripts/check-ledger-update.test.mjs` builds a throwaway git repo in a temp directory to prove the
+ledger guard still blocks a protected file renamed to an unprotected path. It spawned `git` with
+`cwd` pointed at that fixture but **inherited the ambient environment**.
+
+Git hooks export `GIT_DIR` (and `GIT_INDEX_FILE`, `GIT_WORK_TREE`) pointing at the *real*
+repository. So when this test ran from `pre-commit`, `git init --quiet` did not initialize the
+fixture — it re-initialized **CRX_Manager itself**, with a cwd that had no work tree attached, which
+set `core.bare = true` on the shared checkout. Every linked worktree on the machine then failed with
+`fatal: this operation must be run in a work tree`, and the test's next command died with status
+128 because `.claude/hooks/protected.mjs` does not exist in the real tree.
+
+**Why it went unnoticed:** the test passes standalone and passes in CI, because neither sets
+`GIT_DIR`. It only causes damage when run from inside a git hook — which is precisely where the
+pre-commit gate runs it. This is the cause of the previously-recorded incident where a failing
+pre-commit left the repository bare; the recovery (`git -C <repo> config core.bare false`) treated
+the symptom.
+
+Fixed by stripping `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`,
+`GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_PREFIX` from the environment
+handed to both the fixture `git` helper and the spawned CLI, so the fixture repo is the only
+repository those commands can reach.
+
+Verified: 44 assertions pass standalone, and pass again with `GIT_DIR` set to a real worktree
+gitdir — with `core.bare` still `false` afterwards. Before the fix that same invocation is what
+broke the checkout.
+
+**General rule:** any test that shells out to `git` against a fixture repo must sanitize the
+environment. `cwd` alone does not isolate it — `GIT_DIR` outranks `cwd`.
+
 ## 2026-08-25 — Quote-version restore trust boundary (PR #401): rebased, renumbered, verified against live
 
 Landing the long-stale PR #401. `20260813080000` closed the browser write path to
@@ -45,7 +76,7 @@ become a trusted cost source merely because the door is now shut.
 Migration is written and reviewed but **NOT APPLIED**; it is entry 892 in
 `docs/reference/migration-history.md`.
 
-## 2026-08-25 — PR #432 closed unmerged; control-file edits move to the `ask` tier; two git-config falsifications fixed
+## 2026-08-25 — PR #432 closed; control-file edits bounded; local/CI proof de-duplicated
 
 Mason ended the PR #432 repair loop (130 commits, +7,329 lines, four adversarial review rounds,
 never merged) after a symbol sweep showed all five planned splits target code absent from
@@ -53,6 +84,34 @@ never merged) after a symbol sweep showed all five planned splits target code ab
 protection guardrail work is frozen; business-rule guards are unaffected. Full rationale and the
 three-tier guardrail classification are in `docs/manual/DECISION_LOG.md` (2026-08-25 entry) and on
 the closed PR.
+
+**`.husky/pre-commit`** — reduced from 14 overlapping stages to staged-file safety checks:
+ledger, private-artifact containment, staged SQL/frontend validation, conditional Claude/Codex
+manifest parity, and conditional dependency integrity. Full lint, typecheck, guard/unit tests,
+coverage, and build remain in GitHub CI; typecheck and build also remain in pre-push. Commit no
+longer regenerates or auto-stages the workflow map. Staged routing includes Git type changes, and
+ledger collection disables rename collapsing so a protected source path cannot disappear when it
+is renamed outside the protected surface. The
+containment regression contract and active
+preflight/ship/gauntlet/bug-hunt instructions were updated to the same no-index-mutation model;
+generated Codex adapters remain synchronized from the canonical Claude commands.
+
+**`.github/workflows/ci.yml`** — added `ready_for_review`, retained `edited` so base-branch
+retargets rerun proof, and added concurrency that cancels stale runs only for the same PR. All edits
+run full CI because GitHub treats conditionally skipped required jobs as successful; a zero-runner
+edit path would bypass branch protection. Pushes to `main` use unique run groups and are never
+cancelled, preserving the deployment proof record. Lightweight doc-drift and normalized
+workflow-map freshness checks now run in CI. No docs-only bypass was added: control files, scripts,
+migrations, package files, and the schema registry still require the normal full CI path.
+The unrequired containment job is also fail-closed into the required SQL Validation context, so a
+failed or cancelled dependency cannot be accepted as a skipped required check.
+
+**First-push containment performance** — a new remote branch previously scanned up to 4,096
+reachable commits even when nearly all were already advertised by the destination remote. Named
+remotes now use their actually advertised, locally available default-branch HEAD as the exclusion
+boundary only when their configured fetch URL and push URL both exactly match Git's hook-supplied
+actual destination. Direct URLs, divergent `pushurl` settings, or unavailable/unfetched heads keep
+the conservative full-history fallback; all commits after the advertised boundary remain fully scanned.
 
 **`.claude/settings.json`** — added these to `permissions.ask` for `Edit`/`Write`:
 
@@ -241,7 +300,6 @@ Proof: patrol's four suites pass (classify 110, render 82, sources 128, trusted-
 up from 33 by the two sweep assertions); `npm run test:agent-workflows` green;
 `patrol-report.mjs` ran end to end against live data (52 items, "needs you 3 · scan
 errors 1") and still withheld the all-clear because a source failed.
-
 ## 2026-08-24 — Draw-down rollout completed live: migrations 2, 3 and 4 applied
 
 With Mason's explicit in-chat approval (Codex→Claude handoff
