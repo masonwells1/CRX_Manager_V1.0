@@ -52,6 +52,11 @@ function runHook(toolName, filePath, toolInput) {
   });
 }
 function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
+// Allow-side assertions must be AFFIRMATIVE: a crashed hook produces empty
+// stdout, and `!isDeny` would read that as an allow (CodeRabbit PR #489).
+function isAllow(r) {
+  return !r.error && r.status === 0 && r.stdout.includes('"permissionDecision":"allow"');
+}
 
 const CRLF = (s) => s.replace(/\n/g, "\r\n");
 
@@ -64,7 +69,7 @@ try {
     content: "-- status-enum-check: exempt (constraint expanded in this migration)\n" +
       "UPDATE invoices SET status = 'void' WHERE id = 1;\n",
   });
-  ok(!isDeny(r), "SQL Write: the same literal with the exempt marker is allowed");
+  ok(isAllow(r), "SQL Write: the same literal with the exempt marker is allowed");
 
   // ── THE DEADLOCK, SQL (allow direction): CRLF disk carries the marker; the
   // LF Edit fragment spans a line boundary and does NOT contain the marker.
@@ -79,7 +84,7 @@ try {
     old_string: "UPDATE invoices SET status = 'archived' WHERE id = 1;\n-- end of migration",
     new_string: "UPDATE invoices SET status = 'archived' WHERE id = 2;\n-- end of migration",
   });
-  ok(!isDeny(r), "SQL CRLF disk with on-disk exempt marker: marker-less multi-line Edit is allowed (deadlock fixed)");
+  ok(isAllow(r), "SQL CRLF disk with on-disk exempt marker: marker-less multi-line Edit is allowed (deadlock fixed)");
 
   // Same shape via MultiEdit's edits array (used to be silently ALLOWED with
   // empty content — now judged like any Edit).
@@ -89,7 +94,7 @@ try {
       new_string: "UPDATE invoices SET status = 'archived' WHERE id = 2;\n-- end of migration",
     }],
   });
-  ok(!isDeny(r), "SQL CRLF disk + LF MultiEdit: marker on disk is seen, edit allowed");
+  ok(isAllow(r), "SQL CRLF disk + LF MultiEdit: marker on disk is seen, edit allowed");
 
   // ── FAIL-OPEN direction, SQL: CRLF disk looks benign; the multi-line LF
   // Edit introduces the out-of-set literal. A non-normalized splice would
@@ -112,7 +117,7 @@ try {
     old_string: "export const q = supabase.from('invoices').eq('status', 'archived');\nexport default q;",
     new_string: "export const query = supabase.from('invoices').eq('status', 'archived');\nexport default query;",
   });
-  ok(!isDeny(r), "TS CRLF disk with on-disk // exempt marker: marker-less multi-line Edit is allowed (deadlock fixed)");
+  ok(isAllow(r), "TS CRLF disk with on-disk // exempt marker: marker-less multi-line Edit is allowed (deadlock fixed)");
 
   // ── FAIL-OPEN direction, TS: benign CRLF disk; the Edit adds the violation. ──
   writeFileSync(tsPath, CRLF(
@@ -127,6 +132,21 @@ try {
   });
   ok(isDeny(r), "TS CRLF disk + multi-line LF Edit that ADDS an out-of-set literal is still denied");
 
+  // ── Marker REMOVAL (CodeRabbit PR #489 class): disk has the marker AND the
+  // out-of-set literal; the Edit deletes the marker line outright. A
+  // pure-deletion Edit has an empty new_string, so an emptiness early-exit
+  // ABOVE the reconstruction would bypass the guard entirely; and any scan
+  // that still sees pre-edit disk content would still see the old marker. ──
+  writeFileSync(migPath, CRLF(
+    "-- status-enum-check: exempt (this migration expands the CHECK)\n" +
+    "UPDATE invoices SET status = 'archived' WHERE id = 1;\n"
+  ));
+  r = runHook("Edit", migPath, {
+    old_string: "-- status-enum-check: exempt (this migration expands the CHECK)\n",
+    new_string: "",
+  });
+  ok(isDeny(r), "an Edit that DELETES the exempt marker from an out-of-set-literal file is denied");
+
   // ── LF disk sanity: unchanged behavior on an already-LF file. ──
   writeFileSync(migPath, "-- lf migration\nSELECT 1;\n");
   r = runHook("Edit", migPath, {
@@ -139,7 +159,7 @@ try {
     old_string: "-- lf migration",
     new_string: "-- lf migration, edited",
   });
-  ok(!isDeny(r), "LF disk: a benign Edit on a benign file is allowed (unchanged behavior)");
+  ok(isAllow(r), "LF disk: a benign Edit on a benign file is allowed (unchanged behavior)");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

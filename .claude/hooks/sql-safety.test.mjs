@@ -52,6 +52,11 @@ function runHook(toolName, toolInput) {
   });
 }
 function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
+// Allow-side assertions must be AFFIRMATIVE: a crashed hook produces empty
+// stdout, and `!isDeny` would read that as an allow (CodeRabbit PR #489).
+function isAllow(r) {
+  return !r.error && r.status === 0 && r.stdout.includes('"permissionDecision":"allow"');
+}
 
 const CRLF = (s) => s.replace(/\n/g, "\r\n");
 
@@ -64,7 +69,7 @@ try {
     content: "-- sql-safety: exempt-registry (registry lags this backfill)\n" +
       "UPDATE invoices SET status = NULL WHERE id = 1;\n",
   });
-  ok(!isDeny(r), "Write: the same SQL with the exempt-registry marker is allowed");
+  ok(isAllow(r), "Write: the same SQL with the exempt-registry marker is allowed");
 
   // ── THE DEADLOCK (allow direction): CRLF disk carries the marker; the LF
   // Edit fragment spans a line boundary and does NOT contain the marker.
@@ -79,7 +84,7 @@ try {
     old_string: "UPDATE invoices SET status = NULL WHERE id = 1;\n-- end of migration",
     new_string: "UPDATE invoices SET status = NULL WHERE id = 2;\n-- end of migration",
   });
-  ok(!isDeny(r), "CRLF disk with on-disk exempt-registry marker: marker-less multi-line Edit is allowed (deadlock fixed)");
+  ok(isAllow(r), "CRLF disk with on-disk exempt-registry marker: marker-less multi-line Edit is allowed (deadlock fixed)");
 
   // Same shape via MultiEdit's edits array (used to be silently ALLOWED with
   // empty content — now judged like any Edit).
@@ -89,7 +94,7 @@ try {
       new_string: "UPDATE invoices SET status = NULL WHERE id = 2;\n-- end of migration",
     }],
   });
-  ok(!isDeny(r), "CRLF disk + LF MultiEdit: marker on disk is seen, edit allowed");
+  ok(isAllow(r), "CRLF disk + LF MultiEdit: marker on disk is seen, edit allowed");
 
   // ── Registry-stale gate variant of the deadlock: REGISTRY-STALE.flag set,
   // marker on disk, benign Edit fragment without the marker. Fragment-only
@@ -101,7 +106,7 @@ try {
     old_string: "-- end of migration",
     new_string: "-- end",
   });
-  ok(!isDeny(r), "stale flag + on-disk marker: benign marker-less Edit is allowed (stale-gate deadlock fixed)");
+  ok(isAllow(r), "stale flag + on-disk marker: benign marker-less Edit is allowed (stale-gate deadlock fixed)");
 
   // Sanity: with the flag up and NO marker anywhere, a migration Edit is still
   // gated on the stale registry.
@@ -124,6 +129,21 @@ try {
   });
   ok(isDeny(r), "CRLF disk + multi-line LF Edit that ADDS a rule-3 violation is still denied");
 
+  // ── Marker REMOVAL (CodeRabbit PR #489 class): disk has the marker AND the
+  // rule-6 SQL; the Edit deletes the marker line outright. A pure-deletion
+  // Edit has an empty new_string, so an emptiness early-exit ABOVE the
+  // reconstruction would bypass the guard entirely; and any scan that still
+  // sees pre-edit disk content would still see the old marker. ──
+  writeFileSync(migPath, CRLF(
+    "-- sql-safety: exempt-registry (registry lags this backfill)\n" +
+    "UPDATE invoices SET status = NULL WHERE id = 1;\n"
+  ));
+  r = runHook("Edit", {
+    old_string: "-- sql-safety: exempt-registry (registry lags this backfill)\n",
+    new_string: "",
+  });
+  ok(isDeny(r), "an Edit that DELETES the exempt-registry marker from a rule-6 file is denied");
+
   // ── LF disk sanity: unchanged behavior on an already-LF file. ──
   writeFileSync(migPath, "-- lf migration\nSELECT 1;\n");
   r = runHook("Edit", {
@@ -136,7 +156,7 @@ try {
     old_string: "-- lf migration",
     new_string: "-- lf migration, edited",
   });
-  ok(!isDeny(r), "LF disk: a benign Edit on a benign file is allowed (unchanged behavior)");
+  ok(isAllow(r), "LF disk: a benign Edit on a benign file is allowed (unchanged behavior)");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

@@ -22,7 +22,11 @@ CRLF fixtures in both directions — a marker-less edit to a marker-bearing file
 (deadlock fixed, including the registry-stale-gate variant), and a multi-line LF edit that
 introduces a violation into a CRLF file is still denied. Both were mutation-tested: disabling
 the full-file view fails the allow-direction tests, and swapping the normalized splice for an
-exact one fails the deny-direction tests, in both hooks.
+exact one fails the deny-direction tests, in both hooks. The CodeRabbit findings from the
+sibling PR #489 fix are carried over pre-emptively: a pure-deletion Edit that removes the
+exempt marker is a pinned deny (an emptiness early-exit above the reconstruction would have
+bypassed the guard — mutation-verified), and allow-side test assertions are affirmative, so
+a crashed hook's empty stdout cannot read as an allow.
 
 Of the remaining fragment-only PreToolUse content guards: `rls-on-new-tables.mjs`,
 `generated-column-check.mjs`, and `actor-binding-check.mjs` have the same file-level markers
