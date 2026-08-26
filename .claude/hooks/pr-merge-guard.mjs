@@ -29,6 +29,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   contentIsRisky,
+  describeRiskyContent,
   ghApiMergeRequest,
   ghMergeRequest,
   mcpMergeRequest,
@@ -156,12 +157,14 @@ function gateRequest(request) {
 
   const risky = riskyFiles(files);
   let contentFlagged = false;
+  let contentDiffText = "";
   if (risky.length === 0) {
     try {
       const diffArgs = ["pr", "diff"];
       if (request.selector) diffArgs.push(String(request.selector));
       if (request.repo) diffArgs.push("--repo", request.repo);
-      contentFlagged = contentIsRisky(gh(diffArgs));
+      contentDiffText = gh(diffArgs);
+      contentFlagged = contentIsRisky(contentDiffText);
     } catch (error) {
       deny(`PR MERGE GATE: could not inspect this pull request's full diff for money/security risk, so the merge is denied (fail closed). ${error?.message || error}`);
     }
@@ -208,7 +211,7 @@ function gateRequest(request) {
     ? `changes ${risky.length} risky file(s) that need an independent Codex verdict FIRST:\n` +
       risky.slice(0, 6).map((f) => "  " + f).join("\n") +
       (risky.length > 6 ? `\n  ... and ${risky.length - 6} more` : "")
-    : "changes content that matches a money/financial-audit pattern (_cents, financial_audit_log, allocate_payment, apply_prepay) even though no changed file's PATH looked risky";
+    : describeRiskyContent(contentDiffText);
 
   deny(
     `PR MERGE GATE: merging this PR lands a diff on main that ${riskyDescription}\n\n` +
