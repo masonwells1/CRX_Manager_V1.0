@@ -1043,6 +1043,14 @@ order**; they change **no settled decision**. D-A through D-X and the three 2026
 stand exactly as written. This section governs only the two subjects it names — Phase 1b's position
 in the sequence, and the workbook-as-proposal path — and nothing else in this plan.*
 
+> **Revision 8 — PR #498 review round four (two residuals).** Two targeted corrections: the
+> sequencing summary's "`commit_label_draft` itself stays untouched" leftover — which contradicted
+> FIX-A's WP-1 body guard and could have led a builder to omit the one protection against the
+> deployed legacy path — now acknowledges the guard; and RR-3's conversion constants move from
+> TypeScript named exports (unreachable from a PostgreSQL RPC) into the `net_weight_lb_factor`
+> IMMUTABLE SQL function WP-2's migration creates, with exact factors stated and a cross-runtime
+> equality proof required for any display-side mirror.
+>
 > **Revision 7 — PR #498 review round three (two connector P1s).** Revision 4 rewrote this amendment
 > after a third
 > adversarial `gpt-5.6-sol` round closed every outstanding finding and returned seven more, all
@@ -1218,8 +1226,10 @@ the first upload would queue rows with no approval path. Moving Phase 1b behind 
 importer **rides on machinery that already exists when it runs**. **The S-02 bullet's "WP-4's
 migration adds only the EPA-specific RPC" is amended by this section *(RR-5)*: WP-4's migration
 adds TWO new functions — `create_label_draft_proposal` and `commit_label_draft_proposal`** — see
-*The typed commit path is a NEW RPC* below, which states the boundary exactly. **`commit_label_draft`
-itself stays untouched.**
+*The typed commit path is a NEW RPC* below, which states the boundary exactly. **`commit_label_draft`'s
+signature stays untouched by everyone; its body changes exactly once — WP-1's typed-purpose guard
+(FIX-A below), without which the deployed `LabelReview` flow could close a typed draft through the
+legacy scalar-only path — and WP-4 adds nothing to it.**
 
 **WP-2 remains a prerequisite; it is simply no longer the immediate predecessor.** It is still the
 migration that creates `density_value`, `density_unit`, net weight per purchase unit,
@@ -1374,7 +1384,7 @@ so explicitly.
 | `product_attributes.density_value` | `numeric` | **absent, or present non-null** — never present-with-null | Finite and strictly positive when present (WP-2's hard domain). **Absent = no proposal, live value untouched** (R2-4) |
 | `product_attributes.density_unit` | `text` | **no** when `density_value` present | `lb_per_gal` or `specific_gravity`; specific gravity normalizes on write against `WATER_LB_PER_GAL = 8.345404`. The filler never converts (G-3) |
 | `product_attributes.net_weight_value` | `numeric` | **absent, or present non-null** | Finite and strictly positive when present |
-| `product_attributes.net_weight_unit` | `text` | **no** when `net_weight_value` present | **CHECK ∈ a closed set — `lb`, `oz`, `kg`, `g` — never free text *(blocker, RR-3)*.** Revision 5 left this field unconstrained, so a sheet could propose `lbs`, `pounds`, `L` or an empty string and the commit RPC would have had to guess a conversion or store a unit nothing downstream could read — the exact failure `density_unit` was constrained to prevent, one row below. **Normalized to `lb` at commit**, mirroring density's normalize-on-write / retain-entered contract (**D-B**): the conversion constants are **pinned named exports beside `WATER_LB_PER_GAL`** — one source shared by the commit RPC's builder and by the verifier's proof, never two hand-typed copies. **An unlisted unit is refused at import and again at commit, with a named error — never guessed, never coerced** |
+| `product_attributes.net_weight_unit` | `text` | **no** when `net_weight_value` present | **CHECK ∈ a closed set — `lb`, `oz`, `kg`, `g` — never free text *(blocker, RR-3)*.** Revision 5 left this field unconstrained, so a sheet could propose `lbs`, `pounds`, `L` or an empty string and the commit RPC would have had to guess a conversion or store a unit nothing downstream could read — the exact failure `density_unit` was constrained to prevent, one row below. **Normalized to `lb` at commit**, mirroring density's normalize-on-write / retain-entered contract (**D-B**): the conversion factors live in the **`net_weight_lb_factor(p_unit)` IMMUTABLE SQL function WP-2's migration creates** — one database-side source queried by the commit RPC **and** by the verifier's proof, never two hand-typed copies (RR-3 as corrected in Revision 8; a TS export cannot reach a PostgreSQL RPC). **An unlisted unit is refused at import and again at commit, with a named error — never guessed, never coerced** |
 | `product_attributes.net_weight_basis` | `text` | **no** when `net_weight_value` present | `per_package` — the weight of one individual bag or jug — or `per_purchase_unit` — the weight of the whole thing bought. **An input basis, not a storage shape** *(R2-8)*: `per_package` is converted at commit, see below. This is the field that makes a case of four 10-lb bags unambiguous |
 | `product_attributes.package_count` | `int` | **no** when `net_weight_basis = 'per_package'`; **absent** otherwise | Finite and strictly positive. How many of that package are in one purchase unit. Retained beside the normalized figure for audit (D-B pattern), in `net_weight_entered_package_count` *(R3-6)* |
 | `product_attributes.formulation_type` | `text` | **absent, or present *trimmed non-empty*** | As the label states it (SC, EC, WG, SL, …). **Blank is not a value *(blocker, RR-2)*:** `''` and `'   '` are refused at import, by the CHECK and again at commit, because revision 5 counted them as "present and non-null" and would have **overwritten a live formulation type with a blank** |
@@ -1460,9 +1470,15 @@ basis it could convert and a **unit it could only hope about** — `lbs`, `pound
 were all equally admissible, and the RPC's only options were to guess a factor or store a string
 nothing downstream could read. So the unit is **CHECK-constrained to `lb`, `oz`, `kg`, `g`** in the
 payload and **normalized to `lb` at commit**, in the same statement that normalizes the basis. **The
-conversion constants are pinned named exports beside `WATER_LB_PER_GAL`** — one source of truth
-imported by whoever builds the commit path **and** by whoever writes its verification proof, so the
-proof cannot agree with the code by re-typing the same wrong number. **An unlisted unit is REFUSED,
+conversion factors live in the DATABASE, because the converter does** — a TypeScript named export
+cannot be imported by a PostgreSQL RPC. WP-2's migration creates one **IMMUTABLE SQL function,
+`net_weight_lb_factor(p_unit text) RETURNS numeric`**, holding the exact factors — `lb` → `1`,
+`oz` → `0.0625` (exact), `kg` → `2.20462262185`, `g` → `0.00220462262185` — and refusing any other
+unit. `commit_product_attribute_proposal` calls it, and the verification proof queries the **same
+function**, so the proof cannot agree with the code by re-typing the same wrong number. Any
+TypeScript display-side mirror of these factors must carry a **cross-runtime equality proof**
+against the SQL function's returns — the same one-source rule `WATER_LB_PER_GAL` imposes, adapted
+to the runtime that actually executes the conversion. **An unlisted unit is REFUSED,
 at import and again at commit, with a named error** — the importer never guesses, and neither does
 the RPC, which is the identical rule G-3 already imposes on concentration basis. The
 filler never converts (G-3); the commit RPC converts once, where it can be proved. **Proof case:** a
