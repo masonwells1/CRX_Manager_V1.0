@@ -7,12 +7,26 @@
 import { DENY_TOOLNAME_RE } from "./autopilot-lib.mjs";
 
 // Mason wants to halt / pause / is only scoping a future session.
-const HOLD_RE = /((?<!(don'?t|won'?t|never|not) )(?<!(don'?t|won'?t) ever )\bstop\b|(?<!(don'?t|won'?t|never|not) )(?<!(don'?t|won'?t) ever )\bpause\b|\bhold (on|up|off)\b|cancel (all |the )?background|good stopping point|not (working|building) on (it|this|that) yet|just (getting|scoping|scope|the framework|framing)|only (scoping|planning|framing)|don'?t (build|code|implement|write code|start) yet|for a (fresh|future|new) session)/i;
+//
+// The `(?<![-_])` / `(?![-_]|\.[A-Za-z0-9])` pairs around stop|pause exclude an
+// occurrence that is part of an IDENTIFIER rather than a word Mason typed —
+// `stop-wrap.mjs`, `stop-verify.mjs`, `hold-latch`, "non-stop". Discussing this
+// very guard by filename latched a hold on 2026-08-26 for exactly that reason.
+// This removes no vocabulary: a trailing "." (as in "please stop.") only counts
+// as an extension when a letter or digit follows it, and "/" is deliberately NOT
+// in the set so "does stop/pause still work?" keeps matching. Path forms are
+// still caught through the "-" or the ".ext".
+const HOLD_RE = /((?<!(don'?t|won'?t|never|not) )(?<!(don'?t|won'?t) ever )(?<![-_])\bstop\b(?![-_]|\.[A-Za-z0-9])|(?<!(don'?t|won'?t|never|not) )(?<!(don'?t|won'?t) ever )(?<![-_])\bpause\b(?![-_]|\.[A-Za-z0-9])|\bhold (on|up|off)\b|cancel (all |the )?background|good stopping point|not (working|building) on (it|this|that) yet|just (getting|scoping|scope|the framework|framing)|only (scoping|planning|framing)|don'?t (build|code|implement|write code|start) yet|for a (fresh|future|new) session)/i;
 
 // An affirmative "carry on" — not required to clear (any non-hold prompt clears),
 // but used to phrase the confirmation.
 const RESUME_RE = /\b(resume|go ahead|continue|keep going|proceed|start (building|working|now)|do it now|carry on)\b/i;
 
+// NOTE: these are pure VOCABULARY predicates — they judge whatever text they are
+// handed. Deciding WHOSE text that is belongs to the caller: hold-latch-prompt.mjs
+// passes authoredByMason(prompt), never the raw prompt, so a peer session's
+// <cross-session-message> can no longer halt this one (2026-08-26). If you add a
+// caller, strip it there too — prompt-hooks.test.mjs asserts the hook still does.
 export function isHoldPhrase(prompt) {
   return HOLD_RE.test(String(prompt || ""));
 }
