@@ -22,7 +22,8 @@ import os from "node:os";
 import { withFileLock, normalizedSqlHash } from "./ledger-lock-lib.mjs";
 // The dated-fragment pattern is imported, never re-expressed: a second copy here would
 // drift from the guard and this hook would start contradicting what pre-commit enforces.
-import { ENTRY_RE } from "../../scripts/check-ledger-update.mjs";
+// Shared guard logic lives in .claude/hooks/, not scripts/ (CodeRabbit Major, PR #482).
+import { ENTRY_RE, entryContentVerdict, isCountableFragmentFile } from "./changelog-entry-lib.mjs";
 
 let payload = {};
 try {
@@ -559,13 +560,26 @@ try {
       ];
       // "A" or an untracked "?" is an addition; a rename destination ("R100") is not.
       const isAdded = (st) => !/^R/.test(st) && /[A?]/.test(st);
-      // An added fragment must also SURVIVE the session: adding an entry and later
-      // deleting or reverting it leaves the historical "A" in the session log while
-      // no record remains for anyone to read (CodeRabbit, PR #482). Existence is
-      // checked against the working tree — the state the next session inherits.
+      // An added fragment must also SURVIVE the session AS A VALID RECORD: adding an
+      // entry and later deleting, truncating, or emptying it leaves the historical
+      // "A" in the session log while nothing readable remains (CodeRabbit + Codex,
+      // PR #482 — counted-without-validated, the same class as the quotePath
+      // fail-open). Stat first — a DIRECTORY named like a fragment must not count
+      // (existsSync alone accepted one) — then validate the surviving content with
+      // the SAME shared rules the pre-commit guard applies. Both checks read the
+      // working tree: the state the next session actually inherits.
+      const survivingValidFragment = (p) => {
+        const abs = path.join(projectDir, p);
+        if (!isCountableFragmentFile(abs)) return false;
+        try {
+          return entryContentVerdict(p, readFileSync(abs, "utf8")) === true;
+        } catch {
+          return false;
+        }
+      };
       const counts = ({ path: p, status }) =>
         LEDGER_RES.some((re) => re.test(p) &&
-          (re !== ENTRY_RE || (isAdded(status) && existsSync(path.join(projectDir, p)))));
+          (re !== ENTRY_RE || (isAdded(status) && survivingValidFragment(p))));
       if (!touched.some(counts)) {
         issues.push(
           `📓 Commits exist this session but no ledger file was touched —\n` +

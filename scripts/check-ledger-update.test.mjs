@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerCheck } from "./check-ledger-update.mjs";
+import { entryContentVerdict, isCountableFragmentFile } from "../.claude/hooks/changelog-entry-lib.mjs";
 import { scratchHookEnvironment } from "../.claude/hooks/git-test-env.mjs";
 
 let pass = 0;
@@ -366,6 +367,36 @@ try {
     "the refusal names the file by its real (unquoted) name");
 } finally {
   rmSync(quoteRepo, { recursive: true, force: true });
+}
+
+// ── the stop hook's surviving-fragment checks (shared lib; CodeRabbit + Codex, PR #482) ──
+// Counted-without-validated, round 3: an added fragment later truncated/emptied still
+// counted (existence-only), and a DIRECTORY named like a fragment satisfied existsSync.
+const survivorDir = mkdtempSync(join(tmpdir(), "crx-ledger-survivor-"));
+try {
+  // A directory with a fragment-shaped name is NOT a countable fragment file.
+  const dirNamedLikeFragment = join(survivorDir, "2026-08-26-dir.md");
+  mkdirSync(dirNamedLikeFragment, { recursive: true });
+  eq(isCountableFragmentFile(dirNamedLikeFragment), false,
+    "a DIRECTORY named like a fragment is not a countable fragment file");
+  const realFile = join(survivorDir, "2026-08-26-real.md");
+  writeFileSync(realFile, "## 2026-08-26 - real" + NL + NL + "detail" + NL);
+  eq(isCountableFragmentFile(realFile), true, "a real file IS countable");
+  eq(isCountableFragmentFile(join(survivorDir, "absent.md")), false,
+    "a missing path is not countable (no throw)");
+
+  // The surviving CONTENT is validated with the same rules the pre-commit guard uses.
+  const p = "docs/changelog.d/2026-08-26-x.md";
+  eq(entryContentVerdict(p, "## 2026-08-26 - x" + NL + NL + "detail" + NL), true,
+    "a valid surviving fragment passes the shared content rules");
+  ok(/empty/.test(String(entryContentVerdict(p, ""))),
+    "a truncated-to-empty survivor records nothing (the add-then-truncate hole)");
+  ok(/detail beneath/.test(String(entryContentVerdict(p, "## 2026-08-26 - x" + NL))),
+    "a survivor reduced to a bare heading records nothing");
+  ok(/disagrees with the filename date/.test(String(entryContentVerdict(p, "## 2026-08-25 - x" + NL + NL + "d" + NL))),
+    "a survivor whose heading date no longer matches its filename is refused");
+} finally {
+  rmSync(survivorDir, { recursive: true, force: true });
 }
 
 console.log(`check-ledger-update: ${pass} assertions passed`);

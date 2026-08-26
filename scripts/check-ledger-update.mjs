@@ -12,6 +12,19 @@
 // dirty working tree doesn't false-positive.
 
 import { execFileSync } from "node:child_process";
+// The entry predicate and content rules live in .claude/hooks/changelog-entry-lib.mjs
+// — the single source of truth for shared guard logic (CodeRabbit Major, PR #482).
+// Re-exported below so existing consumers (scripts/assemble-changelog.mjs, the test
+// suite) keep importing from here unchanged.
+import {
+  ENTRY_RE,
+  isAttemptedEntry,
+  isRealCalendarDate,
+  normalizeBody,
+  entryContentVerdict,
+} from "../.claude/hooks/changelog-entry-lib.mjs";
+
+export { ENTRY_RE, isAttemptedEntry, isRealCalendarDate };
 
 // Files whose change means "the agent surface / policy changed".
 const TRIGGER_RES = [
@@ -41,43 +54,10 @@ const TRIGGER_RES = [
 // docs/reference/migration-history.md is the natural ledger companion for a
 // migration commit, so it also satisfies the requirement (added 2026-07-16).
 
-// A changelog.d entry is `<YYYY-MM-DD>-<slug>.md`, flat in the folder. Exported so
-// scripts/assemble-changelog.mjs applies the IDENTICAL predicate — one definition,
-// so the guard and the assembler can never disagree about what counts as an entry.
-// Anything a session drops in the folder is an ATTEMPTED entry, even when the filename is
-// wrong. Kept separate from ENTRY_RE so a malformed path is still noticed rather than
-// filtered out before it can be reported (Codex P2, PR #482).
-// The folder's own furniture, by exact name. This is an ALLOWLIST on purpose: the
-// previous version excluded every dotfile, so `docs/changelog.d/.bad.md` was not even
-// an attempted entry and slipped past the malformed-path refusal (Codex P2, PR #482).
-// Enumerating what is legitimate closes that, where enumerating what is forbidden
-// would have to be reopened for every new way of hiding a file.
-const FOLDER_META = new Set(["README.md", ".markdownlint.yaml", ".gitkeep"]);
-
-export function isAttemptedEntry(p) {
-  const prefix = "docs/changelog.d/";
-  const s = String(p ?? "");
-  if (!s.startsWith(prefix)) return false;
-  const rest = s.slice(prefix.length);
-  return rest.length > 0 && !FOLDER_META.has(rest);
-}
-
-// Month and day are range-checked in the pattern itself, so 2026-13-01 and 2026-01-32
-// never read as entries. A regex cannot express "February has 28 days", so the
-// impossible-but-well-shaped dates are caught by isRealCalendarDate below (CodeRabbit,
-// PR #482). Anything importing this — the stop hook does — gets the range check for free.
-export const ENTRY_RE = /^docs\/changelog\.d\/\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])-[a-z0-9][a-z0-9._-]*\.md$/;
-
-// 2026-02-31 has the right shape and does not exist. Round-tripping through Date is the
-// cheapest honest check: JS normalises Feb 31 to Mar 3, so the fields stop matching.
-export function isRealCalendarDate(iso) {
-  const parts = String(iso ?? "").split("-");
-  if (parts.length !== 3) return false;
-  const [y, m, d] = parts.map(Number);
-  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return false;
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
-}
+// ENTRY_RE, isAttemptedEntry, and isRealCalendarDate are defined in
+// .claude/hooks/changelog-entry-lib.mjs and re-exported above — one definition, so
+// the guard, the stop hook, and scripts/assemble-changelog.mjs can never disagree
+// about what counts as an entry.
 
 // Any ONE of these staged alongside satisfies the ledger requirement.
 const LEDGER_RES = [
@@ -118,47 +98,17 @@ function toPosix(v) {
 // unaffected: appending to CHANGELOG.md or DECISION_LOG.md is a MODIFY by nature.
 const NEWLINE = String.fromCharCode(10);
 
-function normalizeBody(s) {
-  return String(s ?? "").replace(/\r\n/g, "\n").trim();
-}
-
 // Returns true if this changelog.d entry genuinely records THIS commit's change, or a
-// reason string explaining why it does not. The guard is the ONLY validator of these
-// files, so "exists at the right path" is not enough (Codex P2, PR #482).
+// reason string explaining why it does not. Content rules (heading, date-vs-filename,
+// real calendar date, detail beneath) are the shared lib's entryContentVerdict — the
+// stop hook applies those IDENTICAL rules to the file that survives the session. The
+// status-shaped rules below (ADDED-only, rename and byte-identity refusals) are
+// commit-specific and stay here.
 function entryVerdict(e, removedBodies) {
   if (!e.status.startsWith("A")) return "is not ADDED by this commit";
-  if (typeof e.content !== "string") return "has no readable staged content";
+  const contentVerdict = entryContentVerdict(e.path, e.content);
+  if (contentVerdict !== true) return contentVerdict;
   const body = normalizeBody(e.content);
-  if (!body) return "is empty, so it records nothing";
-  const first = body.split("\n")[0] || "";
-  // The heading must carry a real description, not just a date and punctuation. `\s*\S+`
-  // used to accept "## 2026-08-26x" (no separator at all) and "## 2026-08-26 -" (a dash
-  // with nothing after it), both of which violate the format the README promises (Codex
-  // P2, PR #482). The separator class is deliberately wide: hyphen, en dash and em dash
-  // are ALL accepted, because seven of the eight entries written under this convention
-  // use an em dash. Narrowing to a literal "-" would have refused the folder's own
-  // history, which is how a guard stops being trusted.
-  const m = /^##\s+(\d{4}-\d{2}-\d{2})\s+[-\u2013\u2014]\s+\S/.exec(first);
-  if (!m) {
-    const dated = /^##\s+\d{4}-\d{2}-\d{2}/.exec(first);
-    if (!dated) return 'does not start with "## <YYYY-MM-DD> - <what changed>"';
-    const rest = first.slice(dated[0].length);
-    if (/^\s*$/.test(rest)) {
-      return "has only a date heading and no description - a date is not a record of what changed";
-    }
-    if (/^\s*[-\u2013\u2014]\s*$/.test(rest)) {
-      return "has a date and a dash but nothing after it - a separator is not a record of what changed";
-    }
-    return 'heading must read "## <YYYY-MM-DD> - <what changed>" - a dash (-, en or em) ' +
-      "with a description after it";
-  }
-  const fileDate = (e.path.split("/").pop() || "").slice(0, 10);
-  if (m[1] !== fileDate) return `heading date ${m[1]} disagrees with the filename date ${fileDate}`;
-  if (!isRealCalendarDate(fileDate)) {
-    return `is dated ${fileDate}, which is not a real calendar date`;
-  }
-  // A heading with nothing beneath it records the title and none of the substance.
-  if (body.split("\n").slice(1).join("").trim() === "") return "has a heading but no detail beneath it";
   // A pure rename arrives as D(old) + A(new) under --no-renames. Counting the added
   // half would let a commit satisfy the guard by MOVING someone else's record while
   // writing none of its own. Byte-identical content is what makes that detectable.
