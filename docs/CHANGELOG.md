@@ -45,6 +45,16 @@ become a trusted cost source merely because the door is now shut.
 Migration is written and reviewed but **NOT APPLIED**; it is entry 892 in
 `docs/reference/migration-history.md`.
 
+## 2026-08-25 — Booking-draw pause released
+
+Mason released the booking-draw pause in-chat after the full draw-down chain and the save_job
+chem-unit guard went live. The pause was procedural (a team agreement during the rollout, never a
+code flag), so the release is a recorded decision, not a deploy. Read-only pre-release checks:
+one `draw_down_quote` overload, intent-bound body installed, zero retry receipts in the prior
+24 hours, function-surface sweeps clean. No test draw was fabricated; the first real draw is the
+final end-to-end proof and should be read back read-only when it happens. Canonical record:
+`docs/manual/DECISION_LOG.md` (2026-08-25 entry).
+
 ## 2026-08-25 — Decision Log: the dangling PR #403 reference now records a closure
 
 `docs/manual/DECISION_LOG.md` still described the narrow live-ledger recovery exception as a
