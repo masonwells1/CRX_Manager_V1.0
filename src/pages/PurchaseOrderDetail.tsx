@@ -287,63 +287,72 @@ export default function PurchaseOrderDetail() {
   const handleReceive = async () => {
     if (!profile) return;
 
-    const itemsPayload = items
-      .filter((item) => parseFloat(receiveItems[item.id]?.qty || '0') > 0)
-      .map((item) => {
-        const ri = receiveItems[item.id];
-        return {
-          po_item_id: item.id,
-          quantity: parseFloat(ri.qty || '0'),
-          condition: ri.condition,
-          lot_number: ri.lot_number || null,
-          notes: ri.notes || null,
-          storage_location: storageLocation,
-        };
+    let request: ReceivePoIntent;
+    const lockedRequest = receiveIntent.unresolvedIntent;
+    if (lockedRequest) {
+      // A committed receipt reduces the live remaining quantity. Revalidating
+      // against that refreshed state would deadlock the exact replay that must
+      // reconcile a lost response, so locked retries use the frozen request.
+      request = lockedRequest;
+    } else {
+      const itemsPayload = items
+        .filter((item) => parseFloat(receiveItems[item.id]?.qty || '0') > 0)
+        .map((item) => {
+          const ri = receiveItems[item.id];
+          return {
+            po_item_id: item.id,
+            quantity: parseFloat(ri.qty || '0'),
+            condition: ri.condition,
+            lot_number: ri.lot_number || null,
+            notes: ri.notes || null,
+            storage_location: storageLocation,
+          };
+        });
+
+      if (itemsPayload.length === 0) {
+        toast('error', 'Enter a quantity for at least one item');
+        return;
+      }
+
+      // Compute whether any line would over-receive based on remaining-to-receive
+      const wouldOverReceive = itemsPayload.some((ip) => {
+        const poItem = items.find((i) => i.id === ip.po_item_id);
+        if (!poItem) return false;
+        const remaining = (poItem.quantity_ordered || 0) - (poItem.quantity_received || 0);
+        return ip.quantity > remaining;
       });
 
-    if (itemsPayload.length === 0) {
-      toast('error', 'Enter a quantity for at least one item');
-      return;
+      if (wouldOverReceive) {
+        if (role !== 'admin') {
+          toast('error', 'Over-receive requires admin role. Reduce the quantity to remaining-to-receive or fewer.');
+          return;
+        }
+        if (!allowOverReceive) {
+          toast('error', 'Quantity exceeds remaining-to-receive. Check the over-receive override and provide a reason.');
+          return;
+        }
+        if (!overReceiveReason.trim()) {
+          toast('error', 'Reason is required when over-receiving.');
+          return;
+        }
+      }
+
+      // Send the reason as a dedicated field. The RPC decides which locked line
+      // is actually over-received and appends the audit marker server-side.
+      const finalPayload = wouldOverReceive
+        ? itemsPayload.map((ip) => ({
+            ...ip,
+            over_receive_reason: overReceiveReason.trim(),
+          }))
+        : itemsPayload;
+
+      request = receiveIntent.beginIntent({
+        itemsPayload,
+        finalPayload,
+        allowOverReceive: wouldOverReceive && allowOverReceive,
+        storageLocation,
+      });
     }
-
-    // Compute whether any line would over-receive based on remaining-to-receive
-    const wouldOverReceive = itemsPayload.some((ip) => {
-      const poItem = items.find((i) => i.id === ip.po_item_id);
-      if (!poItem) return false;
-      const remaining = (poItem.quantity_ordered || 0) - (poItem.quantity_received || 0);
-      return ip.quantity > remaining;
-    });
-
-    if (wouldOverReceive) {
-      if (role !== 'admin') {
-        toast('error', 'Over-receive requires admin role. Reduce the quantity to remaining-to-receive or fewer.');
-        return;
-      }
-      if (!allowOverReceive) {
-        toast('error', 'Quantity exceeds remaining-to-receive. Check the over-receive override and provide a reason.');
-        return;
-      }
-      if (!overReceiveReason.trim()) {
-        toast('error', 'Reason is required when over-receiving.');
-        return;
-      }
-    }
-
-    // Send the reason as a dedicated field. The RPC decides which locked line
-    // is actually over-received and appends the audit marker server-side.
-    const finalPayload = wouldOverReceive
-      ? itemsPayload.map((ip) => ({
-          ...ip,
-          over_receive_reason: overReceiveReason.trim(),
-        }))
-      : itemsPayload;
-
-    const request = receiveIntent.beginIntent({
-      itemsPayload,
-      finalPayload,
-      allowOverReceive: wouldOverReceive && allowOverReceive,
-      storageLocation,
-    });
 
     await runCriticalAction({
       action: async () => {

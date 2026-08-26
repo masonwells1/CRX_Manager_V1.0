@@ -19,7 +19,8 @@ import Badge from '../ui/Badge';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../../lib/db';
-import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { useUncertainMutationIntent } from '../../hooks/useUncertainMutationIntent';
+import { getIdempotencyMismatchResult } from '../../lib/idempotency';
 import { Sentry } from '../../lib/sentry';
 import HelpTip from '../ui/HelpTip';
 import { notifyDamagedReceiving } from '../../lib/notificationTriggers';
@@ -34,6 +35,25 @@ import { ProductOptionDetails, type ProductOptionPresentationModel } from '../pr
 import { ProductSearchResultRow } from '../products/ProductSearchResultRow';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
+
+type QuickReceivePayloadItem = {
+  po_item_id: string;
+  quantity: number;
+  condition: string;
+  lot_number: string | null;
+  notes: string | null;
+  storage_location: string;
+};
+
+type QuickReceiveIntent = {
+  itemsPayload: QuickReceivePayloadItem[];
+  performedBy: string;
+  receivedByName: string;
+  vendor: string;
+  storageLocation: string;
+  matchResults: QuickReceiveMatchResult[];
+  sourceItems: QuickReceiveItem[];
+};
 
 /* ─── helpers ─── */
 let keyCounter = 0;
@@ -67,7 +87,11 @@ export default function QuickReceivePanel() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { toast } = useToast();
-  const receiveIdem = useIdempotencyKey('quick_receive', profile?.id || '');
+  const receiveIntent = useUncertainMutationIntent<QuickReceiveIntent>({
+    operation: 'receive_po_items',
+    userId: profile?.id || '',
+    surface: 'quick-receive',
+  });
 
   /* ─── step control ─── */
   type Step = 'add_items' | 'review' | 'success';
@@ -94,6 +118,18 @@ export default function QuickReceivePanel() {
   /* ─── step 3 / submission ─── */
   const [saving, setSaving] = useState(false);
   const [receiveCount, setReceiveCount] = useState(0);
+
+  useEffect(() => {
+    const recovered = receiveIntent.unresolvedIntent;
+    if (!recovered) return;
+    setVendor(recovered.vendor);
+    setStorageLocation(recovered.storageLocation);
+    setItems(recovered.sourceItems);
+    setMatchResults(recovered.matchResults);
+    setOverrides({});
+    setUnmatchedActions({});
+    setStep('review');
+  }, [receiveIntent.unresolvedIntent]);
 
   /* ─── load products + vendors ─── */
   useEffect(() => {
@@ -218,175 +254,207 @@ export default function QuickReceivePanel() {
   /* ═══════════════════════════════════════════════════════════════════
      STEP 3: Confirm & receive
   ═══════════════════════════════════════════════════════════════════ */
-  const handleConfirmReceive = async () => {
-    if (!profile || !matchResults) return;
+  const submitQuickReceive = async (request: QuickReceiveIntent) => {
+    const { data, error } = await supabase.rpc('receive_po_items', {
+      p_items: request.itemsPayload,
+      p_performed_by: request.performedBy,
+      p_idempotency_key: receiveIntent.getIdempotencyKey(),
+      p_allow_over_receive: false,
+    });
 
-    // Defense in depth: refuse to submit if any price-variance product is missing an explicit PO choice.
-    // The radio picker rendered for has_multiple_costs products has no default selection, so without this
-    // guard the loop below would fall through to auto-allocation (oldest PO first per match_quick_receive_items)
-    // and silently lock the cost to whichever PO came first.
-    const unresolvedVariance = matchResults.find(
-      (m) => m.has_multiple_costs && m.allocations.length > 0 && !overrides[m.product_id],
-    );
-    if (unresolvedVariance) {
-      toast('error', `Choose which PO to receive ${unresolvedVariance.product_name} against — multiple POs at different prices.`);
-      return;
-    }
-
-    // F6 fix: symmetric guard for partially-unmatched products. When a product has BOTH
-    // allocations (some units matched a PO) AND quantity_unmatched > 0 (extras with no PO),
-    // the user must pick over_receive or skip from the unmatched-action radio. Without
-    // this guard, the per-product loop below pushes the matched portion to itemsPayload,
-    // skips the unmatched chunk silently, and the success toast falsely claims the full
-    // shipment was received.
-    const unresolvedUnmatched = matchResults.find(
-      (m) => m.allocations.length > 0 && m.quantity_unmatched > 0 && !unmatchedActions[m.product_id],
-    );
-    if (unresolvedUnmatched) {
-      toast(
-        'error',
-        `Choose what to do with the ${unresolvedUnmatched.quantity_unmatched} extra ${unresolvedUnmatched.product_name} unit(s) — over-receive or skip.`,
-      );
-      return;
-    }
-
-    setSaving(true);
-
-    const itemsPayload: Array<{
-      po_item_id: string;
-      quantity: number;
-      condition: string;
-      lot_number: string | null;
-      notes: string | null;
-      storage_location: string;
-    }> = [];
-
-    for (const match of matchResults) {
-      const sourceItem = validItems.find((i) => i.product_id === match.product_id);
-      if (!sourceItem) continue;
-
-      // If entirely unmatched and user chose skip, skip it
-      if (match.allocations.length === 0 && unmatchedActions[match.product_id] === 'skip') continue;
-      if (match.allocations.length === 0 && !unmatchedActions[match.product_id]) continue;
-
-      const manualOverride = overrides[match.product_id];
-
-      if (manualOverride) {
-        // Worker manually picked a specific PO (no-return scenario)
-        itemsPayload.push({
-          po_item_id: manualOverride,
-          quantity: match.quantity_requested,
-          condition: sourceItem.condition,
-          lot_number: sourceItem.lot_number || null,
-          notes: sourceItem.notes || null,
-          storage_location: storageLocation,
-        });
+    let result: Record<string, unknown>;
+    if (error) {
+      const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
+      const committedRecordIds = receipt?.receiving_record_ids;
+      if (
+        receipt
+        && Array.isArray(committedRecordIds)
+        && committedRecordIds.every((recordId) => typeof recordId === 'string')
+      ) {
+        result = receipt;
+        toast('warning', 'The earlier receipt already completed. Showing its result instead of receiving it twice.');
       } else {
-        // Auto-allocated: one entry per PO allocation
-        for (const alloc of match.allocations) {
+        throw error;
+      }
+    } else {
+      result = assertRpcResult<Record<string, unknown>>(data, 'receive_po_items');
+    }
+
+    receiveIntent.resolveIntent();
+
+    // Notifications and the PDF are non-critical side effects after the
+    // database result is proven. Their failure must never retain a mutation
+    // lock or cause another stock receipt.
+    try {
+      const damagedItems = request.itemsPayload.filter((item) => item.condition !== 'good');
+      if (damagedItems.length > 0) {
+        const damagedInfo = damagedItems.map((item) => {
+          const match = request.matchResults.find((candidate) =>
+            candidate.allocations.some((allocation) => allocation.po_item_id === item.po_item_id)
+          );
+          return {
+            productName: match?.product_name || 'Unknown',
+            quantity: item.quantity,
+            condition: item.condition,
+          };
+        });
+        const firstPO = request.matchResults[0]?.allocations?.[0]?.po_number || 'Quick Receive';
+        const firstPOId = request.matchResults[0]?.allocations?.[0]?.purchase_order_id || '';
+        notifyDamagedReceiving(firstPO, damagedInfo, firstPOId);
+      }
+    } catch {
+      // Damaged-item notification is non-critical after a proven receipt.
+    }
+
+    const receivingRecordIds = result.receiving_record_ids;
+    if (
+      Array.isArray(receivingRecordIds)
+      && receivingRecordIds.length > 0
+      && receivingRecordIds.every((recordId) => typeof recordId === 'string')
+    ) {
+      try {
+        const { downloadReceivingPdf } = await import('../../lib/receivingPdf');
+        await downloadReceivingPdf({
+          po_number: 'Quick Receive',
+          vendor: request.vendor || 'Multiple / Unknown',
+          received_at: new Date().toISOString(),
+          received_by_name: request.receivedByName,
+          storage_location: request.storageLocation,
+          items: request.itemsPayload.map((item) => {
+            const match = request.matchResults.find((candidate) =>
+              candidate.allocations.some((allocation) => allocation.po_item_id === item.po_item_id)
+            );
+            return {
+              product_name: match?.product_name || 'Unknown',
+              quantity_received: item.quantity,
+              condition: item.condition,
+              lot_number: item.lot_number || undefined,
+              notes: item.notes || undefined,
+            };
+          }),
+        });
+      } catch {
+        // PDF is non-critical after a proven receipt.
+      }
+    }
+
+    setReceiveCount(request.itemsPayload.length);
+    setStep('success');
+    toast('success', `Successfully received ${request.itemsPayload.length} item(s)`);
+  };
+
+  const handleConfirmReceive = async () => {
+    if (!profile) return;
+
+    let request = receiveIntent.unresolvedIntent;
+    if (!request) {
+      if (!matchResults) return;
+
+      // Defense in depth: refuse to submit if any price-variance product is missing an explicit PO choice.
+      const unresolvedVariance = matchResults.find(
+        (match) => match.has_multiple_costs && match.allocations.length > 0 && !overrides[match.product_id],
+      );
+      if (unresolvedVariance) {
+        toast('error', `Choose which PO to receive ${unresolvedVariance.product_name} against — multiple POs at different prices.`);
+        return;
+      }
+
+      const unresolvedUnmatched = matchResults.find(
+        (match) => match.allocations.length > 0 && match.quantity_unmatched > 0 && !unmatchedActions[match.product_id],
+      );
+      if (unresolvedUnmatched) {
+        toast(
+          'error',
+          `Choose what to do with the ${unresolvedUnmatched.quantity_unmatched} extra ${unresolvedUnmatched.product_name} unit(s) — over-receive or skip.`,
+        );
+        return;
+      }
+
+      const itemsPayload: QuickReceivePayloadItem[] = [];
+      for (const match of matchResults) {
+        const sourceItem = validItems.find((item) => item.product_id === match.product_id);
+        if (!sourceItem) continue;
+        if (match.allocations.length === 0 && unmatchedActions[match.product_id] === 'skip') continue;
+        if (match.allocations.length === 0 && !unmatchedActions[match.product_id]) continue;
+
+        const manualOverride = overrides[match.product_id];
+        if (manualOverride) {
           itemsPayload.push({
-            po_item_id: alloc.po_item_id,
-            quantity: alloc.quantity_allocated,
+            po_item_id: manualOverride,
+            quantity: match.quantity_requested,
             condition: sourceItem.condition,
             lot_number: sourceItem.lot_number || null,
             notes: sourceItem.notes || null,
             storage_location: storageLocation,
           });
-        }
-
-        // Handle over-receive for unmatched remainder
-        if (match.quantity_unmatched > 0 && unmatchedActions[match.product_id] === 'over_receive') {
-          const lastAlloc = match.allocations[match.allocations.length - 1];
-          if (lastAlloc) {
+        } else {
+          for (const allocation of match.allocations) {
             itemsPayload.push({
-              po_item_id: lastAlloc.po_item_id,
-              quantity: match.quantity_unmatched,
+              po_item_id: allocation.po_item_id,
+              quantity: allocation.quantity_allocated,
               condition: sourceItem.condition,
               lot_number: sourceItem.lot_number || null,
-              notes: `Quick Receive over-receive: ${match.quantity_unmatched} extra units`,
+              notes: sourceItem.notes || null,
               storage_location: storageLocation,
             });
           }
+
+          if (match.quantity_unmatched > 0 && unmatchedActions[match.product_id] === 'over_receive') {
+            const lastAllocation = match.allocations[match.allocations.length - 1];
+            if (lastAllocation) {
+              itemsPayload.push({
+                po_item_id: lastAllocation.po_item_id,
+                quantity: match.quantity_unmatched,
+                condition: sourceItem.condition,
+                lot_number: sourceItem.lot_number || null,
+                notes: `Quick Receive over-receive: ${match.quantity_unmatched} extra units`,
+                storage_location: storageLocation,
+              });
+            }
+          }
         }
       }
-    }
 
-    if (itemsPayload.length === 0) {
-      toast('error', 'No items to receive — all were skipped or unmatched');
-      setSaving(false);
-      return;
-    }
+      if (itemsPayload.length === 0) {
+        toast('error', 'No items to receive — all were skipped or unmatched');
+        return;
+      }
 
-    try {
-      const key = receiveIdem.getKey();
-      // Phase 21 — Cleanup G2: over-receive is no longer the default. If a
-      // QuickReceive batch needs to record a vendor over-shipment, use the
-      // per-PO detail page where an admin can set the override with a reason.
-      const { data, error } = await supabase.rpc('receive_po_items', {
-        p_items: itemsPayload,
-        p_performed_by: profile.id,
-        p_idempotency_key: key,
-        p_allow_over_receive: false,
-      });
-      if (error) throw error;
-      assertRpcResult(data, 'receive_po_items');
-      receiveIdem.resetKey();
-
-      // Notify if damaged
-      const damagedItems = itemsPayload.filter((ip) => ip.condition !== 'good');
-      if (damagedItems.length > 0) {
-        const damagedInfo = damagedItems.map((ip) => {
-          const mr = matchResults.find((m) =>
-            m.allocations.some((a) => a.po_item_id === ip.po_item_id)
-          );
-          return {
-            productName: mr?.product_name || 'Unknown',
-            quantity: ip.quantity,
-            condition: ip.condition,
-          };
+      try {
+        request = receiveIntent.beginIntent({
+          itemsPayload,
+          performedBy: profile.id,
+          receivedByName: profile.full_name || 'Unknown',
+          vendor,
+          storageLocation,
+          matchResults,
+          sourceItems: validItems,
         });
-        const firstPO = matchResults?.[0]?.allocations?.[0]?.po_number || 'Quick Receive';
-        const firstPOId = matchResults?.[0]?.allocations?.[0]?.purchase_order_id || '';
-        notifyDamagedReceiving(firstPO, damagedInfo, firstPOId);
+      } catch (error) {
+        Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+          extra: { context: 'persist_quick_receive_intent' },
+        });
+        toast('error', 'Cannot safely save this receipt for exact retry. No inventory was changed.');
+        return;
       }
-
-      // Auto-download PDF receipt
-      const receivingRecordIds = (data as Record<string, unknown> | null)?.receiving_record_ids as string[] | undefined;
-      if (receivingRecordIds && receivingRecordIds.length > 0) {
-        try {
-          const { downloadReceivingPdf } = await import('../../lib/receivingPdf');
-          await downloadReceivingPdf({
-            po_number: 'Quick Receive',
-            vendor: vendor || 'Multiple / Unknown',
-            received_at: new Date().toISOString(),
-            received_by_name: profile.full_name || 'Unknown',
-            storage_location: storageLocation,
-            items: itemsPayload.map((ip) => {
-              const mr = matchResults.find((m) =>
-                m.allocations.some((a) => a.po_item_id === ip.po_item_id)
-              );
-              return {
-                product_name: mr?.product_name || 'Unknown',
-                quantity_received: ip.quantity,
-                condition: ip.condition,
-                lot_number: ip.lot_number || undefined,
-                notes: ip.notes || undefined,
-              };
-            }),
-          });
-        } catch {
-          // PDF is non-critical
-        }
-      }
-
-      setReceiveCount(itemsPayload.length);
-      setStep('success');
-      toast('success', `Successfully received ${itemsPayload.length} item(s)`);
-    } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'confirm_quick_receive' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to receive items');
     }
-    setSaving(false);
+
+    setSaving(true);
+    try {
+      await submitQuickReceive(request);
+    } catch (error: unknown) {
+      const disposition = receiveIntent.classifyFailure(error);
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        extra: { context: 'confirm_quick_receive', disposition },
+      });
+      if (disposition === 'definitive') {
+        toast('error', error instanceof Error ? error.message : 'Failed to receive items');
+      } else {
+        toast('warning', 'The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');
+      }
+    } finally {
+      setSaving(false);
+    }
   };
 
   /* ─── reset for another receive ─── */
@@ -651,6 +719,11 @@ export default function QuickReceivePanel() {
             <p className="text-sm text-secondary mt-1 mb-4">
               Review how products were matched to open Purchase Orders. Adjust if needed.
             </p>
+            {receiveIntent.isIntentLocked && (
+              <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice.
+              </div>
+            )}
 
             <div className="space-y-4">
               {matchResults.map((match) => {
@@ -758,6 +831,7 @@ export default function QuickReceivePanel() {
                                 name={`override_${match.product_id}`}
                                 value={alloc.po_item_id}
                                 checked={overrides[match.product_id] === alloc.po_item_id}
+                                disabled={receiveIntent.isIntentLocked}
                                 onChange={() =>
                                   setOverrides((prev) => ({
                                     ...prev,
@@ -812,6 +886,7 @@ export default function QuickReceivePanel() {
                                     name={`unmatched_${match.product_id}`}
                                     value="over_receive"
                                     checked={unmatchedActions[match.product_id] === 'over_receive'}
+                                    disabled={receiveIntent.isIntentLocked}
                                     onChange={() =>
                                       setUnmatchedActions((prev) => ({
                                         ...prev,
@@ -832,6 +907,7 @@ export default function QuickReceivePanel() {
                                     unmatchedActions[match.product_id] === 'skip' ||
                                     (allUnmatched && !unmatchedActions[match.product_id])
                                   }
+                                  disabled={receiveIntent.isIntentLocked}
                                   onChange={() =>
                                     setUnmatchedActions((prev) => ({
                                       ...prev,
@@ -862,7 +938,7 @@ export default function QuickReceivePanel() {
             const hasUnresolvedUnmatched = matchResults.some(
               (m) => m.allocations.length > 0 && m.quantity_unmatched > 0 && !unmatchedActions[m.product_id],
             );
-            const blocked = hasUnresolvedVariance || hasUnresolvedUnmatched;
+            const blocked = !receiveIntent.isIntentLocked && (hasUnresolvedVariance || hasUnresolvedUnmatched);
             const blockReason = hasUnresolvedVariance
               ? 'Pick a PO for each price-variance product before continuing.'
               : hasUnresolvedUnmatched
@@ -873,6 +949,7 @@ export default function QuickReceivePanel() {
                 <Button
                   variant="secondary"
                   onClick={() => setStep('add_items')}
+                  disabled={receiveIntent.isIntentLocked}
                 >
                   ← Back to Edit
                 </Button>
@@ -882,7 +959,11 @@ export default function QuickReceivePanel() {
                   icon={<PackageCheck className="w-4 h-4" />}
                   title={blockReason}
                 >
-                  {saving ? 'Receiving...' : 'Confirm & Receive'}
+                  {saving
+                    ? 'Receiving...'
+                    : receiveIntent.isIntentLocked
+                      ? 'Retry Exact Receiving'
+                      : 'Confirm & Receive'}
                 </Button>
               </div>
             );

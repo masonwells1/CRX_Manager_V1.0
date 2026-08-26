@@ -23,6 +23,7 @@ const purchaseOrderDetail = source('src', 'pages', 'PurchaseOrderDetail.tsx');
 const newVendorBill = source('src', 'pages', 'NewVendorBill.tsx');
 const inventoryPage = source('src', 'pages', 'InventoryPage.tsx');
 const receivingHub = source('src', 'components', 'receiving', 'ReceivingHubPanel.tsx');
+const quickReceive = source('src', 'components', 'receiving', 'QuickReceivePanel.tsx');
 const idempotency = source('src', 'lib', 'idempotency.ts');
 const uncertainMutationIntent = source('src', 'hooks', 'useUncertainMutationIntent.ts');
 const section9Smoke = source('scripts', 'smoke', 'smoke-section9-po-ap-high-remediation.sql');
@@ -199,10 +200,23 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(newVendorBill).toContain('The last response was uncertain. These fields are locked so a second bill cannot be created.');
     expect(receivingHub).toContain('This receiving request is locked so stock cannot be received twice.');
 
+    expect(quickReceive).toContain("getIdempotencyMismatchResult(error, 'receive_po_items')");
+    expect(quickReceive).toContain('Retry Exact Receiving');
+    expect(quickReceive).toContain('disabled={receiveIntent.isIntentLocked}');
+    expect(quickReceive).toContain('The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice.');
+
     expect(purchaseOrderDetail).toContain("operation: 'receive_po_items'");
     expect(purchaseOrderDetail).toContain("surface: 'purchase-order-detail'");
     expect(purchaseOrderDetail).toContain("scope: id || ''");
     expect(purchaseOrderDetail).toContain('receiveIntent.getIdempotencyKey()');
+    const purchaseOrderReceive = sliceBetween(
+      purchaseOrderDetail,
+      'const handleReceive = async () => {',
+      'const handleDownloadHistoryPdf = async',
+    );
+    expect(purchaseOrderReceive.indexOf('const lockedRequest = receiveIntent.unresolvedIntent;'))
+      .toBeLessThan(purchaseOrderReceive.indexOf('const itemsPayload = items'));
+    expect(purchaseOrderReceive).toContain('request = lockedRequest;');
     expect(vendorBillDetail).toContain('voidPaymentIdem.getKeyFor(voidPaymentScope)');
     expect(vendorBillDetail).toContain('voidPaymentIdem.resetKeyFor(voidPaymentScope)');
     expect(vendorBillDetail).toContain('voidIdem.getKeyFor(voidBillScope)');
@@ -241,6 +255,14 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(receivingHub).toContain('receiveIntent.getIdempotencyKey()');
     expect(receivingHub).toContain('const recovered = receiveIntent.unresolvedIntent');
     expect(receivingHub).not.toContain("useIdempotencyKey('receive_po_items'");
+
+    expect(quickReceive).toContain("operation: 'receive_po_items'");
+    expect(quickReceive).toContain("surface: 'quick-receive'");
+    expect(quickReceive).toContain('receiveIntent.beginIntent({');
+    expect(quickReceive).toContain('receiveIntent.getIdempotencyKey()');
+    expect(quickReceive).toContain('const recovered = receiveIntent.unresolvedIntent');
+    expect(quickReceive).toContain('let request = receiveIntent.unresolvedIntent;');
+    expect(quickReceive).not.toContain("useIdempotencyKey('quick_receive'");
 
     expect(vendorBillDetail).toContain("operation: 'record_vendor_payment'");
     expect(vendorBillDetail).toContain("surface: 'vendor-bill-detail'");
