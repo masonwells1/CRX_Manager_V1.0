@@ -1,0 +1,45 @@
+-- ============================================================================
+-- COMMENT-ONLY: correct save_job's function comment from ELEVEN refusals to TWELVE
+-- ----------------------------------------------------------------------------
+-- STATUS: NOT APPLIED
+-- (This status line goes stale at apply time; the ledger is authoritative.)
+--
+-- WHAT THIS CHANGES: exactly one thing — the COMMENT ON public.save_job(uuid,
+-- jsonb, jsonb, jsonb, uuid, text). No function body, no ACL, no data, no
+-- schema object of any kind is touched. The installed body (marker
+-- chem_unit_invariant_v2, applied 2026-08-25 as ledger version 20260825142708)
+-- raises TWELVE distinct refusal families; its comment says ELEVEN and omits
+-- JOB_ACRES_NOT_FINITE, which was added in review rounds 23-26 of migration
+-- 20260820120000 after the comment's first draft was written. Verified live
+-- 2026-08-26 before writing this file: regexp over pg_proc.prosrc finds exactly
+-- 12 distinct '(CHEM|JOB)_*' refusal tokens, and pg_description carries the
+-- eleven-count text reproduced below.
+--
+-- EDITS RELATIVE TO THE LIVE COMMENT (everything else is byte-identical):
+--   1. "ELEVEN refusals" -> "TWELVE refusals".
+--   2. A new "Job fields:" clause for JOB_ACRES_NOT_FINITE, inserted after the
+--      Quantities group, describing the check exactly as the body implements it
+--      (every field acreage must be a real, finite, non-negative number; raised
+--      before any write; the table-level residual is recorded in
+--      20260820120000's KNOWN RESIDUALS block).
+--   3. A missing comma after "...unit_conversions spelling)" — the live text
+--      runs CHEM_RATE_UNIT_UNRECOGNIZED's clause straight into
+--      CHEM_RATE_DENOMINATOR_NOT_ACRES with no separator.
+--   4. The stale "NO save-blocking unit guard in JobDetail.tsx" passage
+--      replaced with the current CLIENT MIRROR paragraph: PR #436 merged on
+--      2026-08-25, so a save-blocking client-side mirror now exists, and this
+--      function is the authoritative boundary rather than the only one.
+--      (Caught by the 2026-08-26 drift/RLS pre-reviews — republishing that
+--      passage unchanged would have re-dated a false claim.)
+--
+-- WHY A NEW FILE: the applied migration 20260820120000 is never edited (CRX
+-- Hard Rule). A stale count in the canonical function comment is the exact
+-- "comment can go stale the same way its first draft did" failure that
+-- migration's own header warns about; operators and reviewers enumerate
+-- refusals from this comment, so an undercount hides a guard.
+--
+-- ROLLBACK: re-issue the previous comment text (kept in git history and in
+-- pg_description until this applies). Nothing else to roll back.
+-- ============================================================================
+
+COMMENT ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text) IS $sjc$Saves a job with its fields, customer shares, and chemical lines. Enforces the chemical-unit invariant server-side and DERIVES total_cost_cents / total_price_cents from the chemical lines via safe_cents_qty, ignoring caller-supplied totals. TWELVE refusals, all raised before any write. Units: CHEM_UNIT_MISMATCH (rate unit and price unit provably disagree), CHEM_UNIT_FORM_MISMATCH (a DRY product measured or priced in fluid ounces on either side, in ANY spelling -- both sides are reduced to the unit they name, so a denominator does not hide it), CHEM_UNIT_UNSPECIFIED (a line that BILLS while its rate unit or stock unit is blank), CHEM_UNIT_UNSUPPORTED_CHARACTER (a priced line whose unit contains a character this function cannot read -- the fold refuses rather than discarding, because deleting an unreadable character erases a denominator instead of catching it), CHEM_RATE_UNIT_UNRECOGNIZED (a priced line naming a unit that is neither a normalize_rate_unit canonical output nor a live unit_conversions spelling), CHEM_RATE_DENOMINATOR_NOT_ACRES (a rate measured per anything but acres, in slash, spelled-out, hyphenated, stacked or leading form) and CHEM_STOCK_UNIT_IS_A_RATE (a PRICED line whose STOCK unit carries a denominator of its own -- the Unit says what the quantity counts and what the price is quoted per, so "oz/ac" there names a rate rather than a quantity; every earlier denominator rule examined rate_unit only, and normalize_rate_unit silently stripped the per-acre suffix off the stock side). Quantities: CHEM_QUANTITY_NOT_FINITE (negative, NaN or Infinity), CHEM_QUANTITY_NOT_DERIVED (quantity disagrees with rate x acres -- enforced on the units-EQUAL path too, since matching units prove what is counted and nothing about how many), CHEM_QUANTITY_ZERO_BUT_EXPECTED (a PRICED line recording zero applied where a positive quantity was derivable) and CHEM_QUANTITY_UNVERIFIABLE (a PRICED line whose quantity cannot be checked at all, which closes the bypass of simply omitting the rate). Job fields: JOB_ACRES_NOT_FINITE (a field acreage that is negative, NaN or Infinity -- every field must carry a real, finite, non-negative number of acres to treat, checked before any write, so a non-finite acreage can neither bypass the invariant nor be stored through this RPC; the table-level residual, that OTHER writers and direct DML face no such check, is recorded in 20260820120000's KNOWN RESIDUALS block). This twelfth refusal was added in review round 24 (2026-08-24); the first draft of this comment counted eleven and was corrected by the follow-up comment-only migration. ZERO-QUANTITY LINES ARE NOT FLATLY EXEMPT -- that was true before round 17 and is not now. The exit survives only where zero is genuinely right: customer_supplied, no PRICE (nothing can be under-charged), or no usable rate/acreage (nothing was expected). Per the Mason 2026-08-24 rule the money refusals key on PRICE, so a cost-only line can still misstate margin -- an accepted, recorded residual. THE LIMIT OF ALL OF IT: every refusal checks that units are INTERNALLY CONSISTENT; none checks that a rate is PLAUSIBLE. A milligram per acre of a $931/lb product passes every one of these and invoices six orders of magnitude low. See the banner block in the header of this migration file. CLIENT MIRROR (current as of 2026-08-26): since PR #436 merged on 2026-08-25, JobDetail.tsx carries a save-BLOCKING client-side mirror -- chemRowDefects fails closed on blank or non-finite quantities, on a billing line whose rate unit or stock unit is blank (mirroring CHEM_UNIT_UNSPECIFIED), and on unrecognized rate denominators -- so the operator normally sees an on-screen refusal before the server does. This function remains the authoritative boundary: the client mirror is a courtesy for old tabs and direct API callers do not pass through it, and it must never be more lenient than the SQL. IDEMPOTENCY: a keyed save now goes through check_idempotency_intent (the same helper the return and commission-payment RPCs use), so the key is bound to the calling actor AND to a sha256 fingerprint of the requested job, fields and chemical lines, under an advisory lock. Reusing a spent key for a different operation raises IDEMPOTENCY_CROSS_OP_KEY_REUSE, from a different actor IDEMPOTENCY_ACTOR_MISMATCH, and with a changed payload IDEMPOTENCY_INTENT_MISMATCH -- the last of which is a REFUSAL WHERE THE OLD BODY SILENTLY RETURNED THE EARLIER SUCCESS AND SAVED NOTHING. An unchanged retry still replays to the same job, which is the whole point of the key.$sjc$;
