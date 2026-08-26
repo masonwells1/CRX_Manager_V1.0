@@ -136,6 +136,7 @@
         "cancel_purchase_order",
         "create_vendor_bill",
         "get_ap_aging",
+        "get_ap_dashboard_summary",
         "update_vendor_bill",
         "record_vendor_payment",
         "void_vendor_payment",

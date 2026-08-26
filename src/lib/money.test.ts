@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatCents, formatUSD, centsTimesQuantity, isExactDecimalText, quantitySurvivesSave, sameExactDecimal } from './money';
+import { formatCents, formatUSD, centsToDollarInput, centsTimesQuantity, isExactDecimalText, quantitySurvivesSave, sameExactDecimal } from './money';
 
 /**
  * money.ts is the canonical formatter for a codebase where money is stored as
@@ -65,6 +65,23 @@ describe('money', () => {
     it('rounds to the nearest cent rather than truncating', () => {
       expect(formatUSD(1.005)).toBe('$1.01');
       expect(formatUSD(1.004)).toBe('$1.00');
+    });
+  });
+
+  describe('centsToDollarInput — exact editable decimal text', () => {
+    it.each([
+      [0, '0.00'],
+      [1, '0.01'],
+      [105, '1.05'],
+      [123456, '1234.56'],
+      [-105, '-1.05'],
+    ])('formats %i cents as %s without floating-point math', (cents, expected) => {
+      expect(centsToDollarInput(cents)).toBe(expected);
+    });
+
+    it('fails closed for values that are not safe integer cents', () => {
+      expect(centsToDollarInput(1.5)).toBe('0.00');
+      expect(centsToDollarInput(Number.MAX_SAFE_INTEGER + 1)).toBe('0.00');
     });
   });
 

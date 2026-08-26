@@ -98,18 +98,23 @@ describe('Section 9 AP and receiving intent binding', () => {
   it('uses the Chicago calendar month boundary for the dashboard tile', () => {
     expect(migration).toContain("clock_timestamp() AT TIME ZONE 'America/Chicago'");
     expect(migration).toContain('due_date BETWEEN v_today AND v_month_end');
+    expect(migration).toContain('vp.payment_date < (v_month_end + 1)');
     expect(migration).not.toContain('due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 30');
   });
 
   it('ages AP by due date across all five approved boundary buckets', () => {
-    const hasDueDateAgingContract = (sql: string) =>
-      sql.includes('days_1_30 bigint')
-      && sql.includes('vb.due_date >= p_as_of_date')
-      && sql.includes('(p_as_of_date - vb.due_date) BETWEEN 1 AND 30')
-      && sql.includes('(p_as_of_date - vb.due_date) BETWEEN 31 AND 60')
-      && sql.includes('(p_as_of_date - vb.due_date) BETWEEN 61 AND 90')
-      && sql.includes('(p_as_of_date - vb.due_date) > 90')
-      && !sql.includes('p_as_of_date - vb.bill_date');
+    const hasDueDateAgingContract = (sql: string) => {
+      const functionSql = sql.split('DO $verify$')[0];
+      return functionSql.includes('days_1_30 bigint')
+        && functionSql.includes('vb.due_date >= p_as_of_date')
+        && functionSql.includes('(p_as_of_date - vb.due_date) BETWEEN 1 AND 30')
+        && functionSql.includes('(p_as_of_date - vb.due_date) BETWEEN 31 AND 60')
+        && functionSql.includes('(p_as_of_date - vb.due_date) BETWEEN 61 AND 90')
+        && functionSql.includes('(p_as_of_date - vb.due_date) > 90')
+        && functionSql.includes("v_today date := (clock_timestamp() AT TIME ZONE 'America/Chicago')::date")
+        && functionSql.includes('p_as_of_date IS DISTINCT FROM v_today')
+        && !functionSql.includes('p_as_of_date - vb.bill_date');
+    };
 
     expect(hasDueDateAgingContract(agingMigration)).toBe(true);
     expect(hasDueDateAgingContract(
@@ -138,12 +143,42 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(purchaseOrderDetail).toContain('Retry Exact Receiving');
     expect(purchaseOrderDetail).toContain('disabled={receiveIntent.isIntentLocked}');
     expect(idempotency).toContain("candidate.message === 'IDEMPOTENCY_INTENT_MISMATCH'");
+
+    expect(newVendorBill).toContain("getIdempotencyMismatchResult(error, 'create_vendor_bill')");
+    expect(newVendorBill).toContain('disabled={createBillIntent.isIntentLocked}');
+    expect(newVendorBill).toContain('Retry Exact Bill');
+
+    expect(inventoryPage).toContain("getIdempotencyMismatchResult(error, 'receive_po_items')");
+    expect(inventoryPage).toContain('disabled={receivePoIntent.isIntentLocked}');
+    expect(inventoryPage).toContain('Retry Exact Receiving');
+
+    expect(receivingHub).toContain("getIdempotencyMismatchResult(error, 'receive_po_items')");
+    expect(receivingHub).toContain('disabled={receiveIntent.isIntentLocked}');
+    expect(receivingHub).toContain('Retry Exact Receiving');
   });
 
   it('does not mint a fresh key merely because an uncertain AP/receiving form reopened or changed', () => {
-    expect(newVendorBill).not.toMatch(/useEffect\(\(\) => \{\s*resetIdempotencyKey\(\)/);
-    expect(inventoryPage).not.toMatch(/setReceivePo\(po\);\s*resetReceiveKey\(\)/);
-    expect(receivingHub).not.toMatch(/setReceiveTarget\(po\);\s*resetReceiveKey\(\)/);
-    expect(vendorBillDetail).not.toMatch(/setShowPaymentModal\(true\);\s*resetPaymentKey\(\)/);
+    expect(newVendorBill).toContain("const createBillIdem = useIdempotencyKey('create_vendor_bill'");
+    expect(newVendorBill).toContain('createBillIdem.resetKey()');
+    expect(newVendorBill).toContain('createBillIntent.beginIntent({');
+    expect(newVendorBill).not.toMatch(/useEffect\([\s\S]{0,300}createBillIdem\.resetKey\(\)/);
+
+    expect(inventoryPage).toContain("const receivePoIdem = useIdempotencyKey('receive_po_items'");
+    expect(inventoryPage).toContain('receivePoIdem.resetKey()');
+    expect(inventoryPage).toContain('receivePoIntent.beginIntent({');
+    const inventoryOpen = inventoryPage.slice(
+      inventoryPage.indexOf('const openReceiveModal'),
+      inventoryPage.indexOf('const handleReceive'),
+    );
+    expect(inventoryOpen).not.toContain('receivePoIdem.resetKey()');
+
+    expect(receivingHub).toContain("const receiveIdem = useIdempotencyKey('receive_po_items'");
+    expect(receivingHub).toContain('receiveIdem.resetKey()');
+    expect(receivingHub).toContain('receiveIntent.beginIntent({');
+    expect(receivingHub).not.toMatch(/setReceiveTarget\([^;]+;\s*receiveIdem\.resetKey\(\)/);
+
+    expect(vendorBillDetail).toContain("const paymentIdem = useIdempotencyKey('record_vendor_payment'");
+    expect(vendorBillDetail).toContain('paymentIdem.resetKey()');
+    expect(vendorBillDetail).not.toMatch(/setPayModalOpen\(true\);\s*paymentIdem\.resetKey\(\)/);
   });
 });

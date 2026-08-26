@@ -28,7 +28,7 @@ import { useUncertainMutationIntent } from '../hooks/useUncertainMutationIntent'
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
-import { formatCents as fmt } from '../lib/money';
+import { centsToDollarInput, formatCents as fmt } from '../lib/money';
 import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import type { VendorBill, VendorPayment } from '../types';
 
@@ -426,7 +426,7 @@ export default function VendorBillDetail() {
                 icon={<CreditCard className="w-4 h-4" />}
                 onClick={() => {
                   if (!paymentIntent.isIntentLocked) {
-                    setPayAmount((bill.balance_cents / 100).toFixed(2));
+                    setPayAmount(centsToDollarInput(bill.balance_cents));
                   }
                   setPayModalOpen(true);
                 }}
@@ -590,8 +590,9 @@ export default function VendorBillDetail() {
           />
 
           <div>
-            <label className="text-sm font-medium text-nav-dark">Payment Method</label>
+            <label htmlFor="vendor-payment-method" className="text-sm font-medium text-nav-dark">Payment Method</label>
             <select
+              id="vendor-payment-method"
               value={payMethod}
               onChange={(e) => setPayMethod(e.target.value)}
               disabled={paymentIntent.isIntentLocked}

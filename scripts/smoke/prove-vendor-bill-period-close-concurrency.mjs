@@ -120,22 +120,24 @@ function applyFile(name) { return sql(`BEGIN;\n\\i /tmp/${name}\nCOMMIT;`); }
 function copySql(local, remote) {
   const staged = path.join(tmpdir(), `${NAME}-${remote}`);
   let operationError;
+  let cleanupError;
   try {
     writeFileSync(staged, readFileSync(local, 'utf8').replaceAll('\r\n', '\n'), 'utf8');
     run(['cp', staged, `${NAME}:/tmp/${remote}`]);
   } catch (error) {
     operationError = error;
-    throw error;
   } finally {
     try {
       unlinkSync(staged);
     } catch (error) {
-      if (error.code !== 'ENOENT') {
-        if (operationError) console.error(`Failed to clean staged SQL ${staged}:`, error);
-        else throw error;
-      }
+      if (error.code !== 'ENOENT') cleanupError = error;
     }
   }
+  if (operationError) {
+    if (cleanupError) console.error(`Failed to clean staged SQL ${staged}:`, cleanupError);
+    throw operationError;
+  }
+  if (cleanupError) throw cleanupError;
 }
 function baselineArtifact(suffix) {
   const hits = Object.keys(BASELINE_MANIFEST.artifacts ?? {}).filter((name) => name.endsWith(suffix));

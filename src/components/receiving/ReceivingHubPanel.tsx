@@ -12,6 +12,8 @@ import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { useUncertainMutationIntent } from '../../hooks/useUncertainMutationIntent';
+import { getIdempotencyMismatchResult } from '../../lib/idempotency';
 import type { InventoryPositionRow } from '../../types';
 
 // F5 — Receiving Hub: "To-Ship for inbound". Search a product and see every open
@@ -75,6 +77,11 @@ export default function ReceivingHubPanel() {
   const [refreshKey, setRefreshKey] = useState(0);
   // F5 inline receive (confirm-popup write, reuses receive_po_items).
   const receiveIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
+  const receiveIntent = useUncertainMutationIntent<{
+    items: Array<{ po_item_id: string; quantity: number; condition: 'good' }>;
+    performedBy: string;
+    productName: string;
+  }>();
   const [receiveTarget, setReceiveTarget] = useState<{ line: POLine; product_name: string } | null>(null);
   const [receiveQty, setReceiveQty] = useState('');
   const [receiving, setReceiving] = useState(false);
@@ -177,26 +184,42 @@ export default function ReceivingHubPanel() {
       toast('error', `Quick receive records the full ${fmtUnits(receiveTarget.line.remaining)} remaining. For a partial or damaged receipt, open the PO.`);
       return;
     }
-    const line = receiveTarget.line;
-    const name = receiveTarget.product_name;
+    const request = receiveIntent.beginIntent({
+      items: [{ po_item_id: receiveTarget.line.po_item_id, quantity: qty, condition: 'good' }],
+      performedBy: profile.id,
+      productName: receiveTarget.product_name,
+    });
     const idemKey = receiveIdem.getKey();
     await runCriticalAction({
       action: async () => {
         const { data, error } = await supabase.rpc('receive_po_items', {
-          p_items: [{ po_item_id: line.po_item_id, quantity: qty, condition: 'good' }],
-          p_performed_by: profile.id,
+          p_items: request.items,
+          p_performed_by: request.performedBy,
           p_idempotency_key: idemKey,
           p_allow_over_receive: false,
         });
-        if (error) throw error;
-        assertRpcResult(data, 'receive_po_items');
+        if (error) {
+          const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
+          const recordIds = receipt?.receiving_record_ids;
+          if (Array.isArray(recordIds) && recordIds.every((id) => typeof id === 'string')) {
+            toast('warning', 'The earlier receipt already completed. Refreshing the receiving board instead of receiving it twice.');
+          } else if (receiveIntent.classifyFailure(error) === 'definitive') {
+            receiveIdem.resetKey();
+            throw error;
+          } else {
+            throw new Error('The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');
+          }
+        } else {
+          assertRpcResult(data, 'receive_po_items');
+        }
+        receiveIdem.resetKey();
+        receiveIntent.resolveIntent();
       },
       toast,
       setLoading: setReceiving,
-      successMessage: `Received ${fmtUnits(qty)} of ${name}`,
+      successMessage: `Received ${fmtUnits(request.items[0].quantity)} of ${request.productName}`,
       sentryTag: 'receive_po_items',
       onSuccess: () => {
-        receiveIdem.resetKey();
         setReceiveTarget(null);
         setReceiveQty('');
         setRefreshKey((k) => k + 1);
@@ -372,7 +395,11 @@ export default function ReceivingHubPanel() {
 
       <Modal
         open={!!receiveTarget}
-        onClose={() => { setReceiveTarget(null); setReceiveQty(''); }}
+        onClose={() => {
+          if (receiveIntent.isIntentLocked) return;
+          setReceiveTarget(null);
+          setReceiveQty('');
+        }}
         title="Receive Stock"
       >
         <div className="space-y-4">
@@ -397,14 +424,14 @@ export default function ReceivingHubPanel() {
             <p className="text-[11px] text-secondary mt-1">Receives the full remaining quantity to Main Warehouse in good condition. For a partial/damaged receipt or a printed receipt, open the PO.</p>
           </div>
           <div className="flex justify-end gap-3 pt-2">
-            <Button variant="ghost" onClick={() => { setReceiveTarget(null); setReceiveQty(''); }}>Cancel</Button>
+            <Button variant="ghost" disabled={receiveIntent.isIntentLocked} onClick={() => { setReceiveTarget(null); setReceiveQty(''); }}>Cancel</Button>
             <Button
               icon={<PackagePlus className="w-4 h-4" />}
               onClick={handleReceiveConfirm}
               loading={receiving}
               disabled={!receiveQty || Number(receiveQty) <= 0}
             >
-              Receive
+              {receiveIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Receive'}
             </Button>
           </div>
         </div>

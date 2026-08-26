@@ -16,6 +16,8 @@ import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useUncertainMutationIntent } from '../hooks/useUncertainMutationIntent';
+import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
 import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
@@ -62,6 +64,11 @@ export default function InventoryPage() {
   const navigate = useNavigate();
   const { role, profile } = useAuth();
   const receivePoIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
+  const receivePoIntent = useUncertainMutationIntent<{
+    items: Array<{ po_item_id: string; quantity: number }>;
+    performedBy: string;
+    quantity: number;
+  }>();
   const adjustIdem = useIdempotencyKey('adjust_inventory', profile?.id || '');
   const retireIdem = useIdempotencyKey('retire_inventory_item', profile?.id || '');
   const createHoldIdem = useIdempotencyKey('create_inventory_hold', profile?.id || '');
@@ -575,20 +582,39 @@ export default function InventoryPage() {
 
     await runCriticalAction({
       action: async () => {
+        const request = receivePoIntent.beginIntent({
+          items: [{ po_item_id: receivePOItemId, quantity: qty }],
+          performedBy: profile.id,
+          quantity: qty,
+        });
         const idemKey = receivePoIdem.getKey();
         const { data, error } = await supabase.rpc('receive_po_items', {
-          p_items: [{ po_item_id: receivePOItemId, quantity: qty }],
-          p_performed_by: profile.id,
+          p_items: request.items,
+          p_performed_by: request.performedBy,
           p_idempotency_key: idemKey,
         });
-        if (error) throw error;
-        assertRpcResult(data, 'receive_po_items');
+        if (error) {
+          const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
+          const recordIds = receipt?.receiving_record_ids;
+          if (Array.isArray(recordIds) && recordIds.every((id) => typeof id === 'string')) {
+            toast('warning', 'The earlier receipt already completed. Refreshing inventory instead of receiving it twice.');
+          } else if (receivePoIntent.classifyFailure(error) === 'definitive') {
+            receivePoIdem.resetKey();
+            throw error;
+          } else {
+            throw new Error('The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');
+          }
+        } else {
+          assertRpcResult(data, 'receive_po_items');
+        }
         receivePoIdem.resetKey();
+        receivePoIntent.resolveIntent();
+        return request.quantity;
       },
       toast,
-      successMessage: `Received ${qty} units`,
       sentryTag: 'receive_po_items',
-      onSuccess: () => {
+      onSuccess: (receivedQuantity) => {
+        toast('success', `Received ${receivedQuantity} units`);
         setReceiveOpen(false);
         setReceiveQty('');
         setReceivePOItemId('');
@@ -1562,7 +1588,7 @@ export default function InventoryPage() {
       </Modal>
 
       {/* Receive Modal */}
-      <Modal open={receiveOpen} onClose={() => setReceiveOpen(false)} title="Receive" accent="Shipment">
+      <Modal open={receiveOpen} onClose={() => { if (!receivePoIntent.isIntentLocked) setReceiveOpen(false); }} title="Receive" accent="Shipment">
         <div className="space-y-4">
           {availablePOs.length === 0 ? (
             <div className="text-amber-600 text-sm bg-amber-50 p-3 rounded">
@@ -1574,6 +1600,7 @@ export default function InventoryPage() {
                 label="Purchase Order"
                 value={receivePOItemId}
                 onChange={(e) => setReceivePOItemId(e.target.value)}
+                disabled={receivePoIntent.isIntentLocked}
                 required
                 placeholder="Select a PO..."
                 options={availablePOs.map((po) => ({
@@ -1588,13 +1615,14 @@ export default function InventoryPage() {
                 step="any"
                 value={receiveQty}
                 onChange={(e) => setReceiveQty(e.target.value)}
+                disabled={receivePoIntent.isIntentLocked}
               />
             </>
           )}
           <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setReceiveOpen(false)}>Cancel</Button>
+            <Button variant="secondary" disabled={receivePoIntent.isIntentLocked} onClick={() => setReceiveOpen(false)}>Cancel</Button>
             {availablePOs.length > 0 && (
-              <Button onClick={handleReceive}>Receive</Button>
+              <Button onClick={handleReceive}>{receivePoIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Receive'}</Button>
             )}
           </div>
         </div>

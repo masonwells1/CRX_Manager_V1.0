@@ -15,10 +15,12 @@ import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useUncertainMutationIntent } from '../hooks/useUncertainMutationIntent';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
 import { formatCents as fmt } from '../lib/money';
+import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import type { Vendor, PurchaseOrder } from '../types';
 
 export default function NewVendorBill() {
@@ -26,6 +28,19 @@ export default function NewVendorBill() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const createBillIdem = useIdempotencyKey('create_vendor_bill', profile?.id || '');
+  const createBillIntent = useUncertainMutationIntent<{
+    args: {
+      p_vendor_id: string;
+      p_purchase_order_id?: string;
+      p_bill_number: string;
+      p_bill_date: string;
+      p_due_date: string;
+      p_payment_terms?: string;
+      p_subtotal_cents: number;
+      p_adjustment_cents: number;
+      p_notes?: string;
+    };
+  }>();
   const [saving, setSaving] = useState(false);
 
   // Lookups
@@ -73,13 +88,13 @@ export default function NewVendorBill() {
 
   // When vendor selected, apply default terms
   useEffect(() => {
-    if (!vendorId) return;
+    if (!vendorId || createBillIntent.isIntentLocked) return;
     const v = vendors.find((x) => x.id === vendorId);
     if (v) {
       if (v.default_payment_terms) setPaymentTerms(v.default_payment_terms);
       if (v.default_payment_terms_days) setPaymentTermsDays(v.default_payment_terms_days);
     }
-  }, [vendorId, vendors]);
+  }, [vendorId, vendors, createBillIntent.isIntentLocked]);
 
   // When PO selected, auto-fill vendor + amount
   const handlePOSelect = (poId: string) => {
@@ -126,35 +141,58 @@ export default function NewVendorBill() {
         return;
       }
 
-      const idemKey = createBillIdem.getKey();
       // Compute due_date from bill_date + paymentTermsDays
       const dueDateObj = parseLocalDate(billDate);
       dueDateObj.setDate(dueDateObj.getDate() + paymentTermsDays);
       const computedDueDate = formatLocalDate(dueDateObj);
 
+      const request = createBillIntent.beginIntent({
+        args: {
+          p_vendor_id: vendorId,
+          p_purchase_order_id: purchaseOrderId || undefined,
+          p_bill_number: billNumber.trim(),
+          p_bill_date: billDate,
+          p_due_date: computedDueDate,
+          p_payment_terms: paymentTerms || undefined,
+          p_subtotal_cents: subtotalCents,
+          p_adjustment_cents: adjustmentCents,
+          p_notes: notes || undefined,
+        },
+      });
+      const idemKey = createBillIdem.getKey();
+
       const { data, error } = await supabase.rpc('create_vendor_bill', {
-        p_vendor_id: vendorId,
-        p_purchase_order_id: purchaseOrderId || undefined,
-        p_bill_number: billNumber.trim(),
-        p_bill_date: billDate,
-        p_due_date: computedDueDate,
-        p_payment_terms: paymentTerms || undefined,
-        p_subtotal_cents: subtotalCents,
-        p_adjustment_cents: adjustmentCents,
-        p_notes: notes || undefined,
+        ...request.args,
         p_idempotency_key: idemKey,
       });
 
-      if (error) throw error;
+      if (error) {
+        const receipt = getIdempotencyMismatchResult(error, 'create_vendor_bill');
+        if (typeof receipt?.bill_id === 'string') {
+          createBillIdem.resetKey();
+          createBillIntent.resolveIntent();
+          toast('warning', 'The earlier vendor bill already completed. Opening it instead of creating a duplicate.');
+          navigate(`/accounts-payable/bills/${receipt.bill_id}`);
+          return;
+        }
+        if (createBillIntent.classifyFailure(error) === 'definitive') {
+          createBillIdem.resetKey();
+          throw error;
+        }
+        toast('warning', 'The vendor bill may already exist. The exact request is locked; retry it unchanged to reconcile the result.');
+        return;
+      }
+      const createdBillId = assertRpcResult<string>(data, 'create_vendor_bill');
       createBillIdem.resetKey();
-      assertRpcResult(data, 'create_vendor_bill');
+      createBillIntent.resolveIntent();
 
       toast('success', 'Vendor bill created');
-      navigate(`/accounts-payable/bills/${data}`);
+      navigate(`/accounts-payable/bills/${createdBillId}`);
     } catch (err) {
       toast('error', sanitizeError(err));
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const totalCents = parseDollarsToCents(subtotalDollars || '0') + parseDollarsToCentsSigned(adjustmentDollars || '0');
@@ -174,7 +212,7 @@ export default function NewVendorBill() {
     <div className="space-y-4 max-w-2xl">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <button onClick={() => navigate('/accounts-payable/bills')} className="text-crx-green hover:text-crx-green/70">
+        <button disabled={createBillIntent.isIntentLocked} onClick={() => navigate('/accounts-payable/bills')} className="text-crx-green hover:text-crx-green/70 disabled:cursor-not-allowed disabled:opacity-50">
           <ArrowLeft className="w-5 h-5" />
         </button>
         <h2 className="text-xl font-semibold font-heading text-nav-dark">New Vendor Bill</h2>
@@ -186,6 +224,7 @@ export default function NewVendorBill() {
         <select
           value={purchaseOrderId}
           onChange={(e) => handlePOSelect(e.target.value)}
+          disabled={createBillIntent.isIntentLocked}
           className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
         >
           <option value="">No linked PO</option>
@@ -209,6 +248,7 @@ export default function NewVendorBill() {
             <select
               value={vendorId}
               onChange={(e) => setVendorId(e.target.value)}
+              disabled={createBillIntent.isIntentLocked}
               className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">Select vendor...</option>
@@ -226,12 +266,14 @@ export default function NewVendorBill() {
               value={billNumber}
               onChange={(e) => setBillNumber(e.target.value)}
               placeholder="Vendor's invoice/bill #"
+              disabled={createBillIntent.isIntentLocked}
             />
             <Input
               label="Bill Date"
               type="date"
               value={billDate}
               onChange={(e) => setBillDate(e.target.value)}
+              disabled={createBillIntent.isIntentLocked}
             />
           </div>
 
@@ -240,6 +282,7 @@ export default function NewVendorBill() {
               <label className="text-sm font-medium text-nav-dark">Payment Terms</label>
               <select
                 value={paymentTerms}
+                disabled={createBillIntent.isIntentLocked}
                 onChange={(e) => {
                   setPaymentTerms(e.target.value);
                   const daysMap: Record<string, number> = {
@@ -270,6 +313,7 @@ export default function NewVendorBill() {
               type="number"
               value={String(paymentTermsDays)}
               onChange={(e) => setPaymentTermsDays(Number(e.target.value))}
+              disabled={createBillIntent.isIntentLocked}
             />
           </div>
 
@@ -292,6 +336,7 @@ export default function NewVendorBill() {
               value={subtotalDollars}
               onChange={(e) => setSubtotalDollars(e.target.value)}
               placeholder="0.00"
+              disabled={createBillIntent.isIntentLocked}
             />
             <Input
               label="Adjustment ($)"
@@ -300,6 +345,7 @@ export default function NewVendorBill() {
               value={adjustmentDollars}
               onChange={(e) => setAdjustmentDollars(e.target.value)}
               placeholder="0.00 (negative for discount)"
+              disabled={createBillIntent.isIntentLocked}
             />
           </div>
           <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
@@ -316,16 +362,17 @@ export default function NewVendorBill() {
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           placeholder="Optional notes about this bill"
+          disabled={createBillIntent.isIntentLocked}
         />
       </Card>
 
       {/* Actions */}
       <div className="flex justify-end gap-3">
-        <Button variant="ghost" onClick={() => navigate('/accounts-payable/bills')}>
+        <Button variant="ghost" disabled={createBillIntent.isIntentLocked} onClick={() => navigate('/accounts-payable/bills')}>
           Cancel
         </Button>
         <Button onClick={handleSave} loading={saving}>
-          Create Bill
+          {createBillIntent.isIntentLocked ? 'Retry Exact Bill' : 'Create Bill'}
         </Button>
       </div>
     </div>

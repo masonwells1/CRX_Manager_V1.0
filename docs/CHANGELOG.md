@@ -301,8 +301,8 @@ candidate fix and executable prevention coverage. AP and receiving mutation rece
 authenticated actor and exact payload, and the payment/receiving forms retain an uncertain intent
 until an exact retry reconciles it. `Due This Month` now means the Chicago calendar month, rather
 than the next 30 days. AP aging now measures `due_date`: `Current (Not Due)`, `1-30`, `31-60`,
-`61-90`, and `Over 90` days past due. Mason explicitly approved the fifth `1-30 Days` bucket in
-this task.
+`61-90`, and `Over 90` days past due. Mason explicitly approved this five-bucket scheme in this
+task; `Over 90` is the fifth displayed bucket.
 
 Two pending migrations implement the database contract:
 `20260826125456_bind_section9_ap_receiving_intent_and_month_dashboard.sql` and

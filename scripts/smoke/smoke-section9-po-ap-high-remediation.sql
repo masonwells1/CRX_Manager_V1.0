@@ -562,6 +562,24 @@ BEGIN
        IS DISTINCT FROM (v_dashboard_before->>'total_owed_cents')::bigint + 777 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: dashboard boundary fixture did not enter total owed';
   END IF;
+
+  -- A future-dated payment is not paid in the current month. The lower bound
+  -- alone would incorrectly include it, so prove the exclusive next-month cap.
+  PERFORM public.record_vendor_payment(
+    p_vendor_bill_id := v_dashboard_bill,
+    p_amount_cents := 1,
+    p_payment_date := (date_trunc('month', clock_timestamp() AT TIME ZONE 'America/Chicago')
+      + interval '1 month')::date,
+    p_payment_method := 'check',
+    p_reference_number := 'SMK-S9-FUTURE-PAY-' || v_suffix,
+    p_notes := 'Future payment must not enter current-month dashboard total',
+    p_idempotency_key := 'smk-s9-future-payment-' || v_suffix
+  );
+  v_dashboard_after := public.get_ap_dashboard_summary();
+  IF (v_dashboard_after->>'paid_this_month_cents')::bigint
+       IS DISTINCT FROM (v_dashboard_before->>'paid_this_month_cents')::bigint THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: future payment leaked into Paid This Month';
+  END IF;
   BEGIN
     PERFORM * FROM public.get_ap_aging(
       (clock_timestamp() AT TIME ZONE 'America/Chicago')::date + 1

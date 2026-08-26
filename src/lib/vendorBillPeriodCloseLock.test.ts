@@ -298,6 +298,7 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(section9.chain).toBe('smoke-section9-po-ap-high-remediation.sql');
     expect(section9.covers).toEqual(expect.arrayContaining([
       'create_vendor_bill',
+      'get_ap_dashboard_summary',
       'update_vendor_bill',
       'close_accounting_period',
       'check_period_open',

@@ -628,8 +628,9 @@ BEGIN
     'unpaid_count', COUNT(CASE WHEN status IN ('unpaid', 'partially_paid') THEN 1 END),
     'paid_this_month_cents', COALESCE((
       SELECT SUM(vp.amount_cents)
-        FROM public.vendor_payments vp
+       FROM public.vendor_payments vp
        WHERE vp.payment_date >= date_trunc('month', v_today)::date
+         AND vp.payment_date < (v_month_end + 1)
          AND vp.voided_at IS NULL
     ), 0)
   )
@@ -690,6 +691,7 @@ BEGIN
    WHERE p.oid = 'public.get_ap_dashboard_summary(text)'::regprocedure;
   IF position('AT TIME ZONE ''America/Chicago''' IN v_source) = 0
      OR position('due_date BETWEEN v_today AND v_month_end' IN v_source) = 0
+     OR position('vp.payment_date < (v_month_end + 1)' IN v_source) = 0
      OR position('CURRENT_DATE + 30' IN v_source) > 0 THEN
     RAISE EXCEPTION 'get_ap_dashboard_summary calendar-month verification failed';
   END IF;

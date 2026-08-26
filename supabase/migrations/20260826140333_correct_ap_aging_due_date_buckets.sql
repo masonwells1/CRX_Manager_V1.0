@@ -25,12 +25,12 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
+DECLARE
+  v_today date := (clock_timestamp() AT TIME ZONE 'America/Chicago')::date;
 BEGIN
   PERFORM public.require_admin();
 
-  IF p_as_of_date IS DISTINCT FROM
-    ((clock_timestamp() AT TIME ZONE 'America/Chicago')::date)
-  THEN
+  IF p_as_of_date IS DISTINCT FROM v_today THEN
     RAISE EXCEPTION
       'HISTORICAL_AP_UNAVAILABLE: exact AP history is unavailable before durable bill-state history exists';
   END IF;
@@ -94,3 +94,22 @@ GRANT EXECUTE ON FUNCTION public.get_ap_aging(date)
 
 COMMENT ON FUNCTION public.get_ap_aging(date) IS
   'Current-only AP aging by due date: not due, 1-30, 31-60, 61-90, and over 90 days past due.';
+
+DO $verify$
+DECLARE
+  v_source text;
+BEGIN
+  SELECT p.prosrc
+    INTO v_source
+    FROM pg_catalog.pg_proc p
+   WHERE p.oid = 'public.get_ap_aging(date)'::regprocedure;
+
+  IF position('p_as_of_date IS DISTINCT FROM v_today' IN v_source) = 0
+     OR position('vb.due_date >= p_as_of_date' IN v_source) = 0
+     OR position('BETWEEN 1 AND 30' IN v_source) = 0
+     OR position('(p_as_of_date - vb.due_date) > 90' IN v_source) = 0
+     OR position('p_as_of_date - vb.bill_date' IN v_source) > 0 THEN
+    RAISE EXCEPTION 'get_ap_aging due-date bucket verification failed';
+  END IF;
+END;
+$verify$;
