@@ -101,19 +101,33 @@ const input = payload?.tool_input || {};
 let content = input.content || input.new_string || "";
 const isFragmentEdit = typeof input.content !== "string" &&
   (typeof input.old_string === "string" || Array.isArray(input.edits));
+let reconstructed = !isFragmentEdit; // Write content IS the real post-edit file
 if (isFragmentEdit) {
   try {
     if (existsSync(filePath)) {
       content = applyEditsForAnalysis(readFileSync(filePath, "utf8"), input);
+      reconstructed = true;
     } else if (Array.isArray(input.edits)) {
       content = input.edits.map((e) => e?.new_string || "").join("\n");
     }
   } catch {
-    /* keep the fragment */
+    /* keep the fragment — reduced guarantee, documented in agent-guardrails */
   }
 }
 content = toLF(content);
-if (!content) out("allow");
+if (!content) {
+  // Empty content is only trustworthy when it IS the real post-edit file (a
+  // Write of empty content, or a reconstruction that emptied the file). A
+  // deletion Edit whose reconstruction FAILED leaves no signal at all —
+  // allowing it would let an exempt-marker-deleting edit through unanalyzed
+  // (CodeRabbit PR #489; same rule as the other splice-aware guards). Fail
+  // closed.
+  if (reconstructed) out("allow");
+  out("block",
+    "IDEMPOTENCY GUARD: this Edit deletes content from a migration file, but the on-disk file " +
+    "could not be read to analyze the post-edit result, so the deletion cannot be checked. " +
+    "Retry, or use a single full-file Write so the guard sees complete content.");
+}
 
 if (/--\s*idempotency-body-check:\s*exempt/i.test(content)) {
   out("allow");

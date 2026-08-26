@@ -766,6 +766,30 @@ try {
   writeFileSync(migPath, CRLF("-- idempotency-body-check: exempt\n" + VIOLATING_FN + "\n"));
   r2 = runHookOnDisk({ old_string: "-- idempotency-body-check: exempt\n", new_string: "" });
   ok(isDeny(r2), "an Edit that REMOVES the on-disk exempt marker from a violating file is denied");
+
+  // ── Reconstruction failure fails CLOSED (CodeRabbit PR #489 full review):
+  // existsSync passes but readFileSync throws (a directory named *.sql). ──
+  const dirAsSql = path.join(tmp, "supabase", "migrations", "20260826000001_dir.sql");
+  mkdirSync(dirAsSql, { recursive: true });
+  r2 = spawnSync(process.execPath, [path.join(__dirname, "idempotency-body-check.mjs")], {
+    input: JSON.stringify({ tool_input: { file_path: dirAsSql, old_string: "-- idempotency-body-check: exempt\n", new_string: "" } }),
+    encoding: "utf8",
+  });
+  ok(isDeny(r2), "a deletion Edit whose file cannot be read is denied (fail closed), not allowed unanalyzed");
+  ok(r2.stdout.includes("could not be read"), "the unreadable-file deny explains itself");
+
+  // A NON-empty fragment when reconstruction fails still gets fragment
+  // analysis (documented reduced guarantee): a violating fragment is caught.
+  r2 = spawnSync(process.execPath, [path.join(__dirname, "idempotency-body-check.mjs")], {
+    input: JSON.stringify({ tool_input: { file_path: dirAsSql, old_string: "-- x\n", new_string: VIOLATING_FN } }),
+    encoding: "utf8",
+  });
+  ok(isDeny(r2), "an unreadable file with a violating NON-empty fragment is still denied via fragment analysis");
+
+  // Boundary: emptying a READABLE file reconstructs to empty content — allowed.
+  writeFileSync(migPath, CRLF("-- idempotency-body-check: exempt\n"));
+  r2 = runHookOnDisk({ old_string: "-- idempotency-body-check: exempt\n", new_string: "" });
+  ok(isAllow(r2), "a deletion that empties a readable file is allowed (empty reconstruction is trustworthy)");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

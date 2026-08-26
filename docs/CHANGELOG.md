@@ -129,6 +129,12 @@ it IS the real post-edit file (a Write, or a reconstruction that emptied the fil
 whose file read FAILED (readFileSync threw after existsSync passed) had still slipped through the
 emptiness exit unanalyzed, and now fails closed with instructions to use a full-file Write
 (regression test forces the read failure with a directory named `*.sql`; mutation-verified).
+CodeRabbit's full review extended the sweep with two more real findings: `idempotency-body-check.mjs`
+got the same fail-closed rule (its unreadable-file deletion path had still allowed unanalyzed), and
+`status-enum-check.mjs`'s TypeScript scanner now stops each `.from()` window at the NEXT `.from()`
+call — judging the full post-edit file had exposed its fixed 800-character window to unrelated query
+chains, so a later table's valid status was denied under the preceding table's constraint set on a
+benign edit to an existing page. Both mutation-verified with regression tests in each direction.
 
 
 ## 2026-08-26 — a guard self-test was re-initializing the real repository as bare

@@ -137,7 +137,14 @@ if (isTs) {
     const table = fm[1];
     const cols = byTable[table];
     if (!cols) continue;
-    const after = content.slice(fm.index, fm.index + 800);
+    // The window ends at the NEXT .from() call: since Edits are judged as the
+    // FULL post-edit file (2026-08-26), a fixed 800-char window otherwise
+    // crosses into unrelated query chains — a later table's valid status fell
+    // inside the preceding tables' windows and benign edits to existing pages
+    // were denied (CodeRabbit PR #489, reproduced on GettingStarted.tsx).
+    let after = content.slice(fm.index, fm.index + 800);
+    const nextFrom = after.slice(fm[0].length).search(/\.from\s*\(/);
+    if (nextFrom !== -1) after = after.slice(0, fm[0].length + nextFrom);
 
     for (const [col, values] of Object.entries(cols)) {
       const eqRe = new RegExp(`\\.eq\\s*\\(\\s*['"\`]${escRe(col)}['"\`]\\s*,\\s*(?:['"\`]([^'"\`]+)['"\`]|(-?\\d+(?:\\.\\d+)?))\\s*\\)`, "g");

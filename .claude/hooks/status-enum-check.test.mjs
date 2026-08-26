@@ -37,7 +37,11 @@ for (const dep of ["status-enum-check.mjs", "edit-splice-lib.mjs"]) {
   copyFileSync(path.join(__dirname, dep), path.join(hooksDir, dep));
 }
 writeFileSync(path.join(tmp, ".claude", "schema-registry.json"), JSON.stringify({
-  check_constraints: { "invoices.status": { values: ["draft", "posted", "voided"] } },
+  check_constraints: {
+    "invoices.status": { values: ["draft", "posted", "voided"] },
+    "quotes.status": { values: ["draft", "sent"] },
+    "deliveries.status": { values: ["pending", "completed"] },
+  },
 }));
 
 const migPath = path.join(tmp, "supabase", "migrations", "20260826000000_test.sql");
@@ -182,6 +186,36 @@ try {
     new_string: "-- lf migration, edited",
   });
   ok(isAllow(r), "LF disk: a benign Edit on a benign file is allowed (unchanged behavior)");
+
+  // ── TS window scoping (CodeRabbit PR #489 full review): each .from() window
+  // must stop at the NEXT .from() call. Judging the FULL post-edit file means
+  // a fixed 800-char window otherwise crosses into the next query chain — a
+  // later table's VALID status fell inside the preceding table's window and a
+  // benign Edit to an existing page was denied (reproduced on
+  // GettingStarted.tsx). ──
+  writeFileSync(tsPath,
+    "const STORAGE_KEY = 'gettingStarted';\n" +
+    "const quotes = await db.from('quotes').select('*').eq('status', 'sent');\n" +
+    "const deliveries = await db.from('deliveries').select('*').eq('status', 'completed');\n"
+  );
+  r = runHook("Edit", tsPath, {
+    old_string: "const STORAGE_KEY = 'gettingStarted';",
+    new_string: "const STORAGE_KEY = 'gettingStartedV2';",
+  });
+  ok(isAllow(r), "a valid later-chain status ('completed' on deliveries) is not attributed to the preceding quotes chain");
+
+  // Deny direction: an out-of-set value in its OWN chain is still caught,
+  // including in the second chain of the file.
+  writeFileSync(tsPath,
+    "const quotes = await db.from('quotes').select('*').eq('status', 'sent');\n" +
+    "const deliveries = await db.from('deliveries').select('*').eq('status', 'teleported');\n"
+  );
+  r = runHook("Edit", tsPath, {
+    old_string: "const quotes",
+    new_string: "const quoteRows",
+  });
+  ok(isDeny(r), "an out-of-set status in the second chain is still denied after window scoping");
+  ok(r.stdout.includes("deliveries.status"), "the deny names the actual owning chain, not the preceding one");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }
