@@ -13,6 +13,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { scratchHookEnvironment } from "../.claude/hooks/git-test-env.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
@@ -22,7 +23,10 @@ function ok(c, m) { assert.ok(c, m); pass++; }
 // GIT_WORK_TREE pointing at the REAL repository. Inheriting those makes every git call
 // below operate on the wrong tree — "fatal: this operation must be run in a work tree".
 // Strip the whole GIT_* namespace so each throwaway repo is genuinely isolated.
-const CLEAN_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
+// One sanitizer, not three: the repo already ships scratchHookEnvironment() for exactly
+// this, deriving the variable list from `git rev-parse --local-env-vars` rather than
+// guessing at a GIT_ prefix.
+const cleanEnvFor = (root) => scratchHookEnvironment(root);
 
 const roots = [];
 function makeRepo(files, { track = [] } = {}) {
@@ -38,13 +42,13 @@ function makeRepo(files, { track = [] } = {}) {
   for (const [name, body] of Object.entries(files)) {
     writeFileSync(path.join(root, "docs", "changelog.d", name), body, "utf8");
   }
-  execFileSync("git", ["init", "-q"], { cwd: root, env: CLEAN_ENV });
-  execFileSync("git", ["add", "scripts", "docs/CHANGELOG.md", ...track.map((t) => `docs/changelog.d/${t}`)], { cwd: root, env: CLEAN_ENV });
-  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: root, env: CLEAN_ENV });
+  execFileSync("git", ["init", "-q"], { cwd: root, env: cleanEnvFor(root) });
+  execFileSync("git", ["add", "scripts", "docs/CHANGELOG.md", ...track.map((t) => `docs/changelog.d/${t}`)], { cwd: root, env: cleanEnvFor(root) });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: root, env: cleanEnvFor(root) });
   return root;
 }
 const run = (root) => spawnSync(process.execPath, ["scripts/assemble-changelog.mjs", "--write"],
-  { cwd: root, encoding: "utf8", env: CLEAN_ENV });
+  { cwd: root, encoding: "utf8", env: cleanEnvFor(root) });
 const stillThere = (root, n) => existsSync(path.join(root, "docs", "changelog.d", n));
 
 // ── an untracked fragment is somebody else's draft: skip it, never consume it ──

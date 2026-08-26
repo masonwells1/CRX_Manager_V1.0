@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerCheck } from "./check-ledger-update.mjs";
+import { scratchHookEnvironment } from "../.claude/hooks/git-test-env.mjs";
 
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
@@ -120,7 +121,19 @@ eq(ledgerCheck([".claude/hooks/bash-safety.mjs", "README.md"]).ok, false, "READM
 // Without --no-renames, --name-only reports only src/moved.mjs and the CLI exits 0.
 const renameRepo = mkdtempSync(join(tmpdir(), "crx-ledger-rename-"));
 try {
-  const git = (...args) => execFileSync("git", args, { cwd: renameRepo, stdio: "ignore" });
+  // GIT_* MUST be stripped. husky runs the pre-commit hook with GIT_DIR, GIT_INDEX_FILE
+  // and GIT_WORK_TREE exported at the REAL repository, so a bare `git init` here does not
+  // create a throwaway repo — it re-initialises C:/CRX_Manager with a working directory
+  // that isn't its work tree, flipping `core.bare` to true. That breaks EVERY worktree at
+  // once ("fatal: this operation must be run in a work tree"), and it surfaces disguised
+  // as unrelated failures: a private-artifact containment error, a dependency error, a
+  // doc-drift error. The `git config user.email` calls below would likewise write the
+  // fixture identity into the real repository's config.
+  // Use the repo's shared sanitizer rather than a private copy: it derives the list
+  // from `git rev-parse --local-env-vars` plus the indexed GIT_CONFIG_* payload, which
+  // is authoritative where a hand-written GIT_* prefix test is a guess.
+  const CLEAN_ENV = scratchHookEnvironment(renameRepo);
+  const git = (...args) => execFileSync("git", args, { cwd: renameRepo, stdio: "ignore", env: CLEAN_ENV });
   git("init", "--quiet");
   git("config", "user.email", "ledger-test@example.invalid");
   git("config", "user.name", "Ledger Test");
@@ -132,6 +145,7 @@ try {
   git("mv", ".claude/hooks/protected.mjs", "src/moved.mjs");
   const run = spawnSync(process.execPath, [fileURLToPath(new URL("./check-ledger-update.mjs", import.meta.url))], {
     cwd: renameRepo,
+    env: CLEAN_ENV,
     encoding: "utf8",
   });
   eq(run.status, 1, "protected file renamed to an unprotected path is still blocked");
