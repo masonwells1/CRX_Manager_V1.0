@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -27,6 +28,11 @@ const migration = read(
   'migrations',
   '20260813080000_lock_quote_versions_writes_to_rpc.sql',
 );
+const restoreTrustMigration = read(
+  'supabase',
+  'migrations',
+  '20260825190000_quote_version_restore_trust_boundary.sql',
+);
 const predicate = read(
   'scripts',
   'db-invariant-sweeps',
@@ -34,6 +40,10 @@ const predicate = read(
   'quote-versions-rpc-owned.sql',
 );
 const smoke = read('scripts', 'smoke', 'smoke-quote-version-write-boundary.sql');
+const restoreTrustSmoke = read('scripts', 'smoke', 'smoke-quote-version-restore-trust.sql');
+const quoteBuilder = read('src', 'pages', 'QuoteBuilder.tsx');
+const db = read('src', 'lib', 'db.ts');
+const testAreas = read('scripts', 'test-areas.json');
 
 /**
  * Statements with comment lines stripped and whitespace collapsed.
@@ -596,6 +606,23 @@ describe('quote_versions write boundary — migration', () => {
   });
 });
 
+describe('quote_versions restore trust boundary — prerequisite', () => {
+  it('fails closed unless the earlier RPC-only write boundary is fully live', () => {
+    const precond = restoreTrustMigration.match(/DO \$precond\$[\s\S]*?\$precond\$;/)?.[0] ?? '';
+    expect(precond).not.toBe('');
+    expect(precond).toContain("p.polcmd IN ('a', 'w', 'd', '*')");
+    for (const role of ['authenticated', 'anon']) {
+      for (const privilege of ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'TRIGGER', 'REFERENCES']) {
+        expect(precond).toContain(`has_table_privilege('${role}', 'public.quote_versions', '${privilege}')`);
+      }
+      for (const privilege of ['INSERT', 'UPDATE', 'REFERENCES']) {
+        expect(precond).toContain(`has_any_column_privilege('${role}', 'public.quote_versions', '${privilege}')`);
+      }
+    }
+    expect(precond).toContain('refuse to create a forgeable trust marker');
+  });
+});
+
 describe('quote_versions write boundary — standing predicate', () => {
   it('covers every branch of the boundary', () => {
     for (const key of [
@@ -651,6 +678,16 @@ describe('quote_versions write boundary — standing predicate', () => {
       'quote_versions:writer-scan-blinded',
       'quote_versions:non-bypassing-writer',
       'quote_versions:second-authoritative-writer',
+      'create_quote_version:trusted-marker-writer-contract',
+      '_restore_quote_version_below_cost_impl_20260810:trust-check-contract',
+      // Codex rounds 9/10 (2026-08-26): the wrapper pins alone left the deeper
+      // links of the trust chain unpinned — the two owner impls whose results
+      // the wrappers trust, and the public restore wrapper whose routing the
+      // precondition only name-matched. All three bodies are now pinned from
+      // the reviewed live snapshot.
+      'restore_quote_version:route-pinned',
+      '_create_quote_version_owner_impl:body-pinned',
+      '_restore_quote_version_owner_impl:body-pinned',
       'quote_versions:inheritance-path',
       'quote_versions:service-role-write-lost',
     ]) {
@@ -672,6 +709,342 @@ describe('quote_versions write boundary — standing predicate', () => {
     // version creation while every other branch still reads healthy.
     expect(predicate).toContain('relforcerowsecurity');
     expect(predicate).toMatch(/has_table_privilege\(\s*r\.rolname,\s*'public\.quote_versions',\s*'INSERT'\s*\)/);
+  });
+
+  it('allows the post-boundary marker update only through its exact guarded writer contract', () => {
+    expect(predicateCode).toContain("to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)')");
+    expect(predicateCode).not.toContain("'public.create_quote_version(uuid,uuid,text,text,bigint)'::regprocedure");
+    expect(predicateCode).toContain("WHEN to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NULL THEN true");
+    expect(predicateCode).toContain("'create_quote_version:trusted-marker-writer-contract' AS violation_key");
+    expect(predicateCode).toContain("'search_path=public,pg_temp'");
+    expect(predicateCode).toContain("'authenticated', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE'");
+    expect(predicateCode).toContain("'anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE'");
+    expect(predicateCode).toContain('restore_trusted_at');
+    expect(predicateCode).toContain('regexp_count(');
+    expect(predicateCode).toContain("'\\mupdate\\s+(only\\s+)?(\"?public\"?\\s*\\.\\s*)?\"?quote_versions\\M'");
+
+    // CodeRabbit rounds 4 and 5 (2026-08-25/26). Round 4 replaced a blocklist of
+    // assignment spellings with a CLOSED allowlist over the guarded region.
+    // Round 5 showed the allowlist was anchored in the wrong place: it started
+    // at the `v_version_id` assignment, leaving the interval between the owner
+    // impl RETURNING and that assignment unchecked. A body that slipped
+    //   v_result := jsonb_build_object('status','created','version_id', <legacy>)
+    // into that gap passed every check and stamped an arbitrary legacy row.
+    // The region now starts at the owner call, which also pins its ARGUMENTS.
+    const trustRegion =
+      "v_result := public._create_quote_version_owner_impl" +
+      "( p_quote_id, p_performed_by, p_method, p_idempotency_key ); " +
+      "v_version_id := nullif(v_result->>'version_id', '')::uuid; " +
+      "if v_result->>'status' is distinct from 'created' or v_version_id is null then " +
+      "raise exception 'quote_version_trust_mark_failed'; end if;";
+    const createBody =
+      restoreTrustMigration.match(
+        /CREATE OR REPLACE FUNCTION public\.create_quote_version\([\s\S]*?AS \$function\$([\s\S]*?)\$function\$;/,
+      )?.[1] ?? '';
+    expect(createBody).not.toBe('');
+    const loweredBody = createBody.toLowerCase();
+    const normalizeRegion = (body: string) => {
+      const from = body.indexOf('v_result := public._create_quote_version_owner_impl');
+      const to = body.indexOf('update public.quote_versions');
+      if (from < 0 || to < 0 || to <= from) return null;
+      return body.slice(from, to).replace(/\s+/g, ' ').trim();
+    };
+    // The migration's real body must normalize to exactly the pinned text. This
+    // ties the shipped function to the sweep that polices it — a toContain() on
+    // the predicate alone pins a string while the function drifts away from it.
+    expect(normalizeRegion(loweredBody)).toBe(trustRegion);
+    // ...and the predicate must compare against that same text, SQL-escaped.
+    // CodeRabbit 2026-08-26: asserting the concatenation's fragments separately
+    // proves nothing about their ORDER — reorder them, move one into another
+    // branch, or splice an extra term between them and three toContain checks
+    // still pass, which silently voids the paired claim that the predicate
+    // pins the same region the migration ships. Collapse SQL string
+    // concatenation (`' || '` joins adjacent literals) and assert the single
+    // assembled literal instead.
+    const predicateAssembled = predicateCode.replace(/\s+/g, ' ').split("' || '").join('');
+    expect(predicateAssembled).toContain(`= '${trustRegion.replace(/'/g, "''")}'`);
+    // The region is extracted from the owner call, not from a later derived
+    // variable — that mis-anchoring was round 5's bypass.
+    expect(predicateAssembled).toContain(
+      "FROM strpos(lower(p.prosrc), 'v_result := public._create_quote_version_owner_impl')",
+    );
+    // Round 5's actual bypass: a forged v_result in the gap ahead of the anchor
+    // must not normalize to the pinned region.
+    const gapAttack = loweredBody.replace(
+      "  v_version_id := nullif(v_result->>'version_id'",
+      "  v_result := jsonb_build_object('status','created','version_id', v_legacy_id);\n" +
+        "  v_version_id := nullif(v_result->>'version_id'",
+    );
+    expect(gapAttack).not.toBe(loweredBody);
+    expect(normalizeRegion(gapAttack)).not.toBe(trustRegion);
+    // ...as must a retargeting query after the anchor (round 4's bypass).
+    const afterAnchorAttack = loweredBody.replace(
+      '  update public.quote_versions',
+      '  select id into v_version_id from public.quote_versions limit 1;\n  update public.quote_versions',
+    );
+    expect(afterAnchorAttack).not.toBe(loweredBody);
+    expect(normalizeRegion(afterAnchorAttack)).not.toBe(trustRegion);
+    // Whitespace is collapsed BEFORE trimming. The reverse order lets the
+    // region's trailing newline collapse into a single space, and the real body
+    // then fails its own guard — verified against live PostgreSQL 17.6.
+    expect(predicateCode).toMatch(/AND btrim\(\s*regexp_replace\(/);
+    expect(predicateCode).not.toMatch(/regexp_replace\(\s*btrim\(/);
+
+    // Codex round 8 (2026-08-26): the region pin ends at the marker UPDATE, so
+    // everything after it was unpinned — an appended EXCEPTION handler passed
+    // the region pin, the sole-owner-call count, and the sole-UPDATE count
+    // while quietly changing what a "successful" create means. The predicate
+    // and the migration postcondition now pin the ENTIRE normalized body, in
+    // BOTH branches that bless this function (the writer-scan exemption and
+    // the named contract), so the two cannot drift apart.
+    const createWholeBody = createBody.replace(/\s+/g, ' ').trim();
+    expect(createWholeBody.length).toBe(3972);
+    expect(createHash('md5').update(createWholeBody, 'utf8').digest('hex')).toBe(
+      '3723acbbf1821e9d5d212c3aea983f86',
+    );
+    expect(
+      (predicateCode.match(/= 3972\b/g) ?? []).length,
+      'whole-body length pin must appear in both create branches of the predicate',
+    ).toBe(2);
+    expect((predicateCode.match(/= '3723acbbf1821e9d5d212c3aea983f86'/g) ?? []).length).toBe(2);
+    expect(restoreTrustMigration).toMatch(/= 3972\b/);
+    expect(restoreTrustMigration).toContain("= '3723acbbf1821e9d5d212c3aea983f86'");
+    // The attack the pre-round-8 checks missed: append a handler, leave the
+    // pinned region byte-identical. The region pin still passes on it; only
+    // the whole-body pin refuses it.
+    const handlerAttack = createBody.replace(
+      /END;\s*$/,
+      "EXCEPTION\n  WHEN raise_exception THEN\n    RETURN jsonb_build_object('status', 'created');\nEND;\n",
+    );
+    expect(handlerAttack).not.toBe(createBody);
+    expect(normalizeRegion(handlerAttack.toLowerCase())).toBe(trustRegion);
+    const handlerAttackNorm = handlerAttack.replace(/\s+/g, ' ').trim();
+    expect(
+      handlerAttackNorm.length === 3972 &&
+        createHash('md5').update(handlerAttackNorm, 'utf8').digest('hex') ===
+          '3723acbbf1821e9d5d212c3aea983f86',
+    ).toBe(false);
+  });
+
+  it('pins the restore trust rejection before the only owner-side restore call', () => {
+    expect(predicateCode).toContain("'_restore_quote_version_below_cost_impl_20260810:trust-check-contract' AS violation_key");
+    expect(predicateCode).toContain("'QUOTE_VERSION_LEGACY_UNTRUSTED'");
+    expect(predicateCode).toContain("regexp_count(p.prosrc, '_restore_quote_version_owner_impl\\s*\\(', 1, 'i') = 1");
+    const predicateComparator =
+      "strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''')\n          < strpos(lower(p.prosrc), 'v_result := public._restore_quote_version_owner_impl')";
+    const predicateDmlGuard =
+      "!~* '(insert\\s+into|update\\s+(only\\s+)?[a-z_\\\"]|delete\\s+from|merge\\s+into|truncate\\s+(table\\s+)?[a-z_\\\"]|execute\\s+|perform\\s+|call\\s+)'";
+    const predicatePrefixLength = ') = 2730';
+    const predicatePrefixDigest = "= '62440ea5c855d1366808c5a2098177d7'";
+    const predicateProtectsPrefix = (source: string) =>
+      source.includes(predicateComparator) &&
+      source.includes(predicateDmlGuard) &&
+      source.includes(predicatePrefixLength) &&
+      source.includes(predicatePrefixDigest);
+    expect(predicateProtectsPrefix(predicateCode)).toBe(true);
+    expect(restoreTrustMigration).toContain(predicatePrefixLength);
+    expect(restoreTrustMigration).toContain(predicatePrefixDigest);
+    expect(predicateProtectsPrefix(predicateCode.replace(predicatePrefixLength, ') = 2729'))).toBe(false);
+    expect(predicateProtectsPrefix(predicateCode.replace(predicatePrefixDigest, "= '00000000000000000000000000000000'"))).toBe(false);
+
+    const body = restoreTrustMigration.match(
+      /CREATE OR REPLACE FUNCTION public\._restore_quote_version_below_cost_impl_20260810\([\s\S]*?AS \$function\$([\s\S]*?)\$function\$;/,
+    )?.[1];
+    expect(body).toBeDefined();
+    const trustCheck = "IF v_restore_trusted_at IS NULL THEN\n    RAISE EXCEPTION 'QUOTE_VERSION_LEGACY_UNTRUSTED';\n  END IF;";
+    const trustRaise = "RAISE EXCEPTION 'QUOTE_VERSION_LEGACY_UNTRUSTED'";
+    const ownerCall = 'v_result := public._restore_quote_version_owner_impl(';
+    const hasSafeOrder = (source: string) =>
+      source.indexOf(trustCheck) >= 0 &&
+      source.indexOf(ownerCall) >= 0 &&
+      source.indexOf(trustCheck) < source.indexOf(ownerCall);
+    const hasReadOnlyPrefix = (source: string) => {
+      const prefix = source.slice(0, source.indexOf(trustRaise));
+      const normalizedPrefix = prefix.replace(/\s+/g, ' ').trim();
+      return normalizedPrefix.length === 2730 &&
+        createHash('md5').update(normalizedPrefix, 'utf8').digest('hex') === '62440ea5c855d1366808c5a2098177d7';
+    };
+    expect(hasSafeOrder(body!)).toBe(true);
+    expect(hasReadOnlyPrefix(body!)).toBe(true);
+
+    // Mutation proof: moving the exact rejection below the owner call must fail
+    // the same ordering contract the standing SQL predicate enforces live.
+    const movedAfterOwner = body!.replace(trustCheck, '').replace(ownerCall, `${ownerCall}\n${trustCheck}`);
+    expect(hasSafeOrder(movedAfterOwner)).toBe(false);
+
+    const predicateComparatorMutant = predicateCode.replace(predicateComparator, predicateComparator.replace(/</g, '<>'));
+    expect(predicateProtectsPrefix(predicateComparatorMutant)).toBe(false);
+
+    const predicateDmlGuardMutant = predicateCode.replace(predicateDmlGuard, "!~* '(delete\\s+from)' ");
+    expect(predicateProtectsPrefix(predicateDmlGuardMutant)).toBe(false);
+
+    const inlineUpdateMutant = body!.replace(trustCheck, `UPDATE public.quotes SET status = status;\n  ${trustCheck}`);
+    expect(hasReadOnlyPrefix(inlineUpdateMutant)).toBe(false);
+
+    const selectListHelperMutant = body!.replace(
+      trustCheck,
+      `SELECT 1, public.some_mutator() INTO v_cache_rows;\n  ${trustCheck}`,
+    );
+    expect(hasReadOnlyPrefix(selectListHelperMutant)).toBe(false);
+
+    const conditionalHelperMutant = body!.replace(
+      trustCheck,
+      `IF public.some_mutator() THEN NULL; END IF;\n  ${trustCheck}`,
+    );
+    expect(hasReadOnlyPrefix(conditionalHelperMutant)).toBe(false);
+
+    const quotedHelperMutant = body!.replace(
+      trustCheck,
+      `PERFORM "public"."some_mutator"();\n  ${trustCheck}`,
+    );
+    expect(hasReadOnlyPrefix(quotedHelperMutant)).toBe(false);
+
+    const dollarIdentifierMutant = body!.replace(
+      trustCheck,
+      `PERFORM public.some_mutator$coalesce();\n  ${trustCheck}`,
+    );
+    expect(hasReadOnlyPrefix(dollarIdentifierMutant)).toBe(false);
+
+    // Codex round 8 (2026-08-26): every check above pins the PREFIX — nothing
+    // pinned the tail after the rejection. The bypass: keep the prefix
+    // byte-identical, move the sole owner call into an appended EXCEPTION
+    // handler, and raise into it deliberately. Catching
+    // QUOTE_VERSION_LEGACY_UNTRUSTED then restores legacy snapshots while the
+    // ordering check, the prefix pin, the exact-IF count and the
+    // sole-owner-call count ALL still pass. Prove the miss, then prove the
+    // whole-body pin is what catches it.
+    const wholeBodyLength = 3720;
+    const wholeBodyDigest = 'b864c261854b760ff22f1f24e87ae22f';
+    const normalizeWhole = (source: string) => source.replace(/\s+/g, ' ').trim();
+    const hasWholeBodyPin = (source: string) => {
+      const normalized = normalizeWhole(source);
+      return normalized.length === wholeBodyLength &&
+        createHash('md5').update(normalized, 'utf8').digest('hex') === wholeBodyDigest;
+    };
+    expect(hasWholeBodyPin(body!)).toBe(true);
+
+    const exceptionHandlerAttack = body!
+      .replace(
+        `  v_result := public._restore_quote_version_owner_impl(\n    p_quote_id, p_version_id, p_performed_by, p_idempotency_key\n  );`,
+        `  RAISE EXCEPTION 'ROUTE_TO_HANDLER';`,
+      )
+      .replace(
+        /END;\s*$/,
+        "EXCEPTION\n  WHEN raise_exception THEN\n" +
+          "    v_result := public._restore_quote_version_owner_impl(\n" +
+          "      p_quote_id, p_version_id, p_performed_by, p_idempotency_key\n" +
+          "    );\n    RETURN v_result;\nEND;\n",
+      );
+    expect(exceptionHandlerAttack).not.toBe(body!);
+    // The attack passes every pre-round-8 check: prefix untouched, rejection
+    // still present exactly once and still textually before the (relocated)
+    // owner call, still exactly one owner call.
+    expect(hasSafeOrder(exceptionHandlerAttack)).toBe(true);
+    expect(hasReadOnlyPrefix(exceptionHandlerAttack)).toBe(true);
+    expect(
+      (exceptionHandlerAttack.match(/_restore_quote_version_owner_impl\s*\(/g) ?? []).length,
+    ).toBe(1);
+    // Only the whole-body pin refuses it.
+    expect(hasWholeBodyPin(exceptionHandlerAttack)).toBe(false);
+
+    // And the pin is mirrored where it is enforced: the standing predicate and
+    // the migration postcondition.
+    expect(predicateCode).toMatch(/= 3720\b/);
+    expect(predicateCode).toContain(`= '${wholeBodyDigest}'`);
+    expect(restoreTrustMigration).toMatch(/= 3720\b/);
+    expect(restoreTrustMigration).toContain(`= '${wholeBodyDigest}'`);
+  });
+
+  it('pins the rest of the trust chain: both owner impls, the public route, and the apply preimages', () => {
+    // Codex rounds 9/10 (2026-08-26). The wrapper pins guarantee the wrappers'
+    // text, but the wrappers TRUST results from deeper links that nothing
+    // pinned: a re-emitted _create_quote_version_owner_impl returning
+    // {'status':'created','version_id':<legacy id>} gets its lie stamped
+    // trusted by the byte-perfect wrapper; a re-emitted
+    // _restore_quote_version_owner_impl can restore a different version than
+    // the one whose marker was checked; a re-emitted public
+    // restore_quote_version passed the precondition by merely CONTAINING the
+    // guarded impl's name. All three live bodies are pinned now (values
+    // measured read-only from live on 2026-08-26), and the precondition pins
+    // the PRE-images of the two functions this migration replaces, so an
+    // apply after live drift fails closed instead of silently overwriting.
+    // CodeRabbit on efb75079 (Major): asserting lengths and digests against the
+    // WHOLE predicate proves nothing about which branch carries which pin —
+    // transposing the two owner-impl pins would pass every loose assertion
+    // while both branches report permanent false drift. Slice each branch out
+    // by its violation_key and bind ITS signature, ITS length, and ITS digest
+    // together inside that slice.
+    const liveBodyPins: Array<
+      [key: string, signature: string, length: number, digest: string]
+    > = [
+      [
+        'restore_quote_version:route-pinned',
+        'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)',
+        311,
+        '97da0cdfa0f90ff87b5e48d9aedf9f33',
+      ],
+      [
+        '_create_quote_version_owner_impl:body-pinned',
+        'public._create_quote_version_owner_impl(uuid,uuid,text,text)',
+        3362,
+        '4ecb8accbaf6be4fb64aadbc79e492e3',
+      ],
+      [
+        '_restore_quote_version_owner_impl:body-pinned',
+        'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)',
+        13566,
+        '6972f2d6b76b2d8872b0a027e7f9ee93',
+      ],
+    ];
+    for (const [key, signature, length, digest] of liveBodyPins) {
+      const start = predicateCode.indexOf(`'${key}' AS violation_key`);
+      expect(start, `predicate must contain the ${key} branch`).toBeGreaterThanOrEqual(0);
+      const end = predicateCode.indexOf('UNION ALL', start);
+      const branch = predicateCode.slice(start, end < 0 ? undefined : end);
+      expect(branch, `${key} must pin its own signature`).toContain(`to_regprocedure('${signature}')`);
+      expect(branch, `${key} must pin its own length`).toMatch(new RegExp(`= ${length}\\b`));
+      expect(branch, `${key} must pin its own digest`).toContain(`= '${digest}'`);
+      // No other pinned length/digest may appear inside this branch — that is
+      // exactly the transposition this binding exists to refuse.
+      for (const [otherKey, , otherLength, otherDigest] of liveBodyPins) {
+        if (otherKey === key) continue;
+        expect(branch, `${key} must not carry ${otherKey}'s digest`).not.toContain(
+          `= '${otherDigest}'`,
+        );
+        expect(branch, `${key} must not carry ${otherKey}'s length`).not.toMatch(
+          new RegExp(`= ${otherLength}\\b`),
+        );
+      }
+    }
+    // The wrapper's route pin is enforced in the migration too — precondition
+    // AND postcondition (the migration does not touch the wrapper, so the
+    // same value must read back through the apply).
+    expect(
+      (restoreTrustMigration.match(/= '97da0cdfa0f90ff87b5e48d9aedf9f33'/g) ?? []).length,
+    ).toBe(2);
+    // Preimage pins: the live bodies being REPLACED, distinct by construction
+    // from the shipped bodies' pins (3972/3720 above) — equality would mean
+    // the migration re-emits identical text and changes nothing.
+    expect(restoreTrustMigration).toContain("= '2f800d7f200069089ef95f69fe2f7f47'");
+    expect(restoreTrustMigration).toMatch(/= 3846\b/);
+    expect(restoreTrustMigration).toContain("= 'f6ab3cb8909cbb2925dafb3fd9b4a975'");
+    expect(restoreTrustMigration).toMatch(/= 3974\b/);
+    expect('2f800d7f200069089ef95f69fe2f7f47').not.toBe('3723acbbf1821e9d5d212c3aea983f86');
+    expect('f6ab3cb8909cbb2925dafb3fd9b4a975').not.toBe('b864c261854b760ff22f1f24e87ae22f');
+  });
+
+  it('keeps the new legacy-restore refusal intelligible in the quote UI', () => {
+    expect(db).toContain("QUOTE_VERSION_LEGACY_UNTRUSTED: 'QUOTE_VERSION_LEGACY_UNTRUSTED'");
+    expect(quoteBuilder).toContain('RpcErrorCodes.QUOTE_VERSION_LEGACY_UNTRUSTED');
+    expect(quoteBuilder).toContain('This older saved version cannot be restored');
+  });
+
+  it('keeps the post-boundary predicate in the scoped security gate', () => {
+    // This is deliberately red until both quote migrations apply. Excluding it
+    // would make every later `test:security -- --with-db` silently omit the
+    // trust-marker and restore-routing drift checks after deployment.
+    const security = JSON.parse(testAreas).areas.security as { sweeps: string[] };
+    expect(security.sweeps).toContain('quote-versions-rpc-owned');
   });
 
   it('stays in lockstep with every privilege the migration revokes', () => {
@@ -713,6 +1086,52 @@ describe('quote_versions write boundary — standing predicate', () => {
       );
     }
     expect(predicate).toContain('EXPECT ZERO rows');
+  });
+});
+
+describe('quote_versions restore trust boundary — rollback smoke', () => {
+  it('is registered as a psql-only security/regression/lifecycle chain', () => {
+    const specs = JSON.parse(read('scripts', 'smoke', 'smoke-specs.json')) as {
+      specs: Record<string, { chain?: string; covers?: string[]; area?: string[]; psql_only?: boolean }>;
+    };
+    const entry = specs.specs.restore_quote_version_trust_boundary;
+    expect(entry?.chain).toBe('smoke-quote-version-restore-trust.sql');
+    expect(entry?.psql_only).toBe(true);
+    expect(entry?.covers).toEqual(expect.arrayContaining(['create_quote_version', 'restore_quote_version']));
+    expect(entry?.area).toEqual(expect.arrayContaining(['security', 'regression', 'lifecycle']));
+  });
+
+  it('refuses to run before the trust migration is deployed', () => {
+    expect(restoreTrustSmoke).toContain("a.attname = 'restore_trusted_at'");
+    expect(restoreTrustSmoke).toContain('SMOKE_PREREQ: 20260825190000 quote-version restore trust boundary is not deployed');
+  });
+
+  it('creates both an RPC-trusted version and an owner-only unmarked fixture', () => {
+    expect(restoreTrustSmoke).toContain('SELECT public.create_quote_version(');
+    expect(restoreTrustSmoke).toMatch(/restore_trusted_at IS NOT NULL/);
+    expect(restoreTrustSmoke).toMatch(/INSERT INTO public\.quote_versions[\s\S]*restore_trusted_at[\s\S]*NULL/);
+  });
+
+  it('requires the exact legacy refusal before any quote state changes', () => {
+    expect(restoreTrustSmoke).toContain("IF SQLERRM <> 'QUOTE_VERSION_LEGACY_UNTRUSTED' THEN");
+    expect(restoreTrustSmoke).not.toMatch(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|TRIGGER)/i);
+    expect(restoreTrustSmoke).toMatch(/to_jsonb\(q\), q\.row_version[\s\S]*FOR UPDATE/);
+    expect(restoreTrustSmoke).toMatch(/v_quote_after IS DISTINCT FROM v_quote_before/);
+    expect(restoreTrustSmoke).toMatch(/v_sections_after IS DISTINCT FROM v_sections_before/);
+    expect(restoreTrustSmoke).toMatch(/v_items_after IS DISTINCT FROM v_items_before/);
+  });
+
+  it('chooses a quote that satisfies cost and drawn-ledger restore preconditions', () => {
+    expect(restoreTrustSmoke).toMatch(/qi\.current_cost IS NULL OR qi\.current_cost <= 0/);
+    expect(restoreTrustSmoke).toMatch(/qpd\.quantity_drawn > 0/);
+    expect(restoreTrustSmoke).toContain('no restorable live quote with positive item costs, no drawn ledger');
+  });
+
+  it('also restores the marked version and proves the N+1 token', () => {
+    expect(restoreTrustSmoke).toContain('v_trusted_version_id');
+    expect(restoreTrustSmoke).toMatch(/v_restore_result->>'status', ''\) <> 'restored'/);
+    expect(restoreTrustSmoke).toContain("(v_restore_result->>'row_version')::bigint <> v_expected_row_version + 1");
+    expect(restoreTrustSmoke).toContain("RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK quote-version restore trust boundary'");
   });
 });
 
