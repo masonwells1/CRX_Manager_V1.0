@@ -275,12 +275,40 @@ export function maintenanceProducerCommandMentioned(command) {
       return !(executableNamed(commandToken, "select-string", true) || executableNamed(commandToken, "sls", true));
     };
     const maxNestedShellDepth = 4;
+    // Dynamic syntax makes a `node` invocation opaque only when it appears in
+    // THAT invocation's own command segment. Testing `dynamicSyntax` against the
+    // whole command string meant a single `$`, `*`, `?` or backtick ANYWHERE —
+    // an unrelated pipeline stage, a `$VAR` in a sibling `echo`, or the body of a
+    // file being written by the same command — denied every `node` call in the
+    // command. That removed the one escape route agents had (write a script, then
+    // run it), so ordinary work thrashed against the guard (2026-08-26).
+    //
+    // The pinned region is unchanged for anything that could actually reach the
+    // producer: dynamic syntax in node's OWN segment (`node $VAR/x.mjs`,
+    // `node scripts/$(printf ...)`) still denies, as do the inline-interpreter,
+    // loader, encoded-command and raw-name checks elsewhere in this function.
+    // Segment bounds here use GENUINE command separators only (`;` `&` `|`
+    // newline). The tokenizer also emits `{ } ( ) < >` as control tokens, but
+    // those are expansion/grouping syntax, not command boundaries — treating them
+    // as boundaries would let brace expansion split the producer name across
+    // "segments" and slip past this check
+    // (`node scripts/apply-l{i..i}ve-testdata-...`, covered by bash-safety.test.mjs).
+    // Because they stay INSIDE the segment, `hasDynamicSyntax` still sees them.
+    const isSegmentSeparator = (entry) => Boolean(entry?.control) && /^(?:[;&|]|\n)$/.test(entry.value);
+    const segmentHasDynamicSyntax = (list, index) => {
+      let start = index;
+      while (start > 0 && !isSegmentSeparator(list[start - 1])) start -= 1;
+      let end = index + 1;
+      while (end < list.length && !isSegmentSeparator(list[end])) end += 1;
+      return list.slice(start, end).some((entry) => hasDynamicSyntax(entry.value));
+    };
     function analyzeText(text, depth) {
       if (depth > maxNestedShellDepth) return true;
       return analyzeTokens(tokenize(text), depth);
     }
     function analyzeTokens(candidateTokens, depth) {
-      if (dynamicSyntax && candidateTokens.some(nodeExecutable)) return true;
+      if (dynamicSyntax && candidateTokens.some((token, index, list) =>
+        nodeExecutable(token, index, list) && segmentHasDynamicSyntax(list, index))) return true;
       for (let index = 0; index < candidateTokens.length; index += 1) {
         if (executableNamed(candidateTokens[index], "env") && invocationPosition(candidateTokens, index)) {
           for (let cursor = index + 1; cursor < candidateTokens.length && !candidateTokens[cursor].control; cursor += 1) {
