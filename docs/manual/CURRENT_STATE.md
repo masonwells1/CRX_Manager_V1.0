@@ -1,10 +1,11 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-08-26 UTC for the migration ledger and schema registry only** — re-read
-read-only on 2026-08-26 while landing the COMMENT-only candidate `20260826150000` (history row
-893, NOT applied): still **976 ledger rows**, `max(version)` `20260825142708`, newest name
-`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` — every figure unchanged
-from the 2026-08-25 reading below. Original stamp text follows — a read-only
+**Last verified: 2026-08-26 UTC for the migration ledger only** — after the COMMENT-only apply of
+`20260826150000_fix_save_job_comment_refusal_count` (history row 893, ledger version
+`20260826205935`): **977 ledger rows**, `max(version)` `20260826205935`, effective ordering
+high-water `20260826150000`. That migration changes only `save_job`'s `pg_description` text;
+the function body, schema, and all money behavior are exactly as recorded below. Figures below
+citing 976 rows describe the 2026-08-25 state. Original stamp text follows — a read-only
 re-read. **The live ledger has 976 rows**, `max(version)` `20260825142708`, and current live
 effective ordering high-water `20260820120000` (name
 `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).

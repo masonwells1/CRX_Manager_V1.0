@@ -98,7 +98,9 @@ All significant development milestones, in reverse chronological order.
 ## 2026-08-26 — save_job's function comment corrected: TWELVE refusals, not eleven
 
 New COMMENT-only migration `20260826150000_fix_save_job_comment_refusal_count.sql` (history row
-893, NOT yet applied). The live `save_job` body raises twelve distinct refusal families, but its
+893; **APPLIED LIVE later on 2026-08-26** as ledger version `20260826205935`, ledger 976 → 977
+rows, with a fresh CLEAN proof pair and Mason's explicit in-chat OK — post-apply read of
+`pg_description` confirms the TWELVE count and the `JOB_ACRES_NOT_FINITE` clause are installed). The live `save_job` body raises twelve distinct refusal families, but its
 function comment — the text operators and reviewers enumerate refusals from — says "ELEVEN" and
 omits `JOB_ACRES_NOT_FINITE`, which was added late in review. The applied migration is never
 edited, so the correction is a new file containing exactly one dollar-quoted

@@ -1,8 +1,11 @@
 # Known Issues — Consolidated
 
 
-**Last verified: 2026-08-26 UTC, read-only live re-read while landing the COMMENT-only candidate
-`20260826150000` (history row 893, NOT applied) — every figure below unchanged from 2026-08-25.**
+**Last verified: 2026-08-26 UTC (second re-read, after the COMMENT-only apply). The live ledger is
+now 977 rows, `max(version)` `20260826205935`, effective ordering high-water `20260826150000`
+(name `20260826150000_fix_save_job_comment_refusal_count`, history row 893 — comment-text only, no
+behavior change). Where prose below cites 976 rows / high-water `20260820120000`, read it as the
+pre-apply state of 2026-08-25; the save_job body itself is unchanged.**
 **Live ledger is 976 rows, `max(version)` `20260825142708`, effective ordering high-water
 `20260820120000`** (name `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
 That migration applied live on 2026-08-25 on Mason's explicit in-chat approval; because its ledger
