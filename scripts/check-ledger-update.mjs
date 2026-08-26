@@ -83,33 +83,74 @@ function toPosix(v) {
 // writing its own. A path supplied WITHOUT a status therefore cannot satisfy the
 // changelog.d rule; that direction fails closed on purpose. The older ledger files are
 // unaffected: appending to CHANGELOG.md or DECISION_LOG.md is a MODIFY by nature.
+function normalizeBody(s) {
+  return String(s ?? "").replace(/\r\n/g, "\n").trim();
+}
+
+// Returns true if this changelog.d entry genuinely records THIS commit's change, or a
+// reason string explaining why it does not. The guard is the ONLY validator of these
+// files, so "exists at the right path" is not enough (Codex P2, PR #482).
+function entryVerdict(e, removedBodies) {
+  if (!e.status.startsWith("A")) return "is not ADDED by this commit";
+  if (typeof e.content !== "string") return "has no readable staged content";
+  const body = normalizeBody(e.content);
+  if (!body) return "is empty, so it records nothing";
+  const first = body.split("\n")[0] || "";
+  const m = /^##\s+(\d{4}-\d{2}-\d{2})\b/.exec(first);
+  if (!m) return 'does not start with "## <YYYY-MM-DD> - ..."';
+  const fileDate = (e.path.split("/").pop() || "").slice(0, 10);
+  if (m[1] !== fileDate) return `heading date ${m[1]} disagrees with the filename date ${fileDate}`;
+  // A pure rename arrives as D(old) + A(new) under --no-renames. Counting the added
+  // half would let a commit satisfy the guard by MOVING someone else's record while
+  // writing none of its own. Byte-identical content is what makes that detectable.
+  if (removedBodies.has(body)) {
+    return "is byte-identical to an entry this same commit deletes — renaming an existing " +
+      "record is not writing your own";
+  }
+  return true;
+}
+
 export function ledgerCheck(stagedFiles) {
   const entries = (stagedFiles || []).map((e) => {
     if (e && typeof e === "object") {
-      return { path: toPosix(e.path), status: String(e.status ?? "").toUpperCase() };
+      return {
+        path: toPosix(e.path),
+        status: String(e.status ?? "").toUpperCase(),
+        content: e.content,
+      };
     }
-    return { path: toPosix(e), status: "" };
+    return { path: toPosix(e), status: "", content: undefined };
   });
   const files = entries.map((e) => e.path);
   const triggers = files.filter((f) => TRIGGER_RES.some((re) => re.test(f)));
   if (triggers.length === 0) return { ok: true, triggers: [] };
 
-  const hasLedger = entries.some(({ path: p, status }) => {
-    if (ENTRY_RE.test(p)) return status.startsWith("A");
-    return LEDGER_RES.some((re) => re !== ENTRY_RE && re.test(p));
-  });
+  const removedBodies = new Set(
+    entries
+      .filter((e) => ENTRY_RE.test(e.path) && e.status.startsWith("D") && typeof e.content === "string")
+      .map((e) => normalizeBody(e.content)));
+
+  const entryVerdicts = entries
+    .filter((e) => ENTRY_RE.test(e.path))
+    .map((e) => [e.path, entryVerdict(e, removedBodies)]);
+
+  const hasLedger =
+    entryVerdicts.some(([, v]) => v === true) ||
+    entries.some((e) => !ENTRY_RE.test(e.path) && LEDGER_RES.some((re) => re !== ENTRY_RE && re.test(e.path)));
   if (hasLedger) return { ok: true, triggers };
 
-  // Distinguish "you touched an entry but did not ADD one" from "no ledger at all",
-  // so the operator is not told to do something they just did.
-  const touchedEntryNotAdded = entries.some(({ path: p, status }) => ENTRY_RE.test(p) && !status.startsWith("A"));
+  // Say exactly why a staged entry did not count, so nobody is told to do the thing
+  // they just did.
+  const rejected = entryVerdicts.filter(([, v]) => v !== true);
   return {
     ok: false,
     triggers,
-    reason: touchedEntryNotAdded
-      ? "This commit changes the agent surface but the only docs/changelog.d/ entry it stages is " +
-        "MODIFIED or DELETED, not added. An entry file records ONE change: edit your own new file " +
-        "rather than someone else's existing one, so this commit leaves its own written record."
+    reason: rejected.length
+      ? "This commit changes the agent surface, and it stages docs/changelog.d/ entries, but " +
+        "none of them records THIS change:\n" +
+        rejected.map(([p, why]) => `  • ${p} ${why}`).join("\n") +
+        "\nAn entry records ONE change: add your own new dated file rather than editing, " +
+        "renaming, or emptying someone else's."
       : "This commit changes the agent surface (commands / skills / hooks / workflows / settings / " +
         "shared contract / guard scripts) but stages NO ledger update. Every such change must be " +
         "recorded in the same commit so Mason and future agents can discover it.",
@@ -137,7 +178,18 @@ if (isMain) {
         const parts = line.split("\t");
         const status = (parts[0] || "").trim();
         const p = parts[parts.length - 1];
-        return { path: p, status };
+        const entry = { path: p, status };
+        // The classifier validates entry CONTENT, so read the blob here: staged for an
+        // addition, HEAD for a deletion (a rename's deleted half is what proves the
+        // added half is only a move). Unreadable content is left undefined, which the
+        // classifier treats as "cannot verify" and therefore does not accept.
+        if (ENTRY_RE.test(p)) {
+          const ref = status.startsWith("D") ? `HEAD:${p}` : `:${p}`;
+          try {
+            entry.content = execFileSync("git", ["show", ref], { encoding: "utf8" });
+          } catch { /* leave undefined */ }
+        }
+        return entry;
       })
       .filter((e) => e.path);
   } catch (e) {

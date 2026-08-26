@@ -52,8 +52,13 @@ eq(ledgerCheck([".claude/hooks/guards.test.mjs", "src/lib/db.ts"]).ok, false, "m
 // An entry counts ONLY when git reports it as ADDED. Modifying or deleting an
 // existing entry records nothing about THIS commit — it would let a session edit
 // someone else's entry instead of writing its own (Codex P2, PR #482).
-const added = (p) => ({ path: p, status: "A" });
-const modified = (p) => ({ path: p, status: "M" });
+// Entries must now carry CONTENT: the guard validates that a fragment actually records
+// something, because with the consolidation tool split out nothing else does.
+const NL = String.fromCharCode(10);
+const bodyFor = (p) => "## " + (p.split("/").pop() || "").slice(0, 10) + " - a real entry" + NL + NL + "detail" + NL;
+const added = (p, content = bodyFor(p)) => ({ path: p, status: "A", content });
+const modified = (p) => ({ path: p, status: "M", content: bodyFor(p) });
+const deleted = (p, content = bodyFor(p)) => ({ path: p, status: "D", content });
 
 eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-thing.md")]).ok, true,
   "an ADDED dated entry satisfies the ledger requirement");
@@ -67,7 +72,7 @@ eq(ledgerCheck([".claude/settings.json", modified("docs/changelog.d/2026-08-25-t
   "MODIFYING an existing entry does NOT satisfy the guard");
 eq(ledgerCheck([".claude/settings.json", { path: "docs/changelog.d/2026-08-25-thing.md", status: "D" }]).ok, false,
   "DELETING an entry does NOT satisfy the guard");
-ok(/MODIFIED or DELETED/.test(ledgerCheck([".claude/settings.json", modified("docs/changelog.d/2026-08-25-x.md")]).reason || ""),
+ok(/is not ADDED by this commit/.test(ledgerCheck([".claude/settings.json", modified("docs/changelog.d/2026-08-25-x.md")]).reason || ""),
   "the refusal says the entry was modified rather than claiming no ledger exists");
 // A bare path carries no status, so it cannot prove an add — fails closed.
 eq(ledgerCheck([".claude/settings.json", "docs/changelog.d/2026-08-25-thing.md"]).ok, false,
@@ -92,6 +97,38 @@ eq(ledgerCheck([".claude/settings.json", modified("docs/CHANGELOG.md")]).ok, tru
   "modifying docs/CHANGELOG.md still satisfies the guard");
 eq(ledgerCheck([".claude/settings.json", "docs/manual/DECISION_LOG.md"]).ok, true,
   "a bare path still works for the non-entry ledger files");
+
+// ── content must actually record something (Codex P2, PR #482) ──────────────
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-x.md", "")]).ok, false,
+  "an EMPTY entry does not satisfy the guard");
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-x.md", "just prose" + NL)]).ok, false,
+  "a prose-first entry does not satisfy the guard");
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-x.md", "## 2026-08-24 - wrong" + NL + NL + "body" + NL)]).ok, false,
+  "an entry whose heading date disagrees with its filename does not satisfy the guard");
+eq(ledgerCheck([".claude/settings.json", { path: "docs/changelog.d/2026-08-25-x.md", status: "A" }]).ok, false,
+  "an entry whose content cannot be read fails closed");
+ok(/is empty/.test(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-x.md", "")]).reason || ""),
+  "the refusal names the empty entry rather than claiming no ledger exists");
+
+// ── a rename is not a new record (Codex P2, reproduced against the real hook) ─
+// --no-renames reports a rename as D(old) + A(new); counting the added half would let a
+// commit satisfy the guard by MOVING someone else's entry and writing none of its own.
+{
+  const shared = "## 2026-08-25 - someone else's record" + NL + NL + "their detail" + NL;
+  const renameCommit = [
+    ".claude/settings.json",
+    deleted("docs/changelog.d/2026-08-25-old.md", shared),
+    { path: "docs/changelog.d/2026-08-25-renamed.md", status: "A", content: shared },
+  ];
+  eq(ledgerCheck(renameCommit).ok, false, "a pure RENAME of an existing entry does not satisfy the guard");
+  ok(/rename/i.test(ledgerCheck(renameCommit).reason || ""),
+    "the refusal explains that renaming is not writing your own record");
+  eq(ledgerCheck([
+    ".claude/settings.json",
+    deleted("docs/changelog.d/2026-08-25-old.md", shared),
+    added("docs/changelog.d/2026-08-26-genuinely-new.md"),
+  ]).ok, true, "a genuinely new entry still counts even when an old one is deleted alongside");
+}
 
 // The entry file alone is not a trigger — it needs no ledger of its own.
 eq(ledgerCheck([added("docs/changelog.d/2026-08-25-solo.md")]).ok, true,
