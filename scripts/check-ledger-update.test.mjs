@@ -335,4 +335,37 @@ try {
   rmSync(renameRepo, { recursive: true, force: true });
 }
 
+// ── git path-quoting must not blind the fragment validator (CodeRabbit, PR #482) ──
+// With default core.quotePath, a staged non-ASCII name arrives from a line-based
+// `git diff --name-status` as the quoted-octal literal "docs/changelog.d/\303\251.md" —
+// quotes included — which no longer starts with docs/changelog.d/, so the
+// malformed-fragment refusal never saw it and a source-only commit carried junk into
+// the folder (fail-open). The CLI reads both diff passes NUL-delimited (-z), where
+// paths are never quoted, so the validator always sees the real name.
+const quoteRepo = mkdtempSync(join(tmpdir(), "crx-ledger-quotepath-"));
+try {
+  const fixtureEnv = scratchHookEnvironment(quoteRepo);
+  const git = (...args) =>
+    execFileSync("git", args, { cwd: quoteRepo, stdio: "ignore", env: fixtureEnv });
+  git("init", "--quiet");
+  git("config", "user.email", "ledger-test@example.invalid");
+  git("config", "user.name", "Ledger Test");
+  mkdirSync(join(quoteRepo, "docs", "changelog.d"), { recursive: true });
+  mkdirSync(join(quoteRepo, "src"), { recursive: true });
+  writeFileSync(join(quoteRepo, "src", "app.ts"), "export const x = 1;\n");
+  const accented = String.fromCharCode(0xe9); // é — becomes \303\251 in quoted line output
+  writeFileSync(join(quoteRepo, "docs", "changelog.d", accented + ".md"), "junk\n");
+  git("add", "-A");
+  const run = spawnSync(process.execPath, [fileURLToPath(new URL("./check-ledger-update.mjs", import.meta.url))], {
+    cwd: quoteRepo,
+    env: fixtureEnv,
+    encoding: "utf8",
+  });
+  eq(run.status, 1, "a non-ASCII malformed fragment is refused even under git path quoting");
+  ok(`${run.stdout}${run.stderr}`.includes(accented + ".md"),
+    "the refusal names the file by its real (unquoted) name");
+} finally {
+  rmSync(quoteRepo, { recursive: true, force: true });
+}
+
 console.log(`check-ledger-update: ${pass} assertions passed`);

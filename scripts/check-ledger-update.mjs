@@ -263,36 +263,47 @@ if (isMain) {
     // rename an entry and edit one character and the content test passes. Git still
     // reports it as R<score>, so ask git directly rather than inferring from content
     // (Codex P2, PR #482).
+    // Both passes read NUL-delimited (-z). Line-based --name-status output quotes any
+    // non-ASCII or control-character path under default core.quotePath, so a staged
+    // docs/changelog.d/é.md arrived as the literal "docs/changelog.d/\303\251.md" —
+    // quotes and octal escapes included — which no longer starts with the folder
+    // prefix, and the malformed-fragment refusal never saw it (CodeRabbit, PR #482).
+    // NUL-delimited records are never quoted, so the validator always sees real names.
+    const NUL = String.fromCharCode(0);
     const renameSources = new Map();
     try {
-      const out = execFileSync("git", ["diff", "--cached", "-M", "--name-status", "--diff-filter=R"], { encoding: "utf8" });
-      for (const line of out.split(NEWLINE)) {
-        const parts = line.split("	");
-        if (parts.length >= 3 && parts[0].startsWith("R")) renameSources.set(parts[2], parts[1]);
+      // -z record shape for a rename: R<score> NUL <old> NUL <new> NUL — triplets.
+      const tok = execFileSync("git", ["diff", "--cached", "-M", "--name-status", "--diff-filter=R", "-z"], { encoding: "utf8" }).split(NUL);
+      for (let i = 0; i + 2 < tok.length; i += 3) {
+        if (tok[i].trim().startsWith("R")) renameSources.set(tok[i + 2], tok[i + 1]);
       }
     } catch { /* rename detection unavailable — fall back to the content comparison */ }
 
-    staged = execFileSync("git", ["diff", "--cached", "--no-renames", "--name-status", "--diff-filter=ACMRTD"], { encoding: "utf8" })
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map((line) => {
-        const parts = line.split("\t");
-        const status = (parts[0] || "").trim();
-        const p = parts[parts.length - 1];
-        const entry = { path: p, status, renamedFrom: renameSources.get(p) };
-        // The classifier validates entry CONTENT, so read the blob here: staged for an
-        // addition, HEAD for a deletion (a rename's deleted half is what proves the
-        // added half is only a move). Unreadable content is left undefined, which the
-        // classifier treats as "cannot verify" and therefore does not accept.
-        if (ENTRY_RE.test(p)) {
-          const ref = status.startsWith("D") ? `HEAD:${p}` : `:${p}`;
-          try {
-            entry.content = execFileSync("git", ["show", ref], { encoding: "utf8" });
-          } catch { /* leave undefined */ }
-        }
-        return entry;
-      })
-      .filter((e) => e.path);
+    staged = [];
+    const tok = execFileSync("git", ["diff", "--cached", "--no-renames", "--name-status", "--diff-filter=ACMRTD", "-z"], { encoding: "utf8" }).split(NUL);
+    for (let i = 0; i + 1 < tok.length; ) {
+      const status = (tok[i] || "").trim();
+      // -z record shape: <status> NUL <path> NUL — pairs, except R/C which carry
+      // source AND destination. --no-renames should prevent R records entirely;
+      // consuming both paths defensively (keeping the DESTINATION) preserves the
+      // old last-field behavior in case --no-renames is ever dropped.
+      const twoPath = /^[RC]/.test(status);
+      const p = twoPath ? tok[i + 2] : tok[i + 1];
+      i += twoPath ? 3 : 2;
+      if (!status || !p) continue;
+      const entry = { path: p, status, renamedFrom: renameSources.get(p) };
+      // The classifier validates entry CONTENT, so read the blob here: staged for an
+      // addition, HEAD for a deletion (a rename's deleted half is what proves the
+      // added half is only a move). Unreadable content is left undefined, which the
+      // classifier treats as "cannot verify" and therefore does not accept.
+      if (ENTRY_RE.test(p)) {
+        const ref = status.startsWith("D") ? `HEAD:${p}` : `:${p}`;
+        try {
+          entry.content = execFileSync("git", ["show", ref], { encoding: "utf8" });
+        } catch { /* leave undefined */ }
+      }
+      staged.push(entry);
+    }
   } catch (e) {
     // Can't read the git index at all — warn LOUDLY but don't brick every
     // commit on a git plumbing error (same loud-fail-open pattern as the
