@@ -249,6 +249,22 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(vendorBillDetail).toContain('const recovered = paymentIntent.unresolvedIntent');
     expect(vendorBillDetail).not.toContain("useIdempotencyKey('record_vendor_payment'");
 
+    const vendorRouteReset = sliceBetween(
+      vendorBillDetail,
+      '// Route changes must retire every visible bill-specific form',
+      'const today = localToday();',
+    );
+    expect(vendorRouteReset).toContain('setPayModalOpen(false)');
+    expect(vendorRouteReset).toContain('setPayModalBillId(null)');
+    expect(vendorRouteReset).toContain('setVoidModalOpen(false)');
+    expect(vendorRouteReset).toContain('setVoidPaymentTarget(null)');
+    expect(vendorRouteReset).toContain('setEditModalOpen(false)');
+    expect(vendorRouteReset).not.toContain('paymentIntent.resolveIntent()');
+    expect(vendorBillDetail).toContain('recovered.args.p_vendor_bill_id !== id');
+    expect(vendorBillDetail).toContain('setPayModalBillId(recovered.args.p_vendor_bill_id)');
+    expect(vendorBillDetail).toContain('if (!id || payModalBillId !== id) {');
+    expect(vendorBillDetail).toContain('if (activeBillIdRef.current !== requestedBillId) return;');
+
     expect(purchaseOrderDetail).toContain('const recovered = receiveIntent.unresolvedIntent');
     expect(purchaseOrderDetail).not.toContain("useIdempotencyKey('receive_po_items'");
   });

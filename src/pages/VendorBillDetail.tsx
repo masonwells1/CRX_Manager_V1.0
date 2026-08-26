@@ -4,7 +4,7 @@
  * Shows bill info, linked PO, payment history, and "Record Payment" modal.
  * Uses record_vendor_payment() and void_vendor_bill() RPCs. Admin-only.
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -44,6 +44,8 @@ export default function VendorBillDetail() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const activeBillIdRef = useRef(id);
+  activeBillIdRef.current = id;
   const paymentIntent = useUncertainMutationIntent<{
     amountCents: number;
     args: {
@@ -69,6 +71,7 @@ export default function VendorBillDetail() {
 
   // Payment modal
   const [payModalOpen, setPayModalOpen] = useState(false);
+  const [payModalBillId, setPayModalBillId] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState('');
   const [payMethod, setPayMethod] = useState('check');
   const [payRef, setPayRef] = useState('');
@@ -76,19 +79,9 @@ export default function VendorBillDetail() {
   const [payNotes, setPayNotes] = useState('');
   const [paying, setPaying] = useState(false);
 
-  useEffect(() => {
-    const recovered = paymentIntent.unresolvedIntent;
-    if (!recovered) return;
-    setPayAmount(centsToDollarInput(recovered.amountCents));
-    setPayDate(recovered.args.p_payment_date);
-    setPayMethod(recovered.args.p_payment_method || 'check');
-    setPayRef(recovered.args.p_reference_number || '');
-    setPayNotes(recovered.args.p_notes || '');
-    setPayModalOpen(true);
-  }, [paymentIntent.unresolvedIntent]);
-
   // Void bill
   const [voidModalOpen, setVoidModalOpen] = useState(false);
+  const [voidModalBillId, setVoidModalBillId] = useState<string | null>(null);
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
 
@@ -101,6 +94,7 @@ export default function VendorBillDetail() {
   // Edit bill (PR-14, 2026-05-10) — only for unpaid bills with no active payments.
   const editIdem = useIdempotencyKey('update_vendor_bill', profile?.id || '');
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editModalBillId, setEditModalBillId] = useState<string | null>(null);
   const [editSubtotal, setEditSubtotal] = useState('');
   const [editAdjustment, setEditAdjustment] = useState('');
   const [editBillDate, setEditBillDate] = useState('');
@@ -108,10 +102,50 @@ export default function VendorBillDetail() {
   const [editNotes, setEditNotes] = useState('');
   const [editing, setEditing] = useState(false);
 
+  // Route changes must retire every visible bill-specific form while preserving
+  // any unresolved durable payment record under the old bill's storage scope.
+  useEffect(() => {
+    setBill(null);
+    setPayments([]);
+    setLoading(true);
+    setPayModalOpen(false);
+    setPayModalBillId(null);
+    setPayAmount('');
+    setPayMethod('check');
+    setPayRef('');
+    setPayDate(localToday());
+    setPayNotes('');
+    setVoidModalOpen(false);
+    setVoidModalBillId(null);
+    setVoidReason('');
+    setVoidPaymentTarget(null);
+    setVoidPaymentReason('');
+    setEditModalOpen(false);
+    setEditModalBillId(null);
+    setEditSubtotal('');
+    setEditAdjustment('');
+    setEditBillDate('');
+    setEditDueDate('');
+    setEditNotes('');
+  }, [id]);
+
+  useEffect(() => {
+    const recovered = paymentIntent.unresolvedIntent;
+    if (!recovered || recovered.args.p_vendor_bill_id !== id) return;
+    setPayAmount(centsToDollarInput(recovered.amountCents));
+    setPayDate(recovered.args.p_payment_date);
+    setPayMethod(recovered.args.p_payment_method || 'check');
+    setPayRef(recovered.args.p_reference_number || '');
+    setPayNotes(recovered.args.p_notes || '');
+    setPayModalBillId(recovered.args.p_vendor_bill_id);
+    setPayModalOpen(true);
+  }, [id, paymentIntent.unresolvedIntent]);
+
   const today = localToday();
 
   const fetchBill = useCallback(async () => {
     if (!id) return;
+    const requestedBillId = id;
     setLoading(true);
 
     const { data, error } = await supabase
@@ -120,6 +154,7 @@ export default function VendorBillDetail() {
       .eq('id', id)
       .single();
 
+    if (activeBillIdRef.current !== requestedBillId) return;
     if (error || !data) {
       toast('error', 'Bill not found');
       navigate('/accounts-payable/bills');
@@ -160,6 +195,7 @@ export default function VendorBillDetail() {
       creator_name: p.created_by ? creatorMap[p.created_by] || 'System' : 'System',
     })) as unknown as (VendorPayment & { creator_name: string })[];
 
+    if (activeBillIdRef.current !== requestedBillId) return;
     setPayments(mappedPayments);
     setLoading(false);
   }, [id, toast, navigate]);
@@ -169,7 +205,12 @@ export default function VendorBillDetail() {
   }, [fetchBill]);
 
   const handleRecordPayment = async () => {
-    if (!id) return;
+    if (!id || payModalBillId !== id) {
+      setPayModalOpen(false);
+      setPayModalBillId(null);
+      toast('error', 'The selected vendor bill changed. Reopen Record Payment on the current bill.');
+      return;
+    }
     const amountCents = parseDollarsToCents(payAmount);
     if (amountCents <= 0) { toast('error', 'Enter a valid payment amount'); return; }
 
@@ -198,6 +239,7 @@ export default function VendorBillDetail() {
 
       toast('success', `Payment of ${fmt(request.amountCents)} recorded`);
       setPayModalOpen(false);
+      setPayModalBillId(null);
       setPayAmount('');
       setPayRef('');
       setPayNotes('');
@@ -208,6 +250,7 @@ export default function VendorBillDetail() {
         paymentIntent.resolveIntent();
         toast('warning', 'The earlier payment already completed. The bill has been refreshed instead of recording a duplicate.');
         setPayModalOpen(false);
+        setPayModalBillId(null);
         setPayAmount('');
         setPayRef('');
         setPayNotes('');
@@ -225,17 +268,23 @@ export default function VendorBillDetail() {
   };
 
   const openEditModal = () => {
-    if (!bill) return;
+    if (!bill || bill.id !== id) return;
     setEditSubtotal((bill.subtotal_cents / 100).toFixed(2));
     setEditAdjustment(((bill.adjustment_cents || 0) / 100).toFixed(2));
     setEditBillDate(bill.bill_date);
     setEditDueDate(bill.due_date);
     setEditNotes(bill.notes || '');
+    setEditModalBillId(bill.id);
     setEditModalOpen(true);
   };
 
   const handleEditBill = async () => {
-    if (!bill) return;
+    if (!bill || bill.id !== id || editModalBillId !== id) {
+      setEditModalOpen(false);
+      setEditModalBillId(null);
+      toast('error', 'The selected vendor bill changed. Reopen Edit Bill on the current bill.');
+      return;
+    }
     const subtotalCents = parseDollarsToCents(editSubtotal);
     if (subtotalCents <= 0) {
       toast('error', 'Subtotal must be positive');
@@ -268,6 +317,7 @@ export default function VendorBillDetail() {
       editIdem.resetKey();
       toast('success', 'Bill updated');
       setEditModalOpen(false);
+      setEditModalBillId(null);
       fetchBill();
     } catch (err) {
       toast('error', sanitizeError(err));
@@ -276,7 +326,12 @@ export default function VendorBillDetail() {
   };
 
   const handleVoidPayment = async () => {
-    if (!voidPaymentTarget) return;
+    if (!voidPaymentTarget || voidPaymentTarget.vendor_bill_id !== id) {
+      setVoidPaymentTarget(null);
+      setVoidPaymentReason('');
+      toast('error', 'The selected vendor bill changed. Reopen the payment action on the current bill.');
+      return;
+    }
     if (!voidPaymentReason.trim()) {
       toast('error', 'Please provide a reason for voiding this payment');
       return;
@@ -311,7 +366,12 @@ export default function VendorBillDetail() {
   };
 
   const handleVoid = async () => {
-    if (!id) return;
+    if (!id || voidModalBillId !== id) {
+      setVoidModalOpen(false);
+      setVoidModalBillId(null);
+      toast('error', 'The selected vendor bill changed. Reopen Void Bill on the current bill.');
+      return;
+    }
     const voidBillScope = JSON.stringify([id, voidReason.trim() || null]);
     setVoiding(true);
     try {
@@ -326,6 +386,7 @@ export default function VendorBillDetail() {
 
       toast('success', 'Bill voided');
       setVoidModalOpen(false);
+      setVoidModalBillId(null);
       fetchBill();
     } catch (err) {
       toast('error', sanitizeError(err));
@@ -442,6 +503,7 @@ export default function VendorBillDetail() {
                   if (!paymentIntent.isIntentLocked) {
                     setPayAmount(centsToDollarInput(bill.balance_cents));
                   }
+                  setPayModalBillId(bill.id);
                   setPayModalOpen(true);
                 }}
               >
@@ -450,7 +512,10 @@ export default function VendorBillDetail() {
               <Button
                 variant="ghost"
                 icon={<XCircle className="w-4 h-4" />}
-                onClick={() => setVoidModalOpen(true)}
+                onClick={() => {
+                  setVoidModalBillId(bill.id);
+                  setVoidModalOpen(true);
+                }}
                 className="text-red-600 hover:text-red-700"
               >
                 Void
@@ -569,7 +634,10 @@ export default function VendorBillDetail() {
       <Modal
         open={payModalOpen}
         onClose={() => {
-          if (!paymentIntent.isIntentLocked) setPayModalOpen(false);
+          if (!paymentIntent.isIntentLocked) {
+            setPayModalOpen(false);
+            setPayModalBillId(null);
+          }
         }}
         title="Record Payment"
       >
@@ -634,7 +702,16 @@ export default function VendorBillDetail() {
           />
 
           <div className="flex justify-end gap-3 pt-2">
-            <Button variant="ghost" onClick={() => setPayModalOpen(false)} disabled={paymentIntent.isIntentLocked}>Cancel</Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setPayModalOpen(false);
+                setPayModalBillId(null);
+              }}
+              disabled={paymentIntent.isIntentLocked}
+            >
+              Cancel
+            </Button>
             <Button onClick={handleRecordPayment} loading={paying}>
               {paymentIntent.isIntentLocked ? 'Retry Exact Payment' : 'Record Payment'}
             </Button>
@@ -643,7 +720,14 @@ export default function VendorBillDetail() {
       </Modal>
 
       {/* Edit Bill Modal (PR-14, 2026-05-10) */}
-      <Modal open={editModalOpen} onClose={() => setEditModalOpen(false)} title="Edit Vendor Bill">
+      <Modal
+        open={editModalOpen}
+        onClose={() => {
+          setEditModalOpen(false);
+          setEditModalBillId(null);
+        }}
+        title="Edit Vendor Bill"
+      >
         <div className="space-y-4">
           <p className="text-sm text-secondary">
             Editing <strong>#{bill.bill_number}</strong>. Only available for unpaid bills with no active payments.
@@ -681,7 +765,15 @@ export default function VendorBillDetail() {
             placeholder="Optional"
           />
           <div className="flex justify-end gap-3 pt-2">
-            <Button variant="ghost" onClick={() => setEditModalOpen(false)}>Cancel</Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setEditModalOpen(false);
+                setEditModalBillId(null);
+              }}
+            >
+              Cancel
+            </Button>
             <Button onClick={handleEditBill} loading={editing}>Save Changes</Button>
           </div>
         </div>
@@ -729,7 +821,14 @@ export default function VendorBillDetail() {
       </Modal>
 
       {/* Void Bill Modal */}
-      <Modal open={voidModalOpen} onClose={() => setVoidModalOpen(false)} title="Void Bill">
+      <Modal
+        open={voidModalOpen}
+        onClose={() => {
+          setVoidModalOpen(false);
+          setVoidModalBillId(null);
+        }}
+        title="Void Bill"
+      >
         <div className="space-y-4">
           <p className="text-sm text-secondary">
             Are you sure you want to void bill <strong>#{bill.bill_number}</strong>?
@@ -742,7 +841,15 @@ export default function VendorBillDetail() {
             placeholder="Why is this bill being voided?"
           />
           <div className="flex justify-end gap-3 pt-2">
-            <Button variant="ghost" onClick={() => setVoidModalOpen(false)}>Cancel</Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setVoidModalOpen(false);
+                setVoidModalBillId(null);
+              }}
+            >
+              Cancel
+            </Button>
             <Button onClick={handleVoid} loading={voiding} className="bg-red-600 hover:bg-red-700 text-white">
               Void Bill
             </Button>

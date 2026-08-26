@@ -42,6 +42,7 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Other AP/receiving entry points no longer mint a fresh key merely because a form reopens, unmounts, reloads, or changes after an uncertain response. The frozen payload and matching key are persisted atomically in one versioned, actor/operation/surface/scope-isolated session record; storage failure refuses the mutation before the RPC call.
 - The create-bill and both receiving entry points now freeze the exact first payload after an uncertain response, disable editing/closing, expose an exact-retry action, and reconcile a committed result before allowing a new mutation.
 - Inventory receiving preserves and restores the frozen request if its modal is reopened or the page reloads. PO-detail receiving scopes its durable record to the route PO and restores only that PO's payload when React Router reuses the component, preventing a prior PO payload from being paired with the new PO's PDF or notifications.
+- Vendor Bill Detail closes and clears every visible bill-specific modal when React Router changes the bill ID, without deleting the prior bill's durable unresolved payment. Payment, edit, void-payment, and void-bill actions are bound to the bill that opened them and refuse a route mismatch; stale bill reads are generation-checked so an old request cannot repaint a new route.
 - Vendor-payment and vendor-bill void requests obtain keys by exact target plus normalized reason, so a failed request cannot lend its receipt to a different payment, bill, or reason.
 - Every locked form now explains that the previous response was uncertain and instructs the operator to retry the unchanged request; the New Vendor Bill icon-only back control also has an accessible name.
 - Vendor-payment input formatting now converts integer cents to a decimal string with integer arithmetic, avoiding a binary floating-point round trip.
@@ -57,8 +58,8 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - `npm run typecheck` — pass.
 - `npm run lint` — pass.
 - `npm run build` — pass.
-- `npm run test` after the durable retry follow-up and current-main merge — 342 files passed; 4,806 tests passed; 123 skipped.
-- Durable retry focused contracts — 3 files, 48/48 passed; hook-only reload/unmount/storage-failure proof 8/8 passed.
+- `npm run test` after the durable retry and vendor-bill route follow-ups on current main — 342 files passed; 4,807 tests passed; 123 skipped.
+- Durable retry focused contracts after the vendor-bill route correction — 3 files, 50/50 passed; hook-only reload/unmount/storage-failure/scope-switch proof 9/9 passed.
 - Latest focused remediation/concurrency/money tests after the follow-up — 68/68 passed.
 - Latest PR-review follow-up guard — 4 files, 27/27 passed; the focused Section 9 contract alone passes 7/7.
 - Focused Section 9 guard after the canonical actor-refusal correction — 6/6 passed.
@@ -79,6 +80,7 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Rebased exact branch review at `518f777b` returned CLEAN, but current main advanced during the next test-only review and correctly invalidated that proof. The published branch now contains current main through a normal merge; a new exact-head proof remains pending.
 - Exact branch review at `a2ba3bf9` returned CLEAN, and all required PR checks passed on that SHA. The CodeRabbit status was green, but its actual latest-review body contained two real Major reload/unmount findings. Those are now fixed by the atomic durable payload/key record and covered by executable tests; the changed final head still requires a fresh exact-SHA review and latest-commit PR gates.
 - The first Sol-high review after the durable-retry fix returned CLEAN on `e06b708b`, but `origin/main` advanced to `090bce62` during the run. The wrapper correctly refused to mint a proof for the moved base; the new main commit is now merged and a stable-head rerun remains required.
+- The stable-head Sol-high rerun then found one HIGH: route reuse could pair vendor bill A's visible payment fields with bill B's fresh key. The route reset, modal-to-bill binding, stale-fetch guard, and A-to-B-to-A scope regression described above close it locally; a fresh exact-head review remains required after commit.
 - Both migrations' final security and drift reviewers are CLEAN with SHA-bound proof files. The first intent/dashboard drift run timed out while scanning GitHub under a Windows read-only-shell limitation; the warm-cache retry completed CLEAN without changing the proof harness.
 - Replacement PR #500 is open and obsolete PR #491 is closed without rewriting published history. All earlier required checks passed on `a2ba3bf9`, but the actual CodeRabbit review text exposed the two durable-retry findings described above. They are corrected locally and the full/focused proofs pass; a fresh exact-head review and latest-commit CI/CodeRabbit pass remain pending after the documentation commit.
 

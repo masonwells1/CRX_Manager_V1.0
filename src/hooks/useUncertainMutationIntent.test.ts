@@ -133,4 +133,27 @@ describe('useUncertainMutationIntent', () => {
     expect(result.current.isIntentLocked).toBe(false);
     setItem.mockRestore();
   });
+
+  it('switches route scope without deleting the unresolved record owned by the prior route', () => {
+    const { result, rerender } = renderHook(
+      ({ scope }: { scope: string }) => useUncertainMutationIntent<{ billId: string }>({
+        operation: 'record_vendor_payment',
+        userId: 'admin-4',
+        surface: 'vendor-bill-detail',
+        scope,
+      }),
+      { initialProps: { scope: 'bill-a' } },
+    );
+
+    act(() => result.current.beginIntent({ billId: 'bill-a' }));
+    const billAKey = result.current.getIdempotencyKey();
+
+    rerender({ scope: 'bill-b' });
+    expect(result.current.unresolvedIntent).toBeNull();
+    expect(() => result.current.getIdempotencyKey()).toThrow('DURABLE_MUTATION_INTENT_NOT_STARTED');
+
+    rerender({ scope: 'bill-a' });
+    expect(result.current.unresolvedIntent).toEqual({ billId: 'bill-a' });
+    expect(result.current.getIdempotencyKey()).toBe(billAKey);
+  });
 });

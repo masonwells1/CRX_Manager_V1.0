@@ -202,6 +202,16 @@ record/route scope. Each affected form restores the exact locked fields and reop
 storage failure stops before the RPC can run. The focused Section 9 contracts pass 48/48, the hook's
 reload/unmount and fail-closed tests pass 8/8, and the full suite passes 4,806 with 123 skipped.
 
+The next exact-head Sol review caught a route-reuse financial hazard in the durable fix itself:
+navigating from vendor bill A to bill B could leave A's payment modal fields visible after the hook
+correctly switched to B's empty storage scope, allowing those stale values to be submitted as a new
+payment on B. Vendor Bill Detail now clears every visible bill-specific modal and field on route
+changes without deleting A's durable retry record, binds payment/edit/void actions to the bill that
+opened them, refuses any route mismatch, and ignores stale bill reads that finish after navigation.
+The scope-switch test proves A's unresolved payload/key disappears on B and restores unchanged when
+returning to A; the focused durable/Section 9 contracts pass 50/50 after the correction.
+The full suite then passes 4,807 with 123 skipped, and the production build remains green.
+
 ## 2026-08-26 — Pre-push containment skips top-level ignored tool bulk
 
 The private-artifact pre-push guard now excludes descendants of its existing explicit top-level
