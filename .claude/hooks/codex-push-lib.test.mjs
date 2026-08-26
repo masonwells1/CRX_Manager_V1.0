@@ -335,6 +335,46 @@ assert.deepEqual(riskyFiles(["scripts/remove-applied-ledger-entry.mjs"]), ["scri
 assert.equal(contentIsRisky("+ const total_cents = 100"), true);
 assert.equal(contentIsRisky("+ const title = 'ordinary'"), false);
 
+// 2026-08-25: the content classifier reads only the lines a change ADDS or
+// REMOVES. It used to test the whole diff string, so the unchanged CONTEXT lines
+// git prints around a hunk counted too — a test-and-docs-only PR was classified
+// money-risky twice because pre-existing prose near the edit mentioned
+// `total_impact_cents` and `apply_prepay_to_invoice`, forcing two Codex proofs it
+// did not need. Do NOT re-widen this to the full diff text.
+assert.equal(contentIsRisky("-  const total_cents = 1;"), true, "removing money code is still risky");
+assert.equal(
+  contentIsRisky(
+    [
+      "diff --git a/docs/manual/KNOWN_ISSUES.md b/docs/manual/KNOWN_ISSUES.md",
+      "--- a/docs/manual/KNOWN_ISSUES.md",
+      "+++ b/docs/manual/KNOWN_ISSUES.md",
+      "@@ -10,6 +10,7 @@",
+      " - financial_audit_log.total_impact_cents is backfilled",
+      " - apply_prepay_to_invoice remains parked",
+      "+ - ExcelJS cold load can exceed the 5s default",
+      " - unrelated trailing prose",
+    ].join("\n"),
+  ),
+  false,
+  "money words on CONTEXT lines alone do not make a diff risky",
+);
+assert.equal(
+  contentIsRisky(
+    [
+      "--- a/src/lib/x.ts",
+      "+++ b/src/lib/x.ts",
+      "@@ -1,3 +1,4 @@",
+      " const a = 1;",
+      "+const balance_cents = 2;",
+    ].join("\n"),
+  ),
+  true,
+  "money words on an ADDED line inside a real hunk still flag",
+);
+// Fail CLOSED on an unexpected input shape: text with no +/- lines at all is not
+// a unified diff, so scan the whole thing rather than silently returning false.
+assert.equal(contentIsRisky("const total_cents = 1;"), true, "raw non-diff text falls back to a full scan");
+
 // 2026-07-29: the risky-file gate reasons about THIS app's migrations, RLS and
 // money code, so it only applies to THIS repo. It used to run against any repo
 // the session pushed to, and blocked a backup snapshot because a markdown note

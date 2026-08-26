@@ -142,10 +142,44 @@ const UNIT_CONVERSIONS = [
   { id: 'uc-dryoz', unit: 'Dry oz', factor_oz: 1, unit_type: 'dry' },
 ];
 
+/**
+ * The ACTIVE-list products query answers immediately, so the grid and the hazard banner render
+ * at once, while the BY-ID query — the one whose effect flips `jobLabelsLoaded` — is held open
+ * for `ms`. That is the exact shape of the real race, made deterministic ON PURPOSE.
+ *
+ * Without this, the window between "banner is on screen" and "save gate is open" is only a few
+ * microseconds wide: it closes before the test can click, so the retry in clickSave() is never
+ * exercised locally and a reverted fix looks green — until CI load widens the window and the
+ * suite fails intermittently instead. Holding the by-id load open forces every save-clicking
+ * test through the fail-closed branch first, so the guard's real behaviour is what gets proven.
+ *
+ * Verified 2026-08-25: with this harness and a single un-retried click, 5 tests fail with the
+ * production symptom (`expected false to be true`, toast "Checking the label-rate policy — try
+ * Save again in a moment."); with clickSave(), all 14 pass.
+ */
+function buildLateByIdProductsChain(rows: unknown[], ms: number): Record<string, unknown> {
+  let byId = false;
+  const self: Record<string, unknown> = {};
+  const method = (..._args: unknown[]) => self;
+  for (const m of ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq',
+    'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is', 'contains',
+    'containedBy', 'range', 'filter', 'not', 'or', 'and', 'match',
+    'order', 'limit', 'offset', 'single', 'maybeSingle', 'csv',
+    'rollback', 'returns', 'textSearch', 'overlaps', 'abortSignal']) self[m] = method;
+  self.in = (col: unknown, _vals: unknown) => { if (col === 'id') byId = true; return self; };
+  const settle = () => (byId
+    ? new Promise((res) => setTimeout(res, ms)).then(() => ({ data: rows, error: null }))
+    : Promise.resolve({ data: rows, error: null }));
+  self.then = (onF: unknown, onR: unknown) => settle().then(onF as never, onR as never);
+  self.catch = (onR: unknown) => settle().catch(onR as never);
+  self.finally = (onF: unknown) => settle().finally(onF as never);
+  return self;
+}
+
 function mountWith(chem: Record<string, unknown>) {
   mockFrom.mockImplementation((table: string) => {
     if (table === 'jobs') return buildChain({ data: makeJob(chem), error: null });
-    if (table === 'products') return buildChain({ data: [DRY_PRODUCT], error: null });
+    if (table === 'products') return buildLateByIdProductsChain([DRY_PRODUCT], 800);
     if (table === 'unit_conversions') return buildChain({ data: UNIT_CONVERSIONS, error: null });
     return buildChain({ data: [], error: null });
   });
@@ -200,6 +234,30 @@ function mountWithInactiveProduct(chem: Record<string, unknown>) {
   );
 }
 
+/**
+ * Click Save, retrying while the page is still fail-closed on its label-rate lookups.
+ *
+ * handleSave's FIRST branch returns early with "Checking the label-rate policy — try Save
+ * again in a moment." whenever `guardrailModeLoaded`/`jobLabelsLoaded` have not resolved yet.
+ * Those are SEPARATE queries from the job/products fetch that renders the hazard banner, so
+ * awaiting the banner does NOT imply the save gate is open. A single click landing in that
+ * window emits a non-matching toast and returns — and nothing re-fires the save, so a
+ * `waitFor` on the expected toast just spins until it times out. That is the intermittent CI
+ * failure (`expected false to be true` from the toast assertion) on a correct, unchanged page:
+ * a race in the test, not a defect in the guard. Longer timeouts cannot fix it; only a retry can.
+ *
+ * Retrying is exactly what the app instructs the operator to do, and it cannot double-save:
+ * while the gate is closed the save never proceeds, and once it is open the loop stops.
+ */
+function clickSave(saveButton: HTMLElement) {
+  return waitFor(() => {
+    const before = mockToast.mock.calls.length;
+    fireEvent.click(saveButton);
+    const fresh = mockToast.mock.calls.slice(before).map((c) => String(c[1]));
+    expect(fresh.some((m) => /Checking the label-rate policy/i.test(m))).toBe(false);
+  }, { timeout: 15000 });
+}
+
 describe('JobDetail — billing-hazard guard is wired, not just implemented', () => {
   beforeEach(() => {
     mockToast.mockClear();
@@ -223,7 +281,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
 
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
     const save = saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement;
-    fireEvent.click(save);
+    await clickSave(save);
 
     // Wait for the MATCHING toast, not merely the first toast of any kind — under CI
     // load an unrelated toast can land first, and asserting on a snapshot taken at that
@@ -253,7 +311,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     expect(bannerText).toMatch(/does not change the amount/i);
 
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
-    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     // Wait for the MATCHING toast, not the first toast of any kind (CI-interleaving race).
     const hazardToast = await waitFor(() => {
       const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
@@ -290,7 +348,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
 
     // The save is still refused — by the blank-cents gate now — and save_job never runs.
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
-    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/cannot be saved/i)));
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
   }, 30000);
@@ -332,7 +390,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     });
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
     const save = saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement;
-    fireEvent.click(save);
+    await clickSave(save);
 
     await waitFor(
       () => expect(mockRpc.mock.calls.some((c) => c[0] === 'save_job')).toBe(true),
@@ -433,7 +491,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
     // Pick the JOB Save explicitly. Clicking "Save as Recipe" would also leave save_job
     // uncalled, so an index-based click could pass without proving anything.
-    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     await waitFor(() => {
       expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
     }, { timeout: 15000 });
@@ -480,7 +538,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     expect(await screen.findByText(/whole number of cents/i, {}, { timeout: 15000 })).toBeTruthy();
 
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
-    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     await waitFor(() => {
       expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
     }, { timeout: 15000 });
@@ -530,7 +588,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     expect(await screen.findByText(/blank, negative, or not a whole number of cents/i, {}, { timeout: 15000 })).toBeTruthy();
 
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
-    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     await waitFor(() => {
       expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
     }, { timeout: 15000 });
@@ -546,7 +604,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     });
     expect(await screen.findByText(/cannot be saved/i, {}, { timeout: 15000 })).toBeTruthy();
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
-    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     await waitFor(() => expect(mockToast).toHaveBeenCalled());
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
   }, 30000);
@@ -568,7 +626,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     fireEvent.change(priceInput, { target: { value: '' } });
 
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
-    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     // Wait for the MATCHING toast, not the first toast of any kind (CI-interleaving race).
     await waitFor(() => {
       const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));

@@ -58,14 +58,20 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // every OTHER migration path was already blocked here (P1), so the guard had to
   // learn the new spelling. The transform anchors below are untouched by that
   // edit; only the pinned blobs move.
+  // pushLib re-pinned 2026-08-25: contentIsRisky() now classifies only the lines a
+  // diff ADDS or REMOVES instead of the whole diff text, so unchanged CONTEXT lines
+  // near an edit stop forcing money/security proofs on clean diffs. The risky-path
+  // and producer anchors this transform verifies are untouched; only the blobs move.
   codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
-  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
+  pushLib: "f8a86565b44bbd961d5ae8783ae6776df1afefb4",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   // Re-pinned 2026-08-24 (PR #460) alongside the input blob above; taken from the
   // producer test's reported candidate, not hand-computed.
+  // pushLib re-pinned 2026-08-25 alongside the input blob above; taken from the
+  // producer test's reported candidate, not hand-computed.
   codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
-  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
+  pushLib: "f8a86565b44bbd961d5ae8783ae6776df1afefb4",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

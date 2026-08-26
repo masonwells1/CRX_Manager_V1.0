@@ -1525,15 +1525,37 @@ export function gitUrlRewriteSettings(configOutput) {
 // A push can also be risky by CONTENT even when no file's PATH matches the
 // patterns above — e.g. a helper file outside the usual risky paths that still
 // touches cents-math or writes financial_audit_log / prepay / payment-allocation
-// logic. Checked against the full diff TEXT (not just file names).
+// logic. Checked against the diff TEXT (not just file names), but only against
+// the lines this change actually ADDS or REMOVES — see contentIsRisky below.
 // NOTE: `_cents` is a SUFFIX on identifiers like total_cents/balance_cents/
 // extended_cents — a leading \b would never match there (underscore is a \w
 // character, so there's no word boundary between "total" and "_cents"). Only
 // the trailing \b is meaningful for that one; the other three are matched as
 // whole identifiers.
 const RISKY_CONTENT_RE = /_cents\b|\bfinancial_audit_log\b|\ballocate_payment\b|\bapply_prepay\b|\bauth\.uid\s*\(|\bsecurity\s+definer\b|\b(?:rls|row.level.security|policy|grant|permission|idempoten\w*|inventory|commission|lifecycle)\b|\b(?:is_admin|is_sales_rep|is_driver|is_applicator)\s*\(|\.(?:insert|update|upsert|delete|rpc)\s*\(|\b(?:status|stage|lifecycle_state|role|quantity|amount|price|total|balance|profit|margin)\s*(?:===?|!==?|:|=)/i;
+// Only the lines a change actually ADDS or REMOVES are classified. Testing the
+// whole diff string also swept the CONTEXT lines git prints around each hunk, so
+// an edit that merely landed NEAR pre-existing code or prose containing e.g.
+// `_cents` was called money-risky and forced a Codex proof it did not need
+// (observed 2026-08-25 on a test-and-docs-only PR, twice).
+//
+// Removed lines still count: deleting money/security code is itself risky.
+//
+// `+++ `/`--- ` (with the trailing space) are the file headers, not content.
+// If the input yields no changed lines at all — a caller passed raw text instead
+// of a unified diff, or the diff is rename/mode-only — fall back to scanning the
+// whole string, so an unexpected input shape fails CLOSED rather than open.
 export function contentIsRisky(diffText) {
-  return RISKY_CONTENT_RE.test(String(diffText || ""));
+  const text = String(diffText || "");
+  const changed = text
+    .split(/\r?\n/)
+    .filter(
+      (line) =>
+        (/^\+/.test(line) && !/^\+\+\+ /.test(line)) ||
+        (/^-/.test(line) && !/^--- /.test(line)),
+    )
+    .join("\n");
+  return RISKY_CONTENT_RE.test(changed || text);
 }
 
 function reviewProofValid(data, headSha, nowMs, ranKey, expectedBaseSha) {

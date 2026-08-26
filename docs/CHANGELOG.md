@@ -2,6 +2,55 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-25 — the risky-diff classifier stops reading unchanged lines, and a save-gate race stops flaking CI
+
+Two gate-adjacent defects that both cost real time on PR #479, neither of which changed app
+behaviour.
+
+**1. `contentIsRisky()` classified context lines.** The money/security content gate in
+`.claude/hooks/codex-push-lib.mjs` regex-tested the *whole* diff string. A unified diff prints
+several unchanged CONTEXT lines around every hunk, so a change was called money-risky whenever
+it merely landed *near* pre-existing code or prose containing e.g. `_cents`. PR #479 was
+test-and-docs only and was flagged twice, forcing two `gpt-5.6-sol` proof runs it did not need
+— and a gate that cries wolf on clean diffs is a gate people learn to route around.
+
+It now classifies only the lines a change ADDS or REMOVES. Removed lines still count: deleting
+money or security code is risky in its own right. `+++ `/`--- ` file headers and `@@` hunk
+headers are not content. If the input yields no changed lines at all — a caller passed raw text
+rather than a unified diff, or the diff is rename/mode-only — it falls back to scanning the
+whole string, so an unexpected input shape fails CLOSED rather than open.
+
+This is a deliberate, slight narrowing of detection: a money change whose only flagged
+identifier appears *solely* on an unchanged line is no longer caught by content. That case was
+already covered by the path-based `riskyFiles()` gate, which is untouched. All four call sites
+(`codex-push-guard`, `pr-merge-guard`, `production-action-guard`, `land-pr`) pass real diffs.
+
+Proof, against the actual PR #479 diff (3 files, 8957 bytes): the only two lines matching the
+risky regex were CONTEXT lines in `KNOWN_ISSUES.md` prose. Old behaviour `risky = true`, new
+behaviour `risky = false`, with zero added or removed lines matching — so nothing was lost on
+the diff that triggered this. Regression tests pinning both directions were added to
+`codex-push-lib.test.mjs`; `npm run test:correction-guards` and `npm run test:agent-workflows`
+pass.
+
+**2. `JobDetail.billingHazard.test.tsx` raced the save gate.** `handleSave` fails closed while
+the label-rate policy is still loading: it toasts "Checking the label-rate policy — try Save
+again in a moment." and returns. Those lookups are SEPARATE queries from the job/products fetch
+that renders the hazard banner, so waiting for the banner does not mean the save gate is open.
+Nine tests clicked Save exactly once; a click landing in that window produced a non-matching
+toast and returned, and nothing re-fired the save — so the test's `waitFor` spun until it timed
+out. That is the intermittent CI failure (`AssertionError: expected false to be true`) on a
+correct, unchanged page. Longer timeouts could never fix it; only a retry can.
+
+Clicks now go through a `clickSave()` helper that retries while the gate is still closed —
+exactly what the app instructs the operator to do, and it cannot double-save, because while the
+gate is closed the save never proceeds. The fix is test-only; `JobDetail.tsx` is unchanged.
+
+The race is also now forced deterministically: the mock holds the by-id products query open so
+every save-clicking test goes through the fail-closed branch first. Proof: with that harness and
+a single un-retried click, 5 tests fail with the exact production symptom, including the
+"Checking the label-rate policy" toast; with `clickSave()`, all 14 pass. The file runs 7.05s
+(tests 5.68s) versus 8.20s before, so the harness costs nothing.
+
 ## 2026-08-25 — the last ExcelJS workbook test gets its cold-cache timeout
 
 `productPricingSupplierEvidenceWorkbook.test.ts` was the only one of the three ExcelJS test
