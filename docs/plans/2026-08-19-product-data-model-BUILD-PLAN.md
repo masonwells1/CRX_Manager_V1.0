@@ -1036,11 +1036,643 @@ against a stale source version is **refused**.
 
 ---
 
+## Amendment 2026-08-26 — workbook-first data entry and top-seller priority (Mason, in-chat)
+
+*Two owner decisions taken in chat on 2026-08-26. They change **how the data arrives and in what
+order**; they change **no settled decision**. D-A through D-X and the three 2026-08-20 settlements
+stand exactly as written. This section governs only the two subjects it names — Phase 1b's position
+in the sequence, and the workbook-as-proposal path — and nothing else in this plan.*
+
+> **Revision 4 (final) — rewritten after a third adversarial `gpt-5.6-sol` round closed every
+> outstanding finding and returned seven more, all accepted.** Where the text below disagrees with
+> revision 1, 2 or 3, it **replaces** them; do not restore the earlier wording. **This is the final
+> revision of this amendment.**
+>
+> *What revision 4 changes, one line per fix:*
+>
+> - **R3-1 (blocker):** the approval digest covers a canonical **envelope** — draft id, `product_id`,
+>   `purpose`, `payload_version`, `source_product_data_version`, domain **and** payload — never the
+>   payload alone, because the live queue's RLS lets an admin move a draft onto another product.
+> - **R3-2:** every citation predicate now demands a **trimmed non-empty** value, so a whitespace-only
+>   `source_url` or supplier note no longer passes as a citation.
+> - **R3-3:** the two-domain sequence — commit chemistry, restamp the now-stale attribute draft,
+>   approve it — is written down as the **normal path**, not a recovery.
+> - **R3-4:** the importer's write surface is stated **completely** (queue rows, its own audit rows,
+>   idempotency bookkeeping), and the safety property is redefined as **no writes to authoritative
+>   chemistry, attributes, `products` or `product_brands`**.
+> - **R3-5:** the restamp path **locks the stale draft `FOR UPDATE`** and re-verifies it under the
+>   lock, so two concurrent restamps produce exactly one fresh draft.
+> - **R3-6:** the retained entered net-weight tuple gets **real destination columns** on WP-2's
+>   migration, following the `density_entered_value` precedent exactly.
+> - **R3-7:** the digest's byte format is **server-defined** — the draft-creating RPCs store it, the
+>   review surface echoes it, the commit RPC recomputes it from the stored row; **the client never
+>   serializes JSON for hashing.**
+>
+> *Revision 1's four blockers, kept on the record so they are not reintroduced:* it gave Phase 1b
+> **no migration and no named proposal-creation path**; it pointed attribute commits at **"WP-2's
+> density/attribute commit RPC"**, a function whose contract is density-only; it permitted **one
+> queue row to span two commit RPCs** and therefore two transactions; and it enforced citation **per
+> `purpose`**, which fails open through the untouched `manual` path. All four stay closed.
+>
+> *What revision 3 established and revision 4 keeps in force, named the same way:* **Phase 1b moves
+> again, to after WP-4**, because
+> WP-4 is where the typed propose/commit machinery it rides on gets built *(R2-1)*; the attribute
+> commit RPC gets a **name and an executable contract** — **`commit_product_attribute_proposal`**
+> *(R2-2)*; approval is **bound to a content digest of what was rendered**, because the live queue's
+> own RLS lets an admin edit a draft between render and click *(R2-3)* — **revision 4 widens that
+> digest from the payload to the canonical envelope and moves its computation into the database, so
+> read R2-3 only through R3-1 and R3-7**; **blank, omitted and null get
+> one defined meaning**, so that an import can propose and replace but **never erase** *(R2-4)*; the
+> **outer WP-4 payload fields are forbidden** on an imported row, closing the door on a regulatory
+> field riding in beneath a chemistry review *(R2-5)*; revision 2's claim that the importer "holds no
+> grant" to write chemistry was **false** — a `SECURITY DEFINER` body is not bound by caller grants —
+> and is replaced by the protections that are actually real *(R2-6)*; **restamping is not a new
+> function** *(R2-7)*; `per_package` is an **input basis normalized at commit**, not a storage shape
+> *(R2-8)*; attribute **provenance gets real destination columns** *(R2-9)*; the queue status
+> `proposed` **does not exist on the live table** and is `pending` throughout *(R2-10)*; the
+> `source_url` nullability contradiction is resolved *(R2-11)*; **"usable EPA number" is defined
+> exactly once**, with its escape hatch *(R2-12)*; the ranking's deliberate double-count is
+> **disclosed rather than corrected** *(R2-13)*; **worklist-derived counts are removed** from this
+> public repo *(R2-14)*; and the rename-refusal claim is aligned with the mechanism that actually
+> refuses *(R2-15)*. Nothing here reopens D-A through D-X.
+
+### The two decisions
+
+| # | Question | Decision |
+|---|---|---|
+| **D-Y** *(Mason, 2026-08-26)* | D-V holds the comparison tool to ≈2026-09-18, but 604 products cannot be filled by then. Which products must be right first? | **Top products first.** The Sept-18 scope is Mason's **best-selling products**, ranked by real sales usage, not the whole catalogue. A **ranked priority worklist** derived from live orders and deliveries drives the order of data entry; the long tail fills afterwards, on no deadline. **D-V's protection is unchanged** — if the date comes under pressure it is the schedule that slips, never the quality of the Phase 2 rate review |
+| **D-Z** *(Mason, 2026-08-26)* | D-N built the entry screen for speed because Mason personally faced 33–56 hours of chemistry and density typing. Must that typing be *his*? | **No — an external AI agent drafts it into an Excel workbook, and the workbook uploads as proposals.** Every filled **element** cites the document it was read from. **Nothing from a workbook writes live chemistry**; every row lands in the D-I propose-review-commit queue and Mason approves it, quickly, because the citation sits beside the value. **The WP-1 keyboard-driven entry screen still ships — D-N is unchanged** — because it is the review/correction surface and the path for one-off edits. **The EPA/workbook split is structural, not a preference:** where a product has a **usable** EPA number the workbook carries **no chemistry for it at all** — that chemistry arrives through **WP-4's auto-seed**, and the import **refuses** a chemistry element for such a product with a named error rather than silently dropping it. The workbook fills **attributes** — density, net weight and its package basis, formulation type, safener — for **any** product, because EPA supplies none of them. The rule is nearly free in practice: **only a small minority of the current top band carries a usable EPA number**, so the workbook is carrying most of that band's chemistry either way. The worklist figures themselves stay out of this repo — see D-Y |
+
+**"Usable EPA number", defined exactly once *(R2-12)*.** A product's `epa_registration` is **usable**
+when `epa_registration IS NOT NULL AND btrim(epa_registration) <> ''` — the same predicate **WP-0**
+and **B-22** already use, restated here once so the workbook split and the priority worklist cannot
+drift apart on it. Every other statement in this amendment defers to this one. **Format validity is
+deliberately not part of it:** whether a non-blank number actually resolves is **WP-4's lookup
+concern**, and a product whose non-blank number fails that lookup is surfaced by **WP-4**, not by the
+importer. **The escape hatch is stated so no product can be stranded with neither source path:** if
+Mason then **clears** the bad number, `epa_registration` is blank, the product stops being
+EPA-usable, and it becomes **workbook-eligible on the next import**.
+
+### Sequencing change
+
+**Phase 1b (Product Data Workbook, §4) pulls forward to immediately after WP-4** *(blocker, R2-1)*.
+The order becomes WP-0 → WP-1 → WP-2 → WP-3 → WP-4 → **Phase 1b** → WP-5. Nothing else moves.
+
+Revision 2 placed Phase 1b directly after WP-2, which put the importer **in front of the machinery it
+rides on**. **WP-4 owns the typed propose/commit behaviour** — `create_label_draft_proposal`, and
+`commit_label_draft`'s consumption of the typed `ingredients[]` payload, per the **S-02** split — so
+an importer applying before WP-4 would emit typed payloads that nothing yet knows how to commit, and
+the first upload would queue rows with no approval path. Moving Phase 1b behind WP-4 means its
+importer **rides on machinery that already exists when it runs**.
+
+**WP-2 remains a prerequisite; it is simply no longer the immediate predecessor.** It is still the
+migration that creates `density_value`, `density_unit`, net weight per purchase unit,
+`formulation_type`, `safener` and `nickname`, and it now also carries
+`commit_product_attribute_proposal` (below) — so every attribute column and every attribute commit
+path a workbook row proposes into exists well before any upload happens. **WP-3 now also lands
+first**, which is a second gain rather than a cost: **WP-3's brand-aware density precedence is
+already live when the first upload arrives**, so the stub-density window revision 2's ordering would
+have opened is closed by the move rather than argued around.
+
+**The resequencing costs no calendar time on the ≈2026-09-18 path** — say this plainly, because the
+instinct is to read a later slot as a later finish. The template already exists and **needs no
+database at all**, so the AI agent starts **filling** the workbook on **day one**. Only the **upload**
+waits for Phase 1b. Filling and building were never serial; the resequencing moves the shorter of the
+two.
+
+Phase 1b gains a **bulk proposal import** mode: an uploaded sheet becomes **pending rows in the
+existing D-I queue**, reusing the `purpose` discriminator and the typed versioned payload **WP-1
+creates**. **A note on one word, because revision 2 got it wrong *(R2-10)*:** the live queue's
+`status` CHECK admits exactly `pending`, `accepted`, `edited`, `rejected`, `needs_manual`
+(`20260629210000_product_label_drafts.sql:29-31`) — **there is no `proposed` status and none is to be
+added.** Where this amendment names a queue **status** it always means **`pending`**; "proposal" and
+"proposed" survive only as the **concept** words, and **a "proposed row" is a queue row in status
+`pending`** — nothing more.
+
+**Phase 1b does not redesign the queue schema** — WP-1 owns the queue's shape and is the
+only package permitted to change it, the same rule that moved the queue extension out of WP-4 and
+into WP-1 (blocker S-02), restated here rather than reopened. **It does, however, carry a migration
+of its own, containing exactly one new function** — see *Phase 1b carries its own migration* below.
+
+**What WP-1's migration must therefore carry, named explicitly.** WP-1 is unbuilt and unapplied, so
+each item below is a specification change to a migration that does not yet exist — never an edit to
+an applied one:
+
+- **`purpose` gains a fourth CHECK member, `workbook_import`, present from WP-1's first migration.**
+  Same reasoning as `brand_proposal`: the package that writes these rows applies **after** WP-1, and
+  a CHECK that gains its member later makes every import fail on arrival. Members are `manual`,
+  `epa_label_seed`, `brand_proposal`, `workbook_import`, and `manual` remains the default (2026-08-20
+  settlement 3, unchanged).
+- **`source_type` and `source_url` on every payload *element*, not once per draft — and the element,
+  not the purpose, is what carries the citation rule *(blocker, finding 4)*.** One workbook row may
+  carry an ingredient read off the label beside a density read off the SDS; a draft-level source
+  cannot express **D-M**'s trust order per value. The stored domain is `source_type` ∈ `sds`,
+  `label`, `supplier`, `measured` — D-M's ranking exactly — but **`measured` is reserved for Mason's
+  own in-app entry and is never importable** (G-2). The rule: **in any typed payload, whatever the
+  row's `purpose`, every *filled* element carries its `source_type`, and its `source_url` where that
+  type requires one**, and the commit RPCs **re-check** it and refuse an uncited element at commit.
+  **A citation must be *trimmed non-empty*, never merely non-null *(R3-2)*** — a `source_url` of
+  `'   '` is a blank cell wearing a citation's clothes, and it satisfied revision 3's predicate. The
+  corrected predicate is quoted **exactly once**, in the payload-contract delta table below; the
+  CHECK, this rule, the import RPC's refusal list and the commit re-check all refer to that one
+  quotation rather than restating it.
+- **`product_attributes` — a payload block for the WP-2 fields the current contract has nowhere to
+  put.** The payload contract above carries chemistry, label URL/date and cancellation state only.
+  A density, net weight, package count, formulation type, safener or nickname proposal has no home in
+  it, and a builder facing that gap invents an untyped text field or writes the value live. The block
+  carries `density_value`, `density_unit`, `net_weight_value`, `net_weight_unit`,
+  **`net_weight_basis`**, `package_count`, `formulation_type`, `safener`, `nickname`, each with its
+  own `source_type` / `source_url`. **`net_weight_basis` is load-bearing, not decoration
+  *(finding 7)*:** WP-2 defines the field as *normalized net weight per purchase unit, its unit, the
+  package count **and basis***, and without the basis a case of four 10-lb bags is readable as a
+  10-lb package — WP-2's own finding 25, which revision 1 dropped on the way into the payload.
+- **`import_batch_id`** — groups the rows of one uploaded sheet. **Grouping is a review-surface
+  *filter* and nothing else *(finding 13)*.** Rejecting a bad upload executes **per-row rejections**,
+  each writing its own audit row bound to its own actor — **never** one bulk status mutation over the
+  batch. A single `UPDATE … WHERE import_batch_id = …` is precisely the unreviewed bulk write G-1 and
+  G-4 exist to forbid, arriving through the reject door instead of the approve door. Approval stays
+  per row (G-4).
+- **A purpose-conditional CHECK, in the same shape as the existing one — carrying only what is
+  genuinely purpose-specific.** Revision 1 put the citation requirement here, and that **fails
+  open**: `create_label_draft` writes `manual` rows and is never modified, so a `manual` row carrying
+  typed elements escaped the citation rule entirely. Citation moved to the element (above), so the
+  conditional CHECK keeps only what is genuinely purpose-specific:
+  `CHECK (purpose <> 'workbook_import' OR (payload_version IS NOT NULL AND exactly one of
+  ingredients[] / product_attributes is populated AND label_url IS NULL AND label_accepted_date IS
+  NULL AND epa_product_status IS NULL AND epa_is_cancelled IS NOT DISTINCT FROM false AND
+  proposed_brand_name IS NULL AND conflicts[] is empty AND the populated block contains at least one
+  field AND no field in it is present-with-null))` — the second clause being the single-domain rule
+  below, the middle clauses being **R2-5**'s forbidden outer fields, and the last two being
+  **R2-4**'s field semantics. The element rules bind **every** typed payload element regardless of
+  purpose; the legacy path writes **no** typed-payload elements, so `manual` rows are unaffected in
+  practice — and a
+  `manual` row that *does* carry typed elements is held to the identical element rules. **Strict for
+  the purpose the importer creates, permissive for the legacy shape — and `create_label_draft` is
+  still never modified, by this amendment or by any package.**
+- **`payload_version` stays the versioning lever.** An import whose payload version is unknown is
+  **rejected**, never coerced — the rule already stated for `create_label_draft_proposal`.
+- **A stored canonical-envelope digest column, `payload_envelope_sha256 text`, written at
+  draft-creation time *(R3-7)*.** The digest's byte format is **server-defined** — see *Approval binds
+  to a content digest* below — so the column belongs to the queue **shape**, which **WP-1 owns**, and
+  not to any package that later writes rows into it. It is populated by every draft-creating RPC in
+  scope (`create_label_draft_proposal`, `create_workbook_import_proposals`); legacy `manual` rows
+  written by the unmodified `create_label_draft` carry it **null**, and the typed commit path
+  **refuses a null stored digest** with a named error rather than committing an unbound approval.
+
+**The payload-contract delta, stated exactly *(finding 9)*.** WP-4's payload table above is the base
+contract; the table below is the delta this amendment adds, in the same format. **The two are read
+together** — nothing here restates or overrides a WP-4 row except where the reconciliation line says
+so explicitly.
+
+| Field | Type | Null? | Notes |
+|---|---|---|---|
+| `import_batch_id` | `uuid` | **no** on `workbook_import`; yes elsewhere | Stamped by the import RPC, never supplied by the sheet. A review-surface filter only — it authorizes no bulk operation |
+| element `source_type` | `text` | **no** on every *filled* element | CHECK ∈ `sds`, `label`, `supplier`, `measured` (D-M's ranking). **`measured` is refused at import** — reserved for Mason's own in-app entry (G-2). Import-permitted values are `sds`, `label`, `supplier` |
+| element `source_url` | `text` | **required — present and *trimmed non-empty* — for `sds` and `label`**; **omittable only for `supplier`** | *(R2-11 — this replaces revision 2's "conditional" wording, which contradicted G-2 elsewhere. R3-2 — non-null is not enough; whitespace is not a citation.)* It may be absent **only** for `source_type = 'supplier'`, and **only** where that element's `note` carries a **trimmed non-empty named supplier-document reference**. **This is the one place the citation predicate is quoted; every other mention in this amendment refers back to it rather than restating it:** `NULLIF(btrim(source_url), '') IS NOT NULL OR (source_type = 'supplier' AND NULLIF(btrim(note), '') IS NOT NULL)`. `measured` is not importable at all (G-2), so it never reaches this rule. "Supplier said so" is not a citation, and neither is a space bar |
+| element `note` | `text` | yes — **except** where the pair-rule above requires it, and there it must be **trimmed non-empty** | Carries the named supplier-document reference, the blank-basis explanation (G-3), and any second figure the label prints |
+| `product_attributes` | `jsonb` | yes | Populated **exactly when `ingredients[]` is empty** on a `workbook_import` row, and empty when it is not — the single-domain rule below. **When populated it must carry at least one field** (CHECK, R2-4) |
+| `product_attributes.density_value` | `numeric` | **absent, or present non-null** — never present-with-null | Finite and strictly positive when present (WP-2's hard domain). **Absent = no proposal, live value untouched** (R2-4) |
+| `product_attributes.density_unit` | `text` | **no** when `density_value` present | `lb_per_gal` or `specific_gravity`; specific gravity normalizes on write against `WATER_LB_PER_GAL = 8.345404`. The filler never converts (G-3) |
+| `product_attributes.net_weight_value` | `numeric` | **absent, or present non-null** | Finite and strictly positive when present |
+| `product_attributes.net_weight_unit` | `text` | **no** when `net_weight_value` present | |
+| `product_attributes.net_weight_basis` | `text` | **no** when `net_weight_value` present | `per_package` — the weight of one individual bag or jug — or `per_purchase_unit` — the weight of the whole thing bought. **An input basis, not a storage shape** *(R2-8)*: `per_package` is converted at commit, see below. This is the field that makes a case of four 10-lb bags unambiguous |
+| `product_attributes.package_count` | `int` | **no** when `net_weight_basis = 'per_package'`; **absent** otherwise | Finite and strictly positive. How many of that package are in one purchase unit. Retained beside the normalized figure for audit (D-B pattern), in `net_weight_entered_package_count` *(R3-6)* |
+| `product_attributes.formulation_type` | `text` | **absent, or present non-null** | As the label states it (SC, EC, WG, SL, …) |
+| `product_attributes.safener` | `text` | **absent, or present non-null** | Absent = no proposal. **A label that names no safener is recorded as the explicit value `none`**, cited like any other value — never as an empty cell *(R2-4)* |
+| `product_attributes.nickname` | `text` | **never importable** | **Mason-only.** No document states a trade shorthand, so the AI leaves it blank and **an imported `nickname` element is refused** (G-2) |
+| per-attribute `source_type` / `source_url` | as the element rows above | **no** on every *filled* attribute | Provenance is **per field**: one draft may legitimately cite the SDS for density and the label for formulation type |
+| `label_url`, `label_accepted_date`, `epa_product_status`, `epa_is_cancelled`, `proposed_brand_name` | as WP-4's table | **must be absent**, or at their WP-4 defaults, on `workbook_import` | **Forbidden to the importer** *(blocker, R2-5)*. These are WP-4's **outer** fields: they sit outside `ingredients[]`, so the element-level citation rule cannot reach them. Enforced in **three** places — the purpose-conditional CHECK, `create_workbook_import_proposals`, and the commit re-check |
+| `conflicts[]` | `jsonb` array | **must be empty** on `workbook_import` at import time | **Computed at commit time only, never importer-supplied** *(blocker, R2-5)*. A sheet that could write `conflicts[]` could invent a disagreement that does not exist, or suppress one that does |
+| *destination columns* — `net_weight_source`, `formulation_type_source`, `safener_source` | `text` | on `products`, written by the commit RPC | **Not payload — the columns the payload's per-field provenance lands in** *(R2-9)*. **WP-2's migration carries them**, mirroring the `density_source` column WP-2 already defines. `nickname` is **exempt**: Mason-only, no document states it, nothing to rank |
+| *destination columns* — `net_weight_entered_value`, `net_weight_entered_basis`, `net_weight_entered_package_count` | `numeric`, `text`, `int` | on `products`, written by the commit RPC | **Not payload — where the retained *entered* net-weight tuple lands** *(R3-6)*. Revision 3 required the tuple to be "retained beside the normalized figure" and named **no columns to retain it in**. **WP-2's migration carries these three**, following the `density_entered_value` / `density_entered_unit` precedent **D-B** already set, exactly. `net_weight_entered_value` and `net_weight_entered_package_count` carry the **finite and strictly positive** CHECKs this plan's hard-domain rule demands of every numeric column created there; `net_weight_entered_basis` carries the same `per_package` / `per_purchase_unit` CHECK the payload field does |
+
+**Blank, omitted and null get one meaning, and it is the safe one *(blocker, R2-4)*.** Revision 2
+used "blank" to mean three different things in three places, and the dangerous reading — that an
+emptied cell asks the database to **clear** the live value — was reachable from the text. One rule
+set, binding on the sheet, on the CHECK, on `create_workbook_import_proposals` and again on the
+commit re-check:
+
+- A field **ABSENT** from a `product_attributes` block is **not a proposal**. The live value is
+  **unchanged**. This is **D-D**'s "absent row = ignore" applied one level down, to the field.
+- A field **PRESENT with a non-null value** is a proposal to **set** that field.
+- A field **present with `null`** is **REFUSED** — at import, and again at commit. **A workbook
+  import can never clear or erase a live value.** Clearing a field is an **in-app Mason action
+  only**, on the WP-1 entry screen, where he sees what he is removing before he removes it.
+- A populated `product_attributes` block must carry **at least one field**, enforced by the CHECK. An
+  empty block proposes nothing and is refused rather than queued for a review with nothing to show.
+- **"The label names no safener" is a fact, and it is recorded as one:** `safener` **present** with
+  the explicit value **`none`**, cited like any other value. The same convention applies to any field
+  where a documented absence is worth recording. An empty cell says *"the agent did not fill this"*;
+  `none` says *"the document says there is none"*. Those are different claims, and the review surface
+  shows them differently.
+
+**The invariant, in one sentence: an import can propose additions and replacements, never erasures.**
+
+**The outer WP-4 payload fields are forbidden to the importer *(blocker, R2-5)*.** WP-4's base
+contract carries `label_url`, `label_accepted_date`, `epa_product_status`, `epa_is_cancelled` and
+`proposed_brand_name` **outside** `ingredients[]`, where the element rules above cannot reach them —
+they have no `source_type`, no `source_url`, and nothing to render a citation from. `conflicts[]` is
+worse than uncited: it is a **computed** field describing what the commit itself found. A
+`workbook_import` payload therefore carries **none of them**. They must be **absent or at their WP-4
+defaults**, and `conflicts[]` is populated **at commit time only, never by the importer**. Enforced
+in **three places** — the purpose-conditional CHECK, the import RPC, and the commit re-check. The
+failure this closes is concrete and quiet: a chemistry proposal smuggling an uncited regulatory
+status or a cancellation flag past a reviewer whose screen rendered only ingredients.
+
+**`per_package` is an input basis, not a storage shape *(R2-8)*.** WP-2 already rules what the
+database stores — **normalized net weight per purchase unit** — and this amendment does not change
+it. A `per_package` row is **converted at commit**: `net_weight_value × package_count` gives the
+per-purchase-unit figure, and the **entered value, the entered basis and the package count are
+retained beside the normalized figure** for audit. That is exactly the **D-B** normalize-on-write /
+retain-entered pattern already settled for specific gravity, reused rather than reinvented. **Those
+three retained figures have named destination columns *(R3-6)*, because "retained beside" with no
+column named is an instruction a builder cannot execute:** `net_weight_entered_value`,
+`net_weight_entered_basis` and `net_weight_entered_package_count` on `products`, **carried by WP-2's
+migration** and listed in the delta table above beside the provenance columns — following
+`density_entered_value` / `density_entered_unit` exactly, with the finite / strictly-positive CHECKs
+the hard-domain rule requires of the two numeric columns. The
+filler never converts (G-3); the commit RPC converts once, where it can be proved. **Proof case:** a
+case of four 10-lb bags commits as **40 lb per purchase unit**, with **`(10, per_package, 4)`**
+retained beside it in those three columns.
+
+**Reconciliation with WP-4's table, so the two cannot be read as disagreeing:** WP-4's
+`ingredients[]` row lists a per-element **`source`** field. It is **superseded by the
+`source_type` / `source_url` pair, for all purposes and all packages.** WP-1 is unbuilt, so this is
+a restatement of a contract nobody has emitted yet, not an edit to an applied one. **Commit logic
+reads the pair and never a legacy `source` string**, and no migration emits one. A payload field
+with no mapped destination remains a hard error, exactly as WP-4 already requires.
+
+**Phase 1b carries its own migration, and exactly one new function in it *(blocker, finding 1)*.**
+Revision 1 said Phase 1b "builds no commit RPC of its own" — true, and insufficient, because it left
+the *proposal-creation* path unnamed. An unnamed write path is how a builder invents an unguarded
+one: the identical failure WP-4 already corrected when "the brand-commit path" turned out not to be
+a specification (WP-4, finding 6). So Phase 1b's migration adds **`create_workbook_import_proposals`
+and no other function** — a statement about *functions*, not about that function's write surface,
+which R3-4 states separately below — layered on the queue shape **WP-1 owns**, the same layering WP-4 uses for
+`create_label_draft_proposal`, which remains **WP-4's** and is unchanged by this amendment.
+
+Its contract, per CRX canon and **D-J** / **D-S**:
+
+- **`SECURITY DEFINER` with `SET search_path = public, pg_temp`.**
+- **Resolves the actor from `auth.uid()` inside the function**, never from a caller-supplied
+  argument — actor forgery is the B7/B8/B9 class.
+- **Admin-only**, the same boundary as `commit_brand_proposal` and the WP-5 copy RPC. **Negative
+  proof required:** call it as a non-admin and show it refused with nothing written.
+- **Accepts `p_idempotency_key text DEFAULT NULL` and actually enforces it — and a key is
+  *required*.** A call arriving with `p_idempotency_key IS NULL` is **refused**, exactly as WP-5's
+  copy RPC is and for exactly the same reason: re-running an import is a second real bulk write, not
+  a no-op, so an unreplayable call must not be allowed to start. Prove all three — same key replayed
+  creates no second row, missing key is refused, a different key is an ordinary second import.
+- **Its write surface, stated completely — and the safety property redefined in the same breath
+  *(R3-4)*.** Revision 3 said it "touches `product_label_drafts` and nothing else", which is **not
+  true and cannot be**: an RPC that wrote no audit row and kept no idempotency record would violate
+  two other rules in this same plan. What it actually writes is exactly three things: **(1)
+  `product_label_drafts`** — `INSERT`s of `pending` queue rows, plus, on the restamp path only
+  (R2-7), **one `UPDATE` of the single stale draft it supersedes, by that draft's own id**, never by
+  `import_batch_id`; **(2) its own actor-bound audit rows**, through the plan's established audit
+  trail — the **`cost_history`-precedent trail WP-1 carries**, which is this amendment's audit
+  destination throughout, here and in every commit RPC below; and **(3) the idempotency
+  bookkeeping** the CRX idempotency contract requires of any RPC that actually enforces a key.
+  **The invariant is not "nothing else" — it is this: the importer performs NO writes to
+  authoritative chemistry, attributes, `products`, or `product_brands`.** That is the property a
+  reviewer is asked to check, and it is the property the negative proof asserts. **State the reason
+  correctly, because revision 2 did not *(R2-6)*:** this is **not** a grants argument. The function
+  is `SECURITY DEFINER`, so it runs as its owner and **caller grants constrain nothing about what its
+  body could reach**. What actually proves the property is the **Phase 1b acceptance proof's negative
+  before/after assertions** — run a real import, then show **zero rows changed** in
+  `active_ingredients`, `product_active_ingredients`, `products` (every chemistry and attribute
+  column), and `product_brands`.
+- **The supersede path is race-safe, and exactly one restamp wins *(R3-5)*.** On the restamp path the
+  RPC takes the stale draft's **exact id**, locks that row **`FOR UPDATE`**, and then verifies —
+  **under the lock, never before it** — that the row is still **`pending`**, still **stale** (its
+  `source_product_data_version` still behind the product's current `product_data_version`), and **not
+  already superseded**. If any of the three fails it **refuses with a named error** and writes
+  nothing — no supersede, no fresh draft. So two reviewers clicking restamp on the same draft at the
+  same moment produce **exactly one** fresh draft: the loser gets the named refusal, re-reads the
+  queue, and finds the fresh draft already waiting for review. Without the lock the same two clicks
+  produce two fresh drafts for one product, which is the five-queue-rows failure finding 10 closes,
+  arriving through the restamp door instead of the import door.
+- **Stamps `import_batch_id` on every row it creates, and a per-product
+  `source_product_data_version` read at proposal time** — per product, never per batch, because the
+  staleness refusal `commit_label_draft` performs is per product. **It also computes and stores each
+  row's `payload_envelope_sha256`** at that same write, per R3-7: the digest is the database's to
+  produce, never the sheet's and never the browser's.
+- **Validates before it writes and refuses with a named error rather than dropping:** an unknown
+  `payload_version`; an element claiming `source_type = 'measured'`; a `nickname` element; any filled
+  element with no citation — **and a value that fails the trimmed-non-empty predicate quoted once in
+  the delta table above *is* no citation, so a whitespace-only `source_url` or `note` is refused
+  here, not merely at the CHECK** (R3-2); a `supplier` element with neither a trimmed non-empty
+  `source_url` nor a trimmed non-empty named
+  supplier-document reference in its `note` (R2-11, R3-2); **a chemistry element for a product with a
+  usable EPA number** (D-Z, using the predicate defined once above); a row whose `product_id` is
+  unknown, or whose `sku` no longer matches that id; a row populating both domains; **any field
+  present with `null`**, and a `product_attributes` block with no fields at all (R2-4); and **any of
+  the forbidden outer fields — `label_url`, `label_accepted_date`, `epa_product_status`,
+  `epa_is_cancelled`, `proposed_brand_name` or a non-empty `conflicts[]`** (R2-5). Silent dropping is
+  the failure mode this whole path exists to prevent — a refused import is a five-minute fix, a
+  silently dropped element is a wrong number on spray paperwork.
+- **`EXECUTE` to `authenticated` only, never `anon`**, and `REVOKE ALL … FROM PUBLIC, anon` on every
+  internal helper, so a `SECURITY DEFINER` helper never becomes the privilege boundary.
+
+**Gates for that migration:** it creates a new `SECURITY DEFINER` RPC, so it takes the full RLS +
+migration-drift review, an exact-SHA `gpt-5.6-sol` proof, **Mason's in-chat OK to apply live**, and
+R-12 — the same gates WP-1, WP-2 and WP-5 carry. Phase 1b is no longer a screen-only package.
+
+**Approval binds to a content digest of a canonical *envelope*, because the row can legitimately move
+under the reviewer *(blocker, R2-3; widened by blocker R3-1)*.** G-5 already says approval binds to
+what was **rendered**; revision 2 gave that rule **no mechanism**, and revision 3 gave it a mechanism
+that hashed **the payload alone**. The second hole is the worse one, because it looks closed. The gap
+is not theoretical: the live queue's own RLS **expressly permits an admin to `UPDATE` a draft row** —
+policy `admin_update_product_label_drafts` on `product_label_drafts`
+(`20260629210000_product_label_drafts.sql:93`) — and that policy is **row-wide**, so the admin may
+change **`product_id` itself**, not merely the payload. **A payload-only hash therefore lets content
+reviewed for product A commit onto product B:** move the draft, and whenever the two products'
+`product_data_version` stamps coincide the bytes still match, the digest still matches, and the write
+lands on the wrong product with a clean audit trail behind it. **Binding an approval to the row id
+binds it to nothing; binding it to the payload alone binds it to the wrong thing.**
+
+The mechanism, stated so a builder cannot invent a weaker one:
+
+- **The digest covers a canonical *envelope*, not the payload *(R3-1)*:** the **draft id**,
+  **`product_id`**, **`purpose`**, **`payload_version`**, **`source_product_data_version`**, the
+  **domain** (chemistry or attributes), **and** the payload. Every one of those is a fact the
+  reviewer's decision depended on, and every one is mutable by the same admin `UPDATE` policy.
+- **The byte format is SERVER-defined, and the client never serializes JSON for hashing — that is the
+  whole rule *(R3-7)*.** The **draft-creating RPCs** (`create_label_draft_proposal`,
+  `create_workbook_import_proposals`) compute the canonical envelope digest **at write time** and
+  **store it on the draft row**, in the `payload_envelope_sha256` column WP-1's migration carries.
+  The **review surface displays and echoes that stored digest back** as **`p_payload_sha256`**; it
+  computes nothing and serializes nothing. The **commit RPC recomputes the envelope digest over the
+  stored row** and compares it to what the surface echoed. Two implementations can never disagree
+  about key order, whitespace or number formatting, because only **one** implementation exists and it
+  lives in the database.
+- **Inside the transaction, and *after* the `FOR UPDATE` lock**, the RPC performs that
+  recompute-and-compare and **refuses on mismatch** with a named error, writing nothing. Recomputing
+  before the lock would leave the same race one statement narrower.
+- **That is precisely the TOCTOU property wanted, and it needs nothing else built for it:** the
+  surface echoed the digest **as of render time**, so **any** later change to the stored row — the
+  payload, `product_id`, `purpose`, the version stamp — makes the commit-time recompute differ from
+  the echoed value and the commit refuses. No separate change-detection, no row-version compare on
+  top, no client-side hash. **The one residual is deliberate and safe-direction:** a row edited
+  **out of band** — by raw `UPDATE` through the admin policy, without going through an RPC that
+  restores the stored digest — refuses at commit until it is **restamped**, even though the reviewer
+  saw current content. A false refusal costs one restamp; the opposite error writes an unreviewed
+  value to live chemistry.
+- **A row with no stored envelope digest cannot be committed through a digest-bound path:** the typed
+  commit path **refuses a null `payload_envelope_sha256`** with a named error. Legacy `manual` rows
+  written by the unmodified `create_label_draft` are the only rows in that state, and they carry no
+  typed elements, so the refusal is unreachable in practice — it is stated only so a builder meeting
+  it does not close the gap with a client-computed hash.
+- The reviewer then **re-reads the changed row and approves it again** — which is the correct
+  outcome, not a nuisance: he has not yet seen what he would be approving.
+
+**Scope:** this applies to **`commit_label_draft`'s typed path** and to
+**`commit_product_attribute_proposal`**. **`commit_brand_proposal` is unaffected** and stays outside
+this amendment's scope. **Two negative proofs are required, not one:** render a draft, **edit its
+payload**, attempt the commit with the now-stale digest, and show the **refusal** with nothing
+written; **and** render a draft, **change its `product_id`** to a second product, attempt the commit
+with that same stale digest, and show the **refusal** with **nothing written on either product**
+*(R3-1)*.
+
+**One queue row never spans two commit paths *(blocker, finding 3)*.** Chemistry commits through
+`commit_label_draft`; the WP-2 attributes commit through **`commit_product_attribute_proposal`**
+(named and specified below). A single draft carrying both would need **two RPCs and therefore two transactions** to approve, so a half-approved
+row is reachable — chemistry live, attributes lost, and one audit trail describing an approval that
+only half happened. So the importer **splits proposals by domain**: a `workbook_import` draft carries
+**either** a non-empty `ingredients[]` (chemistry) **or** a non-empty `product_attributes` block
+(attributes), **never both**, enforced by the purpose-conditional CHECK above as *exactly one of the
+two populated*. **One approval = one RPC = one transaction.** A product needing both gets **two
+drafts and two approvals** — the honest cost of the guarantee, and cheaper than any recovery from a
+half-committed row.
+
+**The normal two-domain sequence, written out because it *is* the normal path and not a recovery
+*(R3-3)*.** When one product carries **both** a chemistry draft and an attribute draft, the review
+surface commits **chemistry first**. That commit bumps `product_data_version`, so the sibling
+attribute draft is — **by design, not by defect** — stale the instant chemistry lands: its
+`source_product_data_version` now trails the product, and the staleness refusal will decline it. That
+is the guard doing exactly its job. The reviewer then **restamps** the attribute draft — the
+supersede-and-recreate action already defined above, which sets the stale row to `rejected` with its
+own audit row and creates a fresh `pending` draft re-derived against current values — and **approves
+the fresh draft in the same session**, against a freshly stored envelope digest. **The reverse order
+works identically with the roles swapped:** commit attributes first, restamp the chemistry draft,
+approve it. The total cost is **one extra click per dual-domain product**, and the reviewer sees
+current values both times, which is the point. **Do not read the sibling's staleness as a fault to be
+engineered around** — no cross-domain exemption, no "commit both under one version stamp", no
+softening of the refusal. **Positive proof required:** a dual-domain product runs **chemistry commit
+→ restamp → attribute commit**, with **every proposed value from both drafts landing** and **every
+step audited**, including the supersede.
+
+**Rows match on `product_id`, and on nothing else *(finding 12)*.** The sheets carry **`product_id`
+— the immutable key — prefilled as the first column**, beside `sku` and `product_name` which are
+there for the human. `create_workbook_import_proposals` matches on **`product_id` only** — the
+immutable key. It refuses an **unknown id**, and it refuses a row whose **`sku` no longer matches the
+id it names**, so a **re-SKU** between generating the sheet and uploading it surfaces as a
+**refusal**, never as chemistry landing on the wrong product. **Be exact about what does *not*
+refuse, because revision 2 overclaimed it *(R2-15)*: a product-name change alone does not refuse
+the row.** The id is authoritative and the name is decoration on the sheet, so a renamed product
+imports normally and the **review surface simply shows the product's current name** beside the
+proposal — which is the right behaviour, since the reviewer needs to see what the product is called
+today, not what it was called when the sheet was generated. **Name-only matching is forbidden** —
+WP-0 alone re-SKUs a row and resolves three duplicate-name groups, so names are known to be
+non-unique *and* known to
+move. Where a cited label states an EPA registration that **differs** from the product's stored
+`epa_registration`, that difference lands in **`conflicts[]`** for review under **D-L** and is
+**never auto-committed** — **computed at commit time by the commit RPC, not carried in from the
+sheet** (R2-5), which is why the importer must supply `conflicts[]` empty.
+
+**At most one chemistry draft and one attribute draft per product per batch *(finding 10)*.** All of
+a product's ingredient rows **aggregate into the one chemistry draft**: a draft per sheet row would
+give one product five queue rows, five independent staleness stamps, and a first approval that
+silently invalidates the other four. And a stale draft is never silently committed. The
+`source_product_data_version` refusal stands **exactly as WP-4 wrote it** — unchanged, not softened
+— and the review surface additionally offers an explicit **restamp / re-derive** action. **A sibling
+draft in the *other* domain going stale on the first commit is the ordinary case, not an exception:
+the sequence for it — commit, restamp, approve — is written out above *(R3-3)*, and the restamp's
+own concurrency rule is in the importer's contract bullets *(R3-5)*.**
+
+**Restamp is not a new function, and that matters for the "exactly one new function" claim
+*(R2-7)*.** Revision 2 named the action and left it **unowned**, which is the same unnamed-path
+failure this amendment corrected twice already. The mechanism: the review surface **re-invokes
+`create_workbook_import_proposals`** for that **product and domain**, with a **fresh idempotency
+key**. In the **same transaction**, that RPC **supersedes** the stale draft — **taking that draft's
+exact id, locking it `FOR UPDATE`, and re-verifying it under the lock before it changes anything
+*(R3-5, contract bullet above)*** — the old queue row is
+set to **`rejected`** with **its own audit row, naming the superseding draft** — and creates the
+**fresh `pending` draft**, stamped with the **current** `product_data_version`, re-rendered from
+current values, and carrying a **freshly stored `payload_envelope_sha256`** computed by the RPC
+itself *(R3-7)*. **So Phase 1b's migration still adds exactly one new function, literally:** restamp
+adds none, and neither the lock nor the digest adds one. The re-derived draft is then reviewed and
+approved like any other, against that freshly stored envelope digest.
+**Restamping is a new approval**; it is never a way to carry an old approval
+forward onto data that moved.
+
+**Phase 1b adds NO commit path — only one PROPOSAL-CREATION path, and it is named above.** Revision 1
+blurred these into "no new write path", which is what left the import RPC unspecified. Be precise
+about the boundary: `commit_product_attribute_proposal` below **is** a new function, but it belongs
+to **WP-2**, is created by WP-2's migration, and exists whether or not the workbook ever ships.
+**Chemistry commit is unchanged:** it commits through **`commit_label_draft`**, with the
+single-effective-row
+invariant, the `source_product_data_version` staleness refusal and **D-L**'s typed-value precedence
+all applying to a workbook-sourced proposal exactly as they apply to an EPA one. Brand rows are
+untouched — they remain `brand_proposal` → `commit_brand_proposal`. **Phase 1b builds no commit RPC**
+and none is to be added. What Phase 1b **does** add is the single proposal-creation RPC above,
+riding on the queue shape WP-1 owns.
+
+**The attribute commit RPC is named `commit_product_attribute_proposal`, and it is a WP-2 contract
+*extension* *(blocker, R2-2; this closes revision 1's blocker 2 properly)*.** WP-2 above specifies a
+**density** commit RPC — the one that enforces the **D-M** ranking on write (WP-2, finding 14). The
+workbook proposes density, **net weight with its unit, package count and basis**, `formulation_type`,
+`safener` and `nickname`. Revision 1 sent all of them to "WP-2's density/attribute commit RPC", whose
+contract carries only the first; revision 2 correctly widened the contract and then **left the
+widened function unnamed**, which is the identical unnamed-write-path failure WP-4 already corrected
+once (WP-4, finding 6). It is named here. **This is a specification change to an unbuilt migration —
+WP-2 is unbuilt and unapplied, so it edits nothing that exists.**
+
+**WP-2's migration carries `commit_product_attribute_proposal`**, covering density *and* net weight
+(value, unit, package count, and the package / net-weight basis) *and* `formulation_type` *and*
+`safener` *and* `nickname`. Its contract, **modelled directly on this plan's own
+`commit_brand_proposal` contract** so a builder has an executable shape rather than an adjective:
+
+- **`SECURITY DEFINER` with `SET search_path = public, pg_temp`.**
+- **Resolves the actor from `auth.uid()` inside the function**, never from a caller-supplied
+  argument — actor forgery is the B7/B8/B9 class.
+- **Admin-only** (**D-J** / **D-S**), the same boundary as `commit_brand_proposal`. **Negative proof
+  required:** call it as a non-admin, show it refused with nothing written.
+- **Accepts `p_idempotency_key text DEFAULT NULL` and actually enforces it — and a key is
+  *required*.** A call arriving with `p_idempotency_key IS NULL` is **refused**: a replayed approval
+  is a second real write to live attributes, not a no-op.
+- **Accepts `p_payload_sha256` — the digest the review surface *echoed* from the stored row, never
+  one it computed — and enforces it by recomputing the canonical envelope digest over the stored row
+  after the lock**, exactly as described above (R2-3, R3-1, R3-7). A null stored digest is refused.
+- **In ONE transaction it:** locks the draft row **`FOR UPDATE`**; **refuses if the row is not still
+  `pending`**, so a double-approve cannot write twice; **refuses on `source_product_data_version`
+  staleness** (WP-4's rule, unchanged); **refuses on an envelope-digest mismatch**, after the lock;
+  **enforces the D-M ranking per field on write** — a lower-ranked candidate stays a **proposal**
+  unless Mason explicitly approves it over the higher-ranked value; **converts a `per_package` net
+  weight to the normalized per-purchase-unit figure** and retains the entered value, basis and
+  package count in **`net_weight_entered_value`, `net_weight_entered_basis` and
+  `net_weight_entered_package_count`** beside it (R2-8, R3-6); **writes the attribute values and
+  their per-field provenance**; **writes an actor-bound audit row** on WP-1's
+  `cost_history`-precedent trail; **bumps `product_data_version`**; and **sets the queue row's
+  status to the result of the decision**.
+- **The same RPC's refuse path** sets the queue row to **`rejected`**, writes its own audit row, and
+  **writes nothing** to `products`.
+- **`EXECUTE` to `authenticated` only, never `anon`**, and `REVOKE ALL … FROM PUBLIC, anon` on every
+  internal helper, so a `SECURITY DEFINER` helper never becomes the privilege boundary.
+- **RPC-only with no direct column grant**, for the same reason density is (WP-2, Fable F-10).
+
+**Per-field provenance needs somewhere to land *(R2-9)*.** WP-2 already defines **`density_source`**;
+the same pattern extends to **`net_weight_source`**, **`formulation_type_source`** and
+**`safener_source`**, named in the delta table above and created by **WP-2's migration**. `nickname`
+is **exempt** — it is Mason-only, no document states a trade shorthand, and there is nothing to rank.
+**D-M's ranking governs the document-derived fields**, and **extending D-M beyond density is a
+deliberate specification extension of WP-2, with `density_source` as the precedent** — stated
+explicitly so a builder reads it as **decided**, not as an assumption he is free to drop. Finding 14
+is unchanged in force and now matches in scope. **The retained *entered* net-weight columns ride in
+the same migration and on the same precedent *(R3-6)*** — `net_weight_entered_value`,
+`net_weight_entered_basis` and `net_weight_entered_package_count`, mirroring `density_entered_value`
+/ `density_entered_unit` — so provenance and retained entry land together, and neither is left as an
+instruction with no column behind it.
+
+### Guardrails — stated as rules
+
+| # | Rule | Why |
+|---|---|---|
+| **G-1** | **A workbook or AI-sourced value is NEVER written as effective chemistry directly.** Import creates **proposals only**. Every value reaches live data through the **existing** commit RPCs with every existing invariant intact — exactly one effective row per `(product_id, ingredient_id)`, D-L's precedence, and refusal of a commit whose `source_product_data_version` has moved. There is no bulk path around them, and none is to be added. **`create_workbook_import_proposals` writes `product_label_drafts` (`INSERT`s, plus the single by-id supersede `UPDATE` on the restamp path, R2-7), its own actor-bound audit rows on WP-1's `cost_history`-precedent trail, and the idempotency bookkeeping the CRX contract requires — and it performs NO writes to authoritative chemistry, attributes, `products` or `product_brands`** *(R3-4; "and nothing else" was never true, since an RPC writing no audit row and no idempotency record would break two other rules in this plan)*. **That last clause is the invariant**, a property of its **body**, proved by the import's **negative before/after assertions** (zero rows changed in `active_ingredients`, `product_active_ingredients`, `products` chemistry/attribute columns, `product_brands`). **Do not restate this as a grants argument** *(R2-6)*: the function is `SECURITY DEFINER`, so it runs as its owner and caller grants bind nothing | This is the whole safety property of **D-H** and **D-I**. An importer that writes chemistry is the ~35% WP-4 failure with a spreadsheet in front of it |
+| **G-2** | **Provenance attaches to the element, and the agent fills only what a document can prove.** The AI fills **only document-derivable fields** — chemistry, density, net weight and its package basis, `formulation_type`, `safener` — and cites **per value**: `source_url` is **required** for `source_type` `sds` and `label`; a `supplier` value carries a document URL **or**, where the supplier publishes none, a **named supplier-document reference** in that element's `note`. **Every one of those values must be *trimmed non-empty*, not merely non-null *(R3-2)*** — whitespace is a blank cell wearing a citation's clothes, and the predicate that enforces it is quoted exactly once, in the payload-contract delta table above. **`measured` is reserved for Mason's own in-app entry and is never importable** — the import RPC refuses any element claiming it, and the CHECK and the commit re-check enforce the same, so D-M's top rank cannot be claimed by a spreadsheet. **`nickname` is Mason-only** and an imported nickname element is **refused**: no document states a trade shorthand, so a cited one would be a fabricated citation. Anything the agent cannot cite stays **blank**; **blank is reviewable, a guess is not.** **And blank means one thing only *(R2-4)*: no proposal — the live value is left alone.** It never means "clear this", and where a document affirms an absence the agent writes the **explicit cited value `none`** rather than a blank. Enforced in three places — the element rule in the payload, the import RPC, and again at commit — never by the spreadsheet alone, which anyone can edit | The citation beside the value is what makes per-row review fast enough to be real. Without it, review degrades into re-reading the label — the exact work D-Z exists to remove. And a rule keyed to `purpose` rather than to the element fails open through the one path nobody is allowed to modify |
+| **G-3** | **Concentration basis is recorded as the label's own wording states it, never converted by the filler.** The template constrains `basis` to the **D-A** enum (`acid_equivalent`, `active_ingredient`, `oxide`, `elemental`) and `concentration_unit` to WP-1's list (`lb_per_lb` remains rejected), and the review surface shows the basis and the citation beside the number. **D-A's three rules and R-4a's refusing conversion function govern every use of the value** — nothing here restates, weakens or duplicates them. A label whose basis is unclear leaves `basis` **blank with a note** — and **a blank-basis chemistry element is reviewable but NOT committable: `commit_label_draft` refuses it** *(finding 8)*. The correction path is the **WP-1 entry screen** or a **re-proposed row that states the basis**; it is never a default filled in at commit | Salt weight and acid equivalent on the same jug are different numbers, and a filler that "helpfully" converts destroys the one fact the row exists to record. Blank is a legitimate state for a **proposal** and an illegitimate one for **effective chemistry**: a concentration with no basis is a number whose meaning is unknown, and R-4a has nothing to refuse on because there is nothing to convert *from* |
+| **G-4** | **Review remains per-row human approval by an admin, and one approval is one transaction.** **D-J** and **D-S** are unchanged: admins only, one row at a time, every change audited. Because a `workbook_import` row carries **exactly one domain**, approving it invokes **exactly one commit RPC in exactly one transaction** — there is no half-approved row and no second call to forget. **A product with drafts in *both* domains is therefore two rows and two approvals**, run in the documented order — commit one domain, restamp the sibling, approve it *(R3-3)* — which is the normal path, not an exception to this rule. **Rejection is per row on the same terms**, each with its own audit row and actor; `import_batch_id` **filters** the review session and never executes it. **Approving — or rejecting — an entire sheet in one click is out of scope for Phase 1** and must not be built as a convenience | A one-click sheet approval is a bulk unreviewed write to live chemistry wearing a review screen's clothes — and a one-click sheet *rejection* is the same write with the audit trail of one actor standing in for a hundred decisions |
+| **G-5** | **The review surface renders every element of a proposal, and approval binds to what was rendered** *(finding 6)*. Before approval the surface shows, for **each** element: the **proposed value**, the **current effective value** where one exists, the **citation** (`source_type` and `source_url`, or the named supplier reference), and the **basis**. **Approval binds to exactly the rendered content** — not to the row id, and not to the payload re-read at click time — and it binds **by mechanism**: a **server-computed `sha256` over the canonical envelope** — draft id, `product_id`, `purpose`, `payload_version`, `source_product_data_version`, domain **and** payload — **stored on the draft at creation**, **echoed** unchanged by the review surface as `p_payload_sha256`, and **recomputed over the stored row inside the commit transaction after the `FOR UPDATE` lock**, refusing on mismatch. **The client never serializes JSON for hashing** *(R2-3, R3-1, R3-7)*. **An element the surface cannot render blocks approval; it is never hidden.** Phase 1b's acceptance proof must include a **multi-element draft** showing every element rendered with its current value and citation, **and** three negative cases — a draft carrying an element the surface cannot render is **refused approval** with a named error rather than approved with that element invisible; a draft **edited after it was rendered** is **refused** on the stale envelope digest, with nothing written; **and** a draft whose **`product_id` was changed after it was rendered** is **refused** on that same digest, with **nothing written on either product** *(R3-1 — the live `admin_update_product_label_drafts` policy permits exactly that row-wide edit, so a payload-only hash would have let content reviewed for one product commit onto another)* | A reviewer approves what he can see. An element rendered as a blank, a truncation, or not at all is an unreviewed write wearing a review screen's clothes — G-1's failure arriving one element at a time instead of one sheet at a time |
+
+The WP-4 two-gate rule applies unchanged: **creating** the proposal rows is itself a bulk write to a
+live table and takes Mason's approval separately from the approval that **commits** them, and R-12's
+fresh backup precedes both. R-1 and R-2 also apply — the import ships with the review surface that
+proves it, and its acceptance runs in the running app as a normal authenticated user, with the
+non-admin refusal proved as its negative case.
+
+### The priority worklist (D-Y)
+
+- **Derived read-only from live sales usage** — `order_items` joined to non-deleted `orders`, and
+  `delivery_items` joined to non-deleted `deliveries`, aggregated per `product_id` into a line-count
+  usage score with ordered and delivered quantities carried beside it. It reads; it writes nothing.
+- **Cancelled and voided parents are excluded from the aggregation *(finding 15)*.** A cancelled
+  order and a voided delivery are records of work that did **not** happen, and counting them ranks a
+  product by a sale that was undone. The predicate is
+  `orders.status NOT IN ('cancelled','voided')` and `deliveries.status NOT IN ('cancelled','voided')`,
+  **on top of** the existing `deleted_at IS NULL` filters. **Both status domains were read live from
+  the current CHECK constraints on 2026-08-26, not assumed** — `orders_status_check` admits
+  `confirmed`, `partially_fulfilled`, `fulfilled`, `cancelled`, `voided`; `deliveries_status_check`
+  admits `scheduled`, `in_progress`, `completed`, `cancelled`, `voided`. Two column facts belong
+  beside it, because guessing either produces a query that runs and lies: **`order_items` has no
+  `quantity` column** — the ordered amount is **`total_units_needed`** — and `delivery_items` uses
+  **`coalesce(quantity_delivered, quantity)`**.
+- **The score is an ordering heuristic, not revenue, and Mason confirms the band before it locks
+  scope *(finding 15)*.** A line count says how *often* a product moves, not what it is *worth*: a
+  high-value product sold in a few large lines ranks below a cheap one sold constantly. That is
+  acceptable for **ordering data-entry work** and unacceptable as a business metric, and **no
+  revenue-weighted metric is to be built here** — it would depend on cost, tier and split-billing
+  correctness this build has not yet delivered. So **Mason reviews and confirms the ranked top band
+  before it locks the ≈2026-09-18 scope**; until he does, the band is a proposal like any other.
+  **The order/delivery double-count is deliberate, and is disclosed rather than corrected
+  *(accepted residual, R2-13)*:** a product that was both ordered and delivered contributes to both
+  halves of the score, which is **signal-stacking** — a product that actually moved twice is meant to
+  rank higher — not an accounting error. The guard against a distorted band is the confirmation step
+  this bullet already requires: **Mason reads the ranked list and confirms it.** No revenue-weighted
+  metric is to be built to "fix" it.
+- **Regenerated on demand.** It is a snapshot of a moving number, not a stored artifact. Re-run it
+  rather than trust a copy.
+- **It orders the work and defines the scope.** Entry runs top-down, and the "top products" the
+  ≈2026-09-18 comparison tool must be right about are the ranked band covering **~80% of usage**.
+  Each row also carries whether the product has a **usable** EPA number — **the predicate defined
+  once above (R2-12)**, not a second definition — and therefore, per D-Z, whether its chemistry comes
+  from WP-4's auto-seed or from the workbook. Its **attributes** come from the workbook either way.
+- **Neither workbook is committed to this repository — the template included.** The ranked list is
+  customer-derived sales intelligence and this repo is public; both files live outside the repo
+  tree, beside each other. The empty template was originally intended for `docs/plans/`, but the
+  pre-commit Phase 3C containment guard **refuses any compressed-archive container it cannot
+  inspect** (an `.xlsx` is a zip), and that fail-closed stance is kept deliberately rather than
+  allowlisted: a committed template is one careless save away from a committed **filled** sheet.
+  No rank, count, volume
+  or product name from the worklist belongs in a plan document, a commit message or a PR body.
+  **Revision 3 removed the worklist-derived counts revision 2 had published here *(R2-14)*** — the
+  top-band size and its usable-EPA count — and replaced them with qualitative wording. The rule
+  applies to **this amendment as much as to a PR body**, and the amendment now obeys it. *(The
+  catalogue-wide label-data figures elsewhere in this plan are **not** sales-derived and stay
+  exactly as they are.)*
+
+### What does not change
+
+- **Every settled decision stands.** D-A through D-X and the three 2026-08-20 settlements are
+  untouched. This amendment adds D-Y and D-Z; it reopens nothing.
+- **The WP-0…WP-5 ordering among themselves is unchanged**, and WP-4 still runs — the only thing
+  Revision 3 moved is **Phase 1b's slot**, now after WP-4 rather than after WP-2, and **Revision 4
+  moves nothing at all**: its seven fixes are all mechanism, not sequence. **The division of
+  labour is
+  structural, not a preference:** where a product has a usable EPA number the auto-seed is its
+  **only** chemistry source on this path and the workbook is **refused** one for it; the workbook
+  fills the attributes EPA cannot supply, for **every** product. Revision 1's "remains the preferred
+  source" wording is **replaced** — a *preference* is a tie-break a builder can decide to lose, and
+  the point of the rule is that there is no tie to break.
+- **Mason's typed or approved value remains the trust anchor (D-L).** A workbook row **he approves**
+  becomes his approved value and holds the effective row; a later EPA lookup that disagrees is stored
+  beside it as a flagged difference and never overwrites it. A workbook row he has **not** approved is
+  not his value and carries no precedence whatever — it is a proposal like any other.
+- **Phase 2's 573 re-derived rate values are NOT delegated to this path.** They remain individually
+  human-reviewed with no bulk auto-rewrite (D-V, B-13, §4 Phase 2). Phase 1b ships **two distinct
+  surfaces, and only one of them imports**: the read/export product-data workbook, whose rate columns
+  remain **read-only exactly as D-C already rules (C-32 unchanged)** — and the **proposal-import
+  template**, which carries **no rate columns at all** and must never gain one. Neither surface
+  writes a rate.
+- **The WP-1 fast-entry screen still ships (D-N).** It is where a rejected proposal gets corrected
+  and where one-off edits happen. The workbook does not replace it.
+
+---
+
 ## 4. The rest of the sequence — planned, not yet handed off
 
 | Phase | Package | Already decided |
 |---|---|---|
-| **1b** | Product Data Workbook | Extend existing machinery. Separate `Ingredients` / `Crop Uses` tabs, never delimited strings. Rate columns read-only (D-C). Absent row = ignore (D-D). Concurrency via `product_data_version` compare-and-set (D-E) |
+| **1b** | Product Data Workbook | Extend existing machinery. Separate `Ingredients` / `Crop Uses` tabs, never delimited strings. Rate columns read-only (D-C). Absent row = ignore (D-D). Concurrency via `product_data_version` compare-and-set (D-E). **Resequenced to run immediately after WP-4 and before WP-5 (Amendment 2026-08-26, Revision 3 — WP-4 owns the typed propose/commit machinery the importer rides on), + bulk proposal import mode, and it carries its own migration — one new RPC, `create_workbook_import_proposals` — see Amendment 2026-08-26** |
 | **2** | Rate correction + unit standardization | **Highest risk.** `product_rates` child table with low/high/recommended, one per-acre quoting default enforced by the database. Old columns become a trigger-synced read-only mirror with app writes revoked (T-11, C-42). All **three** write paths updated together (C-31). Blank-unit rejection as a database CHECK with the hardcoded `'oz'` removed (`FieldAppChemicalEntry.tsx:305`). Remap spellings **first**, delete aliases second, change no conversion factor in the same change. All 37 per-100-gallon rows reviewed. Seed bases from day one (D-G). Behind `product_rate_source_mode` — **and evaluate the per-product Wells rollout gate for a pilot-first cutover** (D-F). **573 re-derived values reviewed by Mason, never bulk-rewritten.** Must state what `legacy` mode reads once the mirror exists |
 | **3** | Comparison tool *(target ≈ 2026-09-18)* | Search through the canonical id (R-4); Halex GT at 4 pt must reproduce the sheet exactly — 33.44 oz / 3.34 oz / 1.09 pt; coverage gaps surfaced loudly; cost **and** customer price with selectable tier; adjuvant-exclusion note wherever a total appears; money parses to whole cents; RUP never shown as verified (B-21); `ingredient_map` retirement also touches the RLS contract fixture, generated types and the schema registry (C-36) |
 | **4** | Adjuvants, crop/timing, note boxes | Crop **and** timing as pairs. Required-vs-recommended adjuvant. **Filling `quoting_notes` changes what 444 products auto-fill onto new quotes** — preview before/after first (B-19) |
