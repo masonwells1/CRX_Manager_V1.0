@@ -130,6 +130,27 @@ ok(/is empty/.test(ledgerCheck([".claude/settings.json", added("docs/changelog.d
   ]).ok, true, "a genuinely new entry still counts even when an old one is deleted alongside");
 }
 
+// ── a date is not a record, and a heading is not detail (Codex P2, PR #482) ──
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-x.md", "## 2026-08-25" + NL)]).ok, false,
+  "a bare date heading with no description does not satisfy the guard");
+ok(/only a date heading/.test(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-x.md", "## 2026-08-25" + NL)]).reason || ""),
+  "the refusal says a date is not a record of what changed");
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-x.md", "## 2026-08-25 - a title and nothing else" + NL)]).ok, false,
+  "a heading with no detail beneath it does not satisfy the guard");
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-x.md", "## 2026-08-25 - real" + NL + NL + "detail" + NL)]).ok, true,
+  "a heading WITH detail beneath it does satisfy the guard");
+
+// ── malformed fragments are caught even with no agent-surface trigger ────────
+// A src-only commit must not be able to drop an unreadable entry into the folder.
+eq(ledgerCheck(["src/pages/Invoices.tsx", added("docs/changelog.d/2026-08-25-x.md", "")]).ok, false,
+  "a src-only commit adding an EMPTY entry is refused");
+eq(ledgerCheck(["src/pages/Invoices.tsx", added("docs/changelog.d/2026-08-25-x.md")]).ok, true,
+  "a src-only commit adding a WELL-FORMED entry is fine");
+eq(ledgerCheck(["src/pages/Invoices.tsx", "src/lib/money.ts"]).ok, true,
+  "a src-only commit staging no entry at all is unaffected");
+eq(ledgerCheck(["src/pages/Invoices.tsx", modified("docs/changelog.d/2026-08-25-x.md")]).ok, true,
+  "merely touching an existing entry without claiming it is not blocked");
+
 // The entry file alone is not a trigger — it needs no ledger of its own.
 eq(ledgerCheck([added("docs/changelog.d/2026-08-25-solo.md")]).ok, true,
   "an entry file on its own is not an agent-surface trigger");

@@ -83,6 +83,8 @@ function toPosix(v) {
 // writing its own. A path supplied WITHOUT a status therefore cannot satisfy the
 // changelog.d rule; that direction fails closed on purpose. The older ledger files are
 // unaffected: appending to CHANGELOG.md or DECISION_LOG.md is a MODIFY by nature.
+const NEWLINE = String.fromCharCode(10);
+
 function normalizeBody(s) {
   return String(s ?? "").replace(/\r\n/g, "\n").trim();
 }
@@ -96,10 +98,16 @@ function entryVerdict(e, removedBodies) {
   const body = normalizeBody(e.content);
   if (!body) return "is empty, so it records nothing";
   const first = body.split("\n")[0] || "";
-  const m = /^##\s+(\d{4}-\d{2}-\d{2})\b/.exec(first);
-  if (!m) return 'does not start with "## <YYYY-MM-DD> - ..."';
+  const m = /^##\s+(\d{4}-\d{2}-\d{2})\s*\S+/.exec(first);
+  if (!m) {
+    return /^##\s+\d{4}-\d{2}-\d{2}\s*$/.test(first)
+      ? "has only a date heading and no description - a date is not a record of what changed"
+      : 'does not start with "## <YYYY-MM-DD> - <what changed>"';
+  }
   const fileDate = (e.path.split("/").pop() || "").slice(0, 10);
   if (m[1] !== fileDate) return `heading date ${m[1]} disagrees with the filename date ${fileDate}`;
+  // A heading with nothing beneath it records the title and none of the substance.
+  if (body.split("\n").slice(1).join("").trim() === "") return "has a heading but no detail beneath it";
   // A pure rename arrives as D(old) + A(new) under --no-renames. Counting the added
   // half would let a commit satisfy the guard by MOVING someone else's record while
   // writing none of its own. Byte-identical content is what makes that detectable.
@@ -123,7 +131,6 @@ export function ledgerCheck(stagedFiles) {
   });
   const files = entries.map((e) => e.path);
   const triggers = files.filter((f) => TRIGGER_RES.some((re) => re.test(f)));
-  if (triggers.length === 0) return { ok: true, triggers: [] };
 
   const removedBodies = new Set(
     entries
@@ -133,6 +140,24 @@ export function ledgerCheck(stagedFiles) {
   const entryVerdicts = entries
     .filter((e) => ENTRY_RE.test(e.path))
     .map((e) => [e.path, entryVerdict(e, removedBodies)]);
+
+  // A staged fragment is validated even when nothing triggers the ledger requirement:
+  // a src-only commit must not be able to drop an empty or malformed entry into the
+  // folder unchecked (Codex P2, PR #482). Only a MALFORMED ADDED entry blocks here; a
+  // commit staging no entry at all is unaffected, as is one that merely touches an
+  // existing entry without claiming it as its record.
+  if (triggers.length === 0) {
+    const badAdds = entryVerdicts
+      .filter(([p, v]) => v !== true && entries.some((e) => e.path === p && e.status.startsWith("A")));
+    if (badAdds.length === 0) return { ok: true, triggers: [] };
+    return {
+      ok: false,
+      triggers: [],
+      reason: "This commit adds docs/changelog.d/ entries that do not record anything:" + NEWLINE +
+        badAdds.map(([p, why]) => "  - " + p + " " + why).join(NEWLINE) + NEWLINE +
+        "Fix the entry rather than leaving an unreadable record in the folder.",
+    };
+  }
 
   const hasLedger =
     entryVerdicts.some(([, v]) => v === true) ||
