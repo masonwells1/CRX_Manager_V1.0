@@ -1000,7 +1000,7 @@ export default function OrderDetail() {
       } catch (err) {
         const blocked = describePostInvoiceBlock(err);
         if (blocked) errors.push(`${target.label}: ${blocked}`);
-        else errors.push(`${target.label}: ${err instanceof Error ? err.message : 'failed to post'}`);
+        else errors.push(`${target.label}: ${sanitizeError(err)}`);
       }
     }
     if (alreadyPosted > 0 && posted === 0 && errors.length === 0) {

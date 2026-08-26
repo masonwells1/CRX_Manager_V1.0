@@ -754,10 +754,11 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   delivery-versus-invoice quantity check. Return credits carry negative line items for accounting
   reports, but those lines are not new customer billing and must not create a false
   delivery-parity discrepancy.
-- Fresh read-only production schema was restored into disposable PostgreSQL. Twenty-seven load-bearing
+- Fresh read-only production schema was restored into disposable PostgreSQL. Twenty-nine load-bearing
   signals were exercised: twenty-two guard-removal, race, or accounting mutants plus direct cutover rejection,
   non-credit lifecycle allowance, sequential post-after-credit rejection, fully-costed later-post allowance,
-  and current-season credit attribution. The mutants cover the two
+  ordinary same-line post contention followed by a successful retry, current-season credit attribution,
+  and direct hard-delete refusal on the recognized return-credit header. The mutants cover the two
   return rollout guards, the report's no-pre-existing-return-credit guard, both between-migration
   barrier assertions, public-function overload collision,
   source-recognition trigger, customer scope, immutable cost-line ledger, zero-cost ledger rows,
@@ -778,6 +779,7 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   PREFLIGHT_OVERLOAD_COLLISION_REJECTED,POSTFLIGHT_OVERLOAD_COLLISION_REJECTED,
   SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED,SOURCE_POST_AFTER_CREDIT_REJECTED,
   SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED,SOURCE_POST_AFTER_FULLY_COSTED_CREDIT_ALLOWED,
+  SOURCE_POST_CONCURRENT_RETRY_PROVEN,
   DELIVERY_ALLOCATION_CREDIT_FILTER_REMOVAL_DETECTED,
   SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED,
   RETURN_CREDIT_LEDGER_GUARD_REMOVAL_DETECTED,ZERO_COST_LEDGER_MUTATION_DETECTED,
@@ -786,7 +788,8 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   UNLINKED_COST_GUARD_REMOVAL_DETECTED,PRIOR_CREDIT_CONSUMPTION_REMOVAL_DETECTED,
   LINEAGE_CLEAR_REMOVAL_DETECTED,
   GROUPED_COST_BUCKET_6601_REJECTED,CREDIT_CURRENT_SEASON_MUTATION_DETECTED,
-  FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED,CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN
+  FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED,CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN,
+  RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN
   smoke=SMOKE_PASS_ROLLBACK residue=0`. Final exact-head
   adversarial review remains a pre-publication gate. This latest marker also closes the two HIGH
   findings from the exact-SHA Sol review of `af1eed59`: concurrent source void versus credit issue,

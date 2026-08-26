@@ -371,7 +371,9 @@ BEGIN
      AND EXISTS (
        SELECT 1 FROM public.returns r WHERE r.credit_invoice_id = OLD.id
      ) THEN
-    IF current_setting('app.crx_return_credit_lineage', true) = '1' THEN
+    IF TG_OP = 'DELETE' THEN
+      RAISE EXCEPTION 'RETURN_CREDIT_HEADER_IMMUTABLE';
+    ELSIF current_setting('app.crx_return_credit_lineage', true) = '1' THEN
       NULL;
     ELSIF TG_OP = 'UPDATE'
        AND current_setting('app.crx_return_credit_void', true) = '1'
@@ -389,8 +391,7 @@ BEGIN
        AND NEW.total_amount_cents IS NOT DISTINCT FROM OLD.total_amount_cents
        AND NEW.total_cost_cents IS NOT DISTINCT FROM OLD.total_cost_cents THEN
       NULL;
-    ELSIF TG_OP = 'DELETE'
-       OR v_leaves_recognized
+    ELSIF v_leaves_recognized
        OR ROW(NEW.total_amount_cents, NEW.total_cost_cents, NEW.season)
           IS DISTINCT FROM ROW(OLD.total_amount_cents, OLD.total_cost_cents, OLD.season) THEN
       RAISE EXCEPTION 'RETURN_CREDIT_HEADER_IMMUTABLE';
@@ -855,6 +856,7 @@ DECLARE
   v_src text;
   v_triggerdef text;
   v_source_guard_triggerdef text;
+  v_parent_guard_triggerdef text;
   v_lineage_guard_triggerdef text;
 BEGIN
   FOREACH v_name IN ARRAY ARRAY[
@@ -1091,7 +1093,12 @@ BEGIN
      OR has_function_privilege('service_role', 'public._receive_return_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_SECURITY_DRIFT';
   END IF;
-  IF NOT EXISTS (
+  SELECT p.prosrc INTO v_src
+  FROM pg_proc p
+  WHERE p.oid = to_regprocedure('public.guard_recognized_return_credit_delete()');
+  IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
+       '89c96dabb82f6dada53e0084d5c65e72f11ea0630b56cf6e4f7f99620be48a8d'
+     OR NOT EXISTS (
     SELECT 1 FROM pg_proc p
     WHERE p.oid = 'public.guard_recognized_return_credit_delete()'::regprocedure
       AND p.prosecdef AND p.provolatile = 'v'
@@ -1113,6 +1120,16 @@ BEGIN
      ) THEN
     RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_PARENT_GUARD_DRIFT';
   END IF;
+  SELECT pg_get_triggerdef(t.oid) INTO v_parent_guard_triggerdef
+  FROM pg_trigger t
+  WHERE t.tgrelid = 'public.returns'::regclass
+    AND t.tgname = 'aa_crx_guard_recognized_return_credit_delete'
+    AND NOT t.tgisinternal;
+  IF encode(sha256(convert_to(v_parent_guard_triggerdef, 'UTF8')), 'hex') IS DISTINCT FROM
+       '3d528e657bb97824f50145c7388f74da6da713d271268fba346e6e1a94cb84f7' THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_PARENT_GUARD_TRIGGER:%',
+      encode(sha256(convert_to(v_parent_guard_triggerdef, 'UTF8')), 'hex');
+  END IF;
   SELECT pg_get_triggerdef(t.oid) INTO v_triggerdef FROM pg_trigger t WHERE t.tgrelid = 'public.invoice_items'::regclass AND t.tgname = 'zz_crx_below_cost_invoice_items' AND NOT t.tgisinternal;
   IF v_triggerdef IS NULL
      OR encode(sha256(convert_to(v_triggerdef, 'UTF8')), 'hex') IS DISTINCT FROM
@@ -1123,7 +1140,7 @@ BEGIN
   FROM pg_proc p
   WHERE p.oid = to_regprocedure('public.guard_return_credit_source_recognition()');
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
-         '06e8fc12e110955208c001a7a369d8f4c34724219f15b202de588236d6c9bb16'
+         'cce665d2c4b34a2b253a9e4518599f75d489309f25cc402fe6ae59269c41442e'
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'guard_return_credit_source_recognition') <> 1
      OR NOT EXISTS (

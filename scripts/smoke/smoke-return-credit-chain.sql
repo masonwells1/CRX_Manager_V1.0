@@ -874,6 +874,18 @@ BEGIN
   END;
 
   BEGIN
+    DELETE FROM invoices WHERE id = v_credit_id;
+    RAISE EXCEPTION 'SMOKE_FAIL: active return-credit header was hard-deleted';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason IS DISTINCT FROM 'RETURN_CREDIT_HEADER_IMMUTABLE' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: return-credit header hard-delete guard raised %', v_reason;
+    END IF;
+  END;
+  RAISE NOTICE 'RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN';
+
+  BEGIN
     DELETE FROM returns WHERE id = v_return_id;
     RAISE EXCEPTION 'SMOKE_FAIL: recognized return-credit parent was deleted';
   EXCEPTION WHEN OTHERS THEN

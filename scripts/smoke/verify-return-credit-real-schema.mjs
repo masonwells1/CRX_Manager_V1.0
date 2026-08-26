@@ -346,6 +346,7 @@ const expectedProofs = [
   'SOURCE_POST_AFTER_CREDIT_REJECTED',
   'SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED',
   'SOURCE_POST_AFTER_FULLY_COSTED_CREDIT_ALLOWED',
+  'SOURCE_POST_CONCURRENT_RETRY_PROVEN',
   'DELIVERY_ALLOCATION_CREDIT_FILTER_REMOVAL_DETECTED',
   'SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED',
   'RETURN_CREDIT_LEDGER_GUARD_REMOVAL_DETECTED',
@@ -360,6 +361,7 @@ const expectedProofs = [
   'FRACTIONAL_REPORT_HALF_CENT_DETECTED',
   'FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED',
   'CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN',
+  'RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN',
 ];
 const completedProofs = new Set();
 try {
@@ -899,7 +901,7 @@ try {
   );
   completedProofs.add('SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED');
   psql(canonicalSourceGuardHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '06e8fc12e110955208c001a7a369d8f4c34724219f15b202de588236d6c9bb16');
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', 'cce665d2c4b34a2b253a9e4518599f75d489309f25cc402fe6ae59269c41442e');
 
   // Sequential latent-defect proof: if a return credit was issued while its
   // source invoice was still a draft, later recognition must fail closed. A
@@ -947,6 +949,66 @@ try {
     'legitimate later invoice did not become recognized',
   );
   completedProofs.add('SOURCE_POST_AFTER_FULLY_COSTED_CREDIT_ALLOWED');
+
+  // Ordinary posting still participates in the lineage protocol because a
+  // return credit could start at the same instant. Prove the operational
+  // contract with no return or credit row present: one same-line post fails
+  // fast while the other owns the lock, then succeeds on retry.
+  const ordinaryPosting = postingConcurrencyFixture(8);
+  psql(ordinaryPosting.sql);
+  psql(`
+    SET session_replication_role = replica;
+    DELETE FROM public.return_items WHERE id = '${ordinaryPosting.ids.returnItem}';
+    DELETE FROM public.returns WHERE id = '${ordinaryPosting.ids.return}';
+    DELETE FROM public.invoices WHERE id = '${ordinaryPosting.ids.creditInvoice}';
+    SET session_replication_role = origin;
+  `);
+  psql(ordinaryPosting.laterInvoiceSql);
+  const ordinaryMarker = 'pr361_ordinary_posts_08';
+  const firstOrdinaryPost = psqlAsync(`
+    BEGIN;
+    ${ordinaryPosting.sourcePostSql}
+    SELECT '${ordinaryMarker}', pg_sleep(8);
+    COMMIT;
+  `);
+  await waitForSqlSleep(ordinaryMarker);
+  const contendedOrdinaryPostPromise = psqlAsync(ordinaryPosting.laterPostSql);
+  const contendedOrdinaryPost = await Promise.race([
+    contendedOrdinaryPostPromise,
+    new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
+  ]);
+  assert.notEqual(contendedOrdinaryPost, null, 'ordinary same-line post waited instead of failing fast');
+  assert.notEqual(contendedOrdinaryPost.status, 0, 'ordinary same-line concurrent post bypassed the lineage lock');
+  assert.match(
+    `${contendedOrdinaryPost.stdout}\n${contendedOrdinaryPost.stderr}`,
+    /RETURN_CREDIT_SOURCE_CONCURRENT/,
+    'ordinary same-line concurrent post did not return the retryable lineage token',
+  );
+  const firstOrdinaryPostResult = await firstOrdinaryPost;
+  assert.equal(
+    firstOrdinaryPostResult.status,
+    0,
+    `first ordinary same-line post failed:\n${firstOrdinaryPostResult.stderr || firstOrdinaryPostResult.stdout}`,
+  );
+  const ordinaryRetry = psql(ordinaryPosting.laterPostSql, { allowFailure: true });
+  assert.equal(
+    ordinaryRetry.status,
+    0,
+    `ordinary same-line post did not succeed on retry:\n${ordinaryRetry.stderr || ordinaryRetry.stdout}`,
+  );
+  assert.equal(
+    psqlValue(`
+      SELECT CASE
+        WHEN count(*) FILTER (WHERE status = 'posted') = 2
+         AND count(*) FILTER (WHERE invoice_type = 'credit_memo') = 0
+        THEN 1 ELSE 0 END
+      FROM public.invoices
+      WHERE id IN ('${ordinaryPosting.ids.sourceInvoice}', '${ordinaryPosting.ids.laterInvoice}');
+    `),
+    '1',
+    'ordinary same-line retry proof did not finish with exactly two posted sales and no credit memo',
+  );
+  completedProofs.add('SOURCE_POST_CONCURRENT_RETRY_PROVEN');
 
   // Two-session posting race proof: whichever participant wins the shared
   // order-item lock determines a safe outcome. Here the credit wins, so the
@@ -1015,7 +1077,7 @@ try {
   );
   completedProofs.add('SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED');
   psql(canonicalSourceGuardHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '06e8fc12e110955208c001a7a369d8f4c34724219f15b202de588236d6c9bb16');
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', 'cce665d2c4b34a2b253a9e4518599f75d489309f25cc402fe6ae59269c41442e');
 
   const allConcurrencyFixtures = [
     canonicalConcurrency,
@@ -1024,6 +1086,7 @@ try {
     mutantPostingConcurrency,
     sequentialPosting,
     fullyCostedPosting,
+    ordinaryPosting,
     allocationFixture,
   ];
   const fixtureIds = (key) => allConcurrencyFixtures.map((fixture) => `'${fixture.ids[key]}'`).join(', ');
@@ -1061,7 +1124,7 @@ try {
   assert.match(sourceGuardMutantOutput, /SMOKE_FAIL: source sale with an active return credit was soft-deleted/, `source-recognition guard mutant did not reach the source-sale oracle:\n${sourceGuardMutantOutput}`);
   completedProofs.add('SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED');
   psql(canonicalSourceGuardHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '06e8fc12e110955208c001a7a369d8f4c34724219f15b202de588236d6c9bb16');
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', 'cce665d2c4b34a2b253a9e4518599f75d489309f25cc402fe6ae59269c41442e');
 
   // Return-credit ledger mutation proof: without the line guard, the smoke
   // can rewrite an active negative-cost credit line and make a later return
@@ -1276,6 +1339,8 @@ try {
   assert.match(output, /SMOKE_PASS_ROLLBACK/, `canonical smoke did not reach SMOKE_PASS_ROLLBACK:\n${output}`);
   assert.match(output, /CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN/, `canonical smoke did not prove current-season credit attribution:\n${output}`);
   completedProofs.add('CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN');
+  assert.match(output, /RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN/, `canonical smoke did not prove return-credit header hard-delete refusal:\n${output}`);
+  completedProofs.add('RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN');
   assert.equal(psqlValue("SELECT count(*) FROM public.customers WHERE farm_name LIKE '[SMOKE] Return Credit Farm %';"), '0', 'customer fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.returns WHERE return_number LIKE 'SMK-%';"), '0', 'return fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.invoices WHERE invoice_number LIKE 'SMK-RCC-%';"), '0', 'invoice fixture residue remained');

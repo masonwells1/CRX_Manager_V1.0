@@ -36,6 +36,10 @@ recognizing it would expose an uncosted, restocked return quantity; a fully cost
 block a later delivery invoice. Posting uses the same ordered advisory-lock protocol as credit issuance
 and fails fast on contention. The migration also excludes new credit-memo lines from delivery billing
 allocation so a return cannot reopen customer billing headroom.
+Because every recognized-status transition must coordinate with a return credit that could start at
+the same instant, two people posting invoices for the same order line concurrently can make one post
+fail cleanly with a wait-and-retry message even when no return credit exists yet. No data is at risk;
+retry the refused post after the other finishes.
 
 **ACCEPTED POLICY — late return credits stay in the current crop season.** Mason chose this on
 2026-08-26 to keep prior customer year-end summaries stable and the rule simple. Consequently, a

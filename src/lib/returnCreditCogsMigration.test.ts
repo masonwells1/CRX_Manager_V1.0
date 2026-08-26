@@ -105,9 +105,11 @@ describe('return-credit COGS migration', () => {
     expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('f8becf522d34caa804006e9372759b1088220fb1ea8c020b23ce949051a7581c');
     expect(functionBodySha256(migration, 'void_invoice')).toBe('6d7c17279c90a9d6817129ba6f43bb490523f2844657074046a9f66f019af3ec');
     expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('a151010fc4556ab78d9254c42f7fe3c6ac06ba6dc03c19f52c44fe882ba2b520');
-    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('06e8fc12e110955208c001a7a369d8f4c34724219f15b202de588236d6c9bb16');
+    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('cce665d2c4b34a2b253a9e4518599f75d489309f25cc402fe6ae59269c41442e');
+    expect(functionBodySha256(migration, 'guard_recognized_return_credit_delete')).toBe('89c96dabb82f6dada53e0084d5c65e72f11ea0630b56cf6e4f7f99620be48a8d');
     expect(functionBodySha256(migration, 'guard_return_credit_lineage')).toBe('7b5ccb72380c54cd2a202f891de659bce1b916c09c76ad9884446ba1544dd89f');
     expect(migration).toContain('0f0ad06a8e8fe0994d051fc5b6659cef04f9f16829cbf9998e8b3f1265a257cb');
+    expect(migration).toContain('3d528e657bb97824f50145c7388f74da6da713d271268fba346e6e1a94cb84f7');
     expect(migration).toContain('cc146431df3ab52d734ce3f62189bbbd51e3779ce64cfa789ee829e704f9e27c');
     expect(migration).toContain('_issue_return_credit_header_only_impl_20260825');
     expect(migration).toContain('_receive_return_impl_before_inventory_seed_20260825');

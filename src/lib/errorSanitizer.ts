@@ -36,7 +36,7 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
   [/^RETURN_CREDIT_HEADER_RESULT_INVALID\b/i,
    'The return credit could not be completed safely. Retry the operation'],
   [/^RETURN_CREDIT_SOURCE_CONCURRENT\b/i,
-   'A related invoice is being changed. Wait a moment and retry the return credit'],
+   'A related invoice or return credit is being changed elsewhere. Wait a moment and try again'],
   [/^RETURN_CREDIT_VOID_RELEASE_FAILED\b/i,
    'The return credit could not be voided safely, so no changes were saved. Refresh and try again; contact support if it repeats'],
   [/^RETURN_CREDIT_UNAPPLY_RELEASE_FAILED\b/i,
