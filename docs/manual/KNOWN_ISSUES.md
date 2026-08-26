@@ -117,6 +117,27 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-26 — the quote-version trust chain is whole-body hash-pinned in THREE files; any re-emission must update every pin site in the same change
+
+PR #401 rounds 8-10 pinned the ENTIRE normalized bodies (length + md5, normalization
+`md5(btrim(regexp_replace(prosrc, '\s+', ' ', 'g')))`) of all five chain routines —
+`create_quote_version`, `_restore_quote_version_below_cost_impl_20260810`,
+`_create_quote_version_owner_impl`, `_restore_quote_version_owner_impl`, and the public
+`restore_quote_version` wrapper. This is deliberate: a prefix/region pin left the tail open to
+an appended `EXCEPTION` handler that could catch `QUOTE_VERSION_LEGACY_UNTRUSTED` and restore
+legacy snapshots, and the wrappers trusted deeper links nothing pinned (all proven live
+2026-08-26, both ways). **Consequence:** any future legitimate re-emission of ANY of the five
+makes the standing sweep report a violation until its pin constants are recomputed against live
+and updated in **all three pin locations in the SAME change**:
+1. `scripts/db-invariant-sweeps/predicates/quote-versions-rpc-owned.sql` (the standing sweep —
+   its violation reasons print expected vs measured values, so an operator can tell an expected
+   pin update from a real bypass);
+2. `supabase/migrations/20260825190000_quote_version_restore_trust_boundary.sql` if it has not
+   yet applied (precondition preimage/helper/route pins AND postcondition body pins);
+3. `src/lib/quoteVersionWriteBoundary.test.ts` (the mirror test, which binds each pin to its
+   own predicate branch).
+That forced review is the guard working, not a false positive.
+
 ## OPEN 2026-08-23 — `codex review <scope>` self-recurses, kills its own process, and exits 0
 
 **Severity: HIGH. Not a crash — a silent false "gate passed".** `codex review --base origin/main`

@@ -506,7 +506,7 @@ SELECT 'quote_versions:non-bypassing-writer' AS violation_key,
 UNION ALL
 
 SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
-       'a second RLS-bypassing routine writes public.quote_versions — snapshot_data is an authoritative cost basis and this boundary is reasoned around exactly one author of it' AS reason
+       'an unpinned RLS-bypassing routine writes public.quote_versions — snapshot_data is an authoritative cost basis; the only allowed second writer is the exact create_quote_version trust-marker update guarded immediately above' AS reason
  WHERE EXISTS (
    SELECT 1
      FROM pg_proc p
@@ -516,7 +516,318 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
       AND p.prosecdef
       AND r.rolbypassrls
       AND NOT (n.nspname = 'public' AND p.proname = '_create_quote_version_owner_impl')
+      -- 20260825190000 adds a deliberately narrow second writer: after the
+      -- owner-only implementation has constructed a fresh snapshot, the public
+      -- create wrapper can set only that row's null trust marker. Do not exempt
+      -- by name: any signature, definer, owner, search_path, browser-grant, or
+      -- body drift makes it an authoritative writer again and reports here.
+      AND NOT (
+        p.oid = to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)')
+        AND EXISTS (
+          SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) AS config(value)
+          WHERE replace(config.value, ' ', '') = 'search_path=public,pg_temp'
+        )
+        AND CASE
+          WHEN to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NULL THEN true
+          ELSE NOT has_function_privilege('anon', to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)'), 'EXECUTE')
+        END
+        AND CASE
+          WHEN to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NULL THEN true
+          ELSE has_function_privilege('authenticated', to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)'), 'EXECUTE')
+        END
+        AND p.prosrc LIKE '%_create_quote_version_owner_impl%'
+        -- CodeRabbit 2026-08-25 (P2): the checks around this one prove the
+        -- marker UPDATE EXISTS with the reviewed spelling and that it is the
+        -- only quote_versions write, but NOT that it runs AFTER the owner-side
+        -- writer. A later re-emission could select an arbitrary legacy row into
+        -- v_version_id, run this exact UPDATE before calling the owner
+        -- implementation, and still leave this sweep green while blessing an
+        -- untrusted snapshot. Pin the ordering positionally, the same way the
+        -- restore-side contract further down already does: the owner impl must
+        -- be called first, v_version_id must be derived from THAT call's
+        -- result, and only then may the marker be set.
+        AND strpos(lower(p.prosrc), 'v_result := public._create_quote_version_owner_impl') > 0
+        AND strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid') > 0
+        AND strpos(lower(p.prosrc), 'update public.quote_versions') > 0
+        AND strpos(lower(p.prosrc), 'v_result := public._create_quote_version_owner_impl')
+            < strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
+        AND strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
+            < strpos(lower(p.prosrc), 'update public.quote_versions')
+        -- CodeRabbit round 3 (2026-08-25) found two REAL gaps the positional
+        -- checks above still left open. Both are closed here rather than
+        -- accepted. NOTE the four-argument regexp_count form: the third
+        -- parameter is a START POSITION, not flags. Every call in this file
+        -- originally passed 'i' as the third argument, which raises
+        -- `invalid input syntax for type integer: "i"` at runtime — the sweep
+        -- would have CRASHED rather than reported. Verified against live
+        -- PostgreSQL 17.6 on 2026-08-25 and corrected throughout.
+        --
+        -- Gap 1 (Major): the strpos ordering proves only that ONE matching owner
+        -- call appears before the marker. It does not require exactly one. A
+        -- re-emitted wrapper could mark the first snapshot, create a SECOND
+        -- unmarked snapshot, and return that second version_id while this sweep
+        -- stayed green.
+        AND regexp_count(p.prosrc, '_create_quote_version_owner_impl\s*\(', 1, 'i') = 1
+        --
+        -- Gap 2 (P2) — REOPENED TWICE. Round 3 counted `v_version_id :=` and
+        -- `v_result :=` inside the region; round 4 walked past that with
+        -- `SELECT ... INTO`, so the count became a closed allowlist pinned to
+        -- the exact reviewed text. Round 5 then showed the allowlist itself was
+        -- anchored in the wrong place: it began at the `v_version_id`
+        -- assignment, leaving the interval BETWEEN the owner impl returning and
+        -- that assignment completely unchecked. A re-emission could put
+        --
+        --   v_result := jsonb_build_object('status','created','version_id', <legacy id>);
+        --
+        -- in that gap. The sole-owner-call check, the ordering check, the
+        -- region fingerprint and the exact marker-UPDATE check ALL still
+        -- passed, and the wrapper stamped an arbitrary legacy row as trusted.
+        -- Verified against live PostgreSQL 17.6 on 2026-08-26: that body passed
+        -- the round-4 guard.
+        --
+        -- The region now starts at the owner call itself, so there is no
+        -- unguarded interval left between the writer and the marker. This also
+        -- pins the owner call's ARGUMENTS, which nothing checked before — a
+        -- re-emission passing NULL for p_idempotency_key is now rejected too.
+        --
+        -- Lesson worth keeping: a closed allowlist only closes what is INSIDE
+        -- it. Choosing its boundaries is the whole security argument, and
+        -- "nothing unexpected can appear here" is worth nothing if the
+        -- interesting statement sits just outside. Collapse whitespace BEFORE
+        -- btrim — the reverse order leaves a trailing space and the real body
+        -- fails its own guard.
+        AND btrim(
+              regexp_replace(
+                substring(
+                  lower(p.prosrc)
+                  FROM strpos(lower(p.prosrc), 'v_result := public._create_quote_version_owner_impl')
+                  FOR  strpos(lower(p.prosrc), 'update public.quote_versions')
+                       - strpos(lower(p.prosrc), 'v_result := public._create_quote_version_owner_impl')
+                ),
+                '\s+', ' ', 'g'
+              )
+            ) = 'v_result := public._create_quote_version_owner_impl'
+             || '( p_quote_id, p_performed_by, p_method, p_idempotency_key ); '
+             || 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid; '
+             || 'if v_result->>''status'' is distinct from ''created'' or v_version_id is null then '
+             || 'raise exception ''quote_version_trust_mark_failed''; end if;'
+        AND regexp_count(
+          p.prosrc,
+          'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null\s*;',
+            1, 'i'
+        ) = 1
+        AND regexp_count(
+          p.prosrc,
+          '\mupdate\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M',
+            1, 'i'
+        ) = 1
+        AND p.prosrc !~* '(insert\s+into|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
+        -- Codex round 8 (2026-08-26): everything after the marker UPDATE was
+        -- unpinned, so an appended EXCEPTION handler slid past this exemption.
+        -- Pin the ENTIRE normalized body, same as the named contract below —
+        -- the two must not drift apart, or a weakened contract branch would
+        -- leave this exemption silently blessing the drifted body.
+        AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3972
+        AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '3723acbbf1821e9d5d212c3aea983f86'
+      )
       AND p.prosrc ~* '(insert\s+into|update|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
+ )
+
+UNION ALL
+
+-- The exception above is intentionally checked as its own named contract too.
+-- It may UPDATE only the freshly returned owner-written row, only from NULL to
+-- clock_timestamp(), and only through the existing authenticated public
+-- wrapper. If this exact shape drifts, the writer scan must stop exempting it
+-- before a broadened marker update can bless arbitrary legacy snapshots.
+SELECT 'create_quote_version:trusted-marker-writer-contract' AS violation_key,
+       'create_quote_version may be the sole additional RLS-bypassing quote_versions writer only as the pinned SECURITY DEFINER, authenticated-only, search_path-pinned marker update after _create_quote_version_owner_impl' AS reason
+ WHERE NOT EXISTS (
+   SELECT 1
+     FROM pg_proc p
+     JOIN pg_roles r ON r.oid = p.proowner
+     WHERE p.oid = to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)')
+      AND p.prosecdef
+      AND r.rolbypassrls
+      AND EXISTS (
+        SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) AS config(value)
+        WHERE replace(config.value, ' ', '') = 'search_path=public,pg_temp'
+      )
+       AND CASE
+         WHEN to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NULL THEN true
+         ELSE NOT has_function_privilege('anon', to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)'), 'EXECUTE')
+       END
+       AND CASE
+         WHEN to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NULL THEN true
+         ELSE has_function_privilege('authenticated', to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)'), 'EXECUTE')
+       END
+      AND p.prosrc LIKE '%_create_quote_version_owner_impl%'
+      AND regexp_count(
+        p.prosrc,
+        'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null\s*;',
+          1, 'i'
+      ) = 1
+      AND regexp_count(
+        p.prosrc,
+        '\mupdate\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M',
+          1, 'i'
+      ) = 1
+      AND p.prosrc !~* '(insert\s+into|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
+      -- Codex round 8 (2026-08-26): the pinned region above runs from the owner
+      -- call to the marker UPDATE, so text after the UPDATE was open — an
+      -- appended EXCEPTION handler could catch quote_version_trust_mark_failed
+      -- and report success for a version that was never marked. Fail-closed on
+      -- the trust side (the row stays untrusted), but a silent contract break.
+      -- Same fix as the restore side: pin the ENTIRE normalized body.
+      AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3972
+      AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '3723acbbf1821e9d5d212c3aea983f86'
+ )
+
+UNION ALL
+
+-- Restoring is the point where a trusted snapshot becomes authoritative money
+-- again. Pin both the marker read and the rejection before the owner-side
+-- restore call, so re-emitting this private implementation cannot silently
+-- remove or move the trust check while preserving its signature and grants.
+SELECT '_restore_quote_version_below_cost_impl_20260810:trust-check-contract' AS violation_key,
+       'the private restore implementation must read restore_trusted_at for the requested quote/version, reject NULL with QUOTE_VERSION_LEGACY_UNTRUSTED, and do so before its sole owner-side restore call' AS reason
+ WHERE NOT EXISTS (
+   SELECT 1
+     FROM pg_proc p
+     JOIN pg_roles r ON r.oid = p.proowner
+    WHERE p.oid = to_regprocedure('public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)')
+      AND p.prosecdef
+      AND r.rolbypassrls
+      AND EXISTS (
+        SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) AS config(value)
+        WHERE replace(config.value, ' ', '') = 'search_path=public,pg_temp'
+      )
+      AND regexp_count(
+        p.prosrc,
+        'select\s+restore_trusted_at\s+into\s+v_restore_trusted_at\s+from\s+public\.quote_versions\s+where\s+id\s*=\s*p_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+for\s+key\s+share\s*;',
+          1, 'i'
+      ) = 1
+      AND regexp_count(
+        p.prosrc,
+        'if\s+v_restore_trusted_at\s+is\s+null\s+then\s+raise\s+exception\s+''QUOTE_VERSION_LEGACY_UNTRUSTED''\s*;\s+end\s+if\s*;',
+          1, 'i'
+      ) = 1
+      AND regexp_count(p.prosrc, '_restore_quote_version_owner_impl\s*\(', 1, 'i') = 1
+      AND strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''')
+          < strpos(lower(p.prosrc), 'v_result := public._restore_quote_version_owner_impl')
+      -- The owner call is not the only possible write shape. Keep the entire
+      -- prefix before the rejection read-only. The normalized length + digest
+      -- deliberately fingerprints the entire reviewed prefix instead of trying
+      -- to tokenize every legal PL/pgSQL identifier spelling. Any statement,
+      -- helper call, quoted identifier, dollar identifier, or reordered guard
+      -- changes the fingerprint and fails the standing gate closed.
+      AND substring(
+            p.prosrc FROM 1 FOR greatest(
+              strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
+              0
+            )
+          ) !~* '(insert\s+into|update\s+(only\s+)?[a-z_\"]|delete\s+from|merge\s+into|truncate\s+(table\s+)?[a-z_\"]|execute\s+|perform\s+|call\s+)'
+      AND length(
+            btrim(regexp_replace(
+              substring(
+                p.prosrc FROM 1 FOR greatest(
+                  strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
+                  0
+                )
+              ),
+              '\s+',
+              ' ',
+              'g'
+            ))
+          ) = 2730
+      AND md5(
+            btrim(regexp_replace(
+              substring(
+                p.prosrc FROM 1 FOR greatest(
+                  strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
+                  0
+                )
+              ),
+              '\s+',
+              ' ',
+              'g'
+            ))
+          ) = '62440ea5c855d1366808c5a2098177d7'
+      -- Codex round 8 (2026-08-26): the prefix pin above ends at the rejection,
+      -- so everything AFTER it was open. A re-emission could keep the prefix
+      -- byte-identical, move the sole owner call into an appended EXCEPTION
+      -- handler, and deliberately raise into that handler — catching
+      -- QUOTE_VERSION_LEGACY_UNTRUSTED restores legacy snapshots while the
+      -- prefix pin, the exact-IF count, the sole-owner-call count and the
+      -- ordering check all still pass. Same boundary-choice lesson as round 5:
+      -- the region must leave NO unpinned interval, on either side. So pin the
+      -- ENTIRE normalized body. This subsumes the prefix pin logically; the
+      -- prefix pin stays for diagnostic granularity when only the tail drifts.
+      AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3720
+      AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 'b864c261854b760ff22f1f24e87ae22f'
+ )
+
+UNION ALL
+
+-- Codex round 9/10 (2026-08-26): the two branches above pin the WRAPPER bodies,
+-- but the chain they guard runs deeper. Three more routines' results are
+-- trusted without their bodies being pinned anywhere:
+--   * _create_quote_version_owner_impl — a re-emission keeping its signature,
+--     owner, search_path and grants could return
+--     {'status':'created','version_id':<legacy id>} and the pinned wrapper
+--     would stamp that legacy row trusted, every check green;
+--   * _restore_quote_version_owner_impl — a re-emission could restore a
+--     DIFFERENT (unmarked) version than the one whose marker was checked;
+--   * restore_quote_version (public) — a re-emission could route around the
+--     below-cost impl (whose name merely appearing in prosrc proved nothing)
+--     and reach the owner impl with the trust check skipped.
+-- So pin all three normalized bodies, measured read-only from live on
+-- 2026-08-26. This closes the SET deliberately: these five routines (two
+-- wrappers above, three here) are exactly the chain whose results become an
+-- authoritative cost source; helpers they call (check_idempotency, auth.uid)
+-- affect replay/identity, not what gets trusted as money. Any legitimate
+-- re-emission of one of the five must update its pin here in the same change.
+SELECT 'restore_quote_version:route-pinned' AS violation_key,
+       'the public restore wrapper body drifted from the reviewed below-cost route — expected 311/97da0cdfa0f90ff87b5e48d9aedf9f33, measured '
+         || coalesce((SELECT length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))::text || '/' || md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))
+                        FROM pg_proc p
+                       WHERE p.oid = to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)')), 'signature unresolvable')
+         || ' — an intentionally reviewed re-emission must update this pin, the 20260825190000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
+ WHERE NOT EXISTS (
+   SELECT 1 FROM pg_proc p
+   WHERE p.oid = to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)')
+     AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 311
+     AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '97da0cdfa0f90ff87b5e48d9aedf9f33'
+ )
+
+UNION ALL
+
+SELECT '_create_quote_version_owner_impl:body-pinned' AS violation_key,
+       'the owner-side snapshot writer body drifted from the reviewed text — the create wrapper trusts its returned version_id enough to stamp it restore_trusted_at; expected 3362/4ecb8accbaf6be4fb64aadbc79e492e3, measured '
+         || coalesce((SELECT length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))::text || '/' || md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))
+                        FROM pg_proc p
+                       WHERE p.oid = to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)')), 'signature unresolvable')
+         || ' — an intentionally reviewed re-emission must update this pin, the 20260825190000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
+ WHERE NOT EXISTS (
+   SELECT 1 FROM pg_proc p
+   WHERE p.oid = to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)')
+     AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3362
+     AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '4ecb8accbaf6be4fb64aadbc79e492e3'
+ )
+
+UNION ALL
+
+SELECT '_restore_quote_version_owner_impl:body-pinned' AS violation_key,
+       'the owner-side restore writer body drifted from the reviewed text — the trust check runs in its caller, so this body must keep restoring exactly the version whose marker was checked; expected 13566/6972f2d6b76b2d8872b0a027e7f9ee93, measured '
+         || coalesce((SELECT length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))::text || '/' || md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))
+                        FROM pg_proc p
+                       WHERE p.oid = to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)')), 'signature unresolvable')
+         || ' — an intentionally reviewed re-emission must update this pin, the 20260825190000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
+ WHERE NOT EXISTS (
+   SELECT 1 FROM pg_proc p
+   WHERE p.oid = to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)')
+     AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 13566
+     AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '6972f2d6b76b2d8872b0a027e7f9ee93'
  )
 
 UNION ALL
