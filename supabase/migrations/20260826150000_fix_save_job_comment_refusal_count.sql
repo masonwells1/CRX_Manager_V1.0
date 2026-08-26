@@ -1,8 +1,8 @@
 -- ============================================================================
 -- COMMENT-ONLY: correct save_job's function comment from ELEVEN refusals to TWELVE
 -- ----------------------------------------------------------------------------
--- STATUS: NOT APPLIED (this header line goes stale at apply time; the ledger is
--- authoritative).
+-- STATUS: NOT APPLIED
+-- (This status line goes stale at apply time; the ledger is authoritative.)
 --
 -- WHAT THIS CHANGES: exactly one thing — the COMMENT ON public.save_job(uuid,
 -- jsonb, jsonb, jsonb, uuid, text). No function body, no ACL, no data, no
@@ -19,12 +19,18 @@
 --   1. "ELEVEN refusals" -> "TWELVE refusals".
 --   2. A new "Job fields:" clause for JOB_ACRES_NOT_FINITE, inserted after the
 --      Quantities group, describing the check exactly as the body implements it
---      (every field acreage must be a real, non-negative number; raised before
---      any write; the table-level residual is recorded in 20260820120000's
---      KNOWN RESIDUALS block).
+--      (every field acreage must be a real, finite, non-negative number; raised
+--      before any write; the table-level residual is recorded in
+--      20260820120000's KNOWN RESIDUALS block).
 --   3. A missing comma after "...unit_conversions spelling)" — the live text
 --      runs CHEM_RATE_UNIT_UNRECOGNIZED's clause straight into
 --      CHEM_RATE_DENOMINATOR_NOT_ACRES with no separator.
+--   4. The stale "NO save-blocking unit guard in JobDetail.tsx" passage
+--      replaced with the current CLIENT MIRROR paragraph: PR #436 merged on
+--      2026-08-25, so a save-blocking client-side mirror now exists, and this
+--      function is the authoritative boundary rather than the only one.
+--      (Caught by the 2026-08-26 drift/RLS pre-reviews — republishing that
+--      passage unchanged would have re-dated a false claim.)
 --
 -- WHY A NEW FILE: the applied migration 20260820120000 is never edited (CRX
 -- Hard Rule). A stale count in the canonical function comment is the exact
