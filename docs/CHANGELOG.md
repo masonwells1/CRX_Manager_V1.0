@@ -1,5 +1,59 @@
 # CRX Manager V1.0 — Development Changelog
 
+## 2026-08-25 — the routine migration door now refuses a stolen reviewer proof
+
+PR #470 closed a proof-replay hole in `scripts/apply-migration-file.mjs` by adding
+`requireExactProofName`, but wired it only there. `.claude/hooks/migration-apply-guard.mjs`
+— the PreToolUse hook covering MCP `apply_migration`, the door used for ROUTINE
+migrations — passed no such flag and kept matching proof-to-migration by substring.
+So the fix hardened the rarely-used oversized-file door and left the common one open.
+Codex reported this on #470 and it was deliberately deferred there rather than bundled;
+this is that follow-up.
+
+The attack: copy reviewed bytes to `99999999999999_alias_<old-name>.sql`. The proof for
+`<old-name>` still matched by substring, the queryHash still matched (identical SQL), and
+the ordering check read the alias's leading stamp as newest. Codex reproduced
+`APPLY GATE PASSED` on an actual dry run, including a legacy 8-digit variant
+(`20260210_fix_rls_critical_issues`) that defeated an earlier stamp-count rule outright.
+
+- `requireExactProofName` now **defaults to `true`**, so a caller that forgets it inherits
+  the safe behaviour. Both known callers want exact; the flag stays available for tests.
+- Names are compared **normalized** (basename, `.sql` stripped, slashes unified), not as
+  raw strings. This matters: `write-apply-proofs.mjs` records a bare name while an apply
+  call may carry `<name>.sql` or a repo-relative path, and substring matching had been
+  quietly absorbing that difference. Naive equality would have refused legitimate applies.
+  An alias differs in its STEM, which survives normalization, so it is still refused.
+- The refusal now distinguishes "a fresh clean proof exists but names a DIFFERENT
+  migration" from "no proof found", printing both names. Previously an operator hitting
+  this saw a missing-proof message with a proof sitting right there, and the natural next
+  move — re-mint — would not have helped.
+
+Proof: 114 assertions in `migration-apply-lib.test.mjs` and the full
+`npm run test:correction-guards` suite pass, including the hook's own 86 assertions. The
+existing characterization test that asserted *"substring matching DOES let the alias
+inherit the proof (the bug)"* now asserts the default REFUSES it; the lenient path is
+retained behind an explicit opt-in so it fails loudly if anyone reinstates it as default.
+
+**Correction — the first version of this entry overstated the safety property.** It claimed
+the change "can only refuse an apply that previously succeeded, never permit one". That is
+FALSE, and CodeRabbit was right to challenge it. An exhaustive comparison over 2,500 name
+pairs found **255** where the old substring rule REFUSED and normalized matching ACCEPTS —
+for example a proof recorded as `<name>.SQL` against an apply of `<name>.sql`, which
+substring matching missed because neither string contains the other once the case differs.
+
+So the accurate statement is narrower, in two parts:
+
+- **Against the alias attack the change is strictly tightening.** Every aliased name the
+  old rule accepted is now refused; that is the security property, and it holds.
+- **On spelling variants it is deliberately WIDENING.** Case, path prefix, and surrounding
+  whitespace differences that named the same migration but happened to defeat substring
+  matching are now accepted. Those applies were being refused for no good reason. The
+  widening is bounded by everything else the gate still demands: the proof must be under
+  30 minutes old, carry clean findings, and its `queryHash` must match the SQL actually
+  being transmitted — so a widened name match cannot authorise different content.
+
+Not verified: no live migration was applied for end-to-end verification.
+
 All significant development milestones, in reverse chronological order.
 
 ## 2026-08-26 — Migration guards judge the real post-edit file on CRLF worktrees
@@ -21,6 +75,61 @@ CRLF fixtures with LF fragments in both directions (marker-adding edit allowed; 
 denied), and both fixes were mutation-tested: reverting the normalization or the full-file view makes
 the new tests fail in each direction. `sql-safety.mjs` and `status-enum-check.mjs` still judge
 fragments only (their exempt markers have the same visibility gap) — tracked as a follow-up.
+
+## 2026-08-26 — Pre-push containment skips top-level ignored tool bulk
+
+The private-artifact pre-push guard now excludes descendants of its existing explicit top-level
+dependency/build roots (`node_modules/`, `dist/`, coverage/browser output, Graphify output, and
+the named test-output roots) from **ignored-file enumeration only**. Tracked, staged,
+force-added, index, outgoing-commit, and history content under those paths remains fully scanned;
+nested lookalikes such as `packages/worker/node_modules/` and files literally named after a root
+remain in scope. Candidate scanning and the double-read race closure are unchanged.
+
+On the same installed worktree, the containment benchmark fell from 434,901 ms to 37,468 ms
+(91.4% faster); the worktree scan fell from 405,535 ms to 220 ms, candidates from 50,802 to
+2,815, logical bytes from 661,279,697 to 92,649,224, and ignored paths from 48,006 to 17. The
+owning suite mutation-fails when the new exclusion is removed, and explicitly proves that a
+force-added private packet under every excluded root is still rejected.
+
+## 2026-08-26 — the JobDetail save-gate flake: retry the click, don't wait longer
+
+`src/pages/JobDetail.billingHazard.test.tsx` failed CI intermittently with
+`AssertionError: expected false to be true` on a correct, unchanged page. The obvious remedy
+was already in the file — `waitFor`/`findBy` with 15s internal timeouts and a 30s per-test
+timeout — which is exactly why it kept coming back.
+
+Root cause is a race the test could not wait out. `handleSave` fails closed while the
+label-rate policy is still loading: it toasts "Checking the label-rate policy — try Save again
+in a moment." and returns. Those lookups (`guardrailModeLoaded`, `jobLabelsLoaded`) are
+SEPARATE queries from the job/products fetch that renders the hazard banner, so awaiting the
+banner does not mean the save gate is open. Nine tests clicked Save exactly once. A click
+landing in that window emitted a non-matching toast and returned — and nothing re-fires the
+save, so the test's `waitFor` spun until it timed out. No timeout could ever fix that; only a
+retry can.
+
+All nine clicks now go through a `clickSave()` helper that re-clicks while the gate is still
+closed — exactly what the app instructs the operator to do, and it cannot double-save, because
+while the gate is closed the save never proceeds. The fix is test-only: `JobDetail.tsx` is
+unchanged, and the guard's real behaviour is what gets proven.
+
+The race is now forced deterministically rather than left to CI load: the mock holds the by-id
+products query open so every save-clicking test goes through the fail-closed branch first.
+Without that, the window is microseconds wide, the retry path is never exercised locally, and a
+reverted fix would look green until CI load widened it again.
+
+The gate is a **deferred promise, not a timer**. The first draft held the by-id query for a fixed
+800ms, which CodeRabbit correctly refused: on a slow enough machine the query resolves before the
+first click, no fail-closed toast is emitted, and `clickSave()` returns on its first attempt
+having exercised no retry at all — a green test proving nothing. With an explicit gate the
+ordering holds at any speed, and `clickSave()` now **asserts** the blocked attempt happened (and
+that `save_job` did not run) in all 11 tests that mount through the harness. If the gate ever
+stops closing, those fail loudly instead of passing silently.
+
+Proof: with that harness and a single un-retried click, 5 tests fail with the exact production
+symptom, including the "Checking the label-rate policy" toast; with `clickSave()`, all 14 pass.
+Dropping the timer also made the file *faster* — 3.29s versus 8.20s before. Full suite green:
+339 files, 4770 passed | 123 skipped.
+
 
 ## 2026-08-26 — Ledger-guard test no longer operates on the real repository
 
