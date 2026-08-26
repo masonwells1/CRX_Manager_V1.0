@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-08-24
+Last verified: 2026-08-25
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -33,14 +33,32 @@ and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 
    *integrity safeguards* (a small, understandable layer keeping those from being silently
    disabled) — keep thin; *recursive safeguards* (machinery protecting the machinery) — stop.
    PR #432 was entirely the third tier.
-3. **Control-file edits go to `ask`, not `deny`.** `.claude/hooks/**`, `.codex/hooks/**`,
-   `.claude/settings.json`, `.husky/**`, `package.json`, `.github/workflows/**`,
-   `scripts/{check,validate,verify}-*` and `scripts/remove-applied-ledger-entry.mjs` now prompt
-   rather than hard-block. A `deny` would recreate the maintenance dead-end that PR #432's
-   Finding 2c identified, which is what forced the "reviewed producer" design (split E) we have
-   just declined to build. **This is an accidental-edit tripwire, not tamper prevention** — it is
-   enforced by the agent harness, not the OS, and cannot stop `git apply`, `git checkout -- <path>`
-   or a shell write. It must never be described as if it can.
+3. **Control-file edits move to the `ask` tier.** The complete protected set, `Edit` and `Write`
+   for each: `.claude/hooks/**`, `.codex/hooks/**`, `.codex/hooks.json`, `.codex/config.toml`,
+   `.claude/settings.json`, `.claude/settings.local.json`, `.coderabbit.yaml`, `.husky/**`,
+   `package.json`, `.github/workflows/**`, `AGENTS.md`, `CLAUDE.md`,
+   `scripts/{check,validate,verify}-*`, `scripts/remove-applied-ledger-entry.mjs`,
+   `scripts/write-codex-push-proof.mjs` and `scripts/run-claude-review.mjs`.
+
+   **What the `ask` tier actually does here, corrected 2026-08-25 after a CodeRabbit finding:**
+   this repository sets `permissions.defaultMode: "dontAsk"` (`.claude/settings.json:3`, a
+   deliberate PR #352 decision on 2026-08-08 to stop constant prompting). In `dontAsk` mode an
+   `ask` rule is **auto-denied, not prompted**. So in an ordinary session these paths are
+   **blocked**, and a deliberate control-file edit requires a session started in a permission mode
+   that honours prompts. Mason's decision, 2026-08-25: **keep `dontAsk`** and describe the effect
+   accurately, rather than change harness-wide permission behaviour to make the word "prompt"
+   true. The same applies to every pre-existing `ask` entry — `Bash(gh pr merge:*)`,
+   `Bash(vercel --prod:*)`, `supabase functions deploy`, the edge-function and merge MCP tools:
+   under `dontAsk` those are denials, not prompts, and have been since 2026-08-08.
+
+   `ask` was still chosen over an explicit `deny` because the two differ once the mode changes: a
+   `deny` can never be satisfied, whereas these become prompts in a prompting mode. An explicit
+   `deny` would permanently recreate the maintenance dead-end PR #432's Finding 2c identified,
+   which is what forced the "reviewed producer" design (split E) we have just declined to build.
+
+   **This is an accidental-edit tripwire, not tamper prevention** — it is enforced by the agent
+   harness, not the OS, and cannot stop `git apply`, `git checkout -- <path>` or a shell write.
+   It must never be described as if it can.
 4. **Local pre-commit results are advisory, not independent certification.** The ~14 scripts the
    gate executes are writable by the same identity that runs them. The durable boundary is the one
    already outside agent reach: the `protect-main` ruleset, the three required GitHub checks, and
@@ -75,21 +93,61 @@ and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 
 **Incident found during implementation (same session).** Two git-config settings were falsifying
 local state, both invisible to every file-watching guard because neither is a file in the repo:
 
-- `core.fsmonitor` in `C:/CRX_Manager/.git/config` pointed at a 3-line script in a temp directory
-  (`…/patrol-fsmon-FmF0xX/fsmon.cmd`) that reported "nothing changed". Proven by controlled test:
-  `git status` reported clean while `git -c core.fsmonitor=false status` reported
-  ` M .claude/settings.json`; blob hashes confirmed the file genuinely differed
-  (`f9032e03…` on disk vs `296744f8…` in index/HEAD). `git update-index --refresh` did not fix it.
+- `core.fsmonitor` at repository scope pointed at a 3-line `patrol` script under the user temp
+  directory (`<temp-dir>/patrol-fsmon-<id>/fsmon.cmd`) that reported "nothing changed". Proven by
+  controlled test: `git status` reported clean while `git -c core.fsmonitor=false status` reported
+  the file as modified; blob hashes confirmed it genuinely differed (`f9032e03…` on disk vs
+  `296744f8…` in index/HEAD). `git update-index --refresh` did not fix it.
   **Unset with Mason's approval.**
-- `core.hooksPath` in the `codex-claude-migrations-2-4-33493c` worktree config pointed first at the
-  Codex evidence checkout's `.husky`, then at the primary checkout's absolute `.husky` path. Both
-  values executed another checkout's hook. **Repointed to the worktree-relative `.husky/_`.**
+- `core.hooksPath` in one worktree's config pointed at a **separate checkout outside this
+  repository** (`<other-repo-root>/.husky`), so a commit there would have run that repository's
+  pre-commit hooks instead of this one's. One worktree of ~37 was affected. **Repointed to
+  `<repo-root>/.husky/_`.**
 
 This is the PR #432 threat class — hook trust bound to the wrong repository, and a subvertible
 certifying gate — arriving live through a route none of its five splits covered. It reinforces
 decision 4 rather than reopening decision 2: the answer is the external gate, not a larger internal
-one. **Operative rule:** before committing, and before reporting a tree clean, re-test with
-`git -c core.fsmonitor=false status --short` and check `config.worktree` for a foreign `hooksPath`.
+one.
+
+**Operative rule:** before committing, and before reporting a tree clean, re-test with
+`git -c core.fsmonitor=false status --short --untracked-files=all` — the `--untracked-files` flag
+is required, because a repository or user setting `status.showUntrackedFiles=no` makes plain
+`git status --short` omit untracked files, so an empty result would not prove a clean tree. Then
+enumerate every configured hook path with
+`git config --show-origin --show-scope --get-all core.hooksPath` and confirm the effective value
+from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
+stop-and-report. Checking `config.worktree` alone is insufficient — `core.hooksPath` also takes
+system, global and local scope, and precedence decides which one wins. (Verified 2026-08-25: a
+single worktree carried two configured values, at `local` and `worktree` scope, so a
+worktree-only inspection sees one of them.)
+
+---
+
+## 2026-08-25 — Booking-draw pause RELEASED; draws are back in normal use
+
+**Source:** Mason's explicit in-chat decision, 2026-08-25 ("Ok un pause them then"), after being
+told the draw-down chain was fully live and the release was his call.
+
+**What the pause was:** procedural, not mechanical. During the four-migration draw-down rollout
+(2026-08-24 → 2026-08-25) Mason and the team agreed not to perform booking draws; no code flag,
+schema switch, or RPC guard ever blocked them. "Un-pausing" is therefore this recorded decision,
+not a code change.
+
+**Release preconditions verified read-only against live immediately before recording this
+(2026-08-25):** all four draw-down migrations applied (ledger through `20260825034622`) plus the
+save_job chem-unit apply (`20260825142708`); exactly ONE `draw_down_quote` overload, SECURITY
+DEFINER, with the receipt-intent binding (`check_idempotency_intent`) present in the installed
+body; both private implementation stages present; **zero `draw_down_quote` retry receipts in the
+prior 24 hours** (the clean-slate condition the receipts migration required); function-surface
+invariant sweeps (overloads, search_path, plpgsql-check, anon grants) all clean the same day.
+
+**Deliberately NOT claimed:** no end-to-end booking draw was executed as a test — that would have
+created real order/money rows, and manufacturing production data for a smoke test is prohibited.
+The first real draw is the final proof; whoever is in a session when it happens should read the
+resulting order lines read-only and confirm per-tier pricing and whole-cent amounts.
+
+**Operative rule:** stop telling operators draws are paused. Historical documents that say "keep
+draws paused" describe the rollout window and are superseded by this entry.
 
 ---
 
@@ -472,6 +530,51 @@ transform of the existing checks is mechanical; block-message text is preserved 
    verified at 17.6, and the error advised an impossible split that hit the same rule) and
    `DROP OWNED` (destructive but transactional — that is the destructive gate's job). Over-refusal
    rejects legitimate work and teaches the operator something false about PostgreSQL.
+
+9. **The ledger name is derived from the migration filename; there is no `--name` flag.** Round 5
+   (Codex P1, landed as a follow-up after #460 merged) found `--name` was caller-controlled input
+   that TWO checks trusted differently: `--name 99999999999999_alias_<oldstamp>_old_migration` still
+   matched the reviewer proof by SUBSTRING, while `checkMigrationOrdering` read the FIRST 14-digit
+   stamp and ruled the stale SQL newer than everything applied — the out-of-order replay the gate
+   exists to stop. Rename the FILE if the ledger name must change.
+10. **Every live-apply spelling must be registered with the hold latch.** `isBuildActionUnderHold()`
+    knew `apply_migration` and the Supabase CLI forms, but the file-bytes door is a *Bash command*,
+    so the tool-name set never saw it — a mid-session "stop" from Mason would not have paused a live
+    migration through it. `apply-migration-file` is now in `BUILD_BASH_RE`; add any future spelling
+    there in the same change that creates it.
+
+11. **The ledger name must be CANONICAL — one 14-digit stamp, at the start, none elsewhere.**
+    Removing `--name` (rule 9) was only half the fix, and half a fix is the same bug. The *filename*
+    is caller-controlled too: Codex copied a reviewed migration to
+    `99999999999999_alias_<old-name>.sql` and reproduced the whole replay — the proof still matched
+    (names compare by SUBSTRING and the alias CONTAINS the original name), the queryHash still
+    matched (same SQL), and ordering read the alias's FIRST stamp as newest. The real script exited
+    0. An alias needs a *second* stamp to carry the original name, so requiring exactly one rejects
+    the attack by construction while every real migration passes unchanged. Fix the mechanism —
+    name-to-proof substring matching feeding a name-derived ordering stamp — not the spelling.
+12. **Reject a removed flag in EVERY spelling, before resolving anything else.**
+    `argv.includes("--name")` matched only a standalone token, so `--name=alias` slipped through,
+    and the check ran after file resolution so a missing file reported a path error instead of the
+    refusal. Match `^--flag(=|$)` and refuse first.
+
+13. **Substring proof-matching WAS the replay mechanism; the file-bytes door requires exact
+    proof-name equality.** Rules 9 and 11 each closed a *shape* of the alias and left the mechanism
+    intact — round 7 defeated the stamp-count rule with a legacy 8-digit name
+    (`20260210_fix_rls_critical_issues` → `99999999999999_alias_20260210_fix_rls_critical_issues`
+    has exactly ONE 14-digit stamp), and Codex reproduced `APPLY GATE PASSED` on a real dry run.
+    `evaluateMigrationApply({requireExactProofName: true})` binds a proof to exactly one migration;
+    `scripts/apply-migration-file.mjs` sets it. Sharpening the point: that legacy name cannot be
+    applied honestly either — the ordering guard refuses any candidate without a 14-digit stamp — so
+    its proof was only ever useful to an alias that carried one.
+    **Known remaining weakness, stated not buried:** the PreToolUse hook still matches by substring,
+    so the same alias attack applies to the MCP `apply_migration` path. That is pre-existing, was not
+    introduced by this work, and is NOT fixed here — tightening it changes behaviour for every MCP
+    apply and deserves its own reviewed change.
+
+**Three instances of ONE root cause.** `--project` (round 4), `--name` (round 5), and the
+wrappability list's wrong entries all came from the same mistake: adding flexibility, or asserting a
+restriction, without checking what downstream already assumed. A parameter is not free — every check
+that reads it inherits a trust relationship nobody wrote down.
 
 **What this round cost, and why it is recorded.** Three reviewer findings on PR #460 were all real:
 an unenforced precondition, an unguarded production spelling, and an `allow`-by-default branch in the
@@ -980,12 +1083,23 @@ entry as precedent for publishing any other live data; a fresh owner decision is
 Mason's stated basis was that the data in this system is not real or operational, so the basis does
 not carry to data that is.
 
-**Related, and deliberately not restated here:** the narrow live-ledger recovery exception (the rule
-that lets an already-applied migration be recovered to Git without its already-live SQL blocking the
-push proof) was settled the same day, but its Decision Log entry lives on PR #403 and **is not on
-`main` yet**. Until #403 merges, `main`'s Decision Log does not record that approval. That entry is
-also what makes this change necessary: as amended in #403, the exception is **byte-verbatim only** —
-a redacted recovery cannot attest — so publishing this file in full is what makes it eligible.
+**Related, and closed — not an open thread.** An earlier version of this paragraph pointed at a
+narrow live-ledger recovery exception (the rule that would let an already-applied migration be
+recovered to Git without its already-live SQL blocking the push proof) as a pending approval on
+PR #403. **PR #403 was closed on 2026-08-25 by Mason's explicit decision and will not merge.** That
+exception is therefore **not in force**, and no Decision Log entry for it exists on `main`. Do not
+cite it as approved policy, and do not treat it as unfinished work to be resurrected. The recovery
+it existed to enable had already been completed by hand on 2026-08-14 — commit `3a2a0ca0`, via
+PR #392 — the need has not recurred across the 188 commits since, and the attestation machinery
+needed five Sol adversarial rounds before it was no longer forgeable. A future byte-verbatim
+recovery uses that same manual path, or requires a fresh owner decision. Evidence:
+https://github.com/masonwells1/CRX_Manager_V1.0/pull/403#issuecomment-5416488045
+
+**This override does not depend on #403.** Publishing `20260812115238` in full rests on Mason's own
+explicit 2026-08-14 instruction recorded under **Source** above, and on the byte-for-byte match
+against the live ledger recorded under **Decision** — a redacted file could not have been checked
+against those ledger bytes at all. That reasoning is self-contained and is unaffected by #403's
+closure.
 
 ---
 
