@@ -12,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useUncertainMutationIntent } from '../hooks/useUncertainMutationIntent';
 import {
   purchaseOrderCentsToDollars,
   purchaseOrderLineTotalCents,
@@ -52,12 +53,35 @@ interface ReceiveItemState {
   notes: string;
 }
 
+interface ReceivePoIntent {
+  itemsPayload: Array<{
+    po_item_id: string;
+    quantity: number;
+    condition: ReceivingCondition;
+    lot_number: string | null;
+    notes: string | null;
+    storage_location: string;
+  }>;
+  finalPayload: Array<{
+    po_item_id: string;
+    quantity: number;
+    condition: ReceivingCondition;
+    lot_number: string | null;
+    notes: string | null;
+    storage_location: string;
+    over_receive_reason?: string;
+  }>;
+  allowOverReceive: boolean;
+  storageLocation: string;
+}
+
 export default function PurchaseOrderDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { role, profile } = useAuth();
   const { toast } = useToast();
   const receiveIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
+  const receiveIntent = useUncertainMutationIntent<ReceivePoIntent>();
   const savePOIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
   const {
     getKey: getSubmitPOKey,
@@ -204,8 +228,11 @@ export default function PurchaseOrderDetail() {
 
   /* ─── Open receive modal ─── */
   const openReceiveModal = () => {
-    // Codex P2 fix: reset key per receive intent (variable per-item qty/notes).
-    receiveIdem.resetKey();
+    if (receiveIntent.isIntentLocked) {
+      setReceiveStep('review');
+      setReceiveOpen(true);
+      return;
+    }
     const initial: Record<string, ReceiveItemState> = {};
     items.forEach((item) => {
       initial[item.id] = {
@@ -285,22 +312,36 @@ export default function PurchaseOrderDetail() {
         }))
       : itemsPayload;
 
+    const request = receiveIntent.beginIntent({
+      itemsPayload,
+      finalPayload,
+      allowOverReceive: wouldOverReceive && allowOverReceive,
+      storageLocation,
+    });
+
     await runCriticalAction({
       action: async () => {
         const idemKey = receiveIdem.getKey();
         const { data, error } = await supabase.rpc('receive_po_items', {
-          p_items: finalPayload,
+          p_items: request.finalPayload,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
-          p_allow_over_receive: wouldOverReceive && allowOverReceive,
+          p_allow_over_receive: request.allowOverReceive,
         });
-        if (error) throw error;
+        if (error) {
+          if (receiveIntent.classifyFailure(error) === 'definitive') {
+            receiveIdem.resetKey();
+            throw error;
+          }
+          throw new Error('The receiving update may already be recorded. Retry the locked request unchanged to reconcile it.');
+        }
         assertRpcResult(data, 'receive_po_items');
         receiveIdem.resetKey();
+        receiveIntent.resolveIntent();
 
         // AUDIT 3.2: Notify admins about damaged/non-good items
         if (po) {
-          const damagedItems = itemsPayload
+          const damagedItems = request.itemsPayload
             .filter((ip) => ip.condition && ip.condition !== 'good')
             .map((ip) => {
               const poItem = items.find((i) => i.id === ip.po_item_id);
@@ -315,7 +356,7 @@ export default function PurchaseOrderDetail() {
           }
 
           // AUDIT: Notify admins about over-received items
-          const overItems = itemsPayload
+          const overItems = request.itemsPayload
             .filter((ip) => {
               const poItem = items.find((i) => i.id === ip.po_item_id);
               if (!poItem) return false;
@@ -345,8 +386,8 @@ export default function PurchaseOrderDetail() {
               vendor: po.vendor,
               received_at: new Date().toISOString(),
               received_by_name: profile.full_name || 'Unknown',
-              storage_location: storageLocation,
-              items: itemsPayload.map((ip) => {
+              storage_location: request.storageLocation,
+              items: request.itemsPayload.map((ip) => {
                 const poItem = items.find((i) => i.id === ip.po_item_id);
                 return {
                   product_name: (poItem?.product as unknown as { product_name: string } | undefined)?.product_name || 'Unknown',
@@ -846,7 +887,9 @@ export default function PurchaseOrderDetail() {
       {/* Enhanced Receive Modal */}
       <Modal
         open={receiveOpen}
-        onClose={() => setReceiveOpen(false)}
+        onClose={() => {
+          if (!receiveIntent.isIntentLocked) setReceiveOpen(false);
+        }}
         title="Receive"
         accent="Items"
         size="large"
@@ -965,6 +1008,11 @@ export default function PurchaseOrderDetail() {
         ) : (
           /* Review Step */
           <div className="space-y-4">
+            {receiveIntent.isIntentLocked && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice. Retry it unchanged to reconcile the result.
+              </div>
+            )}
             <div className="bg-gray-50 rounded-xl p-4">
               <p className="text-xs text-secondary mb-2">STORAGE LOCATION</p>
               <p className="text-sm font-medium text-nav-dark">{storageLocation}</p>
@@ -1035,6 +1083,7 @@ export default function PurchaseOrderDetail() {
                       type="checkbox"
                       checked={allowOverReceive}
                       onChange={(e) => setAllowOverReceive(e.target.checked)}
+                      disabled={receiveIntent.isIntentLocked}
                       className="rounded border-amber-400"
                     />
                     Confirm over-receive (admin override)
@@ -1048,6 +1097,7 @@ export default function PurchaseOrderDetail() {
                       onChange={(e) => setOverReceiveReason(e.target.value)}
                       placeholder="Reason (e.g. vendor over-shipped and we are keeping the extra)"
                       rows={2}
+                      disabled={receiveIntent.isIntentLocked}
                       className="ml-6 w-[calc(100%-1.5rem)] rounded border border-amber-400 px-2 py-1 text-sm"
                     />
                   )}
@@ -1056,14 +1106,14 @@ export default function PurchaseOrderDetail() {
             })()}
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => setReceiveStep('fill')}>
+              <Button variant="ghost" onClick={() => setReceiveStep('fill')} disabled={receiveIntent.isIntentLocked}>
                 Back
               </Button>
-              <Button variant="secondary" onClick={() => setReceiveOpen(false)}>
+              <Button variant="secondary" onClick={() => setReceiveOpen(false)} disabled={receiveIntent.isIntentLocked}>
                 Cancel
               </Button>
               <Button onClick={handleReceive} loading={saving}>
-                Confirm & Receive
+                {receiveIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Confirm & Receive'}
               </Button>
             </div>
           </div>

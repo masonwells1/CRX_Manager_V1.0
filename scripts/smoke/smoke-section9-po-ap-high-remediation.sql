@@ -9,6 +9,7 @@ DECLARE
   v_unit_size text;
   v_vendor uuid;
   v_vendor_name text;
+  v_aging_vendor uuid;
   v_po uuid;
   v_po_item uuid;
   v_billed_po uuid;
@@ -16,10 +17,22 @@ DECLARE
   v_payment uuid;
   v_void_bill_po uuid;
   v_void_bill uuid;
+  v_intent_void_bill uuid;
+  v_dashboard_bill uuid;
   v_period uuid;
   v_period_count integer;
   v_receipt uuid;
   v_result jsonb;
+  v_replay_result jsonb;
+  v_dashboard_before jsonb;
+  v_dashboard_after jsonb;
+  v_aging_current bigint;
+  v_aging_1_30 bigint;
+  v_aging_31_60 bigint;
+  v_aging_61_90 bigint;
+  v_aging_over_90 bigint;
+  v_aging_total bigint;
+  v_aging_bill_count integer;
   v_items jsonb;
   v_baseline numeric;
   v_actual numeric;
@@ -29,7 +42,9 @@ DECLARE
   -- Fixed pre-history fixture: never select a rolling date that could collide
   -- with real accounting history as time passes.
   v_old_date date := DATE '1990-01-15';
+  v_today date := (clock_timestamp() AT TIME ZONE 'America/Chicago')::date;
   v_err text;
+  v_due_date date;
   v_suffix text := substr(md5(random()::text), 1, 8);
 BEGIN
   SELECT id INTO v_admin
@@ -193,6 +208,49 @@ BEGIN
       v_secondary_before + 5;
   END IF;
 
+  -- A lost response can retry the exact receiving payload, but the retained
+  -- key must never accept a changed quantity or create a second stock effect.
+  v_replay_result := public.receive_po_items(
+    jsonb_build_array(jsonb_build_object(
+      'po_item_id', v_po_item,
+      'quantity', 5,
+      'storage_location', 'Secondary Warehouse',
+      'condition', 'good'
+    )),
+    v_admin,
+    'smk-s9-receive-alt-' || v_suffix,
+    false
+  );
+  IF v_replay_result IS DISTINCT FROM v_result
+     OR (SELECT count(*) FROM public.receiving_records WHERE id = v_receipt) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact receiving replay changed its result or effect';
+  END IF;
+  BEGIN
+    PERFORM public.receive_po_items(
+      jsonb_build_array(jsonb_build_object(
+        'po_item_id', v_po_item,
+        'quantity', 4,
+        'storage_location', 'Secondary Warehouse',
+        'condition', 'good'
+      )),
+      v_admin,
+      'smk-s9-receive-alt-' || v_suffix,
+      false
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed receiving payload reused a retained key';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong changed-receiving error: %', v_err;
+    END IF;
+  END;
+  IF (SELECT quantity_available FROM public.inventory
+      WHERE product_id = v_product AND location = 'Secondary Warehouse')
+       IS DISTINCT FROM v_secondary_before + 5 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: changed receiving retry leaked inventory';
+  END IF;
+
   -- A received line is immutable. The supported partially-received edit is an
   -- unchanged received line plus a new/unreceived line; its remainder must be
   -- included immediately.
@@ -324,6 +382,37 @@ BEGIN
     p_idempotency_key := 'smk-s9-bill-create-' || v_suffix
   );
 
+  IF public.create_vendor_bill(
+       p_vendor_id := v_vendor,
+       p_purchase_order_id := v_billed_po,
+       p_bill_number := 'SMK-S9-BILL-' || v_suffix,
+       p_bill_date := v_old_date,
+       p_subtotal_cents := 100,
+       p_idempotency_key := 'smk-s9-bill-create-' || v_suffix
+     ) IS DISTINCT FROM v_bill THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact vendor-bill replay returned a different bill';
+  END IF;
+  BEGIN
+    PERFORM public.create_vendor_bill(
+      p_vendor_id := v_vendor,
+      p_purchase_order_id := v_billed_po,
+      p_bill_number := 'SMK-S9-BILL-CHANGED-' || v_suffix,
+      p_bill_date := v_old_date,
+      p_subtotal_cents := 100,
+      p_idempotency_key := 'smk-s9-bill-create-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed vendor bill reused a retained key';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong changed-vendor-bill error: %', v_err;
+    END IF;
+  END;
+  IF (SELECT count(*) FROM public.vendor_bills WHERE purchase_order_id = v_billed_po) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: changed vendor-bill retry created a second bill';
+  END IF;
+
   BEGIN
     PERFORM public.cancel_purchase_order(
       v_billed_po,
@@ -380,9 +469,62 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: accounting_periods retains a browser write policy';
   END IF;
 
+  -- AP aging measures days past due, with due-today/future balances current
+  -- and every overdue boundary assigned exactly once.
+  INSERT INTO public.vendors (name)
+  VALUES ('[SMOKE] Section 9 Aging Vendor ' || v_suffix)
+  RETURNING id INTO v_aging_vendor;
+
+  PERFORM public.create_vendor_bill(v_aging_vendor, NULL, 'SMK-S9-AGING-01-' || v_suffix, v_old_date, v_today, NULL, 101, 0, NULL, 'smk-s9-aging-01-' || v_suffix);
+  PERFORM public.create_vendor_bill(v_aging_vendor, NULL, 'SMK-S9-AGING-02-' || v_suffix, v_old_date, v_today + 1, NULL, 102, 0, NULL, 'smk-s9-aging-02-' || v_suffix);
+  PERFORM public.create_vendor_bill(v_aging_vendor, NULL, 'SMK-S9-AGING-03-' || v_suffix, v_old_date, v_today - 1, NULL, 201, 0, NULL, 'smk-s9-aging-03-' || v_suffix);
+  PERFORM public.create_vendor_bill(v_aging_vendor, NULL, 'SMK-S9-AGING-04-' || v_suffix, v_old_date, v_today - 30, NULL, 202, 0, NULL, 'smk-s9-aging-04-' || v_suffix);
+  PERFORM public.create_vendor_bill(v_aging_vendor, NULL, 'SMK-S9-AGING-05-' || v_suffix, v_old_date, v_today - 31, NULL, 301, 0, NULL, 'smk-s9-aging-05-' || v_suffix);
+  PERFORM public.create_vendor_bill(v_aging_vendor, NULL, 'SMK-S9-AGING-06-' || v_suffix, v_old_date, v_today - 60, NULL, 302, 0, NULL, 'smk-s9-aging-06-' || v_suffix);
+  PERFORM public.create_vendor_bill(v_aging_vendor, NULL, 'SMK-S9-AGING-07-' || v_suffix, v_old_date, v_today - 61, NULL, 401, 0, NULL, 'smk-s9-aging-07-' || v_suffix);
+  PERFORM public.create_vendor_bill(v_aging_vendor, NULL, 'SMK-S9-AGING-08-' || v_suffix, v_old_date, v_today - 90, NULL, 402, 0, NULL, 'smk-s9-aging-08-' || v_suffix);
+  PERFORM public.create_vendor_bill(v_aging_vendor, NULL, 'SMK-S9-AGING-09-' || v_suffix, v_old_date, v_today - 91, NULL, 501, 0, NULL, 'smk-s9-aging-09-' || v_suffix);
+
+  SELECT
+    current_amount,
+    days_1_30,
+    days_31_60,
+    days_61_90,
+    over_90,
+    total_outstanding,
+    bill_count
+  INTO
+    v_aging_current,
+    v_aging_1_30,
+    v_aging_31_60,
+    v_aging_61_90,
+    v_aging_over_90,
+    v_aging_total,
+    v_aging_bill_count
+  FROM public.get_ap_aging(v_today)
+  WHERE vendor_id = v_aging_vendor;
+
+  IF v_aging_current IS DISTINCT FROM 203
+     OR v_aging_1_30 IS DISTINCT FROM 403
+     OR v_aging_31_60 IS DISTINCT FROM 603
+     OR v_aging_61_90 IS DISTINCT FROM 803
+     OR v_aging_over_90 IS DISTINCT FROM 501
+     OR v_aging_total IS DISTINCT FROM 2513
+     OR v_aging_bill_count IS DISTINCT FROM 9 THEN
+    RAISE EXCEPTION
+      'SMOKE_FAIL: due-date aging buckets current=% 1-30=% 31-60=% 61-90=% over90=% total=% bills=%',
+      v_aging_current,
+      v_aging_1_30,
+      v_aging_31_60,
+      v_aging_61_90,
+      v_aging_over_90,
+      v_aging_total,
+      v_aging_bill_count;
+  END IF;
+
   -- Current aging is truthful; unsupported past/future dates fail closed.
   PERFORM * FROM public.get_ap_aging(
-    (clock_timestamp() AT TIME ZONE 'America/Chicago')::date
+    v_today
   );
   BEGIN
     PERFORM * FROM public.get_ap_aging(
@@ -396,6 +538,30 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong past AP error: %', v_err;
     END IF;
   END;
+
+  -- `Due This Month` is a calendar-month tile, not a rolling 30-day window.
+  -- A bill due five days into next month must not increase that tile even when
+  -- it is fewer than 30 days away near month-end.
+  v_dashboard_before := public.get_ap_dashboard_summary();
+  v_dashboard_bill := public.create_vendor_bill(
+    p_vendor_id := v_vendor,
+    p_purchase_order_id := NULL,
+    p_bill_number := 'SMK-S9-DASHBOARD-' || v_suffix,
+    p_bill_date := (clock_timestamp() AT TIME ZONE 'America/Chicago')::date,
+    p_due_date := (date_trunc('month', clock_timestamp() AT TIME ZONE 'America/Chicago')
+      + interval '1 month 4 days')::date,
+    p_subtotal_cents := 777,
+    p_idempotency_key := 'smk-s9-dashboard-bill-' || v_suffix
+  );
+  v_dashboard_after := public.get_ap_dashboard_summary();
+  IF (v_dashboard_after->>'due_this_month_cents')::bigint
+       IS DISTINCT FROM (v_dashboard_before->>'due_this_month_cents')::bigint THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: next-month bill leaked into Due This Month';
+  END IF;
+  IF (v_dashboard_after->>'total_owed_cents')::bigint
+       IS DISTINCT FROM (v_dashboard_before->>'total_owed_cents')::bigint + 777 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: dashboard boundary fixture did not enter total owed';
+  END IF;
   BEGIN
     PERFORM * FROM public.get_ap_aging(
       (clock_timestamp() AT TIME ZONE 'America/Chicago')::date + 1
@@ -419,6 +585,84 @@ BEGIN
     p_reference_number := 'SMK-S9-PAY-' || v_suffix,
     p_notes := 'Section 9 AP period boundary',
     p_idempotency_key := 'smk-s9-payment-' || v_suffix
+  );
+
+  IF public.record_vendor_payment(
+       p_vendor_bill_id := v_bill,
+       p_amount_cents := 25,
+       p_payment_date := v_old_date,
+       p_payment_method := 'check',
+       p_reference_number := 'SMK-S9-PAY-' || v_suffix,
+       p_notes := 'Section 9 AP period boundary',
+       p_idempotency_key := 'smk-s9-payment-' || v_suffix
+     ) IS DISTINCT FROM v_payment THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact vendor-payment replay returned a different payment';
+  END IF;
+  BEGIN
+    PERFORM public.record_vendor_payment(
+      p_vendor_bill_id := v_bill,
+      p_amount_cents := 26,
+      p_payment_date := v_old_date,
+      p_payment_method := 'check',
+      p_reference_number := 'SMK-S9-PAY-' || v_suffix,
+      p_notes := 'Section 9 AP period boundary',
+      p_idempotency_key := 'smk-s9-payment-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed vendor payment reused a retained key';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong changed-vendor-payment error: %', v_err;
+    END IF;
+  END;
+  IF (SELECT paid_cents FROM public.vendor_bills WHERE id = v_bill) <> 25
+     OR (SELECT count(*) FROM public.vendor_payments
+         WHERE vendor_bill_id = v_bill AND voided_at IS NULL) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: changed vendor-payment retry leaked money';
+  END IF;
+
+  v_replay_result := public.void_vendor_payment(
+    v_payment,
+    'Section 9 exact void proof',
+    'smk-s9-payment-void-' || v_suffix
+  );
+  IF public.void_vendor_payment(
+       v_payment,
+       'Section 9 exact void proof',
+       'smk-s9-payment-void-' || v_suffix
+     ) IS DISTINCT FROM v_replay_result THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact payment-void replay changed its result';
+  END IF;
+  BEGIN
+    PERFORM public.void_vendor_payment(
+      v_payment,
+      'Changed void reason',
+      'smk-s9-payment-void-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed payment void reused a retained key';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong changed-payment-void error: %', v_err;
+    END IF;
+  END;
+  IF (SELECT paid_cents FROM public.vendor_bills WHERE id = v_bill) <> 0
+     OR (SELECT count(*) FROM public.vendor_payments
+         WHERE id = v_payment AND voided_at IS NOT NULL) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: payment-void replay changed money twice';
+  END IF;
+
+  -- Restore one active payment for the closed-period refusal proof below.
+  v_payment := public.record_vendor_payment(
+    p_vendor_bill_id := v_bill,
+    p_amount_cents := 25,
+    p_payment_date := v_old_date,
+    p_payment_method := 'check',
+    p_reference_number := 'SMK-S9-PAY-REPLACEMENT-' || v_suffix,
+    p_notes := 'Section 9 AP closed-period fixture',
+    p_idempotency_key := 'smk-s9-payment-replacement-' || v_suffix
   );
 
   v_result := public.save_purchase_order(
@@ -452,6 +696,86 @@ BEGIN
     p_subtotal_cents := 100,
     p_idempotency_key := 'smk-s9-void-bill-create-' || v_suffix
   );
+
+  SELECT due_date INTO v_due_date FROM public.vendor_bills WHERE id = v_void_bill;
+  v_replay_result := public.update_vendor_bill(
+    v_void_bill,
+    100,
+    0,
+    v_old_date,
+    v_due_date,
+    'Section 9 exact update proof',
+    'smk-s9-bill-update-' || v_suffix
+  );
+  IF public.update_vendor_bill(
+       v_void_bill,
+       100,
+       0,
+       v_old_date,
+       v_due_date,
+       'Section 9 exact update proof',
+       'smk-s9-bill-update-' || v_suffix
+     ) IS DISTINCT FROM v_replay_result THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact vendor-bill update replay changed its result';
+  END IF;
+  BEGIN
+    PERFORM public.update_vendor_bill(
+      v_void_bill,
+      100,
+      0,
+      v_old_date,
+      v_due_date,
+      'Changed update notes',
+      'smk-s9-bill-update-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed vendor-bill update reused a retained key';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong changed-vendor-bill-update error: %', v_err;
+    END IF;
+  END;
+  IF (SELECT notes FROM public.vendor_bills WHERE id = v_void_bill)
+       IS DISTINCT FROM 'Section 9 exact update proof' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: changed vendor-bill update leaked a change';
+  END IF;
+
+  v_intent_void_bill := public.create_vendor_bill(
+    p_vendor_id := v_vendor,
+    p_purchase_order_id := NULL,
+    p_bill_number := 'SMK-S9-INTENT-VOID-' || v_suffix,
+    p_bill_date := v_old_date,
+    p_subtotal_cents := 125,
+    p_idempotency_key := 'smk-s9-intent-void-create-' || v_suffix
+  );
+  PERFORM public.void_vendor_bill(
+    v_intent_void_bill,
+    'Section 9 exact bill void proof',
+    'smk-s9-intent-bill-void-' || v_suffix
+  );
+  PERFORM public.void_vendor_bill(
+    v_intent_void_bill,
+    'Section 9 exact bill void proof',
+    'smk-s9-intent-bill-void-' || v_suffix
+  );
+  BEGIN
+    PERFORM public.void_vendor_bill(
+      v_intent_void_bill,
+      'Changed bill void reason',
+      'smk-s9-intent-bill-void-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed vendor-bill void reused a retained key';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong changed-vendor-bill-void error: %', v_err;
+    END IF;
+  END;
+  IF (SELECT status FROM public.vendor_bills WHERE id = v_intent_void_bill) <> 'voided' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: vendor-bill void replay changed terminal state';
+  END IF;
 
   -- Close through the real RPC. This makes the registered PO/AP chain cover
   -- the authoritative check_period_open refusals, not a hand-written closed row.
@@ -507,6 +831,9 @@ BEGIN
   IF (SELECT paid_cents FROM public.vendor_bills WHERE id = v_bill)
        IS DISTINCT FROM 25::bigint
      OR (SELECT count(*) FROM public.vendor_payments WHERE vendor_bill_id = v_bill)
+       IS DISTINCT FROM 2::bigint
+     OR (SELECT count(*) FROM public.vendor_payments
+         WHERE vendor_bill_id = v_bill AND voided_at IS NULL)
        IS DISTINCT FROM 1::bigint
      OR EXISTS (
        SELECT 1 FROM public.idempotency_keys

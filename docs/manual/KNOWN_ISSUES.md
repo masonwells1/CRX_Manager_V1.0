@@ -1,7 +1,16 @@
 # Known Issues — Consolidated
 
+**Last verified: 2026-08-26 UTC, limited read-only Section 9 remediation refresh.** The live ledger
+remains 976 rows at `max(version)` `20260825142708`. Live catalog evidence confirms the three
+Section 9 HIGH findings are still production risks until the pending migrations apply:
+`get_ap_aging(date)` still uses `bill_date` and has no `1-30` return column,
+`get_ap_dashboard_summary()` still uses a rolling 30-day due-this-month window, and the affected
+AP/receiving mutators are not yet wrapped by the new exact-intent contract. The cutover preflight
+currently finds zero active unbound receipts across those six operations. No unrelated issue entry
+was re-read; its own dated evidence remains authoritative.
 
-**Last verified: 2026-08-25 UTC, read-only live re-read after the save_job chem-unit apply.**
+
+**Superseded 2026-08-25 header, kept for provenance: read-only live re-read after the save_job chem-unit apply.**
 **Live ledger is 976 rows, `max(version)` `20260825142708`, effective ordering high-water
 `20260820120000`** (name `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
 That migration applied live on 2026-08-25 on Mason's explicit in-chat approval; because its ledger

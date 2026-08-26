@@ -24,6 +24,7 @@ import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useUncertainMutationIntent } from '../hooks/useUncertainMutationIntent';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
@@ -43,6 +44,17 @@ export default function VendorBillDetail() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const paymentIdem = useIdempotencyKey('record_vendor_payment', profile?.id || '');
+  const paymentIntent = useUncertainMutationIntent<{
+    amountCents: number;
+    args: {
+      p_vendor_bill_id: string;
+      p_payment_date: string;
+      p_amount_cents: number;
+      p_payment_method: string | undefined;
+      p_reference_number: string | undefined;
+      p_notes: string | undefined;
+    };
+  }>();
   const voidIdem = useIdempotencyKey('void_vendor_bill', profile?.id || '');
   const voidPaymentIdem = useIdempotencyKey('void_vendor_payment', profile?.id || '');
 
@@ -145,40 +157,48 @@ export default function VendorBillDetail() {
     const amountCents = parseDollarsToCents(payAmount);
     if (amountCents <= 0) { toast('error', 'Enter a valid payment amount'); return; }
 
-    setPaying(true);
-    try {
-      const payKey = paymentIdem.getKey();
-      const { data, error } = await supabase.rpc('record_vendor_payment', {
+    const request = paymentIntent.beginIntent({
+      amountCents,
+      args: {
         p_vendor_bill_id: id,
         p_payment_date: payDate,
         p_amount_cents: amountCents,
         p_payment_method: payMethod || undefined,
         p_reference_number: payRef || undefined,
         p_notes: payNotes || undefined,
+      },
+    });
+
+    setPaying(true);
+    try {
+      const payKey = paymentIdem.getKey();
+      const { data, error } = await supabase.rpc('record_vendor_payment', {
+        ...request.args,
         p_idempotency_key: payKey,
       });
       if (error) throw error;
       assertRpcResult<string>(data, 'record_vendor_payment');
       paymentIdem.resetKey();
+      paymentIntent.resolveIntent();
 
-      toast('success', `Payment of ${fmt(amountCents)} recorded`);
+      toast('success', `Payment of ${fmt(request.amountCents)} recorded`);
       setPayModalOpen(false);
       setPayAmount('');
       setPayRef('');
       setPayNotes('');
       fetchBill();
     } catch (err) {
-      toast('error', sanitizeError(err));
+      if (paymentIntent.classifyFailure(err) === 'definitive') {
+        paymentIdem.resetKey();
+        toast('error', sanitizeError(err));
+      } else {
+        toast('warning', 'The payment may already be recorded. The exact payment is locked; retry it unchanged to reconcile the result.');
+      }
     }
     setPaying(false);
   };
 
   const openEditModal = () => {
-    // Codex P2 fix (PR #59, 2026-05-16): reset editIdem on every open. The
-    // bill payload (subtotal/adjustment/dates/notes) is user-editable; if
-    // update_vendor_bill succeeded but response was lost, reopening the modal
-    // and changing fields would replay prior result without applying edits.
-    editIdem.resetKey();
     if (!bill) return;
     setEditSubtotal((bill.subtotal_cents / 100).toFixed(2));
     setEditAdjustment(((bill.adjustment_cents || 0) / 100).toFixed(2));
@@ -339,8 +359,6 @@ export default function VendorBillDetail() {
         return (
           <button
             onClick={() => {
-              // Codex P2 fix: reset per-payment void key when target changes.
-              voidPaymentIdem.resetKey();
               setVoidPaymentTarget(r);
               setVoidPaymentReason('');
             }}
@@ -393,9 +411,9 @@ export default function VendorBillDetail() {
               <Button
                 icon={<CreditCard className="w-4 h-4" />}
                 onClick={() => {
-                  // Codex P2 fix: reset payment key per record-payment open.
-                  paymentIdem.resetKey();
-                  setPayAmount((bill.balance_cents / 100).toFixed(2));
+                  if (!paymentIntent.isIntentLocked) {
+                    setPayAmount((bill.balance_cents / 100).toFixed(2));
+                  }
                   setPayModalOpen(true);
                 }}
               >
@@ -404,7 +422,7 @@ export default function VendorBillDetail() {
               <Button
                 variant="ghost"
                 icon={<XCircle className="w-4 h-4" />}
-                onClick={() => { voidIdem.resetKey(); setVoidModalOpen(true); }}
+                onClick={() => setVoidModalOpen(true)}
                 className="text-red-600 hover:text-red-700"
               >
                 Void
@@ -520,12 +538,24 @@ export default function VendorBillDetail() {
       </Card>
 
       {/* Record Payment Modal */}
-      <Modal open={payModalOpen} onClose={() => setPayModalOpen(false)} title="Record Payment">
+      <Modal
+        open={payModalOpen}
+        onClose={() => {
+          if (!paymentIntent.isIntentLocked) setPayModalOpen(false);
+        }}
+        title="Record Payment"
+      >
         <div className="space-y-4">
           <div className="p-3 bg-gray-50 rounded-lg flex justify-between text-sm">
             <span className="text-secondary">Balance due:</span>
             <span className="font-semibold text-red-600">{fmt(bill.balance_cents)}</span>
           </div>
+
+          {paymentIntent.isIntentLocked && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              The last response was uncertain. These fields are locked so a second payment cannot be created. Retry this exact payment to reconcile it.
+            </div>
+          )}
 
           <Input
             label="Payment Amount ($) *"
@@ -534,6 +564,7 @@ export default function VendorBillDetail() {
             min="0.01"
             value={payAmount}
             onChange={(e) => setPayAmount(e.target.value)}
+            disabled={paymentIntent.isIntentLocked}
           />
 
           <Input
@@ -541,6 +572,7 @@ export default function VendorBillDetail() {
             type="date"
             value={payDate}
             onChange={(e) => setPayDate(e.target.value)}
+            disabled={paymentIntent.isIntentLocked}
           />
 
           <div>
@@ -548,6 +580,7 @@ export default function VendorBillDetail() {
             <select
               value={payMethod}
               onChange={(e) => setPayMethod(e.target.value)}
+              disabled={paymentIntent.isIntentLocked}
               className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="check">Check</option>
@@ -561,17 +594,21 @@ export default function VendorBillDetail() {
             label="Reference # (check #, transaction ID)"
             value={payRef}
             onChange={(e) => setPayRef(e.target.value)}
+            disabled={paymentIntent.isIntentLocked}
           />
 
           <Input
             label="Notes"
             value={payNotes}
             onChange={(e) => setPayNotes(e.target.value)}
+            disabled={paymentIntent.isIntentLocked}
           />
 
           <div className="flex justify-end gap-3 pt-2">
-            <Button variant="ghost" onClick={() => setPayModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleRecordPayment} loading={paying}>Record Payment</Button>
+            <Button variant="ghost" onClick={() => setPayModalOpen(false)} disabled={paymentIntent.isIntentLocked}>Cancel</Button>
+            <Button onClick={handleRecordPayment} loading={paying}>
+              {paymentIntent.isIntentLocked ? 'Retry Exact Payment' : 'Record Payment'}
+            </Button>
           </div>
         </div>
       </Modal>

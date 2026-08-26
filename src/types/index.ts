@@ -3676,6 +3676,7 @@ export interface APAgingRow {
   vendor_id: string;
   vendor_name: string;
   current_amount: number;
+  days_1_30: number;
   days_31_60: number;
   days_61_90: number;
   over_90: number;
