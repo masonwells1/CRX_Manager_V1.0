@@ -26,7 +26,12 @@ exact one fails the deny-direction tests, in both hooks. The CodeRabbit findings
 sibling PR #489 fix are carried over pre-emptively: a pure-deletion Edit that removes the
 exempt marker is a pinned deny (an emptiness early-exit above the reconstruction would have
 bypassed the guard — mutation-verified), and allow-side test assertions are affirmative, so
-a crashed hook's empty stdout cannot read as an allow.
+a crashed hook's empty stdout cannot read as an allow. Round-2 parity: as in the sibling
+fix below, empty content is trusted only when it IS the real post-edit file (a Write, or a
+reconstruction that emptied a readable file) — a deletion Edit whose on-disk read failed is
+denied with retry/full-file-Write instructions instead of passing unanalyzed; the
+unreadable-file deny and the empties-a-readable-file allow boundary are pinned and
+mutation-verified in both hooks.
 
 Of the remaining fragment-only PreToolUse content guards: `rls-on-new-tables.mjs`,
 `generated-column-check.mjs`, and `actor-binding-check.mjs` have the same file-level markers
