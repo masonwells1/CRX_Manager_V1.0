@@ -29,6 +29,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
 import { formatCents as fmt } from '../lib/money';
+import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import type { VendorBill, VendorPayment } from '../types';
 
 const statusVariant: Record<string, BadgeVariant> = {
@@ -188,6 +189,19 @@ export default function VendorBillDetail() {
       setPayNotes('');
       fetchBill();
     } catch (err) {
+      const receipt = getIdempotencyMismatchResult(err, 'record_vendor_payment');
+      if (typeof receipt?.payment_id === 'string') {
+        paymentIdem.resetKey();
+        paymentIntent.resolveIntent();
+        toast('warning', 'The earlier payment already completed. The bill has been refreshed instead of recording a duplicate.');
+        setPayModalOpen(false);
+        setPayAmount('');
+        setPayRef('');
+        setPayNotes('');
+        fetchBill();
+        setPaying(false);
+        return;
+      }
       if (paymentIntent.classifyFailure(err) === 'definitive') {
         paymentIdem.resetKey();
         toast('error', sanitizeError(err));
