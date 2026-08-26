@@ -20,6 +20,9 @@ import path from "node:path";
 import os from "node:os";
 
 import { withFileLock, normalizedSqlHash } from "./ledger-lock-lib.mjs";
+// The dated-fragment pattern is imported, never re-expressed: a second copy here would
+// drift from the guard and this hook would start contradicting what pre-commit enforces.
+import { ENTRY_RE } from "../../scripts/check-ledger-update.mjs";
 
 let payload = {};
 try {
@@ -508,6 +511,7 @@ if (newOrChanged.length >= 5) {
 // / git error → skip silently (parallel sessions share tmpdir snapshots, so this
 // is a prompt, not a proof — same block-by-listing semantics as the items above).
 const LEDGER_RES = [
+  ENTRY_RE,
   /^docs\/CHANGELOG\.md$/,
   /^docs\/manual\/[^/]+\.md$/,
   /^docs\/reference\/agent-guardrails\.md$/,
@@ -542,8 +546,10 @@ try {
       if (!touched.some(f => LEDGER_RES.some(re => re.test(f)))) {
         issues.push(
           `📓 Commits exist this session but no ledger file was touched —\n` +
-          `     record the work where it belongs: docs/manual/*.md (DECISION_LOG for a policy or business\n` +
-          `     call, KNOWN_ISSUES for a bug, OWNER_PLAYBOOK for a how-to), docs/reference/migration-history.md\n` +
+          `     record the work where it belongs. PREFERRED: add docs/changelog.d/<YYYY-MM-DD>-<slug>.md,\n` +
+          `     a new dated file of your own — two sessions never write the same path, so it cannot\n` +
+          `     conflict. Otherwise docs/manual/*.md (DECISION_LOG for a policy or business call,\n` +
+          `     KNOWN_ISSUES for a bug, OWNER_PLAYBOOK for a how-to), docs/reference/migration-history.md\n` +
           `     (a schema change), docs/reference/agent-guardrails.md (guard or hook behavior), a docs/loops/\n` +
           `     ledger, or docs/CHANGELOG.md for general work (node scripts/log-session.mjs --summary '...').`
         );

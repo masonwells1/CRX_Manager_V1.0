@@ -47,12 +47,19 @@ const TRIGGER_RES = [
 // Anything a session drops in the folder is an ATTEMPTED entry, even when the filename is
 // wrong. Kept separate from ENTRY_RE so a malformed path is still noticed rather than
 // filtered out before it can be reported (Codex P2, PR #482).
+// The folder's own furniture, by exact name. This is an ALLOWLIST on purpose: the
+// previous version excluded every dotfile, so `docs/changelog.d/.bad.md` was not even
+// an attempted entry and slipped past the malformed-path refusal (Codex P2, PR #482).
+// Enumerating what is legitimate closes that, where enumerating what is forbidden
+// would have to be reopened for every new way of hiding a file.
+const FOLDER_META = new Set(["README.md", ".markdownlint.yaml", ".gitkeep"]);
+
 export function isAttemptedEntry(p) {
   const prefix = "docs/changelog.d/";
   const s = String(p ?? "");
   if (!s.startsWith(prefix)) return false;
   const rest = s.slice(prefix.length);
-  return rest.length > 0 && rest !== "README.md" && !rest.startsWith(".");
+  return rest.length > 0 && !FOLDER_META.has(rest);
 }
 
 export const ENTRY_RE = /^docs\/changelog\.d\/\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9._-]*\.md$/;

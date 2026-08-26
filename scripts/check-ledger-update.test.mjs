@@ -203,6 +203,26 @@ ok(/read it as an entry/.test(ledgerCheck(["src/pages/Invoices.tsx", added("docs
 eq(ledgerCheck(["src/pages/Invoices.tsx", { path: "docs/changelog.d/README.md", status: "M", content: "x" }]).ok, true,
   "editing the folder README on a src-only commit is not an attempted entry");
 
+// ── a hidden filename is still an attempted entry ───────────────────────────
+// The exclusion used to be "any dotfile", so `.bad.md` was not even considered an
+// attempted entry and slipped past the malformed-path refusal (Codex P2, PR #482).
+// Only the folder's own furniture is exempt, by exact name.
+eq(ledgerCheck(["src/pages/Invoices.tsx", added("docs/changelog.d/.bad.md")]).ok, false,
+  "a src-only commit adding a hidden .bad.md is refused");
+eq(ledgerCheck([".claude/settings.json", modified("docs/CHANGELOG.md"),
+  added("docs/changelog.d/.bad.md")]).ok, false,
+  "a legacy ledger update does not launder a hidden fragment either");
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-26-real.md"),
+  added("docs/changelog.d/.hidden-notes.md")]).ok, false,
+  "a valid entry alongside a hidden fragment does not excuse it");
+// The folder's real furniture must stay addable, or this PR could not add its own.
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-26-real.md"),
+  { path: "docs/changelog.d/.markdownlint.yaml", status: "A", content: "MD041: false" + NL }]).ok, true,
+  "adding the folder's .markdownlint.yaml alongside a valid entry is fine");
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-26-real.md"),
+  { path: "docs/changelog.d/README.md", status: "A", content: "# readme" + NL }]).ok, true,
+  "adding the folder README alongside a valid entry is fine");
+
 // ── a legacy ledger update does NOT launder a malformed fragment ────────────
 // Regression for the hole CodeRabbit found on PR #482: the malformed-path check used
 // to sit inside the trigger-free branch, so a commit that staged a trigger AND a valid
