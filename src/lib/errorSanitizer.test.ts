@@ -2,6 +2,20 @@ import { describe, it, expect } from 'vitest';
 import { sanitizeError } from './errorSanitizer';
 
 describe('sanitizeError', () => {
+  it('maps return-credit and customer-scope tokens to operator guidance', () => {
+    expect(sanitizeError('CUSTOMER_SCOPE_DENIED')).toBe('You can only work with customers assigned to you');
+    expect(sanitizeError('RETURN_CREDIT_UNIT_MISMATCH')).toContain('original sale');
+    expect(sanitizeError('RETURN_CREDIT_UNLINKED_COST_LINE')).toContain('Review the credit memo');
+    expect(sanitizeError('RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED')).toContain('Void or unapply');
+    expect(sanitizeError('RETURN_CREDIT_LEDGER_IMMUTABLE')).toContain('source or cost lines');
+    expect(sanitizeError('RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS')).toContain('more than one crop season');
+    expect(sanitizeError('RETURN_CREDIT_HEADER_RESULT_INVALID')).toContain('could not be completed safely');
+    expect(sanitizeError('RETURN_CREDIT_SOURCE_CONCURRENT')).toContain('Wait a moment');
+    expect(sanitizeError('RETURN_CREDIT_VOID_RELEASE_FAILED')).toContain('no changes were saved');
+    expect(sanitizeError('RETURN_CREDIT_UNAPPLY_RELEASE_FAILED')).toContain('no changes were saved');
+    expect(sanitizeError('RETURN_NOT_APPROVED:received')).toContain('current status: received');
+  });
+
   it('returns generic message for null/undefined', () => {
     expect(sanitizeError(null)).toBe('An unexpected error occurred');
     expect(sanitizeError(undefined)).toBe('An unexpected error occurred');

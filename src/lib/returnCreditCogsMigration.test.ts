@@ -1,0 +1,169 @@
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
+
+const migration = readFileSync(
+  'supabase/migrations/20260825230209_rebuild_return_credit_cogs_reversal.sql',
+  'utf8',
+);
+const reportMigration = readFileSync(
+  'supabase/migrations/20260825230150_align_recognized_invoice_report_statuses.sql',
+  'utf8',
+);
+const migrationHistory = readFileSync('docs/reference/migration-history.md', 'utf8');
+const reportsPage = readFileSync('src/pages/Reports.tsx', 'utf8');
+const monthEndPage = readFileSync('src/pages/MonthEndClose.tsx', 'utf8');
+const returnCreditSmoke = readFileSync('scripts/smoke/smoke-return-credit-chain.sql', 'utf8');
+
+describe('return-credit COGS migration', () => {
+  const functionBodySha256 = (sql: string, name: string) => {
+    const match = sql.match(new RegExp(
+      `CREATE(?: OR REPLACE)? FUNCTION public\\.${name}\\([\\s\\S]*?AS \\$function\\$\\r?\\n([\\s\\S]*?)\\r?\\n\\$function\\$;`,
+    ));
+    expect(match?.[1], `${name} body was not found`).toBeTruthy();
+    const normalizedBody = match![1].replace(/\r\n/g, '\n');
+    return createHash('sha256').update(`\n${normalizedBody}\n`, 'utf8').digest('hex');
+  };
+
+  it('pins the dependent live bodies and structurally rejects duplicate return lines', () => {
+    expect(migration).toContain('RETURN_COGS_PREFLIGHT_DRIFT');
+    expect(migration).toContain('_issue_return_credit_intent_impl_20260812');
+    expect(migration).toContain('_receive_return_intent_impl_20260812');
+    expect(migration).toContain('return_items_return_order_item_unique UNIQUE (return_id, order_item_id)');
+    expect(migration).toContain('SELECT 1 FROM public.return_items\n    WHERE order_item_id IS NOT NULL');
+    expect(migration).toContain('LOCK TABLE public.returns IN SHARE ROW EXCLUSIVE MODE');
+    expect(migration).toContain('RETURN_COGS_PREEXISTING_CREDIT_REQUIRES_BACKFILL');
+    expect(migration).toContain('RETURN_COGS_RECEIVED_UNRESTOCKED_REQUIRES_REPAIR');
+    expect(migration).toContain('RETURN_COGS_PREFLIGHT_UNLINKED_COST_CREDIT');
+    expect(migration).toContain('RETURN_COGS_PREFLIGHT_OVERLOAD_DRIFT');
+    expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DEPENDENCY_OVERLOAD_DRIFT');
+    expect(migration).toContain('RETURN_COGS_PREFLIGHT_INVENTORY_UPSERT_CONSTRAINT');
+    expect(migration).toContain("'void_invoice', 'c7a488d58bd876e92565bca9bd4edc90'");
+  });
+
+  it('seeds a missing warehouse row and scopes the guard bypass to credit-memo reversals', () => {
+    expect(migration).toContain('ON CONFLICT (product_id, location) DO UPDATE');
+    expect(migration).toContain("current_setting('app.crx_return_credit_lineage', true) = '1'");
+    expect(migration).toContain('EXECUTE FUNCTION public._enforce_below_cost_line()');
+    expect(migration).toContain('RETURN_CREDIT_UNIT_MISMATCH');
+    expect(migration).toContain('RETURN_CREDIT_UNLINKED_COST_LINE');
+    expect(migration).toContain('RETURN_CREDIT_LEDGER_IMMUTABLE');
+    expect(migration).toContain('BEFORE UPDATE OF status, deleted_at, total_amount_cents, total_cost_cents OR DELETE ON public.invoices');
+    expect(migration).toContain('aa_crx_guard_return_credit_lineage');
+    expect(migration).toContain('BEFORE UPDATE OF invoice_id, order_item_id, product_id, quantity, unit_price_cents, extended_cents, cost_cents, unit_size OR DELETE');
+    expect(migration).toContain('ROW(NEW.invoice_id, NEW.order_item_id, NEW.product_id, NEW.quantity, NEW.unit_price_cents, NEW.extended_cents, NEW.cost_cents, NEW.unit_size)');
+    expect(returnCreditSmoke).toContain('SMOKE_FAIL: active return-credit cost line was reparented');
+    expect(returnCreditSmoke).toContain('SMOKE_FAIL: active zero-cost return-credit line was costed later');
+    expect(returnCreditSmoke).toContain('SMOKE_FAIL: active return-credit revenue fields were mutated');
+    expect(migration).toContain("current_setting('transaction_isolation') <> 'read committed'");
+    expect(migration).toContain("set_config('app.crx_return_credit_lineage', '0', true)");
+    expect(migration).toContain("set_config('app.crx_return_credit_void', '1', true)");
+    expect(migration).toContain("set_config('app.crx_return_credit_void', '0', true)");
+    expect(migration).toContain("set_config('app.crx_return_credit_unapply', '1', true)");
+    expect(migration).toContain("set_config('app.crx_return_credit_unapply', '0', true)");
+    expect(migration).toContain('_void_invoice_return_credit_guard_impl_20260826');
+    expect(migration).toContain('_unapply_return_credit_guard_impl_20260826');
+    expect(migration).toContain('RETURN_CREDIT_VOID_RELEASE_FAILED');
+    expect(migration).toContain('RETURN_CREDIT_UNAPPLY_RELEASE_FAILED');
+    expect(migration).toContain('RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS');
+    expect(migration).toContain('SET total_cost_cents = -v_cogs, season = v_credit_season');
+    expect(returnCreditSmoke).toContain("PERFORM void_invoice(v_credit_id, '[SMOKE] chain void'");
+    expect(returnCreditSmoke).toContain("operation_type = 'invoice_voided'");
+    expect(returnCreditSmoke).toContain("issue_return_credit(v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-reissue')");
+  });
+
+  it('pins the replacement helper bodies used by the COGS postflight', () => {
+    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('ad749d0d1ba9da0208249cb42eb08e869248ce1eeedbbc6b520807555dbb3a3b');
+    expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('f8becf522d34caa804006e9372759b1088220fb1ea8c020b23ce949051a7581c');
+    expect(functionBodySha256(migration, 'void_invoice')).toBe('6d7c17279c90a9d6817129ba6f43bb490523f2844657074046a9f66f019af3ec');
+    expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('a151010fc4556ab78d9254c42f7fe3c6ac06ba6dc03c19f52c44fe882ba2b520');
+    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('555a8b3381a8e29ca5911166536075ec6153296297aad55a9519dae04417abc8');
+    expect(functionBodySha256(migration, 'guard_return_credit_lineage')).toBe('7b5ccb72380c54cd2a202f891de659bce1b916c09c76ad9884446ba1544dd89f');
+    expect(migration).toContain('f6a2595a2abf356b8d230149afa0b803daf9c66e5c5c59deb3baec3df450bd96');
+    expect(migration).toContain('cc146431df3ab52d734ce3f62189bbbd51e3779ce64cfa789ee829e704f9e27c');
+    expect(migration).toContain('_issue_return_credit_header_only_impl_20260825');
+    expect(migration).toContain('_receive_return_impl_before_inventory_seed_20260825');
+    expect(migration).toContain('RETURN_COGS_POSTFLIGHT_CONTRACT_DRIFT');
+    expect(migration).toContain('8db113f5da2277a791ca6f4744581faa1bc02fe532ca19fec93c8120f80c1a05');
+  });
+
+  it('keeps report status alignment in the separate report-only migration', () => {
+    expect(reportMigration).toContain("status IN ('posted', 'overdue', 'paid')");
+    expect(reportMigration).toContain("regexp_count(v_src, 'status IN \\(''posted'', ''overdue'', ''paid''\\)') <> 3");
+    expect(reportMigration).toContain('get_customer_year_end_summary');
+    expect(reportMigration).toContain("status IN ('posted', 'overdue') AND balance_cents > 0");
+    expect(reportMigration).not.toContain('invoice_items (');
+    expect(reportMigration).toContain('RECOGNIZED_INVOICE_REPORT_PREFLIGHT_EXISTING_RETURN_CREDIT');
+    expect(reportMigration).toContain('LOCK TABLE public.returns IN SHARE ROW EXCLUSIVE MODE');
+  });
+
+  it('selects paid and overdue customers in both year-end batch callers', () => {
+    for (const source of [reportsPage, monthEndPage]) {
+      expect(source).toContain(".in('status', ['posted', 'overdue', 'paid'])");
+      expect(source).not.toContain(".in('status', ['posted', 'voided'])");
+    }
+    expect(reportsPage).toContain("toast('error', sanitizeError(err))");
+    const assignedCustomerQuery = reportsPage.match(
+      /const \{ data: assignedCustomers[\s\S]*?if \(assignedError\)/,
+    )?.[0];
+    expect(assignedCustomerQuery).toContain(".eq('assigned_sales_rep', profile.id)");
+    expect(assignedCustomerQuery).not.toContain(".eq('is_active', true)");
+    expect(reportsPage).toContain("toast('error', sanitizeError(batchError))");
+    expect(monthEndPage).toContain("toast('error', sanitizeError(batchError))");
+    expect(monthEndPage).toContain('Recognized Invoices');
+    expect(monthEndPage).toContain('recognized, ${summary.invoices.voided_count} voided');
+    expect(monthEndPage).not.toContain('Posted Invoices');
+  });
+
+  it('measures report behavior as a fixture delta instead of company-wide absolutes', () => {
+    expect(returnCreditSmoke).toContain('v_pnl_revenue_before');
+    expect(returnCreditSmoke).toContain('v_cents - v_pnl_revenue_before <> -1000');
+    expect(returnCreditSmoke).toContain("(v_res #>> '{invoices,posted_count}')::bigint - v_monthly_posted_before <> 4");
+    expect(returnCreditSmoke).toContain("(v_res #>> '{invoices,total_amount_cents}')::bigint - v_monthly_amount_before <> -1000");
+    expect(returnCreditSmoke).toContain("(v_res #>> '{invoices,total_cost_cents}')::numeric - v_monthly_cost_before <> 501");
+    expect(returnCreditSmoke).toContain('FRACTIONAL_COGS_EXPECTED_251');
+    expect(returnCreditSmoke).toContain('FRACTIONAL_COGS_EXPECTED_250');
+    expect(returnCreditSmoke).toContain('return credit was attributed to the credit-date season instead of the source-sale season');
+  });
+
+  it('pins the reviewed live year-end body before replacing it', () => {
+    expect(reportMigration).toContain('34d92979d8d5dbc6f3eff7ebc3daaec4833baeac8917044c89c0af16e00624e7');
+    expect(reportMigration).toContain("p.proconfig = ARRAY['search_path=public, pg_temp']::text[]");
+    expect(reportMigration).toContain('RECOGNIZED_INVOICE_REPORT_PREFLIGHT_YEAR_END_DRIFT');
+    expect(reportMigration).toContain('4d4515042f0b2fab834ad22ba79f877c9cc444e920402593bfc5947f5ff382f4');
+    expect(reportMigration).toContain('ad1432467c3739bd581b42729a2b7bc7d0ff19a60736481881d5ae1ddebbab05');
+    expect(reportMigration).toContain('fae61d495af1f6bb0ab690d6cb9d6d111a3a6e387e0c047f9f8c0d568bd49680');
+  });
+
+  it('fail-closes year-end financial data to admins or the assigned sales rep', () => {
+    expect(reportMigration).toContain('PERFORM public.require_admin_or_sales_rep()');
+    expect(reportMigration).toContain('IF NOT public.is_admin()');
+    expect(reportMigration).toContain('c.assigned_sales_rep = auth.uid()');
+    expect(reportMigration).toContain("RAISE EXCEPTION 'CUSTOMER_SCOPE_DENIED'");
+    expect(reportMigration).toContain('RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_BATCH_WRAPPER');
+  });
+
+  it('pins the exact postflight body source for every redefined report RPC', () => {
+    expect(functionBodySha256(reportMigration, 'get_bottom_line_pnl')).toBe('307c94d4e8de83c91b0b7ca680d529c6834e56ef5bc5b10c5c6d054fc1a265d2');
+    expect(functionBodySha256(reportMigration, 'get_monthly_summary')).toBe('c90c10378f5fc2feb8c41554f0fbc85280f55ca3b637e7b24654055e3dfe8330');
+    expect(functionBodySha256(reportMigration, 'get_customer_year_end_summary')).toBe('983e802e334a70cb2a627447b8760d3830a690dab789d26e161a7f590efe1bfe');
+  });
+
+  it('keeps function body proof hashes stable across LF and CRLF checkouts', () => {
+    expect(functionBodySha256(reportMigration, 'get_bottom_line_pnl')).toBe(
+      functionBodySha256(reportMigration.replace(/\r?\n/g, '\r\n'), 'get_bottom_line_pnl'),
+    );
+    expect(reportMigration).toContain("replace(v_src, chr(13) || chr(10), chr(10))");
+    expect(migration).toContain("replace(v_src, chr(13) || chr(10), chr(10))");
+  });
+
+  it('does not claim field profitability consumes the credit-memo COGS reversal', () => {
+    expect(migrationHistory).toContain(
+      "Live `get_field_profitability` is different: it reads `invoices.total_cost_cents` and scopes itself to `invoice_type = 'field_application'`, so it excludes credit memos and does not carry this reversal.",
+    );
+    expect(migrationHistory).not.toContain(
+      'the invoice-basis RPCs (`get_bottom_line_pnl`, `get_monthly_summary`, field profitability) derive cost from `invoice_items.cost_cents`',
+    );
+    expect(migrationHistory).not.toContain('20260825161340_return_credit_cogs_reversal_current');
+  });
+});

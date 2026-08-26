@@ -857,6 +857,7 @@ interface IssueReturnCreditResult {
   credit_invoice_id: string;
   credit_invoice_number: string;
   credit_amount_cents: number;
+  cogs_reversed_cents: number;
   customer_id: string;
   credited_at: string;          // ISO timestamp
 }
@@ -996,10 +997,12 @@ describe('RPC contract: issue_return_credit', () => {
       credit_invoice_id: 'inv-uuid',
       credit_invoice_number: 'CM-2026-0001',
       credit_amount_cents: 25000,
+      cogs_reversed_cents: 12500,
       customer_id: 'cust-uuid',
       credited_at: '2026-05-07T01:00:00Z',
     };
     expect(result.credit_amount_cents).toBeGreaterThan(0);
+    expect(result.cogs_reversed_cents).toBe(12500);
     expect(result.credit_invoice_number).toMatch(/^CM-/);
   });
 });

@@ -19,6 +19,14 @@ intent binding (`20260825034622`). See the rollout block at the top of
 `docs/reference/migration-history.md`. This pass re-read the ledger and updated the draw-down
 entries only; it does not re-certify unrelated issue narratives below.
 
+**OPEN — return credits do not reverse COGS until the PR 361 rebuild is applied.** Live
+`_issue_return_credit_impl` still creates only the credit-memo header and writes no
+`invoice_items.cost_cents`; live PNL still recognizes only `posted`, and monthly reporting still
+omits `paid`. Production currently has zero credited returns, so the defect is real but latent rather
+than an existing wrong report. Pre-apply candidates `20260825230150` and `20260825230209` contain the
+durable repair and fail closed if the zero-credit/zero-legacy-restock assumptions stop being true.
+Do not call this resolved until both migrations are reviewed, applied, and verified live.
+
 
 **RESOLVED 2026-08-25 — the two `/patrol` findings first deferred at the round-3 review cap
 are both closed.** Kept as history because the reasoning is the evidence for the

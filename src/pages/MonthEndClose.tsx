@@ -215,7 +215,7 @@ export default function MonthEndClose() {
           done: summary.invoices.draft_count === 0,
           detail: summary.invoices.draft_count > 0
             ? `${summary.invoices.draft_count} unposted invoice(s) remain`
-            : `${summary.invoices.posted_count} posted, ${summary.invoices.voided_count} voided`,
+            : `${summary.invoices.posted_count} recognized, ${summary.invoices.voided_count} voided`,
         },
         {
           label: 'Payments reconciled',
@@ -377,7 +377,7 @@ export default function MonthEndClose() {
         .from('invoices')
         .select('customer_id')
         .eq('season', season)
-        .in('status', ['posted', 'voided'])
+        .in('status', ['posted', 'overdue', 'paid'])
         .is('deleted_at', null);
       if (custErr) throw custErr;
 
@@ -396,7 +396,7 @@ export default function MonthEndClose() {
         p_season: season,
       });
       if (batchError) {
-        toast('error', 'Failed to generate year-end summaries: ' + batchError.message);
+        toast('error', sanitizeError(batchError));
         setYeLoading(false);
         return;
       }
@@ -515,7 +515,7 @@ export default function MonthEndClose() {
             <h3 className="text-sm font-semibold text-nav-dark mb-4">Period Summary</h3>
             <div className="space-y-3">
               <div className="flex justify-between text-sm">
-                <span className="text-secondary">Posted Invoices</span>
+                <span className="text-secondary">Recognized Invoices</span>
                 <span className="font-medium">{summary.invoices.posted_count} — {fmt(summary.invoices.total_amount_cents)}</span>
               </div>
               <div className="flex justify-between text-sm">

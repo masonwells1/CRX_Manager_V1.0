@@ -675,6 +675,101 @@ Proof: patrol's four suites pass (classify 110, render 82, sources 128, trusted-
 up from 33 by the two sweep assertions); `npm run test:agent-workflows` green;
 `patrol-report.mjs` ran end to end against live data (52 items, "needs you 3 · scan
 errors 1") and still withheld the all-clear because a source failed.
+
+## 2026-08-25 — Return-credit COGS reversal rebuilt on current accounting truth (pre-apply)
+
+PR #361's 2026-08-09 draft reversed return revenue but was 275 commits behind `main`, shared a
+timestamp with an unrelated migration, and treated only `posted` invoices as recognized sales.
+It has been rebuilt as the new forward migration
+`20260825230209_rebuild_return_credit_cogs_reversal.sql`; the urgent report-predicate correction is
+now its own smaller migration, `20260825230150_align_recognized_invoice_report_statuses.sql`.
+
+- Return credits now create negative-quantity credit-memo lines that reverse only COGS previously
+  recognized by sale invoices in `posted`, `overdue`, or `paid` state. Uninvoiced or non-restocked
+  damaged quantity still receives its full customer credit but carries zero COGS reversal.
+- Historical cost changes are preserved exactly: return quantity consumes individual source invoice
+  lines oldest-first, including a cost that recurs after a different cost; prior active credits
+  consume same-cost source lines FIFO, and cumulative rounding keeps the split lines equal to the
+  exact revenue credit. Fractional quantities now allocate source cost cumulatively too: two
+  half-unit credits against one 501-cent source unit reverse 251 cents and then 250 cents, never
+  251 cents twice. Each governed return credit stores that whole-cent result on its protected header,
+  and P&L/monthly reporting consumes the header only for return-linked credit memos; manual credit
+  memos and sales remain line-based and round each line to whole cents.
+- The report migration makes `get_bottom_line_pnl`, `get_monthly_summary`, and
+  `get_customer_year_end_summary` recognize posted, overdue, and paid invoices without widening
+  AR's open-balance predicate. Year-end product usage includes credit-memo lines, so usable product
+  returned in the season nets against the originally invoiced product. A cross-season credit now
+  inherits its one known recognized source-invoice season. Production enforces `invoices.season NOT
+  NULL`; a defensive fallback to the source order season and then the current season is proven in a
+  disposable transaction that temporarily relaxes that constraint. Conflicting non-null source
+  seasons fail closed, so an October return cannot silently combine sales from different crop years. The
+  year-end RPC now also
+  fail-closes customer financial data: admins can read any customer, while sales reps can read only
+  customers assigned to them; the batch wrapper inherits the same per-customer check.
+- The return migration pins each live dependency it changes, rejects duplicate return/order lines at
+  the schema boundary, and upserts a missing usable-return inventory row transactionally. Its
+  transaction-scoped table lock makes the live zero-credited-return prerequisite race-free and
+  aborts the rollout if a credit exists before apply. It also aborts on old received-but-unrestocked
+  usable items or recognized cost-credit lines without source lineage. After apply, source invoices
+  cannot be voided, soft-deleted, or hard-deleted while an active linked return credit depends on
+  their recognized COGS. Every active return-credit line, including a zero-cost uninvoiced
+  remainder, keeps its invoice lineage, product, quantity, unit price, extended amount, unit, and
+  cost immutable until the credit is voided/unapplied. The return-linked recognized credit header's
+  revenue and COGS totals are immutable too, including against hard deletion. Any recognized source
+  invoice and line for the same credited order line are frozen until the credit is voided/unapplied, and credit
+  issuance plus dangerous source lifecycle changes share sorted transaction advisory locks keyed by
+  order item; ordinary invoice and draft-line updates do not take those locks. A competing source-line
+  mutation fails immediately instead of waiting into a multi-row lock cycle. Credit
+  issuance takes those locks before creating its header, so a racing source void either commits
+  first and becomes visible to the credit path or waits and is rejected after the credit commits.
+  The invoice-detail `void_invoice` action and the canonical `unapply_credit_memo` correction each
+  receive a separate, exact-transition context around their existing admin-only implementation;
+  both fail the whole transaction unless the linked return is restored to `received`. The real-schema
+  smoke executes issue → normal void → received → re-credit, while its cleanup continues to exercise
+  unapply, so neither valid correction path is stranded by the immutable-ledger trigger.
+  The narrow below-cost bypass is cleared immediately after the governed credit-line/header writes.
+  Preflight and postflight also require exactly one function for every reviewed public name, so an
+  unexpected RPC or dependency overload aborts the migration rather than surviving beside the
+  pinned signature.
+- Installed-function preflight and postflight hashes normalize CRLF to LF before comparison,
+  preserving exact body proof across Windows and Linux checkouts while still pinning the reviewed
+  production definitions. The two migrations, canonical smoke, and real-schema prover are also pinned to LF in
+  `.gitattributes`; a dedicated regression exercises both newline forms.
+- The Data Integrity panel and its go-live DB7 proof copy now exclude credit-memo lines from the
+  delivery-versus-invoice quantity check. Return credits carry negative line items for accounting
+  reports, but those lines are not new customer billing and must not create a false
+  delivery-parity discrepancy.
+- Fresh read-only production schema was restored into disposable PostgreSQL. Nineteen load-bearing
+  signals were exercised: seventeen guard-removal or accounting mutants plus direct defensive
+  null-season fallback and conflicting-season rejection. The mutants cover the two return rollout guards, the
+  report's no-pre-existing-return-credit guard, public-function overload collision,
+  source-recognition trigger, customer scope, immutable cost-line ledger, zero-cost ledger rows,
+  credit revenue fields, unlinked-credit guard, one-statement lineage cleanup, historical FIFO
+  chronology, and source-season attribution, plus a real two-session guard-protocol race, fractional report math, and fractional
+  double-rounding. The grouped cost mutant produced 6,601 cents instead of the
+  paid/overdue/posted `$5 → $6 → $5 → $5.01` oracle's 6,700 cents. Removing the source-side lock
+  let a source void complete while the credit lock was held and produced the forbidden state; the
+  canonical guard waited and rejected it. The canonical candidate rejected every failure class and returned
+  `RETURN_CREDIT_POSTAPPLY_LIVE_PASS source=fresh-live-read-only-schema candidate_migrations=4
+  proofs=EXISTING_RETURN_CREDIT_REPORT_GUARD_REMOVAL_DETECTED,EXISTING_CREDIT_GUARD_REMOVAL_DETECTED,
+  RECEIVED_UNRESTOCKED_GUARD_REMOVAL_DETECTED,
+  PREFLIGHT_OVERLOAD_COLLISION_REJECTED,POSTFLIGHT_OVERLOAD_COLLISION_REJECTED,
+  SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED,
+  SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED,
+  RETURN_CREDIT_LEDGER_GUARD_REMOVAL_DETECTED,ZERO_COST_LEDGER_MUTATION_DETECTED,
+  CREDIT_REVENUE_LEDGER_MUTATION_DETECTED,
+  CUSTOMER_SCOPE_DISCLOSURE_REJECTED,FRACTIONAL_REPORT_HALF_CENT_DETECTED,
+  UNLINKED_COST_GUARD_REMOVAL_DETECTED,LINEAGE_CLEAR_REMOVAL_DETECTED,
+  GROUPED_COST_BUCKET_6601_REJECTED,CREDIT_SOURCE_SEASON_MUTATION_DETECTED,
+  FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED,NULL_SOURCE_SEASON_FALLBACK_PROVEN,
+  AMBIGUOUS_SOURCE_SEASON_REJECTED smoke=SMOKE_PASS_ROLLBACK residue=0`. Final exact-head
+  adversarial review remains a pre-publication gate. This latest marker also closes the two HIGH
+  findings from the exact-SHA Sol review of `af1eed59`: concurrent source void versus credit issue,
+  and fractional source-cost/header disagreement.
+
+**Production is unchanged.** This entry records a reviewed pre-apply candidate, not a live migration.
+After any approved live apply, regenerate `.claude/schema-registry.json` from live before closeout.
+
 ## 2026-08-24 — Draw-down rollout completed live: migrations 2, 3 and 4 applied
 
 With Mason's explicit in-chat approval (Codex→Claude handoff

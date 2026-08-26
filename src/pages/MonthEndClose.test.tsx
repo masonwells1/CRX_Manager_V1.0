@@ -120,7 +120,11 @@ vi.mock('../lib/yearEndSummaryPdf', () => ({
 }));
 
 vi.mock('../components/statements/StatementPrintDialog', () => ({ default: () => null }));
-vi.mock('../components/reports/YearEndSummaryDialog', () => ({ default: () => null }));
+vi.mock('../components/reports/YearEndSummaryDialog', () => ({
+  default: ({ open, onGenerate }: { open: boolean; onGenerate: (season: number, options: Record<string, boolean>) => void }) => (
+    open ? <button onClick={() => onGenerate(2026, {})}>Run year-end test</button> : null
+  ),
+}));
 
 import MonthEndClose from './MonthEndClose';
 
@@ -201,6 +205,28 @@ describe('MonthEndClose', () => {
     renderMonthEnd();
     await waitFor(() => {
       expect(screen.getByText(/statement/i)).toBeInTheDocument();
+    });
+  });
+
+  it('surfaces a batch year-end RPC guard error through the sanitizer', async () => {
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') return buildChain({ data: [{ customer_id: 'customer-1' }], error: null });
+      if (table === 'orders') return buildChain({ data: [], count: 0, error: null });
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_batch_year_end_summaries') {
+        return Promise.resolve({ data: null, error: { message: 'CUSTOMER_SCOPE_DENIED' } });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    renderMonthEnd();
+    fireEvent.click(await screen.findByRole('button', { name: 'Year-End Summaries' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Run year-end test' }));
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith('error', 'CUSTOMER_SCOPE_DENIED');
     });
   });
 

@@ -309,6 +309,17 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // body only to consume the order line's allocated cents instead of
   // re-extending price x quantity.
   _create_invoice_for_unbilled_delivery_impl_20260718: ['create_invoice_for_unbilled_delivery'],
+  // Direct browser EXECUTE is revoked. This is the original business body
+  // behind the intent-bound public issue_return_credit wrapper: the public
+  // wrapper claims/replays the actor+return fingerprint, then the private
+  // implementation preserves the established issue_return_credit operation
+  // namespace for its legacy check/save pair. Giving the implementation a new
+  // private namespace would strand existing receipts and could replay a credit.
+  _issue_return_credit_impl: ['issue_return_credit'],
+  // Same legacy-operation contract for the private inventory receipt body.
+  // The intent-bound public wrapper owns the actor+return fingerprint while
+  // this service-role-only helper preserves the committed receive namespace.
+  _receive_return_impl_20260714: ['receive_return'],
   // Restore the Wave A alias exemption when its drafts are promoted from
   // scripts/.staging-migrations/.
 };

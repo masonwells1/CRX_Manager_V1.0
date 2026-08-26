@@ -5,6 +5,30 @@
  */
 
 const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
+  [/^CUSTOMER_SCOPE_DENIED\b/i,
+   'You can only work with customers assigned to you'],
+  [/^RETURN_NOT_FOUND\b/i,
+   'This return could not be found'],
+  [/^RETURN_CREDIT_UNIT_MISMATCH\b/i,
+   'The returned item unit does not match its original sale. Review the return before retrying'],
+  [/^RETURN_CREDIT_UNLINKED_COST_LINE\b/i,
+   'An existing credit cannot be matched safely to this return. Review the credit memo before retrying'],
+  [/^RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED\b/i,
+   'Void or unapply the related return credit before voiding or deleting this sale invoice'],
+  [/^RETURN_CREDIT_LEDGER_IMMUTABLE\b/i,
+   'Void or unapply the return credit before changing its source or cost lines'],
+  [/^RETURN_CREDIT_ISOLATION_UNSUPPORTED\b/i,
+   'This return credit could not be serialized safely. Retry the operation'],
+  [/^RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS\b/i,
+   'This return spans more than one crop season. Review the source invoices before retrying'],
+  [/^RETURN_CREDIT_HEADER_RESULT_INVALID\b/i,
+   'The return credit could not be completed safely. Retry the operation'],
+  [/^RETURN_CREDIT_SOURCE_CONCURRENT\b/i,
+   'A related invoice is being changed. Wait a moment and retry the return credit'],
+  [/^RETURN_CREDIT_VOID_RELEASE_FAILED\b/i,
+   'The return credit could not be voided safely, so no changes were saved. Refresh and try again; contact support if it repeats'],
+  [/^RETURN_CREDIT_UNAPPLY_RELEASE_FAILED\b/i,
+   'The return credit could not be unapplied safely, so no changes were saved. Refresh and try again; contact support if it repeats'],
   [/duplicate key value violates unique constraint "[^"]+"/i,
    'A record with this information already exists'],
   [/violates foreign key constraint "[^"]+"/i,
@@ -36,6 +60,14 @@ export function sanitizeError(error: unknown): string {
       : typeof error === 'object' && error !== null && 'message' in error && typeof (error as Record<string, unknown>).message === 'string'
         ? (error as Record<string, unknown>).message as string
         : 'An unexpected error occurred';
+
+  const returnStatus = message.match(/^RETURN_NOT_APPROVED:([a-z_]+)$/i)?.[1];
+  if (returnStatus) {
+    return `This return must be approved before it can be received (current status: ${returnStatus})`;
+  }
+  if (/^RETURN_NOT_APPROVED\b/i.test(message)) {
+    return 'This return must be approved before it can be received';
+  }
 
   for (const [pattern, replacement] of CONSTRAINT_PATTERNS) {
     if (pattern.test(message)) {

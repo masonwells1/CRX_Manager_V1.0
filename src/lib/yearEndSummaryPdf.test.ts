@@ -43,6 +43,8 @@ vi.mock('jspdf-autotable', () => ({
   }),
 }));
 
+import autoTable from 'jspdf-autotable';
+
 import {
   generateYearEndSummaryPdf,
   downloadYearEndSummaryPdf,
@@ -175,6 +177,17 @@ describe('generateYearEndSummaryPdf', () => {
   it('handles empty product usage', async () => {
     const doc = await generateYearEndSummaryPdf(makeSummaryData({ product_usage: [] }));
     expect(doc).toBe(mockDoc);
+  });
+
+  it('renders a negative returned-product net as a visible negative amount', async () => {
+    await generateYearEndSummaryPdf(makeSummaryData({
+      product_usage: [makeProductUsage({ total_quantity: -1, total_cost_cents: -1000 })],
+    }));
+    const productTable = vi.mocked(autoTable).mock.calls.find(([, options]) =>
+      JSON.stringify(options.head).includes('"Product"')
+    );
+    const body = productTable?.[1].body as unknown[][] | undefined;
+    expect(body).toContainEqual(expect.arrayContaining(['-$10.00']));
   });
 
   it('handles empty invoices', async () => {

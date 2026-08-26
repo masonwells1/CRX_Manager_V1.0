@@ -379,6 +379,18 @@ worktree-only inspection sees one of them.)
 
 ---
 
+## 2026-08-25 — The verified PR 361 E2E credit-demo rows were disposable test data
+
+**Decision:** Mason directed permanent deletion of invoices `6ee78a5c-6105-4275-89f7-247a40cf11eb`
+and `b43ee2cc-c767-47b0-ac39-70052a999ee6` plus credit application
+`a40c3f78-984b-4f89-b5d2-4a54cbccc0ff`; their customer must remain.
+**Why:** all three rows were explicitly marked `[E2E]`, distorted recognized-invoice reporting,
+and were backed up and dependency-checked before the exact-row purge.
+**What this forbids/implies:** this is not general deletion authority; only these three IDs were
+approved. The 2026-08-25 purge left both invoice/application counts at zero and the customer at one.
+
+---
+
 ## 2026-08-25 — Booking-draw pause RELEASED; draws are back in normal use
 
 **Source:** Mason's explicit in-chat decision, 2026-08-25 ("Ok un pause them then"), after being

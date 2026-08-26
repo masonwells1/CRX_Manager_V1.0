@@ -109,6 +109,14 @@ scripts/smoke/prove-save-job-chem-unit-invariant.mjs text eol=lf
 scripts/smoke/fixtures/save-job-chem-unit-harness.sql text eol=lf
 scripts/smoke/fixtures/save-job-chem-unit-tests.sql text eol=lf
 
+# PR 361 return-credit COGS rebuild. The migrations install and pin function
+# bodies, while the rollback smoke and real-schema prover are exact release
+# evidence. Keep all four artifacts byte-stable across Windows and Linux.
+supabase/migrations/20260825230150_align_recognized_invoice_report_statuses.sql text eol=lf
+supabase/migrations/20260825230209_rebuild_return_credit_cogs_reversal.sql text eol=lf
+scripts/smoke/smoke-return-credit-chain.sql text eol=lf
+scripts/smoke/verify-return-credit-real-schema.mjs text eol=lf
+
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf
 supabase/baselines/*.json text eol=lf
