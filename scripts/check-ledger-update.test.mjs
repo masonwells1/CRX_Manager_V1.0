@@ -38,29 +38,54 @@ eq(ledgerCheck(["supabase/migrations/20260716000000_add_foo.sql"]).ok, false, "a
 ok(/ledger/i.test(ledgerCheck(["AGENTS.md"]).reason), "block reason explains the ledger requirement");
 eq(ledgerCheck([".claude/hooks/guards.test.mjs", "src/lib/db.ts"]).ok, false, "mixed commit with a hook-test change still needs a ledger");
 
-// ── docs/changelog.d/ entry files satisfy the guard (2026-08-25) ────────────
-eq(ledgerCheck([".claude/settings.json", "docs/changelog.d/2026-08-25-thing.md"]).ok, true,
-  "a per-change entry file satisfies the ledger requirement");
-eq(ledgerCheck(["AGENTS.md", "docs/changelog.d/2026-08-25-a.md"]).ok, true,
-  "contract change recorded via an entry file is allowed");
-eq(ledgerCheck(["supabase/migrations/20260825000000_x.sql", "docs/changelog.d/2026-08-25-mig.md"]).ok, true,
-  "a migration recorded via an entry file is allowed");
-// README must NOT be a free pass: otherwise editing the folder's own instructions
-// would satisfy the guard while recording nothing about the change.
-eq(ledgerCheck([".claude/settings.json", "docs/changelog.d/README.md"]).ok, false,
-  "changelog.d/README.md alone does NOT satisfy the guard");
-eq(ledgerCheck(["AGENTS.md", "docs/changelog.d/README.md"]).ok, false,
-  "editing the folder README is not a recorded change");
-// Nested paths are not accepted - entries live flat in the folder.
-eq(ledgerCheck([".claude/settings.json", "docs/changelog.d/sub/nested.md"]).ok, false,
-  "a nested path under changelog.d does not satisfy the guard");
-// Non-markdown droppings in the folder are not a ledger entry either.
-eq(ledgerCheck([".claude/settings.json", "docs/changelog.d/notes.txt"]).ok, false,
-  "a non-.md file in changelog.d does not satisfy the guard");
-// The entry file alone is not a trigger - it needs no ledger of its own.
-eq(ledgerCheck(["docs/changelog.d/2026-08-25-solo.md"]).ok, true,
-  "an entry file on its own is not an agent-surface trigger");
+// ── docs/changelog.d/ entry files (2026-08-25) ──────────────────────────────
+// An entry counts ONLY when git reports it as ADDED. Modifying or deleting an
+// existing entry records nothing about THIS commit — it would let a session edit
+// someone else's entry instead of writing its own (Codex P2, PR #482).
+const added = (p) => ({ path: p, status: "A" });
+const modified = (p) => ({ path: p, status: "M" });
 
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-thing.md")]).ok, true,
+  "an ADDED dated entry satisfies the ledger requirement");
+eq(ledgerCheck(["AGENTS.md", added("docs/changelog.d/2026-08-25-a.md")]).ok, true,
+  "contract change recorded via an added entry is allowed");
+eq(ledgerCheck(["supabase/migrations/20260825000000_x.sql", added("docs/changelog.d/2026-08-25-mig.md")]).ok, true,
+  "a migration recorded via an added entry is allowed");
+
+// The hole this closes.
+eq(ledgerCheck([".claude/settings.json", modified("docs/changelog.d/2026-08-25-thing.md")]).ok, false,
+  "MODIFYING an existing entry does NOT satisfy the guard");
+eq(ledgerCheck([".claude/settings.json", { path: "docs/changelog.d/2026-08-25-thing.md", status: "D" }]).ok, false,
+  "DELETING an entry does NOT satisfy the guard");
+ok(/MODIFIED or DELETED/.test(ledgerCheck([".claude/settings.json", modified("docs/changelog.d/2026-08-25-x.md")]).reason || ""),
+  "the refusal says the entry was modified rather than claiming no ledger exists");
+// A bare path carries no status, so it cannot prove an add — fails closed.
+eq(ledgerCheck([".claude/settings.json", "docs/changelog.d/2026-08-25-thing.md"]).ok, false,
+  "a path with NO status cannot satisfy the changelog.d rule (fails closed)");
+
+// The dated filename is enforced, not merely documented (CodeRabbit, PR #482).
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/notes.md")]).ok, false,
+  "an undated notes.md does NOT satisfy the guard");
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/README.md")]).ok, false,
+  "changelog.d/README.md alone does NOT satisfy the guard");
+eq(ledgerCheck(["AGENTS.md", added("docs/changelog.d/README.md")]).ok, false,
+  "editing the folder README is not a recorded change");
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-8-5-short.md")]).ok, false,
+  "a non-zero-padded date is not the documented format");
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/sub/2026-08-25-nested.md")]).ok, false,
+  "a nested path under changelog.d does not satisfy the guard");
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-notes.txt")]).ok, false,
+  "a non-.md file in changelog.d does not satisfy the guard");
+
+// Appending to the older shared ledgers is a MODIFY by nature and stays valid.
+eq(ledgerCheck([".claude/settings.json", modified("docs/CHANGELOG.md")]).ok, true,
+  "modifying docs/CHANGELOG.md still satisfies the guard");
+eq(ledgerCheck([".claude/settings.json", "docs/manual/DECISION_LOG.md"]).ok, true,
+  "a bare path still works for the non-entry ledger files");
+
+// The entry file alone is not a trigger — it needs no ledger of its own.
+eq(ledgerCheck([added("docs/changelog.d/2026-08-25-solo.md")]).ok, true,
+  "an entry file on its own is not an agent-surface trigger");
 // ── triggers WITH a ledger → ok (any one ledger file satisfies) ─────────────
 eq(ledgerCheck([".claude/hooks/migration-apply-guard.mjs", "docs/CHANGELOG.md"]).ok, true, "CHANGELOG satisfies");
 eq(ledgerCheck([".codex/hooks/production-action-guard.mjs", "docs/CHANGELOG.md"]).ok, true, "CHANGELOG satisfies a Codex guard change");

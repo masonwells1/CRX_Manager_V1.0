@@ -16,7 +16,7 @@ Two sessions never write the same path here, so there is nothing to conflict on.
 
 Create `docs/changelog.d/<YYYY-MM-DD>-<short-slug>.md`:
 
-```
+```text
 docs/changelog.d/2026-08-25-fail-closed-save-job-smoke.md
 ```
 
@@ -26,6 +26,20 @@ proof you observed, and what you did **not** verify.
 
 This satisfies the pre-commit ledger guard (`scripts/check-ledger-update.mjs`), so an
 agent-surface or migration commit is recorded without touching the shared file.
+
+## What is enforced, not just asked
+
+Both of these are checked by `scripts/check-ledger-update.mjs`, so a commit that gets
+them wrong is blocked rather than merely discouraged:
+
+- **The filename must be `<YYYY-MM-DD>-<slug>.md`**, flat in this folder. A bare
+  `notes.md` satisfies nothing. The slug is lower-case; the date must be zero-padded.
+  `scripts/assemble-changelog.mjs` imports the same predicate, so the guard and the
+  assembler can never disagree about what counts as an entry.
+- **The entry must be ADDED by this commit.** Modifying or deleting an existing entry
+  does not satisfy the requirement, because it records nothing about the change you
+  are making. This is what stops one session's commit riding on another session's
+  entry.
 
 ## Rules
 
