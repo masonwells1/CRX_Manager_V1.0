@@ -781,6 +781,41 @@ describe('quote_versions write boundary — standing predicate', () => {
     // then fails its own guard — verified against live PostgreSQL 17.6.
     expect(predicateCode).toMatch(/AND btrim\(\s*regexp_replace\(/);
     expect(predicateCode).not.toMatch(/regexp_replace\(\s*btrim\(/);
+
+    // Codex round 8 (2026-08-26): the region pin ends at the marker UPDATE, so
+    // everything after it was unpinned — an appended EXCEPTION handler passed
+    // the region pin, the sole-owner-call count, and the sole-UPDATE count
+    // while quietly changing what a "successful" create means. The predicate
+    // and the migration postcondition now pin the ENTIRE normalized body, in
+    // BOTH branches that bless this function (the writer-scan exemption and
+    // the named contract), so the two cannot drift apart.
+    const createWholeBody = createBody.replace(/\s+/g, ' ').trim();
+    expect(createWholeBody.length).toBe(3972);
+    expect(createHash('md5').update(createWholeBody, 'utf8').digest('hex')).toBe(
+      '3723acbbf1821e9d5d212c3aea983f86',
+    );
+    expect(
+      (predicateCode.match(/= 3972\b/g) ?? []).length,
+      'whole-body length pin must appear in both create branches of the predicate',
+    ).toBe(2);
+    expect((predicateCode.match(/= '3723acbbf1821e9d5d212c3aea983f86'/g) ?? []).length).toBe(2);
+    expect(restoreTrustMigration).toMatch(/= 3972\b/);
+    expect(restoreTrustMigration).toContain("= '3723acbbf1821e9d5d212c3aea983f86'");
+    // The attack the pre-round-8 checks missed: append a handler, leave the
+    // pinned region byte-identical. The region pin still passes on it; only
+    // the whole-body pin refuses it.
+    const handlerAttack = createBody.replace(
+      /END;\s*$/,
+      "EXCEPTION\n  WHEN raise_exception THEN\n    RETURN jsonb_build_object('status', 'created');\nEND;\n",
+    );
+    expect(handlerAttack).not.toBe(createBody);
+    expect(normalizeRegion(handlerAttack.toLowerCase())).toBe(trustRegion);
+    const handlerAttackNorm = handlerAttack.replace(/\s+/g, ' ').trim();
+    expect(
+      handlerAttackNorm.length === 3972 &&
+        createHash('md5').update(handlerAttackNorm, 'utf8').digest('hex') ===
+          '3723acbbf1821e9d5d212c3aea983f86',
+    ).toBe(false);
   });
 
   it('pins the restore trust rejection before the only owner-side restore call', () => {
@@ -861,6 +896,55 @@ describe('quote_versions write boundary — standing predicate', () => {
       `PERFORM public.some_mutator$coalesce();\n  ${trustCheck}`,
     );
     expect(hasReadOnlyPrefix(dollarIdentifierMutant)).toBe(false);
+
+    // Codex round 8 (2026-08-26): every check above pins the PREFIX — nothing
+    // pinned the tail after the rejection. The bypass: keep the prefix
+    // byte-identical, move the sole owner call into an appended EXCEPTION
+    // handler, and raise into it deliberately. Catching
+    // QUOTE_VERSION_LEGACY_UNTRUSTED then restores legacy snapshots while the
+    // ordering check, the prefix pin, the exact-IF count and the
+    // sole-owner-call count ALL still pass. Prove the miss, then prove the
+    // whole-body pin is what catches it.
+    const wholeBodyLength = 3720;
+    const wholeBodyDigest = 'b864c261854b760ff22f1f24e87ae22f';
+    const normalizeWhole = (source: string) => source.replace(/\s+/g, ' ').trim();
+    const hasWholeBodyPin = (source: string) => {
+      const normalized = normalizeWhole(source);
+      return normalized.length === wholeBodyLength &&
+        createHash('md5').update(normalized, 'utf8').digest('hex') === wholeBodyDigest;
+    };
+    expect(hasWholeBodyPin(body!)).toBe(true);
+
+    const exceptionHandlerAttack = body!
+      .replace(
+        `  v_result := public._restore_quote_version_owner_impl(\n    p_quote_id, p_version_id, p_performed_by, p_idempotency_key\n  );`,
+        `  RAISE EXCEPTION 'ROUTE_TO_HANDLER';`,
+      )
+      .replace(
+        /END;\s*$/,
+        "EXCEPTION\n  WHEN raise_exception THEN\n" +
+          "    v_result := public._restore_quote_version_owner_impl(\n" +
+          "      p_quote_id, p_version_id, p_performed_by, p_idempotency_key\n" +
+          "    );\n    RETURN v_result;\nEND;\n",
+      );
+    expect(exceptionHandlerAttack).not.toBe(body!);
+    // The attack passes every pre-round-8 check: prefix untouched, rejection
+    // still present exactly once and still textually before the (relocated)
+    // owner call, still exactly one owner call.
+    expect(hasSafeOrder(exceptionHandlerAttack)).toBe(true);
+    expect(hasReadOnlyPrefix(exceptionHandlerAttack)).toBe(true);
+    expect(
+      (exceptionHandlerAttack.match(/_restore_quote_version_owner_impl\s*\(/g) ?? []).length,
+    ).toBe(1);
+    // Only the whole-body pin refuses it.
+    expect(hasWholeBodyPin(exceptionHandlerAttack)).toBe(false);
+
+    // And the pin is mirrored where it is enforced: the standing predicate and
+    // the migration postcondition.
+    expect(predicateCode).toMatch(/= 3720\b/);
+    expect(predicateCode).toContain(`= '${wholeBodyDigest}'`);
+    expect(restoreTrustMigration).toMatch(/= 3720\b/);
+    expect(restoreTrustMigration).toContain(`= '${wholeBodyDigest}'`);
   });
 
   it('keeps the new legacy-restore refusal intelligible in the quote UI', () => {

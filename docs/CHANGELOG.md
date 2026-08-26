@@ -65,6 +65,18 @@ become a trusted cost source merely because the door is now shut.
   `FOR UPDATE` lock, row-version staleness, the full idempotency payload check including
   `_method` and version-id existence, and the cache-write row-count assertion. The only
   additions are the trust-mark `UPDATE` and its `QUOTE_VERSION_TRUST_MARK_FAILED` guard.
+- **Round 8 (2026-08-26): the standing sweep now pins both re-emitted function bodies
+  whole, not just a prefix or region.** The Codex reviewer showed that everything after
+  the `QUOTE_VERSION_LEGACY_UNTRUSTED` raise was unpinned: a future re-emission could
+  keep the fingerprinted prefix byte-identical, move the sole owner call into an appended
+  `EXCEPTION` handler, and deliberately raise into it — catching the rejection restores
+  legacy snapshots while the prefix pin, exact-IF count, sole-owner-call count and
+  ordering check all still pass. Proven against live PostgreSQL 17.6 both ways: the
+  handler body passes every pre-round-8 check and only a whole-normalized-body
+  length+md5 pin refuses it. That pin is now in the predicate (both create branches and
+  the restore contract), the migration postcondition, and the mirror test's mutation
+  proofs. Same boundary lesson as round 5, terminal form: leave NO unpinned interval on
+  either side of the guard.
 - **Rebase decisions.** Merging current `main` produced eight conflicts. `main` won every
   documentation conflict — the branch's headers still claimed `20260813080000` was
   unapplied, which stopped being true on 2026-08-16. In `rpcContracts.test.ts` `main` also

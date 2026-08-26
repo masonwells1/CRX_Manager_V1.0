@@ -117,6 +117,20 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-26 — quote-version function bodies are whole-body hash-pinned; any re-emission must update six constants in two files
+
+PR #401 round 8 pinned the ENTIRE normalized bodies of `create_quote_version` and
+`_restore_quote_version_below_cost_impl_20260810` (length + md5) in BOTH the standing sweep
+predicate `scripts/db-invariant-sweeps/predicates/quote-versions-rpc-owned.sql` (three sites)
+and the migration `20260825190000`'s postcondition (two sites), mirrored by
+`src/lib/quoteVersionWriteBoundary.test.ts`. This is deliberate: a prefix/region pin left the
+tail open to an appended `EXCEPTION` handler that could catch `QUOTE_VERSION_LEGACY_UNTRUSTED`
+and restore legacy snapshots (proven live 2026-08-26, both ways). **Consequence:** any future
+legitimate re-emission of either function makes the standing sweep report a violation until the
+pin constants are recomputed and updated in the predicate and the test in the SAME change —
+that forced review is the guard working, not a false positive. Recompute with the normalization
+`md5(btrim(regexp_replace(prosrc, '\s+', ' ', 'g')))` plus its length, verified against live.
+
 ## OPEN 2026-08-23 — `codex review <scope>` self-recurses, kills its own process, and exits 0
 
 **Severity: HIGH. Not a crash — a silent false "gate passed".** `codex review --base origin/main`

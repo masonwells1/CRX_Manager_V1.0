@@ -8,6 +8,14 @@
 -- after this migration as restorable, and rejects an unmarked version before it
 -- can rebuild quote_items.cost_at_quote_cents. It deliberately does not
 -- backfill existing rows: that would turn an unprovable assertion into trust.
+--
+-- idempotency-body-check: exempt — both re-emitted wrappers delegate key
+-- persistence to their owner impls, which INSERT the idempotency_keys row
+-- themselves (create: body from 20260611211058, renamed into place by
+-- 20260730235031; restore: last re-emitted by 20260816120000). The wrappers
+-- only check_idempotency() up front and then UPDATE the already-saved row to
+-- enrich the cached result, with GET DIAGNOSTICS proving exactly one row
+-- existed to update — a runtime-enforced proof, not a comment-level claim.
 
 SET LOCAL statement_timeout = '60s';
 SET LOCAL lock_timeout = '10s';
@@ -54,7 +62,12 @@ BEGIN
      OR to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)') IS NULL
      OR to_regprocedure('public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)') IS NULL
      OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'restore_quote_version') <> 1
-     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = '_restore_quote_version_below_cost_impl_20260810') <> 1 THEN
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = '_restore_quote_version_below_cost_impl_20260810') <> 1
+     -- Round 8 review parity: the REVOKE below names ONE create_quote_version
+     -- signature, so a second overload would silently escape it — the same
+     -- hazard 20260813080000 spelled out and asserted. Measured 1 on live
+     -- 2026-08-26 (read-only).
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'create_quote_version') <> 1 THEN
     RAISE EXCEPTION 'PRECOND: expected quote-version RPC signatures are missing; re-review before applying the trust boundary';
   END IF;
   IF NOT EXISTS (
@@ -190,6 +203,7 @@ BEGIN
 END;
 $function$;
 
+-- caller-analysis: create_quote_version :: both live callers (src/lib/quoteLifecycleRpc.ts:54 and :65) run as authenticated, which the GRANT two lines down re-establishes in the same migration; the REVOKE narrows only PUBLIC and anon, so neither caller loses the EXECUTE privilege. The :65 legacy-signature fallback is reachable only on a PGRST202 resolution failure and, once this applies, resolves to the same 5-arg function whose defaulted-NULL p_expected_row_version raises QUOTE_STALE_WRITE — privilege preserved, path effectively dead.
 REVOKE EXECUTE ON FUNCTION public.create_quote_version(uuid, uuid, text, text, bigint)
   FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.create_quote_version(uuid, uuid, text, text, bigint)
@@ -355,6 +369,11 @@ BEGIN
     SELECT 1 FROM pg_proc
     WHERE oid = 'public.create_quote_version(uuid,uuid,text,text,bigint)'::regprocedure
       AND prosrc LIKE '%restore_trusted_at = clock_timestamp()%'
+      -- Codex round 8 (2026-08-26): pin the ENTIRE normalized body, not just a
+      -- fragment — an appended EXCEPTION handler after the marker UPDATE would
+      -- otherwise pass every partial check. Matches the standing predicate.
+      AND length(btrim(regexp_replace(prosrc, '\s+', ' ', 'g'))) = 3972
+      AND md5(btrim(regexp_replace(prosrc, '\s+', ' ', 'g'))) = '3723acbbf1821e9d5d212c3aea983f86'
   ) THEN RAISE EXCEPTION 'POSTCOND: create_quote_version no longer marks new snapshots trusted'; END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_proc
@@ -393,10 +412,25 @@ BEGIN
               'g'
             ))
           ) = '62440ea5c855d1366808c5a2098177d7'
+      -- Codex round 8 (2026-08-26): the prefix pin above stops at the
+      -- rejection, leaving the tail open to an appended EXCEPTION handler that
+      -- catches QUOTE_VERSION_LEGACY_UNTRUSTED and routes into the owner call.
+      -- Pin the ENTIRE normalized body. Matches the standing predicate.
+      AND length(btrim(regexp_replace(prosrc, '\s+', ' ', 'g'))) = 3720
+      AND md5(btrim(regexp_replace(prosrc, '\s+', ' ', 'g'))) = 'b864c261854b760ff22f1f24e87ae22f'
   ) THEN RAISE EXCEPTION 'POSTCOND: restore path no longer rejects untrusted legacy snapshots'; END IF;
   IF has_function_privilege('authenticated', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE')
      OR has_function_privilege('anon', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE') THEN
     RAISE EXCEPTION 'POSTCOND: private restore implementation is externally callable';
+  END IF;
+  -- Round 8 review parity: read the create-side grant state back after the
+  -- REVOKE/GRANT pair, the same way the restore side above is read back, and
+  -- keep the overload count pinned so the single-signature REVOKE stays
+  -- meaningful.
+  IF (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'create_quote_version') <> 1
+     OR has_function_privilege('anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTCOND: create_quote_version overload count or grant state drifted';
   END IF;
   IF (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'restore_quote_version') <> 1
      OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = '_restore_quote_version_below_cost_impl_20260810') <> 1

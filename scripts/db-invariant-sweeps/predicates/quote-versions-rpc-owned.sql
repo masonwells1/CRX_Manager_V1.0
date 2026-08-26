@@ -622,6 +622,13 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
             1, 'i'
         ) = 1
         AND p.prosrc !~* '(insert\s+into|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
+        -- Codex round 8 (2026-08-26): everything after the marker UPDATE was
+        -- unpinned, so an appended EXCEPTION handler slid past this exemption.
+        -- Pin the ENTIRE normalized body, same as the named contract below —
+        -- the two must not drift apart, or a weakened contract branch would
+        -- leave this exemption silently blessing the drifted body.
+        AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3972
+        AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '3723acbbf1821e9d5d212c3aea983f86'
       )
       AND p.prosrc ~* '(insert\s+into|update|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
  )
@@ -666,6 +673,14 @@ SELECT 'create_quote_version:trusted-marker-writer-contract' AS violation_key,
           1, 'i'
       ) = 1
       AND p.prosrc !~* '(insert\s+into|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
+      -- Codex round 8 (2026-08-26): the pinned region above runs from the owner
+      -- call to the marker UPDATE, so text after the UPDATE was open — an
+      -- appended EXCEPTION handler could catch quote_version_trust_mark_failed
+      -- and report success for a version that was never marked. Fail-closed on
+      -- the trust side (the row stays untrusted), but a silent contract break.
+      -- Same fix as the restore side: pin the ENTIRE normalized body.
+      AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3972
+      AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '3723acbbf1821e9d5d212c3aea983f86'
  )
 
 UNION ALL
@@ -738,6 +753,18 @@ SELECT '_restore_quote_version_below_cost_impl_20260810:trust-check-contract' AS
               'g'
             ))
           ) = '62440ea5c855d1366808c5a2098177d7'
+      -- Codex round 8 (2026-08-26): the prefix pin above ends at the rejection,
+      -- so everything AFTER it was open. A re-emission could keep the prefix
+      -- byte-identical, move the sole owner call into an appended EXCEPTION
+      -- handler, and deliberately raise into that handler — catching
+      -- QUOTE_VERSION_LEGACY_UNTRUSTED restores legacy snapshots while the
+      -- prefix pin, the exact-IF count, the sole-owner-call count and the
+      -- ordering check all still pass. Same boundary-choice lesson as round 5:
+      -- the region must leave NO unpinned interval, on either side. So pin the
+      -- ENTIRE normalized body. This subsumes the prefix pin logically; the
+      -- prefix pin stays for diagnostic granularity when only the tail drifts.
+      AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3720
+      AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 'b864c261854b760ff22f1f24e87ae22f'
  )
 
 UNION ALL
