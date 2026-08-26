@@ -13,9 +13,10 @@
 // — this hook does NOT validate those.
 // File name kept as status-enum-check.mjs for settings.json wiring stability.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { toLF, applyEditsForAnalysis } from "./edit-splice-lib.mjs";
 
 function out(decision, reason, systemMessage) {
   const payload = decision === "block"
@@ -47,7 +48,32 @@ const isTs = /\.tsx?$/.test(filePath) && !/\.(test|spec)\.tsx?$/.test(filePath) 
 const isSql = filePath.endsWith(".sql") && filePath.includes("supabase/migrations/");
 if (!isTs && !isSql) out("allow");
 
-const content = payload?.tool_input?.content || payload?.tool_input?.new_string || "";
+// Content being judged: Write -> content (the full file). For Edit/MultiEdit
+// the fragment is only PART of the file, so simulate the edit against the
+// on-disk content (line-ending-safe — edit-splice-lib) and judge the FULL
+// post-edit file. That is what makes a file-level `status-enum-check: exempt`
+// marker that already lives elsewhere in the file (SQL or TS) visible to an
+// Edit (fragment-only judging denied the very file the marker exempts — the
+// 2026-08-26 deadlock class, same as grant-change-guard), and it closes the
+// MultiEdit gap where an edits array produced empty content and the guard
+// silently allowed. Falls back to the fragment(s) if the file can't be
+// read/applied. LF-normalized either way.
+const input = payload?.tool_input || {};
+let content = input.content || input.new_string || "";
+const isFragmentEdit = typeof input.content !== "string" &&
+  (typeof input.old_string === "string" || Array.isArray(input.edits));
+if (isFragmentEdit) {
+  try {
+    if (existsSync(filePath)) {
+      content = applyEditsForAnalysis(readFileSync(filePath, "utf8"), input);
+    } else if (Array.isArray(input.edits)) {
+      content = input.edits.map((e) => e?.new_string || "").join("\n");
+    }
+  } catch {
+    /* keep the fragment */
+  }
+}
+content = toLF(content);
 if (!content) out("allow");
 
 if (/(?:\/\/|--)\s*status-enum-check:\s*exempt/.test(content)) out("allow");
