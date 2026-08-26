@@ -1397,6 +1397,7 @@ git() { return 0; }
   const preCommit = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-commit'), 'utf8'); const commitMsg = readFileSync(path.join(REPO_ROOT, '.husky', 'commit-msg'), 'utf8'); const prePush = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-push'), 'utf8'); const ci = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'); const packageScripts = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).scripts;
   const trustedTargetWorkflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'phase3-private-artifact-containment.yml'), 'utf8');
   assert(preCommit.indexOf('check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit') < preCommit.indexOf('validate-sql.sh'));
+  assert(preCommit.includes('--diff-filter=ACMRTD'), 'pre-commit staged routing must include Git type changes');
   assert(!preCommit.includes('git add docs/app-workflow-map.html'), 'pre-commit must not mutate or auto-stage the reviewed index');
   assert.equal((preCommit.match(/check-supplier-pricing-phase3-private-artifacts\.mjs --pre-commit/g) ?? []).length, 1, 'pre-commit must run containment exactly once before every staged-file check');
   assert(ci.includes('Workflow map freshness (ignore generated date stamp)'), 'CI must verify workflow-map freshness after pre-commit stops generating it');

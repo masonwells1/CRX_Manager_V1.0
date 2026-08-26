@@ -3,11 +3,15 @@
 // Run: node scripts/check-ledger-update.test.mjs
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { ledgerCheck } from "./check-ledger-update.mjs";
 
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
+
+const ledgerGuardSource = readFileSync(new URL("./check-ledger-update.mjs", import.meta.url), "utf8");
+ok(ledgerGuardSource.includes('"--diff-filter=ACMRTD"'), "CLI includes staged Git type changes");
 
 // ── no triggers → always ok ─────────────────────────────────────────────────
 eq(ledgerCheck([]).ok, true, "empty commit is ok");

@@ -203,7 +203,7 @@ If you skip this step, the work-computer Claude starts with a blank memory and r
 ## Step 9 — First commit on the work machine
 
 When you make your first change at work and commit, watch for:
-- Husky pre-commit hook running (containment + staged safety checks) — proves Step 3 worked; pre-push/CI provide the full product proof.
+- Husky pre-commit hook running (containment + staged safety checks) — proves Step 3 worked. Pre-push runs containment, typecheck, and build; CI provides the full lint/test/build product proof, including `check:docs`.
 - Stop hook reminding you of loose ends — proves Step 7a worked.
 
 If both fire, you are 100% set up.
