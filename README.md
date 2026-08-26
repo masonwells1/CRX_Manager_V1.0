@@ -57,7 +57,7 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 | `npm run test:e2e` | Run Playwright E2E tests |
 | `npm run test:e2e:ui` | Interactive Playwright test UI |
 
-> **Note:** A pre-commit hook runs `npm run build` + `npm test` automatically before every commit. Commits are blocked if the build fails or any test fails.
+> **Note:** Pre-commit runs fast checks for the files staged in the commit, plus the repository's safety and workflow-parity guards. Pre-push runs private-artifact containment, TypeScript, and the production build. CI is the full-product-proof gate: it runs lint, type checking, unit coverage, the production build, and the applicable safety checks before merge.
 
 ## User Roles
 

@@ -12,7 +12,8 @@
  * content (lifecycle SVGs, problem descriptions, CSS) is preserved.
  *
  * Run manually : node scripts/generate-workflow-map.mjs
- * Auto-run     : wired into .husky/pre-commit (runs before every commit)
+ * CI check     : regenerated in CI and compared after normalizing the date stamp
+ * Pre-commit   : never auto-runs or stages this file; callers stage it explicitly
  */
 
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
@@ -33,7 +34,9 @@ function srcFiles() {
   const files = [];
   function walk(dir) {
     let entries;
-    try { entries = readdirSync(dir); } catch { return; }
+    // Filesystem directory order is not portable. Sort before recursion so the
+    // generated node/edge order is byte-stable on Windows and GitHub's Linux CI.
+    try { entries = readdirSync(dir).sort(); } catch { return; }
     for (const e of entries) {
       const full = join(dir, e);
       let st;
