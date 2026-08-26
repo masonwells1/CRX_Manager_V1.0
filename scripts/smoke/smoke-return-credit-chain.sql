@@ -862,6 +862,28 @@ BEGIN
     END IF;
   END;
 
+  BEGIN
+    UPDATE invoices SET season = season + 1 WHERE id = v_credit_id;
+    RAISE EXCEPTION 'SMOKE_FAIL: active return-credit season was mutated';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason IS DISTINCT FROM 'RETURN_CREDIT_HEADER_IMMUTABLE' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: return-credit season guard raised %', v_reason;
+    END IF;
+  END;
+
+  BEGIN
+    DELETE FROM returns WHERE id = v_return_id;
+    RAISE EXCEPTION 'SMOKE_FAIL: recognized return-credit parent was deleted';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason IS DISTINCT FROM 'RETURN_CREDIT_PARENT_IMMUTABLE' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: return-credit parent guard raised %', v_reason;
+    END IF;
+  END;
+
   -- The below-cost bypass is statement-scoped in practice, not merely
   -- transaction-local. A later negative line in this same transaction must
   -- hit the ordinary guard after issue_return_credit clears its flag.

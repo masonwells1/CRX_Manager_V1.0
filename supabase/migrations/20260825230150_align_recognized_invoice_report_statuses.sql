@@ -93,6 +93,9 @@ BEGIN
 END;
 $preflight$;
 
+-- Deliberately preserve the live SECURITY INVOKER ACL, including anon EXECUTE:
+-- this migration changes recognized-status accounting only and must not change
+-- the existing report access posture. Postflight pins that grant explicitly.
 CREATE OR REPLACE FUNCTION public.get_bottom_line_pnl(
   p_start_date date,
   p_end_date date

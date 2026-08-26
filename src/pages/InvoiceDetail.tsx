@@ -17,7 +17,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
-import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
+import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { withBelowCostReason } from '../lib/belowCostApproval';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../lib/emailService';
@@ -38,6 +38,7 @@ import { ProductSearchResultRow } from '../components/products/ProductSearchResu
 
 interface LineItem {
   id?: string;
+  order_item_id?: string | null;
   product_id: string | null;
   product_name: string;
   description: string;
@@ -539,6 +540,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       setItems(
         (itemData as Array<Record<string, unknown> & { id: string; product_id: string; product?: { product_name: string }; description: string; quantity: number; unit_price_cents: number; extended_cents: number; cost_cents: number; rate_per_acre?: number | null; acres?: number | null; unit_size?: string; rate_unit?: string; total_applied?: number; sort_order?: number }>).map((it) => ({
           id: it.id,
+          order_item_id: (it.order_item_id as string) ?? null,
           product_id: it.product_id,
           product_name: it.product?.product_name || it.description || '',
           description: it.description,
@@ -1251,7 +1253,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         acres: s.acres,
         amount_cents: s.amount_cents,
       })) : undefined,
-      items: (enrichedItems || []).map((it) => ({
+      items: groupReturnCreditDisplayItems(invoice.invoice_type, (enrichedItems || []).map((it) => ({
+        order_item_id: it.order_item_id || null,
+        product_id: it.product_id || null,
         description: it.description,
         product_name: it.product?.product_name || it.description,
         quantity: Number(it.quantity),
@@ -1269,7 +1273,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         epa_registration: it.epa_registration || it.product?.epa_registration || null,
         is_application_fee: it.is_application_fee || false,
         product_form: it.product_form || it.product?.product_form || null,
-      })) as InvoicePdfItem[],
+      })) as InvoicePdfItem[]),
       total_amount_cents: invoice.total_amount_cents ?? items.reduce((s, i) => s + i.extended_cents, 0),
       total_cost_cents: invoice.total_cost_cents ?? items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : Math.round(i.cost_cents * i.quantity)), 0),
       paid_amount_cents: invoice.paid_amount_cents ?? 0,
@@ -1376,6 +1380,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     : items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
   const canEdit = isAdminOrRep;
   const editable = canEdit && !isSplitInvoice && (isNew || ['draft', 'unposted'].includes(invoice.status || ''));
+  const displayItems = editable
+    ? items
+    : groupReturnCreditDisplayItems(invoice.invoice_type, items);
 
   // Customer filtered list
   const filteredCustomers = customerSearch.length >= 1
@@ -1821,7 +1828,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           )}
         </div>
 
-        {items.length === 0 ? (
+        {displayItems.length === 0 ? (
           <div className="text-center py-8 text-secondary">
             <FileText className="w-8 h-8 mx-auto mb-2 opacity-40" />
             <p className="text-sm">No line items yet. Add products to this invoice.</p>
@@ -1835,14 +1842,14 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                   <th className="pb-2 pr-4 w-24">Qty</th>
                   <th className="pb-2 pr-4 w-28">Unit Price</th>
                   <th className="pb-2 pr-4 w-28">Extended</th>
-                  {items.some((i) => i.tote_number) && (
+                  {displayItems.some((i) => i.tote_number) && (
                     <th className="pb-2 pr-4">Tote #</th>
                   )}
                   <th className="pb-2 w-10"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {items.map((item, idx) => (
+                {displayItems.map((item, idx) => (
                   <tr key={idx} className="group">
                     <td className="py-2 pr-4">
                       <div className="font-medium text-nav-dark">{item.product_name || item.description}</div>
@@ -1886,7 +1893,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                       )}
                     </td>
                     <td className="py-2 pr-4 font-medium">{fmt(item.extended_cents)}</td>
-                    {items.some((i) => i.tote_number) && (
+                    {displayItems.some((i) => i.tote_number) && (
                       <td className="py-2 pr-4 text-secondary">{item.tote_number || '-'}</td>
                     )}
                     <td className="py-2">
@@ -1904,7 +1911,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               </tbody>
               <tfoot>
                 <tr className="border-t border-gray-200 font-semibold">
-                  <td className="pt-3" colSpan={items.some((i) => i.tote_number) ? 4 : 3}>
+                  <td className="pt-3" colSpan={displayItems.some((i) => i.tote_number) ? 4 : 3}>
                     Total
                   </td>
                   <td className="pt-3">{fmt(totalCents)}</td>

@@ -52,7 +52,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_CREDIT_UNIT_MISMATCH');
     expect(migration).toContain('RETURN_CREDIT_UNLINKED_COST_LINE');
     expect(migration).toContain('RETURN_CREDIT_LEDGER_IMMUTABLE');
-    expect(migration).toContain('BEFORE UPDATE OF status, deleted_at, total_amount_cents, total_cost_cents OR DELETE ON public.invoices');
+    expect(migration).toContain('BEFORE UPDATE OF status, deleted_at, total_amount_cents, total_cost_cents, season OR DELETE ON public.invoices');
     expect(migration).toContain('aa_crx_guard_return_credit_lineage');
     expect(migration).toContain('BEFORE UPDATE OF invoice_id, order_item_id, product_id, quantity, unit_price_cents, extended_cents, cost_cents, unit_size OR DELETE');
     expect(migration).toContain('ROW(NEW.invoice_id, NEW.order_item_id, NEW.product_id, NEW.quantity, NEW.unit_price_cents, NEW.extended_cents, NEW.cost_cents, NEW.unit_size)');
@@ -70,6 +70,11 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_CREDIT_VOID_RELEASE_FAILED');
     expect(migration).toContain('RETURN_CREDIT_UNAPPLY_RELEASE_FAILED');
     expect(migration).toContain('RETURN_CREDIT_HEADER_IMMUTABLE');
+    expect(migration).toContain('RETURN_CREDIT_PARENT_IMMUTABLE');
+    expect(migration).toContain('RETURN_CREDIT_LINE_TOTAL_MISMATCH');
+    expect(migration).toContain('BEFORE UPDATE OF status, deleted_at, total_amount_cents, total_cost_cents, season OR DELETE');
+    expect(migration).toContain('ROW(NEW.total_amount_cents, NEW.total_cost_cents, NEW.season)');
+    expect(migration).toContain('CREATE TRIGGER aa_crx_guard_recognized_return_credit_delete');
     expect(migration).toContain('SET total_cost_cents = -v_cogs, season = public.current_season()');
     expect(migration).not.toContain('RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS');
     expect(returnCreditSmoke).toContain("PERFORM void_invoice(v_credit_id, '[SMOKE] chain void'");
@@ -80,13 +85,13 @@ describe('return-credit COGS migration', () => {
   });
 
   it('pins the replacement helper bodies used by the COGS postflight', () => {
-    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('0476706b4a6b1e9a12dff2322d495c41f933fb1c942a770d1bc32dfdee89f362');
+    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
     expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('f8becf522d34caa804006e9372759b1088220fb1ea8c020b23ce949051a7581c');
     expect(functionBodySha256(migration, 'void_invoice')).toBe('6d7c17279c90a9d6817129ba6f43bb490523f2844657074046a9f66f019af3ec');
     expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('a151010fc4556ab78d9254c42f7fe3c6ac06ba6dc03c19f52c44fe882ba2b520');
-    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('32d92c9cf59541d99a5579816e612cbdbf11a98d308e329be084c55306467c4f');
+    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('767a4246bb7aed37f6875f173b3f6d7ad7f8f263109bfb0ab6b1d6d1d5c84e91');
     expect(functionBodySha256(migration, 'guard_return_credit_lineage')).toBe('7b5ccb72380c54cd2a202f891de659bce1b916c09c76ad9884446ba1544dd89f');
-    expect(migration).toContain('f6a2595a2abf356b8d230149afa0b803daf9c66e5c5c59deb3baec3df450bd96');
+    expect(migration).toContain('0f0ad06a8e8fe0994d051fc5b6659cef04f9f16829cbf9998e8b3f1265a257cb');
     expect(migration).toContain('cc146431df3ab52d734ce3f62189bbbd51e3779ce64cfa789ee829e704f9e27c');
     expect(migration).toContain('_issue_return_credit_header_only_impl_20260825');
     expect(migration).toContain('_receive_return_impl_before_inventory_seed_20260825');
@@ -120,6 +125,11 @@ describe('return-credit COGS migration', () => {
     expect(monthEndPage).toContain('Recognized Invoices');
     expect(monthEndPage).toContain('recognized, ${summary.invoices.voided_count} voided');
     expect(monthEndPage).not.toContain('Posted Invoices');
+  });
+
+  it('gives sales reps one clear empty-assignment message', () => {
+    expect(reportsPage).toContain('if (skippedCount > 0 && uniqueIds.length > 0)');
+    expect(reportsPage).toContain('No assigned customers have invoices for season');
   });
 
   it('measures report behavior as a fixture delta instead of company-wide absolutes', () => {

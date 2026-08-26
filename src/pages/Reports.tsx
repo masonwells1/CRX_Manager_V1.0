@@ -467,12 +467,12 @@ export default function Reports() {
           if (assignedError) throw assignedError;
           uniqueIds = (assignedCustomers || []).map((customer) => customer.id);
           const skippedCount = discoveredIds.length - uniqueIds.length;
-          if (skippedCount > 0) {
+          if (skippedCount > 0 && uniqueIds.length > 0) {
             toast('warning', `Skipped ${skippedCount} customer${skippedCount === 1 ? '' : 's'} not assigned to you.`);
           }
         }
         if (uniqueIds.length === 0) {
-          toast('info', `No customers have invoices for season ${season}`);
+          toast('info', `No assigned customers have invoices for season ${season}`);
           setYeLoading(false);
           return;
         }

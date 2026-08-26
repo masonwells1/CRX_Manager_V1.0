@@ -701,6 +701,10 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   2026-08-26 decision, a cross-season credit uses the current crop season when issued, leaving the
   original sale-season summary unchanged. The accepted simplicity tradeoff is that the current
   season can show negative product usage when the original purchase occurred in a prior season. The
+  status repair is intentionally retrospective: regenerating an older year-end report can now add
+  paid or overdue invoices that the old report wrongly omitted. That reprint correction is separate
+  from return-credit season attribution and does not move a 2026 credit back into the sale season.
+  The
   year-end RPC now also fail-closes customer financial data: admins can read any customer, while sales
   reps can read only
   customers assigned to them; the batch wrapper inherits the same per-customer check.
@@ -716,7 +720,7 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   revenue and COGS totals are immutable too, including against hard deletion. Any recognized source
   invoice and line for the same credited order line are frozen until the credit is voided/unapplied, and credit
   issuance plus dangerous source lifecycle changes share sorted transaction advisory locks keyed by
-  order item; ordinary invoice and draft-line updates do not take those locks. A competing source-line
+  order item; unrelated invoice-header updates and draft-line updates do not take those locks. A competing source-line
   mutation fails immediately instead of waiting into a multi-row lock cycle. Credit
   issuance takes those locks before creating its header, so a racing source void either commits
   first and becomes visible to the credit path or waits and is rejected after the credit commits.

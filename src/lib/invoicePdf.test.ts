@@ -38,7 +38,7 @@ vi.mock('jspdf-autotable', () => ({
   }),
 }));
 
-import { generateInvoicePdf, downloadInvoicePdf, generateBatchInvoicePdf } from './invoicePdf';
+import { generateInvoicePdf, downloadInvoicePdf, generateBatchInvoicePdf, groupReturnCreditDisplayItems } from './invoicePdf';
 import type { InvoicePdfData, InvoicePdfItem, InvoicePdfShare } from './invoicePdf';
 
 // ── Test Data Factories ─────────────────────────────────────────────────
@@ -112,6 +112,23 @@ function makeInvoiceData(overrides: Partial<InvoicePdfData> = {}): InvoicePdfDat
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
+
+describe('groupReturnCreditDisplayItems', () => {
+  it('shows one customer line while preserving the exact summed credit', () => {
+    const grouped = groupReturnCreditDisplayItems('credit_memo', [
+      makeItem({ order_item_id: 'order-item-1', product_id: 'product-1', description: 'Return credit - Atrazine 4L', quantity: -10, extended_cents: -18500, cost_cents: 1200 }),
+      makeItem({ order_item_id: 'order-item-1', product_id: 'product-1', description: 'Return credit - Atrazine 4L', quantity: -5, extended_cents: -9250, cost_cents: 1300 }),
+    ]);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]).toMatchObject({ quantity: -15, extended_cents: -27750 });
+  });
+
+  it('does not collapse ordinary invoices or manual credit rows', () => {
+    const rows = [makeItem(), makeItem()];
+    expect(groupReturnCreditDisplayItems('chemical_sale', rows)).toBe(rows);
+    expect(groupReturnCreditDisplayItems('credit_memo', rows)).toHaveLength(2);
+  });
+});
 
 describe('generateInvoicePdf', () => {
   beforeEach(() => {

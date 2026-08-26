@@ -93,6 +93,8 @@ vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../lib/invoicePdf', () => ({
   downloadInvoicePdf: vi.fn(),
   generateInvoicePdf: vi.fn(),
+  deriveFieldAppAppliedAcres: vi.fn(),
+  groupReturnCreditDisplayItems: vi.fn((_invoiceType: string, items: unknown[]) => items),
 }));
 vi.mock('../lib/emailService', () => ({
   sendEmail: vi.fn(),

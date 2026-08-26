@@ -17,6 +17,14 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'Void or unapply the related return credit before voiding or deleting this sale invoice'],
   [/^RETURN_CREDIT_HEADER_IMMUTABLE\b/i,
    'Use Void on the return credit memo before changing or deleting it'],
+  [/^RETURN_CREDIT_PARENT_IMMUTABLE\b/i,
+   'Void or unapply the return credit before deleting its return record'],
+  [/^RETURN_CREDIT_LINE_TOTAL_MISMATCH\b/i,
+   'The return credit lines did not match the credit total, so no changes were saved'],
+  [/^ORDER_INVOICE_TERMINAL\b/i,
+   'This order invoice is already final and cannot be changed'],
+  [/^ORDER_LIFECYCLE_BUSY_RETRY\b/i,
+   'This order is being updated elsewhere. Wait a moment and retry'],
   [/^RETURN_CREDIT_LEDGER_IMMUTABLE\b/i,
    'Void or unapply the return credit before changing its source or cost lines'],
   [/^RETURN_CREDIT_ISOLATION_UNSUPPORTED\b/i,
@@ -67,6 +75,7 @@ export function sanitizeError(error: unknown): string {
     if (returnStatus === 'requested') {
       return `This return must be approved before it can be received (current status: ${statusLabel})`;
     }
+    if (returnStatus === 'received') return 'This return is already received';
     return `This return is ${statusLabel} and cannot be received`;
   }
   if (/^RETURN_NOT_APPROVED\b/i.test(message)) {

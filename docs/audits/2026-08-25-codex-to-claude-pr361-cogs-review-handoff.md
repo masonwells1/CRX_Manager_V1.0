@@ -409,6 +409,14 @@ return credit before installing that contract. New operator mappings explain amb
 invalid protected header output, and concurrent source edits. Because these changes alter the commit,
 `485b8edd` is disposition evidence only; fresh exact-head Claude and Sol verdicts remain mandatory.
 
+## 2026-08-26 superseding owner decision
+
+The earlier source-season/fallback design in this handoff is abandoned and must not be restored.
+Mason chose the simpler durable rule: the credit uses `current_season()` (2026 when issued now), the
+original sale season is not rewritten by the credit, and a prior-season purchase return may create
+negative current-season product usage. Proof names and hashes earlier in this handoff are historical;
+the candidate migration, current smoke, and exact-head review artifacts are authoritative.
+
 ## Required response format
 
 Return:

@@ -33,6 +33,12 @@ current-season summary can show negative product usage when the original purchas
 prior season. Do not "correct" that by moving the credit backward; changing the policy requires a
 new owner decision.
 
+**EXPECTED REPRINT CHANGE — paid/overdue invoice repair.** The PR 361 report repair also makes old
+year-end reports include all recognized `posted`, `overdue`, and `paid` invoices. Regenerating a
+prior-season report can therefore differ from an older printed copy that incorrectly omitted paid
+or overdue invoices. That correction is separate from credit attribution: a 2026 return credit stays
+in 2026 and does not move the credit into the original sale season.
+
 
 **RESOLVED 2026-08-25 — the two `/patrol` findings first deferred at the round-3 review cap
 are both closed.** Kept as history because the reasoning is the evidence for the

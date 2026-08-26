@@ -24,6 +24,8 @@ import type { autoTable as autoTableFn } from 'jspdf-autotable';
 // ── PDF Data Interfaces ─────────────────────────────────────────────────
 
 export interface InvoicePdfItem {
+  order_item_id?: string | null;
+  product_id?: string | null;
   description: string;
   product_name?: string;
   quantity: number;
@@ -41,6 +43,59 @@ export interface InvoicePdfItem {
   epa_registration?: string | null;
   is_application_fee?: boolean;
   product_form?: string | null;
+}
+
+/**
+ * Return-credit accounting keeps one internal line per consumed source-cost lot.
+ * Customers should still see one simple product line. Collapse only the
+ * unmistakable RPC-authored return-credit rows; ordinary/manual credit memos and
+ * the stored ledger rows remain untouched.
+ */
+interface ReturnCreditDisplayItem {
+  order_item_id?: string | null;
+  product_id?: string | null;
+  description: string;
+  quantity: number;
+  unit_size?: string | null;
+  unit_price_cents: number;
+  extended_cents: number;
+  cost_cents?: number;
+}
+
+export function groupReturnCreditDisplayItems<T extends ReturnCreditDisplayItem>(
+  invoiceType: string | null | undefined,
+  items: T[],
+): T[] {
+  if (invoiceType !== 'credit_memo') return items;
+
+  const grouped: T[] = [];
+  const indexByKey = new Map<string, number>();
+  for (const item of items) {
+    if (!item.order_item_id || !item.description.startsWith('Return credit - ')) {
+      grouped.push(item);
+      continue;
+    }
+    const key = [
+      item.order_item_id,
+      item.product_id ?? '',
+      item.description,
+      item.unit_size ?? '',
+      item.unit_price_cents,
+    ].join('\u001f');
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex == null) {
+      indexByKey.set(key, grouped.length);
+      grouped.push({ ...item });
+      continue;
+    }
+    const existing = grouped[existingIndex];
+    grouped[existingIndex] = {
+      ...existing,
+      quantity: existing.quantity + item.quantity,
+      extended_cents: existing.extended_cents + item.extended_cents,
+    };
+  }
+  return grouped;
 }
 
 /**
@@ -272,6 +327,31 @@ export async function buildInvoicePdfDataFromRow(
     if (derived != null) pickAcres = derived;
   }
 
+  const pdfItems = groupReturnCreditDisplayItems(
+    inv.invoice_type,
+    ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string; epa_registration?: string | null; product_form?: string | null } }>).map((it) => ({
+      order_item_id: (it.order_item_id as string) || null,
+      product_id: (it.product_id as string) || null,
+      description: String(it.description ?? ''),
+      product_name: it.product?.product_name || String(it.description ?? ''),
+      quantity: Number(it.quantity),
+      unit_size: (it.unit_size as string) || undefined,
+      unit_price_cents: Number(it.unit_price_cents) || 0,
+      extended_cents: Number(it.extended_cents) || 0,
+      cost_cents: Number(it.cost_cents) || 0,
+      rate_per_acre: it.rate_per_acre != null ? Number(it.rate_per_acre) : null,
+      rate_unit: (it.rate_unit as string) || null,
+      acres: it.acres != null ? Number(it.acres) : null,
+      total_applied: it.total_applied != null ? Number(it.total_applied) : null,
+      total_applied_unit: (it.total_applied_unit as string) || null,
+      total_applied_gl_lb: it.total_applied_gl_lb != null ? Number(it.total_applied_gl_lb) : null,
+      gl_lb_unit: (it.gl_lb_unit as string) || null,
+      epa_registration: (it.epa_registration as string) || it.product?.epa_registration || null,
+      is_application_fee: Boolean(it.is_application_fee),
+      product_form: (it.product_form as string) || it.product?.product_form || null,
+    })) as InvoicePdfItem[],
+  );
+
   return {
     invoice_number: inv.invoice_number,
     invoice_date: inv.invoice_date,
@@ -308,25 +388,7 @@ export async function buildInvoicePdfDataFromRow(
           pricing_note: s.pricing_note ?? null,
         }))
       : undefined,
-    items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string; epa_registration?: string | null; product_form?: string | null } }>).map((it) => ({
-      description: String(it.description ?? ''),
-      product_name: it.product?.product_name || String(it.description ?? ''),
-      quantity: Number(it.quantity),
-      unit_size: (it.unit_size as string) || undefined,
-      unit_price_cents: Number(it.unit_price_cents) || 0,
-      extended_cents: Number(it.extended_cents) || 0,
-      cost_cents: Number(it.cost_cents) || 0,
-      rate_per_acre: it.rate_per_acre != null ? Number(it.rate_per_acre) : null,
-      rate_unit: (it.rate_unit as string) || null,
-      acres: it.acres != null ? Number(it.acres) : null,
-      total_applied: it.total_applied != null ? Number(it.total_applied) : null,
-      total_applied_unit: (it.total_applied_unit as string) || null,
-      total_applied_gl_lb: it.total_applied_gl_lb != null ? Number(it.total_applied_gl_lb) : null,
-      gl_lb_unit: (it.gl_lb_unit as string) || null,
-      epa_registration: (it.epa_registration as string) || it.product?.epa_registration || null,
-      is_application_fee: Boolean(it.is_application_fee),
-      product_form: (it.product_form as string) || it.product?.product_form || null,
-    })) as InvoicePdfItem[],
+    items: pdfItems,
     total_amount_cents: inv.total_amount_cents || 0,
     total_cost_cents: inv.total_cost_cents || 0,
     paid_amount_cents: inv.paid_amount_cents || 0,
