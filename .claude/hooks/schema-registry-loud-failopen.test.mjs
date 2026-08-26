@@ -53,7 +53,7 @@ const tmpRoot = mkdtempSync(path.join(os.tmpdir(), "schema-registry-loud-test-")
 try {
   // ── status-enum-check.mjs: registry file missing entirely ───────────────
   const dirA = path.join(tmpRoot, "a");
-  const hooksA = scaffoldIsolatedHook(dirA, ["status-enum-check.mjs"], null);
+  const hooksA = scaffoldIsolatedHook(dirA, ["status-enum-check.mjs", "edit-splice-lib.mjs"], null);
   let r = runCopiedHook(hooksA, "status-enum-check.mjs", {
     tool_name: "Write",
     tool_input: { file_path: "/project/src/lib/x.ts", content: ".from('invoices').eq('status','anything')" },
@@ -66,7 +66,7 @@ try {
 
   // ── status-enum-check.mjs: registry file present but unparseable JSON ───
   const dirB = path.join(tmpRoot, "b");
-  const hooksB = scaffoldIsolatedHook(dirB, ["status-enum-check.mjs"], "{ not valid json ");
+  const hooksB = scaffoldIsolatedHook(dirB, ["status-enum-check.mjs", "edit-splice-lib.mjs"], "{ not valid json ");
   r = runCopiedHook(hooksB, "status-enum-check.mjs", {
     tool_name: "Write",
     tool_input: { file_path: "/project/src/lib/x.ts", content: ".from('invoices').eq('status','anything')" },
@@ -77,7 +77,7 @@ try {
 
   // ── status-enum-check.mjs: healthy registry -> no warning at all ─────────
   const dirC = path.join(tmpRoot, "c");
-  const hooksC = scaffoldIsolatedHook(dirC, ["status-enum-check.mjs"], JSON.stringify({
+  const hooksC = scaffoldIsolatedHook(dirC, ["status-enum-check.mjs", "edit-splice-lib.mjs"], JSON.stringify({
     check_constraints: { "invoices.status": { values: ["draft", "posted", "voided"] } },
   }));
   r = runCopiedHook(hooksC, "status-enum-check.mjs", {
@@ -124,7 +124,7 @@ try {
   // sql-safety.mjs imports ./registry-freshness-lib.mjs relatively, so it must
   // be copied alongside it into the isolated hooks dir.
   const dirG = path.join(tmpRoot, "g");
-  const hooksG = scaffoldIsolatedHook(dirG, ["sql-safety.mjs", "registry-freshness-lib.mjs"], null);
+  const hooksG = scaffoldIsolatedHook(dirG, ["sql-safety.mjs", "registry-freshness-lib.mjs", "edit-splice-lib.mjs"], null);
   r = runCopiedHook(hooksG, "sql-safety.mjs", {
     tool_name: "Write",
     tool_input: { file_path: "supabase/migrations/20990101000000_x.sql", content: "SELECT 1;" },
@@ -136,7 +136,7 @@ try {
 
   // ── sql-safety.mjs: v1-shaped registry (no columns/not_null_columns/sequences) ──
   const dirH = path.join(tmpRoot, "h");
-  const hooksH = scaffoldIsolatedHook(dirH, ["sql-safety.mjs", "registry-freshness-lib.mjs"], JSON.stringify({
+  const hooksH = scaffoldIsolatedHook(dirH, ["sql-safety.mjs", "registry-freshness-lib.mjs", "edit-splice-lib.mjs"], JSON.stringify({
     generated_columns: [], status_enums: {}, tables_without_updated_at: [],
   }));
   r = runCopiedHook(hooksH, "sql-safety.mjs", {
@@ -148,7 +148,7 @@ try {
 
   // ── sql-safety.mjs: exempt-registry marker present -> no warning (deliberate opt-out) ──
   const dirI = path.join(tmpRoot, "i");
-  const hooksI = scaffoldIsolatedHook(dirI, ["sql-safety.mjs", "registry-freshness-lib.mjs"], null);
+  const hooksI = scaffoldIsolatedHook(dirI, ["sql-safety.mjs", "registry-freshness-lib.mjs", "edit-splice-lib.mjs"], null);
   r = runCopiedHook(hooksI, "sql-safety.mjs", {
     tool_name: "Write",
     tool_input: { file_path: "supabase/migrations/20990101000000_x.sql", content: "-- sql-safety: exempt-registry (test)\nSELECT 1;" },
@@ -158,7 +158,7 @@ try {
 
   // ── sql-safety.mjs: healthy v2 registry -> no warning ────────────────────
   const dirJ = path.join(tmpRoot, "j");
-  const hooksJ = scaffoldIsolatedHook(dirJ, ["sql-safety.mjs", "registry-freshness-lib.mjs"], JSON.stringify({
+  const hooksJ = scaffoldIsolatedHook(dirJ, ["sql-safety.mjs", "registry-freshness-lib.mjs", "edit-splice-lib.mjs"], JSON.stringify({
     columns: { invoices: ["id", "status"] }, not_null_columns: { invoices: { no_default: [], with_default: [] } }, sequences: [],
   }));
   r = runCopiedHook(hooksJ, "sql-safety.mjs", {

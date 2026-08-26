@@ -693,4 +693,105 @@ ok(isDeny(r), "comments at every separator position in the header are all seen t
 r = runHook(`DO $do$ BEGIN\n  EXECUTE 'CREATE FUNCTION public.f17e /* outer /* inner */ still open */ (p_idempotency_key text DEFAULT NULL) ${UNWIRED_CMT_BODY}';\nEND $do$;`);
 ok(isDeny(r), "a NESTED comment in the header position is blanked to the right depth");
 
+// --- Edit/MultiEdit judge the FULL post-edit file (CRLF-safe splice) --------
+// 2026-08-26 (PR #401 branch): this guard judged only the Edit FRAGMENT, so a
+// file-level exempt marker already on disk was invisible — the guard denied the
+// very migration the marker exempts (deadlock, escapable only via a full-file
+// Write) — and a MultiEdit's edits array produced empty content and was
+// silently ALLOWED. Both are fixed by simulating the edit against the on-disk
+// file via edit-splice-lib (LF-normalizing both sides, because on a Windows
+// worktree with core.autocrlf the disk is CRLF while the harness hands the
+// hook LF fragments, and an exact-match splice silently no-ops).
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import os from "node:os";
+
+const CRLF = (s) => s.replace(/\n/g, "\r\n");
+const tmp = mkdtempSync(path.join(os.tmpdir(), "crx-idem-crlf-"));
+mkdirSync(path.join(tmp, "supabase", "migrations"), { recursive: true });
+const migPath = path.join(tmp, "supabase", "migrations", "20260826000000_test.sql");
+
+function runHookOnDisk(toolInput) {
+  const payload = { tool_input: { file_path: migPath, ...toolInput } };
+  return spawnSync(process.execPath, [path.join(__dirname, "idempotency-body-check.mjs")], {
+    input: JSON.stringify(payload),
+    encoding: "utf8",
+  });
+}
+
+const VIOLATING_FN = fn(`UPDATE customers SET name = 'x' WHERE id = 1;`);
+const VIOLATING_FN_V2 = fn(`UPDATE customers SET name = 'y' WHERE id = 1;`);
+
+// Allow-side assertions must be AFFIRMATIVE: a crashed hook produces empty
+// stdout, and `!isDeny` would read that as an allow (CodeRabbit PR #489).
+const isAllow = (res) => !res.error && res.status === 0 &&
+  res.stdout.includes('"permissionDecision":"allow"');
+
+try {
+  // Marker-ADDING edit (allow direction, CRLF-sensitive): the multi-line LF
+  // old_string only matches the CRLF disk when the splice normalizes line
+  // endings — an exact splice no-ops, judges the unedited (marker-less,
+  // violating) file, and denies the very Edit that adds the exempt marker.
+  writeFileSync(migPath, CRLF(VIOLATING_FN + "\n"));
+  let r2 = runHookOnDisk({
+    old_string: VIOLATING_FN,
+    new_string: "-- idempotency-body-check: exempt\n" + VIOLATING_FN,
+  });
+  ok(isAllow(r2), "CRLF disk: multi-line LF Edit that ADDS the exempt marker is allowed (CRLF splice fixed)");
+
+  // THE DEADLOCK (allow direction): the exempt marker lives ON DISK (CRLF);
+  // the LF Edit rewrites the function without restating the marker. Fragment
+  // judging saw an unwired function and no marker → deny.
+  writeFileSync(migPath, CRLF("-- idempotency-body-check: exempt\n" + VIOLATING_FN + "\n"));
+  r2 = runHookOnDisk({ old_string: VIOLATING_FN, new_string: VIOLATING_FN_V2 });
+  ok(isAllow(r2), "CRLF disk with on-disk exempt marker: LF Edit rewriting the function is allowed (deadlock fixed)");
+
+  // Regression (deny direction): no marker anywhere — an LF Edit that ADDS an
+  // unwired mutating function to a benign CRLF file is still denied.
+  writeFileSync(migPath, CRLF("-- add a column\nALTER TABLE customers ADD COLUMN note text;\n"));
+  r2 = runHookOnDisk({ old_string: "-- add a column", new_string: "-- add a column\n" + VIOLATING_FN });
+  ok(isDeny(r2), "CRLF disk: LF Edit introducing a marker-less unwired function is still denied");
+
+  // MultiEdit gap closed (deny direction): an edits array used to yield empty
+  // content and an unconditional allow.
+  r2 = runHookOnDisk({ edits: [{ old_string: "-- add a column", new_string: "-- add a column\n" + VIOLATING_FN }] });
+  ok(isDeny(r2), "CRLF disk: MultiEdit introducing the same unwired function is denied (empty-content bypass closed)");
+
+  // Full-file judging (deny direction): the violation already lives on disk;
+  // the Edit itself touches only a benign line. Fragment judging allowed this.
+  writeFileSync(migPath, CRLF("-- pending migration\n" + VIOLATING_FN + "\n"));
+  r2 = runHookOnDisk({ old_string: "-- pending migration", new_string: "-- pending migration (edited)" });
+  ok(isDeny(r2), "an Edit to a benign line of a file whose on-disk content violates is denied (full post-edit view)");
+
+  // Marker REMOVAL is seen: deleting the exempt line from a violating file denies.
+  writeFileSync(migPath, CRLF("-- idempotency-body-check: exempt\n" + VIOLATING_FN + "\n"));
+  r2 = runHookOnDisk({ old_string: "-- idempotency-body-check: exempt\n", new_string: "" });
+  ok(isDeny(r2), "an Edit that REMOVES the on-disk exempt marker from a violating file is denied");
+
+  // ── Reconstruction failure fails CLOSED (CodeRabbit PR #489 full review):
+  // existsSync passes but readFileSync throws (a directory named *.sql). ──
+  const dirAsSql = path.join(tmp, "supabase", "migrations", "20260826000001_dir.sql");
+  mkdirSync(dirAsSql, { recursive: true });
+  r2 = spawnSync(process.execPath, [path.join(__dirname, "idempotency-body-check.mjs")], {
+    input: JSON.stringify({ tool_input: { file_path: dirAsSql, old_string: "-- idempotency-body-check: exempt\n", new_string: "" } }),
+    encoding: "utf8",
+  });
+  ok(isDeny(r2), "a deletion Edit whose file cannot be read is denied (fail closed), not allowed unanalyzed");
+  ok(r2.stdout.includes("could not be read"), "the unreadable-file deny explains itself");
+
+  // A NON-empty fragment when reconstruction fails still gets fragment
+  // analysis (documented reduced guarantee): a violating fragment is caught.
+  r2 = spawnSync(process.execPath, [path.join(__dirname, "idempotency-body-check.mjs")], {
+    input: JSON.stringify({ tool_input: { file_path: dirAsSql, old_string: "-- x\n", new_string: VIOLATING_FN } }),
+    encoding: "utf8",
+  });
+  ok(isDeny(r2), "an unreadable file with a violating NON-empty fragment is still denied via fragment analysis");
+
+  // Boundary: emptying a READABLE file reconstructs to empty content — allowed.
+  writeFileSync(migPath, CRLF("-- idempotency-body-check: exempt\n"));
+  r2 = runHookOnDisk({ old_string: "-- idempotency-body-check: exempt\n", new_string: "" });
+  ok(isAllow(r2), "a deletion that empties a readable file is allowed (empty reconstruction is trustworthy)");
+} finally {
+  rmSync(tmp, { recursive: true, force: true });
+}
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);

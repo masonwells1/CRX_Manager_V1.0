@@ -33,6 +33,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { toLF, applyEditsForAnalysis } from "./edit-splice-lib.mjs";
 
 const STALE_DAYS = 7;
 
@@ -76,39 +77,59 @@ let newContent = "";
 if (typeof input.content === "string") newContent = input.content;
 else if (typeof input.new_string === "string") newContent = input.new_string;
 else if (Array.isArray(input.edits)) newContent = input.edits.map((e) => e?.new_string || "").join("\n");
-if (!newContent) allow();
+// The emptiness early-exit moved BELOW the disk reconstruction: a pure-deletion
+// Edit has an empty new_string, and exiting here let it bypass the guard
+// entirely — deleting a caller-analysis marker line left a risky REVOKE
+// unjustified yet allowed (CodeRabbit PR #489).
 
 // For Edit/MultiEdit, new_string is only a FRAGMENT — a role-token-only change
 // inside an existing REVOKE (e.g. `service_role` -> `authenticated`) carries no
 // grant/revoke word and would slip past the fast path + parser below. Apply the
 // edit against the on-disk file so both see the FULL post-edit statements (Codex
-// 2026-06-13). Falls back to the fragment if the file can't be read/applied.
+// 2026-06-13). The splice is line-ending-safe (edit-splice-lib): an exact-match
+// splice silently no-oped on CRLF worktrees, so the guard judged the UNEDITED
+// file and denied the very Edit that added its required marker (2026-08-26).
+// Falls back to the fragment if the file can't be read/applied.
+let reconstructed = toolName === "write"; // Write content IS the full file
 if (toolName !== "write" && existsSync(filePath)) {
   try {
-    let disk = readFileSync(filePath, "utf8");
-    const applyOne = (o, n) => {
-      if (typeof o === "string" && o.length > 0 && typeof n === "string") disk = disk.split(o).join(n);
-    };
-    if (Array.isArray(input.edits)) input.edits.forEach((e) => applyOne(e?.old_string, e?.new_string));
-    else applyOne(input.old_string, input.new_string);
-    newContent = disk;
+    newContent = applyEditsForAnalysis(readFileSync(filePath, "utf8"), input);
+    reconstructed = true;
   } catch {
     /* keep the fragment */
   }
+}
+newContent = toLF(newContent);
+if (!newContent) {
+  // Empty content is only trustworthy when it IS the real post-edit file
+  // (a Write of empty content, or a reconstruction that emptied the file).
+  // A deletion Edit whose reconstruction FAILED (readFileSync threw after
+  // existsSync passed) leaves no signal at all — allowing it would let a
+  // marker-deleting edit through unanalyzed (CodeRabbit PR #489). Fail closed.
+  if (reconstructed) allow();
+  deny(
+    "GRANT-CHANGE GUARD: this Edit deletes content from a migration file, but the on-disk file " +
+      "could not be read to analyze the post-edit result, so the deletion cannot be checked for " +
+      "grant/revoke impact. Retry, or use a single full-file Write so the guard sees complete content."
+  );
 }
 
 // Fast path: nothing grant-shaped in the post-edit content.
 if (!/\b(grant|revoke)\b/i.test(newContent)) allow();
 
-// For Edits, the justification markers may already live elsewhere in the file
-// (or be added in the same edit) — scan markers across on-disk content + new content.
+// Marker scan source: when the full post-edit file was reconstructed, scan
+// ONLY it — markers that already live elsewhere in the file are inside it, and
+// including the pre-edit disk content would retain a marker the edit REMOVES,
+// silently allowing a still-risky REVOKE (CodeRabbit PR #489). The disk+fragment
+// union survives solely for the fragment fallback (file unreadable/unapplied),
+// where markers elsewhere in the file must still count.
 let markerSource = newContent;
-try {
-  if (toolName !== "write" && existsSync(filePath)) {
-    markerSource = readFileSync(filePath, "utf8") + "\n" + newContent;
+if (!reconstructed && existsSync(filePath)) {
+  try {
+    markerSource = toLF(readFileSync(filePath, "utf8")) + "\n" + newContent;
+  } catch {
+    /* fall back to new content only */
   }
-} catch {
-  /* fall back to new content only */
 }
 
 // ---------------------------------------------------------------------------

@@ -13,9 +13,10 @@
 // — this hook does NOT validate those.
 // File name kept as status-enum-check.mjs for settings.json wiring stability.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { toLF, applyEditsForAnalysis } from "./edit-splice-lib.mjs";
 
 function out(decision, reason, systemMessage) {
   const payload = decision === "block"
@@ -47,8 +48,46 @@ const isTs = /\.tsx?$/.test(filePath) && !/\.(test|spec)\.tsx?$/.test(filePath) 
 const isSql = filePath.endsWith(".sql") && filePath.includes("supabase/migrations/");
 if (!isTs && !isSql) out("allow");
 
-const content = payload?.tool_input?.content || payload?.tool_input?.new_string || "";
-if (!content) out("allow");
+// Content being judged: Write -> content (the full file). For Edit/MultiEdit
+// the fragment is only PART of the file, so simulate the edit against the
+// on-disk content (line-ending-safe — edit-splice-lib) and judge the FULL
+// post-edit file. That is what makes a file-level `status-enum-check: exempt`
+// marker that already lives elsewhere in the file (SQL or TS) visible to an
+// Edit (fragment-only judging denied the very file the marker exempts — the
+// 2026-08-26 deadlock class, same as grant-change-guard), and it closes the
+// MultiEdit gap where an edits array produced empty content and the guard
+// silently allowed. Falls back to the fragment(s) if the file can't be
+// read/applied. LF-normalized either way.
+const input = payload?.tool_input || {};
+let content = input.content || input.new_string || "";
+const isFragmentEdit = typeof input.content !== "string" &&
+  (typeof input.old_string === "string" || Array.isArray(input.edits));
+let reconstructed = !isFragmentEdit; // Write content IS the real post-edit file
+if (isFragmentEdit) {
+  try {
+    if (existsSync(filePath)) {
+      content = applyEditsForAnalysis(readFileSync(filePath, "utf8"), input);
+      reconstructed = true;
+    } else if (Array.isArray(input.edits)) {
+      content = input.edits.map((e) => e?.new_string || "").join("\n");
+    }
+  } catch {
+    /* keep the fragment */
+  }
+}
+content = toLF(content);
+if (!content) {
+  // Empty content is only trustworthy when it IS the real post-edit file (a
+  // Write of empty content, or a reconstruction that emptied the file). A
+  // deletion Edit whose reconstruction FAILED leaves no signal at all —
+  // allowing it would let a marker-deleting edit through unanalyzed
+  // (CodeRabbit PR #489 round 2). Fail closed.
+  if (reconstructed) out("allow");
+  out("block",
+    "STATUS-ENUM GUARD: this Edit deletes content, but the on-disk file could not be read to " +
+    "analyze the post-edit result, so the deletion cannot be checked. Retry, or use a single " +
+    "full-file Write so the guard sees complete content.");
+}
 
 if (/(?:\/\/|--)\s*status-enum-check:\s*exempt/.test(content)) out("allow");
 
@@ -98,7 +137,14 @@ if (isTs) {
     const table = fm[1];
     const cols = byTable[table];
     if (!cols) continue;
-    const after = content.slice(fm.index, fm.index + 800);
+    // The window ends at the NEXT .from() call: since Edits are judged as the
+    // FULL post-edit file (2026-08-26), a fixed 800-char window otherwise
+    // crosses into unrelated query chains — a later table's valid status fell
+    // inside the preceding tables' windows and benign edits to existing pages
+    // were denied (CodeRabbit PR #489, reproduced on GettingStarted.tsx).
+    let after = content.slice(fm.index, fm.index + 800);
+    const nextFrom = after.slice(fm[0].length).search(/\.from\s*\(/);
+    if (nextFrom !== -1) after = after.slice(0, fm[0].length + nextFrom);
 
     for (const [col, values] of Object.entries(cols)) {
       const eqRe = new RegExp(`\\.eq\\s*\\(\\s*['"\`]${escRe(col)}['"\`]\\s*,\\s*(?:['"\`]([^'"\`]+)['"\`]|(-?\\d+(?:\\.\\d+)?))\\s*\\)`, "g");
