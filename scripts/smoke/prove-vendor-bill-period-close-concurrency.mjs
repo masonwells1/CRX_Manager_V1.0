@@ -357,6 +357,10 @@ CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
       restoreLiveCrLfCloseRemainder();
     }
     if (path.basename(local) === '20260826125456_bind_section9_ap_receiving_intent_and_month_dashboard.sql') {
+      sql(`CREATE FUNCTION public.create_vendor_bill(p_decoy text) RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT '{}'::jsonb $$;`);
+      expectValidationFailure(local, 'section9-intent-decoy-overload', 'SECTION9_UNEXPECTED_PUBLIC_OVERLOADS: create_vendor_bill');
+      sql(`DROP FUNCTION public.create_vendor_bill(text);`);
+      console.log('CANDIDATE_SECTION9_INTENT_DECOY_OVERLOAD_REJECTED_PASS');
       sql(`
 DELETE FROM public.idempotency_keys
  WHERE expires_at >= now()
@@ -412,6 +416,12 @@ DELETE FROM public.idempotency_keys
    AND (request_actor_id IS NULL OR request_fingerprint IS NULL);
 `);
       console.log(`CANDIDATE_ACTIVE_LEGACY_RECEIPT_GUARD_PASS removed_disposable=${legacyCount}`);
+    }
+    if (path.basename(local) === '20260826140333_correct_ap_aging_due_date_buckets.sql') {
+      sql(`CREATE FUNCTION public.get_ap_aging(p_decoy text) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT p_decoy $$;`);
+      expectValidationFailure(local, 'section9-aging-decoy-overload', 'AP_AGING_UNEXPECTED_PUBLIC_OVERLOADS');
+      sql(`DROP FUNCTION public.get_ap_aging(text);`);
+      console.log('CANDIDATE_SECTION9_AGING_DECOY_OVERLOAD_REJECTED_PASS');
     }
     applyMigration(local, 'post_candidate');
   }

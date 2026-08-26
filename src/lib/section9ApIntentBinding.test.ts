@@ -57,8 +57,12 @@ function hasIntentBindingContract(sql: string) {
     && (sql.match(/public\.check_idempotency_intent\(/g) ?? []).length === 7
     && (sql.match(/request_actor_id = v_actor/g) ?? []).length >= 7
     && (sql.match(/request_fingerprint = v_fingerprint/g) ?? []).length >= 7
-    && (sql.match(/extensions\.digest\(/g) ?? []).length === 6
+    && (sql.match(/extensions\.digest\(/g) ?? []).length === 8
     && sql.includes('LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;')
+    && sql.includes('SECTION9_UNEXPECTED_PUBLIC_OVERLOADS')
+    && sql.includes('SECTION9_REVIEWED_BODY_DRIFT')
+    && sql.includes('SECTION9_POSTFLIGHT_PUBLIC_OVERLOAD_DRIFT')
+    && sql.includes("encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')")
     && sql.includes('CREATE TRIGGER section9_bind_idempotency_receipt_20260826')
     && sql.includes("RAISE EXCEPTION 'SECTION9_UNBOUND_IDEMPOTENCY_RECEIPT'")
     && sql.includes("RAISE EXCEPTION 'ACTOR_MISMATCH'")
@@ -97,6 +101,12 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(hasIntentBindingContract(
       migration.replace("RAISE EXCEPTION 'ACTOR_MISMATCH'", "RAISE EXCEPTION 'actor mismatch'"),
     )).toBe(false);
+    expect(hasIntentBindingContract(
+      migration.replaceAll('SECTION9_UNEXPECTED_PUBLIC_OVERLOADS', 'SECTION9_OVERLOAD_CHECK_REMOVED'),
+    )).toBe(false);
+    expect(hasIntentBindingContract(
+      migration.replace('SECTION9_REVIEWED_BODY_DRIFT', 'SECTION9_BODY_CHECK_REMOVED'),
+    )).toBe(false);
   });
 
   it('uses the Chicago calendar month boundary for the dashboard tile', () => {
@@ -117,6 +127,9 @@ describe('Section 9 AP and receiving intent binding', () => {
         && functionSql.includes('(p_as_of_date - vb.due_date) > 90')
         && functionSql.includes("v_today date := (clock_timestamp() AT TIME ZONE 'America/Chicago')::date")
         && functionSql.includes('p_as_of_date IS DISTINCT FROM v_today')
+        && functionSql.includes('AP_AGING_UNEXPECTED_PUBLIC_OVERLOADS')
+        && sql.includes('AP_AGING_POSTFLIGHT_PUBLIC_OVERLOAD_DRIFT')
+        && functionSql.includes('AP_AGING_REVIEWED_CONTRACT_DRIFT')
         && !functionSql.includes('p_as_of_date - vb.bill_date');
     };
 
@@ -126,6 +139,9 @@ describe('Section 9 AP and receiving intent binding', () => {
     )).toBe(false);
     expect(hasDueDateAgingContract(
       agingMigration.replace('BETWEEN 1 AND 30', 'BETWEEN 0 AND 30'),
+    )).toBe(false);
+    expect(hasDueDateAgingContract(
+      agingMigration.replaceAll('AP_AGING_UNEXPECTED_PUBLIC_OVERLOADS', 'AP_AGING_OVERLOAD_CHECK_REMOVED'),
     )).toBe(false);
     expect(accountsPayable).toContain("header: 'Current (Not Due)'");
     expect(accountsPayable).toContain("key: 'days_1_30'");

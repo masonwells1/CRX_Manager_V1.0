@@ -5,6 +5,43 @@
 -- The report remains intentionally current-only until durable historical bill
 -- state is available.
 
+DO $preflight$
+DECLARE
+  v_overload_count integer;
+  v_actual_hash text;
+  v_owner text;
+  v_language text;
+  v_security_definer boolean;
+  v_config text[];
+BEGIN
+  SELECT count(*)
+    INTO v_overload_count
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'get_ap_aging';
+  IF v_overload_count <> 1
+     OR to_regprocedure('public.get_ap_aging(date)') IS NULL THEN
+    RAISE EXCEPTION 'AP_AGING_UNEXPECTED_PUBLIC_OVERLOADS: expected only public.get_ap_aging(date) but found % overload(s)',
+      v_overload_count;
+  END IF;
+
+  SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex'),
+         r.rolname, l.lanname, p.prosecdef, p.proconfig
+    INTO v_actual_hash, v_owner, v_language, v_security_definer, v_config
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_roles r ON r.oid = p.proowner
+    JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+   WHERE p.oid = 'public.get_ap_aging(date)'::regprocedure;
+  IF v_actual_hash IS DISTINCT FROM '093bc502397c32eca1a2496dcd9e172254996a4a88bf7619ee97c0b37ea14842'
+     OR v_owner IS DISTINCT FROM 'postgres'
+     OR v_language IS DISTINCT FROM 'plpgsql'
+     OR v_security_definer IS DISTINCT FROM true
+     OR v_config IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[] THEN
+    RAISE EXCEPTION 'AP_AGING_REVIEWED_CONTRACT_DRIFT';
+  END IF;
+END;
+$preflight$;
+
 DROP FUNCTION IF EXISTS public.get_ap_aging(date);
 
 CREATE FUNCTION public.get_ap_aging(
@@ -98,13 +135,33 @@ COMMENT ON FUNCTION public.get_ap_aging(date) IS
 DO $verify$
 DECLARE
   v_source text;
+  v_overload_count integer;
+  v_owner text;
+  v_language text;
+  v_security_definer boolean;
+  v_config text[];
 BEGIN
-  SELECT p.prosrc
-    INTO v_source
+  SELECT count(*)
+    INTO v_overload_count
     FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'get_ap_aging';
+  IF v_overload_count <> 1 THEN
+    RAISE EXCEPTION 'AP_AGING_POSTFLIGHT_PUBLIC_OVERLOAD_DRIFT';
+  END IF;
+
+  SELECT p.prosrc, r.rolname, l.lanname, p.prosecdef, p.proconfig
+    INTO v_source, v_owner, v_language, v_security_definer, v_config
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_roles r ON r.oid = p.proowner
+    JOIN pg_catalog.pg_language l ON l.oid = p.prolang
    WHERE p.oid = 'public.get_ap_aging(date)'::regprocedure;
 
-  IF position('p_as_of_date IS DISTINCT FROM v_today' IN v_source) = 0
+  IF v_owner IS DISTINCT FROM 'postgres'
+     OR v_language IS DISTINCT FROM 'plpgsql'
+     OR v_security_definer IS DISTINCT FROM true
+     OR v_config IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+     OR position('p_as_of_date IS DISTINCT FROM v_today' IN v_source) = 0
      OR position('vb.due_date >= p_as_of_date' IN v_source) = 0
      OR position('BETWEEN 1 AND 30' IN v_source) = 0
      OR position('(p_as_of_date - vb.due_date) > 90' IN v_source) = 0

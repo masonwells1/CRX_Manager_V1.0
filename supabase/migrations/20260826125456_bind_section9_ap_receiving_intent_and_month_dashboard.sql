@@ -80,53 +80,101 @@ DECLARE
   v_name text;
   v_signature text;
   v_private_signature text;
-  v_required_marker text;
+  v_expected_hash text;
   v_source text;
+  v_actual_hash text;
+  v_owner text;
+  v_language text;
+  v_security_definer boolean;
+  v_config text[];
+  v_overload_count integer;
 BEGIN
-  FOR v_name, v_signature, v_private_signature, v_required_marker IN
+  FOR v_name, v_signature, v_private_signature, v_expected_hash IN
     SELECT * FROM (VALUES
       ('create_vendor_bill',
        'public.create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text)',
        'public._section9_create_vendor_bill_intent_impl_20260826(uuid,uuid,text,date,date,text,bigint,bigint,text,text)',
-       'Vendor bill amount differs from PO'),
+       '6dfb99167675963345fc815cd239cc93677e9cd536a32f532868a58c662c84ba'),
       ('update_vendor_bill',
        'public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text)',
        'public._section9_update_vendor_bill_intent_impl_20260826(uuid,bigint,bigint,date,date,text,text)',
-       'BILL_HAS_ACTIVE_PAYMENTS'),
+       '342ca1c3266ea2f5249181ebae187c45fd9f149c56c07901d786bde349fac4c1'),
       ('record_vendor_payment',
        'public.record_vendor_payment(uuid,bigint,date,text,text,text,text)',
        'public._section9_record_vendor_payment_intent_impl_20260826(uuid,bigint,date,text,text,text,text)',
-       'vendor_payment_recorded'),
+       '95bd3147506716bdad0206e205a00ddaa6a5227d3922b61870202ed26c0d23d4'),
       ('void_vendor_payment',
        'public.void_vendor_payment(uuid,text,text)',
        'public._section9_void_vendor_payment_intent_impl_20260826(uuid,text,text)',
-       'VENDOR_DELETED'),
+       '8e7c192958debcb28d3ce040c57484bcc61243272ed40d5eae51dcf102c80493'),
       ('void_vendor_bill',
        'public.void_vendor_bill(uuid,text,text)',
        'public._section9_void_vendor_bill_intent_impl_20260826(uuid,text,text)',
-       'BILL_HAS_ACTIVE_PAYMENTS'),
+       'af02eaf30178c365cf8acb67a1396f5b83bae1680121a2e53dcaccc854a5af47'),
       ('receive_po_items',
        'public.receive_po_items(jsonb,uuid,text,boolean)',
        'public._section9_receive_po_items_intent_impl_20260826(jsonb,uuid,text,boolean)',
-       '_section9_receive_po_items_serialized')
-    ) AS expected(name, signature, private_signature, marker)
+       'ae1cc40fa18442c2deace8e931b2c116f571ede293046c9e2d9e7dbd5c1de3b7')
+    ) AS expected(name, signature, private_signature, source_hash)
   LOOP
-    IF to_regprocedure(v_private_signature) IS NULL THEN
-      IF to_regprocedure(v_signature) IS NULL THEN
-        RAISE EXCEPTION '% is missing; refusing Section 9 intent wrapper cutover', v_signature;
-      END IF;
+    SELECT count(*)
+      INTO v_overload_count
+      FROM pg_catalog.pg_proc p
+      JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = v_name;
+    IF v_overload_count <> 1 OR to_regprocedure(v_signature) IS NULL THEN
+      RAISE EXCEPTION 'SECTION9_UNEXPECTED_PUBLIC_OVERLOADS: % expected only % but found % overload(s)',
+        v_name, v_signature, v_overload_count;
+    END IF;
+    IF to_regprocedure(v_private_signature) IS NOT NULL THEN
+      RAISE EXCEPTION 'SECTION9_PRIVATE_IMPLEMENTATION_ALREADY_EXISTS: %', v_private_signature;
+    END IF;
 
-      SELECT p.prosrc
-        INTO v_source
-        FROM pg_catalog.pg_proc p
-       WHERE p.oid = to_regprocedure(v_signature);
+    SELECT p.prosrc,
+           encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex'),
+           r.rolname, l.lanname, p.prosecdef, p.proconfig
+      INTO v_source, v_actual_hash, v_owner, v_language, v_security_definer, v_config
+      FROM pg_catalog.pg_proc p
+      JOIN pg_catalog.pg_roles r ON r.oid = p.proowner
+      JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+     WHERE p.oid = to_regprocedure(v_signature);
 
-      IF position(v_required_marker IN v_source) = 0 THEN
-        RAISE EXCEPTION '% does not match the reviewed implementation marker %',
-          v_signature, v_required_marker;
-      END IF;
+    IF v_owner IS DISTINCT FROM 'postgres'
+       OR v_language IS DISTINCT FROM 'plpgsql'
+       OR v_security_definer IS DISTINCT FROM true
+       OR v_config IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[] THEN
+      RAISE EXCEPTION 'SECTION9_PUBLIC_FUNCTION_SHAPE_DRIFT: %', v_signature;
+    END IF;
+    IF v_actual_hash IS DISTINCT FROM v_expected_hash THEN
+      RAISE EXCEPTION 'SECTION9_REVIEWED_BODY_DRIFT: % expected SHA-256 % but found %',
+        v_signature, v_expected_hash, v_actual_hash;
     END IF;
   END LOOP;
+
+  SELECT count(*)
+    INTO v_overload_count
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'get_ap_dashboard_summary';
+  IF v_overload_count <> 1
+     OR to_regprocedure('public.get_ap_dashboard_summary(text)') IS NULL THEN
+    RAISE EXCEPTION 'SECTION9_UNEXPECTED_PUBLIC_OVERLOADS: get_ap_dashboard_summary expected only public.get_ap_dashboard_summary(text) but found % overload(s)',
+      v_overload_count;
+  END IF;
+  SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex'),
+         r.rolname, l.lanname, p.prosecdef, p.proconfig
+    INTO v_actual_hash, v_owner, v_language, v_security_definer, v_config
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_roles r ON r.oid = p.proowner
+    JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+   WHERE p.oid = 'public.get_ap_dashboard_summary(text)'::regprocedure;
+  IF v_actual_hash IS DISTINCT FROM 'e265a3b0558a0f7937d4fd709e44bb8cf3fca68d70fc84878c40166cac88a99c'
+     OR v_owner IS DISTINCT FROM 'postgres'
+     OR v_language IS DISTINCT FROM 'plpgsql'
+     OR v_security_definer IS DISTINCT FROM true
+     OR v_config IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[] THEN
+    RAISE EXCEPTION 'SECTION9_DASHBOARD_REVIEWED_CONTRACT_DRIFT';
+  END IF;
 
   IF to_regprocedure('public.check_idempotency_intent(text,text,uuid,text)') IS NULL THEN
     RAISE EXCEPTION 'check_idempotency_intent(text,text,uuid,text) is missing';
@@ -648,24 +696,44 @@ GRANT EXECUTE ON FUNCTION public.get_ap_dashboard_summary(text) TO authenticated
 
 DO $verify$
 DECLARE
+  v_name text;
   v_source text;
   v_signature text;
   v_trigger_count integer;
+  v_overload_count integer;
+  v_owner text;
+  v_language text;
+  v_security_definer boolean;
+  v_config text[];
 BEGIN
-  FOREACH v_signature IN ARRAY ARRAY[
-    'public.create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text)',
-    'public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text)',
-    'public.record_vendor_payment(uuid,bigint,date,text,text,text,text)',
-    'public.void_vendor_payment(uuid,text,text)',
-    'public.void_vendor_bill(uuid,text,text)',
-    'public.receive_po_items(jsonb,uuid,text,boolean)'
-  ]
+  FOR v_name, v_signature IN
+    SELECT * FROM (VALUES
+      ('create_vendor_bill', 'public.create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text)'),
+      ('update_vendor_bill', 'public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text)'),
+      ('record_vendor_payment', 'public.record_vendor_payment(uuid,bigint,date,text,text,text,text)'),
+      ('void_vendor_payment', 'public.void_vendor_payment(uuid,text,text)'),
+      ('void_vendor_bill', 'public.void_vendor_bill(uuid,text,text)'),
+      ('receive_po_items', 'public.receive_po_items(jsonb,uuid,text,boolean)')
+    ) AS expected(name, signature)
   LOOP
-    SELECT p.prosrc INTO v_source
+    SELECT count(*) INTO v_overload_count
       FROM pg_catalog.pg_proc p
+      JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = v_name;
+    IF v_overload_count <> 1 OR to_regprocedure(v_signature) IS NULL THEN
+      RAISE EXCEPTION 'SECTION9_POSTFLIGHT_PUBLIC_OVERLOAD_DRIFT: %', v_name;
+    END IF;
+    SELECT p.prosrc, r.rolname, l.lanname, p.prosecdef, p.proconfig
+      INTO v_source, v_owner, v_language, v_security_definer, v_config
+      FROM pg_catalog.pg_proc p
+      JOIN pg_catalog.pg_roles r ON r.oid = p.proowner
+      JOIN pg_catalog.pg_language l ON l.oid = p.prolang
      WHERE p.oid = to_regprocedure(v_signature);
-    IF v_source IS NULL THEN
-      RAISE EXCEPTION '% wrapper is missing', v_signature;
+    IF v_owner IS DISTINCT FROM 'postgres'
+       OR v_language IS DISTINCT FROM 'plpgsql'
+       OR v_security_definer IS DISTINCT FROM true
+       OR v_config IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[] THEN
+      RAISE EXCEPTION 'SECTION9_POSTFLIGHT_PUBLIC_FUNCTION_SHAPE_DRIFT: %', v_signature;
     END IF;
     IF position('check_idempotency_intent' IN v_source) = 0
        OR position('crx.section9_idempotency_intent' IN v_source) = 0
@@ -686,10 +754,24 @@ BEGIN
     RAISE EXCEPTION 'Section 9 receipt-binding trigger verification failed';
   END IF;
 
-  SELECT p.prosrc INTO v_source
+  SELECT count(*) INTO v_overload_count
     FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'get_ap_dashboard_summary';
+  IF v_overload_count <> 1 THEN
+    RAISE EXCEPTION 'SECTION9_POSTFLIGHT_PUBLIC_OVERLOAD_DRIFT: get_ap_dashboard_summary';
+  END IF;
+  SELECT p.prosrc, r.rolname, l.lanname, p.prosecdef, p.proconfig
+    INTO v_source, v_owner, v_language, v_security_definer, v_config
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_roles r ON r.oid = p.proowner
+    JOIN pg_catalog.pg_language l ON l.oid = p.prolang
    WHERE p.oid = 'public.get_ap_dashboard_summary(text)'::regprocedure;
-  IF position('AT TIME ZONE ''America/Chicago''' IN v_source) = 0
+  IF v_owner IS DISTINCT FROM 'postgres'
+     OR v_language IS DISTINCT FROM 'plpgsql'
+     OR v_security_definer IS DISTINCT FROM true
+     OR v_config IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+     OR position('AT TIME ZONE ''America/Chicago''' IN v_source) = 0
      OR position('due_date BETWEEN v_today AND v_month_end' IN v_source) = 0
      OR position('vp.payment_date < (v_month_end + 1)' IN v_source) = 0
      OR position('CURRENT_DATE + 30' IN v_source) > 0 THEN

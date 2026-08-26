@@ -44,6 +44,7 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Vendor-payment input formatting now converts integer cents to a decimal string with integer arithmetic, avoiding a binary floating-point round trip.
 - `section9ApIntentBinding.test.ts` mutation-tests the actor binding, fingerprints, cutover lock, insert trigger, transaction-local binding context, private implementation ACLs, helper dependency, receipt reconciliation, due-date basis, and day-1 boundary. `useUncertainMutationIntent.test.ts` proves frozen payloads and keeps actor/intent mismatch errors locked until reconciliation.
 - The public receiving wrapper raises the canonical `ACTOR_MISMATCH` refusal when `p_performed_by` disagrees with `auth.uid()`; the mutation guard goes red if that token is removed or renamed.
+- Both migrations fail closed on stale public overloads. Their preflights pin the sole expected signature, owner, language, security mode, fixed search path, and reviewed live-body SHA-256; their postflights require exactly one expected public overload after creation.
 - The Section 9 rollback chain now proves exact replay and changed-payload refusal for all six mutators, with no second money, inventory, receiving, audit, or terminal-state effect. It also proves the next-month dashboard boundary and exact due-today/future and 1/30/31/60/61/90/91 aging boundaries.
 - The real-schema PostgreSQL 17 prover now restores the verified platform and migration-ledger artifacts, normalizes historical SQL to canonical LF, pins the one live CRLF function body expected by a later preflight, proves a concurrent legacy receipt writer blocks cutover until it commits and is then caught by preflight, and proves a late old payment body is rejected at receipt insertion with zero payment, bill-balance, or receipt residue.
 
@@ -56,7 +57,7 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Latest focused remediation/concurrency/money tests after the follow-up — 68/68 passed.
 - Focused Section 9 guard after the canonical actor-refusal correction — 6/6 passed.
 - `npm run check:docs` — pass.
-- Disposable PostgreSQL proof after the follow-up — full replay of 63 post-baseline migrations, concurrent cutover drain passed, late-old-body rollback passed, both new candidates applied, all three sibling rollback chains passed, every two-session close/write schedule passed, future-dated payments were excluded from the selected month, terminal marker `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
+- Disposable PostgreSQL proof after the follow-up — full replay of 63 post-baseline migrations, decoy overloads for `create_vendor_bill(text)` and `get_ap_aging(text)` were rejected before candidate apply, concurrent cutover drain passed, late-old-body rollback passed, both new candidates applied, all three sibling rollback chains passed, every two-session close/write schedule passed, future-dated payments were excluded from the selected month, terminal marker `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
 - `git diff --check` — pass.
 - React best-practices review — no new waterfall, bundle, hook-dependency, transient-state, or rendering blocker found in the changed flow.
 
@@ -67,7 +68,8 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - The first CodeRabbit review on PR #491 raised eight actionable implementation/proof comments. All eight are corrected locally: three missing uncertain-intent UI locks, exact cents display, stable payment-method label wiring, single-clock AP aging, an upper month bound, smoke ownership, prover cleanup error handling, and guard/changelog accuracy.
 - Exact branch review at `893eeb19` returned CLEAN with zero HIGH/BLOCKER findings and minted its SHA-bound proof.
 - The final migration-specific security pass then found one additional HIGH: `receive_po_items` enforced actor equality but returned a noncanonical exception string. The wrapper and executable guard are corrected, the full database replay passes again, and the AP-aging migration's security/drift proof remains clean.
-- Because that correction changes the artifact after `893eeb19`, a fresh exact-commit review and a refreshed clean security/drift proof for the intent/dashboard migration remain pending, followed by CodeRabbit's latest-commit review, PR checks, live apply, merge, and production verification.
+- Exact branch review at `b4b6b70c` then found one additional HIGH: unexpected public function overloads could survive the migrations and expose a stale implementation. Both migrations now fail closed before and after on overload drift, pin the reviewed pre-cutover function shape/body, and include real decoy-overload rollback proofs.
+- Because that hardening changes the artifact after `b4b6b70c`, a fresh exact-commit review and refreshed clean security/drift proofs for both migrations remain pending, followed by CodeRabbit's latest-commit review, PR checks, live apply, merge, and production verification.
 
 ## APPROVAL STATE
 
