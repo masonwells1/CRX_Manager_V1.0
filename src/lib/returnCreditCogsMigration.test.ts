@@ -10,6 +10,10 @@ const reportMigration = readFileSync(
   'supabase/migrations/20260825230150_align_recognized_invoice_report_statuses.sql',
   'utf8',
 );
+const allocatedDeliveryMigration = readFileSync(
+  'supabase/migrations/20260817120000_carry_allocated_line_cents_through_lifecycle.sql',
+  'utf8',
+);
 const migrationHistory = readFileSync('docs/reference/migration-history.md', 'utf8');
 const reportsPage = readFileSync('src/pages/Reports.tsx', 'utf8');
 const monthEndPage = readFileSync('src/pages/MonthEndClose.tsx', 'utf8');
@@ -40,6 +44,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_COGS_PREFLIGHT_OVERLOAD_DRIFT');
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DEPENDENCY_OVERLOAD_DRIFT');
     expect(migration).toContain('RETURN_COGS_PREFLIGHT_INVENTORY_UPSERT_CONSTRAINT');
+    expect(migration).toContain('returns_credit_invoice_id_active_idx');
     expect(migration).toContain('RETURN_COGS_PREFLIGHT_BATCH_VOID_CONTRACT_DRIFT');
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_BATCH_VOID_CONTRACT_DRIFT');
     expect(migration).toContain("position('PERFORM void_invoice(v_inv.id, p_void_reason)' IN p.prosrc) > 0");
@@ -74,6 +79,9 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_CREDIT_HEADER_IMMUTABLE');
     expect(migration).toContain('v_enters_recognized :=');
     expect(migration).toContain("NEW.status IN ('posted','overdue','paid')");
+    expect(migration).toContain('pg_try_advisory_xact_lock');
+    expect(migration).toContain('RETURN_CREDIT_SOURCE_POST_REQUIRES_REISSUE');
+    expect(migration).toContain('SUM(ri.quantity)');
     expect(migration).toContain('RETURN_CREDIT_PARENT_IMMUTABLE');
     expect(migration).toContain('RETURN_CREDIT_LINE_TOTAL_MISMATCH');
     expect(migration).toContain('BEFORE UPDATE OF status, deleted_at, total_amount_cents, total_cost_cents, season OR DELETE');
@@ -89,11 +97,15 @@ describe('return-credit COGS migration', () => {
   });
 
   it('pins the replacement helper bodies used by the COGS postflight', () => {
+    expect(functionBodySha256(allocatedDeliveryMigration, '_allocated_delivery_cents')).toBe('1df1d230c19e5d129038b1e5dfbca30db0b369ea5a91a22f19dd98cc53129142');
+    expect(functionBodySha256(migration, '_allocated_delivery_cents')).toBe('44a739b026385996b66355ee5c4b1175dbe5260bad57a459a91e69c3873bae81');
+    expect(migration).toContain("AND inv.invoice_type <> 'credit_memo'");
+    expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DELIVERY_ALLOCATION_DRIFT');
     expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
     expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('f8becf522d34caa804006e9372759b1088220fb1ea8c020b23ce949051a7581c');
     expect(functionBodySha256(migration, 'void_invoice')).toBe('6d7c17279c90a9d6817129ba6f43bb490523f2844657074046a9f66f019af3ec');
     expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('a151010fc4556ab78d9254c42f7fe3c6ac06ba6dc03c19f52c44fe882ba2b520');
-    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('895320d1774a425457b4235c119461d2e079d78e97af87ed2ec84bd8cf4e1897');
+    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('06e8fc12e110955208c001a7a369d8f4c34724219f15b202de588236d6c9bb16');
     expect(functionBodySha256(migration, 'guard_return_credit_lineage')).toBe('7b5ccb72380c54cd2a202f891de659bce1b916c09c76ad9884446ba1544dd89f');
     expect(migration).toContain('0f0ad06a8e8fe0994d051fc5b6659cef04f9f16829cbf9998e8b3f1265a257cb');
     expect(migration).toContain('cc146431df3ab52d734ce3f62189bbbd51e3779ce64cfa789ee829e704f9e27c');

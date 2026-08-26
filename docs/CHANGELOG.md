@@ -688,8 +688,12 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   recognized by sale invoices in `posted`, `overdue`, or `paid` state. Uninvoiced or non-restocked
   damaged quantity still receives its full customer credit but carries zero COGS reversal.
 - A source invoice also cannot enter `posted`, `overdue`, or `paid` after an active credit already
-  exists. Posting and credit issuance use the same ordered advisory locks, so whichever transaction
-  wins produces a safe result rather than a recognized sale paired with a stale zero-cost credit.
+  exposes an uncosted, restocked return quantity. Posting and credit issuance use the same ordered
+  advisory locks; posting fails fast if credit issuance owns the lineage lock, avoiding a lock cycle.
+  A later delivery invoice remains postable when earlier recognized quantity already covered the return.
+- `_allocated_delivery_cents` now excludes credit memos atomically with the first migration that adds
+  their line items. A return credit therefore cannot reopen billing headroom or change the amount a
+  later delivery bills against the order line.
 - Historical cost changes are preserved exactly: return quantity consumes individual source invoice
   lines oldest-first, including a cost that recurs after a different cost; prior active credits
   consume same-cost source lines FIFO, and cumulative rounding keeps the split lines equal to the
@@ -750,9 +754,10 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   delivery-versus-invoice quantity check. Return credits carry negative line items for accounting
   reports, but those lines are not new customer billing and must not create a false
   delivery-parity discrepancy.
-- Fresh read-only production schema was restored into disposable PostgreSQL. Twenty-four load-bearing
-  signals were exercised: twenty guard-removal, race, or accounting mutants plus direct cutover rejection,
-  non-credit lifecycle allowance, sequential post-after-credit rejection, and current-season credit attribution. The mutants cover the two
+- Fresh read-only production schema was restored into disposable PostgreSQL. Twenty-seven load-bearing
+  signals were exercised: twenty-two guard-removal, race, or accounting mutants plus direct cutover rejection,
+  non-credit lifecycle allowance, sequential post-after-credit rejection, fully-costed later-post allowance,
+  and current-season credit attribution. The mutants cover the two
   return rollout guards, the report's no-pre-existing-return-credit guard, both between-migration
   barrier assertions, public-function overload collision,
   source-recognition trigger, customer scope, immutable cost-line ledger, zero-cost ledger rows,
@@ -761,9 +766,10 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   double-rounding. The grouped cost mutant produced 6,601 cents instead of the
   paid/overdue/posted `$5 → $6 → $5 → $5.01` oracle's 6,700 cents. Removing the source-side lock
   let a source void complete while the credit lock was held and produced the forbidden state; the
-  canonical guard waited and rejected it. The same mutation let a draft source post while a zero-cost
-  credit was still in flight; the canonical posting path waited, observed the committed credit, and
-  rejected recognition. The canonical candidate rejected every failure class and returned
+  canonical guard failed fast and rejected it. The same mutation let a draft source post while a zero-cost
+  credit was still in flight; the canonical posting path rejected immediately without creating a deadlock.
+  Separate mutants prove that credit-memo lines cannot reopen delivery billing and that prior credits
+  are consumed before another return can reuse source cost. The canonical candidate rejected every failure class and returned
   `RETURN_CREDIT_POSTAPPLY_LIVE_PASS source=fresh-live-read-only-schema candidate_migrations=4
   proofs=EXISTING_RETURN_CREDIT_REPORT_GUARD_REMOVAL_DETECTED,CUTOVER_REPORT_POSTFLIGHT_GUARD_REMOVAL_DETECTED,
   CUTOVER_BARRIER_NON_CREDIT_UPDATE_PROVEN,CUTOVER_BARRIER_REJECTED,CUTOVER_COGS_PREFLIGHT_GUARD_REMOVAL_DETECTED,
@@ -771,12 +777,14 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   RECEIVED_UNRESTOCKED_GUARD_REMOVAL_DETECTED,
   PREFLIGHT_OVERLOAD_COLLISION_REJECTED,POSTFLIGHT_OVERLOAD_COLLISION_REJECTED,
   SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED,SOURCE_POST_AFTER_CREDIT_REJECTED,
-  SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED,
+  SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED,SOURCE_POST_AFTER_FULLY_COSTED_CREDIT_ALLOWED,
+  DELIVERY_ALLOCATION_CREDIT_FILTER_REMOVAL_DETECTED,
   SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED,
   RETURN_CREDIT_LEDGER_GUARD_REMOVAL_DETECTED,ZERO_COST_LEDGER_MUTATION_DETECTED,
   CREDIT_REVENUE_LEDGER_MUTATION_DETECTED,
   CUSTOMER_SCOPE_DISCLOSURE_REJECTED,FRACTIONAL_REPORT_HALF_CENT_DETECTED,
-  UNLINKED_COST_GUARD_REMOVAL_DETECTED,LINEAGE_CLEAR_REMOVAL_DETECTED,
+  UNLINKED_COST_GUARD_REMOVAL_DETECTED,PRIOR_CREDIT_CONSUMPTION_REMOVAL_DETECTED,
+  LINEAGE_CLEAR_REMOVAL_DETECTED,
   GROUPED_COST_BUCKET_6601_REJECTED,CREDIT_CURRENT_SEASON_MUTATION_DETECTED,
   FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED,CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN
   smoke=SMOKE_PASS_ROLLBACK residue=0`. Final exact-head

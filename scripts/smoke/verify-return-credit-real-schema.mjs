@@ -55,6 +55,16 @@ function psqlAsync(sql, options = {}) {
 function psqlValue(sql) {
   return docker(['exec', NAME, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-c', sql]).stdout.trim();
 }
+function assertInstalledFunctionHash(signature, expected) {
+  assert.equal(
+    psqlValue(`
+      SELECT encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex')
+      FROM pg_proc p WHERE p.oid = to_regprocedure('${signature}');
+    `),
+    expected,
+    `${signature} was not restored to its migration-pinned body`,
+  );
+}
 function copy(local, name) { docker(['cp', local, `${NAME}:/tmp/${name}`]); }
 function apply(name, user) { psql(`BEGIN;\n\\i /tmp/${name}\nCOMMIT;`, { user }); }
 function applyStandalone(name, user) { psql(`\\i /tmp/${name}`, { user }); }
@@ -148,6 +158,9 @@ function concurrencyFixture(slot) {
     orderItem: `00000000-0000-4361-8003-0000000000${suffix}`,
     sourceInvoice: `00000000-0000-4361-8004-0000000000${suffix}`,
     creditInvoice: `00000000-0000-4361-8005-0000000000${suffix}`,
+    return: `00000000-0000-4361-8006-0000000000${suffix}`,
+    returnItem: `00000000-0000-4361-8007-0000000000${suffix}`,
+    laterInvoice: `00000000-0000-4361-8008-0000000000${suffix}`,
   };
   const marker = `pr361_concurrency_${suffix}`;
   return {
@@ -178,8 +191,8 @@ function concurrencyFixture(slot) {
          'chemical_sale', 'posted', current_date, current_date, 1000, 500, '00000000-0000-4000-8000-000000000081',
          now(), '00000000-0000-4000-8000-000000000081'),
         ('${ids.creditInvoice}', 'SMK-RCC-CONC-CM-${suffix}', '${ids.customer}', '${ids.order}',
-         'credit_memo', 'posted', current_date, current_date, -1000, -500, '00000000-0000-4000-8000-000000000081',
-         now(), '00000000-0000-4000-8000-000000000081');
+         'credit_memo', 'draft', current_date, current_date, -1000, -500, '00000000-0000-4000-8000-000000000081',
+         NULL, NULL);
       INSERT INTO public.invoice_items (
         invoice_id, order_item_id, product_id, description, quantity,
         unit_price_cents, extended_cents, cost_cents, unit_size
@@ -187,12 +200,39 @@ function concurrencyFixture(slot) {
         '${ids.sourceInvoice}', '${ids.orderItem}', '${ids.product}', '[SMOKE] PR361 concurrency source ${suffix}',
         1, 1000, 1000, 500, 'gal'
       );
+      INSERT INTO public.returns (
+        id, return_number, customer_id, order_id, reason, requested_by,
+        approved_by, status, total_credit_cents, credit_invoice_id,
+        received_by, received_at, credited_by, credited_at
+      ) VALUES (
+        '${ids.return}', 'SMK-RCC-CONC-RMA-${suffix}', '${ids.customer}', '${ids.order}',
+        'overstock', '00000000-0000-4000-8000-000000000081',
+        '00000000-0000-4000-8000-000000000081', 'received', 1000, NULL,
+        '00000000-0000-4000-8000-000000000081', now(), NULL, NULL
+      );
+      INSERT INTO public.return_items (
+        id, return_id, order_item_id, product_id, product_name, quantity, unit,
+        unit_price_cents, extended_cents, condition, restock, restocked, sort_order
+      ) VALUES (
+        '${ids.returnItem}', '${ids.return}', '${ids.orderItem}', '${ids.product}',
+        '[SMOKE] PR361 concurrency product ${suffix}', 1, 'gal', 1000, 1000,
+        'unopened', true, true, 0
+      );
       SET session_replication_role = origin;
     `,
     creditSql: `
       BEGIN;
       SELECT pg_advisory_xact_lock(hashtextextended('${ids.orderItem}'::text, 361));
       SELECT '${marker}', pg_sleep(8);
+      SELECT set_config('app.return_rpc', 'true', true);
+      UPDATE public.invoices
+         SET status = 'posted', posted_at = now(),
+             posted_by = '00000000-0000-4000-8000-000000000081'
+       WHERE id = '${ids.creditInvoice}';
+      UPDATE public.returns
+         SET status = 'credited', credit_invoice_id = '${ids.creditInvoice}',
+             credited_by = '00000000-0000-4000-8000-000000000081', credited_at = now()
+       WHERE id = '${ids.return}';
       SELECT set_config('app.crx_return_credit_lineage', '1', true);
       INSERT INTO public.invoice_items (
         invoice_id, order_item_id, product_id, description, quantity,
@@ -238,6 +278,58 @@ function postingConcurrencyFixture(slot) {
              posted_by = '00000000-0000-4000-8000-000000000081'
        WHERE id = '${fixture.ids.sourceInvoice}';
     `,
+    laterInvoiceSql: `
+      SET session_replication_role = replica;
+      INSERT INTO public.invoices (
+        id, invoice_number, customer_id, order_id, invoice_type, status,
+        invoice_date, due_date, total_amount_cents, total_cost_cents, created_by
+      ) VALUES (
+        '${fixture.ids.laterInvoice}', 'SMK-RCC-CONC-LATER-${String(slot).padStart(2, '0')}',
+        '${fixture.ids.customer}', '${fixture.ids.order}', 'chemical_sale', 'draft',
+        current_date, current_date, 1000, 500, '00000000-0000-4000-8000-000000000081'
+      );
+      INSERT INTO public.invoice_items (
+        invoice_id, order_item_id, product_id, description, quantity,
+        unit_price_cents, extended_cents, cost_cents, unit_size
+      ) VALUES (
+        '${fixture.ids.laterInvoice}', '${fixture.ids.orderItem}', '${fixture.ids.product}',
+        '[SMOKE] PR361 later delivery', 1, 1000, 1000, 500, 'gal'
+      );
+      SET session_replication_role = origin;
+    `,
+    laterPostSql: `
+      UPDATE public.invoices
+         SET status = 'posted', posted_at = now(),
+             posted_by = '00000000-0000-4000-8000-000000000081'
+       WHERE id = '${fixture.ids.laterInvoice}';
+    `,
+  };
+}
+
+function fullyCostedPostingFixture(slot) {
+  const fixture = postingConcurrencyFixture(slot);
+  const creditSql = fixture.creditSql.replace(
+    "-1, 1000, -1000, 0, 'gal'",
+    "-1, 1000, -1000, 500, 'gal'",
+  );
+  assert.notEqual(creditSql, fixture.creditSql, 'fully-costed fixture did not restore credit cost');
+  return {
+    ...fixture,
+    sql: `${fixture.sql}
+      SET session_replication_role = replica;
+      UPDATE public.invoices
+         SET status = 'posted', posted_at = now(),
+             posted_by = '00000000-0000-4000-8000-000000000081'
+       WHERE id = '${fixture.ids.sourceInvoice}';
+      UPDATE public.invoices SET total_cost_cents = -500
+       WHERE id = '${fixture.ids.creditInvoice}';
+      SET session_replication_role = origin;
+    `,
+    creditSql,
+    creditWithoutDelaySql: creditSql.replace(
+      `      SELECT '${fixture.marker}', pg_sleep(8);\n`,
+      '',
+    ),
   };
 }
 const expectedProofs = [
@@ -253,12 +345,15 @@ const expectedProofs = [
   'SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED',
   'SOURCE_POST_AFTER_CREDIT_REJECTED',
   'SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED',
+  'SOURCE_POST_AFTER_FULLY_COSTED_CREDIT_ALLOWED',
+  'DELIVERY_ALLOCATION_CREDIT_FILTER_REMOVAL_DETECTED',
   'SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED',
   'RETURN_CREDIT_LEDGER_GUARD_REMOVAL_DETECTED',
   'ZERO_COST_LEDGER_MUTATION_DETECTED',
   'CREDIT_REVENUE_LEDGER_MUTATION_DETECTED',
   'CUSTOMER_SCOPE_DISCLOSURE_REJECTED',
   'UNLINKED_COST_GUARD_REMOVAL_DETECTED',
+  'PRIOR_CREDIT_CONSUMPTION_REMOVAL_DETECTED',
   'LINEAGE_CLEAR_REMOVAL_DETECTED',
   'CREDIT_CURRENT_SEASON_MUTATION_DETECTED',
   'GROUPED_COST_BUCKET_6601_REJECTED',
@@ -697,6 +792,43 @@ try {
   const postApplyLifecycleViolations = psqlValue(`SELECT violation_key || ': ' || reason FROM (${lifecyclePredicate}) AS violations ORDER BY violation_key;`);
   assert.equal(postApplyLifecycleViolations, '', `returns lifecycle invariant regressed after candidate apply:\n${postApplyLifecycleViolations}`);
 
+  const allocationStart = cogsSql.indexOf('CREATE OR REPLACE FUNCTION public._allocated_delivery_cents(');
+  const allocationEnd = cogsSql.indexOf('REVOKE ALL ON FUNCTION public._allocated_delivery_cents', allocationStart);
+  assert.ok(allocationStart >= 0 && allocationEnd > allocationStart, 'delivery-allocation helper slice is missing');
+  const canonicalAllocationHelper = cogsSql.slice(allocationStart, allocationEnd);
+  const allocationMutant = canonicalAllocationHelper.replace(
+    "     AND inv.invoice_type <> 'credit_memo'\n",
+    '',
+  );
+  assert.notEqual(allocationMutant, canonicalAllocationHelper, 'delivery-allocation mutant did not remove the credit-memo filter');
+  const allocationFixture = concurrencyFixture(7);
+  psql(allocationFixture.sql);
+  assert.equal(
+    psqlValue(`SELECT public._allocated_delivery_cents('${allocationFixture.ids.orderItem}', 1, NULL);`),
+    '0',
+    'fully billed source unexpectedly retained delivery allocation before its credit',
+  );
+  const allocationCreditSql = allocationFixture.creditSql.replace(
+    `      SELECT '${allocationFixture.marker}', pg_sleep(8);\n`,
+    '',
+  );
+  assert.notEqual(allocationCreditSql, allocationFixture.creditSql, 'allocation fixture did not remove its artificial delay');
+  psql(allocationCreditSql);
+  assert.equal(
+    psqlValue(`SELECT public._allocated_delivery_cents('${allocationFixture.ids.orderItem}', 1, NULL);`),
+    '0',
+    'return credit reopened customer delivery allocation',
+  );
+  psql(allocationMutant);
+  assert.equal(
+    psqlValue(`SELECT public._allocated_delivery_cents('${allocationFixture.ids.orderItem}', 1, NULL);`),
+    '1000',
+    'delivery-allocation mutant did not expose reopened billing headroom',
+  );
+  completedProofs.add('DELIVERY_ALLOCATION_CREDIT_FILTER_REMOVAL_DETECTED');
+  psql(canonicalAllocationHelper);
+  assertInstalledFunctionHash('public._allocated_delivery_cents(uuid,numeric,uuid)', '44a739b026385996b66355ee5c4b1175dbe5260bad57a459a91e69c3873bae81');
+
   copy(SMOKE, path.basename(SMOKE));
   const sourceGuardStart = cogsSql.indexOf('CREATE FUNCTION public.guard_return_credit_source_recognition()');
   const sourceGuardEnd = cogsSql.indexOf('REVOKE ALL ON FUNCTION public.guard_return_credit_source_recognition()', sourceGuardStart);
@@ -715,14 +847,19 @@ try {
   psql(canonicalConcurrency.sql);
   const canonicalCredit = psqlAsync(canonicalConcurrency.creditSql);
   await waitForSqlSleep(canonicalConcurrency.marker);
-  const canonicalVoid = psqlAsync(canonicalConcurrency.sourceVoidSql);
-  const [canonicalCreditResult, canonicalVoidResult] = await Promise.all([canonicalCredit, canonicalVoid]);
+  const canonicalVoidPromise = psqlAsync(canonicalConcurrency.sourceVoidSql);
+  const canonicalVoidResult = await Promise.race([
+    canonicalVoidPromise,
+    new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
+  ]);
+  assert.notEqual(canonicalVoidResult, null, 'canonical source void waited on the credit lock instead of failing fast');
+  const canonicalCreditResult = await canonicalCredit;
   assert.equal(canonicalCreditResult.status, 0, `canonical concurrent credit failed:\n${canonicalCreditResult.stderr || canonicalCreditResult.stdout}`);
   assert.notEqual(canonicalVoidResult.status, 0, 'canonical source void committed across a concurrent credit');
   assert.match(
     `${canonicalVoidResult.stdout}\n${canonicalVoidResult.stderr}`,
-    /RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED/,
-    'canonical concurrent source void did not reach the recognition guard',
+    /RETURN_CREDIT_SOURCE_CONCURRENT/,
+    'canonical concurrent source void did not fail fast on the shared lineage lock',
   );
   assert.equal(
     psqlValue(`SELECT (deleted_at IS NULL)::int FROM public.invoices WHERE id = '${canonicalConcurrency.ids.sourceInvoice}';`),
@@ -762,6 +899,7 @@ try {
   );
   completedProofs.add('SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED');
   psql(canonicalSourceGuardHelper);
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '06e8fc12e110955208c001a7a369d8f4c34724219f15b202de588236d6c9bb16');
 
   // Sequential latent-defect proof: if a return credit was issued while its
   // source invoice was still a draft, later recognition must fail closed. A
@@ -783,7 +921,7 @@ try {
   assert.notEqual(sequentialPostResult.status, 0, 'canonical guard allowed a draft source invoice to post after an active zero-cost credit');
   assert.match(
     `${sequentialPostResult.stdout}\n${sequentialPostResult.stderr}`,
-    /RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED/,
+    /RETURN_CREDIT_SOURCE_POST_REQUIRES_REISSUE/,
     'post-after-credit rejection did not reach the source-recognition guard',
   );
   assert.equal(
@@ -793,6 +931,23 @@ try {
   );
   completedProofs.add('SOURCE_POST_AFTER_CREDIT_REJECTED');
 
+  const fullyCostedPosting = fullyCostedPostingFixture(6);
+  psql(fullyCostedPosting.sql);
+  psql(fullyCostedPosting.creditWithoutDelaySql);
+  psql(fullyCostedPosting.laterInvoiceSql);
+  const fullyCostedPostResult = psql(fullyCostedPosting.laterPostSql, { allowFailure: true });
+  assert.equal(
+    fullyCostedPostResult.status,
+    0,
+    `fully costed return credit blocked a legitimate later invoice:\n${fullyCostedPostResult.stderr || fullyCostedPostResult.stdout}`,
+  );
+  assert.equal(
+    psqlValue(`SELECT status FROM public.invoices WHERE id = '${fullyCostedPosting.ids.laterInvoice}';`),
+    'posted',
+    'legitimate later invoice did not become recognized',
+  );
+  completedProofs.add('SOURCE_POST_AFTER_FULLY_COSTED_CREDIT_ALLOWED');
+
   // Two-session posting race proof: whichever participant wins the shared
   // order-item lock determines a safe outcome. Here the credit wins, so the
   // posting session must wait for it and then reject. Removing the source-side
@@ -801,11 +956,13 @@ try {
   psql(canonicalPostingConcurrency.sql);
   const canonicalPostingCredit = psqlAsync(canonicalPostingConcurrency.creditSql);
   await waitForSqlSleep(canonicalPostingConcurrency.marker);
-  const canonicalPost = psqlAsync(canonicalPostingConcurrency.sourcePostSql);
-  const [canonicalPostingCreditResult, canonicalPostResult] = await Promise.all([
-    canonicalPostingCredit,
-    canonicalPost,
+  const canonicalPostPromise = psqlAsync(canonicalPostingConcurrency.sourcePostSql);
+  const canonicalPostResult = await Promise.race([
+    canonicalPostPromise,
+    new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
   ]);
+  assert.notEqual(canonicalPostResult, null, 'canonical source posting waited on the credit lock instead of failing fast');
+  const canonicalPostingCreditResult = await canonicalPostingCredit;
   assert.equal(
     canonicalPostingCreditResult.status,
     0,
@@ -814,8 +971,8 @@ try {
   assert.notEqual(canonicalPostResult.status, 0, 'canonical source posting committed across a concurrent zero-cost credit');
   assert.match(
     `${canonicalPostResult.stdout}\n${canonicalPostResult.stderr}`,
-    /RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED/,
-    'canonical concurrent source posting did not reach the recognition guard',
+    /RETURN_CREDIT_SOURCE_CONCURRENT/,
+    'canonical concurrent source posting did not fail fast on the shared lineage lock',
   );
   assert.equal(
     psqlValue(`SELECT status FROM public.invoices WHERE id = '${canonicalPostingConcurrency.ids.sourceInvoice}';`),
@@ -858,6 +1015,7 @@ try {
   );
   completedProofs.add('SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED');
   psql(canonicalSourceGuardHelper);
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '06e8fc12e110955208c001a7a369d8f4c34724219f15b202de588236d6c9bb16');
 
   const allConcurrencyFixtures = [
     canonicalConcurrency,
@@ -865,14 +1023,18 @@ try {
     canonicalPostingConcurrency,
     mutantPostingConcurrency,
     sequentialPosting,
+    fullyCostedPosting,
+    allocationFixture,
   ];
   const fixtureIds = (key) => allConcurrencyFixtures.map((fixture) => `'${fixture.ids[key]}'`).join(', ');
   psql(`
     SET session_replication_role = replica;
+    DELETE FROM public.return_items WHERE id IN (${fixtureIds('returnItem')});
+    DELETE FROM public.returns WHERE id IN (${fixtureIds('return')});
     DELETE FROM public.invoice_items
-     WHERE invoice_id IN (${fixtureIds('sourceInvoice')}, ${fixtureIds('creditInvoice')});
+     WHERE invoice_id IN (${fixtureIds('sourceInvoice')}, ${fixtureIds('creditInvoice')}, ${fixtureIds('laterInvoice')});
     DELETE FROM public.invoices
-     WHERE id IN (${fixtureIds('sourceInvoice')}, ${fixtureIds('creditInvoice')});
+     WHERE id IN (${fixtureIds('sourceInvoice')}, ${fixtureIds('creditInvoice')}, ${fixtureIds('laterInvoice')});
     DELETE FROM public.order_items
      WHERE id IN (${fixtureIds('orderItem')});
     DELETE FROM public.orders
@@ -899,6 +1061,7 @@ try {
   assert.match(sourceGuardMutantOutput, /SMOKE_FAIL: source sale with an active return credit was soft-deleted/, `source-recognition guard mutant did not reach the source-sale oracle:\n${sourceGuardMutantOutput}`);
   completedProofs.add('SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED');
   psql(canonicalSourceGuardHelper);
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '06e8fc12e110955208c001a7a369d8f4c34724219f15b202de588236d6c9bb16');
 
   // Return-credit ledger mutation proof: without the line guard, the smoke
   // can rewrite an active negative-cost credit line and make a later return
@@ -935,6 +1098,7 @@ try {
   assert.match(zeroCostLineMutantOutput, /SMOKE_FAIL: active zero-cost return-credit line was costed later/, `zero-cost credit-line mutant did not reach the immutable-ledger oracle:\n${zeroCostLineMutantOutput}`);
   completedProofs.add('ZERO_COST_LEDGER_MUTATION_DETECTED');
   psql(canonicalLineageHelper);
+  assertInstalledFunctionHash('public.guard_return_credit_lineage()', '7b5ccb72380c54cd2a202f891de659bce1b916c09c76ad9884446ba1544dd89f');
 
   psql(`
     DROP TRIGGER aa_crx_guard_return_credit_lineage ON public.invoice_items;
@@ -976,6 +1140,7 @@ try {
   assert.match(scopeMutantOutput, /SMOKE_FAIL: unassigned sales rep read another customer year-end summary/, `customer-scope mutant did not reach the deny-path oracle:\n${scopeMutantOutput}`);
   completedProofs.add('CUSTOMER_SCOPE_DISCLOSURE_REJECTED');
   psql(canonicalYearEndHelper);
+  assertInstalledFunctionHash('public.get_customer_year_end_summary(uuid,integer)', '983e802e334a70cb2a627447b8760d3830a690dab789d26e161a7f590efe1bfe');
 
   // Fractional accounting mutation proof: reverting P&L credit memos to the
   // raw unit-cost-times-quantity sum produces 250.5 cents after the first half
@@ -1000,6 +1165,7 @@ try {
   );
   completedProofs.add('FRACTIONAL_REPORT_HALF_CENT_DETECTED');
   psql(canonicalPnlHelper);
+  assertInstalledFunctionHash('public.get_bottom_line_pnl(date,date)', '307c94d4e8de83c91b0b7ca680d529c6834e56ef5bc5b10c5c6d054fc1a265d2');
 
   // Mutation proof: run the same real-schema smoke against a cost-bucket
   // mutant. Sorting by cost before date consumes both $5 lots and the $5.01
@@ -1023,6 +1189,21 @@ try {
   assert.match(unlinkedCostMutantOutput, /SMOKE_FAIL: unlinked cost credit was ignored by return issuance/, `unlinked-cost guard mutant did not reach the ambiguous-credit oracle:\n${unlinkedCostMutantOutput}`);
   completedProofs.add('UNLINKED_COST_GUARD_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
+
+  const priorCreditConsumptionMutant = canonicalIssueHelper.replace(
+    'COALESCE(pl.reversed_qty,0)',
+    '0',
+  );
+  assert.notEqual(priorCreditConsumptionMutant, canonicalIssueHelper, 'prior-credit-consumption mutant did not alter the executable allocator');
+  psql(priorCreditConsumptionMutant);
+  const priorCreditMutantSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const priorCreditMutantOutput = `${priorCreditMutantSmoke.stdout}\n${priorCreditMutantSmoke.stderr}`;
+  assert.notEqual(priorCreditMutantSmoke.status, 0, 'prior-credit-consumption mutant smoke unexpectedly committed');
+  assert.match(priorCreditMutantOutput, /SMOKE_FAIL:/, `prior-credit-consumption mutant did not reach an accounting oracle:\n${priorCreditMutantOutput}`);
+  completedProofs.add('PRIOR_CREDIT_CONSUMPTION_REMOVAL_DETECTED');
+  psql(canonicalIssueHelper);
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
 
   const unclearedLineageMutant = canonicalIssueHelper.replace(
     /  PERFORM set_config\('app\.crx_return_credit_lineage', '0', true\);\r?\n/,
@@ -1036,6 +1217,7 @@ try {
   assert.match(unclearedLineageOutput, /SMOKE_FAIL: active return-credit header ledger was mutated/, `lineage-clear mutant did not reach the header bypass-window oracle:\n${unclearedLineageOutput}`);
   completedProofs.add('LINEAGE_CLEAR_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
 
   const groupedCostBucketMutant = canonicalIssueHelper.replaceAll(
     'PARTITION BY al.id ORDER BY al.invoice_date, al.created_at, al.source_item_id, al.line_cost_cents',
@@ -1049,6 +1231,7 @@ try {
   assert.match(mutantOutput, /SMOKE_FAIL: RETURN_COGS_EXPECTED_6700 got[\s\S]*6601/, `grouped-cost-bucket mutant did not reach the 6601 accounting oracle:\n${mutantOutput}`);
   completedProofs.add('GROUPED_COST_BUCKET_6601_REJECTED');
   psql(canonicalIssueHelper);
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
 
   const creditSeasonMutant = canonicalIssueHelper.replace(
     'SET total_cost_cents = -v_cogs, season = public.current_season()',
@@ -1066,6 +1249,7 @@ try {
   );
   completedProofs.add('CREDIT_CURRENT_SEASON_MUTATION_DETECTED');
   psql(canonicalIssueHelper);
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
 
   const fractionalDoubleRoundMutant = canonicalIssueHelper.replace(
     `(ROUND(cp.line_cost_cents * (cp.posted_qty - cp.available_qty + cp.part_qty))
@@ -1084,6 +1268,7 @@ try {
   );
   completedProofs.add('FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED');
   psql(canonicalIssueHelper);
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
 
   const smoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
   const output = `${smoke.stdout}\n${smoke.stderr}`;

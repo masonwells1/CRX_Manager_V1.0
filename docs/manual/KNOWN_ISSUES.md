@@ -31,9 +31,11 @@ closing the otherwise unsafe commit gap between the two files. They must be appl
 second fails, leave the barrier active, repair the drift it reports, and rerun it; an emergency removal
 needs its own reviewed forward migration and would knowingly reopen the zero-COGS defect.
 Both files bound their table-lock wait at five seconds so a stuck reader causes a clean apply failure
-instead of leaving Returns queued indefinitely. The second also blocks a draft source invoice from
-becoming recognized after a zero-cost credit has already been issued; posting participates in the same
-ordered advisory-lock protocol as credit issuance.
+instead of leaving Returns queued indefinitely. The second blocks a draft source invoice only when
+recognizing it would expose an uncosted, restocked return quantity; a fully costed prior return does not
+block a later delivery invoice. Posting uses the same ordered advisory-lock protocol as credit issuance
+and fails fast on contention. The migration also excludes new credit-memo lines from delivery billing
+allocation so a return cannot reopen customer billing headroom.
 
 **ACCEPTED POLICY — late return credits stay in the current crop season.** Mason chose this on
 2026-08-26 to keep prior customer year-end summaries stable and the rule simple. Consequently, a
