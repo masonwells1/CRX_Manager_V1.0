@@ -1,5 +1,26 @@
 # CRX Manager V1.0 — Development Changelog
 
+## 2026-08-26 — Offline Work Review can no longer resolve against a stale queue snapshot
+
+`src/pages/OfflineWorkReview.tsx` let a reviewer open the resolution dialog for a queue item and
+keep it actionable across a refresh. Resolving offline work is **permanent**, and the open dialog
+still carried the item, note, and idempotency key captured from the *previous* snapshot — so a
+reviewer could confirm a permanent resolution against data that had already been superseded, or
+against a record the refreshed queue no longer showed.
+
+The load path now clears the selection, dialog, note, and idempotency key before every refresh
+rather than leaving a stale resolution live while a newer authoritative response is in flight.
+`openResolution` and `handleResolve` both refuse while a load is pending or errored, and the
+"Resolve safely", "Review final confirmation", and resolution controls are disabled in those
+states, so the guard holds at the UI as well as in the handlers.
+
+Verified by mutation, not by a green suite: with the new regression test in place and the fix
+reverted, `invalidates a selected resolution before a refreshed queue response arrives` fails —
+the dialog is still in the document after a refresh. With the fix restored, all 8 tests pass.
+
+Extracted from PR #449, which is being closed and recut; this fix was the only production-facing
+change in that branch and did not depend on its guard work.
+
 ## 2026-08-25 — the routine migration door now refuses a stolen reviewer proof
 
 PR #470 closed a proof-replay hole in `scripts/apply-migration-file.mjs` by adding
