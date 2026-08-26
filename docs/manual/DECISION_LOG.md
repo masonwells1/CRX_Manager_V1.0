@@ -1,11 +1,39 @@
 # Decision Log
 
-Last verified: 2026-08-25
+Last verified: 2026-08-26
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-26 — Ignored tool output is outside the local content-scan boundary until Git-visible
+
+**Source:** Mason's requested narrow harness-efficiency pass, measured against the remaining
+pre-push containment bottleneck after PR #484.
+
+**Decision.** Descendants of the existing explicit top-level `TOOL_OWNED_IGNORED_PREFIXES` are
+excluded from `git ls-files --others --ignored` enumeration. This is a source-boundary decision,
+not a scanner exemption: no content bytes are opened for a file that is both ignored and confined
+to one of those exact generated/dependency roots. If the same file becomes tracked, staged, or
+force-added, the index and outgoing-history paths inspect it normally and block private markers or
+uninspectable archives. Nested lookalikes such as `packages/worker/node_modules/` remain scanned,
+as do exact root endpoint files such as a file literally named `dist`. Candidate scanning,
+double-read change detection, missing-entry recovery, untrusted-remote fallback, and commit-range
+coverage are unchanged.
+
+**Why.** The installed-worktree baseline spent 405,535 of 434,901 ms rereading 48,006 ignored
+paths, predominantly 47,989 dependency files; Git enumeration alone was under one second. The
+same benchmark after the boundary change took 37,468 ms total and 220 ms in the worktree scan,
+with 2,815 candidates instead of 50,802. The local disk scan is advisory; the durable push
+boundary is Git-visible content plus the protected GitHub review/CI path. Reading hundreds of
+megabytes that Git will not export consumed minutes without strengthening that boundary.
+
+**Operative rule:** do not broaden these excludes by path segment, pattern inference, or dynamic
+ignore rules. New roots require an explicit list change, a nested-lookalike test, force-add deny
+proof, red/green mutation proof, and a retained same-worktree benchmark.
 
 ---
 
