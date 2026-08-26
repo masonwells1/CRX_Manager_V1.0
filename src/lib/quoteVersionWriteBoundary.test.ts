@@ -746,12 +746,20 @@ describe('quote_versions write boundary — standing predicate', () => {
     // the predicate alone pins a string while the function drifts away from it.
     expect(normalizeRegion(loweredBody)).toBe(trustRegion);
     // ...and the predicate must compare against that same text, SQL-escaped.
-    // It is built by concatenation there, so assert the distinctive fragments.
-    expect(predicateCode).toContain(
+    // CodeRabbit 2026-08-26: asserting the concatenation's fragments separately
+    // proves nothing about their ORDER — reorder them, move one into another
+    // branch, or splice an extra term between them and three toContain checks
+    // still pass, which silently voids the paired claim that the predicate
+    // pins the same region the migration ships. Collapse SQL string
+    // concatenation (`' || '` joins adjacent literals) and assert the single
+    // assembled literal instead.
+    const predicateAssembled = predicateCode.replace(/\s+/g, ' ').split("' || '").join('');
+    expect(predicateAssembled).toContain(`= '${trustRegion.replace(/'/g, "''")}'`);
+    // The region is extracted from the owner call, not from a later derived
+    // variable — that mis-anchoring was round 5's bypass.
+    expect(predicateAssembled).toContain(
       "FROM strpos(lower(p.prosrc), 'v_result := public._create_quote_version_owner_impl')",
     );
-    expect(predicateCode).toContain("|| '( p_quote_id, p_performed_by, p_method, p_idempotency_key ); '");
-    expect(predicateCode).toContain("|| 'raise exception ''quote_version_trust_mark_failed''; end if;'");
     // Round 5's actual bypass: a forged v_result in the gap ahead of the anchor
     // must not normalize to the pinned region.
     const gapAttack = loweredBody.replace(
