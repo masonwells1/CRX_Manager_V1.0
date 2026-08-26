@@ -179,6 +179,34 @@ draws paused" describe the rollout window and are superseded by this entry.
 
 ---
 
+## 2026-08-25 — PR #403 closed: the live-ledger recovery exception is NOT in force
+
+**Source:** Mason's explicit approval to close, 2026-08-25, after a triage review against `main` at
+`43e141ab`. Evidence:
+<https://github.com/masonwells1/CRX_Manager_V1.0/pull/403#issuecomment-5416488045>
+
+**Decision.** PR #403 ("narrow wrapper-verified recovery attestation for ledger-proven migrations")
+is closed and will not merge. The narrow live-ledger recovery exception it existed to establish —
+letting an already-applied migration be recovered to Git without its already-live SQL blocking the
+push proof — is therefore **not in force**, and no entry approving it exists on `main`. Reasons: the
+one recovery it was built for was already done by hand on 2026-08-14 (commit `3a2a0ca0`, via
+PR #392) without loosening the push-proof gate; the need did not recur across the 188 commits since;
+and the attestation machinery needed five Sol adversarial rounds before it was no longer forgeable,
+where repo precedent treats 3+ rounds as a size signal (#423 took 8, #432 stalled at 4).
+
+**Operative rule.** A future byte-verbatim recovery uses the manual path proven on 2026-08-14, or
+requires a fresh owner decision. Do not cite the exception as approved policy, and do not treat #403
+as unfinished work to resurrect. `scripts/write-recovery-attestation.mjs` is absent from `main` by
+decision, not by oversight.
+
+**Supersedes.** The forward-reference inside the 2026-08-14 entry "One-time override:
+`20260812115238`'s order-line map is published in full", which described the exception as settled
+but pending #403's merge. That paragraph was corrected in place on 2026-08-25 (PR #478); this entry
+records the reversal in date order per this file's own append-a-new-entry convention. The
+publication override itself stands unchanged and never depended on #403.
+
+---
+
 ## 2026-08-24 — CodeRabbit reviews assertively and enforces the Hard Rules, without a hard merge block
 
 **Source:** Mason's in-chat decisions, 2026-08-24, after a live audit of the CodeRabbit dashboard,

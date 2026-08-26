@@ -1,5 +1,39 @@
 # CRX Manager V1.0 — Development Changelog
 
+## 2026-08-26 — sql-safety and status-enum-check also judge the real post-edit file
+
+Follow-up closing the gap the "Migration guards judge the real post-edit file on CRLF
+worktrees" entry below left tracked: `sql-safety.mjs` and `status-enum-check.mjs` still judged
+only the Edit fragment (`tool_input.new_string`). Both have file-level exempt markers
+(`-- sql-safety: exempt-registry`; `-- status-enum-check: exempt` / `// status-enum-check:
+exempt`) that they searched for in that same fragment, so a marker already on disk was
+invisible to any Edit that didn't happen to include it — the guard (or sql-safety's
+registry-stale gate) denied the very file its marker exempts, the same deadlock class fixed
+for `grant-change-guard.mjs` and `idempotency-body-check.mjs`. A MultiEdit `edits` array also
+produced empty content and a silent allow.
+
+Both hooks now simulate Edit/MultiEdit payloads against the on-disk file via the shared
+line-ending-safe `applyEditsForAnalysis()` (`.claude/hooks/edit-splice-lib.mjs`) and judge the
+full post-edit content, exactly as `idempotency-body-check.mjs` does. `status-enum-check`'s
+file-type gating is unchanged — it still covers both SQL migrations and TS under `src/`.
+New regression tests (`sql-safety.test.mjs`, `status-enum-check.test.mjs`, wired into
+`test:correction-guards`) run isolated copies of the real hooks against crafted registries and
+CRLF fixtures in both directions — a marker-less edit to a marker-bearing file is allowed
+(deadlock fixed, including the registry-stale-gate variant), and a multi-line LF edit that
+introduces a violation into a CRLF file is still denied. Both were mutation-tested: disabling
+the full-file view fails the allow-direction tests, and swapping the normalized splice for an
+exact one fails the deny-direction tests, in both hooks. The CodeRabbit findings from the
+sibling PR #489 fix are carried over pre-emptively: a pure-deletion Edit that removes the
+exempt marker is a pinned deny (an emptiness early-exit above the reconstruction would have
+bypassed the guard — mutation-verified), and allow-side test assertions are affirmative, so
+a crashed hook's empty stdout cannot read as an allow.
+
+Of the remaining fragment-only PreToolUse content guards: `rls-on-new-tables.mjs`,
+`generated-column-check.mjs`, and `actor-binding-check.mjs` have the same file-level markers
+and the same deadlock exposure — tracked as a follow-up. `money-safety.mjs` and
+`env-guard.mjs` have no file-level markers, so fragment judging can only miss cross-fragment
+context (false negatives), never deadlock.
+
 ## 2026-08-25 — the routine migration door now refuses a stolen reviewer proof
 
 PR #470 closed a proof-replay hole in `scripts/apply-migration-file.mjs` by adding
@@ -73,8 +107,8 @@ the Edit fragment — so an on-disk `-- idempotency-body-check: exempt` marker w
 judges the full post-edit file through the same helper. Regression tests run the real hooks against
 CRLF fixtures with LF fragments in both directions (marker-adding edit allowed; risky marker-less edit
 denied), and both fixes were mutation-tested: reverting the normalization or the full-file view makes
-the new tests fail in each direction. `sql-safety.mjs` and `status-enum-check.mjs` still judge
-fragments only (their exempt markers have the same visibility gap) — tracked as a follow-up.
+the new tests fail in each direction. `sql-safety.mjs` and `status-enum-check.mjs` had the same visibility gap on
+their exempt markers — closed the same day (see the entry above).
 
 CodeRabbit's review of this change surfaced two more real holes in `grant-change-guard.mjs`, both
 around marker REMOVAL: the marker scan concatenated the pre-edit disk content, so an Edit that
@@ -303,6 +337,24 @@ one `draw_down_quote` overload, intent-bound body installed, zero retry receipts
 24 hours, function-surface sweeps clean. No test draw was fabricated; the first real draw is the
 final end-to-end proof and should be read back read-only when it happens. Canonical record:
 `docs/manual/DECISION_LOG.md` (2026-08-25 entry).
+
+## 2026-08-25 — Decision Log: the #403 closure now has its own dated entry
+
+Follow-up on PR #478, closing the convention gap that both Codex and the reviewer flagged there.
+That PR corrected the stale forward-reference to PR #403 in place, inside the 2026-08-14 override
+entry. But `DECISION_LOG.md`'s own footer says never to rewrite a past entry — a reversal gets a
+**new** dated entry instead. Correcting in place was right (the old text made a false claim about
+current policy, so leaving it would have kept the exact trap #478 removed), but it left the
+reversal invisible to anyone scanning the log by date. Mason approved adding the entry.
+
+- New dated entry, `2026-08-25 — PR #403 closed: the live-ledger recovery exception is NOT in force`,
+  recording the owner decision, the evidence link, why it was closed (recovery already done by hand
+  on 2026-08-14 via `3a2a0ca0`/PR #392; no recurrence in 188 commits; five Sol rounds on the
+  attestation itself), and the operative rule for a future verbatim recovery.
+- Its **Supersedes** block names the specific forward-reference inside the 2026-08-14 entry that it
+  reverses — not that entry as a whole — and states plainly that the publication override stands
+  unchanged and never depended on #403.
+- Pure addition: 28 lines added to `DECISION_LOG.md`, nothing removed or reworded.
 
 ## 2026-08-25 — Decision Log: the dangling PR #403 reference now records a closure
 
