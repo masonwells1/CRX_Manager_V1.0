@@ -1,5 +1,16 @@
 # CRX Manager V1.0 — Development Changelog
 
+## 2026-08-26 — save_job's function comment corrected: TWELVE refusals, not eleven
+
+New COMMENT-only migration `20260826150000_fix_save_job_comment_refusal_count.sql` (history row
+892, NOT yet applied). The live `save_job` body raises twelve distinct refusal families, but its
+function comment — the text operators and reviewers enumerate refusals from — says "ELEVEN" and
+omits `JOB_ACRES_NOT_FINITE`, which was added late in review. The applied migration is never
+edited, so the correction is a new file containing exactly one dollar-quoted
+`COMMENT ON FUNCTION` statement; verified against the live catalog (12 distinct refusal tokens in
+`pg_proc.prosrc`) before writing. The apply itself still needs reviewer proofs and Mason's
+explicit OK.
+
 ## 2026-08-25 — the routine migration door now refuses a stolen reviewer proof
 
 PR #470 closed a proof-replay hole in `scripts/apply-migration-file.mjs` by adding
