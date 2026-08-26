@@ -2,6 +2,40 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-26 — control-file coverage derived from the validator's own dependency list
+
+Follow-up to PR #476, which added the `ask`-tier tripwire but left part of its own enforcement
+surface unguarded. CodeRabbit flagged `scripts/agent-manifest-parity.mjs`; enumerating the problem
+properly found more.
+
+`scripts/check-agent-workflows.mjs` declares the files it depends on in a `required` array. That
+array — not intuition about which filenames "look important" — is the authoritative set of things
+whose edit can weaken the check. Cross-referencing it against the rules PR #476 shipped left nine
+uncovered paths, now added:
+
+| Path | Why it can weaken the check |
+|---|---|
+| `scripts/agent-manifest-parity.mjs` | imported directly; decides Claude/Codex hook-manifest parity |
+| `scripts/sync-agent-workflows.mjs` | spawned with `--check` to prove the adapters are in sync |
+| `scripts/normalize-eol.mjs` | shared by both mirror comparisons |
+| `scripts/post-agent-review-to-pr.mjs`, `scripts/agent-health-check.mjs` | required files the check asserts on |
+| `.claude/commands/**`, `.claude/skills/**`, `.claude/agents/**`, `.agents/skills/**` | the canonical workflow sources and their generated adapters |
+
+**Why this kept recurring.** PR #476 took four review rounds, each closing the same shape of gap: a
+rule naming one control file while a sibling with equal authority stayed unguarded. A fifth round
+that simply appended the three filenames CodeRabbit named would have repeated it. The durable fix
+is to derive coverage from a list the code already maintains, so the rule set and the dependency
+set cannot drift apart silently.
+
+Entries are additive and keep the existing `Edit(...)`/`Write(...)` pairing. CodeRabbit reported
+that path-scoped `Write(...)` rules are inert because Claude Code consults `Edit(...)` for both
+tools; that claim was **not** verified here, so the pairs were left intact rather than removed —
+deleting them would weaken protection if the claim is wrong, while keeping them costs nothing if it
+is right. Verifying it is separate work.
+
+Proof: `node scripts/check-agent-workflows.mjs` passes, which also JSON-parses `.claude/settings.json`
+— so this confirms the additions are syntactically valid, not merely present.
+
 ## 2026-08-25 — PR #432 closed unmerged; control-file edits move to the `ask` tier; two git-config falsifications fixed
 
 Mason ended the PR #432 repair loop (130 commits, +7,329 lines, four adversarial review rounds,
