@@ -217,7 +217,23 @@ export function checkPendingMigrations({
     };
   }
 
+  // How many TRACKED files share each slug. The slug fallback is only sound when
+  // a slug identifies exactly one file: if two tracked files share a slug and only
+  // one is in the ledger, "the slug is applied" is true of the pair and false of
+  // the individual, so matching on it unconditionally would mark the unapplied one
+  // as applied — silently deleting it from the pending set and stranding it, the
+  // exact failure this guard exists to prevent. Duplicate slugs are already real
+  // history here (20260718225511 / 20260718230000 supplier_price_evidence_phase1b,
+  // and two more pairs), all of them below the baseline today, so this is a latent
+  // hole rather than a live one. Codex P2, PR #502.
+  const trackedSlugCounts = new Map();
+  for (const raw of trackedFiles) {
+    const slug = migrationSlug(raw);
+    if (slug) trackedSlugCounts.set(slug, (trackedSlugCounts.get(slug) ?? 0) + 1);
+  }
+
   const pending = [];
+  const ambiguous = [];
   const unorderable = [];
   for (const raw of trackedFiles) {
     const stem = migrationStem(raw);
@@ -227,7 +243,12 @@ export function checkPendingMigrations({
     // to reach the unorderable branch below and abstain the whole check.
     const stamp = fileStamp(stem);
     if (stamp && stamps.has(stamp)) continue;     // applied under its own stamp
-    if (slugs.has(migrationSlug(stem))) continue; // applied, renumbered — slug matches
+
+    const slug = migrationSlug(stem);
+    const slugApplied = slugs.has(slug);
+    const slugIsShared = (trackedSlugCounts.get(slug) ?? 0) > 1;
+    // applied, renumbered — slug matches, and the slug names only this file
+    if (slugApplied && !slugIsShared) continue;
 
     const ordering = orderingStamp(stem);
     if (!ordering) {
@@ -238,6 +259,12 @@ export function checkPendingMigrations({
     }
     if (ordering <= baselineHighWater) continue;  // captured by the schema baseline
     if (ordering >= ts) continue;                 // not older than the candidate
+
+    // In the window, unapplied by stamp, and its slug is applied but shared with
+    // another tracked file: this file may be the applied one or the pending one,
+    // and the snapshot cannot tell them apart. Report it as unknown rather than
+    // guessing in either direction.
+    if (slugApplied && slugIsShared) { ambiguous.push(stem); continue; }
     pending.push(stem);
   }
 
@@ -249,6 +276,32 @@ export function checkPendingMigrations({
         `${unorderable.length} migration file(s) tracked on origin/main carry no 14-digit ` +
         `timestamp (${unorderable.slice(0, 3).join(", ")}), so whether they are older than this ` +
         `apply cannot be determined`,
+    };
+  }
+
+  // An ambiguity is an UNKNOWN, and it is checked before the marker on purpose:
+  // `ahead-of-pending` states an intent about a queue the operator can see, and
+  // this queue cannot be seen. Letting the marker wave it through would turn the
+  // one escape hatch into a way to skip the check entirely — which is precisely
+  // why the marker is separate from intentional-replay in the first place.
+  if (ambiguous.length) {
+    ambiguous.sort();
+    pending.sort();
+    return {
+      ok: true,
+      abstained: true,
+      ambiguous,
+      pending,
+      abstainReason:
+        `${ambiguous.length} migration file(s) in the scan window share a slug with another file ` +
+        `tracked on origin/main (${ambiguous.join(", ")}), and the applied-migration snapshot ` +
+        `records that slug WITHOUT the stamp that would say which one ran — so whether these are ` +
+        `applied or still waiting cannot be determined` +
+        (pending.length
+          ? ` (separately, ${pending.join(", ")} is definitely unapplied)`
+          : "") +
+        `. Give the new migration a distinct slug and retry; the ahead-of-pending marker ` +
+        `deliberately does not cover this, because it states an intent about a KNOWN queue`,
     };
   }
 

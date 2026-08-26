@@ -189,6 +189,72 @@ allows(
   }),
   "pre-baseline files must NOT be reported as pending, whatever their stamps look like");
 
+// AMBIGUOUS SLUG (Codex P2, PR #502). The slug fallback above is only sound when
+// a slug names exactly ONE tracked file. Two files sharing a slug with only one in
+// the ledger makes "this slug is applied" true of the pair and false of the
+// individual — so an unconditional match marked the unapplied one as applied and
+// deleted it from the pending set, stranding it. Duplicate slugs are real history
+// here (20260718225511 / 20260718230000 supplier_price_evidence_phase1b and two
+// more pairs), all below the baseline today, so this was latent, not live.
+{
+  const shared = [
+    "supabase/migrations/20260801120000_shared_slug.sql",
+    "supabase/migrations/20260805120000_shared_slug.sql",
+  ];
+  const v = checkPendingMigrations({
+    name: "20260830120000_new_work",
+    sql: "select 1;",
+    // Only ONE of the pair is in the ledger, and it is recorded by slug alone.
+    appliedNames: ["20260820120000_anchor", "20260801120000_shared_slug"],
+    trackedFiles: shared,
+    baselineHighWater: BASELINE,
+  });
+  abstains(v, "share a slug",
+    "a post-baseline duplicate slug must NOT be silently treated as applied");
+  assert.deepEqual(v.ambiguous, ["20260805120000_shared_slug"]);
+  pass++;
+
+  // The marker must not paper over it: `ahead-of-pending` states an intent about a
+  // queue the operator can SEE, and this queue cannot be seen. If the marker
+  // unlocked an abstention it would become a way to skip the check entirely.
+  abstains(
+    checkPendingMigrations({
+      name: "20260830120000_new_work",
+      sql: "-- ordering-guard: ahead-of-pending stepping over the shared-slug pair on purpose\n",
+      appliedNames: ["20260820120000_anchor", "20260801120000_shared_slug"],
+      trackedFiles: shared,
+      baselineHighWater: BASELINE,
+    }),
+    "share a slug", "the ahead-of-pending marker does NOT unlock a slug ambiguity");
+
+  // Both applied by stamp → no ambiguity to report. Without this the fix could be
+  // abstaining on every shared slug, which would block real work.
+  allows(
+    checkPendingMigrations({
+      name: "20260830120000_new_work",
+      sql: "select 1;",
+      appliedNames: ["20260801120000_shared_slug", "20260805120000_shared_slug"],
+      trackedFiles: shared,
+      baselineHighWater: BASELINE,
+    }),
+    "a shared slug whose files are BOTH applied by stamp is not ambiguous");
+
+  // The real pairs on main are all pre-baseline, so they must stay silent — this is
+  // what keeps the fix from refusing every apply from the day it lands.
+  allows(
+    checkPendingMigrations({
+      name: "20260830120000_new_work",
+      sql: "select 1;",
+      appliedNames: ["20260820120000_anchor", "20260718225511_supplier_price_evidence_phase1b"],
+      trackedFiles: [
+        "supabase/migrations/20260718225511_supplier_price_evidence_phase1b.sql",
+        "supabase/migrations/20260718230000_supplier_price_evidence_phase1b.sql",
+      ],
+      baselineHighWater: BASELINE,
+    }),
+    "the real pre-baseline duplicate-slug pairs stay below the floor and stay silent");
+}
+
 // An ascending batch of NEW migrations applied in the right order must pass at
 // every step — the false positive that the first ordering guard shipped with.
 {

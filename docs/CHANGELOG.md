@@ -39,6 +39,18 @@ already uses. With both rules the pending set on 2026-08-26 is exactly one file:
 the incident stranded. Stated residual: a genuinely unapplied migration at or below the
 baseline high-water is invisible to this check; the baseline asserts there are none.
 
+The slug fallback is sound only when a slug names exactly ONE tracked file (Codex P2 on the
+PR). Two files sharing a slug with only one in the ledger makes "this slug is applied" true of
+the pair and false of the individual, so an unconditional match marked the unapplied one as
+applied and deleted it from the pending set — stranding it, the exact failure the guard
+exists to prevent. Duplicate slugs are already real history here
+(`20260718225511`/`20260718230000_supplier_price_evidence_phase1b` and two more pairs), all
+below the baseline today, so this was latent rather than live. A shared slug in the scan
+window now abstains and names the files, and the `ahead-of-pending` marker deliberately does
+NOT unlock it: that marker states an intent about a queue the operator can see, and this queue
+cannot be seen — letting it through would turn the one escape hatch into a way to skip the
+check. The remedy the message gives is a distinct slug, not a marker.
+
 Mutation-tested, not merely observed passing: removing the slug fallback, letting the replay
 marker unlock the guard, and turning an abstention into a silent pass each turn the suite red,
 and the incident sequence is reproduced end-to-end through the real gate in both
