@@ -2,6 +2,37 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-25 — the JobDetail save-gate flake: retry the click, don't wait longer
+
+`src/pages/JobDetail.billingHazard.test.tsx` failed CI intermittently with
+`AssertionError: expected false to be true` on a correct, unchanged page. The obvious remedy
+was already in the file — `waitFor`/`findBy` with 15s internal timeouts and a 30s per-test
+timeout — which is exactly why it kept coming back.
+
+Root cause is a race the test could not wait out. `handleSave` fails closed while the
+label-rate policy is still loading: it toasts "Checking the label-rate policy — try Save again
+in a moment." and returns. Those lookups (`guardrailModeLoaded`, `jobLabelsLoaded`) are
+SEPARATE queries from the job/products fetch that renders the hazard banner, so awaiting the
+banner does not mean the save gate is open. Nine tests clicked Save exactly once. A click
+landing in that window emitted a non-matching toast and returned — and nothing re-fires the
+save, so the test's `waitFor` spun until it timed out. No timeout could ever fix that; only a
+retry can.
+
+All nine clicks now go through a `clickSave()` helper that re-clicks while the gate is still
+closed — exactly what the app instructs the operator to do, and it cannot double-save, because
+while the gate is closed the save never proceeds. The fix is test-only: `JobDetail.tsx` is
+unchanged, and the guard's real behaviour is what gets proven.
+
+The race is now forced deterministically rather than left to CI load: the mock holds the by-id
+products query open so every save-clicking test goes through the fail-closed branch first.
+Without that, the window is microseconds wide, the retry path is never exercised locally, and a
+reverted fix would look green until CI load widened it again.
+
+Proof: with that harness and a single un-retried click, 5 tests fail with the exact production
+symptom, including the "Checking the label-rate policy" toast; with `clickSave()`, all 14 pass.
+The file runs 7.05s (tests 5.68s) versus 8.20s before, so the harness costs nothing. Full suite
+green: 339 files, 4770 passed | 123 skipped.
+
 ## 2026-08-25 — PR #432 closed unmerged; control-file edits move to the `ask` tier; two git-config falsifications fixed
 
 Mason ended the PR #432 repair loop (130 commits, +7,329 lines, four adversarial review rounds,
