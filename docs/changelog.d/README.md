@@ -10,7 +10,13 @@ appends to the top of it, so any two sessions working at once collide there. On
 2026-08-25, **12 of 13 open PRs** touched one of the shared ledger documents, and a
 merge conflict in this file blocked a finished PR at the last step.
 
-Two sessions never write the same path here, so there is nothing to conflict on.
+Sessions each write their own new file here, so a collision requires two sessions to
+independently choose an identical date **and** slug — a coincidence, not the structural
+guarantee of collision that a single shared append-point creates. Make the coincidence
+unlikely: put a distinctive noun from your actual change in the slug
+(`2026-08-26-quotepath-fragment-validator.md`, not `2026-08-26-fix.md`). If it does
+happen, git surfaces it loudly as an add/add conflict on identically-named files rather
+than silently merging anything.
 
 ## How
 
