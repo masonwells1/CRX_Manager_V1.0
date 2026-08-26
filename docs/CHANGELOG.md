@@ -2,6 +2,21 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-26 — Pre-push containment skips top-level ignored tool bulk
+
+The private-artifact pre-push guard now excludes descendants of its existing explicit top-level
+dependency/build roots (`node_modules/`, `dist/`, coverage/browser output, Graphify output, and
+the named test-output roots) from **ignored-file enumeration only**. Tracked, staged,
+force-added, index, outgoing-commit, and history content under those paths remains fully scanned;
+nested lookalikes such as `packages/worker/node_modules/` and files literally named after a root
+remain in scope. Candidate scanning and the double-read race closure are unchanged.
+
+On the same installed worktree, the containment benchmark fell from 434,901 ms to 37,468 ms
+(91.4% faster); the worktree scan fell from 405,535 ms to 220 ms, candidates from 50,802 to
+2,815, logical bytes from 661,279,697 to 92,649,224, and ignored paths from 48,006 to 17. The
+owning suite mutation-fails when the new exclusion is removed, and explicitly proves that a
+force-added private packet under every excluded root is still rejected.
+
 ## 2026-08-26 — Ledger-guard test no longer operates on the real repository
 
 `scripts/check-ledger-update.test.mjs` builds a throwaway Git repository to prove that renaming a
