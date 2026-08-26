@@ -207,9 +207,10 @@ vanish/recreation checks are unchanged. The owning suite mutation-fails when thi
 is removed and proves that a force-added private packet under every excluded root is still denied.
 
 Measured on the same installed worktree, the real containment path fell from 434,901 ms to 37,468
-ms overall (a 91.4% reduction in elapsed time), while worktree scanning fell from 405,535 ms to 220 ms. Reopen this issue
-only if a Git-visible artifact under an excluded root escapes scanning, or if an excluded root is
-widened without equivalent tracked/index/history and boundary regression proof.
+ms overall (a 91.4% reduction in elapsed time), while worktree scanning fell from 405,535 ms to 220 ms.
+These timings cover the real scanner path, not the separate exhaustive cross-platform regression suite.
+Reopen this issue only if a Git-visible artifact under an excluded root escapes scanning, or if an
+excluded root is widened without equivalent tracked/index/history and boundary regression proof.
 ## OPEN (WONTFIX for now) 2026-08-20 — `review-proof-guard` denies destructive shell commands that NAME a worktree path
 
 **Severity: LOW — cosmetic, with a zero-cost workaround. Mason chose "document, don't fix"
