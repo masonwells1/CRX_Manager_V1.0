@@ -569,42 +569,48 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
         -- stayed green.
         AND regexp_count(p.prosrc, '_create_quote_version_owner_impl\s*\(', 1, 'i') = 1
         --
-        -- Gap 2 (P2) — REOPENED by CodeRabbit round 4 (2026-08-25). The round-3
-        -- fix enumerated the FORBIDDEN ways to rewrite the marker variables: it
-        -- counted `v_version_id :=` and `v_result :=` inside the region. But
-        -- PL/pgSQL has several other assignment forms — `SELECT ... INTO`,
-        -- `EXECUTE ... INTO`, `... RETURNING ... INTO`, `GET DIAGNOSTICS ... =`
-        -- — so a blocklist closes exactly one spelling per review round and
-        -- leaves the rest open. Round 4 correctly pointed at `SELECT ... INTO
-        -- v_version_id`, which sailed through the round-3 checks.
+        -- Gap 2 (P2) — REOPENED TWICE. Round 3 counted `v_version_id :=` and
+        -- `v_result :=` inside the region; round 4 walked past that with
+        -- `SELECT ... INTO`, so the count became a closed allowlist pinned to
+        -- the exact reviewed text. Round 5 then showed the allowlist itself was
+        -- anchored in the wrong place: it began at the `v_version_id`
+        -- assignment, leaving the interval BETWEEN the owner impl returning and
+        -- that assignment completely unchecked. A re-emission could put
         --
-        -- Replaced with a CLOSED ALLOWLIST rather than a longer blocklist: the
-        -- region between the anchor assignment and the marker UPDATE must be
-        -- EXACTLY the reviewed text, modulo whitespace. Nothing else can appear
-        -- there in any spelling — not another assignment, not a comment — so
-        -- every form, including ones not yet thought of, is closed at once. A
-        -- legitimate future re-emission that changes this region must update
-        -- this literal, and that is the review trigger this sweep exists to
-        -- create.
+        --   v_result := jsonb_build_object('status','created','version_id', <legacy id>);
         --
-        -- Collapse whitespace BEFORE trimming, not after: btrim() first leaves
-        -- the region's trailing newline to collapse into a single space, and the
-        -- comparison fails on the real body. Verified against live PostgreSQL
-        -- 17.6 on 2026-08-25 — real body and a whitespace-reformatted body pass;
-        -- select-into, execute-into, `:=` reassignment of either variable, an
-        -- injected comment, a removed anchor, and a removed trust-mark failure
-        -- check are each rejected.
+        -- in that gap. The sole-owner-call check, the ordering check, the
+        -- region fingerprint and the exact marker-UPDATE check ALL still
+        -- passed, and the wrapper stamped an arbitrary legacy row as trusted.
+        -- Verified against live PostgreSQL 17.6 on 2026-08-26: that body passed
+        -- the round-4 guard.
+        --
+        -- The region now starts at the owner call itself, so there is no
+        -- unguarded interval left between the writer and the marker. This also
+        -- pins the owner call's ARGUMENTS, which nothing checked before — a
+        -- re-emission passing NULL for p_idempotency_key is now rejected too.
+        --
+        -- Lesson worth keeping: a closed allowlist only closes what is INSIDE
+        -- it. Choosing its boundaries is the whole security argument, and
+        -- "nothing unexpected can appear here" is worth nothing if the
+        -- interesting statement sits just outside. Collapse whitespace BEFORE
+        -- btrim — the reverse order leaves a trailing space and the real body
+        -- fails its own guard.
         AND btrim(
               regexp_replace(
                 substring(
                   lower(p.prosrc)
-                  FROM strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
+                  FROM strpos(lower(p.prosrc), 'v_result := public._create_quote_version_owner_impl')
                   FOR  strpos(lower(p.prosrc), 'update public.quote_versions')
-                       - strpos(lower(p.prosrc), 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid')
+                       - strpos(lower(p.prosrc), 'v_result := public._create_quote_version_owner_impl')
                 ),
                 '\s+', ' ', 'g'
               )
-            ) = 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid; if v_result->>''status'' is distinct from ''created'' or v_version_id is null then raise exception ''quote_version_trust_mark_failed''; end if;'
+            ) = 'v_result := public._create_quote_version_owner_impl'
+             || '( p_quote_id, p_performed_by, p_method, p_idempotency_key ); '
+             || 'v_version_id := nullif(v_result->>''version_id'', '''')::uuid; '
+             || 'if v_result->>''status'' is distinct from ''created'' or v_version_id is null then '
+             || 'raise exception ''quote_version_trust_mark_failed''; end if;'
         AND regexp_count(
           p.prosrc,
           'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null\s*;',

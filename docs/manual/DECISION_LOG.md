@@ -8,6 +8,40 @@ settled calls. Newest first. Each entry is a decision, why it was made, and the 
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
 
+## 2026-08-26 — CORRECTION: a closed allowlist only closes what is inside it
+
+**This amends the 2026-08-25 entry immediately below**, which claimed pinning the guarded region
+"closes every form at once, including ones nobody has thought of." That was overstated and CodeRabbit
+round 5 disproved it on live PostgreSQL.
+
+**What was wrong.** The allowlist began at the `v_version_id := nullif(v_result->>'version_id', ...)`
+assignment. The interval *between* `_create_quote_version_owner_impl` returning and that assignment
+was not covered by anything. A re-emission could put
+
+```text
+v_result := jsonb_build_object('status','created','version_id', <legacy id>);
+```
+
+in that gap, and the sole-owner-call check, the ordering check, the region fingerprint and the exact
+marker-`UPDATE` check **all still passed** — the wrapper would stamp an arbitrary pre-boundary
+snapshot as trusted. Verified: that body passed the round-4 guard.
+
+**The fix.** The region now starts at the owner call itself, leaving no unguarded interval between
+the writer and the marker. It also pins the owner call's **arguments**, which nothing had checked —
+a re-emission passing `NULL` for `p_idempotency_key` is now rejected too.
+
+**Operative rule, restated correctly.** A closed allowlist is only as good as its boundaries.
+"Nothing unexpected can appear here" is worth nothing if the interesting statement can sit just
+outside the region. When pinning a region, the first question is not *what does it contain* but
+*where does the trusted chain actually begin* — and the answer is the first statement whose result
+the rest of the region depends on, not the first statement that mentions the variable you care about.
+
+**Process note.** This was the third consecutive round in which a fix to this predicate was itself
+found defective (round 3's arity bug, round 4's blocklist, round 5's mis-anchored allowlist). Each
+fix was verified against live PostgreSQL and each verification tested the thing that had just been
+changed rather than the property the guard is supposed to have. A both-ways proof is necessary and
+was not sufficient; the missing step each time was asking which inputs the proof did **not** cover.
+
 ## 2026-08-25 — Guard regions are closed allowlists, not blocklists of spellings
 
 **Decision.** When a SQL invariant sweep needs to prove that nothing unexpected happens between two
