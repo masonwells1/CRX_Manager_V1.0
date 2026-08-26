@@ -1,7 +1,13 @@
 # Handoff — PR #401, quote-version restore trust boundary
 
-**Written 2026-08-26.** State at writing: branch green, CodeRabbit clean through round 5,
-round 6's Trivial finding fixed and pushed. **NOT merged. Migration NOT applied.**
+**Written 2026-08-26, updated at handoff.** Mason ended the originating session here deliberately
+(it had grown past 13 MB) and asked for the remaining work to move to a fresh session. **NOT
+merged. Migration NOT applied. Database untouched.**
+
+**Seven CodeRabbit rounds have run.** Rounds 1-6 are fully addressed. Round 7's three findings are
+fixed in the final commit on this branch and are described below; that commit had not yet been
+re-reviewed when the session ended, so **expect round 8 to be the next event** and read it before
+merging.
 
 ## What this PR does, in one paragraph
 
@@ -26,8 +32,42 @@ but stop being restorable.
 | Merged | **no** |
 | Applied to live | **no** |
 
-Mason approved both the merge and the apply in-session ("finish it"). The remaining blocker has
-been review-state mechanics, not the code.
+Mason approved both the merge and the apply in-session ("finish it"), and that approval was not
+withdrawn — he stopped the session for size, not for doubt. **Even so, re-confirm before merging:**
+a merge deploys production and the apply is irreversible by rollback (see step 4). Treat a handoff
+as context, never as standing authorization.
+
+The remaining blocker has been review-state mechanics, not the code. `reviewDecision` reads
+`CHANGES_REQUESTED` from a review whose findings are all resolved; it does not auto-clear.
+
+## Round 7 (the last thing that happened)
+
+Three findings, all fixed in the final commit, none in the trust guard itself — that has been clean
+since round 5:
+
+1. **The handoff overstated the safety net** (this file). It said the merge was one-click
+   reversible via Vercel. True of application code, false once the migration applies. Corrected in
+   steps 3 and 4 below, with the real undo path spelled out. **This was the important one.**
+2. **The `GIT_DIR` fix used a hand-written denylist** of variable names — the exact anti-pattern the
+   2026-08-26 DECISION_LOG entry warns against, committed hours after writing it. The repo already
+   had `.claude/hooks/git-test-env.mjs` → `scratchHookEnvironment()`, which asks git itself via
+   `git rev-parse --local-env-vars` and also strips indexed `GIT_CONFIG_KEY_n`/`VALUE_n`. Now uses
+   it. Proven under a hostile env (`GIT_DIR` at the real repo **plus** an injected
+   `GIT_CONFIG_KEY_0=core.bare=true`): 44 assertions pass, `core.bare` still `false`. The denylist
+   would have let the config override through.
+3. `afterwards` → `afterward`, per the repo's documented locale.
+
+**Standing lesson from 2 and from rounds 3-6: check for an existing shared helper before writing a
+private copy, and never close a hole by enumerating the ways through it.**
+
+## A CI flake, recorded so it is not mistaken for a regression
+
+`src/pages/JobDetail.billingHazard.test.tsx > REFUSES the save — no job RPC is called` failed once
+on `dfe219af`, exhausting a 15s `waitFor` under load (the test's own budget is 30s, so it was the
+inner wait, not the test timeout). This PR touches neither that page nor the job-save path, `main`
+is green on it, and a re-run of the **identical commit** passed. It is the third timing-sensitive
+failure in this repo recently — PR #479 fixed a sibling ExcelJS test the same way — which looks
+systemic rather than like three unlucky tests. Worth a proper look; do not just retry until green.
 
 ## The two open review threads are NOT bugs
 
@@ -99,10 +139,28 @@ anything in this repo.
 1. Update the branch with `main` (server-side `gh pr update-branch` is faster than a local merge and
    CI re-runs the same required gate).
 2. Confirm the three required checks, then read the actual CodeRabbit review — not the tick.
-3. Merge (squash). **This deploys production via Vercel**; rollback is one click there.
+3. Merge (squash). **This deploys production via Vercel.** The one-click Vercel rollback reverts
+   **application code only** — it does not revert an applied migration, so the two steps have
+   separate undo paths and step 4 is the point of no easy return.
 4. Apply the migration through the gated file-bytes door
-   (`scripts/apply-migration-file.mjs`) with a fresh same-session apply-guard proof. Non-destructive:
-   it adds a nullable column and re-emits two functions.
+   (`scripts/apply-migration-file.mjs`) with a fresh same-session apply-guard proof. Non-destructive
+   in the sense that it destroys no data: it adds a nullable column and re-emits two functions.
+
+   **But it is a behavior change that a Vercel rollback will not undo.** Once applied, every
+   `quote_versions` row with a NULL `restore_trusted_at` — which is every row written before this
+   migration — becomes **non-restorable**, raising `QUOTE_VERSION_LEGACY_UNTRUSTED`. That is the
+   intended effect, not a side effect, and it is why there is deliberately no backfill. Rolling the
+   application back to the previous deploy leaves the database exactly as the migration left it.
+
+   **If it must be undone**, the path is a forward-fix migration, not a rollback: re-emit
+   `_restore_quote_version_below_cost_impl_20260810` without the trust check, and re-emit
+   `create_quote_version` without the marker `UPDATE`. Dropping the column is a separate decision —
+   the standing sweep in `scripts/db-invariant-sweeps/predicates/quote-versions-rpc-owned.sql` pins
+   both function bodies, so any such re-emission will be reported until the predicate is updated in
+   the same change. Leaving the column in place with the checks removed is the smaller, safer undo.
+
+   Live blast radius makes this cheap in practice rather than theoretically alarming: 3
+   `quote_versions` rows across 2 quotes, and `restore_quote_version` invoked 0 times ever.
 5. After applying, re-read live and update `docs/reference/migration-history.md` entry 892 plus the
    `quote_versions` row in `docs/reference/database-schema.md`.
 

@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerCheck } from "./check-ledger-update.mjs";
+import { scratchHookEnvironment } from "../.claude/hooks/git-test-env.mjs";
 
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
@@ -72,27 +73,20 @@ eq(ledgerCheck([".claude/hooks/bash-safety.mjs", "README.md"]).ok, false, "READM
 // Without --no-renames, --name-only reports only src/moved.mjs and the CLI exits 0.
 const renameRepo = mkdtempSync(join(tmpdir(), "crx-ledger-rename-"));
 try {
-  // A git hook exports GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE pointing at the
-  // REAL repository. Inheriting them here made `git init` re-initialize
-  // CRX_Manager itself with no work tree attached, which set core.bare=true on
-  // the shared checkout and broke every linked worktree on the machine — then
-  // `git add` failed with status 128 because the fixture path does not exist in
-  // the real tree. The test passes standalone and in CI (no hook, so no GIT_DIR)
-  // and only corrupts things when it runs from pre-commit, which is exactly why
-  // it went unnoticed. Strip the repo-pointing variables so the fixture repo is
-  // the only repository these commands can touch.
-  const fixtureEnv = { ...process.env };
-  for (const key of [
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_COMMON_DIR",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_PREFIX",
-  ]) {
-    delete fixtureEnv[key];
-  }
+  // A git hook exports the repository-local GIT_* variables (GIT_DIR,
+  // GIT_INDEX_FILE, GIT_CONFIG_*, ...) pointing at the REAL repository, and
+  // GIT_DIR outranks cwd. Run from pre-commit, this fixture's `git init` used to
+  // re-initialize CRX_Manager itself with no work tree attached, setting
+  // core.bare=true on the shared checkout and breaking every linked worktree —
+  // then `git add` failed with status 128 because the fixture path does not
+  // exist in the real tree. It passes standalone and in CI because neither sets
+  // GIT_DIR, so only a hook run is destructive.
+  //
+  // Use the shared helper rather than a local list of variable names: it asks
+  // git itself via `git rev-parse --local-env-vars` and also strips the indexed
+  // GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n payload. A hand-written denylist here
+  // missed the GIT_CONFIG* family, which can override the fixture's own config.
+  const fixtureEnv = scratchHookEnvironment(renameRepo);
   const git = (...args) =>
     execFileSync("git", args, { cwd: renameRepo, stdio: "ignore", env: fixtureEnv });
   git("init", "--quiet");

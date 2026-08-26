@@ -27,7 +27,7 @@ handed to both the fixture `git` helper and the spawned CLI, so the fixture repo
 repository those commands can reach.
 
 Verified: 44 assertions pass standalone, and pass again with `GIT_DIR` set to a real worktree
-gitdir — with `core.bare` still `false` afterwards. Before the fix that same invocation is what
+gitdir — with `core.bare` still `false` afterward. Before the fix that same invocation is what
 broke the checkout.
 
 **General rule:** any test that shells out to `git` against a fixture repo must sanitize the
