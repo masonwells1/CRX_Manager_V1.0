@@ -119,6 +119,8 @@ const createdBy = flagValue(argv, "--created-by") || DEFAULT_CREATED_BY;
 // Parameterizing the ref quietly broke every one of those assumers. Restricting is
 // the honest fix; binding snapshot + proofs + authorization per-ref would be a much
 // larger change and nothing needs it — this repo has one production project.
+// (The `--project` refusal itself fires earlier, with the other removed flags, so
+// it cannot be reached by a spelling that slips past this point.)
 const projectId = CRX_PRODUCTION_REF;
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -193,6 +195,9 @@ try {
     projectId,
     projectDir,
     cwd: process.cwd(),
+    // The proof must name THIS migration exactly. Substring matching is what let an
+    // aliased filename inherit another migration's proof; see the note in the lib.
+    requireExactProofName: true,
   });
 } catch (err) {
   die(2,
