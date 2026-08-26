@@ -708,6 +708,10 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   year-end RPC now also fail-closes customer financial data: admins can read any customer, while sales
   reps can read only
   customers assigned to them; the batch wrapper inherits the same per-customer check.
+- Because the two migration files commit separately, the report migration installs a persistent
+  database barrier that briefly refuses new return credits. The COGS migration verifies the barrier
+  and removes it only after its complete postflight succeeds; a failed second migration therefore
+  leaves issuance safely paused instead of allowing a revenue credit with zero COGS reversal.
 - The return migration pins each live dependency it changes, rejects duplicate return/order lines at
   the schema boundary, and upserts a missing usable-return inventory row transactionally. Its
   transaction-scoped table lock makes the live zero-credited-return prerequisite race-free and
@@ -743,10 +747,10 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   delivery-versus-invoice quantity check. Return credits carry negative line items for accounting
   reports, but those lines are not new customer billing and must not create a false
   delivery-parity discrepancy.
-- Fresh read-only production schema was restored into disposable PostgreSQL. Eighteen load-bearing
-  signals were exercised: seventeen guard-removal or accounting mutants plus direct current-season
+- Fresh read-only production schema was restored into disposable PostgreSQL. Nineteen load-bearing
+  signals were exercised: seventeen guard-removal or accounting mutants plus direct cutover-barrier and current-season
   credit attribution. The mutants cover the two return rollout guards, the
-  report's no-pre-existing-return-credit guard, public-function overload collision,
+  report's no-pre-existing-return-credit guard, the between-migration issuance barrier, public-function overload collision,
   source-recognition trigger, customer scope, immutable cost-line ledger, zero-cost ledger rows,
   credit revenue fields, unlinked-credit guard, one-statement lineage cleanup, historical FIFO
   chronology, and current-season attribution, plus a real two-session guard-protocol race, fractional report math, and fractional
@@ -755,7 +759,7 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   let a source void complete while the credit lock was held and produced the forbidden state; the
   canonical guard waited and rejected it. The canonical candidate rejected every failure class and returned
   `RETURN_CREDIT_POSTAPPLY_LIVE_PASS source=fresh-live-read-only-schema candidate_migrations=4
-  proofs=EXISTING_RETURN_CREDIT_REPORT_GUARD_REMOVAL_DETECTED,EXISTING_CREDIT_GUARD_REMOVAL_DETECTED,
+  proofs=EXISTING_RETURN_CREDIT_REPORT_GUARD_REMOVAL_DETECTED,CUTOVER_BARRIER_REJECTED,EXISTING_CREDIT_GUARD_REMOVAL_DETECTED,
   RECEIVED_UNRESTOCKED_GUARD_REMOVAL_DETECTED,
   PREFLIGHT_OVERLOAD_COLLISION_REJECTED,POSTFLIGHT_OVERLOAD_COLLISION_REJECTED,
   SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED,

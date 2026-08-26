@@ -21,6 +21,8 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'Void or unapply the return credit before deleting its return record'],
   [/^RETURN_CREDIT_LINE_TOTAL_MISMATCH\b/i,
    'The return credit lines did not match the credit total, so no changes were saved'],
+  [/^RETURN_CREDIT_CUTOVER_IN_PROGRESS\b/i,
+   'Return credits are briefly paused while an accounting update finishes. Retry in a moment'],
   [/^ORDER_INVOICE_TERMINAL\b/i,
    'This order invoice is already final and cannot be changed'],
   [/^ORDER_LIFECYCLE_BUSY_RETRY\b/i,

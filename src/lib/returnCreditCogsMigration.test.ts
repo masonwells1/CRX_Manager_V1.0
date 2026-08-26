@@ -107,6 +107,13 @@ describe('return-credit COGS migration', () => {
     expect(reportMigration).not.toContain('invoice_items (');
     expect(reportMigration).toContain('RECOGNIZED_INVOICE_REPORT_PREFLIGHT_EXISTING_RETURN_CREDIT');
     expect(reportMigration).toContain('LOCK TABLE public.returns IN SHARE ROW EXCLUSIVE MODE');
+    expect(reportMigration).toContain('CREATE TRIGGER aa_crx_block_return_credit_during_cogs_cutover');
+    expect(reportMigration).toContain('RETURN_CREDIT_CUTOVER_IN_PROGRESS');
+    expect(migration).toContain('RETURN_COGS_CUTOVER_BARRIER_MISSING');
+    expect(migration).toContain('DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns');
+    expect(migration.indexOf('DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover')).toBeGreaterThan(
+      migration.indexOf('$postflight$;'),
+    );
   });
 
   it('selects paid and overdue customers in both year-end batch callers', () => {

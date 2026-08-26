@@ -208,6 +208,7 @@ function concurrencyFixture(slot) {
 }
 const expectedProofs = [
   'EXISTING_RETURN_CREDIT_REPORT_GUARD_REMOVAL_DETECTED',
+  'CUTOVER_BARRIER_REJECTED',
   'EXISTING_CREDIT_GUARD_REMOVAL_DETECTED',
   'RECEIVED_UNRESTOCKED_GUARD_REMOVAL_DETECTED',
   'PREFLIGHT_OVERLOAD_COLLISION_REJECTED',
@@ -490,6 +491,16 @@ try {
   completedProofs.add('EXISTING_RETURN_CREDIT_REPORT_GUARD_REMOVAL_DETECTED');
   apply(path.basename(REPORT_CANDIDATE));
   migrations.push(REPORT_CANDIDATE);
+  const cutoverBarrierProbe = psql(`
+    UPDATE public.returns
+       SET status = 'credited'
+     WHERE id = '0cb556ed-467a-4949-866d-8d9edbb09522';
+  `, { allowFailure: true });
+  const cutoverBarrierOutput = `${cutoverBarrierProbe.stdout}\n${cutoverBarrierProbe.stderr}`;
+  assert.notEqual(cutoverBarrierProbe.status, 0, 'report migration left return-credit issuance open before the COGS cutover');
+  assert.match(cutoverBarrierOutput, /RETURN_CREDIT_CUTOVER_IN_PROGRESS/, `cutover barrier raised the wrong error:\n${cutoverBarrierOutput}`);
+  assert.equal(psqlValue("SELECT status FROM public.returns WHERE id = '0cb556ed-467a-4949-866d-8d9edbb09522';"), 'approved', 'cutover barrier probe changed the return');
+  completedProofs.add('CUTOVER_BARRIER_REJECTED');
   const cogsSql = readFileSync(COGS_CANDIDATE, 'utf8');
   const noExistingCreditGuardMutant = cogsSql.replace(
     /  IF EXISTS \(SELECT 1 FROM public\.returns WHERE status = 'credited'\) THEN\r?\n    RAISE EXCEPTION 'RETURN_COGS_PREEXISTING_CREDIT_REQUIRES_BACKFILL';\r?\n  END IF;\r?\n/,

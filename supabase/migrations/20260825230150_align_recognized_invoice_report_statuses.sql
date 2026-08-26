@@ -93,6 +93,32 @@ BEGIN
 END;
 $preflight$;
 
+-- This report migration and the COGS migration are committed separately by the
+-- production apply path. Persist a database-side barrier across that gap so the
+-- old header-only RPC cannot issue a revenue credit with zero COGS. The COGS
+-- migration verifies this exact barrier and removes it only after postflight.
+CREATE FUNCTION public.block_return_credit_during_cogs_cutover()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  IF NEW.status = 'credited'
+     OR NEW.credit_invoice_id IS NOT NULL THEN
+    RAISE EXCEPTION 'RETURN_CREDIT_CUTOVER_IN_PROGRESS';
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+REVOKE ALL ON FUNCTION public.block_return_credit_during_cogs_cutover()
+  FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER aa_crx_block_return_credit_during_cogs_cutover
+  BEFORE UPDATE OF status, credit_invoice_id ON public.returns
+  FOR EACH ROW
+  WHEN (NEW.status = 'credited' OR NEW.credit_invoice_id IS NOT NULL)
+  EXECUTE FUNCTION public.block_return_credit_during_cogs_cutover();
+
 -- Deliberately preserve the live SECURITY INVOKER ACL, including anon EXECUTE:
 -- this migration changes recognized-status accounting only and must not change
 -- the existing report access posture. Postflight pins that grant explicitly.
@@ -340,6 +366,25 @@ BEGIN
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'get_customer_year_end_summary') <> 1
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'get_batch_year_end_summaries') <> 1 THEN
     RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_MISSING';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public.block_return_credit_during_cogs_cutover()'::regprocedure
+      AND p.prosecdef AND p.provolatile = 'v'
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+  )
+     OR has_function_privilege('anon', 'public.block_return_credit_during_cogs_cutover()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.block_return_credit_during_cogs_cutover()', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.block_return_credit_during_cogs_cutover()', 'EXECUTE')
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_trigger t
+       WHERE t.tgrelid = 'public.returns'::regclass
+         AND t.tgname = 'aa_crx_block_return_credit_during_cogs_cutover'
+         AND NOT t.tgisinternal
+         AND t.tgfoid = 'public.block_return_credit_during_cogs_cutover()'::regprocedure
+     ) THEN
+    RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER';
   END IF;
   SELECT p.prosrc INTO v_src FROM pg_proc p WHERE p.oid = v_pnl;
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') <> (v_expected ->> 'get_bottom_line_pnl')

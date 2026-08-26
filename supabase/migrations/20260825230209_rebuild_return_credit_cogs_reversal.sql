@@ -11,6 +11,30 @@
 -- between preflight and replacement of the COGS implementation.
 LOCK TABLE public.returns IN SHARE ROW EXCLUSIVE MODE;
 
+DO $cutover_barrier$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = to_regprocedure('public.block_return_credit_during_cogs_cutover()')
+      AND p.prosecdef AND p.provolatile = 'v'
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+  )
+     OR has_function_privilege('anon', 'public.block_return_credit_during_cogs_cutover()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.block_return_credit_during_cogs_cutover()', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.block_return_credit_during_cogs_cutover()', 'EXECUTE')
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_trigger t
+       WHERE t.tgrelid = 'public.returns'::regclass
+         AND t.tgname = 'aa_crx_block_return_credit_during_cogs_cutover'
+         AND NOT t.tgisinternal
+         AND t.tgfoid = 'public.block_return_credit_during_cogs_cutover()'::regprocedure
+     ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_CUTOVER_BARRIER_MISSING';
+  END IF;
+END;
+$cutover_barrier$;
+
 DO $preflight$
 DECLARE
   v_expected jsonb := jsonb_build_object(
@@ -1007,3 +1031,9 @@ BEGIN
   END IF;
 END;
 $postflight$;
+
+-- Removal is deliberately last. If any statement or postflight assertion above
+-- fails, the migration transaction rolls back and the persistent barrier keeps
+-- return-credit issuance disabled rather than reopening the unsafe gap.
+DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns;
+DROP FUNCTION public.block_return_credit_during_cogs_cutover();
