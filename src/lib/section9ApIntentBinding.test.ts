@@ -102,7 +102,7 @@ describe('Section 9 AP and receiving intent binding', () => {
       migration.replace("RAISE EXCEPTION 'ACTOR_MISMATCH'", "RAISE EXCEPTION 'actor mismatch'"),
     )).toBe(false);
     expect(hasIntentBindingContract(
-      migration.replaceAll('SECTION9_UNEXPECTED_PUBLIC_OVERLOADS', 'SECTION9_OVERLOAD_CHECK_REMOVED'),
+      migration.split('SECTION9_UNEXPECTED_PUBLIC_OVERLOADS').join('SECTION9_OVERLOAD_CHECK_REMOVED'),
     )).toBe(false);
     expect(hasIntentBindingContract(
       migration.replace('SECTION9_REVIEWED_BODY_DRIFT', 'SECTION9_BODY_CHECK_REMOVED'),
@@ -141,7 +141,7 @@ describe('Section 9 AP and receiving intent binding', () => {
       agingMigration.replace('BETWEEN 1 AND 30', 'BETWEEN 0 AND 30'),
     )).toBe(false);
     expect(hasDueDateAgingContract(
-      agingMigration.replaceAll('AP_AGING_UNEXPECTED_PUBLIC_OVERLOADS', 'AP_AGING_OVERLOAD_CHECK_REMOVED'),
+      agingMigration.split('AP_AGING_UNEXPECTED_PUBLIC_OVERLOADS').join('AP_AGING_OVERLOAD_CHECK_REMOVED'),
     )).toBe(false);
     expect(accountsPayable).toContain("header: 'Current (Not Due)'");
     expect(accountsPayable).toContain("key: 'days_1_30'");
