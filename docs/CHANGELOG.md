@@ -131,6 +131,20 @@ become a trusted cost source merely because the door is now shut.
   the restore contract), the migration postcondition, and the mirror test's mutation
   proofs. Same boundary lesson as round 5, terminal form: leave NO unpinned interval on
   either side of the guard.
+- **Rounds 9-10 (2026-08-26): the pins now cover the whole trust chain, plus apply-time
+  preimage verification.** The Codex reviewer extended round 8's lesson one level deeper on
+  three fronts, all confirmed real: the pinned wrappers TRUST results from owner impls whose
+  bodies nothing pinned (a re-emitted `_create_quote_version_owner_impl` returning a legacy
+  version_id would get its lie stamped trusted by the byte-perfect wrapper; a re-emitted
+  `_restore_quote_version_owner_impl` could restore a different version than the one whose
+  marker was checked), and the public `restore_quote_version` wrapper passed its precondition
+  by merely CONTAINING the guarded impl's name. All three live bodies are now pinned in the
+  standing predicate (measured read-only from live 2026-08-26, verified green against live),
+  the wrapper route pin is asserted in the migration's precondition and postcondition, and
+  the precondition now also pins the PRE-images of the two functions being replaced — if live
+  drifts between this review and the apply, the apply fails closed instead of silently
+  overwriting newer behavior. The pinned set is closed deliberately at these five routines:
+  they are exactly the chain whose results become an authoritative cost source.
 - **Rebase decisions.** Merging current `main` produced eight conflicts. `main` won every
   documentation conflict — the branch's headers still claimed `20260813080000` was
   unapplied, which stopped being true on 2026-08-16. In `rpcContracts.test.ts` `main` also

@@ -69,6 +69,12 @@ grant state back after the REVOKE/GRANT pair. The two exemption-marker citations
 corrected per review. The maintenance obligation the whole-body pins create is recorded in
 `docs/manual/KNOWN_ISSUES.md` (2026-08-26 entry).
 
+**Rounds 9-10 (Codex, later on 2026-08-26)** extended the same lesson one level deeper and
+were fixed the same day: the owner impls' bodies and the public restore wrapper's route are
+now pinned too (live-measured, verified green against live), and the migration precondition
+pins the PRE-images of the two functions it replaces so an apply after live drift fails
+closed. The pinned set is closed at the five chain routines; see the CHANGELOG entry.
+
 Two hook bugs surfaced while landing it, worth separate fixes: the grant-change guard and
 the idempotency guard both apply an Edit's `old_string` against the on-disk file with an
 exact string split, so on a CRLF working tree every Edit fragment silently fails to apply

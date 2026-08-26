@@ -769,6 +769,57 @@ SELECT '_restore_quote_version_below_cost_impl_20260810:trust-check-contract' AS
 
 UNION ALL
 
+-- Codex round 9/10 (2026-08-26): the two branches above pin the WRAPPER bodies,
+-- but the chain they guard runs deeper. Three more routines' results are
+-- trusted without their bodies being pinned anywhere:
+--   * _create_quote_version_owner_impl — a re-emission keeping its signature,
+--     owner, search_path and grants could return
+--     {'status':'created','version_id':<legacy id>} and the pinned wrapper
+--     would stamp that legacy row trusted, every check green;
+--   * _restore_quote_version_owner_impl — a re-emission could restore a
+--     DIFFERENT (unmarked) version than the one whose marker was checked;
+--   * restore_quote_version (public) — a re-emission could route around the
+--     below-cost impl (whose name merely appearing in prosrc proved nothing)
+--     and reach the owner impl with the trust check skipped.
+-- So pin all three normalized bodies, measured read-only from live on
+-- 2026-08-26. This closes the SET deliberately: these five routines (two
+-- wrappers above, three here) are exactly the chain whose results become an
+-- authoritative cost source; helpers they call (check_idempotency, auth.uid)
+-- affect replay/identity, not what gets trusted as money. Any legitimate
+-- re-emission of one of the five must update its pin here in the same change.
+SELECT 'restore_quote_version:route-pinned' AS violation_key,
+       'the public restore wrapper body drifted from the reviewed below-cost route — it must arm _begin_below_cost_money_write and delegate every argument to _restore_quote_version_below_cost_impl_20260810, nothing else' AS reason
+ WHERE NOT EXISTS (
+   SELECT 1 FROM pg_proc p
+   WHERE p.oid = to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)')
+     AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 311
+     AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '97da0cdfa0f90ff87b5e48d9aedf9f33'
+ )
+
+UNION ALL
+
+SELECT '_create_quote_version_owner_impl:body-pinned' AS violation_key,
+       'the owner-side snapshot writer body drifted from the reviewed text — the create wrapper trusts its returned version_id enough to stamp it restore_trusted_at' AS reason
+ WHERE NOT EXISTS (
+   SELECT 1 FROM pg_proc p
+   WHERE p.oid = to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)')
+     AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3362
+     AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '4ecb8accbaf6be4fb64aadbc79e492e3'
+ )
+
+UNION ALL
+
+SELECT '_restore_quote_version_owner_impl:body-pinned' AS violation_key,
+       'the owner-side restore writer body drifted from the reviewed text — the trust check runs in its caller, so this body must keep restoring exactly the version whose marker was checked' AS reason
+ WHERE NOT EXISTS (
+   SELECT 1 FROM pg_proc p
+   WHERE p.oid = to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)')
+     AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 13566
+     AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '6972f2d6b76b2d8872b0a027e7f9ee93'
+ )
+
+UNION ALL
+
 -- Inheritance, BOTH directions — the migration asserts both, once.
 --
 -- As a CHILD: quote_versions inheriting from another table means a write aimed

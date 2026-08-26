@@ -680,6 +680,14 @@ describe('quote_versions write boundary — standing predicate', () => {
       'quote_versions:second-authoritative-writer',
       'create_quote_version:trusted-marker-writer-contract',
       '_restore_quote_version_below_cost_impl_20260810:trust-check-contract',
+      // Codex rounds 9/10 (2026-08-26): the wrapper pins alone left the deeper
+      // links of the trust chain unpinned — the two owner impls whose results
+      // the wrappers trust, and the public restore wrapper whose routing the
+      // precondition only name-matched. All three bodies are now pinned from
+      // the reviewed live snapshot.
+      'restore_quote_version:route-pinned',
+      '_create_quote_version_owner_impl:body-pinned',
+      '_restore_quote_version_owner_impl:body-pinned',
       'quote_versions:inheritance-path',
       'quote_versions:service-role-write-lost',
     ]) {
@@ -945,6 +953,47 @@ describe('quote_versions write boundary — standing predicate', () => {
     expect(predicateCode).toContain(`= '${wholeBodyDigest}'`);
     expect(restoreTrustMigration).toMatch(/= 3720\b/);
     expect(restoreTrustMigration).toContain(`= '${wholeBodyDigest}'`);
+  });
+
+  it('pins the rest of the trust chain: both owner impls, the public route, and the apply preimages', () => {
+    // Codex rounds 9/10 (2026-08-26). The wrapper pins guarantee the wrappers'
+    // text, but the wrappers TRUST results from deeper links that nothing
+    // pinned: a re-emitted _create_quote_version_owner_impl returning
+    // {'status':'created','version_id':<legacy id>} gets its lie stamped
+    // trusted by the byte-perfect wrapper; a re-emitted
+    // _restore_quote_version_owner_impl can restore a different version than
+    // the one whose marker was checked; a re-emitted public
+    // restore_quote_version passed the precondition by merely CONTAINING the
+    // guarded impl's name. All three live bodies are pinned now (values
+    // measured read-only from live on 2026-08-26), and the precondition pins
+    // the PRE-images of the two functions this migration replaces, so an
+    // apply after live drift fails closed instead of silently overwriting.
+    const liveBodyPins: Array<[label: string, length: number, digest: string]> = [
+      ['restore_quote_version wrapper', 311, '97da0cdfa0f90ff87b5e48d9aedf9f33'],
+      ['_create_quote_version_owner_impl', 3362, '4ecb8accbaf6be4fb64aadbc79e492e3'],
+      ['_restore_quote_version_owner_impl', 13566, '6972f2d6b76b2d8872b0a027e7f9ee93'],
+    ];
+    for (const [label, length, digest] of liveBodyPins) {
+      expect(predicateCode, `predicate must pin ${label} length`).toMatch(
+        new RegExp(`= ${length}\\b`),
+      );
+      expect(predicateCode, `predicate must pin ${label} digest`).toContain(`= '${digest}'`);
+    }
+    // The wrapper's route pin is enforced in the migration too — precondition
+    // AND postcondition (the migration does not touch the wrapper, so the
+    // same value must read back through the apply).
+    expect(
+      (restoreTrustMigration.match(/= '97da0cdfa0f90ff87b5e48d9aedf9f33'/g) ?? []).length,
+    ).toBe(2);
+    // Preimage pins: the live bodies being REPLACED, distinct by construction
+    // from the shipped bodies' pins (3972/3720 above) — equality would mean
+    // the migration re-emits identical text and changes nothing.
+    expect(restoreTrustMigration).toContain("= '2f800d7f200069089ef95f69fe2f7f47'");
+    expect(restoreTrustMigration).toMatch(/= 3846\b/);
+    expect(restoreTrustMigration).toContain("= 'f6ab3cb8909cbb2925dafb3fd9b4a975'");
+    expect(restoreTrustMigration).toMatch(/= 3974\b/);
+    expect('2f800d7f200069089ef95f69fe2f7f47').not.toBe('3723acbbf1821e9d5d212c3aea983f86');
+    expect('f6ab3cb8909cbb2925dafb3fd9b4a975').not.toBe('b864c261854b760ff22f1f24e87ae22f');
   });
 
   it('keeps the new legacy-restore refusal intelligible in the quote UI', () => {

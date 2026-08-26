@@ -76,8 +76,33 @@ BEGIN
       AND p.prosecdef
       AND EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, ARRAY[]::text[])) c(value) WHERE replace(c.value, ' ', '') = 'search_path=public,pg_temp')
       AND p.prosrc LIKE '%_restore_quote_version_below_cost_impl_20260810%'
+      -- Codex round 10 (2026-08-26): the LIKE above proves only that the
+      -- guarded implementation's NAME appears somewhere in the wrapper. Pin
+      -- the wrapper's whole normalized body (measured read-only from live,
+      -- 2026-08-26): it must arm _begin_below_cost_money_write and delegate
+      -- every argument — a rerouted wrapper fails this apply closed.
+      AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 311
+      AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '97da0cdfa0f90ff87b5e48d9aedf9f33'
   ) THEN
     RAISE EXCEPTION 'PRECOND: public restore wrapper is not the pinned SECURITY DEFINER route to the guarded implementation';
+  END IF;
+  -- Codex round 10 (2026-08-26): verify the PRE-IMAGES of the two functions
+  -- this migration replaces. The review diffed the proposed bodies against
+  -- live prosrc as of 2026-08-26; if live moves after that snapshot but
+  -- before this applies, CREATE OR REPLACE would silently overwrite the newer
+  -- behavior. Fail closed instead and force a re-review.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public.create_quote_version(uuid,uuid,text,text,bigint)'::regprocedure
+      AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3846
+      AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '2f800d7f200069089ef95f69fe2f7f47'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)'::regprocedure
+      AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3974
+      AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 'f6ab3cb8909cbb2925dafb3fd9b4a975'
+  ) THEN
+    RAISE EXCEPTION 'PRECOND: a function this migration replaces has changed since the reviewed 2026-08-26 live snapshot; re-diff the proposed bodies against current live before applying';
   END IF;
   IF has_function_privilege('anon', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE')
@@ -440,6 +465,11 @@ BEGIN
          AND p.prosecdef
          AND EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, ARRAY[]::text[])) c(value) WHERE replace(c.value, ' ', '') = 'search_path=public,pg_temp')
          AND p.prosrc LIKE '%_restore_quote_version_below_cost_impl_20260810%'
+         -- Codex round 10: this migration does not touch the wrapper, so its
+         -- body must read back byte-stable through the apply. Same pin as the
+         -- precondition and the standing predicate.
+         AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 311
+         AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '97da0cdfa0f90ff87b5e48d9aedf9f33'
      ) THEN
     RAISE EXCEPTION 'POSTCOND: restore overload, SECURITY DEFINER, search path, or routing boundary drifted';
   END IF;
