@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-08-25
+Last verified: 2026-08-26
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -190,6 +190,34 @@ migration to silence it.
 
 ---
 
+## 2026-08-26 — Ignored tool output is outside the local content-scan boundary until Git-visible
+
+**Source:** Mason's requested narrow harness-efficiency pass, measured against the remaining
+pre-push containment bottleneck after PR #484.
+
+**Decision.** Descendants of the existing explicit top-level `TOOL_OWNED_IGNORED_PREFIXES` are
+excluded from `git ls-files --others --ignored` enumeration. This is a source-boundary decision,
+not a scanner exemption: no content bytes are opened for a file that is both ignored and confined
+to one of those exact generated/dependency roots. If the same file becomes tracked, staged, or
+force-added, the index and outgoing-history paths inspect it normally and block private markers or
+uninspectable archives. Nested lookalikes such as `packages/worker/node_modules/` remain scanned,
+as do exact root endpoint files such as a file literally named `dist`. Candidate scanning,
+double-read change detection, missing-entry recovery, untrusted-remote fallback, and commit-range
+coverage are unchanged.
+
+**Why.** The installed-worktree baseline spent 405,535 of 434,901 ms rereading 48,006 ignored
+paths, predominantly 47,989 dependency files; Git enumeration alone was under one second. The
+same benchmark after the boundary change took 37,468 ms total and 220 ms in the worktree scan,
+with 2,815 candidates instead of 50,802. The local disk scan is advisory; the durable push
+boundary is Git-visible content plus the protected GitHub review/CI path. Reading hundreds of
+megabytes that Git will not export consumed minutes without strengthening that boundary.
+
+**Operative rule:** do not broaden these excludes by path segment, pattern inference, or dynamic
+ignore rules. New roots require an explicit list change, a nested-lookalike test, force-add deny
+proof, red/green mutation proof, and a retained same-worktree benchmark.
+
+---
+
 ## 2026-08-25 — PR #432 closed unmerged; agent-self-protection work frozen; control-file edits move to `ask`
 
 **Source:** Mason's in-chat decision, 2026-08-25, after a measured review of guardrail investment
@@ -329,6 +357,34 @@ resulting order lines read-only and confirm per-tier pricing and whole-cent amou
 
 **Operative rule:** stop telling operators draws are paused. Historical documents that say "keep
 draws paused" describe the rollout window and are superseded by this entry.
+
+---
+
+## 2026-08-25 — PR #403 closed: the live-ledger recovery exception is NOT in force
+
+**Source:** Mason's explicit approval to close, 2026-08-25, after a triage review against `main` at
+`43e141ab`. Evidence:
+<https://github.com/masonwells1/CRX_Manager_V1.0/pull/403#issuecomment-5416488045>
+
+**Decision.** PR #403 ("narrow wrapper-verified recovery attestation for ledger-proven migrations")
+is closed and will not merge. The narrow live-ledger recovery exception it existed to establish —
+letting an already-applied migration be recovered to Git without its already-live SQL blocking the
+push proof — is therefore **not in force**, and no entry approving it exists on `main`. Reasons: the
+one recovery it was built for was already done by hand on 2026-08-14 (commit `3a2a0ca0`, via
+PR #392) without loosening the push-proof gate; the need did not recur across the 188 commits since;
+and the attestation machinery needed five Sol adversarial rounds before it was no longer forgeable,
+where repo precedent treats 3+ rounds as a size signal (#423 took 8, #432 stalled at 4).
+
+**Operative rule.** A future byte-verbatim recovery uses the manual path proven on 2026-08-14, or
+requires a fresh owner decision. Do not cite the exception as approved policy, and do not treat #403
+as unfinished work to resurrect. `scripts/write-recovery-attestation.mjs` is absent from `main` by
+decision, not by oversight.
+
+**Supersedes.** The forward-reference inside the 2026-08-14 entry "One-time override:
+`20260812115238`'s order-line map is published in full", which described the exception as settled
+but pending #403's merge. That paragraph was corrected in place on 2026-08-25 (PR #478); this entry
+records the reversal in date order per this file's own append-a-new-entry convention. The
+publication override itself stands unchanged and never depended on #403.
 
 ---
 
