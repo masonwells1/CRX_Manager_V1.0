@@ -114,7 +114,7 @@ npm run agent-health
 
 ## Documentation and Generated Files
 
-- Record a shipped change as a NEW file in `docs/changelog.d/` (`<YYYY-MM-DD>-<slug>.md`), not by appending to `docs/CHANGELOG.md`. That file is over 15,000 lines and every parallel session lands in it, so concurrent work collides there; a per-change file cannot conflict. It satisfies the pre-commit ledger guard. `docs/CHANGELOG.md` remains valid and is still the history for everything written before this convention; `docs/changelog.d/README.md` has the details.
+- Record a shipped change as a NEW file in `docs/changelog.d/` (`<YYYY-MM-DD>-<slug>.md`), not by appending to `docs/CHANGELOG.md`. That file is over 15,000 lines and every parallel session lands in it, so concurrent work collides there structurally; a per-change file collides only if two sessions independently pick an identical date and slug, so use a distinctive noun from the change in the slug. It satisfies the pre-commit ledger guard. `docs/CHANGELOG.md` remains valid and is still the history for everything written before this convention; `docs/changelog.d/README.md` has the details.
 - `AGENTS.md` is the canonical shared contract and is edited intentionally by hand.
 - `CLAUDE.md` imports this file and contains Claude-only routing; it must not restate or contradict shared policy.
 - After changing `.claude/commands/` or `.claude/skills/`, run `node scripts/sync-agent-workflows.mjs --write`, then `npm run test:agent-workflows`.
