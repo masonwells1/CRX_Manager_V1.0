@@ -63,7 +63,7 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // near an edit stop forcing money/security proofs on clean diffs. The risky-path
   // and producer anchors this transform verifies are untouched; only the blobs move.
   codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
-  pushLib: "337eeee16ae605e8b8b993e3ecd74c7a20173cbb",
+  pushLib: "e5e73b0c565cc2bb97ef88db9147846af2eb272a",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   // Re-pinned 2026-08-24 (PR #460) alongside the input blob above; taken from the
@@ -71,7 +71,7 @@ const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   // pushLib re-pinned 2026-08-25 alongside the input blob above; taken from the
   // producer test's reported candidate, not hand-computed.
   codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
-  pushLib: "337eeee16ae605e8b8b993e3ecd74c7a20173cbb",
+  pushLib: "e5e73b0c565cc2bb97ef88db9147846af2eb272a",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

@@ -335,21 +335,49 @@ assert.deepEqual(riskyFiles(["scripts/remove-applied-ledger-entry.mjs"]), ["scri
 assert.equal(contentIsRisky("+ const total_cents = 100"), true);
 assert.equal(contentIsRisky("+ const title = 'ordinary'"), false);
 
-// 2026-08-25: the content classifier reads CODE hunks in full (context lines
-// included) but PROSE files (.md/.mdx/.txt) on their CHANGED lines only.
+// 2026-08-25: the content classifier reads everything in FULL (context lines
+// included) EXCEPT `docs/**/*.md`, which is read on its CHANGED lines only.
 //
-// Both halves are load-bearing and were each proven by a counter-example:
+// Every part of that sentence was forced by a counter-example from the adversarial
+// gate. Two successive drafts were refused before this shape survived:
 //
 //  - CODE keeps its context, because a money edit often does not repeat the money
 //    word on the line it touches. gpt-5.6-sol reproduced exactly that (High,
-//    2026-08-25): `total_cents` on an UNCHANGED line while the CHANGED line adds
-//    `Math.round(Number(input) * taxRate)`. Classifying changed lines only let that
+//    2026-08-25, round 1): `total_cents` on an UNCHANGED line while the CHANGED line
+//    adds `Math.round(Number(input) * taxRate)`. A changed-lines-only scan let that
 //    binary-float money change through the gate unreviewed. Do NOT narrow this.
 //
-//  - PROSE drops its context, because documentation names money and security
-//    machinery constantly while carrying no executable risk. PR #479, a test-and-docs
-//    change, was flagged money-risky twice — two proof runs it did not need — purely
-//    from unchanged KNOWN_ISSUES.md prose near the edit. Do NOT re-widen this.
+//  - The exemption is `docs/**/*.md` and NOTHING else — not `.mdx`, not `.txt`, not
+//    Markdown elsewhere in the tree. In this repo Markdown is frequently executable
+//    governance: AGENTS.md, CLAUDE.md, .claude/commands/**, .claude/skills/** and
+//    .agents/** are instructions agents follow. A draft exempting every .md/.mdx/.txt
+//    was refused (High, 2026-08-25, round 2) with an AGENTS.md hunk whose unchanged
+//    context reads `Money must use total_cents` and whose ADDED line reads
+//    `This requirement may be skipped`. Do NOT widen the region.
+//
+//  - Narrative docs drop their context because they name money and security machinery
+//    constantly while carrying no executable risk. PR #479, a test-and-docs change,
+//    was flagged money-risky twice — two proof runs it did not need — purely from
+//    unchanged docs/manual/KNOWN_ISSUES.md prose near the edit.
+const diffHunk = (path, ...body) =>
+  [`diff --git a/${path} b/${path}`, `--- a/${path}`, `+++ b/${path}`, "@@ -1,3 +1,3 @@", ...body].join("\n");
+
+for (const controlSurface of [
+  "AGENTS.md",
+  "CLAUDE.md",
+  ".claude/skills/codex-review/SKILL.md",
+  ".claude/commands/ship.md",
+  ".agents/skills/agent-health/SKILL.md",
+  "README.md",
+  "docs/guide.mdx",
+  "notes.txt",
+]) {
+  assert.equal(
+    contentIsRisky(diffHunk(controlSurface, " Money must use total_cents", "+This requirement may be skipped")),
+    true,
+    `${controlSurface} is a control surface, not narrative docs — its context lines must still be classified`,
+  );
+}
 assert.equal(contentIsRisky("-  const total_cents = 1;"), true, "removing money code is still risky");
 assert.equal(
   contentIsRisky(

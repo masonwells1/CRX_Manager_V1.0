@@ -14,19 +14,30 @@ it merely landed *near* text containing e.g. `_cents`. PR #479 was test-and-docs
 flagged twice, forcing two `gpt-5.6-sol` proof runs it did not need — and a gate that cries wolf
 on clean diffs is a gate people learn to route around.
 
-It now classifies **per file**: CODE hunks in FULL, context lines included exactly as before;
-PROSE files (`.md`/`.mdx`/`.txt`) on their CHANGED lines only. Removed lines always count.
+It now classifies **per file**: everything in FULL, context lines included exactly as before,
+**except `docs/**/*.md`**, which is read on its CHANGED lines only. Removed lines always count.
 Text with no diff structure at all falls back to a whole-string scan, so an unexpected input
 shape fails CLOSED.
 
-Both halves are load-bearing, and the first draft of this fix got it wrong. That draft narrowed
-*everything* to changed lines, and the adversarial `gpt-5.6-sol` gate refused it with a High
-finding plus a working counter-example: `total_cents` sitting on an UNCHANGED line while the
-CHANGED line introduced `Math.round(Number(input) * taxRate)`. The base flagged that diff; the
-narrowed version returned false and matched no risky path — a binary-floating-point money change
-walking straight through the gate. Code therefore keeps its context, because a money edit often
-does not repeat the money word on the line it touches. Prose drops its context, because
-documentation names money and security machinery constantly while carrying no executable risk.
+That narrow shape is not the shape this change started with. The adversarial `gpt-5.6-sol` gate
+refused two drafts before this one, and both refusals were correct:
+
+- **Round 1** — the first draft narrowed *everything* to changed lines. Counter-example:
+  `total_cents` on an UNCHANGED line while the CHANGED line introduced
+  `Math.round(Number(input) * taxRate)`. The base flagged it; the draft returned false and
+  matched no risky path — a binary-floating-point money change walking straight through the
+  gate. Code therefore keeps its context: a money edit often does not repeat the money word on
+  the line it touches.
+- **Round 2** — the second draft exempted every `.md`, `.mdx` and `.txt` anywhere in the tree.
+  Counter-example: an `AGENTS.md` hunk whose unchanged context reads `Money must use
+  total_cents` and whose ADDED line reads `This requirement may be skipped`. In this repo
+  Markdown is frequently *executable governance* — `AGENTS.md`, `CLAUDE.md`,
+  `.claude/commands/**`, `.claude/skills/**`, `.agents/**` are instructions agents follow — so
+  exempting it would let a money rule be weakened without review. The exemption is now
+  `docs/**/*.md` and nothing else.
+
+Worth recording plainly: the gate caught two real holes in a change whose whole purpose was to
+make that same gate quieter. It earned its keep here.
 
 Proof: against the actual PR #479 diff (3 files, 8957 bytes) the only two lines matching the
 risky regex were CONTEXT lines in `KNOWN_ISSUES.md` prose — old `risky = true`, new

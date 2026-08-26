@@ -1541,24 +1541,33 @@ const RISKY_CONTENT_RE = /_cents\b|\bfinancial_audit_log\b|\ballocate_payment\b|
 // gate unreviewed, so for code the surrounding hunk is signal, not noise.
 // (gpt-5.6-sol, High finding, 2026-08-25.)
 //
-// PROSE files (.md/.mdx/.txt) are classified on their CHANGED lines only. Documentation
-// *describes* money and security machinery by name, so its context lines match the regex
-// constantly while carrying no executable risk at all: PR #479 was a test-and-docs change
+// NARRATIVE DOCS — and ONLY `docs/**/*.md` — are classified on their CHANGED lines only.
+// Documentation *describes* money and security machinery by name, so its context lines match
+// the regex constantly while carrying no executable risk: PR #479 was a test-and-docs change
 // flagged money-risky twice — forcing two proof runs it did not need — purely because
 // unchanged `KNOWN_ISSUES.md` prose near the edit mentioned `total_impact_cents` and
 // `apply_prepay_to_invoice`. A gate that cries wolf on prose is one people learn to route
-// around, and prose cannot carry the arithmetic this gate exists to catch.
+// around.
+//
+// The region is pinned deliberately tight, because in THIS repo Markdown is frequently
+// executable governance rather than prose. `AGENTS.md`, `CLAUDE.md`, `.claude/commands/**`,
+// `.claude/skills/**` and `.agents/**` are instructions agents actually follow, and `.mdx`
+// can carry code outright. An earlier draft exempted every `.md`/`.mdx`/`.txt` anywhere;
+// gpt-5.6-sol refused it (High, 2026-08-25) with a working counter-example — an `AGENTS.md`
+// hunk whose unchanged context reads `Money must use total_cents` and whose ADDED line reads
+// `This requirement may be skipped` — i.e. weakening a money rule without tripping the gate.
+// Everything outside `docs/**/*.md` is a code or control surface and is scanned in FULL.
 //
 // Removed lines always count: deleting money or security code is itself risky.
 //
 // Fail CLOSED on anything unrecognised — text with no diff structure at all (a caller
 // passed raw text rather than a unified diff) is scanned in full.
-const PROSE_PATH_RE = /\.(?:md|mdx|txt)$/i;
+const NARRATIVE_DOC_PATH_RE = /^docs\/(?:[^\r\n]*\/)?[^/\r\n]+\.md$/i;
 
 export function contentIsRisky(diffText) {
   const text = String(diffText || "");
   let sawFileHeader = false;
-  let inProseFile = false;
+  let inNarrativeDoc = false;
   const scanned = [];
 
   for (const line of text.split(/\r?\n/)) {
@@ -1569,13 +1578,13 @@ export function contentIsRisky(diffText) {
       const path = header[1].trim();
       if (path && path !== "/dev/null") {
         sawFileHeader = true;
-        inProseFile = PROSE_PATH_RE.test(path);
+        inNarrativeDoc = NARRATIVE_DOC_PATH_RE.test(path);
       }
       continue;
     }
     if (/^--- /.test(line) || /^@@/.test(line) || /^diff --git /.test(line)) continue;
 
-    if (/^[+-]/.test(line) || !inProseFile) scanned.push(line);
+    if (/^[+-]/.test(line) || !inNarrativeDoc) scanned.push(line);
   }
 
   if (!sawFileHeader) return RISKY_CONTENT_RE.test(text);
