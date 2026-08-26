@@ -1398,6 +1398,7 @@ git() { return 0; }
   const trustedTargetWorkflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'phase3-private-artifact-containment.yml'), 'utf8');
   assert(preCommit.indexOf('check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit') < preCommit.indexOf('validate-sql.sh'));
   assert(preCommit.includes('--diff-filter=ACMRTD'), 'pre-commit staged routing must include Git type changes');
+  assert(preCommit.includes('--no-renames'), 'pre-commit staged routing must preserve both sides of Git renames');
   assert.match(workflowMapGenerator, /readdirSync\(dir\)\.sort\(\)/, 'workflow-map source discovery must be deterministic across filesystems');
   assert(!preCommit.includes('git add docs/app-workflow-map.html'), 'pre-commit must not mutate or auto-stage the reviewed index');
   assert.equal((preCommit.match(/check-supplier-pricing-phase3-private-artifacts\.mjs --pre-commit/g) ?? []).length, 1, 'pre-commit must run containment exactly once before every staged-file check');

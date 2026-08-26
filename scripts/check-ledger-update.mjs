@@ -75,7 +75,7 @@ const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].repla
 if (isMain) {
   let staged;
   try {
-    staged = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMRTD"], { encoding: "utf8" })
+    staged = execFileSync("git", ["diff", "--cached", "--no-renames", "--name-only", "--diff-filter=ACMRTD"], { encoding: "utf8" })
       .split(/\r?\n/)
       .filter(Boolean);
   } catch (e) {

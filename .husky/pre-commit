@@ -4,7 +4,7 @@
 # surfaces. Full lint, typecheck, unit/guard tests, coverage, and build remain
 # durable PR gates in GitHub CI; typecheck and build also remain in pre-push.
 
-if ! STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMRTD)"; then
+if ! STAGED_FILES="$(git diff --cached --no-renames --name-only --diff-filter=ACMRTD)"; then
   echo "❌ Could not read the staged index — commit blocked before safety checks."
   exit 1
 fi

@@ -15,7 +15,10 @@ the closed PR.
 ledger, private-artifact containment, staged SQL/frontend validation, conditional Claude/Codex
 manifest parity, and conditional dependency integrity. Full lint, typecheck, guard/unit tests,
 coverage, and build remain in GitHub CI; typecheck and build also remain in pre-push. Commit no
-longer regenerates or auto-stages the workflow map. The containment regression contract and active
+longer regenerates or auto-stages the workflow map. Staged routing includes Git type changes, and
+ledger collection disables rename collapsing so a protected source path cannot disappear when it
+is renamed outside the protected surface. The
+containment regression contract and active
 preflight/ship/gauntlet/bug-hunt instructions were updated to the same no-index-mutation model;
 generated Codex adapters remain synchronized from the canonical Claude commands.
 
