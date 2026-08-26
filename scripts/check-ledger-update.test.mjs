@@ -232,7 +232,6 @@ try {
     cwd: renameRepo,
     env: fixtureEnv,
     encoding: "utf8",
-    env: fixtureEnv,
   });
   eq(run.status, 1, "protected file renamed to an unprotected path is still blocked");
   ok(`${run.stdout}${run.stderr}`.includes("LEDGER UPDATE REQUIRED"), "rename block explains the ledger requirement");

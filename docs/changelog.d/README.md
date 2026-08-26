@@ -29,17 +29,32 @@ agent-surface or migration commit is recorded without touching the shared file.
 
 ## What is enforced, not just asked
 
-Both of these are checked by `scripts/check-ledger-update.mjs`, so a commit that gets
-them wrong is blocked rather than merely discouraged:
+All of the following are checked by `scripts/check-ledger-update.mjs`, so a commit that
+gets them wrong is blocked rather than merely discouraged:
 
 - **The filename must be `<YYYY-MM-DD>-<slug>.md`**, flat in this folder. A bare
-  `notes.md` satisfies nothing. The slug is lower-case; the date must be zero-padded.
-  The pattern lives in one exported `ENTRY_RE`, so any future consolidation tool can
-  import it rather than re-expressing it and drifting.
+  `notes.md` satisfies nothing, and neither does a nested path or a non-`.md` file. The
+  slug is lower-case; the date must be zero-padded. The pattern lives in one exported
+  `ENTRY_RE`, so any future consolidation tool imports it rather than re-expressing it
+  and drifting. Anything else dropped in this folder is reported by name — it will never
+  be read as an entry, so it is not left to rot silently.
 - **The entry must be ADDED by this commit.** Modifying or deleting an existing entry
-  does not satisfy the requirement, because it records nothing about the change you
-  are making. This is what stops one session's commit riding on another session's
-  entry.
+  does not satisfy the requirement, because it records nothing about the change you are
+  making. This is what stops one session's commit riding on another session's entry.
+- **A rename is not an addition.** Git reports a rename destination even when the file
+  was edited on the way, and the guard refuses it, naming the file it came from. Moving
+  someone else's record is not writing your own.
+- **The entry must actually say something.** The body must be non-empty; the first line
+  must be `## <YYYY-MM-DD> - <description>` with a description, not a bare date; the
+  heading's date must match the filename's date; and there must be detail beneath the
+  heading. A title with an empty body records that something happened and none of what
+  it was.
+- **Content is read from the staged blob**, not from your working tree, so what the guard
+  judges is exactly what the commit will contain. An entry whose content cannot be read
+  is treated as unverifiable and does not count — that direction fails closed on purpose.
+
+These apply even when a commit touches no agent-surface file: a `src/`-only commit cannot
+drop a malformed entry into this folder unchecked.
 
 ## Rules
 
