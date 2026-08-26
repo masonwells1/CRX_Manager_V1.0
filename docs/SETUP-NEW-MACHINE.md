@@ -61,7 +61,7 @@ npm install
 
 This does two important things:
 1. Downloads all the JavaScript/TypeScript packages the app needs.
-2. Runs the `prepare` script, which installs the Husky pre-commit hooks into `.git/hooks/`. From now on, every `git commit` will automatically run lint + build + tests.
+2. Runs the `prepare` script, which installs the Husky hooks. Every `git commit` now runs the fast staged-file safety checks; typecheck/build run at pre-push and the full lint/test/build proof runs in CI.
 
 If `npm install` fails:
 - Check your Node.js version (`node --version`) — must be 20 or higher.
@@ -203,7 +203,7 @@ If you skip this step, the work-computer Claude starts with a blank memory and r
 ## Step 9 — First commit on the work machine
 
 When you make your first change at work and commit, watch for:
-- Husky pre-commit hook running (lint + build + tests) — proves Step 3 worked.
+- Husky pre-commit hook running (containment + staged safety checks) — proves Step 3 worked. Pre-push runs containment, typecheck, and build; CI provides the full lint/test/build product proof, including `check:docs`.
 - Stop hook reminding you of loose ends — proves Step 7a worked.
 
 If both fire, you are 100% set up.

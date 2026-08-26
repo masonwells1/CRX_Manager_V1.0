@@ -3,11 +3,20 @@
 // Run: node scripts/check-ledger-update.test.mjs
 
 import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ledgerCheck } from "./check-ledger-update.mjs";
 
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
+
+const ledgerGuardSource = readFileSync(new URL("./check-ledger-update.mjs", import.meta.url), "utf8");
+ok(ledgerGuardSource.includes('"--diff-filter=ACMRTD"'), "CLI includes staged Git type changes");
+ok(ledgerGuardSource.includes('"--no-renames"'), "CLI preserves both sides of staged renames");
 
 // ── no triggers → always ok ─────────────────────────────────────────────────
 eq(ledgerCheck([]).ok, true, "empty commit is ok");
@@ -58,5 +67,38 @@ eq(ledgerCheck([".claude\\hooks\\bash-safety.mjs", "docs\\CHANGELOG.md"]).ok, tr
 // ── non-ledger docs do NOT satisfy ───────────────────────────────────────────
 eq(ledgerCheck([".claude/hooks/bash-safety.mjs", "docs/reference/gotchas.md"]).ok, false, "gotchas.md is not a ledger — still blocked");
 eq(ledgerCheck([".claude/hooks/bash-safety.mjs", "README.md"]).ok, false, "README is not a ledger — still blocked");
+
+// A rename must expose both the protected source and unprotected destination.
+// Without --no-renames, --name-only reports only src/moved.mjs and the CLI exits 0.
+const renameRepo = mkdtempSync(join(tmpdir(), "crx-ledger-rename-"));
+// Git exports GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE/GIT_PREFIX to hook children, and a child of
+// .husky/pre-commit inherits them. `cwd` does NOT override an absolute GIT_DIR, so without this
+// scrub every git call below — and the guard spawned at the end — targets the REAL repository
+// instead of the temp fixture. That failure mode is invisible to CI (which runs this test with no
+// GIT_* set) while blocking every commit in the repo. Keep the scrub on both child processes.
+const fixtureEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+);
+try {
+  const git = (...args) => execFileSync("git", args, { cwd: renameRepo, stdio: "ignore", env: fixtureEnv });
+  git("init", "--quiet");
+  git("config", "user.email", "ledger-test@example.invalid");
+  git("config", "user.name", "Ledger Test");
+  mkdirSync(join(renameRepo, ".claude", "hooks"), { recursive: true });
+  writeFileSync(join(renameRepo, ".claude", "hooks", "protected.mjs"), "export default true;\n");
+  git("add", ".claude/hooks/protected.mjs");
+  git("commit", "--quiet", "-m", "fixture");
+  mkdirSync(join(renameRepo, "src"), { recursive: true });
+  git("mv", ".claude/hooks/protected.mjs", "src/moved.mjs");
+  const run = spawnSync(process.execPath, [fileURLToPath(new URL("./check-ledger-update.mjs", import.meta.url))], {
+    cwd: renameRepo,
+    encoding: "utf8",
+    env: fixtureEnv,
+  });
+  eq(run.status, 1, "protected file renamed to an unprotected path is still blocked");
+  ok(`${run.stdout}${run.stderr}`.includes("LEDGER UPDATE REQUIRED"), "rename block explains the ledger requirement");
+} finally {
+  rmSync(renameRepo, { recursive: true, force: true });
+}
 
 console.log(`check-ledger-update: ${pass} assertions passed`);
