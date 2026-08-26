@@ -85,7 +85,11 @@ now reads only the reconstructed post-edit file (the disk+fragment union survive
 unreadable-file fallback, where markers elsewhere in the file must still count), the emptiness check
 moved below reconstruction, and a marker-removal regression test pins both (each fix
 mutation-verified). Allow-side test assertions are now affirmative — `!isDeny` had treated a crashed
-hook's empty stdout as an allow.
+hook's empty stdout as an allow. Round 2 closed the last variant: empty content is only trusted when
+it IS the real post-edit file (a Write, or a reconstruction that emptied the file) — a deletion Edit
+whose file read FAILED (readFileSync threw after existsSync passed) had still slipped through the
+emptiness exit unanalyzed, and now fails closed with instructions to use a full-file Write
+(regression test forces the read failure with a directory named `*.sql`; mutation-verified).
 
 ## 2026-08-26 — Pre-push containment skips top-level ignored tool bulk
 

@@ -134,6 +134,29 @@ try {
     new_string: "",
   });
   ok(isDeny(r), "an Edit that REMOVES the caller-analysis marker from a risky-REVOKE file is denied");
+
+  // ── Reconstruction failure + deletion Edit fails CLOSED (CodeRabbit PR #489
+  // round 2): existsSync passes but readFileSync throws (a directory named
+  // *.sql), and the deletion's empty new_string leaves nothing to analyze —
+  // allowing would let a marker-deleting edit through unanalyzed. ──
+  const dirAsSql = path.join(tmp, "supabase", "migrations", "20260826000001_dir.sql");
+  mkdirSync(dirAsSql, { recursive: true });
+  r = spawnSync(process.execPath, [hookPath], {
+    input: JSON.stringify({ tool_name: "Edit", tool_input: { file_path: dirAsSql, old_string: "-- caller-analysis: my_fn :: x\n", new_string: "" } }),
+    encoding: "utf8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: tmp },
+  });
+  ok(isDeny(r), "a deletion Edit whose file cannot be read is denied (fail closed), not allowed unanalyzed");
+  ok(r.stdout.includes("could not be read"), "the unreadable-file deny explains itself");
+
+  // Boundary: a deletion that empties a READABLE file reconstructs to empty
+  // content — nothing left to analyze, allowed.
+  writeFileSync(migPath, CRLF("-- caller-analysis: my_fn :: stale marker, no grants left\n"));
+  r = runHook("Edit", {
+    old_string: "-- caller-analysis: my_fn :: stale marker, no grants left\n",
+    new_string: "",
+  });
+  ok(isAllow(r), "a deletion that empties a readable file is allowed (empty reconstruction is trustworthy)");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

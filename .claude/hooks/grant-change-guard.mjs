@@ -100,7 +100,19 @@ if (toolName !== "write" && existsSync(filePath)) {
   }
 }
 newContent = toLF(newContent);
-if (!newContent) allow();
+if (!newContent) {
+  // Empty content is only trustworthy when it IS the real post-edit file
+  // (a Write of empty content, or a reconstruction that emptied the file).
+  // A deletion Edit whose reconstruction FAILED (readFileSync threw after
+  // existsSync passed) leaves no signal at all — allowing it would let a
+  // marker-deleting edit through unanalyzed (CodeRabbit PR #489). Fail closed.
+  if (reconstructed) allow();
+  deny(
+    "GRANT-CHANGE GUARD: this Edit deletes content from a migration file, but the on-disk file " +
+      "could not be read to analyze the post-edit result, so the deletion cannot be checked for " +
+      "grant/revoke impact. Retry, or use a single full-file Write so the guard sees complete content."
+  );
+}
 
 // Fast path: nothing grant-shaped in the post-edit content.
 if (!/\b(grant|revoke)\b/i.test(newContent)) allow();
