@@ -9,6 +9,122 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-25 — PR #432 closed unmerged; agent-self-protection work frozen; control-file edits move to `ask`
+
+**Source:** Mason's in-chat decision, 2026-08-25, after a measured review of guardrail investment
+and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 repair loop
+(rounds 1–4 plus the five-part split plan) permanently.
+
+**Decisions.**
+
+1. **PR #432 is closed unmerged and will not be split, rehabilitated, or cherry-picked.** A
+   repo-wide symbol sweep against `origin/main` @ `0365cd8d` found that all five planned splits
+   (A–E) target code that does not exist on `main`: `trustedGitHooksReason`, `gitExecutionReason`,
+   `TRUSTED_MAIN_GIT_HOOK_BLOBS`, `protectedShellDestinationReason`,
+   `SHELL_EXECUTORS_WITH_DEDICATED_GUARDS` and `auditedGitCommands` are 0 hits repo-wide, and
+   `protected-identity-lib.mjs` does not exist. Split C would have repaired a regression the branch
+   itself introduced — `main`'s shared `extractPatchDestinations` (`codex-push-lib.mjs:352`)
+   already handles the `rename to` spelling. **Operative rule:** a split plan derived from a branch
+   review inherits that branch's line numbers; sweep the receiving base for every target symbol
+   before implementing.
+2. **Agent-self-protection guardrail work is frozen**, revisited only if a real incident
+   demonstrates a specific missing control. Guardrails are now classified in three tiers:
+   *business safeguards* (money, inventory, customer data, RLS, migrations) — keep and extend;
+   *integrity safeguards* (a small, understandable layer keeping those from being silently
+   disabled) — keep thin; *recursive safeguards* (machinery protecting the machinery) — stop.
+   PR #432 was entirely the third tier.
+3. **Control-file edits move to the `ask` tier.** The complete protected set, `Edit` and `Write`
+   for each: `.claude/hooks/**`, `.codex/hooks/**`, `.codex/hooks.json`, `.codex/config.toml`,
+   `.claude/settings.json`, `.claude/settings.local.json`, `.coderabbit.yaml`, `.husky/**`,
+   `package.json`, `.github/workflows/**`, `AGENTS.md`, `CLAUDE.md`,
+   `scripts/{check,validate,verify}-*`, `scripts/remove-applied-ledger-entry.mjs`,
+   `scripts/write-codex-push-proof.mjs` and `scripts/run-claude-review.mjs`.
+
+   **What the `ask` tier actually does here, corrected 2026-08-25 after a CodeRabbit finding:**
+   this repository sets `permissions.defaultMode: "dontAsk"` (`.claude/settings.json:3`, a
+   deliberate PR #352 decision on 2026-08-08 to stop constant prompting). In `dontAsk` mode an
+   `ask` rule is **auto-denied, not prompted**. So in an ordinary session these paths are
+   **blocked**, and a deliberate control-file edit requires a session started in a permission mode
+   that honours prompts. Mason's decision, 2026-08-25: **keep `dontAsk`** and describe the effect
+   accurately, rather than change harness-wide permission behaviour to make the word "prompt"
+   true. The same applies to every pre-existing `ask` entry — `Bash(gh pr merge:*)`,
+   `Bash(vercel --prod:*)`, `supabase functions deploy`, the edge-function and merge MCP tools:
+   under `dontAsk` those are denials, not prompts, and have been since 2026-08-08.
+
+   `ask` was still chosen over an explicit `deny` because the two differ once the mode changes: a
+   `deny` can never be satisfied, whereas these become prompts in a prompting mode. An explicit
+   `deny` would permanently recreate the maintenance dead-end PR #432's Finding 2c identified,
+   which is what forced the "reviewed producer" design (split E) we have just declined to build.
+
+   **This is an accidental-edit tripwire, not tamper prevention** — it is enforced by the agent
+   harness, not the OS, and cannot stop `git apply`, `git checkout -- <path>` or a shell write.
+   It must never be described as if it can.
+4. **Local pre-commit results are advisory, not independent certification.** The ~14 scripts the
+   gate executes are writable by the same identity that runs them. The durable boundary is the one
+   already outside agent reach: the `protect-main` ruleset, the three required GitHub checks, and
+   CodeRabbit review on every PR.
+
+**Incident found during implementation (same session).** Two git-config settings were falsifying
+local state, both invisible to every file-watching guard because neither is a file in the repo:
+
+- `core.fsmonitor` at repository scope pointed at a 3-line `patrol` script under the user temp
+  directory (`<temp-dir>/patrol-fsmon-<id>/fsmon.cmd`) that reported "nothing changed". Proven by
+  controlled test: `git status` reported clean while `git -c core.fsmonitor=false status` reported
+  the file as modified; blob hashes confirmed it genuinely differed (`f9032e03…` on disk vs
+  `296744f8…` in index/HEAD). `git update-index --refresh` did not fix it.
+  **Unset with Mason's approval.**
+- `core.hooksPath` in one worktree's config pointed at a **separate checkout outside this
+  repository** (`<other-repo-root>/.husky`), so a commit there would have run that repository's
+  pre-commit hooks instead of this one's. One worktree of ~37 was affected. **Repointed to
+  `<repo-root>/.husky/_`.**
+
+This is the PR #432 threat class — hook trust bound to the wrong repository, and a subvertible
+certifying gate — arriving live through a route none of its five splits covered. It reinforces
+decision 4 rather than reopening decision 2: the answer is the external gate, not a larger internal
+one.
+
+**Operative rule:** before committing, and before reporting a tree clean, re-test with
+`git -c core.fsmonitor=false status --short --untracked-files=all` — the `--untracked-files` flag
+is required, because a repository or user setting `status.showUntrackedFiles=no` makes plain
+`git status --short` omit untracked files, so an empty result would not prove a clean tree. Then
+enumerate every configured hook path with
+`git config --show-origin --show-scope --get-all core.hooksPath` and confirm the effective value
+from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
+stop-and-report. Checking `config.worktree` alone is insufficient — `core.hooksPath` also takes
+system, global and local scope, and precedence decides which one wins. (Verified 2026-08-25: a
+single worktree carried two configured values, at `local` and `worktree` scope, so a
+worktree-only inspection sees one of them.)
+
+---
+
+## 2026-08-25 — Booking-draw pause RELEASED; draws are back in normal use
+
+**Source:** Mason's explicit in-chat decision, 2026-08-25 ("Ok un pause them then"), after being
+told the draw-down chain was fully live and the release was his call.
+
+**What the pause was:** procedural, not mechanical. During the four-migration draw-down rollout
+(2026-08-24 → 2026-08-25) Mason and the team agreed not to perform booking draws; no code flag,
+schema switch, or RPC guard ever blocked them. "Un-pausing" is therefore this recorded decision,
+not a code change.
+
+**Release preconditions verified read-only against live immediately before recording this
+(2026-08-25):** all four draw-down migrations applied (ledger through `20260825034622`) plus the
+save_job chem-unit apply (`20260825142708`); exactly ONE `draw_down_quote` overload, SECURITY
+DEFINER, with the receipt-intent binding (`check_idempotency_intent`) present in the installed
+body; both private implementation stages present; **zero `draw_down_quote` retry receipts in the
+prior 24 hours** (the clean-slate condition the receipts migration required); function-surface
+invariant sweeps (overloads, search_path, plpgsql-check, anon grants) all clean the same day.
+
+**Deliberately NOT claimed:** no end-to-end booking draw was executed as a test — that would have
+created real order/money rows, and manufacturing production data for a smoke test is prohibited.
+The first real draw is the final proof; whoever is in a session when it happens should read the
+resulting order lines read-only and confirm per-tier pricing and whole-cent amounts.
+
+**Operative rule:** stop telling operators draws are paused. Historical documents that say "keep
+draws paused" describe the rollout window and are superseded by this entry.
+
+---
+
 ## 2026-08-24 — CodeRabbit reviews assertively and enforces the Hard Rules, without a hard merge block
 
 **Source:** Mason's in-chat decisions, 2026-08-24, after a live audit of the CodeRabbit dashboard,

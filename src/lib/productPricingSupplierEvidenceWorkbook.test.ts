@@ -58,5 +58,12 @@ describe('pricing workbook supplier evidence', () => {
     expect(parsed.exportId).toBe('export-1');
     expect(parsed.rows).toHaveLength(1);
     expect(parsed.rows[0].product_id).toBe('product-1');
-  });
+    // Same ExcelJS generate-and-reparse cost as the product and supplier
+    // workbook tests, which already carry this timeout. ~350ms warm, but the
+    // first ExcelJS load in a worker is multi-second on a cold module/FS cache
+    // (7.0s measured here on the first run after a fresh `npm ci`), which
+    // crosses the 5s default and fails the pre-commit gate in a new worktree.
+    // The work is I/O- and CPU-bound, not hung — give it headroom rather than
+    // retrying the commit until it passes.
+  }, 30000);
 });
