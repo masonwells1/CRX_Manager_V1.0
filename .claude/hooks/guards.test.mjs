@@ -46,6 +46,14 @@ ok(isResumePhrase("ok go ahead and continue"), "resume phrase");
 ok(isBuildActionUnderHold("Edit", { file_path: "src/pages/Foo.tsx" }), "edit source blocked under hold");
 ok(isBuildActionUnderHold("Bash", { command: "git commit -m x" }), "commit blocked under hold");
 ok(isBuildActionUnderHold("mcp__supabase__apply_migration", {}), "apply blocked under hold");
+// The file-bytes live-apply door is a Bash command, not an MCP tool, so the
+// tool-name set never sees it. Codex (P1, PR #460) verified the predicate returned
+// false for this exact invocation — a mid-session "stop" would NOT have paused a
+// live migration through the new spelling.
+ok(isBuildActionUnderHold("Bash", { command: "node scripts/apply-migration-file.mjs supabase/migrations/x.sql --confirm" }),
+  "file-bytes live apply blocked under hold");
+ok(isBuildActionUnderHold("Bash", { command: "node scripts/apply-migration-file.mjs x.sql" }),
+  "even a dry run of the live-apply door pauses under hold");
 ok(!isBuildActionUnderHold("Write", { file_path: ".claude/session-state/hold.json" }), "session-state write allowed");
 ok(!isBuildActionUnderHold("Write", { file_path: "docs/SCOPE.md" }), "SCOPE.md allowed under hold");
 ok(!isBuildActionUnderHold("Bash", { command: "npm run test" }), "tests allowed under hold");

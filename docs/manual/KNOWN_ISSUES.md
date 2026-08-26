@@ -1,9 +1,16 @@
 # Known Issues — Consolidated
 
 
-**Last verified: 2026-08-25 UTC, read-only live re-read after the draw-down rollout completed.**
-**Live ledger is 975 rows, `max(version)` `20260825034622`, effective ordering high-water
-`20260819232000`** (name `20260819232000_bind_draw_down_receipts_to_intent`). All four migrations
+**Last verified: 2026-08-25 UTC, read-only live re-read after the save_job chem-unit apply.**
+**Live ledger is 976 rows, `max(version)` `20260825142708`, effective ordering high-water
+`20260820120000`** (name `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
+That migration applied live on 2026-08-25 on Mason's explicit in-chat approval; because its ledger
+`name` carries a `20260820120000` prefix, the effective ordering high-water advances past the
+draw-down chain's `20260819232000` even though the assigned `version` is later. History row 891
+and the header of `docs/reference/migration-history.md` carry the full apply record.
+(Superseded reading, kept for provenance: 975 rows / `max(version)` `20260825034622` /
+high-water `20260819232000` — correct until the save_job apply, one migration behind live.)
+All four migrations
 of the draw-down chain are applied live — the cutover barrier (2026-08-24 midday, version
 `20260824185408`) and, later that day with Mason's explicit in-chat approval, the tier split
 (`20260825025241`), the allocated-line-cents lifecycle carry (`20260825033106`), and the receipt
@@ -405,9 +412,9 @@ documents why at `rateBaseUnit`. That sidesteps the problem for blend tickets on
 real-world exposure on the job path is currently zero — but that is a fact about today's four rows,
 not a guarantee, and free-text entry can produce one at any time.
 
-**Half closed, PARKED.** Migration `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
-(history row 891, branch `claude/save-job-server-side-chem-unit`, **written and proven, NOT applied
-to live**) makes `save_job` refuse a chemical line whose rate unit has a non-acre denominator, with
+**CLOSED — APPLIED LIVE 2026-08-25.** Migration `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
+(history row 891, merged as PR #446, applied to production 2026-08-25 as ledger version
+`20260825142708` on Mason's explicit in-chat approval) makes `save_job` refuse a chemical line whose rate unit has a non-acre denominator, with
 `CHEM_RATE_DENOMINATOR_NOT_ACRES`. That turns the dangerous direction — nothing on screen, hard
 failure at billing — into a refusal at save time, naming the product and the offending unit. Proven
 in a throwaway container: an `oz/cwt` line is refused and leaves no `jobs` or `job_chemicals` row.
@@ -539,10 +546,11 @@ and never run this check. A mismatched-unit priced line can still be created thr
 billed by `transfer_job_to_invoice`. "The database is now the boundary" is therefore true of the
 job-save path and not yet true of the table.
 
-**Still open after that migration applies:** (a) `baseUnitOfRate` itself still collapses `oz/cwt` to
-`oz` on the client — the guard that stops such a row reaching `save_job` (`rateDenominatorIsUnrecognized`
-in `chemRowDefects`) rides on PR #436 and is **not on `main`**, so until that PR lands the operator
-still sees "convertible, priced fine" and only learns otherwise when the save is rejected; and (b)
+**Still open after that migration applied:** (a) is now **closed** — `rateDenominatorIsUnrecognized`
+in `chemRowDefects` landed with PR #436 (merged to `main` as `c302d296`), so the client half no
+longer shows "convertible, priced fine" for an `oz/cwt` row; the server refusal is the backstop,
+not the only signal. (`baseUnitOfRate` still collapses `oz/cwt` to `oz`, which is why the
+server-side denominator test is deliberately wider — see the residuals in the handoff.) And (b)
 the blend-ticket path is untouched — `create_invoice_from_blend_ticket` still raises
 `BLEND_TICKET_UNIT_UNCONVERTIBLE` at billing time, and `blendMathValidator.ts` still does its own
 suffix stripping.
@@ -2627,6 +2635,7 @@ The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). The
 - **Offline work recovery database foundation and browser rollout are live; phone/device E2E remains pending** — all four receipt migrations, including the corrective target-row lock, were applied and verified on 2026-07-14, and PR #124's browser rollout landed on `main` before the 2026-07-15 offline verification pass. Browser retention until proven success, distinct cap/backlog handling, a safe device review panel, audited office `already_completed` / `abandoned` resolution, and cross-tab replay protection are now in code. A saved action that lacks an original queue-time target snapshot is intentionally sent to office review rather than deriving a new baseline after reconnect; therefore snapshot conflict coverage is complete only for actions that captured the snapshot when queued. Still deferred: signature/photo persistence, idempotent email/notification replay, operation-specific conflict preconditions, automatic device discovery of an office resolution, and a general duplicate-action policy. Browser storage remains device-local until the phone reconnects and stages its permanent server receipt, so destroying or clearing that storage before reconnection can still lose work. Source: `docs/audits/2026-07-15-offline-stage1b-rollout-verification.md`, `docs/audits/2026-07-14-offline-receipt-browser-office-resolution-proof.md`, and `docs/roadmap/offline-work-stage1b-receipt-design-2026-07-13.md`.
 - **Live `schema_migrations` having more entries than files on disk is OLD, pre-existing drift** — do not treat it as a new problem. Only reconcile migrations newer than the point where the current branch diverged from `origin/main`. (Session memory: `project_migration-disk-vs-live-drift`.)
 - **Page-render tests pass in isolation but flake in the full `vitest` suite** — fix with `waitFor`/`findAllBy`, not synchronous `getBy`. See `docs/reference/gotchas.md` and session memory `project_page-test-fullsuite-flake`.
+- **ExcelJS workbook tests can exceed the 5s default timeout on a cold cache** — a *different* root cause from the page-render flake above, so the `waitFor` fix does not apply. The first ExcelJS load inside a worker is multi-second (7.0s measured 2026-08-25 on the first `vitest` run after a fresh `npm ci` in a new worktree) versus ~350ms once warm, so whichever test triggers that load sits right on the 5s cap and swings by an order of magnitude. Because `.husky/pre-commit` runs the full suite, a cold-cache miss hard-blocks an unrelated commit — the exact pressure toward the forbidden `--no-verify`. Fix: an explicit generous per-test timeout as the third argument to `it(...)`, never a higher global `testTimeout` (that would relax the 5s contract for the whole suite). All three ExcelJS test files now carry one — `productPricingWorkbook.test.ts` (20s/45s), `supplierPricingWorkbook.test.ts` (20s), and `productPricingSupplierEvidenceWorkbook.test.ts` (30s, added 2026-08-25 after it flaked in PR #476). Every ExcelJS load in these files happens inside a test body (no `beforeAll`/module-scope load), and tests run in file order, so the first test in each file absorbs the cold cost — that is why covering the first test per file is sufficient for the pre-commit gate. Residual: a manually filtered run (`vitest -t "…"`) that selects a *later* test in a file makes that test pay the cold load under the 5s cap; filtered runs do not gate commits, so this is accepted rather than blanket-timed-out.
 - **PWA (installed app) needs two reloads after a production deploy** to pick up a new service-worker chunk — expected behavior, not a bug to chase.
 - **Prepay bulk-apply (`apply_remaining_prepayments` / `batch_apply_all_prepayments`) is hard-disabled in production** (`RAISE 'PREPAY_BULK_APPLY_DISABLED'`, migration `20260620200000`) rather than properly fixed — the real fix needs the shelved reserved-pool redesign (§2/§4). Per-invoice `apply_prepay_to_invoice` is unaffected.
 - **`commission_payments.total_amount` is a legacy numeric-dollar column and remains tracked debt until the full approval gate is proven** — current posting compares the header and item totals directly in the same numeric-dollar unit; only `financial_audit_log.total_impact_cents` converts the posted total to cents. Verify exact numeric arithmetic, clean finite whole-cent values, and an active finite whole-cent CHECK before treating it as an approved compatibility exception. Converting historical payment headers/items safely is a dedicated money-schema migration, not part of the gauntlet cutover; do not casually retype or rewrite it while re-emitting posting guards.
