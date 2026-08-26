@@ -203,6 +203,41 @@ for (const command of [
   ok(maintenanceProducerCommandMentioned(command), `producer spelling recognized by shell guard: ${command}`);
   ok(checkDangerousCommand(command), `non-literal producer invocation denied by shell guard: ${command}`);
 }
+// ── PR #503: the dynamic-syntax test is scoped to the `node` invocation's OWN
+//    command segment. These pin BOTH directions of that narrowing so it cannot
+//    silently widen back into a false-positive engine, or silently leak. ──
+//
+// (a) Opacity inside node's own segment still denies.
+for (const command of [
+  "node $PRODUCER --approved-by-mason=2026-08-12",
+  "node ./scripts/*.mjs",
+  "node scripts/x-`printf y`.mjs",
+  // Process substitution feeds node opaque generated content. It tokenizes into
+  // two ADJACENT control tokens, so a naive per-token scan misses it — the
+  // adjacency is re-joined explicitly (CodeRabbit, PR #503).
+  // (The spaced form `< (printf data)` is not process substitution in bash — it is
+  // a syntax error — and was never blocked before this change either, so it is
+  // deliberately not asserted here.)
+  "node scripts/ordinary-check.mjs <(printf data)",
+  "node scripts/ordinary-check.mjs >(tee out.log)",
+]) {
+  ok(checkDangerousCommand(command), `opacity in node's own segment denied: ${command}`);
+}
+// (b) Opacity in an UNRELATED segment no longer denies an innocent node call.
+//     Before PR #503 every one of these was blocked, which left agents no way to
+//     write a script and then run it.
+for (const command of [
+  'echo "Total: $TOTAL" && node scripts/report.mjs',
+  "VERSION=$(git rev-parse --short HEAD) && node scripts/build.mjs",
+  "node scripts/a.mjs && ls *.json",
+  "grep -rn x src/ | head -5 && node scripts/check-docs.mjs",
+  "diff <(sort a.txt) <(sort b.txt) && node scripts/report.mjs",
+  // A plain redirect is not process substitution.
+  "node scripts/report.mjs > out.log",
+]) {
+  ok(!checkDangerousCommand(command), `opacity outside node's segment stays allowed: ${command}`);
+}
+
 const focusedProducerHarness = "node scripts/apply-live-testdata-maintenance-20260812.test.mjs";
 ok(!maintenanceProducerCommandMentioned(focusedProducerHarness), "focused producer test harness is not classified as the protected producer");
 eq(checkMaintenanceProducerInvocation(focusedProducerHarness), null, "focused producer test harness stays allowed by the shell guard");

@@ -295,12 +295,27 @@ export function maintenanceProducerCommandMentioned(command) {
     // (`node scripts/apply-l{i..i}ve-testdata-...`, covered by bash-safety.test.mjs).
     // Because they stay INSIDE the segment, `hasDynamicSyntax` still sees them.
     const isSegmentSeparator = (entry) => Boolean(entry?.control) && /^(?:[;&|]|\n)$/.test(entry.value);
+    // `hasDynamicSyntax` spots process substitution via the two-character sequence
+    // `<(` / `>(`, but tokenizing splits those into two ADJACENT control tokens, so
+    // neither token carries the pattern on its own and a per-token scan would miss
+    // it. Re-join that adjacency explicitly (CodeRabbit, PR #503): without this,
+    // `node scripts/x.mjs <(printf ...)` fed node opaque generated content and was
+    // allowed, while the pre-change whole-string test denied it. A plain redirect
+    // (`node x.mjs > out.log`) is NOT substitution and stays allowed.
+    const isProcessSubstitutionAt = (list, cursor) => Boolean(list[cursor]?.control)
+      && /^[<>]$/.test(list[cursor].value)
+      && Boolean(list[cursor + 1]?.control)
+      && list[cursor + 1].value === "(";
     const segmentHasDynamicSyntax = (list, index) => {
       let start = index;
       while (start > 0 && !isSegmentSeparator(list[start - 1])) start -= 1;
       let end = index + 1;
       while (end < list.length && !isSegmentSeparator(list[end])) end += 1;
-      return list.slice(start, end).some((entry) => hasDynamicSyntax(entry.value));
+      for (let cursor = start; cursor < end; cursor += 1) {
+        if (hasDynamicSyntax(list[cursor].value)) return true;
+        if (cursor + 1 < end && isProcessSubstitutionAt(list, cursor)) return true;
+      }
+      return false;
     };
     function analyzeText(text, depth) {
       if (depth > maxNestedShellDepth) return true;
