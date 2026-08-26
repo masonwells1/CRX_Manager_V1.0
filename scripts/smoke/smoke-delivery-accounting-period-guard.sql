@@ -119,10 +119,10 @@ BEGIN
   INSERT INTO public.order_items (
     order_id, product_id, product_name, price_per_unit, cost_per_unit,
     total_units_needed, total_price, profit, net_margin,
-    quantity_delivered, quantity_remaining
+    quantity_delivered, quantity_remaining, pricing_pending
   ) VALUES (
-    v_order, v_product, '[SMOKE] delivery period line', 10, 6,
-    2, 20, 8, 40, 0, 2
+    v_order, v_product, '[SMOKE] delivery period line', 0, 0,
+    2, 0, 0, 0, 0, 2, true
   ) RETURNING id INTO v_order_item;
 
   INSERT INTO public.deliveries (

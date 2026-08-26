@@ -1,0 +1,591 @@
+-- Section 9 AP/receiving safety remediation (parts 2 and 3 of the 2026-08-26
+-- Live Foundation Gauntlet refresh).
+--
+-- 1. `Due This Month` now means the remaining interval from the Chicago
+--    business date through the final day of that calendar month.
+-- 2. Every AP/receiving mutation receipt is bound to the authenticated actor
+--    plus a SHA-256 fingerprint of every business-relevant input.
+--
+-- The mature money/inventory bodies are renamed, not copied. Public wrappers
+-- authorize before reading a receipt, require a key, check exact intent, call
+-- the owner-only implementation, and bind the receipt written by that body.
+-- This preserves period locks, PO serialization, money math, inventory math,
+-- audit rows, and existing return shapes byte-for-byte inside the implementations.
+
+DO $preflight$
+DECLARE
+  v_name text;
+  v_signature text;
+  v_private_signature text;
+  v_required_marker text;
+  v_source text;
+BEGIN
+  FOR v_name, v_signature, v_private_signature, v_required_marker IN
+    SELECT * FROM (VALUES
+      ('create_vendor_bill',
+       'public.create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text)',
+       'public._section9_create_vendor_bill_intent_impl_20260826(uuid,uuid,text,date,date,text,bigint,bigint,text,text)',
+       'Vendor bill amount differs from PO'),
+      ('update_vendor_bill',
+       'public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text)',
+       'public._section9_update_vendor_bill_intent_impl_20260826(uuid,bigint,bigint,date,date,text,text)',
+       'BILL_HAS_ACTIVE_PAYMENTS'),
+      ('record_vendor_payment',
+       'public.record_vendor_payment(uuid,bigint,date,text,text,text,text)',
+       'public._section9_record_vendor_payment_intent_impl_20260826(uuid,bigint,date,text,text,text,text)',
+       'vendor_payment_recorded'),
+      ('void_vendor_payment',
+       'public.void_vendor_payment(uuid,text,text)',
+       'public._section9_void_vendor_payment_intent_impl_20260826(uuid,text,text)',
+       'VENDOR_DELETED'),
+      ('void_vendor_bill',
+       'public.void_vendor_bill(uuid,text,text)',
+       'public._section9_void_vendor_bill_intent_impl_20260826(uuid,text,text)',
+       'BILL_HAS_ACTIVE_PAYMENTS'),
+      ('receive_po_items',
+       'public.receive_po_items(jsonb,uuid,text,boolean)',
+       'public._section9_receive_po_items_intent_impl_20260826(jsonb,uuid,text,boolean)',
+       '_section9_receive_po_items_serialized')
+    ) AS expected(name, signature, private_signature, marker)
+  LOOP
+    IF to_regprocedure(v_private_signature) IS NULL THEN
+      IF to_regprocedure(v_signature) IS NULL THEN
+        RAISE EXCEPTION '% is missing; refusing Section 9 intent wrapper cutover', v_signature;
+      END IF;
+
+      SELECT p.prosrc
+        INTO v_source
+        FROM pg_catalog.pg_proc p
+       WHERE p.oid = to_regprocedure(v_signature);
+
+      IF position(v_required_marker IN v_source) = 0 THEN
+        RAISE EXCEPTION '% does not match the reviewed implementation marker %',
+          v_signature, v_required_marker;
+      END IF;
+    END IF;
+  END LOOP;
+
+  IF to_regprocedure('public.check_idempotency_intent(text,text,uuid,text)') IS NULL THEN
+    RAISE EXCEPTION 'check_idempotency_intent(text,text,uuid,text) is missing';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM public.idempotency_keys k
+     WHERE k.expires_at >= now()
+       AND k.operation IN (
+         'create_vendor_bill', 'update_vendor_bill', 'record_vendor_payment',
+         'void_vendor_payment', 'void_vendor_bill', 'receive_po_items'
+       )
+       AND (k.request_actor_id IS NULL OR k.request_fingerprint IS NULL)
+  ) THEN
+    RAISE EXCEPTION 'SECTION9_ACTIVE_LEGACY_IDEMPOTENCY_RECEIPTS';
+  END IF;
+END;
+$preflight$;
+
+DO $rename$
+BEGIN
+  IF to_regprocedure('public._section9_create_vendor_bill_intent_impl_20260826(uuid,uuid,text,date,date,text,bigint,bigint,text,text)') IS NULL THEN
+    ALTER FUNCTION public.create_vendor_bill(uuid, uuid, text, date, date, text, bigint, bigint, text, text)
+      RENAME TO _section9_create_vendor_bill_intent_impl_20260826;
+  END IF;
+  IF to_regprocedure('public._section9_update_vendor_bill_intent_impl_20260826(uuid,bigint,bigint,date,date,text,text)') IS NULL THEN
+    ALTER FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text)
+      RENAME TO _section9_update_vendor_bill_intent_impl_20260826;
+  END IF;
+  IF to_regprocedure('public._section9_record_vendor_payment_intent_impl_20260826(uuid,bigint,date,text,text,text,text)') IS NULL THEN
+    ALTER FUNCTION public.record_vendor_payment(uuid, bigint, date, text, text, text, text)
+      RENAME TO _section9_record_vendor_payment_intent_impl_20260826;
+  END IF;
+  IF to_regprocedure('public._section9_void_vendor_payment_intent_impl_20260826(uuid,text,text)') IS NULL THEN
+    ALTER FUNCTION public.void_vendor_payment(uuid, text, text)
+      RENAME TO _section9_void_vendor_payment_intent_impl_20260826;
+  END IF;
+  IF to_regprocedure('public._section9_void_vendor_bill_intent_impl_20260826(uuid,text,text)') IS NULL THEN
+    ALTER FUNCTION public.void_vendor_bill(uuid, text, text)
+      RENAME TO _section9_void_vendor_bill_intent_impl_20260826;
+  END IF;
+  IF to_regprocedure('public._section9_receive_po_items_intent_impl_20260826(jsonb,uuid,text,boolean)') IS NULL THEN
+    ALTER FUNCTION public.receive_po_items(jsonb, uuid, text, boolean)
+      RENAME TO _section9_receive_po_items_intent_impl_20260826;
+  END IF;
+END;
+$rename$;
+
+REVOKE ALL ON FUNCTION public._section9_create_vendor_bill_intent_impl_20260826(uuid, uuid, text, date, date, text, bigint, bigint, text, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public._section9_update_vendor_bill_intent_impl_20260826(uuid, bigint, bigint, date, date, text, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public._section9_record_vendor_payment_intent_impl_20260826(uuid, bigint, date, text, text, text, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public._section9_void_vendor_payment_intent_impl_20260826(uuid, text, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public._section9_void_vendor_bill_intent_impl_20260826(uuid, text, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public._section9_receive_po_items_intent_impl_20260826(jsonb, uuid, text, boolean)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+GRANT EXECUTE ON FUNCTION public._section9_create_vendor_bill_intent_impl_20260826(uuid, uuid, text, date, date, text, bigint, bigint, text, text) TO postgres;
+GRANT EXECUTE ON FUNCTION public._section9_update_vendor_bill_intent_impl_20260826(uuid, bigint, bigint, date, date, text, text) TO postgres;
+GRANT EXECUTE ON FUNCTION public._section9_record_vendor_payment_intent_impl_20260826(uuid, bigint, date, text, text, text, text) TO postgres;
+GRANT EXECUTE ON FUNCTION public._section9_void_vendor_payment_intent_impl_20260826(uuid, text, text) TO postgres;
+GRANT EXECUTE ON FUNCTION public._section9_void_vendor_bill_intent_impl_20260826(uuid, text, text) TO postgres;
+GRANT EXECUTE ON FUNCTION public._section9_receive_po_items_intent_impl_20260826(jsonb, uuid, text, boolean) TO postgres;
+
+CREATE OR REPLACE FUNCTION public.create_vendor_bill(
+  p_vendor_id uuid,
+  p_purchase_order_id uuid DEFAULT NULL::uuid,
+  p_bill_number text DEFAULT ''::text,
+  p_bill_date date DEFAULT CURRENT_DATE,
+  p_due_date date DEFAULT NULL::date,
+  p_payment_terms text DEFAULT NULL::text,
+  p_subtotal_cents bigint DEFAULT 0,
+  p_adjustment_cents bigint DEFAULT 0,
+  p_notes text DEFAULT NULL::text,
+  p_idempotency_key text DEFAULT NULL::text
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_actor uuid := auth.uid();
+  v_fingerprint text;
+  v_replay jsonb;
+  v_bill_id uuid;
+BEGIN
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = v_actor AND is_active = true AND role = 'admin') THEN
+    RAISE EXCEPTION 'NOT_AUTHORIZED: admin role required to create vendor bills';
+  END IF;
+  IF p_idempotency_key IS NULL
+     OR p_idempotency_key !~ '[^[:space:]]'
+     OR p_idempotency_key COLLATE "C" !~ '[!-~]' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: create_vendor_bill requires p_idempotency_key';
+  END IF;
+
+  v_fingerprint := encode(extensions.digest(convert_to(jsonb_build_object(
+    'actor_id', v_actor,
+    'vendor_id', p_vendor_id,
+    'purchase_order_id', p_purchase_order_id,
+    'bill_number', p_bill_number,
+    'bill_date', p_bill_date,
+    'due_date', p_due_date,
+    'payment_terms', p_payment_terms,
+    'subtotal_cents', p_subtotal_cents,
+    'adjustment_cents', p_adjustment_cents,
+    'notes', p_notes
+  )::text, 'UTF8'), 'sha256'), 'hex');
+
+  v_replay := public.check_idempotency_intent(
+    p_idempotency_key, 'create_vendor_bill', v_actor, v_fingerprint
+  );
+  IF v_replay IS NOT NULL THEN
+    IF v_replay -> 'result' IS NULL OR jsonb_typeof(v_replay -> 'result') = 'null' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+    END IF;
+    RETURN (v_replay -> 'result' ->> 'bill_id')::uuid;
+  END IF;
+
+  v_bill_id := public._section9_create_vendor_bill_intent_impl_20260826(
+    p_vendor_id, p_purchase_order_id, p_bill_number, p_bill_date, p_due_date,
+    p_payment_terms, p_subtotal_cents, p_adjustment_cents, p_notes, p_idempotency_key
+  );
+
+  UPDATE public.idempotency_keys
+     SET request_actor_id = v_actor,
+         request_fingerprint = v_fingerprint
+   WHERE idempotency_key = p_idempotency_key
+     AND operation = 'create_vendor_bill';
+  IF NOT FOUND THEN RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING'; END IF;
+  RETURN v_bill_id;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.update_vendor_bill(
+  p_bill_id uuid,
+  p_subtotal_cents bigint,
+  p_adjustment_cents bigint,
+  p_bill_date date,
+  p_due_date date,
+  p_notes text,
+  p_idempotency_key text DEFAULT NULL::text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_actor uuid := auth.uid();
+  v_fingerprint text;
+  v_replay jsonb;
+  v_result jsonb;
+BEGIN
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = v_actor AND is_active = true AND role = 'admin') THEN
+    RAISE EXCEPTION 'NOT_AUTHORIZED: only admins can edit vendor bills';
+  END IF;
+  IF p_idempotency_key IS NULL
+     OR p_idempotency_key !~ '[^[:space:]]'
+     OR p_idempotency_key COLLATE "C" !~ '[!-~]' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: update_vendor_bill requires p_idempotency_key';
+  END IF;
+
+  v_fingerprint := encode(extensions.digest(convert_to(jsonb_build_object(
+    'actor_id', v_actor,
+    'bill_id', p_bill_id,
+    'subtotal_cents', p_subtotal_cents,
+    'adjustment_cents', p_adjustment_cents,
+    'bill_date', p_bill_date,
+    'due_date', p_due_date,
+    'notes', p_notes
+  )::text, 'UTF8'), 'sha256'), 'hex');
+
+  v_replay := public.check_idempotency_intent(
+    p_idempotency_key, 'update_vendor_bill', v_actor, v_fingerprint
+  );
+  IF v_replay IS NOT NULL THEN
+    IF v_replay -> 'result' IS NULL OR jsonb_typeof(v_replay -> 'result') = 'null' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+    END IF;
+    RETURN v_replay -> 'result';
+  END IF;
+
+  v_result := public._section9_update_vendor_bill_intent_impl_20260826(
+    p_bill_id, p_subtotal_cents, p_adjustment_cents, p_bill_date,
+    p_due_date, p_notes, p_idempotency_key
+  );
+  UPDATE public.idempotency_keys
+     SET request_actor_id = v_actor, request_fingerprint = v_fingerprint
+   WHERE idempotency_key = p_idempotency_key AND operation = 'update_vendor_bill';
+  IF NOT FOUND THEN RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING'; END IF;
+  RETURN v_result;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.record_vendor_payment(
+  p_vendor_bill_id uuid,
+  p_amount_cents bigint,
+  p_payment_date date DEFAULT CURRENT_DATE,
+  p_payment_method text DEFAULT NULL::text,
+  p_reference_number text DEFAULT NULL::text,
+  p_notes text DEFAULT NULL::text,
+  p_idempotency_key text DEFAULT NULL::text
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_actor uuid := auth.uid();
+  v_fingerprint text;
+  v_replay jsonb;
+  v_payment_id uuid;
+BEGIN
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = v_actor AND is_active = true AND role = 'admin') THEN
+    RAISE EXCEPTION 'NOT_AUTHORIZED: admin role required to record vendor payments';
+  END IF;
+  IF p_idempotency_key IS NULL
+     OR p_idempotency_key !~ '[^[:space:]]'
+     OR p_idempotency_key COLLATE "C" !~ '[!-~]' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: record_vendor_payment requires p_idempotency_key';
+  END IF;
+
+  v_fingerprint := encode(extensions.digest(convert_to(jsonb_build_object(
+    'actor_id', v_actor,
+    'vendor_bill_id', p_vendor_bill_id,
+    'amount_cents', p_amount_cents,
+    'payment_date', p_payment_date,
+    'payment_method', p_payment_method,
+    'reference_number', p_reference_number,
+    'notes', p_notes
+  )::text, 'UTF8'), 'sha256'), 'hex');
+
+  v_replay := public.check_idempotency_intent(
+    p_idempotency_key, 'record_vendor_payment', v_actor, v_fingerprint
+  );
+  IF v_replay IS NOT NULL THEN
+    IF v_replay -> 'result' IS NULL OR jsonb_typeof(v_replay -> 'result') = 'null' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+    END IF;
+    RETURN (v_replay -> 'result' ->> 'payment_id')::uuid;
+  END IF;
+
+  v_payment_id := public._section9_record_vendor_payment_intent_impl_20260826(
+    p_vendor_bill_id, p_amount_cents, p_payment_date, p_payment_method,
+    p_reference_number, p_notes, p_idempotency_key
+  );
+  UPDATE public.idempotency_keys
+     SET request_actor_id = v_actor, request_fingerprint = v_fingerprint
+   WHERE idempotency_key = p_idempotency_key AND operation = 'record_vendor_payment';
+  IF NOT FOUND THEN RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING'; END IF;
+  RETURN v_payment_id;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.void_vendor_payment(
+  p_payment_id uuid,
+  p_reason text,
+  p_idempotency_key text DEFAULT NULL::text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_actor uuid := auth.uid();
+  v_fingerprint text;
+  v_replay jsonb;
+  v_result jsonb;
+BEGIN
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = v_actor AND is_active = true AND role = 'admin') THEN
+    RAISE EXCEPTION 'NOT_AUTHORIZED: only admins can void vendor payments';
+  END IF;
+  IF p_idempotency_key IS NULL
+     OR p_idempotency_key !~ '[^[:space:]]'
+     OR p_idempotency_key COLLATE "C" !~ '[!-~]' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: void_vendor_payment requires p_idempotency_key';
+  END IF;
+
+  v_fingerprint := encode(extensions.digest(convert_to(jsonb_build_object(
+    'actor_id', v_actor, 'payment_id', p_payment_id, 'reason', p_reason
+  )::text, 'UTF8'), 'sha256'), 'hex');
+  v_replay := public.check_idempotency_intent(
+    p_idempotency_key, 'void_vendor_payment', v_actor, v_fingerprint
+  );
+  IF v_replay IS NOT NULL THEN
+    IF v_replay -> 'result' IS NULL OR jsonb_typeof(v_replay -> 'result') = 'null' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+    END IF;
+    RETURN v_replay -> 'result';
+  END IF;
+
+  v_result := public._section9_void_vendor_payment_intent_impl_20260826(
+    p_payment_id, p_reason, p_idempotency_key
+  );
+  UPDATE public.idempotency_keys
+     SET request_actor_id = v_actor, request_fingerprint = v_fingerprint
+   WHERE idempotency_key = p_idempotency_key AND operation = 'void_vendor_payment';
+  IF NOT FOUND THEN RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING'; END IF;
+  RETURN v_result;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.void_vendor_bill(
+  p_vendor_bill_id uuid,
+  p_reason text DEFAULT NULL::text,
+  p_idempotency_key text DEFAULT NULL::text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_actor uuid := auth.uid();
+  v_fingerprint text;
+  v_replay jsonb;
+BEGIN
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = v_actor AND is_active = true AND role = 'admin') THEN
+    RAISE EXCEPTION 'NOT_AUTHORIZED: admin role required to void vendor bills';
+  END IF;
+  IF p_idempotency_key IS NULL
+     OR p_idempotency_key !~ '[^[:space:]]'
+     OR p_idempotency_key COLLATE "C" !~ '[!-~]' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: void_vendor_bill requires p_idempotency_key';
+  END IF;
+
+  v_fingerprint := encode(extensions.digest(convert_to(jsonb_build_object(
+    'actor_id', v_actor, 'vendor_bill_id', p_vendor_bill_id, 'reason', p_reason
+  )::text, 'UTF8'), 'sha256'), 'hex');
+  v_replay := public.check_idempotency_intent(
+    p_idempotency_key, 'void_vendor_bill', v_actor, v_fingerprint
+  );
+  IF v_replay IS NOT NULL THEN
+    IF v_replay -> 'result' IS NULL OR jsonb_typeof(v_replay -> 'result') = 'null' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+    END IF;
+    RETURN;
+  END IF;
+
+  PERFORM public._section9_void_vendor_bill_intent_impl_20260826(
+    p_vendor_bill_id, p_reason, p_idempotency_key
+  );
+  UPDATE public.idempotency_keys
+     SET request_actor_id = v_actor, request_fingerprint = v_fingerprint
+   WHERE idempotency_key = p_idempotency_key AND operation = 'void_vendor_bill';
+  IF NOT FOUND THEN RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING'; END IF;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.receive_po_items(
+  p_items jsonb,
+  p_performed_by uuid,
+  p_idempotency_key text DEFAULT NULL::text,
+  p_allow_over_receive boolean DEFAULT false
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_actor uuid := auth.uid();
+  v_actor_role text;
+  v_allow_over_receive boolean := COALESCE(p_allow_over_receive, false);
+  v_fingerprint text;
+  v_replay jsonb;
+  v_result jsonb;
+BEGIN
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'Not authenticated'; END IF;
+  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+  END IF;
+  SELECT role INTO v_actor_role
+    FROM public.profiles
+   WHERE id = v_actor AND is_active = true;
+  IF v_actor_role IS NULL OR v_actor_role NOT IN ('admin', 'sales_rep') THEN
+    RAISE EXCEPTION 'Only admin or sales_rep can receive PO items';
+  END IF;
+  IF p_idempotency_key IS NULL
+     OR p_idempotency_key !~ '[^[:space:]]'
+     OR p_idempotency_key COLLATE "C" !~ '[!-~]' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: receive_po_items requires p_idempotency_key';
+  END IF;
+
+  v_fingerprint := encode(extensions.digest(convert_to(jsonb_build_object(
+    'actor_id', v_actor,
+    'items', p_items,
+    'allow_over_receive', v_allow_over_receive
+  )::text, 'UTF8'), 'sha256'), 'hex');
+  v_replay := public.check_idempotency_intent(
+    p_idempotency_key, 'receive_po_items', v_actor, v_fingerprint
+  );
+  IF v_replay IS NOT NULL THEN
+    IF v_replay -> 'result' IS NULL OR jsonb_typeof(v_replay -> 'result') = 'null' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+    END IF;
+    RETURN v_replay -> 'result';
+  END IF;
+
+  v_result := public._section9_receive_po_items_intent_impl_20260826(
+    p_items, p_performed_by, p_idempotency_key, v_allow_over_receive
+  );
+  UPDATE public.idempotency_keys
+     SET request_actor_id = v_actor, request_fingerprint = v_fingerprint
+   WHERE idempotency_key = p_idempotency_key AND operation = 'receive_po_items';
+  IF NOT FOUND THEN RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING'; END IF;
+  RETURN v_result;
+END;
+$function$;
+
+ALTER FUNCTION public.create_vendor_bill(uuid, uuid, text, date, date, text, bigint, bigint, text, text) OWNER TO postgres;
+ALTER FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text) OWNER TO postgres;
+ALTER FUNCTION public.record_vendor_payment(uuid, bigint, date, text, text, text, text) OWNER TO postgres;
+ALTER FUNCTION public.void_vendor_payment(uuid, text, text) OWNER TO postgres;
+ALTER FUNCTION public.void_vendor_bill(uuid, text, text) OWNER TO postgres;
+ALTER FUNCTION public.receive_po_items(jsonb, uuid, text, boolean) OWNER TO postgres;
+
+REVOKE ALL ON FUNCTION public.create_vendor_bill(uuid, uuid, text, date, date, text, bigint, bigint, text, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.record_vendor_payment(uuid, bigint, date, text, text, text, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.void_vendor_payment(uuid, text, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.void_vendor_bill(uuid, text, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.receive_po_items(jsonb, uuid, text, boolean) FROM PUBLIC, anon;
+
+GRANT EXECUTE ON FUNCTION public.create_vendor_bill(uuid, uuid, text, date, date, text, bigint, bigint, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.record_vendor_payment(uuid, bigint, date, text, text, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.void_vendor_payment(uuid, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.void_vendor_bill(uuid, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.receive_po_items(jsonb, uuid, text, boolean) TO authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.get_ap_dashboard_summary(
+  p_idempotency_key text DEFAULT NULL::text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_today date := (clock_timestamp() AT TIME ZONE 'America/Chicago')::date;
+  v_month_end date;
+  v_result jsonb;
+BEGIN
+  PERFORM public.require_admin();
+  v_month_end := (date_trunc('month', v_today)::date + INTERVAL '1 month - 1 day')::date;
+
+  SELECT jsonb_build_object(
+    'total_owed_cents', COALESCE(SUM(CASE WHEN status IN ('unpaid', 'partially_paid') THEN balance_cents ELSE 0 END), 0),
+    'overdue_cents', COALESCE(SUM(CASE WHEN status IN ('unpaid', 'partially_paid') AND due_date < v_today THEN balance_cents ELSE 0 END), 0),
+    'overdue_count', COUNT(CASE WHEN status IN ('unpaid', 'partially_paid') AND due_date < v_today THEN 1 END),
+    'due_this_week_cents', COALESCE(SUM(CASE WHEN status IN ('unpaid', 'partially_paid') AND due_date BETWEEN v_today AND v_today + 7 THEN balance_cents ELSE 0 END), 0),
+    'due_this_week_count', COUNT(CASE WHEN status IN ('unpaid', 'partially_paid') AND due_date BETWEEN v_today AND v_today + 7 THEN 1 END),
+    'due_this_month_cents', COALESCE(SUM(CASE WHEN status IN ('unpaid', 'partially_paid') AND due_date BETWEEN v_today AND v_month_end THEN balance_cents ELSE 0 END), 0),
+    'total_bills', COUNT(*),
+    'unpaid_count', COUNT(CASE WHEN status IN ('unpaid', 'partially_paid') THEN 1 END),
+    'paid_this_month_cents', COALESCE((
+      SELECT SUM(vp.amount_cents)
+        FROM public.vendor_payments vp
+       WHERE vp.payment_date >= date_trunc('month', v_today)::date
+         AND vp.voided_at IS NULL
+    ), 0)
+  )
+  INTO v_result
+  FROM public.vendor_bills
+  WHERE deleted_at IS NULL AND status <> 'voided';
+
+  RETURN v_result;
+END;
+$function$;
+
+ALTER FUNCTION public.get_ap_dashboard_summary(text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.get_ap_dashboard_summary(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_ap_dashboard_summary(text) TO authenticated, service_role;
+
+DO $verify$
+DECLARE
+  v_source text;
+  v_signature text;
+BEGIN
+  FOREACH v_signature IN ARRAY ARRAY[
+    'public.create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text)',
+    'public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text)',
+    'public.record_vendor_payment(uuid,bigint,date,text,text,text,text)',
+    'public.void_vendor_payment(uuid,text,text)',
+    'public.void_vendor_bill(uuid,text,text)',
+    'public.receive_po_items(jsonb,uuid,text,boolean)'
+  ]
+  LOOP
+    SELECT p.prosrc INTO v_source
+      FROM pg_catalog.pg_proc p
+     WHERE p.oid = to_regprocedure(v_signature);
+    IF v_source IS NULL THEN
+      RAISE EXCEPTION '% wrapper is missing', v_signature;
+    END IF;
+    IF position('check_idempotency_intent' IN v_source) = 0
+       OR position('request_actor_id = v_actor' IN v_source) = 0
+       OR position('request_fingerprint = v_fingerprint' IN v_source) = 0 THEN
+      RAISE EXCEPTION '% intent-binding wrapper verification failed', v_signature;
+    END IF;
+  END LOOP;
+
+  SELECT p.prosrc INTO v_source
+    FROM pg_catalog.pg_proc p
+   WHERE p.oid = 'public.get_ap_dashboard_summary(text)'::regprocedure;
+  IF position('AT TIME ZONE ''America/Chicago''' IN v_source) = 0
+     OR position('due_date BETWEEN v_today AND v_month_end' IN v_source) = 0
+     OR position('CURRENT_DATE + 30' IN v_source) > 0 THEN
+    RAISE EXCEPTION 'get_ap_dashboard_summary calendar-month verification failed';
+  END IF;
+END;
+$verify$;

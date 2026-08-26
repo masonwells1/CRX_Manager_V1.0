@@ -129,6 +129,25 @@ on the Git-hook path, where a green CI is not evidence the gate works. Verified 
 a bare run and a full hook-style environment both report 44 assertions passed, where the latter
 previously aborted with status 128.
 
+## 2026-08-26 — Section 9 AP safety remediation proven locally (pending live apply)
+
+The three HIGH findings from the Live Foundation Gauntlet Section 9 refresh now have a complete
+candidate fix and executable prevention coverage. AP and receiving mutation receipts bind the
+authenticated actor and exact payload, and the payment/receiving forms retain an uncertain intent
+until an exact retry reconciles it. `Due This Month` now means the Chicago calendar month, rather
+than the next 30 days. AP aging now measures `due_date`: `Current (Not Due)`, `1-30`, `31-60`,
+`61-90`, and `Over 90` days past due. Mason explicitly approved the fifth `1-30 Days` bucket in
+this task.
+
+Two pending migrations implement the database contract:
+`20260826125456_bind_section9_ap_receiving_intent_and_month_dashboard.sql` and
+`20260826140333_correct_ap_aging_due_date_buckets.sql`. A disposable PostgreSQL 17 replay applied
+all 63 post-baseline migrations, ran the complete Section 9 PO/AP rollback chain (including every
+aging boundary), and passed every two-session accounting-period race schedule with terminal marker
+`VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`. Static mutation guards also prove the intent binding,
+private implementation ACLs, legacy-receipt cutover barrier, Chicago month boundary, and due-date
+bucket predicates. No live migration has been applied and no production behavior changed yet.
+
 ## 2026-08-25 — PR #432 closed; control-file edits bounded; local/CI proof de-duplicated
 
 Mason ended the PR #432 repair loop (130 commits, +7,329 lines, four adversarial review rounds,

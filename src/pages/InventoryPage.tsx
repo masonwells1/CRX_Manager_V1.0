@@ -507,8 +507,8 @@ export default function InventoryPage() {
   };
 
   const openReceiveModal = async (inventoryId: string) => {
-    // Codex P2 fix (PR #59, 2026-05-16): reset key per inventory target.
-    receivePoIdem.resetKey();
+    // Do not rotate the key here. A prior receive may have committed before a
+    // lost response; reopening must retain that key so edited input fails closed.
     const target = inventory.find((i) => i.id === inventoryId);
     if (!target) return;
 
