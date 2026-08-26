@@ -1043,18 +1043,44 @@ order**; they change **no settled decision**. D-A through D-X and the three 2026
 stand exactly as written. This section governs only the two subjects it names — Phase 1b's position
 in the sequence, and the workbook-as-proposal path — and nothing else in this plan.*
 
-> **Revision 6 — PR #498 review round two.** Revision 4 rewrote this amendment after a third
+> **Revision 7 — PR #498 review round three (two connector P1s).** Revision 4 rewrote this amendment
+> after a third
 > adversarial `gpt-5.6-sol` round closed every outstanding finding and returned seven more, all
 > accepted, and **that round closed the Sol gauntlet** — no adversarial finding stands open against
 > it. **Revision 5 folded in PR #498's first review round** — CodeRabbit and the Codex GitHub
-> connector, six findings, all accepted. **Revision 6 folds in the second round — three Codex P1s
-> and two CodeRabbit findings, five in all, all accepted.** Where the text below disagrees with
-> revision 1, 2, 3, 4 or 5, it **replaces** them; do not restore the earlier wording. **Revision 4
+> connector, six findings, all accepted. **Revision 6 folded in the second round** — three Codex P1s
+> and two CodeRabbit findings, five in all, all accepted. **Revision 7 folds in the third round —
+> two Codex connector P1s, both accepted, and one of them says revision 6 asserted something
+> FALSE.** Where the text below disagrees with
+> revision 1, 2, 3, 4, 5 or 6, it **replaces** them; do not restore the earlier wording. **Revision 4
 > was the last word of the adversarial gauntlet, not the last word of this amendment:** the gauntlet
 > is closed, and it is the pull-request review, running on different eyes, that has now reopened the
-> text twice.
+> text three times.
 >
-> *What revision 6 changes, one line per fix:*
+> *What revision 7 changes, one line per fix:*
+>
+> - **FIX-A (blocker — Codex P1; revision 6's "by construction" claim was FALSE and is corrected,
+>   not defended):** revision 6 asserted that a typed draft is **structurally unreachable** through
+>   legacy `commit_label_draft` and told builders **not to guard it**. **Both halves were wrong.**
+>   The deployed `LabelReview` screen loads **every** `product_label_drafts` row
+>   (`src/pages/LabelReview.tsx:210-220` — `select('*')`, no `purpose` filter, no status filter) and
+>   sends decisions to legacy `commit_label_draft`, whose body checks the admin role, the decision
+>   value, idempotency and the draft's **status** — and **never reads `purpose`**
+>   (`20260629210000_product_label_drafts.sql:244-284`). A typed draft **is** reachable: it would
+>   apply the scalar label fields, **skip the digest, version, citation and ingredient logic
+>   entirely**, and **close the queue row**. **Resolution: WP-1's migration re-emits
+>   `commit_label_draft`'s body at its unchanged ten-parameter signature, adding EXACTLY ONE thing —
+>   a typed-purpose guard that refuses any draft whose `purpose <> 'manual'`.**
+> - **FIX-B (blocker — Codex P1):** revision 6's transaction sequences placed the
+>   `product_data_version` bump **after** the authoritative writes. Under the **predicated-`UPDATE`**
+>   form, combined with RR-4's **return-normally** refusal semantics, a **zero-row bump would commit
+>   the writes that already happened** — the compare-and-set defeated by ordering rather than by
+>   racing. **Resolution: in both commit RPCs the version compare-and-set executes BEFORE any
+>   authoritative mutation**, so a staleness refusal is one **by construction** — this time the
+>   phrase is earned.
+>
+> *What revision 6 changed, one line per fix — unchanged and still in force except where FIX-A and
+> FIX-B correct it:*
 >
 > - **RR-1 (blocker — Codex P1):** provenance gets **a destination per fact, not one column per
 >   field** — `<field>_source`, `<field>_source_url` and `<field>_source_note` land on `products` for
@@ -1078,8 +1104,9 @@ in the sequence, and the workbook-as-proposal path — and nothing else in this 
 >   the live `commit_label_draft` does none of what the amendment requires. **Resolved by the
 >   NEW-RPC pattern this plan already set on the create side *(Mason, 2026-08-26)*: WP-4's migration
 >   adds a SECOND new function, `commit_label_draft_proposal`**, which is the **only** commit path
->   for typed drafts. **`commit_label_draft` is never touched — not its signature, not its body** —
->   so the legacy manual path is preserved **by construction** rather than by careful re-emission.
+>   for typed drafts. **`commit_label_draft`'s SIGNATURE is never modified by anyone** — and, per
+>   **FIX-A**, its **body is re-emitted exactly once, by WP-1, to add the typed-purpose guard**;
+>   **WP-4 adds nothing to it.**
 >   *(This also closes the open item drafting revision 6 raised: the echoed `p_payload_sha256` is a
 >   parameter the frozen signature could never have carried, and a new RPC takes it at birth.
 >   **Arity note, checked against the installed definition:** the review round called
@@ -1230,7 +1257,11 @@ of its own, containing exactly one new function** — see *Phase 1b carries its 
 
 **What WP-1's migration must therefore carry, named explicitly.** WP-1 is unbuilt and unapplied, so
 each item below is a specification change to a migration that does not yet exist — never an edit to
-an applied one:
+an applied one. **One item — the typed-purpose guard *(FIX-A)* — changes the BODY of a function that
+is already live, and that is a different thing from editing an applied migration:** the applied file
+`20260629210000_product_label_drafts.sql` is never touched; WP-1's **new** migration issues a
+`CREATE OR REPLACE FUNCTION` at the same signature, which is the ordinary CRX way to change a live
+function and is exactly what the plan already does elsewhere:
 
 - **`purpose` gains a fourth CHECK member, `workbook_import`, present from WP-1's first migration.**
   Same reasoning as `brand_proposal`: the package that writes these rows applies **after** WP-1, and
@@ -1295,6 +1326,31 @@ an applied one:
   5 says "refused" where revision 4 said "rejected": no draft exists yet for a refused import, and
   since PR-2 `rejected` names a queue status with two exact owners, the word is no longer free for
   general use.)*
+- **A TYPED-PURPOSE GUARD on `commit_label_draft`, re-emitting its body in this same migration
+  *(blocker, FIX-A)*.** The moment the `purpose` CHECK above admits `epa_label_seed`,
+  `brand_proposal` and `workbook_import`, typed rows become creatable — and the **deployed**
+  `LabelReview` screen loads **every** draft row with no `purpose` filter and no status filter
+  (`src/pages/LabelReview.tsx:210-220`) and sends its decisions to legacy `commit_label_draft`,
+  whose body checks the admin role, the decision value, idempotency and the draft's **status**, and
+  **never reads `purpose`** (`20260629210000_product_label_drafts.sql:244-284`). Left alone it would
+  happily "approve" a workbook chemistry draft by writing the scalar label fields, **skipping the
+  digest, the version compare-and-set, the citation re-checks and the ingredient rows entirely**,
+  and then **closing the queue row** so nothing is left to review. So **WP-1's migration re-emits
+  `commit_label_draft`'s body via `CREATE OR REPLACE FUNCTION` at its unchanged ten-parameter
+  signature, adding EXACTLY ONE thing: a guard at the top of the body that refuses any draft whose
+  `purpose <> 'manual'`.** The refusal carries **validation-refusal semantics** *(PR-2, RR-4)* — a
+  named error, **no authoritative product, chemistry, attribute, brand, or queue-state mutation,
+  exactly one refusal audit row, and the draft left `pending`** — so a misrouted typed draft stays
+  exactly where the real review surface will find it. **Every other line of that body is
+  byte-identical**; the guard adds no parameter, no column read and no branch beyond its own.
+  **The ordering argument is what makes this airtight, and it is why the guard belongs HERE and
+  nowhere else:** typed rows **cannot exist** before this migration's CHECK admits their `purpose`,
+  and the guard lands in **this same migration**, so **no window ever exists in which a typed row
+  and an unguarded legacy RPC coexist** — not for one statement, not for the apply-before-merge
+  window, not at all. Putting the guard in WP-4 (or in Phase 1b) would open exactly that window.
+  **This is a body re-emission, not a new function:** WP-1's migration still adds the functions it
+  already owns and **no additional one**, and `pg_proc` still holds **exactly one**
+  `commit_label_draft` afterwards.
 - **A stored canonical-envelope digest column, `payload_envelope_sha256 text`, written at
   draft-creation time *(R3-7)*.** The digest's byte format is **server-defined** — see *Approval binds
   to a content digest* below — so the column belongs to the queue **shape**, which **WP-1 owns**, and
@@ -1661,12 +1717,43 @@ them must actually be built:
   stepped past, and `ROW_COUNT` must be checked, not assumed.
 
 **BOTH RPCs must build the SAME form — mixing them is how a deadlock is manufactured**, since the
-explicit-lock form takes the product row **first** and the predicated-`UPDATE` form takes it
-**last**, so two commits running the two different shapes can grab the product and the draft in
+explicit-lock form takes the product row **first** and the predicated-`UPDATE` form takes it at the
+**compare-and-set**, so two commits running the two different shapes can grab the product and the
+draft in
 opposite orders. **Under the explicit-lock form the order is fixed: product row, then draft row.**
 Either way the envelope-digest recompute, the `pending` check, the staleness comparison and every
 other re-check still run **inside the one transaction and after the draft row is locked**, exactly as
 stated above; **PR-1 adds a lock, it removes none.**
+
+**And the compare-and-set must execute BEFORE any authoritative write — the order is part of the
+guard, not a detail of it *(blocker, FIX-B — Codex connector P1, accepted)*.** Revision 6 wrote both
+transaction sequences with the version bump **near the end**, after the value writes. Under the
+**explicit-lock** form that is survivable, because the product row is held from the top and the
+comparison cannot go stale. **Under the predicated form it silently defeats the compare-and-set.**
+Combine it with RR-4's **return-normally** refusal semantics — which exist so the refusal audit row
+survives — and the failure is complete: the RPC writes the chemistry or the attribute values, *then*
+runs the predicated bump, gets **zero rows**, and **returns a refusal on a transaction that then
+COMMITS the writes it already made.** A caller sees "refused, nothing written"; the database holds
+the opposite. **A guard that runs after the thing it guards is not a guard.**
+
+The requirement, binding on **both** commit RPCs: **the version compare-and-set is the last step
+before the first authoritative mutation, and no authoritative mutation precedes it.** Under the
+**explicit-lock** form this is already the stated order — the product row is taken first and held.
+Under the **predicated** form the `UPDATE … WHERE product_data_version = <source>` **is the FIRST
+authoritative statement in the transaction**, so **zero rows affected is a staleness refusal with
+nothing authoritative yet written** — RR-4's "no authoritative mutation" clause becomes true **by
+construction** rather than by the builder remembering it. Every read-only re-check — the `pending`
+check, the digest recompute, the EPA re-check, the citation and basis re-checks, the blank and
+unit-domain re-checks — runs **before** that statement, so a refusal on any of them also precedes
+every write.
+
+**Say the consequence plainly, because it looks wrong at first glance and is not:** under the
+predicated form **`product_data_version` advances at the TOP of the transaction and the value writes
+follow it**, inside that same transaction. That is fine. The bump and the writes are **atomic
+together** — a rollback unwinds both, and **no other transaction can observe the gap**, because the
+row the bump touched is locked by that very `UPDATE` until commit. A concurrent commit for the same
+product either waits or finds the version already moved and refuses. **The version is not "wrong for
+a moment"; it is unobservable until it is right.**
 
 **Concurrency proof required, and it is a two-session proof, not a unit test *(PR-1)*:** open **two
 sessions**, fire **two commits against the same product simultaneously** — the natural case is the
@@ -1674,7 +1761,10 @@ sibling chemistry and attribute drafts, which is also the case a reviewer will h
 that **exactly one succeeded** while the other **refused on the version predicate**, with **nothing
 authoritative written by the loser, its one refusal audit row present, its draft still `pending`**,
 and the product's `product_data_version` advanced **exactly once** *(assertion wording per RR-4)*.
-Run the
+**That "nothing authoritative written by the loser" assertion is exactly the one revision 6's
+ordering would have FAILED under the predicated form *(FIX-B)*** — the loser would have written its
+values and then returned a refusal — so the proof must read the loser's target rows, not merely its
+return value. Run the
 same pair against the pre-PR-1 shape and it must be the failing case; a proof that passes both ways
 is proving nothing.
 
@@ -1896,7 +1986,9 @@ audit row** *(PR-2, RR-4)*. **The live `commit_label_draft` does none of those t
 deployed body
 (`supabase/migrations/20260629210000_product_label_drafts.sql:212-224`) commits a hand-entered label
 draft and knows nothing about `ingredients[]`, `payload_envelope_sha256` or `product_data_version`
-locks.
+locks. **Do not read that as safety — revision 6 did, and was wrong *(FIX-A)*:** a body that does
+not understand a typed payload will still write the scalar fields and close the row when handed
+one, which is why WP-1's migration guards it.
 Meanwhile the S-02 split says **"WP-4's migration adds only the EPA-specific RPC"**, and every other
 package here is forbidden the queue's functions. So the plan required behaviour that **no package
 was assigned to build**: a builder reaching that line either does nothing, and the typed path never
@@ -1911,18 +2003,26 @@ faced exactly this on the create side and answered it: *"do not touch `create_la
 the EPA path gets a new, distinctly named public RPC — `create_label_draft_proposal`."* The commit
 side gets the mirror of that answer:
 
-- **`commit_label_draft` is NEVER touched — not its signature, and not its body.** No
-  `CREATE OR REPLACE`, no overload, no drop-and-recreate, by WP-4 or by any package. The rule that
-  protected `create_label_draft` now protects its commit-side twin, for the same reason: a deployed
+- **`commit_label_draft`'s SIGNATURE is never modified — by WP-4 or by any package — and its BODY
+  is re-emitted exactly ONCE, by WP-1, for the typed-purpose guard and nothing else *(amended by
+  FIX-A; revision 6 said "not its body" and that was wrong).** No parameter change, no overload, no
+  drop-and-recreate, ever. The rule that
+  protected `create_label_draft` still protects its commit-side twin, for the same reason: a deployed
   caller is using it right now, and the apply-before-merge window means the migration lands while
-  the old frontend is still live.
+  the old frontend is still live. **The single permitted body change is the guard specified in
+  WP-1's migration list above** — refuse `purpose <> 'manual'`, validation-refusal semantics, every
+  other line byte-identical. **WP-4 adds nothing to that function**, and neither does WP-2, WP-3,
+  WP-5 or Phase 1b.
 - **WP-4's migration adds a SECOND new function, `commit_label_draft_proposal`** —
   name-symmetric with `create_label_draft_proposal`, so the pair reads as one path. **It is the
   ONLY commit path for typed drafts**, meaning every draft whose `purpose` is **`epa_label_seed`**
   or **`workbook_import`**. `manual` drafts continue to commit through `commit_label_draft`, exactly
   as they do today.
-- **`pg_proc` proof, extended by one line:** after WP-4's migration applies, assert **exactly one
-  `commit_label_draft`** *and* **exactly one `commit_label_draft_proposal`** — by query, not by
+- **`pg_proc` proof, at BOTH migrations *(FIX-A extends it once more)*:** after **WP-1's** migration
+  applies — the one that re-emits the guarded body — assert **exactly one `commit_label_draft`**, so
+  the re-emission is proved to have replaced rather than overloaded; and after **WP-4's** migration
+  applies, assert **exactly one `commit_label_draft`** *and* **exactly one
+  `commit_label_draft_proposal`** — by query, not by
   reading the migration — alongside the `create_label_draft` / `create_label_draft_proposal` pair
   the plan already asserts.
 
@@ -1941,26 +2041,34 @@ shape read twice:**
 - **Accepts `p_payload_sha256`** — the digest the review surface **echoed** from the stored row,
   never one it computed. **This is the parameter the frozen signature could never have carried, and
   it is the whole reason this RPC exists.** A null stored `payload_envelope_sha256` is refused.
-- **In ONE transaction it:** locks the **product** row `FOR UPDATE` **first**, then the draft row
+- **In ONE transaction, IN THIS ORDER — every check and the version compare-and-set complete before
+  any authoritative write *(PR-1, ordering fixed by blocker FIX-B)*:** locks the **product** row
+  `FOR UPDATE` **first**, then the draft row
   **`FOR UPDATE`** — the explicit-lock form of *(PR-1)*, built **identically** here and in
   `commit_product_attribute_proposal`, so two commits on one product serialize instead of
   deadlocking; if the predicated-`UPDATE` form is built instead, **both** RPCs build that one;
-  **refuses if the row is not still `pending`**, so a double-approve cannot write twice; **refuses
-  on `source_product_data_version` staleness** (WP-4's rule, unchanged) — **genuinely atomic**,
-  either under the held product lock or as the predicated
-  `UPDATE … AND product_data_version = <source_product_data_version>` that must affect exactly one
-  row *(PR-1)*; **recomputes the canonical envelope digest over the stored row after the locks and
+  **refuses if the row is not still `pending`**, so a double-approve cannot write twice;
+  **recomputes the canonical envelope digest over the stored row after the locks and
   refuses on mismatch** *(R3-1, R3-7)*; **re-evaluates the usable-EPA predicate for
   `workbook_import` chemistry and refuses if the product now has a usable EPA number** *(PR-3)*;
   **re-checks every element's citation** — trimmed non-empty, the supplier pair-rule, no `measured`,
   no `nickname` *(G-2, R3-2)* — **and refuses a blank-basis element** *(G-3, finding 8)*; **refuses
-  any forbidden outer field** *(R2-5)*; **enforces the single-effective-row invariant**, promoting
+  any forbidden outer field** *(R2-5)*; **then settles `source_product_data_version` staleness —
+  and this is the LAST thing that happens before the first authoritative write** (WP-4's rule,
+  unchanged, now **genuinely atomic** and **correctly ordered**): under the **explicit-lock** form
+  the product row is already held from the top, so the comparison reads a value nothing can move;
+  under the **predicated** form the
+  `UPDATE products SET product_data_version = product_data_version + 1 … WHERE id = <product_id>
+  AND product_data_version = <source_product_data_version>` **is the FIRST authoritative statement
+  in the transaction**, and **zero rows affected is the staleness refusal**, taken with **nothing
+  authoritative yet written**; and only then does it write — **enforces the single-effective-row
+  invariant**, promoting
   the committed row and retiring the one it replaces, with **D-L**'s typed-value precedence intact;
   **writes each element's `source_type`, `source_url` and `note`** into those columns on
   `product_active_ingredients` *(PR-4)*, in this same write and never as a backfill; **computes
   `conflicts[]`** *(R2-5 — computed here, never importer-supplied)*; **writes an actor-bound audit
-  row** on WP-1's `cost_history`-precedent trail; **bumps `product_data_version`** — under the
-  product lock, or as the predicated `UPDATE` that is itself the guard *(PR-1)*; and **sets the
+  row** on WP-1's `cost_history`-precedent trail; **bumps `product_data_version` if the explicit-lock
+  form was built** — the predicated form already bumped it as its guard *(PR-1)*; and **sets the
   queue row's status to the result of the *decision***, never back to `pending`.
 - **Its refuse paths are of the three kinds *(PR-2, RR-4)*, identically to
   `commit_product_attribute_proposal`:** a **validation** refusal means **no authoritative product,
@@ -1972,23 +2080,44 @@ shape read twice:**
 - **`EXECUTE` to `authenticated` only, never `anon`**, and `REVOKE ALL … FROM PUBLIC, anon` on every
   internal helper, so a `SECURITY DEFINER` helper never becomes the privilege boundary.
 
-**Three consequences, stated plainly because they are the reason this shape was chosen:**
+**Four consequences, stated plainly because they are the reason this shape was chosen — and the
+third one is where revision 6 was FLATLY WRONG *(FIX-A)*:**
 
-- **The legacy manual path is preserved BY CONSTRUCTION, not by care.** `create_label_draft` →
-  `commit_label_draft` is **untouched**, so there is **no re-emission window** in which a legacy
-  branch could drift: nothing about that path changes, at any point, in any migration.
-- **WP-1's legacy create-and-commit proof is therefore a TRUE regression proof.** Calling
+- **The legacy manual path keeps working, and the guard is the only thing added to it.**
+  `create_label_draft` is untouched entirely; `commit_label_draft` is re-emitted **once**, by WP-1,
+  with one guard at the top and every other line byte-identical. There is exactly **one** body
+  change in the whole plan, it is one `IF`, and it lands in the same migration that makes typed
+  rows possible.
+- **WP-1's legacy create-and-commit proof is extended, and it now proves MORE than it did.** Calling
   `create_label_draft` with today's five named arguments and committing that draft through
-  `commit_label_draft` proves the deployed caller still works — and because neither function was
-  modified, a pass means what it appears to mean, rather than meaning "the re-emission happened to
-  preserve the branch."
-- **A typed draft can never be committed through legacy `commit_label_draft`, and that is
-  STRUCTURAL rather than a new check.** Its body is untouched and **predates the typed-payload
-  columns entirely** — it reads the fixed label fields by name and has no code path that looks at
-  `payload_version`, `ingredients[]`, `product_attributes` or `payload_envelope_sha256`. It cannot
-  consume a typed payload because it does not know one exists. **Do not add a guard to it to say
-  so** — adding anything to it would touch the body this decision freezes; the property comes from
-  the freeze itself.
+  `commit_label_draft` proves the deployed caller still works **through the guarded body** — which
+  is the regression the guard could plausibly have broken. **And it gains a negative case *(FIX-A)*:
+  create a TYPED draft** — `epa_label_seed` or `workbook_import` — **decide it through legacy
+  `commit_label_draft`, and show it REFUSED with the named error**, no scalar fields written, the
+  queue row still `pending`, one refusal audit row. **A positive-only proof would pass on the
+  unguarded body**, which is precisely how revision 6's claim went unchallenged.
+- **A typed draft is REACHABLE through legacy `commit_label_draft` unless it is guarded — revision 6
+  said the opposite and said it confidently.** The claim was that the legacy body "predates the
+  typed-payload columns" and therefore "cannot consume a typed payload because it does not know one
+  exists." **That is true and irrelevant.** The body does not need to *understand* the payload to
+  do damage: it checks the admin role, the decision value, idempotency and the draft's **status**,
+  and **never reads `purpose`** (`20260629210000_product_label_drafts.sql:244-284`). Handed a
+  workbook chemistry draft it would write the **scalar label fields**, **skip the digest, the
+  version compare-and-set, the citation re-checks and the ingredient rows**, and **close the queue
+  row** — an approval that wrote the wrong things, skipped every guard this amendment exists to
+  install, and left nothing behind to review. **The deployed `LabelReview` screen makes that path
+  live, not theoretical:** it loads **every** draft row, `select('*')`, **no `purpose` filter and no
+  status filter** (`src/pages/LabelReview.tsx:210-220`), and posts decisions straight to
+  `commit_label_draft`. **Revision 6's "do not add a guard to it" instruction is WITHDRAWN.** The
+  guard is required, it is specified in WP-1's migration list above, and the freeze it appeared to
+  protect was never protecting anything.
+- **The UI consequence is real and is stated rather than glossed *(FIX-A)*.** Until Phase 1b's
+  review surface ships, the legacy `LabelReview` screen will **display typed pending rows it cannot
+  commit** — the guard refuses them, correctly, but the crew meets an Approve button that always
+  fails. **So WP-1's screen scope includes filtering non-`manual` rows OUT of `LabelReview`**, so
+  that the guard is a backstop nobody reaches rather than a wall the crew walks into daily. The
+  guard is the **correctness** boundary; the filter is what keeps it from becoming a support
+  ticket. Both ship; neither substitutes for the other.
 
 **Read-together clause — the ONE place this rename is recorded, so the base plan is not rewritten
 in place *(RR-5, exactly as PR-4 handled WP-1's column list)*: wherever the WP-4 section above, or
@@ -1998,7 +2127,8 @@ an earlier revision of this amendment, names `commit_label_draft` for the TYPED 
 typed-value precedence and every commit-time re-check — read `commit_label_draft_proposal`.** Those
 rules bind to it **identically and without exception**; not one of them is weakened, dropped or
 renegotiated by moving to a new function. Where the same text concerns a **`manual`** draft, it
-still means `commit_label_draft`, which is unchanged. **The S-02 bullet is amended the same way:**
+still means `commit_label_draft` — **whose signature is unchanged and whose body changes exactly
+once, in WP-1's migration, to add the typed-purpose guard *(FIX-A)***. **The S-02 bullet is amended the same way:**
 read "WP-4's migration adds only the EPA-specific RPC, `create_label_draft_proposal`" as **"adds
 `create_label_draft_proposal` and `commit_label_draft_proposal`"**. **It still adds no queue
 columns** — that half of the S-02 split is untouched, and WP-1 still owns the queue's shape.
@@ -2034,21 +2164,28 @@ WP-2 is unbuilt and unapplied, so it edits nothing that exists.**
 - **Accepts `p_payload_sha256` — the digest the review surface *echoed* from the stored row, never
   one it computed — and enforces it by recomputing the canonical envelope digest over the stored row
   after the lock**, exactly as described above (R2-3, R3-1, R3-7). A null stored digest is refused.
-- **In ONE transaction it:** locks the **product** row `FOR UPDATE` **first**, then the draft row
+- **In ONE transaction, IN THIS ORDER — every check and the version compare-and-set complete before
+  any authoritative write *(PR-1, ordering fixed by blocker FIX-B)*:** locks the **product** row
+  `FOR UPDATE` **first**, then the draft row
   **`FOR UPDATE`** — the explicit-lock form of *(PR-1)*, in this RPC and in
   `commit_label_draft_proposal` **identically**, so two commits on one product serialize instead of deadlocking; if the
   predicated-`UPDATE` form is built instead, **both** RPCs build that one and the product row is
   taken by the bump; **refuses if the row is not still
-  `pending`**, so a double-approve cannot write twice; **refuses on `source_product_data_version`
-  staleness** (WP-4's rule, unchanged) — **and that comparison is now genuinely atomic**, either
-  because the product row is held from the line above or because the bump is the predicated
-  `UPDATE … AND product_data_version = <source_product_data_version>` that must affect exactly one
-  row *(PR-1)*; **refuses on an envelope-digest mismatch**, after the locks;
-  **enforces the D-M ranking per field on write** — a lower-ranked candidate stays a **proposal**
-  unless Mason explicitly approves it over the higher-ranked value; **re-checks that every TEXT
+  `pending`**, so a double-approve cannot write twice; **refuses on an envelope-digest mismatch**,
+  after the locks; **re-checks that every TEXT
   value present is trimmed non-empty** and refuses a blank *(RR-2)*; **refuses a `net_weight_unit`
-  outside the closed `lb` / `oz` / `kg` / `g` set** *(RR-3)*; **converts a `per_package` net
-  weight to the normalized per-purchase-unit figure and normalizes its unit to `lb` using the pinned
+  outside the closed `lb` / `oz` / `kg` / `g` set** *(RR-3)*; **then settles
+  `source_product_data_version` staleness — the LAST step before the
+  first authoritative write** (WP-4's rule, unchanged) — **genuinely atomic and correctly
+  ordered**, either
+  because the product row is held from the line above or because the predicated
+  `UPDATE … AND product_data_version = <source_product_data_version>` **is the first authoritative
+  statement in the transaction** and must affect exactly one
+  row, **zero rows being the staleness refusal, taken with nothing authoritative yet written**
+  *(PR-1, FIX-B)*; and only then does it write —
+  **enforcing the D-M ranking per field on write** — a lower-ranked candidate stays a **proposal**
+  unless Mason explicitly approves it over the higher-ranked value; **converting a `per_package` net
+  weight to the normalized per-purchase-unit figure and normalizing its unit to `lb` using the pinned
   named constants** *(RR-3)*, and retains the entered value, **unit**, basis and
   package count in **`net_weight_entered_value`, `net_weight_entered_unit`,
   `net_weight_entered_basis` and
@@ -2056,8 +2193,8 @@ WP-2 is unbuilt and unapplied, so it edits nothing that exists.**
   their per-field provenance — each field's `source_type`, `source_url` and `note` into that field's
   `<field>_source`, `<field>_source_url` and `<field>_source_note` columns, in this same
   transaction and never as a later backfill** *(RR-1)*; **writes an actor-bound audit row** on WP-1's
-  `cost_history`-precedent trail; **bumps `product_data_version`** — under the product lock, or as
-  the predicated `UPDATE` that is itself the guard *(PR-1)*; and **sets the queue row's status to the
+  `cost_history`-precedent trail; **bumps `product_data_version` if the explicit-lock form was
+  built** — the predicated form already bumped it at the top, as its guard *(PR-1, FIX-B)*; and **sets the queue row's status to the
   result of the *decision*** — one of the live CHECK's terminal decision states, **never back to
   `pending`**. A refusal is not a decision and takes none of this path *(PR-2)*.
 - **The same RPC's refuse paths are of three kinds, and only one of them touches the status *(PR-2,
@@ -2122,7 +2259,7 @@ commit.**
 
 | # | Rule | Why |
 |---|---|---|
-| **G-1** | **A workbook or AI-sourced value is NEVER written as effective chemistry directly.** Import creates **proposals only**. Every value reaches live data through the **typed commit RPCs — `commit_label_draft_proposal` for chemistry and `commit_product_attribute_proposal` for attributes *(RR-5 renames the first; revision 5 called it "the existing commit RPCs", which stopped being accurate the moment the typed path became its own function)*** — with every existing invariant intact — exactly one effective row per `(product_id, ingredient_id)`, D-L's precedence, and refusal of a commit whose `source_product_data_version` has moved — **a refusal that is only a guard if the comparison is atomic, so both commit RPCs lock the product row or make the version bump a predicated single-row `UPDATE` *(PR-1)*, and the refusal itself leaves the draft `pending` rather than `rejected` *(PR-2)* while writing exactly one refusal audit row *(RR-4)* — no authoritative mutation, one audit row, draft still `pending`, which is the sentence every refuse path in this amendment now uses.** There is no bulk path around them, and none is to be added. **`create_workbook_import_proposals` writes `product_label_drafts` (`INSERT`s, plus the single by-id supersede `UPDATE` on the restamp path, R2-7), its own actor-bound audit rows on WP-1's `cost_history`-precedent trail, and the idempotency bookkeeping the CRX contract requires — and it performs NO writes to authoritative chemistry, attributes, `products` or `product_brands`** *(R3-4; "and nothing else" was never true, since an RPC writing no audit row and no idempotency record would break two other rules in this plan)*. **That last clause is the invariant**, a property of its **body**, proved by the import's **negative before/after assertions** (zero rows changed in `active_ingredients`, `product_active_ingredients`, `products` chemistry/attribute columns, `product_brands`). **Do not restate this as a grants argument** *(R2-6)*: the function is `SECURITY DEFINER`, so it runs as its owner and caller grants bind nothing | This is the whole safety property of **D-H** and **D-I**. An importer that writes chemistry is the ~35% WP-4 failure with a spreadsheet in front of it |
+| **G-1** | **A workbook or AI-sourced value is NEVER written as effective chemistry directly.** Import creates **proposals only**. Every value reaches live data through the **typed commit RPCs — `commit_label_draft_proposal` for chemistry and `commit_product_attribute_proposal` for attributes *(RR-5 renames the first; revision 5 called it "the existing commit RPCs", which stopped being accurate the moment the typed path became its own function)*** — with every existing invariant intact — exactly one effective row per `(product_id, ingredient_id)`, D-L's precedence, and refusal of a commit whose `source_product_data_version` has moved — **a refusal that is only a guard if the comparison is atomic, so both commit RPCs lock the product row or make the version bump a predicated single-row `UPDATE` *(PR-1)*, and the refusal itself leaves the draft `pending` rather than `rejected` *(PR-2)* while writing exactly one refusal audit row *(RR-4)* — no authoritative mutation, one audit row, draft still `pending`, which is the sentence every refuse path in this amendment now uses.** There is no bulk path around them, and none is to be added. **Nor is there a LEGACY path around them any more *(blocker, FIX-A)*: the deployed `LabelReview` screen loads every draft row with no `purpose` filter (`src/pages/LabelReview.tsx:210-220`) and posts to `commit_label_draft`, whose body never reads `purpose` — so a typed draft could have been "approved" through it, writing the scalar label fields, skipping the digest, the version compare-and-set, the citation re-checks and the ingredient rows, and closing the queue row. WP-1's migration closes that door with the typed-purpose guard, in the same migration whose CHECK first makes typed rows possible, so the door is never open for a single statement.** **`create_workbook_import_proposals` writes `product_label_drafts` (`INSERT`s, plus the single by-id supersede `UPDATE` on the restamp path, R2-7), its own actor-bound audit rows on WP-1's `cost_history`-precedent trail, and the idempotency bookkeeping the CRX contract requires — and it performs NO writes to authoritative chemistry, attributes, `products` or `product_brands`** *(R3-4; "and nothing else" was never true, since an RPC writing no audit row and no idempotency record would break two other rules in this plan)*. **That last clause is the invariant**, a property of its **body**, proved by the import's **negative before/after assertions** (zero rows changed in `active_ingredients`, `product_active_ingredients`, `products` chemistry/attribute columns, `product_brands`). **Do not restate this as a grants argument** *(R2-6)*: the function is `SECURITY DEFINER`, so it runs as its owner and caller grants bind nothing | This is the whole safety property of **D-H** and **D-I**. An importer that writes chemistry is the ~35% WP-4 failure with a spreadsheet in front of it |
 | **G-2** | **Provenance attaches to the element, and the agent fills only what a document can prove.** The AI fills **only document-derivable fields** — chemistry, density, net weight and its package basis, `formulation_type`, `safener` — and cites **per value**: `source_url` is **required** for `source_type` `sds` and `label`; a `supplier` value carries a document URL **or**, where the supplier publishes none, a **named supplier-document reference** in that value's `note`. **"Value" means value, on both sides *(PR-5)*:** chemistry elements and `product_attributes` fields each carry their own `source_type` / `source_url` / `note`, and the supplier pair-rule applies to an attribute exactly as it applies to an element — revision 4 gave attributes no `note`, which left that rule with nowhere to land on the attribute side. **Every one of those values must be *trimmed non-empty*, not merely non-null *(R3-2)*** — whitespace is a blank cell wearing a citation's clothes, and the predicate that enforces it is quoted exactly once, in the payload-contract delta table above. **`measured` is reserved for Mason's own in-app entry and is never importable** — the import RPC refuses any element claiming it, and the CHECK and the commit re-check enforce the same, so D-M's top rank cannot be claimed by a spreadsheet. **`nickname` is Mason-only** and an imported nickname element is **refused**: no document states a trade shorthand, so a cited one would be a fabricated citation. Anything the agent cannot cite stays **blank**; **blank is reviewable, a guess is not.** **And blank means one thing only *(R2-4)*: no proposal — the live value is left alone.** It never means "clear this", and where a document affirms an absence the agent writes the **explicit cited value `none`** rather than a blank. **Revision 6 makes that mechanical rather than conventional *(blocker, RR-2)*: a TEXT value is proposed only if it is *trimmed non-empty*, checked at import, by the CHECK and again at commit** — `''` and `'   '` are refused exactly as `null` is, because revision 5 counted them as real values and would have let a spreadsheet **blank out a live `formulation_type` or `safener`**. **The whole loop, and there is nothing outside it: ABSENT = no proposal; PRESENT = a trimmed non-empty value, which for a documented absence is the cited literal `none`. No third state exists.** Enforced in three places — the element rule in the payload, the import RPC, and again at commit — never by the spreadsheet alone, which anyone can edit | The citation beside the value is what makes per-row review fast enough to be real. Without it, review degrades into re-reading the label — the exact work D-Z exists to remove. And a rule keyed to `purpose` rather than to the element fails open through the one path nobody is allowed to modify |
 | **G-3** | **Concentration basis is recorded as the label's own wording states it, never converted by the filler.** The template constrains `basis` to the **D-A** enum (`acid_equivalent`, `active_ingredient`, `oxide`, `elemental`) and `concentration_unit` to WP-1's list (`lb_per_lb` remains rejected), and the review surface shows the basis and the citation beside the number. **D-A's three rules and R-4a's refusing conversion function govern every use of the value** — nothing here restates, weakens or duplicates them. A label whose basis is unclear leaves `basis` **blank with a note** — and **a blank-basis chemistry element is reviewable but NOT committable: `commit_label_draft_proposal` refuses it** *(finding 8; renamed by RR-5)*. **That is a *validation* refusal *(PR-2, RR-4)*: no authoritative product, chemistry, attribute, brand, or queue-state mutation; exactly one refusal audit row is written, naming the check; the draft remains `pending`** — which is what keeps the correction path open. The correction path is the **WP-1 entry screen**, a **restamp**, or a **re-proposed row that states the basis**; it is never a default filled in at commit | Salt weight and acid equivalent on the same jug are different numbers, and a filler that "helpfully" converts destroys the one fact the row exists to record. Blank is a legitimate state for a **proposal** and an illegitimate one for **effective chemistry**: a concentration with no basis is a number whose meaning is unknown, and R-4a has nothing to refuse on because there is nothing to convert *from* |
 | **G-4** | **Review remains per-row human approval by an admin, and one approval is one transaction.** **D-J** and **D-S** are unchanged: admins only, one row at a time, every change audited. Because a `workbook_import` row carries **exactly one domain**, approving it invokes **exactly one commit RPC in exactly one transaction** — there is no half-approved row and no second call to forget. **A product with drafts in *both* domains is therefore two rows and two approvals**, run in the documented order — commit one domain, restamp the sibling, approve it *(R3-3)* — which is the normal path, not an exception to this rule. **Rejection is per row on the same terms**, each with its own audit row and actor; `import_batch_id` **filters** the review session and never executes it. **And "rejection" here means the human act, which is one of only two things that may set `rejected` — the other being the restamp supersede *(PR-2)*. A commit that refuses on a validation check has rejected nothing: the draft stays `pending` and the audit row carries the story.** **Because the two commits on a dual-domain product now serialize on the product row *(PR-1)*, firing both at once yields one commit and one staleness refusal, not two writes — the same two-approval shape this rule already describes, with the order enforced instead of assumed.** **Approving — or rejecting — an entire sheet in one click is out of scope for Phase 1** and must not be built as a convenience | A one-click sheet approval is a bulk unreviewed write to live chemistry wearing a review screen's clothes — and a one-click sheet *rejection* is the same write with the audit trail of one actor standing in for a hundred decisions |
@@ -2199,7 +2336,11 @@ non-admin refusal proved as its negative case.
   5 and 6 move nothing at all**: revision 4's seven fixes, revision 5's six and revision 6's five
   are all mechanism, storage shape and wording — not sequence. **RR-5 adds one function to WP-4's
   migration — `commit_label_draft_proposal` — and moves no package and no other count**; Phase 1b's
-  migration still adds exactly one function, and WP-2's still adds exactly one. **The division of
+  migration still adds exactly one function, and WP-2's still adds exactly one. **FIX-A adds no
+  function anywhere *(revision 7)*:** WP-1's migration **re-emits one existing function's body** to
+  add the typed-purpose guard, which changes a body and not a count — `pg_proc` holds exactly one
+  `commit_label_draft` before and after. **Say it that way and not as "WP-1 adds a function", because
+  the two claims are audited differently.** **The division of
   labour is
   structural, not a preference:** where a product has a usable EPA number the auto-seed is its
   **only** chemistry source on this path and the workbook is **refused** one for it; the workbook
@@ -2218,7 +2359,10 @@ non-admin refusal proved as its negative case.
   writes a rate.
 - **The WP-1 fast-entry screen still ships (D-N).** It is where a **refused or rejected** proposal
   gets corrected — the two are different states *(PR-2)*, and both end up on the same screen — and
-  where one-off edits happen. The workbook does not replace it.
+  where one-off edits happen. The workbook does not replace it. **WP-1's screen scope gains one
+  small item in revision 7 *(FIX-A)*: filtering non-`manual` rows out of the legacy `LabelReview`
+  list**, so that between WP-1 and Phase 1b the crew never meets an Approve button that the new
+  typed-purpose guard will always refuse.
 
 ---
 
