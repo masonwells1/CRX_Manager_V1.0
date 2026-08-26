@@ -30,10 +30,18 @@
 //
 // DELIBERATELY NOT LISTED: "cross-session-message". A sibling Claude/Codex
 // session is behind that envelope, not the harness, so unlike the entries below
-// there IS an agent choosing the words. Listing it would stop a sibling from
-// latching a hold on this session — a loosening, not a tightening — and that is
-// Mason's call to make, not this file's. Left out on purpose; do not "complete"
-// the list from the audit above without asking him first.
+// there IS an agent choosing the words — the advisory reminder hooks keep
+// reacting to sibling text on purpose (an extra policy warning on relayed
+// phrasing is safe noise; suppressing dangerous-phrase-warning there would hide
+// a real relayed-danger signal — relayed authorization is not authorization).
+// But a sibling is also not MASON, and on 2026-08-26 a sibling's "stand-down
+// report" cross-session message latched hold.json in worktree
+// funny-visvesvaraya-c572b7; the same gap would let any sibling message
+// silently CLEAR a hold Mason had latched, or write OVERNIGHT-INTENT.flag off
+// relayed "overnight" phrasing. Settled 2026-08-26 (Mason's fix task for that
+// incident): the STATE-MUTATING prompt hooks (hold-latch-prompt,
+// autopilot-intent-reminder) additionally ignore cross-session envelopes via
+// isCrossSessionMessage() below; the advisory-only hooks do not.
 export const MACHINE_TAG_NAMES = [
   "task-notification",
   "scheduled-task",
@@ -61,6 +69,18 @@ export function isMachineGenerated(prompt) {
   if (!text) return false;
   if (CONTAINS_MACHINE_TAG_RE.test(text)) return true;
   return STARTS_WITH_MACHINE_TAG_RE.test(text.trim());
+}
+
+// A prompt DELIVERED AS a sibling-session envelope: the trimmed prompt begins
+// with <cross-session-message ...>. Start-anchored on purpose — a message Mason
+// himself types that merely QUOTES a sibling envelope mid-sentence is still
+// Mason speaking, and must still latch/clear the hold like any typed prompt.
+const STARTS_WITH_CROSS_SESSION_RE = /^<cross-session-message\b/i;
+
+export function isCrossSessionMessage(prompt) {
+  const text = String(prompt || "");
+  if (!text) return false;
+  return STARTS_WITH_CROSS_SESSION_RE.test(text.trim());
 }
 
 export const PUSH_POLICY =

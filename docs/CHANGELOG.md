@@ -95,6 +95,26 @@ Not verified: no live migration was applied for end-to-end verification.
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-26 — sibling-session messages can no longer latch or clear the stop-hold (or write the overnight flag)
+
+A peer Claude session's `<cross-session-message>` containing "stand-down report" latched
+`hold.json` in worktree `funny-visvesvaraya-c572b7` — halting work on text no human typed. The
+envelope class was a known, deliberate gap in `prompt-source-lib.mjs`'s machine-prompt detection;
+the incident (and the mirror-image hazard — any sibling message would silently *clear* a hold Mason
+had latched, since the latch clears on every non-hold prompt) settled the question.
+
+New start-anchored `isCrossSessionMessage()` in `.claude/hooks/prompt-source-lib.mjs`, now checked
+by the two state-mutating prompt hooks: `hold-latch-prompt.mjs` (sibling messages neither latch nor
+clear the hold) and `autopilot-intent-reminder.mjs` (relayed "overnight/hands-free" neither writes
+`OVERNIGHT-INTENT.flag` nor injects the arm-autopilot directive). The five advisory-only phrase
+hooks deliberately keep reacting to sibling text — rationale in the 2026-08-26
+`docs/manual/DECISION_LOG.md` entry.
+
+Verified: new regression block in `.claude/hooks/prompt-hooks.test.mjs` runs the real hook
+processes against the incident-shaped envelope in both directions, with typed negative controls
+(the same wording typed by Mason still latches, still clears, still fires the reminder).
+Mutation-tested: stripping the new check from either hook turns exactly the new assertions red.
+
 ## 2026-08-26 — Migration guards judge the real post-edit file on CRLF worktrees
 
 `grant-change-guard.mjs` simulated an Edit against the on-disk migration with an exact
@@ -135,7 +155,6 @@ got the same fail-closed rule (its unreadable-file deletion path had still allow
 call — judging the full post-edit file had exposed its fixed 800-character window to unrelated query
 chains, so a later table's valid status was denied under the preceding table's constraint set on a
 benign edit to an existing page. Both mutation-verified with regression tests in each direction.
-
 
 ## 2026-08-26 — a guard self-test was re-initializing the real repository as bare
 

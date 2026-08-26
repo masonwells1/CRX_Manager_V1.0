@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { isHoldPhrase, isResumePhrase } from "./hold-latch-lib.mjs";
-import { isMachineGenerated } from "./prompt-source-lib.mjs";
+import { isCrossSessionMessage, isMachineGenerated } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -22,7 +22,10 @@ try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { emit(); }
 // Machine-generated envelopes (<task-notification>, <system-reminder>, slash-command
 // output) are not something Mason typed — they must NEITHER latch NOR clear the hold.
 // Proven 2026-07-04: a <task-notification> audit digest containing "stop" latched hold.json.
-if (isMachineGenerated(payload?.prompt)) emit();
+// Sibling-session envelopes (<cross-session-message ...>) are likewise not Mason:
+// proven 2026-08-26, a sibling's "stand-down report" latched the hold — and the same
+// gap would let any sibling message silently CLEAR a hold Mason had latched.
+if (isMachineGenerated(payload?.prompt) || isCrossSessionMessage(payload?.prompt)) emit();
 
 const prompt = String(payload?.prompt || "");
 

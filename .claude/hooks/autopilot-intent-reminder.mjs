@@ -9,7 +9,7 @@
 
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { isMachineGenerated } from "./prompt-source-lib.mjs";
+import { isCrossSessionMessage, isMachineGenerated } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -23,8 +23,11 @@ try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { emit(); }
 
 // Machine-generated envelopes (<task-notification>, <system-reminder>, slash-command
 // output) are not something Mason typed — never latch OVERNIGHT-INTENT or remind off
-// a word like "overnight" inside an embedded report.
-if (isMachineGenerated(payload?.prompt)) emit();
+// a word like "overnight" inside an embedded report. Sibling-session envelopes
+// (<cross-session-message ...>) are likewise not Mason (2026-08-26): a relayed
+// "overnight/hands-free" must not write OVERNIGHT-INTENT.flag or nudge this session
+// toward arming autopilot — relayed authorization is not authorization.
+if (isMachineGenerated(payload?.prompt) || isCrossSessionMessage(payload?.prompt)) emit();
 
 const prompt = String(payload?.prompt || "").toLowerCase();
 if (!prompt) emit();

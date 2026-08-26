@@ -8,6 +8,37 @@ settled calls. Newest first. Each entry is a decision, why it was made, and the 
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
 
+## 2026-08-26 — Sibling-session messages can neither latch nor clear the hold (state-mutating prompt hooks ignore `<cross-session-message>`)
+
+**Decision.** `prompt-source-lib.mjs` had deliberately left `cross-session-message` out of
+`MACHINE_TAG_NAMES`, with a note that letting a sibling session latch a hold was Mason's call to
+make. That call is now made, prompted by an incident: on 2026-08-26 a peer session's
+`<cross-session-message>` containing "stand-down report" latched `hold.json` in worktree
+`funny-visvesvaraya-c572b7` — a halt no human asked for. The same gap ran the other, worse way:
+because the hold latch clears on *any* non-hold prompt, any sibling message arriving after Mason
+typed "stop" would have silently cleared his hold.
+
+**The split.** A new start-anchored `isCrossSessionMessage()` classifier (not an addition to
+`MACHINE_TAG_NAMES` — a sibling *is* an agent choosing words, unlike harness envelopes) is checked
+by the two **state-mutating** UserPromptSubmit hooks only:
+
+- `hold-latch-prompt.mjs` — sibling messages neither latch nor clear `hold.json`; only Mason's own
+  next message clears a hold he latched.
+- `autopilot-intent-reminder.mjs` — relayed "overnight / hands-free" phrasing neither writes
+  `OVERNIGHT-INTENT.flag` nor injects the arm-autopilot directive (relayed authorization is not
+  authorization).
+
+The five **advisory-only** phrase hooks (`dangerous-phrase-warning`, `codex-gauntlet-reminder`,
+`agent-pair-review-reminder`, `codex-to-claude-handoff-reminder`, `ship-intent-reminder`)
+deliberately keep reacting to sibling text: an extra policy reminder on relayed phrasing is safe
+noise, while suppressing a danger warning on relayed risky text would be a loosening.
+
+**Operative rule.** Any future prompt hook that mutates session state must ignore prompts that are
+machine envelopes OR begin with `<cross-session-message`; advisory hooks stay on
+`isMachineGenerated()` alone unless a new incident says otherwise. The classifier is start-anchored
+on purpose — Mason quoting a sibling envelope mid-sentence is still Mason. Regression +
+mutation-tested in `.claude/hooks/prompt-hooks.test.mjs`.
+
 ## 2026-08-26 — CORRECTION: a closed allowlist only closes what is inside it
 
 **This amends the 2026-08-25 entry immediately below**, which claimed pinning the guarded region
