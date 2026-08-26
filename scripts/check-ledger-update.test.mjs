@@ -86,6 +86,9 @@ try {
   // git itself via `git rev-parse --local-env-vars` and also strips the indexed
   // GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n payload. A hand-written denylist here
   // missed the GIT_CONFIG* family, which can override the fixture's own config.
+  // (PR #486 independently landed a GIT_-prefix filter for the same bug; this
+  // merge keeps the shared helper, whose scrub is a superset. Both child
+  // processes — the fixture git helper and the spawned guard — get it.)
   const fixtureEnv = scratchHookEnvironment(renameRepo);
   const git = (...args) =>
     execFileSync("git", args, { cwd: renameRepo, stdio: "ignore", env: fixtureEnv });

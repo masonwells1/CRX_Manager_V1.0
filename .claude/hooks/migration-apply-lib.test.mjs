@@ -20,7 +20,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
-import { evaluateMigrationApply } from "./migration-apply-lib.mjs";
+import { evaluateMigrationApply, normalizeMigName } from "./migration-apply-lib.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -334,12 +334,25 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     writeFileSync(path.join(stateDir, `migration-review-${legacy}.json`),
       JSON.stringify({ migration: legacy, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: legacyHash }), "utf8");
 
-    // Substring matching (the hook's current behaviour) hands the alias that proof.
-    const lenient = evaluateMigrationApply({
+    // FIXED (PR: exact proof-name on the MCP path). requireExactProofName now
+    // DEFAULTS to true, so the hook — which passes no such flag — refuses the alias.
+    // This assertion used to read "substring matching DOES let the alias inherit the
+    // proof (the bug)" and was a characterization test for a known-open hole.
+    const byDefault = evaluateMigrationApply({
       name: alias, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
     });
-    ok(lenient.decision === "allow", "substring matching DOES let the alias inherit the proof (the bug)");
+    denies(byDefault, "without subagent review proof", "the DEFAULT now refuses the aliased legacy name (was the bug)");
+
+    // The lenient mode still behaves the old way when a caller explicitly opts in.
+    // Kept deliberately: it documents WHY the default was flipped, and it fails loudly
+    // if anyone ever reintroduces substring matching as the default.
+    const lenient = evaluateMigrationApply({
+      name: alias, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
+      projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+      requireExactProofName: false,
+    });
+    ok(lenient.decision === "allow", "opt-in substring matching is still the vulnerable behaviour (no longer the default)");
 
     // Exact matching refuses it.
     const strict = evaluateMigrationApply({
@@ -524,6 +537,48 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   ok(!existsSync(snapshot),
     "after an apply attempt the stale snapshot is GONE — the next apply blocks on missing evidence");
   ok(res.status !== 0, `a failed transmission exits non-zero (got ${res.status})`);
+}
+
+// ── name normalization: tolerate .sql and paths, never tolerate an alias ─────
+// Substring matching used to absorb the ".sql vs no .sql" difference between what
+// write-apply-proofs.mjs records and what an apply_migration call carries. Naive
+// exact equality would have broken those legitimate applies, which is why the fix
+// normalizes both sides instead of comparing raw strings.
+ok(normalizeMigName("20260820120000_foo") === "20260820120000_foo", "bare name is unchanged");
+ok(normalizeMigName("20260820120000_foo.sql") === "20260820120000_foo", "a .sql suffix is stripped");
+ok(normalizeMigName("20260820120000_foo.SQL") === "20260820120000_foo", "the suffix strip is case-insensitive");
+ok(normalizeMigName("supabase/migrations/20260820120000_foo.sql") === "20260820120000_foo", "a posix path is reduced to its stem");
+ok(normalizeMigName("supabase" + String.fromCharCode(92) + "migrations" + String.fromCharCode(92) + "20260820120000_foo.sql")
+  === "20260820120000_foo", "a windows path is reduced to its stem");
+ok(normalizeMigName("  20260820120000_foo.sql  ") === "20260820120000_foo", "surrounding whitespace is ignored");
+ok(normalizeMigName(null) === "", "null normalizes to empty, never throws");
+ok(normalizeMigName(undefined) === "", "undefined normalizes to empty, never throws");
+// The whole point: an alias differs in its STEM, so normalization cannot rescue it.
+ok(normalizeMigName("99999999999999_alias_20260820120000_foo") !== normalizeMigName("20260820120000_foo"),
+  "an aliased name never normalizes onto the migration it wraps");
+ok(normalizeMigName("99999999999999_alias_20260210_fix_rls.sql") !== normalizeMigName("20260210_fix_rls"),
+  "the legacy 8-digit alias shape never normalizes onto its target either");
+
+// ── the widening is bounded and INTENTIONAL, and is pinned here ─────────────
+// The first draft of this change claimed it could "only refuse, never permit".
+// That was false: normalization ACCEPTS spelling variants that substring matching
+// refused, because substring matching fails once the case differs. These cases are
+// the widening. They are safe only because the proof must still be <30min old, carry
+// clean findings, and match the transmitted SQL by queryHash — so a widened NAME
+// match can never authorise different CONTENT. If anyone narrows normalizeMigName
+// again, these go red and the changelog's claim must be revisited with them.
+{
+  const oldMatch = (mig, proof) => mig.includes(proof) || proof.includes(mig) || mig === proof;
+  const widened = [
+    ["20260820120000_foo.sql", "20260820120000_foo.SQL"],
+    ["20260820120000_foo.sql", "supabase/migrations/20260820120000_foo"],
+    ["20260820120000_foo.SQL", "20260820120000_foo.Sql"],
+  ];
+  for (const [mig, proof] of widened) {
+    ok(!oldMatch(mig, proof), `substring matching REFUSED ${JSON.stringify(mig)} vs ${JSON.stringify(proof)}`);
+    ok(normalizeMigName(mig) === normalizeMigName(proof),
+      `normalization ACCEPTS it — a deliberate, bounded widening, not a fail-closed change`);
+  }
 }
 
 for (const r of roots) { try { rmSync(r, { recursive: true, force: true }); } catch { /* best effort */ } }
