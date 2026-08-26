@@ -538,12 +538,30 @@ try {
       // a hardcoded file list instead, so committing a docs/manual/ file beyond
       // that list, or a docs/loops/ ledger — both accepted here and by the hard
       // guard — still produced a false "no ledger" warning.
+      // A changelog.d fragment counts ONLY when this session ADDED it. Modifying,
+      // renaming or deleting an existing entry records nothing about the work just
+      // done — it rides on someone else's record, which is exactly what pre-commit
+      // refuses. The legacy ledgers stay status-blind on purpose: appending to
+      // CHANGELOG.md or DECISION_LOG.md IS a modify (Codex P2, PR #482). Without this
+      // split, adding ENTRY_RE here would have made the hook LOOSER than before.
+      const BACKSLASH = String.fromCharCode(92);
+      const toPosixPath = (s) => s.split(BACKSLASH).join("/").trim();
+      const fromLog = runGit(["log", "--name-status", "-M", "--pretty=format:", since])
+        .split("\n").map(s => s.trim()).filter(Boolean)
+        .map((s) => {
+          const parts = s.split("\t");
+          if (parts.length < 2) return null;
+          return { path: toPosixPath(parts[parts.length - 1]), status: parts[0].trim() };
+        }).filter(Boolean);
       const touched = [
-        ...lines.map(porcelainPath),
-        ...runGit(["log", "--name-only", "--pretty=format:", since])
-          .split("\n").map(s => s.replace(/\\/g, "/").trim()).filter(Boolean),
+        ...lines.map((l) => ({ path: porcelainPath(l), status: l.slice(0, 2) })),
+        ...fromLog,
       ];
-      if (!touched.some(f => LEDGER_RES.some(re => re.test(f)))) {
+      // "A" or an untracked "?" is an addition; a rename destination ("R100") is not.
+      const isAdded = (st) => !/^R/.test(st) && /[A?]/.test(st);
+      const counts = ({ path: p, status }) =>
+        LEDGER_RES.some((re) => re.test(p) && (re !== ENTRY_RE || isAdded(status)));
+      if (!touched.some(counts)) {
         issues.push(
           `📓 Commits exist this session but no ledger file was touched —\n` +
           `     record the work where it belongs. PREFERRED: add docs/changelog.d/<YYYY-MM-DD>-<slug>.md,\n` +
