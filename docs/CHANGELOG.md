@@ -2,6 +2,35 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-25 — the last ExcelJS workbook test gets its cold-cache timeout
+
+`productPricingSupplierEvidenceWorkbook.test.ts` was the only one of the three ExcelJS test
+files without an explicit per-test timeout, so it inherited the 5s default. Its single test
+generates and re-parses a real `.xlsx`; that costs ~350ms warm but multi-seconds on the first
+ExcelJS load in a worker, which is why it failed on the first run in a fresh worktree and
+passed on every run after. Because `.husky/pre-commit` runs the full suite, that cold miss
+hard-blocks an unrelated commit — the exact pressure toward the forbidden `--no-verify`.
+
+- Added `}, 30000)` to the test, matching the treatment its two siblings already carried
+  (`productPricingWorkbook.test.ts` 20s/45s, `supplierPricingWorkbook.test.ts` 20s). The
+  global `testTimeout` is deliberately untouched, so the rest of the suite keeps its 5s
+  contract.
+- Audited every test that generates or parses `.xlsx`. `Products.pricing-flow.test.tsx` and
+  `SupplierPricing.test.tsx` mock the workbook modules and never load ExcelJS (≤454ms
+  measured), so they need nothing. None of the three lib files loads ExcelJS from a
+  `beforeAll` or module scope, so a per-test timeout is the correct lever and covering the
+  first test per file is sufficient for the gate.
+- `docs/manual/KNOWN_ISSUES.md` records this as a distinct root cause from the existing
+  page-render full-suite flake, whose `waitFor`/`findAllBy` fix does not apply here.
+
+Proof: on the first `vitest` run after a fresh `npm ci`, the cold ExcelJS load landed on the
+sibling file `productPricingWorkbook.test.ts`, whose first test measured **7013ms** — already
+over the 5s default, and passing only because that file already carried a 20s timeout. That is
+the cost this entry's test was exposed to with no timeout of its own. Mutation proof of the new
+30s value: with `--testTimeout=100` the target test fails `Test timed out in 100ms` before the
+change and passes after, confirming the per-test timeout overrides the global. All 5
+xlsx-touching files green (48 tests); target test 346ms before, 373ms after.
+
 ## 2026-08-25 — Booking-draw pause released
 
 Mason released the booking-draw pause in-chat after the full draw-down chain and the save_job
@@ -11,6 +40,7 @@ one `draw_down_quote` overload, intent-bound body installed, zero retry receipts
 24 hours, function-surface sweeps clean. No test draw was fabricated; the first real draw is the
 final end-to-end proof and should be read back read-only when it happens. Canonical record:
 `docs/manual/DECISION_LOG.md` (2026-08-25 entry).
+
 ## 2026-08-25 — Decision Log: the dangling PR #403 reference now records a closure
 
 `docs/manual/DECISION_LOG.md` still described the narrow live-ledger recovery exception as a
