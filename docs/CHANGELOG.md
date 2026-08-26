@@ -275,6 +275,16 @@ become a trusted cost source merely because the door is now shut.
   drifts between this review and the apply, the apply fails closed instead of silently
   overwriting newer behavior. The pinned set is closed deliberately at these five routines:
   they are exactly the chain whose results become an authoritative cost source.
+- **Sol exact-SHA round (2026-08-26, pre-merge): owner-helper drift is now refused at apply
+  time, and the smoke pass token is boundary-anchored.** The merge-gate review confirmed the
+  body pins bind one signature each, so a second owner-helper overload — born EXECUTE-able by
+  the API roles on this project — or a browser grant on the pinned signature sat outside every
+  pin, and the standing sweep is not transactional with the apply. The precondition and
+  postcondition now assert exactly one overload of each owner helper and no anon/authenticated
+  EXECUTE (measured live: one each, none). `interpret-result.mjs` also stops accepting
+  identifiers that merely extend `SMOKE_PASS_ROLLBACK`, with a red/green regression test. The
+  review's other finding is the in-transaction cutover race — the owner's recorded accepted
+  risk, deliberately left open.
 - **Rebase decisions.** Merging current `main` produced eight conflicts. `main` won every
   documentation conflict — the branch's headers still claimed `20260813080000` was
   unapplied, which stopped being true on 2026-08-16. In `rpcContracts.test.ts` `main` also
