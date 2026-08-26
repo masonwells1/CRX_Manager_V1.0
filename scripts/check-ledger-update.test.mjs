@@ -71,8 +71,16 @@ eq(ledgerCheck([".claude/hooks/bash-safety.mjs", "README.md"]).ok, false, "READM
 // A rename must expose both the protected source and unprotected destination.
 // Without --no-renames, --name-only reports only src/moved.mjs and the CLI exits 0.
 const renameRepo = mkdtempSync(join(tmpdir(), "crx-ledger-rename-"));
+// Git exports GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE/GIT_PREFIX to hook children, and a child of
+// .husky/pre-commit inherits them. `cwd` does NOT override an absolute GIT_DIR, so without this
+// scrub every git call below — and the guard spawned at the end — targets the REAL repository
+// instead of the temp fixture. That failure mode is invisible to CI (which runs this test with no
+// GIT_* set) while blocking every commit in the repo. Keep the scrub on both child processes.
+const fixtureEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+);
 try {
-  const git = (...args) => execFileSync("git", args, { cwd: renameRepo, stdio: "ignore" });
+  const git = (...args) => execFileSync("git", args, { cwd: renameRepo, stdio: "ignore", env: fixtureEnv });
   git("init", "--quiet");
   git("config", "user.email", "ledger-test@example.invalid");
   git("config", "user.name", "Ledger Test");
@@ -85,6 +93,7 @@ try {
   const run = spawnSync(process.execPath, [fileURLToPath(new URL("./check-ledger-update.mjs", import.meta.url))], {
     cwd: renameRepo,
     encoding: "utf8",
+    env: fixtureEnv,
   });
   eq(run.status, 1, "protected file renamed to an unprotected path is still blocked");
   ok(`${run.stdout}${run.stderr}`.includes("LEDGER UPDATE REQUIRED"), "rename block explains the ledger requirement");

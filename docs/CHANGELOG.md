@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-25 — the JobDetail save-gate flake: retry the click, don't wait longer
+## 2026-08-26 — the JobDetail save-gate flake: retry the click, don't wait longer
 
 `src/pages/JobDetail.billingHazard.test.tsx` failed CI intermittently with
 `AssertionError: expected false to be true` on a correct, unchanged page. The obvious remedy
@@ -40,6 +40,24 @@ Proof: with that harness and a single un-retried click, 5 tests fail with the ex
 symptom, including the "Checking the label-rate policy" toast; with `clickSave()`, all 14 pass.
 Dropping the timer also made the file *faster* — 3.29s versus 8.20s before. Full suite green:
 339 files, 4770 passed | 123 skipped.
+## 2026-08-26 — Ledger-guard test no longer operates on the real repository
+
+`scripts/check-ledger-update.test.mjs` builds a throwaway Git repository to prove that renaming a
+protected file out of the protected surface is still blocked. Its Git calls passed only `cwd`, never
+a scrubbed environment. Git exports `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_WORK_TREE` and `GIT_PREFIX` to
+hook child processes, and `cwd` does **not** override an absolute `GIT_DIR` — so whenever this test
+ran from a Git hook it operated on the real repository instead of its fixture, aborting with
+`Command failed: git add .claude/hooks/protected.mjs` (status 128) and blocking the commit outright.
+
+Both child processes now inherit a `GIT_*`-scrubbed environment: the fixture's `git` helper and the
+`spawnSync` that executes the guard. The second one matters independently — with `GIT_DIR` inherited,
+the spawned guard inspected the real repository, so the rename assertion could pass or fail for
+reasons having nothing to do with the fixture it was meant to exercise.
+
+CI never caught this because CI runs the test directly with no `GIT_*` set; the defect existed only
+on the Git-hook path, where a green CI is not evidence the gate works. Verified in both directions —
+a bare run and a full hook-style environment both report 44 assertions passed, where the latter
+previously aborted with status 128.
 
 ## 2026-08-25 — PR #432 closed; control-file edits bounded; local/CI proof de-duplicated
 
