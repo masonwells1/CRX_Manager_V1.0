@@ -1043,6 +1043,13 @@ order**; they change **no settled decision**. D-A through D-X and the three 2026
 stand exactly as written. This section governs only the two subjects it names — Phase 1b's position
 in the sequence, and the workbook-as-proposal path — and nothing else in this plan.*
 
+> **Revision 9 — PR #498 review round five (two residuals).** A `manual` row carrying typed payload
+> elements is now FORBIDDEN by the purpose-conditional CHECK (an earlier clause permitted it, which
+> reopened FIX-A through a side door — and a CHECK binds every write path, the admin UPDATE policy
+> included); and the restamp path adopts the commit RPCs' lock order — product row first — reading
+> the fresh draft's version under that lock so a replacement cannot be born stale against a
+> concurrently committing sibling.
+>
 > **Revision 8 — PR #498 review round four (two residuals).** Two targeted corrections: the
 > sequencing summary's "`commit_label_draft` itself stays untouched" leftover — which contradicted
 > FIX-A's WP-1 body guard and could have led a builder to omit the one protection against the
@@ -1327,8 +1334,13 @@ function and is exactly what the plan already does elsewhere:
   **R2-4**'s field semantics as **RR-2** corrects them: **present-with-blank is present-with-null
   wearing a value's clothes, and the CHECK now refuses both.** The element rules bind **every** typed payload element regardless of
   purpose; the legacy path writes **no** typed-payload elements, so `manual` rows are unaffected in
-  practice — and a
-  `manual` row that *does* carry typed elements is held to the identical element rules. **Strict for
+  practice. **And a `manual` row carrying typed elements is not "held to the element rules" — it is
+  FORBIDDEN outright *(Revision 9; closes the round-five P1)*: the purpose-conditional CHECK requires
+  a `manual` row's typed payload fields to be absent or empty.** An earlier revision permitted the
+  combination, which reopened FIX-A through a side door — a typed payload wearing a `manual` purpose
+  would have sailed past the purpose-only body guard into the legacy scalar path. Because a CHECK
+  constraint binds **every** write path — the admin row-wide UPDATE policy included — the
+  combination cannot exist in the queue at all, on insert or by later edit. **Strict for
   the purpose the importer creates, permissive for the legacy shape — and `create_label_draft` is
   still never modified, by this amendment or by any package.**
 - **`payload_version` stays the versioning lever.** An import whose payload version is unknown is
@@ -1592,11 +1604,16 @@ Its contract, per CRX canon and **D-J** / **D-S**:
   before/after assertions** — run a real import, then show **zero rows changed** in
   `active_ingredients`, `product_active_ingredients`, `products` (every chemistry and attribute
   column), and `product_brands`.
-- **The supersede path is race-safe, and exactly one restamp wins *(R3-5)*.** On the restamp path the
-  RPC takes the stale draft's **exact id**, locks that row **`FOR UPDATE`**, and then verifies —
-  **under the lock, never before it** — that the row is still **`pending`**, still **stale** (its
+- **The supersede path is race-safe, and exactly one restamp wins *(R3-5; lock order corrected in
+  Revision 9, closing the round-five P2)*.** On the restamp path the RPC takes **the product row
+  first — the same lock order the commit RPCs use — and then** the stale draft's **exact id**,
+  locking each **`FOR UPDATE`**, and then verifies —
+  **under the locks, never before them** — that the row is still **`pending`**, still **stale** (its
   `source_product_data_version` still behind the product's current `product_data_version`), and **not
-  already superseded**. If any of the three fails it **refuses with a named error**: **no
+  already superseded**. **The fresh draft's `source_product_data_version` is read under that product
+  lock**, so the replacement cannot be born stale against a sibling draft committing concurrently —
+  without the product lock, a restamp could read the version, lose the race to a committing sibling,
+  and mint a "fresh" draft that fails its very next approval. If any of the three fails it **refuses with a named error**: **no
   authoritative product, chemistry, attribute, brand, or queue-state mutation — no supersede and no
   fresh draft — exactly one refusal audit row is written, and the stale draft remains `pending`**
   *(RR-4)*. So two reviewers clicking restamp on the same draft at the
