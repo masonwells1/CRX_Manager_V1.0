@@ -34,7 +34,9 @@ function srcFiles() {
   const files = [];
   function walk(dir) {
     let entries;
-    try { entries = readdirSync(dir); } catch { return; }
+    // Filesystem directory order is not portable. Sort before recursion so the
+    // generated node/edge order is byte-stable on Windows and GitHub's Linux CI.
+    try { entries = readdirSync(dir).sort(); } catch { return; }
     for (const e of entries) {
       const full = join(dir, e);
       let st;
