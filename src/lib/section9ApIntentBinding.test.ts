@@ -204,6 +204,17 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(quickReceive).toContain('Retry Exact Receiving');
     expect(quickReceive).toContain('disabled={receiveIntent.isIntentLocked}');
     expect(quickReceive).toContain('The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice.');
+    for (const caller of [
+      newVendorBill,
+      vendorBillDetail,
+      inventoryPage,
+      purchaseOrderDetail,
+      receivingHub,
+      quickReceive,
+    ]) {
+      expect(caller).toContain('UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE');
+      expect(caller).toContain('.isRetryExpired');
+    }
 
     expect(purchaseOrderDetail).toContain("operation: 'receive_po_items'");
     expect(purchaseOrderDetail).toContain("surface: 'purchase-order-detail'");
@@ -225,6 +236,10 @@ describe('Section 9 AP and receiving intent binding', () => {
 
   it('persists each critical payload and matching key across reopen, unmount, and reload', () => {
     expect(uncertainMutationIntent).toContain("const DURABLE_INTENT_PREFIX = 'crx:uncertain-mutation:v1:'");
+    expect(uncertainMutationIntent).toContain('const SAFE_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;');
+    expect(uncertainMutationIntent).toContain("throw new Error(UNCERTAIN_MUTATION_RETRY_EXPIRED)");
+    expect(uncertainMutationIntent).toContain('retryNotAfterMs: number;');
+    expect(uncertainMutationIntent).toContain('candidate.version === 1');
     expect(uncertainMutationIntent).toContain('window.sessionStorage.setItem(storageKey, JSON.stringify(record))');
     expect(uncertainMutationIntent).toContain('idempotencyKey,\n        intent,');
     expect(uncertainMutationIntent).toContain("throw new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE')");

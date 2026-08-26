@@ -12,7 +12,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { useUncertainMutationIntent } from '../hooks/useUncertainMutationIntent';
+import {
+  UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
+  useUncertainMutationIntent,
+} from '../hooks/useUncertainMutationIntent';
 import {
   purchaseOrderCentsToDollars,
   purchaseOrderLineTotalCents,
@@ -285,6 +288,10 @@ export default function PurchaseOrderDetail() {
 
   /* ─── Submit receive ─── */
   const handleReceive = async () => {
+    if (receiveIntent.isRetryExpired) {
+      toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
+      return;
+    }
     if (!profile) return;
 
     let request: ReceivePoIntent;
@@ -1054,7 +1061,9 @@ export default function PurchaseOrderDetail() {
           <div className="space-y-4">
             {receiveIntent.isIntentLocked && (
               <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice. Retry it unchanged to reconcile the result.
+                {receiveIntent.isRetryExpired
+                  ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                  : 'The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice. Retry it unchanged to reconcile the result.'}
               </div>
             )}
             <div className="bg-gray-50 rounded-xl p-4">
@@ -1156,7 +1165,7 @@ export default function PurchaseOrderDetail() {
               <Button variant="secondary" onClick={() => setReceiveOpen(false)} disabled={receiveIntent.isIntentLocked}>
                 Cancel
               </Button>
-              <Button onClick={handleReceive} loading={saving}>
+              <Button onClick={handleReceive} loading={saving} disabled={receiveIntent.isRetryExpired}>
                 {receiveIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Confirm & Receive'}
               </Button>
             </div>

@@ -11,7 +11,10 @@ import { runCriticalAction } from '../../lib/criticalAction';
 import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { useUncertainMutationIntent } from '../../hooks/useUncertainMutationIntent';
+import {
+  UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
+  useUncertainMutationIntent,
+} from '../../hooks/useUncertainMutationIntent';
 import { getIdempotencyMismatchResult } from '../../lib/idempotency';
 import type { InventoryPositionRow } from '../../types';
 
@@ -180,6 +183,10 @@ export default function ReceivingHubPanel() {
   }, [toast, refreshKey]);
 
   const handleReceiveConfirm = async () => {
+    if (receiveIntent.isRetryExpired) {
+      toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
+      return;
+    }
     if (!receiveTarget || !profile) return;
     const qty = Number(receiveQty);
     if (!qty || qty <= 0) {
@@ -414,7 +421,9 @@ export default function ReceivingHubPanel() {
         <div className="space-y-4">
           {receiveIntent.isIntentLocked && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.
+              {receiveIntent.isRetryExpired
+                ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                : 'The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.'}
             </div>
           )}
           <p className="text-sm text-secondary">
@@ -443,7 +452,7 @@ export default function ReceivingHubPanel() {
               icon={<PackagePlus className="w-4 h-4" />}
               onClick={handleReceiveConfirm}
               loading={receiving}
-              disabled={!receiveQty || Number(receiveQty) <= 0}
+              disabled={receiveIntent.isRetryExpired || !receiveQty || Number(receiveQty) <= 0}
             >
               {receiveIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Receive'}
             </Button>

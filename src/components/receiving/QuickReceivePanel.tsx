@@ -19,7 +19,10 @@ import Badge from '../ui/Badge';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../../lib/db';
-import { useUncertainMutationIntent } from '../../hooks/useUncertainMutationIntent';
+import {
+  UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
+  useUncertainMutationIntent,
+} from '../../hooks/useUncertainMutationIntent';
 import { getIdempotencyMismatchResult } from '../../lib/idempotency';
 import { Sentry } from '../../lib/sentry';
 import HelpTip from '../ui/HelpTip';
@@ -344,6 +347,10 @@ export default function QuickReceivePanel() {
   };
 
   const handleConfirmReceive = async () => {
+    if (receiveIntent.isRetryExpired) {
+      toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
+      return;
+    }
     if (!profile) return;
 
     let request = receiveIntent.unresolvedIntent;
@@ -721,7 +728,9 @@ export default function QuickReceivePanel() {
             </p>
             {receiveIntent.isIntentLocked && (
               <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice.
+                {receiveIntent.isRetryExpired
+                  ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                  : 'The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice.'}
               </div>
             )}
 
@@ -955,7 +964,7 @@ export default function QuickReceivePanel() {
                 </Button>
                 <Button
                   onClick={handleConfirmReceive}
-                  disabled={saving || blocked}
+                  disabled={receiveIntent.isRetryExpired || saving || blocked}
                   icon={<PackageCheck className="w-4 h-4" />}
                   title={blockReason}
                 >

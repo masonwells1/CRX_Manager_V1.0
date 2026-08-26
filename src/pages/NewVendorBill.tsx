@@ -14,7 +14,10 @@ import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
-import { useUncertainMutationIntent } from '../hooks/useUncertainMutationIntent';
+import {
+  UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
+  useUncertainMutationIntent,
+} from '../hooks/useUncertainMutationIntent';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
@@ -137,6 +140,10 @@ export default function NewVendorBill() {
   };
 
   const handleSave = async () => {
+    if (createBillIntent.isRetryExpired) {
+      toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
+      return;
+    }
     if (!vendorId) { toast('error', 'Select a vendor'); return; }
     if (!billNumber.trim()) { toast('error', 'Enter a bill number'); return; }
     if (!subtotalDollars || Number(subtotalDollars) <= 0) { toast('error', 'Enter a valid amount'); return; }
@@ -384,14 +391,16 @@ export default function NewVendorBill() {
       {/* Actions */}
       {createBillIntent.isIntentLocked && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-          The last response was uncertain. These fields are locked so a second bill cannot be created. Retry this exact bill to reconcile it.
+          {createBillIntent.isRetryExpired
+            ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+            : 'The last response was uncertain. These fields are locked so a second bill cannot be created. Retry this exact bill to reconcile it.'}
         </div>
       )}
       <div className="flex justify-end gap-3">
         <Button variant="ghost" disabled={createBillIntent.isIntentLocked} onClick={() => navigate('/accounts-payable/bills')}>
           Cancel
         </Button>
-        <Button onClick={handleSave} loading={saving}>
+        <Button onClick={handleSave} loading={saving} disabled={createBillIntent.isRetryExpired}>
           {createBillIntent.isIntentLocked ? 'Retry Exact Bill' : 'Create Bill'}
         </Button>
       </div>

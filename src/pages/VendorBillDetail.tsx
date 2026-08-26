@@ -24,7 +24,10 @@ import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { useUncertainMutationIntent } from '../hooks/useUncertainMutationIntent';
+import {
+  UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
+  useUncertainMutationIntent,
+} from '../hooks/useUncertainMutationIntent';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
@@ -205,6 +208,10 @@ export default function VendorBillDetail() {
   }, [fetchBill]);
 
   const handleRecordPayment = async () => {
+    if (paymentIntent.isRetryExpired) {
+      toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
+      return;
+    }
     if (!id || payModalBillId !== id) {
       setPayModalOpen(false);
       setPayModalBillId(null);
@@ -649,7 +656,9 @@ export default function VendorBillDetail() {
 
           {paymentIntent.isIntentLocked && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              The last response was uncertain. These fields are locked so a second payment cannot be created. Retry this exact payment to reconcile it.
+              {paymentIntent.isRetryExpired
+                ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                : 'The last response was uncertain. These fields are locked so a second payment cannot be created. Retry this exact payment to reconcile it.'}
             </div>
           )}
 
@@ -712,7 +721,7 @@ export default function VendorBillDetail() {
             >
               Cancel
             </Button>
-            <Button onClick={handleRecordPayment} loading={paying}>
+            <Button onClick={handleRecordPayment} loading={paying} disabled={paymentIntent.isRetryExpired}>
               {paymentIntent.isIntentLocked ? 'Retry Exact Payment' : 'Record Payment'}
             </Button>
           </div>

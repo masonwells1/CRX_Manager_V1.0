@@ -16,7 +16,10 @@ import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { useUncertainMutationIntent } from '../hooks/useUncertainMutationIntent';
+import {
+  UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
+  useUncertainMutationIntent,
+} from '../hooks/useUncertainMutationIntent';
 import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
@@ -583,6 +586,10 @@ export default function InventoryPage() {
   };
 
   const handleReceive = async () => {
+    if (receivePoIntent.isRetryExpired) {
+      toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
+      return;
+    }
     const qty = parseFloat(receiveQty);
     if (!qty || qty <= 0) {
       toast('error', 'Please enter a valid quantity');
@@ -1620,7 +1627,9 @@ export default function InventoryPage() {
         <div className="space-y-4">
           {receivePoIntent.isIntentLocked && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.
+              {receivePoIntent.isRetryExpired
+                ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                : 'The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.'}
             </div>
           )}
           {availablePOs.length === 0 ? (
@@ -1655,7 +1664,9 @@ export default function InventoryPage() {
           <div className="flex justify-end gap-2">
             <Button variant="secondary" disabled={receivePoIntent.isIntentLocked} onClick={() => setReceiveOpen(false)}>Cancel</Button>
             {availablePOs.length > 0 && (
-              <Button onClick={handleReceive}>{receivePoIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Receive'}</Button>
+              <Button onClick={handleReceive} disabled={receivePoIntent.isRetryExpired}>
+                {receivePoIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Receive'}
+              </Button>
             )}
           </div>
         </div>

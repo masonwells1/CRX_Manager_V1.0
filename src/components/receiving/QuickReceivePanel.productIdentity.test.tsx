@@ -173,12 +173,14 @@ describe('QuickReceivePanel Product identity', () => {
       '',
     ])}`;
     window.sessionStorage.setItem(storageKey, JSON.stringify({
-      version: 1,
+      version: 2,
       operation: 'receive_po_items',
       userId: 'user-1',
       surface: 'quick-receive',
       scope: '',
       idempotencyKey: 'receive_po_items:user-1:frozen-key',
+      createdAtMs: Date.now(),
+      retryNotAfterMs: Date.now() + (23 * 60 * 60 * 1000),
       intent: {
         itemsPayload: frozenPayload,
         performedBy: 'user-1',
@@ -207,5 +209,78 @@ describe('QuickReceivePanel Product identity', () => {
       }),
     ));
     expect(window.sessionStorage.getItem(storageKey)).toBeNull();
+  });
+
+  it('keeps an expired request locked and never calls the receiving RPC', async () => {
+    const storageKey = `crx:uncertain-mutation:v1:${JSON.stringify([
+      'receive_po_items',
+      'user-1',
+      'quick-receive',
+      '',
+    ])}`;
+    window.sessionStorage.setItem(storageKey, JSON.stringify({
+      version: 2,
+      operation: 'receive_po_items',
+      userId: 'user-1',
+      surface: 'quick-receive',
+      scope: '',
+      idempotencyKey: 'receive_po_items:user-1:expired-key',
+      createdAtMs: Date.now() - (24 * 60 * 60 * 1000),
+      retryNotAfterMs: Date.now() - (60 * 60 * 1000),
+      intent: {
+        itemsPayload: [{
+          po_item_id: 'po-item-expired',
+          quantity: 3,
+          condition: 'good',
+          lot_number: null,
+          notes: null,
+          storage_location: 'Cold Storage',
+        }],
+        performedBy: 'user-1',
+        receivedByName: 'Receiver',
+        vendor: 'Vendor B',
+        storageLocation: 'Cold Storage',
+        matchResults: [{
+          product_id: 'product-b',
+          product_name: 'Same Name',
+          quantity_requested: 3,
+          quantity_unmatched: 0,
+          has_multiple_costs: false,
+          allocations: [{
+            po_item_id: 'po-item-expired',
+            purchase_order_id: 'po-expired',
+            po_number: 'PO-EXPIRED',
+            po_vendor: 'Vendor B',
+            quantity_allocated: 3,
+            unit_cost: 25,
+            po_remaining_before: 3,
+            po_remaining_after: 0,
+          }],
+        }],
+        sourceItems: [{
+          key: 'expired-line',
+          product_id: 'product-b',
+          product_name: 'Same Name',
+          sku: 'SKU-B',
+          quantity: 3,
+          condition: 'good',
+          lot_number: '',
+          notes: '',
+        }],
+      },
+    }));
+
+    render(
+      <MemoryRouter>
+        <QuickReceivePanel />
+      </MemoryRouter>,
+    );
+
+    const retry = await screen.findByRole('button', { name: /retry exact receiving/i });
+    expect(retry).toBeDisabled();
+    expect(screen.getByText(/safe automatic retry window expired/i)).toBeInTheDocument();
+    fireEvent.click(retry);
+    expect(mocks.rpc).not.toHaveBeenCalledWith('receive_po_items', expect.anything());
+    expect(window.sessionStorage.getItem(storageKey)).toContain('expired-key');
   });
 });

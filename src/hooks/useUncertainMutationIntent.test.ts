@@ -156,4 +156,69 @@ describe('useUncertainMutationIntent', () => {
     expect(result.current.unresolvedIntent).toEqual({ billId: 'bill-a' });
     expect(result.current.getIdempotencyKey()).toBe(billAKey);
   });
+
+  it('keeps an expired request locked and refuses to return a mutating key', () => {
+    let nowMs = Date.parse('2026-08-26T12:00:00Z');
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    const options = {
+      operation: 'record_vendor_payment',
+      userId: 'admin-5',
+      surface: 'vendor-bill-detail',
+      scope: 'bill-expired',
+    };
+    const first = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    act(() => first.result.current.beginIntent({ amount: 9000 }));
+    const originalKey = first.result.current.getIdempotencyKey();
+    first.unmount();
+
+    nowMs += 23 * 60 * 60 * 1000;
+    const restored = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    expect(restored.result.current.isIntentLocked).toBe(true);
+    expect(restored.result.current.isRetryExpired).toBe(true);
+    expect(restored.result.current.beginIntent({ amount: 1 })).toEqual({ amount: 9000 });
+    expect(() => restored.result.current.getIdempotencyKey())
+      .toThrow('DURABLE_MUTATION_INTENT_RETRY_EXPIRED');
+    expect(restored.result.current.classifyFailure(new Error('DURABLE_MUTATION_INTENT_RETRY_EXPIRED')))
+      .toBe('uncertain');
+    expect(window.sessionStorage.getItem(
+      `crx:uncertain-mutation:v1:${JSON.stringify([
+        options.operation,
+        options.userId,
+        options.surface,
+        options.scope,
+      ])}`,
+    )).toContain(originalKey);
+    restored.unmount();
+    now.mockRestore();
+  });
+
+  it('fails closed for a legacy durable record that has no retry deadline', () => {
+    const options = {
+      operation: 'receive_po_items',
+      userId: 'admin-6',
+      surface: 'quick-receive',
+    };
+    const storageKey = `crx:uncertain-mutation:v1:${JSON.stringify([
+      options.operation,
+      options.userId,
+      options.surface,
+      '',
+    ])}`;
+    window.sessionStorage.setItem(storageKey, JSON.stringify({
+      version: 1,
+      operation: options.operation,
+      userId: options.userId,
+      surface: options.surface,
+      scope: '',
+      idempotencyKey: 'receive_po_items:admin-6:legacy',
+      intent: { item: 'frozen' },
+    }));
+
+    const restored = renderHook(() => useUncertainMutationIntent<{ item: string }>(options));
+    expect(restored.result.current.unresolvedIntent).toEqual({ item: 'frozen' });
+    expect(restored.result.current.isRetryExpired).toBe(true);
+    expect(() => restored.result.current.getIdempotencyKey())
+      .toThrow('DURABLE_MUTATION_INTENT_RETRY_EXPIRED');
+    expect(window.sessionStorage.getItem(storageKey)).toContain('legacy');
+  });
 });
