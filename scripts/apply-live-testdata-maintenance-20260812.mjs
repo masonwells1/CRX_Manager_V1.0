@@ -52,6 +52,12 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // joined RISKY_PATH_RES so a Codex push touching it needs an exact-head
   // proof. The apply-live-testdata risky-path anchor this transform verifies is
   // still present exactly once; the transform is identity, so input == output.
+  // Re-pinned 2026-08-24 (PR #460): the guard gained a deny for
+  // scripts/apply-migration-file.mjs, the new gated file-bytes live-apply path.
+  // Codex's own review of that PR found the new script reached production while
+  // every OTHER migration path was already blocked here (P1), so the guard had to
+  // learn the new spelling. The transform anchors below are untouched by that
+  // edit; only the pinned blobs move.
   // pushLib re-pinned 2026-08-24: added `riskyContentMatches` and
   // `describeRiskyContent`, which report WHICH risky-content pattern fired and
   // in which file, so both guards stop blaming a hard-coded list of four
@@ -84,11 +90,17 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // The untrusted block is also fenced and labelled as data. Still diagnosis
   // only: `RISKY_CONTENT_RE`, `contentIsRisky` and `RISKY_PATH_RES` remain
   // byte-for-byte unchanged, so the transform is identity and input == output.
-  codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
+  // Re-pinned 2026-08-25 (PR #463 merge of origin/main): the merge combined
+  // PR #460's codexGuard (deny for scripts/apply-migration-file.mjs) with this
+  // PR's pushLib reporter work, so codexGuard takes main's blob and pushLib
+  // keeps this branch's blob. Inputs verified against the merged working tree
+  // with `git hash-object`; outputs taken from the producer test's printed
+  // candidate, not hand-computed.
+  codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
   pushLib: "d0f68482d54e9b0381f760f44b094f290b8599e4",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
+  codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
   pushLib: "d0f68482d54e9b0381f760f44b094f290b8599e4",
 };
 

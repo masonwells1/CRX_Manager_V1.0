@@ -1,6 +1,89 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-19 UTC, read-only live re-read.** **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
+
+**Last verified: 2026-08-25 UTC, read-only live re-read after the save_job chem-unit apply.**
+**Live ledger is 976 rows, `max(version)` `20260825142708`, effective ordering high-water
+`20260820120000`** (name `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
+That migration applied live on 2026-08-25 on Mason's explicit in-chat approval; because its ledger
+`name` carries a `20260820120000` prefix, the effective ordering high-water advances past the
+draw-down chain's `20260819232000` even though the assigned `version` is later. History row 891
+and the header of `docs/reference/migration-history.md` carry the full apply record.
+(Superseded reading, kept for provenance: 975 rows / `max(version)` `20260825034622` /
+high-water `20260819232000` — correct until the save_job apply, one migration behind live.)
+All four migrations
+of the draw-down chain are applied live — the cutover barrier (2026-08-24 midday, version
+`20260824185408`) and, later that day with Mason's explicit in-chat approval, the tier split
+(`20260825025241`), the allocated-line-cents lifecycle carry (`20260825033106`), and the receipt
+intent binding (`20260825034622`). See the rollout block at the top of
+`docs/reference/migration-history.md`. This pass re-read the ledger and updated the draw-down
+entries only; it does not re-certify unrelated issue narratives below.
+
+
+**RESOLVED 2026-08-25 — the two `/patrol` findings first deferred at the round-3 review cap
+are both closed.** Kept as history because the reasoning is the evidence for the
+interactive-only scoping decision, and because a future change that "simplifies" either
+one would reopen a security property. Detail below.
+(1) **Ambient-code path — CLOSED 2026-08-24** (Mason approved the extra review round).
+`scripts/patrol/trusted-exec.mjs` now binds `git`, `gh`, and `powershell` to fixed absolute
+executables under one minimal environment (system/global Git config disabled, replacement
+objects off, system attributes off, no terminal prompt, `PATH` narrowed to the trusted Git
+directory plus the system directory, inherited `GIT_*` overrides dropped by allowlist).
+**Repository-local config — PARTIALLY closed, revised 2026-08-25. Read this before
+believing the sentence above covers everything.** `git status` runs Git's conversion
+pipeline, so repo-local command-bearing config executes. Measured against real repositories
+on 2026-08-25 rather than assumed:
+
+| vector | plain `git status` | with a command-line `-c` override |
+|---|---|---|
+| `core.fsmonitor` | **executes** | **blocked** (`-c core.fsmonitor=false`) |
+| `filter.*.clean` | **executes** | **still executes** (`-c core.attributesFile=NUL` does not help; suppressing it requires naming the driver, which requires reading the config first) |
+
+So patrol closes the fsmonitor half **by construction** — a fixed flag, no config read,
+nothing that can fail open — and leaves the filter half open, declared rather than
+half-guarded.
+
+A scanner (`worktreeFilterRisk` / `dangerousConfigKeys`) did previously refuse to run status
+in a worktree whose config defined a filter. **It was deleted on 2026-08-25** because it
+failed **open** in three consecutive review rounds (an unguarded call site; error-text
+matching that swallowed every failure; unrecognised Git boolean spellings), and because the
+residual exposure is the repo's existing baseline rather than something patrol adds:
+`scripts/fleet-status.mjs` runs `git status --porcelain -uall` across **every** worktree
+through a bare `execFileSync("git", …)` — a PATH lookup inheriting the full ambient
+environment, with no scan and none of patrol's hardening. Patrol after the deletion is
+strictly better protected than a command already run whenever Mason asks "where are we at?".
+**Open follow-up: apply the same one-line fsmonitor override to `fleet-status.mjs`.**
+**Scheduling patrol later reopens this in full and needs its own design pass — do not
+reinstate the scanner piecemeal.** Same fixed-executable pattern PR #455 established for the
+review wrapper still applies and stays.
+(2) **Forgeable parked state — CLOSED 2026-08-24.** `isParked()` now honours **labels
+only**; a `PARKED` title is ignored. Applying a label requires write access, so it carries
+authorization a self-authored title does not. **Consequence Mason should know:** PRs #361
+and #441, which were parked via title markers, are actionable again in the report — add a
+`hold`/`parked` label to either one to park it properly.
+
+**RESOLVED BY SCOPING 2026-08-24 (Mason's decision) — `/patrol` is interactive only.**
+The unattended-execution surface below did not converge, so the tool no longer claims that
+capability: no OS scheduled task, no unattended `/loop`. Every finding in that surface
+matters *only* because patrol would run hourly under Mason's account unwatched; run by hand
+it is no riskier than any other script in this repo, and by hand is where its value already
+is. The `trusted-exec.mjs` hardening stays as defence in depth. **Scheduling it later needs
+its own design pass on the execution surface, not another patch.** The history below is
+kept because it is the evidence for that decision.
+
+**The unattended-execution surface did not converge.** Three consecutive
+Codex rounds each found a *new* hole in the previous round's fix: round 3 (PATH lookups and
+repo-local filters), round 4 (a missed `execFileSync("git")` in `patrol-report.mjs`, plus
+producer validation failing open on an unbound app id), round 5 (`collectorBuild()` calling
+status without the filter check, and the guard reading only `--local` while Git also
+consumes per-worktree config when `extensions.worktreeConfig` is on). Each fix was correct
+and each was incomplete. **Recommendation on the table for Mason: scope `/patrol` to
+interactive use and drop the OS-scheduled task.** Every one of these findings matters
+*because* the tool would run hourly unattended under his account; run by hand inside a
+session it carries no more risk than any other script he runs. That removes the threat
+model rather than patching it one hole at a time.
+
+**Superseded 2026-08-22 header, kept for provenance — was last-verified 2026-08-22 UTC, read-only live re-read of the ledger and of every `job_chemicals` row.** The ledger figures below are unchanged from the 2026-08-19 pass; issue entries not named in the 2026-08-22 changes were not individually re-verified in this pass. **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
+
 of the stored ledger name), and `docs/reference/migration-history.md` uses the 14-digit definition, so this file now matches it. A plain `max(name)` returns the slug `year_end_summary`. The ordering claim holds over the prefixed subset, not over the raw column.) Two things this pass corrected in this file: (1) the header below claimed `20260812003315` / 962 rows, **nine applies** and six days of ledger staleness out of date — the six 2026-08-12 recoveries listed below, then `20260812212323`, `20260813011751` and `20260816174353`, which is 962 + 9 = 971; (2) CRX-SEC-1 **applied live on 2026-08-16** — see the new CLOSED entry immediately below — while `docs/reference/migration-history.md` row 886 still called it an unapplied local candidate. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, matching this ledger; it was **not** re-derived in this pass. **The 2026-08-10 money figures quoted further down this file are stale** — a read-only re-measure on 2026-08-18 finds `order_items.total_price`, `order_items.profit`, `commissions.commission_amount` and `commissions.order_profit` all at **0** sub-cent rows, with only `quotes.total_cost` still holding **2**; the "43 dirty rows" and "49 rows" figures below are superseded by that measurement (recorded in full in `docs/manual/CURRENT_STATE.md` section 2). Everything else below was left as separately dated historical evidence and was not re-verified in this pass.
 
 **Superseded 2026-08-17 header, kept for provenance — ledger high-water only.** Live ledger high-water is **`20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc`. This pass re-read the live ledger and nothing else: it corrects a high-water this document was stating wrongly, and it does **not** re-certify the issue narrative below, which keeps its own older dates. **The schema registry is NOT refreshed to this high-water** — it is still stamped to the 962-row mark and is now nine migrations behind. Beyond the six migrations named in the next paragraph, three more have landed since: ledger versions `20260812212323`, `20260813011751`, `20260816174353`, carrying submitted names `20260812130145_bind_return_receipts_to_intent_and_restore_overdue`, `20260813070000_pin_return_idempotency_helper_contract`, `20260813080000_lock_quote_versions_writes_to_rpc`. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded **name** when reconciling an apply.
@@ -324,7 +407,153 @@ non-acre denominator has **not** been checked, so the real-world exposure is unk
 `blendMathValidator.ts` deliberately does its own suffix stripping rather than reuse this helper, and
 documents why at `rateBaseUnit`. That sidesteps the problem for blend tickets only.
 
-**Not started.** Investigate live `rate_unit` values first; a fix without that is speculative.
+**Live `rate_unit` values checked 2026-08-22 (read-only).** All four `job_chemicals` rows carry
+`pt/ac`, `oz`, `oz`, and the junk string `32`. **None has a non-acre denominator**, so the
+real-world exposure on the job path is currently zero — but that is a fact about today's four rows,
+not a guarantee, and free-text entry can produce one at any time.
+
+**CLOSED — APPLIED LIVE 2026-08-25.** Migration `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
+(history row 891, merged as PR #446, applied to production 2026-08-25 as ledger version
+`20260825142708` on Mason's explicit in-chat approval) makes `save_job` refuse a chemical line whose rate unit has a non-acre denominator, with
+`CHEM_RATE_DENOMINATOR_NOT_ACRES`. That turns the dangerous direction — nothing on screen, hard
+failure at billing — into a refusal at save time, naming the product and the offending unit. Proven
+in a throwaway container: an `oz/cwt` line is refused and leaves no `jobs` or `job_chemicals` row.
+
+**All three spellings are covered, and the word and hyphen forms are new findings.** The migration
+refuses `oz/cwt`, `oz per cwt` *and* `oz-per-cwt`. A slash-only test was the first draft and Codex
+blocked it (P1, 2026-08-23): a spelled-out denominator whose `unit` carries the same text
+normalizes EQUAL, so the row was accepted with its quantity already derived against a non-acre
+denominator. The hyphen form was the same escape one separator away and was found in the following
+review round. The per-acre exclusion is plural-tolerant on both sides, so `gal per acres` still
+saves. **The same gap exists in the client half on PR #436** — `rateDenominatorIsUnrecognized` ends
+in `return raw.includes('/')`, so it flags neither the word nor the hyphen form. That is unfixed and
+belongs to PR #436.
+
+**A BLANK `unit` is now REFUSED when the line bills — settled by Mason, 2026-08-23.** The invariant
+can only disprove what it can measure, so a blank unit on either side used to be *skipped* — while
+`transfer_job_to_invoice` billed the line at `price_per_unit_cents x quantity` regardless. An
+unprovable line that still bills is the same hazard class as a provably wrong one, so migration
+`20260820120000` now raises `CHEM_UNIT_UNSPECIFIED` for it.
+
+Three exemptions, all deliberate and all the same rule — a line that cannot bill cannot bill
+*wrongly*, so refusing it would be pure friction: a `customer_supplied` line (contributes 0 to both
+totals), a line carrying neither a cost nor a price, and a line whose quantity is 0. The test covers
+the **cost** side as well as the price, because `total_cost_cents` feeds margin and not just the
+customer bill.
+
+The zero-quantity exemption is third for a reason worth recording. When the refusal was first
+written, the zero-quantity skip sat *below* it, so a line with a blank unit, a filled-in price and
+quantity 0 was refused — and because `performSave` re-sends the whole chemical grid, one such line
+makes the **entire job** unsaveable, not just that line. It is reachable from the ordinary UI:
+`reconcileChemAutofillUnits` leaves `unit` blank on its fallback path while the tier price is
+already populated, so a product picked before any acreage is entered lands exactly there. Three
+independent reviewers found it on the same round; the skip moved above the refusal, test `T20` pins
+it, and a mutant that moves it back turns `T20` red by name.
+
+**PRE-APPLY DATA OBLIGATION — SATISFIED 2026-08-24, and still re-run it before any apply.** Of the
+four live `job_chemicals` rows, exactly one (JOB-2026-0002) carried a `pt/ac` rate, a **blank** unit
+and both a cost and a price, so the new rule refused it. Mason chose to fix the data first and then
+close the hole. **That correction was made on 2026-08-24 with his explicit OK** — one row, `unit` set
+to `'Pt'` — and re-verified read-only: the count below now returns **zero**, and the job totals did
+not move (`219930` / `278578` before and after), because the per-unit amounts were already quoted
+per pint; only the label was missing. Behaviour test `T28` replays the corrected row and asserts
+those same two totals, so the claim is proved by execution rather than asserted.
+
+Do **not** treat that as retiring the check. "Zero rows today" is a property of the data on one day,
+not of the migration: a legacy import, a hand-built RPC call, or any save made before this migration
+applies can recreate the shape. Re-run this immediately before the apply and require **zero** rows:
+
+**The query is deliberately NOT reproduced here. Copy it from the header of
+`supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`,
+which is the only authoritative copy.** This page used to carry a second copy claiming to match it
+"character for character", and on 2026-08-24 the exact-SHA gate found the copy had gone stale: it
+was missing the fourth term, the one for a rate that is ONLY a denominator (`per acre`, naming no
+unit at all). A stale pre-apply count fails in the worst direction — it reports a false zero, and
+the apply then makes live jobs unsaveable. One rule written in two places is exactly how that
+happens, so the second place is now a pointer instead of a copy.
+
+What the query looks for, so whoever pastes it can sanity-check what they pasted: a **blank stock
+unit**; a stock unit that is nothing but a per-acre denominator; a **rate unit** that strips to
+nothing once its per-acre suffix is removed; or a rate unit that is only a denominator with no
+leading separator — all counted only on lines that actually bill (non-zero quantity, not
+customer-supplied, carrying a cost or a price). **Four terms. If the block you pasted has three, it
+is the stale version.**
+
+It took **four** versions to get right. The first three tested only a blank stock `unit`, so they missed the rate
+side entirely: `normalize_rate_unit` returns NULL whenever its base strips to empty, which a rate
+unit of `/ac` or `per acre` does — those rows are refused too, and a `unit`-only count reports zero
+while a live row is still refused. Every wrong version failed in the same direction, which is the
+dangerous one: it reads as "no operational impact on apply day" when in fact a job would become
+unsaveable. All four versions happened to return the same **one** live row, so Mason's actual data
+obligation never changed — but that was luck, not correctness.
+
+Context that keeps the risk in proportion: the affected row belongs to a **test product** on a job
+already in `invoiced` status, not to live customer work. Had it not been corrected, the cost would
+have been one operator seeing a message naming the product and asking for the Unit — but one bad
+line blocks the *whole* job, because the page re-sends the entire chemical grid on every save.
+
+**A "narrower" option was floated and does not work — recorded so it is not re-proposed.** The
+obvious softening is to refuse a blank unit only when the line carries a non-zero price. That buys
+**nothing** here: the one live blank-unit row carries both a cost *and* a price, so the narrow gate
+refuses exactly the same row as the broad one.
+
+Test `T1` in `scripts/smoke/fixtures/save-job-chem-unit-tests.sql` replays that row's
+**pre-correction** shape and asserts the refusal, so the obligation is pinned by an executable test
+rather than by this paragraph; `T28` replays the corrected row and asserts it saves at the real
+totals. `T1` is deliberately kept now that production is clean — deleting it because no row happens
+to be in that shape today would retire the only executable statement of the policy. Note this does
+**not** close the class on its own, because of the scope limit below.
+
+**A SECOND, UNRELATED LIVE DEFECT IS OPEN IN THE SAME FUNCTION, and the same parked migration
+closes it — `save_job` can create a DUPLICATE JOB, and can silently discard an edit.** Found by the
+exact-SHA `gpt-5.6-sol` proof gate on 2026-08-24; live today, since nothing has been applied. This
+is a defect in the idempotency handling, not in the unit invariant, and it is recorded here so it is
+not re-discovered as new.
+
+An *idempotency key* is the receipt number the app sends with a save so that a double-click, or a
+retry after a dropped connection, records the work once instead of twice. The live `save_job` body
+looks that key up with an unlocked `SELECT` filtered to `operation = 'save_job'`, then records the
+receipt with `ON CONFLICT (idempotency_key) DO NOTHING` — but the live uniqueness constraint is
+`idempotency_keys_idempotency_key_key`, on the **key alone**, not on the pair (verified read-only
+2026-08-24). Those two facts together are the bug. A key already spent by a *different* operation is
+invisible to the filtered lookup, so the job is created, the receipt INSERT is swallowed by the
+conflict, and the **next** retry with that key finds nothing again and creates a **second job** — a
+duplicate job is a duplicate bill. Two callers racing on one key could also both pass the unlocked
+lookup.
+
+The quieter half: even scoped correctly, a key+operation lookup matches on the key, so a key spent
+by an earlier `save_job` and then reused for a **different job or an edited payload** returns the
+earlier success. Nothing is duplicated, but the current request is never saved and the operator is
+told it was — an edited quantity, cent amount or job header silently discarded. Any caller could
+likewise replay another user's receipt. This is the identical defect shape already fixed for
+commission payouts (finding 3.5 below, PR #378, applied live 2026-08-11).
+
+Migration `20260820120000` closes both halves by routing the lookup through
+`check_idempotency_intent(text, text, uuid, text)` — installed live and already called by nine money
+RPCs (the whole return family plus create/post/void commission payment) — which advisory-locks the
+key and binds it to the calling actor and to a sha256 fingerprint of the request. Cross-operation
+reuse raises `IDEMPOTENCY_CROSS_OP_KEY_REUSE`, another actor's receipt `IDEMPOTENCY_ACTOR_MISMATCH`,
+a changed payload `IDEMPOTENCY_INTENT_MISMATCH`; an unchanged retry still replays to the same job.
+Tests `T26`, `T27`, `T29` and `T30` pin all four behaviours. **Parked with the rest of the
+migration — the hole is open on production until it applies.**
+
+**A THIRD hole in the same function, found 2026-08-24 and closed by the same parked migration: fluid ounces could be billed as dry ounces.** `normalize_rate_unit` collapses `fl oz` to `oz` without knowing the product's form. That is correct for a **liquid** product (`unit_conversions` records `oz` as "alias for fl oz", both liquid, both factor 1) and wrong for a **dry** one, where `oz` is a dry ounce — a weight — and `fl oz` is a volume. `field_app_priced_quantity`, the authoritative converter, refuses the pair outright: its dry branch sizes `fl oz` as NULL. The guard compared the normalised units **before** loading `product_form`, so a dry line with `rate_unit = 'fl oz/ac'` and `unit = 'oz'` compared equal, took the fast path, and billed with nothing proven — the guard being more lenient than the SQL that bills. Note an earlier round of this work examined this exact alias and cleared it; that clearance was right for liquids and never covered dry, which is why it is recorded here rather than treated as new. **The first fix was a HALF-fix and the gate returned the other half as a fresh HIGH.** Moving the form lookup above the equality shortcut closed only the shortcut. The path it missed is worse: `field_app_priced_quantity` is called with the **normalised** units, so `fl oz` is already `oz` before the converter sees it — handed the raw spelling its dry branch sizes it NULL and refuses, handed `oz` it sizes it 1 and converts **16:1 into pounds**. A dry line with `rate_unit = 'fl oz/ac'` against a stock `unit` of `'lb'` therefore does **not** normalise equal, skipped the new check entirely, went down the conversion path, and turned a VOLUME into a WEIGHT that the authoritative totals were derived from. The rule is now **unconditional**: on a dry product, a fluid-ounce spelling on either side is refused whatever the other side says. `T31`/`T32` pin the aliased pair both ways, `T37`/`T38` the conversion path, and `T33` pins that the LIQUID `fl oz`/`oz` pair still saves — the one line that must not move, because widening further ("the converter must agree") would refuse a liquid product priced in pounds and block whole jobs. **A test had to be INVERTED, and that is the durable lesson:** the half-fix round had written a test *requiring* the both-sides-`fl oz` dry shape to SAVE, on the reasoning that identical spellings are self-consistent. That froze the half-fix in place and would have defended it against the next reviewer. Self-consistent arithmetic in a unit the invoice cannot convert is not a saving grace. **No live product is in the refused shape** (read read-only 2026-08-24: the 85 dry products use `dry oz`, `lb`, `mg` and `oz`), but the compared units arrive in the RPC payload rather than from the catalog, so catalog cleanliness does not bound it. **A THIRD round was needed on this same rule, and it is the reason the rule is no longer a list.** The round-12 fix matched three literal spellings (`fl oz`, `floz`, `fluid ounce`). The gate returned `fl. oz` as a fresh P1: `normalize_rate_unit` has no arm for the period form, so it hands the string back unchanged, both sides of a dry line match each other, the equality shortcut fires, and the line bills with nothing proven. The app's own `src/lib/blendMathValidator.ts` states that periods are insignificant, so the client and server disagreed about what the operator typed. The rule now folds whitespace **and periods** on both sides and matches the fluid-ounce CONCEPT rather than an enumerated list; `T39` pins it. **A FOURTH round followed within hours, and it is the one worth remembering.** CodeRabbit found that the round-13 fold handled periods but not ZERO-WIDTH characters, so `fl<U+200B>oz` escaped exactly as `fl. oz` had — the same mistake twice running, because round 13 fixed the single spelling a reviewer named instead of adopting the complete rule the app already had. `src/lib/blendMathValidator.ts` defines the full lossless set (case; zero-width U+200B/200C/200D/FEFF deleted outright; any run of real whitespace including the non-breaking space; periods) and the guard now mirrors it exactly. Measured on live PostgreSQL 17.6, the round-13 expression missed five real forms. Zero-width characters are DELETED because they separate nothing (`fl<ZWSP>oz` must close up to `floz`); the non-breaking space is MAPPED TO A SPACE because it does separate, so the legitimate `dry<NBSP>oz` unit still saves — `T40` pins the refusal and `T41` pins that non-refusal, because widening a guard is never free. **Parked with the rest of the migration.**
+
+**Scope limit: `save_job` is not the only writer.** The invariant binds `save_job` alone, but
+`_close_quote_as_applied` (migration 20260703200000) and the recipe-pricing path (migration
+20260618230000) both `INSERT INTO job_chemicals` with `cost_per_unit_cents` / `price_per_unit_cents`
+and never run this check. A mismatched-unit priced line can still be created through those paths and
+billed by `transfer_job_to_invoice`. "The database is now the boundary" is therefore true of the
+job-save path and not yet true of the table.
+
+**Still open after that migration applied:** (a) is now **closed** — `rateDenominatorIsUnrecognized`
+in `chemRowDefects` landed with PR #436 (merged to `main` as `c302d296`), so the client half no
+longer shows "convertible, priced fine" for an `oz/cwt` row; the server refusal is the backstop,
+not the only signal. (`baseUnitOfRate` still collapses `oz/cwt` to `oz`, which is why the
+server-side denominator test is deliberately wider — see the residuals in the handoff.) And (b)
+the blend-ticket path is untouched — `create_invoice_from_blend_ticket` still raises
+`BLEND_TICKET_UNIT_UNCONVERTIBLE` at billing time, and `blendMathValidator.ts` still does its own
+suffix stripping.
 
 ---
 
@@ -346,10 +575,13 @@ comment in `src/lib/blendMathValidator.ts` — but it means an operator who type
 row and `Gal` on another loses the check on that ticket.
 
 **Not started.** No migration, no live state, no money path.
-## OPEN 2026-08-19 — PR #404 stamps quote-line provenance, defers the FK, and settles superseded prices
+## RESOLVED 2026-08-24 (opened 2026-08-19) — PR #404 stamps quote-line provenance, defers the FK, and settles superseded prices
 
-**Status: reworked on branch `claude/draw-down-price-tier-lines`, NOT applied, NOT merged. Awaiting
-Mason's explicit approval for both.**
+**Status: RESOLVED — the reworked tier-split migration merged to `main` as the authoritative
+artifact (PR #461) and was applied live on 2026-08-24 with Mason's explicit in-chat approval as
+ledger version `20260825025241`, followed by its two successors (`20260825033106`,
+`20260825034622`). See the rollout block at the top of `docs/reference/migration-history.md`.
+The branch named below is a superseded draft; the description below is kept as history.**
 
 **FIXED in the same migration — `restore_quote_version` REFUSES a drawn booking.** Found by
 `rls-security-reviewer` and confirmed against live `prosrc`: `save_quote` was not the only path that
@@ -504,9 +736,11 @@ PostgreSQL 17.6 in Docker, the same version live runs:
   shape **aborts** under the old non-deferrable rule and **silently wipes the stamp** under the
   retired SET NULL rule; and the residual case above **fails closed** with no orphan committed.
 
-**Not verified: the file has never been applied end-to-end by a server** — the preflight requires
-the cutover barrier (`20260816110000`) committed in a prior transaction. That happens only at
-apply, which needs Mason's OK.
+**(Historical pre-rollout note, superseded 2026-08-24.)** At review time the file had never been
+applied end-to-end by a server — the preflight requires the cutover barrier (`20260816110000`)
+committed in a prior transaction. That gap closed on 2026-08-24: the file applied live with Mason's
+explicit approval as ledger version `20260825025241` and its preflight/postflight passed in that
+committed transaction.
 
 ---
 
@@ -755,9 +989,15 @@ So: 12 gaps → 11 closed by the reconcile → 1 `cancelled` left by design → 
 
 ---
 
-## OPEN 2026-08-14 — `draw_down_quote` never rounds the weighted average PRICE, and the whole-cent guard rejects it
+## RESOLVED 2026-08-24 (opened 2026-08-14) — `draw_down_quote` never rounds the weighted average PRICE, and the whole-cent guard rejects it
 
-**Severity: HIGH, live in production, currently latent (0 reachable rows).** Found by the
+**Status: RESOLVED — the weighted average itself was eliminated by
+`20260816120000_draw_down_split_order_lines_by_price_tier`, applied live 2026-08-24 as ledger
+version `20260825025241` (one order line per booked price tier; the migration's postflight refuses
+any body that reintroduces the averaging identifier). The description below is the pre-rollout
+record of the defect.**
+
+**Severity at time of finding: HIGH, live in production, currently latent (0 reachable rows).** Found by the
 independent Codex review of PR #392 and re-verified directly against live `pg_proc` and live data
 on 2026-08-14. **This is a defect in already-applied SQL — it is not caused by the recovery PR, and
 it cannot be fixed by editing the recovered files, which must stay byte-identical to what ran.**
@@ -851,7 +1091,9 @@ rejected, its remaining soft-delete change is already delivered by both the tier
 the successor wrapper, and its live-body `md5(prosrc)` pin cannot match after that wrapper cutover.
 It is fully superseded: never "repair" it into a later `CREATE OR REPLACE public.draw_down_quote`,
 because that would overwrite the actor binding, required-key guard and receipt binding. All four
-successor migrations remain pending; this correction authorizes no live apply.
+migrations in the chain — the barrier and its three successors — are now applied live (the barrier
+on 2026-08-24 midday, the remaining three later that day with Mason's explicit approval — see
+`docs/reference/migration-history.md`); the do-not-rebuild instruction above still stands.
 
 **THE FIX IS THE TIER SPLIT, NOT THE ROUNDING — Mason changed his answer on 2026-08-16, and the
 later answer governs.** Two options were put to him. The first, at 09:51 Central, was mine: keep the
@@ -893,17 +1135,18 @@ regression risk on this path:
    `total_price`.
 
 Mason's decision 2026-08-14 was to log this bug and fix it separately rather than entangle it with
-the recovery PR. **No migration here is approved for apply** — PR #404 landing on `main` does not
-apply anything; the live apply is a separate, explicit decision. Do not re-diagnose this from
-scratch; the live evidence is above.
+the recovery PR. **(Historical: the "no migration here is approved for apply" caveat that stood
+with this entry is superseded — see below.)** Do not re-diagnose this from scratch; the live
+evidence is above.
 
-**Status of the tier-split candidate: LOCAL CANDIDATE — NOT APPLIED.** Both required gate reviewers
-returned zero blockers and a further adversarial pass found one HIGH, since fixed in-file (a draw
-against a soft-deleted booking — see the CRX-RLS-001 note on row 887). Every scenario was re-proven
-end-to-end on throwaway PostgreSQL 17 databases and the full typecheck/lint/test/build pipeline is
-green. **Nothing has touched the live database.** The live apply still needs Mason's explicit
-approval and the standard apply-guard proof. Row 887 of `docs/reference/migration-history.md`
-carries the file's pinned SQL hash and the apply obligations.
+**Status of the tier-split candidate: APPLIED LIVE 2026-08-24** (superseding the LOCAL CANDIDATE
+status this paragraph carried before the rollout). Both required gate reviewers returned zero
+blockers and a further adversarial pass found one HIGH, since fixed in-file (a draw against a
+soft-deleted booking — see the CRX-RLS-001 note on row 887); every scenario was re-proven
+end-to-end on throwaway PostgreSQL 17 databases before the apply. On 2026-08-24, with Mason's
+explicit in-chat approval and fresh apply-guard + Codex proofs, it applied live as ledger version
+`20260825025241`. Row 887 of `docs/reference/migration-history.md` carries the file's pinned SQL
+hash and the apply record.
 
 The first rounding attempt's branch, `claude/draw-down-price-rounding`, was deleted on 2026-08-16;
 its tip is preserved as tag `abandoned/draw-down-price-rounding` so the abandoned work stays
@@ -2392,6 +2635,7 @@ The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). The
 - **Offline work recovery database foundation and browser rollout are live; phone/device E2E remains pending** — all four receipt migrations, including the corrective target-row lock, were applied and verified on 2026-07-14, and PR #124's browser rollout landed on `main` before the 2026-07-15 offline verification pass. Browser retention until proven success, distinct cap/backlog handling, a safe device review panel, audited office `already_completed` / `abandoned` resolution, and cross-tab replay protection are now in code. A saved action that lacks an original queue-time target snapshot is intentionally sent to office review rather than deriving a new baseline after reconnect; therefore snapshot conflict coverage is complete only for actions that captured the snapshot when queued. Still deferred: signature/photo persistence, idempotent email/notification replay, operation-specific conflict preconditions, automatic device discovery of an office resolution, and a general duplicate-action policy. Browser storage remains device-local until the phone reconnects and stages its permanent server receipt, so destroying or clearing that storage before reconnection can still lose work. Source: `docs/audits/2026-07-15-offline-stage1b-rollout-verification.md`, `docs/audits/2026-07-14-offline-receipt-browser-office-resolution-proof.md`, and `docs/roadmap/offline-work-stage1b-receipt-design-2026-07-13.md`.
 - **Live `schema_migrations` having more entries than files on disk is OLD, pre-existing drift** — do not treat it as a new problem. Only reconcile migrations newer than the point where the current branch diverged from `origin/main`. (Session memory: `project_migration-disk-vs-live-drift`.)
 - **Page-render tests pass in isolation but flake in the full `vitest` suite** — fix with `waitFor`/`findAllBy`, not synchronous `getBy`. See `docs/reference/gotchas.md` and session memory `project_page-test-fullsuite-flake`.
+- **ExcelJS workbook tests can exceed the 5s default timeout on a cold cache** — a *different* root cause from the page-render flake above, so the `waitFor` fix does not apply. The first ExcelJS load inside a worker is multi-second (7.0s measured 2026-08-25 on the first `vitest` run after a fresh `npm ci` in a new worktree) versus ~350ms once warm, so whichever test triggers that load sits right on the 5s cap and swings by an order of magnitude. Because `.husky/pre-commit` runs the full suite, a cold-cache miss hard-blocks an unrelated commit — the exact pressure toward the forbidden `--no-verify`. Fix: an explicit generous per-test timeout as the third argument to `it(...)`, never a higher global `testTimeout` (that would relax the 5s contract for the whole suite). All three ExcelJS test files now carry one — `productPricingWorkbook.test.ts` (20s/45s), `supplierPricingWorkbook.test.ts` (20s), and `productPricingSupplierEvidenceWorkbook.test.ts` (30s, added 2026-08-25 after it flaked in PR #476). Every ExcelJS load in these files happens inside a test body (no `beforeAll`/module-scope load), and tests run in file order, so the first test in each file absorbs the cold cost — that is why covering the first test per file is sufficient for the pre-commit gate. Residual: a manually filtered run (`vitest -t "…"`) that selects a *later* test in a file makes that test pay the cold load under the 5s cap; filtered runs do not gate commits, so this is accepted rather than blanket-timed-out.
 - **PWA (installed app) needs two reloads after a production deploy** to pick up a new service-worker chunk — expected behavior, not a bug to chase.
 - **Prepay bulk-apply (`apply_remaining_prepayments` / `batch_apply_all_prepayments`) is hard-disabled in production** (`RAISE 'PREPAY_BULK_APPLY_DISABLED'`, migration `20260620200000`) rather than properly fixed — the real fix needs the shelved reserved-pool redesign (§2/§4). Per-invoice `apply_prepay_to_invoice` is unaffected.
 - **`commission_payments.total_amount` is a legacy numeric-dollar column and remains tracked debt until the full approval gate is proven** — current posting compares the header and item totals directly in the same numeric-dollar unit; only `financial_audit_log.total_impact_cents` converts the posted total to cents. Verify exact numeric arithmetic, clean finite whole-cent values, and an active finite whole-cent CHECK before treating it as an approved compatibility exception. Converting historical payment headers/items safely is a dedicated money-schema migration, not part of the gauntlet cutover; do not casually retype or rewrite it while re-emitting posting guards.
