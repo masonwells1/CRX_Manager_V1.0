@@ -52,7 +52,7 @@ So the accurate statement is narrower, in two parts:
   30 minutes old, carry clean findings, and its `queryHash` must match the SQL actually
   being transmitted — so a widened name match cannot authorise different content.
 
-Not verified: no live migration was applied to exercise this end to end.
+Not verified: no live migration was applied for end-to-end verification.
 
 All significant development milestones, in reverse chronological order.
 
