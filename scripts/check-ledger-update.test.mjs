@@ -151,6 +151,34 @@ eq(ledgerCheck(["src/pages/Invoices.tsx", "src/lib/money.ts"]).ok, true,
 eq(ledgerCheck(["src/pages/Invoices.tsx", modified("docs/changelog.d/2026-08-25-x.md")]).ok, true,
   "merely touching an existing entry without claiming it is not blocked");
 
+// ── rename STATUS beats content comparison (Codex P2, PR #482) ──────────────
+// Renaming an entry and editing one character defeats a byte-identical test, so the
+// guard asks git for rename status instead of inferring it from content.
+eq(ledgerCheck([
+  ".claude/settings.json",
+  { path: "docs/changelog.d/2026-08-26-renamed.md", status: "A",
+    content: "## 2026-08-26 - theirs" + NL + NL + "old detail!" + NL,
+    renamedFrom: "docs/changelog.d/2026-08-25-old.md" },
+]).ok, false, "a renamed-and-edited entry does NOT satisfy the guard");
+ok(/is a rename of/.test(ledgerCheck([
+  ".claude/settings.json",
+  { path: "docs/changelog.d/2026-08-26-renamed.md", status: "A",
+    content: "## 2026-08-26 - theirs" + NL + NL + "old detail!" + NL,
+    renamedFrom: "docs/changelog.d/2026-08-25-old.md" },
+]).reason || ""), "the refusal names the file it was renamed from");
+
+// ── malformed PATHS are caught on trigger-free commits too ──────────────────
+eq(ledgerCheck(["src/pages/Invoices.tsx", added("docs/changelog.d/notes.md")]).ok, false,
+  "a src-only commit adding an undated notes.md is refused");
+eq(ledgerCheck(["src/pages/Invoices.tsx", added("docs/changelog.d/2026-8-5-x.md")]).ok, false,
+  "a src-only commit adding a non-padded date is refused");
+eq(ledgerCheck(["src/pages/Invoices.tsx", added("docs/changelog.d/sub/nested.md")]).ok, false,
+  "a src-only commit adding a nested fragment is refused");
+ok(/read it as an entry/.test(ledgerCheck(["src/pages/Invoices.tsx", added("docs/changelog.d/notes.md")]).reason || ""),
+  "the refusal explains the filename will never be read as an entry");
+eq(ledgerCheck(["src/pages/Invoices.tsx", { path: "docs/changelog.d/README.md", status: "M", content: "x" }]).ok, true,
+  "editing the folder README on a src-only commit is not an attempted entry");
+
 // The entry file alone is not a trigger — it needs no ledger of its own.
 eq(ledgerCheck([added("docs/changelog.d/2026-08-25-solo.md")]).ok, true,
   "an entry file on its own is not an agent-surface trigger");

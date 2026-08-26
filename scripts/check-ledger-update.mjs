@@ -44,6 +44,17 @@ const TRIGGER_RES = [
 // A changelog.d entry is `<YYYY-MM-DD>-<slug>.md`, flat in the folder. Exported so
 // scripts/assemble-changelog.mjs applies the IDENTICAL predicate — one definition,
 // so the guard and the assembler can never disagree about what counts as an entry.
+// Anything a session drops in the folder is an ATTEMPTED entry, even when the filename is
+// wrong. Kept separate from ENTRY_RE so a malformed path is still noticed rather than
+// filtered out before it can be reported (Codex P2, PR #482).
+export function isAttemptedEntry(p) {
+  const prefix = "docs/changelog.d/";
+  const s = String(p ?? "");
+  if (!s.startsWith(prefix)) return false;
+  const rest = s.slice(prefix.length);
+  return rest.length > 0 && rest !== "README.md" && !rest.startsWith(".");
+}
+
 export const ENTRY_RE = /^docs\/changelog\.d\/\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9._-]*\.md$/;
 
 // Any ONE of these staged alongside satisfies the ledger requirement.
@@ -111,6 +122,9 @@ function entryVerdict(e, removedBodies) {
   // A pure rename arrives as D(old) + A(new) under --no-renames. Counting the added
   // half would let a commit satisfy the guard by MOVING someone else's record while
   // writing none of its own. Byte-identical content is what makes that detectable.
+  if (e.renamedFrom) {
+    return `is a rename of ${e.renamedFrom} — moving an existing record is not writing your own`;
+  }
   if (removedBodies.has(body)) {
     return "is byte-identical to an entry this same commit deletes — renaming an existing " +
       "record is not writing your own";
@@ -125,9 +139,10 @@ export function ledgerCheck(stagedFiles) {
         path: toPosix(e.path),
         status: String(e.status ?? "").toUpperCase(),
         content: e.content,
+        renamedFrom: e.renamedFrom,
       };
     }
-    return { path: toPosix(e), status: "", content: undefined };
+    return { path: toPosix(e), status: "", content: undefined, renamedFrom: undefined };
   });
   const files = entries.map((e) => e.path);
   const triggers = files.filter((f) => TRIGGER_RES.some((re) => re.test(f)));
@@ -147,8 +162,12 @@ export function ledgerCheck(stagedFiles) {
   // commit staging no entry at all is unaffected, as is one that merely touches an
   // existing entry without claiming it as its record.
   if (triggers.length === 0) {
+    const badPaths = entries
+      .filter((e) => e.status.startsWith("A") && isAttemptedEntry(e.path) && !ENTRY_RE.test(e.path))
+      .map((e) => [e.path, "is not named <YYYY-MM-DD>-<slug>.md, so nothing will ever read it as an entry"]);
     const badAdds = entryVerdicts
-      .filter(([p, v]) => v !== true && entries.some((e) => e.path === p && e.status.startsWith("A")));
+      .filter(([p, v]) => v !== true && entries.some((e) => e.path === p && e.status.startsWith("A")))
+      .concat(badPaths);
     if (badAdds.length === 0) return { ok: true, triggers: [] };
     return {
       ok: false,
@@ -196,6 +215,20 @@ if (isMain) {
     // — the added half is a genuine new entry and should count, while an R line would
     // have needed two-path parsing. The last-field read below stays as a defensive
     // measure in case --no-renames is ever dropped.
+    // A SECOND pass WITH rename detection. --no-renames above is what makes an added
+    // half visible at all, but comparing bodies only catches a byte-identical move:
+    // rename an entry and edit one character and the content test passes. Git still
+    // reports it as R<score>, so ask git directly rather than inferring from content
+    // (Codex P2, PR #482).
+    const renameSources = new Map();
+    try {
+      const out = execFileSync("git", ["diff", "--cached", "-M", "--name-status", "--diff-filter=R"], { encoding: "utf8" });
+      for (const line of out.split(NEWLINE)) {
+        const parts = line.split("	");
+        if (parts.length >= 3 && parts[0].startsWith("R")) renameSources.set(parts[2], parts[1]);
+      }
+    } catch { /* rename detection unavailable — fall back to the content comparison */ }
+
     staged = execFileSync("git", ["diff", "--cached", "--no-renames", "--name-status", "--diff-filter=ACMRTD"], { encoding: "utf8" })
       .split(/\r?\n/)
       .filter(Boolean)
@@ -203,7 +236,7 @@ if (isMain) {
         const parts = line.split("\t");
         const status = (parts[0] || "").trim();
         const p = parts[parts.length - 1];
-        const entry = { path: p, status };
+        const entry = { path: p, status, renamedFrom: renameSources.get(p) };
         // The classifier validates entry CONTENT, so read the blob here: staged for an
         // addition, HEAD for a deletion (a rename's deleted half is what proves the
         // added half is only a move). Unreadable content is left undefined, which the
