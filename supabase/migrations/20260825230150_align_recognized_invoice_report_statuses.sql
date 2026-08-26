@@ -1,6 +1,16 @@
 -- Keep earned revenue and invoice-basis COGS recognized after an invoice is
 -- aged overdue or paid. This is intentionally report-only: it writes no
 -- business rows and does not alter AR's open-balance definition.
+--
+-- APPLY-PAIR REQUIREMENT: this file intentionally pauses return-credit
+-- issuance until 20260825230209 completes and removes the barrier. Apply both
+-- files back-to-back in one governed session; this file is not safe to leave
+-- half-applied as an ordinary operating state. If the second migration fails,
+-- leave this barrier in place, repair the reported drift, and rerun the second
+-- migration. An emergency reopen requires a separately reviewed forward
+-- migration that verifies and removes the exact trigger/function; doing that
+-- before the COGS repair deliberately reopens the known zero-COGS risk and is
+-- therefore not the recommended recovery.
 
 -- Freeze return-credit issuance while the authoritative credit-header
 -- assertion and report replacements run in the same migration transaction.
@@ -97,6 +107,12 @@ $preflight$;
 -- production apply path. Persist a database-side barrier across that gap so the
 -- old header-only RPC cannot issue a revenue credit with zero COGS. The COGS
 -- migration verifies this exact barrier and removes it only after postflight.
+-- UPDATE is the governed issuance boundary: create_return never inserts a
+-- credited status or credit_invoice_id, and the existing lifecycle trigger
+-- rejects direct writes outside the RPC context. A superuser can bypass user
+-- triggers with session_replication_role=replica; that maintenance-only power
+-- is outside the application threat model and is used only by disposable proof
+-- fixtures below this migration chain.
 CREATE FUNCTION public.block_return_credit_during_cogs_cutover()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -353,6 +369,7 @@ DECLARE
   v_monthly regprocedure := to_regprocedure('public.get_monthly_summary(date,date)');
   v_year_end regprocedure := to_regprocedure('public.get_customer_year_end_summary(uuid,integer)');
   v_batch_year_end regprocedure := to_regprocedure('public.get_batch_year_end_summaries(uuid[],integer)');
+  v_cutover_barrier regprocedure := to_regprocedure('public.block_return_credit_during_cogs_cutover()');
   v_expected jsonb := jsonb_build_object(
     'get_bottom_line_pnl', '307c94d4e8de83c91b0b7ca680d529c6834e56ef5bc5b10c5c6d054fc1a265d2',
     'get_monthly_summary', 'c90c10378f5fc2feb8c41554f0fbc85280f55ca3b637e7b24654055e3dfe8330',
@@ -367,22 +384,25 @@ BEGIN
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'get_batch_year_end_summaries') <> 1 THEN
     RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_MISSING';
   END IF;
+  IF v_cutover_barrier IS NULL THEN
+    RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER';
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_proc p
-    WHERE p.oid = 'public.block_return_credit_during_cogs_cutover()'::regprocedure
+    WHERE p.oid = v_cutover_barrier
       AND p.prosecdef AND p.provolatile = 'v'
       AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
       AND pg_get_userbyid(p.proowner) = 'postgres'
   )
-     OR has_function_privilege('anon', 'public.block_return_credit_during_cogs_cutover()', 'EXECUTE')
-     OR has_function_privilege('authenticated', 'public.block_return_credit_during_cogs_cutover()', 'EXECUTE')
-     OR has_function_privilege('service_role', 'public.block_return_credit_during_cogs_cutover()', 'EXECUTE')
+     OR has_function_privilege('anon', v_cutover_barrier, 'EXECUTE')
+     OR has_function_privilege('authenticated', v_cutover_barrier, 'EXECUTE')
+     OR has_function_privilege('service_role', v_cutover_barrier, 'EXECUTE')
      OR NOT EXISTS (
        SELECT 1 FROM pg_trigger t
        WHERE t.tgrelid = 'public.returns'::regclass
          AND t.tgname = 'aa_crx_block_return_credit_during_cogs_cutover'
          AND NOT t.tgisinternal
-         AND t.tgfoid = 'public.block_return_credit_during_cogs_cutover()'::regprocedure
+         AND t.tgfoid = v_cutover_barrier
      ) THEN
     RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER';
   END IF;

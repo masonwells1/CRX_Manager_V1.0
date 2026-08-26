@@ -31,7 +31,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('_receive_return_intent_impl_20260812');
     expect(migration).toContain('return_items_return_order_item_unique UNIQUE (return_id, order_item_id)');
     expect(migration).toContain('SELECT 1 FROM public.return_items\n    WHERE order_item_id IS NOT NULL');
-    expect(migration).toContain('LOCK TABLE public.returns IN SHARE ROW EXCLUSIVE MODE');
+    expect(migration).toContain('LOCK TABLE public.returns IN ACCESS EXCLUSIVE MODE');
     expect(migration).toContain('RETURN_COGS_PREEXISTING_CREDIT_REQUIRES_BACKFILL');
     expect(migration).toContain('RETURN_COGS_RECEIVED_UNRESTOCKED_REQUIRES_REPAIR');
     expect(migration).toContain('RETURN_COGS_PREFLIGHT_UNLINKED_COST_CREDIT');

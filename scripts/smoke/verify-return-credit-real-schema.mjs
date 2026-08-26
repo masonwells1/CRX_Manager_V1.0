@@ -208,7 +208,10 @@ function concurrencyFixture(slot) {
 }
 const expectedProofs = [
   'EXISTING_RETURN_CREDIT_REPORT_GUARD_REMOVAL_DETECTED',
+  'CUTOVER_REPORT_POSTFLIGHT_GUARD_REMOVAL_DETECTED',
   'CUTOVER_BARRIER_REJECTED',
+  'CUTOVER_BARRIER_NON_CREDIT_UPDATE_PROVEN',
+  'CUTOVER_COGS_PREFLIGHT_GUARD_REMOVAL_DETECTED',
   'EXISTING_CREDIT_GUARD_REMOVAL_DETECTED',
   'RECEIVED_UNRESTOCKED_GUARD_REMOVAL_DETECTED',
   'PREFLIGHT_OVERLOAD_COLLISION_REJECTED',
@@ -489,8 +492,36 @@ try {
   assert.notEqual(guardedExistingReturnCreditReport.status, 0, 'canonical report migration accepted a pre-existing recognized return credit');
   assert.match(guardedExistingReturnCreditOutput, /RECOGNIZED_INVOICE_REPORT_PREFLIGHT_EXISTING_RETURN_CREDIT/, `canonical report migration did not reach the existing return-credit guard:\n${guardedExistingReturnCreditOutput}`);
   completedProofs.add('EXISTING_RETURN_CREDIT_REPORT_GUARD_REMOVAL_DETECTED');
+  const reportWithoutBarrierTrigger = reportMigrationSql.replace(
+    /CREATE TRIGGER aa_crx_block_return_credit_during_cogs_cutover[\s\S]*?EXECUTE FUNCTION public\.block_return_credit_during_cogs_cutover\(\);\r?\n/,
+    '',
+  );
+  assert.notEqual(reportWithoutBarrierTrigger, reportMigrationSql, 'cutover report mutant did not remove the trigger');
+  const reportWithoutBarrierPostflightGuard = reportWithoutBarrierTrigger.replace(
+    /  IF v_cutover_barrier IS NULL THEN\r?\n    RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER';\r?\n  END IF;\r?\n  IF NOT EXISTS \([\s\S]*?RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER';\r?\n  END IF;\r?\n/,
+    '',
+  );
+  assert.notEqual(reportWithoutBarrierPostflightGuard, reportWithoutBarrierTrigger, 'cutover report mutant did not remove the postflight guard');
+  const unguardedMissingReportBarrier = psql(`BEGIN;\n${reportWithoutBarrierPostflightGuard}\nROLLBACK;`, { allowFailure: true });
+  assert.equal(unguardedMissingReportBarrier.status, 0, `cutover report postflight mutant did not expose the missing-trigger acceptance path:\n${unguardedMissingReportBarrier.stderr || unguardedMissingReportBarrier.stdout}`);
+  const guardedMissingReportBarrier = psql(`BEGIN;\n${reportWithoutBarrierTrigger}\nCOMMIT;`, { allowFailure: true });
+  const guardedMissingReportBarrierOutput = `${guardedMissingReportBarrier.stdout}\n${guardedMissingReportBarrier.stderr}`;
+  assert.notEqual(guardedMissingReportBarrier.status, 0, 'canonical report postflight accepted a missing cutover trigger');
+  assert.match(guardedMissingReportBarrierOutput, /RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER/, `canonical report postflight did not reach the missing-barrier guard:\n${guardedMissingReportBarrierOutput}`);
+  assert.equal(psqlValue("SELECT (to_regprocedure('public.block_return_credit_during_cogs_cutover()') IS NULL)::int;"), '1', 'cutover report mutant left the barrier function behind');
+  completedProofs.add('CUTOVER_REPORT_POSTFLIGHT_GUARD_REMOVAL_DETECTED');
   apply(path.basename(REPORT_CANDIDATE));
   migrations.push(REPORT_CANDIDATE);
+  const nonCreditBarrierProbe = psql(`
+    BEGIN;
+    SELECT set_config('app.return_rpc', 'true', true);
+    UPDATE public.returns
+       SET status = status
+     WHERE id = '0cb556ed-467a-4949-866d-8d9edbb09522';
+    ROLLBACK;
+  `, { allowFailure: true });
+  assert.equal(nonCreditBarrierProbe.status, 0, `cutover barrier blocked an ordinary non-credit lifecycle update:\n${nonCreditBarrierProbe.stderr || nonCreditBarrierProbe.stdout}`);
+  completedProofs.add('CUTOVER_BARRIER_NON_CREDIT_UPDATE_PROVEN');
   const cutoverBarrierProbe = psql(`
     UPDATE public.returns
        SET status = 'credited'
@@ -502,6 +533,23 @@ try {
   assert.equal(psqlValue("SELECT status FROM public.returns WHERE id = '0cb556ed-467a-4949-866d-8d9edbb09522';"), 'approved', 'cutover barrier probe changed the return');
   completedProofs.add('CUTOVER_BARRIER_REJECTED');
   const cogsSql = readFileSync(COGS_CANDIDATE, 'utf8');
+  const cogsWithoutBarrierGuard = cogsSql
+    .replace(/DO \$cutover_barrier\$\r?\n[\s\S]*?\r?\n\$cutover_barrier\$;\r?\n/, '')
+    .replace(/\r?\n-- Removal is deliberately last[\s\S]*?DROP FUNCTION public\.block_return_credit_during_cogs_cutover\(\);\r?\n?$/, '');
+  assert.notEqual(cogsWithoutBarrierGuard, cogsSql, 'cutover COGS mutant did not remove the preflight and cleanup contract');
+  const missingCogsBarrierPrefix = `
+    BEGIN;
+    DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns;
+    DROP FUNCTION public.block_return_credit_during_cogs_cutover();
+  `;
+  const unguardedMissingCogsBarrier = psql(`${missingCogsBarrierPrefix}\n${cogsWithoutBarrierGuard}\nROLLBACK;`, { allowFailure: true });
+  assert.equal(unguardedMissingCogsBarrier.status, 0, `cutover COGS preflight mutant did not expose the missing-barrier acceptance path:\n${unguardedMissingCogsBarrier.stderr || unguardedMissingCogsBarrier.stdout}`);
+  const guardedMissingCogsBarrier = psql(`${missingCogsBarrierPrefix}\n${cogsSql}\nCOMMIT;`, { allowFailure: true });
+  const guardedMissingCogsBarrierOutput = `${guardedMissingCogsBarrier.stdout}\n${guardedMissingCogsBarrier.stderr}`;
+  assert.notEqual(guardedMissingCogsBarrier.status, 0, 'canonical COGS migration accepted a missing cutover barrier');
+  assert.match(guardedMissingCogsBarrierOutput, /RETURN_COGS_CUTOVER_BARRIER_MISSING/, `canonical COGS migration did not reach the missing-barrier guard:\n${guardedMissingCogsBarrierOutput}`);
+  assert.equal(psqlValue("SELECT (to_regprocedure('public.block_return_credit_during_cogs_cutover()') IS NOT NULL)::int;"), '1', 'missing-barrier proof did not roll back the canonical barrier');
+  completedProofs.add('CUTOVER_COGS_PREFLIGHT_GUARD_REMOVAL_DETECTED');
   const noExistingCreditGuardMutant = cogsSql.replace(
     /  IF EXISTS \(SELECT 1 FROM public\.returns WHERE status = 'credited'\) THEN\r?\n    RAISE EXCEPTION 'RETURN_COGS_PREEXISTING_CREDIT_REQUIRES_BACKFILL';\r?\n  END IF;\r?\n/,
     '',

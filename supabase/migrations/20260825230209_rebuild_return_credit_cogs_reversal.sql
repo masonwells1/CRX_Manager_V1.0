@@ -6,29 +6,35 @@
 -- This file must be applied transactionally; the guarded repository apply
 -- path and disposable prover both wrap each migration in one transaction.
 
--- Freeze return lifecycle writes until the migration commits. The zero-credit
--- assertion below is therefore race-free: a concurrent credit cannot appear
--- between preflight and replacement of the COGS implementation.
-LOCK TABLE public.returns IN SHARE ROW EXCLUSIVE MODE;
+-- Freeze return reads and writes until the migration commits. ACCESS EXCLUSIVE
+-- is acquired up front because removing the cutover trigger needs that mode;
+-- taking it now avoids a late lock upgrade and its reader/return_items deadlock
+-- cycle. The zero-credit assertion below is therefore race-free.
+LOCK TABLE public.returns IN ACCESS EXCLUSIVE MODE;
 
 DO $cutover_barrier$
+DECLARE
+  v_cutover_barrier regprocedure := to_regprocedure('public.block_return_credit_during_cogs_cutover()');
 BEGIN
+  IF v_cutover_barrier IS NULL THEN
+    RAISE EXCEPTION 'RETURN_COGS_CUTOVER_BARRIER_MISSING';
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_proc p
-    WHERE p.oid = to_regprocedure('public.block_return_credit_during_cogs_cutover()')
+    WHERE p.oid = v_cutover_barrier
       AND p.prosecdef AND p.provolatile = 'v'
       AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
       AND pg_get_userbyid(p.proowner) = 'postgres'
   )
-     OR has_function_privilege('anon', 'public.block_return_credit_during_cogs_cutover()', 'EXECUTE')
-     OR has_function_privilege('authenticated', 'public.block_return_credit_during_cogs_cutover()', 'EXECUTE')
-     OR has_function_privilege('service_role', 'public.block_return_credit_during_cogs_cutover()', 'EXECUTE')
+     OR has_function_privilege('anon', v_cutover_barrier, 'EXECUTE')
+     OR has_function_privilege('authenticated', v_cutover_barrier, 'EXECUTE')
+     OR has_function_privilege('service_role', v_cutover_barrier, 'EXECUTE')
      OR NOT EXISTS (
        SELECT 1 FROM pg_trigger t
        WHERE t.tgrelid = 'public.returns'::regclass
          AND t.tgname = 'aa_crx_block_return_credit_during_cogs_cutover'
          AND NOT t.tgisinternal
-         AND t.tgfoid = 'public.block_return_credit_during_cogs_cutover()'::regprocedure
+         AND t.tgfoid = v_cutover_barrier
      ) THEN
     RAISE EXCEPTION 'RETURN_COGS_CUTOVER_BARRIER_MISSING';
   END IF;

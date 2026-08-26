@@ -26,7 +26,12 @@ lines against recognized sales. The second restores every usable return into Mai
 when the inventory row is missing), rejects duplicate `(return_id, order_item_id)` values structurally,
 and then emits negative credit-memo lines against recognized source lots. It scopes the below-cost
 exception to that server-owned reversal context and leaves the independently pinned terminal-order
-guard unchanged. **Neither is
+guard unchanged. **Apply these two files back-to-back in one governed session.** The first file alone
+installs a persistent fail-closed trigger that pauses return-credit issuance; the second verifies and
+removes it only after its full postflight succeeds. If the second file fails, leave the barrier active,
+repair the reported drift, and rerun the second file. An emergency reopen would require a separately
+reviewed forward migration and would knowingly restore the zero-COGS risk, so it is not the recommended
+recovery. **Neither is
 applied live; no production change is authorized by this candidate record.**
 
 ---

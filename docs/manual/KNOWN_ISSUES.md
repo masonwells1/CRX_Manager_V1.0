@@ -26,8 +26,10 @@ omits `paid`. Production currently has zero credited returns, so the defect is r
 than an existing wrong report. Pre-apply candidates `20260825230150` and `20260825230209` contain the
 durable repair and fail closed if the zero-credit/zero-legacy-restock assumptions stop being true.
 Do not call this resolved until both migrations are reviewed, applied, and verified live.
-The first migration temporarily blocks new return-credit issuance until the second migration's
-postflight succeeds, closing the otherwise unsafe commit gap between the two files.
+The first migration blocks new return-credit issuance until the second migration's postflight succeeds,
+closing the otherwise unsafe commit gap between the two files. They must be applied back-to-back. If the
+second fails, leave the barrier active, repair the drift it reports, and rerun it; an emergency removal
+needs its own reviewed forward migration and would knowingly reopen the zero-COGS defect.
 
 **ACCEPTED POLICY — late return credits stay in the current crop season.** Mason chose this on
 2026-08-26 to keep prior customer year-end summaries stable and the rule simple. Consequently, a

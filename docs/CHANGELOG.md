@@ -747,10 +747,11 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   delivery-versus-invoice quantity check. Return credits carry negative line items for accounting
   reports, but those lines are not new customer billing and must not create a false
   delivery-parity discrepancy.
-- Fresh read-only production schema was restored into disposable PostgreSQL. Nineteen load-bearing
-  signals were exercised: seventeen guard-removal or accounting mutants plus direct cutover-barrier and current-season
-  credit attribution. The mutants cover the two return rollout guards, the
-  report's no-pre-existing-return-credit guard, the between-migration issuance barrier, public-function overload collision,
+- Fresh read-only production schema was restored into disposable PostgreSQL. Twenty-two load-bearing
+  signals were exercised: nineteen guard-removal or accounting mutants plus direct cutover rejection,
+  non-credit lifecycle allowance, and current-season credit attribution. The mutants cover the two
+  return rollout guards, the report's no-pre-existing-return-credit guard, both between-migration
+  barrier assertions, public-function overload collision,
   source-recognition trigger, customer scope, immutable cost-line ledger, zero-cost ledger rows,
   credit revenue fields, unlinked-credit guard, one-statement lineage cleanup, historical FIFO
   chronology, and current-season attribution, plus a real two-session guard-protocol race, fractional report math, and fractional
@@ -759,7 +760,9 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   let a source void complete while the credit lock was held and produced the forbidden state; the
   canonical guard waited and rejected it. The canonical candidate rejected every failure class and returned
   `RETURN_CREDIT_POSTAPPLY_LIVE_PASS source=fresh-live-read-only-schema candidate_migrations=4
-  proofs=EXISTING_RETURN_CREDIT_REPORT_GUARD_REMOVAL_DETECTED,CUTOVER_BARRIER_REJECTED,EXISTING_CREDIT_GUARD_REMOVAL_DETECTED,
+  proofs=EXISTING_RETURN_CREDIT_REPORT_GUARD_REMOVAL_DETECTED,CUTOVER_REPORT_POSTFLIGHT_GUARD_REMOVAL_DETECTED,
+  CUTOVER_BARRIER_NON_CREDIT_UPDATE_PROVEN,CUTOVER_BARRIER_REJECTED,CUTOVER_COGS_PREFLIGHT_GUARD_REMOVAL_DETECTED,
+  EXISTING_CREDIT_GUARD_REMOVAL_DETECTED,
   RECEIVED_UNRESTOCKED_GUARD_REMOVAL_DETECTED,
   PREFLIGHT_OVERLOAD_COLLISION_REJECTED,POSTFLIGHT_OVERLOAD_COLLISION_REJECTED,
   SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED,
