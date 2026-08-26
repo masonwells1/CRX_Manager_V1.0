@@ -33,6 +33,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { toLF, applyEditsForAnalysis } from "./edit-splice-lib.mjs";
 
 const STALE_DAYS = 7;
 
@@ -82,20 +83,18 @@ if (!newContent) allow();
 // inside an existing REVOKE (e.g. `service_role` -> `authenticated`) carries no
 // grant/revoke word and would slip past the fast path + parser below. Apply the
 // edit against the on-disk file so both see the FULL post-edit statements (Codex
-// 2026-06-13). Falls back to the fragment if the file can't be read/applied.
+// 2026-06-13). The splice is line-ending-safe (edit-splice-lib): an exact-match
+// splice silently no-oped on CRLF worktrees, so the guard judged the UNEDITED
+// file and denied the very Edit that added its required marker (2026-08-26).
+// Falls back to the fragment if the file can't be read/applied.
 if (toolName !== "write" && existsSync(filePath)) {
   try {
-    let disk = readFileSync(filePath, "utf8");
-    const applyOne = (o, n) => {
-      if (typeof o === "string" && o.length > 0 && typeof n === "string") disk = disk.split(o).join(n);
-    };
-    if (Array.isArray(input.edits)) input.edits.forEach((e) => applyOne(e?.old_string, e?.new_string));
-    else applyOne(input.old_string, input.new_string);
-    newContent = disk;
+    newContent = applyEditsForAnalysis(readFileSync(filePath, "utf8"), input);
   } catch {
     /* keep the fragment */
   }
 }
+newContent = toLF(newContent);
 
 // Fast path: nothing grant-shaped in the post-edit content.
 if (!/\b(grant|revoke)\b/i.test(newContent)) allow();
@@ -105,7 +104,7 @@ if (!/\b(grant|revoke)\b/i.test(newContent)) allow();
 let markerSource = newContent;
 try {
   if (toolName !== "write" && existsSync(filePath)) {
-    markerSource = readFileSync(filePath, "utf8") + "\n" + newContent;
+    markerSource = toLF(readFileSync(filePath, "utf8")) + "\n" + newContent;
   }
 } catch {
   /* fall back to new content only */

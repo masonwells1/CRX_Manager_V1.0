@@ -2,6 +2,26 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-26 — Migration guards judge the real post-edit file on CRLF worktrees
+
+`grant-change-guard.mjs` simulated an Edit against the on-disk migration with an exact
+`split(old_string).join(new_string)`. On a Windows worktree with `core.autocrlf` the file on disk is
+CRLF while the harness hands hooks LF-normalized fragments, so any fragment spanning a line boundary
+silently failed to match — the guard judged the **unedited** file. That cut both ways: it denied the
+very Edit that added the `-- caller-analysis:` marker it was demanding (the PR #401 deadlock,
+escapable only via a full-file Write), and it would have **allowed** an Edit that introduced a
+marker-less risky REVOKE, because the unedited file looked benign.
+
+Both sides of the splice are now LF-normalized in a shared helper, `.claude/hooks/edit-splice-lib.mjs`.
+`idempotency-body-check.mjs` had the sibling defect — it never looked at the file at all, judging only
+the Edit fragment — so an on-disk `-- idempotency-body-check: exempt` marker was invisible to edits
+(same deadlock), and a MultiEdit `edits` array produced empty content and was silently allowed. It now
+judges the full post-edit file through the same helper. Regression tests run the real hooks against
+CRLF fixtures with LF fragments in both directions (marker-adding edit allowed; risky marker-less edit
+denied), and both fixes were mutation-tested: reverting the normalization or the full-file view makes
+the new tests fail in each direction. `sql-safety.mjs` and `status-enum-check.mjs` still judge
+fragments only (their exempt markers have the same visibility gap) — tracked as a follow-up.
+
 ## 2026-08-26 — Ledger-guard test no longer operates on the real repository
 
 `scripts/check-ledger-update.test.mjs` builds a throwaway Git repository to prove that renaming a

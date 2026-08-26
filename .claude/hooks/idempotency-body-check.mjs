@@ -38,7 +38,8 @@
 // check_idempotency(). Conservative by design: it only fires when the lookup
 // clearly carries NO operation reference at all.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
+import { toLF, applyEditsForAnalysis } from "./edit-splice-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -86,7 +87,32 @@ if (!filePath || !filePath.endsWith(".sql") || !filePath.includes("supabase/migr
   out("allow");
 }
 
-const content = payload?.tool_input?.content || payload?.tool_input?.new_string || "";
+// Content being judged: Write -> content (the full file). For Edit/MultiEdit
+// the fragment is only PART of the file, so simulate the edit against the
+// on-disk content (line-ending-safe — edit-splice-lib) and judge the FULL
+// post-edit file. That is what makes a file-level exempt marker that already
+// lives elsewhere in the file visible to an Edit (fragment-only judging denied
+// the very migration the marker exempts — the 2026-08-26 deadlock), and it
+// closes the MultiEdit gap where an edits array produced empty content and the
+// guard silently allowed. Falls back to the fragment(s) if the file can't be
+// read/applied. LF-normalized either way so the length-preserving masker's
+// indexes stay self-consistent.
+const input = payload?.tool_input || {};
+let content = input.content || input.new_string || "";
+const isFragmentEdit = typeof input.content !== "string" &&
+  (typeof input.old_string === "string" || Array.isArray(input.edits));
+if (isFragmentEdit) {
+  try {
+    if (existsSync(filePath)) {
+      content = applyEditsForAnalysis(readFileSync(filePath, "utf8"), input);
+    } else if (Array.isArray(input.edits)) {
+      content = input.edits.map((e) => e?.new_string || "").join("\n");
+    }
+  } catch {
+    /* keep the fragment */
+  }
+}
+content = toLF(content);
 if (!content) out("allow");
 
 if (/--\s*idempotency-body-check:\s*exempt/i.test(content)) {
