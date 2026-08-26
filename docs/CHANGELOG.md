@@ -111,6 +111,57 @@ on the Git-hook path, where a green CI is not evidence the gate works. Verified 
 a bare run and a full hook-style environment both report 44 assertions passed, where the latter
 previously aborted with status 128.
 
+## 2026-08-25 — Draw-down rollout closeout: two canonical documents reconciled to live
+
+Documentation-only follow-up to the 2026-08-24 rollout below, closing the last two open review
+findings from PR #472. It stops two canonical documents from contradicting live state, and records
+the post-rollout verification that was actually performed.
+
+**The booking-draw release is NOT recorded here.** That decision has its own canonical entry in
+`docs/manual/DECISION_LOG.md` and its own changelog entry below, both landed by PR #480 from the
+session Mason gave the decision to. This entry deliberately does not restate it — one decision, one
+record. Note the distinction that entry draws and this one relies on: the pause was **procedural**,
+a team agreement during the rollout, never a code flag or RPC guard.
+
+**Observed on 2026-08-25 (read-only, no writes):** **zero unexpired and zero unbound
+`draw_down_quote` receipts**; the draw-down function ACL and `search_path` posture as recorded in
+the rollout block; production root returning **HTTP 200**; and Mason opening the production Quote
+Builder initial screen (`Q-2026-2062`), which rendered normally with no visible error and with no
+customer, item, preview, save, or submission made.
+
+**Ledger reading at the time this entry was written:** **976 rows**, `max(version)`
+`20260825142708`, effective ordering high-water `20260820120000`. The draw-down rollout itself
+closed the ledger at 975 rows / `20260825034622`; the 976th row is
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` (history row 891), applied
+live later on 2026-08-25 and unrelated to the draw-down chain. Only the ledger fact is recorded here;
+its full apply record — approval, proofs, postflight — landed separately in PR #475, from the session
+that ran it, and `.claude/schema-registry.json` was refreshed to `20260825142708` in that same PR.
+
+**Stated precisely:** that screen observation is reachability and UI-render evidence only. It is
+**not** a booking-draw transaction and **not** an end-to-end draw allocation proof. No end-to-end
+production draw has been observed, and none was manufactured — creating, updating, or submitting a
+real quote or order purely to produce evidence was ruled out.
+
+Documents corrected in this pass:
+
+- `docs/manual/CURRENT_STATE.md` — its header still reported 971 ledger rows at high-water
+  `20260816174353` with a registry matching that older boundary, contradicting `KNOWN_ISSUES.md`
+  and `migration-history.md`. Restamped to the current live reading; the old figures are kept only
+  inside an explicitly superseded provenance block.
+- `docs/audits/2026-08-24-codex-to-claude-draw-down-live-rollout-handoff.md` — its banner called
+  the handoff "fully executed" with "no instruction … actionable", which retired the two closeout
+  steps that had not happened. The banner now supersedes only the apply/reconciliation steps (1–7)
+  and points at PR #480's decision record for step 9 instead of asserting a standing pause.
+
+Not changed here: `docs/manual/DECISION_LOG.md`. An earlier revision of this branch added its own
+booking-draw entry; PR #480 landed the canonical one first, sourced from the session Mason gave the
+decision to and carrying release preconditions this branch had not read. That entry is better
+sourced, so this branch's duplicate was dropped rather than merged alongside it — two entries for
+one decision on one date is the same defect this pass exists to remove. Same disposition as the
+`save_job` record, which deferred to PR #475.
+
+No code, schema, live data, or migration was changed by this entry.
+
 ## 2026-08-25 — the routine migration door now refuses a stolen reviewer proof
 
 PR #470 closed a proof-replay hole in `scripts/apply-migration-file.mjs` by adding
