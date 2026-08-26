@@ -44,6 +44,11 @@ function runHook(toolName, toolInput) {
   });
 }
 function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
+// Allow-side assertions must be AFFIRMATIVE: a crashed hook produces empty
+// stdout, and `!isDeny` would read that as an allow (CodeRabbit PR #489).
+function isAllow(r) {
+  return !r.error && r.status === 0 && r.stdout.includes('"permissionDecision":"allow"');
+}
 
 const CRLF = (s) => s.replace(/\n/g, "\r\n");
 
@@ -57,7 +62,7 @@ try {
     content: "-- caller-analysis: my_fn :: UI callsite removed in this branch\n" +
       "REVOKE EXECUTE ON FUNCTION public.my_fn(uuid) FROM authenticated;\n",
   });
-  ok(!isDeny(r), "Write: the same REVOKE with a caller-analysis marker is allowed");
+  ok(isAllow(r), "Write: the same REVOKE with a caller-analysis marker is allowed");
 
   // ── THE DEADLOCK (allow direction): CRLF disk, LF fragments, marker-adding
   // Edit. The fragments span a line boundary — that is what makes an exact
@@ -72,7 +77,7 @@ try {
     new_string: "-- test migration\n-- caller-analysis: my_fn :: UI callsite removed in this branch\n" +
       "REVOKE EXECUTE ON FUNCTION public.my_fn(uuid) FROM authenticated;",
   });
-  ok(!isDeny(r), "CRLF disk + multi-line LF Edit that ADDS the caller-analysis marker is allowed (deadlock fixed)");
+  ok(isAllow(r), "CRLF disk + multi-line LF Edit that ADDS the caller-analysis marker is allowed (deadlock fixed)");
 
   // Same edit shape via MultiEdit's edits array.
   r = runHook("MultiEdit", {
@@ -82,7 +87,7 @@ try {
         "REVOKE EXECUTE ON FUNCTION public.my_fn(uuid) FROM authenticated;",
     }],
   });
-  ok(!isDeny(r), "CRLF disk + LF MultiEdit that adds the marker is allowed too");
+  ok(isAllow(r), "CRLF disk + LF MultiEdit that adds the marker is allowed too");
 
   // ── FAIL-OPEN direction: CRLF disk looks benign; the multi-line LF Edit
   // introduces the risky REVOKE. Broken splice judged the unedited (benign)
@@ -108,13 +113,27 @@ try {
     old_string: "-- lf migration",
     new_string: "-- lf migration\n-- caller-analysis: my_fn :: cron runs as postgres owner, unaffected",
   });
-  ok(!isDeny(r), "LF disk: marker-adding Edit is allowed (unchanged behavior)");
+  ok(isAllow(r), "LF disk: marker-adding Edit is allowed (unchanged behavior)");
 
   r = runHook("Edit", {
     old_string: "-- caller-analysis",
     new_string: "-- removed-analysis",
   });
-  ok(isDeny(r), "LF disk: an Edit leaving a risky REVOKE without a marker is denied (unchanged behavior)");
+  ok(isDeny(r), "an Edit whose old_string matches nothing still judges the on-disk content (marker-less REVOKE denied)");
+
+  // ── Marker REMOVAL (CodeRabbit PR #489): disk has the marker AND the risky
+  // REVOKE; the Edit deletes the marker line. Scanning the pre-edit disk
+  // content alongside the reconstruction would still see the old marker and
+  // allow a now-unjustified REVOKE. ──
+  writeFileSync(migPath, CRLF(
+    "-- caller-analysis: my_fn :: UI callsite removed in this branch\n" +
+    "REVOKE EXECUTE ON FUNCTION public.my_fn(uuid) FROM authenticated;\n"
+  ));
+  r = runHook("Edit", {
+    old_string: "-- caller-analysis: my_fn :: UI callsite removed in this branch\n",
+    new_string: "",
+  });
+  ok(isDeny(r), "an Edit that REMOVES the caller-analysis marker from a risky-REVOKE file is denied");
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

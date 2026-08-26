@@ -721,6 +721,11 @@ function runHookOnDisk(toolInput) {
 const VIOLATING_FN = fn(`UPDATE customers SET name = 'x' WHERE id = 1;`);
 const VIOLATING_FN_V2 = fn(`UPDATE customers SET name = 'y' WHERE id = 1;`);
 
+// Allow-side assertions must be AFFIRMATIVE: a crashed hook produces empty
+// stdout, and `!isDeny` would read that as an allow (CodeRabbit PR #489).
+const isAllow = (res) => !res.error && res.status === 0 &&
+  res.stdout.includes('"permissionDecision":"allow"');
+
 try {
   // Marker-ADDING edit (allow direction, CRLF-sensitive): the multi-line LF
   // old_string only matches the CRLF disk when the splice normalizes line
@@ -731,14 +736,14 @@ try {
     old_string: VIOLATING_FN,
     new_string: "-- idempotency-body-check: exempt\n" + VIOLATING_FN,
   });
-  ok(!isDeny(r2), "CRLF disk: multi-line LF Edit that ADDS the exempt marker is allowed (CRLF splice fixed)");
+  ok(isAllow(r2), "CRLF disk: multi-line LF Edit that ADDS the exempt marker is allowed (CRLF splice fixed)");
 
   // THE DEADLOCK (allow direction): the exempt marker lives ON DISK (CRLF);
   // the LF Edit rewrites the function without restating the marker. Fragment
   // judging saw an unwired function and no marker → deny.
   writeFileSync(migPath, CRLF("-- idempotency-body-check: exempt\n" + VIOLATING_FN + "\n"));
   r2 = runHookOnDisk({ old_string: VIOLATING_FN, new_string: VIOLATING_FN_V2 });
-  ok(!isDeny(r2), "CRLF disk with on-disk exempt marker: LF Edit rewriting the function is allowed (deadlock fixed)");
+  ok(isAllow(r2), "CRLF disk with on-disk exempt marker: LF Edit rewriting the function is allowed (deadlock fixed)");
 
   // Regression (deny direction): no marker anywhere — an LF Edit that ADDS an
   // unwired mutating function to a benign CRLF file is still denied.
