@@ -268,6 +268,24 @@ one `draw_down_quote` overload, intent-bound body installed, zero retry receipts
 final end-to-end proof and should be read back read-only when it happens. Canonical record:
 `docs/manual/DECISION_LOG.md` (2026-08-25 entry).
 
+## 2026-08-25 — Decision Log: the #403 closure now has its own dated entry
+
+Follow-up on PR #478, closing the convention gap that both Codex and the reviewer flagged there.
+That PR corrected the stale forward-reference to PR #403 in place, inside the 2026-08-14 override
+entry. But `DECISION_LOG.md`'s own footer says never to rewrite a past entry — a reversal gets a
+**new** dated entry instead. Correcting in place was right (the old text made a false claim about
+current policy, so leaving it would have kept the exact trap #478 removed), but it left the
+reversal invisible to anyone scanning the log by date. Mason approved adding the entry.
+
+- New dated entry, `2026-08-25 — PR #403 closed: the live-ledger recovery exception is NOT in force`,
+  recording the owner decision, the evidence link, why it was closed (recovery already done by hand
+  on 2026-08-14 via `3a2a0ca0`/PR #392; no recurrence in 188 commits; five Sol rounds on the
+  attestation itself), and the operative rule for a future verbatim recovery.
+- Its **Supersedes** block names the specific forward-reference inside the 2026-08-14 entry that it
+  reverses — not that entry as a whole — and states plainly that the publication override stands
+  unchanged and never depended on #403.
+- Pure addition: 28 lines added to `DECISION_LOG.md`, nothing removed or reworded.
+
 ## 2026-08-25 — Decision Log: the dangling PR #403 reference now records a closure
 
 `docs/manual/DECISION_LOG.md` still described the narrow live-ledger recovery exception as a
