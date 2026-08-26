@@ -13,7 +13,7 @@ alarms, none of them the actual fault. Its `git config user.email` / `user.name`
 were also writing the fixture identity into the real repository's config.
 
 Two hypotheses were tested and **discarded** before the real one was found: the new
-new git-spawning test of mine (a sandbox reproduction did not flip the flag) and concurrent commits
+git-spawning test of mine (a sandbox reproduction did not flip the flag) and concurrent commits
 across worktrees (a peer session held every git operation and it still flipped). The hold
 is what made the cause findable, by ruling out everything else.
 

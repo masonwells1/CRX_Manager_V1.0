@@ -559,8 +559,13 @@ try {
       ];
       // "A" or an untracked "?" is an addition; a rename destination ("R100") is not.
       const isAdded = (st) => !/^R/.test(st) && /[A?]/.test(st);
+      // An added fragment must also SURVIVE the session: adding an entry and later
+      // deleting or reverting it leaves the historical "A" in the session log while
+      // no record remains for anyone to read (CodeRabbit, PR #482). Existence is
+      // checked against the working tree — the state the next session inherits.
       const counts = ({ path: p, status }) =>
-        LEDGER_RES.some((re) => re.test(p) && (re !== ENTRY_RE || isAdded(status)));
+        LEDGER_RES.some((re) => re.test(p) &&
+          (re !== ENTRY_RE || (isAdded(status) && existsSync(path.join(projectDir, p)))));
       if (!touched.some(counts)) {
         issues.push(
           `📓 Commits exist this session but no ledger file was touched —\n` +
