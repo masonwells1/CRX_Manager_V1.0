@@ -20,6 +20,10 @@ import path from "node:path";
 import os from "node:os";
 
 import { withFileLock, normalizedSqlHash } from "./ledger-lock-lib.mjs";
+// The dated-fragment pattern is imported, never re-expressed: a second copy here would
+// drift from the guard and this hook would start contradicting what pre-commit enforces.
+// Shared guard logic lives in .claude/hooks/, not scripts/ (CodeRabbit Major, PR #482).
+import { ENTRY_RE, entryContentVerdict, isCountableFragmentFile } from "./changelog-entry-lib.mjs";
 
 let payload = {};
 try {
@@ -508,6 +512,7 @@ if (newOrChanged.length >= 5) {
 // / git error → skip silently (parallel sessions share tmpdir snapshots, so this
 // is a prompt, not a proof — same block-by-listing semantics as the items above).
 const LEDGER_RES = [
+  ENTRY_RE,
   /^docs\/CHANGELOG\.md$/,
   /^docs\/manual\/[^/]+\.md$/,
   /^docs\/reference\/agent-guardrails\.md$/,
@@ -534,16 +539,54 @@ try {
       // a hardcoded file list instead, so committing a docs/manual/ file beyond
       // that list, or a docs/loops/ ledger — both accepted here and by the hard
       // guard — still produced a false "no ledger" warning.
+      // A changelog.d fragment counts ONLY when this session ADDED it. Modifying,
+      // renaming or deleting an existing entry records nothing about the work just
+      // done — it rides on someone else's record, which is exactly what pre-commit
+      // refuses. The legacy ledgers stay status-blind on purpose: appending to
+      // CHANGELOG.md or DECISION_LOG.md IS a modify (Codex P2, PR #482). Without this
+      // split, adding ENTRY_RE here would have made the hook LOOSER than before.
+      const BACKSLASH = String.fromCharCode(92);
+      const toPosixPath = (s) => s.split(BACKSLASH).join("/").trim();
+      const fromLog = runGit(["log", "--name-status", "-M", "--pretty=format:", since])
+        .split("\n").map(s => s.trim()).filter(Boolean)
+        .map((s) => {
+          const parts = s.split("\t");
+          if (parts.length < 2) return null;
+          return { path: toPosixPath(parts[parts.length - 1]), status: parts[0].trim() };
+        }).filter(Boolean);
       const touched = [
-        ...lines.map(porcelainPath),
-        ...runGit(["log", "--name-only", "--pretty=format:", since])
-          .split("\n").map(s => s.replace(/\\/g, "/").trim()).filter(Boolean),
+        ...lines.map((l) => ({ path: porcelainPath(l), status: l.slice(0, 2) })),
+        ...fromLog,
       ];
-      if (!touched.some(f => LEDGER_RES.some(re => re.test(f)))) {
+      // "A" or an untracked "?" is an addition; a rename destination ("R100") is not.
+      const isAdded = (st) => !/^R/.test(st) && /[A?]/.test(st);
+      // An added fragment must also SURVIVE the session AS A VALID RECORD: adding an
+      // entry and later deleting, truncating, or emptying it leaves the historical
+      // "A" in the session log while nothing readable remains (CodeRabbit + Codex,
+      // PR #482 — counted-without-validated, the same class as the quotePath
+      // fail-open). Stat first — a DIRECTORY named like a fragment must not count
+      // (existsSync alone accepted one) — then validate the surviving content with
+      // the SAME shared rules the pre-commit guard applies. Both checks read the
+      // working tree: the state the next session actually inherits.
+      const survivingValidFragment = (p) => {
+        const abs = path.join(projectDir, p);
+        if (!isCountableFragmentFile(abs)) return false;
+        try {
+          return entryContentVerdict(p, readFileSync(abs, "utf8")) === true;
+        } catch {
+          return false;
+        }
+      };
+      const counts = ({ path: p, status }) =>
+        LEDGER_RES.some((re) => re.test(p) &&
+          (re !== ENTRY_RE || (isAdded(status) && survivingValidFragment(p))));
+      if (!touched.some(counts)) {
         issues.push(
           `📓 Commits exist this session but no ledger file was touched —\n` +
-          `     record the work where it belongs: docs/manual/*.md (DECISION_LOG for a policy or business\n` +
-          `     call, KNOWN_ISSUES for a bug, OWNER_PLAYBOOK for a how-to), docs/reference/migration-history.md\n` +
+          `     record the work where it belongs. PREFERRED: add docs/changelog.d/<YYYY-MM-DD>-<slug>.md,\n` +
+          `     a new dated file of your own — two sessions never write the same path, so it cannot\n` +
+          `     conflict. Otherwise docs/manual/*.md (DECISION_LOG for a policy or business call,\n` +
+          `     KNOWN_ISSUES for a bug, OWNER_PLAYBOOK for a how-to), docs/reference/migration-history.md\n` +
           `     (a schema change), docs/reference/agent-guardrails.md (guard or hook behavior), a docs/loops/\n` +
           `     ledger, or docs/CHANGELOG.md for general work (node scripts/log-session.mjs --summary '...').`
         );
