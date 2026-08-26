@@ -53,8 +53,11 @@ gets them wrong is blocked rather than merely discouraged:
   judges is exactly what the commit will contain. An entry whose content cannot be read
   is treated as unverifiable and does not count — that direction fails closed on purpose.
 
-These apply even when a commit touches no agent-surface file: a `src/`-only commit cannot
-drop a malformed entry into this folder unchecked.
+These are refused unconditionally. A malformed entry does not become acceptable because
+the commit also staged something else the guard likes: not an agent-surface trigger, not
+a `docs/CHANGELOG.md` update, and not a well-formed sibling entry. A `src/`-only commit
+cannot drop a malformed entry in here either. If it is added to this folder and it will
+not be read as a record, the commit is blocked, full stop.
 
 ## Rules
 

@@ -179,6 +179,34 @@ ok(/read it as an entry/.test(ledgerCheck(["src/pages/Invoices.tsx", added("docs
 eq(ledgerCheck(["src/pages/Invoices.tsx", { path: "docs/changelog.d/README.md", status: "M", content: "x" }]).ok, true,
   "editing the folder README on a src-only commit is not an attempted entry");
 
+// ── a legacy ledger update does NOT launder a malformed fragment ────────────
+// Regression for the hole CodeRabbit found on PR #482: the malformed-path check used
+// to sit inside the trigger-free branch, so a commit that staged a trigger AND a valid
+// docs/CHANGELOG.md update satisfied hasLedger and carried the junk fragment in with it.
+eq(ledgerCheck([".claude/settings.json", modified("docs/CHANGELOG.md"),
+  added("docs/changelog.d/notes.md")]).ok, false,
+  "a trigger plus a legacy ledger update does not launder an undated notes.md");
+eq(ledgerCheck([".claude/settings.json", modified("docs/CHANGELOG.md"),
+  added("docs/changelog.d/sub/nested.md")]).ok, false,
+  "a trigger plus a legacy ledger update does not launder a nested fragment");
+ok(/read it as an entry/.test(ledgerCheck([".claude/settings.json", modified("docs/CHANGELOG.md"),
+  added("docs/changelog.d/notes.md")]).reason || ""),
+  "the refusal still explains why the filename will never be read");
+// A well-formed sibling does not excuse the malformed one either.
+eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-26-real.md"),
+  added("docs/changelog.d/notes.md")]).ok, false,
+  "a valid entry alongside a malformed one does not excuse the malformed one");
+eq(ledgerCheck([".claude/settings.json", modified("docs/CHANGELOG.md"),
+  added("docs/changelog.d/2026-08-26-real.md", "## 2026-08-26" + NL)]).ok, false,
+  "a legacy ledger update does not launder an entry with no detail beneath its heading");
+// The paths that were already accepted stay accepted — this is a narrowing, not a rewrite.
+eq(ledgerCheck([".claude/settings.json", modified("docs/CHANGELOG.md"),
+  added("docs/changelog.d/2026-08-26-real.md")]).ok, true,
+  "a trigger with both a legacy ledger update and a valid entry still passes");
+eq(ledgerCheck([".claude/settings.json", modified("docs/CHANGELOG.md"),
+  { path: "docs/changelog.d/README.md", status: "M", content: "x" }]).ok, true,
+  "editing the folder README alongside a legacy ledger update is still fine");
+
 // The entry file alone is not a trigger — it needs no ledger of its own.
 eq(ledgerCheck([added("docs/changelog.d/2026-08-25-solo.md")]).ok, true,
   "an entry file on its own is not an agent-surface trigger");

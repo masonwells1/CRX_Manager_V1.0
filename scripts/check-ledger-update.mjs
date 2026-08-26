@@ -156,27 +156,30 @@ export function ledgerCheck(stagedFiles) {
     .filter((e) => ENTRY_RE.test(e.path))
     .map((e) => [e.path, entryVerdict(e, removedBodies)]);
 
-  // A staged fragment is validated even when nothing triggers the ledger requirement:
-  // a src-only commit must not be able to drop an empty or malformed entry into the
-  // folder unchecked (Codex P2, PR #482). Only a MALFORMED ADDED entry blocks here; a
-  // commit staging no entry at all is unaffected, as is one that merely touches an
-  // existing entry without claiming it as its record.
-  if (triggers.length === 0) {
-    const badPaths = entries
-      .filter((e) => e.status.startsWith("A") && isAttemptedEntry(e.path) && !ENTRY_RE.test(e.path))
-      .map((e) => [e.path, "is not named <YYYY-MM-DD>-<slug>.md, so nothing will ever read it as an entry"]);
-    const badAdds = entryVerdicts
-      .filter(([p, v]) => v !== true && entries.some((e) => e.path === p && e.status.startsWith("A")))
-      .concat(badPaths);
-    if (badAdds.length === 0) return { ok: true, triggers: [] };
+  // A malformed ADDED entry is refused no matter what else the commit stages. This runs
+  // AHEAD of the trigger branch on purpose: when it lived inside `triggers.length === 0`,
+  // a commit that touched the agent surface AND updated a legacy ledger file satisfied
+  // hasLedger and carried an unreadable fragment in with it, contradicting the contract
+  // the README states (CodeRabbit Major, PR #482). A src-only commit must not be able to
+  // drop an empty or misnamed entry into the folder either (Codex P2, same PR).
+  // Only a MALFORMED ADDED entry blocks here; a commit staging no entry at all is
+  // unaffected, as is one that merely touches an existing entry without claiming it.
+  const badPaths = entries
+    .filter((e) => e.status.startsWith("A") && isAttemptedEntry(e.path) && !ENTRY_RE.test(e.path))
+    .map((e) => [e.path, "is not named <YYYY-MM-DD>-<slug>.md, so nothing will ever read it as an entry"]);
+  const badAdds = entryVerdicts
+    .filter(([p, v]) => v !== true && entries.some((e) => e.path === p && e.status.startsWith("A")))
+    .concat(badPaths);
+  if (badAdds.length > 0) {
     return {
       ok: false,
-      triggers: [],
+      triggers,
       reason: "This commit adds docs/changelog.d/ entries that do not record anything:" + NEWLINE +
         badAdds.map(([p, why]) => "  - " + p + " " + why).join(NEWLINE) + NEWLINE +
         "Fix the entry rather than leaving an unreadable record in the folder.",
     };
   }
+  if (triggers.length === 0) return { ok: true, triggers: [] };
 
   const hasLedger =
     entryVerdicts.some(([, v]) => v === true) ||
