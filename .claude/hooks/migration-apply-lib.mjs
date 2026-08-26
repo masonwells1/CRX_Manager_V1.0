@@ -340,7 +340,7 @@ export function evaluateMigrationApply({
   const MAX_AGE_MS = PROOF_MAX_AGE_MS;
 
   let validProof = null;
-  let nameMismatchProof = null;
+  const freshCleanProofNames = [];
   for (const dir of proofDirs) {
     if (validProof) break;
     try {
@@ -390,7 +390,7 @@ export function evaluateMigrationApply({
         // right there, and the natural next move is to re-mint — which will not help.
         if (proofName && !nameMatches) {
           const fnd = (data.findings || "").toString();
-          if (fnd === "clean" || fnd === "blockers-fixed") nameMismatchProof = { file: f, proofName };
+          if (fnd === "clean" || fnd === "blockers-fixed") freshCleanProofNames.push(proofName);
         }
         if (proofName && nameMatches) {
           const findings = (data.findings || "").toString();
@@ -510,14 +510,15 @@ export function evaluateMigrationApply({
   // No valid proof — block with explicit instructions.
   return block(
     `MIGRATION APPLY GUARD: Cannot apply migration "${migName || "(unnamed)"}" without subagent review proof.\n\n` +
-    (nameMismatchProof
-      ? `A fresh, clean proof IS present, but it names a DIFFERENT migration:\n` +
-        `  proof file : ${nameMismatchProof.file}\n` +
-        `  proof names: "${nameMismatchProof.proofName}"\n` +
+    (freshCleanProofNames.length
+      ? `Fresh, clean proof(s) ARE present, but none of them names this migration:\n` +
+        freshCleanProofNames.slice(0, 6).map((n) => `  proof names: "${n}"\n`).join("") +
+        (freshCleanProofNames.length > 6 ? `  … and ${freshCleanProofNames.length - 6} more\n` : "") +
         `  you applied: "${migName}"\n` +
-        `A proof binds to exactly ONE migration, so it cannot authorise this one. If those\n` +
-        `two names should be identical, the file being applied is not the file that was\n` +
-        `reviewed — check the filename. Re-minting will NOT help until the names agree.\n\n`
+        `A proof binds to exactly ONE migration, so a proof for another one cannot authorise\n` +
+        `this apply — which is normal and expected while applying a BATCH. If one of the names\n` +
+        `above should be identical to yours, the file being applied is not the file that was\n` +
+        `reviewed: check the filename. Re-minting will NOT help until the names agree.\n\n`
       : "") +
     `REQUIRED STEPS before retrying this call:\n` +
     `  1. Dispatch in PARALLEL (single message with two Agent tool calls):\n` +

@@ -559,5 +559,27 @@ ok(normalizeMigName("99999999999999_alias_20260820120000_foo") !== normalizeMigN
 ok(normalizeMigName("99999999999999_alias_20260210_fix_rls.sql") !== normalizeMigName("20260210_fix_rls"),
   "the legacy 8-digit alias shape never normalizes onto its target either");
 
+// ── the widening is bounded and INTENTIONAL, and is pinned here ─────────────
+// The first draft of this change claimed it could "only refuse, never permit".
+// That was false: normalization ACCEPTS spelling variants that substring matching
+// refused, because substring matching fails once the case differs. These cases are
+// the widening. They are safe only because the proof must still be <30min old, carry
+// clean findings, and match the transmitted SQL by queryHash — so a widened NAME
+// match can never authorise different CONTENT. If anyone narrows normalizeMigName
+// again, these go red and the changelog's claim must be revisited with them.
+{
+  const oldMatch = (mig, proof) => mig.includes(proof) || proof.includes(mig) || mig === proof;
+  const widened = [
+    ["20260820120000_foo.sql", "20260820120000_foo.SQL"],
+    ["20260820120000_foo.sql", "supabase/migrations/20260820120000_foo"],
+    ["20260820120000_foo.SQL", "20260820120000_foo.Sql"],
+  ];
+  for (const [mig, proof] of widened) {
+    ok(!oldMatch(mig, proof), `substring matching REFUSED ${JSON.stringify(mig)} vs ${JSON.stringify(proof)}`);
+    ok(normalizeMigName(mig) === normalizeMigName(proof),
+      `normalization ACCEPTS it — a deliberate, bounded widening, not a fail-closed change`);
+  }
+}
+
 for (const r of roots) { try { rmSync(r, { recursive: true, force: true }); } catch { /* best effort */ } }
 console.log(`migration-apply-lib: ${pass} assertions passed`);

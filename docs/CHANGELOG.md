@@ -13,7 +13,7 @@ this is that follow-up.
 The attack: copy reviewed bytes to `99999999999999_alias_<old-name>.sql`. The proof for
 `<old-name>` still matched by substring, the queryHash still matched (identical SQL), and
 the ordering check read the alias's leading stamp as newest. Codex reproduced
-`APPLY GATE PASSED` on a real dry run, including a legacy 8-digit variant
+`APPLY GATE PASSED` on an actual dry run, including a legacy 8-digit variant
 (`20260210_fix_rls_critical_issues`) that defeated an earlier stamp-count rule outright.
 
 - `requireExactProofName` now **defaults to `true`**, so a caller that forgets it inherits
@@ -34,9 +34,25 @@ existing characterization test that asserted *"substring matching DOES let the a
 inherit the proof (the bug)"* now asserts the default REFUSES it; the lenient path is
 retained behind an explicit opt-in so it fails loudly if anyone reinstates it as default.
 
-Not verified: no live migration was applied to exercise this end-to-end. The change is
-fail-closed — every altered path can only refuse an apply that previously succeeded, never
-permit one — so the untested direction is the safe one.
+**Correction — the first version of this entry overstated the safety property.** It claimed
+the change "can only refuse an apply that previously succeeded, never permit one". That is
+FALSE, and CodeRabbit was right to challenge it. An exhaustive comparison over 2,500 name
+pairs found **255** where the old substring rule REFUSED and normalized matching ACCEPTS —
+for example a proof recorded as `<name>.SQL` against an apply of `<name>.sql`, which
+substring matching missed because neither string contains the other once the case differs.
+
+So the accurate statement is narrower, in two parts:
+
+- **Against the alias attack the change is strictly tightening.** Every aliased name the
+  old rule accepted is now refused; that is the security property, and it holds.
+- **On spelling variants it is deliberately WIDENING.** Case, path prefix, and surrounding
+  whitespace differences that named the same migration but happened to defeat substring
+  matching are now accepted. Those applies were being refused for no good reason. The
+  widening is bounded by everything else the gate still demands: the proof must be under
+  30 minutes old, carry clean findings, and its `queryHash` must match the SQL actually
+  being transmitted — so a widened name match cannot authorise different content.
+
+Not verified: no live migration was applied to exercise this end to end.
 
 All significant development milestones, in reverse chronological order.
 
