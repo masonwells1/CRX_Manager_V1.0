@@ -61,6 +61,7 @@ function hasIntentBindingContract(sql: string) {
     && sql.includes('LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;')
     && sql.includes('CREATE TRIGGER section9_bind_idempotency_receipt_20260826')
     && sql.includes("RAISE EXCEPTION 'SECTION9_UNBOUND_IDEMPOTENCY_RECEIPT'")
+    && sql.includes("RAISE EXCEPTION 'ACTOR_MISMATCH'")
     && (sql.match(/PERFORM set_config\('crx\.section9_idempotency_intent'/g) ?? []).length === 6
     && sql.includes('SECTION9_ACTIVE_LEGACY_IDEMPOTENCY_RECEIPTS');
 }
@@ -92,6 +93,9 @@ describe('Section 9 AP and receiving intent binding', () => {
     )).toBe(false);
     expect(hasIntentBindingContract(
       migration.replace("PERFORM set_config('crx.section9_idempotency_intent'", 'PERFORM set_config(\'crx.unbound_intent\''),
+    )).toBe(false);
+    expect(hasIntentBindingContract(
+      migration.replace("RAISE EXCEPTION 'ACTOR_MISMATCH'", "RAISE EXCEPTION 'actor mismatch'"),
     )).toBe(false);
   });
 
