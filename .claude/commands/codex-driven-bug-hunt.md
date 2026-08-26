@@ -104,8 +104,9 @@ For each candidate Codex reported:
 For each confirmed **green** finding: make the minimal, surgical edit that matches surrounding style (the PreToolUse hooks fire on your write). For each **yellow** finding: draft the migration / edge-fn and rolled-back-validate it against live (a transaction that ends in ROLLBACK / `plpgsql_check`) — but **do not apply**; it parks.
 
 ### Step 4 — CODEX FIX-GLANCE (review the EXACT change that will be committed)
-Regenerate the auto-staged artifact FIRST (the pre-commit hook regenerates `docs/app-workflow-map.html`), stage **this fix's files + the map if it changed**, and review the FINAL staged diff — so Codex reviews exactly what the commit will contain, BEFORE committing:
+Inspect repository state first, regenerate the workflow map explicitly, stage **this fix's files + the map if it changed**, and review the FINAL staged diff — so Codex reviews exactly what the commit will contain, BEFORE committing. Pre-commit never mutates the index; CI verifies the map's normalized generated content:
 ```bash
+git status --short --branch                 # inspect state before generating or staging anything
 npm run generate-map                         # regenerate the auto artifact NOW, not at commit time
 git add <the-fix's-files>
 git diff --quiet -- docs/app-workflow-map.html || git add docs/app-workflow-map.html   # stage the map IFF this fix changed it
@@ -118,12 +119,13 @@ node scripts/overnight-codex-gate.mjs .claude/session-state/codex-fix-glance-pro
 [ $? -ne 0 ] && echo "Codex fix-glance run FAILED — treat as NEEDS-WORK; do NOT commit."
 cat .claude/session-state/codex-fix-glance-latest.txt
 ```
-Address every Codex NEEDS-WORK and re-run. **Hard cap: 3 rounds** per finding — if still NEEDS-WORK, revert that edit (`git restore --staged --worktree <files>`) and re-tier the finding to **yellow / park**. Because the map is regenerated + staged HERE, the pre-commit hook finds nothing new to add — the committed diff equals the reviewed diff. (If the hook still alters the index at commit time, ABORT the commit and re-glance the post-hook diff.)
+Address every Codex NEEDS-WORK and re-run. **Hard cap: 3 rounds** per finding — if still NEEDS-WORK, revert that edit (`git restore --staged --worktree <files>`) and re-tier the finding to **yellow / park**. Because the map is regenerated + staged HERE and pre-commit does not alter the index, the committed diff equals the reviewed diff. If any hook alters the index at commit time, abort and investigate it as a harness regression.
 
 ### Step 5 — Verify + commit (green) / park (yellow)
 Green, only after Codex says SHIP:
 ```bash
 npm run typecheck && npm run build && npm run test    # the deterministic floor; must be clean
+git status --short --branch                          # inspect the final state immediately before commit
 git commit -m "fix(codex-hunt): <plain-English what+why> (Codex-found + Claude-verified + Codex-reviewed)"
 ```
 Commit JUST the files this fix touched (never `-A`; never unrelated / feature files; never `--no-verify`). Yellow: append the parked item to `REPORT.md` with the plain-English explanation + the rolled-back-validation proof + the Codex note.
