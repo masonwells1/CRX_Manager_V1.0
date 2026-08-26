@@ -88,6 +88,11 @@ async function runApplyMigrationFile({
   allowTransmission,
   fetchImpl,
 }) {
+const rejectedFlag = (flag, why) => {
+  if (argv.some((a) => new RegExp(`^${flag}(?:=|$)`).test(a))) die(1, why);
+};
+rejectedFlag("--project", "apply-migration-file: --project is not supported; the production target is pinned.");
+rejectedFlag("--name", "apply-migration-file: --name is not supported. Migration identity is derived from the checked-out filename.");
 const positional = argv.filter((a, i) => !a.startsWith("--") && !argv[i - 1]?.startsWith("--"));
 const filePath = positional[0];
 if (!filePath) {
@@ -115,24 +120,10 @@ const createdBy = flagValue(argv, "--created-by") || DEFAULT_CREATED_BY;
 // the honest fix; binding snapshot + proofs + authorization per-ref would be a much
 // larger change and nothing needs it — this repo has one production project.
 const projectId = CRX_PRODUCTION_REF;
-if (argv.includes("--project")) {
-  die(1,
-    "apply-migration-file: --project is not supported. The target is pinned to CRX production " +
-    `(${CRX_PRODUCTION_REF}).\n` +
-    "The applied-migration snapshot, the reviewer/Codex proofs, and the autopilot authorization flag are all " +
-    "checkout-wide and assume a single project; pointing this script elsewhere would let a foreign ledger " +
-    "overwrite the snapshot production ordering is judged against. If another target is ever genuinely needed, " +
-    "scope those three things to the project ref FIRST — do not re-add the flag on its own.");
-}
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const absFile = path.resolve(process.cwd(), filePath);
 if (!existsSync(absFile)) die(1, `apply-migration-file: no such file — ${absFile}`);
-if (argv.includes("--name")) {
-  die(1,
-    "apply-migration-file: --name is not supported. Migration identity is the exact checked-out " +
-    "supabase/migrations filename, so a caller cannot relabel reviewed SQL to bypass ordering or proof binding.");
-}
 
 // This second door accepts repository migration bytes only. Resolve both paths
 // first so a relative traversal or symlink cannot make an outside file appear
@@ -163,6 +154,10 @@ const sql = readFileSync(absFile, "utf8").replace(/\r\n/g, "\n");
 if (!sql.trim()) die(1, `apply-migration-file: ${absFile} is empty.`);
 
 const migName = path.basename(resolvedFile).replace(/\.sql$/i, "");
+const canonicalName = /^\d{14}_[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+if (!canonicalName.test(migName) || (migName.match(/\d{14}/g) || []).length !== 1) {
+  die(1, `apply-migration-file: "${migName}" is not a canonical migration name. Refusing an alias that could borrow another migration's proof.`);
+}
 const queryHash = createHash("sha256").update(sql).digest("hex");
 
 console.log(`migration : ${migName}`);

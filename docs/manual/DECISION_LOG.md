@@ -21,8 +21,9 @@ Changed-only SQL validation treats every migration rename as an append-only hist
 **Operative rule.** Do not add an identity override or substring proof matching. A hash proves
 content, not ordering identity: relabelling old reviewed SQL with a future timestamp can otherwise
 replay superseded safeguards. Never rename an applied repository migration; create a new migration
-for every new change. The regression suite proves both attempted bypasses deny. No live migration,
-Edge Function, production data, secret, or permission changed.
+for every new change. File-based applies must also use one canonical 14-digit filename stamp, and
+the hold latch must block their Bash spelling. The regression suite proves attempted bypasses deny.
+No live migration, Edge Function, production data, secret, or permission changed.
 
 ---
 
