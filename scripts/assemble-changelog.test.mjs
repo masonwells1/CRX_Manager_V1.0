@@ -18,6 +18,12 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 
+// husky runs this from inside a commit, where git exports GIT_DIR / GIT_INDEX_FILE /
+// GIT_WORK_TREE pointing at the REAL repository. Inheriting those makes every git call
+// below operate on the wrong tree — "fatal: this operation must be run in a work tree".
+// Strip the whole GIT_* namespace so each throwaway repo is genuinely isolated.
+const CLEAN_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
+
 const roots = [];
 function makeRepo(files, { track = [] } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "crx-asm-"));
@@ -32,13 +38,13 @@ function makeRepo(files, { track = [] } = {}) {
   for (const [name, body] of Object.entries(files)) {
     writeFileSync(path.join(root, "docs", "changelog.d", name), body, "utf8");
   }
-  execFileSync("git", ["init", "-q"], { cwd: root });
-  execFileSync("git", ["add", "scripts", "docs/CHANGELOG.md", ...track.map((t) => `docs/changelog.d/${t}`)], { cwd: root });
-  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: root });
+  execFileSync("git", ["init", "-q"], { cwd: root, env: CLEAN_ENV });
+  execFileSync("git", ["add", "scripts", "docs/CHANGELOG.md", ...track.map((t) => `docs/changelog.d/${t}`)], { cwd: root, env: CLEAN_ENV });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: root, env: CLEAN_ENV });
   return root;
 }
 const run = (root) => spawnSync(process.execPath, ["scripts/assemble-changelog.mjs", "--write"],
-  { cwd: root, encoding: "utf8" });
+  { cwd: root, encoding: "utf8", env: CLEAN_ENV });
 const stillThere = (root, n) => existsSync(path.join(root, "docs", "changelog.d", n));
 
 // ── an untracked fragment is somebody else's draft: skip it, never consume it ──
