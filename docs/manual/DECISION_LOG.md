@@ -7,6 +7,187 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+
+## 2026-08-26 — CORRECTION: a closed allowlist only closes what is inside it
+
+**This amends the 2026-08-25 entry immediately below**, which claimed pinning the guarded region
+"closes every form at once, including ones nobody has thought of." That was overstated and CodeRabbit
+round 5 disproved it on live PostgreSQL.
+
+**What was wrong.** The allowlist began at the `v_version_id := nullif(v_result->>'version_id', ...)`
+assignment. The interval *between* `_create_quote_version_owner_impl` returning and that assignment
+was not covered by anything. A re-emission could put
+
+```text
+v_result := jsonb_build_object('status','created','version_id', <legacy id>);
+```
+
+in that gap, and the sole-owner-call check, the ordering check, the region fingerprint and the exact
+marker-`UPDATE` check **all still passed** — the wrapper would stamp an arbitrary pre-boundary
+snapshot as trusted. Verified: that body passed the round-4 guard.
+
+**The fix.** The region now starts at the owner call itself, leaving no unguarded interval between
+the writer and the marker. It also pins the owner call's **arguments**, which nothing had checked —
+a re-emission passing `NULL` for `p_idempotency_key` is now rejected too.
+
+**Operative rule, restated correctly.** A closed allowlist is only as good as its boundaries.
+"Nothing unexpected can appear here" is worth nothing if the interesting statement can sit just
+outside the region. When pinning a region, the first question is not *what does it contain* but
+*where does the trusted chain actually begin* — and the answer is the first statement whose result
+the rest of the region depends on, not the first statement that mentions the variable you care about.
+
+**Process note.** This was the third consecutive round in which a fix to this predicate was itself
+found defective (round 3's arity bug, round 4's blocklist, round 5's mis-anchored allowlist). Each
+fix was verified against live PostgreSQL and each verification tested the thing that had just been
+changed rather than the property the guard is supposed to have. A both-ways proof is necessary and
+was not sufficient; the missing step each time was asking which inputs the proof did **not** cover.
+
+## 2026-08-25 — Guard regions are closed allowlists, not blocklists of spellings
+
+**Decision.** When a SQL invariant sweep needs to prove that nothing unexpected happens between two
+points in a function body, pin the whole region to its exact reviewed text (whitespace-normalized)
+rather than counting the ways it could be subverted.
+
+**Why.** PR #401's `quote-versions-rpc-owned.sql` predicate reached four review rounds on the same
+few lines. Round 3 found that the region between the anchor assignment and the trust-marker `UPDATE`
+could be subverted by reassigning `v_version_id` or `v_result`, and was fixed by counting
+`v_version_id :=` and `v_result :=` inside the region. Round 4 then found `SELECT ... INTO
+v_version_id`, which that count does not see. PL/pgSQL has at least five assignment forms
+(`:=`, `SELECT ... INTO`, `EXECUTE ... INTO`, `... RETURNING ... INTO`, `GET DIAGNOSTICS ... =`), so
+a blocklist closes one spelling per review round and never terminates. A closed allowlist —
+"this region must be exactly this text" — closes every form at once, including forms nobody has
+enumerated, and it cannot be defeated by a spelling the reviewer did not think of.
+
+**Cost, accepted deliberately.** The pin is brittle by design: any legitimate re-emission that
+changes the region must update the literal. That is the review trigger the sweep exists to create,
+and the restore-side contract in the same file already uses the same technique (a prefix length plus
+an md5 digest).
+
+**Operative rule.** A guard that enumerates forbidden forms is a guard that will be reopened. Where
+the protected region is small and fixed, pin the region. Where it is not, say so explicitly rather
+than shipping a blocklist that reads like a proof.
+
+**Two mechanics worth keeping.** Collapse whitespace *before* trimming — `btrim()` first leaves the
+region's trailing newline to collapse into a single space, and the real body then fails its own
+guard; this was caught only by executing the expression against live PostgreSQL 17.6, not by review.
+And the test must tie the migration to the predicate: assert that the shipped function body
+normalizes to the pinned literal, not merely that the predicate contains it. A `toContain()` on the
+predicate alone pins a string while the function drifts away from it.
+---
+
+## 2026-08-25 — `regexp_count(text, text, 'i')` does not exist; it crashes the sweep it guards
+
+**Found:** 2026-08-25, while closing CodeRabbit's round-3 findings on PR #401.
+
+**The bug.** Every `regexp_count` call added to
+`scripts/db-invariant-sweeps/predicates/quote-versions-rpc-owned.sql` passed the case-insensitive
+flag as the **third** argument: `regexp_count(p.prosrc, '<pattern>', 'i')`. PostgreSQL's third
+parameter is a **start position (integer)**, and the flags string is the **fourth**. The three-argument
+form with a text flag has no matching overload, so every one of those calls raises
+
+```text
+ERROR: 22P02: invalid input syntax for type integer: "i"
+```
+
+Confirmed by executing the file's own expression against live PostgreSQL 17.6. Ten call sites were
+affected. The correct form is `regexp_count(src, pattern, 1, 'i')`.
+
+**Why it matters more than a typo.** This predicate is a standing security sweep: it is what
+detects a second authoritative writer to `quote_versions`, whose `snapshot_data` is an authoritative
+cost basis. A crashing predicate does not report "clean" — it reports nothing at all, and whether
+that is treated as a pass depends entirely on how the sweep runner handles a failing statement. The
+guard that was supposed to protect the trust marker could not execute.
+
+**How it got in, and why neither reviewer caught it.**
+- `origin/main`'s copy of this predicate contains **zero** `regexp_count` calls. Every one was
+  introduced by PR #401 itself.
+- The exact-SHA `gpt-5.6-sol` gate reviewed the diff and found a genuine concurrency defect, but it
+  reasons about the code as text — it did not execute the SQL.
+- CodeRabbit reviewed the same lines three times and its round-3 remediation **proposed adding
+  another** `regexp_count(..., 'i')` call, reproducing the bug.
+- `src/lib/quoteVersionWriteBoundary.test.ts` asserted `toContain(...)` on the literal broken
+  string, so the test suite actively **pinned the defect in place** and went green on it.
+
+**Operative lesson.** A static assertion that a SQL file *contains* a given string proves only that
+the string is present, never that the SQL runs. Any predicate or guard expressed as SQL must be
+**executed** against a real PostgreSQL — a `toContain` test is not a substitute, and a
+diff-reading reviewer will not catch an argument-type error. Where a guard is meant to reject
+something, prove it both ways: run it against the real body (expect pass) and against a mutated
+body (expect reject). Both directions were verified here after the fix.
+
+**Related open risk, unchanged by this entry:** the accepted cutover race recorded in the entry immediately below.
+
+---
+
+## 2026-08-25 — ACCEPTED RISK: the quote-version trust-marker cutover race stays open
+
+**Source:** Mason's explicit in-chat decision, 2026-08-25, chosen from a plain-English trade-off
+after both adversarial reviewers independently flagged the same defect on PR #401 head `9b2d86a5`.
+
+**The finding, stated accurately.** Migration `20260825190000_quote_version_restore_trust_boundary`
+adds `quote_versions.restore_trusted_at` (taking an ACCESS EXCLUSIVE lock) and re-emits the
+create/restore functions **inside one transaction**. An invocation that has already entered an old
+function body blocks on that lock and then resumes on its OLD body after the migration commits.
+Both reviewers found this, from opposite ends:
+
+- **Sol (exact-SHA gate, `CODEX_PROOF_VERDICT: BLOCKERS`, base `43e141a` head `9b2d86a`)** — the
+  restore side. An in-flight restore finishes without `QUOTE_VERSION_LEGACY_UNTRUSTED` and can
+  restore an untrusted legacy cost snapshot. This is the security-relevant direction.
+- **CodeRabbit (CHANGES_REQUESTED, P2, same head commit)** — the create side. An in-flight creation
+  finishes without the marker update, so a legitimately created version is written with
+  `restore_trusted_at` NULL and is thereafter rejected as legacy-untrusted. This direction fails
+  **closed** — it is a usability defect, not an exposure.
+
+Sol's asked-for remediation was a drainable two-phase cutover.
+
+**Decision.** The race is **accepted and recorded, not fixed.** The migration lands and applies as
+a single transaction.
+
+**Basis, measured live on 2026-08-25 immediately before the decision:**
+
+| Fact | Value |
+|---|---|
+| Rows in `quote_versions` | 3, across 2 quotes |
+| `restore_quote_version` invocations, ever | 0 |
+| `create_quote_version` invocations, ever | 1 |
+
+Exploiting or tripping this race requires a user to be mid-create or mid-restore at the instant the
+migration commits. Restore has never been called in production. The remediation — a two-phase
+cutover with a drain barrier — is new machinery on the money path, and guard changes in this
+repository have historically needed 4–8 review rounds (#423 took 8; #432 stalled at 4 and was
+closed). Mason judged that cost disproportionate to a race that needs a user who does not exist.
+
+**Operative rule.** This acceptance is scoped to **this migration's apply window only**. It is not
+a precedent for single-transaction cutovers generally, and it does not apply if the facts change.
+**If `restore_quote_version` or `create_quote_version` ever comes into regular use, a re-emission of
+either function must use a two-phase drainable cutover** — re-read the two counts above before
+assuming this entry still holds. The one-time mitigation available at apply time is to apply during
+a period of no user activity, which costs nothing and removes the window in practice.
+
+**Not accepted, and fixed in the same PR.** The two lower-severity findings were real and cheap, so
+they were corrected rather than accepted:
+
+- `scripts/db-invariant-sweeps/predicates/quote-versions-rpc-owned.sql` proved the trust-marker
+  `UPDATE` existed with the reviewed spelling but never that it ran **after** the owner-side writer.
+  A re-emission could have selected an arbitrary legacy row into `v_version_id`, run that exact
+  `UPDATE` first, and left the standing sweep green while blessing an untrusted snapshot. Now pinned
+  positionally (owner impl call → `v_version_id` derived from its result → marker `UPDATE`), the
+  same technique the restore-side contract already used. **Mutation-tested against live PostgreSQL
+  17.6:** the real body returns true; the reordered attack body returns false.
+- `scripts/smoke/smoke-quote-version-restore-trust.sql` selected its fixture on
+  `quote_product_draws.quantity_drawn > 0`, which is not the predicate the restore path enforces.
+  `_restore_quote_version_owner_impl` raises `QUOTE_RESTORE_BLOCKED_BY_DRAW` from an unfiltered
+  `order_items → quote_items` join, so a quote whose draws were later cancelled or voided would be
+  admitted by the fixture and then rejected by the guard, reporting `SMOKE_FAIL` on a correct
+  migration. The fixture now mirrors the guard's own predicate.
+
+**Why this entry exists rather than a clean gate verdict.** The Sol gate cannot return CLEAN on a
+defect the owner has chosen to accept — no amount of re-running converges, because the finding is
+correct and the code deliberately still contains it. Per the standing pattern for owner decisions
+the adversarial gate cannot resolve, the decision is recorded here and the BLOCKERS verdict stands
+on the record alongside it. Do not re-run the gate expecting a different answer, and do not edit the
+migration to silence it.
+
 ---
 
 ## 2026-08-26 — Ignored tool output is outside the local content-scan boundary until Git-visible
@@ -32,8 +213,8 @@ boundary is Git-visible content plus the protected GitHub review/CI path. Readin
 megabytes that Git will not export consumed minutes without strengthening that boundary.
 
 **Operative rule:** do not broaden these excludes by path segment, pattern inference, or dynamic
-ignore rules. New roots require an explicit list change, a nested-lookalike test, force-add deny
-proof, red/green mutation proof, and a retained same-worktree benchmark.
+ignore rules. New roots require an explicit list change, a nested-lookalike test, proof that
+force-add is denied, red/green mutation proof, and a retained same-worktree benchmark.
 
 ---
 

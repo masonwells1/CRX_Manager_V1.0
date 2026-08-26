@@ -219,6 +219,9 @@ export const RpcErrorCodes = {
   QUOTE_NOT_FOUND: 'QUOTE_NOT_FOUND',
   // save_quote / save_customer whole-record optimistic concurrency.
   QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE',
+  // restore_quote_version trust boundary (20260825190000). Legacy snapshots
+  // remain visible, but cannot re-enter the quote write path as authoritative cost.
+  QUOTE_VERSION_LEGACY_UNTRUSTED: 'QUOTE_VERSION_LEGACY_UNTRUSTED',
   CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE',
   COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT',
   IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT',

@@ -38,11 +38,13 @@ import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { interpretResult, PASS_TOKEN } from './interpret-result.mjs';
+
+export { interpretResult } from './interpret-result.mjs';
 
 const SMOKE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SPECS_PATH = path.join(SMOKE_DIR, 'smoke-specs.json');
 const AREAS_PATH = path.join(SMOKE_DIR, '..', 'test-areas.json');
-const PASS_TOKEN = 'SMOKE_PASS_ROLLBACK';
 
 /** Area vocabulary comes from scripts/test-areas.json so the two files can't drift. */
 const VALID_AREAS = (() => {
@@ -203,46 +205,6 @@ function printList(specs) {
   );
 }
 
-/** PASS iff the chain's terminal error IS the pass token; otherwise FAIL + message. */
-function interpretResult(outputText) {
-  const lines = outputText.split(/\r?\n/).filter((l) => l.trim());
-  // Anchored on the psql-rendered error, not on a bare substring — the same bug
-  // class fixed for SMOKE_PREREQ below, but in the dangerous direction. A bare
-  // outputText.includes(PASS_TOKEN) reports PASS on ANY output carrying the
-  // token: a SMOKE_FAIL message quoting it, a NOTICE, or a psql-echoed source
-  // line. That turns a real failure green, which is strictly worse than turning
-  // a pass red. Checked across every chain in scripts/smoke: no chain trips the
-  // old form today (all other occurrences are comments or the terminal raise
-  // itself), so this closes the hole without changing any current verdict.
-  // psql renders the raise as `psql:file.sql:NN: ERROR:  SMOKE_PASS_ROLLBACK`.
-  // The token must start the error message; the suffixed variants raised by
-  // smoke-commission-payout-intent-binding-live.sql — 'SMOKE_PASS_ROLLBACK
-  // (9/9 incl. cross-actor)' and the 8/8 form — still match, because the suffix
-  // follows the token rather than preceding it.
-  if (lines.some((l) => new RegExp(`ERROR:\\s+${PASS_TOKEN}`).test(l))) return { pass: true };
-  // SMOKE_PREREQ means "the change this chain proves is not deployed on THIS
-  // database" — a chain gated behind an unapplied migration, not a regression.
-  // Without this branch, --all reports a red FAIL on every environment that is
-  // simply behind, and a red run that is expected to be red trains everyone to
-  // ignore red runs. It is deliberately NOT extended to SMOKE_SETUP: a missing
-  // fixture is a real gap in the proof and must stay loud.
-  // Anchored on the RAISE, not on the token. A bare /SMOKE_PREREQ/ substring
-  // match is pre-empted by any line that merely mentions it — a chain quoting
-  // the token in a hint, or a SMOKE_FAIL message explaining what a prereq skip
-  // would have meant — and because this branch is tested before SMOKE_FAIL, that
-  // downgrades a real failure to a skip. psql renders the raise as
-  // `psql:file.sql:NN: ERROR:  SMOKE_PREREQ: ...`, so require the token to be
-  // the immediate start of the error message.
-  const prereqLine = lines.find((l) => /ERROR:\s+SMOKE_PREREQ:/.test(l));
-  if (prereqLine) return { pass: false, prereq: true, message: prereqLine.trim() };
-  const errLine =
-    lines.find((l) => /SMOKE_FAIL|SMOKE_SETUP/.test(l)) ||
-    lines.find((l) => /ERROR:|FATAL:/.test(l)) ||
-    lines[lines.length - 1] ||
-    '(no output)';
-  return { pass: false, message: errLine.trim() };
-}
-
 function runViaPsql(key, spec, dbUrl) {
   const file = path.join(SMOKE_DIR, spec.chain);
   // -1: single transaction (belt-and-braces; the DO block is one statement
@@ -268,7 +230,7 @@ function printForClaude(key, spec) {
   console.log(bar);
   console.log('EXECUTE the SQL below as ONE statement via Supabase MCP execute_sql');
   console.log('(project rhyzpcqhnizqbxphqdkr). Interpret the result:');
-  console.log(`  * error message contains '${PASS_TOKEN}'  -> PASS (rollback fired)`);
+  console.log(`  * PostgreSQL error message starts '${PASS_TOKEN}' -> PASS (rollback fired)`);
   console.log("  * error starts 'ERROR: SMOKE_PREREQ:'       -> SKIP: the change this");
   console.log('      chain proves is not deployed on this database. NOT a pass — it');
   console.log('      proved nothing. Apply the migration, then run it again.');
@@ -290,7 +252,7 @@ function main() {
       '                                        [--allow-prereq-skips]\n\n' +
       'Modes: SUPABASE_DB_URL set -> executes via psql and reports PASS/FAIL;\n' +
       '       otherwise prints each chain with banners for Claude/MCP execution.\n\n' +
-      `PASS contract: chain error text contains '${PASS_TOKEN}'.\n\n` +
+      `PASS contract: PostgreSQL error text starts '${PASS_TOKEN}'.\n\n` +
       'Prerequisite skips exit NONZERO by default: post-apply, a skip means the\n' +
       'boundary the chain proves has been re-opened. Pass --allow-prereq-skips\n' +
       'only when the database is deliberately behind.'
@@ -442,4 +404,12 @@ function main() {
   }
 }
 
-main();
+// Importers use the parser regression tests below without starting a smoke
+// run. The command-line entry point remains exactly this file.
+const invokedPath = process.argv[1] && path.resolve(process.argv[1]);
+const modulePath = fileURLToPath(import.meta.url);
+if (invokedPath && (process.platform !== 'win32'
+  ? invokedPath === modulePath
+  : invokedPath.toLowerCase() === modulePath.toLowerCase())) {
+  main();
+}

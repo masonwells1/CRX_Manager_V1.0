@@ -62,7 +62,22 @@ export function isAttemptedEntry(p) {
   return rest.length > 0 && !FOLDER_META.has(rest);
 }
 
-export const ENTRY_RE = /^docs\/changelog\.d\/\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9._-]*\.md$/;
+// Month and day are range-checked in the pattern itself, so 2026-13-01 and 2026-01-32
+// never read as entries. A regex cannot express "February has 28 days", so the
+// impossible-but-well-shaped dates are caught by isRealCalendarDate below (CodeRabbit,
+// PR #482). Anything importing this — the stop hook does — gets the range check for free.
+export const ENTRY_RE = /^docs\/changelog\.d\/\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])-[a-z0-9][a-z0-9._-]*\.md$/;
+
+// 2026-02-31 has the right shape and does not exist. Round-tripping through Date is the
+// cheapest honest check: JS normalises Feb 31 to Mar 3, so the fields stop matching.
+export function isRealCalendarDate(iso) {
+  const parts = String(iso ?? "").split("-");
+  if (parts.length !== 3) return false;
+  const [y, m, d] = parts.map(Number);
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
 
 // Any ONE of these staged alongside satisfies the ledger requirement.
 const LEDGER_RES = [
@@ -139,6 +154,9 @@ function entryVerdict(e, removedBodies) {
   }
   const fileDate = (e.path.split("/").pop() || "").slice(0, 10);
   if (m[1] !== fileDate) return `heading date ${m[1]} disagrees with the filename date ${fileDate}`;
+  if (!isRealCalendarDate(fileDate)) {
+    return `is dated ${fileDate}, which is not a real calendar date`;
+  }
   // A heading with nothing beneath it records the title and none of the substance.
   if (body.split("\n").slice(1).join("").trim() === "") return "has a heading but no detail beneath it";
   // A pure rename arrives as D(old) + A(new) under --no-renames. Counting the added

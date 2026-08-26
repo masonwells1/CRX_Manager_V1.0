@@ -159,6 +159,23 @@ eq(heading("## 2026-08-25 no dash here").ok, false,
 eq(heading("## 2026-08-25 - hyphen").ok, true, "a hyphen separator is accepted");
 eq(heading("## 2026-08-25 \u2013 en dash").ok, true, "an en dash separator is accepted");
 eq(heading("## 2026-08-25 \u2014 em dash").ok, true, "an em dash separator is accepted");
+
+// ── an impossible date is not a date (CodeRabbit, PR #482) ──────────────────
+// The pattern range-checks month and day; a regex cannot know February's length, so
+// well-shaped-but-nonexistent dates are caught by the calendar round-trip.
+const dated = (name) => ledgerCheck([".claude/settings.json",
+  { path: "docs/changelog.d/" + name, status: "A",
+    content: "## " + name.slice(0, 10) + " - x" + NL + NL + "detail" + NL }]);
+eq(dated("2026-13-01-x.md").ok, false, "a 13th month does not satisfy the guard");
+eq(dated("2026-01-32-x.md").ok, false, "a 32nd day does not satisfy the guard");
+eq(dated("2026-02-31-x.md").ok, false, "February 31st does not satisfy the guard");
+eq(dated("2025-02-29-x.md").ok, false, "February 29th in a non-leap year does not satisfy the guard");
+ok(/not a real calendar date/.test(dated("2026-02-31-x.md").reason || ""),
+  "the refusal says the date is not real");
+// Real dates, including a genuine leap day, must still pass.
+eq(dated("2026-02-28-x.md").ok, true, "the last day of February is accepted");
+eq(dated("2024-02-29-x.md").ok, true, "a real leap day is accepted");
+eq(dated("2026-12-31-x.md").ok, true, "the last day of the year is accepted");
 // The date check still runs off the tightened pattern.
 eq(ledgerCheck([".claude/settings.json",
   added("docs/changelog.d/2026-08-25-x.md", "## 2026-08-26 \u2014 wrong date" + NL + NL + "d" + NL)]).ok, false,
@@ -278,19 +295,26 @@ eq(ledgerCheck([".claude/hooks/bash-safety.mjs", "README.md"]).ok, false, "READM
 // A rename must expose both the protected source and unprotected destination.
 // Without --no-renames, --name-only reports only src/moved.mjs and the CLI exits 0.
 const renameRepo = mkdtempSync(join(tmpdir(), "crx-ledger-rename-"));
-// Git exports GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE/GIT_PREFIX to hook children, and a child of
-// .husky/pre-commit inherits them. `cwd` does NOT override an absolute GIT_DIR, so without this
-// scrub every git call below — and the guard spawned at the end — targets the REAL repository
-// instead of the temp fixture. That failure mode is invisible to CI (which runs this test with no
-// GIT_* set) while blocking every commit in the repo. Keep the scrub on both child processes.
-// Upgraded from a hand-written GIT_ prefix filter to the repo's shared sanitizer. It
-// derives the variable list from `git rev-parse --local-env-vars` — authoritative, where
-// a prefix test is a guess — and also clears the indexed GIT_CONFIG_KEY_n/VALUE_n payload
-// that a prefix filter catches only by luck. Every other git-spawning test in this repo
-// already used it; this file opting out is what made it the one that corrupted the repo.
-const fixtureEnv = scratchHookEnvironment(renameRepo);
 try {
-  const git = (...args) => execFileSync("git", args, { cwd: renameRepo, stdio: "ignore", env: fixtureEnv });
+  // A git hook exports the repository-local GIT_* variables (GIT_DIR,
+  // GIT_INDEX_FILE, GIT_CONFIG_*, ...) pointing at the REAL repository, and
+  // GIT_DIR outranks cwd. Run from pre-commit, this fixture's `git init` used to
+  // re-initialize CRX_Manager itself with no work tree attached, setting
+  // core.bare=true on the shared checkout and breaking every linked worktree —
+  // then `git add` failed with status 128 because the fixture path does not
+  // exist in the real tree. It passes standalone and in CI because neither sets
+  // GIT_DIR, so only a hook run is destructive.
+  //
+  // Use the shared helper rather than a local list of variable names: it asks
+  // git itself via `git rev-parse --local-env-vars` and also strips the indexed
+  // GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n payload. A hand-written denylist here
+  // missed the GIT_CONFIG* family, which can override the fixture's own config.
+  // (PR #486 independently landed a GIT_-prefix filter for the same bug; this
+  // merge keeps the shared helper, whose scrub is a superset. Both child
+  // processes — the fixture git helper and the spawned guard — get it.)
+  const fixtureEnv = scratchHookEnvironment(renameRepo);
+  const git = (...args) =>
+    execFileSync("git", args, { cwd: renameRepo, stdio: "ignore", env: fixtureEnv });
   git("init", "--quiet");
   git("config", "user.email", "ledger-test@example.invalid");
   git("config", "user.name", "Ledger Test");

@@ -1,111 +1,38 @@
 # CRX Manager V1.0 — Development Changelog
 
-## 2026-08-25 — the routine migration door now refuses a stolen reviewer proof
-
-PR #470 closed a proof-replay hole in `scripts/apply-migration-file.mjs` by adding
-`requireExactProofName`, but wired it only there. `.claude/hooks/migration-apply-guard.mjs`
-— the PreToolUse hook covering MCP `apply_migration`, the door used for ROUTINE
-migrations — passed no such flag and kept matching proof-to-migration by substring.
-So the fix hardened the rarely-used oversized-file door and left the common one open.
-Codex reported this on #470 and it was deliberately deferred there rather than bundled;
-this is that follow-up.
-
-The attack: copy reviewed bytes to `99999999999999_alias_<old-name>.sql`. The proof for
-`<old-name>` still matched by substring, the queryHash still matched (identical SQL), and
-the ordering check read the alias's leading stamp as newest. Codex reproduced
-`APPLY GATE PASSED` on an actual dry run, including a legacy 8-digit variant
-(`20260210_fix_rls_critical_issues`) that defeated an earlier stamp-count rule outright.
-
-- `requireExactProofName` now **defaults to `true`**, so a caller that forgets it inherits
-  the safe behaviour. Both known callers want exact; the flag stays available for tests.
-- Names are compared **normalized** (basename, `.sql` stripped, slashes unified), not as
-  raw strings. This matters: `write-apply-proofs.mjs` records a bare name while an apply
-  call may carry `<name>.sql` or a repo-relative path, and substring matching had been
-  quietly absorbing that difference. Naive equality would have refused legitimate applies.
-  An alias differs in its STEM, which survives normalization, so it is still refused.
-- The refusal now distinguishes "a fresh clean proof exists but names a DIFFERENT
-  migration" from "no proof found", printing both names. Previously an operator hitting
-  this saw a missing-proof message with a proof sitting right there, and the natural next
-  move — re-mint — would not have helped.
-
-Proof: 114 assertions in `migration-apply-lib.test.mjs` and the full
-`npm run test:correction-guards` suite pass, including the hook's own 86 assertions. The
-existing characterization test that asserted *"substring matching DOES let the alias
-inherit the proof (the bug)"* now asserts the default REFUSES it; the lenient path is
-retained behind an explicit opt-in so it fails loudly if anyone reinstates it as default.
-
-**Correction — the first version of this entry overstated the safety property.** It claimed
-the change "can only refuse an apply that previously succeeded, never permit one". That is
-FALSE, and CodeRabbit was right to challenge it. An exhaustive comparison over 2,500 name
-pairs found **255** where the old substring rule REFUSED and normalized matching ACCEPTS —
-for example a proof recorded as `<name>.SQL` against an apply of `<name>.sql`, which
-substring matching missed because neither string contains the other once the case differs.
-
-So the accurate statement is narrower, in two parts:
-
-- **Against the alias attack the change is strictly tightening.** Every aliased name the
-  old rule accepted is now refused; that is the security property, and it holds.
-- **On spelling variants it is deliberately WIDENING.** Case, path prefix, and surrounding
-  whitespace differences that named the same migration but happened to defeat substring
-  matching are now accepted. Those applies were being refused for no good reason. The
-  widening is bounded by everything else the gate still demands: the proof must be under
-  30 minutes old, carry clean findings, and its `queryHash` must match the SQL actually
-  being transmitted — so a widened name match cannot authorise different content.
-
-Not verified: no live migration was applied for end-to-end verification.
-
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-25 — Draw-down rollout closeout: two canonical documents reconciled to live
+## 2026-08-26 — a guard self-test was re-initializing the real repository as bare
 
-Documentation-only follow-up to the 2026-08-24 rollout below, closing the last two open review
-findings from PR #472. It stops two canonical documents from contradicting live state, and records
-the post-rollout verification that was actually performed.
+`scripts/check-ledger-update.test.mjs` builds a throwaway git repo in a temp directory to prove the
+ledger guard still blocks a protected file renamed to an unprotected path. It spawned `git` with
+`cwd` pointed at that fixture but **inherited the ambient environment**.
 
-**The booking-draw release is NOT recorded here.** That decision has its own canonical entry in
-`docs/manual/DECISION_LOG.md` and its own changelog entry below, both landed by PR #480 from the
-session Mason gave the decision to. This entry deliberately does not restate it — one decision, one
-record. Note the distinction that entry draws and this one relies on: the pause was **procedural**,
-a team agreement during the rollout, never a code flag or RPC guard.
+Git hooks export `GIT_DIR` (and `GIT_INDEX_FILE`, `GIT_WORK_TREE`) pointing at the *real*
+repository. So when this test ran from `pre-commit`, `git init --quiet` did not initialize the
+fixture — it re-initialized **CRX_Manager itself**, with a cwd that had no work tree attached, which
+set `core.bare = true` on the shared checkout. Every linked worktree on the machine then failed with
+`fatal: this operation must be run in a work tree`, and the test's next command died with status
+128 because `.claude/hooks/protected.mjs` does not exist in the real tree.
 
-**Observed on 2026-08-25 (read-only, no writes):** **zero unexpired and zero unbound
-`draw_down_quote` receipts**; the draw-down function ACL and `search_path` posture as recorded in
-the rollout block; production root returning **HTTP 200**; and Mason opening the production Quote
-Builder initial screen (`Q-2026-2062`), which rendered normally with no visible error and with no
-customer, item, preview, save, or submission made.
+**Why it went unnoticed:** the test passes standalone and passes in CI, because neither sets
+`GIT_DIR`. It only causes damage when run from inside a git hook — which is precisely where the
+pre-commit gate runs it. This is the cause of the previously-recorded incident where a failing
+pre-commit left the repository bare; the recovery (`git -C <repo> config core.bare false`) treated
+the symptom.
 
-**Ledger reading at the time this entry was written:** **976 rows**, `max(version)`
-`20260825142708`, effective ordering high-water `20260820120000`. The draw-down rollout itself
-closed the ledger at 975 rows / `20260825034622`; the 976th row is
-`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` (history row 891), applied
-live later on 2026-08-25 and unrelated to the draw-down chain. Only the ledger fact is recorded here;
-its full apply record — approval, proofs, postflight — landed separately in PR #475, from the session
-that ran it, and `.claude/schema-registry.json` was refreshed to `20260825142708` in that same PR.
+Fixed by stripping `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`,
+`GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_PREFIX` from the environment
+handed to both the fixture `git` helper and the spawned CLI, so the fixture repo is the only
+repository those commands can reach.
 
-**Stated precisely:** that screen observation is reachability and UI-render evidence only. It is
-**not** a booking-draw transaction and **not** an end-to-end draw allocation proof. No end-to-end
-production draw has been observed, and none was manufactured — creating, updating, or submitting a
-real quote or order purely to produce evidence was ruled out.
+Verified: 44 assertions pass standalone, and pass again with `GIT_DIR` set to a real worktree
+gitdir — with `core.bare` still `false` afterward. Before the fix that same invocation is what
+broke the checkout.
 
-Documents corrected in this pass:
+**General rule:** any test that shells out to `git` against a fixture repo must sanitize the
+environment. `cwd` alone does not isolate it — `GIT_DIR` outranks `cwd`.
 
-- `docs/manual/CURRENT_STATE.md` — its header still reported 971 ledger rows at high-water
-  `20260816174353` with a registry matching that older boundary, contradicting `KNOWN_ISSUES.md`
-  and `migration-history.md`. Restamped to the current live reading; the old figures are kept only
-  inside an explicitly superseded provenance block.
-- `docs/audits/2026-08-24-codex-to-claude-draw-down-live-rollout-handoff.md` — its banner called
-  the handoff "fully executed" with "no instruction … actionable", which retired the two closeout
-  steps that had not happened. The banner now supersedes only the apply/reconciliation steps (1–7)
-  and points at PR #480's decision record for step 9 instead of asserting a standing pause.
-
-Not changed here: `docs/manual/DECISION_LOG.md`. An earlier revision of this branch added its own
-booking-draw entry; PR #480 landed the canonical one first, sourced from the session Mason gave the
-decision to and carrying release preconditions this branch had not read. That entry is better
-sourced, so this branch's duplicate was dropped rather than merged alongside it — two entries for
-one decision on one date is the same defect this pass exists to remove. Same disposition as the
-`save_job` record, which deferred to PR #475.
-
-No code, schema, live data, or migration was changed by this entry.
 ## 2026-08-26 — Pre-push containment skips top-level ignored tool bulk
 
 The private-artifact pre-push guard now excludes descendants of its existing explicit top-level
@@ -162,6 +89,11 @@ Dropping the timer also made the file *faster* — 3.29s versus 8.20s before. Fu
 
 ## 2026-08-26 — Ledger-guard test no longer operates on the real repository
 
+**Merge note (2026-08-26):** PR #486 landed this fix on `main` while this branch carried its own
+version of the same fix (the entry above). The merge keeps the branch's shared-helper
+implementation (`scratchHookEnvironment`), whose scrub is a superset of the `GIT_*`-prefix filter
+described below; both entries stay for provenance.
+
 `scripts/check-ledger-update.test.mjs` builds a throwaway Git repository to prove that renaming a
 protected file out of the protected surface is still blocked. Its Git calls passed only `cwd`, never
 a scrubbed environment. Git exports `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_WORK_TREE` and `GIT_PREFIX` to
@@ -178,6 +110,182 @@ CI never caught this because CI runs the test directly with no `GIT_*` set; the 
 on the Git-hook path, where a green CI is not evidence the gate works. Verified in both directions —
 a bare run and a full hook-style environment both report 44 assertions passed, where the latter
 previously aborted with status 128.
+
+## 2026-08-25 — Draw-down rollout closeout: two canonical documents reconciled to live
+
+Documentation-only follow-up to the 2026-08-24 rollout below, closing the last two open review
+findings from PR #472. It stops two canonical documents from contradicting live state, and records
+the post-rollout verification that was actually performed.
+
+**The booking-draw release is NOT recorded here.** That decision has its own canonical entry in
+`docs/manual/DECISION_LOG.md` and its own changelog entry below, both landed by PR #480 from the
+session Mason gave the decision to. This entry deliberately does not restate it — one decision, one
+record. Note the distinction that entry draws and this one relies on: the pause was **procedural**,
+a team agreement during the rollout, never a code flag or RPC guard.
+
+**Observed on 2026-08-25 (read-only, no writes):** **zero unexpired and zero unbound
+`draw_down_quote` receipts**; the draw-down function ACL and `search_path` posture as recorded in
+the rollout block; production root returning **HTTP 200**; and Mason opening the production Quote
+Builder initial screen (`Q-2026-2062`), which rendered normally with no visible error and with no
+customer, item, preview, save, or submission made.
+
+**Ledger reading at the time this entry was written:** **976 rows**, `max(version)`
+`20260825142708`, effective ordering high-water `20260820120000`. The draw-down rollout itself
+closed the ledger at 975 rows / `20260825034622`; the 976th row is
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` (history row 891), applied
+live later on 2026-08-25 and unrelated to the draw-down chain. Only the ledger fact is recorded here;
+its full apply record — approval, proofs, postflight — landed separately in PR #475, from the session
+that ran it, and `.claude/schema-registry.json` was refreshed to `20260825142708` in that same PR.
+
+**Stated precisely:** that screen observation is reachability and UI-render evidence only. It is
+**not** a booking-draw transaction and **not** an end-to-end draw allocation proof. No end-to-end
+production draw has been observed, and none was manufactured — creating, updating, or submitting a
+real quote or order purely to produce evidence was ruled out.
+
+Documents corrected in this pass:
+
+- `docs/manual/CURRENT_STATE.md` — its header still reported 971 ledger rows at high-water
+  `20260816174353` with a registry matching that older boundary, contradicting `KNOWN_ISSUES.md`
+  and `migration-history.md`. Restamped to the current live reading; the old figures are kept only
+  inside an explicitly superseded provenance block.
+- `docs/audits/2026-08-24-codex-to-claude-draw-down-live-rollout-handoff.md` — its banner called
+  the handoff "fully executed" with "no instruction … actionable", which retired the two closeout
+  steps that had not happened. The banner now supersedes only the apply/reconciliation steps (1–7)
+  and points at PR #480's decision record for step 9 instead of asserting a standing pause.
+
+Not changed here: `docs/manual/DECISION_LOG.md`. An earlier revision of this branch added its own
+booking-draw entry; PR #480 landed the canonical one first, sourced from the session Mason gave the
+decision to and carrying release preconditions this branch had not read. That entry is better
+sourced, so this branch's duplicate was dropped rather than merged alongside it — two entries for
+one decision on one date is the same defect this pass exists to remove. Same disposition as the
+`save_job` record, which deferred to PR #475.
+
+No code, schema, live data, or migration was changed by this entry.
+
+## 2026-08-25 — the routine migration door now refuses a stolen reviewer proof
+
+PR #470 closed a proof-replay hole in `scripts/apply-migration-file.mjs` by adding
+`requireExactProofName`, but wired it only there. `.claude/hooks/migration-apply-guard.mjs`
+— the PreToolUse hook covering MCP `apply_migration`, the door used for ROUTINE
+migrations — passed no such flag and kept matching proof-to-migration by substring.
+So the fix hardened the rarely-used oversized-file door and left the common one open.
+Codex reported this on #470 and it was deliberately deferred there rather than bundled;
+this is that follow-up.
+
+The attack: copy reviewed bytes to `99999999999999_alias_<old-name>.sql`. The proof for
+`<old-name>` still matched by substring, the queryHash still matched (identical SQL), and
+the ordering check read the alias's leading stamp as newest. Codex reproduced
+`APPLY GATE PASSED` on an actual dry run, including a legacy 8-digit variant
+(`20260210_fix_rls_critical_issues`) that defeated an earlier stamp-count rule outright.
+
+- `requireExactProofName` now **defaults to `true`**, so a caller that forgets it inherits
+  the safe behaviour. Both known callers want exact; the flag stays available for tests.
+- Names are compared **normalized** (basename, `.sql` stripped, slashes unified), not as
+  raw strings. This matters: `write-apply-proofs.mjs` records a bare name while an apply
+  call may carry `<name>.sql` or a repo-relative path, and substring matching had been
+  quietly absorbing that difference. Naive equality would have refused legitimate applies.
+  An alias differs in its STEM, which survives normalization, so it is still refused.
+- The refusal now distinguishes "a fresh clean proof exists but names a DIFFERENT
+  migration" from "no proof found", printing both names. Previously an operator hitting
+  this saw a missing-proof message with a proof sitting right there, and the natural next
+  move — re-mint — would not have helped.
+
+Proof: 114 assertions in `migration-apply-lib.test.mjs` and the full
+`npm run test:correction-guards` suite pass, including the hook's own 86 assertions. The
+existing characterization test that asserted *"substring matching DOES let the alias
+inherit the proof (the bug)"* now asserts the default REFUSES it; the lenient path is
+retained behind an explicit opt-in so it fails loudly if anyone reinstates it as default.
+
+**Correction — the first version of this entry overstated the safety property.** It claimed
+the change "can only refuse an apply that previously succeeded, never permit one". That is
+FALSE, and CodeRabbit was right to challenge it. An exhaustive comparison over 2,500 name
+pairs found **255** where the old substring rule REFUSED and normalized matching ACCEPTS —
+for example a proof recorded as `<name>.SQL` against an apply of `<name>.sql`, which
+substring matching missed because neither string contains the other once the case differs.
+
+So the accurate statement is narrower, in two parts:
+
+- **Against the alias attack the change is strictly tightening.** Every aliased name the
+  old rule accepted is now refused; that is the security property, and it holds.
+- **On spelling variants it is deliberately WIDENING.** Case, path prefix, and surrounding
+  whitespace differences that named the same migration but happened to defeat substring
+  matching are now accepted. Those applies were being refused for no good reason. The
+  widening is bounded by everything else the gate still demands: the proof must be under
+  30 minutes old, carry clean findings, and its `queryHash` must match the SQL actually
+  being transmitted — so a widened name match cannot authorise different content.
+
+Not verified: no live migration was applied for end-to-end verification.
+
+
+## 2026-08-25 — Quote-version restore trust boundary (PR #401): rebased, renumbered, verified against live
+
+Landing the long-stale PR #401. `20260813080000` closed the browser write path to
+`quote_versions` and applied live on 2026-08-16, but the rows written *before* that
+boundary are still there and nothing distinguishes them from RPC-created ones. Restoring
+a version rebuilds `quote_items.cost_at_quote_cents`, so an unprovable legacy row must not
+become a trusted cost source merely because the door is now shut.
+
+- **New nullable `quote_versions.restore_trusted_at timestamptz`.** `create_quote_version`
+  stamps it on its own first successful insert, after the owner-side writer has built the
+  snapshot from typed database rows; a cached idempotent replay returns before that point
+  and so cannot bless a pre-boundary row with a reused key. The private
+  `_restore_quote_version_below_cost_impl_20260810` raises
+  `QUOTE_VERSION_LEGACY_UNTRUSTED` when the marker is NULL, before any quote, section or
+  item row is touched.
+- **No backfill, deliberately.** Backfilling would convert an unprovable assertion into
+  trust. Pre-boundary snapshots stay fully readable; they just stop being restorable.
+  Measured live on 2026-08-25 before landing: 3 quote versions across 2 quotes, and
+  `restore_quote_version` has been invoked zero times in production — the behavioral
+  change lands on a path no one has used.
+- **Renumbered `20260813180000` → `20260825190000`.** The original stamp had fallen below
+  the live high-water name `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`,
+  so `.claude/hooks/migration-ordering-lib.mjs` would have refused the apply outright —
+  correctly, since replaying a stale file is how the `batch_apply_prepayments` actor guard
+  was silently reverted on 2026-07-15. All seven in-repo references were moved with it.
+- **Re-emission verified non-regressive.** The migration re-emits
+  `create_quote_version` with `CREATE OR REPLACE`, so its proposed body was diffed against
+  the live `prosrc` on 2026-08-25 rather than trusted. Every existing guard survives:
+  actor identity, active-role membership, quote ownership both before and after the
+  `FOR UPDATE` lock, row-version staleness, the full idempotency payload check including
+  `_method` and version-id existence, and the cache-write row-count assertion. The only
+  additions are the trust-mark `UPDATE` and its `QUOTE_VERSION_TRUST_MARK_FAILED` guard.
+- **Round 8 (2026-08-26): the standing sweep now pins both re-emitted function bodies
+  whole, not just a prefix or region.** The Codex reviewer showed that everything after
+  the `QUOTE_VERSION_LEGACY_UNTRUSTED` raise was unpinned: a future re-emission could
+  keep the fingerprinted prefix byte-identical, move the sole owner call into an appended
+  `EXCEPTION` handler, and deliberately raise into it — catching the rejection restores
+  legacy snapshots while the prefix pin, exact-IF count, sole-owner-call count and
+  ordering check all still pass. Proven against live PostgreSQL 17.6 both ways: the
+  handler body passes every pre-round-8 check and only a whole-normalized-body
+  length+md5 pin refuses it. That pin is now in the predicate (both create branches and
+  the restore contract), the migration postcondition, and the mirror test's mutation
+  proofs. Same boundary lesson as round 5, terminal form: leave NO unpinned interval on
+  either side of the guard.
+- **Rounds 9-10 (2026-08-26): the pins now cover the whole trust chain, plus apply-time
+  preimage verification.** The Codex reviewer extended round 8's lesson one level deeper on
+  three fronts, all confirmed real: the pinned wrappers TRUST results from owner impls whose
+  bodies nothing pinned (a re-emitted `_create_quote_version_owner_impl` returning a legacy
+  version_id would get its lie stamped trusted by the byte-perfect wrapper; a re-emitted
+  `_restore_quote_version_owner_impl` could restore a different version than the one whose
+  marker was checked), and the public `restore_quote_version` wrapper passed its precondition
+  by merely CONTAINING the guarded impl's name. All three live bodies are now pinned in the
+  standing predicate (measured read-only from live 2026-08-26, verified green against live),
+  the wrapper route pin is asserted in the migration's precondition and postcondition, and
+  the precondition now also pins the PRE-images of the two functions being replaced — if live
+  drifts between this review and the apply, the apply fails closed instead of silently
+  overwriting newer behavior. The pinned set is closed deliberately at these five routines:
+  they are exactly the chain whose results become an authoritative cost source.
+- **Rebase decisions.** Merging current `main` produced eight conflicts. `main` won every
+  documentation conflict — the branch's headers still claimed `20260813080000` was
+  unapplied, which stopped being true on 2026-08-16. In `rpcContracts.test.ts` `main` also
+  won outright: the private restore implementation holds no `authenticated`, `anon` or
+  `service_role` EXECUTE grant live, so it never reaches the generated client types and
+  needs no exemption, and the two Wave A guard entries the branch carried are still parked.
+  `smoke-specs.json` kept both sides — each added a different new spec.
+
+Migration is written and reviewed but **NOT APPLIED**; it is entry 892 in
+`docs/reference/migration-history.md`.
+
 
 ## 2026-08-25 — PR #432 closed; control-file edits bounded; local/CI proof de-duplicated
 
