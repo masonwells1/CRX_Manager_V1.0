@@ -77,7 +77,10 @@ let newContent = "";
 if (typeof input.content === "string") newContent = input.content;
 else if (typeof input.new_string === "string") newContent = input.new_string;
 else if (Array.isArray(input.edits)) newContent = input.edits.map((e) => e?.new_string || "").join("\n");
-if (!newContent) allow();
+// The emptiness early-exit moved BELOW the disk reconstruction: a pure-deletion
+// Edit has an empty new_string, and exiting here let it bypass the guard
+// entirely — deleting a caller-analysis marker line left a risky REVOKE
+// unjustified yet allowed (CodeRabbit PR #489).
 
 // For Edit/MultiEdit, new_string is only a FRAGMENT — a role-token-only change
 // inside an existing REVOKE (e.g. `service_role` -> `authenticated`) carries no
@@ -87,27 +90,34 @@ if (!newContent) allow();
 // splice silently no-oped on CRLF worktrees, so the guard judged the UNEDITED
 // file and denied the very Edit that added its required marker (2026-08-26).
 // Falls back to the fragment if the file can't be read/applied.
+let reconstructed = toolName === "write"; // Write content IS the full file
 if (toolName !== "write" && existsSync(filePath)) {
   try {
     newContent = applyEditsForAnalysis(readFileSync(filePath, "utf8"), input);
+    reconstructed = true;
   } catch {
     /* keep the fragment */
   }
 }
 newContent = toLF(newContent);
+if (!newContent) allow();
 
 // Fast path: nothing grant-shaped in the post-edit content.
 if (!/\b(grant|revoke)\b/i.test(newContent)) allow();
 
-// For Edits, the justification markers may already live elsewhere in the file
-// (or be added in the same edit) — scan markers across on-disk content + new content.
+// Marker scan source: when the full post-edit file was reconstructed, scan
+// ONLY it — markers that already live elsewhere in the file are inside it, and
+// including the pre-edit disk content would retain a marker the edit REMOVES,
+// silently allowing a still-risky REVOKE (CodeRabbit PR #489). The disk+fragment
+// union survives solely for the fragment fallback (file unreadable/unapplied),
+// where markers elsewhere in the file must still count.
 let markerSource = newContent;
-try {
-  if (toolName !== "write" && existsSync(filePath)) {
+if (!reconstructed && existsSync(filePath)) {
+  try {
     markerSource = toLF(readFileSync(filePath, "utf8")) + "\n" + newContent;
+  } catch {
+    /* fall back to new content only */
   }
-} catch {
-  /* fall back to new content only */
 }
 
 // ---------------------------------------------------------------------------

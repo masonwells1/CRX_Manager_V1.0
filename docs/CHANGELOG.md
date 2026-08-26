@@ -76,6 +76,17 @@ denied), and both fixes were mutation-tested: reverting the normalization or the
 the new tests fail in each direction. `sql-safety.mjs` and `status-enum-check.mjs` still judge
 fragments only (their exempt markers have the same visibility gap) — tracked as a follow-up.
 
+CodeRabbit's review of this change surfaced two more real holes in `grant-change-guard.mjs`, both
+around marker REMOVAL: the marker scan concatenated the pre-edit disk content, so an Edit that
+deleted a `-- caller-analysis:` line still saw the old marker and allowed the now-unjustified
+REVOKE; and worse, a pure-deletion Edit has an empty `new_string`, which tripped the guard's
+emptiness early-exit before any analysis ran — deletion edits bypassed the guard entirely. The scan
+now reads only the reconstructed post-edit file (the disk+fragment union survives solely for the
+unreadable-file fallback, where markers elsewhere in the file must still count), the emptiness check
+moved below reconstruction, and a marker-removal regression test pins both (each fix
+mutation-verified). Allow-side test assertions are now affirmative — `!isDeny` had treated a crashed
+hook's empty stdout as an allow.
+
 ## 2026-08-26 — Pre-push containment skips top-level ignored tool bulk
 
 The private-artifact pre-push guard now excludes descendants of its existing explicit top-level
