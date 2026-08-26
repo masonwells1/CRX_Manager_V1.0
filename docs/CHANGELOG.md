@@ -39,11 +39,11 @@ The pending Section 9 remediation now binds all six AP/receiving mutation receip
 
 The candidate migration now takes an exclusive receipt-table cutover lock, installs an insert-time binding trigger, and supplies actor/fingerprint context from each new wrapper before calling the private mature implementation. Pre-cutover writers drain before validation; callers queued behind cutover either use the new wrapper or have their late old-body receipt rejected, which rolls back the whole money/inventory statement. The payment and PO receiving screens also inspect mismatch receipts and refresh the committed result instead of enabling a duplicate submission.
 
-The final migration-security pass found that the new `receive_po_items` wrapper enforced the actor comparison but raised a descriptive sentence instead of the canonical `ACTOR_MISMATCH` code. It now raises the canonical refusal, and the Section 9 mutation guard fails if that token is removed or renamed. The focused guard and the full 63-migration disposable PostgreSQL replay passed after the correction.
+The final migration-security pass found that the new `receive_po_items` wrapper enforced the actor comparison but raised a descriptive sentence instead of the canonical `ACTOR_MISMATCH` code. It now raises the canonical refusal, and the Section 9 mutation guard fails if that token is removed or renamed. The focused guard and the full 64-migration disposable PostgreSQL replay passed after the correction.
 
 A subsequent exact-commit review found that both migrations assumed no stale function overload existed. The preflights now require exactly one expected public signature, PostgreSQL ownership, PL/pgSQL, `SECURITY DEFINER`, the fixed search path, and the SHA-256 hash of the reviewed live body before changing anything; postflights require exactly one expected public overload after creation. Disposable decoy overloads for `create_vendor_bill(text)` and `get_ap_aging(text)` now make the corresponding migration fail closed before the reviewed signature is changed, and the full replay proves both refusals before applying the clean candidates.
 
-Network-isolated PostgreSQL 17 proof replayed all 63 post-baseline migrations, observed cutover waiting on a concurrent legacy writer, caught its committed unbound receipt in preflight, then proved a late old payment body leaves zero payment, bill-balance, or receipt residue. All three sibling rollback smokes and every period-close concurrency schedule passed through `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`. These migrations remain local candidates; no live schema or data was changed, and fresh exact-commit review plus the governed apply/PR gates still remain.
+Network-isolated PostgreSQL 17 proof replayed all 64 post-baseline migrations, observed cutover waiting on a concurrent legacy writer, caught its committed unbound receipt in preflight, then proved a late old payment body leaves zero payment, bill-balance, or receipt residue. All three sibling rollback smokes and every period-close concurrency schedule passed through `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`. These migrations remain local candidates; no live schema or data was changed, and fresh exact-commit review plus the governed apply/PR gates still remain.
 
 ## 2026-08-26 — Pre-push containment skips top-level ignored tool bulk
 
@@ -311,7 +311,7 @@ task; `Over 90` is the fifth displayed bucket.
 Two pending migrations implement the database contract:
 `20260826125456_bind_section9_ap_receiving_intent_and_month_dashboard.sql` and
 `20260826140333_correct_ap_aging_due_date_buckets.sql`. A disposable PostgreSQL 17 replay applied
-all 63 post-baseline migrations, ran the complete Section 9 PO/AP rollback chain (including every
+all 64 post-baseline migrations, ran the complete Section 9 PO/AP rollback chain (including every
 aging boundary), and passed every two-session accounting-period race schedule with terminal marker
 `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`. Static mutation guards also prove the intent binding,
 private implementation ACLs, legacy-receipt cutover barrier, Chicago month boundary, and due-date

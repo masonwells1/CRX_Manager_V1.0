@@ -3,8 +3,8 @@
 ## WHERE
 
 - Checkout: `C:\Users\mason\.codex\worktrees\section9-ap-safety-remediation\CRX_Manager`
-- Branch: `codex/section9-ap-safety-remediation`
-- Current base: `origin/main` at `5e356ee6e757526920c3d7ffe92491e1e42b6bbf`; the branch is two commits ahead and not behind.
+- Branch: `codex/section9-ap-safety-remediation-v2`
+- Current base: `origin/main` at `22c7d217ed67b73e96828f5ddbf0befd0d40ed01`; the branch was rebased onto that commit and the full affected proof reran afterwards.
 - Repository: `masonwells1/CRX_Manager_V1.0`
 - Live database: Supabase project `rhyzpcqhnizqbxphqdkr`
 
@@ -57,7 +57,7 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Latest focused remediation/concurrency/money tests after the follow-up — 68/68 passed.
 - Focused Section 9 guard after the canonical actor-refusal correction — 6/6 passed.
 - `npm run check:docs` — pass.
-- Disposable PostgreSQL proof after the follow-up — full replay of 63 post-baseline migrations, decoy overloads for `create_vendor_bill(text)` and `get_ap_aging(text)` were rejected before candidate apply, concurrent cutover drain passed, late-old-body rollback passed, both new candidates applied, all three sibling rollback chains passed, every two-session close/write schedule passed, future-dated payments were excluded from the selected month, terminal marker `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
+- Disposable PostgreSQL proof after the follow-up — full replay of 64 post-baseline migrations, decoy overloads for `create_vendor_bill(text)` and `get_ap_aging(text)` were rejected before candidate apply, concurrent cutover drain passed, late-old-body rollback passed, both new candidates applied, all three sibling rollback chains passed, every two-session close/write schedule passed, future-dated payments were excluded from the selected month, terminal marker `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
 - `git diff --check` — pass.
 - React best-practices review — no new waterfall, bundle, hook-dependency, transient-state, or rendering blocker found in the changed flow.
 
@@ -69,7 +69,9 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Exact branch review at `893eeb19` returned CLEAN with zero HIGH/BLOCKER findings and minted its SHA-bound proof.
 - The final migration-specific security pass then found one additional HIGH: `receive_po_items` enforced actor equality but returned a noncanonical exception string. The wrapper and executable guard are corrected, the full database replay passes again, and the AP-aging migration's security/drift proof remains clean.
 - Exact branch review at `b4b6b70c` then found one additional HIGH: unexpected public function overloads could survive the migrations and expose a stale implementation. Both migrations now fail closed before and after on overload drift, pin the reviewed pre-cutover function shape/body, and include real decoy-overload rollback proofs.
-- Because that hardening changes the artifact after `b4b6b70c`, a fresh exact-commit review and refreshed clean security/drift proofs for both migrations remain pending, followed by CodeRabbit's latest-commit review, PR checks, live apply, merge, and production verification.
+- Rebased exact branch review at `518f777b` returned CLEAN, but current main advanced during the next test-only review and correctly invalidated that proof. The branch has since been rebased again; a new exact-head proof remains pending.
+- The AP-aging migration's final security and drift reviewers are CLEAN. The intent/dashboard migration's final security reviewer is CLEAN; its drift reviewer produced no verdict because the read-only shell was policy-blocked and the final local branch was not yet available through GitHub. It must rerun after the replacement branch is published.
+- CodeRabbit's latest-commit review, PR checks, live apply, merge, and production verification remain pending.
 
 ## APPROVAL STATE
 
@@ -84,6 +86,6 @@ Done means the changed database and UI paths execute successfully in rollback-on
 
 ## FIRST ACTION
 
-Commit the canonical actor-refusal correction, rerun both exact review gates against that new head, and update PR #491 only if both return no unresolved HIGH/BLOCKER finding.
+Mint a fresh exact-head review, publish the rebased `-v2` branch without rewriting PR #491's history, open the replacement PR, and rerun the intent/dashboard drift reviewer against the visible final commit.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.
