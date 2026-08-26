@@ -335,13 +335,37 @@ assert.deepEqual(riskyFiles(["scripts/remove-applied-ledger-entry.mjs"]), ["scri
 assert.equal(contentIsRisky("+ const total_cents = 100"), true);
 assert.equal(contentIsRisky("+ const title = 'ordinary'"), false);
 
-// 2026-08-25: the content classifier reads only the lines a change ADDS or
-// REMOVES. It used to test the whole diff string, so the unchanged CONTEXT lines
-// git prints around a hunk counted too — a test-and-docs-only PR was classified
-// money-risky twice because pre-existing prose near the edit mentioned
-// `total_impact_cents` and `apply_prepay_to_invoice`, forcing two Codex proofs it
-// did not need. Do NOT re-widen this to the full diff text.
+// 2026-08-25: the content classifier reads CODE hunks in full (context lines
+// included) but PROSE files (.md/.mdx/.txt) on their CHANGED lines only.
+//
+// Both halves are load-bearing and were each proven by a counter-example:
+//
+//  - CODE keeps its context, because a money edit often does not repeat the money
+//    word on the line it touches. gpt-5.6-sol reproduced exactly that (High,
+//    2026-08-25): `total_cents` on an UNCHANGED line while the CHANGED line adds
+//    `Math.round(Number(input) * taxRate)`. Classifying changed lines only let that
+//    binary-float money change through the gate unreviewed. Do NOT narrow this.
+//
+//  - PROSE drops its context, because documentation names money and security
+//    machinery constantly while carrying no executable risk. PR #479, a test-and-docs
+//    change, was flagged money-risky twice — two proof runs it did not need — purely
+//    from unchanged KNOWN_ISSUES.md prose near the edit. Do NOT re-widen this.
 assert.equal(contentIsRisky("-  const total_cents = 1;"), true, "removing money code is still risky");
+assert.equal(
+  contentIsRisky(
+    [
+      "diff --git a/src/lib/tax.ts b/src/lib/tax.ts",
+      "--- a/src/lib/tax.ts",
+      "+++ b/src/lib/tax.ts",
+      "@@ -1,5 +1,5 @@",
+      "   const total_cents = line.total_cents;",
+      "-  return exactCents(total_cents, taxRate);",
+      "+  return Math.round(Number(input) * taxRate);",
+    ].join("\n"),
+  ),
+  true,
+  "CODE: money on an unchanged context line still flags the hunk (Sol High, 2026-08-25)",
+);
 assert.equal(
   contentIsRisky(
     [
@@ -356,22 +380,35 @@ assert.equal(
     ].join("\n"),
   ),
   false,
-  "money words on CONTEXT lines alone do not make a diff risky",
+  "PROSE: money words on context lines alone do not make a docs diff risky",
+);
+assert.equal(
+  contentIsRisky(
+    ["--- a/docs/x.md", "+++ b/docs/x.md", "@@ -1 +1,2 @@", " ordinary prose", "+ the new allocate_payment flow"].join("\n"),
+  ),
+  true,
+  "PROSE: a money word on an ADDED line still flags",
 );
 assert.equal(
   contentIsRisky(
     [
+      "--- a/docs/x.md",
+      "+++ b/docs/x.md",
+      "@@ -1 +1,2 @@",
+      " prose mentioning total_impact_cents",
+      "+ harmless addition",
+      "diff --git a/src/lib/x.ts b/src/lib/x.ts",
       "--- a/src/lib/x.ts",
       "+++ b/src/lib/x.ts",
-      "@@ -1,3 +1,4 @@",
-      " const a = 1;",
-      "+const balance_cents = 2;",
+      "@@ -1,2 +1,2 @@",
+      " const balance_cents = 1;",
+      "+const b = compute();",
     ].join("\n"),
   ),
   true,
-  "money words on an ADDED line inside a real hunk still flag",
+  "a mixed diff is classified per file — clean prose does not mask a risky code hunk",
 );
-// Fail CLOSED on an unexpected input shape: text with no +/- lines at all is not
+// Fail CLOSED on an unexpected input shape: text with no diff structure at all is not
 // a unified diff, so scan the whole thing rather than silently returning false.
 assert.equal(contentIsRisky("const total_cents = 1;"), true, "raw non-diff text falls back to a full scan");
 

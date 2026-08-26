@@ -1533,29 +1533,53 @@ export function gitUrlRewriteSettings(configOutput) {
 // the trailing \b is meaningful for that one; the other three are matched as
 // whole identifiers.
 const RISKY_CONTENT_RE = /_cents\b|\bfinancial_audit_log\b|\ballocate_payment\b|\bapply_prepay\b|\bauth\.uid\s*\(|\bsecurity\s+definer\b|\b(?:rls|row.level.security|policy|grant|permission|idempoten\w*|inventory|commission|lifecycle)\b|\b(?:is_admin|is_sales_rep|is_driver|is_applicator)\s*\(|\.(?:insert|update|upsert|delete|rpc)\s*\(|\b(?:status|stage|lifecycle_state|role|quantity|amount|price|total|balance|profit|margin)\s*(?:===?|!==?|:|=)/i;
-// Only the lines a change actually ADDS or REMOVES are classified. Testing the
-// whole diff string also swept the CONTEXT lines git prints around each hunk, so
-// an edit that merely landed NEAR pre-existing code or prose containing e.g.
-// `_cents` was called money-risky and forced a Codex proof it did not need
-// (observed 2026-08-25 on a test-and-docs-only PR, twice).
+// CODE hunks are classified in FULL, context lines included — unchanged behaviour, and
+// deliberately so. A money edit frequently does not repeat the money word on the line it
+// touches: the reviewed counter-example is `const total_cents = …` sitting on an UNCHANGED
+// line while the changed line introduces `Math.round(Number(input) * taxRate)`. Classifying
+// only the changed line there would let a binary-floating-point money change through the
+// gate unreviewed, so for code the surrounding hunk is signal, not noise.
+// (gpt-5.6-sol, High finding, 2026-08-25.)
 //
-// Removed lines still count: deleting money/security code is itself risky.
+// PROSE files (.md/.mdx/.txt) are classified on their CHANGED lines only. Documentation
+// *describes* money and security machinery by name, so its context lines match the regex
+// constantly while carrying no executable risk at all: PR #479 was a test-and-docs change
+// flagged money-risky twice — forcing two proof runs it did not need — purely because
+// unchanged `KNOWN_ISSUES.md` prose near the edit mentioned `total_impact_cents` and
+// `apply_prepay_to_invoice`. A gate that cries wolf on prose is one people learn to route
+// around, and prose cannot carry the arithmetic this gate exists to catch.
 //
-// `+++ `/`--- ` (with the trailing space) are the file headers, not content.
-// If the input yields no changed lines at all — a caller passed raw text instead
-// of a unified diff, or the diff is rename/mode-only — fall back to scanning the
-// whole string, so an unexpected input shape fails CLOSED rather than open.
+// Removed lines always count: deleting money or security code is itself risky.
+//
+// Fail CLOSED on anything unrecognised — text with no diff structure at all (a caller
+// passed raw text rather than a unified diff) is scanned in full.
+const PROSE_PATH_RE = /\.(?:md|mdx|txt)$/i;
+
 export function contentIsRisky(diffText) {
   const text = String(diffText || "");
-  const changed = text
-    .split(/\r?\n/)
-    .filter(
-      (line) =>
-        (/^\+/.test(line) && !/^\+\+\+ /.test(line)) ||
-        (/^-/.test(line) && !/^--- /.test(line)),
-    )
-    .join("\n");
-  return RISKY_CONTENT_RE.test(changed || text);
+  let sawFileHeader = false;
+  let inProseFile = false;
+  const scanned = [];
+
+  for (const line of text.split(/\r?\n/)) {
+    // `+++ b/<path>` names the file the following hunks belong to. `/dev/null` (a
+    // deletion) carries no path, so it leaves the current classification alone.
+    const header = /^\+\+\+ (?:b\/)?(.*)$/.exec(line);
+    if (header) {
+      const path = header[1].trim();
+      if (path && path !== "/dev/null") {
+        sawFileHeader = true;
+        inProseFile = PROSE_PATH_RE.test(path);
+      }
+      continue;
+    }
+    if (/^--- /.test(line) || /^@@/.test(line) || /^diff --git /.test(line)) continue;
+
+    if (/^[+-]/.test(line) || !inProseFile) scanned.push(line);
+  }
+
+  if (!sawFileHeader) return RISKY_CONTENT_RE.test(text);
+  return RISKY_CONTENT_RE.test(scanned.join("\n"));
 }
 
 function reviewProofValid(data, headSha, nowMs, ranKey, expectedBaseSha) {
