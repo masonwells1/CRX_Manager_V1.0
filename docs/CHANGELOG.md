@@ -1,6 +1,141 @@
 # CRX Manager V1.0 — Development Changelog
 
+## 2026-08-26 — sql-safety and status-enum-check also judge the real post-edit file
+
+Follow-up closing the gap the "Migration guards judge the real post-edit file on CRLF
+worktrees" entry below left tracked: `sql-safety.mjs` and `status-enum-check.mjs` still judged
+only the Edit fragment (`tool_input.new_string`). Both have file-level exempt markers
+(`-- sql-safety: exempt-registry`; `-- status-enum-check: exempt` / `// status-enum-check:
+exempt`) that they searched for in that same fragment, so a marker already on disk was
+invisible to any Edit that didn't happen to include it — the guard (or sql-safety's
+registry-stale gate) denied the very file its marker exempts, the same deadlock class fixed
+for `grant-change-guard.mjs` and `idempotency-body-check.mjs`. A MultiEdit `edits` array also
+produced empty content and a silent allow.
+
+Both hooks now simulate Edit/MultiEdit payloads against the on-disk file via the shared
+line-ending-safe `applyEditsForAnalysis()` (`.claude/hooks/edit-splice-lib.mjs`) and judge the
+full post-edit content, exactly as `idempotency-body-check.mjs` does. `status-enum-check`'s
+file-type gating is unchanged — it still covers both SQL migrations and TS under `src/`.
+New regression tests (`sql-safety.test.mjs`, `status-enum-check.test.mjs`, wired into
+`test:correction-guards`) run isolated copies of the real hooks against crafted registries and
+CRLF fixtures in both directions — a marker-less edit to a marker-bearing file is allowed
+(deadlock fixed, including the registry-stale-gate variant), and a multi-line LF edit that
+introduces a violation into a CRLF file is still denied. Both were mutation-tested: disabling
+the full-file view fails the allow-direction tests, and swapping the normalized splice for an
+exact one fails the deny-direction tests, in both hooks. The CodeRabbit findings from the
+sibling PR #489 fix are carried over pre-emptively: a pure-deletion Edit that removes the
+exempt marker is a pinned deny (an emptiness early-exit above the reconstruction would have
+bypassed the guard — mutation-verified), and allow-side test assertions are affirmative, so
+a crashed hook's empty stdout cannot read as an allow. Round-2 parity: as in the sibling
+fix below, empty content is trusted only when it IS the real post-edit file (a Write, or a
+reconstruction that emptied a readable file) — a deletion Edit whose on-disk read failed is
+denied with retry/full-file-Write instructions instead of passing unanalyzed; the
+unreadable-file deny and the empties-a-readable-file allow boundary are pinned and
+mutation-verified in both hooks.
+
+Of the remaining fragment-only PreToolUse content guards: `rls-on-new-tables.mjs`,
+`generated-column-check.mjs`, and `actor-binding-check.mjs` have the same file-level markers
+and the same deadlock exposure — tracked as a follow-up. `money-safety.mjs` and
+`env-guard.mjs` have no file-level markers, so fragment judging can only miss cross-fragment
+context (false negatives), never deadlock.
+
+## 2026-08-25 — the routine migration door now refuses a stolen reviewer proof
+
+PR #470 closed a proof-replay hole in `scripts/apply-migration-file.mjs` by adding
+`requireExactProofName`, but wired it only there. `.claude/hooks/migration-apply-guard.mjs`
+— the PreToolUse hook covering MCP `apply_migration`, the door used for ROUTINE
+migrations — passed no such flag and kept matching proof-to-migration by substring.
+So the fix hardened the rarely-used oversized-file door and left the common one open.
+Codex reported this on #470 and it was deliberately deferred there rather than bundled;
+this is that follow-up.
+
+The attack: copy reviewed bytes to `99999999999999_alias_<old-name>.sql`. The proof for
+`<old-name>` still matched by substring, the queryHash still matched (identical SQL), and
+the ordering check read the alias's leading stamp as newest. Codex reproduced
+`APPLY GATE PASSED` on an actual dry run, including a legacy 8-digit variant
+(`20260210_fix_rls_critical_issues`) that defeated an earlier stamp-count rule outright.
+
+- `requireExactProofName` now **defaults to `true`**, so a caller that forgets it inherits
+  the safe behaviour. Both known callers want exact; the flag stays available for tests.
+- Names are compared **normalized** (basename, `.sql` stripped, slashes unified), not as
+  raw strings. This matters: `write-apply-proofs.mjs` records a bare name while an apply
+  call may carry `<name>.sql` or a repo-relative path, and substring matching had been
+  quietly absorbing that difference. Naive equality would have refused legitimate applies.
+  An alias differs in its STEM, which survives normalization, so it is still refused.
+- The refusal now distinguishes "a fresh clean proof exists but names a DIFFERENT
+  migration" from "no proof found", printing both names. Previously an operator hitting
+  this saw a missing-proof message with a proof sitting right there, and the natural next
+  move — re-mint — would not have helped.
+
+Proof: 114 assertions in `migration-apply-lib.test.mjs` and the full
+`npm run test:correction-guards` suite pass, including the hook's own 86 assertions. The
+existing characterization test that asserted *"substring matching DOES let the alias
+inherit the proof (the bug)"* now asserts the default REFUSES it; the lenient path is
+retained behind an explicit opt-in so it fails loudly if anyone reinstates it as default.
+
+**Correction — the first version of this entry overstated the safety property.** It claimed
+the change "can only refuse an apply that previously succeeded, never permit one". That is
+FALSE, and CodeRabbit was right to challenge it. An exhaustive comparison over 2,500 name
+pairs found **255** where the old substring rule REFUSED and normalized matching ACCEPTS —
+for example a proof recorded as `<name>.SQL` against an apply of `<name>.sql`, which
+substring matching missed because neither string contains the other once the case differs.
+
+So the accurate statement is narrower, in two parts:
+
+- **Against the alias attack the change is strictly tightening.** Every aliased name the
+  old rule accepted is now refused; that is the security property, and it holds.
+- **On spelling variants it is deliberately WIDENING.** Case, path prefix, and surrounding
+  whitespace differences that named the same migration but happened to defeat substring
+  matching are now accepted. Those applies were being refused for no good reason. The
+  widening is bounded by everything else the gate still demands: the proof must be under
+  30 minutes old, carry clean findings, and its `queryHash` must match the SQL actually
+  being transmitted — so a widened name match cannot authorise different content.
+
+Not verified: no live migration was applied for end-to-end verification.
+
 All significant development milestones, in reverse chronological order.
+
+## 2026-08-26 — Migration guards judge the real post-edit file on CRLF worktrees
+
+`grant-change-guard.mjs` simulated an Edit against the on-disk migration with an exact
+`split(old_string).join(new_string)`. On a Windows worktree with `core.autocrlf` the file on disk is
+CRLF while the harness hands hooks LF-normalized fragments, so any fragment spanning a line boundary
+silently failed to match — the guard judged the **unedited** file. That cut both ways: it denied the
+very Edit that added the `-- caller-analysis:` marker it was demanding (the PR #401 deadlock,
+escapable only via a full-file Write), and it would have **allowed** an Edit that introduced a
+marker-less risky REVOKE, because the unedited file looked benign.
+
+Both sides of the splice are now LF-normalized in a shared helper, `.claude/hooks/edit-splice-lib.mjs`.
+`idempotency-body-check.mjs` had the sibling defect — it never looked at the file at all, judging only
+the Edit fragment — so an on-disk `-- idempotency-body-check: exempt` marker was invisible to edits
+(same deadlock), and a MultiEdit `edits` array produced empty content and was silently allowed. It now
+judges the full post-edit file through the same helper. Regression tests run the real hooks against
+CRLF fixtures with LF fragments in both directions (marker-adding edit allowed; risky marker-less edit
+denied), and both fixes were mutation-tested: reverting the normalization or the full-file view makes
+the new tests fail in each direction. `sql-safety.mjs` and `status-enum-check.mjs` had the same visibility gap on
+their exempt markers — closed the same day (see the entry above).
+
+CodeRabbit's review of this change surfaced two more real holes in `grant-change-guard.mjs`, both
+around marker REMOVAL: the marker scan concatenated the pre-edit disk content, so an Edit that
+deleted a `-- caller-analysis:` line still saw the old marker and allowed the now-unjustified
+REVOKE; and worse, a pure-deletion Edit has an empty `new_string`, which tripped the guard's
+emptiness early-exit before any analysis ran — deletion edits bypassed the guard entirely. The scan
+now reads only the reconstructed post-edit file (the disk+fragment union survives solely for the
+unreadable-file fallback, where markers elsewhere in the file must still count), the emptiness check
+moved below reconstruction, and a marker-removal regression test pins both (each fix
+mutation-verified). Allow-side test assertions are now affirmative — `!isDeny` had treated a crashed
+hook's empty stdout as an allow. Round 2 closed the last variant: empty content is only trusted when
+it IS the real post-edit file (a Write, or a reconstruction that emptied the file) — a deletion Edit
+whose file read FAILED (readFileSync threw after existsSync passed) had still slipped through the
+emptiness exit unanalyzed, and now fails closed with instructions to use a full-file Write
+(regression test forces the read failure with a directory named `*.sql`; mutation-verified).
+CodeRabbit's full review extended the sweep with two more real findings: `idempotency-body-check.mjs`
+got the same fail-closed rule (its unreadable-file deletion path had still allowed unanalyzed), and
+`status-enum-check.mjs`'s TypeScript scanner now stops each `.from()` window at the NEXT `.from()`
+call — judging the full post-edit file had exposed its fixed 800-character window to unrelated query
+chains, so a later table's valid status was denied under the preceding table's constraint set on a
+benign edit to an existing page. Both mutation-verified with regression tests in each direction.
+
 
 ## 2026-08-26 — a guard self-test was re-initializing the real repository as bare
 
@@ -86,6 +221,7 @@ Proof: with that harness and a single un-retried click, 5 tests fail with the ex
 symptom, including the "Checking the label-rate policy" toast; with `clickSave()`, all 14 pass.
 Dropping the timer also made the file *faster* — 3.29s versus 8.20s before. Full suite green:
 339 files, 4770 passed | 123 skipped.
+
 
 ## 2026-08-26 — Ledger-guard test no longer operates on the real repository
 
