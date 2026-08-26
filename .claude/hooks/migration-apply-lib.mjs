@@ -29,6 +29,7 @@ import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
 import { sessionProofDirs } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
+import { checkPendingMigrations } from "./migration-pending-lib.mjs";
 
 export const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 export const REQUIRED_CODEX_EFFORT = "high";
@@ -84,6 +85,9 @@ export function evaluateMigrationApply({
   cwd,
   now = Date.now(),
   gitWorktreeList,
+  // Injection point for the pending-set preflight's view of origin/main. Tests
+  // stub it; both real callers let it shell out.
+  gitTrackedMigrations,
   // Defaults to TRUE so a caller that forgets it inherits the safe behaviour.
   // It was introduced (PR #470) opt-in for scripts/apply-migration-file.mjs only,
   // which left the MCP apply_migration path — the door used for ROUTINE migrations —
@@ -279,6 +283,91 @@ export function evaluateMigrationApply({
         `MIGRATION ORDERING GUARD failed to evaluate "${safeName}": ${err?.message || err}. ` +
         `Refusing the apply rather than skipping the check. Fix the guard, or state an explicit ` +
         `intentional replay in the migration SQL if that is genuinely what this is.`);
+    }
+
+    // PENDING-SET PREFLIGHT (2026-08-26). The ordering check above asks only
+    // "is anything NEWER already applied?". It never asks "is anything OLDER
+    // still WAITING?" — so an apply could legally advance the live high-water
+    // past a tracked, unapplied migration, and the refusal surfaced weeks later
+    // aimed at the innocent party. That is how
+    // 20260825190000_quote_version_restore_trust_boundary was stranded by
+    // 20260826150000_fix_save_job_comment_refusal_count. See
+    // ./migration-pending-lib.mjs for the full account and the measured reasons
+    // behind its two scoping rules.
+    //
+    // Same fail-closed contract as everything else in this block: an abstention
+    // is "no verdict", and an unknown verdict is not a pass.
+    try {
+      const listTracked = gitTrackedMigrations || (() => execFileSync(
+        "git",
+        ["ls-tree", "-r", "--name-only", "origin/main", "--", "supabase/migrations"],
+        { cwd: projectDir, encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] },
+      ));
+
+      let trackedFiles;
+      try {
+        trackedFiles = String(listTracked() ?? "")
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter((l) => /\.sql$/i.test(l));
+      } catch (err) {
+        return block(
+          `MIGRATION PENDING-SET GUARD: could not list the migrations tracked on origin/main ` +
+          `(${err?.message || err}), so whether an OLDER migration is still waiting to be applied ` +
+          `is UNKNOWN. Refusing the apply rather than stepping over a queue this guard cannot see.\n\n` +
+          `Run \`git fetch origin\` in ${projectDir} so origin/main resolves, then retry.`);
+      }
+
+      // origin/main is the reference for "tracked", so a stale ref would hide a
+      // migration someone merged minutes ago. Report the SHA the verdict was
+      // computed against rather than assert freshness this guard cannot prove.
+      let mainSha = "unknown";
+      try {
+        mainSha = execFileSync("git", ["rev-parse", "--short", "origin/main"], {
+          cwd: projectDir, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"],
+        }).trim() || "unknown";
+      } catch { /* reported as unknown; not worth failing the apply over */ }
+
+      let baselineHighWater = null;
+      try {
+        const manifest = JSON.parse(
+          readFileSync(path.join(projectDir, "supabase", "baselines", "manifest.json"), "utf8"));
+        baselineHighWater = manifest?.migrations_high_water ?? null;
+      } catch (err) {
+        return block(
+          `MIGRATION PENDING-SET GUARD: could not read the schema-baseline manifest at ` +
+          `${path.join("supabase", "baselines", "manifest.json")} (${err?.message || err}). Its ` +
+          `\`migrations_high_water\` is the floor for the pending scan — without it the scan would ` +
+          `have to judge pre-baseline history it cannot reconstruct, so it has no verdict. An ` +
+          `unknown verdict is not a pass. Refusing the apply.`);
+      }
+
+      const pendingCheck = checkPendingMigrations({
+        name: migName,
+        sql: migQuery,
+        appliedNames,
+        trackedFiles,
+        baselineHighWater,
+      });
+
+      if (!pendingCheck.ok) {
+        return block(`${pendingCheck.reason}\n\n(Pending set computed against origin/main @ ${mainSha}. ` +
+          `If that ref is stale, \`git fetch origin\` and retry.)`);
+      }
+      if (pendingCheck.abstained) {
+        return block(
+          `MIGRATION PENDING-SET GUARD: the pending-set check reached no verdict for "${safeName}", ` +
+          `so whether an OLDER tracked migration is still waiting is UNKNOWN — because ` +
+          `${pendingCheck.abstainReason}. An unknown verdict is not a pass. Refusing the apply.\n\n` +
+          `(Checked against origin/main @ ${mainSha}.)`);
+      }
+    } catch (err) {
+      // A crash in the pending check must not silently wave a migration through.
+      return block(
+        `MIGRATION PENDING-SET GUARD failed to evaluate "${safeName}": ${err?.message || err}. ` +
+        `Refusing the apply rather than skipping the check. Fix ` +
+        `${path.join(".claude", "hooks", "migration-pending-lib.mjs")} — do not route around this ` +
+        `by applying through another channel.`);
     }
   }
 
