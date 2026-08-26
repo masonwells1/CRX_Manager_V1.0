@@ -1,7 +1,8 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-08-25 UTC for the migration ledger and schema registry only** — a read-only
-re-read. **The live ledger has 976 rows**, `max(version)` `20260825142708`, and current live
+**Last verified: 2026-08-26 UTC for the limited Section 9 catalog evidence below; 2026-08-25 UTC
+for the migration ledger and schema registry** — read-only re-reads. **The live ledger has 976
+rows**, `max(version)` `20260825142708`, and current live
 effective ordering high-water `20260820120000` (name
 `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
 
