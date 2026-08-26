@@ -62,10 +62,12 @@ const input = payload?.tool_input || {};
 let content = input.content || input.new_string || "";
 const isFragmentEdit = typeof input.content !== "string" &&
   (typeof input.old_string === "string" || Array.isArray(input.edits));
+let reconstructed = !isFragmentEdit; // Write content IS the real post-edit file
 if (isFragmentEdit) {
   try {
     if (existsSync(filePath)) {
       content = applyEditsForAnalysis(readFileSync(filePath, "utf8"), input);
+      reconstructed = true;
     } else if (Array.isArray(input.edits)) {
       content = input.edits.map((e) => e?.new_string || "").join("\n");
     }
@@ -74,7 +76,18 @@ if (isFragmentEdit) {
   }
 }
 content = toLF(content);
-if (!content) out("allow");
+if (!content) {
+  // Empty content is only trustworthy when it IS the real post-edit file (a
+  // Write of empty content, or a reconstruction that emptied the file). A
+  // deletion Edit whose reconstruction FAILED leaves no signal at all —
+  // allowing it would let a marker-deleting edit through unanalyzed
+  // (CodeRabbit PR #489 round 2). Fail closed.
+  if (reconstructed) out("allow");
+  out("block",
+    "STATUS-ENUM GUARD: this Edit deletes content, but the on-disk file could not be read to " +
+    "analyze the post-edit result, so the deletion cannot be checked. Retry, or use a single " +
+    "full-file Write so the guard sees complete content.");
+}
 
 if (/(?:\/\/|--)\s*status-enum-check:\s*exempt/.test(content)) out("allow");
 

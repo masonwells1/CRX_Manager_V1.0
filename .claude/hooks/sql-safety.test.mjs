@@ -144,6 +144,29 @@ try {
   });
   ok(isDeny(r), "an Edit that DELETES the exempt-registry marker from a rule-6 file is denied");
 
+  // ── Reconstruction failure + deletion Edit fails CLOSED (CodeRabbit PR #489
+  // round 2): existsSync passes but readFileSync throws (a directory named
+  // *.sql), and the deletion's empty new_string leaves nothing to analyze —
+  // allowing would let a marker-deleting edit through unanalyzed. ──
+  const dirAsSql = path.join(tmp, "supabase", "migrations", "20260826000001_dir.sql");
+  mkdirSync(dirAsSql, { recursive: true });
+  r = runHook("Edit", {
+    file_path: dirAsSql,
+    old_string: "-- sql-safety: exempt-registry (x)\n",
+    new_string: "",
+  });
+  ok(isDeny(r), "a deletion Edit whose file cannot be read is denied (fail closed), not allowed unanalyzed");
+  ok(r.stdout.includes("could not be read"), "the unreadable-file deny explains itself");
+
+  // Boundary: a deletion that empties a READABLE file reconstructs to empty
+  // content — nothing left to analyze, allowed.
+  writeFileSync(migPath, CRLF("-- sql-safety: exempt-registry (stale marker, nothing left)\n"));
+  r = runHook("Edit", {
+    old_string: "-- sql-safety: exempt-registry (stale marker, nothing left)\n",
+    new_string: "",
+  });
+  ok(isAllow(r), "a deletion that empties a readable file is allowed (empty reconstruction is trustworthy)");
+
   // ── LF disk sanity: unchanged behavior on an already-LF file. ──
   writeFileSync(migPath, "-- lf migration\nSELECT 1;\n");
   r = runHook("Edit", {
