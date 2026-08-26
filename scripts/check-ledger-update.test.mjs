@@ -140,6 +140,30 @@ eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-x.md
 eq(ledgerCheck([".claude/settings.json", added("docs/changelog.d/2026-08-25-x.md", "## 2026-08-25 - real" + NL + NL + "detail" + NL)]).ok, true,
   "a heading WITH detail beneath it does satisfy the guard");
 
+// ── the heading needs a SEPARATOR and a description, not just a date ─────────
+// `\s*\S+` accepted a heading with no separator at all and one with a dash and
+// nothing after it, both of which the README forbids (Codex P2, PR #482).
+const heading = (h) => ledgerCheck([".claude/settings.json",
+  added("docs/changelog.d/2026-08-25-x.md", h + NL + NL + "detail" + NL)]);
+eq(heading("## 2026-08-25x").ok, false,
+  "a heading with no separator between date and text does not satisfy the guard");
+eq(heading("## 2026-08-25 -").ok, false,
+  "a heading with a dash and nothing after it does not satisfy the guard");
+ok(/nothing after it/.test(heading("## 2026-08-25 -").reason || ""),
+  "the refusal says a separator is not a record of what changed");
+eq(heading("## 2026-08-25 no dash here").ok, false,
+  "a heading with a description but no separator does not satisfy the guard");
+// The separator class stays WIDE on purpose: seven of the eight entries written under
+// this convention use an em dash, so narrowing to a literal "-" would refuse the
+// folder's own history. Each of these must keep passing.
+eq(heading("## 2026-08-25 - hyphen").ok, true, "a hyphen separator is accepted");
+eq(heading("## 2026-08-25 \u2013 en dash").ok, true, "an en dash separator is accepted");
+eq(heading("## 2026-08-25 \u2014 em dash").ok, true, "an em dash separator is accepted");
+// The date check still runs off the tightened pattern.
+eq(ledgerCheck([".claude/settings.json",
+  added("docs/changelog.d/2026-08-25-x.md", "## 2026-08-26 \u2014 wrong date" + NL + NL + "d" + NL)]).ok, false,
+  "an em-dash heading whose date disagrees with the filename is still refused");
+
 // ── malformed fragments are caught even with no agent-surface trigger ────────
 // A src-only commit must not be able to drop an unreadable entry into the folder.
 eq(ledgerCheck(["src/pages/Invoices.tsx", added("docs/changelog.d/2026-08-25-x.md", "")]).ok, false,

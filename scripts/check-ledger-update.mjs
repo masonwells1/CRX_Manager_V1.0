@@ -109,11 +109,26 @@ function entryVerdict(e, removedBodies) {
   const body = normalizeBody(e.content);
   if (!body) return "is empty, so it records nothing";
   const first = body.split("\n")[0] || "";
-  const m = /^##\s+(\d{4}-\d{2}-\d{2})\s*\S+/.exec(first);
+  // The heading must carry a real description, not just a date and punctuation. `\s*\S+`
+  // used to accept "## 2026-08-26x" (no separator at all) and "## 2026-08-26 -" (a dash
+  // with nothing after it), both of which violate the format the README promises (Codex
+  // P2, PR #482). The separator class is deliberately wide: hyphen, en dash and em dash
+  // are ALL accepted, because seven of the eight entries written under this convention
+  // use an em dash. Narrowing to a literal "-" would have refused the folder's own
+  // history, which is how a guard stops being trusted.
+  const m = /^##\s+(\d{4}-\d{2}-\d{2})\s+[-\u2013\u2014]\s+\S/.exec(first);
   if (!m) {
-    return /^##\s+\d{4}-\d{2}-\d{2}\s*$/.test(first)
-      ? "has only a date heading and no description - a date is not a record of what changed"
-      : 'does not start with "## <YYYY-MM-DD> - <what changed>"';
+    const dated = /^##\s+\d{4}-\d{2}-\d{2}/.exec(first);
+    if (!dated) return 'does not start with "## <YYYY-MM-DD> - <what changed>"';
+    const rest = first.slice(dated[0].length);
+    if (/^\s*$/.test(rest)) {
+      return "has only a date heading and no description - a date is not a record of what changed";
+    }
+    if (/^\s*[-\u2013\u2014]\s*$/.test(rest)) {
+      return "has a date and a dash but nothing after it - a separator is not a record of what changed";
+    }
+    return 'heading must read "## <YYYY-MM-DD> - <what changed>" - a dash (-, en or em) ' +
+      "with a description after it";
   }
   const fileDate = (e.path.split("/").pop() || "").slice(0, 10);
   if (m[1] !== fileDate) return `heading date ${m[1]} disagrees with the filename date ${fileDate}`;

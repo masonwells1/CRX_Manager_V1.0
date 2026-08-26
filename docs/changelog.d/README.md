@@ -44,11 +44,14 @@ gets them wrong is blocked rather than merely discouraged:
 - **A rename is not an addition.** Git reports a rename destination even when the file
   was edited on the way, and the guard refuses it, naming the file it came from. Moving
   someone else's record is not writing your own.
-- **The entry must actually say something.** The body must be non-empty; the first line
-  must be `## <YYYY-MM-DD> - <description>` with a description, not a bare date; the
-  heading's date must match the filename's date; and there must be detail beneath the
-  heading. A title with an empty body records that something happened and none of what
-  it was.
+- **The entry must actually say something.** The body must be non-empty; the heading must
+  read `## <YYYY-MM-DD> <dash> <description>` — a real separator followed by a real
+  description, so neither `## 2026-08-26x` nor `## 2026-08-26 -` counts; the heading's
+  date must match the filename's date; and there must be detail beneath the heading. A
+  title with an empty body records that something happened and none of what it was.
+  A hyphen, an en dash and an em dash are all accepted as the separator. That is
+  deliberate — most entries here use an em dash, and a guard that refused the folder's
+  own history would be worth less than no guard at all.
 - **Content is read from the staged blob**, not from your working tree, so what the guard
   judges is exactly what the commit will contain. An entry whose content cannot be read
   is treated as unverifiable and does not count — that direction fails closed on purpose.
