@@ -75,9 +75,9 @@ function assertCommit(repoRoot, sha) {
   runGit(repoRoot, ['cat-file', '-e', `${sha}^{commit}`]);
 }
 
-export function parseChangedPaths(buffer) {
+export function parseChangedEntries(buffer) {
   const fields = splitNul(buffer);
-  const paths = [];
+  const entries = [];
   for (let index = 0; index < fields.length; ) {
     const status = decodeUtf8Exact(fields[index], 'git diff status');
     index += 1;
@@ -85,15 +85,19 @@ export function parseChangedPaths(buffer) {
       throw new Error(`unexpected git diff status: ${status}`);
     }
     if (index >= fields.length) throw new Error(`missing path for git diff status ${status}`);
-    paths.push(decodeUtf8Exact(fields[index], 'git diff path'));
+    entries.push({ status, path: decodeUtf8Exact(fields[index], 'git diff path') });
     index += 1;
     if (status.startsWith('R') || status.startsWith('C')) {
       if (index >= fields.length) throw new Error(`missing second path for git diff status ${status}`);
-      paths.push(decodeUtf8Exact(fields[index], 'git diff path'));
+      entries.push({ status, path: decodeUtf8Exact(fields[index], 'git diff path') });
       index += 1;
     }
   }
-  return paths;
+  return entries;
+}
+
+export function parseChangedPaths(buffer) {
+  return parseChangedEntries(buffer).map(entry => entry.path);
 }
 
 function validateRepoPath(candidate) {
@@ -188,9 +192,14 @@ export function classifyCiScope({ repoRoot, eventName, baseSha, headSha }) {
       normalizedHead,
       '--',
     ]);
-    const changedPaths = parseChangedPaths(diff.stdout);
+    const changedEntries = parseChangedEntries(diff.stdout);
+    const changedPaths = changedEntries.map(entry => entry.path);
     const pathClassification = classifyPathList(changedPaths);
     if (pathClassification.fullCi) return pathClassification;
+
+    if (changedEntries.some(entry => ENTRY_RE.test(entry.path) && entry.status !== 'A')) {
+      return fullCi('non-added-changelog-entry', changedPaths);
+    }
 
     for (const changedPath of changedPaths) {
       const before = readTreeEntry(resolvedRoot, compareStart, changedPath);

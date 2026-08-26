@@ -7,7 +7,7 @@ generated maps, manual workflow/reference truth, mixed changes, malformed histor
 and non-regular Git entries continue through complete CI.
 
 The classifier executes from the exact trusted comparison base when available, so candidate bytes
-cannot declare their own change safe. Correctly named `docs/changelog.d/` records are additionally
+cannot declare their own change safe. Correctly named, newly added `docs/changelog.d/` records are additionally
 validated from the candidate blob with the trusted base's shared entry rules. The introducing PR
 and first merge push force full CI. Phase 3C containment and the full SQL migration audit still run
 in both routes; required checks still execute and bind prerequisite failures to red. The fast route

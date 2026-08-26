@@ -10,6 +10,7 @@ import {
   classifyCiScope,
   classifyPathList,
   isFastDocumentationPath,
+  parseChangedEntries,
   parseChangedPaths,
 } from './classify-ci-scope.mjs';
 
@@ -108,6 +109,11 @@ throws(
   () => parseChangedPaths(Buffer.from([0x4d, 0x00, 0x64, 0x6f, 0x63, 0x73, 0x2f, 0xff, 0x00])),
   'non-UTF-8 git path',
 );
+equal(
+  parseChangedEntries(Buffer.from('A\0docs/changelog.d/2026-08-26-new.md\0'))[0].status,
+  'A',
+  'status parser must preserve additions',
+);
 
 const workflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
 for (const requiredFragment of [
@@ -177,6 +183,33 @@ try {
     const result = classifyCiScope({ repoRoot: root, eventName: 'pull_request', baseSha: base, headSha: head });
     equal(result.fullCi, true, 'invalid changelog content must run full CI');
     equal(result.reason, 'invalid-changelog-entry', 'invalid changelog reason');
+  }
+
+  for (const operation of ['modify', 'delete', 'rename']) {
+    const { root } = createRepo();
+    disposables.push(root);
+    const original = 'docs/changelog.d/2026-08-25-existing-record.md';
+    write(
+      root,
+      original,
+      '## 2026-08-25 - existing record\n\nThis record belongs to an earlier change.\n',
+    );
+    const base = commitAll(root, 'existing changelog record');
+    if (operation === 'modify') {
+      write(
+        root,
+        original,
+        '## 2026-08-25 - edited old record\n\nThis must not stand in for a new record.\n',
+      );
+    } else if (operation === 'delete') {
+      rmSync(path.join(root, ...original.split('/')));
+    } else {
+      git(root, ['mv', original, 'docs/changelog.d/2026-08-26-renamed-old-record.md']);
+    }
+    const head = commitAll(root, `${operation} existing changelog record`);
+    const result = classifyCiScope({ repoRoot: root, eventName: 'pull_request', baseSha: base, headSha: head });
+    equal(result.fullCi, true, `${operation} of existing changelog record must run full CI`);
+    equal(result.reason, 'non-added-changelog-entry', `${operation} changelog status reason`);
   }
 
   {
