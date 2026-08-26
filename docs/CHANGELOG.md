@@ -154,8 +154,9 @@ reversal invisible to anyone scanning the log by date. Mason approved adding the
   recording the owner decision, the evidence link, why it was closed (recovery already done by hand
   on 2026-08-14 via `3a2a0ca0`/PR #392; no recurrence in 188 commits; five Sol rounds on the
   attestation itself), and the operative rule for a future verbatim recovery.
-- Its **Supersedes** block names the 2026-08-14 entry it reverses and states plainly that the
-  publication override stands unchanged and never depended on #403.
+- Its **Supersedes** block names the specific forward-reference inside the 2026-08-14 entry that it
+  reverses — not that entry as a whole — and states plainly that the publication override stands
+  unchanged and never depended on #403.
 - Pure addition: 28 lines added to `DECISION_LOG.md`, nothing removed or reworded.
 
 ## 2026-08-25 — Decision Log: the dangling PR #403 reference now records a closure
