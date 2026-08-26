@@ -9,8 +9,10 @@ re-read. **The live ledger has 976 rows**, `max(version)` `20260825142708`, and 
 effective ordering high-water `20260820120000` (name
 `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
 
-**Also read live 2026-08-26, for the pending `20260825190000_quote_version_restore_trust_boundary`
-(PR #401):** `quote_versions.restore_trusted_at` is **absent** (the migration is unapplied), the
+**Also read live 2026-08-26, for the pending `20260826220000_quote_version_restore_trust_boundary`
+(PR #401; renumbered from `20260825190000` by PR #499 after the `20260826150000` COMMENT-only
+apply at 20:59:35 UTC moved the ledger name high-water past the old stamp — 977 rows now, see
+history entry 892 for the causal record):** `quote_versions.restore_trusted_at` is **absent** (the migration is unapplied), the
 table holds **3 rows across 2 quotes**, and all five routines of the quote-version trust chain
 (`create_quote_version`, `restore_quote_version`, `_create_quote_version_owner_impl`,
 `_restore_quote_version_owner_impl`, `_restore_quote_version_below_cost_impl_20260810`) have

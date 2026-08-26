@@ -17,9 +17,12 @@ describe('run-smoke result parser', () => {
 
   it('refuses an identifier that merely EXTENDS the pass token (Sol, 2026-08-26)', () => {
     // startsWith() alone accepted this: the token boundary must be the end of
-    // the message or a non-identifier character.
+    // the message or a character that cannot extend a PostgreSQL identifier.
     const result = interpretResult('ERROR:  SMOKE_PASS_ROLLBACK_BUT_FAILED');
     expect(result.pass).toBe(false);
+    // PostgreSQL identifiers may also contain `$` (CodeRabbit, 2026-08-26) —
+    // a boundary that excluded only [A-Za-z0-9_] let this through.
+    expect(interpretResult('ERROR:  SMOKE_PASS_ROLLBACK$BUT_FAILED').pass).toBe(false);
   });
 
   it('keeps failures that merely quote a pass token red', () => {

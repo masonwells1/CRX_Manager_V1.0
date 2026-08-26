@@ -1652,7 +1652,7 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // cache write. Verified against live prosrc on 2026-08-25: the wrapper's
   // entire body is PERFORM public._begin_below_cost_money_write(...) followed
   // by RETURN of the impl, forwarding p_idempotency_key unchanged. It needs an
-  // entry only now because 20260825190000 is the first on-disk CREATE of that
+  // entry only now because 20260826220000 is the first on-disk CREATE of that
   // impl under its post-rename name, so the transitive-mutation walker could
   // not previously see through the wrapper to classify it at all.
   restore_quote_version: 'delegated',
@@ -2794,13 +2794,13 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // check_idempotency('restore_quote_version') lookup plus the idempotency_keys
   // cache write, asserting a single affected row.
   // Pre-apply-window entry, exactly like the draw-down impl above: it enters
-  // the inventory because migration 20260825190000 is the FIRST on-disk CREATE
+  // the inventory because migration 20260826220000 is the FIRST on-disk CREATE
   // of this function under its post-rename name. 20260812115237 renamed the
   // original public body with ALTER FUNCTION ... RENAME TO and defined no body
   // on disk, so the transitive-mutation walker could not see it until now.
   // Move this to MUTATING_RPCS_WITH_IDEMPOTENCY only if the function ever
   // becomes public — live grants on 2026-08-25 show no EXECUTE for anon,
-  // authenticated or service_role, and 20260825190000 re-asserts that shape.
+  // authenticated or service_role, and 20260826220000 re-asserts that shape.
   '_restore_quote_version_below_cost_impl_20260810',
 ]);
 
