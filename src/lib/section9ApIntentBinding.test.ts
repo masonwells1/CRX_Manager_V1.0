@@ -235,21 +235,25 @@ describe('Section 9 AP and receiving intent binding', () => {
   });
 
   it('persists each critical payload and matching key across reopen, unmount, and reload', () => {
-    expect(uncertainMutationIntent).toContain("const DURABLE_INTENT_PREFIX = 'crx:uncertain-mutation:v1:'");
+    expect(uncertainMutationIntent).toContain("const DURABLE_INTENT_PREFIX = 'crx:uncertain-mutation:v3:'");
     expect(uncertainMutationIntent).toContain('const SAFE_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;');
     expect(uncertainMutationIntent).toContain("throw new Error(UNCERTAIN_MUTATION_RETRY_EXPIRED)");
     expect(uncertainMutationIntent).toContain('retryNotAfterMs: number;');
-    expect(uncertainMutationIntent).toContain('candidate.version === 1');
-    expect(uncertainMutationIntent).toContain('window.sessionStorage.setItem(storageKey, JSON.stringify(record))');
-    expect(uncertainMutationIntent).toContain('idempotencyKey,\n        intent,');
+    expect(uncertainMutationIntent).toContain('candidate.version !== 1 && candidate.version !== 2');
+    expect(uncertainMutationIntent).toContain('window.localStorage.setItem(storageKey, JSON.stringify(record))');
+    expect(uncertainMutationIntent).toContain('intentIdentity: fingerprintIntent(intent, getIntentIdentityRef.current)');
     expect(uncertainMutationIntent).toContain("throw new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE')");
-    expect(uncertainMutationIntent).toContain('candidate.operation !== options.operation');
-    expect(uncertainMutationIntent).toContain('candidate.userId !== options.userId');
-    expect(uncertainMutationIntent).toContain('candidate.surface !== options.surface');
-    expect(uncertainMutationIntent).toContain('candidate.scope !== scope');
+    expect(uncertainMutationIntent).toContain("JSON.stringify([options.operation, options.userId])");
+    expect(uncertainMutationIntent).toContain("window.addEventListener('storage', handleStorage)");
+    expect(uncertainMutationIntent).toContain("db.transaction(DURABLE_INTENT_STORE, 'readwrite')");
+    expect(uncertainMutationIntent).toContain('coordinateDurableRecord(storageKey, proposed, intent, options)');
+    expect(uncertainMutationIntent).toContain('existing.intentIdentity === candidateIdentity');
+    expect(uncertainMutationIntent).toContain('throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT)');
 
     expect(newVendorBill).toContain("operation: 'create_vendor_bill'");
     expect(newVendorBill).toContain("surface: 'new-vendor-bill'");
+    expect(newVendorBill).toContain('getIntentIdentity: (intent) => intent.args');
+    expect(newVendorBill).toContain('createBillIntent.isForeignIntentLocked');
     expect(newVendorBill).toContain('createBillIntent.beginIntent({');
     expect(newVendorBill).toContain('createBillIntent.getIdempotencyKey()');
     expect(newVendorBill).toContain('const recovered = createBillIntent.unresolvedIntent?.args');
@@ -257,6 +261,8 @@ describe('Section 9 AP and receiving intent binding', () => {
 
     expect(inventoryPage).toContain("operation: 'receive_po_items'");
     expect(inventoryPage).toContain("surface: 'inventory-page'");
+    expect(inventoryPage).toContain('p_items: intent.items');
+    expect(inventoryPage).toContain('receivePoIntent.isForeignIntentLocked');
     expect(inventoryPage).toContain('receivePoIntent.beginIntent({');
     expect(inventoryPage).toContain('receivePoIntent.getIdempotencyKey()');
     expect(inventoryPage).toContain('const recovered = receivePoIntent.unresolvedIntent');
@@ -266,6 +272,8 @@ describe('Section 9 AP and receiving intent binding', () => {
 
     expect(receivingHub).toContain("operation: 'receive_po_items'");
     expect(receivingHub).toContain("surface: 'receiving-hub'");
+    expect(receivingHub).toContain('p_items: intent.items');
+    expect(receivingHub).toContain('receiveIntent.isForeignIntentLocked');
     expect(receivingHub).toContain('receiveIntent.beginIntent({');
     expect(receivingHub).toContain('receiveIntent.getIdempotencyKey()');
     expect(receivingHub).toContain('const recovered = receiveIntent.unresolvedIntent');
@@ -273,6 +281,8 @@ describe('Section 9 AP and receiving intent binding', () => {
 
     expect(quickReceive).toContain("operation: 'receive_po_items'");
     expect(quickReceive).toContain("surface: 'quick-receive'");
+    expect(quickReceive).toContain('p_items: intent.itemsPayload');
+    expect(quickReceive).toContain('receiveIntent.isForeignIntentLocked');
     expect(quickReceive).toContain('receiveIntent.beginIntent({');
     expect(quickReceive).toContain('receiveIntent.getIdempotencyKey()');
     expect(quickReceive).toContain('const recovered = receiveIntent.unresolvedIntent');
@@ -282,6 +292,8 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(vendorBillDetail).toContain("operation: 'record_vendor_payment'");
     expect(vendorBillDetail).toContain("surface: 'vendor-bill-detail'");
     expect(vendorBillDetail).toContain("scope: id || ''");
+    expect(vendorBillDetail).toContain('getIntentIdentity: (intent) => intent.args');
+    expect(vendorBillDetail).toContain('paymentIntent.isForeignIntentLocked');
     expect(vendorBillDetail).toContain('paymentIntent.getIdempotencyKey()');
     expect(vendorBillDetail).toContain('const recovered = paymentIntent.unresolvedIntent');
     expect(vendorBillDetail).not.toContain("useIdempotencyKey('record_vendor_payment'");
@@ -303,6 +315,8 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(vendorBillDetail).toContain('if (activeBillIdRef.current !== requestedBillId) return;');
 
     expect(purchaseOrderDetail).toContain('const recovered = receiveIntent.unresolvedIntent');
+    expect(purchaseOrderDetail).toContain('p_items: intent.finalPayload');
+    expect(purchaseOrderDetail).toContain('receiveIntent.isForeignIntentLocked');
     expect(purchaseOrderDetail).not.toContain("useIdempotencyKey('receive_po_items'");
   });
 

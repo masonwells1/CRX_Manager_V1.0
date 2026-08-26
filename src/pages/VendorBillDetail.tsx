@@ -25,6 +25,7 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import {
+  UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
   useUncertainMutationIntent,
 } from '../hooks/useUncertainMutationIntent';
@@ -64,6 +65,7 @@ export default function VendorBillDetail() {
     userId: profile?.id || '',
     surface: 'vendor-bill-detail',
     scope: id || '',
+    getIntentIdentity: (intent) => intent.args,
   });
   const voidIdem = useIdempotencyKey('void_vendor_bill', profile?.id || '');
   const voidPaymentIdem = useIdempotencyKey('void_vendor_payment', profile?.id || '');
@@ -208,6 +210,10 @@ export default function VendorBillDetail() {
   }, [fetchBill]);
 
   const handleRecordPayment = async () => {
+    if (paymentIntent.isForeignIntentLocked) {
+      toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+      return;
+    }
     if (paymentIntent.isRetryExpired) {
       toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
       return;
@@ -221,7 +227,7 @@ export default function VendorBillDetail() {
     const amountCents = parseDollarsToCents(payAmount);
     if (amountCents <= 0) { toast('error', 'Enter a valid payment amount'); return; }
 
-    const request = paymentIntent.beginIntent({
+    const request = await paymentIntent.beginIntent({
       amountCents,
       args: {
         p_vendor_bill_id: id,
@@ -242,7 +248,7 @@ export default function VendorBillDetail() {
       });
       if (error) throw error;
       assertRpcResult<string>(data, 'record_vendor_payment');
-      paymentIntent.resolveIntent();
+      await paymentIntent.resolveIntent();
 
       toast('success', `Payment of ${fmt(request.amountCents)} recorded`);
       setPayModalOpen(false);
@@ -254,7 +260,7 @@ export default function VendorBillDetail() {
     } catch (err) {
       const receipt = getIdempotencyMismatchResult(err, 'record_vendor_payment');
       if (typeof receipt?.payment_id === 'string') {
-        paymentIntent.resolveIntent();
+        await paymentIntent.resolveIntent();
         toast('warning', 'The earlier payment already completed. The bill has been refreshed instead of recording a duplicate.');
         setPayModalOpen(false);
         setPayModalBillId(null);
@@ -265,7 +271,7 @@ export default function VendorBillDetail() {
         setPaying(false);
         return;
       }
-      if (paymentIntent.classifyFailure(err) === 'definitive') {
+      if (await paymentIntent.classifyFailure(err) === 'definitive') {
         toast('error', sanitizeError(err));
       } else {
         toast('warning', 'The payment may already be recorded. The exact payment is locked; retry it unchanged to reconcile the result.');
@@ -656,7 +662,9 @@ export default function VendorBillDetail() {
 
           {paymentIntent.isIntentLocked && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              {paymentIntent.isRetryExpired
+              {paymentIntent.isForeignIntentLocked
+                ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
+                : paymentIntent.isRetryExpired
                 ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
                 : 'The last response was uncertain. These fields are locked so a second payment cannot be created. Retry this exact payment to reconcile it.'}
             </div>
@@ -721,7 +729,7 @@ export default function VendorBillDetail() {
             >
               Cancel
             </Button>
-            <Button onClick={handleRecordPayment} loading={paying} disabled={paymentIntent.isRetryExpired}>
+            <Button onClick={handleRecordPayment} loading={paying} disabled={paymentIntent.isForeignIntentLocked || paymentIntent.isRetryExpired}>
               {paymentIntent.isIntentLocked ? 'Retry Exact Payment' : 'Record Payment'}
             </Button>
           </div>

@@ -17,6 +17,7 @@ import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import {
+  UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
   useUncertainMutationIntent,
 } from '../hooks/useUncertainMutationIntent';
@@ -85,6 +86,11 @@ export default function InventoryPage() {
     operation: 'receive_po_items',
     userId: profile?.id || '',
     surface: 'inventory-page',
+    getIntentIdentity: (intent) => ({
+      p_items: intent.items,
+      p_performed_by: intent.performedBy,
+      p_allow_over_receive: false,
+    }),
   });
   const adjustIdem = useIdempotencyKey('adjust_inventory', profile?.id || '');
   const retireIdem = useIdempotencyKey('retire_inventory_item', profile?.id || '');
@@ -586,6 +592,10 @@ export default function InventoryPage() {
   };
 
   const handleReceive = async () => {
+    if (receivePoIntent.isForeignIntentLocked) {
+      toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+      return;
+    }
     if (receivePoIntent.isRetryExpired) {
       toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
       return;
@@ -617,7 +627,7 @@ export default function InventoryPage() {
 
     await runCriticalAction({
       action: async () => {
-        const request = receivePoIntent.beginIntent({
+        const request = await receivePoIntent.beginIntent({
           items: [{ po_item_id: receivePOItemId, quantity: qty }],
           performedBy: profile.id,
           quantity: qty,
@@ -635,7 +645,7 @@ export default function InventoryPage() {
           const recordIds = receipt?.receiving_record_ids;
           if (Array.isArray(recordIds) && recordIds.every((id) => typeof id === 'string')) {
             toast('warning', 'The earlier receipt already completed. Refreshing inventory instead of receiving it twice.');
-          } else if (receivePoIntent.classifyFailure(error) === 'definitive') {
+          } else if (await receivePoIntent.classifyFailure(error) === 'definitive') {
             throw error;
           } else {
             throw new Error('The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');
@@ -643,7 +653,7 @@ export default function InventoryPage() {
         } else {
           assertRpcResult(data, 'receive_po_items');
         }
-        receivePoIntent.resolveIntent();
+        await receivePoIntent.resolveIntent();
         return request.quantity;
       },
       toast,
@@ -1627,7 +1637,9 @@ export default function InventoryPage() {
         <div className="space-y-4">
           {receivePoIntent.isIntentLocked && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              {receivePoIntent.isRetryExpired
+              {receivePoIntent.isForeignIntentLocked
+                ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
+                : receivePoIntent.isRetryExpired
                 ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
                 : 'The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.'}
             </div>
@@ -1664,7 +1676,7 @@ export default function InventoryPage() {
           <div className="flex justify-end gap-2">
             <Button variant="secondary" disabled={receivePoIntent.isIntentLocked} onClick={() => setReceiveOpen(false)}>Cancel</Button>
             {availablePOs.length > 0 && (
-              <Button onClick={handleReceive} disabled={receivePoIntent.isRetryExpired}>
+              <Button onClick={handleReceive} disabled={receivePoIntent.isForeignIntentLocked || receivePoIntent.isRetryExpired}>
                 {receivePoIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Receive'}
               </Button>
             )}

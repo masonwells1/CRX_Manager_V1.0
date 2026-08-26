@@ -12,6 +12,7 @@ import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import {
+  UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
   useUncertainMutationIntent,
 } from '../../hooks/useUncertainMutationIntent';
@@ -87,6 +88,11 @@ export default function ReceivingHubPanel() {
     operation: 'receive_po_items',
     userId: profile?.id || '',
     surface: 'receiving-hub',
+    getIntentIdentity: (intent) => ({
+      p_items: intent.items,
+      p_performed_by: intent.performedBy,
+      p_allow_over_receive: false,
+    }),
   });
   const [receiveTarget, setReceiveTarget] = useState<{ line: POLine; product_name: string } | null>(null);
   const [receiveQty, setReceiveQty] = useState('');
@@ -183,6 +189,10 @@ export default function ReceivingHubPanel() {
   }, [toast, refreshKey]);
 
   const handleReceiveConfirm = async () => {
+    if (receiveIntent.isForeignIntentLocked) {
+      toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+      return;
+    }
     if (receiveIntent.isRetryExpired) {
       toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
       return;
@@ -201,7 +211,7 @@ export default function ReceivingHubPanel() {
       toast('error', `Quick receive records the full ${fmtUnits(receiveTarget.line.remaining)} remaining. For a partial or damaged receipt, open the PO.`);
       return;
     }
-    const request = receiveIntent.beginIntent({
+    const request = await receiveIntent.beginIntent({
       items: [{ po_item_id: receiveTarget.line.po_item_id, quantity: qty, condition: 'good' }],
       performedBy: profile.id,
       productName: receiveTarget.product_name,
@@ -221,7 +231,7 @@ export default function ReceivingHubPanel() {
           const recordIds = receipt?.receiving_record_ids;
           if (Array.isArray(recordIds) && recordIds.every((id) => typeof id === 'string')) {
             toast('warning', 'The earlier receipt already completed. Refreshing the receiving board instead of receiving it twice.');
-          } else if (receiveIntent.classifyFailure(error) === 'definitive') {
+          } else if (await receiveIntent.classifyFailure(error) === 'definitive') {
             throw error;
           } else {
             throw new Error('The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');
@@ -229,7 +239,7 @@ export default function ReceivingHubPanel() {
         } else {
           assertRpcResult(data, 'receive_po_items');
         }
-        receiveIntent.resolveIntent();
+        await receiveIntent.resolveIntent();
       },
       toast,
       setLoading: setReceiving,
@@ -421,7 +431,9 @@ export default function ReceivingHubPanel() {
         <div className="space-y-4">
           {receiveIntent.isIntentLocked && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              {receiveIntent.isRetryExpired
+              {receiveIntent.isForeignIntentLocked
+                ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
+                : receiveIntent.isRetryExpired
                 ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
                 : 'The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.'}
             </div>
@@ -452,7 +464,7 @@ export default function ReceivingHubPanel() {
               icon={<PackagePlus className="w-4 h-4" />}
               onClick={handleReceiveConfirm}
               loading={receiving}
-              disabled={receiveIntent.isRetryExpired || !receiveQty || Number(receiveQty) <= 0}
+              disabled={receiveIntent.isForeignIntentLocked || receiveIntent.isRetryExpired || !receiveQty || Number(receiveQty) <= 0}
             >
               {receiveIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Receive'}
             </Button>

@@ -13,6 +13,7 @@ import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import {
+  UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
   useUncertainMutationIntent,
 } from '../hooks/useUncertainMutationIntent';
@@ -58,6 +59,7 @@ interface ReceiveItemState {
 }
 
 interface ReceivePoIntent {
+  performedBy: string;
   itemsPayload: Array<{
     po_item_id: string;
     quantity: number;
@@ -89,6 +91,11 @@ export default function PurchaseOrderDetail() {
     userId: profile?.id || '',
     surface: 'purchase-order-detail',
     scope: id || '',
+    getIntentIdentity: (intent) => ({
+      p_items: intent.finalPayload,
+      p_performed_by: intent.performedBy,
+      p_allow_over_receive: intent.allowOverReceive,
+    }),
   });
   const savePOIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
   const {
@@ -288,6 +295,10 @@ export default function PurchaseOrderDetail() {
 
   /* ─── Submit receive ─── */
   const handleReceive = async () => {
+    if (receiveIntent.isForeignIntentLocked) {
+      toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+      return;
+    }
     if (receiveIntent.isRetryExpired) {
       toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
       return;
@@ -353,7 +364,8 @@ export default function PurchaseOrderDetail() {
           }))
         : itemsPayload;
 
-      request = receiveIntent.beginIntent({
+      request = await receiveIntent.beginIntent({
+        performedBy: profile.id,
         itemsPayload,
         finalPayload,
         allowOverReceive: wouldOverReceive && allowOverReceive,
@@ -366,7 +378,7 @@ export default function PurchaseOrderDetail() {
         const idemKey = receiveIntent.getIdempotencyKey();
         const { data, error } = await supabase.rpc('receive_po_items', {
           p_items: request.finalPayload,
-          p_performed_by: profile.id,
+          p_performed_by: request.performedBy,
           p_idempotency_key: idemKey,
           p_allow_over_receive: request.allowOverReceive,
         });
@@ -380,7 +392,7 @@ export default function PurchaseOrderDetail() {
           ) {
             responseData = receipt;
             toast('warning', 'The earlier receiving update already completed. The PO has been refreshed instead of receiving it twice.');
-          } else if (receiveIntent.classifyFailure(error) === 'definitive') {
+          } else if (await receiveIntent.classifyFailure(error) === 'definitive') {
             throw error;
           } else {
             throw new Error('The receiving update may already be recorded. Retry the locked request unchanged to reconcile it.');
@@ -388,7 +400,7 @@ export default function PurchaseOrderDetail() {
         } else {
           responseData = assertRpcResult(data, 'receive_po_items');
         }
-        receiveIntent.resolveIntent();
+        await receiveIntent.resolveIntent();
 
         // AUDIT 3.2: Notify admins about damaged/non-good items
         if (po) {
@@ -1061,7 +1073,9 @@ export default function PurchaseOrderDetail() {
           <div className="space-y-4">
             {receiveIntent.isIntentLocked && (
               <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                {receiveIntent.isRetryExpired
+                {receiveIntent.isForeignIntentLocked
+                  ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
+                  : receiveIntent.isRetryExpired
                   ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
                   : 'The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice. Retry it unchanged to reconcile the result.'}
               </div>
@@ -1165,7 +1179,7 @@ export default function PurchaseOrderDetail() {
               <Button variant="secondary" onClick={() => setReceiveOpen(false)} disabled={receiveIntent.isIntentLocked}>
                 Cancel
               </Button>
-              <Button onClick={handleReceive} loading={saving} disabled={receiveIntent.isRetryExpired}>
+              <Button onClick={handleReceive} loading={saving} disabled={receiveIntent.isForeignIntentLocked || receiveIntent.isRetryExpired}>
                 {receiveIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Confirm & Receive'}
               </Button>
             </div>

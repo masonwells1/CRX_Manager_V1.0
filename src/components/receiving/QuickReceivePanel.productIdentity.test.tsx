@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
 import QuickReceivePanel from './QuickReceivePanel';
 
 const mocks = vi.hoisted(() => ({
@@ -66,6 +67,8 @@ describe('QuickReceivePanel Product identity', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
+    window.localStorage.clear();
+    globalThis.indexedDB = new IDBFactory();
     mocks.rpc.mockImplementation(async (name: string) => {
       if (name === 'match_quick_receive_items') {
         return {
@@ -128,6 +131,7 @@ describe('QuickReceivePanel Product identity', () => {
         })],
       }),
     ));
+    expect(await screen.findByText(/successfully received 1 item allocation/i)).toBeInTheDocument();
   });
 
   it('restores a locked request after reload and retries its frozen payload without revalidation', async () => {
@@ -166,19 +170,18 @@ describe('QuickReceivePanel Product identity', () => {
       notes: null,
       storage_location: 'Cold Storage',
     }];
-    const storageKey = `crx:uncertain-mutation:v1:${JSON.stringify([
+    const storageKey = `crx:uncertain-mutation:v3:${JSON.stringify([
       'receive_po_items',
       'user-1',
-      'quick-receive',
-      '',
     ])}`;
-    window.sessionStorage.setItem(storageKey, JSON.stringify({
-      version: 2,
+    window.localStorage.setItem(storageKey, JSON.stringify({
+      version: 3,
       operation: 'receive_po_items',
       userId: 'user-1',
       surface: 'quick-receive',
       scope: '',
       idempotencyKey: 'receive_po_items:user-1:frozen-key',
+      intentIdentity: 'frozen-identity',
       createdAtMs: Date.now(),
       retryNotAfterMs: Date.now() + (23 * 60 * 60 * 1000),
       intent: {
@@ -208,23 +211,23 @@ describe('QuickReceivePanel Product identity', () => {
         p_idempotency_key: 'receive_po_items:user-1:frozen-key',
       }),
     ));
-    expect(window.sessionStorage.getItem(storageKey)).toBeNull();
+    expect(await screen.findByText(/successfully received 1 item allocation/i)).toBeInTheDocument();
+    await waitFor(() => expect(window.localStorage.getItem(storageKey)).toBeNull());
   });
 
   it('keeps an expired request locked and never calls the receiving RPC', async () => {
-    const storageKey = `crx:uncertain-mutation:v1:${JSON.stringify([
+    const storageKey = `crx:uncertain-mutation:v3:${JSON.stringify([
       'receive_po_items',
       'user-1',
-      'quick-receive',
-      '',
     ])}`;
-    window.sessionStorage.setItem(storageKey, JSON.stringify({
-      version: 2,
+    window.localStorage.setItem(storageKey, JSON.stringify({
+      version: 3,
       operation: 'receive_po_items',
       userId: 'user-1',
       surface: 'quick-receive',
       scope: '',
       idempotencyKey: 'receive_po_items:user-1:expired-key',
+      intentIdentity: 'expired-identity',
       createdAtMs: Date.now() - (24 * 60 * 60 * 1000),
       retryNotAfterMs: Date.now() - (60 * 60 * 1000),
       intent: {
@@ -281,6 +284,6 @@ describe('QuickReceivePanel Product identity', () => {
     expect(screen.getByText(/safe automatic retry window expired/i)).toBeInTheDocument();
     fireEvent.click(retry);
     expect(mocks.rpc).not.toHaveBeenCalledWith('receive_po_items', expect.anything());
-    expect(window.sessionStorage.getItem(storageKey)).toContain('expired-key');
+    expect(window.localStorage.getItem(storageKey)).toContain('expired-key');
   });
 });

@@ -20,6 +20,7 @@ import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../../lib/db';
 import {
+  UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
   useUncertainMutationIntent,
 } from '../../hooks/useUncertainMutationIntent';
@@ -94,6 +95,11 @@ export default function QuickReceivePanel() {
     operation: 'receive_po_items',
     userId: profile?.id || '',
     surface: 'quick-receive',
+    getIntentIdentity: (intent) => ({
+      p_items: intent.itemsPayload,
+      p_performed_by: intent.performedBy,
+      p_allow_over_receive: false,
+    }),
   });
 
   /* ─── step control ─── */
@@ -283,7 +289,7 @@ export default function QuickReceivePanel() {
       result = assertRpcResult<Record<string, unknown>>(data, 'receive_po_items');
     }
 
-    receiveIntent.resolveIntent();
+    await receiveIntent.resolveIntent();
 
     // Notifications and the PDF are non-critical side effects after the
     // database result is proven. Their failure must never retain a mutation
@@ -347,6 +353,10 @@ export default function QuickReceivePanel() {
   };
 
   const handleConfirmReceive = async () => {
+    if (receiveIntent.isForeignIntentLocked) {
+      toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+      return;
+    }
     if (receiveIntent.isRetryExpired) {
       toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
       return;
@@ -428,7 +438,7 @@ export default function QuickReceivePanel() {
       }
 
       try {
-        request = receiveIntent.beginIntent({
+        request = await receiveIntent.beginIntent({
           itemsPayload,
           performedBy: profile.id,
           receivedByName: profile.full_name || 'Unknown',
@@ -450,7 +460,7 @@ export default function QuickReceivePanel() {
     try {
       await submitQuickReceive(request);
     } catch (error: unknown) {
-      const disposition = receiveIntent.classifyFailure(error);
+      const disposition = await receiveIntent.classifyFailure(error);
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
         extra: { context: 'confirm_quick_receive', disposition },
       });
@@ -728,7 +738,9 @@ export default function QuickReceivePanel() {
             </p>
             {receiveIntent.isIntentLocked && (
               <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                {receiveIntent.isRetryExpired
+                {receiveIntent.isForeignIntentLocked
+                  ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
+                  : receiveIntent.isRetryExpired
                   ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
                   : 'The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice.'}
               </div>
@@ -964,7 +976,7 @@ export default function QuickReceivePanel() {
                 </Button>
                 <Button
                   onClick={handleConfirmReceive}
-                  disabled={receiveIntent.isRetryExpired || saving || blocked}
+                  disabled={receiveIntent.isForeignIntentLocked || receiveIntent.isRetryExpired || saving || blocked}
                   icon={<PackageCheck className="w-4 h-4" />}
                   title={blockReason}
                 >

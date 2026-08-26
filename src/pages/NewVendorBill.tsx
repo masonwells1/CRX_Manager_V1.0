@@ -15,6 +15,7 @@ import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import {
+  UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
   useUncertainMutationIntent,
 } from '../hooks/useUncertainMutationIntent';
@@ -45,6 +46,7 @@ export default function NewVendorBill() {
     operation: 'create_vendor_bill',
     userId: profile?.id || '',
     surface: 'new-vendor-bill',
+    getIntentIdentity: (intent) => intent.args,
   });
   const [saving, setSaving] = useState(false);
 
@@ -140,6 +142,10 @@ export default function NewVendorBill() {
   };
 
   const handleSave = async () => {
+    if (createBillIntent.isForeignIntentLocked) {
+      toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+      return;
+    }
     if (createBillIntent.isRetryExpired) {
       toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
       return;
@@ -171,7 +177,7 @@ export default function NewVendorBill() {
       dueDateObj.setDate(dueDateObj.getDate() + paymentTermsDays);
       const computedDueDate = formatLocalDate(dueDateObj);
 
-      const request = createBillIntent.beginIntent({
+      const request = await createBillIntent.beginIntent({
         args: {
           p_vendor_id: vendorId,
           p_purchase_order_id: purchaseOrderId || undefined,
@@ -194,19 +200,19 @@ export default function NewVendorBill() {
       if (error) {
         const receipt = getIdempotencyMismatchResult(error, 'create_vendor_bill');
         if (typeof receipt?.bill_id === 'string') {
-          createBillIntent.resolveIntent();
+          await createBillIntent.resolveIntent();
           toast('warning', 'The earlier vendor bill already completed. Opening it instead of creating a duplicate.');
           navigate(`/accounts-payable/bills/${receipt.bill_id}`);
           return;
         }
-        if (createBillIntent.classifyFailure(error) === 'definitive') {
+        if (await createBillIntent.classifyFailure(error) === 'definitive') {
           throw error;
         }
         toast('warning', 'The vendor bill may already exist. The exact request is locked; retry it unchanged to reconcile the result.');
         return;
       }
       const createdBillId = assertRpcResult<string>(data, 'create_vendor_bill');
-      createBillIntent.resolveIntent();
+      await createBillIntent.resolveIntent();
 
       toast('success', 'Vendor bill created');
       navigate(`/accounts-payable/bills/${createdBillId}`);
@@ -391,7 +397,9 @@ export default function NewVendorBill() {
       {/* Actions */}
       {createBillIntent.isIntentLocked && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-          {createBillIntent.isRetryExpired
+          {createBillIntent.isForeignIntentLocked
+            ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
+            : createBillIntent.isRetryExpired
             ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
             : 'The last response was uncertain. These fields are locked so a second bill cannot be created. Retry this exact bill to reconcile it.'}
         </div>
@@ -400,7 +408,7 @@ export default function NewVendorBill() {
         <Button variant="ghost" disabled={createBillIntent.isIntentLocked} onClick={() => navigate('/accounts-payable/bills')}>
           Cancel
         </Button>
-        <Button onClick={handleSave} loading={saving} disabled={createBillIntent.isRetryExpired}>
+        <Button onClick={handleSave} loading={saving} disabled={createBillIntent.isForeignIntentLocked || createBillIntent.isRetryExpired}>
           {createBillIntent.isIntentLocked ? 'Retry Exact Bill' : 'Create Bill'}
         </Button>
       </div>
