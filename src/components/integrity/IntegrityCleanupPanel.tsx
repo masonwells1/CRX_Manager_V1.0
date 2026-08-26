@@ -6,6 +6,7 @@ import { useToast } from '../ui/Toast';
 import Button from '../ui/Button';
 import ConfirmModal from '../ui/ConfirmModal';
 import { Sentry } from '../../lib/sentry';
+import { activeInvoiceCoversDelivery, type DeliveryInvoiceCoverage } from '../../lib/deliveryInvoiceCoverage';
 
 interface NegativeInvRow {
   id: string;
@@ -271,19 +272,20 @@ export default function IntegrityCleanupPanel() {
         const orderIds = allCompleted.map((d) => d.order_id);
         if (orderIds.length > 0) {
           // U2 #34: bill-tracking is per-DELIVERY, not per-order. A delivery is "billed"
-          // only if an active invoice is tied to THIS delivery, or an order-level invoice
+          // only if an active non-credit invoice is tied to THIS delivery, or an order-level invoice
           // (delivery_id IS NULL) covers the whole order. An invoice tied to a DIFFERENT
           // delivery on the same order must NOT hide this delivery — mirrors the
           // complete_delivery auto-invoice guard.
           const { data: invoiceRows } = await supabase
             .from('invoices')
-            .select('order_id, delivery_id')
+            .select('order_id, delivery_id, invoice_type, status, deleted_at')
             .in('order_id', orderIds)
-            .not('status', 'in', '("voided","cancelled")');
-          const invRows = (invoiceRows || []) as { order_id: string; delivery_id: string | null }[];
-          const billedDeliveryIds = new Set(invRows.filter((i) => i.delivery_id).map((i) => i.delivery_id as string));
-          const orderLevelBilledOrderIds = new Set(invRows.filter((i) => !i.delivery_id).map((i) => i.order_id));
-          const filtered = allCompleted.filter((d) => !billedDeliveryIds.has(d.id) && !orderLevelBilledOrderIds.has(d.order_id));
+            .not('status', 'in', '("voided","cancelled")')
+            .is('deleted_at', null);
+          const invRows = (invoiceRows || []) as DeliveryInvoiceCoverage[];
+          const filtered = allCompleted.filter((d) => !invRows.some((invoice) =>
+            activeInvoiceCoversDelivery(invoice, d.id, d.order_id)
+          ));
           setUnbilled(
             filtered.map((d) => {
               const c = Array.isArray(d.customer) ? d.customer[0] : d.customer;

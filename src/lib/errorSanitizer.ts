@@ -14,7 +14,7 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
   [/^RETURN_CREDIT_UNLINKED_COST_LINE\b/i,
    'An existing credit cannot be matched safely to this return. Review the credit memo before retrying'],
   [/^RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED\b/i,
-   'Void or unapply the related return credit before voiding or deleting this sale invoice'],
+   'Void or unapply the related return credit before moving this sale invoice out of a recognized status or deleting it'],
   [/^RETURN_CREDIT_SOURCE_POST_REQUIRES_REISSUE\b/i,
    'This invoice cannot be posted because an earlier return credit was issued before enough product was invoiced. Void or unapply that credit, post this invoice, then reissue the credit'],
   [/^RETURN_CREDIT_HEADER_IMMUTABLE\b/i,

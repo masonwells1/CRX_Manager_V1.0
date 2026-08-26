@@ -65,7 +65,8 @@ individually rewritten in this pass.
 
 **PR #361 return-credit candidate — not applied.** The candidate migrations
 `20260825230150_align_recognized_invoice_report_statuses` and
-`20260825230209_rebuild_return_credit_cogs_reversal` are absent from the live ledger. Production has
+`20260825230209_rebuild_return_credit_cogs_reversal`, plus the follow-up
+`20260826215500_exclude_return_credits_from_delivery_invoice_gate`, are absent from the live ledger. Production has
 zero credited returns, zero returns linked to credit invoices, and zero recognized return-credit
 memos, so the defect is real but latent. Current live return-credit issuance still creates a
 header-only credit, while the P&L and monthly reports use different recognized invoice-status sets.
@@ -80,7 +81,10 @@ void, batch-void, and unapply cleanup. Per Mason's 2026-08-26 decision, an issue
 show negative product usage in the current season when the original purchase belongs to an earlier
 season; that is the accepted simplicity tradeoff. A fresh read-only live-schema clone in disposable
 PostgreSQL passed the paid/overdue/posted multi-cost chain, current-season boundary, fractional-cent
-allocation, concurrency and lifecycle mutants, and ended in `SMOKE_PASS_ROLLBACK` with zero residue.
+allocation, concurrency and lifecycle mutants. The third candidate prevents the order-linked credit
+memo from suppressing either a later delivery's automatic draft invoice or the manual recovery path
+for a completed unbilled delivery. Thirty-three load-bearing proofs ended in `SMOKE_PASS_ROLLBACK`
+with zero residue.
 After an approved live apply, the schema registry must be regenerated from live before closeout.
 
 **Superseded 2026-08-22 header, kept for provenance — was last verified 2026-08-22 UTC for the ledger only** — a read-only re-read returning 971 rows, high-water `20260816174353`, 345 of 971 names timestamp-prefixed, every figure **unchanged** from the previous pass; that pass also read the four live `job_chemicals` rows while measuring the blast radius of parked migration `20260820120000` (history row 891), which is written and proven but **not applied**. The `quote_versions` write surface, the return-idempotency helper contract, and the section 2 counts were last read live **2026-08-19 UTC** and are carried forward on that reading, not re-verified since. **The live ledger has 971 rows.** Its highest `version` is `20260816174353`, carrying submitted migration name `20260813080000_lock_quote_versions_writes_to_rpc`, which is also the highest *timestamp-prefixed* `name` — so both orderings agree on the same row. (Only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is

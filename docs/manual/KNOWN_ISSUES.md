@@ -23,9 +23,10 @@ entries only; it does not re-certify unrelated issue narratives below.
 `_issue_return_credit_impl` still creates only the credit-memo header and writes no
 `invoice_items.cost_cents`; live PNL still recognizes only `posted`, and monthly reporting still
 omits `paid`. Production currently has zero credited returns, so the defect is real but latent rather
-than an existing wrong report. Pre-apply candidates `20260825230150` and `20260825230209` contain the
-durable repair and fail closed if the zero-credit/zero-legacy-restock assumptions stop being true.
-Do not call this resolved until both migrations are reviewed, applied, and verified live.
+than an existing wrong report. Pre-apply candidates `20260825230150`, `20260825230209`, and
+`20260826215500` contain the durable repair and fail closed if the zero-credit/zero-legacy-restock
+assumptions or either delivery-invoice implementation contract stop being true. Do not call this
+resolved until all three migrations are reviewed, applied, and verified live.
 The first migration blocks new return-credit issuance until the second migration's postflight succeeds,
 closing the otherwise unsafe commit gap between the two files. They must be applied back-to-back. If the
 second fails, leave the barrier active, repair the drift it reports, and rerun it; an emergency removal
@@ -36,6 +37,9 @@ recognizing it would expose an uncosted, restocked return quantity; a fully cost
 block a later delivery invoice. Posting uses the same ordered advisory-lock protocol as credit issuance
 and fails fast on contention. The migration also excludes new credit-memo lines from delivery billing
 allocation so a return cannot reopen customer billing headroom.
+The third migration also excludes the order-linked credit memo from both delivery invoice coverage
+checks, so it cannot suppress a later delivery's automatic invoice or block manual recovery of an
+already-completed unbilled delivery.
 Because every recognized-status transition must coordinate with a return credit that could start at
 the same instant, two people posting invoices for the same order line concurrently can make one post
 fail cleanly with a wait-and-retry message even when no return credit exists yet. No data is at risk;

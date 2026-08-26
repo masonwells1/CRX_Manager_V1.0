@@ -114,6 +114,7 @@ scripts/smoke/fixtures/save-job-chem-unit-tests.sql text eol=lf
 # evidence. Keep all four artifacts byte-stable across Windows and Linux.
 supabase/migrations/20260825230150_align_recognized_invoice_report_statuses.sql text eol=lf
 supabase/migrations/20260825230209_rebuild_return_credit_cogs_reversal.sql text eol=lf
+supabase/migrations/20260826215500_exclude_return_credits_from_delivery_invoice_gate.sql text eol=lf
 scripts/smoke/smoke-return-credit-chain.sql text eol=lf
 scripts/smoke/verify-return-credit-real-schema.mjs text eol=lf
 

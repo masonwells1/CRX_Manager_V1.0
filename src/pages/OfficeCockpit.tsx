@@ -72,6 +72,7 @@ import { SkeletonCard } from '../components/ui/Skeleton';
 import type { WatchdogFlag } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import FinanceSnapshotCard from '../components/dashboard/FinanceSnapshotCard';
+import { activeInvoiceCoversDelivery, type DeliveryInvoiceCoverage } from '../lib/deliveryInvoiceCoverage';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -257,11 +258,6 @@ type RawCompletedDelivery = {
   order_id: string | null;
   completed_at: string | null;
   customer: { farm_name: string } | null;
-};
-
-type DeliveryInvoiceCoverageRow = {
-  order_id: string;
-  delivery_id: string | null;
 };
 
 type RawUpcomingJob = {
@@ -604,17 +600,17 @@ export default function OfficeCockpit() {
     );
     const deliveryOrderIds = [...new Set(completedDeliveryCandidates.map((row) => row.order_id))];
     let deliveryInvoiceError: { message?: string } | null = null;
-    let activeDeliveryInvoices: DeliveryInvoiceCoverageRow[] = [];
+    let activeDeliveryInvoices: DeliveryInvoiceCoverage[] = [];
 
     if (deliveryOrderIds.length > 0) {
       const invoiceCoverageRes = await supabase
         .from('invoices')
-        .select('order_id, delivery_id')
+        .select('order_id, delivery_id, invoice_type, status, deleted_at')
         .in('order_id', deliveryOrderIds)
         .not('status', 'in', '("voided","cancelled")')
         .is('deleted_at', null);
       deliveryInvoiceError = invoiceCoverageRes.error;
-      activeDeliveryInvoices = (invoiceCoverageRes.data || []) as DeliveryInvoiceCoverageRow[];
+      activeDeliveryInvoices = (invoiceCoverageRes.data || []) as DeliveryInvoiceCoverage[];
     }
 
     const rawLapsedPlannedHolds = (lapsedPlannedHoldsRes.data || []) as RawLapsedPlannedHold[];
@@ -772,13 +768,13 @@ export default function OfficeCockpit() {
     const deliveredNotInvoicedLoadOk = !completedDeliveriesRes.error && !deliveryInvoiceError;
     const deliveredNotInvoicedHitLimit = rawCompletedDeliveries.length === TILE_LIMIT;
     // Mirrors create_invoice_for_unbilled_delivery's own precondition: an invoice
-    // covers this delivery when it targets this delivery or the whole parent order.
+    // covers this delivery when it is not a credit memo and targets this delivery
+    // or the whole parent order.
     // The guarded fix action lives on DeliveryDetail, where the RPC is confirmed.
     const deliveredNotInvoiced: DeliveredNotInvoicedRow[] = deliveredNotInvoicedLoadOk
       ? completedDeliveryCandidates
         .filter((deliveryRow) => !activeDeliveryInvoices.some((invoiceRow) =>
-          invoiceRow.order_id === deliveryRow.order_id &&
-          (invoiceRow.delivery_id === deliveryRow.id || invoiceRow.delivery_id === null)
+          activeInvoiceCoversDelivery(invoiceRow, deliveryRow.id, deliveryRow.order_id)
         ))
         .map((deliveryRow) => ({
           id: deliveryRow.id,

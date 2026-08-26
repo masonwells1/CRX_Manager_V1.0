@@ -67,6 +67,12 @@ DECLARE
   v_source_posted_id uuid;
   v_order_item_1 uuid;
   v_order_item_2 uuid;
+  v_order_item_3 uuid;
+  v_order_item_4 uuid;
+  v_followup_delivery_id uuid;
+  v_backfill_delivery_id uuid;
+  v_followup_invoice_id uuid;
+  v_backfill_invoice_id uuid;
   v_return_id    uuid;
   v_sequential_return_id uuid;
   v_sequential_return_id2 uuid;
@@ -240,6 +246,20 @@ BEGIN
     v_order_id, v_product_id, '[SMOKE] RCC Herbicide ' || v_suffix,
     10, 6, 'gal', 60, 6, 0
   ) RETURNING id INTO v_order_item_2;
+  INSERT INTO order_items (
+    order_id, product_id, product_name, price_per_unit, cost_per_unit,
+    total_units_needed, unit_size, total_price, quantity_delivered, quantity_remaining
+  ) VALUES (
+    v_order_id, v_product_id, '[SMOKE] RCC Follow-up Herbicide ' || v_suffix,
+    25, 5, 1, 'gal', 25, 0, 1
+  ) RETURNING id INTO v_order_item_3;
+  INSERT INTO order_items (
+    order_id, product_id, product_name, price_per_unit, cost_per_unit,
+    total_units_needed, unit_size, total_price, quantity_delivered, quantity_remaining
+  ) VALUES (
+    v_order_id, v_product_id, '[SMOKE] RCC Backfill Herbicide ' || v_suffix,
+    25, 5, 1, 'gal', 25, 1, 0
+  ) RETURNING id INTO v_order_item_4;
 
   -- Keep the order's delivered totals backed by exact completed-delivery
   -- history so the governed cancel path reaches the received-return guard.
@@ -847,6 +867,97 @@ BEGIN
       v_status, v_cents, v_stmt_sum, v_cogs, v_n, v_uuid, v_by;
   END IF;
   RAISE NOTICE 'CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN';
+
+  -- A posted return credit is order-linked and deliberately has no delivery_id.
+  -- It must not count as an order-level sales invoice and suppress either the
+  -- ordinary auto-invoice path or the completed-delivery backfill path.
+  PERFORM set_config('app.admin_override', 'true', true);
+  UPDATE orders SET status = 'partially_fulfilled' WHERE id = v_order_id;
+  PERFORM set_config('app.admin_override', 'false', true);
+
+  INSERT INTO deliveries (
+    delivery_number, order_id, customer_id, scheduled_date, status, created_by
+  ) VALUES (
+    'SMK-RCC-FOLLOWUP-D-' || v_suffix, v_order_id, v_customer_id,
+    current_date, 'scheduled', v_admin
+  ) RETURNING id INTO v_followup_delivery_id;
+  INSERT INTO delivery_items (
+    delivery_id, order_item_id, product_id, quantity,
+    quantity_delivered, unit_size
+  ) VALUES (
+    v_followup_delivery_id, v_order_item_3, v_product_id, 1, 0, 'gal'
+  );
+  UPDATE deliveries SET status = 'in_progress' WHERE id = v_followup_delivery_id;
+  v_res := public.complete_delivery(
+    v_followup_delivery_id, '[SMOKE] RCC Follow-up Receiver', v_admin,
+    NULL, NULL, NULL, 'smk-rcc-followup-complete-' || v_suffix, now()
+  );
+  v_followup_invoice_id := (v_res #>> '{auto_invoice,invoice_id}')::uuid;
+  IF v_followup_invoice_id IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: posted return credit suppressed the follow-up delivery auto-invoice: %', v_res;
+  END IF;
+  SELECT status, total_amount_cents, total_cost_cents
+    INTO v_status, v_cents, v_cogs
+    FROM invoices
+   WHERE id = v_followup_invoice_id
+     AND delivery_id = v_followup_delivery_id
+     AND order_id = v_order_id
+     AND invoice_type = 'chemical_sale';
+  IF NOT FOUND OR v_status <> 'draft' OR v_cents <> 2500 OR v_cogs <> 500 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: follow-up auto-invoice wrong: id=%, status=%, total=%, cost=%',
+      v_followup_invoice_id, v_status, v_cents, v_cogs;
+  END IF;
+  SELECT count(*) INTO v_n FROM invoices
+   WHERE delivery_id = v_followup_delivery_id
+     AND status NOT IN ('voided', 'cancelled')
+     AND deleted_at IS NULL;
+  IF v_n <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: follow-up delivery produced % active invoices', v_n;
+  END IF;
+  RAISE NOTICE 'RETURN_CREDIT_FOLLOWUP_AUTO_INVOICE_PROVEN';
+
+  SET LOCAL session_replication_role = replica;
+  INSERT INTO deliveries (
+    delivery_number, order_id, customer_id, scheduled_date, status,
+    completed_at, signed_by, created_by
+  ) VALUES (
+    'SMK-RCC-BACKFILL-D-' || v_suffix, v_order_id, v_customer_id,
+    current_date, 'completed', now(), '[SMOKE] RCC Historical Receiver', v_admin
+  ) RETURNING id INTO v_backfill_delivery_id;
+  INSERT INTO delivery_items (
+    delivery_id, order_item_id, product_id, quantity,
+    quantity_delivered, unit_size
+  ) VALUES (
+    v_backfill_delivery_id, v_order_item_4, v_product_id, 1, 1, 'gal'
+  );
+  SET LOCAL session_replication_role = origin;
+  BEGIN
+    v_res2 := public.create_invoice_for_unbilled_delivery(
+      v_backfill_delivery_id, v_admin, 'smk-rcc-backfill-' || v_suffix
+    );
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'This delivery already has an active invoice%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: posted return credit suppressed the unbilled-delivery backfill: %', v_reason;
+    END IF;
+    RAISE;
+  END;
+  v_backfill_invoice_id := (v_res2->>'invoice_id')::uuid;
+  IF v_backfill_invoice_id IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: posted return credit suppressed the unbilled-delivery backfill: %', v_res2;
+  END IF;
+  SELECT status, total_amount_cents, total_cost_cents
+    INTO v_status, v_cents, v_cogs
+    FROM invoices
+   WHERE id = v_backfill_invoice_id
+     AND delivery_id = v_backfill_delivery_id
+     AND order_id = v_order_id
+     AND invoice_type = 'chemical_sale';
+  IF NOT FOUND OR v_status <> 'draft' OR v_cents <> 2500 OR v_cogs <> 500 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unbilled-delivery backfill invoice wrong: id=%, status=%, total=%, cost=%',
+      v_backfill_invoice_id, v_status, v_cents, v_cogs;
+  END IF;
+  RAISE NOTICE 'RETURN_CREDIT_UNBILLED_BACKFILL_PROVEN';
 
   BEGIN
     UPDATE invoices

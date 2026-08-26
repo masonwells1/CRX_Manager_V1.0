@@ -12,6 +12,7 @@ const EXTENSIONS = path.join(ROOT, 'supabase', 'baselines', '20260727174805_exte
 const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql');
 const REPORT_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260825230150_align_recognized_invoice_report_statuses.sql');
 const COGS_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260825230209_rebuild_return_credit_cogs_reversal.sql');
+const DELIVERY_CREDIT_GATE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260826215500_exclude_return_credits_from_delivery_invoice_gate.sql');
 const HELPER_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260813070000_pin_return_idempotency_helper_contract.sql');
 const FORWARD_COMPATIBILITY_REPLAY = [
   '20260813060000_require_completed_delivery_before_invoice_post.sql',
@@ -348,6 +349,8 @@ const expectedProofs = [
   'SOURCE_POST_AFTER_FULLY_COSTED_CREDIT_ALLOWED',
   'SOURCE_POST_CONCURRENT_RETRY_PROVEN',
   'DELIVERY_ALLOCATION_CREDIT_FILTER_REMOVAL_DETECTED',
+  'DELIVERY_AUTO_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED',
+  'UNBILLED_DELIVERY_CREDIT_FILTER_REMOVAL_DETECTED',
   'SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED',
   'RETURN_CREDIT_LEDGER_GUARD_REMOVAL_DETECTED',
   'ZERO_COST_LEDGER_MUTATION_DETECTED',
@@ -361,12 +364,15 @@ const expectedProofs = [
   'FRACTIONAL_REPORT_HALF_CENT_DETECTED',
   'FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED',
   'CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN',
+  'RETURN_CREDIT_FOLLOWUP_AUTO_INVOICE_PROVEN',
+  'RETURN_CREDIT_UNBILLED_BACKFILL_PROVEN',
   'RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN',
 ];
 const completedProofs = new Set();
 try {
   assert.ok(readFileSync(CANDIDATE, 'utf8').length > 0, 'candidate migration is missing');
   assert.ok(readFileSync(COGS_CANDIDATE, 'utf8').length > 0, 'COGS candidate migration is missing');
+  assert.ok(readFileSync(DELIVERY_CREDIT_GATE_CANDIDATE, 'utf8').length > 0, 'delivery credit-gate candidate migration is missing');
   assert.ok(readFileSync(HELPER_GUARD, 'utf8').length > 0, 'helper guard migration is missing');
   for (const migration of FORWARD_COMPATIBILITY_REPLAY) {
     assert.ok(readFileSync(migration, 'utf8').length > 0, `forward replay migration is missing: ${path.basename(migration)}`);
@@ -780,6 +786,9 @@ try {
   copy(COGS_CANDIDATE, path.basename(COGS_CANDIDATE));
   apply(path.basename(COGS_CANDIDATE));
   migrations.push(COGS_CANDIDATE);
+  copy(DELIVERY_CREDIT_GATE_CANDIDATE, path.basename(DELIVERY_CREDIT_GATE_CANDIDATE));
+  apply(path.basename(DELIVERY_CREDIT_GATE_CANDIDATE));
+  migrations.push(DELIVERY_CREDIT_GATE_CANDIDATE);
   // The migration must accept multiple NULL-lineage items because PostgreSQL's
   // installed UNIQUE constraint does. Remove only the synthetic second item
   // after that apply proof so the later smoke can exercise the exact one-line
@@ -832,6 +841,51 @@ try {
   assertInstalledFunctionHash('public._allocated_delivery_cents(uuid,numeric,uuid)', '44a739b026385996b66355ee5c4b1175dbe5260bad57a459a91e69c3873bae81');
 
   copy(SMOKE, path.basename(SMOKE));
+  const deliveryGateSql = readFileSync(DELIVERY_CREDIT_GATE_CANDIDATE, 'utf8');
+  const completeGateStart = deliveryGateSql.indexOf('CREATE OR REPLACE FUNCTION public._complete_delivery_authorized_impl(');
+  const completeGateEnd = deliveryGateSql.indexOf('REVOKE ALL ON FUNCTION public._complete_delivery_authorized_impl', completeGateStart);
+  assert.ok(completeGateStart >= 0 && completeGateEnd > completeGateStart, 'delivery auto-invoice helper slice is missing');
+  const canonicalCompleteGate = deliveryGateSql.slice(completeGateStart, completeGateEnd);
+  const completeGateMutant = canonicalCompleteGate.replace(
+    /^\s*AND invoice_type <> 'credit_memo'\r?\n/m,
+    '',
+  );
+  assert.notEqual(completeGateMutant, canonicalCompleteGate, 'delivery auto-invoice mutant did not remove the credit-memo filter');
+  psql(completeGateMutant);
+  const completeGateMutantSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const completeGateMutantOutput = `${completeGateMutantSmoke.stdout}\n${completeGateMutantSmoke.stderr}`;
+  assert.notEqual(completeGateMutantSmoke.status, 0, 'delivery auto-invoice mutant smoke unexpectedly committed');
+  assert.match(
+    completeGateMutantOutput,
+    /SMOKE_FAIL: posted return credit suppressed the follow-up delivery auto-invoice/,
+    `delivery auto-invoice mutant did not reach the credit-memo coverage oracle:\n${completeGateMutantOutput}`,
+  );
+  completedProofs.add('DELIVERY_AUTO_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED');
+  psql(canonicalCompleteGate);
+  assertInstalledFunctionHash('public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamptz)', '15c5a7ddf836f402d52544a69b8628061b4e9042444362262c1d76d26916ee69');
+
+  const backfillGateStart = deliveryGateSql.indexOf('CREATE OR REPLACE FUNCTION public._create_invoice_for_unbilled_delivery_impl_20260718(');
+  const backfillGateEnd = deliveryGateSql.indexOf('REVOKE ALL ON FUNCTION public._create_invoice_for_unbilled_delivery_impl_20260718', backfillGateStart);
+  assert.ok(backfillGateStart >= 0 && backfillGateEnd > backfillGateStart, 'unbilled-delivery helper slice is missing');
+  const canonicalBackfillGate = deliveryGateSql.slice(backfillGateStart, backfillGateEnd);
+  const backfillGateMutant = canonicalBackfillGate.replace(
+    /^\s*AND invoice_type <> 'credit_memo'\r?\n/m,
+    '',
+  );
+  assert.notEqual(backfillGateMutant, canonicalBackfillGate, 'unbilled-delivery mutant did not remove the credit-memo filter');
+  psql(backfillGateMutant);
+  const backfillGateMutantSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const backfillGateMutantOutput = `${backfillGateMutantSmoke.stdout}\n${backfillGateMutantSmoke.stderr}`;
+  assert.notEqual(backfillGateMutantSmoke.status, 0, 'unbilled-delivery mutant smoke unexpectedly committed');
+  assert.match(
+    backfillGateMutantOutput,
+    /SMOKE_FAIL: posted return credit suppressed the unbilled-delivery backfill/,
+    `unbilled-delivery mutant did not reach the credit-memo coverage oracle:\n${backfillGateMutantOutput}`,
+  );
+  completedProofs.add('UNBILLED_DELIVERY_CREDIT_FILTER_REMOVAL_DETECTED');
+  psql(canonicalBackfillGate);
+  assertInstalledFunctionHash('public._create_invoice_for_unbilled_delivery_impl_20260718(uuid,uuid,text)', 'd74e002a01fffedbb69322174f1da1cad8b86b0df4312c5ac56257f1f6077f5f');
+
   const sourceGuardStart = cogsSql.indexOf('CREATE FUNCTION public.guard_return_credit_source_recognition()');
   const sourceGuardEnd = cogsSql.indexOf('REVOKE ALL ON FUNCTION public.guard_return_credit_source_recognition()', sourceGuardStart);
   assert.ok(sourceGuardStart >= 0 && sourceGuardEnd > sourceGuardStart, 'source-recognition guard helper slice is missing');
@@ -1339,6 +1393,10 @@ try {
   assert.match(output, /SMOKE_PASS_ROLLBACK/, `canonical smoke did not reach SMOKE_PASS_ROLLBACK:\n${output}`);
   assert.match(output, /CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN/, `canonical smoke did not prove current-season credit attribution:\n${output}`);
   completedProofs.add('CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN');
+  assert.match(output, /RETURN_CREDIT_FOLLOWUP_AUTO_INVOICE_PROVEN/, `canonical smoke did not prove the follow-up delivery auto-invoice:\n${output}`);
+  completedProofs.add('RETURN_CREDIT_FOLLOWUP_AUTO_INVOICE_PROVEN');
+  assert.match(output, /RETURN_CREDIT_UNBILLED_BACKFILL_PROVEN/, `canonical smoke did not prove the unbilled-delivery backfill:\n${output}`);
+  completedProofs.add('RETURN_CREDIT_UNBILLED_BACKFILL_PROVEN');
   assert.match(output, /RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN/, `canonical smoke did not prove return-credit header hard-delete refusal:\n${output}`);
   completedProofs.add('RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN');
   assert.equal(psqlValue("SELECT count(*) FROM public.customers WHERE farm_name LIKE '[SMOKE] Return Credit Farm %';"), '0', 'customer fixture residue remained');

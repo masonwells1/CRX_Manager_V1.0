@@ -14,6 +14,10 @@ const allocatedDeliveryMigration = readFileSync(
   'supabase/migrations/20260817120000_carry_allocated_line_cents_through_lifecycle.sql',
   'utf8',
 );
+const deliveryCreditGateMigration = readFileSync(
+  'supabase/migrations/20260826215500_exclude_return_credits_from_delivery_invoice_gate.sql',
+  'utf8',
+);
 const migrationHistory = readFileSync('docs/reference/migration-history.md', 'utf8');
 const reportsPage = readFileSync('src/pages/Reports.tsx', 'utf8');
 const monthEndPage = readFileSync('src/pages/MonthEndClose.tsx', 'utf8');
@@ -98,9 +102,18 @@ describe('return-credit COGS migration', () => {
 
   it('pins the replacement helper bodies used by the COGS postflight', () => {
     expect(functionBodySha256(allocatedDeliveryMigration, '_allocated_delivery_cents')).toBe('1df1d230c19e5d129038b1e5dfbca30db0b369ea5a91a22f19dd98cc53129142');
+    expect(functionBodySha256(allocatedDeliveryMigration, '_complete_delivery_authorized_impl')).toBe('0e889bb6e0bc998d2833081e8e6f8e801e032595e7360e09d4f594e13ed7ad24');
+    expect(functionBodySha256(allocatedDeliveryMigration, '_create_invoice_for_unbilled_delivery_impl_20260718')).toBe('6543165d2c7cb6acbffd222adb28fee9b66278338ec401f6b2f19537c8aebcaa');
+    expect(functionBodySha256(deliveryCreditGateMigration, '_complete_delivery_authorized_impl')).toBe('15c5a7ddf836f402d52544a69b8628061b4e9042444362262c1d76d26916ee69');
+    expect(functionBodySha256(deliveryCreditGateMigration, '_create_invoice_for_unbilled_delivery_impl_20260718')).toBe('d74e002a01fffedbb69322174f1da1cad8b86b0df4312c5ac56257f1f6077f5f');
+    expect(deliveryCreditGateMigration.match(/AND invoice_type <> 'credit_memo'/g)).toHaveLength(2);
+    expect(deliveryCreditGateMigration).toContain('UNBILLED_DELIVERY_RETURN_CREDIT_GATE_PREFLIGHT_CONTRACT_DRIFT');
+    expect(deliveryCreditGateMigration).toContain('UNBILLED_DELIVERY_RETURN_CREDIT_GATE_POSTFLIGHT_DRIFT');
     expect(functionBodySha256(migration, '_allocated_delivery_cents')).toBe('44a739b026385996b66355ee5c4b1175dbe5260bad57a459a91e69c3873bae81');
     expect(migration).toContain("AND inv.invoice_type <> 'credit_memo'");
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DELIVERY_ALLOCATION_DRIFT');
+    expect(migration).toContain("p.prorettype = 'void'::regtype");
+    expect(migration).toContain("p.prorettype = 'jsonb'::regtype");
     expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
     expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('f8becf522d34caa804006e9372759b1088220fb1ea8c020b23ce949051a7581c');
     expect(functionBodySha256(migration, 'void_invoice')).toBe('6d7c17279c90a9d6817129ba6f43bb490523f2844657074046a9f66f019af3ec');
