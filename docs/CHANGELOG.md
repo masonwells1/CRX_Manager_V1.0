@@ -56,6 +56,14 @@ Not verified: no live migration was applied for end-to-end verification.
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-26 — Section 9 AP safety remediation closes the cutover race locally
+
+The pending Section 9 remediation now binds all six AP/receiving mutation receipts to the signed-in actor and exact request payload, corrects AP aging to five due-date buckets, and changes the dashboard's `Due This Month` amount from a rolling 30 days to Chicago calendar month-end. A first exact-commit Sol-high review found a real release race: an RPC that resolved the old body before migration cutover could resume after the legacy-receipt preflight, commit an unbound receipt, and cause the payment/receiving callers to unlock a new request after a mismatch.
+
+The candidate migration now takes an exclusive receipt-table cutover lock, installs an insert-time binding trigger, and supplies actor/fingerprint context from each new wrapper before calling the private mature implementation. Pre-cutover writers drain before validation; callers queued behind cutover either use the new wrapper or have their late old-body receipt rejected, which rolls back the whole money/inventory statement. The payment and PO receiving screens also inspect mismatch receipts and refresh the committed result instead of enabling a duplicate submission.
+
+Network-isolated PostgreSQL 17 proof replayed all 63 post-baseline migrations, observed cutover waiting on a concurrent legacy writer, caught its committed unbound receipt in preflight, then proved a late old payment body leaves zero payment, bill-balance, or receipt residue. All three sibling rollback smokes and every period-close concurrency schedule passed through `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`. These migrations remain local candidates; no live schema or data was changed, and fresh exact-commit review plus the governed apply/PR gates still remain.
+
 ## 2026-08-26 — Pre-push containment skips top-level ignored tool bulk
 
 The private-artifact pre-push guard now excludes descendants of its existing explicit top-level

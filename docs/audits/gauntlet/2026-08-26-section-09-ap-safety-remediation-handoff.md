@@ -4,7 +4,7 @@
 
 - Checkout: `C:\Users\mason\.codex\worktrees\section9-ap-safety-remediation\CRX_Manager`
 - Branch: `codex/section9-ap-safety-remediation`
-- Starting base: `origin/main` at `14378963c4c2188844757c07da4ca0f38e4944f3`; refresh/rebase is required before final review.
+- Current base: `origin/main` at `2a2f3dc0d0acb5aea9d298d9b76387edf8249696`; the branch was rebased and the full affected proof reran afterwards.
 - Repository: `masonwells1/CRX_Manager_V1.0`
 - Live database: Supabase project `rhyzpcqhnizqbxphqdkr`
 
@@ -28,6 +28,9 @@ Done means the changed database and UI paths execute successfully in rollback-on
   - wraps all six AP/receiving mutators with actor-plus-SHA-256 intent binding;
   - keeps the mature implementations private and owner-only;
   - preserves the existing public signatures, defaults, return shapes, grants, and fixed search paths;
+  - takes an `ACCESS EXCLUSIVE` cutover lock on the receipt table so pre-cutover executions drain before legacy-receipt validation;
+  - installs an insert-time binding trigger that rejects a late old function body and rolls its entire money/inventory statement back;
+  - stamps each new receipt atomically from transaction-local wrapper context before the private implementation returns;
   - refuses active unbound legacy receipts at cutover;
   - changes `Due This Month` from a rolling 30-day window to the Chicago business date through calendar month-end.
 - Candidate migration `20260826140333_correct_ap_aging_due_date_buckets.sql`:
@@ -35,26 +38,28 @@ Done means the changed database and UI paths execute successfully in rollback-on
   - adds the fifth `1-30 Days` bucket and makes `Current` mean due today or later;
   - preserves the current-only refusal, admin guard, fixed search path, owner, and deliberate grants.
 - `AccountsPayable.tsx`, shared types, and generated Supabase RPC types now expose and label all five buckets, including CSV export and totals.
-- Lost-response UI protection freezes the first exact payment or PO-receiving payload and prevents closing or editing those forms until an exact retry reconciles the result or the server proves a definitive refusal.
+- Lost-response UI protection freezes the first exact payment or PO-receiving payload and prevents closing or editing those forms until an exact retry reconciles the result or the server proves a definitive refusal. Intent-mismatch errors remain uncertain until the caller inspects their receipt; both screens now recover the committed payment/receiving result and refresh authoritative state instead of unlocking a fresh mutation.
 - Other AP/receiving entry points no longer mint a fresh key merely because a form reopens or changes after an uncertain response; the server rejects changed intent under the retained key.
-- `section9ApIntentBinding.test.ts` mutation-tests the actor binding, fingerprints, private implementation ACLs, helper dependency, due-date basis, and day-1 boundary. `useUncertainMutationIntent.test.ts` proves frozen payloads and definitive-versus-uncertain error handling.
+- `section9ApIntentBinding.test.ts` mutation-tests the actor binding, fingerprints, cutover lock, insert trigger, transaction-local binding context, private implementation ACLs, helper dependency, receipt reconciliation, due-date basis, and day-1 boundary. `useUncertainMutationIntent.test.ts` proves frozen payloads and keeps actor/intent mismatch errors locked until reconciliation.
 - The Section 9 rollback chain now proves exact replay and changed-payload refusal for all six mutators, with no second money, inventory, receiving, audit, or terminal-state effect. It also proves the next-month dashboard boundary and exact due-today/future and 1/30/31/60/61/90/91 aging boundaries.
-- The real-schema PostgreSQL 17 prover now restores the verified platform and migration-ledger artifacts, normalizes historical SQL to canonical LF, pins the one live CRLF function body expected by a later preflight, and proves the candidate legacy-receipt barrier before removing only the disposable fixture.
+- The real-schema PostgreSQL 17 prover now restores the verified platform and migration-ledger artifacts, normalizes historical SQL to canonical LF, pins the one live CRLF function body expected by a later preflight, proves a concurrent legacy receipt writer blocks cutover until it commits and is then caught by preflight, and proves a late old payment body is rejected at receipt insertion with zero payment, bill-balance, or receipt residue.
 
 ## PROOF OBSERVED
 
 - `npm run typecheck` — pass.
 - `npm run lint` — pass.
 - `npm run build` — pass.
-- `npm run test` — 341 files passed; 4,779 tests passed; 123 skipped.
-- Focused remediation tests — 15/15 passed.
-- Disposable PostgreSQL proof — full replay of 63 post-baseline migrations, both new candidates applied, all three sibling rollback chains passed, every two-session close/write schedule passed, terminal marker `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
+- `npm run test` after the cutover-race follow-up — 341 files passed; 4,781 tests passed; 123 skipped.
+- Latest focused remediation/concurrency-guard tests after the follow-up — 20/20 passed.
+- Disposable PostgreSQL proof after the follow-up — full replay of 63 post-baseline migrations, concurrent cutover drain passed, late-old-body rollback passed, both new candidates applied, all three sibling rollback chains passed, every two-session close/write schedule passed, terminal marker `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
 - `git diff --check` — pass.
 - React best-practices review — no new waterfall, bundle, hook-dependency, transient-state, or rendering blocker found in the changed flow.
 
-## NOT STARTED
+## EXACT-COMMIT REVIEW STATUS
 
-- Independent exact-SHA migration/adversarial review, proof stamping, commit, PR checks, live apply, merge, and production verification.
+- The first `gpt-5.6-sol` high-effort exact-commit review correctly found one HIGH cutover race: queued old RPC bodies could write an unbound receipt after preflight, while payment and receiving callers treated the resulting mismatch as permission to unlock a fresh key.
+- The database cutover barrier/trigger and client receipt reconciliation described above close that finding, and the new disposable concurrency/rollback proof passes.
+- A fresh exact-commit review of the follow-up SHA, proof stamping, PR checks, live apply, merge, and production verification remain pending.
 
 ## APPROVAL STATE
 
@@ -64,12 +69,11 @@ Done means the changed database and UI paths execute successfully in rollback-on
 
 ## GATES AND BLOCKERS
 
-- `origin/main` advanced during the build. Refresh/rebase before the final exact-SHA review.
 - Money/RPC/migration changes require rollback-only execution, migration security/drift review, and an exact-SHA `gpt-5.6-sol` high-effort verdict.
 - Live apply is not authorized yet.
 
 ## FIRST ACTION
 
-Refresh/rebase from `origin/main`, rerun the affected proof if the rebase changes relevant files, then enter the exact-SHA review and protected PR pipeline.
+Commit the reviewed-race follow-up, run the exact-SHA review against that new head, and enter the protected PR pipeline only if it returns no unresolved HIGH/BLOCKER finding.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

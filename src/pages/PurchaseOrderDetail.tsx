@@ -28,6 +28,7 @@ import RelatedNotes from '../components/team/RelatedNotes';
 import HelpTip from '../components/ui/HelpTip';
 import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition, LinkedEntityType } from '../types';
 import { Sentry } from '../lib/sentry';
+import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import { ProductOptionDetails, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
 
@@ -328,14 +329,25 @@ export default function PurchaseOrderDetail() {
           p_idempotency_key: idemKey,
           p_allow_over_receive: request.allowOverReceive,
         });
+        let responseData: unknown;
         if (error) {
-          if (receiveIntent.classifyFailure(error) === 'definitive') {
+          const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
+          const committedRecordIds = receipt?.receiving_record_ids;
+          if (
+            Array.isArray(committedRecordIds)
+            && committedRecordIds.every((recordId) => typeof recordId === 'string')
+          ) {
+            responseData = receipt;
+            toast('warning', 'The earlier receiving update already completed. The PO has been refreshed instead of receiving it twice.');
+          } else if (receiveIntent.classifyFailure(error) === 'definitive') {
             receiveIdem.resetKey();
             throw error;
+          } else {
+            throw new Error('The receiving update may already be recorded. Retry the locked request unchanged to reconcile it.');
           }
-          throw new Error('The receiving update may already be recorded. Retry the locked request unchanged to reconcile it.');
+        } else {
+          responseData = assertRpcResult(data, 'receive_po_items');
         }
-        assertRpcResult(data, 'receive_po_items');
         receiveIdem.resetKey();
         receiveIntent.resolveIntent();
 
@@ -377,7 +389,7 @@ export default function PurchaseOrderDetail() {
         }
 
         // Offer PDF download
-        const receivingRecordIds = (data as { receiving_record_ids?: string[] } | null)?.receiving_record_ids;
+        const receivingRecordIds = (responseData as { receiving_record_ids?: string[] } | null)?.receiving_record_ids;
         if (receivingRecordIds && receivingRecordIds.length > 0 && po) {
           try {
             const { downloadReceivingPdf } = await import('../lib/receivingPdf');

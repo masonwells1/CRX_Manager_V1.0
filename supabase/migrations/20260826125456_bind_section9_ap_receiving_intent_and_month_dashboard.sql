@@ -12,6 +12,69 @@
 -- This preserves period locks, PO serialization, money math, inventory math,
 -- audit rows, and existing return shapes byte-for-byte inside the implementations.
 
+-- Drain every transaction that already touched the shared receipt table before
+-- validating legacy receipts or renaming the public RPCs. PostgreSQL lock
+-- queueing also holds callers that arrive during cutover behind this migration.
+LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;
+
+-- A caller that resolved an old function body before the rename can resume
+-- after the migration commits. The old body has no binding context, so reject
+-- its late receipt INSERT and roll its entire money/inventory statement back.
+-- New wrappers provide the actor + fingerprint as transaction-local context;
+-- the trigger stamps the receipt atomically at INSERT time.
+CREATE OR REPLACE FUNCTION public._section9_bind_idempotency_receipt_20260826()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_context_text text;
+  v_context jsonb;
+BEGIN
+  IF NEW.operation NOT IN (
+    'create_vendor_bill', 'update_vendor_bill', 'record_vendor_payment',
+    'void_vendor_payment', 'void_vendor_bill', 'receive_po_items'
+  ) THEN
+    RETURN NEW;
+  END IF;
+
+  v_context_text := current_setting('crx.section9_idempotency_intent', true);
+  IF v_context_text IS NULL OR v_context_text = '' THEN
+    RAISE EXCEPTION 'SECTION9_UNBOUND_IDEMPOTENCY_RECEIPT';
+  END IF;
+
+  BEGIN
+    v_context := v_context_text::jsonb;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE EXCEPTION 'SECTION9_INVALID_IDEMPOTENCY_CONTEXT';
+  END;
+
+  IF v_context ->> 'operation' IS DISTINCT FROM NEW.operation
+     OR v_context ->> 'idempotency_key' IS DISTINCT FROM NEW.idempotency_key
+     OR COALESCE(v_context ->> 'actor_id', '') = ''
+     OR COALESCE(v_context ->> 'fingerprint', '') = '' THEN
+    RAISE EXCEPTION 'SECTION9_IDEMPOTENCY_CONTEXT_MISMATCH';
+  END IF;
+
+  NEW.request_actor_id := (v_context ->> 'actor_id')::uuid;
+  NEW.request_fingerprint := v_context ->> 'fingerprint';
+  RETURN NEW;
+END;
+$function$;
+
+ALTER FUNCTION public._section9_bind_idempotency_receipt_20260826() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public._section9_bind_idempotency_receipt_20260826()
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._section9_bind_idempotency_receipt_20260826() TO postgres;
+
+DROP TRIGGER IF EXISTS section9_bind_idempotency_receipt_20260826
+  ON public.idempotency_keys;
+CREATE TRIGGER section9_bind_idempotency_receipt_20260826
+BEFORE INSERT ON public.idempotency_keys
+FOR EACH ROW
+EXECUTE FUNCTION public._section9_bind_idempotency_receipt_20260826();
+
 DO $preflight$
 DECLARE
   v_name text;
@@ -189,6 +252,11 @@ BEGIN
     RETURN (v_replay -> 'result' ->> 'bill_id')::uuid;
   END IF;
 
+  PERFORM set_config('crx.section9_idempotency_intent', jsonb_build_object(
+    'operation', 'create_vendor_bill', 'idempotency_key', p_idempotency_key,
+    'actor_id', v_actor, 'fingerprint', v_fingerprint
+  )::text, true);
+
   v_bill_id := public._section9_create_vendor_bill_intent_impl_20260826(
     p_vendor_id, p_purchase_order_id, p_bill_number, p_bill_date, p_due_date,
     p_payment_terms, p_subtotal_cents, p_adjustment_cents, p_notes, p_idempotency_key
@@ -254,6 +322,11 @@ BEGIN
     RETURN v_replay -> 'result';
   END IF;
 
+  PERFORM set_config('crx.section9_idempotency_intent', jsonb_build_object(
+    'operation', 'update_vendor_bill', 'idempotency_key', p_idempotency_key,
+    'actor_id', v_actor, 'fingerprint', v_fingerprint
+  )::text, true);
+
   v_result := public._section9_update_vendor_bill_intent_impl_20260826(
     p_bill_id, p_subtotal_cents, p_adjustment_cents, p_bill_date,
     p_due_date, p_notes, p_idempotency_key
@@ -316,6 +389,11 @@ BEGIN
     RETURN (v_replay -> 'result' ->> 'payment_id')::uuid;
   END IF;
 
+  PERFORM set_config('crx.section9_idempotency_intent', jsonb_build_object(
+    'operation', 'record_vendor_payment', 'idempotency_key', p_idempotency_key,
+    'actor_id', v_actor, 'fingerprint', v_fingerprint
+  )::text, true);
+
   v_payment_id := public._section9_record_vendor_payment_intent_impl_20260826(
     p_vendor_bill_id, p_amount_cents, p_payment_date, p_payment_method,
     p_reference_number, p_notes, p_idempotency_key
@@ -367,6 +445,11 @@ BEGIN
     RETURN v_replay -> 'result';
   END IF;
 
+  PERFORM set_config('crx.section9_idempotency_intent', jsonb_build_object(
+    'operation', 'void_vendor_payment', 'idempotency_key', p_idempotency_key,
+    'actor_id', v_actor, 'fingerprint', v_fingerprint
+  )::text, true);
+
   v_result := public._section9_void_vendor_payment_intent_impl_20260826(
     p_payment_id, p_reason, p_idempotency_key
   );
@@ -415,6 +498,11 @@ BEGIN
     END IF;
     RETURN;
   END IF;
+
+  PERFORM set_config('crx.section9_idempotency_intent', jsonb_build_object(
+    'operation', 'void_vendor_bill', 'idempotency_key', p_idempotency_key,
+    'actor_id', v_actor, 'fingerprint', v_fingerprint
+  )::text, true);
 
   PERFORM public._section9_void_vendor_bill_intent_impl_20260826(
     p_vendor_bill_id, p_reason, p_idempotency_key
@@ -475,6 +563,11 @@ BEGIN
     END IF;
     RETURN v_replay -> 'result';
   END IF;
+
+  PERFORM set_config('crx.section9_idempotency_intent', jsonb_build_object(
+    'operation', 'receive_po_items', 'idempotency_key', p_idempotency_key,
+    'actor_id', v_actor, 'fingerprint', v_fingerprint
+  )::text, true);
 
   v_result := public._section9_receive_po_items_intent_impl_20260826(
     p_items, p_performed_by, p_idempotency_key, v_allow_over_receive
@@ -556,6 +649,7 @@ DO $verify$
 DECLARE
   v_source text;
   v_signature text;
+  v_trigger_count integer;
 BEGIN
   FOREACH v_signature IN ARRAY ARRAY[
     'public.create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text)',
@@ -573,11 +667,23 @@ BEGIN
       RAISE EXCEPTION '% wrapper is missing', v_signature;
     END IF;
     IF position('check_idempotency_intent' IN v_source) = 0
+       OR position('crx.section9_idempotency_intent' IN v_source) = 0
        OR position('request_actor_id = v_actor' IN v_source) = 0
        OR position('request_fingerprint = v_fingerprint' IN v_source) = 0 THEN
       RAISE EXCEPTION '% intent-binding wrapper verification failed', v_signature;
     END IF;
   END LOOP;
+
+  SELECT COUNT(*)
+    INTO v_trigger_count
+    FROM pg_catalog.pg_trigger t
+   WHERE t.tgrelid = 'public.idempotency_keys'::regclass
+     AND t.tgname = 'section9_bind_idempotency_receipt_20260826'
+     AND NOT t.tgisinternal
+     AND t.tgenabled = 'O';
+  IF v_trigger_count <> 1 THEN
+    RAISE EXCEPTION 'Section 9 receipt-binding trigger verification failed';
+  END IF;
 
   SELECT p.prosrc INTO v_source
     FROM pg_catalog.pg_proc p

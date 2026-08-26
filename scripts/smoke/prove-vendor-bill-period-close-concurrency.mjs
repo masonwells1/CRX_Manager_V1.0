@@ -355,7 +355,40 @@ CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
       restoreLiveCrLfCloseRemainder();
     }
     if (path.basename(local) === '20260826125456_bind_section9_ap_receiving_intent_and_month_dashboard.sql') {
-      expectValidationFailure(local, 'section9-active-legacy-receipt', 'SECTION9_ACTIVE_LEGACY_IDEMPOTENCY_RECEIPTS');
+      sql(`
+DELETE FROM public.idempotency_keys
+ WHERE expires_at >= now()
+   AND operation IN (
+     'create_vendor_bill', 'update_vendor_bill', 'record_vendor_payment',
+     'void_vendor_payment', 'void_vendor_bill', 'receive_po_items'
+   )
+   AND (request_actor_id IS NULL OR request_fingerprint IS NULL);
+`);
+      const cutoverRemote = `section9-cutover-${path.basename(local)}`;
+      copySql(local, cutoverRemote);
+      const legacyWriter = session(`
+BEGIN;
+SET application_name='section9-legacy-receipt-writer';
+INSERT INTO public.idempotency_keys (idempotency_key, operation, result)
+VALUES ('section9-cutover-held-receipt', 'record_vendor_payment', '{"payment_id":"00000000-0000-0000-0000-000000000099"}'::jsonb);
+SELECT 'SECTION9_LEGACY_RECEIPT_HELD';
+SELECT pg_sleep(${BARRIER_SECONDS});
+COMMIT;
+`, 'SECTION9_LEGACY_RECEIPT_HELD');
+      await legacyWriter.ready;
+      const cutover = session(`
+BEGIN;
+SET application_name='section9-cutover-migration';
+SELECT 'SECTION9_CUTOVER_STARTED';
+\\i /tmp/${cutoverRemote}
+COMMIT;
+`, 'SECTION9_CUTOVER_STARTED');
+      await cutover.ready;
+      await waitForSessionLock('section9-cutover-migration', 'Section 9 cutover waiting for legacy receipt writer');
+      const [legacyWriterResult, cutoverResult] = await Promise.all([legacyWriter.done, cutover.done]);
+      assert.equal(legacyWriterResult.code, 0, legacyWriterResult.err);
+      expectError(cutoverResult, 'SECTION9_ACTIVE_LEGACY_IDEMPOTENCY_RECEIPTS', 'Section 9 drained cutover preflight');
+      console.log('CANDIDATE_SECTION9_CUTOVER_DRAINS_LEGACY_WRITER_PASS');
       const legacyCount = Number(scalar(`
 SELECT count(*)
   FROM public.idempotency_keys
@@ -381,6 +414,24 @@ DELETE FROM public.idempotency_keys
     applyMigration(local, 'post_candidate');
   }
   console.log(`FULL_POST_BASELINE_REPLAY_PASS count=${pendingMigrations.length} baseline_high_water=${BASELINE_MANIFEST.migrations_high_water}`);
+
+  // A request that resolved an old function body before cutover can resume
+  // afterwards. Its private implementation has no binding context, so the
+  // receipt trigger must reject the INSERT and roll back the payment itself.
+  const lateOldBodyBill = scalar(`${bill('section9-late-old-body-bill')}`);
+  const lateOldBody = sql(`${claims()}
+SELECT public._section9_record_vendor_payment_intent_impl_20260826(
+  '${lateOldBodyBill}'::uuid, 100, '${date}'::date, 'check', NULL, NULL,
+  'section9-late-old-body-payment'
+);`, { fail: true });
+  assert.notEqual(lateOldBody.status, 0, 'late old payment body unexpectedly succeeded');
+  assert.match(`${lateOldBody.stdout}\n${lateOldBody.stderr}`, /SECTION9_UNBOUND_IDEMPOTENCY_RECEIPT/);
+  assert.equal(scalar(`SELECT count(*) FROM public.vendor_payments WHERE vendor_bill_id='${lateOldBodyBill}'::uuid`), '0');
+  assert.equal(scalar(`SELECT paid_cents FROM public.vendor_bills WHERE id='${lateOldBodyBill}'::uuid`), '0');
+  assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='section9-late-old-body-payment'`), '0');
+  sql(`DELETE FROM public.vendor_bills WHERE id='${lateOldBodyBill}'::uuid; DELETE FROM public.idempotency_keys WHERE idempotency_key='section9-late-old-body-bill';`);
+  console.log('CANDIDATE_SECTION9_LATE_OLD_BODY_ROLLBACK_PASS');
+
   // The candidate must be visibly present before the registered business chains
   // and two-session schedules run.
   assert.equal(scalar(`SELECT count(*) FROM pg_constraint WHERE conrelid='public.accounting_periods'::regclass AND conname='accounting_periods_whole_calendar_month_check'`), '1');

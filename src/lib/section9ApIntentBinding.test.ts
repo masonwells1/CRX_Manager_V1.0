@@ -23,6 +23,7 @@ const purchaseOrderDetail = source('src', 'pages', 'PurchaseOrderDetail.tsx');
 const newVendorBill = source('src', 'pages', 'NewVendorBill.tsx');
 const inventoryPage = source('src', 'pages', 'InventoryPage.tsx');
 const receivingHub = source('src', 'components', 'receiving', 'ReceivingHubPanel.tsx');
+const idempotency = source('src', 'lib', 'idempotency.ts');
 
 const publicSignatures = [
   'create_vendor_bill(uuid, uuid, text, date, date, text, bigint, bigint, text, text)',
@@ -52,11 +53,15 @@ function hasIntentBindingContract(sql: string) {
       sql.includes(`REVOKE ALL ON FUNCTION public.${name}(`)
       && sql.includes('FROM PUBLIC, anon, authenticated, service_role;'),
     )
-    && (sql.match(/FROM PUBLIC, anon, authenticated, service_role;/g) ?? []).length === 6
+    && (sql.match(/FROM PUBLIC, anon, authenticated, service_role;/g) ?? []).length === 7
     && (sql.match(/public\.check_idempotency_intent\(/g) ?? []).length === 7
     && (sql.match(/request_actor_id = v_actor/g) ?? []).length >= 7
     && (sql.match(/request_fingerprint = v_fingerprint/g) ?? []).length >= 7
     && (sql.match(/extensions\.digest\(/g) ?? []).length === 6
+    && sql.includes('LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;')
+    && sql.includes('CREATE TRIGGER section9_bind_idempotency_receipt_20260826')
+    && sql.includes("RAISE EXCEPTION 'SECTION9_UNBOUND_IDEMPOTENCY_RECEIPT'")
+    && (sql.match(/PERFORM set_config\('crx\.section9_idempotency_intent'/g) ?? []).length === 6
     && sql.includes('SECTION9_ACTIVE_LEGACY_IDEMPOTENCY_RECEIPTS');
 }
 
@@ -81,6 +86,12 @@ describe('Section 9 AP and receiving intent binding', () => {
     )).toBe(false);
     expect(hasIntentBindingContract(
       migration.replace('FROM PUBLIC, anon, authenticated, service_role;', 'FROM PUBLIC, anon;'),
+    )).toBe(false);
+    expect(hasIntentBindingContract(
+      migration.replace('LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;', ''),
+    )).toBe(false);
+    expect(hasIntentBindingContract(
+      migration.replace("PERFORM set_config('crx.section9_idempotency_intent'", 'PERFORM set_config(\'crx.unbound_intent\''),
     )).toBe(false);
   });
 
@@ -114,14 +125,19 @@ describe('Section 9 AP and receiving intent binding', () => {
 
   it('locks the two highest-risk lost-response forms to their first exact payload', () => {
     expect(vendorBillDetail).toContain('paymentIntent.beginIntent({');
+    expect(vendorBillDetail).toContain("getIdempotencyMismatchResult(err, 'record_vendor_payment')");
+    expect(vendorBillDetail).toContain("typeof receipt?.payment_id === 'string'");
     expect(vendorBillDetail).toContain("paymentIntent.classifyFailure(err) === 'definitive'");
     expect(vendorBillDetail).toContain('Retry Exact Payment');
     expect(vendorBillDetail).toContain('disabled={paymentIntent.isIntentLocked}');
 
     expect(purchaseOrderDetail).toContain('receiveIntent.beginIntent({');
+    expect(purchaseOrderDetail).toContain("getIdempotencyMismatchResult(error, 'receive_po_items')");
+    expect(purchaseOrderDetail).toContain('Array.isArray(committedRecordIds)');
     expect(purchaseOrderDetail).toContain("receiveIntent.classifyFailure(error) === 'definitive'");
     expect(purchaseOrderDetail).toContain('Retry Exact Receiving');
     expect(purchaseOrderDetail).toContain('disabled={receiveIntent.isIntentLocked}');
+    expect(idempotency).toContain("candidate.message === 'IDEMPOTENCY_INTENT_MISMATCH'");
   });
 
   it('does not mint a fresh key merely because an uncertain AP/receiving form reopened or changed', () => {

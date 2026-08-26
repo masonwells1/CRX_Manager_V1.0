@@ -45,6 +45,17 @@ describe('useUncertainMutationIntent', () => {
     expect(result.current.unresolvedIntent).toEqual({ amount: 100 });
   });
 
+  it('keeps an intent mismatch locked until the caller reconciles the receipt', () => {
+    const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>());
+    act(() => result.current.beginIntent({ amount: 100 }));
+
+    act(() => {
+      expect(result.current.classifyFailure({ code: '22023', message: 'IDEMPOTENCY_INTENT_MISMATCH' }))
+        .toBe('uncertain');
+    });
+    expect(result.current.unresolvedIntent).toEqual({ amount: 100 });
+  });
+
   it('does not depend on Error instances for Supabase failures', () => {
     const errorSpy = vi.fn();
     const plainObject = { code: '08007', message: 'transaction resolution unknown' };
