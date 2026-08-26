@@ -169,7 +169,7 @@ kill attempts was stopped only incidentally, by the maintenance-producer guard r
 command's shape rather than its target. Wiring that guard touches both hook manifests and needs
 Mason's approval.
 
-## OPEN 2026-08-20 — the Phase 3C containment scanner walks `dist/`, so a concurrent rebuild refuses the push
+## RESOLVED 2026-08-26 — Phase 3C no longer walks top-level ignored tool bulk
 
 **Severity: MEDIUM. Not a containment hole — a false refusal.** The pre-push hook
 (`.husky/pre-push:7`) runs `scripts/check-supplier-pricing-phase3-private-artifacts.mjs`, which
@@ -192,20 +192,25 @@ session in the same checkout — the scanner throws and the push is refused with
 "containment failed"**, which reads as "a private packet leaked" when nothing leaked. Phase 3C's
 containment scan is ~98 seconds on its own, so the window is wide.
 
-**Verified from source 2026-08-20** (the call chain and the missing exclusion, cited above); the
-crash itself was **observed directly in an earlier session** and was not reproduced here. Nothing
-about this weakens containment: `dist/` files still get the structural-signature scan, and a
-force-added file becomes tracked and gets the full scan regardless.
+**Historical verification from source 2026-08-20** (the call chain and the missing exclusion,
+cited above); the crash itself was **observed directly in an earlier session** and was not
+reproduced here. At that time `dist/` files still received the structural-signature scan. The
+resolution below deliberately changes that boundary for ordinary ignored descendants while
+retaining the full scan once a file becomes Git-visible.
 
-**Likely fix, not yet written and deliberately not bundled with the 2026-08-20 fleet-scan repair:**
-tolerate `ENOENT` across the **whole** pre-open sequence above — not just the `stat`/`open`
-boundary — for `source === 'ignored'` tool-owned paths, **and re-check that the path is still
-absent from the index before skipping it**. That re-check is the load-bearing half: the candidate
-list is collected before scanning, so "it vanished" and "it was force-added and is now tracked"
-are indistinguishable at scan time. Without it, "a file that vanished mid-scan cannot be a staged
-private packet" is an overclaim, not a guarantee. The alternative — widening the exclude pathspec —
-would stop scanning `dist/` altogether and is a real loss of coverage. Whoever picks this up should
-confirm which the containment charter actually wants before choosing.
+**Resolution and chosen boundary:** ignored-file enumeration now excludes descendants of the
+guard's existing explicit top-level dependency/build/test-output roots. This deliberately gives up
+structural scanning of ordinary ignored descendants under those roots. It does **not** exclude a
+root endpoint, a nested lookalike, or anything Git can see: tracked, staged, force-added, index,
+outgoing-commit, and history content remains scanned. The existing candidate double-read and
+vanish/recreation checks are unchanged. The owning suite mutation-fails when this pathspec boundary
+is removed and proves that a force-added private packet under every excluded root is still denied.
+
+Measured on the same installed worktree, the real containment path fell from 434,901 ms to 37,468
+ms overall (a 91.4% reduction in elapsed time), while worktree scanning fell from 405,535 ms to 220 ms.
+These timings cover the real scanner path, not the separate exhaustive cross-platform regression suite.
+Reopen this issue only if a Git-visible artifact under an excluded root escapes scanning, or if an
+excluded root is widened without equivalent tracked/index/history and boundary regression proof.
 ## OPEN (WONTFIX for now) 2026-08-20 — `review-proof-guard` denies destructive shell commands that NAME a worktree path
 
 **Severity: LOW — cosmetic, with a zero-cost workaround. Mason chose "document, don't fix"
@@ -2635,6 +2640,7 @@ The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). The
 - **Offline work recovery database foundation and browser rollout are live; phone/device E2E remains pending** — all four receipt migrations, including the corrective target-row lock, were applied and verified on 2026-07-14, and PR #124's browser rollout landed on `main` before the 2026-07-15 offline verification pass. Browser retention until proven success, distinct cap/backlog handling, a safe device review panel, audited office `already_completed` / `abandoned` resolution, and cross-tab replay protection are now in code. A saved action that lacks an original queue-time target snapshot is intentionally sent to office review rather than deriving a new baseline after reconnect; therefore snapshot conflict coverage is complete only for actions that captured the snapshot when queued. Still deferred: signature/photo persistence, idempotent email/notification replay, operation-specific conflict preconditions, automatic device discovery of an office resolution, and a general duplicate-action policy. Browser storage remains device-local until the phone reconnects and stages its permanent server receipt, so destroying or clearing that storage before reconnection can still lose work. Source: `docs/audits/2026-07-15-offline-stage1b-rollout-verification.md`, `docs/audits/2026-07-14-offline-receipt-browser-office-resolution-proof.md`, and `docs/roadmap/offline-work-stage1b-receipt-design-2026-07-13.md`.
 - **Live `schema_migrations` having more entries than files on disk is OLD, pre-existing drift** — do not treat it as a new problem. Only reconcile migrations newer than the point where the current branch diverged from `origin/main`. (Session memory: `project_migration-disk-vs-live-drift`.)
 - **Page-render tests pass in isolation but flake in the full `vitest` suite** — fix with `waitFor`/`findAllBy`, not synchronous `getBy`. See `docs/reference/gotchas.md` and session memory `project_page-test-fullsuite-flake`.
+- **A test that clicks Save on `JobDetail` must RETRY the click, not just wait longer** — a *third* root cause, distinct from both flake classes around it. `handleSave` fails closed while the label-rate policy is still loading: it toasts "Checking the label-rate policy — try Save again in a moment." and returns. Those lookups (`guardrailModeLoaded`, `jobLabelsLoaded`) are separate queries from the job/products fetch that renders the page, so awaiting on-screen content does **not** mean the save gate is open. A single `fireEvent.click` landing in that window emits a non-matching toast and returns — and nothing re-fires the save, so a `waitFor` on the expected toast spins until it times out, surfacing as `AssertionError: expected false to be true`. Neither a longer timeout nor `waitFor` can fix this; only a retry can. `JobDetail.billingHazard.test.tsx` routes all nine save clicks through a `clickSave()` helper that re-clicks while the gate is still closed (safe: while closed the save never proceeds, so it cannot double-save), and its mock deliberately holds the by-id products query open so every save-clicking test exercises the fail-closed branch instead of racing past it. Hold it with a **deferred promise, not a timer**: a fixed delay silently stops testing anything once a machine is slow enough that the query resolves before the first click, and `clickSave()` therefore also *asserts* the blocked attempt happened rather than assuming it. Verified 2026-08-25: with that harness and a single un-retried click, 5 tests fail with the production symptom; with the helper, all 14 pass. If you add a save-clicking test to a page with a load-gated `handleSave`, use the same helper shape.
 - **ExcelJS workbook tests can exceed the 5s default timeout on a cold cache** — a *different* root cause from the page-render flake above, so the `waitFor` fix does not apply. The first ExcelJS load inside a worker is multi-second (7.0s measured 2026-08-25 on the first `vitest` run after a fresh `npm ci` in a new worktree) versus ~350ms once warm, so whichever test triggers that load sits right on the 5s cap and swings by an order of magnitude. Because `.husky/pre-commit` runs the full suite, a cold-cache miss hard-blocks an unrelated commit — the exact pressure toward the forbidden `--no-verify`. Fix: an explicit generous per-test timeout as the third argument to `it(...)`, never a higher global `testTimeout` (that would relax the 5s contract for the whole suite). All three ExcelJS test files now carry one — `productPricingWorkbook.test.ts` (20s/45s), `supplierPricingWorkbook.test.ts` (20s), and `productPricingSupplierEvidenceWorkbook.test.ts` (30s, added 2026-08-25 after it flaked in PR #476). Every ExcelJS load in these files happens inside a test body (no `beforeAll`/module-scope load), and tests run in file order, so the first test in each file absorbs the cold cost — that is why covering the first test per file is sufficient for the pre-commit gate. Residual: a manually filtered run (`vitest -t "…"`) that selects a *later* test in a file makes that test pay the cold load under the 5s cap; filtered runs do not gate commits, so this is accepted rather than blanket-timed-out.
 - **PWA (installed app) needs two reloads after a production deploy** to pick up a new service-worker chunk — expected behavior, not a bug to chase.
 - **Prepay bulk-apply (`apply_remaining_prepayments` / `batch_apply_all_prepayments`) is hard-disabled in production** (`RAISE 'PREPAY_BULK_APPLY_DISABLED'`, migration `20260620200000`) rather than properly fixed — the real fix needs the shelved reserved-pool redesign (§2/§4). Per-invoice `apply_prepay_to_invoice` is unaffected.
