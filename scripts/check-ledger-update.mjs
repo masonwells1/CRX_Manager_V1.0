@@ -123,9 +123,14 @@ if (isMain) {
   try {
     // --name-status, not --name-only: the classifier needs to know whether a
     // changelog.d entry was ADDED, because modifying an existing one records nothing
-    // about this commit (Codex P2, PR #482). Rename/copy lines carry a score (R100)
-    // and a second path; take the LAST field as the destination path.
-    staged = execFileSync("git", ["diff", "--cached", "--name-status", "--diff-filter=ACMRD"], { encoding: "utf8" })
+    // about this commit (Codex P2, PR #482).
+    //
+    // --no-renames and the T (type-change) filter come from origin/main and are kept:
+    // --no-renames splits a rename into a separate D and A, which is what we want here
+    // — the added half is a genuine new entry and should count, while an R line would
+    // have needed two-path parsing. The last-field read below stays as a defensive
+    // measure in case --no-renames is ever dropped.
+    staged = execFileSync("git", ["diff", "--cached", "--no-renames", "--name-status", "--diff-filter=ACMRTD"], { encoding: "utf8" })
       .split(/\r?\n/)
       .filter(Boolean)
       .map((line) => {

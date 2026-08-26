@@ -172,7 +172,7 @@ For every confirmed BLOCKER/HIGH, add one prevention action before closing the l
 - command or skill prompt update when the issue is workflow-related;
 - `docs/reference/gotchas.md` entry only when no executable check is practical (justify why in the disposition).
 
-Note the deterministic floor that now runs beneath this review loop (so you don't re-catch by review what a gate already prevents): `npm run typecheck` (in `.husky/pre-commit` + `/ship` verify) kills the type-error class; the ESLint contract rules + render-smoke test (when present) cover untyped DB access, unhandled Supabase `{error}`, and pages-that-throw. Route a confirmed finding to the matching gate rather than relying on the next review to notice it again.
+Note the deterministic floor that now runs beneath this review loop (so you don't re-catch by review what a gate already prevents): `npm run typecheck` (in `/ship`, pre-push, and CI) kills the type-error class; the ESLint contract rules + render-smoke test (when present) cover untyped DB access, unhandled Supabase `{error}`, and pages-that-throw. Route a confirmed finding to the matching gate rather than relying on the next review to notice it again.
 
 If Claude skills or hooks changed, run:
 
