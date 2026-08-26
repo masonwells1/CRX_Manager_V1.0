@@ -220,12 +220,11 @@ const expectedProofs = [
   'CUSTOMER_SCOPE_DISCLOSURE_REJECTED',
   'UNLINKED_COST_GUARD_REMOVAL_DETECTED',
   'LINEAGE_CLEAR_REMOVAL_DETECTED',
-  'CREDIT_SOURCE_SEASON_MUTATION_DETECTED',
+  'CREDIT_CURRENT_SEASON_MUTATION_DETECTED',
   'GROUPED_COST_BUCKET_6601_REJECTED',
   'FRACTIONAL_REPORT_HALF_CENT_DETECTED',
   'FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED',
-  'NULL_SOURCE_SEASON_FALLBACK_PROVEN',
-  'AMBIGUOUS_SOURCE_SEASON_REJECTED',
+  'CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN',
 ];
 const completedProofs = new Set();
 try {
@@ -850,20 +849,20 @@ try {
   psql(canonicalIssueHelper);
 
   const creditSeasonMutant = canonicalIssueHelper.replace(
-    'SET total_cost_cents = -v_cogs, season = v_credit_season',
     'SET total_cost_cents = -v_cogs, season = public.current_season()',
+    'SET total_cost_cents = -v_cogs, season = public.current_season() - 1',
   );
-  assert.notEqual(creditSeasonMutant, canonicalIssueHelper, 'credit-season mutant did not alter source-season attribution');
+  assert.notEqual(creditSeasonMutant, canonicalIssueHelper, 'credit-season mutant did not alter current-season attribution');
   psql(creditSeasonMutant);
   const creditSeasonSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
   const creditSeasonOutput = `${creditSeasonSmoke.stdout}\n${creditSeasonSmoke.stderr}`;
   assert.notEqual(creditSeasonSmoke.status, 0, 'credit-season mutant smoke unexpectedly committed');
   assert.match(
     creditSeasonOutput,
-    /SMOKE_FAIL: year-end omitted recognized paid\/overdue sale or posted credit|SMOKE_FAIL: return credit was attributed to the credit-date season/,
+    /SMOKE_FAIL: credit memo wrong:[\s\S]*season=|SMOKE_FAIL: current-season year-end omitted posted return credit|SMOKE_FAIL: current-season credit usage/,
     `credit-season mutant did not reach the cross-season oracle:\n${creditSeasonOutput}`,
   );
-  completedProofs.add('CREDIT_SOURCE_SEASON_MUTATION_DETECTED');
+  completedProofs.add('CREDIT_CURRENT_SEASON_MUTATION_DETECTED');
   psql(canonicalIssueHelper);
 
   const fractionalDoubleRoundMutant = canonicalIssueHelper.replace(
@@ -888,10 +887,8 @@ try {
   const output = `${smoke.stdout}\n${smoke.stderr}`;
   assert.notEqual(smoke.status, 0, 'canonical return-credit smoke committed instead of forcing rollback');
   assert.match(output, /SMOKE_PASS_ROLLBACK/, `canonical smoke did not reach SMOKE_PASS_ROLLBACK:\n${output}`);
-  assert.match(output, /NULL_SOURCE_SEASON_FALLBACK_PROVEN/, `canonical smoke did not prove the defensive null-season fallback:\n${output}`);
-  completedProofs.add('NULL_SOURCE_SEASON_FALLBACK_PROVEN');
-  assert.match(output, /AMBIGUOUS_SOURCE_SEASON_REJECTED/, `canonical smoke did not prove ambiguous-season rejection:\n${output}`);
-  completedProofs.add('AMBIGUOUS_SOURCE_SEASON_REJECTED');
+  assert.match(output, /CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN/, `canonical smoke did not prove current-season credit attribution:\n${output}`);
+  completedProofs.add('CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN');
   assert.equal(psqlValue("SELECT count(*) FROM public.customers WHERE farm_name LIKE '[SMOKE] Return Credit Farm %';"), '0', 'customer fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.returns WHERE return_number LIKE 'SMK-%';"), '0', 'return fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.invoices WHERE invoice_number LIKE 'SMK-RCC-%';"), '0', 'invoice fixture residue remained');

@@ -7,13 +7,15 @@ describe('sanitizeError', () => {
     expect(sanitizeError('RETURN_CREDIT_UNIT_MISMATCH')).toContain('original sale');
     expect(sanitizeError('RETURN_CREDIT_UNLINKED_COST_LINE')).toContain('Review the credit memo');
     expect(sanitizeError('RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED')).toContain('Void or unapply');
+    expect(sanitizeError('RETURN_CREDIT_HEADER_IMMUTABLE')).toContain('Use Void');
     expect(sanitizeError('RETURN_CREDIT_LEDGER_IMMUTABLE')).toContain('source or cost lines');
-    expect(sanitizeError('RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS')).toContain('more than one crop season');
     expect(sanitizeError('RETURN_CREDIT_HEADER_RESULT_INVALID')).toContain('could not be completed safely');
     expect(sanitizeError('RETURN_CREDIT_SOURCE_CONCURRENT')).toContain('Wait a moment');
     expect(sanitizeError('RETURN_CREDIT_VOID_RELEASE_FAILED')).toContain('no changes were saved');
     expect(sanitizeError('RETURN_CREDIT_UNAPPLY_RELEASE_FAILED')).toContain('no changes were saved');
-    expect(sanitizeError('RETURN_NOT_APPROVED:received')).toContain('current status: received');
+    expect(sanitizeError('RETURN_NOT_APPROVED:requested')).toContain('must be approved');
+    expect(sanitizeError('RETURN_NOT_APPROVED:received')).toBe('This return is received and cannot be received');
+    expect(sanitizeError('RETURN_NOT_APPROVED:credited')).toBe('This return is credited and cannot be received');
   });
 
   it('returns generic message for null/undefined', () => {

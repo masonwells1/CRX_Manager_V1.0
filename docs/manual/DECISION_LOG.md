@@ -237,6 +237,19 @@ migration to silence it.
 
 ---
 
+## 2026-08-26 — Return credits belong to the current crop season
+
+**Source:** Mason's in-chat decision while rebuilding PR #361.
+**Decision:** A return credit uses `current_season()` when it is issued; it does not restate the
+customer year-end summary for the original sale season.
+**Why:** Keeping the credit in the current season is simpler to explain and preserves previously
+generated customer summaries.
+**What this forbids/implies:** A late return can create negative product usage in the current
+season even when the original purchase was in a prior season. That is an accepted reporting
+tradeoff; company P&L and monthly reports likewise recognize the credit in its current period.
+
+---
+
 ## 2026-08-26 — Ignored tool output is outside the local content-scan boundary until Git-visible
 
 **Source:** Mason's requested narrow harness-efficiency pass, measured against the remaining

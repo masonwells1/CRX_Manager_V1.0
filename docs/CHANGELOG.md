@@ -697,14 +697,12 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   memos and sales remain line-based and round each line to whole cents.
 - The report migration makes `get_bottom_line_pnl`, `get_monthly_summary`, and
   `get_customer_year_end_summary` recognize posted, overdue, and paid invoices without widening
-  AR's open-balance predicate. Year-end product usage includes credit-memo lines, so usable product
-  returned in the season nets against the originally invoiced product. A cross-season credit now
-  inherits its one known recognized source-invoice season. Production enforces `invoices.season NOT
-  NULL`; a defensive fallback to the source order season and then the current season is proven in a
-  disposable transaction that temporarily relaxes that constraint. Conflicting non-null source
-  seasons fail closed, so an October return cannot silently combine sales from different crop years. The
-  year-end RPC now also
-  fail-closes customer financial data: admins can read any customer, while sales reps can read only
+  AR's open-balance predicate. Year-end product usage includes credit-memo lines. Per Mason's
+  2026-08-26 decision, a cross-season credit uses the current crop season when issued, leaving the
+  original sale-season summary unchanged. The accepted simplicity tradeoff is that the current
+  season can show negative product usage when the original purchase occurred in a prior season. The
+  year-end RPC now also fail-closes customer financial data: admins can read any customer, while sales
+  reps can read only
   customers assigned to them; the batch wrapper inherits the same per-customer check.
 - The return migration pins each live dependency it changes, rejects duplicate return/order lines at
   the schema boundary, and upserts a missing usable-return inventory row transactionally. Its
@@ -726,26 +724,28 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   receive a separate, exact-transition context around their existing admin-only implementation;
   both fail the whole transaction unless the linked return is restored to `received`. The real-schema
   smoke executes issue → normal void → received → re-credit, while its cleanup continues to exercise
-  unapply, so neither valid correction path is stranded by the immutable-ledger trigger.
+  unapply, and a second credit is removed through `batch_void_invoices`. Preflight and postflight
+  require that batch RPC to keep delegating to `void_invoice`, so none of the three valid correction
+  paths is stranded by the immutable-ledger trigger.
   The narrow below-cost bypass is cleared immediately after the governed credit-line/header writes.
   Preflight and postflight also require exactly one function for every reviewed public name, so an
   unexpected RPC or dependency overload aborts the migration rather than surviving beside the
   pinned signature.
-- Installed-function preflight and postflight hashes normalize CRLF to LF before comparison,
-  preserving exact body proof across Windows and Linux checkouts while still pinning the reviewed
-  production definitions. The two migrations, canonical smoke, and real-schema prover are also pinned to LF in
+- Installed-function SHA-256 preflight and postflight hashes normalize CRLF to LF before comparison;
+  the pre-existing `void_invoice` wrapper is separately pinned to its exact live raw-md5 body before
+  rename. The two migrations, canonical smoke, and real-schema prover are also pinned to LF in
   `.gitattributes`; a dedicated regression exercises both newline forms.
 - The Data Integrity panel and its go-live DB7 proof copy now exclude credit-memo lines from the
   delivery-versus-invoice quantity check. Return credits carry negative line items for accounting
   reports, but those lines are not new customer billing and must not create a false
   delivery-parity discrepancy.
-- Fresh read-only production schema was restored into disposable PostgreSQL. Nineteen load-bearing
-  signals were exercised: seventeen guard-removal or accounting mutants plus direct defensive
-  null-season fallback and conflicting-season rejection. The mutants cover the two return rollout guards, the
+- Fresh read-only production schema was restored into disposable PostgreSQL. Eighteen load-bearing
+  signals were exercised: seventeen guard-removal or accounting mutants plus direct current-season
+  credit attribution. The mutants cover the two return rollout guards, the
   report's no-pre-existing-return-credit guard, public-function overload collision,
   source-recognition trigger, customer scope, immutable cost-line ledger, zero-cost ledger rows,
   credit revenue fields, unlinked-credit guard, one-statement lineage cleanup, historical FIFO
-  chronology, and source-season attribution, plus a real two-session guard-protocol race, fractional report math, and fractional
+  chronology, and current-season attribution, plus a real two-session guard-protocol race, fractional report math, and fractional
   double-rounding. The grouped cost mutant produced 6,601 cents instead of the
   paid/overdue/posted `$5 → $6 → $5 → $5.01` oracle's 6,700 cents. Removing the source-side lock
   let a source void complete while the credit lock was held and produced the forbidden state; the
@@ -760,9 +760,9 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   CREDIT_REVENUE_LEDGER_MUTATION_DETECTED,
   CUSTOMER_SCOPE_DISCLOSURE_REJECTED,FRACTIONAL_REPORT_HALF_CENT_DETECTED,
   UNLINKED_COST_GUARD_REMOVAL_DETECTED,LINEAGE_CLEAR_REMOVAL_DETECTED,
-  GROUPED_COST_BUCKET_6601_REJECTED,CREDIT_SOURCE_SEASON_MUTATION_DETECTED,
-  FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED,NULL_SOURCE_SEASON_FALLBACK_PROVEN,
-  AMBIGUOUS_SOURCE_SEASON_REJECTED smoke=SMOKE_PASS_ROLLBACK residue=0`. Final exact-head
+  GROUPED_COST_BUCKET_6601_REJECTED,CREDIT_CURRENT_SEASON_MUTATION_DETECTED,
+  FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED,CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN
+  smoke=SMOKE_PASS_ROLLBACK residue=0`. Final exact-head
   adversarial review remains a pre-publication gate. This latest marker also closes the two HIGH
   findings from the exact-SHA Sol review of `af1eed59`: concurrent source void versus credit issue,
   and fractional source-cost/header disagreement.

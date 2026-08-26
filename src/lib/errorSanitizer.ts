@@ -15,12 +15,12 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'An existing credit cannot be matched safely to this return. Review the credit memo before retrying'],
   [/^RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED\b/i,
    'Void or unapply the related return credit before voiding or deleting this sale invoice'],
+  [/^RETURN_CREDIT_HEADER_IMMUTABLE\b/i,
+   'Use Void on the return credit memo before changing or deleting it'],
   [/^RETURN_CREDIT_LEDGER_IMMUTABLE\b/i,
    'Void or unapply the return credit before changing its source or cost lines'],
   [/^RETURN_CREDIT_ISOLATION_UNSUPPORTED\b/i,
    'This return credit could not be serialized safely. Retry the operation'],
-  [/^RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS\b/i,
-   'This return spans more than one crop season. Review the source invoices before retrying'],
   [/^RETURN_CREDIT_HEADER_RESULT_INVALID\b/i,
    'The return credit could not be completed safely. Retry the operation'],
   [/^RETURN_CREDIT_SOURCE_CONCURRENT\b/i,
@@ -63,7 +63,11 @@ export function sanitizeError(error: unknown): string {
 
   const returnStatus = message.match(/^RETURN_NOT_APPROVED:([a-z_]+)$/i)?.[1];
   if (returnStatus) {
-    return `This return must be approved before it can be received (current status: ${returnStatus})`;
+    const statusLabel = returnStatus.replace(/_/g, ' ');
+    if (returnStatus === 'requested') {
+      return `This return must be approved before it can be received (current status: ${statusLabel})`;
+    }
+    return `This return is ${statusLabel} and cannot be received`;
   }
   if (/^RETURN_NOT_APPROVED\b/i.test(message)) {
     return 'This return must be approved before it can be received';

@@ -819,51 +819,6 @@ BEGIN
     IF v_reason IS DISTINCT FROM 'SMOKE_UNLINKED_FIXTURE_ROLLBACK' THEN RAISE; END IF;
   END;
 
-  -- Production currently enforces invoices.season NOT NULL. Relax that shape
-  -- only inside this disposable, rollback-only subtransaction to prove the
-  -- defensive fallback if a future schema change makes the column nullable.
-  -- With no non-null source season and no order season, use current_season().
-  BEGIN
-    EXECUTE 'ALTER TABLE public.invoices ALTER COLUMN season DROP NOT NULL';
-    UPDATE invoices
-       SET season = NULL
-     WHERE id IN (v_source_paid_id, v_source_overdue_id, v_source_posted_id);
-    v_res := issue_return_credit(
-      v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-null-season'
-    );
-    SELECT season INTO v_n
-    FROM invoices
-    WHERE id = (v_res->>'credit_invoice_id')::uuid;
-    IF v_n IS DISTINCT FROM v_season THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: null source season fallback=% (expected current season %)',
-        v_n, v_season;
-    END IF;
-    RAISE EXCEPTION 'SMOKE_NULL_SEASON_ROLLBACK';
-  EXCEPTION WHEN OTHERS THEN
-    v_reason := SQLERRM;
-    IF v_reason IS DISTINCT FROM 'SMOKE_NULL_SEASON_ROLLBACK' THEN RAISE; END IF;
-  END;
-  RAISE NOTICE 'NULL_SOURCE_SEASON_FALLBACK_PROVEN';
-
-  -- Conflicting non-null source seasons are accounting ambiguity and must fail
-  -- closed. The subtransaction also restores the deliberately changed season.
-  BEGIN
-    UPDATE invoices
-       SET season = v_source_season - 1
-     WHERE id = v_source_posted_id;
-    PERFORM issue_return_credit(
-      v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-ambiguous-season'
-    );
-    RAISE EXCEPTION 'SMOKE_FAIL: conflicting source seasons were credited';
-  EXCEPTION WHEN OTHERS THEN
-    v_reason := SQLERRM;
-    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_reason IS DISTINCT FROM 'RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: conflicting source seasons raised %', v_reason;
-    END IF;
-  END;
-  RAISE NOTICE 'AMBIGUOUS_SOURCE_SEASON_REJECTED';
-
   -- --------------------------------------------------------------------
   -- 4. issue_return_credit: received -> credited; posted credit_memo
   -- --------------------------------------------------------------------
@@ -878,18 +833,20 @@ BEGIN
 
   -- the credit memo invoice: posted, negative total, carries order + salesman
   SELECT status, total_amount_cents, balance_cents, order_id, salesman_id,
-         total_cost_cents
-  INTO v_status, v_cents, v_stmt_sum, v_uuid, v_by, v_cogs
+         total_cost_cents, season
+  INTO v_status, v_cents, v_stmt_sum, v_uuid, v_by, v_cogs, v_n
   FROM invoices WHERE id = v_credit_id AND invoice_type = 'credit_memo';
   IF NOT FOUND THEN
     RAISE EXCEPTION 'SMOKE_FAIL: credit memo invoice % not found / wrong type', v_credit_id;
   END IF;
   IF v_status <> 'posted' OR v_cents <> -15000 OR v_stmt_sum <> -15000
      OR v_cogs <> -6700
+     OR v_n IS DISTINCT FROM v_season
      OR v_uuid IS DISTINCT FROM v_order_id OR v_by IS DISTINCT FROM v_admin THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: credit memo wrong: status=%, total=%, balance=%, cost=%, order=%, salesman=%',
-      v_status, v_cents, v_stmt_sum, v_cogs, v_uuid, v_by;
+    RAISE EXCEPTION 'SMOKE_FAIL: credit memo wrong: status=%, total=%, balance=%, cost=%, season=%, order=%, salesman=%',
+      v_status, v_cents, v_stmt_sum, v_cogs, v_n, v_uuid, v_by;
   END IF;
+  RAISE NOTICE 'CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN';
 
   BEGIN
     UPDATE invoices
@@ -900,7 +857,7 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_reason := SQLERRM;
     IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_reason IS DISTINCT FROM 'RETURN_CREDIT_LEDGER_IMMUTABLE' THEN
+    IF v_reason IS DISTINCT FROM 'RETURN_CREDIT_HEADER_IMMUTABLE' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: return-credit header ledger guard raised %', v_reason;
     END IF;
   END;
@@ -1100,8 +1057,9 @@ BEGIN
 
   -- --------------------------------------------------------------------
   -- 6. Report controls: paid and overdue source sales must remain in the
-  -- customer year-end invoice set with the posted credit memo. The detailed
-  -- statement keeps the same credit in its explicit open-credit disclosure.
+  -- customer year-end invoice set. The posted credit memo belongs to the
+  -- current credit season, leaving the prior customer summary unchanged. The
+  -- detailed statement keeps the same credit in its open-credit disclosure.
   -- A sales rep can read the assigned customer but neither an unassigned
   -- customer nor a mixed batch. The admin path remains unrestricted.
   PERFORM set_config('request.jwt.claims',
@@ -1109,6 +1067,11 @@ BEGIN
   v_res := public.get_customer_year_end_summary(v_customer_id, v_source_season);
   IF v_res #>> '{customer,id}' IS DISTINCT FROM v_customer_id::text THEN
     RAISE EXCEPTION 'SMOKE_FAIL: assigned sales rep could not read assigned year-end summary: %', v_res;
+  END IF;
+  v_res := public.get_batch_year_end_summaries(ARRAY[v_customer_id], v_source_season);
+  IF jsonb_array_length(v_res) <> 1
+     OR v_res #>> '{0,customer,id}' IS DISTINCT FROM v_customer_id::text THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: assigned-only sales-rep year-end batch returned %', v_res;
   END IF;
   BEGIN
     PERFORM public.get_customer_year_end_summary(v_other_customer_id, v_season);
@@ -1138,24 +1101,46 @@ BEGIN
   FROM jsonb_array_elements(v_res->'invoices') AS invoice_row
   WHERE invoice_row->>'invoice_number' IN (
     'SMK-RCC-PAID-' || v_suffix,
-    'SMK-RCC-OVERDUE-' || v_suffix,
-    v_credit_num
+    'SMK-RCC-OVERDUE-' || v_suffix
   );
-  IF v_n <> 3 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: year-end omitted recognized paid/overdue sale or posted credit (rows=%): %', v_n, v_res;
+  IF v_n <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: source-season year-end omitted recognized paid/overdue sales (rows=%): %', v_n, v_res;
   END IF;
-  -- This fixture deliberately credits one more delivered unit than appeared on
-  -- recognized invoice lines.  The customer-facing usage rollup must include
-  -- both sides instead of hiding the return: 14 sold - 15 returned = -1 unit,
-  -- and 14000 - 15000 = -1000 cents.  The negative result is an intentional
-  -- signal that the return credit exceeded recognized billed product.
+  SELECT count(*) INTO v_n
+  FROM jsonb_array_elements(v_res->'invoices') AS invoice_row
+  WHERE invoice_row->>'invoice_number' = v_credit_num;
+  IF v_n <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: current-season return credit restated the source-season year-end summary';
+  END IF;
   SELECT COALESCE(SUM((usage_row->>'total_quantity')::numeric), 0),
          COALESCE(SUM((usage_row->>'total_cost_cents')::bigint), 0)
     INTO v_qty, v_cents
     FROM jsonb_array_elements(v_res->'product_usage') AS usage_row
    WHERE usage_row->>'product_name' = (SELECT product_name FROM products WHERE id = v_product_id);
-  IF v_qty IS DISTINCT FROM -1::numeric OR v_cents IS DISTINCT FROM -1000::bigint THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: year-end return netting quantity=% value=% (expected -1/-1000)',
+  IF v_qty IS DISTINCT FROM 14::numeric OR v_cents IS DISTINCT FROM 14000::bigint THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: source-season usage changed quantity=% value=% (expected 14/14000)',
+      v_qty, v_cents;
+  END IF;
+
+  -- Mason chose simple current-season recognition. This fixture deliberately
+  -- returns one more unit than appeared on recognized sale lines, so the
+  -- current season truthfully shows the credit by itself: -15 units/-15000
+  -- cents. Negative current-season usage is the accepted tradeoff for never
+  -- restating a previously generated customer year-end summary.
+  v_res2 := public.get_customer_year_end_summary(v_customer_id, v_season);
+  SELECT count(*) INTO v_n
+  FROM jsonb_array_elements(v_res2->'invoices') AS invoice_row
+  WHERE invoice_row->>'invoice_number' = v_credit_num;
+  IF v_n <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: current-season year-end omitted posted return credit (rows=%): %', v_n, v_res2;
+  END IF;
+  SELECT COALESCE(SUM((usage_row->>'total_quantity')::numeric), 0),
+         COALESCE(SUM((usage_row->>'total_cost_cents')::bigint), 0)
+    INTO v_qty, v_cents
+    FROM jsonb_array_elements(v_res2->'product_usage') AS usage_row
+   WHERE usage_row->>'product_name' = (SELECT product_name FROM products WHERE id = v_product_id);
+  IF v_qty IS DISTINCT FROM -15::numeric OR v_cents IS DISTINCT FROM -15000::bigint THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: current-season credit usage quantity=% value=% (expected -15/-15000)',
       v_qty, v_cents;
   END IF;
   v_res := public.get_detailed_statement_data(v_customer_id, CURRENT_DATE, 'detailed');
@@ -1202,8 +1187,8 @@ BEGIN
   SELECT count(*) INTO v_n
   FROM jsonb_array_elements(v_res2->'invoices') AS invoice_row
   WHERE invoice_row->>'invoice_number' = v_credit_num;
-  IF v_n <> 0 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: return credit was attributed to the credit-date season instead of the source-sale season';
+  IF v_n <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: return credit was not retained in the current credit season';
   END IF;
   SELECT amount * 100 INTO v_qty
   FROM get_bottom_line_pnl(CURRENT_DATE - 2, CURRENT_DATE)
@@ -1247,8 +1232,15 @@ BEGIN
   END IF;
   -- Keep the legacy statement/unapply portion below isolated to its original
   -- one-credit contract after proving both independent fractional receipts.
-  PERFORM unapply_credit_memo(v_sequential_credit_id2, '[SMOKE] fractional B proof cleanup', v_admin,
-    'smk-rcc-' || v_suffix || '-fractional-b-unapply');
+  SELECT batch_void_invoices(
+    ARRAY[v_sequential_credit_id2],
+    '[SMOKE] fractional B batch-void proof cleanup',
+    v_admin,
+    'smk-rcc-' || v_suffix || '-fractional-b-batch-void'
+  ) INTO v_n;
+  IF v_n <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: batch void did not route the return credit through void_invoice (count %)', v_n;
+  END IF;
   PERFORM unapply_credit_memo(v_sequential_credit_id, '[SMOKE] fractional A proof cleanup', v_admin,
     'smk-rcc-' || v_suffix || '-fractional-a-unapply');
 

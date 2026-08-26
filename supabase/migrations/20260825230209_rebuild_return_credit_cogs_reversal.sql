@@ -105,6 +105,22 @@ BEGIN
      OR v_trigger_hash IS DISTINCT FROM 'c2ae0d583e558d9ea86f69a4870f35e324adf029798e54543fccf9a2dc0eb367' THEN
     RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_CONTRACT_DRIFT';
   END IF;
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'batch_void_invoices') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = 'public.batch_void_invoices(uuid[],text,uuid,text)'::regprocedure
+         AND p.prosecdef AND p.provolatile = 'v'
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+         AND position('PERFORM void_invoice(v_inv.id, p_void_reason)' IN p.prosrc) > 0
+         AND position('UPDATE invoices SET' IN p.prosrc) = 0
+     )
+     OR has_function_privilege('anon', 'public.batch_void_invoices(uuid[],text,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.batch_void_invoices(uuid[],text,uuid,text)', 'EXECUTE') IS NOT TRUE
+     OR has_function_privilege('service_role', 'public.batch_void_invoices(uuid[],text,uuid,text)', 'EXECUTE') IS NOT TRUE THEN
+    RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_BATCH_VOID_CONTRACT_DRIFT';
+  END IF;
   IF EXISTS (
     SELECT 1 FROM public.return_items
     WHERE order_item_id IS NOT NULL
@@ -277,7 +293,7 @@ BEGIN
        OR v_leaves_recognized
        OR ROW(NEW.total_amount_cents, NEW.total_cost_cents)
           IS DISTINCT FROM ROW(OLD.total_amount_cents, OLD.total_cost_cents) THEN
-      RAISE EXCEPTION 'RETURN_CREDIT_LEDGER_IMMUTABLE';
+      RAISE EXCEPTION 'RETURN_CREDIT_HEADER_IMMUTABLE';
     END IF;
   END IF;
   IF OLD.invoice_type <> 'credit_memo'
@@ -504,8 +520,6 @@ DECLARE
   v_cached jsonb; v_header jsonb; v_result jsonb; v_invoice_id uuid;
   v_cogs bigint;
   v_lock_order_item_id uuid;
-  v_credit_season integer;
-  v_source_season_count integer;
 BEGIN
   IF p_idempotency_key IS NOT NULL THEN
     v_cached := public.check_idempotency(p_idempotency_key, 'issue_return_credit');
@@ -535,33 +549,6 @@ BEGIN
   v_header := public._issue_return_credit_header_only_impl_20260825(p_return_id, p_actor_id, NULL);
   v_invoice_id := (v_header ->> 'credit_invoice_id')::uuid;
   IF v_invoice_id IS NULL THEN RAISE EXCEPTION 'RETURN_CREDIT_HEADER_RESULT_INVALID'; END IF;
-
-  -- Customer year-end product usage follows the season of the recognized sale
-  -- being reversed, not the calendar date on which the return was credited.
-  SELECT COUNT(DISTINCT i.season), MIN(i.season)
-    INTO v_source_season_count, v_credit_season
-  FROM public.return_items ri
-  JOIN public.invoice_items ii
-    ON ii.order_item_id = ri.order_item_id
-   AND ii.product_id = ri.product_id
-   AND ii.quantity > 0
-   AND ii.unit_size IS NOT DISTINCT FROM ri.unit
-  JOIN public.invoices i
-    ON i.id = ii.invoice_id
-   AND i.invoice_type <> 'credit_memo'
-   AND i.status IN ('posted','overdue','paid')
-   AND i.deleted_at IS NULL
-  WHERE ri.return_id = p_return_id;
-  IF v_source_season_count > 1 THEN
-    RAISE EXCEPTION 'RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS';
-  END IF;
-  IF v_source_season_count = 0 THEN
-    SELECT COALESCE(o.season, public.current_season())
-      INTO v_credit_season
-    FROM public.returns r
-    LEFT JOIN public.orders o ON o.id = r.order_id
-    WHERE r.id = p_return_id;
-  END IF;
 
   -- A source unit mismatch indicates broken lineage. Do not silently turn a
   -- known sale lot into a zero-cost reversal.
@@ -651,7 +638,11 @@ BEGIN
   -- Cost allocation telescopes per source line, so sequential fractional
   -- returns share the exact whole-cent source cost without double-rounding.
   UPDATE public.invoices
-  SET total_cost_cents = -v_cogs, season = v_credit_season
+  -- Owner decision 2026-08-26: keep prior customer year-end summaries stable
+  -- by recognizing the return credit in the current crop season. A late return
+  -- can therefore produce negative current-season usage instead of restating
+  -- the season in which the original sale occurred.
+  SET total_cost_cents = -v_cogs, season = public.current_season()
   WHERE id = v_invoice_id;
   PERFORM set_config('app.crx_return_credit_lineage', '0', true);
   v_result := v_header || jsonb_build_object('cogs_reversed_cents', v_cogs);
@@ -669,7 +660,7 @@ DO $postflight$
 DECLARE
   v_expected jsonb := jsonb_build_object(
     '_issue_return_credit_header_only_impl_20260825', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
-    '_issue_return_credit_impl', 'ad749d0d1ba9da0208249cb42eb08e869248ce1eeedbbc6b520807555dbb3a3b',
+    '_issue_return_credit_impl', '0476706b4a6b1e9a12dff2322d495c41f933fb1c942a770d1bc32dfdee89f362',
     '_receive_return_impl_before_inventory_seed_20260825', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
     '_receive_return_impl_20260714', 'f8becf522d34caa804006e9372759b1088220fb1ea8c020b23ce949051a7581c',
     'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
@@ -795,6 +786,22 @@ BEGIN
      OR has_function_privilege('service_role', 'public._unapply_return_credit_guard_impl_20260826(uuid,text,uuid,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_UNAPPLY_CONTRACT_DRIFT';
   END IF;
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'batch_void_invoices') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = 'public.batch_void_invoices(uuid[],text,uuid,text)'::regprocedure
+         AND p.prosecdef AND p.provolatile = 'v'
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+         AND position('PERFORM void_invoice(v_inv.id, p_void_reason)' IN p.prosrc) > 0
+         AND position('UPDATE invoices SET' IN p.prosrc) = 0
+     )
+     OR has_function_privilege('anon', 'public.batch_void_invoices(uuid[],text,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.batch_void_invoices(uuid[],text,uuid,text)', 'EXECUTE') IS NOT TRUE
+     OR has_function_privilege('service_role', 'public.batch_void_invoices(uuid[],text,uuid,text)', 'EXECUTE') IS NOT TRUE THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_BATCH_VOID_CONTRACT_DRIFT';
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_proc p
     WHERE p.oid = 'public._issue_return_credit_impl(uuid,uuid,text)'::regprocedure
@@ -879,7 +886,7 @@ BEGIN
   FROM pg_proc p
   WHERE p.oid = to_regprocedure('public.guard_return_credit_source_recognition()');
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
-        '555a8b3381a8e29ca5911166536075ec6153296297aad55a9519dae04417abc8'
+        '32d92c9cf59541d99a5579816e612cbdbf11a98d308e329be084c55306467c4f'
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'guard_return_credit_source_recognition') <> 1
      OR NOT EXISTS (

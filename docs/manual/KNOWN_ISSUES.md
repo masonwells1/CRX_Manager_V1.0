@@ -27,6 +27,12 @@ than an existing wrong report. Pre-apply candidates `20260825230150` and `202608
 durable repair and fail closed if the zero-credit/zero-legacy-restock assumptions stop being true.
 Do not call this resolved until both migrations are reviewed, applied, and verified live.
 
+**ACCEPTED POLICY — late return credits stay in the current crop season.** Mason chose this on
+2026-08-26 to keep prior customer year-end summaries stable and the rule simple. Consequently, a
+current-season summary can show negative product usage when the original purchase occurred in a
+prior season. Do not "correct" that by moving the credit backward; changing the policy requires a
+new owner decision.
+
 
 **RESOLVED 2026-08-25 — the two `/patrol` findings first deferred at the round-3 review cap
 are both closed.** Kept as history because the reasoning is the evidence for the

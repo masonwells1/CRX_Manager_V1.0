@@ -38,6 +38,10 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_COGS_PREFLIGHT_OVERLOAD_DRIFT');
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DEPENDENCY_OVERLOAD_DRIFT');
     expect(migration).toContain('RETURN_COGS_PREFLIGHT_INVENTORY_UPSERT_CONSTRAINT');
+    expect(migration).toContain('RETURN_COGS_PREFLIGHT_BATCH_VOID_CONTRACT_DRIFT');
+    expect(migration).toContain('RETURN_COGS_POSTFLIGHT_BATCH_VOID_CONTRACT_DRIFT');
+    expect(migration).toContain("position('PERFORM void_invoice(v_inv.id, p_void_reason)' IN p.prosrc) > 0");
+    expect(migration).toContain("position('UPDATE invoices SET' IN p.prosrc) = 0");
     expect(migration).toContain("'void_invoice', 'c7a488d58bd876e92565bca9bd4edc90'");
   });
 
@@ -65,19 +69,22 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('_unapply_return_credit_guard_impl_20260826');
     expect(migration).toContain('RETURN_CREDIT_VOID_RELEASE_FAILED');
     expect(migration).toContain('RETURN_CREDIT_UNAPPLY_RELEASE_FAILED');
-    expect(migration).toContain('RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS');
-    expect(migration).toContain('SET total_cost_cents = -v_cogs, season = v_credit_season');
+    expect(migration).toContain('RETURN_CREDIT_HEADER_IMMUTABLE');
+    expect(migration).toContain('SET total_cost_cents = -v_cogs, season = public.current_season()');
+    expect(migration).not.toContain('RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS');
     expect(returnCreditSmoke).toContain("PERFORM void_invoice(v_credit_id, '[SMOKE] chain void'");
     expect(returnCreditSmoke).toContain("operation_type = 'invoice_voided'");
     expect(returnCreditSmoke).toContain("issue_return_credit(v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-reissue')");
+    expect(returnCreditSmoke).toContain('batch void did not route the return credit through void_invoice');
+    expect(returnCreditSmoke).toContain('assigned-only sales-rep year-end batch returned');
   });
 
   it('pins the replacement helper bodies used by the COGS postflight', () => {
-    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('ad749d0d1ba9da0208249cb42eb08e869248ce1eeedbbc6b520807555dbb3a3b');
+    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('0476706b4a6b1e9a12dff2322d495c41f933fb1c942a770d1bc32dfdee89f362');
     expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('f8becf522d34caa804006e9372759b1088220fb1ea8c020b23ce949051a7581c');
     expect(functionBodySha256(migration, 'void_invoice')).toBe('6d7c17279c90a9d6817129ba6f43bb490523f2844657074046a9f66f019af3ec');
     expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('a151010fc4556ab78d9254c42f7fe3c6ac06ba6dc03c19f52c44fe882ba2b520');
-    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('555a8b3381a8e29ca5911166536075ec6153296297aad55a9519dae04417abc8');
+    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('32d92c9cf59541d99a5579816e612cbdbf11a98d308e329be084c55306467c4f');
     expect(functionBodySha256(migration, 'guard_return_credit_lineage')).toBe('7b5ccb72380c54cd2a202f891de659bce1b916c09c76ad9884446ba1544dd89f');
     expect(migration).toContain('f6a2595a2abf356b8d230149afa0b803daf9c66e5c5c59deb3baec3df450bd96');
     expect(migration).toContain('cc146431df3ab52d734ce3f62189bbbd51e3779ce64cfa789ee829e704f9e27c');
@@ -123,7 +130,8 @@ describe('return-credit COGS migration', () => {
     expect(returnCreditSmoke).toContain("(v_res #>> '{invoices,total_cost_cents}')::numeric - v_monthly_cost_before <> 501");
     expect(returnCreditSmoke).toContain('FRACTIONAL_COGS_EXPECTED_251');
     expect(returnCreditSmoke).toContain('FRACTIONAL_COGS_EXPECTED_250');
-    expect(returnCreditSmoke).toContain('return credit was attributed to the credit-date season instead of the source-sale season');
+    expect(returnCreditSmoke).toContain('current-season return credit restated the source-season year-end summary');
+    expect(returnCreditSmoke).toContain('current-season credit usage quantity=% value=% (expected -15/-15000)');
   });
 
   it('pins the reviewed live year-end body before replacing it', () => {
