@@ -182,6 +182,16 @@ Network-isolated PostgreSQL 17 proof replayed all 64 post-baseline migrations, o
 
 PR #500's latest-commit review then found two additional lost-response defects and several prevention gaps. Inventory receiving now preserves its locked payload when the modal is reopened; vendor-payment and vendor-bill void keys are scoped to the exact target plus normalized reason; and PO receiving state is scoped and cleared when React Router reuses the page for another PO. The UI now explains every locked state. The standing Section 9 invariant follows each public wrapper into its private implementation, the dashboard smoke proves both sides of month-end, the AP return-contract proof includes `days_1_30`, decoy cleanup is exception-safe, and source guards no longer pass on missing slice markers or fixed-size regex windows. The full 64-migration replay passed again. The broader supplier-pricing proof now restores its baseline migration ledger, but a pre-existing `notify_team_note_assignment` preimage mismatch stops that harness before the Section 9 assertion; the focused guard pins the corrected return signature until that unrelated baseline drift is repaired.
 
+Reading the latest CodeRabbit review text rather than trusting its green status exposed two more Major
+findings: the create-bill, vendor-payment, Inventory, Receiving Hub, and PO-detail receiving flows
+still kept their frozen payload and idempotency key only in component memory. A reload or unmount
+after PostgreSQL committed but before the response arrived could therefore mint a new key and post a
+second bill, payment, or receipt. `useUncertainMutationIntent` now stores the frozen payload and its
+matching key as one versioned `sessionStorage` record, isolated by actor, operation, UI surface, and
+record/route scope. Each affected form restores the exact locked fields and reopens the retry UI; a
+storage failure stops before the RPC can run. The focused Section 9 contracts pass 48/48, the hook's
+reload/unmount and fail-closed tests pass 8/8, and the full suite passes 4,806 with 123 skipped.
+
 ## 2026-08-26 — Pre-push containment skips top-level ignored tool bulk
 
 The private-artifact pre-push guard now excludes descendants of its existing explicit top-level

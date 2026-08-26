@@ -4,7 +4,7 @@
 
 - Checkout: `C:\Users\mason\.codex\worktrees\section9-ap-safety-remediation\CRX_Manager`
 - Branch: `codex/section9-ap-safety-remediation-v2`
-- Current base: `origin/main` at `22c7d217ed67b73e96828f5ddbf0befd0d40ed01`; the branch was rebased onto that commit and the full affected proof reran afterwards.
+- Current base: `origin/main` at `d5add074`; the published branch merged that current base without rewriting history, and the affected proof reran afterwards.
 - Repository: `masonwells1/CRX_Manager_V1.0`
 - Live database: Supabase project `rhyzpcqhnizqbxphqdkr`
 
@@ -39,13 +39,13 @@ Done means the changed database and UI paths execute successfully in rollback-on
   - preserves the current-only refusal, admin guard, fixed search path, owner, and deliberate grants.
 - `AccountsPayable.tsx`, shared types, and generated Supabase RPC types now expose and label all five buckets, including CSV export and totals.
 - Lost-response UI protection freezes the first exact payment or PO-receiving payload and prevents closing or editing those forms until an exact retry reconciles the result or the server proves a definitive refusal. Intent-mismatch errors remain uncertain until the caller inspects their receipt; both screens now recover the committed payment/receiving result and refresh authoritative state instead of unlocking a fresh mutation.
-- Other AP/receiving entry points no longer mint a fresh key merely because a form reopens or changes after an uncertain response; the server rejects changed intent under the retained key.
+- Other AP/receiving entry points no longer mint a fresh key merely because a form reopens, unmounts, reloads, or changes after an uncertain response. The frozen payload and matching key are persisted atomically in one versioned, actor/operation/surface/scope-isolated session record; storage failure refuses the mutation before the RPC call.
 - The create-bill and both receiving entry points now freeze the exact first payload after an uncertain response, disable editing/closing, expose an exact-retry action, and reconcile a committed result before allowing a new mutation.
-- Inventory receiving preserves the frozen request if its modal is reopened. PO-detail receiving scopes its key to the route PO and clears the in-memory lock when React Router reuses the component for another PO, preventing a prior PO payload from being paired with the new PO's PDF or notifications.
+- Inventory receiving preserves and restores the frozen request if its modal is reopened or the page reloads. PO-detail receiving scopes its durable record to the route PO and restores only that PO's payload when React Router reuses the component, preventing a prior PO payload from being paired with the new PO's PDF or notifications.
 - Vendor-payment and vendor-bill void requests obtain keys by exact target plus normalized reason, so a failed request cannot lend its receipt to a different payment, bill, or reason.
 - Every locked form now explains that the previous response was uncertain and instructs the operator to retry the unchanged request; the New Vendor Bill icon-only back control also has an accessible name.
 - Vendor-payment input formatting now converts integer cents to a decimal string with integer arithmetic, avoiding a binary floating-point round trip.
-- `section9ApIntentBinding.test.ts` mutation-tests the actor binding, fingerprints, cutover lock, insert trigger, transaction-local binding context, private implementation ACLs, helper dependency, receipt reconciliation, due-date basis, and day-1 boundary. `useUncertainMutationIntent.test.ts` proves frozen payloads and keeps actor/intent mismatch errors locked until reconciliation.
+- `section9ApIntentBinding.test.ts` mutation-tests the actor binding, fingerprints, cutover lock, insert trigger, transaction-local binding context, private implementation ACLs, helper dependency, receipt reconciliation, due-date basis, day-1 boundary, durable actor/surface/scope isolation, and restoration wiring in all five high-risk forms. `useUncertainMutationIntent.test.ts` proves same-payload/same-key restoration after unmount/reload, definitive cleanup, and fail-closed storage refusal.
 - The public receiving wrapper raises the canonical `ACTOR_MISMATCH` refusal when `p_performed_by` disagrees with `auth.uid()`; the mutation guard goes red if that token is removed or renamed.
 - Both migrations fail closed on stale public overloads. Their preflights pin the sole expected signature, owner, language, security mode, fixed search path, and reviewed live-body SHA-256; their postflights require exactly one expected public overload after creation.
 - The Section 9 rollback chain now proves exact replay and changed-payload refusal for all six mutators, with no second money, inventory, receiving, audit, or terminal-state effect. It also proves the next-month dashboard boundary and exact due-today/future and 1/30/31/60/61/90/91 aging boundaries.
@@ -57,7 +57,8 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - `npm run typecheck` — pass.
 - `npm run lint` — pass.
 - `npm run build` — pass.
-- `npm run test -- --run` after the CodeRabbit follow-up — 342 files passed; 4,803 tests passed; 123 skipped.
+- `npm run test` after the durable retry follow-up and current-main merge — 342 files passed; 4,806 tests passed; 123 skipped.
+- Durable retry focused contracts — 3 files, 48/48 passed; hook-only reload/unmount/storage-failure proof 8/8 passed.
 - Latest focused remediation/concurrency/money tests after the follow-up — 68/68 passed.
 - Latest PR-review follow-up guard — 4 files, 27/27 passed; the focused Section 9 contract alone passes 7/7.
 - Focused Section 9 guard after the canonical actor-refusal correction — 6/6 passed.
@@ -75,9 +76,10 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Exact branch review at `893eeb19` returned CLEAN with zero HIGH/BLOCKER findings and minted its SHA-bound proof.
 - The final migration-specific security pass then found one additional HIGH: `receive_po_items` enforced actor equality but returned a noncanonical exception string. The wrapper and executable guard are corrected, the full database replay passes again, and the AP-aging migration's security/drift proof remains clean.
 - Exact branch review at `b4b6b70c` then found one additional HIGH: unexpected public function overloads could survive the migrations and expose a stale implementation. Both migrations now fail closed before and after on overload drift, pin the reviewed pre-cutover function shape/body, and include real decoy-overload rollback proofs.
-- Rebased exact branch review at `518f777b` returned CLEAN, but current main advanced during the next test-only review and correctly invalidated that proof. The branch has since been rebased again; a new exact-head proof remains pending.
+- Rebased exact branch review at `518f777b` returned CLEAN, but current main advanced during the next test-only review and correctly invalidated that proof. The published branch now contains current main through a normal merge; a new exact-head proof remains pending.
+- Exact branch review at `a2ba3bf9` returned CLEAN, and all required PR checks passed on that SHA. The CodeRabbit status was green, but its actual latest-review body contained two real Major reload/unmount findings. Those are now fixed by the atomic durable payload/key record and covered by executable tests; the changed final head still requires a fresh exact-SHA review and latest-commit PR gates.
 - Both migrations' final security and drift reviewers are CLEAN with SHA-bound proof files. The first intent/dashboard drift run timed out while scanning GitHub under a Windows read-only-shell limitation; the warm-cache retry completed CLEAN without changing the proof harness.
-- Replacement PR #500 is open and obsolete PR #491 is closed without rewriting published history. Required CI and Vercel checks passed on `b5f8b252`; CodeRabbit then requested changes with two major correctness findings plus prevention/clarity fixes. All findings are corrected locally and the owning focused/database proofs pass; a fresh exact-head review and latest-commit CI/CodeRabbit pass remain pending after commit.
+- Replacement PR #500 is open and obsolete PR #491 is closed without rewriting published history. All earlier required checks passed on `a2ba3bf9`, but the actual CodeRabbit review text exposed the two durable-retry findings described above. They are corrected locally and the full/focused proofs pass; a fresh exact-head review and latest-commit CI/CodeRabbit pass remain pending after the documentation commit.
 
 ## APPROVAL STATE
 
@@ -92,6 +94,6 @@ Done means the changed database and UI paths execute successfully in rollback-on
 
 ## FIRST ACTION
 
-Run the full suite, commit the PR-review follow-up, mint a fresh exact-head review, push to PR #500, and clear latest-commit CI/CodeRabbit before requesting live-migration approval.
+Commit the durable-retry proof update, mint a fresh exact-head review, push to PR #500, and clear latest-commit CI/CodeRabbit before requesting live-migration approval.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.
