@@ -4,7 +4,7 @@
 
 - Checkout: `C:\Users\mason\.codex\worktrees\section9-ap-safety-remediation\CRX_Manager`
 - Branch: `codex/section9-ap-safety-remediation-v2`
-- Current base: `origin/main` at `d5add074`; the published branch merged that current base without rewriting history, and the affected proof reran afterwards.
+- Current base: `origin/main` at `090bce62`; the published branch merged that current base without rewriting history, and the affected proof reran afterwards.
 - Repository: `masonwells1/CRX_Manager_V1.0`
 - Live database: Supabase project `rhyzpcqhnizqbxphqdkr`
 
@@ -78,6 +78,7 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Exact branch review at `b4b6b70c` then found one additional HIGH: unexpected public function overloads could survive the migrations and expose a stale implementation. Both migrations now fail closed before and after on overload drift, pin the reviewed pre-cutover function shape/body, and include real decoy-overload rollback proofs.
 - Rebased exact branch review at `518f777b` returned CLEAN, but current main advanced during the next test-only review and correctly invalidated that proof. The published branch now contains current main through a normal merge; a new exact-head proof remains pending.
 - Exact branch review at `a2ba3bf9` returned CLEAN, and all required PR checks passed on that SHA. The CodeRabbit status was green, but its actual latest-review body contained two real Major reload/unmount findings. Those are now fixed by the atomic durable payload/key record and covered by executable tests; the changed final head still requires a fresh exact-SHA review and latest-commit PR gates.
+- The first Sol-high review after the durable-retry fix returned CLEAN on `e06b708b`, but `origin/main` advanced to `090bce62` during the run. The wrapper correctly refused to mint a proof for the moved base; the new main commit is now merged and a stable-head rerun remains required.
 - Both migrations' final security and drift reviewers are CLEAN with SHA-bound proof files. The first intent/dashboard drift run timed out while scanning GitHub under a Windows read-only-shell limitation; the warm-cache retry completed CLEAN without changing the proof harness.
 - Replacement PR #500 is open and obsolete PR #491 is closed without rewriting published history. All earlier required checks passed on `a2ba3bf9`, but the actual CodeRabbit review text exposed the two durable-retry findings described above. They are corrected locally and the full/focused proofs pass; a fresh exact-head review and latest-commit CI/CodeRabbit pass remain pending after the documentation commit.
 
