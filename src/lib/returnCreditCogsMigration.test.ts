@@ -32,6 +32,8 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('return_items_return_order_item_unique UNIQUE (return_id, order_item_id)');
     expect(migration).toContain('SELECT 1 FROM public.return_items\n    WHERE order_item_id IS NOT NULL');
     expect(migration).toContain('LOCK TABLE public.returns IN ACCESS EXCLUSIVE MODE');
+    expect(migration).toContain("SET lock_timeout = '5s';");
+    expect(migration).toContain('RESET lock_timeout;');
     expect(migration).toContain('RETURN_COGS_PREEXISTING_CREDIT_REQUIRES_BACKFILL');
     expect(migration).toContain('RETURN_COGS_RECEIVED_UNRESTOCKED_REQUIRES_REPAIR');
     expect(migration).toContain('RETURN_COGS_PREFLIGHT_UNLINKED_COST_CREDIT');
@@ -70,6 +72,8 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_CREDIT_VOID_RELEASE_FAILED');
     expect(migration).toContain('RETURN_CREDIT_UNAPPLY_RELEASE_FAILED');
     expect(migration).toContain('RETURN_CREDIT_HEADER_IMMUTABLE');
+    expect(migration).toContain('v_enters_recognized :=');
+    expect(migration).toContain("NEW.status IN ('posted','overdue','paid')");
     expect(migration).toContain('RETURN_CREDIT_PARENT_IMMUTABLE');
     expect(migration).toContain('RETURN_CREDIT_LINE_TOTAL_MISMATCH');
     expect(migration).toContain('BEFORE UPDATE OF status, deleted_at, total_amount_cents, total_cost_cents, season OR DELETE');
@@ -89,7 +93,7 @@ describe('return-credit COGS migration', () => {
     expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('f8becf522d34caa804006e9372759b1088220fb1ea8c020b23ce949051a7581c');
     expect(functionBodySha256(migration, 'void_invoice')).toBe('6d7c17279c90a9d6817129ba6f43bb490523f2844657074046a9f66f019af3ec');
     expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('a151010fc4556ab78d9254c42f7fe3c6ac06ba6dc03c19f52c44fe882ba2b520');
-    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('767a4246bb7aed37f6875f173b3f6d7ad7f8f263109bfb0ab6b1d6d1d5c84e91');
+    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('895320d1774a425457b4235c119461d2e079d78e97af87ed2ec84bd8cf4e1897');
     expect(functionBodySha256(migration, 'guard_return_credit_lineage')).toBe('7b5ccb72380c54cd2a202f891de659bce1b916c09c76ad9884446ba1544dd89f');
     expect(migration).toContain('0f0ad06a8e8fe0994d051fc5b6659cef04f9f16829cbf9998e8b3f1265a257cb');
     expect(migration).toContain('cc146431df3ab52d734ce3f62189bbbd51e3779ce64cfa789ee829e704f9e27c');
@@ -107,6 +111,8 @@ describe('return-credit COGS migration', () => {
     expect(reportMigration).not.toContain('invoice_items (');
     expect(reportMigration).toContain('RECOGNIZED_INVOICE_REPORT_PREFLIGHT_EXISTING_RETURN_CREDIT');
     expect(reportMigration).toContain('LOCK TABLE public.returns IN SHARE ROW EXCLUSIVE MODE');
+    expect(reportMigration).toContain("SET lock_timeout = '5s';");
+    expect(reportMigration).toContain('RESET lock_timeout;');
     expect(reportMigration).toContain('CREATE TRIGGER aa_crx_block_return_credit_during_cogs_cutover');
     expect(reportMigration).toContain('RETURN_CREDIT_CUTOVER_IN_PROGRESS');
     expect(migration).toContain('RETURN_COGS_CUTOVER_BARRIER_MISSING');

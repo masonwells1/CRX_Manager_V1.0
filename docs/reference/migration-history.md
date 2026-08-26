@@ -26,7 +26,10 @@ lines against recognized sales. The second restores every usable return into Mai
 when the inventory row is missing), rejects duplicate `(return_id, order_item_id)` values structurally,
 and then emits negative credit-memo lines against recognized source lots. It scopes the below-cost
 exception to that server-owned reversal context and leaves the independently pinned terminal-order
-guard unchanged. **Apply these two files back-to-back in one governed session.** The first file alone
+guard unchanged. Source invoices cannot enter or leave recognized status around an active credit;
+posting and credit issuance share ordered lineage locks, and the disposable two-session proof covers
+both race directions. Each migration gives its table lock five seconds before failing cleanly.
+**Apply these two files back-to-back in one governed session.** The first file alone
 installs a persistent fail-closed trigger that pauses return-credit issuance; the second verifies and
 removes it only after its full postflight succeeds. If the second file fails, leave the barrier active,
 repair the reported drift, and rerun the second file. An emergency reopen would require a separately

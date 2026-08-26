@@ -10,6 +10,7 @@
 -- is acquired up front because removing the cutover trigger needs that mode;
 -- taking it now avoids a late lock upgrade and its reader/return_items deadlock
 -- cycle. The zero-credit assertion below is therefore race-free.
+SET lock_timeout = '5s';
 LOCK TABLE public.returns IN ACCESS EXCLUSIVE MODE;
 
 DO $cutover_barrier$
@@ -26,6 +27,8 @@ BEGIN
       AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
       AND pg_get_userbyid(p.proowner) = 'postgres'
   )
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'block_return_credit_during_cogs_cutover') <> 1
      OR has_function_privilege('anon', v_cutover_barrier, 'EXECUTE')
      OR has_function_privilege('authenticated', v_cutover_barrier, 'EXECUTE')
      OR has_function_privilege('service_role', v_cutover_barrier, 'EXECUTE')
@@ -35,8 +38,8 @@ BEGIN
          AND t.tgname = 'aa_crx_block_return_credit_during_cogs_cutover'
          AND NOT t.tgisinternal
          AND t.tgfoid = v_cutover_barrier
-     ) THEN
-    RAISE EXCEPTION 'RETURN_COGS_CUTOVER_BARRIER_MISSING';
+    ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_CUTOVER_BARRIER_DRIFTED';
   END IF;
 END;
 $cutover_barrier$;
@@ -196,6 +199,7 @@ BEGIN
          AND p.proname IN (
            'guard_return_credit_source_recognition',
            'guard_return_credit_lineage',
+           'guard_recognized_return_credit_delete',
            '_void_invoice_return_credit_guard_impl_20260826',
            '_unapply_return_credit_guard_impl_20260826'
          )
@@ -204,7 +208,8 @@ BEGIN
        SELECT 1 FROM pg_trigger t
        WHERE (t.tgrelid, t.tgname) IN (
          ('public.invoices'::regclass, 'aa_crx_guard_return_credit_source_recognition'),
-         ('public.invoice_items'::regclass, 'aa_crx_guard_return_credit_lineage')
+         ('public.invoice_items'::regclass, 'aa_crx_guard_return_credit_lineage'),
+         ('public.returns'::regclass, 'aa_crx_guard_recognized_return_credit_delete')
        )
          AND NOT t.tgisinternal
      ) THEN
@@ -288,6 +293,7 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_leaves_recognized boolean;
+  v_enters_recognized boolean := false;
   v_lock_order_item_id uuid;
 BEGIN
   IF TG_OP = 'DELETE' THEN
@@ -296,6 +302,10 @@ BEGIN
     v_leaves_recognized := NEW.deleted_at IS NOT NULL
       OR NEW.status IS NULL
       OR NEW.status NOT IN ('posted','overdue','paid');
+    v_enters_recognized := OLD.invoice_type <> 'credit_memo'
+      AND (OLD.status IS NULL OR OLD.status NOT IN ('posted','overdue','paid') OR OLD.deleted_at IS NOT NULL)
+      AND NEW.status IN ('posted','overdue','paid')
+      AND NEW.deleted_at IS NULL;
   END IF;
   IF OLD.invoice_type = 'credit_memo'
      AND OLD.status IN ('posted','overdue','paid')
@@ -329,9 +339,10 @@ BEGIN
     END IF;
   END IF;
   IF OLD.invoice_type <> 'credit_memo'
-     AND OLD.status IN ('posted','overdue','paid')
-     AND OLD.deleted_at IS NULL
-     AND v_leaves_recognized THEN
+     AND (
+       (OLD.status IN ('posted','overdue','paid') AND OLD.deleted_at IS NULL AND v_leaves_recognized)
+       OR v_enters_recognized
+     ) THEN
     -- Only the dangerous transition takes the shared lineage locks. Waiting
     -- ends before the READ COMMITTED visibility check, so a concurrent credit
     -- that committed while we waited is visible below.
@@ -956,6 +967,8 @@ BEGIN
       AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
       AND pg_get_userbyid(p.proowner) = 'postgres'
   )
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'guard_recognized_return_credit_delete') <> 1
      OR has_function_privilege('anon', 'public.guard_recognized_return_credit_delete()', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.guard_recognized_return_credit_delete()', 'EXECUTE')
      OR has_function_privilege('service_role', 'public.guard_recognized_return_credit_delete()', 'EXECUTE')
@@ -979,7 +992,7 @@ BEGIN
   FROM pg_proc p
   WHERE p.oid = to_regprocedure('public.guard_return_credit_source_recognition()');
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
-         '767a4246bb7aed37f6875f173b3f6d7ad7f8f263109bfb0ab6b1d6d1d5c84e91'
+         '895320d1774a425457b4235c119461d2e079d78e97af87ed2ec84bd8cf4e1897'
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'guard_return_credit_source_recognition') <> 1
      OR NOT EXISTS (
@@ -1041,5 +1054,6 @@ $postflight$;
 -- Removal is deliberately last. If any statement or postflight assertion above
 -- fails, the migration transaction rolls back and the persistent barrier keeps
 -- return-credit issuance disabled rather than reopening the unsafe gap.
+RESET lock_timeout;
 DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns;
 DROP FUNCTION public.block_return_credit_during_cogs_cutover();

@@ -206,6 +206,40 @@ function concurrencyFixture(slot) {
     sourceVoidSql: `UPDATE public.invoices SET deleted_at = now() WHERE id = '${ids.sourceInvoice}';`,
   };
 }
+
+function postingConcurrencyFixture(slot) {
+  const fixture = concurrencyFixture(slot);
+  const zeroCostCreditSql = fixture.creditSql.replace(
+    "-1, 1000, -1000, 500, 'gal'",
+    "-1, 1000, -1000, 0, 'gal'",
+  );
+  assert.notEqual(zeroCostCreditSql, fixture.creditSql, 'posting fixture did not zero the latent credit cost');
+  return {
+    ...fixture,
+    sql: `${fixture.sql}
+      SET session_replication_role = replica;
+      UPDATE public.invoices
+         SET status = 'draft', posted_at = NULL, posted_by = NULL
+       WHERE id = '${fixture.ids.sourceInvoice}';
+      UPDATE public.invoices
+         SET total_cost_cents = 0
+       WHERE id = '${fixture.ids.creditInvoice}';
+      SET session_replication_role = origin;
+    `,
+    creditSql: zeroCostCreditSql,
+    creditWithoutDelaySql: zeroCostCreditSql.replace(
+      `      SELECT '${fixture.marker}', pg_sleep(8);\n`,
+      '',
+    ),
+    sourcePostSql: `
+      UPDATE public.invoices
+         SET status = 'posted',
+             posted_at = now(),
+             posted_by = '00000000-0000-4000-8000-000000000081'
+       WHERE id = '${fixture.ids.sourceInvoice}';
+    `,
+  };
+}
 const expectedProofs = [
   'EXISTING_RETURN_CREDIT_REPORT_GUARD_REMOVAL_DETECTED',
   'CUTOVER_REPORT_POSTFLIGHT_GUARD_REMOVAL_DETECTED',
@@ -217,6 +251,8 @@ const expectedProofs = [
   'PREFLIGHT_OVERLOAD_COLLISION_REJECTED',
   'POSTFLIGHT_OVERLOAD_COLLISION_REJECTED',
   'SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED',
+  'SOURCE_POST_AFTER_CREDIT_REJECTED',
+  'SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED',
   'SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED',
   'RETURN_CREDIT_LEDGER_GUARD_REMOVAL_DETECTED',
   'ZERO_COST_LEDGER_MUTATION_DETECTED',
@@ -498,7 +534,7 @@ try {
   );
   assert.notEqual(reportWithoutBarrierTrigger, reportMigrationSql, 'cutover report mutant did not remove the trigger');
   const reportWithoutBarrierPostflightGuard = reportWithoutBarrierTrigger.replace(
-    /  IF v_cutover_barrier IS NULL THEN\r?\n    RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER';\r?\n  END IF;\r?\n  IF NOT EXISTS \([\s\S]*?RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER';\r?\n  END IF;\r?\n/,
+    /  IF v_cutover_barrier IS NULL THEN\r?\n    RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER_MISSING';\r?\n  END IF;\r?\n  IF NOT EXISTS \([\s\S]*?RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER_DRIFTED';\r?\n  END IF;\r?\n/,
     '',
   );
   assert.notEqual(reportWithoutBarrierPostflightGuard, reportWithoutBarrierTrigger, 'cutover report mutant did not remove the postflight guard');
@@ -516,7 +552,9 @@ try {
     BEGIN;
     SELECT set_config('app.return_rpc', 'true', true);
     UPDATE public.returns
-       SET status = status
+       SET status = 'received',
+           received_by = '00000000-0000-4000-8000-000000000081',
+           received_at = now()
      WHERE id = '0cb556ed-467a-4949-866d-8d9edbb09522';
     ROLLBACK;
   `, { allowFailure: true });
@@ -533,10 +571,16 @@ try {
   assert.equal(psqlValue("SELECT status FROM public.returns WHERE id = '0cb556ed-467a-4949-866d-8d9edbb09522';"), 'approved', 'cutover barrier probe changed the return');
   completedProofs.add('CUTOVER_BARRIER_REJECTED');
   const cogsSql = readFileSync(COGS_CANDIDATE, 'utf8');
-  const cogsWithoutBarrierGuard = cogsSql
-    .replace(/DO \$cutover_barrier\$\r?\n[\s\S]*?\r?\n\$cutover_barrier\$;\r?\n/, '')
-    .replace(/\r?\n-- Removal is deliberately last[\s\S]*?DROP FUNCTION public\.block_return_credit_during_cogs_cutover\(\);\r?\n?$/, '');
-  assert.notEqual(cogsWithoutBarrierGuard, cogsSql, 'cutover COGS mutant did not remove the preflight and cleanup contract');
+  const cogsWithoutBarrierPreflight = cogsSql.replace(
+    /DO \$cutover_barrier\$\r?\n[\s\S]*?\r?\n\$cutover_barrier\$;\r?\n/,
+    '',
+  );
+  assert.notEqual(cogsWithoutBarrierPreflight, cogsSql, 'cutover COGS mutant did not remove the barrier preflight');
+  const cogsWithoutBarrierGuard = cogsWithoutBarrierPreflight.replace(
+    /\r?\n-- Removal is deliberately last[\s\S]*?DROP FUNCTION public\.block_return_credit_during_cogs_cutover\(\);\r?\n?$/,
+    '',
+  );
+  assert.notEqual(cogsWithoutBarrierGuard, cogsWithoutBarrierPreflight, 'cutover COGS mutant did not remove the barrier cleanup contract');
   const missingCogsBarrierPrefix = `
     BEGIN;
     DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns;
@@ -718,26 +762,125 @@ try {
   );
   completedProofs.add('SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED');
   psql(canonicalSourceGuardHelper);
+
+  // Sequential latent-defect proof: if a return credit was issued while its
+  // source invoice was still a draft, later recognition must fail closed. A
+  // zero-cost credit cannot be made correct after the immutable fact.
+  const sequentialPosting = postingConcurrencyFixture(5);
+  assert.notEqual(
+    sequentialPosting.creditWithoutDelaySql,
+    sequentialPosting.creditSql,
+    'posting fixture did not remove its artificial race delay',
+  );
+  psql(sequentialPosting.sql);
+  const sequentialCreditResult = psql(sequentialPosting.creditWithoutDelaySql, { allowFailure: true });
+  assert.equal(
+    sequentialCreditResult.status,
+    0,
+    `sequential latent credit setup failed:\n${sequentialCreditResult.stderr || sequentialCreditResult.stdout}`,
+  );
+  const sequentialPostResult = psql(sequentialPosting.sourcePostSql, { allowFailure: true });
+  assert.notEqual(sequentialPostResult.status, 0, 'canonical guard allowed a draft source invoice to post after an active zero-cost credit');
+  assert.match(
+    `${sequentialPostResult.stdout}\n${sequentialPostResult.stderr}`,
+    /RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED/,
+    'post-after-credit rejection did not reach the source-recognition guard',
+  );
+  assert.equal(
+    psqlValue(`SELECT status FROM public.invoices WHERE id = '${sequentialPosting.ids.sourceInvoice}';`),
+    'draft',
+    'post-after-credit rejection changed the source invoice status',
+  );
+  completedProofs.add('SOURCE_POST_AFTER_CREDIT_REJECTED');
+
+  // Two-session posting race proof: whichever participant wins the shared
+  // order-item lock determines a safe outcome. Here the credit wins, so the
+  // posting session must wait for it and then reject. Removing the source-side
+  // lock must expose a posted sale paired with the stale zero-cost credit.
+  const canonicalPostingConcurrency = postingConcurrencyFixture(3);
+  psql(canonicalPostingConcurrency.sql);
+  const canonicalPostingCredit = psqlAsync(canonicalPostingConcurrency.creditSql);
+  await waitForSqlSleep(canonicalPostingConcurrency.marker);
+  const canonicalPost = psqlAsync(canonicalPostingConcurrency.sourcePostSql);
+  const [canonicalPostingCreditResult, canonicalPostResult] = await Promise.all([
+    canonicalPostingCredit,
+    canonicalPost,
+  ]);
+  assert.equal(
+    canonicalPostingCreditResult.status,
+    0,
+    `canonical concurrent latent credit failed:\n${canonicalPostingCreditResult.stderr || canonicalPostingCreditResult.stdout}`,
+  );
+  assert.notEqual(canonicalPostResult.status, 0, 'canonical source posting committed across a concurrent zero-cost credit');
+  assert.match(
+    `${canonicalPostResult.stdout}\n${canonicalPostResult.stderr}`,
+    /RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED/,
+    'canonical concurrent source posting did not reach the recognition guard',
+  );
+  assert.equal(
+    psqlValue(`SELECT status FROM public.invoices WHERE id = '${canonicalPostingConcurrency.ids.sourceInvoice}';`),
+    'draft',
+    'canonical posting race left its source invoice recognized',
+  );
+
+  psql(sourceLockMutant);
+  const mutantPostingConcurrency = postingConcurrencyFixture(4);
+  psql(mutantPostingConcurrency.sql);
+  const mutantPostingCredit = psqlAsync(mutantPostingConcurrency.creditSql);
+  await waitForSqlSleep(mutantPostingConcurrency.marker);
+  const mutantPostPromise = psqlAsync(mutantPostingConcurrency.sourcePostSql);
+  const mutantPostEarly = await Promise.race([
+    mutantPostPromise,
+    new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
+  ]);
+  assert.notEqual(mutantPostEarly, null, 'source-lock mutant still blocked source posting while the credit lock was held');
+  assert.equal(
+    mutantPostEarly.status,
+    0,
+    `source-lock mutant unexpectedly rejected the racing source posting:\n${mutantPostEarly.stderr || mutantPostEarly.stdout}`,
+  );
+  const mutantPostingCreditResult = await mutantPostingCredit;
+  assert.equal(
+    mutantPostingCreditResult.status,
+    0,
+    `source-lock mutant concurrent latent credit failed:\n${mutantPostingCreditResult.stderr || mutantPostingCreditResult.stdout}`,
+  );
+  assert.equal(
+    psqlValue(`
+      SELECT CASE WHEN s.status = 'posted' AND count(ii.id) = 1 THEN 1 ELSE 0 END
+      FROM public.invoices s
+      LEFT JOIN public.invoice_items ii ON ii.invoice_id = '${mutantPostingConcurrency.ids.creditInvoice}'
+      WHERE s.id = '${mutantPostingConcurrency.ids.sourceInvoice}'
+      GROUP BY s.status;
+    `),
+    '1',
+    'source-lock mutant did not expose a recognized sale with an active zero-cost credit',
+  );
+  completedProofs.add('SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED');
+  psql(canonicalSourceGuardHelper);
+
+  const allConcurrencyFixtures = [
+    canonicalConcurrency,
+    mutantConcurrency,
+    canonicalPostingConcurrency,
+    mutantPostingConcurrency,
+    sequentialPosting,
+  ];
+  const fixtureIds = (key) => allConcurrencyFixtures.map((fixture) => `'${fixture.ids[key]}'`).join(', ');
   psql(`
     SET session_replication_role = replica;
     DELETE FROM public.invoice_items
-     WHERE invoice_id IN (
-       '${canonicalConcurrency.ids.sourceInvoice}', '${canonicalConcurrency.ids.creditInvoice}',
-       '${mutantConcurrency.ids.sourceInvoice}', '${mutantConcurrency.ids.creditInvoice}'
-     );
+     WHERE invoice_id IN (${fixtureIds('sourceInvoice')}, ${fixtureIds('creditInvoice')});
     DELETE FROM public.invoices
-     WHERE id IN (
-       '${canonicalConcurrency.ids.sourceInvoice}', '${canonicalConcurrency.ids.creditInvoice}',
-       '${mutantConcurrency.ids.sourceInvoice}', '${mutantConcurrency.ids.creditInvoice}'
-     );
+     WHERE id IN (${fixtureIds('sourceInvoice')}, ${fixtureIds('creditInvoice')});
     DELETE FROM public.order_items
-     WHERE id IN ('${canonicalConcurrency.ids.orderItem}', '${mutantConcurrency.ids.orderItem}');
+     WHERE id IN (${fixtureIds('orderItem')});
     DELETE FROM public.orders
-     WHERE id IN ('${canonicalConcurrency.ids.order}', '${mutantConcurrency.ids.order}');
+     WHERE id IN (${fixtureIds('order')});
     DELETE FROM public.products
-     WHERE id IN ('${canonicalConcurrency.ids.product}', '${mutantConcurrency.ids.product}');
+     WHERE id IN (${fixtureIds('product')});
     DELETE FROM public.customers
-     WHERE id IN ('${canonicalConcurrency.ids.customer}', '${mutantConcurrency.ids.customer}');
+     WHERE id IN (${fixtureIds('customer')});
     SET session_replication_role = origin;
   `);
 

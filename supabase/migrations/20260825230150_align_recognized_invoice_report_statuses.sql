@@ -14,6 +14,7 @@
 
 -- Freeze return-credit issuance while the authoritative credit-header
 -- assertion and report replacements run in the same migration transaction.
+SET lock_timeout = '5s';
 LOCK TABLE public.returns IN SHARE ROW EXCLUSIVE MODE;
 
 DO $preflight$
@@ -28,6 +29,8 @@ DECLARE
 BEGIN
   IF v_pnl IS NULL OR v_monthly IS NULL OR v_year_end IS NULL
      OR v_require_role IS NULL OR v_is_admin IS NULL OR v_batch_year_end IS NULL
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'block_return_credit_during_cogs_cutover') <> 0
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'get_bottom_line_pnl') <> 1
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -385,7 +388,7 @@ BEGIN
     RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_MISSING';
   END IF;
   IF v_cutover_barrier IS NULL THEN
-    RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER';
+    RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER_MISSING';
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_proc p
@@ -394,6 +397,8 @@ BEGIN
       AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
       AND pg_get_userbyid(p.proowner) = 'postgres'
   )
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'block_return_credit_during_cogs_cutover') <> 1
      OR has_function_privilege('anon', v_cutover_barrier, 'EXECUTE')
      OR has_function_privilege('authenticated', v_cutover_barrier, 'EXECUTE')
      OR has_function_privilege('service_role', v_cutover_barrier, 'EXECUTE')
@@ -404,7 +409,7 @@ BEGIN
          AND NOT t.tgisinternal
          AND t.tgfoid = v_cutover_barrier
      ) THEN
-    RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER';
+    RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_POSTFLIGHT_CUTOVER_BARRIER_DRIFTED';
   END IF;
   SELECT p.prosrc INTO v_src FROM pg_proc p WHERE p.oid = v_pnl;
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') <> (v_expected ->> 'get_bottom_line_pnl')
@@ -441,3 +446,5 @@ BEGIN
   END IF;
 END;
 $postflight$;
+
+RESET lock_timeout;
