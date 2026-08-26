@@ -128,6 +128,10 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
     expect(sweep).toContain('vendors:browser-mutation-privilege');
     expect(sweep).toContain('vendor_bills:deleted-vendor:');
     expect(sweep).toContain('vendor_bills:invalid-po:');
+    expect(sweep).toContain('_section9_create_vendor_bill_intent_impl_20260826');
+    expect(sweep).toContain('_section9_update_vendor_bill_intent_impl_20260826');
+    expect(sweep).toContain("wrapper.prosrc LIKE '%public._section9_create_vendor_bill_intent_impl_20260826(%'");
+    expect(sweep).toContain("wrapper.prosrc LIKE '%public._section9_update_vendor_bill_intent_impl_20260826(%'");
     expect(sweep).toMatch(
       /FULL JOIN \(\s*SELECT product_id, quantity_on_order\s*FROM public\.inventory\s*WHERE location = 'Main Warehouse'\s*\) i/,
     );

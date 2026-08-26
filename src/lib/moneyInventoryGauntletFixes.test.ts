@@ -296,7 +296,9 @@ describe('money and inventory gauntlet fixes', () => {
     expect(detail).toContain(
       "useIdempotencyKey('submit_purchase_order', `${profile?.id || ''}:${id || ''}`)",
     );
-    expect(detail).toContain('resetSubmitPOKey();\n  }, [id, resetSubmitPOKey]);');
+    expect(detail).toContain(
+      'resetSubmitPOKey();\n    resolveReceiveIntent();\n  }, [id, resetSubmitPOKey, resolveReceiveIntent]);',
+    );
     expect(submitHandler).toContain("supabase.rpc('submit_purchase_order'");
     expect(submitHandler).toContain('const submitKey = getSubmitPOKey()');
     expect(submitHandler).toContain('resetSubmitPOKey()');

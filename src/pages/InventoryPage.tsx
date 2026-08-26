@@ -516,6 +516,10 @@ export default function InventoryPage() {
   const openReceiveModal = async (inventoryId: string) => {
     // Do not rotate the key here. A prior receive may have committed before a
     // lost response; reopening must retain that key so edited input fails closed.
+    if (receivePoIntent.isIntentLocked) {
+      setReceiveOpen(true);
+      return;
+    }
     const target = inventory.find((i) => i.id === inventoryId);
     if (!target) return;
 
@@ -1590,6 +1594,11 @@ export default function InventoryPage() {
       {/* Receive Modal */}
       <Modal open={receiveOpen} onClose={() => { if (!receivePoIntent.isIntentLocked) setReceiveOpen(false); }} title="Receive" accent="Shipment">
         <div className="space-y-4">
+          {receivePoIntent.isIntentLocked && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.
+            </div>
+          )}
           {availablePOs.length === 0 ? (
             <div className="text-amber-600 text-sm bg-amber-50 p-3 rounded">
               No open purchase orders found for this product. Create a purchase order first.

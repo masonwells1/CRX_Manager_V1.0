@@ -41,23 +41,29 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Lost-response UI protection freezes the first exact payment or PO-receiving payload and prevents closing or editing those forms until an exact retry reconciles the result or the server proves a definitive refusal. Intent-mismatch errors remain uncertain until the caller inspects their receipt; both screens now recover the committed payment/receiving result and refresh authoritative state instead of unlocking a fresh mutation.
 - Other AP/receiving entry points no longer mint a fresh key merely because a form reopens or changes after an uncertain response; the server rejects changed intent under the retained key.
 - The create-bill and both receiving entry points now freeze the exact first payload after an uncertain response, disable editing/closing, expose an exact-retry action, and reconcile a committed result before allowing a new mutation.
+- Inventory receiving preserves the frozen request if its modal is reopened. PO-detail receiving scopes its key to the route PO and clears the in-memory lock when React Router reuses the component for another PO, preventing a prior PO payload from being paired with the new PO's PDF or notifications.
+- Vendor-payment and vendor-bill void requests obtain keys by exact target plus normalized reason, so a failed request cannot lend its receipt to a different payment, bill, or reason.
+- Every locked form now explains that the previous response was uncertain and instructs the operator to retry the unchanged request; the New Vendor Bill icon-only back control also has an accessible name.
 - Vendor-payment input formatting now converts integer cents to a decimal string with integer arithmetic, avoiding a binary floating-point round trip.
 - `section9ApIntentBinding.test.ts` mutation-tests the actor binding, fingerprints, cutover lock, insert trigger, transaction-local binding context, private implementation ACLs, helper dependency, receipt reconciliation, due-date basis, and day-1 boundary. `useUncertainMutationIntent.test.ts` proves frozen payloads and keeps actor/intent mismatch errors locked until reconciliation.
 - The public receiving wrapper raises the canonical `ACTOR_MISMATCH` refusal when `p_performed_by` disagrees with `auth.uid()`; the mutation guard goes red if that token is removed or renamed.
 - Both migrations fail closed on stale public overloads. Their preflights pin the sole expected signature, owner, language, security mode, fixed search path, and reviewed live-body SHA-256; their postflights require exactly one expected public overload after creation.
 - The Section 9 rollback chain now proves exact replay and changed-payload refusal for all six mutators, with no second money, inventory, receiving, audit, or terminal-state effect. It also proves the next-month dashboard boundary and exact due-today/future and 1/30/31/60/61/90/91 aging boundaries.
 - The real-schema PostgreSQL 17 prover now restores the verified platform and migration-ledger artifacts, normalizes historical SQL to canonical LF, pins the one live CRLF function body expected by a later preflight, proves a concurrent legacy receipt writer blocks cutover until it commits and is then caught by preflight, and proves a late old payment body is rejected at receipt insertion with zero payment, bill-balance, or receipt residue.
+- The standing Section 9 invariant accepts the pre-apply direct bodies and the post-apply wrapper-to-private chain, then checks the private implementation's locks and period guards. Decoy overload cleanup now runs in `finally`, and one shared legacy-receipt predicate drives setup, assertion, and cleanup.
 
 ## PROOF OBSERVED
 
 - `npm run typecheck` — pass.
 - `npm run lint` — pass.
 - `npm run build` — pass.
-- `npm run test -- --run` after the CodeRabbit follow-up — 341 files passed; 4,787 tests passed; 123 skipped.
+- `npm run test -- --run` after the CodeRabbit follow-up — 342 files passed; 4,803 tests passed; 123 skipped.
 - Latest focused remediation/concurrency/money tests after the follow-up — 68/68 passed.
+- Latest PR-review follow-up guard — 4 files, 27/27 passed; the focused Section 9 contract alone passes 7/7.
 - Focused Section 9 guard after the canonical actor-refusal correction — 6/6 passed.
 - `npm run check:docs` — pass.
 - Disposable PostgreSQL proof after the follow-up — full replay of 64 post-baseline migrations, decoy overloads for `create_vendor_bill(text)` and `get_ap_aging(text)` were rejected before candidate apply, concurrent cutover drain passed, late-old-body rollback passed, both new candidates applied, all three sibling rollback chains passed, every two-session close/write schedule passed, future-dated payments were excluded from the selected month, terminal marker `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
+- The broader supplier-pricing return-policy proof now creates and restores its disposable migration ledger, then stops before the Section 9 object-identity assertion at the older `20260810010308_active_team_note_assignment_actor.sql` preflight because the baseline's `notify_team_note_assignment` body md5 is `ad8be4ed1d2bdd2a87acce255b38ab641` instead of the migration's pinned `ce356683fb140f2e0d3d8faee077cc1a`. This is an unrelated harness/baseline blocker, not a clean result; the corrected `days_1_30` expected signature is pinned by the focused test.
 - `git diff --check` — pass.
 - React best-practices review — no new waterfall, bundle, hook-dependency, transient-state, or rendering blocker found in the changed flow.
 
@@ -70,8 +76,8 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - The final migration-specific security pass then found one additional HIGH: `receive_po_items` enforced actor equality but returned a noncanonical exception string. The wrapper and executable guard are corrected, the full database replay passes again, and the AP-aging migration's security/drift proof remains clean.
 - Exact branch review at `b4b6b70c` then found one additional HIGH: unexpected public function overloads could survive the migrations and expose a stale implementation. Both migrations now fail closed before and after on overload drift, pin the reviewed pre-cutover function shape/body, and include real decoy-overload rollback proofs.
 - Rebased exact branch review at `518f777b` returned CLEAN, but current main advanced during the next test-only review and correctly invalidated that proof. The branch has since been rebased again; a new exact-head proof remains pending.
-- The AP-aging migration's final security and drift reviewers are CLEAN. The intent/dashboard migration's final security reviewer is CLEAN; its drift reviewer produced no verdict because the read-only shell was policy-blocked and the final local branch was not yet available through GitHub. It must rerun after the replacement branch is published.
-- CodeRabbit's latest-commit review, PR checks, live apply, merge, and production verification remain pending.
+- Both migrations' final security and drift reviewers are CLEAN with SHA-bound proof files. The first intent/dashboard drift run timed out while scanning GitHub under a Windows read-only-shell limitation; the warm-cache retry completed CLEAN without changing the proof harness.
+- Replacement PR #500 is open and obsolete PR #491 is closed without rewriting published history. Required CI and Vercel checks passed on `b5f8b252`; CodeRabbit then requested changes with two major correctness findings plus prevention/clarity fixes. All findings are corrected locally and the owning focused/database proofs pass; a fresh exact-head review and latest-commit CI/CodeRabbit pass remain pending after commit.
 
 ## APPROVAL STATE
 
@@ -86,6 +92,6 @@ Done means the changed database and UI paths execute successfully in rollback-on
 
 ## FIRST ACTION
 
-Mint a fresh exact-head review, publish the rebased `-v2` branch without rewriting PR #491's history, open the replacement PR, and rerun the intent/dashboard drift reviewer against the visible final commit.
+Run the full suite, commit the PR-review follow-up, mint a fresh exact-head review, push to PR #500, and clear latest-commit CI/CodeRabbit before requesting live-migration approval.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

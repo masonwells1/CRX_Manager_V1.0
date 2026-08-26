@@ -87,7 +87,7 @@ export default function AccountsPayable() {
     },
     {
       key: 'days_1_30',
-      header: '1-30 Days',
+      header: '1-30 Days Past Due',
       sortable: true,
       render: (r) => (
         <span className={`font-mono ${r.days_1_30 > 0 ? 'text-yellow-600' : ''}`}>
@@ -97,7 +97,7 @@ export default function AccountsPayable() {
     },
     {
       key: 'days_31_60',
-      header: '31-60 Days',
+      header: '31-60 Days Past Due',
       sortable: true,
       render: (r) => (
         <span className={`font-mono ${r.days_31_60 > 0 ? 'text-yellow-600' : ''}`}>
@@ -107,7 +107,7 @@ export default function AccountsPayable() {
     },
     {
       key: 'days_61_90',
-      header: '61-90 Days',
+      header: '61-90 Days Past Due',
       sortable: true,
       render: (r) => (
         <span className={`font-mono ${r.days_61_90 > 0 ? 'text-orange-600' : ''}`}>
@@ -117,7 +117,7 @@ export default function AccountsPayable() {
     },
     {
       key: 'over_90',
-      header: '90+ Days',
+      header: '90+ Days Past Due',
       sortable: true,
       render: (r) => (
         <span className={`font-mono ${r.over_90 > 0 ? 'text-red-600 font-semibold' : ''}`}>
@@ -234,9 +234,9 @@ export default function AccountsPayable() {
                       { key: 'vendor_name', header: 'Vendor' },
                       { key: 'current_amount', header: 'Current (Not Due)', format: (v) => fmtCSV((v as number) / 100) },
                       { key: 'days_1_30', header: '1-30 Days Past Due', format: (v) => fmtCSV((v as number) / 100) },
-                      { key: 'days_31_60', header: '31-60 Days', format: (v) => fmtCSV((v as number) / 100) },
-                      { key: 'days_61_90', header: '61-90 Days', format: (v) => fmtCSV((v as number) / 100) },
-                      { key: 'over_90', header: '90+ Days', format: (v) => fmtCSV((v as number) / 100) },
+                      { key: 'days_31_60', header: '31-60 Days Past Due', format: (v) => fmtCSV((v as number) / 100) },
+                      { key: 'days_61_90', header: '61-90 Days Past Due', format: (v) => fmtCSV((v as number) / 100) },
+                      { key: 'over_90', header: '90+ Days Past Due', format: (v) => fmtCSV((v as number) / 100) },
                       { key: 'total_outstanding', header: 'Total', format: (v) => fmtCSV((v as number) / 100) },
                       { key: 'bill_count', header: 'Bills' },
                     ],

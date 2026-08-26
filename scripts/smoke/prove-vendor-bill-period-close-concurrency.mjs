@@ -59,6 +59,13 @@ const SIBLING_SMOKES = [
 const ADMIN = '00000000-0000-0000-0000-0000000000a1';
 const KEY = 818181;
 const BARRIER_SECONDS = 8;
+const SECTION9_LEGACY_RECEIPT_PREDICATE = `
+ WHERE expires_at >= now()
+   AND operation IN (
+     'create_vendor_bill', 'update_vendor_bill', 'record_vendor_payment',
+     'void_vendor_payment', 'void_vendor_bill', 'receive_po_items'
+   )
+   AND (request_actor_id IS NULL OR request_fingerprint IS NULL)`;
 
 function run(args, { input, fail = false } = {}) {
   const r = spawnSync('docker', args, { cwd: ROOT, encoding: 'utf8', input, maxBuffer: 60 * 1024 * 1024 });
@@ -358,18 +365,13 @@ CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
     }
     if (path.basename(local) === '20260826125456_bind_section9_ap_receiving_intent_and_month_dashboard.sql') {
       sql(`CREATE FUNCTION public.create_vendor_bill(p_decoy text) RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT '{}'::jsonb $$;`);
-      expectValidationFailure(local, 'section9-intent-decoy-overload', 'SECTION9_UNEXPECTED_PUBLIC_OVERLOADS: create_vendor_bill');
-      sql(`DROP FUNCTION public.create_vendor_bill(text);`);
+      try {
+        expectValidationFailure(local, 'section9-intent-decoy-overload', 'SECTION9_UNEXPECTED_PUBLIC_OVERLOADS: create_vendor_bill');
+      } finally {
+        sql(`DROP FUNCTION IF EXISTS public.create_vendor_bill(text);`);
+      }
       console.log('CANDIDATE_SECTION9_INTENT_DECOY_OVERLOAD_REJECTED_PASS');
-      sql(`
-DELETE FROM public.idempotency_keys
- WHERE expires_at >= now()
-   AND operation IN (
-     'create_vendor_bill', 'update_vendor_bill', 'record_vendor_payment',
-     'void_vendor_payment', 'void_vendor_bill', 'receive_po_items'
-   )
-   AND (request_actor_id IS NULL OR request_fingerprint IS NULL);
-`);
+      sql(`DELETE FROM public.idempotency_keys${SECTION9_LEGACY_RECEIPT_PREDICATE};`);
       const cutoverRemote = `section9-cutover-${path.basename(local)}`;
       copySql(local, cutoverRemote);
       const legacyWriter = session(`
@@ -396,31 +398,19 @@ COMMIT;
       expectError(cutoverResult, 'SECTION9_ACTIVE_LEGACY_IDEMPOTENCY_RECEIPTS', 'Section 9 drained cutover preflight');
       console.log('CANDIDATE_SECTION9_CUTOVER_DRAINS_LEGACY_WRITER_PASS');
       const legacyCount = Number(scalar(`
-SELECT count(*)
-  FROM public.idempotency_keys
- WHERE expires_at >= now()
-   AND operation IN (
-     'create_vendor_bill', 'update_vendor_bill', 'record_vendor_payment',
-     'void_vendor_payment', 'void_vendor_bill', 'receive_po_items'
-   )
-   AND (request_actor_id IS NULL OR request_fingerprint IS NULL);
+SELECT count(*) FROM public.idempotency_keys${SECTION9_LEGACY_RECEIPT_PREDICATE};
 `));
       assert.ok(legacyCount > 0, 'legacy-receipt mutation proof had no synthetic receipt to remove');
-      sql(`
-DELETE FROM public.idempotency_keys
- WHERE expires_at >= now()
-   AND operation IN (
-     'create_vendor_bill', 'update_vendor_bill', 'record_vendor_payment',
-     'void_vendor_payment', 'void_vendor_bill', 'receive_po_items'
-   )
-   AND (request_actor_id IS NULL OR request_fingerprint IS NULL);
-`);
+      sql(`DELETE FROM public.idempotency_keys${SECTION9_LEGACY_RECEIPT_PREDICATE};`);
       console.log(`CANDIDATE_ACTIVE_LEGACY_RECEIPT_GUARD_PASS removed_disposable=${legacyCount}`);
     }
     if (path.basename(local) === '20260826140333_correct_ap_aging_due_date_buckets.sql') {
       sql(`CREATE FUNCTION public.get_ap_aging(p_decoy text) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT p_decoy $$;`);
-      expectValidationFailure(local, 'section9-aging-decoy-overload', 'AP_AGING_UNEXPECTED_PUBLIC_OVERLOADS');
-      sql(`DROP FUNCTION public.get_ap_aging(text);`);
+      try {
+        expectValidationFailure(local, 'section9-aging-decoy-overload', 'AP_AGING_UNEXPECTED_PUBLIC_OVERLOADS');
+      } finally {
+        sql(`DROP FUNCTION IF EXISTS public.get_ap_aging(text);`);
+      }
       console.log('CANDIDATE_SECTION9_AGING_DECOY_OVERLOAD_REJECTED_PASS');
     }
     applyMigration(local, 'post_candidate');

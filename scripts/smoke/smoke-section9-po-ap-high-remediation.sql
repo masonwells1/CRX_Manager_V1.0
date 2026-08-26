@@ -563,6 +563,23 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: dashboard boundary fixture did not enter total owed';
   END IF;
 
+  -- Inclusion side of the same boundary: month-end itself belongs in the tile.
+  PERFORM public.create_vendor_bill(
+    p_vendor_id := v_vendor,
+    p_purchase_order_id := NULL,
+    p_bill_number := 'SMK-S9-DASHBOARD-IN-' || v_suffix,
+    p_bill_date := (clock_timestamp() AT TIME ZONE 'America/Chicago')::date,
+    p_due_date := (date_trunc('month', clock_timestamp() AT TIME ZONE 'America/Chicago')
+      + interval '1 month - 1 day')::date,
+    p_subtotal_cents := 555,
+    p_idempotency_key := 'smk-s9-dashboard-in-bill-' || v_suffix
+  );
+  v_dashboard_after := public.get_ap_dashboard_summary();
+  IF (v_dashboard_after->>'due_this_month_cents')::bigint
+       IS DISTINCT FROM (v_dashboard_before->>'due_this_month_cents')::bigint + 555 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: month-end bill missing from Due This Month';
+  END IF;
+
   -- A future-dated payment is not paid in the current month. The lower bound
   -- alone would incorrectly include it, so prove the exclusive next-month cap.
   PERFORM public.record_vendor_payment(

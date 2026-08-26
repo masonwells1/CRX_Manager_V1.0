@@ -24,6 +24,17 @@ const newVendorBill = source('src', 'pages', 'NewVendorBill.tsx');
 const inventoryPage = source('src', 'pages', 'InventoryPage.tsx');
 const receivingHub = source('src', 'components', 'receiving', 'ReceivingHubPanel.tsx');
 const idempotency = source('src', 'lib', 'idempotency.ts');
+const section9Smoke = source('scripts', 'smoke', 'smoke-section9-po-ap-high-remediation.sql');
+const periodCloseProof = source('scripts', 'smoke', 'prove-vendor-bill-period-close-concurrency.mjs');
+const supplierPhase3Proof = source('scripts', 'smoke', 'prove-supplier-pricing-phase3-return-policy-concurrency.mjs');
+
+function sliceBetween(text: string, startMarker: string, endMarker: string) {
+  const start = text.indexOf(startMarker);
+  const end = text.indexOf(endMarker, start + startMarker.length);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return text.slice(start, end);
+}
 
 const publicSignatures = [
   'create_vendor_bill(uuid, uuid, text, date, date, text, bigint, bigint, text, text)',
@@ -114,6 +125,8 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(migration).toContain('due_date BETWEEN v_today AND v_month_end');
     expect(migration).toContain('vp.payment_date < (v_month_end + 1)');
     expect(migration).not.toContain('due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 30');
+    expect(section9Smoke).toContain("p_bill_number := 'SMK-S9-DASHBOARD-IN-' || v_suffix");
+    expect(section9Smoke).toContain("RAISE EXCEPTION 'SMOKE_FAIL: month-end bill missing from Due This Month'");
   });
 
   it('ages AP by due date across all five approved boundary buckets', () => {
@@ -146,6 +159,12 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(accountsPayable).toContain("header: 'Current (Not Due)'");
     expect(accountsPayable).toContain("key: 'days_1_30'");
     expect(accountsPayable).toContain("header: '1-30 Days Past Due'");
+    expect(accountsPayable).toContain("header: '31-60 Days Past Due'");
+    expect(accountsPayable).toContain("header: '61-90 Days Past Due'");
+    expect(accountsPayable).toContain("header: '90+ Days Past Due'");
+    expect(supplierPhase3Proof).toContain('current_amount bigint, days_1_30 bigint, days_31_60 bigint');
+    expect(supplierPhase3Proof).toContain('CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations');
+    expect(supplierPhase3Proof).toContain('\\i /tmp/migrationHistory.sql');
   });
 
   it('locks the two highest-risk lost-response forms to their first exact payload', () => {
@@ -171,34 +190,68 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(inventoryPage).toContain("getIdempotencyMismatchResult(error, 'receive_po_items')");
     expect(inventoryPage).toContain('disabled={receivePoIntent.isIntentLocked}');
     expect(inventoryPage).toContain('Retry Exact Receiving');
+    expect(inventoryPage).toContain('if (receivePoIntent.isIntentLocked) {');
 
     expect(receivingHub).toContain("getIdempotencyMismatchResult(error, 'receive_po_items')");
     expect(receivingHub).toContain('disabled={receiveIntent.isIntentLocked}');
     expect(receivingHub).toContain('Retry Exact Receiving');
+    expect(newVendorBill).toContain('The last response was uncertain. These fields are locked so a second bill cannot be created.');
+    expect(receivingHub).toContain('This receiving request is locked so stock cannot be received twice.');
+
+    expect(purchaseOrderDetail).toContain("useIdempotencyKey('receive_po_items', profile?.id || '', id || '')");
+    expect(purchaseOrderDetail).toContain('resolveReceiveIntent();');
+    expect(vendorBillDetail).toContain('voidPaymentIdem.getKeyFor(voidPaymentScope)');
+    expect(vendorBillDetail).toContain('voidPaymentIdem.resetKeyFor(voidPaymentScope)');
+    expect(vendorBillDetail).toContain('voidIdem.getKeyFor(voidBillScope)');
+    expect(vendorBillDetail).toContain('voidIdem.resetKeyFor(voidBillScope)');
   });
 
   it('does not mint a fresh key merely because an uncertain AP/receiving form reopened or changed', () => {
     expect(newVendorBill).toContain("const createBillIdem = useIdempotencyKey('create_vendor_bill'");
     expect(newVendorBill).toContain('createBillIdem.resetKey()');
     expect(newVendorBill).toContain('createBillIntent.beginIntent({');
-    expect(newVendorBill).not.toMatch(/useEffect\([\s\S]{0,300}createBillIdem\.resetKey\(\)/);
+    const newBillEffects = sliceBetween(
+      newVendorBill,
+      'useEffect(() => {',
+      '// When PO selected, auto-fill vendor + amount',
+    );
+    expect(newBillEffects).not.toContain('createBillIdem.resetKey()');
 
     expect(inventoryPage).toContain("const receivePoIdem = useIdempotencyKey('receive_po_items'");
     expect(inventoryPage).toContain('receivePoIdem.resetKey()');
     expect(inventoryPage).toContain('receivePoIntent.beginIntent({');
-    const inventoryOpen = inventoryPage.slice(
-      inventoryPage.indexOf('const openReceiveModal'),
-      inventoryPage.indexOf('const handleReceive'),
-    );
+    const inventoryOpen = sliceBetween(inventoryPage, 'const openReceiveModal', 'const handleReceive');
     expect(inventoryOpen).not.toContain('receivePoIdem.resetKey()');
+    expect(inventoryOpen).toContain('if (receivePoIntent.isIntentLocked) {');
 
     expect(receivingHub).toContain("const receiveIdem = useIdempotencyKey('receive_po_items'");
     expect(receivingHub).toContain('receiveIdem.resetKey()');
     expect(receivingHub).toContain('receiveIntent.beginIntent({');
-    expect(receivingHub).not.toMatch(/setReceiveTarget\([^;]+;\s*receiveIdem\.resetKey\(\)/);
+    const receivingOpeners = sliceBetween(receivingHub, '<ReceivingHubLineCards', '<Modal');
+    expect(receivingOpeners).not.toContain('receiveIdem.resetKey()');
 
     expect(vendorBillDetail).toContain("const paymentIdem = useIdempotencyKey('record_vendor_payment'");
     expect(vendorBillDetail).toContain('paymentIdem.resetKey()');
-    expect(vendorBillDetail).not.toMatch(/setPayModalOpen\(true\);\s*paymentIdem\.resetKey\(\)/);
+    const vendorBillHeader = sliceBetween(vendorBillDetail, '{/* Header */}', '{/* Bill Info Cards */}');
+    expect(vendorBillHeader).not.toContain('paymentIdem.resetKey()');
+  });
+
+  it('keeps the disposable cutover proof deterministic after assertion failures', () => {
+    expect(periodCloseProof).toContain('const SECTION9_LEGACY_RECEIPT_PREDICATE = `');
+    expect(periodCloseProof.match(/SECTION9_LEGACY_RECEIPT_PREDICATE/g)).toHaveLength(4);
+    const intentDecoy = sliceBetween(
+      periodCloseProof,
+      "expectValidationFailure(local, 'section9-intent-decoy-overload'",
+      "console.log('CANDIDATE_SECTION9_INTENT_DECOY_OVERLOAD_REJECTED_PASS')",
+    );
+    const agingDecoy = sliceBetween(
+      periodCloseProof,
+      "expectValidationFailure(local, 'section9-aging-decoy-overload'",
+      "console.log('CANDIDATE_SECTION9_AGING_DECOY_OVERLOAD_REJECTED_PASS')",
+    );
+    expect(intentDecoy).toContain('finally {');
+    expect(intentDecoy).toContain('DROP FUNCTION IF EXISTS public.create_vendor_bill(text)');
+    expect(agingDecoy).toContain('finally {');
+    expect(agingDecoy).toContain('DROP FUNCTION IF EXISTS public.get_ap_aging(text)');
   });
 });

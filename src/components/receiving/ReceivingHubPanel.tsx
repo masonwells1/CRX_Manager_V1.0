@@ -403,6 +403,11 @@ export default function ReceivingHubPanel() {
         title="Receive Stock"
       >
         <div className="space-y-4">
+          {receiveIntent.isIntentLocked && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.
+            </div>
+          )}
           <p className="text-sm text-secondary">
             Receive <span className="font-medium text-nav-dark">{receiveTarget?.product_name}</span> on PO{' '}
             <span className="font-medium text-nav-dark">{receiveTarget?.line.po_number}</span> from{' '}

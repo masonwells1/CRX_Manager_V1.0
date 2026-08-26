@@ -81,8 +81,9 @@ export default function PurchaseOrderDetail() {
   const navigate = useNavigate();
   const { role, profile } = useAuth();
   const { toast } = useToast();
-  const receiveIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
+  const receiveIdem = useIdempotencyKey('receive_po_items', profile?.id || '', id || '');
   const receiveIntent = useUncertainMutationIntent<ReceivePoIntent>();
+  const { resolveIntent: resolveReceiveIntent } = receiveIntent;
   const savePOIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
   const {
     getKey: getSubmitPOKey,
@@ -111,7 +112,8 @@ export default function PurchaseOrderDetail() {
   // Never let a lost-response retry key from one PO replay a different PO's result.
   useEffect(() => {
     resetSubmitPOKey();
-  }, [id, resetSubmitPOKey]);
+    resolveReceiveIntent();
+  }, [id, resetSubmitPOKey, resolveReceiveIntent]);
 
   /* Edit modal state */
   const [editOpen, setEditOpen] = useState(false);

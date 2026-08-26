@@ -212,7 +212,7 @@ export default function NewVendorBill() {
     <div className="space-y-4 max-w-2xl">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <button disabled={createBillIntent.isIntentLocked} onClick={() => navigate('/accounts-payable/bills')} className="text-crx-green hover:text-crx-green/70 disabled:cursor-not-allowed disabled:opacity-50">
+        <button type="button" aria-label="Back to vendor bills" disabled={createBillIntent.isIntentLocked} onClick={() => navigate('/accounts-payable/bills')} className="text-crx-green hover:text-crx-green/70 disabled:cursor-not-allowed disabled:opacity-50">
           <ArrowLeft className="w-5 h-5" />
         </button>
         <h2 className="text-xl font-semibold font-heading text-nav-dark">New Vendor Bill</h2>
@@ -367,6 +367,11 @@ export default function NewVendorBill() {
       </Card>
 
       {/* Actions */}
+      {createBillIntent.isIntentLocked && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          The last response was uncertain. These fields are locked so a second bill cannot be created. Retry this exact bill to reconcile it.
+        </div>
+      )}
       <div className="flex justify-end gap-3">
         <Button variant="ghost" disabled={createBillIntent.isIntentLocked} onClick={() => navigate('/accounts-payable/bills')}>
           Cancel

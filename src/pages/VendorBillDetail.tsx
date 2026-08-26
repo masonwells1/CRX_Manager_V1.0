@@ -269,9 +269,10 @@ export default function VendorBillDetail() {
       toast('error', 'Please provide a reason for voiding this payment');
       return;
     }
+    const voidPaymentScope = JSON.stringify([voidPaymentTarget.id, voidPaymentReason.trim()]);
     setVoidingPayment(true);
     try {
-      const key = voidPaymentIdem.getKey();
+      const key = voidPaymentIdem.getKeyFor(voidPaymentScope);
       const { data, error } = await supabase.rpc('void_vendor_payment', {
         p_payment_id: voidPaymentTarget.id,
         p_reason: voidPaymentReason.trim(),
@@ -286,7 +287,7 @@ export default function VendorBillDetail() {
         new_paid_cents: number;
         new_bill_status: string;
       }>(data, 'void_vendor_payment');
-      voidPaymentIdem.resetKey();
+      voidPaymentIdem.resetKeyFor(voidPaymentScope);
       toast('success', 'Payment voided');
       setVoidPaymentTarget(null);
       setVoidPaymentReason('');
@@ -299,16 +300,17 @@ export default function VendorBillDetail() {
 
   const handleVoid = async () => {
     if (!id) return;
+    const voidBillScope = JSON.stringify([id, voidReason.trim() || null]);
     setVoiding(true);
     try {
-      const voidKey = voidIdem.getKey();
+      const voidKey = voidIdem.getKeyFor(voidBillScope);
       // RETURNS void — use .throwOnError() (regex coverage skips fire-and-forget).
       await supabase.rpc('void_vendor_bill', {
         p_vendor_bill_id: id,
-        p_reason: voidReason || undefined,
+        p_reason: voidReason.trim() || undefined,
         p_idempotency_key: voidKey,
       }).throwOnError();
-      voidIdem.resetKey();
+      voidIdem.resetKeyFor(voidBillScope);
 
       toast('success', 'Bill voided');
       setVoidModalOpen(false);
