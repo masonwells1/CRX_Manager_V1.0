@@ -1995,8 +1995,43 @@ export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execut
   return { checked_path_count: visible.size, checked_commit_count: checkedCommits.length, checked_ignored_count: worktree.ignoredCount, worktree_scan_duration_ms: worktree.durationMs, scanned_candidate_count: budget.candidates, scanned_logical_bytes: budget.logicalBytes };
 }
 
-function outgoingCommitsForNewRemoteRef(localSha, root, execute) {
-  return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(localSha, 'local')], root, execute);
+function advertisedRemoteHeadCommit(remoteName, remoteLocation, root, execute) {
+  // A direct URL has no stable local remote identity. Keep the conservative
+  // full-ancestry fallback for that case, and never pass URL-like hook metadata
+  // into a new Git argv position.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(remoteName) || remoteName.includes('..')) return null;
+  let remoteNames;
+  try { remoteNames = gitLines(['remote'], root, execute); } catch (_error) { return null; }
+  if (!remoteNames.includes(remoteName)) return null;
+  let fetchLocations;
+  let pushLocations;
+  try {
+    fetchLocations = gitLines(['remote', 'get-url', '--all', remoteName], root, execute);
+    pushLocations = gitLines(['remote', 'get-url', '--push', '--all', remoteName], root, execute);
+  } catch (_error) { return null; }
+  // Git supplies the actual push destination as pre-push argv $2. Optimize only
+  // when one configured fetch URL and one push URL both match that exact value;
+  // otherwise querying the remote name could trust ancestry from a different
+  // repository than the one receiving this push.
+  if (fetchLocations.length !== 1 || pushLocations.length !== 1 || fetchLocations[0] !== remoteLocation || pushLocations[0] !== remoteLocation) return null;
+  let advertised;
+  try { advertised = gitLines(['ls-remote', '--symref', remoteName, 'HEAD'], root, execute); } catch (_error) { return null; }
+  const headShas = advertised
+    .map(line => /^(?:([0-9a-f]{40}|[0-9a-f]{64}))\s+HEAD$/i.exec(line)?.[1] ?? null)
+    .filter(Boolean)
+    .map(sha => assertCommitSha(sha, 'advertised remote HEAD'));
+  if (headShas.length > 1) throw new Error('private Phase 3C pre-push containment received multiple advertised remote HEAD objects');
+  if (headShas.length === 0) return null;
+  // A remote may have advanced beyond the caller's last fetch. Exclude only an
+  // advertised boundary whose object is already available locally; otherwise
+  // retain the conservative full-ancestry scan.
+  return peeledCommitSha(headShas[0], root, execute);
+}
+function outgoingCommitsForNewRemoteRef(localSha, root, execute, remoteName, remoteLocation) {
+  const argv = ['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(localSha, 'local')];
+  const remoteHead = advertisedRemoteHeadCommit(remoteName, remoteLocation, root, execute);
+  if (remoteHead) argv.push('--not', remoteHead);
+  return gitLines(argv, root, execute);
 }
 function peeledCommitSha(objectSha, root, execute) {
   try {
@@ -2052,8 +2087,9 @@ async function inspectOutgoingRefObject({ localRef, localSha, root, execute, bud
   }
   return { violations, commit };
 }
-export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, remoteName, stdin } = {}) {
+export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, remoteName, remoteLocation = remoteName, stdin } = {}) {
   if (typeof remoteName !== 'string' || remoteName.length === 0) throw new Error('private Phase 3C pre-push containment requires a remote name or URL');
+  if (typeof remoteLocation !== 'string' || remoteLocation.length === 0) throw new Error('private Phase 3C pre-push containment requires the actual push location');
   const updates = String(stdin ?? '').split(/\r?\n/).filter(Boolean);
   if (updates.length > MAX_STRUCTURAL_SCAN_CANDIDATES) throw new Error('private Phase 3C containment candidate-count cap exceeded');
   const ranges = [];
@@ -2070,10 +2106,10 @@ export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT,
     const inspected = await inspectOutgoingRefObject({ localRef, localSha, root, execute, budget: outgoingBudget });
     objectViolations.push(...inspected.violations);
     if (inspected.commit === null) continue;
-    if (isZeroSha(remoteSha)) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
+    if (isZeroSha(remoteSha)) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute, remoteName, remoteLocation));
     else {
       const remoteCommit = peeledCommitSha(assertCommitSha(remoteSha, 'remote'), root, execute);
-      if (remoteCommit === null) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
+      if (remoteCommit === null) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute, remoteName, remoteLocation));
       else ranges.push(`${remoteCommit}..${inspected.commit}`);
     }
   }
@@ -2170,11 +2206,11 @@ export async function checkGitHubEventPrivateArtifactContainment({ root = REPO_R
 }
 
 export function parseCli(args) {
-  const result = { ranges: [], prePushRemote: null, preCommit: false, commitMessageFile: null, githubEvent: false, root: null, attestGitHubHandoff: false };
+  const result = { ranges: [], prePushRemote: null, prePushLocation: null, preCommit: false, commitMessageFile: null, githubEvent: false, root: null, attestGitHubHandoff: false };
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     if (token === '--range') { if (result.ranges.length) throw new Error('disclosure-safe usage: duplicate --range'); const value = args[++index]; if (typeof value !== 'string' || !value || value.startsWith('--')) throw new Error('disclosure-safe usage: --range requires base..head'); result.ranges.push(value); continue; }
-    if (token === '--pre-push') { if (result.prePushRemote !== null) throw new Error('disclosure-safe usage: duplicate --pre-push'); const value = args[++index]; if (typeof value !== 'string' || !value || value.startsWith('--')) throw new Error('disclosure-safe usage: --pre-push requires remote name'); result.prePushRemote = value; continue; }
+    if (token === '--pre-push') { if (result.prePushRemote !== null) throw new Error('disclosure-safe usage: duplicate --pre-push'); const remote = args[++index]; const location = args[++index]; if (typeof remote !== 'string' || !remote || remote.startsWith('--') || typeof location !== 'string' || !location || location.startsWith('--')) throw new Error('disclosure-safe usage: --pre-push requires remote name and actual push location'); result.prePushRemote = remote; result.prePushLocation = location; continue; }
     if (token === '--pre-commit') { if (result.preCommit) throw new Error('disclosure-safe usage: duplicate --pre-commit'); result.preCommit = true; continue; }
     if (token === '--commit-msg') { if (result.commitMessageFile !== null) throw new Error('disclosure-safe usage: duplicate --commit-msg'); const value = args[++index]; if (typeof value !== 'string' || !value || value.startsWith('--')) throw new Error('disclosure-safe usage: --commit-msg requires a message file'); result.commitMessageFile = value; continue; }
     if (token === '--github-event') { if (result.githubEvent) throw new Error('disclosure-safe usage: duplicate --github-event'); result.githubEvent = true; continue; }
@@ -2198,7 +2234,7 @@ async function main() {
   const result = cli.githubEvent
     ? await checkGitHubEventPrivateArtifactContainment({ root: cli.root ?? REPO_ROOT })
     : cli.prePushRemote !== null
-      ? await checkPrePushPrivateArtifactContainment({ remoteName: cli.prePushRemote, stdin: readFileSync(0, 'utf8') })
+      ? await checkPrePushPrivateArtifactContainment({ remoteName: cli.prePushRemote, remoteLocation: cli.prePushLocation, stdin: readFileSync(0, 'utf8') })
       : await checkPrivateArtifactContainment({
         ranges: cli.ranges,
         includeIgnored: !cli.preCommit,

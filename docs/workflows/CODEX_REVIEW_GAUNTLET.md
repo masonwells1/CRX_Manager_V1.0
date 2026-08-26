@@ -94,7 +94,7 @@ Do not close a repeated bug class with documentation only when an executable che
 
 The gauntlet is a **review** layer — it catches *semantic* classes (actor-forgery, money, idempotency, drift, lifecycle) by having an independent model read the change. It is on-demand and DB/security/money-scoped, so it must not be relied on for *mechanical* classes. Those are caught for free, every commit, by deterministic gates that sit beneath it:
 
-- **Type errors** → `npm run typecheck` runs in `.husky/pre-commit` and `/ship` verify. (`npm run build` is vite/esbuild — it transpiles, it does **not** type-check.)
+- **Type errors** → `npm run typecheck` runs in `/ship`, pre-push, and CI. (`npm run build` is vite/esbuild — it transpiles, it does **not** type-check.)
 - **Untyped DB access** (`.select('*')` + `as` casts), **unhandled Supabase `{ error }`** (returned, not thrown), **pages that throw on mount** → ESLint contract rules + a render-smoke test (see `docs/audits/2026-06-14-field-mode-error-retrospective-and-prevention-spec.md` and the reconciliation in `…-gauntlet-vs-fieldmode-controls-reconciliation.md`).
 - **Schema drift** → the live-schema Vitest suite fails closed when a trusted operator explicitly supplies live credentials, but GitHub automation is intentionally parked until a least-privilege credential exists. A mock, skipped, missing-secret, or unexecuted suite is `BLOCKED`/`UNVERIFIED`, never a pass.
 - **Mutating RPC idempotency** → inventory must start from the current mutator set and require a key or an explicit evidence-backed exemption; scanning only RPCs that already declare a key is not coverage.
