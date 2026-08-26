@@ -63,6 +63,32 @@ and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 
    gate executes are writable by the same identity that runs them. The durable boundary is the one
    already outside agent reach: the `protect-main` ruleset, the three required GitHub checks, and
    CodeRabbit review on every PR.
+5. **Local proof is proportionate and external proof remains complete.** Pre-commit now keeps the
+   staged-file safeguards that fail fast on ledger omissions, private artifacts, SQL/frontend
+   anti-patterns, Claude/Codex manifest drift, and dependency changes. Full lint, typecheck,
+   guard/unit tests, coverage, and build run in GitHub CI; pre-push still runs containment,
+   typecheck, and build. Workflow-map generation and automatic staging were removed from commit.
+6. **CI cancels superseded PR work, never `main` proof.** `ready_for_review` was added; `edited` is
+   retained so base-branch retargets rerun proof. All edits run full CI because GitHub treats a
+   conditionally skipped required job as successful; a zero-runner edit path would bypass branch
+   protection. Concurrency cancels an older run only when a newer event belongs to the same pull
+   request. Push runs on `main` use a unique group so the durable deployment record cannot be
+   cancelled by another push. Lightweight doc-drift and date-normalized workflow-map
+   freshness checks now run in CI. Because containment itself is not a required ruleset context,
+   its result is fail-closed into the required SQL Validation job; failure or cancellation cannot
+   turn the required jobs into accepted skips. No docs-only shortcut is part of this phase; a future shortcut
+   must explicitly exclude `.claude/**`, `.codex/**`, `.github/**`, `.husky/**`, `AGENTS.md`,
+   `CLAUDE.md`, `.coderabbit.yaml`, `package.json`, `scripts/**`, `supabase/migrations/**`, and
+   `.claude/schema-registry.json`.
+7. **A first push no longer rescans all reachable repository history when the destination proves a
+   usable default-branch boundary.** Git's hook-supplied actual push location is mandatory. For a
+   configured named remote, optimization occurs only when its sole fetch URL and sole push URL both
+   match that exact location; pre-push then reads the remote's advertised `HEAD` and excludes that
+   ancestry only when the same commit object is already available locally. Direct URLs, divergent
+   `pushurl` configuration, missing/unavailable remote heads, malformed responses, and unfetched
+   heads retain the conservative full-history fallback. New commits after the remote
+   boundary are still scanned completely, including private content added and deleted before the
+   new branch tip.
 
 **Incident found during implementation (same session).** Two git-config settings were falsifying
 local state, both invisible to every file-watching guard because neither is a file in the repo:

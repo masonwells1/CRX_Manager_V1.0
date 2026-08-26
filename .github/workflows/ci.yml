@@ -8,7 +8,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-    types: [opened, reopened, synchronize, edited]
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+
+# Supersede stale runs only for the same pull request. Every listed PR event,
+# including edits, runs full proof so a skipped required job cannot satisfy branch
+# protection. Pushes to main receive a run-id group and are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # CI only reads repository content and artifacts. It never needs a writable
 # GitHub token, and checkout must not retain one in the local Git config.
@@ -18,7 +25,6 @@ permissions:
 jobs:
   phase3-private-artifact-containment:
     name: Phase 3C Candidate Containment (CI)
-    if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 12
     # This is intentionally the first content-processing job. It uses only
@@ -99,13 +105,24 @@ jobs:
   sql-validation:
     name: SQL Migration Validation
     runs-on: ubuntu-latest
-    # Keep this dependency unconditional: a skipped containment job also skips
-    # SQL validation, so the containment job's event filter must stay tautological.
     needs: phase3-private-artifact-containment
+    # SQL Validation is a required branch-protection context; containment is not.
+    # Always start this job so a failed/cancelled containment dependency becomes
+    # a required red result instead of a skipped result that GitHub may accept.
+    if: ${{ always() }}
     # Fast (no node_modules); runs on every push and PR. Catches commits that
     # bypassed husky locally (e.g. via --no-verify or a non-husky environment)
     # by re-running the full migration audit at the PR/push gate.
     steps:
+      - name: Bind containment result into this required check
+        env:
+          CONTAINMENT_RESULT: ${{ needs.phase3-private-artifact-containment.result }}
+        run: |
+          test "$CONTAINMENT_RESULT" = "success" || {
+            echo "Private-artifact containment did not pass: $CONTAINMENT_RESULT" >&2
+            exit 1
+          }
+
       - name: Checkout code
         uses: actions/checkout@v7
         with:
@@ -280,6 +297,20 @@ jobs:
 
       - name: Agent workflow truth-state and sync tests
         run: npm run test:agent-workflows
+
+      - name: Documentation consistency
+        run: npm run check:docs
+
+      - name: Workflow map freshness (ignore generated date stamp)
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(mktemp)"
+          after="$(mktemp)"
+          sed -E 's/Updated [^<]+/Updated <date>/' docs/app-workflow-map.html > "$before"
+          node scripts/generate-workflow-map.mjs
+          sed -E 's/Updated [^<]+/Updated <date>/' docs/app-workflow-map.html > "$after"
+          diff -u "$before" "$after"
 
       - name: RPC contract and idempotency inventory tests
         run: npm run test:contracts

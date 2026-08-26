@@ -61,14 +61,60 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // every OTHER migration path was already blocked here (P1), so the guard had to
   // learn the new spelling. The transform anchors below are untouched by that
   // edit; only the pinned blobs move.
+  // pushLib re-pinned 2026-08-24: added `riskyContentMatches` and
+  // `describeRiskyContent`, which report WHICH risky-content pattern fired and
+  // in which file, so both guards stop blaming a hard-coded list of four
+  // identifiers for a pattern that has roughly twenty alternatives. This is
+  // diagnosis only — `RISKY_CONTENT_RE` and `contentIsRisky` are byte-for-byte
+  // unchanged, and the reporter is built from `RISKY_CONTENT_RE.source` rather
+  // than a copy, so the gate's verdict cannot move. RISKY_PATH_RES and the
+  // risky producer-path anchor this transform verifies are untouched, so the
+  // transform is still identity and input == output.
+  // pushLib re-pinned again 2026-08-24 (PR #463, CodeRabbit round 1): the
+  // reporter now parses C-quoted patch paths and attributes a RENAME to the
+  // source path rather than the destination — a rename of `docs/policy.md` to
+  // `docs/ordinary.md` fires the gate on the SOURCE name, and blaming the
+  // destination was the same misdirection this PR removes. Still diagnosis
+  // only: `RISKY_CONTENT_RE`, `contentIsRisky` and `RISKY_PATH_RES` remain
+  // byte-for-byte unchanged, so the transform is identity and input == output.
+  // pushLib re-pinned again 2026-08-24 (PR #463, Codex round 1): diff-derived
+  // paths are now escaped and delimited before they reach a denial message.
+  // The quoted-path decoding added earlier in the same PR turned an encoded
+  // newline in an attacker-chosen FILENAME into a real one, and that message is
+  // delivered verbatim to a privileged agent — Codex demonstrated a name
+  // rendering as a forged second line of guard guidance. Still diagnosis only:
+  // `RISKY_CONTENT_RE`, `contentIsRisky` and `RISKY_PATH_RES` remain
+  // byte-for-byte unchanged, so the transform is identity and input == output.
+  // pushLib re-pinned again 2026-08-24 (PR #463, Codex round 2, SEC-001): diff
+  // parsing is now stateful. A unified diff renders an added line by prefixing
+  // `+`, so file CONTENT of `++ b/evil.md` arrives as `+++ b/evil.md` and was
+  // indistinguishable from a file header — letting diff content, not just a
+  // filename, forge attribution. Headers are now recognised only outside a hunk.
+  // The untrusted block is also fenced and labelled as data. Still diagnosis
+  // only: `RISKY_CONTENT_RE`, `contentIsRisky` and `RISKY_PATH_RES` remain
+  // byte-for-byte unchanged, so the transform is identity and input == output.
+  // Re-pinned 2026-08-25 (PR #463 merge of origin/main): the merge combined
+  // PR #460's codexGuard (deny for scripts/apply-migration-file.mjs) with this
+  // PR's pushLib reporter work, so codexGuard takes main's blob and pushLib
+  // keeps this branch's blob. Inputs verified against the merged working tree
+  // with `git hash-object`; outputs taken from the producer test's printed
+  // candidate, not hand-computed.
+  // Re-pinned 2026-08-26 (PR #364 merge of origin/main): the merge combined
+  // main's pushLib blob d0f68482 with this branch's four added RISKY_PATH_RES
+  // entries, so the merged working tree is neither side's blob. main's
+  // candidate was tried first and the producer test refused it as stale
+  // (expected d0f68482, got c25708e5), so the pin follows the merged file.
+  // codexGuard is byte-identical on both sides and keeps its blob. The risky
+  // producer-path anchor this transform verifies is still present exactly
+  // once, so the pushLib transform is identity and input == output.
   codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
-  pushLib: "6cc49038af588b0c6911e93ed64cb140ca9acd25",
+  pushLib: "c25708e5c177bbefa5c703af321c935c071f9ccf",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   // codexGuard re-pinned 2026-08-24 (PR #460) alongside the input blob above;
   // taken from the producer test's reported candidate, not hand-computed.
   codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
-  pushLib: "6cc49038af588b0c6911e93ed64cb140ca9acd25",
+  pushLib: "c25708e5c177bbefa5c703af321c935c071f9ccf",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
