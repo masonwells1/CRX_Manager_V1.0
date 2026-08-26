@@ -1,5 +1,43 @@
 # CRX Manager V1.0 — Development Changelog
 
+## 2026-08-25 — the routine migration door now refuses a stolen reviewer proof
+
+PR #470 closed a proof-replay hole in `scripts/apply-migration-file.mjs` by adding
+`requireExactProofName`, but wired it only there. `.claude/hooks/migration-apply-guard.mjs`
+— the PreToolUse hook covering MCP `apply_migration`, the door used for ROUTINE
+migrations — passed no such flag and kept matching proof-to-migration by substring.
+So the fix hardened the rarely-used oversized-file door and left the common one open.
+Codex reported this on #470 and it was deliberately deferred there rather than bundled;
+this is that follow-up.
+
+The attack: copy reviewed bytes to `99999999999999_alias_<old-name>.sql`. The proof for
+`<old-name>` still matched by substring, the queryHash still matched (identical SQL), and
+the ordering check read the alias's leading stamp as newest. Codex reproduced
+`APPLY GATE PASSED` on a real dry run, including a legacy 8-digit variant
+(`20260210_fix_rls_critical_issues`) that defeated an earlier stamp-count rule outright.
+
+- `requireExactProofName` now **defaults to `true`**, so a caller that forgets it inherits
+  the safe behaviour. Both known callers want exact; the flag stays available for tests.
+- Names are compared **normalized** (basename, `.sql` stripped, slashes unified), not as
+  raw strings. This matters: `write-apply-proofs.mjs` records a bare name while an apply
+  call may carry `<name>.sql` or a repo-relative path, and substring matching had been
+  quietly absorbing that difference. Naive equality would have refused legitimate applies.
+  An alias differs in its STEM, which survives normalization, so it is still refused.
+- The refusal now distinguishes "a fresh clean proof exists but names a DIFFERENT
+  migration" from "no proof found", printing both names. Previously an operator hitting
+  this saw a missing-proof message with a proof sitting right there, and the natural next
+  move — re-mint — would not have helped.
+
+Proof: 114 assertions in `migration-apply-lib.test.mjs` and the full
+`npm run test:correction-guards` suite pass, including the hook's own 86 assertions. The
+existing characterization test that asserted *"substring matching DOES let the alias
+inherit the proof (the bug)"* now asserts the default REFUSES it; the lenient path is
+retained behind an explicit opt-in so it fails loudly if anyone reinstates it as default.
+
+Not verified: no live migration was applied to exercise this end-to-end. The change is
+fail-closed — every altered path can only refuse an apply that previously succeeded, never
+permit one — so the untested direction is the safe one.
+
 All significant development milestones, in reverse chronological order.
 
 ## 2026-08-25 — Booking-draw pause released

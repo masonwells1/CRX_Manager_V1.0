@@ -56,6 +56,26 @@ const block = (reason) => ({ decision: "block", reason });
  * @param {Function} [args.gitWorktreeList] injection point for `git worktree list`
  * @returns {{decision: "allow"|"block", reason?: string}}
  */
+// Compare migration identities, not raw strings. A proof records the name passed to
+// write-apply-proofs.mjs (no .sql); an apply_migration call may carry the bare name,
+// a basename with .sql, or a repo-relative path. Substring matching used to absorb
+// that variation — and absorbed the alias attack with it. Normalizing both sides
+// keeps the tolerance without the hole: an alias differs in its STEM, which survives
+// normalization, so `99999999999999_alias_<old>` still cannot equal `<old>`.
+export function normalizeMigName(v) {
+  // The backslash separator is built rather than written as an escape, so this line
+  // survives any future codegen or heredoc that would otherwise eat one of them.
+  const BACKSLASH = String.fromCharCode(92);
+  return String(v ?? "")
+    .trim()
+    .split(BACKSLASH)
+    .join("/")
+    .split("/")
+    .pop()
+    .replace(/\.sql$/i, "")
+    .trim();
+}
+
 export function evaluateMigrationApply({
   name,
   query,
@@ -64,7 +84,12 @@ export function evaluateMigrationApply({
   cwd,
   now = Date.now(),
   gitWorktreeList,
-  requireExactProofName = false,
+  // Defaults to TRUE so a caller that forgets it inherits the safe behaviour.
+  // It was introduced (PR #470) opt-in for scripts/apply-migration-file.mjs only,
+  // which left the MCP apply_migration path — the door used for ROUTINE migrations —
+  // still matching by substring. Flipping the default closes that; both known callers
+  // are the PreToolUse hook and apply-migration-file.mjs, and both want exact.
+  requireExactProofName = true,
 } = {}) {
   const stateDir = path.join(projectDir, ".claude", "session-state");
 
@@ -315,6 +340,7 @@ export function evaluateMigrationApply({
   const MAX_AGE_MS = PROOF_MAX_AGE_MS;
 
   let validProof = null;
+  let nameMismatchProof = null;
   for (const dir of proofDirs) {
     if (validProof) break;
     try {
@@ -341,17 +367,31 @@ export function evaluateMigrationApply({
         // and left the mechanism intact; a legacy 8-digit name like
         // `20260210_fix_rls_critical_issues` defeated the stamp-count rule outright.
         //
-        // `requireExactProofName` makes the proof bind to exactly one migration.
-        // scripts/apply-migration-file.mjs sets it. The PreToolUse hook does NOT yet:
-        // that path's substring matching is a pre-existing documented weakness
-        // (see the sessionProofDirs note above), and tightening it repo-wide changes
-        // behaviour for every MCP apply, which deserves its own reviewed change rather
-        // than riding along at the end of this one. The same alias attack applies there
-        // — it is not introduced here, and it is not fixed here either.
+        // `requireExactProofName` binds a proof to exactly one migration, and it now
+        // DEFAULTS TO TRUE — so both doors are closed: scripts/apply-migration-file.mjs
+        // (which set it explicitly from PR #470) and the PreToolUse hook covering MCP
+        // `apply_migration`, which passes no flag and therefore inherits the safe value.
+        // The MCP path is the door used for ROUTINE migrations, so leaving it lenient
+        // meant the earlier fix hardened the rare door and left the common one open.
+        //
+        // Comparison is on NORMALIZED names (basename, `.sql` stripped), not raw strings.
+        // Substring matching had been absorbing a real difference — write-apply-proofs.mjs
+        // records a bare name while an apply call may carry `<name>.sql` or a repo path —
+        // so naive equality would have refused legitimate applies. Normalizing keeps that
+        // tolerance and still refuses every alias, because an alias differs in its STEM,
+        // which survives normalization.
         const proofName = (data.migration || "").toString();
         const nameMatches = requireExactProofName
-          ? proofName === migName
+          ? normalizeMigName(proofName) === normalizeMigName(migName)
           : (migName.includes(proofName) || proofName.includes(migName) || migName === proofName);
+        // Remember a fresh, clean proof that failed ONLY on identity, so the refusal
+        // can say "the proof names a DIFFERENT migration" instead of "no proof found".
+        // Without this the operator sees a missing-proof message while a proof sits
+        // right there, and the natural next move is to re-mint — which will not help.
+        if (proofName && !nameMatches) {
+          const fnd = (data.findings || "").toString();
+          if (fnd === "clean" || fnd === "blockers-fixed") nameMismatchProof = { file: f, proofName };
+        }
         if (proofName && nameMatches) {
           const findings = (data.findings || "").toString();
           if (findings === "clean" || findings === "blockers-fixed") {
@@ -470,6 +510,15 @@ export function evaluateMigrationApply({
   // No valid proof — block with explicit instructions.
   return block(
     `MIGRATION APPLY GUARD: Cannot apply migration "${migName || "(unnamed)"}" without subagent review proof.\n\n` +
+    (nameMismatchProof
+      ? `A fresh, clean proof IS present, but it names a DIFFERENT migration:\n` +
+        `  proof file : ${nameMismatchProof.file}\n` +
+        `  proof names: "${nameMismatchProof.proofName}"\n` +
+        `  you applied: "${migName}"\n` +
+        `A proof binds to exactly ONE migration, so it cannot authorise this one. If those\n` +
+        `two names should be identical, the file being applied is not the file that was\n` +
+        `reviewed — check the filename. Re-minting will NOT help until the names agree.\n\n`
+      : "") +
     `REQUIRED STEPS before retrying this call:\n` +
     `  1. Dispatch in PARALLEL (single message with two Agent tool calls):\n` +
     `       Agent: rls-security-reviewer    (scope: this migration)\n` +
