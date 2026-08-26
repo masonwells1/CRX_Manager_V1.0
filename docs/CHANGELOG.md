@@ -2,6 +2,203 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-25 — PR #432 closed unmerged; control-file edits move to the `ask` tier; two git-config falsifications fixed
+
+Mason ended the PR #432 repair loop (130 commits, +7,329 lines, four adversarial review rounds,
+never merged) after a symbol sweep showed all five planned splits target code absent from
+`origin/main`, and one split repaired a regression the branch itself introduced. Agent-self-
+protection guardrail work is frozen; business-rule guards are unaffected. Full rationale and the
+three-tier guardrail classification are in `docs/manual/DECISION_LOG.md` (2026-08-25 entry) and on
+the closed PR.
+
+**`.claude/settings.json`** — added these to `permissions.ask` for `Edit`/`Write`:
+
+| Path | Why it is control-plane |
+|---|---|
+| `.claude/hooks/**`, `.codex/hooks/**` | the guard implementations |
+| `.codex/hooks.json` | the manifest that **registers** the Codex guards; `.codex/hooks/**` cannot match it |
+| `.codex/config.toml` | selects the production Supabase project and sets `read_only=false` |
+| `.claude/settings.json` | the Claude permission and hook manifest |
+| `.claude/settings.local.json` | tracked, and **higher precedence** than `settings.json` |
+| `.coderabbit.yaml` | configures the every-PR reviewer; the repo file outranks both dashboards |
+| `.husky/**`, `package.json`, `.github/workflows/**` | the commit gate, the script table, and two of the three required checks |
+| `AGENTS.md`, `CLAUDE.md` | the canonical shared contract and Claude routing — they define the approval gates themselves |
+| `scripts/{check,validate,verify}-*`, `remove-applied-ledger-entry.mjs` | the deterministic validators and the ledger mutator |
+| `scripts/write-codex-push-proof.mjs`, `scripts/run-claude-review.mjs` | mint the exact-SHA evidence the risky-change gates consume |
+
+**What this actually does — read this before citing it.** The repo sets
+`permissions.defaultMode: "dontAsk"` (`.claude/settings.json:3`, a deliberate PR #352 decision on
+2026-08-08). In `dontAsk` mode an `ask` rule is **auto-denied, not prompted**. So in an ordinary
+session these paths are **blocked**; a deliberate control-file edit needs a session started in a
+permission mode that honours prompts. Mason's decision, 2026-08-25: keep `dontAsk` and state the
+effect accurately rather than change harness-wide permission behaviour. The same is true of every
+pre-existing `ask` entry — `Bash(gh pr merge:*)`, `Bash(vercel --prod:*)`,
+`supabase functions deploy`, the edge-function and merge MCP tools — which have been denials
+rather than prompts since 2026-08-08.
+
+`ask` was still chosen over an explicit `deny` because the two diverge once the mode changes: a
+`deny` can never be satisfied, whereas these become prompts under a prompting mode. A permanent
+`deny` would recreate the maintenance dead-end that forced PR #432's "reviewed producer" design,
+which was declined.
+
+This is an **accidental-edit tripwire, not tamper prevention** — harness-enforced, not
+OS-enforced, and it cannot stop `git apply`, `git checkout -- <path>` or a shell write. Do not
+cite it as a security control.
+
+The last four rows were added across three review rounds, each closing the same class of gap: a
+rule naming one control file while a sibling with equal or greater authority stayed unguarded.
+`.claude/settings.local.json` was the sharpest — being higher precedence, an edit there could have
+overridden this entire tripwire without triggering it. **When protecting configuration, enumerate
+the precedence chain, not just the file you have in mind.**
+
+**Two git-config settings were falsifying local state** and were fixed with Mason's approval. Both
+were invisible to every existing guard because neither is a file in the repository:
+
+- `core.fsmonitor` (repo config) pointed at a temp-directory script reporting "nothing changed".
+  `git status` reported a clean tree while `git -c core.fsmonitor=false status` reported
+  the file as modified; blob hashes confirmed a real difference (`f9032e03…` vs
+  `296744f8…`). `git update-index --refresh` did not clear it. Now unset. Previous value was a
+  `patrol` fsmonitor script under the user temp directory
+  (`<temp-dir>/patrol-fsmon-<id>/fsmon.cmd`).
+- `core.hooksPath` in one worktree pointed at a **separate checkout outside this repository**
+  (`<other-repo-root>/.husky`); a commit there would have run that repository's pre-commit hooks
+  instead of this one's. One worktree of ~37. Now `<repo-root>/.husky/_`, matching the rest.
+
+Before trusting a clean tree, re-test with
+`git -c core.fsmonitor=false status --short --untracked-files=all` — `--untracked-files` is
+required because `status.showUntrackedFiles=no` would otherwise hide untracked files and make an
+empty result look clean. Then
+enumerate every configured hook path with
+`git config --show-origin --show-scope --get-all core.hooksPath` and confirm the effective value
+from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
+stop-and-report. Inspecting `config.worktree` alone is insufficient — `core.hooksPath` also takes
+system, global and local scope, and precedence decides which one wins.
+
+## 2026-08-25 — the last ExcelJS workbook test gets its cold-cache timeout
+
+`productPricingSupplierEvidenceWorkbook.test.ts` was the only one of the three ExcelJS test
+files without an explicit per-test timeout, so it inherited the 5s default. Its single test
+generates and re-parses a real `.xlsx`; that costs ~350ms warm but multi-seconds on the first
+ExcelJS load in a worker, which is why it failed on the first run in a fresh worktree and
+passed on every run after. Because `.husky/pre-commit` runs the full suite, that cold miss
+hard-blocks an unrelated commit — the exact pressure toward the forbidden `--no-verify`.
+
+- Added `}, 30000)` to the test, matching the treatment its two siblings already carried
+  (`productPricingWorkbook.test.ts` 20s/45s, `supplierPricingWorkbook.test.ts` 20s). The
+  global `testTimeout` is deliberately untouched, so the rest of the suite keeps its 5s
+  contract.
+- Audited every test that generates or parses `.xlsx`. `Products.pricing-flow.test.tsx` and
+  `SupplierPricing.test.tsx` mock the workbook modules and never load ExcelJS (≤454ms
+  measured), so they need nothing. None of the three lib files loads ExcelJS from a
+  `beforeAll` or module scope, so a per-test timeout is the correct lever and covering the
+  first test per file is sufficient for the gate.
+- `docs/manual/KNOWN_ISSUES.md` records this as a distinct root cause from the existing
+  page-render full-suite flake, whose `waitFor`/`findAllBy` fix does not apply here.
+
+Proof: on the first `vitest` run after a fresh `npm ci`, the cold ExcelJS load landed on the
+sibling file `productPricingWorkbook.test.ts`, whose first test measured **7013ms** — already
+over the 5s default, and passing only because that file already carried a 20s timeout. That is
+the cost this entry's test was exposed to with no timeout of its own. Mutation proof of the new
+30s value: with `--testTimeout=100` the target test fails `Test timed out in 100ms` before the
+change and passes after, confirming the per-test timeout overrides the global. All 5
+xlsx-touching files green (48 tests); target test 346ms before, 373ms after.
+
+## 2026-08-25 — Booking-draw pause released
+
+Mason released the booking-draw pause in-chat after the full draw-down chain and the save_job
+chem-unit guard went live. The pause was procedural (a team agreement during the rollout, never a
+code flag), so the release is a recorded decision, not a deploy. Read-only pre-release checks:
+one `draw_down_quote` overload, intent-bound body installed, zero retry receipts in the prior
+24 hours, function-surface sweeps clean. No test draw was fabricated; the first real draw is the
+final end-to-end proof and should be read back read-only when it happens. Canonical record:
+`docs/manual/DECISION_LOG.md` (2026-08-25 entry).
+
+## 2026-08-25 — Decision Log: the dangling PR #403 reference now records a closure
+
+`docs/manual/DECISION_LOG.md` still described the narrow live-ledger recovery exception as a
+settled approval whose entry was "not on `main` yet", pending PR #403. PR #403 was closed on
+2026-08-25 by Mason's explicit decision and will never merge, so as written that paragraph read as
+unfinished work — a future agent could have tried to resurrect the exception, or cited it as
+policy in force. Neither is true.
+
+- The paragraph inside the 2026-08-14 "One-time override" entry now states the closure directly:
+  the exception is **not in force**, no entry for it exists on `main`, and a future byte-verbatim
+  recovery uses the manual path proven on 2026-08-14 (commit `3a2a0ca0`, via PR #392) or requires
+  a fresh owner decision.
+- A second paragraph separates the two decisions that the old text had entangled. Publishing
+  `20260812115238` in full rests on Mason's own 2026-08-14 instruction and on the byte-for-byte
+  ledger match recorded in the same entry — not on #403's byte-verbatim rule. That override stands
+  unchanged and is unaffected by the closure.
+- Nothing else in the override entry changed: **Source**, **Decision**, and **Operative rule** are
+  untouched.
+
+Evidence: <https://github.com/masonwells1/CRX_Manager_V1.0/pull/403#issuecomment-5416488045>.
+Verified before writing — #403 `CLOSED`, `mergedAt: null`; #392 merged `4381c460`; `3a2a0ca0` is an
+ancestor of `origin/main` with 188 commits after it; the migration file is present on `main`; and
+`git grep` finds no other reference to #403 or to the recovery exception anywhere in the repo.
+
+## 2026-08-25 — save_job chem-unit invariant + derived totals applied live
+
+With Mason's explicit in-chat approval,
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` (merged as PR #446) was
+applied to production through the gated file-bytes apply door (`scripts/apply-migration-file.mjs`)
+→ ledger version `20260825142708`, ledger 975 → 976 rows. The Supabase management-API token was
+sourced in-process from the Windows Credential Manager (`Supabase CLI:supabase`) and never entered
+chat or a file. Fresh same-session CLEAN proof pair (`write-apply-proofs.mjs`,
+`gpt-5.6-sol`/high) was minted immediately before the apply; the transmitted bytes matched the
+reviewed sha256 `f2e0404e…`.
+
+`save_job` now refuses mismatched or unrecognized chemical rate units (the 8×/16× pint-vs-gallon
+over-bill class) and derives `total_cost_cents` / `total_price_cents` from the chemical lines
+server-side instead of trusting the caller. Post-apply proof: installed body carries
+`chem_unit_invariant_v2`; idempotency helpers unchanged by md5; registered smoke
+`smoke-save-job-parity.sql` returned `SMOKE_PASS_ROLLBACK` on live with the derived-total and both
+unit-refusal assertions active; nine function/money invariant sweeps clean (zero unallowlisted
+rows). The smoke fixture was updated in this change: the governed-pricing trigger
+(`require_governed_product_pricing`) now refuses `current_cost` on product INSERT, so the fixture
+creates pricing-free product shells. Tracked follow-up: the function `COMMENT` still says ELEVEN
+refusal families while the body raises twelve — needs a tiny COMMENT-only migration (the applied
+file is never edited).
+
+- **Migrations applied live this session:**
+  - `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`
+
+## 2026-08-25 — `/patrol`: the fsmonitor override now covers every Git launch
+
+Follow-up on PR #473, closing three defects the mandatory gates returned. The previous
+commit claimed the fsmonitor vector was closed by construction; it was closed for the
+centralized `git()` helper only. `patrol-sources.mjs` built its own `spawnSync` argument
+list for the `ownDraftPaths` reader — trusted binary, trusted environment, but no
+`-c core.fsmonitor=false`. That reader runs index-refreshing `git diff` commands inside
+every worktree, so a repository-local `core.fsmonitor` could execute a program there
+under Mason's account. Found by the exact-SHA `gpt-5.6-sol` gate (HIGH) and confirmed
+against the source before fixing.
+
+- `SAFE_BY_CONSTRUCTION` is now exported and applied at both direct launchers. The
+  second — `git cat-file --batch` — was surfaced by the new regression sweep rather than
+  by the review. `cat-file` never refreshes the index so it was not a live vector, but an
+  exempt launcher is an exception to remember, which is how the first one was missed.
+- New static sweep: every direct `spawnSync(trustedGitPath(), [...])` in a patrol module
+  must carry the override. The property is "no call site is exempt", which an
+  execution test of one path cannot establish.
+- CI (required check) was failing on Linux: the fsmonitor CONTROL wrote a Windows `.cmd`
+  payload the runner cannot execute, so the control could not fire. The fixture was
+  broken on that platform, not the hardening. It now writes a `#!/bin/sh` payload with
+  the executable bit off-Windows, so the control is real on both platforms.
+- `.claude/commands/patrol.md` still claimed the hardening refuses "worktrees whose local
+  config could execute a filter". That scanner was deleted the day before. The text now
+  matches the code and names the residual `filter.*.clean/smudge` exposure as accepted
+  interactive-only baseline risk — the same risk `scripts/fleet-status.mjs` already carries.
+
+Sol's remaining medium (source `expected`/`received` counts recorded but never enforced)
+changes reporter behaviour rather than fixing a defect in this diff, and is left for
+Mason to schedule.
+
+Proof: patrol's four suites pass (classify 110, render 82, sources 128, trusted-exec 35 —
+up from 33 by the two sweep assertions); `npm run test:agent-workflows` green;
+`patrol-report.mjs` ran end to end against live data (52 items, "needs you 3 · scan
+errors 1") and still withheld the all-clear because a source failed.
+
 ## 2026-08-24 — Draw-down rollout completed live: migrations 2, 3 and 4 applied
 
 With Mason's explicit in-chat approval (Codex→Claude handoff
@@ -25,6 +222,130 @@ updated. Booking draws stayed paused throughout the rollout.
   - `20260816120000_draw_down_split_order_lines_by_price_tier.sql`
   - `20260817120000_carry_allocated_line_cents_through_lifecycle.sql`
   - `20260819232000_bind_draw_down_receipts_to_intent.sql`
+
+## 2026-08-24 — `/patrol`: a read-only queue reporter that cannot fake an all-clear
+
+Mason runs 28 worktrees and ~20 open PRs at once, and `/fleet` reports all of it without
+filtering — he reads everything or nothing. `/patrol` answers the narrower question "what
+needs Mason?" and is built so that its silence is trustworthy **about the things it can
+observe** — it never reports an all-clear over a source it failed to read, a condition it
+could not determine, or an item it hid. It cannot speak to decisions that live outside
+GitHub: a pull request held back by a judgement call recorded only in session notes looks
+unblocked to patrol, which is why parking must be marked with a label on the PR itself.
+
+- **Read-only by construction.** The collector issues GETs and read-only `git` queries —
+  read-only in the sense that no tracked file and no business data changes. `git status`
+  and `git diff` still refresh Git's index metadata under `.git/` as a side effect of
+  reading, which is why the fsmonitor override matters on every call site.
+  An earlier design proposed one automatic `gh pr update-branch` action; two adversarial
+  Codex (`gpt-5.6-sol`, high effort) review rounds on the plan established that the
+  classify-then-act window could not be made race-free against 28 concurrent sessions or
+  against exact-SHA review proofs, so every mutation was removed rather than guarded.
+- **The renderer, not a language model, owns every safety-critical line** — the lanes, the
+  counts, the emergency text, and the exact phrase `Nothing waiting on you`. The reporting
+  agent may append one labelled paragraph; it cannot suppress a lane, soften an error, or
+  paraphrase an all-clear. Round 2 of the review flagged the previous "the agent is
+  instructed not to…" wording as an assertion without a mechanism.
+- **Exhaustive fallback.** Any unmatched condition combination resolves to `INDETERMINATE`;
+  `IDLE` is never a fallback and is downgraded automatically if it carries a blocker.
+- **Freshness is proved, not assumed.** Merge state requires two reads a minimum interval
+  apart, cross-checked against a different GitHub API, so two responses from one cache
+  cannot pass as agreement.
+- **Required checks are the union of branch protection AND active rulesets.** This repo's
+  `protect-main` ruleset requires a `Vercel` check that branch protection does not list;
+  resolving from protection alone would have read a PR as green with a required check
+  unrun. Duplicate check contexts resolve to the newest run so a stale green cannot win,
+  and the CodeRabbit status is validated by creating App id rather than context name.
+- **A failed source emits a visible `SCAN_ERROR` item**, so an empty list from a broken
+  source can never be mistaken for a genuinely empty list.
+- **Negative claims only.** Patrol reports blockers it can see and never asserts a PR is
+  ready to merge — a complete readiness predicate would have to model every current and
+  future GitHub ruleset. GitHub's merge button stays the authority.
+- **Parking must be marked on GitHub.** A PR held by a judgement call is invisible to
+  patrol unless it carries a `hold`/`parked`/`do-not-merge` label or `PARKED` in the title.
+  Verified live: patrol reported "no blockers found" for PR #445, which is deliberately
+  parked as a net regression, because that decision exists only in session notes.
+- Proven by running against the live queue, not only by tests: the run surfaced two real
+  defects unit tests would not have — a decision-table hole routing nine ordinary
+  worktrees into the fallback, and a cited "full queue" path that was never written.
+  153 assertions pass at this checkpoint (355 by the end of the branch: classify 110,
+  render 82, sources 128, trusted-exec 35), including a mutation set that flips each all-clear condition
+  individually and asserts the phrase disappears every time.
+- **`/patrol` is interactive only — Mason's scoping decision, 2026-08-24.** It is not
+  scheduled and must not be. Three adversarial review rounds each found a *new* hole in the
+  previous round's fix of the unattended-execution surface; every fix was correct and every
+  one was incomplete by one step. All of those findings exist only because the tool would
+  run hourly under his account unwatched, so the capability was dropped rather than patched
+  a fourth time. Run by hand it is no riskier than any other script here, and by hand is
+  where its value already is. The `trusted-exec.mjs` hardening stays as defence in depth;
+  scheduling it later needs its own design pass, not another patch.
+- **Loop liveness, parked migrations, and gate health are implemented.** Parked discovery
+  reuses `.claude/hooks/worktree-awareness-lib.mjs` — the library `/fleet` composes — so
+  the two can never report different parked counts; when that library cannot determine a
+  worktree's parked state, patrol marks the source incomplete instead of reporting a clean
+  zero. The process probe fails **closed**: zero `powershell` rows in its own output means
+  the probe broke, never that nothing is running.
+- **`patrol-monitor.mjs` reports heartbeat freshness** — missing, stale, malformed, or
+  future-dated. **Superseded by the interactive-only decision above:** it is a convenience
+  check ("is the scan I last ran still current?"), *not* a dead-man alarm, because nothing
+  fires it while nobody is at the machine. It is deliberately NOT registered as a scheduled
+  task. The design note that produced it still holds for any future attempt: an earlier
+  version hung the alarm on `SessionStart`, which only fires when someone starts a session
+  — no alarm in exactly the cases (machine asleep, nobody working) a dead-man switch exists
+  to cover.
+- **An independent Codex (`gpt-5.6-sol`, high effort) review of the code returned
+  BLOCKERS and found two real review-gate defects, both now fixed.** (1) Required checks
+  were matched by context name with the producing app discarded, so any integration with
+  status-write access could post a lookalike success and make patrol report green — the
+  actor-forgery shape CRX treats as a red line. Checks now resolve from the REST
+  check-runs and statuses endpoints and bind each required context to its expected app;
+  the GraphQL rollup was dropped because it omits the producer entirely. Commit statuses
+  expose no app id, so the one status-based required check has its producing account
+  pinned, and any unverifiable producer fails closed. (2) Any CodeRabbit status other than
+  `pending` counted as a completed review, so `failure` and `error` cleared the
+  missing-review blocker and could yield "no blockers found" with nothing having passed;
+  only a verified `success` now counts, and a failed review is an explicit blocker.
+  A third, medium finding corrected the command doc, which claimed patrol had "no write
+  capability" when it does write its own local state.
+- **A second Codex round found two more false-all-clear paths, both fixed.** (1) Parked
+  discovery ran only the worktree-owned pass, which deliberately exempts drafts inherited
+  from `origin/main` — so patrol could report zero parked migrations while an unapplied
+  mainline migration still waited. It now runs the same mainline discovery `/fleet` does
+  and marks the source incomplete when that state is unknown; the live count went from
+  "source errored" to a real 16. (2) `patrol-report.mjs` kept a good in-memory snapshot
+  when persisting it threw, rendered it normally, and exited 0 — able to print the
+  reserved all-clear while citing a queue file that did not exist. Any persistence failure
+  now discards the snapshot and produces the emergency result.
+- **A third Codex round found the Sol gate failing open; fixed.** Patrol cannot evaluate
+  the exact-SHA proof registry, and reported that as silence — so a risky money/RLS/
+  migration PR with **no** proof reached "no blockers found" and was handed to Mason as
+  his decision while CRX's hard gate had never been checked. An unsupported check now
+  reads as UNVERIFIED rather than passed: every PR carries an explicit blocker naming the
+  gate patrol cannot see, which also makes the all-clear unreachable while that is true.
+  Verified live — PR #460 (oversized-migration apply path) now surfaces the warning.
+- **The ambient-code path is closed** (Mason approved a fourth review round for it).
+  `scripts/patrol/trusted-exec.mjs` binds `git`, `gh`, and `powershell` to fixed absolute
+  executables under one minimal environment — the pattern PR #455 set for the proof
+  wrapper. Since no environment switch disables *repository-local* filters, and
+  `git status` runs Git's conversion pipeline, patrol now **refuses to scan** any worktree
+  whose local config defines an executable filter, fsmonitor command, textconv, or
+  ssh/proxy override, and fails closed when that config is unreadable. This matters
+  because this hardening was written while unattended scheduling was still intended: a `PATH` shim or a configured content filter
+  would otherwise execute hourly under Mason's account.
+- **One round-3 finding remains open and is Mason's call** (see `KNOWN_ISSUES.md`): any PR
+  author can forge parked state by putting `PARKED` in a title, since no actor provenance
+  is required. Real, but not a false-all-clear.
+- **Patrol then caught a false positive in itself.** It reported the Codex gate as down
+  because the review capture embeds the reviewed diff, and this change's own source
+  contains a usage-limit pattern. The gate probe now anchors to a real error line rather
+  than matching text anywhere in the capture — the same "matches text, not effect" trap
+  the merge guard has hit before.
+- Three further defects were found only by running it, not by tests: both CLI entry points
+  never executed at all on Windows (a hand-built `file://C:/…` never equals Node's
+  `file:///C:/…`); the main checkout is a path prefix of every nested worktree, so a bare
+  substring match credited every nested process to the parent and reported twelve July
+  ledgers as "stalled"; and ledgers older than a week are now `ARCHIVED` rather than
+  presented as loops that just died.
 
 ## 2026-08-24 — Fleet shipping sprint: schema registry refreshed from live…
 

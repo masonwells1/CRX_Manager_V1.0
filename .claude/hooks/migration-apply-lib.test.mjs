@@ -262,6 +262,112 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   ok(!otherProject.stdout.includes("Transmitting"), "--project never reaches transmission");
   const otherProjectConfirm = runScript(okRoot, ["--project", "someotherprojectref", "--confirm"]);
   ok(otherProjectConfirm.status === 1, "--project is refused even with --confirm");
+
+  // --name is refused for the same reason: it was caller-controlled input that TWO
+  // checks trusted. An alias like `99999999999999_alias_<oldstamp>_old_migration`
+  // still matches the reviewer proof by substring, while the ordering gate reads the
+  // FIRST 14-digit stamp and rules the stale SQL newer than everything applied —
+  // the out-of-order replay the gate exists to stop. (Codex P1, PR #460 round 5.)
+  const aliased = runScript(okRoot, ["--name", `99999999999999_alias_${MIG}`]);
+  ok(aliased.status === 1, `--name is refused (got ${aliased.status})`);
+  ok(aliased.stderr.includes("--name is not supported"), "the refusal names the flag");
+  ok(!aliased.stdout.includes("Transmitting"), "--name never reaches transmission");
+  const aliasedConfirm = runScript(okRoot, ["--name", `99999999999999_alias_${MIG}`, "--confirm"]);
+  ok(aliasedConfirm.status === 1, "--name is refused even with --confirm");
+  // `argv.includes` matched only a standalone token, so the `=` spelling slipped
+  // through; and the check ran after file resolution, so a missing file reported a
+  // path error instead of the refusal. (CodeRabbit, PR #470.)
+  const aliasedEquals = runScript(okRoot, [`--name=99999999999999_alias_${MIG}`]);
+  ok(aliasedEquals.status === 1, "--name=alias is refused too");
+  ok(aliasedEquals.stderr.includes("--name is not supported"), "the = spelling gets the same refusal");
+  const projectEquals = runScript(okRoot, ["--project=someotherref"]);
+  ok(projectEquals.status === 1, "--project=ref is refused too");
+  const nameNoFile = spawnSync(process.execPath, [
+    path.resolve(__scriptsDir, "apply-migration-file.mjs"), "--name", "whatever",
+  ], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: okRoot, SUPABASE_ACCESS_TOKEN: "" } });
+  ok(nameNoFile.stderr.includes("--name is not supported"),
+    "the flag refusal fires BEFORE file resolution, not a path error");
+
+  // REMOVING THE FLAG WAS HALF A FIX. The filename is caller-controlled too: copy an
+  // old reviewed migration to `99999999999999_alias_<old-name>.sql` and the proof
+  // still matches by substring, the queryHash still matches, and ordering reads the
+  // alias's FIRST stamp as newest. Codex reproduced the full replay (P1, PR #470).
+  // A canonical name — exactly one 14-digit stamp, at the start — kills it by
+  // construction, because an alias needs a second stamp to carry the original name.
+  {
+    const aliasRoot = fixture();
+    mkdirSync(path.join(aliasRoot, "supabase", "migrations"), { recursive: true });
+    const aliasName = `99999999999999_alias_${MIG}`;
+    writeFileSync(path.join(aliasRoot, "supabase", "migrations", `${aliasName}.sql`), SQL, "utf8");
+    const res = spawnSync(process.execPath, [
+      path.resolve(__scriptsDir, "apply-migration-file.mjs"),
+      path.join(aliasRoot, "supabase", "migrations", `${aliasName}.sql`),
+      "--confirm",
+    ], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: aliasRoot, SUPABASE_ACCESS_TOKEN: "" } });
+    ok(res.status === 1, `an aliased FILENAME is refused (got ${res.status})`);
+    ok(res.stderr.includes("not a canonical migration name"), "the refusal names the canonical-name rule");
+    ok(!res.stdout.includes("Transmitting"), "an aliased filename never transmits");
+    ok(existsSync(path.join(aliasRoot, ".claude", "session-state", "applied-migrations.json")),
+      "a refused aliased filename leaves the snapshot intact");
+  }
+  // A real repository migration name still passes unchanged.
+  ok(dry.status === 0, "the canonical-name rule does not reject a real migration filename");
+
+  // ROUND 7: the stamp-count rule closed a SHAPE, not the mechanism. A legacy
+  // 8-digit name (`20260210_fix_rls_critical_issues`) aliased to
+  // `99999999999999_alias_20260210_fix_rls_critical_issues` has exactly ONE 14-digit
+  // stamp, so it passed — while substring proof-matching still handed it the old
+  // migration's proof. Codex reproduced APPLY GATE PASSED. Exact proof-name equality
+  // is the actual fix.
+  {
+    const legacy = "20260210_fix_rls_critical_issues";
+    const alias = `99999999999999_alias_${legacy}`;
+    const legacySql = "ALTER TABLE public.t ENABLE ROW LEVEL SECURITY;\n";
+    const legacyHash = createHash("sha256").update(legacySql).digest("hex");
+    const root = mkdtempSync(path.join(os.tmpdir(), "crx-alias8-"));
+    roots.push(root);
+    const stateDir = path.join(root, ".claude", "session-state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(path.join(stateDir, "applied-migrations.json"),
+      JSON.stringify({ captured_at: iso(0), applied: [{ version: "20270101000000", name: "20270101000000_much_newer" }] }), "utf8");
+    // A genuine, fresh, clean proof for the LEGACY migration — nothing forged.
+    writeFileSync(path.join(stateDir, `migration-review-${legacy}.json`),
+      JSON.stringify({ migration: legacy, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: legacyHash }), "utf8");
+
+    // Substring matching (the hook's current behaviour) hands the alias that proof.
+    const lenient = evaluateMigrationApply({
+      name: alias, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
+      projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+    });
+    ok(lenient.decision === "allow", "substring matching DOES let the alias inherit the proof (the bug)");
+
+    // Exact matching refuses it.
+    const strict = evaluateMigrationApply({
+      name: alias, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
+      projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+      requireExactProofName: true,
+    });
+    denies(strict, "without subagent review proof", "exact proof-name matching refuses the aliased legacy name");
+
+    // Worth stating plainly, because it sharpens the bug: the legacy name cannot be
+    // applied HONESTLY either — the ordering guard refuses any candidate without a
+    // 14-digit stamp. So the only thing its proof was ever good for was being
+    // inherited by an alias that DID carry one. Exact matching removes that.
+    const honest = evaluateMigrationApply({
+      name: legacy, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
+      projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+      requireExactProofName: true,
+    });
+    denies(honest, "MIGRATION ORDERING GUARD",
+      "the legacy 8-digit name is refused by ordering regardless — its proof was only ever useful to an alias");
+
+    // Exact matching must not break the ordinary case: a canonical name whose proof
+    // names it exactly still passes.
+    allows(evaluate(fixture(), { requireExactProofName: true }),
+      "exact proof-name matching still allows a normal, correctly-named migration");
+  }
+  // The derived name still works — the removal must not break the normal path.
+  ok(dry.stdout.includes(`migration : ${MIG}`), "the ledger name is derived from the filename");
 }
 
 // ── WRAPPABILITY: the precondition the atomicity promise depends on ─────────
