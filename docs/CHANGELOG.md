@@ -2,6 +2,25 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-26 — Ledger-guard test no longer operates on the real repository
+
+`scripts/check-ledger-update.test.mjs` builds a throwaway Git repository to prove that renaming a
+protected file out of the protected surface is still blocked. Its Git calls passed only `cwd`, never
+a scrubbed environment. Git exports `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_WORK_TREE` and `GIT_PREFIX` to
+hook child processes, and `cwd` does **not** override an absolute `GIT_DIR` — so whenever this test
+ran from a Git hook it operated on the real repository instead of its fixture, aborting with
+`Command failed: git add .claude/hooks/protected.mjs` (status 128) and blocking the commit outright.
+
+Both child processes now inherit a `GIT_*`-scrubbed environment: the fixture's `git` helper and the
+`spawnSync` that executes the guard. The second one matters independently — with `GIT_DIR` inherited,
+the spawned guard inspected the real repository, so the rename assertion could pass or fail for
+reasons having nothing to do with the fixture it was meant to exercise.
+
+CI never caught this because CI runs the test directly with no `GIT_*` set; the defect existed only
+on the Git-hook path, where a green CI is not evidence the gate works. Verified in both directions —
+a bare run and a full hook-style environment both report 44 assertions passed, where the latter
+previously aborted with status 128.
+
 ## 2026-08-25 — PR #432 closed; control-file edits bounded; local/CI proof de-duplicated
 
 Mason ended the PR #432 repair loop (130 commits, +7,329 lines, four adversarial review rounds,
