@@ -28,12 +28,20 @@ products query open so every save-clicking test goes through the fail-closed bra
 Without that, the window is microseconds wide, the retry path is never exercised locally, and a
 reverted fix would look green until CI load widened it again.
 
+The gate is a **deferred promise, not a timer**. The first draft held the by-id query for a fixed
+800ms, which CodeRabbit correctly refused: on a slow enough machine the query resolves before the
+first click, no fail-closed toast is emitted, and `clickSave()` returns on its first attempt
+having exercised no retry at all — a green test proving nothing. With an explicit gate the
+ordering holds at any speed, and `clickSave()` now **asserts** the blocked attempt happened (and
+that `save_job` did not run) in all 11 tests that mount through the harness. If the gate ever
+stops closing, those fail loudly instead of passing silently.
+
 Proof: with that harness and a single un-retried click, 5 tests fail with the exact production
 symptom, including the "Checking the label-rate policy" toast; with `clickSave()`, all 14 pass.
-The file runs 7.05s (tests 5.68s) versus 8.20s before, so the harness costs nothing. Full suite
-green: 339 files, 4770 passed | 123 skipped.
+Dropping the timer also made the file *faster* — 3.29s versus 8.20s before. Full suite green:
+339 files, 4770 passed | 123 skipped.
 
-## 2026-08-25 — PR #432 closed unmerged; control-file edits move to the `ask` tier; two git-config falsifications fixed
+## 2026-08-25 — PR #432 closed; control-file edits bounded; local/CI proof de-duplicated
 
 Mason ended the PR #432 repair loop (130 commits, +7,329 lines, four adversarial review rounds,
 never merged) after a symbol sweep showed all five planned splits target code absent from
@@ -41,6 +49,34 @@ never merged) after a symbol sweep showed all five planned splits target code ab
 protection guardrail work is frozen; business-rule guards are unaffected. Full rationale and the
 three-tier guardrail classification are in `docs/manual/DECISION_LOG.md` (2026-08-25 entry) and on
 the closed PR.
+
+**`.husky/pre-commit`** — reduced from 14 overlapping stages to staged-file safety checks:
+ledger, private-artifact containment, staged SQL/frontend validation, conditional Claude/Codex
+manifest parity, and conditional dependency integrity. Full lint, typecheck, guard/unit tests,
+coverage, and build remain in GitHub CI; typecheck and build also remain in pre-push. Commit no
+longer regenerates or auto-stages the workflow map. Staged routing includes Git type changes, and
+ledger collection disables rename collapsing so a protected source path cannot disappear when it
+is renamed outside the protected surface. The
+containment regression contract and active
+preflight/ship/gauntlet/bug-hunt instructions were updated to the same no-index-mutation model;
+generated Codex adapters remain synchronized from the canonical Claude commands.
+
+**`.github/workflows/ci.yml`** — added `ready_for_review`, retained `edited` so base-branch
+retargets rerun proof, and added concurrency that cancels stale runs only for the same PR. All edits
+run full CI because GitHub treats conditionally skipped required jobs as successful; a zero-runner
+edit path would bypass branch protection. Pushes to `main` use unique run groups and are never
+cancelled, preserving the deployment proof record. Lightweight doc-drift and normalized
+workflow-map freshness checks now run in CI. No docs-only bypass was added: control files, scripts,
+migrations, package files, and the schema registry still require the normal full CI path.
+The unrequired containment job is also fail-closed into the required SQL Validation context, so a
+failed or cancelled dependency cannot be accepted as a skipped required check.
+
+**First-push containment performance** — a new remote branch previously scanned up to 4,096
+reachable commits even when nearly all were already advertised by the destination remote. Named
+remotes now use their actually advertised, locally available default-branch HEAD as the exclusion
+boundary only when their configured fetch URL and push URL both exactly match Git's hook-supplied
+actual destination. Direct URLs, divergent `pushurl` settings, or unavailable/unfetched heads keep
+the conservative full-history fallback; all commits after the advertised boundary remain fully scanned.
 
 **`.claude/settings.json`** — added these to `permissions.ask` for `Edit`/`Write`:
 
@@ -229,7 +265,6 @@ Proof: patrol's four suites pass (classify 110, render 82, sources 128, trusted-
 up from 33 by the two sweep assertions); `npm run test:agent-workflows` green;
 `patrol-report.mjs` ran end to end against live data (52 items, "needs you 3 · scan
 errors 1") and still withheld the all-clear because a source failed.
-
 ## 2026-08-24 — Draw-down rollout completed live: migrations 2, 3 and 4 applied
 
 With Mason's explicit in-chat approval (Codex→Claude handoff

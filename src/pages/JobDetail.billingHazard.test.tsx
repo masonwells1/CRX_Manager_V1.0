@@ -145,7 +145,8 @@ const UNIT_CONVERSIONS = [
 /**
  * The ACTIVE-list products query answers immediately, so the grid and the hazard banner render
  * at once, while the BY-ID query — the one whose effect flips `jobLabelsLoaded` — is held open
- * for `ms`. That is the exact shape of the real race, made deterministic ON PURPOSE.
+ * until the test explicitly releases it. That is the exact shape of the real race, made
+ * deterministic ON PURPOSE.
  *
  * Without this, the window between "banner is on screen" and "save gate is open" is only a few
  * microseconds wide: it closes before the test can click, so the retry in clickSave() is never
@@ -153,11 +154,25 @@ const UNIT_CONVERSIONS = [
  * suite fails intermittently instead. Holding the by-id load open forces every save-clicking
  * test through the fail-closed branch first, so the guard's real behaviour is what gets proven.
  *
+ * The gate is a DEFERRED PROMISE, not a timer. An earlier draft held the query for a fixed
+ * 800ms, which silently stops testing anything the moment a machine is slow: if setup outlasts
+ * the timer, the query resolves before the first click, no fail-closed toast is emitted, and
+ * clickSave() returns on its first attempt having exercised no retry at all — a green test
+ * proving nothing. With an explicit gate the ordering holds on any machine at any speed, and
+ * clickSave() ASSERTS the blocked attempt actually happened. (CodeRabbit, PR #485.)
+ *
  * Verified 2026-08-25: with this harness and a single un-retried click, 5 tests fail with the
  * production symptom (`expected false to be true`, toast "Checking the label-rate policy — try
  * Save again in a moment."); with clickSave(), all 14 pass.
  */
-function buildLateByIdProductsChain(rows: unknown[], ms: number): Record<string, unknown> {
+let releaseLabelLookup: () => void = () => {};
+// True only while a mountWith() gate is installed for the CURRENT test. A few tests build
+// their own `mockFrom` instead of calling mountWith, so their by-id lookup resolves
+// immediately and there is no fail-closed attempt to assert. Reset in beforeEach so the
+// flag can never leak from one test into the next.
+let labelLookupGated = false;
+
+function buildGatedByIdProductsChain(rows: unknown[], gate: Promise<void>): Record<string, unknown> {
   let byId = false;
   const self: Record<string, unknown> = {};
   const method = (..._args: unknown[]) => self;
@@ -168,7 +183,7 @@ function buildLateByIdProductsChain(rows: unknown[], ms: number): Record<string,
     'rollback', 'returns', 'textSearch', 'overlaps', 'abortSignal']) self[m] = method;
   self.in = (col: unknown, _vals: unknown) => { if (col === 'id') byId = true; return self; };
   const settle = () => (byId
-    ? new Promise((res) => setTimeout(res, ms)).then(() => ({ data: rows, error: null }))
+    ? gate.then(() => ({ data: rows, error: null }))
     : Promise.resolve({ data: rows, error: null }));
   self.then = (onF: unknown, onR: unknown) => settle().then(onF as never, onR as never);
   self.catch = (onR: unknown) => settle().catch(onR as never);
@@ -177,9 +192,17 @@ function buildLateByIdProductsChain(rows: unknown[], ms: number): Record<string,
 }
 
 function mountWith(chem: Record<string, unknown>) {
+  // One gate per mount, created BEFORE render so the by-id effect can only ever
+  // observe the pending promise. `from('products')` is called more than once, so the
+  // gate must be shared across those chains rather than created inside each.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = () => resolve(); });
+  releaseLabelLookup = release;
+  labelLookupGated = true;
+
   mockFrom.mockImplementation((table: string) => {
     if (table === 'jobs') return buildChain({ data: makeJob(chem), error: null });
-    if (table === 'products') return buildLateByIdProductsChain([DRY_PRODUCT], 800);
+    if (table === 'products') return buildGatedByIdProductsChain([DRY_PRODUCT], gate);
     if (table === 'unit_conversions') return buildChain({ data: UNIT_CONVERSIONS, error: null });
     return buildChain({ data: [], error: null });
   });
@@ -248,12 +271,31 @@ function mountWithInactiveProduct(chem: Record<string, unknown>) {
  *
  * Retrying is exactly what the app instructs the operator to do, and it cannot double-save:
  * while the gate is closed the save never proceeds, and once it is open the loop stops.
+ *
+ * Because mountWith() holds the by-id lookup open until released, the FIRST click is
+ * guaranteed to hit the fail-closed branch — so this asserts that it did. That assertion is
+ * what stops the harness from quietly degrading into a no-op: if the gate ever stopped
+ * closing, this fails loudly instead of passing while testing nothing.
  */
-function clickSave(saveButton: HTMLElement) {
-  return waitFor(() => {
+async function clickSave(saveButton: HTMLElement) {
+  // 1. The blocked attempt — asserted only where mountWith actually installed the gate.
+  //    Proves the page really does refuse while the policy is still loading, and stops this
+  //    harness from quietly degrading into a no-op: if the gate ever stopped closing, this
+  //    fails loudly instead of passing while testing nothing.
+  if (labelLookupGated) {
     const before = mockToast.mock.calls.length;
     fireEvent.click(saveButton);
-    const fresh = mockToast.mock.calls.slice(before).map((c) => String(c[1]));
+    const blocked = mockToast.mock.calls.slice(before).map((c) => String(c[1]));
+    expect(blocked.some((m) => /Checking the label-rate policy/i.test(m))).toBe(true);
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+  }
+
+  // 2. Let the label-rate lookup finish, then retry until the gate is actually open.
+  releaseLabelLookup();
+  await waitFor(() => {
+    const mark = mockToast.mock.calls.length;
+    fireEvent.click(saveButton);
+    const fresh = mockToast.mock.calls.slice(mark).map((c) => String(c[1]));
     expect(fresh.some((m) => /Checking the label-rate policy/i.test(m))).toBe(false);
   }, { timeout: 15000 });
 }
@@ -263,6 +305,10 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     mockToast.mockClear();
     mockRpc.mockClear();
     mockRpc.mockResolvedValue({ data: null, error: null });
+    // A gate belongs to exactly one test. Clearing here means a test that builds its own
+    // `mockFrom` can never inherit the previous test's gate — or its release function.
+    labelLookupGated = false;
+    releaseLabelLookup = () => {};
   });
 
   it('shows the on-screen warning for the live Dry oz / Lb row', async () => {
