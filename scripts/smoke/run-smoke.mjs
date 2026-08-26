@@ -38,7 +38,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { interpretResult } from './interpret-result.mjs';
+import { interpretResult, PASS_TOKEN } from './interpret-result.mjs';
 
 export { interpretResult } from './interpret-result.mjs';
 

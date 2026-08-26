@@ -99,7 +99,7 @@ Both reviewers found this, from opposite ends:
 - **Sol (exact-SHA gate, `CODEX_PROOF_VERDICT: BLOCKERS`, base `43e141a` head `9b2d86a`)** — the
   restore side. An in-flight restore finishes without `QUOTE_VERSION_LEGACY_UNTRUSTED` and can
   restore an untrusted legacy cost snapshot. This is the security-relevant direction.
-- **CodeRabbit (CHANGES_REQUESTED, P2, same head commit)** — the create side. An in-flight create
+- **CodeRabbit (CHANGES_REQUESTED, P2, same head commit)** — the create side. An in-flight creation
   finishes without the marker update, so a legitimately created version is written with
   `restore_trusted_at` NULL and is thereafter rejected as legacy-untrusted. This direction fails
   **closed** — it is a usability defect, not an exposure.

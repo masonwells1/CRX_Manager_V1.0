@@ -1,4 +1,4 @@
-const PASS_TOKEN = 'SMOKE_PASS_ROLLBACK';
+export const PASS_TOKEN = 'SMOKE_PASS_ROLLBACK';
 
 /** PASS iff the chain's terminal PostgreSQL error is the pass token. */
 export function interpretResult(outputText) {

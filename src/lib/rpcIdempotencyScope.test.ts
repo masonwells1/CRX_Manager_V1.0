@@ -512,9 +512,15 @@ describe('Idempotency operation literals in latest disk migrations', () => {
     const def = defs.get('_restore_quote_version_below_cost_impl_20260810');
     expect(def).toBeDefined();
     expect(def!.body).toMatch(/operation\s*=\s*'restore_quote_version'/i);
-    expect(def!.body.indexOf('check_idempotency')).toBeLessThan(
-      def!.body.indexOf('QUOTE_VERSION_LEGACY_UNTRUSTED'),
-    );
+    // CodeRabbit 2026-08-26: indexOf returns -1 for a missing token, so the
+    // ordering comparison below passed vacuously in exactly the case it exists
+    // to catch — a re-emission that DROPS the check_idempotency lookup. Assert
+    // both tokens are present before comparing their positions.
+    const lookupAt = def!.body.indexOf('check_idempotency');
+    const rejectAt = def!.body.indexOf('QUOTE_VERSION_LEGACY_UNTRUSTED');
+    expect(lookupAt).toBeGreaterThanOrEqual(0);
+    expect(rejectAt).toBeGreaterThanOrEqual(0);
+    expect(lookupAt).toBeLessThan(rejectAt);
   });
 
   it('disk scan found a meaningful number of function definitions (sanity)', () => {

@@ -794,7 +794,7 @@ describe('quote_versions write boundary — standing predicate', () => {
     const movedAfterOwner = body!.replace(trustCheck, '').replace(ownerCall, `${ownerCall}\n${trustCheck}`);
     expect(hasSafeOrder(movedAfterOwner)).toBe(false);
 
-    const predicateComparatorMutant = predicateCode.replace(predicateComparator, predicateComparator.replace('<', '<>'));
+    const predicateComparatorMutant = predicateCode.replace(predicateComparator, predicateComparator.replace(/</g, '<>'));
     expect(predicateProtectsPrefix(predicateComparatorMutant)).toBe(false);
 
     const predicateDmlGuardMutant = predicateCode.replace(predicateDmlGuard, "!~* '(delete\\s+from)' ");
