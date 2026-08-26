@@ -11,6 +11,15 @@ describe('run-smoke result parser', () => {
       interpretResult('psql:C:\\CRX_Manager\\scripts\\smoke\\chain.sql:42: ERROR:  SMOKE_PASS_ROLLBACK restore quote'),
     ).toEqual({ pass: true });
     expect(interpretResult('ERROR:  SMOKE_PASS_ROLLBACK (9/9 incl. cross-actor)')).toEqual({ pass: true });
+    // The exact bare token also passes.
+    expect(interpretResult('ERROR:  SMOKE_PASS_ROLLBACK')).toEqual({ pass: true });
+  });
+
+  it('refuses an identifier that merely EXTENDS the pass token (Sol, 2026-08-26)', () => {
+    // startsWith() alone accepted this: the token boundary must be the end of
+    // the message or a non-identifier character.
+    const result = interpretResult('ERROR:  SMOKE_PASS_ROLLBACK_BUT_FAILED');
+    expect(result.pass).toBe(false);
   });
 
   it('keeps failures that merely quote a pass token red', () => {

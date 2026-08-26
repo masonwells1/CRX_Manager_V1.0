@@ -123,6 +123,21 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'PRECOND: an owner-side helper this boundary trusts has changed since the reviewed 2026-08-26 live snapshot; re-review the helper and update its pins before applying';
   END IF;
+  -- Sol on e63680d4: the body pins above bind ONE signature each. A second
+  -- overload of either owner helper — born EXECUTE-able by the API roles on
+  -- this project — or a browser grant on the pinned one would sit outside
+  -- every pin while routing around the marker check. The standing sweep
+  -- watches this too, but a sweep is not transactional with this apply;
+  -- assert it here so the migration cannot commit onto that state.
+  -- Measured live 2026-08-26: one overload each, no anon/authenticated EXECUTE.
+  IF (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = '_create_quote_version_owner_impl') <> 1
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = '_restore_quote_version_owner_impl') <> 1
+     OR has_function_privilege('anon', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'PRECOND: owner-helper overload count or browser grant state drifted; a second overload or a browser-executable helper reopens the boundary this migration trusts';
+  END IF;
   IF has_function_privilege('anon', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE')
      OR has_function_privilege('anon', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE')
@@ -507,6 +522,14 @@ BEGIN
       AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '6972f2d6b76b2d8872b0a027e7f9ee93'
   ) THEN
     RAISE EXCEPTION 'POSTCOND: an owner-side helper body changed across the apply';
+  END IF;
+  IF (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = '_create_quote_version_owner_impl') <> 1
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = '_restore_quote_version_owner_impl') <> 1
+     OR has_function_privilege('anon', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTCOND: owner-helper overload count or browser grant state drifted across the apply';
   END IF;
 END;
 $postcond$;

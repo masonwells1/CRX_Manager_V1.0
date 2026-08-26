@@ -5,7 +5,13 @@ export function interpretResult(outputText) {
   const lines = outputText.split(/\r?\n/).filter((line) => line.trim());
   const postgresErrorMessage = (line) => line.match(/^(?:psql:.*:\d+: )?ERROR:\s+(.+)$/)?.[1] || null;
 
-  if (lines.map(postgresErrorMessage).some((message) => message?.startsWith(PASS_TOKEN))) {
+  // The token must be the whole message or be followed by a non-identifier
+  // character — bare startsWith() also accepted identifiers that merely EXTEND
+  // the token, e.g. SMOKE_PASS_ROLLBACK_BUT_FAILED (Sol, 2026-08-26).
+  const isPassToken = (message) =>
+    message === PASS_TOKEN ||
+    (message?.startsWith(PASS_TOKEN) && /^[^A-Za-z0-9_]/.test(message.slice(PASS_TOKEN.length)));
+  if (lines.map(postgresErrorMessage).some(isPassToken)) {
     return { pass: true };
   }
 
