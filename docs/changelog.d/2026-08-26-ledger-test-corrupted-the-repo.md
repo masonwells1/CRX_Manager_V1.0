@@ -31,5 +31,5 @@ out. The defect was never a missing safeguard; it was one caller declining an ex
 one, which is why adding a third private copy would have been the wrong fix.
 
 Verified with `GIT_DIR` and `GIT_INDEX_FILE` set exactly as the hook sets them:
-`check-ledger-update` 60 assertions, `assemble-changelog` 11 assertions, and `core.bare`
+`check-ledger-update` 60 assertions pass and `core.bare` is
 still `false` afterwards.

@@ -20,10 +20,8 @@ Two sessions never write the same path, so there is nothing to conflict on.
   rather than decorative. 48 assertions pass.
 - `docs/changelog.d/README.md` states the convention and the rule against editing
   someone else's entry to get past a red hook.
-- `scripts/assemble-changelog.mjs` consolidates entries into `docs/CHANGELOG.md`.
-  Dry-run by default, wired into no hook: consolidation is a moment to read what
-  shipped, not a step to automate away. It inserts a blank line before each heading
-  — the exact MD022 seam that broke the merge above.
+- A consolidation tool is deliberately NOT included. It would delete the files it
+  consumes, which needs a higher bar than the convention itself; it ships separately.
 - `AGENTS.md` points sessions at the new path.
 
 **Deliberately not done.** The ledger guard itself was left alone. It was first

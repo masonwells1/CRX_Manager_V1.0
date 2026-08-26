@@ -34,8 +34,8 @@ them wrong is blocked rather than merely discouraged:
 
 - **The filename must be `<YYYY-MM-DD>-<slug>.md`**, flat in this folder. A bare
   `notes.md` satisfies nothing. The slug is lower-case; the date must be zero-padded.
-  `scripts/assemble-changelog.mjs` imports the same predicate, so the guard and the
-  assembler can never disagree about what counts as an entry.
+  The pattern lives in one exported `ENTRY_RE`, so any future consolidation tool can
+  import it rather than re-expressing it and drifting.
 - **The entry must be ADDED by this commit.** Modifying or deleting an existing entry
   does not satisfy the requirement, because it records nothing about the change you
   are making. This is what stops one session's commit riding on another session's
@@ -55,7 +55,10 @@ them wrong is blocked rather than merely discouraged:
 
 ## Consolidating
 
-`node scripts/assemble-changelog.mjs` previews merging these entries into
-`docs/CHANGELOG.md`; add `--write` to actually do it. It is deliberately manual and
-wired into no hook — consolidation is a moment to read what shipped, not a step to
-automate away.
+Entries accumulate here. Nothing consumes them automatically, and nothing needs to —
+`docs/CHANGELOG.md` remains the history for everything written before this convention,
+and these files are readable as they are.
+
+A consolidation tool that merges entries into `docs/CHANGELOG.md` is deliberately NOT
+part of this change. It deletes the files it consumes, so it needs a higher bar than the
+convention itself; it ships separately once it has one.
