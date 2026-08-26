@@ -81,9 +81,12 @@ export default function PurchaseOrderDetail() {
   const navigate = useNavigate();
   const { role, profile } = useAuth();
   const { toast } = useToast();
-  const receiveIdem = useIdempotencyKey('receive_po_items', profile?.id || '', id || '');
-  const receiveIntent = useUncertainMutationIntent<ReceivePoIntent>();
-  const { resolveIntent: resolveReceiveIntent } = receiveIntent;
+  const receiveIntent = useUncertainMutationIntent<ReceivePoIntent>({
+    operation: 'receive_po_items',
+    userId: profile?.id || '',
+    surface: 'purchase-order-detail',
+    scope: id || '',
+  });
   const savePOIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
   const {
     getKey: getSubmitPOKey,
@@ -109,11 +112,31 @@ export default function PurchaseOrderDetail() {
   const [overReceiveReason, setOverReceiveReason] = useState('');
 
   // React Router can reuse this component when only the route parameter changes.
-  // Never let a lost-response retry key from one PO replay a different PO's result.
+  // The durable receiving record is PO-scoped; the submit key still rotates here.
   useEffect(() => {
     resetSubmitPOKey();
-    resolveReceiveIntent();
-  }, [id, resetSubmitPOKey, resolveReceiveIntent]);
+    setReceiveOpen(false);
+  }, [id, resetSubmitPOKey]);
+
+  useEffect(() => {
+    const recovered = receiveIntent.unresolvedIntent;
+    if (!recovered) return;
+    const restoredItems: Record<string, ReceiveItemState> = {};
+    recovered.finalPayload.forEach((item) => {
+      restoredItems[item.po_item_id] = {
+        qty: String(item.quantity),
+        condition: item.condition,
+        lot_number: item.lot_number || '',
+        notes: item.notes || '',
+      };
+    });
+    setReceiveItems(restoredItems);
+    setStorageLocation(recovered.storageLocation);
+    setAllowOverReceive(recovered.allowOverReceive);
+    setOverReceiveReason(recovered.finalPayload.find((item) => item.over_receive_reason)?.over_receive_reason || '');
+    setReceiveStep('review');
+    setReceiveOpen(true);
+  }, [receiveIntent.unresolvedIntent]);
 
   /* Edit modal state */
   const [editOpen, setEditOpen] = useState(false);
@@ -324,7 +347,7 @@ export default function PurchaseOrderDetail() {
 
     await runCriticalAction({
       action: async () => {
-        const idemKey = receiveIdem.getKey();
+        const idemKey = receiveIntent.getIdempotencyKey();
         const { data, error } = await supabase.rpc('receive_po_items', {
           p_items: request.finalPayload,
           p_performed_by: profile.id,
@@ -342,7 +365,6 @@ export default function PurchaseOrderDetail() {
             responseData = receipt;
             toast('warning', 'The earlier receiving update already completed. The PO has been refreshed instead of receiving it twice.');
           } else if (receiveIntent.classifyFailure(error) === 'definitive') {
-            receiveIdem.resetKey();
             throw error;
           } else {
             throw new Error('The receiving update may already be recorded. Retry the locked request unchanged to reconcile it.');
@@ -350,7 +372,6 @@ export default function PurchaseOrderDetail() {
         } else {
           responseData = assertRpcResult(data, 'receive_po_items');
         }
-        receiveIdem.resetKey();
         receiveIntent.resolveIntent();
 
         // AUDIT 3.2: Notify admins about damaged/non-good items

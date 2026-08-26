@@ -24,6 +24,7 @@ const newVendorBill = source('src', 'pages', 'NewVendorBill.tsx');
 const inventoryPage = source('src', 'pages', 'InventoryPage.tsx');
 const receivingHub = source('src', 'components', 'receiving', 'ReceivingHubPanel.tsx');
 const idempotency = source('src', 'lib', 'idempotency.ts');
+const uncertainMutationIntent = source('src', 'hooks', 'useUncertainMutationIntent.ts');
 const section9Smoke = source('scripts', 'smoke', 'smoke-section9-po-ap-high-remediation.sql');
 const periodCloseProof = source('scripts', 'smoke', 'prove-vendor-bill-period-close-concurrency.mjs');
 const supplierPhase3Proof = source('scripts', 'smoke', 'prove-supplier-pricing-phase3-return-policy-concurrency.mjs');
@@ -198,42 +199,58 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(newVendorBill).toContain('The last response was uncertain. These fields are locked so a second bill cannot be created.');
     expect(receivingHub).toContain('This receiving request is locked so stock cannot be received twice.');
 
-    expect(purchaseOrderDetail).toContain("useIdempotencyKey('receive_po_items', profile?.id || '', id || '')");
-    expect(purchaseOrderDetail).toContain('resolveReceiveIntent();');
+    expect(purchaseOrderDetail).toContain("operation: 'receive_po_items'");
+    expect(purchaseOrderDetail).toContain("surface: 'purchase-order-detail'");
+    expect(purchaseOrderDetail).toContain("scope: id || ''");
+    expect(purchaseOrderDetail).toContain('receiveIntent.getIdempotencyKey()');
     expect(vendorBillDetail).toContain('voidPaymentIdem.getKeyFor(voidPaymentScope)');
     expect(vendorBillDetail).toContain('voidPaymentIdem.resetKeyFor(voidPaymentScope)');
     expect(vendorBillDetail).toContain('voidIdem.getKeyFor(voidBillScope)');
     expect(vendorBillDetail).toContain('voidIdem.resetKeyFor(voidBillScope)');
   });
 
-  it('does not mint a fresh key merely because an uncertain AP/receiving form reopened or changed', () => {
-    expect(newVendorBill).toContain("const createBillIdem = useIdempotencyKey('create_vendor_bill'");
-    expect(newVendorBill).toContain('createBillIdem.resetKey()');
+  it('persists each critical payload and matching key across reopen, unmount, and reload', () => {
+    expect(uncertainMutationIntent).toContain("const DURABLE_INTENT_PREFIX = 'crx:uncertain-mutation:v1:'");
+    expect(uncertainMutationIntent).toContain('window.sessionStorage.setItem(storageKey, JSON.stringify(record))');
+    expect(uncertainMutationIntent).toContain('idempotencyKey,\n        intent,');
+    expect(uncertainMutationIntent).toContain("throw new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE')");
+    expect(uncertainMutationIntent).toContain('candidate.operation !== options.operation');
+    expect(uncertainMutationIntent).toContain('candidate.userId !== options.userId');
+    expect(uncertainMutationIntent).toContain('candidate.surface !== options.surface');
+    expect(uncertainMutationIntent).toContain('candidate.scope !== scope');
+
+    expect(newVendorBill).toContain("operation: 'create_vendor_bill'");
+    expect(newVendorBill).toContain("surface: 'new-vendor-bill'");
     expect(newVendorBill).toContain('createBillIntent.beginIntent({');
-    const newBillEffects = sliceBetween(
-      newVendorBill,
-      'useEffect(() => {',
-      '// When PO selected, auto-fill vendor + amount',
-    );
-    expect(newBillEffects).not.toContain('createBillIdem.resetKey()');
+    expect(newVendorBill).toContain('createBillIntent.getIdempotencyKey()');
+    expect(newVendorBill).toContain('const recovered = createBillIntent.unresolvedIntent?.args');
+    expect(newVendorBill).not.toContain("useIdempotencyKey('create_vendor_bill'");
 
-    expect(inventoryPage).toContain("const receivePoIdem = useIdempotencyKey('receive_po_items'");
-    expect(inventoryPage).toContain('receivePoIdem.resetKey()');
+    expect(inventoryPage).toContain("operation: 'receive_po_items'");
+    expect(inventoryPage).toContain("surface: 'inventory-page'");
     expect(inventoryPage).toContain('receivePoIntent.beginIntent({');
+    expect(inventoryPage).toContain('receivePoIntent.getIdempotencyKey()');
+    expect(inventoryPage).toContain('const recovered = receivePoIntent.unresolvedIntent');
     const inventoryOpen = sliceBetween(inventoryPage, 'const openReceiveModal', 'const handleReceive');
-    expect(inventoryOpen).not.toContain('receivePoIdem.resetKey()');
     expect(inventoryOpen).toContain('if (receivePoIntent.isIntentLocked) {');
+    expect(inventoryPage).not.toContain("useIdempotencyKey('receive_po_items'");
 
-    expect(receivingHub).toContain("const receiveIdem = useIdempotencyKey('receive_po_items'");
-    expect(receivingHub).toContain('receiveIdem.resetKey()');
+    expect(receivingHub).toContain("operation: 'receive_po_items'");
+    expect(receivingHub).toContain("surface: 'receiving-hub'");
     expect(receivingHub).toContain('receiveIntent.beginIntent({');
-    const receivingOpeners = sliceBetween(receivingHub, '<ReceivingHubLineCards', '<Modal');
-    expect(receivingOpeners).not.toContain('receiveIdem.resetKey()');
+    expect(receivingHub).toContain('receiveIntent.getIdempotencyKey()');
+    expect(receivingHub).toContain('const recovered = receiveIntent.unresolvedIntent');
+    expect(receivingHub).not.toContain("useIdempotencyKey('receive_po_items'");
 
-    expect(vendorBillDetail).toContain("const paymentIdem = useIdempotencyKey('record_vendor_payment'");
-    expect(vendorBillDetail).toContain('paymentIdem.resetKey()');
-    const vendorBillHeader = sliceBetween(vendorBillDetail, '{/* Header */}', '{/* Bill Info Cards */}');
-    expect(vendorBillHeader).not.toContain('paymentIdem.resetKey()');
+    expect(vendorBillDetail).toContain("operation: 'record_vendor_payment'");
+    expect(vendorBillDetail).toContain("surface: 'vendor-bill-detail'");
+    expect(vendorBillDetail).toContain("scope: id || ''");
+    expect(vendorBillDetail).toContain('paymentIntent.getIdempotencyKey()');
+    expect(vendorBillDetail).toContain('const recovered = paymentIntent.unresolvedIntent');
+    expect(vendorBillDetail).not.toContain("useIdempotencyKey('record_vendor_payment'");
+
+    expect(purchaseOrderDetail).toContain('const recovered = receiveIntent.unresolvedIntent');
+    expect(purchaseOrderDetail).not.toContain("useIdempotencyKey('receive_po_items'");
   });
 
   it('keeps the disposable cutover proof deterministic after assertion failures', () => {

@@ -44,7 +44,6 @@ export default function VendorBillDetail() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
-  const paymentIdem = useIdempotencyKey('record_vendor_payment', profile?.id || '');
   const paymentIntent = useUncertainMutationIntent<{
     amountCents: number;
     args: {
@@ -55,7 +54,12 @@ export default function VendorBillDetail() {
       p_reference_number: string | undefined;
       p_notes: string | undefined;
     };
-  }>();
+  }>({
+    operation: 'record_vendor_payment',
+    userId: profile?.id || '',
+    surface: 'vendor-bill-detail',
+    scope: id || '',
+  });
   const voidIdem = useIdempotencyKey('void_vendor_bill', profile?.id || '');
   const voidPaymentIdem = useIdempotencyKey('void_vendor_payment', profile?.id || '');
 
@@ -71,6 +75,17 @@ export default function VendorBillDetail() {
   const [payDate, setPayDate] = useState(localToday());
   const [payNotes, setPayNotes] = useState('');
   const [paying, setPaying] = useState(false);
+
+  useEffect(() => {
+    const recovered = paymentIntent.unresolvedIntent;
+    if (!recovered) return;
+    setPayAmount(centsToDollarInput(recovered.amountCents));
+    setPayDate(recovered.args.p_payment_date);
+    setPayMethod(recovered.args.p_payment_method || 'check');
+    setPayRef(recovered.args.p_reference_number || '');
+    setPayNotes(recovered.args.p_notes || '');
+    setPayModalOpen(true);
+  }, [paymentIntent.unresolvedIntent]);
 
   // Void bill
   const [voidModalOpen, setVoidModalOpen] = useState(false);
@@ -172,14 +187,13 @@ export default function VendorBillDetail() {
 
     setPaying(true);
     try {
-      const payKey = paymentIdem.getKey();
+      const payKey = paymentIntent.getIdempotencyKey();
       const { data, error } = await supabase.rpc('record_vendor_payment', {
         ...request.args,
         p_idempotency_key: payKey,
       });
       if (error) throw error;
       assertRpcResult<string>(data, 'record_vendor_payment');
-      paymentIdem.resetKey();
       paymentIntent.resolveIntent();
 
       toast('success', `Payment of ${fmt(request.amountCents)} recorded`);
@@ -191,7 +205,6 @@ export default function VendorBillDetail() {
     } catch (err) {
       const receipt = getIdempotencyMismatchResult(err, 'record_vendor_payment');
       if (typeof receipt?.payment_id === 'string') {
-        paymentIdem.resetKey();
         paymentIntent.resolveIntent();
         toast('warning', 'The earlier payment already completed. The bill has been refreshed instead of recording a duplicate.');
         setPayModalOpen(false);
@@ -203,7 +216,6 @@ export default function VendorBillDetail() {
         return;
       }
       if (paymentIntent.classifyFailure(err) === 'definitive') {
-        paymentIdem.resetKey();
         toast('error', sanitizeError(err));
       } else {
         toast('warning', 'The payment may already be recorded. The exact payment is locked; retry it unchanged to reconcile the result.');

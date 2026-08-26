@@ -63,12 +63,26 @@ interface HoldWithRelations extends InventoryHold {
 export default function InventoryPage() {
   const navigate = useNavigate();
   const { role, profile } = useAuth();
-  const receivePoIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
   const receivePoIntent = useUncertainMutationIntent<{
     items: Array<{ po_item_id: string; quantity: number }>;
     performedBy: string;
     quantity: number;
-  }>();
+    inventoryId: string;
+    selectedPO: {
+      id: string;
+      po_number: string;
+      ordered: number;
+      received: number;
+      unit_cost: number;
+      purchase_order_id: string;
+      product_id: string;
+      unit_size: string | null;
+    };
+  }>({
+    operation: 'receive_po_items',
+    userId: profile?.id || '',
+    surface: 'inventory-page',
+  });
   const adjustIdem = useIdempotencyKey('adjust_inventory', profile?.id || '');
   const retireIdem = useIdempotencyKey('retire_inventory_item', profile?.id || '');
   const createHoldIdem = useIdempotencyKey('create_inventory_hold', profile?.id || '');
@@ -272,6 +286,16 @@ export default function InventoryPage() {
 
     setHolds(holdRows);
   }, []);
+
+  useEffect(() => {
+    const recovered = receivePoIntent.unresolvedIntent;
+    if (!recovered) return;
+    setSelectedId(recovered.inventoryId);
+    setReceiveQty(String(recovered.quantity));
+    setReceivePOItemId(recovered.selectedPO.id);
+    setAvailablePOs([recovered.selectedPO]);
+    setReceiveOpen(true);
+  }, [receivePoIntent.unresolvedIntent]);
 
   useEffect(() => {
     fetchInventory();
@@ -590,8 +614,10 @@ export default function InventoryPage() {
           items: [{ po_item_id: receivePOItemId, quantity: qty }],
           performedBy: profile.id,
           quantity: qty,
+          inventoryId: selectedId,
+          selectedPO,
         });
-        const idemKey = receivePoIdem.getKey();
+        const idemKey = receivePoIntent.getIdempotencyKey();
         const { data, error } = await supabase.rpc('receive_po_items', {
           p_items: request.items,
           p_performed_by: request.performedBy,
@@ -603,7 +629,6 @@ export default function InventoryPage() {
           if (Array.isArray(recordIds) && recordIds.every((id) => typeof id === 'string')) {
             toast('warning', 'The earlier receipt already completed. Refreshing inventory instead of receiving it twice.');
           } else if (receivePoIntent.classifyFailure(error) === 'definitive') {
-            receivePoIdem.resetKey();
             throw error;
           } else {
             throw new Error('The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');
@@ -611,7 +636,6 @@ export default function InventoryPage() {
         } else {
           assertRpcResult(data, 'receive_po_items');
         }
-        receivePoIdem.resetKey();
         receivePoIntent.resolveIntent();
         return request.quantity;
       },

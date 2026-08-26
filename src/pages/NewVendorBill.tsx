@@ -14,12 +14,11 @@ import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
-import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useUncertainMutationIntent } from '../hooks/useUncertainMutationIntent';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
-import { formatCents as fmt } from '../lib/money';
+import { centsToDollarInput, formatCents as fmt } from '../lib/money';
 import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import type { Vendor, PurchaseOrder } from '../types';
 
@@ -27,7 +26,6 @@ export default function NewVendorBill() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
-  const createBillIdem = useIdempotencyKey('create_vendor_bill', profile?.id || '');
   const createBillIntent = useUncertainMutationIntent<{
     args: {
       p_vendor_id: string;
@@ -40,7 +38,11 @@ export default function NewVendorBill() {
       p_adjustment_cents: number;
       p_notes?: string;
     };
-  }>();
+  }>({
+    operation: 'create_vendor_bill',
+    userId: profile?.id || '',
+    surface: 'new-vendor-bill',
+  });
   const [saving, setSaving] = useState(false);
 
   // Lookups
@@ -57,6 +59,22 @@ export default function NewVendorBill() {
   const [subtotalDollars, setSubtotalDollars] = useState('');
   const [adjustmentDollars, setAdjustmentDollars] = useState('0');
   const [notes, setNotes] = useState('');
+
+  useEffect(() => {
+    const recovered = createBillIntent.unresolvedIntent?.args;
+    if (!recovered) return;
+    setVendorId(recovered.p_vendor_id);
+    setPurchaseOrderId(recovered.p_purchase_order_id || '');
+    setBillNumber(recovered.p_bill_number);
+    setBillDate(recovered.p_bill_date);
+    setPaymentTerms(recovered.p_payment_terms || '');
+    const due = parseLocalDate(recovered.p_due_date).getTime();
+    const bill = parseLocalDate(recovered.p_bill_date).getTime();
+    setPaymentTermsDays(Math.max(0, Math.round((due - bill) / 86_400_000)));
+    setSubtotalDollars(centsToDollarInput(recovered.p_subtotal_cents));
+    setAdjustmentDollars(centsToDollarInput(recovered.p_adjustment_cents));
+    setNotes(recovered.p_notes || '');
+  }, [createBillIntent.unresolvedIntent]);
 
   // Keep one key until the server confirms success. If a response is lost,
   // editing the page must not mint a fresh key that could create a second bill;
@@ -159,7 +177,7 @@ export default function NewVendorBill() {
           p_notes: notes || undefined,
         },
       });
-      const idemKey = createBillIdem.getKey();
+      const idemKey = createBillIntent.getIdempotencyKey();
 
       const { data, error } = await supabase.rpc('create_vendor_bill', {
         ...request.args,
@@ -169,21 +187,18 @@ export default function NewVendorBill() {
       if (error) {
         const receipt = getIdempotencyMismatchResult(error, 'create_vendor_bill');
         if (typeof receipt?.bill_id === 'string') {
-          createBillIdem.resetKey();
           createBillIntent.resolveIntent();
           toast('warning', 'The earlier vendor bill already completed. Opening it instead of creating a duplicate.');
           navigate(`/accounts-payable/bills/${receipt.bill_id}`);
           return;
         }
         if (createBillIntent.classifyFailure(error) === 'definitive') {
-          createBillIdem.resetKey();
           throw error;
         }
         toast('warning', 'The vendor bill may already exist. The exact request is locked; retry it unchanged to reconcile the result.');
         return;
       }
       const createdBillId = assertRpcResult<string>(data, 'create_vendor_bill');
-      createBillIdem.resetKey();
       createBillIntent.resolveIntent();
 
       toast('success', 'Vendor bill created');

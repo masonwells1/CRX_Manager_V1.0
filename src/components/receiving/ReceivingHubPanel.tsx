@@ -11,7 +11,6 @@ import { runCriticalAction } from '../../lib/criticalAction';
 import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { useUncertainMutationIntent } from '../../hooks/useUncertainMutationIntent';
 import { getIdempotencyMismatchResult } from '../../lib/idempotency';
 import type { InventoryPositionRow } from '../../types';
@@ -76,15 +75,26 @@ export default function ReceivingHubPanel() {
   const [search, setSearch] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   // F5 inline receive (confirm-popup write, reuses receive_po_items).
-  const receiveIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
   const receiveIntent = useUncertainMutationIntent<{
     items: Array<{ po_item_id: string; quantity: number; condition: 'good' }>;
     performedBy: string;
     productName: string;
-  }>();
+    target: { line: POLine; product_name: string };
+  }>({
+    operation: 'receive_po_items',
+    userId: profile?.id || '',
+    surface: 'receiving-hub',
+  });
   const [receiveTarget, setReceiveTarget] = useState<{ line: POLine; product_name: string } | null>(null);
   const [receiveQty, setReceiveQty] = useState('');
   const [receiving, setReceiving] = useState(false);
+
+  useEffect(() => {
+    const recovered = receiveIntent.unresolvedIntent;
+    if (!recovered) return;
+    setReceiveTarget(recovered.target);
+    setReceiveQty(String(recovered.items[0]?.quantity || ''));
+  }, [receiveIntent.unresolvedIntent]);
 
   useEffect(() => {
     let cancelled = false;
@@ -188,8 +198,9 @@ export default function ReceivingHubPanel() {
       items: [{ po_item_id: receiveTarget.line.po_item_id, quantity: qty, condition: 'good' }],
       performedBy: profile.id,
       productName: receiveTarget.product_name,
+      target: receiveTarget,
     });
-    const idemKey = receiveIdem.getKey();
+    const idemKey = receiveIntent.getIdempotencyKey();
     await runCriticalAction({
       action: async () => {
         const { data, error } = await supabase.rpc('receive_po_items', {
@@ -204,7 +215,6 @@ export default function ReceivingHubPanel() {
           if (Array.isArray(recordIds) && recordIds.every((id) => typeof id === 'string')) {
             toast('warning', 'The earlier receipt already completed. Refreshing the receiving board instead of receiving it twice.');
           } else if (receiveIntent.classifyFailure(error) === 'definitive') {
-            receiveIdem.resetKey();
             throw error;
           } else {
             throw new Error('The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');
@@ -212,7 +222,6 @@ export default function ReceivingHubPanel() {
         } else {
           assertRpcResult(data, 'receive_po_items');
         }
-        receiveIdem.resetKey();
         receiveIntent.resolveIntent();
       },
       toast,
