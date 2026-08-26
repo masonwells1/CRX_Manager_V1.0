@@ -968,16 +968,53 @@ describe('quote_versions write boundary — standing predicate', () => {
     // measured read-only from live on 2026-08-26), and the precondition pins
     // the PRE-images of the two functions this migration replaces, so an
     // apply after live drift fails closed instead of silently overwriting.
-    const liveBodyPins: Array<[label: string, length: number, digest: string]> = [
-      ['restore_quote_version wrapper', 311, '97da0cdfa0f90ff87b5e48d9aedf9f33'],
-      ['_create_quote_version_owner_impl', 3362, '4ecb8accbaf6be4fb64aadbc79e492e3'],
-      ['_restore_quote_version_owner_impl', 13566, '6972f2d6b76b2d8872b0a027e7f9ee93'],
+    // CodeRabbit on efb75079 (Major): asserting lengths and digests against the
+    // WHOLE predicate proves nothing about which branch carries which pin —
+    // transposing the two owner-impl pins would pass every loose assertion
+    // while both branches report permanent false drift. Slice each branch out
+    // by its violation_key and bind ITS signature, ITS length, and ITS digest
+    // together inside that slice.
+    const liveBodyPins: Array<
+      [key: string, signature: string, length: number, digest: string]
+    > = [
+      [
+        'restore_quote_version:route-pinned',
+        'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)',
+        311,
+        '97da0cdfa0f90ff87b5e48d9aedf9f33',
+      ],
+      [
+        '_create_quote_version_owner_impl:body-pinned',
+        'public._create_quote_version_owner_impl(uuid,uuid,text,text)',
+        3362,
+        '4ecb8accbaf6be4fb64aadbc79e492e3',
+      ],
+      [
+        '_restore_quote_version_owner_impl:body-pinned',
+        'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)',
+        13566,
+        '6972f2d6b76b2d8872b0a027e7f9ee93',
+      ],
     ];
-    for (const [label, length, digest] of liveBodyPins) {
-      expect(predicateCode, `predicate must pin ${label} length`).toMatch(
-        new RegExp(`= ${length}\\b`),
-      );
-      expect(predicateCode, `predicate must pin ${label} digest`).toContain(`= '${digest}'`);
+    for (const [key, signature, length, digest] of liveBodyPins) {
+      const start = predicateCode.indexOf(`'${key}' AS violation_key`);
+      expect(start, `predicate must contain the ${key} branch`).toBeGreaterThanOrEqual(0);
+      const end = predicateCode.indexOf('UNION ALL', start);
+      const branch = predicateCode.slice(start, end < 0 ? undefined : end);
+      expect(branch, `${key} must pin its own signature`).toContain(`to_regprocedure('${signature}')`);
+      expect(branch, `${key} must pin its own length`).toMatch(new RegExp(`= ${length}\\b`));
+      expect(branch, `${key} must pin its own digest`).toContain(`= '${digest}'`);
+      // No other pinned length/digest may appear inside this branch — that is
+      // exactly the transposition this binding exists to refuse.
+      for (const [otherKey, , otherLength, otherDigest] of liveBodyPins) {
+        if (otherKey === key) continue;
+        expect(branch, `${key} must not carry ${otherKey}'s digest`).not.toContain(
+          `= '${otherDigest}'`,
+        );
+        expect(branch, `${key} must not carry ${otherKey}'s length`).not.toMatch(
+          new RegExp(`= ${otherLength}\\b`),
+        );
+      }
     }
     // The wrapper's route pin is enforced in the migration too — precondition
     // AND postcondition (the migration does not touch the wrapper, so the

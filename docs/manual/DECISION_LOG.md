@@ -213,8 +213,8 @@ boundary is Git-visible content plus the protected GitHub review/CI path. Readin
 megabytes that Git will not export consumed minutes without strengthening that boundary.
 
 **Operative rule:** do not broaden these excludes by path segment, pattern inference, or dynamic
-ignore rules. New roots require an explicit list change, a nested-lookalike test, force-add deny
-proof, red/green mutation proof, and a retained same-worktree benchmark.
+ignore rules. New roots require an explicit list change, a nested-lookalike test, proof that
+force-add is denied, red/green mutation proof, and a retained same-worktree benchmark.
 
 ---
 

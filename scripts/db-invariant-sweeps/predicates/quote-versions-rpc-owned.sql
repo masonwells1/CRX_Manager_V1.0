@@ -788,7 +788,11 @@ UNION ALL
 -- affect replay/identity, not what gets trusted as money. Any legitimate
 -- re-emission of one of the five must update its pin here in the same change.
 SELECT 'restore_quote_version:route-pinned' AS violation_key,
-       'the public restore wrapper body drifted from the reviewed below-cost route — it must arm _begin_below_cost_money_write and delegate every argument to _restore_quote_version_below_cost_impl_20260810, nothing else' AS reason
+       'the public restore wrapper body drifted from the reviewed below-cost route — expected 311/97da0cdfa0f90ff87b5e48d9aedf9f33, measured '
+         || coalesce((SELECT length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))::text || '/' || md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))
+                        FROM pg_proc p
+                       WHERE p.oid = to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)')), 'signature unresolvable')
+         || ' — an intentionally reviewed re-emission must update this pin, the 20260825190000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
  WHERE NOT EXISTS (
    SELECT 1 FROM pg_proc p
    WHERE p.oid = to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)')
@@ -799,7 +803,11 @@ SELECT 'restore_quote_version:route-pinned' AS violation_key,
 UNION ALL
 
 SELECT '_create_quote_version_owner_impl:body-pinned' AS violation_key,
-       'the owner-side snapshot writer body drifted from the reviewed text — the create wrapper trusts its returned version_id enough to stamp it restore_trusted_at' AS reason
+       'the owner-side snapshot writer body drifted from the reviewed text — the create wrapper trusts its returned version_id enough to stamp it restore_trusted_at; expected 3362/4ecb8accbaf6be4fb64aadbc79e492e3, measured '
+         || coalesce((SELECT length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))::text || '/' || md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))
+                        FROM pg_proc p
+                       WHERE p.oid = to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)')), 'signature unresolvable')
+         || ' — an intentionally reviewed re-emission must update this pin, the 20260825190000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
  WHERE NOT EXISTS (
    SELECT 1 FROM pg_proc p
    WHERE p.oid = to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)')
@@ -810,7 +818,11 @@ SELECT '_create_quote_version_owner_impl:body-pinned' AS violation_key,
 UNION ALL
 
 SELECT '_restore_quote_version_owner_impl:body-pinned' AS violation_key,
-       'the owner-side restore writer body drifted from the reviewed text — the trust check runs in its caller, so this body must keep restoring exactly the version whose marker was checked' AS reason
+       'the owner-side restore writer body drifted from the reviewed text — the trust check runs in its caller, so this body must keep restoring exactly the version whose marker was checked; expected 13566/6972f2d6b76b2d8872b0a027e7f9ee93, measured '
+         || coalesce((SELECT length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))::text || '/' || md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))
+                        FROM pg_proc p
+                       WHERE p.oid = to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)')), 'signature unresolvable')
+         || ' — an intentionally reviewed re-emission must update this pin, the 20260825190000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
  WHERE NOT EXISTS (
    SELECT 1 FROM pg_proc p
    WHERE p.oid = to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)')

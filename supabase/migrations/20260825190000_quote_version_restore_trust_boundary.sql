@@ -104,6 +104,25 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'PRECOND: a function this migration replaces has changed since the reviewed 2026-08-26 live snapshot; re-diff the proposed bodies against current live before applying';
   END IF;
+  -- CodeRabbit on efb75079: the preimage pins above cover only the two
+  -- functions being REPLACED. The two owner helpers this boundary trusts are
+  -- pinned in the standing sweep, but a sweep runs after the fact — if a
+  -- helper drifts between the 2026-08-26 measurement and this apply, the
+  -- migration would commit onto a compromised chain and the sweep would flag
+  -- it only after the trust boundary is live. Refuse at apply time instead.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public._create_quote_version_owner_impl(uuid,uuid,text,text)'::regprocedure
+      AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3362
+      AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '4ecb8accbaf6be4fb64aadbc79e492e3'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)'::regprocedure
+      AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 13566
+      AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '6972f2d6b76b2d8872b0a027e7f9ee93'
+  ) THEN
+    RAISE EXCEPTION 'PRECOND: an owner-side helper this boundary trusts has changed since the reviewed 2026-08-26 live snapshot; re-review the helper and update its pins before applying';
+  END IF;
   IF has_function_privilege('anon', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE')
      OR has_function_privilege('anon', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE')
@@ -472,6 +491,22 @@ BEGIN
          AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '97da0cdfa0f90ff87b5e48d9aedf9f33'
      ) THEN
     RAISE EXCEPTION 'POSTCOND: restore overload, SECURITY DEFINER, search path, or routing boundary drifted';
+  END IF;
+  -- The two owner helpers are untouched by this migration, so their reviewed
+  -- bodies must read back byte-stable through the apply — same pins as the
+  -- precondition and the standing predicate.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public._create_quote_version_owner_impl(uuid,uuid,text,text)'::regprocedure
+      AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 3362
+      AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '4ecb8accbaf6be4fb64aadbc79e492e3'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)'::regprocedure
+      AND length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = 13566
+      AND md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g'))) = '6972f2d6b76b2d8872b0a027e7f9ee93'
+  ) THEN
+    RAISE EXCEPTION 'POSTCOND: an owner-side helper body changed across the apply';
   END IF;
 END;
 $postcond$;

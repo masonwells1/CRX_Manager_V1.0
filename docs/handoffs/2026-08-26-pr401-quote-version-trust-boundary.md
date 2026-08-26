@@ -4,11 +4,10 @@
 (it had grown past 13 MB) and asked for the remaining work to move to a fresh session. **NOT
 merged. Migration NOT applied. Database untouched.**
 
-**Eight review rounds have run.** Rounds 1-6 are fully addressed. Round 7's three findings are
-fixed in commit `612a0457`. Round 8 arrived from the Codex connector on 2026-08-26 (not
-CodeRabbit, which had not re-reviewed `612a0457` when round 8 was fixed) and is addressed in the
-commit that follows it — see the Round 8 section below. CodeRabbit is rate-limited to one review
-per hour; read whatever it posts on the newest head before merging.
+**Ten review rounds have run.** Rounds 1-6 are fully addressed. Round 7's three findings are
+fixed in commit `612a0457`. Rounds 8-10 arrived from the Codex connector on 2026-08-26 and are
+fixed in `ece8f79f` (round 8) and `7b49d56a` (rounds 9-10) — see the sections below. CodeRabbit
+is rate-limited to one review per hour; read whatever it posts on the newest head before merging.
 
 ## What this PR does, in one paragraph
 
