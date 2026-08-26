@@ -9,6 +9,7 @@
 //   node scripts/assemble-changelog.mjs --write    # apply, then delete the entries
 
 import { readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ENTRY_RE } from "./check-ledger-update.mjs";
@@ -34,6 +35,29 @@ try {
   process.exit(0);
 }
 
+// Only consolidate fragments git already TRACKS. With several sessions sharing a
+// checkout, an untracked file is somebody's draft in progress — consuming it would
+// splice half-written text into the changelog and then DELETE the original, which is
+// the one unrecoverable thing this script could do (Codex P2, PR #482).
+let tracked = new Set();
+try {
+  tracked = new Set(
+    execFileSync("git", ["ls-files", "--", "docs/changelog.d"], { cwd: repo, encoding: "utf8" })
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((p) => p.split("/").pop()));
+} catch (e) {
+  console.error(`assemble-changelog: could not list tracked files (${e && e.message}). Refusing to ` +
+    "consolidate — an untracked draft from another session could otherwise be consumed and deleted.");
+  process.exit(1);
+}
+const untracked = names.filter((n) => !tracked.has(n));
+if (untracked.length) {
+  console.error(`assemble-changelog: SKIPPING ${untracked.length} untracked fragment(s) — commit them first:`);
+  for (const n of untracked) console.error(`  • ${n}`);
+}
+names = names.filter((n) => tracked.has(n));
+
 let skipped = [];
 try {
   skipped = readdirSync(entryDir).filter((n) => n !== "README.md" && !isEntry(n));
@@ -52,11 +76,35 @@ if (names.length === 0) {
 // Newest first, matching CHANGELOG.md's reverse-chronological contract.
 names.sort().reverse();
 
-const blocks = names.map((n) => ({
+const candidates = names.map((n) => ({
   name: n,
   date: dateOf(n),
   body: readFileSync(path.join(entryDir, n), "utf8").replace(/\r\n/g, "\n").trim(),
 }));
+
+// A fragment must actually BE a dated section before it is spliced in and its source
+// deleted. Empty, prose-first, or a heading whose date disagrees with the filename all
+// mean the file is not what the convention promises (Codex P2 + CodeRabbit, PR #482).
+// Rejected fragments are reported and LEFT ON DISK — never silently consumed.
+const rejected = [];
+const blocks = [];
+for (const c of candidates) {
+  const first = c.body.split("\n")[0] || "";
+  const m = /^##\s+(\d{4}-\d{2}-\d{2})\b/.exec(first);
+  if (!c.body) rejected.push([c.name, "file is empty — consuming it would delete a fragment while adding nothing"]);
+  else if (!m) rejected.push([c.name, `must start with "## <YYYY-MM-DD> - ..." (found ${JSON.stringify(first.slice(0, 40))})`]);
+  else if (m[1] !== c.date) rejected.push([c.name, `heading date ${m[1]} disagrees with the filename date ${c.date}`]);
+  else blocks.push(c);
+}
+if (rejected.length) {
+  console.error(`assemble-changelog: REFUSING ${rejected.length} malformed fragment(s) (left on disk, nothing deleted):`);
+  for (const [n, why] of rejected) console.error(`  • ${n} — ${why}`);
+}
+
+if (blocks.length === 0) {
+  console.log("assemble-changelog: no consolidatable entry files (see any skips above).");
+  process.exit(rejected.length ? 1 : 0);
+}
 
 console.log(`assemble-changelog: ${blocks.length} entry file(s) would be merged into docs/CHANGELOG.md:`);
 for (const b of blocks) console.log(`  • ${b.name}  (${b.body.split("\n").length} lines)`);

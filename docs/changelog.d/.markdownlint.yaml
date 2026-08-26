@@ -1,0 +1,8 @@
+# Scoped to docs/changelog.d/ ONLY — deliberately not a repo-root config, so this
+# changes linting for nothing outside this folder.
+#
+# MD041 (first-line-in-file must be a top-level heading) does not apply here. Each
+# file is a changelog FRAGMENT, not a document: scripts/assemble-changelog.mjs splices
+# it into docs/CHANGELOG.md as an H2 section. Promoting these to H1 to satisfy MD041
+# would produce the wrong hierarchy in the assembled file.
+MD041: false
