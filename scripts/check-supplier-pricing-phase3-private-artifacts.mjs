@@ -1710,6 +1710,28 @@ function worktreeContainerToolOwnedExcludePathspecs(containerDirectories) {
   return pathspecs;
 }
 
+/**
+ * Keeps ignored-file enumeration out of the exact top-level dependency/build
+ * roots that this checker already classifies as tool-owned. This applies only
+ * to `git ls-files --others --ignored`: a tracked, staged, or force-added file
+ * under one of these roots is still inspected through the index and commit
+ * scans, and a nested lookalike such as `packages/app/node_modules/` remains in
+ * scope. Matching descendants rather than the root endpoint also keeps a file
+ * literally named `node_modules` or `dist` visible to the scanner.
+ */
+function topLevelToolOwnedIgnoredExcludePathspecs() {
+  return [...TOOL_OWNED_IGNORED_PREFIXES]
+    .sort()
+    .map(prefix => `:(exclude,glob)${prefix}**`);
+}
+
+function ignoredBulkExcludePathspecs(containerDirectories) {
+  return [
+    ...topLevelToolOwnedIgnoredExcludePathspecs(),
+    ...worktreeContainerToolOwnedExcludePathspecs(containerDirectories),
+  ];
+}
+
 function worktreeEntryKind(root, repoPath, ownWorktrees = { paths: new Set(), worktreesDirectory: null }) {
   const lexicalRoot = path.resolve(root);
   const lexicalPath = path.resolve(lexicalRoot, repoPath);
@@ -1763,7 +1785,7 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
   const ownWorktrees = providedOwnWorktrees ?? registeredWorktreeDirectories(root, execute);
   const modified = new Set(gitPaths(['diff', '--name-only', '-z', '--diff-filter=ACMRT'], root, execute));
   const untracked = new Set(gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute));
-  const ignoreExcludes = worktreeContainerToolOwnedExcludePathspecs(ownWorktrees.containerDirectories);
+  const ignoreExcludes = ignoredBulkExcludePathspecs(ownWorktrees.containerDirectories);
   const ignored = includeIgnored
     ? new Set(gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z', ...(ignoreExcludes.length ? ['--', ...ignoreExcludes] : [])], root, execute))
     : new Set();
@@ -1964,7 +1986,7 @@ function executeWithAuthoritativeIndex(execute, root, indexFile) {
 export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, ranges = [], commits = [], includeIgnored = true, indexFile = null, testLimits = {}, budget = new ScanBudget() } = {}) {
   const authoritativeExecute = executeWithAuthoritativeIndex(execute, root, indexFile);
   const ownWorktrees = registeredWorktreeDirectories(root, authoritativeExecute);
-  const ignoreExcludes = worktreeContainerToolOwnedExcludePathspecs(ownWorktrees.containerDirectories);
+  const ignoreExcludes = ignoredBulkExcludePathspecs(ownWorktrees.containerDirectories);
   const ignoredVisible = includeIgnored
     ? gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z', ...(ignoreExcludes.length ? ['--', ...ignoreExcludes] : [])], root, authoritativeExecute)
     : [];
