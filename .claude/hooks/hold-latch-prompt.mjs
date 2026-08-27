@@ -17,7 +17,7 @@ function emit(extra) {
 }
 
 let payload;
-try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { emit(); }
+try { payload = globalThis.__CRX_ROUTED_HOOK_PAYLOAD ?? JSON.parse(readFileSync(0, "utf8")); } catch { emit(); }
 
 // Machine-generated envelopes (<task-notification>, <system-reminder>, slash-command
 // output) are not something Mason typed — they must NEITHER latch NOR clear the hold.

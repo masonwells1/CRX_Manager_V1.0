@@ -1,11 +1,23 @@
 # Decision Log
 
-Last verified: 2026-08-26
+Last verified: 2026-08-27
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+
+## 2026-08-27 — preserve CRX safety rules while collapsing harness machinery
+
+**Decision:** Pause the recurring gauntlet, retune it to monthly/on-demand read-only review, retire
+Patrol, and consolidate prompt/post hook process launches plus Codex matcher scope without changing
+business safety rules or GitHub branch protection.
+**Why:** The audit found necessary safety invariants were being reimplemented and rerun through too
+many independent processes, while the audit policy itself rewarded creating more maintenance work.
+**What this forbids/implies:** A new hook needs a named reproducible BLOCKER/HIGH recurrence, a
+measured false-positive budget, and removal or consolidation of an existing mechanism; keep the
+underlying business invariant and prefer an owning regression test or existing static check.
 
 
 ## 2026-08-26 — ordinary documentation gets a trusted fast CI lane; uncertainty still runs everything
