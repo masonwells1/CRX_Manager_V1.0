@@ -540,6 +540,14 @@
         "get_customer_statement",
         "get_bottom_line_pnl",
         "get_monthly_summary",
+        "get_customer_year_end_summary",
+        "get_batch_year_end_summaries",
+        "get_detailed_statement_data",
+        "complete_delivery",
+        "create_invoice_for_unbilled_delivery",
+        "get_dashboard_action_items",
+        "void_invoice",
+        "batch_void_invoices",
         "unapply_credit_memo"
       ],
       "area": [

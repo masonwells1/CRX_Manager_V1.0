@@ -51,6 +51,9 @@ describe('activeInvoiceCoversDelivery', () => {
   });
 
   it('is used by every UI that reports or recovers unbilled deliveries', () => {
+    // Deliberate wiring guard: behavior tests above prove the predicate itself;
+    // this check prevents any consumer from silently copying an older local
+    // predicate that lets credit memos hide unbilled deliveries.
     for (const relativePath of [
       'src/components/integrity/IntegrityCleanupPanel.tsx',
       'src/pages/DeliveryDetail.tsx',

@@ -1509,7 +1509,7 @@ BEGIN
   END IF;
 
   -- --------------------------------------------------------------------
-  -- 8b. Apply Credit lost-response replay + both shared reversal callers.
+  -- 10b. Apply Credit lost-response replay + both shared reversal callers.
   -- The first exact retry stands in for "commit succeeded, response lost".
   -- --------------------------------------------------------------------
   INSERT INTO field_app_billing_sets (created_by)

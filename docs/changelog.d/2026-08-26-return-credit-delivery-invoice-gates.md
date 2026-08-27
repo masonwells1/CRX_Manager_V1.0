@@ -14,15 +14,22 @@ longer describe a posted credit memo as a sales invoice needing review; and auto
 ignores soft-deleted invoices. The migration preserves the public RPC grants and the private helper's
 no-application-execute posture with exact preflight and postflight checks. Delivery completion also
 excludes credit-memo lines from tote-number copying, preserving the return's original traceability.
+Delivery voiding leaves draft/manual and soft-deleted credit memos untouched, and posted credits do
+not create a false cancelled-order billing warning.
 
 The delivery detail page, integrity cleanup panel, and office exception dashboard now share the same
 active, non-deleted sales-invoice coverage predicate, so a return credit or deleted invoice cannot hide
 the recovery action or produce a false all-clear in the user interface.
 
-Fresh read-only production schema was restored into disposable PostgreSQL and all six candidate
-migrations were applied there. The rollback-only harness passed 40 load-bearing predicates, including
+The invoice-list Batch Print path now uses the same return-credit grouping as single-invoice Print,
+so one credit memo cannot produce a simple customer line in one PDF and cost-lot fragments in another.
+
+Fresh read-only production schema was restored into disposable PostgreSQL and six replay entries were
+applied there: the four PR #361 candidates plus two required compatibility/guard predecessors. The
+rollback-only harness passed 40 load-bearing predicates, including
 separate mutants for the dashboard credit filter and both automatic-invoice filters; direct execution
-of the dashboard, void, cancel, and ordinary hard-delete paths; and proof that both invoice paths still
-create the expected $25 revenue and $5 historical-cost draft. The full application suite (342 files,
-4,808 passed and 123 skipped), typecheck, lint, documentation check, and production build are green.
+of the dashboard, void, cancel, and ordinary hard-delete paths; draft-credit preservation; and proof
+that both invoice paths still create the expected $25 revenue and $5 historical-cost draft. The full
+application suite (342 files, 4,809 passed and 123 skipped), typecheck, lint, documentation check, and
+production build are green.
 No migration was applied to the live database in this change.

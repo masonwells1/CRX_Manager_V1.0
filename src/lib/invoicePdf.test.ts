@@ -3,6 +3,8 @@
  * Uses the same jsPDF/autoTable mock pattern as statementPdf.test.ts
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Mock jsPDF doc instance ─────────────────────────────────────────────
@@ -127,6 +129,13 @@ describe('groupReturnCreditDisplayItems', () => {
     const rows = [makeItem(), makeItem()];
     expect(groupReturnCreditDisplayItems('chemical_sale', rows)).toBe(rows);
     expect(groupReturnCreditDisplayItems('credit_memo', rows)).toHaveLength(2);
+  });
+
+  it('is applied by the invoice-list batch print path with lineage ids available', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/pages/Invoices.tsx'), 'utf8');
+    expect(source).toMatch(/items:\s*groupReturnCreditDisplayItems\(inv\.invoice_type,/);
+    expect(source).toContain("order_item_id: (it.order_item_id as string) || null");
+    expect(source).toContain("product_id: (it.product_id as string) || null");
   });
 });
 

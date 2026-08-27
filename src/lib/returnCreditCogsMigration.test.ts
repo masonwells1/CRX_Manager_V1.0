@@ -120,11 +120,11 @@ describe('return-credit COGS migration', () => {
     expect(deliveryCreditGateMigration.match(/AND invoice_type <> 'credit_memo'/g)).toHaveLength(2);
     expect(deliveryCreditGateMigration).toContain('UNBILLED_DELIVERY_RETURN_CREDIT_GATE_PREFLIGHT_CONTRACT_DRIFT');
     expect(deliveryCreditGateMigration).toContain('UNBILLED_DELIVERY_RETURN_CREDIT_GATE_POSTFLIGHT_DRIFT');
-    expect(functionBodySha256(deliverySurfaceMigration, 'get_dashboard_action_items')).toBe('c876f69e11fafcd1bcb75d2554e71f6f1f9ed33ac08181a8bf207580edcc49a9');
-    expect(functionBodySha256(deliverySurfaceMigration, 'void_delivery')).toBe('426cea4c5e350350ce85249e9df2f1c9d8aa03da4868072bf395683e9254ba03');
+    expect(functionBodySha256(deliverySurfaceMigration, 'get_dashboard_action_items')).toBe('583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769');
+    expect(functionBodySha256(deliverySurfaceMigration, 'void_delivery')).toBe('d7f0465616be4e125c0b5a1fd2b15a8b0b502b2f2ecaaeb4a981abb599837d25');
     expect(functionBodySha256(deliverySurfaceMigration, 'cancel_delivery')).toBe('73be159b6793fb16580a702068974102e6ef12794be9f38af861b92e9d6495dd');
     expect(functionBodySha256(deliverySurfaceMigration, '_complete_delivery_authorized_impl')).toBe('3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a');
-    expect(deliverySurfaceMigration.match(/invoice_type <> 'credit_memo'/g)).toHaveLength(5);
+    expect(deliverySurfaceMigration.match(/invoice_type <> 'credit_memo'/g)).toHaveLength(7);
     expect(deliverySurfaceMigration).toContain('RETURN_CREDIT_DELIVERY_SURFACE_PREFLIGHT_CONTRACT_DRIFT');
     expect(deliverySurfaceMigration).toContain('RETURN_CREDIT_DELIVERY_SURFACE_POSTFLIGHT_CONTRACT_DRIFT');
     expect(deliverySurfaceMigration).toContain('"private":true');

@@ -754,8 +754,8 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   delivery-versus-invoice quantity check. Return credits carry negative line items for accounting
   reports, but those lines are not new customer billing and must not create a false
   delivery-parity discrepancy.
-- Fresh read-only production schema was restored into disposable PostgreSQL. Twenty-nine load-bearing
-  signals were exercised: twenty-two guard-removal, race, or accounting mutants plus direct cutover rejection,
+- Fresh read-only production schema was restored into disposable PostgreSQL. Forty load-bearing
+  signals were exercised: mutation tests plus direct cutover rejection,
   non-credit lifecycle allowance, sequential post-after-credit rejection, fully-costed later-post allowance,
   ordinary same-line post contention followed by a successful retry, current-season credit attribution,
   and direct hard-delete refusal on the recognized return-credit header. The mutants cover the two
@@ -770,27 +770,14 @@ now its own smaller migration, `20260825230150_align_recognized_invoice_report_s
   canonical guard failed fast and rejected it. The same mutation let a draft source post while a zero-cost
   credit was still in flight; the canonical posting path rejected immediately without creating a deadlock.
   Separate mutants prove that credit-memo lines cannot reopen delivery billing and that prior credits
-  are consumed before another return can reuse source cost. The canonical candidate rejected every failure class and returned
-  `RETURN_CREDIT_POSTAPPLY_LIVE_PASS source=fresh-live-read-only-schema candidate_migrations=4
-  proofs=EXISTING_RETURN_CREDIT_REPORT_GUARD_REMOVAL_DETECTED,CUTOVER_REPORT_POSTFLIGHT_GUARD_REMOVAL_DETECTED,
-  CUTOVER_BARRIER_NON_CREDIT_UPDATE_PROVEN,CUTOVER_BARRIER_REJECTED,CUTOVER_COGS_PREFLIGHT_GUARD_REMOVAL_DETECTED,
-  EXISTING_CREDIT_GUARD_REMOVAL_DETECTED,
-  RECEIVED_UNRESTOCKED_GUARD_REMOVAL_DETECTED,
-  PREFLIGHT_OVERLOAD_COLLISION_REJECTED,POSTFLIGHT_OVERLOAD_COLLISION_REJECTED,
-  SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED,SOURCE_POST_AFTER_CREDIT_REJECTED,
-  SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED,SOURCE_POST_AFTER_FULLY_COSTED_CREDIT_ALLOWED,
-  SOURCE_POST_CONCURRENT_RETRY_PROVEN,
-  DELIVERY_ALLOCATION_CREDIT_FILTER_REMOVAL_DETECTED,
-  SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED,
-  RETURN_CREDIT_LEDGER_GUARD_REMOVAL_DETECTED,ZERO_COST_LEDGER_MUTATION_DETECTED,
-  CREDIT_REVENUE_LEDGER_MUTATION_DETECTED,
-  CUSTOMER_SCOPE_DISCLOSURE_REJECTED,FRACTIONAL_REPORT_HALF_CENT_DETECTED,
-  UNLINKED_COST_GUARD_REMOVAL_DETECTED,PRIOR_CREDIT_CONSUMPTION_REMOVAL_DETECTED,
-  LINEAGE_CLEAR_REMOVAL_DETECTED,
-  GROUPED_COST_BUCKET_6601_REJECTED,CREDIT_CURRENT_SEASON_MUTATION_DETECTED,
-  FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED,CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN,
-  RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN
-  smoke=SMOKE_PASS_ROLLBACK residue=0`. Final exact-head
+  are consumed before another return can reuse source cost. Eleven additional delivery/dashboard/void/cancel/tote
+  signals cover the two follow-up migrations; the maintained proof summary lives in
+  `docs/changelog.d/2026-08-26-return-credit-delivery-invoice-gates.md`. The canonical candidate rejected every failure class and returned
+  `RETURN_CREDIT_POSTAPPLY_LIVE_PASS source=fresh-live-read-only-schema candidate_migrations=6
+  proofs=<the exact 40-entry expectedProofs set> smoke=SMOKE_PASS_ROLLBACK residue=0`.
+  The six disposable replay entries are the four PR #361 migrations plus the two compatibility/guard
+  predecessors required to reproduce the live function chain; only the four PR #361 migrations are
+  candidates for the eventual live apply. Final exact-head
   adversarial review remains a pre-publication gate. This latest marker also closes the two HIGH
   findings from the exact-SHA Sol review of `af1eed59`: concurrent source void versus credit issue,
   and fractional source-cost/header disagreement.

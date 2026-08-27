@@ -228,6 +228,8 @@ $function$;
 -- A sale remains recognized after collection or aging.  Credit memos use the
 -- same recognized status set, so unused product returned in this season nets
 -- both the invoice-basis financial totals and the customer-facing usage rows.
+-- Compatibility note: product_usage.total_cost_cents is the long-standing JSON
+-- key for customer spend (invoice_items.extended_cents), despite its name.
 CREATE OR REPLACE FUNCTION public.get_customer_year_end_summary(
   p_customer_id uuid,
   p_season integer

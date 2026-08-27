@@ -818,8 +818,9 @@ try {
   // Exercise the three user-visible delivery surfaces Claude identified, plus
   // the ordinary DELETE branch of the new return-credit header trigger. The
   // whole fixture is rolled back; success means a credit memo cannot hide an
-  // unbilled delivery or create false void/cancel warnings, while unrelated
-  // draft invoices still hard-delete normally (including cascaded line items).
+  // unbilled delivery, create false void/cancel warnings, or be auto-cancelled
+  // as delivery billing, while unrelated draft invoices still hard-delete
+  // normally (including cascaded line items).
   psql(`
     BEGIN;
     SELECT set_config(
@@ -831,11 +832,17 @@ try {
     INSERT INTO public.customers (id, farm_name)
     VALUES ('f3611000-0000-4000-8000-000000000001', '[SMOKE] PR361 delivery surfaces');
     INSERT INTO public.orders (id, order_number, customer_id, salesman_id, status)
-    VALUES (
-      'f3611000-0000-4000-8000-000000000002', 'SMK-RCC-SURFACES',
-      'f3611000-0000-4000-8000-000000000001',
-      '00000000-0000-4000-8000-000000000081', 'confirmed'
-    );
+    VALUES
+      (
+        'f3611000-0000-4000-8000-000000000002', 'SMK-RCC-SURFACES',
+        'f3611000-0000-4000-8000-000000000001',
+        '00000000-0000-4000-8000-000000000081', 'confirmed'
+      ),
+      (
+        'f3611000-0000-4000-8000-000000000012', 'SMK-RCC-CANCELLED-CREDIT',
+        'f3611000-0000-4000-8000-000000000001',
+        '00000000-0000-4000-8000-000000000081', 'cancelled'
+      );
     INSERT INTO public.products (id, product_name, current_cost)
     VALUES (
       'f3611000-0000-4000-8000-000000000008',
@@ -905,7 +912,33 @@ try {
         'f3611000-0000-4000-8000-000000000001', NULL,
         'chemical_sale', 'draft', current_date, current_date, 1000, 500,
         '00000000-0000-4000-8000-000000000081', NULL, NULL
+      ),
+      (
+        'f3611000-0000-4000-8000-000000000013', 'SMK-RCC-DRAFT-CREDIT',
+        'f3611000-0000-4000-8000-000000000001',
+        'f3611000-0000-4000-8000-000000000002',
+        'credit_memo', 'draft', current_date, current_date, -100, 0,
+        '00000000-0000-4000-8000-000000000081', NULL, NULL
+      ),
+      (
+        'f3611000-0000-4000-8000-000000000014', 'SMK-RCC-CANCELLED-ORDER-CREDIT',
+        'f3611000-0000-4000-8000-000000000001',
+        'f3611000-0000-4000-8000-000000000012',
+        'credit_memo', 'posted', current_date, current_date, -100, 0,
+        '00000000-0000-4000-8000-000000000081', now(),
+        '00000000-0000-4000-8000-000000000081'
       );
+    INSERT INTO public.invoices (
+      id, invoice_number, customer_id, order_id, invoice_type, status,
+      invoice_date, due_date, total_amount_cents, total_cost_cents, created_by,
+      deleted_at
+    ) VALUES (
+      'f3611000-0000-4000-8000-000000000015', 'SMK-RCC-DELETED-DRAFT-CREDIT',
+      'f3611000-0000-4000-8000-000000000001',
+      'f3611000-0000-4000-8000-000000000002',
+      'credit_memo', 'draft', current_date, current_date, -100, 0,
+      '00000000-0000-4000-8000-000000000081', now()
+    );
     INSERT INTO public.invoice_items (
       id, invoice_id, product_id, description, quantity,
       unit_price_cents, extended_cents, cost_cents
@@ -952,6 +985,13 @@ try {
       ) THEN
         RAISE EXCEPTION 'posted return credit hid the completed delivery from dashboard action items';
       END IF;
+      IF EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(v_dashboard->'cancelled_posted') item
+        WHERE item->>'id' = 'f3611000-0000-4000-8000-000000000012'
+      ) THEN
+        RAISE EXCEPTION 'posted return credit created a false cancelled-order billing warning';
+      END IF;
 
       v_result := public.complete_delivery(
         'f3611000-0000-4000-8000-000000000010', '[SMOKE] Tote Receiver',
@@ -974,6 +1014,16 @@ try {
       );
       IF COALESCE((v_result->>'posted_invoices_exist')::boolean, true) THEN
         RAISE EXCEPTION 'posted return credit produced a false void-delivery warning: %', v_result;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM public.invoices
+        WHERE id IN (
+          'f3611000-0000-4000-8000-000000000013',
+          'f3611000-0000-4000-8000-000000000015'
+        )
+          AND status <> 'draft'
+      ) THEN
+        RAISE EXCEPTION 'void_delivery auto-cancelled a draft return credit';
       END IF;
 
       v_result := public.cancel_delivery(
@@ -1048,8 +1098,8 @@ try {
   assert.ok(dashboardStart >= 0 && dashboardEnd > dashboardStart, 'dashboard action-items helper slice is missing');
   const canonicalDashboard = deliverySurfaceSql.slice(dashboardStart, dashboardEnd);
   const dashboardCreditMutant = canonicalDashboard.replace(
-    /^\s*AND i\.invoice_type <> 'credit_memo'\r?\n/m,
-    '',
+    /(\s+AND \(i\.delivery_id = d\.id OR i\.delivery_id IS NULL\)\r?\n)\s+AND i\.invoice_type <> 'credit_memo'\r?\n/,
+    '$1',
   );
   assert.notEqual(dashboardCreditMutant, canonicalDashboard, 'dashboard action-items mutant did not remove the credit-memo filter');
   psql(dashboardCreditMutant);
@@ -1063,7 +1113,65 @@ try {
   );
   completedProofs.add('DASHBOARD_UNBILLED_CREDIT_FILTER_REMOVAL_DETECTED');
   psql(canonicalDashboard);
-  assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', 'c876f69e11fafcd1bcb75d2554e71f6f1f9ed33ac08181a8bf207580edcc49a9');
+  assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', '583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769');
+
+  const dashboardCancelledCreditMutant = canonicalDashboard.replace(
+    /(\s+AND i\.status = 'posted'\r?\n)\s+AND i\.invoice_type <> 'credit_memo'\r?\n/,
+    '$1',
+  );
+  assert.notEqual(dashboardCancelledCreditMutant, canonicalDashboard, 'cancelled-order dashboard mutant did not remove the credit-memo filter');
+  psql(dashboardCancelledCreditMutant);
+  const cancelledDashboardMutant = psql(`
+    BEGIN;
+    SELECT set_config(
+      'request.jwt.claims',
+      '{"sub":"00000000-0000-4000-8000-000000000081","role":"authenticated"}',
+      true
+    );
+    SET LOCAL session_replication_role = replica;
+    INSERT INTO public.customers (id, farm_name)
+    VALUES ('f3612000-0000-4000-8000-000000000001', '[SMOKE] cancelled credit warning mutant');
+    INSERT INTO public.orders (id, order_number, customer_id, salesman_id, status)
+    VALUES (
+      'f3612000-0000-4000-8000-000000000002', 'SMK-RCC-CANCELLED-MUTANT',
+      'f3612000-0000-4000-8000-000000000001',
+      '00000000-0000-4000-8000-000000000081', 'cancelled'
+    );
+    INSERT INTO public.invoices (
+      id, invoice_number, customer_id, order_id, invoice_type, status,
+      invoice_date, due_date, total_amount_cents, total_cost_cents, created_by,
+      posted_at, posted_by
+    ) VALUES (
+      'f3612000-0000-4000-8000-000000000003', 'SMK-RCC-CANCELLED-MUTANT',
+      'f3612000-0000-4000-8000-000000000001',
+      'f3612000-0000-4000-8000-000000000002', 'credit_memo', 'posted',
+      current_date, current_date, -100, 0,
+      '00000000-0000-4000-8000-000000000081', now(),
+      '00000000-0000-4000-8000-000000000081'
+    );
+    SET LOCAL session_replication_role = origin;
+    DO $cancelled_dashboard_mutant$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(public.get_dashboard_action_items(50)->'cancelled_posted') item
+        WHERE item->>'id' = 'f3612000-0000-4000-8000-000000000002'
+      ) THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: posted return credit created a cancelled-order warning';
+      END IF;
+    END
+    $cancelled_dashboard_mutant$;
+    ROLLBACK;
+  `, { allowFailure: true });
+  const cancelledDashboardMutantOutput = `${cancelledDashboardMutant.stdout}\n${cancelledDashboardMutant.stderr}`;
+  assert.notEqual(cancelledDashboardMutant.status, 0, 'cancelled-order dashboard mutant unexpectedly committed');
+  assert.match(
+    cancelledDashboardMutantOutput,
+    /SMOKE_FAIL: posted return credit created a cancelled-order warning/,
+    `cancelled-order dashboard mutant did not reach its credit-memo oracle:\n${cancelledDashboardMutantOutput}`,
+  );
+  psql(canonicalDashboard);
+  assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', '583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769');
 
   const completeGateStart = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION public._complete_delivery_authorized_impl(');
   const completeGateEnd = deliverySurfaceSql.indexOf('ALTER FUNCTION public.get_dashboard_action_items', completeGateStart);

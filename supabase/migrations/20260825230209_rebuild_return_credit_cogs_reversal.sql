@@ -285,6 +285,9 @@ ALTER FUNCTION public._receive_return_impl_20260714(uuid, uuid, text)
 REVOKE ALL ON FUNCTION public._receive_return_impl_before_inventory_seed_20260825(uuid, uuid, text)
   FROM PUBLIC, anon, authenticated, service_role;
 
+-- A received return is physically verified stock coming back into the
+-- warehouse. It is not a phantom row manufactured by a delivery shortage, so
+-- manufactured_at_delivery deliberately keeps its false default.
 CREATE FUNCTION public._receive_return_impl_20260714(
   p_return_id uuid, p_received_by uuid, p_idempotency_key text DEFAULT NULL
 ) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $function$

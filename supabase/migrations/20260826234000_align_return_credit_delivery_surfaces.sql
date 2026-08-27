@@ -124,7 +124,10 @@ BEGIN
         i.invoice_number
       FROM orders o
       JOIN customers c ON c.id = o.customer_id
-      JOIN invoices i ON i.order_id = o.id AND i.status = 'posted'
+      JOIN invoices i ON i.order_id = o.id
+        AND i.status = 'posted'
+        AND i.invoice_type <> 'credit_memo'
+        AND i.deleted_at IS NULL
       WHERE o.status = 'cancelled'
       ORDER BY o.created_at DESC
       LIMIT p_limit
@@ -463,6 +466,8 @@ BEGIN
     void_reason = 'Auto-cancelled: delivery ' || v_delivery.delivery_number || ' was voided by admin',
     updated_at  = now()
   WHERE order_id = v_delivery.order_id AND status = 'draft'
+    AND invoice_type <> 'credit_memo'
+    AND deleted_at IS NULL
     AND (delivery_id = p_delivery_id OR delivery_id IS NULL);
 
   -- U2 (Codex P1): read-only "posted invoice needs review" flag — scope it the same
@@ -1235,7 +1240,7 @@ DECLARE
 BEGIN
   FOR v_check IN
     SELECT value
-    FROM jsonb_array_elements($checks$[{"name":"get_dashboard_action_items","signature":"public.get_dashboard_action_items(integer)","args":"23","hash":"c876f69e11fafcd1bcb75d2554e71f6f1f9ed33ac08181a8bf207580edcc49a9","private":false},{"name":"void_delivery","signature":"public.void_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"426cea4c5e350350ce85249e9df2f1c9d8aa03da4868072bf395683e9254ba03","private":false},{"name":"cancel_delivery","signature":"public.cancel_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"73be159b6793fb16580a702068974102e6ef12794be9f38af861b92e9d6495dd","private":false},{"name":"_complete_delivery_authorized_impl","signature":"public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)","args":"2950 25 2950 3802 25 25 25 1184","hash":"3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a","private":true}]$checks$::jsonb)
+    FROM jsonb_array_elements($checks$[{"name":"get_dashboard_action_items","signature":"public.get_dashboard_action_items(integer)","args":"23","hash":"583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769","private":false},{"name":"void_delivery","signature":"public.void_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"d7f0465616be4e125c0b5a1fd2b15a8b0b502b2f2ecaaeb4a981abb599837d25","private":false},{"name":"cancel_delivery","signature":"public.cancel_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"73be159b6793fb16580a702068974102e6ef12794be9f38af861b92e9d6495dd","private":false},{"name":"_complete_delivery_authorized_impl","signature":"public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)","args":"2950 25 2950 3802 25 25 25 1184","hash":"3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a","private":true}]$checks$::jsonb)
   LOOP
     SELECT count(*)
       INTO v_count
