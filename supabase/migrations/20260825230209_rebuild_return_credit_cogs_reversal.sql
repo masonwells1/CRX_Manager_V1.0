@@ -97,6 +97,8 @@ BEGIN
          AND NOT p.prosecdef AND p.provolatile = 's'
          AND p.proconfig = ARRAY['search_path=public']::text[]
          AND pg_get_userbyid(p.proowner) = 'postgres'
+         AND encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') =
+             '0b9ef2b922c909de0cea7757bcfe95901c0781739eddd8521b09cfb1537907ba'
      )
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'void_invoice' AND p.proargtypes = '2950 25 25'::oidvector AND p.prorettype = 'void'::regtype) <> 1
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'unapply_credit_memo' AND p.proargtypes = '2950 25 2950 25'::oidvector AND p.prorettype = 'jsonb'::regtype) <> 1
@@ -873,6 +875,21 @@ DECLARE
   v_parent_guard_triggerdef text;
   v_lineage_guard_triggerdef text;
 BEGIN
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'current_season') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = to_regprocedure('public.current_season()')
+         AND p.proargtypes = ''::oidvector
+         AND p.prorettype = 'integer'::regtype
+         AND NOT p.prosecdef AND p.provolatile = 's'
+         AND p.proconfig = ARRAY['search_path=public']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+         AND encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') =
+             '0b9ef2b922c909de0cea7757bcfe95901c0781739eddd8521b09cfb1537907ba'
+     ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_CURRENT_SEASON_DRIFT';
+  END IF;
   FOREACH v_name IN ARRAY ARRAY[
     '_issue_return_credit_header_only_impl_20260825',
     '_issue_return_credit_impl',

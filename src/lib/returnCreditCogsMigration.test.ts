@@ -105,6 +105,8 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain("p.prorettype = 'integer'::regtype");
     expect(migration).toContain("p.provolatile = 's'");
     expect(migration).toContain("p.proconfig = ARRAY['search_path=public']::text[]");
+    expect(migration.match(/0b9ef2b922c909de0cea7757bcfe95901c0781739eddd8521b09cfb1537907ba/g)).toHaveLength(2);
+    expect(migration).toContain('RETURN_COGS_POSTFLIGHT_CURRENT_SEASON_DRIFT');
     expect(migration).toContain('SET total_cost_cents = -v_cogs, season = public.current_season()');
     expect(migration).not.toContain('RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS');
     expect(returnCreditSmoke).toContain("PERFORM void_invoice(v_credit_id, '[SMOKE] chain void'");
