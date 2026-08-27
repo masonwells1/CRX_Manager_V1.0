@@ -65,6 +65,16 @@ Never commit `.env` files or reveal keys. Never use `--no-verify`. Never use des
 - Do not claim a finding is current when the checkout is behind `origin/main`.
 - Do not push, deploy, migrate, or mutate live data as part of a review, audit, health check, or setup check.
 
+## Multi-Agent Coordination
+
+- Mason describes the business outcome; the coordinating agent owns risk classification, task breakdown, worker selection, file/worktree isolation, integration, and one consolidated owner-facing status. Do not make Mason coordinate agents or Git.
+- Use each tool's canonical native orchestration, project instructions, skills, and linked worktrees. Do not add a custom agent server, queue, container layer, or permanent role files until a repeated workflow and a verified native limitation justify them.
+- Delegate only significant, independent, bounded work whose saved time or reduced context noise exceeds the coordination cost. Keep tiny fixes and tightly sequential work with the coordinator. Ad-hoc delegation defaults to at most three active workers unless tool-specific guidance or a canonical workflow defines a different tested fan-out.
+- Before delegation, give each worker a contract naming the objective, minimum relevant context, allowed and prohibited files or systems, observable acceptance criteria, required checks, and the evidence and unresolved risks it must return. Workers return distilled results, not raw logs or a bare `Done`.
+- Follow the active tool's model-routing rules instead of duplicating them here. Architecture and final review of money, inventory, units, auth, RLS, migrations, and other business-critical behavior stay with the strongest reviewer required by the current workflow.
+- Designate exactly one writer per checkout. Concurrent writers require separate clean worktrees and disjoint file ownership; dependent database, API, UI, and test work stays sequential until the coordinator has fixed the shared interface. No worker merges, deploys, applies a live migration, mutates live data, or widens scope independently.
+- Worker-written tests and successful builds are supporting evidence, not final proof. The coordinator reviews every accepted diff, runs the real-path verification required below, and preserves the existing exact-SHA adversarial-review and delivery gates.
+
 ## CRX Hard Rules
 
 - Add database changes only as new files under `supabase/migrations/`; never edit an applied migration.
