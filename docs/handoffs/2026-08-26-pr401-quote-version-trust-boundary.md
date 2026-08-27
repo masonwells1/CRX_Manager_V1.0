@@ -25,12 +25,19 @@ but stop being restorable.
 | | |
 |---|---|
 | Branch | `codex/quote-version-restore-trust-boundary` |
-| Migration | `supabase/migrations/20260825190000_quote_version_restore_trust_boundary.sql` |
+| Migration | `supabase/migrations/20260826220000_quote_version_restore_trust_boundary.sql` |
 | Diff vs `main` | 19 files, ~1,722 insertions |
 | Required checks | all three passing (Vercel; Lint/Type/Test/Build; SQL Migration Validation) |
 | Local gate | full suite green — 340 files, 4,784 passed, 0 failed |
-| Merged | **no** |
+| Merged | **YES — 2026-08-26 18:23 UTC, squash `22c7d217`, Mason-approved** |
 | Applied to live | **no** |
+
+**Renumbered a second time (2026-08-26, PR #499):** `20260825190000` → `20260826220000`.
+While this migration sat merged-but-unapplied, the COMMENT-only `20260826150000` (PR #497)
+applied live first, moving the ledger's name high-water past this file's stamp — the ordering
+guard then refused the apply outright, the same mechanical wedge that forced the first
+renumbering. All references-by-name moved with it; no fingerprint changed (every pin hashes
+function bodies, never filenames).
 
 Mason approved both the merge and the apply in-session ("finish it"), and that approval was not
 withdrawn — he stopped the session for size, not for doubt. **Even so, re-confirm before merging:**

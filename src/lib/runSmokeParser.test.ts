@@ -11,6 +11,25 @@ describe('run-smoke result parser', () => {
       interpretResult('psql:C:\\CRX_Manager\\scripts\\smoke\\chain.sql:42: ERROR:  SMOKE_PASS_ROLLBACK restore quote'),
     ).toEqual({ pass: true });
     expect(interpretResult('ERROR:  SMOKE_PASS_ROLLBACK (9/9 incl. cross-actor)')).toEqual({ pass: true });
+    // The exact bare token also passes.
+    expect(interpretResult('ERROR:  SMOKE_PASS_ROLLBACK')).toEqual({ pass: true });
+  });
+
+  it('refuses any identifier that merely EXTENDS the pass token', () => {
+    // Three rounds of the same bug taught the shape of the fix: the matcher
+    // ALLOWLISTS real delimiters (end, space, open paren) instead of
+    // enumerating forbidden extension characters. Each historical bypass stays
+    // pinned red here: plain extension (Sol), $-extension (CodeRabbit —
+    // PostgreSQL identifiers may contain $), and non-ASCII identifier letters
+    // (Sol — identifiers also permit é, λ and friends).
+    for (const attack of [
+      'ERROR:  SMOKE_PASS_ROLLBACK_BUT_FAILED',
+      'ERROR:  SMOKE_PASS_ROLLBACK$BUT_FAILED',
+      'ERROR:  SMOKE_PASS_ROLLBACKéBUT_FAILED',
+      'ERROR:  SMOKE_PASS_ROLLBACKλBUT_FAILED',
+    ]) {
+      expect(interpretResult(attack).pass, attack).toBe(false);
+    }
   });
 
   it('keeps failures that merely quote a pass token red', () => {
