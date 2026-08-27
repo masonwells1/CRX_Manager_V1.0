@@ -124,7 +124,7 @@ body (expect reject). Both directions were verified here after the fix.
 **Source:** Mason's explicit in-chat decision, 2026-08-25, chosen from a plain-English trade-off
 after both adversarial reviewers independently flagged the same defect on PR #401 head `9b2d86a5`.
 
-**The finding, stated accurately.** Migration `20260825190000_quote_version_restore_trust_boundary`
+**The finding, stated accurately.** Migration `20260826220000_quote_version_restore_trust_boundary`
 adds `quote_versions.restore_trusted_at` (taking an ACCESS EXCLUSIVE lock) and re-emits the
 create/restore functions **inside one transaction**. An invocation that has already entered an old
 function body blocks on that lock and then resumes on its OLD body after the migration commits.

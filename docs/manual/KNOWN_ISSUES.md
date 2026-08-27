@@ -136,7 +136,9 @@ and updated in **all three pin locations in the SAME change**:
 1. `scripts/db-invariant-sweeps/predicates/quote-versions-rpc-owned.sql` (the standing sweep —
    its violation reasons print expected vs measured values, so an operator can tell an expected
    pin update from a real bypass);
-2. `supabase/migrations/20260825190000_quote_version_restore_trust_boundary.sql` if it has not
+2. `supabase/migrations/20260826220000_quote_version_restore_trust_boundary.sql` (renumbered
+   from `20260825190000` on 2026-08-26 after the `20260826150000` COMMENT-only apply moved the
+   ledger high-water past it — see history entry 892 for the causal record) if it has not
    yet applied (precondition preimage/helper/route pins AND postcondition body pins);
 3. `src/lib/quoteVersionWriteBoundary.test.ts` (the mirror test, which binds each pin to its
    own predicate branch).

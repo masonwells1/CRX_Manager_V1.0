@@ -1,17 +1,24 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-08-26 UTC for the migration ledger only** — after the COMMENT-only apply of
-`20260826150000_fix_save_job_comment_refusal_count` (history row 893, ledger version
-`20260826205935`): **977 ledger rows**, `max(version)` `20260826205935`, effective ordering
-high-water `20260826150000`. That migration changes only `save_job`'s `pg_description` text;
-the function body, schema, and all money behavior are exactly as recorded below. Figures below
-citing 976 rows describe the 2026-08-25 state. Original stamp text follows — a read-only
+**Last verified: 2026-08-26 ~21:30 UTC for the migration ledger only** — read-only re-read
+after the `20260826150000` apply: **977 ledger rows**, `max(version)` `20260826205935`, and
+current live effective ordering name high-water **`20260826150000`**
+(`20260826150000_fix_save_job_comment_refusal_count`, history row 893, **applied live
+2026-08-26 20:59:35 UTC**). That apply superseded the earlier reading this header carried
+(976 rows / high-water `20260820120000`, taken while row 893 was still a candidate) — kept
+below for provenance, per this file's convention. Superseded text follows: re-read read-only
+on 2026-08-26 while landing the COMMENT-only candidate `20260826150000` (history row
+893, then NOT applied): still **976 ledger rows**, `max(version)` `20260825142708`, newest name
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` — every figure unchanged
+from the 2026-08-25 reading below. Original stamp text follows — a read-only
 re-read. **The live ledger has 976 rows**, `max(version)` `20260825142708`, and current live
 effective ordering high-water `20260820120000` (name
 `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
 
-**Also read live 2026-08-26, for the pending `20260825190000_quote_version_restore_trust_boundary`
-(PR #401):** `quote_versions.restore_trusted_at` is **absent** (the migration is unapplied), the
+**Also read live 2026-08-26, for the pending `20260826220000_quote_version_restore_trust_boundary`
+(PR #401; renumbered from `20260825190000` by PR #499 after the `20260826150000` COMMENT-only
+apply at 20:59:35 UTC moved the ledger name high-water past the old stamp — 977 rows now, see
+history entry 892 for the causal record):** `quote_versions.restore_trusted_at` is **absent** (the migration is unapplied), the
 table holds **3 rows across 2 quotes**, and all five routines of the quote-version trust chain
 (`create_quote_version`, `restore_quote_version`, `_create_quote_version_owner_impl`,
 `_restore_quote_version_owner_impl`, `_restore_quote_version_below_cost_impl_20260810`) have

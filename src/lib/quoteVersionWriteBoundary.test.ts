@@ -31,7 +31,7 @@ const migration = read(
 const restoreTrustMigration = read(
   'supabase',
   'migrations',
-  '20260825190000_quote_version_restore_trust_boundary.sql',
+  '20260826220000_quote_version_restore_trust_boundary.sql',
 );
 const predicate = read(
   'scripts',
@@ -1103,7 +1103,7 @@ describe('quote_versions restore trust boundary — rollback smoke', () => {
 
   it('refuses to run before the trust migration is deployed', () => {
     expect(restoreTrustSmoke).toContain("a.attname = 'restore_trusted_at'");
-    expect(restoreTrustSmoke).toContain('SMOKE_PREREQ: 20260825190000 quote-version restore trust boundary is not deployed');
+    expect(restoreTrustSmoke).toContain('SMOKE_PREREQ: 20260826220000 quote-version restore trust boundary is not deployed');
   });
 
   it('creates both an RPC-trusted version and an owner-only unmarked fixture', () => {
