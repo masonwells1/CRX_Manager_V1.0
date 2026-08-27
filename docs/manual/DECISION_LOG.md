@@ -1,11 +1,31 @@
 # Decision Log
 
-Last verified: 2026-08-26
+Last verified: 2026-08-27
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+
+## 2026-08-27 — Codex live migrations use an exact same-turn owner approval
+
+**Source:** Mason's in-chat request to build a safe Codex migration approval gate on 2026-08-27.
+
+**Decision.** An interactive Codex session may call the live Supabase migration tool only after a
+real Mason-authored prompt arms one exact migration for the CRX project. The approval is bound to
+the current Codex session and turn, Git HEAD, migration name, on-disk file, and normalized SQL hash;
+it expires after five minutes and is atomically consumed by the first matching attempt.
+
+**Why.** Codex hooks cannot safely return an approval prompt from PreToolUse: the current runtime
+does not support that decision and continues the tool call after reporting the hook failure. A
+same-turn UserPromptSubmit token preserves Mason as the authorizing party without weakening the
+existing migration review, ordering, destructive-SQL, and exact-content gates.
+
+**Operative rule.** Approval is one migration at a time. Machine envelopes, peer-session messages,
+quoted approval text, wrong project/name/SQL, moved HEAD, another turn/session, expiry, replay, raw
+SQL, CLI apply paths, and manual invocation of the minting hook all deny. A failed attempt consumes
+the approval, so Mason must send the exact sentence again after the underlying gate is repaired.
 
 
 ## 2026-08-26 — ordinary documentation gets a trusted fast CI lane; uncertainty still runs everything
