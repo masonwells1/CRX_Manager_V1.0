@@ -14,3 +14,7 @@
 - Regression coverage exercises storage failures, non-empty receipt proof, the
   exact money/date helpers, route identity, and the disabled expired-retry path.
   No live migration or production data change was performed.
+- A duplicated browser tab now receives a distinct per-page claim even when it
+  inherits the original tab's session storage. Definitive failure cleanup never
+  deletes a resolved peer tombstone, and a collision regression proves the
+  committed payment/receipt marker survives the copied-tab race.

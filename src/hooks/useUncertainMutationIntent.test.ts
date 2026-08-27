@@ -427,7 +427,8 @@ describe('useUncertainMutationIntent', () => {
     const stored = JSON.parse(window.localStorage.getItem(
       `crx:uncertain-mutation:v4:${JSON.stringify(['create_vendor_bill', 'admin-same-race'])}`,
     )!);
-    expect(stored.claimTabIds).toEqual(expect.arrayContaining(['same-tab-a', 'same-tab-b']));
+    expect(stored.claimTabIds.some((claim: string) => claim.startsWith('same-tab-a:'))).toBe(true);
+    expect(stored.claimTabIds.some((claim: string) => claim.startsWith('same-tab-b:'))).toBe(true);
   });
 
   it('releases only the definitively rejected tab claim while a peer request remains in flight', async () => {
@@ -457,7 +458,8 @@ describe('useUncertainMutationIntent', () => {
       `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`,
     )!);
     expect(pending.status).toBe('pending');
-    expect(pending.claimTabIds).toEqual(['commit-tab']);
+    expect(pending.claimTabIds).toHaveLength(1);
+    expect(pending.claimTabIds[0]).toMatch(/^commit-tab:/);
 
     window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'blocked-tab');
     const blockedTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
@@ -492,7 +494,7 @@ describe('useUncertainMutationIntent', () => {
       expect(await rejectTab.result.current.classifyFailure({
         code: '23514',
         message: 'late definitive rejection',
-      })).toBe('definitive');
+      })).toBe('resolved');
     });
 
     const resolved = JSON.parse(window.localStorage.getItem(
@@ -500,12 +502,52 @@ describe('useUncertainMutationIntent', () => {
     )!);
     expect(resolved.status).toBe('resolved');
     expect(resolved.idempotencyKey).toBe(completedKey);
-    expect(resolved.claimTabIds).toEqual(['resolve-first-tab']);
+    expect(resolved.claimTabIds).toHaveLength(2);
+    expect(resolved.claimTabIds.some((claim: string) => claim.startsWith('resolve-first-tab:'))).toBe(true);
+    expect(resolved.claimTabIds.some((claim: string) => claim.startsWith('reject-second-tab:'))).toBe(true);
 
     window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'after-resolve-tab');
     const afterResolve = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
     await act(async () => afterResolve.result.current.beginIntent({ amount: 2_500 }));
     expect(afterResolve.result.current.getIdempotencyKey()).not.toBe(completedKey);
+  });
+
+  it('keeps duplicated tabs distinct and never erases a peer resolved tombstone', async () => {
+    const options = {
+      operation: 'record_vendor_payment',
+      userId: 'admin-cloned-tab-race',
+      surface: 'vendor-bill-detail',
+      scope: 'bill-cloned-tab-race',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'copied-tab-id');
+    const resolveTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'copied-tab-id');
+    const rejectTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+
+    await act(async () => resolveTab.result.current.beginIntent({ amount: 15_000 }));
+    await act(async () => rejectTab.result.current.beginIntent({ amount: 15_000 }));
+    const pending = JSON.parse(window.localStorage.getItem(
+      `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`,
+    )!);
+    expect(pending.claimTabIds).toHaveLength(2);
+    expect(new Set(pending.claimTabIds).size).toBe(2);
+    expect(pending.claimTabIds.every((claim: string) => claim.startsWith('copied-tab-id:'))).toBe(true);
+
+    const completedKey = resolveTab.result.current.getIdempotencyKey();
+    await act(async () => resolveTab.result.current.resolveIntent());
+    await act(async () => {
+      expect(await rejectTab.result.current.classifyFailure({
+        code: '23514',
+        message: 'late rejection from duplicated tab',
+      })).toBe('resolved');
+    });
+
+    const resolved = JSON.parse(window.localStorage.getItem(
+      `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`,
+    )!);
+    expect(resolved.status).toBe('resolved');
+    expect(resolved.idempotencyKey).toBe(completedKey);
+    expect(resolved.claimTabIds).toHaveLength(2);
   });
 
   it('distinguishes a peer-tab completion from a stale failure after a newer request starts', async () => {

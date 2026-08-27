@@ -354,6 +354,9 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(receivingHub).toContain('recordIds.length > 0');
 
     expect(uncertainMutationIntent).toContain('Failure classification runs inside mutation catch paths.');
+    expect(uncertainMutationIntent).toContain('function currentPageClaimId(): string');
+    expect(uncertainMutationIntent).toContain("return `${currentTabId()}:${crypto.randomUUID()}`;");
+    expect(uncertainMutationIntent).toContain("if (candidate.status === 'resolved') {");
     expect(vendorBillDetail).toContain('Payment could not be safely prepared. Nothing was recorded');
     expect(purchaseOrderDetail).toContain('Receiving could not be safely prepared. Nothing was received');
     expect(receivingHub).toContain('Receiving could not be safely prepared. Nothing was received');

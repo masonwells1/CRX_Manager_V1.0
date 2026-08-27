@@ -93,6 +93,13 @@ function currentTabId(): string {
   }
 }
 
+function currentPageClaimId(): string {
+  // sessionStorage is copied when a browser tab is duplicated. A fresh UUID
+  // suffix makes each mounted page claimant distinct even when both pages
+  // inherit the same tab ID.
+  return `${currentTabId()}:${crypto.randomUUID()}`;
+}
+
 function isValidRecord<T>(
   candidate: Partial<DurableMutationIntentRecord<T>>,
   options: DurableMutationIntentOptions<T>,
@@ -178,7 +185,7 @@ function migrateLegacySessionRecord<T>(
         version: 4,
         status: 'pending',
         requestVersion: candidate.idempotencyKey,
-        claimTabIds: [currentTabId()],
+        claimTabIds: [currentPageClaimId()],
         resolvedAtMs: null,
         operation: options.operation,
         userId: options.userId,
@@ -432,6 +439,12 @@ async function deleteCoordinatedRecord<T>(
         const candidate = stored?.record as Partial<DurableMutationIntentRecord<T>> | undefined;
         if (!candidate || !isValidRecord(candidate, options)) return;
         if (candidate.requestVersion === requestVersion) {
+          if (candidate.status === 'resolved') {
+            // A definitive response from one claimant must never erase proof
+            // that an identical peer request already committed.
+            outcome = { deleted: false, current: candidate };
+            return;
+          }
           const remainingClaimTabIds = candidate.claimTabIds.filter(
             (claimTabId) => claimTabId !== tabId,
           );
@@ -478,7 +491,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
   const getIntentIdentityRef = useRef(options?.getIntentIdentity);
   getIntentIdentityRef.current = options?.getIntentIdentity;
   const tabIdRef = useRef<string | null>(null);
-  if (tabIdRef.current === null && typeof window !== 'undefined') tabIdRef.current = currentTabId();
+  if (tabIdRef.current === null && typeof window !== 'undefined') tabIdRef.current = currentPageClaimId();
   const initialRecord = readDurableRecord<T>(storageKey, options);
   const initialPending = initialRecord?.status === 'pending';
   const initialOwned = initialPending
@@ -577,7 +590,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
         proposed,
         intent,
         options,
-        tabIdRef.current ?? currentTabId(),
+        tabIdRef.current ?? currentPageClaimId(),
       );
       writeDurableRecord(storageKey, coordinated.record);
       applyRecord(coordinated.record);
@@ -664,6 +677,10 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
         } else if (outcome.current) {
           if (storageKey) writeDurableRecord(storageKey, outcome.current);
           applyRecord(outcome.current);
+          if (outcome.current.status === 'resolved') {
+            attemptRecordRef.current = null;
+            return 'resolved';
+          }
         }
         attemptRecordRef.current = null;
         return 'definitive';
@@ -688,7 +705,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           attempt,
           attempt.intent,
           options,
-          tabIdRef.current ?? currentTabId(),
+          tabIdRef.current ?? currentPageClaimId(),
         );
         writeDurableRecord(storageKey, restored.record);
         applyRecord(restored.record);
