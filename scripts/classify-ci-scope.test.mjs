@@ -7,11 +7,16 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
+  applyPriorFullProof,
   classifyCiScope,
   classifyPathList,
+  classifyPullRequestEvent,
+  fullProofArtifactName,
   isFastDocumentationPath,
   parseChangedEntries,
   parseChangedPaths,
+  runClassifier,
+  verifyPriorFullCiProof,
 } from './classify-ci-scope.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -167,10 +172,201 @@ equal(
   'status parser must preserve additions',
 );
 
+const readyPr = { action: 'opened', pull_request: { draft: false } };
+const draftPr = { action: 'opened', pull_request: { draft: true } };
+equal(classifyPullRequestEvent('push', {}).route, 'code', 'pushes use code routing');
+equal(classifyPullRequestEvent('pull_request', readyPr).route, 'code', 'ready opened PR uses code routing');
+equal(classifyPullRequestEvent('pull_request', draftPr).route, 'code', 'opened draft still requires code proof');
+equal(
+  classifyPullRequestEvent('pull_request', { action: 'synchronize', pull_request: { draft: true } }).route,
+  'code',
+  'draft synchronize still requires code proof',
+);
+equal(
+  classifyPullRequestEvent('pull_request', { action: 'ready_for_review', pull_request: { draft: false } }).route,
+  'force-full',
+  'ready-for-review forces full proof',
+);
+for (const changes of [{ title: { from: 'old' } }, { body: { from: 'old' } }, { title: { from: 'old' }, body: { from: 'old' } }]) {
+  equal(
+    classifyPullRequestEvent('pull_request', { action: 'edited', changes, pull_request: { draft: false } }).route,
+    'metadata',
+    'title/body-only edits are metadata candidates',
+  );
+}
+for (const changes of [{ base: { ref: { from: 'release' } } }, {}, { labels: { from: [] } }, null]) {
+  equal(
+    classifyPullRequestEvent('pull_request', { action: 'edited', changes, pull_request: { draft: false } }).route,
+    'force-full',
+    'base or ambiguous edits force full proof',
+  );
+}
+equal(
+  classifyPullRequestEvent('pull_request', { action: 'edited', changes: { base: { ref: { from: 'release' } } }, pull_request: { draft: true } }).route,
+  'force-full',
+  'base edits force full proof even while draft',
+);
+
+const proofBase = 'a'.repeat(40);
+const proofHead = 'b'.repeat(40);
+const proofName = fullProofArtifactName(proofBase, proofHead);
+equal(proofName, `crx-full-ci-proof-${proofBase}-${proofHead}`, 'full proof artifact binds base and head');
+const artifactListing = runId => ({
+  total_count: 1,
+  artifacts: [{
+    name: proofName,
+    expired: false,
+    created_at: '2026-08-27T00:00:00Z',
+    workflow_run: { id: runId, head_sha: proofHead },
+  }],
+});
+const workflowRun = (runId, overrides = {}) => ({
+  id: runId,
+  status: 'completed',
+  conclusion: 'success',
+  event: 'pull_request',
+  path: '.github/workflows/ci.yml',
+  head_sha: proofHead,
+  created_at: `2026-08-27T${String(runId % 24).padStart(2, '0')}:00:00Z`,
+  pull_requests: [{ base: { sha: proofBase }, head: { sha: proofHead } }],
+  ...overrides,
+});
+const workflowRunListing = runs => ({ total_count: runs.length, workflow_runs: runs });
+const response = (payload, ok = true, status = 200) => ({ ok, status, json: async () => payload });
+equal(
+  await verifyPriorFullCiProof({
+    repository: 'masonwells1/CRX_Manager_V1.0',
+    baseSha: proofBase,
+    headSha: proofHead,
+    currentRunId: '999',
+    fetchImpl: async url => url.includes('/actions/workflows/')
+      ? response(workflowRunListing([workflowRun(321)]))
+      : response(artifactListing(321)),
+  }),
+  true,
+  'successful prior full workflow proof is accepted',
+);
+equal(
+  await verifyPriorFullCiProof({
+    repository: 'masonwells1/CRX_Manager_V1.0',
+    baseSha: proofBase,
+    headSha: proofHead,
+    currentRunId: '321',
+    fetchImpl: async url => url.includes('/actions/workflows/')
+      ? response(workflowRunListing([workflowRun(321)]))
+      : response(artifactListing(321)),
+  }),
+  false,
+  'current workflow cannot attest itself',
+);
+equal(
+  await verifyPriorFullCiProof({
+    repository: 'masonwells1/CRX_Manager_V1.0',
+    baseSha: proofBase,
+    headSha: proofHead,
+    currentRunId: '999',
+    fetchImpl: async url => url.includes('/actions/workflows/')
+      ? response(workflowRunListing([workflowRun(321, { conclusion: 'failure' })]))
+      : response(artifactListing(321)),
+  }),
+  false,
+  'failed prior workflow is not accepted',
+);
+{
+  let artifactRequests = 0;
+  equal(
+    await verifyPriorFullCiProof({
+      repository: 'masonwells1/CRX_Manager_V1.0',
+      baseSha: proofBase,
+      headSha: proofHead,
+      currentRunId: '999',
+      fetchImpl: async url => {
+        if (url.includes('/actions/workflows/')) {
+          return response(workflowRunListing([
+            workflowRun(321, { created_at: '2026-08-27T00:00:00Z' }),
+            workflowRun(654, { created_at: '2026-08-27T01:00:00Z', conclusion: 'failure' }),
+          ]));
+        }
+        artifactRequests += 1;
+        return response(artifactListing(321));
+      },
+    }),
+    false,
+    'newest failed full run blocks an older success',
+  );
+  equal(artifactRequests, 0, 'a newest failed run blocks proof before artifact lookup');
+}
+{
+  equal(
+    await verifyPriorFullCiProof({
+      repository: 'masonwells1/CRX_Manager_V1.0',
+      baseSha: proofBase,
+      headSha: proofHead,
+      currentRunId: '999',
+      fetchImpl: async url => {
+        if (url.includes('/actions/workflows/')) {
+          return response(workflowRunListing([
+            workflowRun(321, { created_at: '2026-08-27T00:00:00Z' }),
+            workflowRun(654, { created_at: '2026-08-27T01:00:00Z' }),
+          ]));
+        }
+        return response(artifactListing(321));
+      },
+    }),
+    false,
+    'a newer successful cheap run without an artifact blocks an older full proof',
+  );
+}
+equal(
+  applyPriorFullProof({ docsOnly: false, fullCi: true, reason: 'code', changedPaths: ['src/App.tsx'] }, 'metadata', true).fullCi,
+  false,
+  'metadata routing becomes cheap only with prior full proof',
+);
+equal(
+  applyPriorFullProof({ docsOnly: false, fullCi: true, reason: 'code', changedPaths: ['src/App.tsx'] }, 'metadata', false).fullCi,
+  true,
+  'metadata routing without prior proof preserves full CI',
+);
+equal(
+  applyPriorFullProof({ docsOnly: false, fullCi: true, reason: 'code', changedPaths: ['src/App.tsx'] }, 'code', true).fullCi,
+  true,
+  'prior artifact cannot cheap-route a code event',
+);
+equal(
+  await verifyPriorFullCiProof({
+    repository: 'masonwells1/CRX_Manager_V1.0',
+    baseSha: proofBase,
+    headSha: proofHead,
+    currentRunId: '999',
+    fetchImpl: async url => url.includes('/actions/workflows/')
+      ? response(workflowRunListing([workflowRun(321)]))
+      : response({ ...artifactListing(321), artifacts: [{ ...artifactListing(321).artifacts[0], expired: true }] }),
+  }),
+  false,
+  'expired proof artifacts are rejected',
+);
+await assert.rejects(
+  verifyPriorFullCiProof({
+    repository: 'masonwells1/CRX_Manager_V1.0',
+    baseSha: proofBase,
+    headSha: proofHead,
+    currentRunId: '999',
+    fetchImpl: async () => response({}, false, 403),
+  }),
+  /workflow-run lookup failed/,
+);
+assertions += 1;
+
 const workflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
 for (const requiredFragment of [
   'types: [opened, reopened, synchronize, ready_for_review, edited]',
   'name: Classify CI scope',
+  'timeout-minutes: 5',
+  '--event-path "$GITHUB_EVENT_PATH"',
+  'name: Publish exact full-CI proof',
+  'crx-full-ci-proof-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}',
+  "github.event.action == 'edited' && 'edited' || 'code'",
+  'code:false|force-full:false|error:false|metadata:false|metadata:true',
   'if ! git -C "$GITHUB_WORKSPACE" cat-file -e "${compare_base}^{commit}" 2>/dev/null; then',
   'git -C "$GITHUB_WORKSPACE" worktree add --detach "$trusted_root" "$compare_base"',
   '--github-output "$classifier_output"; then',
@@ -208,6 +404,160 @@ try {
     const result = classifyCiScope({ repoRoot: root, eventName: 'pull_request', baseSha: base, headSha: head });
     equal(result.docsOnly, true, 'real docs diff must use fast lane');
     equal(result.changedPaths.length, 1, 'real docs diff path count');
+  }
+
+  {
+    const { root, base } = createRepo();
+    disposables.push(root);
+    write(root, 'src/example.ts', 'export const value = 2;\n');
+    const head = commitAll(root, 'code change');
+    equal(
+      classifyCiScope({ repoRoot: root, eventName: 'pull_request', baseSha: base, headSha: head, eventRoute: 'code' }).fullCi,
+      true,
+      'draft status cannot bypass code-path proof',
+    );
+    equal(
+      classifyCiScope({ repoRoot: root, eventName: 'pull_request', baseSha: base, headSha: head, eventRoute: 'force-full' }).fullCi,
+      true,
+      'forced event routing overrides path-based shortcuts',
+    );
+  }
+
+  {
+    const { root, base } = createRepo();
+    disposables.push(root);
+    write(root, 'src/example.ts', 'export const value = 3;\n');
+    const head = commitAll(root, 'base-edit integration fixture');
+    const eventPath = path.join(root, 'base-edit-event.json');
+    const outputPath = path.join(root, 'base-edit-output.txt');
+    writeFileSync(eventPath, JSON.stringify({
+      action: 'edited',
+      changes: { base: { ref: { from: 'release' } } },
+      pull_request: { draft: false },
+    }), 'utf8');
+    const result = await runClassifier({
+      repoRoot: root,
+      eventName: 'pull_request',
+      baseSha: base,
+      headSha: head,
+      githubOutput: outputPath,
+      eventPath,
+      repository: 'masonwells1/CRX_Manager_V1.0',
+      currentRunId: '999',
+    });
+    equal(result.fullCi, true, 'CLI wiring forces full proof for a base edit');
+    equal(readFileSync(outputPath, 'utf8').includes('event_route=force-full'), true, 'CLI output records forced base-edit routing');
+  }
+
+  {
+    const { root, base } = createRepo();
+    disposables.push(root);
+    write(root, 'src/example.ts', 'export const value = 31;\n');
+    const head = commitAll(root, 'malformed-event integration fixture');
+    const eventPath = path.join(root, 'malformed-event.json');
+    const outputPath = path.join(root, 'malformed-event-output.txt');
+    writeFileSync(eventPath, '{not valid json', 'utf8');
+    const result = await runClassifier({
+      repoRoot: root,
+      eventName: 'pull_request',
+      baseSha: base,
+      headSha: head,
+      githubOutput: outputPath,
+      eventPath,
+      repository: 'masonwells1/CRX_Manager_V1.0',
+      currentRunId: '999',
+    });
+    equal(result.fullCi, true, 'malformed event payload wiring preserves full CI');
+    equal(result.eventRoute, 'error', 'malformed event payload emits the accepted error route');
+    equal(readFileSync(outputPath, 'utf8').includes('event_route=error'), true, 'CLI output records the fail-closed error route');
+  }
+
+  {
+    const { root, base } = createRepo();
+    disposables.push(root);
+    write(root, 'src/example.ts', 'export const value = 4;\n');
+    const head = commitAll(root, 'metadata integration fixture');
+    const eventPath = path.join(root, 'metadata-event.json');
+    const outputPath = path.join(root, 'metadata-output.txt');
+    writeFileSync(eventPath, JSON.stringify({
+      action: 'edited',
+      changes: { title: { from: 'old title' } },
+      pull_request: { draft: false },
+    }), 'utf8');
+    let sawAbortSignal = false;
+    const artifactName = fullProofArtifactName(base, head);
+    const result = await runClassifier({
+      repoRoot: root,
+      eventName: 'pull_request',
+      baseSha: base,
+      headSha: head,
+      githubOutput: outputPath,
+      eventPath,
+      repository: 'masonwells1/CRX_Manager_V1.0',
+      currentRunId: '999',
+    }, {
+      fetchImpl: async (url, options) => {
+        sawAbortSignal = options.signal instanceof AbortSignal;
+        if (url.includes('/actions/workflows/')) {
+          return response({
+            total_count: 1,
+            workflow_runs: [{
+              id: 777,
+              status: 'completed',
+              conclusion: 'success',
+              event: 'pull_request',
+              path: '.github/workflows/ci.yml',
+              head_sha: head,
+              created_at: '2026-08-27T02:00:00Z',
+              pull_requests: [{ base: { sha: base }, head: { sha: head } }],
+            }],
+          });
+        }
+        if (url.includes('/actions/artifacts')) {
+          return response({
+            total_count: 1,
+            artifacts: [{
+              name: artifactName,
+              expired: false,
+              created_at: '2026-08-27T02:00:00Z',
+              workflow_run: { id: 777, head_sha: head },
+            }],
+          });
+        }
+        throw new Error(`unexpected proof URL: ${url}`);
+      },
+    });
+    equal(sawAbortSignal, true, 'CLI wiring bounds GitHub API requests with an abort signal');
+    equal(result.fullCi, false, 'CLI wiring applies exact successful metadata proof');
+    equal(readFileSync(outputPath, 'utf8').includes('prior_full_proof=true'), true, 'CLI output records accepted exact proof');
+  }
+
+  {
+    const { root, base } = createRepo();
+    disposables.push(root);
+    write(root, 'src/example.ts', 'export const value = 5;\n');
+    const head = commitAll(root, 'metadata timeout fixture');
+    const eventPath = path.join(root, 'metadata-timeout-event.json');
+    const outputPath = path.join(root, 'metadata-timeout-output.txt');
+    writeFileSync(eventPath, JSON.stringify({
+      action: 'edited',
+      changes: { body: { from: 'old body' } },
+      pull_request: { draft: false },
+    }), 'utf8');
+    const result = await runClassifier({
+      repoRoot: root,
+      eventName: 'pull_request',
+      baseSha: base,
+      headSha: head,
+      githubOutput: outputPath,
+      eventPath,
+      repository: 'masonwells1/CRX_Manager_V1.0',
+      currentRunId: '999',
+    }, {
+      fetchImpl: async () => { throw new Error('simulated API timeout'); },
+    });
+    equal(result.fullCi, true, 'CLI wiring fails closed when proof lookup times out');
+    equal(readFileSync(outputPath, 'utf8').includes('prior_full_proof=false'), true, 'CLI output records timeout fallback');
   }
 
   {
