@@ -4,7 +4,7 @@
 
 - Checkout: `C:\Users\mason\.codex\worktrees\section9-ap-safety-remediation\CRX_Manager`
 - Branch: `codex/section9-ap-safety-remediation-v2`
-- Last merged base: `origin/main` at `4e230271`; current `origin/main` advanced to `abbad8c2` while this follow-up was in progress and must be merged before final exact-head proof.
+- Current base: `origin/main` at `abbad8c2`; the branch is 0 commits behind and 30 commits ahead before the final evidence-stamp commit.
 - Repository: `masonwells1/CRX_Manager_V1.0`
 - Live database: Supabase project `rhyzpcqhnizqbxphqdkr`
 
@@ -79,6 +79,7 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Latest PR-review follow-up guard — 4 files, 27/27 passed; the focused Section 9 contract alone passes 7/7.
 - Latest cross-tab completion-race proof — 7 focused files, 62/62 passed; typecheck and targeted lint pass.
 - Latest same-surface intent and per-claim release proof — 6 focused files, 50/50 passed; typecheck, targeted lint, and diff checks pass. The Quick Receive reload fixture now carries the real canonical fingerprint, so it proves exact frozen replay rather than bypassing the identity guard with synthetic metadata.
+- After merging current `origin/main` at `abbad8c2` (a documentation-only CI proof fragment), the same 6 focused files and 50/50 tests, typecheck, documentation drift, and diff hygiene pass; the branch is 0 behind.
 - Focused Section 9 guard after the canonical actor-refusal correction — 6/6 passed.
 - `npm run check:docs` — pass.
 - Disposable PostgreSQL proof after the follow-up — full replay of 64 post-baseline migrations, decoy overloads for `create_vendor_bill(text)` and `get_ap_aging(text)` were rejected before candidate apply, concurrent cutover drain passed, late-old-body rollback passed, both new candidates applied, all three sibling rollback chains passed, every two-session close/write schedule passed, future-dated payments were excluded from the selected month, terminal marker `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
