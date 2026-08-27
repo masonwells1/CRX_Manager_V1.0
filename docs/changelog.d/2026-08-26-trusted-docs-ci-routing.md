@@ -1,10 +1,12 @@
 ## 2026-08-26 - ordinary docs use a trusted, fail-closed fast CI route
 
 The required GitHub workflow now classifies the exact pull-request or push change set before the
-expensive application proof. Only a deliberately small allowlist of ordinary Markdown records can
-take the fast route. Code, migrations, scripts, dependencies, workflow and agent controls,
-generated maps, manual workflow/reference truth, mixed changes, malformed history, unknown paths,
-and non-regular Git entries continue through complete CI.
+expensive application proof. Only two exact passive Markdown records plus validated new
+changelog fragments can take the fast route. There is no directory-wide documentation prefix:
+audit, archive, handoff, loop, plan, agent-consumed manual synthesis, and other agent-consumed records always run complete CI. Code,
+migrations, scripts, dependencies, workflow and agent controls, generated maps, manual
+workflow/reference truth, mixed changes, malformed history, unknown paths, and non-regular Git
+entries also continue through complete CI.
 Reserved agent-instruction basename families and nested agent, Codex, Claude, GitHub, or hook control
 directories are rejected case-insensitively even when placed below an otherwise allowed docs folder.
 

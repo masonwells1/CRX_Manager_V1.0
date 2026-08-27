@@ -16,16 +16,7 @@ const PROTECTED_INSTRUCTION_BASENAME_RE = /^(?:(?:agents|claude)(?:\.[a-z0-9_-]+
 const FAST_DOC_EXACT = new Set([
   'README.md',
   'docs/CHANGELOG.md',
-  'docs/manual/KNOWN_ISSUES.md',
 ]);
-
-const FAST_DOC_PREFIXES = [
-  'docs/archive/',
-  'docs/audits/',
-  'docs/handoffs/',
-  'docs/loops/',
-  'docs/plans/',
-];
 
 function fullCi(reason, changedPaths = []) {
   return {
@@ -121,8 +112,7 @@ export function isFastDocumentationPath(candidate) {
   if (!validateRepoPath(candidate) || !candidate.endsWith('.md')) return false;
   if (hasProtectedAgentControlMarker(candidate)) return false;
   if (FAST_DOC_EXACT.has(candidate)) return true;
-  if (ENTRY_RE.test(candidate)) return true;
-  return FAST_DOC_PREFIXES.some(prefix => candidate.startsWith(prefix) && candidate.length > prefix.length);
+  return ENTRY_RE.test(candidate);
 }
 
 function readBlobText(repoRoot, sha, repoPath) {

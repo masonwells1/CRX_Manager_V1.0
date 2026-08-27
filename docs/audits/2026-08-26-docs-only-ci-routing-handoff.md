@@ -26,8 +26,8 @@ Done means the classifier is fail-closed, the required `Lint, Type Check, Test, 
 - The branch was fast-forwarded to `08e773189bb71d0ddb3d80dd941e69ab70992dde` after PR #482 merged. Its new per-change changelog convention is preserved: this change now adds a new `docs/changelog.d/` record instead of appending to the shared changelog.
 - The classifier comes from the exact comparison-base worktree. Missing base classifier, zero push base, invalid event/history, missing objects, ambiguous merge bases, non-UTF-8 output, unsafe path syntax, non-regular Git entries, empty ranges, and mixed/protected changes all select complete CI or fail the routing prerequisite red.
 - Only newly added, correctly shaped `docs/changelog.d/` paths are checked with the trusted base's shared `entryContentVerdict`; modifying, deleting, or renaming an existing record, malformed names, impossible dates, invalid candidate content, and the folder README do not receive the fast route.
-- Reserved instruction basename families (including `AGENTS.override.md`) and nested `.agents`, `.claude`, `.codex`, `.github`, or `.husky` segments are denied case-insensitively at every depth; exact-head re-review must confirm the nested agent-control finding is closed.
-- `npm run test:ci-scope`: 86 assertions passed. Real temporary repositories cover PR merge-base semantics, push ranges, safe and unsafe renames, deletion, symlink-shaped entries, changelog content/status, nested agent-control basename families and directory markers, and fallback errors.
+- The fast lane has no directory-wide documentation prefixes. All Markdown below `docs/archive/`, `docs/audits/`, `docs/build-loops/`, `docs/handoffs/`, `docs/loops/`, and `docs/plans/` stays in full CI because those locations contain or feed agent instructions. Reserved instruction basename families and nested control-directory segments remain denied case-insensitively at every depth.
+- `npm run test:ci-scope` covers PR merge-base semantics, push ranges, passive-record changes, agent-consumed documentation inventory, deletion, symlink-shaped entries, changelog content/status, nested agent-control basename families and directory markers, and fallback errors.
 - Mutation proof: removing the lowercase `.md` requirement, replacing the trusted-base worktree invocation, routing the Phase 3C packet suite to the docs lane, disabling changelog-content refusal, accepting non-added changelog records, and ignoring nested agent-control markers each turned the owning test red; every guard was restored and rerun green.
 - `npm run test:supplier-pricing-phase3c-packet`: passed after updating its workflow-topology assertions.
 - `npm run lint` and `npm run typecheck`: passed.
@@ -45,7 +45,7 @@ Done means the classifier is fail-closed, the required `Lint, Type Check, Test, 
 
 - `.github/workflows/ci.yml`: trusted classification job, fail-closed prerequisite binding, and conditional expensive steps while retaining both required contexts.
 - `scripts/classify-ci-scope.mjs`: exact event-range classifier and CLI outputs.
-- `scripts/classify-ci-scope.test.mjs`: 63 focused assertions and real Git fixtures.
+- `scripts/classify-ci-scope.test.mjs`: focused path/inventory assertions and real Git fixtures.
 - `scripts/supplier-pricing-phase3-private-artifacts.test.mjs`: updated topology assertions that keep the multi-minute packet suite explicit in full CI.
 - `package.json`: `test:ci-scope` command.
 - `docs/manual/DECISION_LOG.md` and `docs/changelog.d/2026-08-26-trusted-docs-ci-routing.md`: durable policy and shipped-change record.
@@ -66,7 +66,7 @@ Mason explicitly approved building and finishing this scope on 2026-08-26. Ordin
 ## GATES AND BLOCKERS
 
 - Classification defaults to full CI on empty, malformed, unknown, non-UTF-8, or mixed changes.
-- Only a narrow allowlist of ordinary Markdown records may use the fast lane. Agent instructions, workflow/reference manuals, generated maps, configuration, source, tests, migrations, and tooling remain full CI.
+- Only two exact passive Markdown records plus validated new changelog fragments may use the fast lane. Agent instructions, agent-consumed manual synthesis, all audit/archive/handoff/loop/plan trees, workflow/reference manuals, generated maps, configuration, source, tests, migrations, and tooling remain full CI.
 - The classifier used by CI must come from the trusted comparison base when present. The introducing PR and any missing-classifier state force full CI.
 - `Phase 3C Candidate Containment (CI)` still runs before candidate processing.
 - `SQL Migration Validation` continues to execute on every event and bind prerequisite failures.

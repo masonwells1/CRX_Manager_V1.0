@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -42,6 +42,22 @@ function write(root, relativePath, contents) {
   writeFileSync(absolutePath, contents, 'utf8');
 }
 
+function markdownFilesUnder(relativeRoot) {
+  const absoluteRoot = path.join(REPO_ROOT, ...relativeRoot.split('/'));
+  if (!existsSync(absoluteRoot)) return [];
+  const found = [];
+  const visit = (absoluteDirectory, relativeDirectory) => {
+    for (const entry of readdirSync(absoluteDirectory, { withFileTypes: true })) {
+      const absolute = path.join(absoluteDirectory, entry.name);
+      const relative = `${relativeDirectory}/${entry.name}`;
+      if (entry.isDirectory()) visit(absolute, relative);
+      else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) found.push(relative);
+    }
+  };
+  visit(absoluteRoot, relativeRoot);
+  return found;
+}
+
 function commitAll(root, message) {
   git(root, ['add', '-A']);
   git(root, ['commit', '-m', message]);
@@ -58,8 +74,10 @@ function createRepo() {
   git(root, ['config', '--local', 'tag.gpgSign', 'false']);
   git(root, ['config', '--local', 'user.email', 'ci-scope@example.invalid']);
   git(root, ['config', '--local', 'user.name', 'CI Scope Test']);
+  write(root, 'README.md', '# project\n');
   write(root, 'docs/audits/evidence.md', '# baseline\n');
   write(root, 'docs/CHANGELOG.md', '# changelog\n');
+  write(root, 'docs/manual/KNOWN_ISSUES.md', '# known issues\n');
   write(root, 'src/example.ts', 'export const value = 1;\n');
   const base = commitAll(root, 'baseline');
   return { root, base };
@@ -69,12 +87,6 @@ const safePaths = [
   'README.md',
   'docs/CHANGELOG.md',
   'docs/changelog.d/2026-08-26-docs-fast-lane.md',
-  'docs/manual/KNOWN_ISSUES.md',
-  'docs/archive/2026/report.md',
-  'docs/audits/2026/report.md',
-  'docs/handoffs/next.md',
-  'docs/loops/review.md',
-  'docs/plans/build.md',
 ];
 for (const candidate of safePaths) equal(isFastDocumentationPath(candidate), true, candidate);
 
@@ -96,6 +108,12 @@ const protectedPaths = [
   'docs/changelog.d/2026-08-26-Bad-Slug.md',
   'docs/manual/DECISION_LOG.md',
   'docs/manual/AGENT_ONBOARDING.md',
+  'docs/manual/KNOWN_ISSUES.md',
+  'docs/archive/2026/report.md',
+  'docs/audits/2026/report.md',
+  'docs/handoffs/next.md',
+  'docs/loops/review.md',
+  'docs/plans/build.md',
   'docs/reference/migration-history.md',
   'docs/workflows/SAFE_DEVELOPMENT_RULES.md',
   'docs/audits/report.MD',
@@ -121,10 +139,23 @@ const protectedPaths = [
 ];
 for (const candidate of protectedPaths) equal(isFastDocumentationPath(candidate), false, candidate);
 
+const agentConsumedDocs = [
+  'docs/archive',
+  'docs/audits',
+  'docs/build-loops',
+  'docs/handoffs',
+  'docs/loops',
+  'docs/plans',
+].flatMap(markdownFilesUnder);
+equal(agentConsumedDocs.length > 0, true, 'agent-consumed documentation inventory must not be empty');
+for (const candidate of agentConsumedDocs) {
+  equal(isFastDocumentationPath(candidate), false, `agent-consumed document must run full CI: ${candidate}`);
+}
+
 equal(classifyPathList([]).fullCi, true, 'empty diff must run full CI');
-equal(classifyPathList(['docs/audits/a.md', 'docs/plans/b.md']).docsOnly, true, 'ordinary docs');
-equal(classifyPathList(['docs/audits/a.md', 'src/App.tsx']).fullCi, true, 'mixed changes');
-equal(classifyPathList(Array.from({ length: 5001 }, (_, index) => `docs/audits/${index}.md`)).fullCi, true, 'path limit');
+equal(classifyPathList(['README.md', 'docs/CHANGELOG.md']).docsOnly, true, 'ordinary passive records');
+equal(classifyPathList(['README.md', 'src/App.tsx']).fullCi, true, 'mixed changes');
+equal(classifyPathList(Array.from({ length: 5001 }, () => 'README.md')).reason, 'changed-path-limit', 'path limit');
 throws(() => parseChangedPaths(Buffer.from('M\0docs/audits/a.md')), 'unterminated git output');
 throws(
   () => parseChangedPaths(Buffer.from([0x4d, 0x00, 0x64, 0x6f, 0x63, 0x73, 0x2f, 0xff, 0x00])),
@@ -172,7 +203,7 @@ try {
   {
     const { root, base } = createRepo();
     disposables.push(root);
-    write(root, 'docs/audits/evidence.md', '# changed\n');
+    write(root, 'README.md', '# changed\n');
     const head = commitAll(root, 'ordinary docs');
     const result = classifyCiScope({ repoRoot: root, eventName: 'pull_request', baseSha: base, headSha: head });
     equal(result.docsOnly, true, 'real docs diff must use fast lane');
@@ -240,7 +271,7 @@ try {
     const { root, base } = createRepo();
     disposables.push(root);
     git(root, ['checkout', '-b', 'docs-branch']);
-    write(root, 'docs/audits/evidence.md', '# branch docs\n');
+    write(root, 'README.md', '# branch docs\n');
     const head = commitAll(root, 'branch docs');
     git(root, ['checkout', 'main']);
     write(root, 'src/main-only.ts', 'export const mainOnly = true;\n');
@@ -257,7 +288,7 @@ try {
   {
     const { root, base } = createRepo();
     disposables.push(root);
-    write(root, 'docs/audits/evidence.md', '# changed\n');
+    write(root, 'README.md', '# changed\n');
     write(root, 'src/example.ts', 'export const value = 2;\n');
     const head = commitAll(root, 'mixed');
     equal(
@@ -272,11 +303,11 @@ try {
     disposables.push(root);
     mkdirSync(path.join(root, 'docs', 'plans'), { recursive: true });
     git(root, ['mv', 'docs/audits/evidence.md', 'docs/plans/evidence.md']);
-    const head = commitAll(root, 'safe rename');
+    const head = commitAll(root, 'agent-control docs rename');
     equal(
-      classifyCiScope({ repoRoot: root, eventName: 'pull_request', baseSha: base, headSha: head }).docsOnly,
+      classifyCiScope({ repoRoot: root, eventName: 'pull_request', baseSha: base, headSha: head }).fullCi,
       true,
-      'safe-to-safe rename must use fast lane',
+      'rename between agent-consumed document folders must run full CI',
     );
   }
 
@@ -295,12 +326,12 @@ try {
   {
     const { root, base } = createRepo();
     disposables.push(root);
-    rmSync(path.join(root, 'docs', 'audits', 'evidence.md'));
-    const head = commitAll(root, 'safe deletion');
+    rmSync(path.join(root, 'README.md'));
+    const head = commitAll(root, 'passive record deletion');
     equal(
       classifyCiScope({ repoRoot: root, eventName: 'push', baseSha: base, headSha: head }).docsOnly,
       true,
-      'safe deletion must use fast lane',
+      'passive exact-record deletion must use fast lane',
     );
   }
 
@@ -323,7 +354,7 @@ try {
     const { root, base } = createRepo();
     disposables.push(root);
     const blob = git(root, ['hash-object', '-w', '--stdin']);
-    git(root, ['update-index', '--add', '--cacheinfo', `120000,${blob},docs/audits/link.md`]);
+    git(root, ['update-index', '--add', '--cacheinfo', `120000,${blob},docs/CHANGELOG.md`]);
     git(root, ['commit', '-m', 'symlink-shaped docs entry']);
     const head = git(root, ['rev-parse', 'HEAD']);
     equal(

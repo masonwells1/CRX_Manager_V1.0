@@ -20,13 +20,15 @@ steps (dependency audit, lint, typecheck, guard/application tests, coverage, and
 separate Windows containment regression job may be omitted after an exact trusted-base classifier
 proves every changed path is an ordinary Markdown record.
 
-The allowlist is intentionally small: root `README.md`, `docs/CHANGELOG.md`,
-`docs/manual/KNOWN_ISSUES.md`, correctly named and valid new records below `docs/changelog.d/`,
-and Markdown below `docs/archive/`, `docs/audits/`, `docs/handoffs/`, `docs/loops/`, or
-`docs/plans/`. Changelog records are validated from the candidate blob with the trusted base's
-shared entry rules; the folder README, malformed names, impossible dates, or invalid content do
-not earn the fast route. Everything else runs complete CI. This is
-stricter than the exclusion floor recorded in the 2026-08-25 harness decision: agent instructions,
+The allowlist is intentionally small: only root `README.md`, `docs/CHANGELOG.md`, and correctly
+named and valid new records below `docs/changelog.d/`. Changelog records are validated from the candidate blob with the trusted
+base's shared entry rules; the folder README, malformed names, impossible dates, or invalid content
+do not earn the fast route. There is no directory-wide documentation prefix. In particular,
+`docs/archive/`, `docs/audits/`, `docs/build-loops/`, `docs/handoffs/`, `docs/loops/`, and
+`docs/plans/` always run complete CI because the repository already records that those locations
+contain or feed agent instructions. Agent-consumed manual synthesis such as
+`docs/manual/KNOWN_ISSUES.md` also remains full CI. Everything else runs complete CI. This is stricter than the
+exclusion floor recorded in the 2026-08-25 harness decision: agent instructions,
 manual workflow/reference sources, generated maps, hidden control directories, workflow files,
 hooks, configuration, dependencies, scripts, tests, source, migrations, unknown paths, mixed diffs,
 non-regular Git entries, malformed history, and empty ranges all resolve to complete CI.
