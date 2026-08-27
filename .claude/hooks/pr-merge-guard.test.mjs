@@ -42,6 +42,9 @@ eq(ghApiMergeRequest("gh api repos/o/r/pulls/12"), null, "non-merge endpoint ign
 ok(ghApiMergeRequest("gh api graphql -f query='mutation { mergePullRequest(input: {}) }'")?.unsupportedGraphql, "GraphQL merge flagged unresolvable");
 ok(ghApiMergeRequest("gh -R o/r api graphql -f query='mutation { mergePullRequest(input: {}) }'")?.unsupportedGraphql, "GraphQL merge with global flags between gh and api still flagged — Codex round-5");
 ok(ghApiMergeRequest("gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {}) }'")?.unsupportedGraphql, "GraphQL auto-merge enable flagged unresolvable");
+ok(ghApiMergeRequest("gh api graphql --input payload.json")?.fileBackedBody, "file-backed GraphQL input denies as uninspectable");
+ok(ghApiMergeRequest("gh api graphql -F query=@mutation.graphql")?.fileBackedBody, "file-backed GraphQL query field denies as uninspectable");
+ok(ghApiMergeRequest("gh api graphql --field=query=@mutation.graphql")?.fileBackedBody, "equals-form file-backed GraphQL query denies as uninspectable");
 eq(ghApiMergeRequest("gh -R o/r api -X PUT repos/o/r/pulls/7/merge"), { selector: "7", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: true }, "REST merge with global flags between gh and api still parses");
 eq(ghApiMergeRequest("curl -X PUT api.github.com/repos/o/r/pulls/12/merge"), null, "curl is not a gh api call (denied by the hook's raw-REST rule instead)");
 
@@ -81,6 +84,12 @@ ok(/GraphQL merge/.test(r.decision?.permissionDecisionReason || ""), "GraphQL de
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {}) }'" } });
 ok(r.decision?.permissionDecision === "deny", "GraphQL auto-merge enable denied");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh api graphql --input payload.json" } });
+ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL body denied before it can hide auto-merge");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh api graphql -F query=@mutation.graphql" } });
+ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL query field denied before it can hide auto-merge");
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "curl -X PUT -H 'Authorization: token x' https://api.github.com/repos/o/r/pulls/12/merge" } });
 ok(r.decision?.permissionDecision === "deny", "raw curl REST merge denied (Codex finding 2026-07-16)");

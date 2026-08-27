@@ -609,6 +609,16 @@ try {
   }).blocked, true, "GraphQL auto-merge with global gh flags also denies closed");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
+    toolInput: { command: "gh api graphql --input payload.json" },
+    repoDir: risky.repo,
+  }).blocked, true, "file-backed GraphQL input denies closed");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh api graphql -F query=@mutation.graphql" },
+    repoDir: risky.repo,
+  }).blocked, true, "file-backed GraphQL query field denies closed");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
     toolInput: { command: "gh api -X PUT repos/crop/crx/contents/file.txt -f branch=main" },
     repoDir: risky.repo,
   }).blocked, true, "unrecognized mutating gh API calls are denied");

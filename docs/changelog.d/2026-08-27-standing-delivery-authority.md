@@ -34,6 +34,12 @@ schemas cannot transmit that precondition. The same review caught `auto deploy` 
 routine commit/push/merge wording; it is again a hard-gated out-of-band production action, while
 normal Vercel deployment caused by a reviewed green merge remains part of routine delivery.
 
+The final GitHub review found two more bypass/friction edges before merge. File-backed GraphQL
+requests (`--input` or `-F query=@file`) are now denied because the hook cannot inspect whether
+their hidden body arms auto-merge. The standard ship command and frontend rollback runbook now
+read the PR head and require its literal SHA in `--match-head-commit`, so the documented workflow
+matches the enforced guard instead of failing at the last step.
+
 Proof run: focused autopilot, prompt, hold, Claude/Codex merge-guard, and global risky-phrase
 tests; full correction-guard and agent-workflow suites; lint, typecheck, build, docs check, sync,
 and mutation tests. No business safety rule, branch protection, product model, migration, RPC,

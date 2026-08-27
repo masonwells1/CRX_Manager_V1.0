@@ -107,7 +107,9 @@ git revert <bad-commit-sha>
 git push -u origin revert/<short-name>
 gh pr create --fill
 # Wait for required checks, then merge the exact reviewed head (auto-merge is intentionally disabled).
-gh pr merge --squash
+gh pr view --json headRefOid --jq .headRefOid
+# Substitute the returned literal 40-character SHA below; do not use a shell variable because the guard must inspect it.
+gh pr merge --squash --match-head-commit <head-sha>
 ```
 The merge to `main` auto-deploys the revert via Vercel. (The Vercel dashboard
 rollback above is faster — prefer it mid-incident.)

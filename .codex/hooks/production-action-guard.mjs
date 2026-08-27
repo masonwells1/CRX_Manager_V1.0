@@ -479,9 +479,17 @@ function ghApiMergeRequest(command) {
   const words = shellWords(command);
   const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
   if (apiIndex === -1) return null;
-  if (words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql") &&
-      /\b(?:mergePullRequest|enablePullRequestAutoMerge)\b/i.test(text)) {
-    return { unsupportedGraphql: true };
+  const isGraphql = words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql");
+  if (isGraphql) {
+    const fileBackedBody = words.some((word, index) => {
+      const lower = word.toLowerCase();
+      if (lower === "--input" || lower.startsWith("--input=")) return true;
+      if (["-F", "--field"].includes(word) && /^query=@/i.test(String(words[index + 1] || ""))) return true;
+      return /^-Fquery=@/i.test(word) || /^--field=query=@/i.test(word);
+    });
+    if (fileBackedBody || /\b(?:mergePullRequest|enablePullRequestAutoMerge)\b/i.test(text)) {
+      return { unsupportedGraphql: true, fileBackedBody };
+    }
   }
   let method = "GET";
   let endpoint = "";
