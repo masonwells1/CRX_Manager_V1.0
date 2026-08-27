@@ -22,6 +22,14 @@ remain denied; routine delivery wording cannot demand another Mason confirmation
 force-push still does; and new-session guidance begins authorized reversible work instead of
 waiting for a blanket approval.
 
+Exact-head review found and closed one HIGH before delivery: allowing armed `--auto` merges
+would let an ordinary PR receive a later risky migration/money/guard commit after the local
+merge hook had returned, then land that later head without a fresh adversarial proof. Both the
+Claude and Codex merge guards now deny auto-merge for every PR targeting `main`, regardless of
+its current risk classification. This adds no Mason approval: the agent waits for checks, then
+performs one immediate guarded merge. `land-pr.mjs` disables any pre-existing auto-merge,
+keeps branches current, and prints the immediate merge command when green.
+
 ## 2026-08-26 — the hold latch matches only what Mason typed
 
 Two sessions could not talk to each other. A coordinator session sent a peer a

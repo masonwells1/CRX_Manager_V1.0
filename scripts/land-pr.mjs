@@ -3,9 +3,8 @@
 //
 // Why (2026-08-08, PR #345 incident): GitHub branch protection requires a PR
 // branch to be up to date with main. When a sibling PR merges first, the PR
-// goes mergeStateStatus=BEHIND and sits forever — every check green, auto-merge
-// armed, and nothing merges, because auto-merge does NOT update the branch for
-// you. Our watchers only polled checks, so a fully green PR stalled overnight.
+// goes mergeStateStatus=BEHIND and sits forever. Our watchers only polled
+// checks, so a fully green PR stalled overnight.
 // The un-stick is one command: `gh pr update-branch <n>`. This script watches
 // STATE (not just checks) and runs that command whenever the PR falls behind,
 // re-running it if main moves again mid-wait.
@@ -20,12 +19,11 @@
 //   node scripts/land-pr.mjs <pr-number> [--timeout-mins N] [--once]
 //
 // Intended flow:
-//   non-risky diff:  gh pr merge N --squash --auto --delete-branch   (gated)
-//                    node scripts/land-pr.mjs N        → exits 0 when MERGED
-//   risky diff:      node scripts/land-pr.mjs N        → updates branch, waits
-//                    for CLEAN+green, then prints the proof-and-merge steps
-//                    (mint proof with write-codex-push-proof.mjs, merge with
-//                    NO --auto, immediately — proof is head+base bound).
+//   every diff:      node scripts/land-pr.mjs N → updates branch, waits for
+//                    CLEAN+green, then prints the immediate guarded merge steps.
+//   risky diff:      also mints a fresh exact-head proof before the merge.
+// Auto-merge is deliberately not used: a later risky commit could otherwise
+// land after the local exact-head gate has already returned.
 //   --once:          single pass — report state, run update-branch if BEHIND,
 //                    exit without polling.
 
@@ -135,6 +133,12 @@ for (;;) {
   const line = `state=${state} mergeState=${mss} checks=${ok}/${total} ok, ${pending} pending, ${failed} failed, autoMerge=${armed ? "armed" : "OFF"}`;
   if (line !== lastLine) { console.log(`[land-pr] ${line}`); lastLine = line; }
 
+  if (armed) {
+    gh(["pr", "merge", prNumber, "--repo", REPO, "--disable-auto"]);
+    console.log(`[land-pr] Disabled pre-existing auto-merge for PR #${prNumber}; the final merge must be immediate and exact-head guarded.`);
+    continue;
+  }
+
   if (mss !== "DIRTY") dirtyStreak = 0;
   if (mss === "BEHIND") updateBranch();
   else if (mss === "DIRTY") {
@@ -160,15 +164,11 @@ for (;;) {
       );
       process.exit(2);
     }
-    if (!armed) {
-      console.log(
-        `[land-pr] PR #${prNumber} is green, up to date, and non-risky, but auto-merge is NOT armed.\n` +
-        `Arm it (goes through the normal merge gate), then re-run me to watch it land:\n` +
-        `  gh pr merge ${prNumber} --squash --auto --delete-branch`
-      );
-      process.exit(2);
-    }
-    // armed + clean → GitHub merges momentarily; keep polling to confirm.
+    console.log(
+      `[land-pr] PR #${prNumber} is green, up to date, and non-risky. Merge this exact head now through the normal guard:\n` +
+      `  gh pr merge ${prNumber} --squash --delete-branch   (NO --auto; no extra Mason approval required)`
+    );
+    process.exit(2);
   }
 
   if (once) {

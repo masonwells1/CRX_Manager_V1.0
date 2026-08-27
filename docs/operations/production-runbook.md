@@ -105,7 +105,9 @@ After deploy, smoke-test by triggering the function from the live app (or via `c
 git checkout -b revert/<short-name> origin/main
 git revert <bad-commit-sha>
 git push -u origin revert/<short-name>
-gh pr create --fill && gh pr merge --squash --auto
+gh pr create --fill
+# Wait for required checks, then merge the exact reviewed head (auto-merge is intentionally disabled).
+gh pr merge --squash
 ```
 The merge to `main` auto-deploys the revert via Vercel. (The Vercel dashboard
 rollback above is faster — prefer it mid-incident.)

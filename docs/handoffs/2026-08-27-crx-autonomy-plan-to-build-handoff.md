@@ -32,11 +32,12 @@ Remove repeated approval requests for routine, reversible work and protected gre
 - `npm run test:agent-workflows` passed, including 166 prompt-hook assertions, Codex/Claude adapter parity, production-action guard proof, and agent-guidance checks.
 - `npm run check:docs`, `npm run typecheck`, and `npm run build` passed after installing the locked dependencies with `npm ci --ignore-scripts`; npm reported zero vulnerabilities.
 - Mutation proof was observed in both directions: neutering the force-push regex failed `force push denied`, and reclassifying routine auto-delivery as approval-required failed `routine delivery does not demand another Mason confirmation`. Both mutations were restored and focused tests passed again.
+- The first independent exact-head review of commit `413b0a16` returned BLOCKERS with one valid HIGH: enabling `--auto` while a PR was non-risky could let a later risky commit land without a fresh exact-head review. The remediation denies auto-merge for every main-bound PR in both Claude and Codex guards, updates `land-pr.mjs` to disable pre-existing auto-merge, and keeps autonomous delivery by waiting for checks then performing one immediate guarded merge. The new universal gate was mutation-proved load-bearing, and both owning guard suites plus the pinned live-maintenance producer test pass.
 
 ## NOT STARTED
 
-- Commit the exact implementation scope.
-- Run the independent exact-head adversarial review and resolve any real finding.
+- Commit the exact-head review remediation.
+- Re-run the independent exact-head adversarial review and resolve any real finding.
 - Push the feature branch, open the PR, read CodeRabbit, wait for required checks, merge, and verify the merged policy on `main`.
 
 ## APPROVAL STATE

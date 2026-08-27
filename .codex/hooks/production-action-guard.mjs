@@ -445,8 +445,13 @@ function ghMergeRequest(command) {
   const valueFlags = new Set(["--repo", "-R", "--match-head-commit", "--subject", "--body"]);
   let selector = "";
   let repo = "";
+  let auto = false;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
+    if (word.toLowerCase() === "--auto" || word.toLowerCase().startsWith("--auto=")) {
+      auto = true;
+      continue;
+    }
     if (word.startsWith("--repo=")) {
       repo = word.slice("--repo=".length);
       continue;
@@ -459,7 +464,7 @@ function ghMergeRequest(command) {
     }
     if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
   }
-  return { selector, repo };
+  return { selector, repo, auto };
 }
 
 function ghApiMergeRequest(command) {
@@ -497,7 +502,7 @@ function ghApiMergeRequest(command) {
   }
   if (method !== "PUT" || !endpoint) return null;
   const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
-  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}` } : null;
+  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false } : null;
 }
 
 function ghApiMutates(command) {
@@ -552,7 +557,7 @@ function mcpMergeRequest(toolInput) {
   const repository = toolInput.repo ?? toolInput.repository ?? toolInput.repoName ??
     toolInput.repository_full_name ?? toolInput.repositoryFullName ?? toolInput.full_name ?? "";
   const repo = String(repository).includes("/") ? String(repository) : (owner && repository ? `${owner}/${repository}` : "");
-  return { selector: String(selector), repo };
+  return { selector: String(selector), repo, auto: false };
 }
 
 function resolvePullRequest({ request, repoDir, runGh }) {
@@ -602,6 +607,12 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     return denied(`CODEX PRODUCTION GATE: merges to protected branch ${base} remain blocked.`);
   }
   if (base !== "main") return { blocked: false };
+  if (request.auto) {
+    return denied(
+      "CODEX PRODUCTION GATE: `--auto` is denied for every PR targeting main because later commits could land " +
+      "after this exact-head gate ran. Wait for all checks, then merge immediately without `--auto`; no extra Mason approval is required."
+    );
+  }
   if (!pullRequest.baseRefOid) {
     return denied(
       "CODEX PRODUCTION GATE: GitHub did not report this pull request's current base commit (baseRefOid), " +

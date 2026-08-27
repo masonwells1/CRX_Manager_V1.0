@@ -151,5 +151,13 @@ ok(
   "listWorktreesFromProjectDir actually shells out to `git worktree list --porcelain`",
 );
 ok(!/const\s+stateDir\s*=\s*path\.join\(/.test(guardSource), "the single-directory proof scan that made PR #252 unmergeable has not returned");
+ok(
+  /if\s*\(\s*request\.auto\s*\)[\s\S]{0,500}?not allowed for any PR targeting main/.test(guardSource),
+  "every main-bound --auto request is denied before risk classification",
+);
+const autoGateIndex = guardSource.indexOf("if (request.auto)");
+const nonRiskyReturnIndex = guardSource.indexOf("if (risky.length === 0 && !contentFlagged) return;");
+ok(autoGateIndex !== -1 && nonRiskyReturnIndex !== -1 && autoGateIndex < nonRiskyReturnIndex,
+  "the universal auto-merge deny executes before the non-risky early return");
 
 console.log(`pr-merge-guard: ${pass} assertions passed`);

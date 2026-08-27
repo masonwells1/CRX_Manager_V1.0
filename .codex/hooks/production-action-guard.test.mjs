@@ -546,6 +546,15 @@ try {
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, false, "gh PR merge to main uses the same valid proof gate");
+  const autoMergeDecision = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash --auto" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  });
+  assert.equal(autoMergeDecision.blocked, true, "all main-bound auto-merges are denied even with green checks and valid proof");
+  assert.match(autoMergeDecision.reason, /later commits could land/, "auto-merge deny names the exact-head race");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh api -X PUT repos/crop/crx/pulls/123/merge -f merge_method=squash" },

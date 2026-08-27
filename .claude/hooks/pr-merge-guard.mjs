@@ -11,10 +11,9 @@
 //     guard machinery → requires the same fresh, HEAD- and base-bound Codex
 //     proof codex-push-guard requires (minted only by
 //     scripts/write-codex-push-proof.mjs — hand-writing is blocked);
-//   * merge with a non-green pipeline → denied (for a NON-risky diff, `--auto`
-//     is tolerated — GitHub itself defers the merge until required checks pass;
-//     for a RISKY diff `--auto` is denied outright, because it would land
-//     later-pushed commits with a stale proof — Codex round-4 finding);
+//   * merge with a non-green pipeline → denied; `--auto` is denied for every
+//     main-bound PR because a PR that is non-risky now can receive a later risky
+//     commit after this hook has run and then land without exact-head review;
 //   * GraphQL mergePullRequest / unresolvable PR context → denied, fail closed.
 //
 // Mirrors .codex/hooks/production-action-guard.mjs's merge route (the Codex
@@ -132,14 +131,24 @@ function gateRequest(request) {
   }
   if (base !== "main") return; // ordinary feature-branch merges are not production landings
 
+  // Auto-merge records a future landing decision. The PR can receive more
+  // commits after this hook returns, so today's non-risky classification cannot
+  // prove the eventual merge head is non-risky. Wait for checks and perform one
+  // immediate guarded merge on the exact head instead.
+  if (request.auto) {
+    deny(
+      "PR MERGE GATE: `--auto` is not allowed for any PR targeting main because later commits " +
+      "could land after this exact-head gate has run. Wait for every check to finish, then run " +
+      "`gh pr merge <n> --squash` without `--auto`; no extra Mason approval is required."
+    );
+  }
+
   // ── green-pipeline requirement ─────────────────────────────────────────────
-  // `--auto` defers the merge to GitHub, which itself enforces the required
-  // checks — so only immediate merges must already be green here.
-  if (!request.auto && !pullRequestChecksGreen(pr)) {
+  if (!pullRequestChecksGreen(pr)) {
     deny(
       "PR MERGE GATE: this pull request is not merge-ready with a fully green GitHub pipeline " +
       "(mergeStateStatus must be CLEAN and every reported check completed successfully). " +
-      "Wait for the required Vercel check, or use `gh pr merge --auto` to let GitHub merge when green."
+      "Wait for the required checks, then retry the immediate merge."
     );
   }
 
@@ -170,20 +179,6 @@ function gateRequest(request) {
     }
   }
   if (risky.length === 0 && !contentFlagged) return;
-
-  // ── risky merge: --auto is denied outright ─────────────────────────────────
-  // Auto-merge defers the landing until GitHub's checks pass — AFTER this hook
-  // has run. Later commits pushed to the branch would then merge with no fresh
-  // proof and no re-run of this gate (Codex round-4). Risky diffs must merge
-  // immediately, with a fresh proof, while the gate can still see them.
-  if (request.auto) {
-    deny(
-      "PR MERGE GATE: `--auto` is not allowed for a risky diff — auto-merge lands the PR later, " +
-      "after this gate has run, so commits pushed in the meantime would merge with a stale (or no) " +
-      "Codex proof. Wait for the checks, then merge immediately: mint the proof with " +
-      "`node scripts/write-codex-push-proof.mjs` and run `gh pr merge <n> --squash` (no --auto)."
-    );
-  }
 
   // ── risky merge → require the fresh, bound Codex proof ─────────────────────
   const headSha = pr.headRefOid;

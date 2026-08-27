@@ -96,11 +96,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // keeps this branch's blob. Inputs verified against the merged working tree
   // with `git hash-object`; outputs taken from the producer test's printed
   // candidate, not hand-computed.
-  codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
+  // Re-pinned 2026-08-27: every main-bound auto-merge is now denied so a
+  // later risky commit cannot land after an earlier non-risky gate decision.
+  // The maintenance anchors below are unchanged.
+  codexGuard: "b11b09c25a0229880bda5fdb31d283ce3d7ee196",
   pushLib: "d0f68482d54e9b0381f760f44b094f290b8599e4",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
+  codexGuard: "f45f9de769ba129bd73eee326b6532cfb535badd",
   pushLib: "d0f68482d54e9b0381f760f44b094f290b8599e4",
 };
 
