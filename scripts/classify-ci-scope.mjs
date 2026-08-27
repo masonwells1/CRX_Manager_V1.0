@@ -11,12 +11,7 @@ const SAFE_PATH_RE = /^[A-Za-z0-9._/-]+$/;
 const REGULAR_BLOB_MODES = new Set(['100644', '100755']);
 const MAX_CHANGED_PATHS = 5000;
 const PROTECTED_CONTROL_SEGMENTS = new Set(['.agents', '.claude', '.codex', '.github', '.husky']);
-const PROTECTED_INSTRUCTION_BASENAMES = new Set([
-  'agents.md',
-  'claude.md',
-  'claude.local.md',
-  'skill.md',
-]);
+const PROTECTED_INSTRUCTION_BASENAME_RE = /^(?:(?:agents|claude)(?:\.[a-z0-9_-]+)*|gemini|skill)\.md$|^copilot-instructions\.md$/;
 
 const FAST_DOC_EXACT = new Set([
   'README.md',
@@ -118,7 +113,7 @@ function validateRepoPath(candidate) {
 function hasProtectedAgentControlMarker(candidate) {
   const segments = candidate.split('/');
   const basename = segments.at(-1).toLowerCase();
-  if (PROTECTED_INSTRUCTION_BASENAMES.has(basename)) return true;
+  if (PROTECTED_INSTRUCTION_BASENAME_RE.test(basename)) return true;
   return segments.slice(0, -1).some(segment => PROTECTED_CONTROL_SEGMENTS.has(segment.toLowerCase()));
 }
 

@@ -30,7 +30,8 @@ stricter than the exclusion floor recorded in the 2026-08-25 harness decision: a
 manual workflow/reference sources, generated maps, hidden control directories, workflow files,
 hooks, configuration, dependencies, scripts, tests, source, migrations, unknown paths, mixed diffs,
 non-regular Git entries, malformed history, and empty ranges all resolve to complete CI.
-Reserved agent-instruction basenames (`AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`, and `SKILL.md`)
+Reserved agent-instruction basename families (`AGENTS.md` / `AGENTS.*.md`, `CLAUDE.md` /
+`CLAUDE.*.md`, `GEMINI.md`, `SKILL.md`, and `copilot-instructions.md`)
 and control-directory segments (`.agents`, `.claude`, `.codex`, `.github`, and `.husky`) are rejected
 case-insensitively at every depth, including below an otherwise ordinary documentation folder.
 

@@ -5,7 +5,7 @@ expensive application proof. Only a deliberately small allowlist of ordinary Mar
 take the fast route. Code, migrations, scripts, dependencies, workflow and agent controls,
 generated maps, manual workflow/reference truth, mixed changes, malformed history, unknown paths,
 and non-regular Git entries continue through complete CI.
-Reserved agent-instruction basenames and nested agent, Codex, Claude, GitHub, or hook control
+Reserved agent-instruction basename families and nested agent, Codex, Claude, GitHub, or hook control
 directories are rejected case-insensitively even when placed below an otherwise allowed docs folder.
 
 The classifier executes from the exact trusted comparison base when available, so candidate bytes
