@@ -9,6 +9,8 @@ import {
   applyReviewedMigration,
   buildAtomicMigrationSql,
   handleRpcMessage,
+  prepareApplyAttempt,
+  runPostApplyHooks,
   transactionCompatibility,
 } from "./codex-safe-supabase-mcp.mjs";
 import { CRX_PRODUCTION_REF } from "../.claude/hooks/migration-apply-lib.mjs";
@@ -29,6 +31,9 @@ const HASH = createHash("sha256").update(SQL).digest("hex");
 assert.deepEqual(transactionCompatibility(SQL), { ok: true });
 for (const [sql, label] of [
   ["BEGIN; SELECT 1; COMMIT;", "transaction control"],
+  ["END WORK;", "transaction control"],
+  ["ABORT;", "transaction control"],
+  ["START TRANSACTION;", "transaction control"],
   ["VACUUM public.widgets;", "VACUUM"],
   ["ALTER SYSTEM SET work_mem = '1GB';", "ALTER SYSTEM"],
   ["CREATE INDEX CONCURRENTLY idx_x ON x(id);", "CONCURRENTLY"],
@@ -40,9 +45,18 @@ for (const [sql, label] of [
   assert.equal(result.ok, false, `${label} must be rejected`);
   assert.equal(result.reason, label);
 }
+assert.deepEqual(transactionCompatibility("SELECT CASE WHEN true THEN 1 ELSE 0 END;"), { ok: true });
+assert.deepEqual(transactionCompatibility("SELECT E'BEGIN \\'quoted\\'';"), { ok: true });
+assert.equal(transactionCompatibility("SELECT E'escaped\\' quote'; COMMIT;").ok, false,
+  "an escape-string quote cannot hide a following COMMIT");
+assert.equal(transactionCompatibility("SELECT '\\'; COMMIT;").ok, false,
+  "a standard string backslash cannot hide a following COMMIT");
+assert.equal(transactionCompatibility("SELECT 'unterminated").ok, false);
+assert.equal(transactionCompatibility("SET standard_conforming_strings = off;").ok, false);
 
 const atomic = buildAtomicMigrationSql({ migrationName: MIGRATION, query: SQL, queryHash: HASH });
 assert.ok(atomic.startsWith("BEGIN;\n"));
+assert.match(atomic, /^SET LOCAL standard_conforming_strings = on;$/m);
 assert.ok(atomic.endsWith("COMMIT;\n"));
 assert.ok(atomic.includes(SQL.trimEnd()));
 assert.ok(atomic.includes("20260827010101"));
@@ -63,6 +77,7 @@ try {
     linkRoot: root,
     evaluate: () => ({ decision: "allow" }),
     runQuery: neverTransmit,
+    prepareApplyAttempt: () => {},
     runPostApplyHooks: () => {},
   };
 
@@ -96,15 +111,18 @@ try {
 
   const sqlFiles = [];
   let hooks = 0;
+  const lifecycle = [];
   const applied = applyReviewedMigration(
     { project_id: CRX_PRODUCTION_REF, migration_name: MIGRATION, query_sha256: HASH },
     {
       ...baseDeps,
+      prepareApplyAttempt: () => { lifecycle.push("before"); },
       runQuery: ({ sqlFile }) => {
+        lifecycle.push(`query-${sqlFiles.length + 1}`);
         sqlFiles.push({ path: sqlFile, body: readFileSync(sqlFile, "utf8") });
         return sqlFiles.length === 1 ? JSON.stringify({ rows: [] }) : JSON.stringify({ rows: [{ count: 1 }] });
       },
-      runPostApplyHooks: () => { hooks += 1; },
+      runPostApplyHooks: () => { hooks += 1; lifecycle.push("after"); },
     },
   );
   assert.deepEqual(applied, { applied: true, migration_name: MIGRATION, query_sha256: HASH, ledger_rows: 1 });
@@ -112,7 +130,56 @@ try {
   assert.ok(sqlFiles[0].body.startsWith("BEGIN;\n"));
   assert.match(sqlFiles[1].body, /SELECT count\(\*\)::int AS count/);
   assert.equal(hooks, 1);
+  assert.deepEqual(lifecycle, ["before", "query-1", "query-2", "after"]);
   assert.ok(sqlFiles.every((entry) => !existsSync(entry.path)), "temporary SQL files must be removed");
+
+  let beforeTimeout = 0;
+  let afterTimeout = 0;
+  assert.throws(
+    () => applyReviewedMigration(
+      { project_id: CRX_PRODUCTION_REF, migration_name: MIGRATION, query_sha256: HASH },
+      {
+        ...baseDeps,
+        prepareApplyAttempt: () => { beforeTimeout += 1; },
+        runQuery: () => { throw new Error("transport timed out after unknown server state"); },
+        runPostApplyHooks: () => { afterTimeout += 1; },
+      },
+    ),
+    /unknown server state/,
+  );
+  assert.equal(beforeTimeout, 1, "snapshot invalidation must precede an unknown-success timeout");
+  assert.equal(afterTimeout, 0, "success hooks must not claim success after an unknown result");
+
+  const stateDir = path.join(root, ".claude", "session-state");
+  mkdirSync(stateDir, { recursive: true });
+  const snapshot = path.join(stateDir, "applied-migrations.json");
+  writeFileSync(snapshot, "{}\n");
+  let attemptedPayload;
+  assert.throws(
+    () => prepareApplyAttempt({
+      repoRoot: root, migrationName: MIGRATION, query: SQL,
+      run: (_file, _args, options) => { attemptedPayload = JSON.parse(options.input); return ""; },
+    }),
+    /could not invalidate/,
+  );
+  assert.equal(attemptedPayload.tool_response.isError, true, "pre-transmission record is conservative");
+  rmSync(snapshot, { force: true });
+
+  const independentHooks = [];
+  assert.throws(
+    () => runPostApplyHooks({
+      repoRoot: root, migrationName: MIGRATION, query: SQL,
+      run: (_file, args) => {
+        const hook = path.basename(args[0]);
+        independentHooks.push(hook);
+        if (hook === "applied-snapshot-invalidate.mjs") throw new Error("first hook failed");
+        return "";
+      },
+    }),
+    /post-apply safety actions failed/,
+  );
+  assert.deepEqual(independentHooks, ["applied-snapshot-invalidate.mjs", "registry-freshness.mjs"],
+    "one post-hook failure must not suppress the other hook");
 
   const listed = handleRpcMessage({ method: "tools/list" });
   assert.deepEqual(listed.tools.map((tool) => tool.name), ["apply_reviewed_migration"]);
@@ -138,4 +205,4 @@ const replies = child.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line
 assert.equal(replies[0].result.protocolVersion, "2025-06-18");
 assert.deepEqual(replies[1].result.tools.map((tool) => tool.name), ["apply_reviewed_migration"]);
 
-console.log("codex-safe-supabase-mcp: 45 assertions passed; no live connection attempted");
+console.log("codex-safe-supabase-mcp: 66 assertions passed; no live connection attempted");

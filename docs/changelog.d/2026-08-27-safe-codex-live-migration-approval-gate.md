@@ -12,8 +12,10 @@ proof, and destructive-SQL rules inside the tool handler, and only then transmit
 That tool uses Codex's native approval prompt routed to Mason, not the automatic reviewer.
 
 The atomic batch refuses a duplicate version/name, runs compatible migration SQL and its ledger row
-in one transaction, verifies the content-bound ledger row afterwards, then invokes the existing
-registry-stale and applied-snapshot invalidation hooks. Migrations with their own transaction
+in one transaction and verifies the content-bound ledger row afterwards. Before transmission it
+records a conservative source-containment attempt and invalidates the ordering snapshot, so a
+timeout cannot leave stale evidence usable; after success it runs source-ledger and registry-stale
+actions independently. Migrations with their own transaction
 control or operations such as `CONCURRENTLY` remain parked for a human-operated path. Passing the
 technical gate does not approve production: Mason must approve that specific native tool prompt.
 

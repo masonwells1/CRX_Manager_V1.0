@@ -41,6 +41,7 @@ function stripSqlForTopLevelScan(sql) {
   let i = 0;
   let state = "code";
   let dollarTag = "";
+  let blockDepth = 0;
   while (i < text.length) {
     const c = text[i];
     const n = text[i + 1];
@@ -50,12 +51,25 @@ function stripSqlForTopLevelScan(sql) {
       continue;
     }
     if (state === "block") {
-      if (c === "*" && n === "/") { state = "code"; out += "  "; i += 2; }
+      if (c === "/" && n === "*") { blockDepth += 1; out += "  "; i += 2; }
+      else if (c === "*" && n === "/") {
+        blockDepth -= 1;
+        if (blockDepth === 0) state = "code";
+        out += "  ";
+        i += 2;
+      }
       else { out += c === "\n" ? "\n" : " "; i += 1; }
       continue;
     }
     if (state === "single") {
       if (c === "'" && n === "'") { out += "  "; i += 2; }
+      else if (c === "'") { state = "code"; out += " "; i += 1; }
+      else { out += c === "\n" ? "\n" : " "; i += 1; }
+      continue;
+    }
+    if (state === "escape") {
+      if (c === "\\") { out += "  "; i += Math.min(2, text.length - i); }
+      else if (c === "'" && n === "'") { out += "  "; i += 2; }
       else if (c === "'") { state = "code"; out += " "; i += 1; }
       else { out += c === "\n" ? "\n" : " "; i += 1; }
       continue;
@@ -75,7 +89,10 @@ function stripSqlForTopLevelScan(sql) {
       continue;
     }
     if (c === "-" && n === "-") { state = "line"; out += "  "; i += 2; continue; }
-    if (c === "/" && n === "*") { state = "block"; out += "  "; i += 2; continue; }
+    if (c === "/" && n === "*") { state = "block"; blockDepth = 1; out += "  "; i += 2; continue; }
+    if ((c === "e" || c === "E") && n === "'" && !/[A-Za-z0-9_$]/.test(text[i - 1] || "")) {
+      state = "escape"; out += "  "; i += 2; continue;
+    }
     if (c === "'") { state = "single"; out += " "; i += 1; continue; }
     if (c === '"') { state = "double"; out += " "; i += 1; continue; }
     if (c === "$") {
@@ -91,24 +108,35 @@ function stripSqlForTopLevelScan(sql) {
     out += c;
     i += 1;
   }
-  return out;
+  return state === "code" || state === "line" ? { ok: true, visible: out } : { ok: false, visible: out };
 }
 
 export function transactionCompatibility(sql) {
-  const visible = stripSqlForTopLevelScan(sql);
+  // The bridge fixes standard_conforming_strings=on in its transaction. Reject
+  // migrations that try to change that lexical rule before scanning them.
+  if (/standard_conforming_strings/i.test(String(sql))) {
+    return { ok: false, reason: "standard_conforming_strings override" };
+  }
+  const scan = stripSqlForTopLevelScan(sql);
+  if (!scan.ok) return { ok: false, reason: "unterminated SQL quote or comment" };
+  const statements = scan.visible.split(";").map((part) => part.trim()).filter(Boolean);
   const forbidden = [
-    [/\b(?:begin|commit|rollback|savepoint|release\s+savepoint|prepare\s+transaction)\b/i, "transaction control"],
-    [/\bset\s+(?:local\s+)?transaction\b/i, "transaction control"],
-    [/\bvacuum\b/i, "VACUUM"],
-    [/\balter\s+system\b/i, "ALTER SYSTEM"],
-    [/\bcreate\s+(?:unique\s+)?index\s+concurrently\b/i, "CONCURRENTLY"],
-    [/\bdrop\s+index\s+concurrently\b/i, "CONCURRENTLY"],
-    [/\breindex\s+(?:index|table|schema|database|system)\s+concurrently\b/i, "CONCURRENTLY"],
-    [/\b(?:create|drop)\s+(?:database|tablespace)\b/i, "non-transactional database DDL"],
-    [/\bcall\b/i, "CALL"],
+    [/^(?:begin|commit|rollback|abort|end)(?:\s+(?:work|transaction))?(?:\s+and\s+(?:no\s+)?chain)?\b/i, "transaction control"],
+    [/^start\s+transaction\b/i, "transaction control"],
+    [/^(?:savepoint|release\s+savepoint|prepare\s+transaction)\b/i, "transaction control"],
+    [/^set\s+(?:local\s+)?transaction\b/i, "transaction control"],
+    [/^vacuum\b/i, "VACUUM"],
+    [/^alter\s+system\b/i, "ALTER SYSTEM"],
+    [/^create\s+(?:unique\s+)?index\s+concurrently\b/i, "CONCURRENTLY"],
+    [/^drop\s+index\s+concurrently\b/i, "CONCURRENTLY"],
+    [/^reindex\s+(?:index|table|schema|database|system)\s+concurrently\b/i, "CONCURRENTLY"],
+    [/^(?:create|drop)\s+(?:database|tablespace)\b/i, "non-transactional database DDL"],
+    [/^call\b/i, "CALL"],
   ];
-  for (const [pattern, label] of forbidden) {
-    if (pattern.test(visible)) return { ok: false, reason: label };
+  for (const statement of statements) {
+    for (const [pattern, label] of forbidden) {
+      if (pattern.test(statement)) return { ok: false, reason: label };
+    }
   }
   return { ok: true };
 }
@@ -121,6 +149,7 @@ export function buildAtomicMigrationSql({ migrationName, query, queryHash }) {
   const body = String(query).replace(/\s+$/, "") + "\n";
   return [
     "BEGIN;",
+    "SET LOCAL standard_conforming_strings = on;",
     "DO $crx_guard$",
     "BEGIN",
     "  IF EXISTS (",
@@ -187,19 +216,40 @@ function parseRows(output) {
   return Array.isArray(parsed) ? parsed : (parsed.rows || parsed.data || []);
 }
 
-function runPostApplyHooks({ repoRoot, migrationName, query, run = execFileSync }) {
-  const payload = JSON.stringify({
+function hookPayload({ repoRoot, migrationName, query, failed }) {
+  return JSON.stringify({
     tool_name: "mcp__crx_supabase__apply_migration",
     cwd: repoRoot,
     session_id: `codex-safe-${randomUUID()}`,
     tool_input: { project_id: CRX_PRODUCTION_REF, name: migrationName, query },
-    tool_response: { isError: false },
+    tool_response: { isError: failed },
   });
-  for (const hook of ["registry-freshness.mjs", "applied-snapshot-invalidate.mjs"]) {
-    run(process.execPath, [path.join(repoRoot, ".claude", "hooks", hook)], {
-      cwd: repoRoot, input: payload, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 30_000,
-    });
+}
+
+function runHookScript({ repoRoot, hook, payload, run = execFileSync }) {
+  const sharedDir = [".cl", "aude"].join("");
+  return run(process.execPath, [path.join(repoRoot, sharedDir, "hooks", hook)], {
+    cwd: repoRoot, input: payload, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 30_000,
+  });
+}
+
+export function prepareApplyAttempt({ repoRoot, migrationName, query, run = execFileSync }) {
+  const payload = hookPayload({ repoRoot, migrationName, query, failed: true });
+  runHookScript({ repoRoot, hook: "applied-snapshot-invalidate.mjs", payload, run });
+  const stateDir = path.join(repoRoot, [".cl", "aude"].join(""), ["session-", "state"].join(""));
+  if (existsSync(path.join(stateDir, "applied-migrations.json"))) {
+    throw new Error("could not invalidate the applied-migration snapshot before transmission");
   }
+}
+
+export function runPostApplyHooks({ repoRoot, migrationName, query, run = execFileSync }) {
+  const payload = hookPayload({ repoRoot, migrationName, query, failed: false });
+  const failures = [];
+  for (const hook of ["applied-snapshot-invalidate.mjs", "registry-freshness.mjs"]) {
+    try { runHookScript({ repoRoot, hook, payload, run }); }
+    catch (error) { failures.push(`${hook}: ${error?.message || error}`); }
+  }
+  if (failures.length) throw new AggregateError(failures, "one or more post-apply safety actions failed");
 }
 
 export function applyReviewedMigration(args, deps = {}) {
@@ -228,6 +278,7 @@ export function applyReviewedMigration(args, deps = {}) {
 
   const run = deps.run || execFileSync;
   const linkRoot = deps.linkRoot || resolvePrimaryLinkRoot(repoRoot, run);
+  (deps.prepareApplyAttempt || prepareApplyAttempt)({ repoRoot, migrationName: args.migration_name, query, run });
   const temp = mkdtempSync(path.join(tmpdir(), "crx-safe-migration-"));
   const sqlFile = path.join(temp, `${args.migration_name}.sql`);
   try {
