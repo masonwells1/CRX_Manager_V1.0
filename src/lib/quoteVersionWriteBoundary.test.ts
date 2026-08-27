@@ -31,7 +31,7 @@ const migration = read(
 const restoreTrustMigration = read(
   'supabase',
   'migrations',
-  '20260825190000_quote_version_restore_trust_boundary.sql',
+  '20260826220000_quote_version_restore_trust_boundary.sql',
 );
 const predicate = read(
   'scripts',
@@ -621,6 +621,30 @@ describe('quote_versions restore trust boundary — prerequisite', () => {
     }
     expect(precond).toContain('refuse to create a forgeable trust marker');
   });
+
+  it('transactionally refuses owner-helper overload or browser-grant drift before and after apply', () => {
+    const hasOwnerHelperCutoverGuards = (sql: string) => {
+      const precond = sql.match(/DO \$precond\$[\s\S]*?\$precond\$;/)?.[0] ?? '';
+      const postcond = sql.match(/DO \$postcond\$[\s\S]*?\$postcond\$;/)?.[0] ?? '';
+      const required = [
+        "proname = '_create_quote_version_owner_impl') <> 1",
+        "proname = '_restore_quote_version_owner_impl') <> 1",
+        "has_function_privilege('anon', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')",
+        "has_function_privilege('authenticated', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')",
+        "has_function_privilege('anon', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE')",
+        "has_function_privilege('authenticated', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE')",
+      ];
+      return required.every((token) => precond.includes(token) && postcond.includes(token));
+    };
+
+    expect(hasOwnerHelperCutoverGuards(restoreTrustMigration)).toBe(true);
+    expect(hasOwnerHelperCutoverGuards(
+      restoreTrustMigration.replace(
+        "has_function_privilege('authenticated', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')",
+        'false',
+      ),
+    )).toBe(false);
+  });
 });
 
 describe('quote_versions write boundary — standing predicate', () => {
@@ -1103,7 +1127,7 @@ describe('quote_versions restore trust boundary — rollback smoke', () => {
 
   it('refuses to run before the trust migration is deployed', () => {
     expect(restoreTrustSmoke).toContain("a.attname = 'restore_trusted_at'");
-    expect(restoreTrustSmoke).toContain('SMOKE_PREREQ: 20260825190000 quote-version restore trust boundary is not deployed');
+    expect(restoreTrustSmoke).toContain('SMOKE_PREREQ: 20260826220000 quote-version restore trust boundary is not deployed');
   });
 
   it('creates both an RPC-trusted version and an owner-only unmarked fixture', () => {

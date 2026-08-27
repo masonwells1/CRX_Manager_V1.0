@@ -363,7 +363,7 @@ CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
     if (path.basename(local) === '20260817120000_carry_allocated_line_cents_through_lifecycle.sql') {
       restoreLiveCrLfCloseRemainder();
     }
-    if (path.basename(local) === '20260826125456_bind_section9_ap_receiving_intent_and_month_dashboard.sql') {
+    if (path.basename(local) === '20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard.sql') {
       sql(`CREATE FUNCTION public.create_vendor_bill(p_decoy text) RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT '{}'::jsonb $$;`);
       try {
         expectValidationFailure(local, 'section9-intent-decoy-overload', 'SECTION9_UNEXPECTED_PUBLIC_OVERLOADS: create_vendor_bill');
@@ -404,7 +404,7 @@ SELECT count(*) FROM public.idempotency_keys${SECTION9_LEGACY_RECEIPT_PREDICATE}
       sql(`DELETE FROM public.idempotency_keys${SECTION9_LEGACY_RECEIPT_PREDICATE};`);
       console.log(`CANDIDATE_ACTIVE_LEGACY_RECEIPT_GUARD_PASS removed_disposable=${legacyCount}`);
     }
-    if (path.basename(local) === '20260826140333_correct_ap_aging_due_date_buckets.sql') {
+    if (path.basename(local) === '20260826222000_correct_ap_aging_due_date_buckets.sql') {
       sql(`CREATE FUNCTION public.get_ap_aging(p_decoy text) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT p_decoy $$;`);
       try {
         expectValidationFailure(local, 'section9-aging-decoy-overload', 'AP_AGING_UNEXPECTED_PUBLIC_OVERLOADS');

@@ -24,7 +24,7 @@ Done means the changed database and UI paths execute successfully in rollback-on
 
 ## WRITTEN AND PROVEN LOCALLY
 
-- Candidate migration `20260826125456_bind_section9_ap_receiving_intent_and_month_dashboard.sql`:
+- Candidate migration `20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard.sql`:
   - wraps all six AP/receiving mutators with actor-plus-SHA-256 intent binding;
   - keeps the mature implementations private and owner-only;
   - preserves the existing public signatures, defaults, return shapes, grants, and fixed search paths;
@@ -33,7 +33,7 @@ Done means the changed database and UI paths execute successfully in rollback-on
   - stamps each new receipt atomically from transaction-local wrapper context before the private implementation returns;
   - refuses active unbound legacy receipts at cutover;
   - changes `Due This Month` from a rolling 30-day window to the Chicago business date through calendar month-end.
-- Candidate migration `20260826140333_correct_ap_aging_due_date_buckets.sql`:
+- Candidate migration `20260826222000_correct_ap_aging_due_date_buckets.sql`:
   - replaces bill-date aging with the approved due-date contract;
   - adds the fifth `1-30 Days` bucket and makes `Current` mean due today or later;
   - preserves the current-only refusal, admin guard, fixed search path, owner, and deliberate grants.
@@ -67,6 +67,8 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - `npm run test` after the retry-expiry follow-up — 342 files passed; 4,811 tests passed; 123 skipped.
 - `npm run test` after cross-session/tab/surface coordination — 342 files passed; 4,819 tests passed; 123 skipped.
 - `npm run test` after versioned cross-tab completion coordination — 342 files passed; 4,820 tests passed; 123 skipped.
+- `npm run test` after restoring current-main quote-trust apply guards — 342 files passed; 4,821 tests passed; 123 skipped.
+- `npm run test` after the final migration restamp/order guard — 342 files passed; 4,822 tests passed; 123 skipped.
 - Durable retry focused contracts after the vendor-bill route correction — 3 files, 50/50 passed; hook-only reload/unmount/storage-failure/scope-switch proof 9/9 passed.
 - Final receiving review follow-up — typecheck, full lint, production build, documentation drift, and diff checks pass; 4 focused files, 19/19 tests pass, including an actual Quick Receive reload/retry.
 - Latest focused remediation/concurrency/money tests after the follow-up — 68/68 passed.
@@ -75,6 +77,7 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Focused Section 9 guard after the canonical actor-refusal correction — 6/6 passed.
 - `npm run check:docs` — pass.
 - Disposable PostgreSQL proof after the follow-up — full replay of 64 post-baseline migrations, decoy overloads for `create_vendor_bill(text)` and `get_ap_aging(text)` were rejected before candidate apply, concurrent cutover drain passed, late-old-body rollback passed, both new candidates applied, all three sibling rollback chains passed, every two-session close/write schedule passed, future-dated payments were excluded from the selected month, terminal marker `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
+- Disposable PostgreSQL proof after restoring current-main quote trust and restamping Section 9 — full replay of 65 post-baseline migrations in safe order (`20260826220000` quote trust, then `20260826221000` intent/dashboard, then `20260826222000` aging); decoy overload, cutover drain, late-old-body rollback, sibling smoke, and every two-session close/write schedule passed; terminal marker `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
 - The broader supplier-pricing return-policy proof now creates and restores its disposable migration ledger, then stops before the Section 9 object-identity assertion at the older `20260810010308_active_team_note_assignment_actor.sql` preflight because the baseline's `notify_team_note_assignment` body md5 is `ad8be4ed1d2bdd2a87acce255b38ab641` instead of the migration's pinned `ce356683fb140f2e0d3d8faee077cc1a`. This is an unrelated harness/baseline blocker, not a clean result; the corrected `days_1_30` expected signature is pinned by the focused test.
 - `git diff --check` — pass.
 - React best-practices review — no new waterfall, bundle, hook-dependency, transient-state, or rendering blocker found in the changed flow.
@@ -95,6 +98,8 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Exact review after the main-policy merge found one further HIGH: the durable browser lock could outlive the database's 24-hour idempotency receipt and replay after server expiry. The 23-hour fail-closed client deadline and stale/manual-reconciliation state described above close it locally; 4 focused files and 22/22 tests, full suite, typecheck, full lint, production build, documentation drift, and diff hygiene pass, while exact-head proof remains pending.
 - The next exact-head review correctly refused proof with one HIGH: `sessionStorage` disappeared on tab/PWA closure, and surface-specific storage keys allowed another receiving screen to mint a new key. The cross-session mirror, atomic IndexedDB claim, actor/operation storage identity, canonical payload comparison, and foreign-screen guards described above close that path locally; 7 focused files and 34/34 tests, full suite, typecheck, full lint, production build, documentation drift, and diff hygiene pass, while exact-head proof remains pending.
 - The following exact-head review found one HIGH in the first cross-session fix: when two tabs shared one request, the successful tab deleted the shared record, so a second tab that lost its response could later mint a new key. The versioned compare-and-resolve tombstone and stale-response regression described above close that race locally; 7 focused files and 62/62 tests, all 342 full-suite files and 4,820 tests, typecheck, full lint, production build, documentation drift, and diff hygiene pass, while exact-head proof remains pending.
+- Exact review at `9a2eaf21` then found one HIGH outside the Section 9 runtime logic: the branch had retained the pre-renumbered quote-version trust migration and omitted `origin/main`'s transactional owner-helper overload and browser-grant checks. The branch now restores the current `20260826220000` artifact and references exactly, and a new mutation-tested contract requires those checks in both precondition and postcondition. Fresh focused/full and exact-head proof remain pending.
+- Reconciliation against the current live name high-water then found that the two unchanged Section 9 candidates still carried their earlier `20260826125456`/`20260826140333` stamps, which the migration-ordering guard would refuse behind live `20260826150000`. They are now restamped `20260826221000`/`20260826222000`, immediately after pending quote-trust `20260826220000`, and an executable ordering contract pins that three-file release sequence.
 - Both migrations' final security and drift reviewers are CLEAN with SHA-bound proof files. The first intent/dashboard drift run timed out while scanning GitHub under a Windows read-only-shell limitation; the warm-cache retry completed CLEAN without changing the proof harness.
 - Replacement PR #500 is open and obsolete PR #491 is closed without rewriting published history. All earlier required checks passed on `a2ba3bf9`, but the actual CodeRabbit review text exposed the two durable-retry findings described above. They are corrected locally and the full/focused proofs pass; a fresh exact-head review and latest-commit CI/CodeRabbit pass remain pending after the documentation commit.
 
@@ -111,6 +116,6 @@ Done means the changed database and UI paths execute successfully in rollback-on
 
 ## FIRST ACTION
 
-Commit the durable-retry proof update, mint a fresh exact-head review, push to PR #500, and clear latest-commit CI/CodeRabbit before requesting live-migration approval.
+Commit the quote-trust restoration and Section 9 restamp proof, mint a fresh exact-head review, push to PR #500, and clear latest-commit CI/CodeRabbit before requesting the ordered live-migration approval.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

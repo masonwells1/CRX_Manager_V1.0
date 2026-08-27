@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -7,15 +7,18 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const source = (...parts: string[]) =>
   readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
 
+const quoteTrustMigrationName = '20260826220000_quote_version_restore_trust_boundary.sql';
+const section9IntentMigrationName = '20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard.sql';
+const section9AgingMigrationName = '20260826222000_correct_ap_aging_due_date_buckets.sql';
 const migration = source(
   'supabase',
   'migrations',
-  '20260826125456_bind_section9_ap_receiving_intent_and_month_dashboard.sql',
+  section9IntentMigrationName,
 );
 const agingMigration = source(
   'supabase',
   'migrations',
-  '20260826140333_correct_ap_aging_due_date_buckets.sql',
+  section9AgingMigrationName,
 );
 const accountsPayable = source('src', 'pages', 'AccountsPayable.tsx');
 const vendorBillDetail = source('src', 'pages', 'VendorBillDetail.tsx');
@@ -84,6 +87,20 @@ function hasIntentBindingContract(sql: string) {
 }
 
 describe('Section 9 AP and receiving intent binding', () => {
+  it('keeps both unapplied Section 9 candidates after the pending quote-trust migration in release order', () => {
+    const orderedMigrations = readdirSync(join(root, 'supabase', 'migrations'))
+      .filter((name) => /^\d{14}_.+\.sql$/.test(name))
+      .sort();
+    const quoteTrustIndex = orderedMigrations.indexOf(quoteTrustMigrationName);
+
+    expect(quoteTrustIndex).toBeGreaterThanOrEqual(0);
+    expect(orderedMigrations.slice(quoteTrustIndex, quoteTrustIndex + 3)).toEqual([
+      quoteTrustMigrationName,
+      section9IntentMigrationName,
+      section9AgingMigrationName,
+    ]);
+  });
+
   it('binds all six public mutation receipts and keeps their implementations private', () => {
     expect(hasIntentBindingContract(migration)).toBe(true);
     expect(migration).toContain('p_purchase_order_id uuid DEFAULT NULL::uuid');

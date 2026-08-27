@@ -477,8 +477,8 @@ than the next 30 days. AP aging now measures `due_date`: `Current (Not Due)`, `1
 task; `Over 90` is the fifth displayed bucket.
 
 Two pending migrations implement the database contract:
-`20260826125456_bind_section9_ap_receiving_intent_and_month_dashboard.sql` and
-`20260826140333_correct_ap_aging_due_date_buckets.sql`. A disposable PostgreSQL 17 replay applied
+`20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard.sql` and
+`20260826222000_correct_ap_aging_due_date_buckets.sql`. A disposable PostgreSQL 17 replay applied
 all 64 post-baseline migrations, ran the complete Section 9 PO/AP rollback chain (including every
 aging boundary), and passed every two-session accounting-period race schedule with terminal marker
 `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`. Static mutation guards also prove the intent binding,
