@@ -24,9 +24,10 @@ omits `paid`. Production currently has zero credited returns, so the defect is r
 than an existing wrong report. A 2026-08-27 read-only check found one open restock row: it is exactly
 the pinned legacy `15 ea` RMA with the authoritative `2.5 Gal` conversion, leaving zero unhandled
 warehouse-unit mismatches. Pre-apply candidates `20260827041000`, `20260827041100`,
-`20260827041200`, `20260827041300`, and `20260827041400` contain the durable repair and fail closed if the zero-credit/zero-legacy-restock
-assumptions or either delivery-invoice implementation contract stop being true. Do not call this
-resolved until all five migrations are reviewed, applied, and verified live. Apply the five files in order
+`20260827041200`, `20260827041300`, `20260827041400`, and `20260827041500` contain the durable
+repair and fail closed if the zero-credit/zero-legacy-restock assumptions or either delivery-invoice
+implementation contract stop being true. Do not call this resolved until all six migrations are
+reviewed, applied, and verified live. Apply the six files in order
 through the repository's guarded migration runner or the Supabase migration operation, never through
 the ad-hoc SQL channel.
 The first migration blocks new return-credit issuance until the second migration's postflight succeeds,
@@ -101,6 +102,12 @@ invoice-basis P&L and monthly COGS to round each invoice line to exact whole cen
 is required so a return can never reverse more COGS than those reports recognized, but it means a
 reprinted P&L or monthly summary containing fractional-quantity lines can differ by a cent from an
 older copy.
+**RETIRED 2026-08-27 — Patrol is no longer an active CRX workflow.** Its command, generated
+skill adapter, runtime, monitor, classifier, renderer, trusted-exec layer, and dedicated tests
+were removed as part of the first harness-simplification tranche. The Patrol discussion below is
+preserved only as historical evidence; its file paths and operating instructions no longer exist.
+Use the smaller existing status/workspace tools for targeted read-only checks instead of rebuilding
+an always-on owner queue monitor.
 
 
 **RESOLVED 2026-08-25 — the two `/patrol` findings first deferred at the round-3 review cap

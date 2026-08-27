@@ -1490,8 +1490,12 @@ git() { return 0; }
   assert(ci.includes('permissions:\n  contents: read'));
   assert(ci.includes('types: [opened, reopened, synchronize, ready_for_review, edited]'));
   assert(!/^    if:/m.test(candidateContainmentJob), 'candidate containment must not conditionally skip: GitHub treats skipped required jobs as successful');
-  assert(!ci.includes('github.event.changes.base.ref.from'), 'PR metadata edits must run full CI rather than emitting skipped required checks');
-  assert(ci.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"), 'only pull-request concurrency groups may cancel stale proof runs');
+  assert(!ci.includes('github.event.changes.base.ref.from'), 'candidate workflow expressions must not decide whether a base edit is safe');
+  assert(ci.includes("github.event.action == 'edited' && 'edited' || 'code'"), 'metadata edits must not cancel an in-flight code-proof run');
+  assert(ci.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"), 'only pull-request concurrency groups may cancel stale proof runs within the same event lane');
+  assert(ci.includes('--event-path "$GITHUB_EVENT_PATH"'), 'trusted comparison-base classifier must inspect the exact event payload');
+  assert(ci.includes('name: Publish exact full-CI proof'), 'a successful full PR run must publish an exact base/head proof artifact');
+  assert(ci.includes('crx-full-ci-proof-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}'), 'full proof artifact name must bind both event SHAs');
   const ciCheckoutBlocks = ci.split('uses: actions/checkout@v7').slice(1);
   assert.equal(ciCheckoutBlocks.length, 6, 'CI checkout count changed; review least-privilege settings');
   for (const block of ciCheckoutBlocks) {

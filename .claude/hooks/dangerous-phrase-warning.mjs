@@ -27,7 +27,7 @@ function emit(extra) {
 
 let payload;
 try {
-  payload = JSON.parse(readFileSync(0, "utf8"));
+  payload = globalThis.__CRX_ROUTED_HOOK_PAYLOAD ?? JSON.parse(readFileSync(0, "utf8"));
 } catch {
   emit();
 }

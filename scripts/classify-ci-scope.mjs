@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -10,6 +10,9 @@ const SHA_RE = /^[0-9a-f]{40}$/i;
 const SAFE_PATH_RE = /^[A-Za-z0-9._/-]+$/;
 const REGULAR_BLOB_MODES = new Set(['100644', '100755']);
 const MAX_CHANGED_PATHS = 5000;
+const FULL_PROOF_ARTIFACT_PREFIX = 'crx-full-ci-proof';
+const GITHUB_API_ROOT = 'https://api.github.com';
+const GITHUB_API_TIMEOUT_MS = 5000;
 const PROTECTED_CONTROL_SEGMENTS = new Set(['.agents', '.claude', '.codex', '.github', '.husky']);
 const PROTECTED_INSTRUCTION_BASENAME_RE = /^(?:(?:agents|claude)(?:\.[a-z0-9_-]+)*|gemini|skill)\.md$|^copilot-instructions\.md$/;
 
@@ -25,6 +28,147 @@ function fullCi(reason, changedPaths = []) {
     reason,
     changedPaths,
   };
+}
+
+function cheapCi(reason, changedPaths = []) {
+  return {
+    docsOnly: true,
+    fullCi: false,
+    reason,
+    changedPaths,
+  };
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function classifyPullRequestEvent(eventName, eventPayload) {
+  if (eventName !== 'pull_request') return { route: 'code', reason: 'non-pr-event' };
+  if (!isPlainObject(eventPayload) || !isPlainObject(eventPayload.pull_request)) {
+    return { route: 'force-full', reason: 'invalid-pr-event' };
+  }
+
+  const action = eventPayload.action;
+  const changes = eventPayload.changes;
+  if (action === 'ready_for_review') return { route: 'force-full', reason: 'ready-for-review' };
+
+  if (action === 'edited') {
+    if (!isPlainObject(changes)) return { route: 'force-full', reason: 'ambiguous-pr-edit' };
+    const changedFields = Object.keys(changes);
+    if (changedFields.includes('base')) return { route: 'force-full', reason: 'base-edited' };
+    if (changedFields.length === 0 || changedFields.some(field => !['title', 'body'].includes(field))) {
+      return { route: 'force-full', reason: 'ambiguous-pr-edit' };
+    }
+    return { route: 'metadata', reason: 'title-body-only-edit' };
+  }
+
+  if (!['opened', 'reopened', 'synchronize'].includes(action)) {
+    return { route: 'force-full', reason: 'unsupported-pr-action' };
+  }
+  return { route: 'code', reason: 'code-event' };
+}
+
+export function fullProofArtifactName(baseSha, headSha) {
+  const base = String(baseSha ?? '').toLowerCase();
+  const head = String(headSha ?? '').toLowerCase();
+  if (!SHA_RE.test(base) || !SHA_RE.test(head)) throw new Error('invalid full-proof artifact SHA');
+  return `${FULL_PROOF_ARTIFACT_PREFIX}-${base}-${head}`;
+}
+
+export async function verifyPriorFullCiProof({
+  repository,
+  baseSha,
+  headSha,
+  currentRunId,
+  fetchImpl = globalThis.fetch,
+  apiRoot = GITHUB_API_ROOT,
+  requestTimeoutMs = GITHUB_API_TIMEOUT_MS,
+}) {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repository ?? ''))) {
+    throw new Error('invalid GitHub repository name');
+  }
+  if (!/^\d+$/.test(String(currentRunId ?? ''))) throw new Error('invalid current workflow run id');
+  if (typeof fetchImpl !== 'function') throw new Error('fetch implementation unavailable');
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 30000) {
+    throw new Error('invalid GitHub API timeout');
+  }
+
+  const artifactName = fullProofArtifactName(baseSha, headSha);
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'crx-ci-event-router',
+  };
+  const request = url => fetchImpl(url, {
+    headers,
+    signal: AbortSignal.timeout(requestTimeoutMs),
+  });
+  const normalizedBase = String(baseSha).toLowerCase();
+  const normalizedHead = String(headSha).toLowerCase();
+  const runsUrl = `${apiRoot}/repos/${repository}/actions/workflows/ci.yml/runs?event=pull_request&head_sha=${normalizedHead}&per_page=100`;
+  const runsResponse = await request(runsUrl);
+  if (!runsResponse.ok) throw new Error(`workflow-run lookup failed (${runsResponse.status})`);
+  const runListing = await runsResponse.json();
+  if (!isPlainObject(runListing) || !Array.isArray(runListing.workflow_runs)) {
+    throw new Error('workflow-run lookup returned an invalid payload');
+  }
+  if (!Number.isSafeInteger(runListing.total_count) || runListing.total_count > runListing.workflow_runs.length) {
+    throw new Error('workflow-run lookup was incomplete');
+  }
+  const matchingRuns = runListing.workflow_runs
+    .filter(run => (
+      isPlainObject(run)
+      && Number.isSafeInteger(run.id)
+      && String(run.id) !== String(currentRunId)
+      && run.event === 'pull_request'
+      && (run.path === '.github/workflows/ci.yml' || String(run.path ?? '').startsWith('.github/workflows/ci.yml@'))
+      && String(run.head_sha ?? '').toLowerCase() === normalizedHead
+      && typeof run.created_at === 'string'
+      && Number.isFinite(Date.parse(run.created_at))
+      && Array.isArray(run.pull_requests)
+      && run.pull_requests.some(pullRequest => (
+        isPlainObject(pullRequest)
+        && String(pullRequest.base?.sha ?? '').toLowerCase() === normalizedBase
+        && String(pullRequest.head?.sha ?? '').toLowerCase() === normalizedHead
+      ))
+    ))
+    .sort((left, right) => (
+      Date.parse(right.created_at) - Date.parse(left.created_at)
+      || right.id - left.id
+    ));
+  const newestRun = matchingRuns[0];
+  if (
+    !newestRun
+    || newestRun.status !== 'completed'
+    || newestRun.conclusion !== 'success'
+  ) return false;
+
+  const listUrl = `${apiRoot}/repos/${repository}/actions/artifacts?per_page=100&name=${encodeURIComponent(artifactName)}`;
+  const listResponse = await request(listUrl);
+  if (!listResponse.ok) throw new Error(`artifact lookup failed (${listResponse.status})`);
+  const listing = await listResponse.json();
+  if (!isPlainObject(listing) || !Array.isArray(listing.artifacts)) {
+    throw new Error('artifact lookup returned an invalid payload');
+  }
+  if (!Number.isSafeInteger(listing.total_count) || listing.total_count > listing.artifacts.length) {
+    throw new Error('artifact lookup was incomplete');
+  }
+  return listing.artifacts.some(artifact => (
+    isPlainObject(artifact)
+    && artifact.name === artifactName
+    && artifact.expired === false
+    && isPlainObject(artifact.workflow_run)
+    && artifact.workflow_run.id === newestRun.id
+    && String(artifact.workflow_run.head_sha ?? '').toLowerCase() === normalizedHead
+  ));
+}
+
+export function applyPriorFullProof(result, eventRoute, priorFullProof) {
+  if (eventRoute === 'metadata' && priorFullProof === true) {
+    return cheapCi('pr-metadata-only-prior-full-proof', result.changedPaths);
+  }
+  return result;
 }
 
 function decodeUtf8Exact(buffer, label) {
@@ -165,7 +309,7 @@ export function classifyPathList(changedPaths) {
   };
 }
 
-export function classifyCiScope({ repoRoot, eventName, baseSha, headSha }) {
+export function classifyCiScope({ repoRoot, eventName, baseSha, headSha, eventRoute = 'code' }) {
   try {
     const resolvedRoot = path.resolve(repoRoot);
     const normalizedBase = String(baseSha ?? '').toLowerCase();
@@ -194,6 +338,12 @@ export function classifyCiScope({ repoRoot, eventName, baseSha, headSha }) {
     ]);
     const changedEntries = parseChangedEntries(diff.stdout);
     const changedPaths = changedEntries.map(entry => entry.path);
+    if (eventRoute === 'force-full' || eventRoute === 'error') {
+      return fullCi(`event-route-${eventRoute}`, changedPaths);
+    }
+    if (!['code', 'metadata'].includes(eventRoute)) {
+      return fullCi('unknown-event-route', changedPaths);
+    }
     const pathClassification = classifyPathList(changedPaths);
     if (pathClassification.fullCi) return pathClassification;
 
@@ -243,6 +393,9 @@ function parseArgs(argv) {
     baseSha: values.get('base'),
     headSha: values.get('head'),
     githubOutput: values.get('github-output'),
+    eventPath: values.get('event-path'),
+    repository: values.get('repository'),
+    currentRunId: values.get('current-run-id'),
   };
 }
 
@@ -254,28 +407,55 @@ function writeGithubOutputs(outputPath, result) {
       `full_ci=${result.fullCi}`,
       `reason=${result.reason}`,
       `changed_count=${result.changedPaths.length}`,
+      `event_route=${result.eventRoute}`,
+      `prior_full_proof=${result.priorFullProof}`,
       '',
     ].join('\n'),
     'utf8',
   );
 }
 
-function main() {
-  const options = parseArgs(process.argv.slice(2));
+export async function runClassifier(options, { fetchImpl = globalThis.fetch } = {}) {
   if (!options.repoRoot || !options.eventName || !options.baseSha || !options.headSha || !options.githubOutput) {
     throw new Error('required arguments: --repo-root --event-name --base --head --github-output');
   }
-  const result = classifyCiScope(options);
+  let eventClassification = { route: 'code', reason: 'event-routing-not-requested' };
+  if (options.eventPath) {
+    try {
+      const eventBuffer = readFileSync(options.eventPath);
+      const eventPayload = JSON.parse(decodeUtf8Exact(eventBuffer, 'GitHub event payload'));
+      eventClassification = classifyPullRequestEvent(options.eventName, eventPayload);
+    } catch (error) {
+      console.error(`PR event classification failed closed: ${error.message}`);
+      eventClassification = { route: 'error', reason: 'event-classification-error' };
+    }
+  }
+
+  let priorFullProof = false;
+  let result = classifyCiScope({ ...options, eventRoute: eventClassification.route });
+  if (eventClassification.route === 'metadata') {
+    try {
+      priorFullProof = await verifyPriorFullCiProof({ ...options, fetchImpl });
+    } catch (error) {
+      console.error(`Prior full-CI proof lookup failed closed: ${error.message}`);
+    }
+    result = applyPriorFullProof(result, eventClassification.route, priorFullProof);
+  }
+  result = { ...result, eventRoute: eventClassification.route, priorFullProof };
   writeGithubOutputs(options.githubOutput, result);
   console.log(JSON.stringify(result));
+  return result;
+}
+
+async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  await runClassifier(options);
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  try {
-    main();
-  } catch (error) {
+  main().catch(error => {
     console.error(`CI scope classifier failed closed: ${error.message}`);
     process.exitCode = 2;
-  }
+  });
 }
