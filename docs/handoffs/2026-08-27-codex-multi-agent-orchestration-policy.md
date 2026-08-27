@@ -24,7 +24,8 @@ Add a concise CRX-specific policy that lets Codex use native parallel workers wi
 - `npm run check:docs` passed every local documentation-drift assertion; its live database count was correctly skipped because no live database verification is needed for this policy-only change.
 - `npm run test:agent-workflows` passed, including the lean-guidance check at 133 lines, hook parity, generated workflow parity, production guard tests, and 38 synced Codex workflow adapters.
 - `npm run agent-health` passed with one pre-existing warning that the schema registry trails one migration on disk; this policy change does not touch migrations or the registry.
-- The combined global and project `AGENTS.md` files total 30,165 bytes, below Codex's default 32 KiB project-instruction discovery limit.
+- The combined global and project `AGENTS.md` files total 30,290 bytes, below Codex's default 32 KiB project-instruction discovery limit.
+- The first exact-head `gpt-5.6-sol` High review returned clean for commit `8083d4c56fdc0e2a11149822000bcf2c0d04e068`. GitHub review then found two follow-up documentation issues: scope the three-worker cap to ad-hoc Codex delegation, and state the exact-head review gate consistently. Both findings were accepted for correction.
 
 ## WRITTEN, NOT PROVEN
 
@@ -44,13 +45,12 @@ Mason requested help brainstorming this setup and editing `AGENTS.md`, which aut
 
 ## GATES AND BLOCKERS
 
-- Completed locally: exact-diff inspection, documentation checks, agent-workflow checks, agent health, and instruction-size verification.
-- Required before delivery: obtain a separate review of the exact head commit.
+- Completed on the first commit: exact-diff inspection, documentation checks, agent-workflow checks, agent health, instruction-size verification, and a clean exact-head Sol High review.
+- Current blocker: the follow-up commit that resolves review feedback requires a fresh separate exact-head review before delivery.
 - Required before merge: all existing CRX branch-protection, CodeRabbit, exact-SHA review, CI, and Vercel rules remain unchanged.
-- Current blocker: none.
 
 ## FIRST ACTION
 
-Review the new `AGENTS.md` section for duplication or conflict, then run the focused documentation and agent-workflow verification suite.
+Run the focused documentation and agent-workflow checks on the review-fix commit, then obtain a fresh exact-head review before pushing it.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.
