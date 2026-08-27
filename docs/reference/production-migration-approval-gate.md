@@ -29,6 +29,9 @@ Create `production-database` with all of these settings:
 The workflow verifies settings 1-4 before it can reach its approval job. Secrets are referenced
 only by the approved job and are never stored in the repository.
 
+This is intentionally a one-account design. The reviewer is Mason's normal website session; the
+separate safety boundary is the much narrower credential available to Codex on the workstation.
+
 ## Required Codex fine-grained token
 
 Create a fine-grained personal access token owned by `masonwells1`, limited to only
@@ -58,17 +61,43 @@ CLI's hidden token prompt, then remove the old broad OAuth login.
 
 Repeat this proof whenever the Codex GitHub credential is replaced or its permissions change.
 
+## Durable migration review attestation
+
+Before merging a migration PR, run the repository's trusted migration review wrapper against the
+clean exact PR head. Only after both required reviewer charters and the independent
+`gpt-5.6-sol`/high review return clean, post the canonical eight-line attestation as an issue
+comment on that PR. The attestation binds the reviewed PR-head commit, migration stem, and exact
+SHA-256. It records `trusted-migration-review-wrapper-v1` as its producer.
+
+The production workflow accepts the comment only when all of these are true:
+
+1. The comment body is the exact canonical form, with no added or omitted text.
+2. GitHub identifies its author as the repository owner.
+3. The comment belongs to the one PR whose exact head was reviewed.
+4. That PR's recorded merge commit is still the current `main` commit.
+5. The migration's Git blob is identical at the reviewed PR head and current `main`.
+
+Condition 4 deliberately makes the release window fail closed: if another PR reaches `main`, rerun
+the release preparation against current state rather than approving stale evidence. The established
+honest-agent residual still applies: the same account can write an attestation comment, so the
+trusted wrapper, exact-head adversarial review, PR review, and Mason-only deployment approval all
+remain required; the comment is durable evidence, not a new human identity.
+
 ## Migration run
 
-The migration workflow accepts the exact current `main` commit, exact timestamped migration stem,
-and lowercase SHA-256 of that file. Before approval it verifies current-main binding, file/hash
-binding, environment protection, parser deny paths, and atomic-batch compatibility. After Mason's
-website approval, it rebuilds the batch from the same commit, reconfirms current main, obtains the
+The migration workflow accepts the exact current `main` commit, exact reviewed PR-head commit,
+durable review-comment ID, exact timestamped migration stem, and lowercase SHA-256 of that file.
+Before approval it verifies current-main binding, the merged-PR and durable-review bindings,
+unchanged Git-blob and file/hash bindings, environment protection, parser deny paths, and
+atomic-batch compatibility. After Mason's website approval, it rebuilds the batch from the same
+commit, reconfirms current main, verifies the installed Supabase CLI version, obtains the
 environment secrets, and executes one transaction.
 
-That transaction locks the migration ledger, refuses duplicates and out-of-order versions, runs the
-migration SQL, writes the content-bound ledger row, verifies it, and commits. SQL that cannot safely
-run in that transaction remains parked for a separately reviewed manual path.
+That transaction locks the migration ledger, refuses duplicate versions, names, or exact SQL
+content and refuses out-of-order versions, runs the migration SQL, writes the content-bound ledger
+row, verifies it, and commits. A second 14-digit timestamp anywhere in the filename suffix is also
+rejected, closing the stale-migration alias/replay form. SQL that cannot safely run in that
+transaction remains parked for a separately reviewed manual path.
 
 ## Emergency stop
 

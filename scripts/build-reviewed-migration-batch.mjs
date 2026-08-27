@@ -3,8 +3,10 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { checkWrappable, topLevelSkeleton } from "../.claude/hooks/migration-wrappability-lib.mjs";
+
 export const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
-const MIGRATION_STEM_RE = /^(\d{14})_([A-Za-z0-9][A-Za-z0-9_-]*)$/;
+const MIGRATION_STEM_RE = /^(\d{14})_((?![A-Za-z0-9_-]*\d{14})[A-Za-z0-9][A-Za-z0-9_-]*)$/;
 
 function sqlLiteral(value) {
   return "'" + String(value).replaceAll("'", "''") + "'";
@@ -21,107 +23,13 @@ function sha256(value) {
   return createHash("sha256").update(String(value)).digest("hex");
 }
 
-function topLevelSql(sql) {
-  const text = String(sql);
-  let out = "";
-  let i = 0;
-  let state = "code";
-  let dollarTag = "";
-  let blockDepth = 0;
-  while (i < text.length) {
-    const c = text[i];
-    const n = text[i + 1];
-    if (state === "line") {
-      if (c === "\n") { state = "code"; out += "\n"; } else out += " ";
-      i += 1;
-      continue;
-    }
-    if (state === "block") {
-      if (c === "/" && n === "*") { blockDepth += 1; out += "  "; i += 2; }
-      else if (c === "*" && n === "/") {
-        blockDepth -= 1;
-        if (blockDepth === 0) state = "code";
-        out += "  ";
-        i += 2;
-      } else { out += c === "\n" ? "\n" : " "; i += 1; }
-      continue;
-    }
-    if (state === "single") {
-      if (c === "'" && n === "'") { out += "  "; i += 2; }
-      else if (c === "'") { state = "code"; out += " "; i += 1; }
-      else { out += c === "\n" ? "\n" : " "; i += 1; }
-      continue;
-    }
-    if (state === "escape") {
-      if (c === "\\") { out += "  "; i += Math.min(2, text.length - i); }
-      else if (c === "'" && n === "'") { out += "  "; i += 2; }
-      else if (c === "'") { state = "code"; out += " "; i += 1; }
-      else { out += c === "\n" ? "\n" : " "; i += 1; }
-      continue;
-    }
-    if (state === "double") {
-      if (c === '"' && n === '"') { out += "  "; i += 2; }
-      else if (c === '"') { state = "code"; out += " "; i += 1; }
-      else { out += c === "\n" ? "\n" : " "; i += 1; }
-      continue;
-    }
-    if (state === "dollar") {
-      if (text.startsWith(dollarTag, i)) {
-        out += " ".repeat(dollarTag.length);
-        i += dollarTag.length;
-        state = "code";
-      } else { out += c === "\n" ? "\n" : " "; i += 1; }
-      continue;
-    }
-    if (c === "-" && n === "-") { state = "line"; out += "  "; i += 2; continue; }
-    if (c === "/" && n === "*") { state = "block"; blockDepth = 1; out += "  "; i += 2; continue; }
-    if ((c === "e" || c === "E") && n === "'" && !/[A-Za-z0-9_$]/.test(text[i - 1] || "")) {
-      state = "escape"; out += "  "; i += 2; continue;
-    }
-    if (c === "'") { state = "single"; out += " "; i += 1; continue; }
-    if (c === '"') { state = "double"; out += " "; i += 1; continue; }
-    if (c === "$") {
-      const match = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/.exec(text.slice(i));
-      if (match) {
-        dollarTag = match[0];
-        state = "dollar";
-        out += " ".repeat(dollarTag.length);
-        i += dollarTag.length;
-        continue;
-      }
-    }
-    out += c;
-    i += 1;
-  }
-  return state === "code" || state === "line" ? { ok: true, visible: out } : { ok: false, visible: out };
-}
-
 export function transactionCompatibility(sql) {
-  if (/standard_conforming_strings/i.test(String(sql))) {
-    return { ok: false, reason: "standard_conforming_strings override" };
-  }
-  const scan = topLevelSql(sql);
-  if (!scan.ok) return { ok: false, reason: "unterminated SQL quote or comment" };
-  if (/(?:^|\n)\s*\\/m.test(scan.visible)) return { ok: false, reason: "client meta-command" };
-  const statements = scan.visible.split(";").map((part) => part.trim()).filter(Boolean);
-  const forbidden = [
-    [/^(?:begin|commit|rollback|abort|end)(?:\s+(?:work|transaction))?(?:\s+and\s+(?:no\s+)?chain)?\b/i, "transaction control"],
-    [/^start\s+transaction\b/i, "transaction control"],
-    [/^(?:savepoint|release\s+savepoint|prepare\s+transaction)\b/i, "transaction control"],
-    [/^set\s+(?:local\s+)?transaction\b/i, "transaction control"],
-    [/^vacuum\b/i, "VACUUM"],
-    [/^alter\s+system\b/i, "ALTER SYSTEM"],
-    [/^create\s+(?:unique\s+)?index\s+concurrently\b/i, "CONCURRENTLY"],
-    [/^drop\s+index\s+concurrently\b/i, "CONCURRENTLY"],
-    [/^reindex\s+(?:index|table|schema|database|system)\s+concurrently\b/i, "CONCURRENTLY"],
-    [/^(?:create|drop)\s+(?:database|tablespace)\b/i, "non-transactional database DDL"],
-    [/^call\b/i, "CALL"],
-  ];
-  for (const statement of statements) {
-    for (const [pattern, label] of forbidden) {
-      if (pattern.test(statement)) return { ok: false, reason: label };
-    }
-  }
+  const verdict = checkWrappable(sql);
+  if (!verdict.wrappable) return { ok: false, reason: verdict.reason };
+  const skeleton = topLevelSkeleton(sql);
+  if (/standard_conforming_strings/i.test(skeleton)) return { ok: false, reason: "standard_conforming_strings override" };
+  if (/(?:^|\n)\s*\\/m.test(skeleton)) return { ok: false, reason: "client meta-command" };
+  if (/(?:^|;)\s*call\b/i.test(skeleton)) return { ok: false, reason: "CALL" };
   return { ok: true };
 }
 
@@ -143,7 +51,9 @@ export function buildAtomicMigrationSql({ migrationName, query, queryHash }) {
     "BEGIN",
     "  IF EXISTS (",
     "    SELECT 1 FROM supabase_migrations.schema_migrations",
-    `    WHERE version = ${sqlLiteral(version)} OR name IN (${sqlLiteral(name)}, ${sqlLiteral(fullStem)})`,
+    `    WHERE version = ${sqlLiteral(version)}`,
+    `       OR name IN (${sqlLiteral(name)}, ${sqlLiteral(fullStem)})`,
+    `       OR idempotency_key = ${sqlLiteral(queryHash)}`,
     "  ) THEN",
     `    RAISE EXCEPTION ${dollarLiteral(`CRX migration already recorded: ${fullStem}`, "dup")};`,
     "  END IF;",

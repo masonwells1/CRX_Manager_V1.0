@@ -15,11 +15,21 @@ on:
         description: Lowercase SHA-256 of the exact migration file
         required: true
         type: string
+      reviewed_commit:
+        description: Exact PR head commit reviewed by the migration gate
+        required: true
+        type: string
+      review_comment_id:
+        description: GitHub issue-comment ID containing the durable review attestation
+        required: true
+        type: string
 
 permissions:
   actions: read
   contents: read
   deployments: read
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: production-database-migration
@@ -55,7 +65,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.expected_commit }}
           fetch-depth: 0
@@ -65,17 +75,32 @@ jobs:
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
           MIGRATION_NAME: ${{ inputs.migration_name }}
           QUERY_SHA256: ${{ inputs.query_sha256 }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+          REVIEW_COMMENT_ID: ${{ inputs.review_comment_id }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$REVIEWED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$REVIEW_COMMENT_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$MIGRATION_NAME" =~ ^[0-9]{14}_[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
+          ! [[ "${MIGRATION_NAME:15}" =~ [0-9]{14} ]]
           [[ "$QUERY_SHA256" =~ ^[a-f0-9]{64}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
+
+      - name: Verify durable exact-commit migration review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
+          REVIEW_COMMENT_ID: ${{ inputs.review_comment_id }}
+        run: node scripts/verify-production-migration-review.mjs
 
       - name: Prove deny paths and build the exact atomic batch
         env:
@@ -102,7 +127,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.expected_commit }}
           fetch-depth: 0
@@ -115,13 +140,22 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
 
-      - uses: supabase/setup-cli@v1
+      - id: supabase-cli
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520 # v3.0.0
         with:
           version: 2.109.1
+
+      - name: Verify exact Supabase CLI artifact version
+        env:
+          INSTALLED_VERSION: ${{ steps.supabase-cli.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$INSTALLED_VERSION" = "2.109.1"
+          test "$(supabase --version)" = "2.109.1"
 
       - name: Rebuild the content-bound batch after approval
         env:

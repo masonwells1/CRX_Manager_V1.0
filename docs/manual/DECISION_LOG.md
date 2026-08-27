@@ -15,8 +15,9 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 **Decision.** Codex prepares and dispatches one exact main-branch migration through the GitHub
 `production-database` environment. GitHub, not the local agent shell, holds the Supabase credential.
 The environment requires Mason's account, disallows administrator bypass, and binds current main,
-filename, and SHA-256. The local Codex GitHub credential is a fine-grained token with Deployments
-read-only; only Mason's website session has the Deployments-write capability needed to approve.
+the exact reviewed PR head plus durable review comment, filename, and SHA-256. The local Codex GitHub
+credential is a fine-grained token with Deployments read-only; only Mason's website session has the
+Deployments-write capability needed to approve.
 
 **Why.** Codex hooks cannot safely return an approval prompt from PreToolUse: the current runtime
 does not support that decision and continues the tool call after reporting the hook failure.
@@ -29,8 +30,9 @@ credentials outside the agent's local capability set.
 prevents administrator bypass, accepts protected branches only, and carries its two production
 secrets. Codex may dispatch and read a pending run but its machine token must not have Deployments
 write. The workflow locks the live ledger inside the same transaction, applies only transaction-
-compatible SQL, writes and verifies the content-bound ledger row, then commits. No prompt-text
-approval token is part of this gate.
+compatible SQL, refuses stale timestamp aliases and exact-content replay, writes and verifies the
+content-bound ledger row, then commits. Credential-bearing actions use full commit pins and the
+installed Supabase CLI version is verified. No prompt-text approval token is part of this gate.
 
 
 ## 2026-08-27 — preserve CRX safety rules while collapsing harness machinery
