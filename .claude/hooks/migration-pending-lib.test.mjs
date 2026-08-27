@@ -201,27 +201,50 @@ allows(
     "supabase/migrations/20260801120000_shared_slug.sql",
     "supabase/migrations/20260805120000_shared_slug.sql",
   ];
-  const v = checkPendingMigrations({
-    name: "20260830120000_new_work",
-    sql: "select 1;",
-    // Only ONE of the pair is in the ledger, and it is recorded by slug alone.
-    appliedNames: ["20260820120000_anchor", "20260801120000_shared_slug"],
-    trackedFiles: shared,
-    baselineHighWater: BASELINE,
-  });
-  abstains(v, "share a slug",
-    "a post-baseline duplicate slug must NOT be silently treated as applied");
-  assert.deepEqual(v.ambiguous, ["20260805120000_shared_slug"]);
-  pass++;
+  // EXACT-STAMP SIBLING → the twin is PENDING, not ambiguous (Codex P2 round 2).
+  // 20260801120000 matches its own stamp, so that ledger row is spoken for and
+  // cannot also vouch for 20260805120000. The evidence is conclusive, and calling
+  // it "ambiguous" would be both wrong and unfixable — renaming the candidate
+  // cannot resolve a pair the candidate is not part of.
+  {
+    const v = checkPendingMigrations({
+      name: "20260830120000_new_work",
+      sql: "select 1;",
+      appliedNames: ["20260820120000_anchor", "20260801120000_shared_slug"],
+      trackedFiles: shared,
+      baselineHighWater: BASELINE,
+    });
+    denies(v, "20260805120000_shared_slug",
+      "an exact-stamp sibling makes its twin definitively pending, not ambiguous");
+    assert.deepEqual(v.pending, ["20260805120000_shared_slug"]);
+    assert.ok(!v.abstained, "conclusive evidence must not abstain");
+    pass++;
+  }
 
-  // The marker must not paper over it: `ahead-of-pending` states an intent about a
-  // queue the operator can SEE, and this queue cannot be seen. If the marker
-  // unlocked an abstention it would become a way to skip the check entirely.
+  // GENUINE ambiguity: the ledger knows the slug but by slug ALONE — no stamp
+  // distinguishes which of the two files ran. Only here is a shrug honest.
+  {
+    const v = checkPendingMigrations({
+      name: "20260830120000_new_work",
+      sql: "select 1;",
+      // A renumbered row: slug matches, stamp matches neither tracked file.
+      appliedNames: ["20260820120000_anchor", "20260731090000_shared_slug"],
+      trackedFiles: shared,
+      baselineHighWater: BASELINE,
+    });
+    abstains(v, "share a slug",
+      "slug-only ledger evidence for a shared slug is genuinely ambiguous");
+    assert.deepEqual(v.ambiguous, ["20260801120000_shared_slug", "20260805120000_shared_slug"]);
+    pass++;
+  }
+
+  // The marker must not paper over a genuine ambiguity: `ahead-of-pending` states
+  // an intent about a queue the operator can SEE, and this queue cannot be seen.
   abstains(
     checkPendingMigrations({
       name: "20260830120000_new_work",
       sql: "-- ordering-guard: ahead-of-pending stepping over the shared-slug pair on purpose\n",
-      appliedNames: ["20260820120000_anchor", "20260801120000_shared_slug"],
+      appliedNames: ["20260820120000_anchor", "20260731090000_shared_slug"],
       trackedFiles: shared,
       baselineHighWater: BASELINE,
     }),

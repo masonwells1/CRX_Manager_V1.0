@@ -151,6 +151,10 @@ function makePendingSetInputs(root) {
   git("commit", "-q", "-m", "fixture");
   const ref = git("update-ref", "refs/remotes/origin/main", "HEAD");
   ok(ref.status === 0, `fixture origin/main is created (git said: ${ref.stderr})`);
+  // The freshness gate reads FETCH_HEAD's mtime. `git init` never writes one, so
+  // without this the fixture looks like a checkout that has never fetched — which
+  // the guard correctly refuses. This stands in for a just-completed fetch.
+  writeFileSync(path.join(root, ".git", "FETCH_HEAD"), "fixture\n");
 }
 function armAutopilot(stateDir, hoursFromNow) {
   writeFileSync(path.join(stateDir, "AUTOPILOT.on"), JSON.stringify({
@@ -404,6 +408,8 @@ function armAutopilot(stateDir, hoursFromNow) {
     git(["commit", "-qm", "seed"], primary);
     const originRef = git(["update-ref", "refs/remotes/origin/main", "HEAD"], primary);
     ok(originRef.status === 0, `fixture origin/main is created (git said: ${originRef.stderr})`);
+    // Stands in for a just-completed fetch; see makePendingSetInputs.
+    writeFileSync(path.join(primary, ".git", "FETCH_HEAD"), "fixture\n");
     const added = git(["worktree", "add", "-q", "-b", "wt", linked], primary);
     // Asserted, never skipped. An `if (added.status === 0)` guard here would let
     // the whole worktree regression disappear silently the day `git worktree add`

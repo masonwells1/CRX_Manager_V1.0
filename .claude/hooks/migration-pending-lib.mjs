@@ -136,7 +136,13 @@ export function hasAheadOfPendingMarker(sql) {
 }
 
 /**
- * Build the two lookup sets a tracked file is matched against.
+ * Build the lookup sets a tracked file is matched against.
+ *
+ * `slugCounts` — how many applied entries carry each slug — is what makes the
+ * slug fallback attributable rather than a bare yes/no. One ledger row bearing a
+ * slug can vouch for exactly ONE tracked file with that slug; a second file needs
+ * its own evidence. Counting is what lets the check say "that row is already
+ * spoken for, so this other file is definitely pending" instead of shrugging.
  *
  * @param {string[]} appliedNames effective names from the applied-migration
  *   snapshot — the same array checkMigrationOrdering() consumes.
@@ -144,6 +150,7 @@ export function hasAheadOfPendingMarker(sql) {
 export function appliedIndex(appliedNames) {
   const stamps = new Set();
   const slugs = new Set();
+  const slugCounts = new Map();
   for (const raw of Array.isArray(appliedNames) ? appliedNames : []) {
     const stem = migrationStem(raw);
     if (!stem) continue;
@@ -152,9 +159,12 @@ export function appliedIndex(appliedNames) {
     // be the one that matches a file on disk.
     for (const m of stem.matchAll(/\d{14}/g)) stamps.add(m[0]);
     const slug = migrationSlug(stem);
-    if (slug) slugs.add(slug);
+    if (slug) {
+      slugs.add(slug);
+      slugCounts.set(slug, (slugCounts.get(slug) ?? 0) + 1);
+    }
   }
-  return { stamps, slugs };
+  return { stamps, slugs, slugCounts };
 }
 
 /**
@@ -208,7 +218,7 @@ export function checkPendingMigrations({
     };
   }
 
-  const { stamps, slugs } = appliedIndex(appliedNames);
+  const { stamps, slugCounts } = appliedIndex(appliedNames);
   if (stamps.size === 0) {
     return {
       ok: true,
@@ -217,55 +227,71 @@ export function checkPendingMigrations({
     };
   }
 
-  // How many TRACKED files share each slug. The slug fallback is only sound when
-  // a slug identifies exactly one file: if two tracked files share a slug and only
-  // one is in the ledger, "the slug is applied" is true of the pair and false of
-  // the individual, so matching on it unconditionally would mark the unapplied one
-  // as applied — silently deleting it from the pending set and stranding it, the
-  // exact failure this guard exists to prevent. Duplicate slugs are already real
-  // history here (20260718225511 / 20260718230000 supplier_price_evidence_phase1b,
-  // and two more pairs), all of them below the baseline today, so this is a latent
-  // hole rather than a live one. Codex P2, PR #502.
-  const trackedSlugCounts = new Map();
+  // ATTRIBUTION, NOT A YES/NO (Codex P2 rounds 1-2, PR #502).
+  //
+  // The slug fallback exists for renumbered rows, whose stamps can never match.
+  // But a slug is not a unique key here — 20260718225511 and 20260718230000 both
+  // end in _supplier_price_evidence_phase1b, and there are two more such pairs.
+  // Asking "is this slug in the ledger?" is then the wrong question twice over:
+  //
+  //   Answer it YES unconditionally and the unapplied twin is marked applied and
+  //   silently deleted from the pending set — the exact stranding this guard
+  //   exists to prevent, reintroduced inside it.
+  //
+  //   Answer it "ambiguous" whenever the slug is shared and the check gives up
+  //   even when the evidence is conclusive: if one twin matched by its own exact
+  //   stamp, that ledger row is spoken for, and the OTHER twin is definitively
+  //   pending. Abstaining there is both less accurate and unfixable — renaming
+  //   the candidate cannot resolve a pair it is not part of.
+  //
+  // So COUNT instead. One ledger row bearing a slug vouches for exactly one file.
+  // Rows already claimed by an exact-stamp match are spent; only the remainder can
+  // vouch for the files that did not match. Then it is arithmetic:
+  //   spare >= unmatched  → all applied
+  //   spare == 0          → all definitively PENDING
+  //   otherwise           → genuinely ambiguous, and only then
+  const unmatchedBySlug = new Map();
+  const spentBySlug = new Map();
   for (const raw of trackedFiles) {
-    const slug = migrationSlug(raw);
-    if (slug) trackedSlugCounts.set(slug, (trackedSlugCounts.get(slug) ?? 0) + 1);
+    const stem = migrationStem(raw);
+    if (!stem) continue;
+    const slug = migrationSlug(stem);
+    const stamp = fileStamp(stem);
+    // Applied under its own stamp — conclusive, and settled first so a file that
+    // ran can never reach the unorderable branch and abstain the whole check.
+    // It also SPENDS one ledger row for its slug, which is what lets a twin be
+    // called pending rather than ambiguous.
+    if (stamp && stamps.has(stamp)) {
+      spentBySlug.set(slug, (spentBySlug.get(slug) ?? 0) + 1);
+      continue;
+    }
+    if (!unmatchedBySlug.has(slug)) unmatchedBySlug.set(slug, []);
+    unmatchedBySlug.get(slug).push(stem);
   }
 
   const pending = [];
   const ambiguous = [];
   const unorderable = [];
-  for (const raw of trackedFiles) {
-    const stem = migrationStem(raw);
-    if (!stem) continue;
-    // Applied is checked FIRST and on its own terms. An applied migration can
-    // never be pending, whatever its filename looks like, so it must not be able
-    // to reach the unorderable branch below and abstain the whole check.
-    const stamp = fileStamp(stem);
-    if (stamp && stamps.has(stamp)) continue;     // applied under its own stamp
+  for (const [slug, stems] of unmatchedBySlug) {
+    const rows = slugCounts.get(slug) ?? 0;
+    const spare = Math.max(0, rows - (spentBySlug.get(slug) ?? 0));
+    // Every unmatched file here can be vouched for by a spare row.
+    if (spare >= stems.length) continue;
 
-    const slug = migrationSlug(stem);
-    const slugApplied = slugs.has(slug);
-    const slugIsShared = (trackedSlugCounts.get(slug) ?? 0) > 1;
-    // applied, renumbered — slug matches, and the slug names only this file
-    if (slugApplied && !slugIsShared) continue;
-
-    const ordering = orderingStamp(stem);
-    if (!ordering) {
-      // No leading date at all: genuinely unorderable, and unapplied. Collected
-      // rather than skipped — skipping is how a pending migration goes unseen.
-      unorderable.push(stem);
-      continue;
+    for (const stem of stems) {
+      const ordering = orderingStamp(stem);
+      if (!ordering) {
+        // No leading date at all: genuinely unorderable, and unapplied. Collected
+        // rather than skipped — skipping is how a pending migration goes unseen.
+        unorderable.push(stem);
+        continue;
+      }
+      if (ordering <= baselineHighWater) continue;  // captured by the schema baseline
+      if (ordering >= ts) continue;                 // not older than the candidate
+      // No row left to vouch for anything with this slug → definitively pending.
+      // Some rows left but not enough to cover every file → cannot say which.
+      (spare === 0 ? pending : ambiguous).push(stem);
     }
-    if (ordering <= baselineHighWater) continue;  // captured by the schema baseline
-    if (ordering >= ts) continue;                 // not older than the candidate
-
-    // In the window, unapplied by stamp, and its slug is applied but shared with
-    // another tracked file: this file may be the applied one or the pending one,
-    // and the snapshot cannot tell them apart. Report it as unknown rather than
-    // guessing in either direction.
-    if (slugApplied && slugIsShared) { ambiguous.push(stem); continue; }
-    pending.push(stem);
   }
 
   if (unorderable.length) {
