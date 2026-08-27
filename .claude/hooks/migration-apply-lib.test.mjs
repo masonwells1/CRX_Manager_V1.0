@@ -428,6 +428,12 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   notWrappable("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;\nCREATE TABLE public.t (id bigint);\n",
     "SET TRANSACTION", "SET TRANSACTION is refused");
   notWrappable("COMMIT TRANSACTION;\n", "COMMIT", "COMMIT TRANSACTION is refused");
+  notWrappable("COMMIT AND CHAIN;\n", "COMMIT", "COMMIT AND CHAIN is refused");
+  notWrappable("COMMIT WORK AND NO CHAIN;\n", "COMMIT", "COMMIT WORK AND NO CHAIN is refused");
+  notWrappable("ROLLBACK AND CHAIN;\n", "ROLLBACK", "ROLLBACK AND CHAIN is refused");
+  notWrappable("ABORT TRANSACTION AND NO CHAIN;\n", "ROLLBACK", "ABORT transaction syntax is refused");
+  notWrappable("END AND CHAIN;\n", "END", "END AND CHAIN is refused");
+  notWrappable("END WORK AND NO CHAIN;\n", "END", "END WORK AND NO CHAIN is refused");
   notWrappable("ROLLBACK TO SAVEPOINT s1;\n", "ROLLBACK", "ROLLBACK TO SAVEPOINT is refused");
   notWrappable("BEGIN TRANSACTION;\nCREATE TABLE public.t (id bigint);\n", "BEGIN", "BEGIN TRANSACTION is refused");
   notWrappable("RELEASE SAVEPOINT s1;\n", "SAVEPOINT", "RELEASE SAVEPOINT is refused");
@@ -471,6 +477,13 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   wrappable(
     "INSERT INTO public.audit (note) VALUES ('COMMIT was requested');\n",
     "a string literal naming COMMIT is not transaction control");
+  wrappable(
+    "INSERT INTO public.audit (note) VALUES (E'escaped\\' quote; COMMIT is text');\nSELECT 1;\n",
+    "an escape-string literal cannot desynchronize transaction-control scanning");
+  notWrappable(
+    "INSERT INTO public.audit (note) VALUES (E'escaped\\' quote');\nCOMMIT AND CHAIN;\n",
+    "COMMIT",
+    "a real COMMIT after an escape-string literal is still refused");
   wrappable(
     "CREATE TABLE public.commit_log (id bigint, rollback_reason text);\n",
     "identifiers containing commit/rollback are not transaction control");

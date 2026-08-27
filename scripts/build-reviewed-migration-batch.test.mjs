@@ -11,10 +11,9 @@ import {
   transactionCompatibility,
 } from "./build-reviewed-migration-batch.mjs";
 import {
-  expectedAttestationBody,
   selectExactMergedPr,
-  validateReviewComment,
   validateReviewInputs,
+  validateTrustedDispatch,
 } from "./production-migration-review-lib.mjs";
 
 const MIGRATION = "20990101010101_test_safe_batch";
@@ -31,6 +30,7 @@ const SQL = [
 const HASH = createHash("sha256").update(SQL).digest("hex");
 
 const workflow = readFileSync(path.join(process.cwd(), ".github", "workflows", "production-migration.yml"), "utf8");
+const runbook = readFileSync(path.join(process.cwd(), "docs", "reference", "production-migration-approval-gate.md"), "utf8");
 assert.match(workflow, /^\s*environment: production-database\s*$/m,
   "the credential-bearing job must use the protected production-database environment");
 assert.match(workflow, /^\s*deployments: read\s*$/m,
@@ -43,8 +43,8 @@ assert.match(workflow, /can_admins_bypass.*!=\s*"false"/,
   "preflight must fail while administrators can bypass the approval");
 assert.match(workflow, /protected_branches.*!=\s*"true"/,
   "preflight must require the environment to accept protected branches only");
-assert.match(workflow, /Verify durable exact-commit migration review/,
-  "preflight must verify durable review evidence before approval");
+assert.match(workflow, /Verify human-dispatched exact-commit migration review/,
+  "preflight must bind Mason's manual dispatch to exact review evidence before approval");
 assert.match(workflow, /verify-production-migration-review\.mjs/,
   "the durable review verifier must be invoked by a literal script path");
 assert.doesNotMatch(workflow, /uses:\s+[^\s]+@v\d+/,
@@ -53,6 +53,10 @@ assert.match(workflow, /supabase\/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a
   "the credential-bearing job must pin the audited Supabase setup action release");
 assert.match(workflow, /INSTALLED_VERSION[\s\S]*2\.109\.1/,
   "the installed CLI artifact version must be independently verified");
+assert.match(runbook, /Actions:\s*\*\*read only\*\*/i,
+  "the one-account Codex token must not be able to dispatch workflows");
+assert.doesNotMatch(runbook, /Actions:\s*read and write/i,
+  "the runbook must never grant the Codex token workflow-dispatch capability");
 
 const canary = readFileSync(path.join(process.cwd(), ".github", "workflows", "production-approval-canary.yml"), "utf8");
 assert.match(canary, /^\s*environment: production-database\s*$/m,
@@ -70,16 +74,19 @@ const reviewInput = {
   reviewedCommit: REVIEWED,
   migrationName: MIGRATION,
   queryHash: REVIEW_HASH,
-  commentId: "12345",
+  reviewProofHash: "b".repeat(64),
 };
 assert.doesNotThrow(() => validateReviewInputs(reviewInput));
 assert.throws(() => validateReviewInputs({
   ...reviewInput,
   migrationName: "99999999999999_alias_20260101000000_stale",
 }), /non-replayable/);
-const attestationBody = expectedAttestationBody(reviewInput);
-assert.match(attestationBody, new RegExp("reviewed_commit=" + REVIEWED));
-assert.match(attestationBody, /model=gpt-5\.6-sol\nreasoning_effort=high\nverdict=clean/);
+assert.doesNotThrow(() => validateTrustedDispatch({
+  actor: "masonwells1", owner: "masonwells1", eventName: "workflow_dispatch",
+}));
+assert.throws(() => validateTrustedDispatch({
+  actor: "masonwells1", owner: "masonwells1", eventName: "push",
+}), /manually dispatched/);
 const mergedPr = {
   number: 500,
   state: "closed",
@@ -90,23 +97,18 @@ const mergedPr = {
 };
 assert.equal(selectExactMergedPr([mergedPr], reviewInput), mergedPr);
 assert.throws(() => selectExactMergedPr([{ ...mergedPr, merge_commit_sha: "3".repeat(40) }], reviewInput), /current main/);
-assert.doesNotThrow(() => validateReviewComment({
-  user: { login: "masonwells1" },
-  author_association: "OWNER",
-  body: attestationBody,
-  issue_url: "https://api.github.com/repos/masonwells1/CRX_Manager_V1.0/issues/500",
-}, { owner: "masonwells1", prNumber: 500, body: attestationBody }));
-assert.throws(() => validateReviewComment({
-  user: { login: "masonwells1" }, author_association: "OWNER", body: attestationBody + " ",
-  issue_url: "https://api.github.com/repos/masonwells1/CRX_Manager_V1.0/issues/500",
-}, { owner: "masonwells1", prNumber: 500, body: attestationBody }), /exact canonical/);
 
 assert.deepEqual(transactionCompatibility(SQL), { ok: true });
 assert.deepEqual(transactionCompatibility("SELECT CASE WHEN true THEN 1 ELSE 0 END;"), { ok: true });
 
 for (const [sql, reasonPattern] of [
   ["BEGIN; SELECT 1; COMMIT;", /top-level (?:BEGIN|COMMIT)/],
+  ["COMMIT AND CHAIN;", /top-level COMMIT/],
+  ["COMMIT WORK AND NO CHAIN;", /top-level COMMIT/],
+  ["ROLLBACK AND CHAIN;", /top-level ROLLBACK/],
+  ["ABORT TRANSACTION AND NO CHAIN;", /top-level ROLLBACK/],
   ["END;", /top-level END/],
+  ["END WORK AND CHAIN;", /top-level END/],
   ["START TRANSACTION;", /START TRANSACTION/],
   ["SAVEPOINT before_change;", /SAVEPOINT/],
   ["SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;", /SET TRANSACTION/],
@@ -127,6 +129,10 @@ for (const [sql, reasonPattern] of [
 }
 assert.equal(transactionCompatibility("SELECT '\\'; COMMIT;").ok, false,
   "standard-string quoting cannot hide a following COMMIT");
+assert.equal(transactionCompatibility("SELECT E'escaped\\' quote'; COMMIT AND CHAIN;").ok, false,
+  "escape-string quoting cannot hide a following transaction-ending statement");
+assert.deepEqual(transactionCompatibility("SELECT E'COMMIT\\' is text'; SELECT 1;"), { ok: true },
+  "transaction words inside a valid escape-string literal remain data");
 
 const batch = buildAtomicMigrationSql({ migrationName: MIGRATION, query: SQL, queryHash: HASH });
 assert.ok(batch.startsWith("BEGIN;\n"));

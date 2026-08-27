@@ -1,10 +1,9 @@
 import { spawnSync } from "node:child_process";
 
 import {
-  expectedAttestationBody,
   selectExactMergedPr,
-  validateReviewComment,
   validateReviewInputs,
+  validateTrustedDispatch,
 } from "./production-migration-review-lib.mjs";
 
 function git(args) {
@@ -35,26 +34,30 @@ try {
     reviewedCommit: process.env.REVIEWED_COMMIT,
     migrationName: process.env.MIGRATION_NAME,
     queryHash: process.env.QUERY_SHA256,
-    commentId: process.env.REVIEW_COMMENT_ID,
+    reviewProofHash: process.env.REVIEW_PROOF_SHA256,
   };
   validateReviewInputs(input);
+  validateTrustedDispatch({
+    actor: process.env.GITHUB_ACTOR,
+    owner: process.env.GITHUB_REPOSITORY_OWNER,
+    eventName: process.env.GITHUB_EVENT_NAME,
+  });
   if (git(["rev-parse", "HEAD"]) !== input.expectedCommit) throw new Error("checked-out HEAD is not the expected current-main commit");
 
   const pulls = await githubJson("/commits/" + input.reviewedCommit + "/pulls");
   const mergedPr = selectExactMergedPr(pulls, input);
-  const comment = await githubJson("/issues/comments/" + input.commentId);
-  validateReviewComment(comment, {
-    owner: String(process.env.GITHUB_REPOSITORY_OWNER || ""),
-    prNumber: mergedPr.number,
-    body: expectedAttestationBody(input),
-  });
 
   git(["fetch", "--no-tags", "origin", input.reviewedCommit]);
   const relativeMigration = "supabase/migrations/" + input.migrationName + ".sql";
   const reviewedBlob = git(["rev-parse", input.reviewedCommit + ":" + relativeMigration]);
   const currentBlob = git(["rev-parse", input.expectedCommit + ":" + relativeMigration]);
   if (reviewedBlob !== currentBlob) throw new Error("migration changed after its exact reviewed PR head");
-  process.stdout.write(JSON.stringify({ verified: true, pullRequest: mergedPr.number, reviewedBlob }) + "\n");
+  process.stdout.write(JSON.stringify({
+    verified: true,
+    pullRequest: mergedPr.number,
+    reviewedBlob,
+    reviewProofSha256: input.reviewProofHash,
+  }) + "\n");
 } catch (error) {
   process.stderr.write(String(error?.message || error) + "\n");
   process.exitCode = 1;

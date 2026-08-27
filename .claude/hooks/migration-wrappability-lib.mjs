@@ -57,10 +57,13 @@ export function topLevelSkeleton(sql) {
       out += " ";
       continue;
     }
-    if (ch === "'") {
-      i++;
+    const escapeString = (ch === "e" || ch === "E") && s[i + 1] === "'" &&
+      !/[A-Za-z0-9_$]/.test(s[i - 1] || "");
+    if (ch === "'" || escapeString) {
+      i += escapeString ? 2 : 1;
       let closed = false;
       while (i < n) {
+        if (escapeString && s[i] === "\\") { i += Math.min(2, n - i); continue; }
         if (s[i] === "'" && s[i + 1] === "'") { i += 2; continue; }
         if (s[i] === "'") { i++; closed = true; break; }
         i++;
@@ -105,15 +108,15 @@ export function topLevelSkeleton(sql) {
 // as its own statement IS transaction control, so it is matched with its
 // terminator/keyword rather than by name alone.
 const TXN_CONTROL = [
-  { re: /(?:^|;)\s*commit\s*(?:;|$)/i, what: "a top-level COMMIT" },
-  { re: /(?:^|;)\s*commit\s+(?:transaction|work|prepared)\b/i, what: "a top-level COMMIT" },
-  { re: /(?:^|;)\s*rollback\s*(?:;|$)/i, what: "a top-level ROLLBACK" },
-  { re: /(?:^|;)\s*rollback\s+(?:transaction|work|prepared|to\b)/i, what: "a top-level ROLLBACK" },
+  { re: /(?:^|;)\s*commit(?:\s+(?:transaction|work))?(?:\s+and\s+(?:no\s+)?chain)?\s*(?:;|$)/i, what: "a top-level COMMIT" },
+  { re: /(?:^|;)\s*commit\s+prepared\b/i, what: "a top-level COMMIT" },
+  { re: /(?:^|;)\s*(?:rollback|abort)(?:\s+(?:transaction|work))?(?:\s+and\s+(?:no\s+)?chain)?\s*(?:;|$)/i, what: "a top-level ROLLBACK" },
+  { re: /(?:^|;)\s*rollback\s+(?:prepared|to\b)/i, what: "a top-level ROLLBACK" },
   { re: /(?:^|;)\s*begin\s*(?:;|$)/i, what: "a top-level BEGIN" },
   { re: /(?:^|;)\s*begin\s+(?:transaction|work|isolation\b|read\b|deferrable\b|not\b)/i, what: "a top-level BEGIN" },
   { re: /(?:^|;)\s*start\s+transaction\b/i, what: "a top-level START TRANSACTION" },
   { re: /(?:^|;)\s*(?:savepoint|release\s+savepoint)\b/i, what: "a SAVEPOINT" },
-  { re: /(?:^|;)\s*(?:end)\s*(?:;|$)/i, what: "a top-level END (transaction commit)" },
+  { re: /(?:^|;)\s*end(?:\s+(?:transaction|work))?(?:\s+and\s+(?:no\s+)?chain)?\s*(?:;|$)/i, what: "a top-level END (transaction commit)" },
   { re: /(?:^|;)\s*prepare\s+transaction\b/i, what: "PREPARE TRANSACTION" },
   { re: /(?:^|;)\s*set\s+transaction\b/i, what: "SET TRANSACTION" },
 ];

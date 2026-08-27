@@ -19,8 +19,8 @@ on:
         description: Exact PR head commit reviewed by the migration gate
         required: true
         type: string
-      review_comment_id:
-        description: GitHub issue-comment ID containing the durable review attestation
+      review_proof_sha256:
+        description: SHA-256 of the clean exact-head Codex review capture Mason inspected
         required: true
         type: string
 
@@ -28,7 +28,6 @@ permissions:
   actions: read
   contents: read
   deployments: read
-  issues: read
   pull-requests: read
 
 concurrency:
@@ -76,12 +75,12 @@ jobs:
           MIGRATION_NAME: ${{ inputs.migration_name }}
           QUERY_SHA256: ${{ inputs.query_sha256 }}
           REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
-          REVIEW_COMMENT_ID: ${{ inputs.review_comment_id }}
+          REVIEW_PROOF_SHA256: ${{ inputs.review_proof_sha256 }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
           [[ "$REVIEWED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
-          [[ "$REVIEW_COMMENT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$REVIEW_PROOF_SHA256" =~ ^[a-f0-9]{64}$ ]]
           [[ "$MIGRATION_NAME" =~ ^[0-9]{14}_[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
           ! [[ "${MIGRATION_NAME:15}" =~ [0-9]{14} ]]
           [[ "$QUERY_SHA256" =~ ^[a-f0-9]{64}$ ]]
@@ -92,14 +91,14 @@ jobs:
         with:
           node-version: 24
 
-      - name: Verify durable exact-commit migration review
+      - name: Verify human-dispatched exact-commit migration review
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
           REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
           MIGRATION_NAME: ${{ inputs.migration_name }}
           QUERY_SHA256: ${{ inputs.query_sha256 }}
-          REVIEW_COMMENT_ID: ${{ inputs.review_comment_id }}
+          REVIEW_PROOF_SHA256: ${{ inputs.review_proof_sha256 }}
         run: node scripts/verify-production-migration-review.mjs
 
       - name: Prove deny paths and build the exact atomic batch

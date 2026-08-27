@@ -12,12 +12,12 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 **Source:** Mason's in-chat request to build a safe Codex migration approval gate on 2026-08-27.
 
-**Decision.** Codex prepares and dispatches one exact main-branch migration through the GitHub
-`production-database` environment. GitHub, not the local agent shell, holds the Supabase credential.
+**Decision.** Codex prepares one exact main-branch migration for Mason to dispatch through the
+GitHub `production-database` environment. GitHub, not the local agent shell, holds the Supabase credential.
 The environment requires Mason's account, disallows administrator bypass, and binds current main,
-the exact reviewed PR head plus durable review comment, filename, and SHA-256. The local Codex GitHub
-credential is a fine-grained token with Deployments read-only; only Mason's website session has the
-Deployments-write capability needed to approve.
+the exact reviewed PR head plus review-capture SHA-256, filename, and SHA-256. The local Codex GitHub
+credential is a fine-grained token with Actions and Deployments read-only; only Mason's website
+session can dispatch the reviewed artifact and approve release.
 
 **Why.** Codex hooks cannot safely return an approval prompt from PreToolUse: the current runtime
 does not support that decision and continues the tool call after reporting the hook failure.
@@ -28,8 +28,9 @@ credentials outside the agent's local capability set.
 
 **Operative rule.** The workflow remains unusable unless its GitHub environment requires only Mason,
 prevents administrator bypass, accepts protected branches only, and carries its two production
-secrets. Codex may dispatch and read a pending run but its machine token must not have Deployments
-write. The workflow locks the live ledger inside the same transaction, applies only transaction-
+secrets. Codex may read a pending run but its machine token must not have Actions write or Deployments
+write. Mason's manual dispatch is the durable exact-artifact review attestation. The workflow locks
+the live ledger inside the same transaction, applies only transaction-
 compatible SQL, refuses stale timestamp aliases and exact-content replay, writes and verifies the
 content-bound ledger row, then commits. Credential-bearing actions use full commit pins and the
 installed Supabase CLI version is verified. No prompt-text approval token is part of this gate.
