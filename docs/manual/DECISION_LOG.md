@@ -8,25 +8,26 @@ settled calls. Newest first. Each entry is a decision, why it was made, and the 
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
 
-## 2026-08-27 — Codex live migrations use the native owner approval prompt
+## 2026-08-27 — Codex live migrations use an owner-prompted, proof-bound bridge
 
 **Source:** Mason's in-chat request to build a safe Codex migration approval gate on 2026-08-27.
 
-**Decision.** Both supported Codex Supabase `apply_migration` tool channels must use Codex's native
-`prompt` approval mode. Supabase app approvals must be reviewed by the user, not the automatic
-reviewer. The production guard permits only the two exact configured tool identities; unknown or
-UUID-qualified lookalikes fail closed before they can reach the live tool.
+**Decision.** Disable Codex's raw Supabase `apply_migration` and `execute_sql` tools. The only Codex
+write path is the local CRX bridge's `apply_reviewed_migration` tool, which is fixed to the CRX
+project, reads the exact migration file itself, checks its SHA-256 and all existing migration proof
+rules inside the tool handler, applies file plus ledger row atomically, and uses native `prompt`
+approval routed to Mason.
 
 **Why.** Codex hooks cannot safely return an approval prompt from PreToolUse: the current runtime
 does not support that decision and continues the tool call after reporting the hook failure.
 UserPromptSubmit exposes prompt text but no positive proof that the text was authored by Mason, so a
-text token could be forged by relayed or machine-generated content. The native prompt is the only
-supported mechanism that keeps the user as the approving party.
+text token could be forged by relayed or machine-generated content. A separate hook can also fail or
+time out without stopping a tool, so the transmission path itself must enforce the technical gate.
 
-**Operative rule.** The existing migration apply guard remains responsible for the exact CRX
-project, migration name, ordered snapshot, SQL hash, review proof, proof freshness, and destructive
-SQL checks. Passing those checks never authorizes the live call by itself: Codex must still show the
-native approval prompt, and only Mason may approve it. No prompt-text approval token exists.
+**Operative rule.** Raw SQL tools stay disabled. The bridge accepts only transaction-compatible,
+timestamped repo migrations whose exact content has current project/order/hash/review/destructive-
+SQL proof. Passing those checks never authorizes the call by itself: Codex must still show the native
+approval prompt, and only Mason may approve it. No prompt-text approval token exists.
 
 
 ## 2026-08-27 — preserve CRX safety rules while collapsing harness machinery

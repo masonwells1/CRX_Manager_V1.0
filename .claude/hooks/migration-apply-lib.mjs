@@ -92,6 +92,20 @@ export function evaluateMigrationApply({
   requireExactProofName = true,
 } = {}) {
   const stateDir = path.join(projectDir, ".claude", "session-state");
+  const targetProject = String(projectId || "").trim();
+  if (targetProject !== CRX_PRODUCTION_REF) {
+    return block(
+      `MIGRATION APPLY GUARD: project_id must exactly equal the CRX production project ` +
+      `(${CRX_PRODUCTION_REF}); received ${targetProject || "(missing)"}. Refusing the apply.`);
+  }
+
+  const migName = (name || "").toString().trim();
+  const migQuery = (query || "").toString();
+  if (!migQuery.trim()) {
+    return block("MIGRATION APPLY GUARD: transmitted SQL is missing or empty. Refusing an unbound migration apply.");
+  }
+  const currentHash = createHash("sha256").update(migQuery).digest("hex");
+  const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unknown";
 
   // Make sure the directory exists so future writes work.
   try { mkdirSync(stateDir, { recursive: true }); } catch { /* ignore */ }
@@ -110,10 +124,10 @@ export function evaluateMigrationApply({
   // The merge guard's answer — scan every sibling checkout — is NOT safe here, and
   // Codex blocked the first version of this fix for taking it. Its proof is bound
   // to the exact head and base SHAs GitHub reports, so a sibling's proof can only
-  // authorize the identical merge. This proof is weaker: interactively `queryHash`
-  // is enforced only when the proof carries one, and migration names match by
-  // substring. Scanning all worktrees would therefore let a proof minted by a
-  // DIFFERENT concurrent session authorize a live apply this session never
+  // authorize the identical merge. Migration evidence stays session-local even
+  // though exact names and exact SQL hashes are now mandatory in every mode.
+  // Scanning all worktrees would let a proof minted by a DIFFERENT concurrent
+  // session authorize a live apply this session never
   // reviewed — against the settled "proof from THIS session" rule
   // (docs/manual/DECISION_LOG.md, 2026-07-13) and squarely in Mason's way of
   // working, where dozens of worktrees run at once.
@@ -134,11 +148,6 @@ export function evaluateMigrationApply({
     { cwd: projectDir, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] },
   ));
   const proofDirs = sessionProofDirs(projectDir, hookCwd, listWorktrees);
-
-  const migName = (name || "").toString().trim();
-  const migQuery = (query || "").toString();
-  const currentHash = migQuery ? createHash("sha256").update(migQuery).digest("hex") : "";
-  const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unknown";
 
   // ORDERING PREFLIGHT (2026-08-08). Refuse a migration that is OLDER than one
   // already applied — the mechanism that silently reverted the
@@ -395,10 +404,10 @@ export function evaluateMigrationApply({
         if (proofName && nameMatches) {
           const findings = (data.findings || "").toString();
           if (findings === "clean" || findings === "blockers-fixed") {
-            // Content-binding: if the proof recorded a queryHash, it must match the SQL
-            // actually being applied. A mismatch means the migration was edited AFTER it
-            // was reviewed, so the proof no longer attests to this content — skip it.
-            if (data.queryHash && currentHash && data.queryHash !== currentHash) continue;
+            // Exact content binding is mandatory in every mode. A missing hash
+            // or any mismatch means the proof does not attest to the SQL being
+            // transmitted and cannot authorize this apply.
+            if (!data.queryHash || data.queryHash !== currentHash) continue;
             validProof = { file: f, dir, data };
             break;
           }
@@ -410,9 +419,8 @@ export function evaluateMigrationApply({
   if (validProof) {
     // Hands-free applies carry three EXTRA requirements (Codex P1s 2026-07-13
     // rounds 2-3) — with Mason absent, the proof must be maximally bound:
-    //   1. Exact content binding: the proof's queryHash must be present and
-    //      match the transmitted SQL (interactively it's optional-but-checked;
-    //      unattended, an unbound proof could apply edited-after-review SQL).
+    //   1. Exact content binding is already mandatory for every apply above;
+    //      the hands-free branch repeats it as defense in depth.
     //   2. A recorded Codex Sol/high verdict (separate reviewer gate actually ran — Mason's
     //      "ran, not queued" rule).
     //   3. A FRESH Codex output artifact on disk (<30 min): /codex-review tees

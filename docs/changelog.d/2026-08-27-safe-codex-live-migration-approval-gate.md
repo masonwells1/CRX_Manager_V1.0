@@ -5,18 +5,20 @@ candidate fix used text from UserPromptSubmit as an approval token, but exact-co
 review proved that relayed machine text could be mistaken for Mason's authorship. That design was
 removed before release.
 
-The replacement uses Codex's native approval system. Both supported Supabase `apply_migration`
-channels are configured to prompt, and Supabase app approvals are routed to the user rather than
-the automatic reviewer. The production guard allows only those two exact tool identities to reach
-the existing migration apply guard; unknown, rogue, or UUID-qualified lookalikes fail closed.
+The replacement disables Codex's raw Supabase `apply_migration` and `execute_sql` tools. A local,
+CRX-only bridge exposes one write tool: it reads the exact timestamped migration file from the repo,
+verifies the caller-supplied SHA-256, fixed production project, ordered snapshot, current review
+proof, and destructive-SQL rules inside the tool handler, and only then transmits an atomic batch.
+That tool uses Codex's native approval prompt routed to Mason, not the automatic reviewer.
 
-The gate is additive. The existing exact project, ordered migration snapshot, reviewed SQL hash,
-proof freshness, destructive-content refusal, and second-model requirements can still deny the
-call. Passing them does not approve production: Codex must still show its native prompt and Mason
-must approve that specific tool call. Raw mutating SQL, CLI migration commands, the large-file apply
-script, edge-function deploys, and Supabase lifecycle tools remain blocked.
+The atomic batch refuses a duplicate version/name, runs compatible migration SQL and its ledger row
+in one transaction, verifies the content-bound ledger row afterwards, then invokes the existing
+registry-stale and applied-snapshot invalidation hooks. Migrations with their own transaction
+control or operations such as `CONCURRENTLY` remain parked for a human-operated path. Passing the
+technical gate does not approve production: Mason must approve that specific native tool prompt.
 
-Prevention tests verify the native prompt/user-reviewer configuration, exact allowed identities,
-lookalike denial, and protection of the gate configuration and its reviewed maintenance producer.
-The protected guard, configuration, and workflow command are changed only after a fresh exact-head
-gpt-5.6-sol/high proof validates the producer and its expected preimages.
+Prevention tests mutation-test the wrong-project, missing-file, wrong-hash, missing-review,
+non-transactional, duplicate-ledger, post-apply, and native protocol paths without a live
+connection. The bridge, configuration, shared migration rules, and maintenance producer become
+protected harness files only after a fresh exact-head gpt-5.6-sol/high proof validates the producer
+and its pinned preimages.

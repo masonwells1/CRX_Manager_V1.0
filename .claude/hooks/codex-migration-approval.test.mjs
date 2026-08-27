@@ -2,28 +2,33 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-const root = process.cwd();
-const config = readFileSync(path.join(root, ".codex", "config.toml"), "utf8").replace(/\r\n/g, "\n");
+const config = readFileSync(path.join(process.cwd(), ".codex", "config.toml"), "utf8").replace(/\r\n/g, "\n");
 
 function section(name) {
   const escaped = name.replace(/[.*+?^$()|[\]\\]/g, "\\$&");
-  const expression = "^\\[" + escaped + "\\]\\n([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))";
-  const match = new RegExp(expression, "m").exec(config);
-  assert.ok(match, "missing Codex config section [" + name + "]");
+  const match = new RegExp("^\\[" + escaped + "\\]\\n([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))", "m").exec(config);
+  assert.ok(match, `missing Codex config section [${name}]`);
   return match[1];
 }
 
-const directMcp = section("mcp_servers.supabase.tools.apply_migration");
-const supabaseApp = section("apps.supabase");
-const appTool = section("apps.supabase.tools.apply_migration");
+assert.match(config, /^approvals_reviewer\s*=\s*"user"\s*$/m, "tool prompts must route to Mason");
 
-assert.match(directMcp, /^approval_mode\s*=\s*"prompt"\s*$/m, "direct Supabase MCP apply_migration must prompt");
-assert.match(supabaseApp, /^approvals_reviewer\s*=\s*"user"\s*$/m, "Supabase app prompts must route to Mason, not auto-review");
-assert.match(appTool, /^approval_mode\s*=\s*"prompt"\s*$/m, "Supabase app apply_migration must prompt");
+const direct = section("mcp_servers.supabase");
+assert.match(direct, /^disabled_tools\s*=\s*\[[^\]]*"apply_migration"[^\]]*"execute_sql"[^\]]*\]\s*$/m,
+  "direct Supabase raw SQL write tools must be disabled");
 
-for (const body of [directMcp, appTool]) {
-  assert.doesNotMatch(body, /^approval_mode\s*=\s*"(?:auto|writes|approve)"\s*$/m, "migration apply may not auto-approve");
+for (const name of ["apps.supabase.tools.apply_migration", "apps.supabase.tools.execute_sql"]) {
+  assert.match(section(name), /^enabled\s*=\s*false\s*$/m, `${name} must be disabled`);
 }
 
-assert.doesNotMatch(config, /codex-migration-approval-prompt\.mjs/, "prompt text must never mint migration approval");
-console.log("codex-migration-approval: native user-prompt config verified");
+const bridge = section("mcp_servers.crx_supabase");
+assert.match(bridge, /^command\s*=\s*"node"\s*$/m);
+assert.match(bridge, /^args\s*=\s*\["scripts\/codex-safe-supabase-mcp\.mjs"\]\s*$/m);
+assert.match(bridge, /^required\s*=\s*true\s*$/m);
+
+const apply = section("mcp_servers.crx_supabase.tools.apply_reviewed_migration");
+assert.match(apply, /^approval_mode\s*=\s*"prompt"\s*$/m, "reviewed migration apply must prompt Mason");
+assert.doesNotMatch(apply, /^approval_mode\s*=\s*"(?:auto|writes|approve)"\s*$/m);
+
+assert.doesNotMatch(config, /codex-migration-approval-prompt\.mjs/, "prompt text must never mint approval");
+console.log("codex-migration-approval: raw SQL tools disabled and reviewed wrapper prompts Mason");
