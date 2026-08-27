@@ -67,7 +67,14 @@ vi.mock('../hooks/useRowSelection', () => ({
 vi.mock('../components/ui/PageHeader', () => ({
   default: ({ actions }: { actions?: ReactNode }) => <div>{actions}</div>,
 }));
-vi.mock('../components/ui/DataTable', () => ({ default: () => <div>orders table</div> }));
+vi.mock('../components/ui/DataTable', () => ({
+  default: ({ data }: { data: Array<{ id: string; invoiced_pct: number }> }) => (
+    <div>
+      orders table
+      {data.map((row) => <span key={row.id}>Invoiced {row.invoiced_pct}%</span>)}
+    </div>
+  ),
+}));
 vi.mock('../components/ui/BulkDeleteConfirmModal', () => ({
   default: ({ open, onConfirm }: { open: boolean; onConfirm: () => void }) => open
     ? <button onClick={onConfirm}>Confirm order delete</button>
@@ -153,5 +160,35 @@ describe('Orders bulk-delete lifecycle guard', () => {
       );
     });
     expect(mockCheckMutationResult).not.toHaveBeenCalled();
+  });
+
+  it('calculates invoiced percent from active sale invoices only', async () => {
+    const invoiceQuery = buildChain({
+      data: [
+        { order_id: 'order-1', total_amount_cents: 60000, invoice_type: 'chemical_sale', status: 'posted', deleted_at: null },
+        { order_id: 'order-1', total_amount_cents: -15000, invoice_type: 'credit_memo', status: 'posted', deleted_at: null },
+        { order_id: 'order-1', total_amount_cents: 40000, invoice_type: 'chemical_sale', status: 'posted', deleted_at: '2026-08-26T12:00:00Z' },
+      ],
+      error: null,
+    });
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') {
+        return buildChain({
+          data: [{
+            id: 'order-1', order_number: 'ORD-1', customer_id: 'customer-1',
+            status: 'confirmed', order_date: '2026-04-01', total_price: 1000,
+            customer: { farm_name: 'Test Farm', parent_customer_id: null },
+          }],
+          error: null,
+        });
+      }
+      if (table === 'invoices') return invoiceQuery;
+      return buildChain({ data: [], error: null });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Invoiced 60%')).toBeInTheDocument();
+    expect(invoiceQuery.in).toHaveBeenCalledWith('order_id', ['order-1']);
   });
 });

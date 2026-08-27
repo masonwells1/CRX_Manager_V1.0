@@ -38,6 +38,7 @@ import type { OrderSummaryData } from '../lib/orderSummaryPdf';
 import type { PickListData } from '../lib/orderPickListPdf';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
+import { activeInvoiceCoversOrder } from '../lib/deliveryInvoiceCoverage';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType, InventoryPositionRow } from '../types';
 
@@ -921,9 +922,7 @@ export default function OrderDetail() {
   // would only patch an invoice it created itself (auto-invoice path matches
   // on invoices.delivery_id). The result is a manual draft frozen at the
   // ordered quantities while the customer was billed for less.
-  const hasActiveInvoice = invoices.some(
-    (inv) => !['voided', 'cancelled'].includes(inv.status)
-  );
+  const hasActiveInvoice = invoices.some((inv) => activeInvoiceCoversOrder(inv, order?.id ?? ''));
   const hasPendingDelivery = deliveries.some(
     (d) => d.status === 'scheduled' || d.status === 'in_progress'
   );

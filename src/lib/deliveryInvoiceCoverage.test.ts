@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { activeInvoiceCoversDelivery, type DeliveryInvoiceCoverage } from './deliveryInvoiceCoverage';
+import {
+  activeInvoiceCoversDelivery,
+  activeInvoiceCoversOrder,
+  type DeliveryInvoiceCoverage,
+} from './deliveryInvoiceCoverage';
 
 const root = process.cwd();
 
@@ -17,6 +21,18 @@ function invoice(overrides: Partial<DeliveryInvoiceCoverage> = {}): DeliveryInvo
 }
 
 describe('activeInvoiceCoversDelivery', () => {
+  it('keeps order billing coverage limited to active sale invoices', () => {
+    expect(activeInvoiceCoversOrder(invoice(), 'order-1')).toBe(true);
+    expect(activeInvoiceCoversOrder(invoice({ invoice_type: 'credit_memo' }), 'order-1')).toBe(false);
+    expect(activeInvoiceCoversOrder(invoice({ status: 'voided' }), 'order-1')).toBe(false);
+    expect(activeInvoiceCoversOrder(invoice({ status: 'cancelled' }), 'order-1')).toBe(false);
+    expect(activeInvoiceCoversOrder(
+      invoice({ deleted_at: '2026-08-26T12:00:00Z' }),
+      'order-1',
+    )).toBe(false);
+    expect(activeInvoiceCoversOrder(invoice(), 'order-2')).toBe(false);
+  });
+
   it('does not let an active order-level return credit hide an unbilled delivery', () => {
     expect(activeInvoiceCoversDelivery(
       invoice({ invoice_type: 'credit_memo' }),
@@ -62,6 +78,18 @@ describe('activeInvoiceCoversDelivery', () => {
       const source = readFileSync(resolve(root, relativePath), 'utf8');
       expect(source).toContain('activeInvoiceCoversDelivery');
       expect(source).toContain('invoice_type');
+    }
+  });
+
+  it('is used by every order UI that reports or recovers billing coverage', () => {
+    for (const relativePath of [
+      'src/pages/OrderDetail.tsx',
+      'src/pages/Orders.tsx',
+    ]) {
+      const source = readFileSync(resolve(root, relativePath), 'utf8');
+      expect(source).toContain('activeInvoiceCoversOrder');
+      expect(source).toContain('invoice_type');
+      expect(source).toContain('deleted_at');
     }
   });
 });

@@ -70,6 +70,12 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain("current_setting('app.crx_return_credit_lineage', true) = '1'");
     expect(migration).toContain('EXECUTE FUNCTION public._enforce_below_cost_line()');
     expect(migration).toContain('RETURN_CREDIT_UNIT_MISMATCH');
+    expect(migration).toContain('WHEN ri.order_item_id IS NULL THEN ri.unit');
+    expect(migration).toContain("ELSE COALESCE(oi.unit_size, 'ea')");
+    expect(migration).toContain("v_item.source_unit");
+    expect(returnCreditSmoke).toContain('unit mismatch created a warehouse inventory row');
+    expect(returnCreditSmoke).toContain('public receive tamper guard raised');
+    expect(returnCreditSmoke).toContain('private receive unit guard raised');
     expect(migration).toContain('RETURN_CREDIT_UNLINKED_COST_LINE');
     expect(migration).toContain('RETURN_CREDIT_LEDGER_IMMUTABLE');
     expect(migration).toContain('BEFORE UPDATE OF status, deleted_at, total_amount_cents, total_cost_cents, season OR DELETE ON public.invoices');
@@ -144,7 +150,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain("p.prorettype = 'void'::regtype");
     expect(migration).toContain("p.prorettype = 'jsonb'::regtype");
     expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
-    expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('f8becf522d34caa804006e9372759b1088220fb1ea8c020b23ce949051a7581c');
+    expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('722ff281a364867058154c1c7d8060c6c6ea16a60f4c8764005d6ba0c8f0ef28');
     expect(functionBodySha256(migration, 'void_invoice')).toBe('6d7c17279c90a9d6817129ba6f43bb490523f2844657074046a9f66f019af3ec');
     expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('a151010fc4556ab78d9254c42f7fe3c6ac06ba6dc03c19f52c44fe882ba2b520');
     expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('cce665d2c4b34a2b253a9e4518599f75d489309f25cc402fe6ae59269c41442e');

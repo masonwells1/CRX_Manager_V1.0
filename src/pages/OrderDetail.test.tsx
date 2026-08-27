@@ -154,6 +154,30 @@ describe('OrderDetail', () => {
     });
   });
 
+  it('keeps Create Invoice available when the only linked invoice is a posted return credit', async () => {
+    const orderData = {
+      id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
+      order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
+      total_profit: 20000, total_margin_pct: 40.0, order_name: 'Spring Order', notes: '',
+      created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
+    };
+    const returnCredit = {
+      id: 'credit-1', order_id: 'ord-123', invoice_number: 'CM-0001',
+      invoice_type: 'credit_memo', status: 'posted', deleted_at: null,
+      total_amount_cents: -15000, paid_amount_cents: 0, prepay_applied_cents: 0,
+      balance_cents: -15000, write_off_cents: 0,
+    };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') return buildChain({ data: orderData, error: null });
+      if (table === 'invoices') return buildChain({ data: [returnCredit], error: null });
+      return buildChain({ data: [], error: null });
+    });
+
+    renderOrderDetail();
+
+    expect(await screen.findByRole('button', { name: 'Create Invoice' })).toBeInTheDocument();
+  });
+
   it('#67: shows a plain Cancel Order action on a confirmed order, not the old dead-option Change Status dropdown', async () => {
     const orderData = {
       id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',

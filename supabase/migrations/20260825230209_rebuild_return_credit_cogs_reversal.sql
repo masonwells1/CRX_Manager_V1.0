@@ -320,14 +320,38 @@ BEGIN
   SELECT id, return_number, status, customer_id INTO v_return FROM public.returns WHERE id = p_return_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'RETURN_NOT_FOUND'; END IF;
   IF v_return.status <> 'approved' THEN RAISE EXCEPTION 'RETURN_NOT_APPROVED:%', v_return.status; END IF;
-  FOR v_item IN
-    SELECT ri.id AS item_id, ri.product_id, ri.quantity, ri.product_name, ri.condition, ri.unit
+  IF EXISTS (
+    SELECT 1
     FROM public.return_items ri
+    LEFT JOIN public.order_items oi
+      ON oi.id = ri.order_item_id
+     AND oi.product_id = ri.product_id
+    WHERE ri.return_id = p_return_id
+      AND ri.restock
+      AND NOT ri.restocked
+      AND ri.order_item_id IS NOT NULL
+      AND (
+        oi.id IS NULL
+        OR ri.unit IS DISTINCT FROM COALESCE(oi.unit_size, 'ea')
+      )
+  ) THEN
+    RAISE EXCEPTION 'RETURN_CREDIT_UNIT_MISMATCH';
+  END IF;
+  FOR v_item IN
+    SELECT ri.id AS item_id, ri.product_id, ri.quantity, ri.product_name, ri.condition,
+           CASE
+             WHEN ri.order_item_id IS NULL THEN ri.unit
+             ELSE COALESCE(oi.unit_size, 'ea')
+           END AS source_unit
+    FROM public.return_items ri
+    LEFT JOIN public.order_items oi
+      ON oi.id = ri.order_item_id
+     AND oi.product_id = ri.product_id
     WHERE ri.return_id = p_return_id AND ri.restock AND NOT ri.restocked
     ORDER BY ri.sort_order, ri.id
   LOOP
     INSERT INTO public.inventory (product_id, location, quantity_available, quantity_prebooked, quantity_on_order, unit_size)
-    VALUES (v_item.product_id, 'Main Warehouse', v_item.quantity, 0, 0, v_item.unit)
+    VALUES (v_item.product_id, 'Main Warehouse', v_item.quantity, 0, 0, v_item.source_unit)
     ON CONFLICT (product_id, location) DO UPDATE
       SET quantity_available = public.inventory.quantity_available + EXCLUDED.quantity_available,
           updated_at = now();
@@ -862,7 +886,7 @@ DECLARE
     '_issue_return_credit_header_only_impl_20260825', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
     '_issue_return_credit_impl', '4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881',
     '_receive_return_impl_before_inventory_seed_20260825', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
-    '_receive_return_impl_20260714', 'f8becf522d34caa804006e9372759b1088220fb1ea8c020b23ce949051a7581c',
+    '_receive_return_impl_20260714', '722ff281a364867058154c1c7d8060c6c6ea16a60f4c8764005d6ba0c8f0ef28',
     'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
     '_issue_return_credit_intent_impl_20260812', '55607c6dae0cc11f4837f67c54de88a6f4d83413cd3686e04c21bf33afa4ffa5',
     'receive_return', '80873cb93b67293a811f6be91efb224f7f4dd085fa8c4282267336be430b8b6a',

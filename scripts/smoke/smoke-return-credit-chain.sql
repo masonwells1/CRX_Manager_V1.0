@@ -624,6 +624,55 @@ BEGIN
   -- --------------------------------------------------------------------
   -- 3. receive_return: approved -> received; restock 15 units
   -- --------------------------------------------------------------------
+  -- A stale or forged return-item unit must fail before the missing warehouse
+  -- row is seeded. Restore the transaction-local fixture afterward and run the
+  -- canonical receive path below.
+  SET LOCAL session_replication_role = replica;
+  UPDATE return_items
+     SET unit = 'qt'
+   WHERE return_id = v_return_id
+     AND order_item_id = v_order_item_1;
+  SET LOCAL session_replication_role = origin;
+  BEGIN
+    PERFORM receive_return(
+      v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-receive-unit-mismatch'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: public receive accepted a tampered return source';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'RETURN_SOURCE_NOT_VERIFIED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: public receive tamper guard raised %', v_reason;
+    END IF;
+  END;
+  BEGIN
+    PERFORM _receive_return_impl_20260714(
+      v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-receive-unit-impl'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: private receive accepted a return-item/source unit mismatch';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'RETURN_CREDIT_UNIT_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: private receive unit guard raised %', v_reason;
+    END IF;
+  END;
+  SELECT count(*) INTO v_n FROM inventory
+  WHERE product_id = v_product_id AND location = 'Main Warehouse';
+  IF v_n <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unit mismatch created a warehouse inventory row';
+  END IF;
+  SELECT status INTO v_status FROM returns WHERE id = v_return_id;
+  IF v_status IS DISTINCT FROM 'approved' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unit mismatch changed return status to %', v_status;
+  END IF;
+  SET LOCAL session_replication_role = replica;
+  UPDATE return_items
+     SET unit = 'gal'
+   WHERE return_id = v_return_id
+     AND order_item_id = v_order_item_1;
+  SET LOCAL session_replication_role = origin;
+
   v_res := receive_return(v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-receive');
   IF COALESCE((v_res->>'success')::boolean, false) IS NOT TRUE
      OR v_res->>'status' IS DISTINCT FROM 'received'
