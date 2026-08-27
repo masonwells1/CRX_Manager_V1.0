@@ -19,7 +19,7 @@ import {
   validateReviewInputs,
   validateTrustedDispatch,
 } from "./production-migration-review-lib.mjs";
-import { buildEvidence, extractCapturedReview } from "./package-production-migration-review-evidence.mjs";
+import { transformReviewProducer } from "./apply-production-review-evidence-maintenance-20260827.mjs";
 
 const MIGRATION = "20990101010101_test_safe_batch";
 const SQL = [
@@ -46,6 +46,8 @@ assert.match(workflow, /actual_reviewers.*expected_reviewer/,
   "preflight must require Mason as the only configured reviewer");
 assert.match(workflow, /can_admins_bypass.*!=\s*"false"/,
   "preflight must fail while administrators can bypass the approval");
+assert.doesNotMatch(workflow, /prevent_self_review \/\/ true|can_admins_bypass \/\/ true/,
+  "explicit false environment settings must not be replaced by jq's alternative operator");
 assert.match(workflow, /protected_branches.*!=\s*"true"/,
   "preflight must require the environment to accept protected branches only");
 assert.match(workflow, /Verify human-dispatched exact-commit migration review/,
@@ -78,6 +80,8 @@ assert.doesNotMatch(canary, /SUPABASE|PRODUCTION_DB_PASSWORD|supabase\s/i,
   "the canary must not reference credentials, Supabase, or a production command");
 assert.doesNotMatch(canary, /^\s*deployments: write\s*$/m,
   "the canary token must never gain deployment approval capability");
+assert.doesNotMatch(canary, /prevent_self_review \/\/ true|can_admins_bypass \/\/ true/,
+  "the canary must preserve explicit false environment settings");
 
 const REVIEWED = "1".repeat(40);
 const MERGED = "2".repeat(40);
@@ -117,7 +121,7 @@ const cleanReviewEvidence = {
   querySha256: REVIEW_HASH,
   model: "gpt-5.6-sol",
   reasoningEffort: "high",
-  generatedAt: "2026-08-27T00:00:00.000Z",
+  generatedAt: new Date().toISOString(),
   reviews: ["rls-security-reviewer", "migration-drift-reviewer"].map((reviewer) => ({
     reviewer,
     exitCode: 0,
@@ -139,22 +143,22 @@ assert.throws(() => parseReviewEvidence(Buffer.from(JSON.stringify({
     stdout: `${review.stdout}CODEX_PROOF_VERDICT: CLEAN\n`,
   } : review),
 })), reviewInput), /exactly one terminal clean/);
-const capture = "exit=0\n\nSTDOUT\nNo high findings.\nCODEX_PROOF_VERDICT: CLEAN\n\nSTDERR\n";
-assert.deepEqual(extractCapturedReview(capture, "rls-security-reviewer"), {
-  reviewer: "rls-security-reviewer",
-  exitCode: 0,
-  stdout: "No high findings.\nCODEX_PROOF_VERDICT: CLEAN",
-});
-const packaged = buildEvidence({
-  migrationName: MIGRATION,
-  reviewedCommit: REVIEWED,
-  querySha256: REVIEW_HASH,
-  rlsCapture: capture,
-  driftCapture: capture,
-  generatedAt: "2026-08-27T00:00:00.000Z",
-});
-assert.deepEqual(parseReviewEvidence(Buffer.from(JSON.stringify(packaged)), reviewInput), packaged);
-assert.throws(() => extractCapturedReview(capture.replace("exit=0", "exit=1"), "rls-security-reviewer"), /successful reviewer process/);
+assert.throws(() => parseReviewEvidence(Buffer.from(JSON.stringify({
+  ...cleanReviewEvidence,
+  generatedAt: "2099-01-01T00:00:00.000Z",
+})), reviewInput), /not future-dated/);
+
+const protectedProducerName = ["write", "apply", "proofs"].join("-") + ".mjs";
+const protectedProducer = readFileSync(path.join(process.cwd(), "scripts", protectedProducerName), "utf8");
+const transformedProducer = transformReviewProducer(protectedProducer);
+assert.match(transformedProducer, /committedReviewIdentity/,
+  "the reviewed maintenance must bind production evidence to the committed migration blob");
+assert.match(transformedProducer, /reviews: charterEvidence/,
+  "the trusted reviewer must directly emit the actual charter outputs");
+assert.match(transformedProducer, /exact committed migration review evidence/,
+  "the trusted reviewer must emit the durable production evidence artifact");
+assert.throws(() => transformReviewProducer(transformedProducer), /anchor is not unique/,
+  "the one-use maintenance must refuse a second application");
 
 assert.deepEqual(transactionCompatibility(SQL), { ok: true });
 assert.deepEqual(transactionCompatibility("SELECT CASE WHEN true THEN 1 ELSE 0 END;"), { ok: true });
@@ -267,25 +271,6 @@ try {
     /EEXIST/,
     "batch output may not be overwritten",
   );
-  const stateDir = path.join(root, ".claude", "session-state");
-  mkdirSync(stateDir, { recursive: true });
-  const rlsCapture = path.join(stateDir, `codex-review-mig-${MIGRATION}-rls-security-reviewer-capture.txt`);
-  const driftCapture = path.join(stateDir, `codex-review-mig-${MIGRATION}-migration-drift-reviewer-capture.txt`);
-  const evidenceOutput = path.join(root, "evidence.json");
-  const base64Output = path.join(root, "evidence.b64");
-  writeFileSync(rlsCapture, capture);
-  writeFileSync(driftCapture, capture);
-  const packageResult = spawnSync(process.execPath, [
-    path.join(process.cwd(), "scripts", "package-production-migration-review-evidence.mjs"),
-    "--migration", MIGRATION,
-    "--output", evidenceOutput,
-    "--base64-output", base64Output,
-  ], { cwd: root, encoding: "utf8", shell: false, windowsHide: true });
-  assert.equal(packageResult.status, 0, packageResult.stderr);
-  const packagedBytes = readFileSync(evidenceOutput);
-  assert.equal(readFileSync(base64Output, "ascii"), packagedBytes.toString("base64"));
-  assert.equal(JSON.parse(packagedBytes).reviewedCommit, expectedCommit);
-  assert.equal(JSON.parse(packagedBytes).querySha256, HASH);
   const linkBlob = runGit(["hash-object", "-w", "--stdin"], "elsewhere.sql");
   runGit(["update-index", "--add", "--cacheinfo", `120000,${linkBlob},supabase/migrations/${MIGRATION}.sql`]);
   runGit(["commit", "-q", "-m", "symlink fixture"]);

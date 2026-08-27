@@ -53,8 +53,8 @@ jobs:
           actual_reviewers="$(jq -c \
             '[.reviewers[]? | {type: .type, login: .reviewer.login}]' \
             <<<"$reviewer_rule")"
-          prevent_self_review="$(jq -r '.prevent_self_review // true' <<<"$reviewer_rule")"
-          can_admins_bypass="$(jq -r '.can_admins_bypass // true' <<<"$environment_json")"
+          prevent_self_review="$(jq -r 'if .prevent_self_review == null then true else .prevent_self_review end' <<<"$reviewer_rule")"
+          can_admins_bypass="$(jq -r 'if .can_admins_bypass == null then true else .can_admins_bypass end' <<<"$environment_json")"
           protected_branches="$(jq -r '.deployment_branch_policy.protected_branches // false' <<<"$environment_json")"
           if [[ "$actual_reviewers" != "$expected_reviewer" || \
                 "$prevent_self_review" != "false" || \

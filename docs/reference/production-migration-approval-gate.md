@@ -71,20 +71,17 @@ Repeat this proof whenever the Codex GitHub credential is replaced or its permis
 ## Human-dispatched migration review attestation
 
 Before merging a migration PR, run the repository's trusted migration review wrapper against the
-clean exact PR head. After both required `gpt-5.6-sol`/high reviewer charters return clean, package
-their two machine-verdict captures with
-`scripts/package-production-migration-review-evidence.mjs`. The packager reads the committed regular
-Git blob, binds the evidence to that PR-head commit and SQL SHA-256, rejects failed or duplicate
-verdict tokens, and produces JSON plus a base64 copy. Mason inspects the JSON. After the PR merges,
+clean exact PR head. After both required `gpt-5.6-sol`/high reviewer charters return clean, the
+trusted wrapper itself writes JSON plus a base64 copy of the two machine-verdict captures. It does
+so only after its unchanged-content check and only when the migration is a committed regular Git
+blob, binding the evidence to that PR-head commit and SQL SHA-256. Mason inspects the JSON. After the PR merges,
 Codex gives Mason the exact five workflow inputs: current-main commit, reviewed PR-head commit,
 migration stem, migration SHA-256, and the packaged review evidence in base64. Mason enters those
 inputs and presses **Run workflow** in GitHub's website.
 
-The preparation sequence is two separate commands: first the existing exact migration-review
-producer, then the evidence packager. The packager accepts only the migration name, discovers the
-two producer-named captures itself, requires both to be less than 30 minutes old, and writes a
-`.json` file for Mason to inspect plus a `.b64` file for the workflow input. It refuses to overwrite
-either output. Do not hand-author or edit either evidence file.
+The preparation sequence is one exact invocation of the existing migration-review producer. The
+wrapper writes a `.json` file for Mason to inspect plus a `.b64` file for the workflow input and
+refuses to overwrite either output. Do not hand-author or edit either evidence file.
 
 That manual dispatch is the durable review attestation. It is a meaningful capability boundary
 because the Codex token has Actions read-only and therefore cannot create the event. The production

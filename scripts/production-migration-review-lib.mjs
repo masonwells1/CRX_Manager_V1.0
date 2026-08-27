@@ -31,7 +31,10 @@ export function parseReviewEvidence(bytes, expected) {
   if (evidence.migrationName !== expected.migrationName || evidence.reviewedCommit !== expected.reviewedCommit || evidence.querySha256 !== expected.queryHash) {
     throw new Error("review evidence is not bound to the requested commit and migration bytes");
   }
-  if (!Number.isFinite(Date.parse(evidence.generatedAt))) throw new Error("review evidence timestamp is invalid");
+  const generatedAt = Date.parse(evidence.generatedAt);
+  if (!Number.isFinite(generatedAt) || generatedAt > Date.now() + 5_000 || Date.now() - generatedAt > 24 * 60 * 60 * 1000) {
+    throw new Error("review evidence must be no more than 24 hours old and not future-dated");
+  }
   if (!Array.isArray(evidence.reviews) || evidence.reviews.length !== REQUIRED_REVIEWERS.length) {
     throw new Error("review evidence must contain exactly the two required reviewer charters");
   }
