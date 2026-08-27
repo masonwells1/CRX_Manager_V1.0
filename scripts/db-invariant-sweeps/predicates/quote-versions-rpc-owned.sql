@@ -516,7 +516,7 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
       AND p.prosecdef
       AND r.rolbypassrls
       AND NOT (n.nspname = 'public' AND p.proname = '_create_quote_version_owner_impl')
-      -- 20260825190000 adds a deliberately narrow second writer: after the
+      -- 20260826220000 adds a deliberately narrow second writer: after the
       -- owner-only implementation has constructed a fresh snapshot, the public
       -- create wrapper can set only that row's null trust marker. Do not exempt
       -- by name: any signature, definer, owner, search_path, browser-grant, or
@@ -792,7 +792,7 @@ SELECT 'restore_quote_version:route-pinned' AS violation_key,
          || coalesce((SELECT length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))::text || '/' || md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))
                         FROM pg_proc p
                        WHERE p.oid = to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)')), 'signature unresolvable')
-         || ' — an intentionally reviewed re-emission must update this pin, the 20260825190000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
+         || ' — an intentionally reviewed re-emission must update this pin, the 20260826220000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
  WHERE NOT EXISTS (
    SELECT 1 FROM pg_proc p
    WHERE p.oid = to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)')
@@ -807,7 +807,7 @@ SELECT '_create_quote_version_owner_impl:body-pinned' AS violation_key,
          || coalesce((SELECT length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))::text || '/' || md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))
                         FROM pg_proc p
                        WHERE p.oid = to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)')), 'signature unresolvable')
-         || ' — an intentionally reviewed re-emission must update this pin, the 20260825190000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
+         || ' — an intentionally reviewed re-emission must update this pin, the 20260826220000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
  WHERE NOT EXISTS (
    SELECT 1 FROM pg_proc p
    WHERE p.oid = to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)')
@@ -822,7 +822,7 @@ SELECT '_restore_quote_version_owner_impl:body-pinned' AS violation_key,
          || coalesce((SELECT length(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))::text || '/' || md5(btrim(regexp_replace(p.prosrc, '\s+', ' ', 'g')))
                         FROM pg_proc p
                        WHERE p.oid = to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)')), 'signature unresolvable')
-         || ' — an intentionally reviewed re-emission must update this pin, the 20260825190000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
+         || ' — an intentionally reviewed re-emission must update this pin, the 20260826220000 migration pins, and quoteVersionWriteBoundary.test.ts in the same change' AS reason
  WHERE NOT EXISTS (
    SELECT 1 FROM pg_proc p
    WHERE p.oid = to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)')
