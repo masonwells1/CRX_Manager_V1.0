@@ -20,6 +20,7 @@ import { downloadYearEndSummaryPdf, downloadBatchYearEndSummaries } from '../lib
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import { localToday, formatLocalDate, parseLocalDate } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
+import { getRecognizedInvoiceCustomerIds } from '../lib/recognizedInvoiceCustomers';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
   ChemicalHistoryRow, CommissionBalanceRow, InventoryCostRow,
@@ -441,16 +442,9 @@ export default function Reports() {
     setYeLoading(true);
     try {
       if (yeBatchMode) {
-        // Batch: get all customers with invoices for this season
-        const { data: custIds, error: custErr } = await supabase
-          .from('invoices')
-          .select('customer_id')
-          .eq('season', season)
-          .in('status', ['posted', 'overdue', 'paid'])
-          .is('deleted_at', null);
-        if (custErr) throw custErr;
-
-        const discoveredIds = [...new Set((custIds || []).map((r) => r.customer_id))];
+        // Batch: page through every recognized invoice so the API row cap cannot
+        // silently omit customers as the season grows.
+        const discoveredIds = await getRecognizedInvoiceCustomerIds(season);
         if (discoveredIds.length === 0) {
           toast('info', `No customers have invoices for season ${season}`);
           setYeLoading(false);

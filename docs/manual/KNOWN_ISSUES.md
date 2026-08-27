@@ -164,6 +164,17 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ## OPEN 2026-08-26 — the quote-version trust chain is whole-body hash-pinned in THREE files; any re-emission must update every pin site in the same change
 
+**Apply-order dependency with the PR #361 successor:** the merged-but-unapplied
+`20260826220000_quote_version_restore_trust_boundary.sql` must apply before the five pending
+`20260827041000`–`20260827041400` return-credit migrations. Reversing that order would move the
+high-water past the quote security migration and wedge it again. If the quote migration cannot apply
+first, it must be renumbered above the new high-water before either chain is released.
+
+**Non-restocked return policy:** damaged or otherwise non-restocked returns still refund the customer,
+but intentionally reverse zero COGS because no saleable inventory value returned to Crop RX. This is
+the conservative direction: revenue falls while profit is not inflated by an inventory-value reversal.
+The disposable PR #361 proof executes this branch and pins the credit to `-1000` revenue and `0` cost.
+
 PR #401 rounds 8-10 pinned the ENTIRE normalized bodies (length + md5, normalization
 `md5(btrim(regexp_replace(prosrc, '\s+', ' ', 'g')))`) of all five chain routines —
 `create_quote_version`, `_restore_quote_version_below_cost_impl_20260810`,

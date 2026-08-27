@@ -25,6 +25,7 @@ import StatementPrintDialog from '../components/statements/StatementPrintDialog'
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import type { DetailedStatementData, StatementOptions, YearEndSummaryData } from '../types';
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
+import { getRecognizedInvoiceCustomerIds } from '../lib/recognizedInvoiceCustomers';
 
 interface PeriodInfo {
   id?: string;
@@ -372,16 +373,9 @@ export default function MonthEndClose() {
   const handleGenerateYearEnd = async (season: number, options: YearEndSummaryOptions) => {
     setYeLoading(true);
     try {
-      // Get all customers with invoices for this season
-      const { data: custIds, error: custErr } = await supabase
-        .from('invoices')
-        .select('customer_id')
-        .eq('season', season)
-        .in('status', ['posted', 'overdue', 'paid'])
-        .is('deleted_at', null);
-      if (custErr) throw custErr;
-
-      const uniqueIds = [...new Set((custIds || []).map((r) => r.customer_id))];
+      // Page through every recognized invoice so the API row cap cannot
+      // silently omit customers as the season grows.
+      const uniqueIds = await getRecognizedInvoiceCustomerIds(season);
       if (uniqueIds.length === 0) {
         toast('info', `No customers have invoices for season ${season}`);
         setYeLoading(false);

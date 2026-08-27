@@ -347,6 +347,7 @@ const expectedProofs = [
   'RECEIVED_SOURCE_UNIT_GUARD_REMOVAL_DETECTED',
   'PREFLIGHT_OVERLOAD_COLLISION_REJECTED',
   'POSTFLIGHT_OVERLOAD_COLLISION_REJECTED',
+  'NON_RESTOCKED_RETURN_ZERO_COGS_PROVEN',
   'SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED',
   'SOURCE_POST_AFTER_CREDIT_REJECTED',
   'SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED',
@@ -859,6 +860,62 @@ try {
   copy(ORDER_INVOICE_GATE_CANDIDATE, path.basename(ORDER_INVOICE_GATE_CANDIDATE));
   apply(path.basename(ORDER_INVOICE_GATE_CANDIDATE));
   migrations.push(ORDER_INVOICE_GATE_CANDIDATE);
+
+  // A damaged/non-restocked return still refunds the customer, but it does not
+  // bring saleable inventory value back. Prove the credit reverses revenue and
+  // deliberately leaves COGS at zero rather than inflating profit.
+  const damagedReturn = concurrencyFixture(9);
+  const damagedReturnSql = damagedReturn.sql.replace(
+    "'unopened', true, true, 0",
+    "'damaged', false, false, 0",
+  );
+  assert.notEqual(damagedReturnSql, damagedReturn.sql, 'damaged-return fixture did not disable restocking');
+  psql(`
+    BEGIN;
+    ${damagedReturnSql}
+    SELECT set_config(
+      'request.jwt.claims',
+      '{"sub":"00000000-0000-4000-8000-000000000081","role":"authenticated"}',
+      true
+    );
+    DO $damaged_return$
+    DECLARE
+      v_result jsonb;
+      v_credit_id uuid;
+      v_total_amount bigint;
+      v_total_cost bigint;
+      v_line_cost_effect bigint;
+    BEGIN
+      v_result := public.issue_return_credit(
+        '${damagedReturn.ids.return}',
+        '00000000-0000-4000-8000-000000000081',
+        'smk-rcc-damaged-no-restock'
+      );
+      v_credit_id := (v_result ->> 'credit_invoice_id')::uuid;
+      IF v_credit_id IS NULL THEN
+        RAISE EXCEPTION 'NON_RESTOCKED_RETURN_MISSING_CREDIT';
+      END IF;
+      IF (v_result ->> 'cogs_reversed_cents')::bigint <> 0 THEN
+        RAISE EXCEPTION 'NON_RESTOCKED_RETURN_REVERSED_COGS';
+      END IF;
+      SELECT i.total_amount_cents, i.total_cost_cents,
+             COALESCE(SUM(ii.cost_cents * ii.quantity), 0)::bigint
+        INTO v_total_amount, v_total_cost, v_line_cost_effect
+      FROM public.invoices i
+      LEFT JOIN public.invoice_items ii ON ii.invoice_id = i.id
+      WHERE i.id = v_credit_id
+      GROUP BY i.total_amount_cents, i.total_cost_cents;
+      IF v_total_amount IS DISTINCT FROM -1000 THEN
+        RAISE EXCEPTION 'NON_RESTOCKED_RETURN_REVENUE_DRIFT:%', v_total_amount;
+      END IF;
+      IF v_total_cost IS DISTINCT FROM 0 OR v_line_cost_effect IS DISTINCT FROM 0 THEN
+        RAISE EXCEPTION 'NON_RESTOCKED_RETURN_COST_DRIFT:header=%,lines=%', v_total_cost, v_line_cost_effect;
+      END IF;
+    END;
+    $damaged_return$;
+    ROLLBACK;
+  `);
+  completedProofs.add('NON_RESTOCKED_RETURN_ZERO_COGS_PROVEN');
 
   const orderGateFixture = (suffix, allocated) => `
     BEGIN;

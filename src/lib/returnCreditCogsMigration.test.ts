@@ -29,6 +29,7 @@ const orderInvoiceGateMigration = readFileSync(
 const migrationHistory = readFileSync('docs/reference/migration-history.md', 'utf8');
 const reportsPage = readFileSync('src/pages/Reports.tsx', 'utf8');
 const monthEndPage = readFileSync('src/pages/MonthEndClose.tsx', 'utf8');
+const recognizedInvoiceCustomers = readFileSync('src/lib/recognizedInvoiceCustomers.ts', 'utf8');
 const customerDetailPage = readFileSync('src/pages/CustomerDetail.tsx', 'utf8');
 const returnCreditSmoke = readFileSync('scripts/smoke/smoke-return-credit-chain.sql', 'utf8');
 
@@ -212,9 +213,12 @@ describe('return-credit COGS migration', () => {
   });
 
   it('selects paid and overdue customers in both year-end batch callers', () => {
+    expect(recognizedInvoiceCustomers).toContain(".in('status', ['posted', 'overdue', 'paid'])");
+    expect(recognizedInvoiceCustomers).not.toContain(".in('status', ['posted', 'voided'])");
+    expect(recognizedInvoiceCustomers).toContain(".order('id', { ascending: true })");
+    expect(recognizedInvoiceCustomers).toContain('.range(from, to)');
     for (const source of [reportsPage, monthEndPage]) {
-      expect(source).toContain(".in('status', ['posted', 'overdue', 'paid'])");
-      expect(source).not.toContain(".in('status', ['posted', 'voided'])");
+      expect(source).toContain('getRecognizedInvoiceCustomerIds(season)');
     }
     expect(reportsPage).toContain("toast('error', sanitizeError(err))");
     const assignedCustomerQuery = reportsPage.match(

@@ -14,6 +14,11 @@ the delivery, dashboard, and order invoice gates all use the same active, non-de
 intersection. Void and unapply wrappers clear their narrow trigger-bypass settings on both success and
 failure before rethrowing an error.
 
+Damaged or otherwise non-restocked returns still reverse the customer's revenue but intentionally
+reverse zero COGS because no saleable inventory value returned. Batch year-end customer discovery now
+paginates through every recognized invoice, so the API's per-response row cap cannot silently omit a
+customer from the run.
+
 No migration was applied to production by this repository change. The fresh read-only production
-schema must pass the 45-signal disposable PostgreSQL proof, exact-SHA adversarial reviews, the governed
+schema must pass the 46-signal disposable PostgreSQL proof, exact-SHA adversarial reviews, the governed
 migration review, and a fresh live ledger high-water check before the separately approved live apply.
