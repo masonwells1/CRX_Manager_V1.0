@@ -497,7 +497,6 @@ function ghApiMergeRequest(command) {
   }
   let method = "GET";
   let endpoint = "";
-  let matchHead = "";
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (word === "-X" || word === "--method") {
@@ -513,16 +512,7 @@ function ghApiMergeRequest(command) {
       method = word.slice(2).toUpperCase();
       continue;
     }
-    if (["-f", "-F", "--field", "--raw-field"].includes(word)) {
-      const field = String(words[index + 1] || "");
-      if (/^sha=/i.test(field)) matchHead = field.slice(field.indexOf("=") + 1);
-      index += 1;
-      continue;
-    }
-    if (/^--(?:field|raw-field)=sha=/i.test(word)) {
-      matchHead = word.replace(/^--(?:field|raw-field)=sha=/i, "");
-      continue;
-    }
+    if (["-f", "-F", "--field", "--raw-field"].includes(word)) { index += 1; continue; }
     const normalizedEndpoint = word
       .replace(/^https:\/\/api\.github\.com\//i, "")
       .replace(/^\//, "");
@@ -531,8 +521,7 @@ function ghApiMergeRequest(command) {
     }
   }
   if (method !== "PUT" || !endpoint) return null;
-  const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
-  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false, matchHead, atomicHeadMatch: true } : null;
+  return { unsupportedRest: true };
 }
 
 function ghApiMutates(command) {
@@ -829,6 +818,9 @@ export function evaluateProductionAction({
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     if (ghRequest?.unsupportedGraphql) {
       return denied("CODEX PRODUCTION GATE: GraphQL merge/auto-merge mutations are denied because the guard cannot safely resolve and verify their exact PR head/checks. Use `gh pr merge <number> --match-head-commit <head-sha>` instead.");
+    }
+    if (ghRequest?.unsupportedRest) {
+      return denied("CODEX PRODUCTION GATE: GitHub REST merge calls are denied because file-backed request bodies can hide or override the expected head SHA. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
     }
     if (ghRequest) {
       if (commandSegments.length !== 1) {

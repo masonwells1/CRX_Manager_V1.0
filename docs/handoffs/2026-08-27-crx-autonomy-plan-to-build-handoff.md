@@ -52,6 +52,8 @@ Mason explicitly requested more Codex working room and authorized addressing unn
 
 ## GATES AND BLOCKERS
 
+- Exact-head review of `01147bea` found that a GitHub REST merge could combine a visible SHA with an uninspected file-backed body that overrides it. REST merges now deny unconditionally; autonomous delivery retains only the standalone, explicit `gh pr merge ... --match-head-commit ...` path.
+
 - Do not edit product-data-model plans, migrations/RPCs, or product-model tests.
 - Do not absorb the separate `codex/migration-approval-gate` worktree; live migration approval behavior is outside this tranche.
 - Do not change branch protection or business safety rules.

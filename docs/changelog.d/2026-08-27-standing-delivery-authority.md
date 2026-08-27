@@ -63,6 +63,11 @@ the numeric PR, `owner/repo`, and exact 40-character head SHA. Repository/host e
 overrides are denied. The documented ship, rollback, and `land-pr` commands emit that complete
 form, so autonomous delivery remains one agent-owned command with no Mason prompt.
 
+The final exact-head review removed GitHub REST merges from the permitted route. A file-backed
+REST request body could hide or override a visible SHA field, so REST merges now deny
+unconditionally. Autonomous delivery retains the single literal, standalone `gh pr merge`
+command with an explicit repository, PR number, and `--match-head-commit` SHA.
+
 Proof run: focused autopilot, prompt, hold, Claude/Codex merge-guard, and global risky-phrase
 tests; full correction-guard and agent-workflow suites; lint, typecheck, build, docs check, sync,
 and mutation tests. No business safety rule, branch protection, product model, migration, RPC,

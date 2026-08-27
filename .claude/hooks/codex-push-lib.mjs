@@ -2132,9 +2132,10 @@ export function ghMergeRequest(command) {
   return { selector, repo, auto, matchHead, atomicHeadMatch: true };
 }
 
-// `gh api -X PUT repos/o/r/pulls/N/merge`, plus GraphQL operations that either
-// merge a PR now or arm auto-merge for a future head (unresolvable → caller
-// must deny). The `api` subcommand is found by
+// GitHub API operations that merge a PR now or arm auto-merge for a future
+// head are unresolvable and must be denied by the caller. REST merge bodies can
+// be supplied from files and override visible fields, so only `gh pr merge`
+// with `--match-head-commit` is supported. The `api` subcommand is found by
 // word-scan, NOT by position — global flags may sit between `gh` and `api`
 // (`gh -R o/r api graphql ...` — Codex round-5 finding on this guard's own PR:
 // the position-anchored `gh\s+api` regex let that exact form pass ungated).
@@ -2158,25 +2159,17 @@ export function ghApiMergeRequest(command) {
   }
   let method = "GET";
   let endpoint = "";
-  let matchHead = "";
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (word === "-X" || word === "--method") { method = String(words[index + 1] || "").toUpperCase(); index += 1; continue; }
     if (word.startsWith("--method=")) { method = word.slice("--method=".length).toUpperCase(); continue; }
     if (/^-X\S+/i.test(word)) { method = word.slice(2).toUpperCase(); continue; }
-    if (["-f", "-F", "--field", "--raw-field"].includes(word)) {
-      const field = String(words[index + 1] || "");
-      if (/^sha=/i.test(field)) matchHead = field.slice(field.indexOf("=") + 1);
-      index += 1;
-      continue;
-    }
-    if (/^--(?:field|raw-field)=sha=/i.test(word)) matchHead = word.replace(/^--(?:field|raw-field)=sha=/i, "");
+    if (["-f", "-F", "--field", "--raw-field"].includes(word)) { index += 1; continue; }
     const normalizedEndpoint = word.replace(/^https:\/\/api\.github\.com\//i, "").replace(/^\//, "");
     if (/^repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/i.test(normalizedEndpoint)) endpoint = normalizedEndpoint;
   }
   if (method !== "PUT" || !endpoint) return null;
-  const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
-  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false, matchHead, atomicHeadMatch: true } : null;
+  return { unsupportedRest: true };
 }
 
 // MCP merge tool inputs — key spellings differ per connector (GitHub MCP uses

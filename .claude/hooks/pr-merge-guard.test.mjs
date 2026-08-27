@@ -39,9 +39,10 @@ ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge --repo o/r --matc
 ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge 42 --match-head-commit 0123456789012345678901234567890123456789")), "current-repository merges are not explicit");
 
 // ── ghApiMergeRequest ────────────────────────────────────────────────────────
-eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge"), { selector: "12", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: true }, "REST merge endpoint parses");
-eq(ghApiMergeRequest("gh api --method=PUT https://api.github.com/repos/o/r/pulls/3/merge"), { selector: "3", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: true }, "full-URL + --method= parses");
-eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge -f sha=0123456789012345678901234567890123456789"), { selector: "12", repo: "o/r", auto: false, matchHead: "0123456789012345678901234567890123456789", atomicHeadMatch: true }, "REST atomic head SHA parses");
+ok(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge")?.unsupportedRest, "REST merge endpoint is unsupported");
+ok(ghApiMergeRequest("gh api --method=PUT https://api.github.com/repos/o/r/pulls/3/merge")?.unsupportedRest, "full-URL REST merge is unsupported");
+ok(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge -f sha=0123456789012345678901234567890123456789")?.unsupportedRest, "REST merge with visible SHA remains unsupported");
+ok(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge --input payload.json -f sha=0123456789012345678901234567890123456789")?.unsupportedRest, "file-backed REST body cannot override a visible SHA");
 eq(ghApiMergeRequest("gh api repos/o/r/pulls/12"), null, "non-merge endpoint ignored");
 ok(ghApiMergeRequest("gh api graphql -f query='mutation { mergePullRequest(input: {}) }'")?.unsupportedGraphql, "GraphQL merge flagged unresolvable");
 ok(ghApiMergeRequest("gh -R o/r api graphql -f query='mutation { mergePullRequest(input: {}) }'")?.unsupportedGraphql, "GraphQL merge with global flags between gh and api still flagged — Codex round-5");
@@ -49,7 +50,7 @@ ok(ghApiMergeRequest("gh api graphql -f query='mutation { enablePullRequestAutoM
 ok(ghApiMergeRequest("gh api graphql --input payload.json")?.fileBackedBody, "file-backed GraphQL input denies as uninspectable");
 ok(ghApiMergeRequest("gh api graphql -F query=@mutation.graphql")?.fileBackedBody, "file-backed GraphQL query field denies as uninspectable");
 ok(ghApiMergeRequest("gh api graphql --field=query=@mutation.graphql")?.fileBackedBody, "equals-form file-backed GraphQL query denies as uninspectable");
-eq(ghApiMergeRequest("gh -R o/r api -X PUT repos/o/r/pulls/7/merge"), { selector: "7", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: true }, "REST merge with global flags between gh and api still parses");
+ok(ghApiMergeRequest("gh -R o/r api -X PUT repos/o/r/pulls/7/merge")?.unsupportedRest, "REST merge with global flags remains unsupported");
 eq(ghApiMergeRequest("curl -X PUT api.github.com/repos/o/r/pulls/12/merge"), null, "curl is not a gh api call (denied by the hook's raw-REST rule instead)");
 
 // ── mcpMergeRequest ──────────────────────────────────────────────────────────
@@ -94,6 +95,9 @@ ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL body denied b
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh api graphql -F query=@mutation.graphql" } });
 ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL query field denied before it can hide auto-merge");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh api -X PUT repos/o/r/pulls/12/merge --input payload.json -f sha=0123456789012345678901234567890123456789" } });
+ok(r.decision?.permissionDecision === "deny", "file-backed REST merge denied before it can override the visible SHA");
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "$verb='merge'; gh pr $verb 12 --squash --auto" } });
 ok(r.decision?.permissionDecision === "deny", "shell-expanded gh merge verb is denied before literal parsing");

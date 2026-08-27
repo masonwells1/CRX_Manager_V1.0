@@ -110,12 +110,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after selectorless/compound merge context was removed. Every merge
   // now names one PR, repository, and exact head in a standalone command; the
   // maintenance transform anchors remain unchanged.
-  codexGuard: "842bf5391f9c08a55feea52b89c8c1f6bfef1d44",
-  pushLib: "90ed89244890269292a033af80da302a0fed683f",
+  // Re-pinned after REST merge support was removed because file-backed request
+  // bodies can override visible SHA fields. The maintenance anchors are still
+  // unchanged.
+  codexGuard: "b31476bbaf931d2e72725aa8f4d9541e6ffe9fb3",
+  pushLib: "aeab7dd66fabfcec74c21360605655a577fd9848",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "569f3a70d9280a93b42eed2820718b2a45b2b6c4",
-  pushLib: "90ed89244890269292a033af80da302a0fed683f",
+  codexGuard: "8504643244907123b3dbb657dce81f72882a654c",
+  pushLib: "aeab7dd66fabfcec74c21360605655a577fd9848",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

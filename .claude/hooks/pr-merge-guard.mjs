@@ -77,6 +77,9 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     if (api?.unsupportedGraphql) {
       deny("PR MERGE GATE: GraphQL merge/auto-merge mutations are denied because the guard cannot safely resolve and verify the PR's exact head/checks. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
     }
+    if (api?.unsupportedRest) {
+      deny("PR MERGE GATE: GitHub REST merge calls are denied because file-backed request bodies can hide or override the expected head SHA. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
+    }
     const found = api || ghMergeRequest(segment);
     if (found) { requests.push(found); continue; }
     // Raw REST merges outside gh — curl/wget/Invoke-RestMethod/node fetch — name

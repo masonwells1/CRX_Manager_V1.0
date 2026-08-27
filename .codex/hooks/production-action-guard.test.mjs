@@ -636,14 +636,14 @@ try {
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
-  }).blocked, false, "gh API merge route uses the same green-CI and proof gate");
+  }).blocked, true, "REST merge route is unsupported even with a visible exact-head sha");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `gh api -X PUT https://api.github.com/repos/crop/crx/pulls/123/merge -f merge_method=squash -f sha=${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
-  }).blocked, false, "full-URL gh API merge route uses the same gate");
+  }).blocked, true, "full-URL REST merge route is unsupported");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh api -X PUT repos/crop/crx/pulls/123/merge -f merge_method=squash" },
@@ -651,6 +651,13 @@ try {
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, true, "REST merge without atomic sha denies");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh api -X PUT repos/crop/crx/pulls/123/merge --input payload.json -f sha=${risky.sha}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "file-backed REST merge cannot override a visible exact-head sha");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh api graphql -f query='mutation{mergePullRequest(input:{pullRequestId:\"PR_1\"}){pullRequest{id}}}'" },
