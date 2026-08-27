@@ -436,6 +436,7 @@ DECLARE
   v_return record; v_item record; v_cached jsonb; v_result jsonb;
   v_restocked_qty numeric := 0; v_restocked_count int := 0;
   v_actor uuid := auth.uid();
+  v_source_delivery_id uuid;
   v_inventory_unit text;
   v_product_inventory_unit text;
   v_container_size numeric;
@@ -448,9 +449,67 @@ BEGIN
     v_cached := public.check_idempotency(p_idempotency_key, 'receive_return');
     IF v_cached IS NOT NULL THEN RETURN v_cached; END IF;
   END IF;
-  SELECT id, return_number, status, customer_id INTO v_return FROM public.returns WHERE id = p_return_id FOR UPDATE;
+  SELECT id, return_number, status, customer_id, order_id INTO v_return FROM public.returns WHERE id = p_return_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'RETURN_NOT_FOUND'; END IF;
   IF v_return.status <> 'approved' THEN RAISE EXCEPTION 'RETURN_NOT_APPROVED:%', v_return.status; END IF;
+
+  -- Serialize receipt against every delivery that can back this return. Delivery
+  -- void/cancel locks the same row first, so whichever operation wins forces the
+  -- loser to re-read the committed delivery state before changing inventory.
+  -- The one pinned source-free legacy RMA has no order_id and is handled by its
+  -- exact item/product/unit compatibility branch below.
+  IF v_return.order_id IS NOT NULL THEN
+    IF EXISTS (
+      SELECT 1 FROM public.return_items ri
+      WHERE ri.return_id = p_return_id
+        AND ri.order_item_id IS NULL
+    ) THEN
+      RAISE EXCEPTION 'RETURN_SOURCE_DELIVERY_AMBIGUOUS';
+    END IF;
+
+    FOR v_source_delivery_id IN
+      SELECT d.id
+      FROM public.deliveries d
+      WHERE d.order_id = v_return.order_id
+        AND d.deleted_at IS NULL
+        AND EXISTS (
+          SELECT 1
+          FROM public.delivery_items di
+          JOIN public.return_items ri
+            ON ri.return_id = p_return_id
+           AND ri.order_item_id = di.order_item_id
+          WHERE di.delivery_id = d.id
+        )
+      ORDER BY d.id
+    LOOP
+      PERFORM 1
+      FROM public.deliveries d
+      WHERE d.id = v_source_delivery_id
+      FOR UPDATE;
+    END LOOP;
+
+    IF EXISTS (
+      SELECT 1
+      FROM public.return_items ri
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(di.quantity_delivered), 0) AS delivered_quantity
+        FROM public.deliveries d
+        JOIN public.delivery_items di ON di.delivery_id = d.id
+        WHERE d.order_id = v_return.order_id
+          AND d.status = 'completed'
+          AND d.deleted_at IS NULL
+          AND di.order_item_id = ri.order_item_id
+      ) backed ON true
+      WHERE ri.return_id = p_return_id
+        AND (
+          ri.order_item_id IS NULL
+          OR backed.delivered_quantity < ri.quantity
+        )
+    ) THEN
+      RAISE EXCEPTION 'RETURN_SOURCE_DELIVERY_NOT_COMPLETED';
+    END IF;
+  END IF;
+
   IF EXISTS (
     SELECT 1
     FROM public.return_items ri
@@ -1175,7 +1234,7 @@ DECLARE
     '_issue_return_credit_header_only_impl_20260825', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
     '_issue_return_credit_impl', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612',
     '_receive_return_impl_before_inventory_seed_20260825', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
-    '_receive_return_impl_20260714', '12d48d1c9e6c2452720afa967d84bbeb9b5b0bcb85f3b02382e1c68bfead1b31',
+    '_receive_return_impl_20260714', '150b7ad4f001929baecc73078c181de092477ced7b3a4b3f85bfb2d9438dd789',
     'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
     '_issue_return_credit_intent_impl_20260812', '55607c6dae0cc11f4837f67c54de88a6f4d83413cd3686e04c21bf33afa4ffa5',
     'receive_return', '80873cb93b67293a811f6be91efb224f7f4dd085fa8c4282267336be430b8b6a',

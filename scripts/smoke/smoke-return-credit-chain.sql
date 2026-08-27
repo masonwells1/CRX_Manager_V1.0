@@ -70,6 +70,7 @@ DECLARE
   v_backdated_source_id uuid;
   v_rounding_order_id uuid;
   v_rounding_order_item_id uuid;
+  v_rounding_delivery_id uuid;
   v_order_item_1 uuid;
   v_order_item_2 uuid;
   v_order_item_3 uuid;
@@ -638,6 +639,37 @@ BEGIN
     IF v_reason NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE EXCEPTION 'SMOKE_FAIL: approve mismatch raised %', v_reason; END IF;
   END;
 
+  -- An approved return owns its delivered-lineage reservation. Reversing the
+  -- delivery first and receiving later would otherwise restore the same stock
+  -- twice. Both delivery paths must refuse before making any mutation.
+  BEGIN
+    PERFORM void_delivery(
+      v_delivery_id, 'smoke approved-return delivery guard', v_admin,
+      'smk-rcc-' || v_suffix || '-void-delivery-before-receive'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: delivery with an approved return was voided';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'DELIVERY_HAS_RECEIVED_RETURN%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected approved-return delivery void rejection, got %', v_reason;
+    END IF;
+  END;
+  BEGIN
+    PERFORM cancel_delivery(
+      v_delivery_id, 'smoke approved-return delivery guard', v_admin,
+      'smk-rcc-' || v_suffix || '-cancel-delivery-before-receive'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: delivery with an approved return was cancelled';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'DELIVERY_HAS_RECEIVED_RETURN%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected approved-return delivery cancel rejection, got %', v_reason;
+    END IF;
+  END;
+  RAISE NOTICE 'DELIVERY_PENDING_RETURN_REVERSAL_GUARDS_PROVEN';
+
   -- Exercise the two other requested-stage wrappers without bypassing their
   -- public transition paths. These synthetic headers are transaction-local.
   PERFORM set_config('app.return_rpc', 'true', true);
@@ -676,6 +708,41 @@ BEGIN
   PERFORM set_config('app.admin_override', 'true', true);
   UPDATE orders SET status = 'partially_fulfilled' WHERE id = v_order_id;
   PERFORM set_config('app.admin_override', 'false', true);
+
+  -- Prove receive_return revalidates its physical source independently of the
+  -- delivery reversal guard. Simulate a pre-fix/concurrent reversal by moving
+  -- the delivery out of completed, confirm receipt fails without inventory,
+  -- then restore the disposable fixture for the canonical path.
+  PERFORM set_config('app.admin_override', 'true', true);
+  UPDATE deliveries SET status = 'voided' WHERE id = v_delivery_id;
+  PERFORM set_config('app.admin_override', 'false', true);
+  BEGIN
+    PERFORM receive_return(
+      v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-receive-after-delivery-reversal'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: approved return was received after source delivery reversal';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'RETURN_SOURCE_DELIVERY_NOT_COMPLETED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: reversed-delivery receipt guard raised %', v_reason;
+    END IF;
+  END;
+  SELECT count(*) INTO v_n FROM inventory
+  WHERE product_id = v_product_id AND location = 'Main Warehouse';
+  IF v_n <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected reversed-delivery receipt created warehouse inventory';
+  END IF;
+  SELECT status INTO v_status FROM returns WHERE id = v_return_id;
+  IF v_status IS DISTINCT FROM 'approved' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected reversed-delivery receipt changed return status to %', v_status;
+  END IF;
+  PERFORM set_config('app.admin_override', 'true', true);
+  PERFORM set_config('crx.delivery_completion_authorized', v_delivery_id::text, true);
+  UPDATE deliveries SET status = 'completed' WHERE id = v_delivery_id;
+  PERFORM set_config('crx.delivery_completion_authorized', '', true);
+  PERFORM set_config('app.admin_override', 'false', true);
+  RAISE NOTICE 'RETURN_RECEIPT_SOURCE_DELIVERY_REVALIDATION_PROVEN';
 
   -- --------------------------------------------------------------------
   -- 3. receive_return: approved -> received; restock 15 units
@@ -1888,6 +1955,29 @@ BEGIN
     v_rounding_order_id, v_product_id, '[SMOKE] RCC rounding product ' || v_suffix,
     30, 5.01, 1.25, 'gal', 37.50, 1.25, 0
   ) RETURNING id INTO v_rounding_order_item_id;
+
+  INSERT INTO deliveries (
+    delivery_number, order_id, customer_id, scheduled_date, status, created_by
+  ) VALUES (
+    'SMK-RCC-ROUND-D-' || v_suffix, v_rounding_order_id, v_customer_id,
+    current_date, 'scheduled', v_admin
+  ) RETURNING id INTO v_rounding_delivery_id;
+  INSERT INTO delivery_items (
+    delivery_id, order_item_id, product_id, quantity,
+    quantity_delivered, unit_size
+  ) VALUES (
+    v_rounding_delivery_id, v_rounding_order_item_id, v_product_id,
+    1.25, 1.25, 'gal'
+  );
+  PERFORM set_config('app.admin_override', 'true', true);
+  PERFORM set_config('crx.delivery_completion_authorized', v_rounding_delivery_id::text, true);
+  UPDATE deliveries
+     SET status = 'completed',
+         completed_at = now(),
+         signed_by = '[SMOKE] RCC Rounding Receiver'
+   WHERE id = v_rounding_delivery_id;
+  PERFORM set_config('crx.delivery_completion_authorized', '', true);
+  PERFORM set_config('app.admin_override', 'false', true);
 
   INSERT INTO invoices (
     invoice_number, customer_id, order_id, invoice_type, status, season,

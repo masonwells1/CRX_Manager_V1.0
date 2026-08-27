@@ -70,6 +70,17 @@ function assertInstalledFunctionHash(signature, expected) {
     `${signature} was not restored to its migration-pinned body`,
   );
 }
+function installReceiveIntentOrderHoldProbe() {
+  const signature = 'public._receive_return_intent_impl_20260812(uuid,uuid,text)';
+  const canonical = psqlValue(`SELECT pg_get_functiondef('${signature}'::regprocedure);`);
+  const probe = canonical.replace(
+    /(    WHERE o\.id = v_order_id AND o\.deleted_at IS NULL\r?\n    FOR UPDATE;\r?\n)/,
+    '$1    PERFORM pg_sleep(8);\n',
+  );
+  assert.notEqual(probe, canonical, 'receive intent order-hold probe did not instrument the real order lock');
+  psql(probe);
+  return canonical;
+}
 function copy(local, name) { docker(['cp', local, `${NAME}:/tmp/${name}`]); }
 function apply(name, user) { psql(`BEGIN;\n\\i /tmp/${name}\nCOMMIT;`, { user }); }
 function applyStandalone(name, user) { psql(`\\i /tmp/${name}`, { user }); }
@@ -166,6 +177,8 @@ function concurrencyFixture(slot) {
     return: `00000000-0000-4361-8006-0000000000${suffix}`,
     returnItem: `00000000-0000-4361-8007-0000000000${suffix}`,
     laterInvoice: `00000000-0000-4361-8008-0000000000${suffix}`,
+    delivery: `00000000-0000-4361-8009-0000000000${suffix}`,
+    deliveryItem: `00000000-0000-4361-8010-0000000000${suffix}`,
   };
   const marker = `pr361_concurrency_${suffix}`;
   return {
@@ -186,6 +199,20 @@ function concurrencyFixture(slot) {
       ) VALUES (
         '${ids.orderItem}', '${ids.order}', '${ids.product}', '[SMOKE] PR361 concurrency product ${suffix}',
         10, 5, 1, 10, 5, 50, 1, 0, 'gal'
+      );
+      INSERT INTO public.deliveries (
+        id, delivery_number, order_id, customer_id, scheduled_date,
+        status, completed_at, created_by
+      ) VALUES (
+        '${ids.delivery}', 'SMK-RCC-CONC-D-${suffix}', '${ids.order}', '${ids.customer}',
+        current_date, 'completed', now(), '00000000-0000-4000-8000-000000000081'
+      );
+      INSERT INTO public.delivery_items (
+        id, delivery_id, order_item_id, product_id, quantity,
+        quantity_delivered, unit_size
+      ) VALUES (
+        '${ids.deliveryItem}', '${ids.delivery}', '${ids.orderItem}', '${ids.product}',
+        1, 1, 'gal'
       );
       INSERT INTO public.invoices (
         id, invoice_number, customer_id, order_id, invoice_type, status,
@@ -250,6 +277,297 @@ function concurrencyFixture(slot) {
     `,
     sourceVoidSql: `UPDATE public.invoices SET deleted_at = now() WHERE id = '${ids.sourceInvoice}';`,
   };
+}
+
+function deliveryReturnRaceFixture(slot, operation) {
+  const suffix = String(slot).padStart(2, '0');
+  const ids = {
+    product: `00000000-0000-4362-8000-0000000000${suffix}`,
+    customer: `00000000-0000-4362-8001-0000000000${suffix}`,
+    order: `00000000-0000-4362-8002-0000000000${suffix}`,
+    orderItem: `00000000-0000-4362-8003-0000000000${suffix}`,
+    delivery: `00000000-0000-4362-8004-0000000000${suffix}`,
+    deliveryItem: `00000000-0000-4362-8005-0000000000${suffix}`,
+  };
+  const marker = `pr509_${operation}_create_return_${suffix}`;
+  const actor = '00000000-0000-4000-8000-000000000081';
+  return {
+    ids,
+    marker,
+    sql: `
+      SET session_replication_role = replica;
+      INSERT INTO public.customers (id, farm_name)
+      VALUES ('${ids.customer}', '[SMOKE] PR509 ${operation} race ${suffix}');
+      INSERT INTO public.products (id, product_name, current_cost, unit_size, inventory_unit)
+      VALUES ('${ids.product}', '[SMOKE] PR509 ${operation} race product ${suffix}', 5.00, 'gal', 'gal');
+      INSERT INTO public.orders (id, order_number, customer_id, salesman_id, status)
+      VALUES ('${ids.order}', 'SMK-RCC-${operation.toUpperCase()}-${suffix}', '${ids.customer}', '${actor}', 'confirmed');
+      INSERT INTO public.order_items (
+        id, order_id, product_id, product_name, price_per_unit, cost_per_unit,
+        total_units_needed, total_price, profit, net_margin,
+        quantity_delivered, quantity_remaining, unit_size
+      ) VALUES (
+        '${ids.orderItem}', '${ids.order}', '${ids.product}', '[SMOKE] PR509 ${operation} race product ${suffix}',
+        10, 5, 1, 10, 5, 50, 1, 0, 'gal'
+      );
+      INSERT INTO public.deliveries (
+        id, delivery_number, order_id, customer_id, scheduled_date,
+        status, completed_at, signed_by, created_by
+      ) VALUES (
+        '${ids.delivery}', 'SMK-RCC-${operation.toUpperCase()}-D-${suffix}', '${ids.order}', '${ids.customer}',
+        current_date, 'completed', now(), '[SMOKE] PR509 Race Receiver', '${actor}'
+      );
+      INSERT INTO public.delivery_items (
+        id, delivery_id, order_item_id, product_id, quantity,
+        quantity_delivered, unit_size
+      ) VALUES (
+        '${ids.deliveryItem}', '${ids.delivery}', '${ids.orderItem}', '${ids.product}',
+        1, 1, 'gal'
+      );
+      INSERT INTO public.inventory (
+        product_id, location, quantity_available, quantity_prebooked
+      ) VALUES ('${ids.product}', 'Main Warehouse', 10, 0);
+      SET session_replication_role = origin;
+    `,
+    createReturnSql: `
+      BEGIN;
+      SELECT 1 FROM public.orders WHERE id = '${ids.order}' FOR UPDATE;
+      SELECT 1 FROM public.order_items WHERE id = '${ids.orderItem}' FOR UPDATE;
+      SELECT '${marker}', pg_sleep(8);
+      SELECT set_config(
+        'request.jwt.claims',
+        '{"sub":"${actor}","role":"authenticated"}',
+        true
+      );
+      SELECT public.create_return(
+        jsonb_build_object(
+          'customer_id', '${ids.customer}',
+          'order_id', '${ids.order}',
+          'reason', 'overstock'
+        ),
+        jsonb_build_array(jsonb_build_object(
+          'order_item_id', '${ids.orderItem}',
+          'quantity', 1,
+          'condition', 'unopened',
+          'restock', true
+        )),
+        'pr509-${operation}-create-race-${suffix}'
+      );
+      COMMIT;
+    `,
+    reverseSql: `
+      BEGIN;
+      SELECT set_config(
+        'request.jwt.claims',
+        '{"sub":"${actor}","role":"authenticated"}',
+        true
+      );
+      SELECT public.${operation}_delivery(
+        '${ids.delivery}',
+        '[SMOKE] PR509 ${operation} versus create_return race',
+        '${actor}',
+        'pr509-${operation}-reverse-race-${suffix}'
+      );
+      COMMIT;
+    `,
+  };
+}
+
+async function proveDeliveryReturnRaceBlocked(fixture, label) {
+  psql(fixture.sql);
+  const createReturn = psqlAsync(fixture.createReturnSql);
+  await waitForSqlSleep(fixture.marker);
+  const reversePromise = psqlAsync(fixture.reverseSql);
+  const reverseEarly = await Promise.race([
+    reversePromise,
+    new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
+  ]);
+  assert.notEqual(reverseEarly, null, `${label} waited on create_return's order lock instead of failing fast`);
+  assert.notEqual(reverseEarly.status, 0, `${label} crossed create_return's held order lock`);
+  assert.match(
+    `${reverseEarly.stdout}\n${reverseEarly.stderr}`,
+    /DELIVERY_ORDER_BUSY_RETRY/,
+    `${label} did not return the retryable busy-order error`,
+  );
+  const createResult = await createReturn;
+  assert.equal(createResult.status, 0, `${label} create_return setup failed:\n${createResult.stderr || createResult.stdout}`);
+  const retryResult = psql(
+    fixture.reverseSql.replace(/(pr509-(?:void|cancel)-reverse-race-\d+)/, '$1-retry'),
+    { allowFailure: true },
+  );
+  assert.notEqual(retryResult.status, 0, `${label} reversed the delivery after the return committed`);
+  assert.match(
+    `${retryResult.stdout}\n${retryResult.stderr}`,
+    /DELIVERY_HAS_RECEIVED_RETURN/,
+    `${label} did not reject the active return on retry`,
+  );
+  assert.equal(
+    psqlValue(`SELECT status FROM public.deliveries WHERE id = '${fixture.ids.delivery}';`),
+    'completed',
+    `${label} changed delivery state after losing the create_return race`,
+  );
+  assert.equal(
+    psqlValue(`SELECT count(*) FROM public.returns WHERE order_id = '${fixture.ids.order}' AND status = 'requested';`),
+    '1',
+    `${label} canonical race did not retain exactly one requested return`,
+  );
+}
+
+async function proveDeliveryReturnRaceMutant(fixture, label, expectedStatus) {
+  psql(fixture.sql);
+  const createReturn = psqlAsync(fixture.createReturnSql);
+  await waitForSqlSleep(fixture.marker);
+  const reversePromise = psqlAsync(fixture.reverseSql);
+  const createResult = await createReturn;
+  assert.equal(createResult.status, 0, `${label} mutant create_return setup failed:\n${createResult.stderr || createResult.stdout}`);
+  const reverseResult = await reversePromise;
+  assert.equal(reverseResult.status, 0, `${label} order-lock mutant did not expose the race:\n${reverseResult.stderr || reverseResult.stdout}`);
+  assert.equal(
+    psqlValue(`SELECT status FROM public.deliveries WHERE id = '${fixture.ids.delivery}';`),
+    expectedStatus,
+    `${label} order-lock mutant did not reverse the delivery`,
+  );
+  assert.equal(
+    psqlValue(`SELECT count(*) FROM public.returns WHERE order_id = '${fixture.ids.order}' AND status = 'requested';`),
+    '1',
+    `${label} order-lock mutant did not leave the active return stranded`,
+  );
+}
+
+function deliveryReceiveRaceFixture(slot, operation) {
+  const base = deliveryReturnRaceFixture(slot, operation);
+  const suffix = String(slot).padStart(2, '0');
+  const returnId = `00000000-0000-4362-8006-0000000000${suffix}`;
+  const returnItemId = `00000000-0000-4362-8007-0000000000${suffix}`;
+  const actor = '00000000-0000-4000-8000-000000000081';
+  const marker = `pr509_${operation}_receive_return_${suffix}`;
+  return {
+    ...base,
+    marker,
+    returnId,
+    sql: `${base.sql}
+      SET session_replication_role = replica;
+      INSERT INTO public.returns (
+        id, return_number, customer_id, order_id, reason, requested_by,
+        approved_by, approved_at, status, total_credit_cents
+      ) VALUES (
+        '${returnId}', 'SMK-RCC-${operation.toUpperCase()}-RECEIVE-${suffix}',
+        '${base.ids.customer}', '${base.ids.order}', 'overstock', '${actor}',
+        '${actor}', now(), 'approved', 1000
+      );
+      INSERT INTO public.return_items (
+        id, return_id, order_item_id, product_id, product_name, quantity, unit,
+        unit_price_cents, extended_cents, condition, restock, restocked, sort_order
+      ) VALUES (
+        '${returnItemId}', '${returnId}', '${base.ids.orderItem}', '${base.ids.product}',
+        '[SMOKE] PR509 ${operation} receive race product ${suffix}', 1, 'gal',
+        1000, 1000, 'unopened', true, false, 0
+      );
+      SET session_replication_role = origin;
+    `,
+    receiveSql: `
+      BEGIN;
+      SELECT set_config(
+        'request.jwt.claims',
+        '{"sub":"${actor}","role":"authenticated"}',
+        true
+      );
+      SELECT public.receive_return(
+        '${returnId}',
+        '${actor}',
+        'pr509-${operation}-receive-race-${suffix}'
+      ) /* ${marker} */;
+      COMMIT;
+    `,
+    reverseSql: base.reverseSql
+      .replace('versus create_return race', 'versus receive_return race')
+      .replace(`pr509-${operation}-reverse-race-${suffix}`, `pr509-${operation}-receive-reverse-${suffix}`),
+  };
+}
+
+async function proveDeliveryReceiveRaceSerialized(fixture, label) {
+  psql(fixture.sql);
+  const receivePromise = psqlAsync(fixture.receiveSql);
+  await waitForSqlSleep(fixture.marker);
+  const reversePromise = psqlAsync(fixture.reverseSql);
+  const reverseEarly = await Promise.race([
+    reversePromise,
+    new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
+  ]);
+  assert.notEqual(reverseEarly, null, `${label} waited on receive_return's order lock instead of failing fast`);
+  assert.notEqual(reverseEarly.status, 0, `${label} crossed receive_return's held order lock`);
+  const earlyOutput = `${reverseEarly.stdout}\n${reverseEarly.stderr}`;
+  assert.doesNotMatch(earlyOutput, /deadlock detected/i, `${label} deadlocked against receive_return`);
+  assert.match(earlyOutput, /DELIVERY_ORDER_BUSY_RETRY/, `${label} did not return the retryable busy-order error`);
+  const receiveResult = await receivePromise;
+  assert.equal(receiveResult.status, 0, `${label} receive_return failed:\n${receiveResult.stderr || receiveResult.stdout}`);
+  const retryResult = psql(
+    fixture.reverseSql.replace(/(pr509-(?:void|cancel)-receive-reverse-\d+)/, '$1-retry'),
+    { allowFailure: true },
+  );
+  assert.notEqual(retryResult.status, 0, `${label} reversed a delivery after the concurrent receipt`);
+  assert.match(
+    `${retryResult.stdout}\n${retryResult.stderr}`,
+    /DELIVERY_HAS_RECEIVED_RETURN/,
+    `${label} did not reject the freshly received return on retry`,
+  );
+  assert.equal(
+    psqlValue(`SELECT status FROM public.returns WHERE id = '${fixture.returnId}';`),
+    'received',
+    `${label} did not preserve the completed receipt`,
+  );
+  assert.equal(
+    psqlValue(`SELECT status FROM public.deliveries WHERE id = '${fixture.ids.delivery}';`),
+    'completed',
+    `${label} changed delivery state after the receipt won serialization`,
+  );
+}
+
+async function proveDeliveryReceiveRaceDeadlocks(fixture, label) {
+  psql(fixture.sql);
+  const receivePromise = psqlAsync(fixture.receiveSql);
+  await waitForSqlSleep(fixture.marker);
+  const reversePromise = psqlAsync(fixture.reverseSql);
+  const [receiveResult, reverseResult] = await Promise.all([receivePromise, reversePromise]);
+  const output = `${receiveResult.stdout}\n${receiveResult.stderr}\n${reverseResult.stdout}\n${reverseResult.stderr}`;
+  assert.match(output, /deadlock detected/i, `${label} delivery-first mutant did not expose the receive/reversal deadlock`);
+}
+
+function cleanupDeliveryRaceFixtures() {
+  psql(`
+    SET session_replication_role = replica;
+    DELETE FROM public.idempotency_keys WHERE idempotency_key LIKE 'pr509-%';
+    DELETE FROM public.notifications WHERE related_entity_id::text LIKE '00000000-0000-4362-%';
+    DELETE FROM public.activity_feed
+      WHERE related_entity_id::text LIKE '00000000-0000-4362-%'
+         OR customer_id::text LIKE '00000000-0000-4362-%';
+    DELETE FROM public.financial_audit_log WHERE entity_id::text LIKE '00000000-0000-4362-%';
+    DELETE FROM public.inventory_transactions WHERE product_id::text LIKE '00000000-0000-4362-%';
+    DELETE FROM public.return_items WHERE return_id::text LIKE '00000000-0000-4362-%';
+    DELETE FROM public.returns WHERE id::text LIKE '00000000-0000-4362-%';
+    DELETE FROM public.delivery_items WHERE delivery_id::text LIKE '00000000-0000-4362-%';
+    DELETE FROM public.deliveries WHERE id::text LIKE '00000000-0000-4362-%';
+    DELETE FROM public.order_items WHERE order_id::text LIKE '00000000-0000-4362-%';
+    DELETE FROM public.orders WHERE id::text LIKE '00000000-0000-4362-%';
+    DELETE FROM public.inventory WHERE product_id::text LIKE '00000000-0000-4362-%';
+    DELETE FROM public.products WHERE id::text LIKE '00000000-0000-4362-%';
+    DELETE FROM public.customers WHERE id::text LIKE '00000000-0000-4362-%';
+    SET session_replication_role = origin;
+  `);
+  assert.equal(
+    psqlValue(`
+      SELECT (
+        (SELECT count(*) FROM public.returns WHERE id::text LIKE '00000000-0000-4362-%')
+        + (SELECT count(*) FROM public.deliveries WHERE id::text LIKE '00000000-0000-4362-%')
+        + (SELECT count(*) FROM public.orders WHERE id::text LIKE '00000000-0000-4362-%')
+        + (SELECT count(*) FROM public.products WHERE id::text LIKE '00000000-0000-4362-%')
+        + (SELECT count(*) FROM public.customers WHERE id::text LIKE '00000000-0000-4362-%')
+        + (SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key LIKE 'pr509-%')
+      );
+    `),
+    '0',
+    'delivery concurrency fixture cleanup left residue',
+  );
 }
 
 function postingConcurrencyFixture(slot) {
@@ -394,10 +712,21 @@ const expectedProofs = [
   'RETURN_CREDIT_CANCEL_WARNING_FILTER_PROVEN',
   'RETURN_CREDIT_TOTE_PROVENANCE_PROVEN',
   'GENERATED_INVOICE_EDIT_LINEAGE_PROVEN',
+  'RECEIVE_RETURN_SOURCE_DELIVERY_GUARD_REMOVAL_DETECTED',
   'VOID_DELIVERY_RETURN_GUARD_REMOVAL_DETECTED',
   'CANCEL_DELIVERY_RETURN_GUARD_REMOVAL_DETECTED',
+  'VOID_DELIVERY_CREATE_RETURN_RACE_PROVEN',
+  'VOID_DELIVERY_ORDER_LOCK_REMOVAL_DETECTED',
+  'VOID_DELIVERY_RECEIVE_RACE_PROVEN',
+  'VOID_DELIVERY_LOCK_ORDER_MUTATION_DETECTED',
+  'CANCEL_DELIVERY_CREATE_RETURN_RACE_PROVEN',
+  'CANCEL_DELIVERY_ORDER_LOCK_REMOVAL_DETECTED',
+  'CANCEL_DELIVERY_RECEIVE_RACE_PROVEN',
+  'CANCEL_DELIVERY_LOCK_ORDER_MUTATION_DETECTED',
   'LEGACY_CANCEL_EXACT_QUANTITY_MUTATION_DETECTED',
   'DELIVERY_RECEIVED_RETURN_REVERSAL_GUARDS_PROVEN',
+  'DELIVERY_PENDING_RETURN_REVERSAL_GUARDS_PROVEN',
+  'RETURN_RECEIPT_SOURCE_DELIVERY_REVALIDATION_PROVEN',
   'LEGACY_RESTOCK_CANCEL_EXACT_PROVEN',
 ];
 const completedProofs = new Set();
@@ -1501,16 +1830,71 @@ try {
   assertInstalledFunctionHash('public._allocated_delivery_cents(uuid,numeric,uuid)', '44a739b026385996b66355ee5c4b1175dbe5260bad57a459a91e69c3873bae81');
 
   copy(SMOKE, path.basename(SMOKE));
+  const cogsMigrationSql = readFileSync(COGS_CANDIDATE, 'utf8');
   const deliveryGateSql = readFileSync(DELIVERY_CREDIT_GATE_CANDIDATE, 'utf8');
   const deliverySurfaceSql = readFileSync(DELIVERY_SURFACE_CANDIDATE, 'utf8');
   const invoiceLineageSql = readFileSync(INVOICE_LINEAGE_CANDIDATE, 'utf8');
+
+  const receiveStart = cogsMigrationSql.indexOf('CREATE FUNCTION public._receive_return_impl_20260714(');
+  const receiveEnd = cogsMigrationSql.indexOf('REVOKE ALL ON FUNCTION public._receive_return_impl_20260714', receiveStart);
+  assert.ok(receiveStart >= 0 && receiveEnd > receiveStart, 'receive-return helper slice is missing');
+  const canonicalReceiveReturn = cogsMigrationSql.slice(receiveStart, receiveEnd);
+  const replaceableReceiveReturn = canonicalReceiveReturn.replace(
+    'CREATE FUNCTION public._receive_return_impl_20260714(',
+    'CREATE OR REPLACE FUNCTION public._receive_return_impl_20260714(',
+  );
+  assert.notEqual(replaceableReceiveReturn, canonicalReceiveReturn, 'receive-return helper was not made replaceable for mutation proof');
+  const receiveDeliveryGuardMutant = replaceableReceiveReturn.replace(
+    /  -- Serialize receipt against every delivery that can back this return\.[\s\S]*?^  END IF;\r?\n\r?\n/m,
+    '',
+  );
+  assert.notEqual(receiveDeliveryGuardMutant, replaceableReceiveReturn, 'receive-return source-delivery mutant did not alter the executable helper');
+  psql(receiveDeliveryGuardMutant);
+  const receiveDeliveryGuardSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const receiveDeliveryGuardOutput = `${receiveDeliveryGuardSmoke.stdout}\n${receiveDeliveryGuardSmoke.stderr}`;
+  assert.notEqual(receiveDeliveryGuardSmoke.status, 0, 'receive-return source-delivery mutant smoke unexpectedly committed');
+  assert.match(
+    receiveDeliveryGuardOutput,
+    /SMOKE_FAIL: approved return was received after source delivery reversal/,
+    `receive-return source-delivery mutant did not reach the double-restock oracle:\n${receiveDeliveryGuardOutput}`,
+  );
+  completedProofs.add('RECEIVE_RETURN_SOURCE_DELIVERY_GUARD_REMOVAL_DETECTED');
+  psql(replaceableReceiveReturn);
+  assertInstalledFunctionHash('public._receive_return_impl_20260714(uuid,uuid,text)', '150b7ad4f001929baecc73078c181de092477ced7b3a4b3f85bfb2d9438dd789');
 
   const voidStart = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."void_delivery"(');
   const voidEnd = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."cancel_delivery"(', voidStart);
   assert.ok(voidStart >= 0 && voidEnd > voidStart, 'void_delivery helper slice is missing');
   const canonicalVoidDelivery = deliverySurfaceSql.slice(voidStart, voidEnd);
+  const voidOrderLockMutant = canonicalVoidDelivery.replace(
+    /  -- create_return and receive_return lock the parent order before they create[\s\S]*?^  END IF;\r?\n\r?\n/m,
+    '',
+  );
+  assert.notEqual(voidOrderLockMutant, canonicalVoidDelivery, 'void-delivery order-lock mutant did not alter the executable helper');
+  await proveDeliveryReturnRaceBlocked(deliveryReturnRaceFixture(11, 'void'), 'canonical void_delivery');
+  completedProofs.add('VOID_DELIVERY_CREATE_RETURN_RACE_PROVEN');
+  psql(voidOrderLockMutant);
+  await proveDeliveryReturnRaceMutant(deliveryReturnRaceFixture(12, 'void'), 'void_delivery', 'voided');
+  completedProofs.add('VOID_DELIVERY_ORDER_LOCK_REMOVAL_DETECTED');
+  psql(canonicalVoidDelivery);
+  const canonicalReceiveIntentForVoid = installReceiveIntentOrderHoldProbe();
+  await proveDeliveryReceiveRaceSerialized(deliveryReceiveRaceFixture(15, 'void'), 'canonical void_delivery');
+  completedProofs.add('VOID_DELIVERY_RECEIVE_RACE_PROVEN');
+  const voidLockOrderMutant = canonicalVoidDelivery.replace(
+    'FOR UPDATE NOWAIT;',
+    'FOR UPDATE;',
+  );
+  assert.notEqual(voidLockOrderMutant, canonicalVoidDelivery, 'void-delivery lock-order mutant did not alter the executable helper');
+  psql(voidLockOrderMutant);
+  await proveDeliveryReceiveRaceDeadlocks(deliveryReceiveRaceFixture(16, 'void'), 'void_delivery');
+  completedProofs.add('VOID_DELIVERY_LOCK_ORDER_MUTATION_DETECTED');
+  psql(canonicalVoidDelivery);
+  psql(canonicalReceiveIntentForVoid);
+  assertInstalledFunctionHash('public._receive_return_intent_impl_20260812(uuid,uuid,text)', '9f5e2cfa95f6c0fb6ae06c3d7f0c04a31efdd8309b431f6dba5330c78aad9ded');
+  assertInstalledFunctionHash('public.void_delivery(uuid,text,uuid,text)', '7086ec87e31f5c2a59fda75ea6966e2bac3e7140366bc92d3e44765400f68af4');
+
   const voidReturnGuardMutant = canonicalVoidDelivery.replace(
-    /  -- A received\/credited return has already put[\s\S]*?    RAISE EXCEPTION 'DELIVERY_HAS_RECEIVED_RETURN';\r?\n  END IF;\r?\n\r?\n/,
+    /  -- Any active return reserves this delivery lineage[\s\S]*?    RAISE EXCEPTION 'DELIVERY_HAS_RECEIVED_RETURN';\r?\n  END IF;\r?\n\r?\n/,
     '',
   );
   assert.notEqual(voidReturnGuardMutant, canonicalVoidDelivery, 'void-delivery return guard mutant did not alter the executable helper');
@@ -1518,17 +1902,44 @@ try {
   const voidReturnGuardSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
   const voidReturnGuardOutput = `${voidReturnGuardSmoke.stdout}\n${voidReturnGuardSmoke.stderr}`;
   assert.notEqual(voidReturnGuardSmoke.status, 0, 'void-delivery return guard mutant smoke unexpectedly committed');
-  assert.match(voidReturnGuardOutput, /SMOKE_FAIL: delivery with a received return was voided/, `void-delivery return guard mutant did not reach the double-restock oracle:\n${voidReturnGuardOutput}`);
+  assert.match(voidReturnGuardOutput, /SMOKE_FAIL: delivery with an approved return was voided/, `void-delivery return guard mutant did not reach the pending-return oracle:\n${voidReturnGuardOutput}`);
   completedProofs.add('VOID_DELIVERY_RETURN_GUARD_REMOVAL_DETECTED');
   psql(canonicalVoidDelivery);
-  assertInstalledFunctionHash('public.void_delivery(uuid,text,uuid,text)', '81efbd554ce4023c177a92dd96e1331003550ecad3139a3cb8b25cddf0b7a1fc');
+  assertInstalledFunctionHash('public.void_delivery(uuid,text,uuid,text)', '7086ec87e31f5c2a59fda75ea6966e2bac3e7140366bc92d3e44765400f68af4');
 
   const cancelStart = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."cancel_delivery"(');
   const cancelEnd = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION public._complete_delivery_authorized_impl(', cancelStart);
   assert.ok(cancelStart >= 0 && cancelEnd > cancelStart, 'cancel_delivery helper slice is missing');
   const canonicalCancelDelivery = deliverySurfaceSql.slice(cancelStart, cancelEnd);
+  const cancelOrderLockMutant = canonicalCancelDelivery.replace(
+    /  -- Match void_delivery's fail-fast delivery -> order serialization\.[\s\S]*?^  END IF;\r?\n\r?\n/m,
+    '',
+  );
+  assert.notEqual(cancelOrderLockMutant, canonicalCancelDelivery, 'cancel-delivery order-lock mutant did not alter the executable helper');
+  await proveDeliveryReturnRaceBlocked(deliveryReturnRaceFixture(13, 'cancel'), 'canonical cancel_delivery');
+  completedProofs.add('CANCEL_DELIVERY_CREATE_RETURN_RACE_PROVEN');
+  psql(cancelOrderLockMutant);
+  await proveDeliveryReturnRaceMutant(deliveryReturnRaceFixture(14, 'cancel'), 'cancel_delivery', 'cancelled');
+  completedProofs.add('CANCEL_DELIVERY_ORDER_LOCK_REMOVAL_DETECTED');
+  psql(canonicalCancelDelivery);
+  const canonicalReceiveIntentForCancel = installReceiveIntentOrderHoldProbe();
+  await proveDeliveryReceiveRaceSerialized(deliveryReceiveRaceFixture(17, 'cancel'), 'canonical cancel_delivery');
+  completedProofs.add('CANCEL_DELIVERY_RECEIVE_RACE_PROVEN');
+  const cancelLockOrderMutant = canonicalCancelDelivery.replace(
+    'FOR UPDATE NOWAIT;',
+    'FOR UPDATE;',
+  );
+  assert.notEqual(cancelLockOrderMutant, canonicalCancelDelivery, 'cancel-delivery lock-order mutant did not alter the executable helper');
+  psql(cancelLockOrderMutant);
+  await proveDeliveryReceiveRaceDeadlocks(deliveryReceiveRaceFixture(18, 'cancel'), 'cancel_delivery');
+  completedProofs.add('CANCEL_DELIVERY_LOCK_ORDER_MUTATION_DETECTED');
+  psql(canonicalCancelDelivery);
+  psql(canonicalReceiveIntentForCancel);
+  assertInstalledFunctionHash('public._receive_return_intent_impl_20260812(uuid,uuid,text)', '9f5e2cfa95f6c0fb6ae06c3d7f0c04a31efdd8309b431f6dba5330c78aad9ded');
+  assertInstalledFunctionHash('public.cancel_delivery(uuid,text,uuid,text)', '07eb823ddb26899dba8379c1c9596a0a52dd9d8dcf8530de680f8d33571d98fa');
+
   const cancelReturnGuardMutant = canonicalCancelDelivery.replace(
-    /  -- Match void_delivery's fail-closed return-lineage boundary\.[\s\S]*?    RAISE EXCEPTION 'DELIVERY_HAS_RECEIVED_RETURN';\r?\n  END IF;\r?\n\r?\n/,
+    /  -- Match void_delivery's fail-closed active-return lineage boundary\.[\s\S]*?    RAISE EXCEPTION 'DELIVERY_HAS_RECEIVED_RETURN';\r?\n  END IF;\r?\n\r?\n/,
     '',
   );
   assert.notEqual(cancelReturnGuardMutant, canonicalCancelDelivery, 'cancel-delivery return guard mutant did not alter the executable helper');
@@ -1536,10 +1947,11 @@ try {
   const cancelReturnGuardSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
   const cancelReturnGuardOutput = `${cancelReturnGuardSmoke.stdout}\n${cancelReturnGuardSmoke.stderr}`;
   assert.notEqual(cancelReturnGuardSmoke.status, 0, 'cancel-delivery return guard mutant smoke unexpectedly committed');
-  assert.match(cancelReturnGuardOutput, /SMOKE_FAIL: delivery with a received return was cancelled/, `cancel-delivery return guard mutant did not reach the double-restock oracle:\n${cancelReturnGuardOutput}`);
+  assert.match(cancelReturnGuardOutput, /SMOKE_FAIL: delivery with an approved return was cancelled/, `cancel-delivery return guard mutant did not reach the pending-return oracle:\n${cancelReturnGuardOutput}`);
   completedProofs.add('CANCEL_DELIVERY_RETURN_GUARD_REMOVAL_DETECTED');
   psql(canonicalCancelDelivery);
-  assertInstalledFunctionHash('public.cancel_delivery(uuid,text,uuid,text)', '36c9407d2aa78a4d1e60ec790c99e32d8f8009c953ba9378595f6f5a358d76a5');
+  assertInstalledFunctionHash('public.cancel_delivery(uuid,text,uuid,text)', '07eb823ddb26899dba8379c1c9596a0a52dd9d8dcf8530de680f8d33571d98fa');
+  cleanupDeliveryRaceFixtures();
 
   const cancelReturnStart = invoiceLineageSql.indexOf('CREATE OR REPLACE FUNCTION public._cancel_return_intent_impl_20260812(');
   const cancelReturnEnd = invoiceLineageSql.indexOf('REVOKE ALL ON FUNCTION public._cancel_return_intent_impl_20260812', cancelReturnStart);
@@ -2280,6 +2692,10 @@ try {
   completedProofs.add('GENERATED_INVOICE_EDIT_LINEAGE_PROVEN');
   assert.match(output, /DELIVERY_RECEIVED_RETURN_REVERSAL_GUARDS_PROVEN/, `canonical smoke did not prove delivery reversal guards after a received return:\n${output}`);
   completedProofs.add('DELIVERY_RECEIVED_RETURN_REVERSAL_GUARDS_PROVEN');
+  assert.match(output, /DELIVERY_PENDING_RETURN_REVERSAL_GUARDS_PROVEN/, `canonical smoke did not prove delivery reversal guards before return receipt:\n${output}`);
+  completedProofs.add('DELIVERY_PENDING_RETURN_REVERSAL_GUARDS_PROVEN');
+  assert.match(output, /RETURN_RECEIPT_SOURCE_DELIVERY_REVALIDATION_PROVEN/, `canonical smoke did not prove source-delivery receipt revalidation:\n${output}`);
+  completedProofs.add('RETURN_RECEIPT_SOURCE_DELIVERY_REVALIDATION_PROVEN');
   assert.match(output, /LEGACY_RESTOCK_CANCEL_EXACT_PROVEN/, `canonical smoke did not prove exact legacy restock cancellation:\n${output}`);
   completedProofs.add('LEGACY_RESTOCK_CANCEL_EXACT_PROVEN');
   assert.equal(psqlValue("SELECT count(*) FROM public.customers WHERE farm_name LIKE '[SMOKE] Return Credit Farm %';"), '0', 'customer fixture residue remained');

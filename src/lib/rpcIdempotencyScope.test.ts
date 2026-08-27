@@ -225,6 +225,12 @@ const ALIAS_SCOPED: Record<string, string> = {
  */
 const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   _guard_idempotency_key_insert: ['allocate_payment'],
+  // Direct EXECUTE is revoked. Migration 20260812130145 renamed the original
+  // cancel_return implementation behind the public cancel_return wrapper, and
+  // migration 20260827041500 re-emits that private implementation to preserve
+  // exact inventory reversal. Both layers deliberately share the one public
+  // cancel_return cache namespace so retries cannot create divergent receipts.
+  _cancel_return_intent_impl_20260812: ['cancel_return'],
   // Direct EXECUTE is revoked. This private implementation remains behind the
   // public create_invoice_from_order wrapper and deliberately shares that
   // wrapper's cache namespace so a retry through either layer finds the same

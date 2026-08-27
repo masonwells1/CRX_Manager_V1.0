@@ -379,23 +379,45 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Delivery not found: %', p_delivery_id;
   END IF;
-
   IF v_delivery.status != 'completed' THEN
     RAISE EXCEPTION 'Only completed deliveries can be voided (current status: %)', v_delivery.status;
   END IF;
 
-  -- A received/credited return has already put part of this delivery lineage
-  -- back into inventory. Restoring the delivery again would double-count that
-  -- stock and can leave active return-credit accounting attached to zero
-  -- delivered quantity. Source-free legacy lines are conservatively order-wide;
-  -- order-linked lines block only deliveries sharing that order line.
+  -- create_return and receive_return lock the parent order before they create
+  -- or receive a return. Keep the established delivery -> order hierarchy used
+  -- by completion, but never WAIT for the order while holding the delivery:
+  -- waiting would oppose receive_return's return -> order -> delivery chain.
+  -- Fail fast instead; the caller can retry after the concurrent lifecycle
+  -- operation commits, at which point the active-return predicate below sees
+  -- the fresh reservation and rejects the reversal.
+  IF v_delivery.order_id IS NOT NULL THEN
+    BEGIN
+      PERFORM 1
+      FROM orders
+      WHERE id = v_delivery.order_id
+      FOR UPDATE NOWAIT;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'ORDER_NOT_FOUND';
+      END IF;
+    EXCEPTION
+      WHEN lock_not_available THEN
+        RAISE EXCEPTION 'DELIVERY_ORDER_BUSY_RETRY';
+    END;
+  END IF;
+
+  -- Any active return reserves this delivery lineage until the return is
+  -- rejected or cancelled. Reversing the delivery under a requested/approved
+  -- return would let a later receipt add stock after the delivery already put
+  -- the same stock back. Received/credited returns have already added it.
+  -- Source-free legacy lines are conservatively order-wide; order-linked lines
+  -- block only deliveries sharing that order line.
   IF v_delivery.order_id IS NOT NULL AND EXISTS (
     SELECT 1
     FROM returns r
     JOIN return_items ri ON ri.return_id = r.id
     WHERE r.order_id = v_delivery.order_id
       AND r.deleted_at IS NULL
-      AND r.status IN ('received', 'credited')
+      AND r.status IN ('requested', 'approved', 'received', 'credited')
       AND (
         ri.order_item_id IS NULL
         OR EXISTS (
@@ -601,21 +623,40 @@ BEGIN
     BEGIN v_cached := check_idempotency(p_idempotency_key, 'cancel_delivery'); IF v_cached IS NOT NULL THEN RETURN v_cached; END IF; END;
   END IF;
 
+  IF NOT EXISTS (SELECT 1 FROM profiles WHERE id = v_actor AND is_active = true AND role IN ('admin', 'sales_rep')) THEN RAISE EXCEPTION 'Not authorized to cancel deliveries'; END IF;
+
   SELECT * INTO v_delivery FROM deliveries WHERE id = p_delivery_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Delivery not found'; END IF;
   IF v_delivery.status NOT IN ('scheduled', 'in_progress', 'completed') THEN RAISE EXCEPTION 'Cannot cancel a % delivery', v_delivery.status; END IF;
-  IF NOT EXISTS (SELECT 1 FROM profiles WHERE id = v_actor AND is_active = true AND role IN ('admin', 'sales_rep')) THEN RAISE EXCEPTION 'Not authorized to cancel deliveries'; END IF;
 
-  -- Match void_delivery's fail-closed return-lineage boundary. This also
-  -- prevents the quick-delivery branch from directly cancelling an order that
-  -- already has physically received or credited merchandise.
+  -- Match void_delivery's fail-fast delivery -> order serialization. Never
+  -- wait for create_return/receive_return's order lock while this delivery is
+  -- locked, because receive_return later locks the source delivery.
+  IF v_delivery.order_id IS NOT NULL THEN
+    BEGIN
+      PERFORM 1
+      FROM orders
+      WHERE id = v_delivery.order_id
+      FOR UPDATE NOWAIT;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'ORDER_NOT_FOUND';
+      END IF;
+    EXCEPTION
+      WHEN lock_not_available THEN
+        RAISE EXCEPTION 'DELIVERY_ORDER_BUSY_RETRY';
+    END;
+  END IF;
+
+  -- Match void_delivery's fail-closed active-return lineage boundary. This
+  -- also prevents the quick-delivery branch from directly cancelling an order
+  -- whose merchandise is reserved by, or already restored through, a return.
   IF v_delivery.order_id IS NOT NULL AND EXISTS (
     SELECT 1
     FROM returns r
     JOIN return_items ri ON ri.return_id = r.id
     WHERE r.order_id = v_delivery.order_id
       AND r.deleted_at IS NULL
-      AND r.status IN ('received', 'credited')
+      AND r.status IN ('requested', 'approved', 'received', 'credited')
       AND (
         ri.order_item_id IS NULL
         OR EXISTS (
@@ -1315,7 +1356,7 @@ DECLARE
 BEGIN
   FOR v_check IN
     SELECT value
-    FROM jsonb_array_elements($checks$[{"name":"get_dashboard_action_items","signature":"public.get_dashboard_action_items(integer)","args":"23","hash":"583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769","private":false},{"name":"void_delivery","signature":"public.void_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"81efbd554ce4023c177a92dd96e1331003550ecad3139a3cb8b25cddf0b7a1fc","private":false},{"name":"cancel_delivery","signature":"public.cancel_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"36c9407d2aa78a4d1e60ec790c99e32d8f8009c953ba9378595f6f5a358d76a5","private":false},{"name":"_complete_delivery_authorized_impl","signature":"public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)","args":"2950 25 2950 3802 25 25 25 1184","hash":"3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a","private":true}]$checks$::jsonb)
+    FROM jsonb_array_elements($checks$[{"name":"get_dashboard_action_items","signature":"public.get_dashboard_action_items(integer)","args":"23","hash":"583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769","private":false},{"name":"void_delivery","signature":"public.void_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"7086ec87e31f5c2a59fda75ea6966e2bac3e7140366bc92d3e44765400f68af4","private":false},{"name":"cancel_delivery","signature":"public.cancel_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"07eb823ddb26899dba8379c1c9596a0a52dd9d8dcf8530de680f8d33571d98fa","private":false},{"name":"_complete_delivery_authorized_impl","signature":"public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)","args":"2950 25 2950 3802 25 25 25 1184","hash":"3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a","private":true}]$checks$::jsonb)
   LOOP
     SELECT count(*)
       INTO v_count

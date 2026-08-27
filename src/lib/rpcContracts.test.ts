@@ -2777,6 +2777,13 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // - correct_job_commission_split (20260813050000)
   // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
 
+  // Private implementation behind the public cancel_return RPC. Direct
+  // EXECUTE is revoked, it declares p_idempotency_key, and it deliberately
+  // enforces the public 'cancel_return' cache namespace. Migration
+  // 20260827041500 re-emits it for exact inventory reversal, placing it in the
+  // pending-migration inventory while it remains absent from generated types.
+  '_cancel_return_intent_impl_20260812',
+
   // Private implementation behind the public draw_down_quote RPC, so it is
   // absent from the generated types by design. It declares p_idempotency_key
   // text and owns the canonical check_idempotency/save_idempotency pair for the
