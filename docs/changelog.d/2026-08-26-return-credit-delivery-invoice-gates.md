@@ -1,13 +1,13 @@
 ## 2026-08-26 — Return-credit delivery invoices remain billable
 
-Added `20260826215500_exclude_return_credits_from_delivery_invoice_gate.sql`, a forward migration
+Added `20260827041200_exclude_return_credits_from_delivery_invoice_gate.sql`, a forward migration
 that excludes credit memos from both delivery invoice coverage checks. A posted order-level return
 credit therefore cannot suppress the ordinary draft invoice for a later delivery or block the admin
 recovery path for an already-completed unbilled delivery. Both private function bodies are pinned to
 their exact prior and replacement hashes and retain their existing ownership, security, search-path,
 signature, volatility, and private-execute posture.
 
-Added `20260826234000_align_return_credit_delivery_surfaces.sql` after Claude's exact-commit
+Added `20260827041300_align_return_credit_delivery_surfaces.sql` after Claude's exact-commit
 adversarial review found three remaining server-side mismatches. The main dashboard now continues to
 surface a completed unbilled delivery when the order has only a return credit; void and cancel no
 longer describe a posted credit memo as a sales invoice needing review; and automatic delivery billing
@@ -26,7 +26,7 @@ so one credit memo cannot produce a simple customer line in one PDF and cost-lot
 
 Fresh read-only production schema was restored into disposable PostgreSQL and seven replay entries were
 applied there: the five PR #361 candidates plus two required compatibility/guard predecessors. The
-rollback-only harness passed 44 load-bearing predicates, including
+rollback-only harness passed 45 load-bearing predicates, including
 separate mutants for the dashboard credit filter and both automatic-invoice filters; direct execution
 of the dashboard, void, cancel, and ordinary hard-delete paths; draft-credit preservation; and proof
 that both invoice paths still create the expected $25 revenue and $5 historical-cost draft. The full

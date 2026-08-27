@@ -10,11 +10,11 @@ const NAME = `crx-return-credit-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const EXTENSIONS = path.join(ROOT, 'supabase', 'baselines', '20260727174805_extensions.sql');
 const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql');
-const REPORT_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260825230150_align_recognized_invoice_report_statuses.sql');
-const COGS_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260825230209_rebuild_return_credit_cogs_reversal.sql');
-const DELIVERY_CREDIT_GATE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260826215500_exclude_return_credits_from_delivery_invoice_gate.sql');
-const DELIVERY_SURFACE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260826234000_align_return_credit_delivery_surfaces.sql');
-const ORDER_INVOICE_GATE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827031500_align_return_credit_order_invoice_gates.sql');
+const REPORT_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041000_align_recognized_invoice_report_statuses.sql');
+const COGS_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041100_rebuild_return_credit_cogs_reversal.sql');
+const DELIVERY_CREDIT_GATE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041200_exclude_return_credits_from_delivery_invoice_gate.sql');
+const DELIVERY_SURFACE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041300_align_return_credit_delivery_surfaces.sql');
+const ORDER_INVOICE_GATE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041400_align_return_credit_order_invoice_gates.sql');
 const HELPER_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260813070000_pin_return_idempotency_helper_contract.sql');
 const FORWARD_COMPATIBILITY_REPLAY = [
   '20260813060000_require_completed_delivery_before_invoice_post.sql',
@@ -357,6 +357,7 @@ const expectedProofs = [
   'DELIVERY_AUTO_INVOICE_DELETED_FILTER_REMOVAL_DETECTED',
   'UNBILLED_DELIVERY_CREDIT_FILTER_REMOVAL_DETECTED',
   'DASHBOARD_UNBILLED_CREDIT_FILTER_REMOVAL_DETECTED',
+  'DASHBOARD_CANCELLED_CREDIT_FILTER_REMOVAL_DETECTED',
   'ORDER_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED',
   'SPLIT_ORDER_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED',
   'SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED',
@@ -1340,6 +1341,7 @@ try {
     /SMOKE_FAIL: posted return credit created a cancelled-order warning/,
     `cancelled-order dashboard mutant did not reach its credit-memo oracle:\n${cancelledDashboardMutantOutput}`,
   );
+  completedProofs.add('DASHBOARD_CANCELLED_CREDIT_FILTER_REMOVAL_DETECTED');
   psql(canonicalDashboard);
   assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', '583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769');
 

@@ -277,9 +277,10 @@ BEGIN
 END;
 $preflight$;
 
--- Return-credit invoice lines are accounting reversals, not prior customer
--- billing. Exclude them atomically with the first migration that creates those
--- lines so a later delivery cannot reopen or distort its billable allocation.
+-- Credit-memo lines are accounting reversals, not proof that product was sold
+-- or delivered. Deliberately exclude every credit memo (including a manual
+-- memo) from billable allocation: an AR adjustment never creates fresh
+-- delivery billing headroom. Only active non-credit sale invoices allocate it.
 CREATE OR REPLACE FUNCTION public._allocated_delivery_cents(
   p_order_item_id uuid,
   p_quantity numeric,
@@ -615,11 +616,18 @@ BEGIN
     PERFORM set_config('app.crx_return_credit_void', '1', true);
   END IF;
 
-  PERFORM public._void_invoice_return_credit_guard_impl_20260826(
-    p_invoice_id,
-    p_void_reason,
-    p_idempotency_key
-  );
+  BEGIN
+    PERFORM public._void_invoice_return_credit_guard_impl_20260826(
+      p_invoice_id,
+      p_void_reason,
+      p_idempotency_key
+    );
+  EXCEPTION WHEN OTHERS THEN
+    IF v_is_return_credit THEN
+      PERFORM set_config('app.crx_return_credit_void', '0', true);
+    END IF;
+    RAISE;
+  END;
 
   IF v_is_return_credit THEN
     PERFORM set_config('app.crx_return_credit_void', '0', true);
@@ -666,12 +674,19 @@ BEGIN
     PERFORM set_config('app.crx_return_credit_unapply', '1', true);
   END IF;
 
-  v_result := public._unapply_return_credit_guard_impl_20260826(
-    p_credit_memo_id,
-    p_reason,
-    p_performed_by,
-    p_idempotency_key
-  );
+  BEGIN
+    v_result := public._unapply_return_credit_guard_impl_20260826(
+      p_credit_memo_id,
+      p_reason,
+      p_performed_by,
+      p_idempotency_key
+    );
+  EXCEPTION WHEN OTHERS THEN
+    IF v_is_return_credit THEN
+      PERFORM set_config('app.crx_return_credit_unapply', '0', true);
+    END IF;
+    RAISE;
+  END;
 
   IF v_is_return_credit THEN
     PERFORM set_config('app.crx_return_credit_unapply', '0', true);
@@ -1037,7 +1052,7 @@ BEGIN
   FROM pg_proc p
   WHERE p.oid = to_regprocedure('public.void_invoice(uuid,text,text)');
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
-       '6d7c17279c90a9d6817129ba6f43bb490523f2844657074046a9f66f019af3ec'
+       '7d1eb3222e0cd59318919206d2338de7477c2091f22550671ecbcf5ff80a9d14'
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'void_invoice') <> 1
      OR NOT EXISTS (
@@ -1067,7 +1082,7 @@ BEGIN
   FROM pg_proc p
   WHERE p.oid = to_regprocedure('public.unapply_credit_memo(uuid,text,uuid,text)');
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
-       'a151010fc4556ab78d9254c42f7fe3c6ac06ba6dc03c19f52c44fe882ba2b520'
+       '005ce6a1cfbc7c7f7fcf4712104235bf884af9bc5b30e5f3cbf1edc0f2b6e63e'
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'unapply_credit_memo') <> 1
      OR NOT EXISTS (

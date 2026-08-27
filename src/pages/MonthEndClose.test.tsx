@@ -96,7 +96,7 @@ vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
-  sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
+  sanitizeError: vi.fn((e: unknown) => `Safe: ${(e as Error)?.message || 'Error'}`),
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -208,7 +208,7 @@ describe('MonthEndClose', () => {
     });
   });
 
-  it('surfaces a batch year-end RPC guard error to the user', async () => {
+  it('sanitizes a batch year-end RPC guard error before showing it', async () => {
     mockFrom.mockImplementation((table: string) => {
       if (table === 'invoices') return buildChain({ data: [{ customer_id: 'customer-1' }], error: null });
       if (table === 'orders') return buildChain({ data: [], count: 0, error: null });
@@ -226,7 +226,7 @@ describe('MonthEndClose', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Run year-end test' }));
 
     await waitFor(() => {
-      expect(mockToast).toHaveBeenCalledWith('error', 'CUSTOMER_SCOPE_DENIED');
+      expect(mockToast).toHaveBeenCalledWith('error', 'Safe: CUSTOMER_SCOPE_DENIED');
     });
   });
 

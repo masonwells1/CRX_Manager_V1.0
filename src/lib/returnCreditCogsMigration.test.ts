@@ -3,11 +3,11 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 const migration = readFileSync(
-  'supabase/migrations/20260825230209_rebuild_return_credit_cogs_reversal.sql',
+  'supabase/migrations/20260827041100_rebuild_return_credit_cogs_reversal.sql',
   'utf8',
 );
 const reportMigration = readFileSync(
-  'supabase/migrations/20260825230150_align_recognized_invoice_report_statuses.sql',
+  'supabase/migrations/20260827041000_align_recognized_invoice_report_statuses.sql',
   'utf8',
 );
 const allocatedDeliveryMigration = readFileSync(
@@ -15,15 +15,15 @@ const allocatedDeliveryMigration = readFileSync(
   'utf8',
 );
 const deliveryCreditGateMigration = readFileSync(
-  'supabase/migrations/20260826215500_exclude_return_credits_from_delivery_invoice_gate.sql',
+  'supabase/migrations/20260827041200_exclude_return_credits_from_delivery_invoice_gate.sql',
   'utf8',
 );
 const deliverySurfaceMigration = readFileSync(
-  'supabase/migrations/20260826234000_align_return_credit_delivery_surfaces.sql',
+  'supabase/migrations/20260827041300_align_return_credit_delivery_surfaces.sql',
   'utf8',
 );
 const orderInvoiceGateMigration = readFileSync(
-  'supabase/migrations/20260827031500_align_return_credit_order_invoice_gates.sql',
+  'supabase/migrations/20260827041400_align_return_credit_order_invoice_gates.sql',
   'utf8',
 );
 const migrationHistory = readFileSync('docs/reference/migration-history.md', 'utf8');
@@ -45,6 +45,14 @@ describe('return-credit COGS migration', () => {
     expect(match?.[1], `${name} body was not found`).toBeTruthy();
     const normalizedBody = match![1].replace(/\r\n/g, '\n');
     return createHash('sha256').update(`\n${normalizedBody}\n`, 'utf8').digest('hex');
+  };
+
+  const assertExceptionReset = (sql: string, setting: string) => {
+    const escaped = setting.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(
+      `EXCEPTION WHEN OTHERS THEN[\\s\\S]{0,220}set_config\\('${escaped}', '0', true\\)[\\s\\S]{0,100}RAISE;`,
+    );
+    if (!pattern.test(sql)) throw new Error(`${setting} is not reset before re-raising`);
   };
 
   it('pins the dependent live bodies and structurally rejects duplicate return lines', () => {
@@ -164,13 +172,14 @@ describe('return-credit COGS migration', () => {
     expect(orderInvoiceGateMigration).toContain('FROM PUBLIC, anon, authenticated, service_role;');
     expect(functionBodySha256(migration, '_allocated_delivery_cents')).toBe('44a739b026385996b66355ee5c4b1175dbe5260bad57a459a91e69c3873bae81');
     expect(migration).toContain("AND inv.invoice_type <> 'credit_memo'");
+    expect(migration).toContain("'Return credit - ' || s.product_name");
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DELIVERY_ALLOCATION_DRIFT');
     expect(migration).toContain("p.prorettype = 'void'::regtype");
     expect(migration).toContain("p.prorettype = 'jsonb'::regtype");
     expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
     expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('722ff281a364867058154c1c7d8060c6c6ea16a60f4c8764005d6ba0c8f0ef28');
-    expect(functionBodySha256(migration, 'void_invoice')).toBe('6d7c17279c90a9d6817129ba6f43bb490523f2844657074046a9f66f019af3ec');
-    expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('a151010fc4556ab78d9254c42f7fe3c6ac06ba6dc03c19f52c44fe882ba2b520');
+    expect(functionBodySha256(migration, 'void_invoice')).toBe('7d1eb3222e0cd59318919206d2338de7477c2091f22550671ecbcf5ff80a9d14');
+    expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('005ce6a1cfbc7c7f7fcf4712104235bf884af9bc5b30e5f3cbf1edc0f2b6e63e');
     expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('cce665d2c4b34a2b253a9e4518599f75d489309f25cc402fe6ae59269c41442e');
     expect(functionBodySha256(migration, 'guard_recognized_return_credit_delete')).toBe('89c96dabb82f6dada53e0084d5c65e72f11ea0630b56cf6e4f7f99620be48a8d');
     expect(functionBodySha256(migration, 'guard_return_credit_lineage')).toBe('7b5ccb72380c54cd2a202f891de659bce1b916c09c76ad9884446ba1544dd89f');
@@ -220,6 +229,19 @@ describe('return-credit COGS migration', () => {
     expect(monthEndPage).not.toContain('Posted Invoices');
     expect(customerDetailPage).toContain("toast('error', sanitizeError(err))");
     expect(customerDetailPage).not.toContain("err instanceof Error ? err.message : 'Failed to generate summary'");
+  });
+
+  it('clears return-credit bypass settings on delegated failures and detects reset removal', () => {
+    const settings = ['app.crx_return_credit_void', 'app.crx_return_credit_unapply'];
+    for (const setting of settings) {
+      expect(() => assertExceptionReset(migration, setting)).not.toThrow();
+      const mutant = migration.replace(
+        `PERFORM set_config('${setting}', '0', true);`,
+        `PERFORM set_config('${setting}', '1', true); -- mutation: reset removed`,
+      );
+      expect(mutant).not.toBe(migration);
+      expect(() => assertExceptionReset(mutant, setting)).toThrow(`${setting} is not reset before re-raising`);
+    }
   });
 
   it('gives sales reps one clear empty-assignment message', () => {

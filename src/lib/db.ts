@@ -150,7 +150,7 @@ export const RpcErrorCodes = {
   // delivery is completed — the same click that corrects it to what actually went out.
   DELIVERY_NOT_COMPLETED: 'DELIVERY_NOT_COMPLETED',
   DELIVERY_MISSING: 'DELIVERY_MISSING',
-  // return-credit COGS and year-end report guards (20260825230150/230209)
+  // return-credit COGS and year-end report guards (20260827041000/041100)
   RETURN_CREDIT_CUTOVER_IN_PROGRESS: 'RETURN_CREDIT_CUTOVER_IN_PROGRESS',
   CUSTOMER_SCOPE_DENIED: 'CUSTOMER_SCOPE_DENIED',
   RETURN_NOT_APPROVED: 'RETURN_NOT_APPROVED',

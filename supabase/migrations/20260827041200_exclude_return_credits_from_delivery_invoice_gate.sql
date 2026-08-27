@@ -1,4 +1,4 @@
--- 20260826215500_exclude_return_credits_from_delivery_invoice_gate.sql
+-- 20260827041200_exclude_return_credits_from_delivery_invoice_gate.sql
 --
 -- A posted return-credit memo is order-linked but intentionally has no delivery_id.
 -- The delivery completion auto-invoice gate historically treated every order-level

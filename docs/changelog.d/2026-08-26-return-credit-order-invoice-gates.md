@@ -4,4 +4,4 @@
 - The migration aborts on source drift, changes one exact guard in each private implementation, pins both outgoing function bodies, and preserves their private execution posture.
 - The disposable production-schema proof restores the stale guards as mutants and proves both public invoice-creation paths fail, reapplies the canonical migration, and proves ordinary and split-order recovery succeed.
 - Added fail-closed rollout preflights for linked nonterminal return unit drift and recognized source-line unit drift. Removing either guard is mutation-tested.
-- Final database proof: seven candidate/compatibility entries, 44 load-bearing proofs, `SMOKE_PASS_ROLLBACK`, and zero residue. No migration was applied to production.
+- Final database proof: seven candidate/compatibility entries, 45 load-bearing proofs, `SMOKE_PASS_ROLLBACK`, and zero residue. No migration was applied to production.

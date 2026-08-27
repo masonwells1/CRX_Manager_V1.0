@@ -31,6 +31,8 @@ import type { Order } from '../types';
 import { getSeasonDates } from '../utils/season';
 import { activeInvoiceCountsTowardBilling, type InvoiceBillingCoverage } from '../lib/deliveryInvoiceCoverage';
 
+const EMPTY_UUID = '00000000-0000-0000-0000-000000000000';
+
 interface OrderWithFulfillment extends Order {
   fulfillment_pct: number;
   invoiced_pct: number;
@@ -104,11 +106,11 @@ export default function Orders() {
       supabase
         .from('order_items')
         .select('order_id, total_units_needed, quantity_delivered, price_per_unit, product_name')
-        .in('order_id', orderIds.length > 0 ? orderIds : ['__none__']),
+        .in('order_id', orderIds.length > 0 ? orderIds : [EMPTY_UUID]),
       supabase
         .from('invoices')
         .select('order_id, total_amount_cents, invoice_type, status, deleted_at')
-        .in('order_id', orderIds.length > 0 ? orderIds : ['__none__']),
+        .in('order_id', orderIds.length > 0 ? orderIds : [EMPTY_UUID]),
       parentIds.length > 0
         ? supabase
             .from('customers')
@@ -118,7 +120,7 @@ export default function Orders() {
       supabase
         .from('deliveries')
         .select('order_id, scheduled_date, status')
-        .in('order_id', orderIds.length > 0 ? orderIds : ['__none__'])
+        .in('order_id', orderIds.length > 0 ? orderIds : [EMPTY_UUID])
         .in('status', ['scheduled', 'in_progress']),
     ]);
 

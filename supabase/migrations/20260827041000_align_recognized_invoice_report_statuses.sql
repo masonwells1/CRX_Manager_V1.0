@@ -3,7 +3,7 @@
 -- business rows and does not alter AR's open-balance definition.
 --
 -- APPLY-PAIR REQUIREMENT: this file intentionally pauses return-credit
--- issuance until 20260825230209 completes and removes the barrier. Apply both
+-- issuance until 20260827041100 completes and removes the barrier. Apply both
 -- files back-to-back in one governed session; this file is not safe to leave
 -- half-applied as an ordinary operating state. If the second migration fails,
 -- leave this barrier in place, repair the reported drift, and rerun the second
@@ -48,6 +48,7 @@ BEGIN
   SELECT p.prosrc INTO v_src FROM pg_proc p WHERE p.oid = v_pnl;
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') <> '7624af5d26e6b9cbf9a8e5e6b0f030fe5cc164bf5b6994214db94d5438e3fcd4'
      OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_pnl AND NOT p.prosecdef AND p.provolatile = 's' AND p.proconfig = ARRAY['search_path=public']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR has_function_privilege('anon', v_pnl, 'EXECUTE') IS NOT TRUE
      OR has_function_privilege('authenticated', v_pnl, 'EXECUTE') IS NOT TRUE
      OR has_function_privilege('service_role', v_pnl, 'EXECUTE') IS NOT TRUE THEN
     RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_PREFLIGHT_PNL_DRIFT';
@@ -137,9 +138,10 @@ CREATE TRIGGER aa_crx_block_return_credit_during_cogs_cutover
   WHEN (NEW.status = 'credited' OR NEW.credit_invoice_id IS NOT NULL)
   EXECUTE FUNCTION public.block_return_credit_during_cogs_cutover();
 
--- Deliberately preserve the live SECURITY INVOKER ACL: CREATE OR REPLACE does
--- not change grants, and this migration changes recognized-status accounting
--- only. A stricter anon posture applied before this file remains stricter.
+-- Deliberately preserve and pin the live SECURITY INVOKER ACL, including anon
+-- EXECUTE inherited through the existing function grant. The function remains
+-- caller-rights and every underlying table read remains subject to RLS; this
+-- report-status correction neither grants nor revokes an API capability.
 CREATE OR REPLACE FUNCTION public.get_bottom_line_pnl(
   p_start_date date,
   p_end_date date
@@ -415,6 +417,7 @@ BEGIN
   SELECT p.prosrc INTO v_src FROM pg_proc p WHERE p.oid = v_pnl;
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') <> (v_expected ->> 'get_bottom_line_pnl')
      OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_pnl AND NOT p.prosecdef AND p.provolatile = 's' AND p.proconfig = ARRAY['search_path=public']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR has_function_privilege('anon', v_pnl, 'EXECUTE') IS NOT TRUE
      OR has_function_privilege('authenticated', v_pnl, 'EXECUTE') IS NOT TRUE
      OR has_function_privilege('service_role', v_pnl, 'EXECUTE') IS NOT TRUE
      OR position('i.status IN (''posted'', ''overdue'', ''paid'')' IN v_src) = 0

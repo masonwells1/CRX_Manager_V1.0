@@ -66,11 +66,11 @@ it applied live on 2026-08-25. Those older lines are left in place as provenance
 individually rewritten in this pass.
 
 **PR #361 return-credit candidate — not applied.** The candidate migrations
-`20260825230150_align_recognized_invoice_report_statuses` and
-`20260825230209_rebuild_return_credit_cogs_reversal`, plus the follow-up
-`20260826215500_exclude_return_credits_from_delivery_invoice_gate` and the delivery-surface alignment
-`20260826234000_align_return_credit_delivery_surfaces`, plus the order-level alignment
-`20260827031500_align_return_credit_order_invoice_gates`, are absent from the live ledger. Production has
+`20260827041000_align_recognized_invoice_report_statuses` and
+`20260827041100_rebuild_return_credit_cogs_reversal`, plus the follow-up
+`20260827041200_exclude_return_credits_from_delivery_invoice_gate` and the delivery-surface alignment
+`20260827041300_align_return_credit_delivery_surfaces`, plus the order-level alignment
+`20260827041400_align_return_credit_order_invoice_gates`, are absent from the live ledger. Production has
 zero credited returns, zero returns linked to credit invoices, and zero recognized return-credit
 memos, so the defect is real but latent. Current live return-credit issuance still creates a
 header-only credit, while the P&L and monthly reports use different recognized invoice-status sets.
