@@ -11,7 +11,9 @@ season.
 Invoice-basis P&L and monthly COGS now round each ordinary sale line to whole cents before summing.
 That is a deliberate reporting change: it makes the report basis exactly match the return allocator's
 whole-cent ceiling, so a return cannot reverse more than the report recognized. Reprinting a period
-with fractional-quantity invoice lines can therefore differ by a cent from an older copy. Year-end
+with fractional-quantity invoice lines can therefore differ by a cent from an older copy. The posted
+return-credit detail view uses the stored, penny-exact COGS header as well, so grouped fractional lines
+cannot introduce a one-cent display mismatch. Year-end
 financial access is also tightened: admins can read every customer, while sales reps can read only
 customers assigned to them; batch discovery pages and chunks both invoice and assignment reads.
 

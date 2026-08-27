@@ -1367,19 +1367,23 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // generic page strictly read-only for them so a save can't cascade away their line
   // shares (Codex P1 #6). Paired with the hard guard in handleSave.
   const isSplitInvoice = !!(invoice as { field_app_billing_set_id?: string | null }).field_app_billing_set_id;
+  const canEdit = isAdminOrRep;
+  const editable = canEdit && !isSplitInvoice && (isNew || ['draft', 'unposted'].includes(invoice.status || ''));
+  const storedTotalCostCents = (invoice as { total_cost_cents?: number | null }).total_cost_cents;
   // Total Cost / Margin:
   // - Split invoice (Codex r5 P2): chemical items store PER-UNIT cost, but the header
   //   total_cost_cents holds the penny-exact largest-remainder-allocated COGS — recomputing
   //   cost_cents*quantity here would mis-display it (1¢ cost split 50/50 shows 1¢+1¢ vs the
   //   authoritative 1¢+0¢). Use the header total.
+  // - Posted return credits also use the stored header because their grouped fractional lines
+  //   telescope to the original penny-exact COGS. Recomputing each line can differ by one cent.
   // - Otherwise mirror save_invoice DELTA-E: a machine-fee line stores its EXACT extended cost
   //   (its quantity is acres, not a multiplier), so add it as-is; product lines store a per-unit
   //   cost -> x quantity. Using x quantity for the fee line would inflate Total Cost by acres.
-  const totalCostCents = isSplitInvoice
-    ? Number((invoice as { total_cost_cents?: number | null }).total_cost_cents ?? 0)
+  const useStoredTotalCost = isSplitInvoice || (invoice.invoice_type === 'credit_memo' && !editable);
+  const totalCostCents = useStoredTotalCost && storedTotalCostCents != null
+    ? Number(storedTotalCostCents)
     : items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
-  const canEdit = isAdminOrRep;
-  const editable = canEdit && !isSplitInvoice && (isNew || ['draft', 'unposted'].includes(invoice.status || ''));
   const displayItems = editable
     ? items
     : groupReturnCreditDisplayItems(invoice.invoice_type, items);

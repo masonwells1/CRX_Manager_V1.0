@@ -473,6 +473,37 @@ describe('InvoiceDetail', () => {
       expect(matches.length).toBeGreaterThan(0);
     });
   });
+
+  it('renders the stored penny-exact COGS total for a posted return credit', async () => {
+    const invoice = {
+      id: 'credit-return-1', invoice_number: 'CM-RETURN-1', status: 'posted',
+      invoice_type: 'credit_memo', customer_id: 'cust-1', total_amount_cents: -1000,
+      total_cost_cents: -251, paid_amount_cents: 0, prepay_applied_cents: 0,
+      credit_applied_cents: 0, balance_cents: -1000, invoice_date: '2026-03-15',
+      due_date: null, created_at: '2026-03-15T00:00:00Z',
+    };
+    const creditLines = [{
+      id: 'credit-line-1', invoice_id: invoice.id, product_id: 'product-1',
+      description: 'Return credit - Product', quantity: 1.5, unit_price_cents: -667,
+      extended_cents: -1000, cost_cents: -168, unit_size: 'Gal',
+      is_application_fee: false,
+    }];
+    let invoiceCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : [], error: null });
+      }
+      if (table === 'invoice_items') return buildChain({ data: creditLines, error: null });
+      return buildChain({ data: [], error: null });
+    });
+
+    renderInvoiceDetail(invoice.id);
+    await waitFor(() => expect(screen.getAllByText('CM-RETURN-1').length).toBeGreaterThan(0));
+    const totalCostLabel = screen.getByText('Total Cost');
+    expect(totalCostLabel.parentElement).toHaveTextContent('-$2.51');
+    expect(totalCostLabel.parentElement).not.toHaveTextContent('-$2.52');
+  });
 });
 
 describe('InvoiceDetail — chemical-sale payment terms', () => {
