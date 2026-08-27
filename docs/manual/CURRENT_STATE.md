@@ -1,8 +1,14 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-08-26 UTC for the migration ledger and schema registry only** — re-read
-read-only on 2026-08-26 while landing the COMMENT-only candidate `20260826150000` (history row
-893, NOT applied): still **976 ledger rows**, `max(version)` `20260825142708`, newest name
+**Last verified: 2026-08-26 ~21:30 UTC for the migration ledger only** — read-only re-read
+after the `20260826150000` apply: **977 ledger rows**, `max(version)` `20260826205935`, and
+current live effective ordering name high-water **`20260826150000`**
+(`20260826150000_fix_save_job_comment_refusal_count`, history row 893, **applied live
+2026-08-26 20:59:35 UTC**). That apply superseded the earlier reading this header carried
+(976 rows / high-water `20260820120000`, taken while row 893 was still a candidate) — kept
+below for provenance, per this file's convention. Superseded text follows: re-read read-only
+on 2026-08-26 while landing the COMMENT-only candidate `20260826150000` (history row
+893, then NOT applied): still **976 ledger rows**, `max(version)` `20260825142708`, newest name
 `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` — every figure unchanged
 from the 2026-08-25 reading below. Original stamp text follows — a read-only
 re-read. **The live ledger has 976 rows**, `max(version)` `20260825142708`, and current live

@@ -24,11 +24,14 @@ EXECUTE (measured live 2026-08-26, read-only: one each, none — the assertions 
 and fail closed on drift). Sol's remaining finding is the in-transaction cutover race: the
 owner's recorded accepted risk, deliberately unresolved on #401.
 
-**Smoke pass token anchored to an identifier boundary.** `interpret-result.mjs` accepted any
-error message merely EXTENDING `SMOKE_PASS_ROLLBACK` — `SMOKE_PASS_ROLLBACK_BUT_FAILED` (Sol)
-and, after the first fix, `SMOKE_PASS_ROLLBACK$BUT_FAILED` (CodeRabbit — PostgreSQL
-identifiers may contain `$`). The boundary now excludes `[A-Za-z0-9_$]`, with red/green
-regressions for both attack strings observed failing (4/4).
+**Smoke pass token now matched by delimiter ALLOWLIST, not extender denylist.** Three review
+rounds found the same bug at increasing depth: bare `startsWith()` accepted
+`SMOKE_PASS_ROLLBACK_BUT_FAILED` (Sol); excluding `[A-Za-z0-9_]` accepted the `$`-extended
+form (CodeRabbit — PostgreSQL identifiers may contain `$`); excluding `$` too still accepted
+non-ASCII identifier letters (`é`, `λ` — Sol, reproduced read-only). The terminal fix stops
+enumerating cheats: the matcher accepts exactly the shapes real pass raises take — the bare
+token, token-space, or token-parenthesis — and all four historical attack strings are pinned
+red in `runSmokeParser.test.ts` (observed failing, 59/59 suite green).
 
 Not verified: the migration itself remains UNAPPLIED — the apply follows PR #499's merge,
 from the owning session, through the gated file-bytes door with fresh proofs.

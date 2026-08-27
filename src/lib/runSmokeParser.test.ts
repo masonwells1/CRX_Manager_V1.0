@@ -15,14 +15,21 @@ describe('run-smoke result parser', () => {
     expect(interpretResult('ERROR:  SMOKE_PASS_ROLLBACK')).toEqual({ pass: true });
   });
 
-  it('refuses an identifier that merely EXTENDS the pass token (Sol, 2026-08-26)', () => {
-    // startsWith() alone accepted this: the token boundary must be the end of
-    // the message or a character that cannot extend a PostgreSQL identifier.
-    const result = interpretResult('ERROR:  SMOKE_PASS_ROLLBACK_BUT_FAILED');
-    expect(result.pass).toBe(false);
-    // PostgreSQL identifiers may also contain `$` (CodeRabbit, 2026-08-26) —
-    // a boundary that excluded only [A-Za-z0-9_] let this through.
-    expect(interpretResult('ERROR:  SMOKE_PASS_ROLLBACK$BUT_FAILED').pass).toBe(false);
+  it('refuses any identifier that merely EXTENDS the pass token', () => {
+    // Three rounds of the same bug taught the shape of the fix: the matcher
+    // ALLOWLISTS real delimiters (end, space, open paren) instead of
+    // enumerating forbidden extension characters. Each historical bypass stays
+    // pinned red here: plain extension (Sol), $-extension (CodeRabbit —
+    // PostgreSQL identifiers may contain $), and non-ASCII identifier letters
+    // (Sol — identifiers also permit é, λ and friends).
+    for (const attack of [
+      'ERROR:  SMOKE_PASS_ROLLBACK_BUT_FAILED',
+      'ERROR:  SMOKE_PASS_ROLLBACK$BUT_FAILED',
+      'ERROR:  SMOKE_PASS_ROLLBACKéBUT_FAILED',
+      'ERROR:  SMOKE_PASS_ROLLBACKλBUT_FAILED',
+    ]) {
+      expect(interpretResult(attack).pass, attack).toBe(false);
+    }
   });
 
   it('keeps failures that merely quote a pass token red', () => {

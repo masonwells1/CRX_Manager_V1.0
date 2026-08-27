@@ -5,14 +5,19 @@ export function interpretResult(outputText) {
   const lines = outputText.split(/\r?\n/).filter((line) => line.trim());
   const postgresErrorMessage = (line) => line.match(/^(?:psql:.*:\d+: )?ERROR:\s+(.+)$/)?.[1] || null;
 
-  // The token must be the whole message or be followed by a character that
-  // cannot extend a PostgreSQL identifier — bare startsWith() accepted
-  // identifiers that merely EXTEND the token, e.g. SMOKE_PASS_ROLLBACK_BUT_FAILED
-  // (Sol, 2026-08-26), and PostgreSQL identifiers may also contain `$`, so
-  // SMOKE_PASS_ROLLBACK$BUT_FAILED must stay red too (CodeRabbit, 2026-08-26).
+  // ALLOWLIST the delimiters real pass messages use; do not enumerate the
+  // characters that could extend an identifier. Three review rounds proved the
+  // deny-the-extenders direction never terminates: bare startsWith() accepted
+  // SMOKE_PASS_ROLLBACK_BUT_FAILED (Sol), excluding [A-Za-z0-9_] accepted the
+  // $-extended form (CodeRabbit — identifiers may contain $), and excluding $
+  // too still accepted non-ASCII identifier letters like é and λ (Sol,
+  // reproduced read-only). Every real pass raise is either the bare token or
+  // the token followed by a space or an open parenthesis — accept exactly
+  // those shapes and nothing else.
   const isPassToken = (message) =>
     message === PASS_TOKEN ||
-    (message?.startsWith(PASS_TOKEN) && /^[^A-Za-z0-9_$]/.test(message.slice(PASS_TOKEN.length)));
+    message?.startsWith(PASS_TOKEN + ' ') ||
+    message?.startsWith(PASS_TOKEN + '(');
   if (lines.map(postgresErrorMessage).some(isPassToken)) {
     return { pass: true };
   }
