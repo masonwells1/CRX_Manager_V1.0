@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { isHoldPhrase, isResumePhrase } from "./hold-latch-lib.mjs";
-import { isMachineGenerated } from "./prompt-source-lib.mjs";
+import { isMachineGenerated, authoredByMason } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -24,7 +24,22 @@ try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { emit(); }
 // Proven 2026-07-04: a <task-notification> audit digest containing "stop" latched hold.json.
 if (isMachineGenerated(payload?.prompt)) emit();
 
-const prompt = String(payload?.prompt || "");
+// Strip the spans of THIS prompt that Mason did not author — peer-session
+// <cross-session-message> blocks, machine envelopes, quoted blockquote lines,
+// and code spans — then match only on what is left. Proven 2026-08-26: a peer
+// session's message ("stand down ... no need to stop the other lane") latched
+// the receiver's hold, the quoted reply latched the sender's, and naming
+// `stop-wrap.mjs` latched it again. Matching the raw prompt is the defect.
+//
+// This narrows the INPUT, never the vocabulary: if Mason typed a hold phrase
+// anywhere outside those spans it still latches, including in the same message
+// as a stripped block.
+const prompt = authoredByMason(payload?.prompt);
+
+// Nothing left after stripping → this prompt is entirely someone else's words.
+// It is not Mason's turn to speak, so it must NEITHER latch a hold NOR clear
+// one: a sibling session must not be able to release a hold Mason latched.
+if (!prompt.trim()) emit();
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const stateDir = path.join(projectDir, ".claude", "session-state");
@@ -37,7 +52,7 @@ function wasHeld() {
 if (isHoldPhrase(prompt)) {
   try {
     mkdirSync(stateDir, { recursive: true });
-    writeFileSync(holdPath, JSON.stringify({ held: true, phrase: prompt.slice(0, 200), ts: new Date().toISOString() }), "utf8");
+    writeFileSync(holdPath, JSON.stringify({ held: true, phrase: prompt.trim().slice(0, 200), ts: new Date().toISOString() }), "utf8");
   } catch { /* non-fatal */ }
   emit([
     "HOLD LATCHED — Mason said stop / pause / scope-only.",
