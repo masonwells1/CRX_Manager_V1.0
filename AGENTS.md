@@ -65,7 +65,9 @@ Never commit `.env` files or reveal keys. Never use `--no-verify`. Never use des
 - Do not claim a finding is current when the checkout is behind `origin/main`.
 - Do not push, deploy, migrate, or mutate live data as part of a review, audit, health check, or setup check.
 
-## Native Multi-Agent Orchestration
+## Native Codex Multi-Agent Orchestration
+
+This section applies only when Codex is the coordinating agent. Claude continues to use the canonical `.claude/` workflows and their tested model routing and fan-out limits.
 
 - Mason describes the business outcome; the coordinating agent owns risk classification, task breakdown, worker selection, file/worktree isolation, integration, and one consolidated owner-facing status. Do not make Mason coordinate agents or Git.
 - Prefer native Codex subagents, project instructions, skills, and linked worktrees. Do not add a custom agent server, queue, container layer, or permanent role files until a repeated workflow and a verified native limitation justify them.

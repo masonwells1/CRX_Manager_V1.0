@@ -1,6 +1,6 @@
 ## 2026-08-27 — Define native Codex multi-agent orchestration
 
-Added a concise CRX-specific `AGENTS.md` policy that makes the coordinating agent own task decomposition, bounded worker contracts, worktree isolation, integration, and one Mason-facing status. The policy prefers native Codex capabilities, keeps critical architecture and final review with Sol High, limits parallel workers, and preserves all existing exact-commit review and protected delivery gates.
+Added a concise CRX-specific `AGENTS.md` policy that makes the Codex coordinating agent own task decomposition, bounded worker contracts, worktree isolation, integration, and one Mason-facing status. The policy explicitly leaves Claude's canonical workflows and model routing unchanged, prefers native Codex capabilities, keeps critical architecture and final review with Sol High, limits ad-hoc parallel workers, and preserves all existing exact-commit review and protected delivery gates.
 
 Added a verified setup handoff recording the current Codex capability evidence, the intentional decision not to add speculative custom-agent infrastructure, and the remaining delivery gate.
 

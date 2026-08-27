@@ -25,7 +25,8 @@ Add a concise CRX-specific policy that lets Codex use native parallel workers wi
 - `npm run test:agent-workflows` passed, including the lean-guidance check at 133 lines, hook parity, generated workflow parity, production guard tests, and 38 synced Codex workflow adapters.
 - `npm run agent-health` passed with one pre-existing warning that the schema registry trails one migration on disk; this policy change does not touch migrations or the registry.
 - The combined global and project `AGENTS.md` files total 30,290 bytes, below Codex's default 32 KiB project-instruction discovery limit.
-- The first exact-head `gpt-5.6-sol` High review returned clean for commit `8083d4c56fdc0e2a11149822000bcf2c0d04e068`. GitHub review then found two follow-up documentation issues: scope the three-worker cap to ad-hoc Codex delegation, and state the exact-head review gate consistently. Both findings were accepted for correction.
+- The first exact-head `gpt-5.6-sol` High review returned clean for commit `8083d4c56fdc0e2a11149822000bcf2c0d04e068`. GitHub review then found two follow-up documentation issues: scope the three-worker cap to ad-hoc Codex delegation, and state the exact-head review gate consistently. Both findings were corrected in `22460092e7d0e68c9b589c8046f2a8c71f5775c3`, which then passed a fresh exact-head Sol High review.
+- A latest-commit GitHub Codex review identified one additional valid issue: because Claude imports this shared file, the Codex-specific worker and model-routing section also needed an explicit Codex-only scope. CodeRabbit's fresh latest-head review cleared its earlier change request without adding a new finding.
 
 ## WRITTEN, NOT PROVEN
 
@@ -46,11 +47,11 @@ Mason requested help brainstorming this setup and editing `AGENTS.md`, which aut
 ## GATES AND BLOCKERS
 
 - Completed on the first commit: exact-diff inspection, documentation checks, agent-workflow checks, agent health, instruction-size verification, and a clean exact-head Sol High review.
-- Current blocker: the follow-up commit that resolves review feedback requires a fresh separate exact-head review before delivery.
+- Current blocker: the Codex-only scoping fix requires focused checks and a fresh separate exact-head review before delivery.
 - Required before merge: all existing CRX branch-protection, CodeRabbit, exact-SHA review, CI, and Vercel rules remain unchanged.
 
 ## FIRST ACTION
 
-Run the focused documentation and agent-workflow checks on the review-fix commit, then obtain a fresh exact-head review before pushing it.
+Run the focused documentation and agent-workflow checks on the Codex-only scoping fix, then obtain a fresh exact-head review before pushing it.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.
