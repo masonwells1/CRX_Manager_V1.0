@@ -59,6 +59,7 @@ const SIBLING_SMOKES = [
 const ADMIN = '00000000-0000-0000-0000-0000000000a1';
 const KEY = 818181;
 const BARRIER_SECONDS = 8;
+const SECTION9_LOCK_TIMEOUT_HOLD_SECONDS = 12;
 const SECTION9_LEGACY_RECEIPT_PREDICATE = `
  WHERE expires_at >= now()
    AND operation IN (
@@ -364,6 +365,39 @@ CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
       restoreLiveCrLfCloseRemainder();
     }
     if (path.basename(local) === '20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard.sql') {
+      const timeoutRemote = `section9-lock-timeout-${path.basename(local)}`;
+      copySql(local, timeoutRemote);
+      const timeoutHolder = session(`
+BEGIN;
+SET application_name='section9-lock-timeout-holder';
+INSERT INTO public.idempotency_keys (idempotency_key, operation, result)
+VALUES ('section9-lock-timeout-held-receipt', 'record_vendor_payment', '{"payment_id":"00000000-0000-0000-0000-000000000098"}'::jsonb);
+SELECT 'SECTION9_LOCK_TIMEOUT_HOLDER_READY';
+SELECT pg_sleep(${SECTION9_LOCK_TIMEOUT_HOLD_SECONDS});
+COMMIT;
+`, 'SECTION9_LOCK_TIMEOUT_HOLDER_READY');
+      await timeoutHolder.ready;
+      const timeoutAttempt = session(`
+BEGIN;
+SET application_name='section9-lock-timeout-migration';
+SELECT 'SECTION9_LOCK_TIMEOUT_ATTEMPT_STARTED';
+\\i /tmp/${timeoutRemote}
+COMMIT;
+`, 'SECTION9_LOCK_TIMEOUT_ATTEMPT_STARTED');
+      await timeoutAttempt.ready;
+      const [timeoutHolderResult, timeoutAttemptResult] = await Promise.all([
+        timeoutHolder.done,
+        timeoutAttempt.done,
+      ]);
+      assert.equal(timeoutHolderResult.code, 0, timeoutHolderResult.err);
+      expectError(
+        timeoutAttemptResult,
+        'canceling statement due to lock timeout',
+        'Section 9 bounded cutover lock',
+      );
+      sql(`DELETE FROM public.idempotency_keys WHERE idempotency_key='section9-lock-timeout-held-receipt';`);
+      console.log('CANDIDATE_SECTION9_BOUNDED_CUTOVER_LOCK_TIMEOUT_PASS');
+
       sql(`CREATE FUNCTION public.create_vendor_bill(p_decoy text) RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT '{}'::jsonb $$;`);
       try {
         expectValidationFailure(local, 'section9-intent-decoy-overload', 'SECTION9_UNEXPECTED_PUBLIC_OVERLOADS: create_vendor_bill');

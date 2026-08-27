@@ -13,8 +13,11 @@
 -- audit rows, and existing return shapes byte-for-byte inside the implementations.
 
 -- Drain every transaction that already touched the shared receipt table before
--- validating legacy receipts or renaming the public RPCs. PostgreSQL lock
--- queueing also holds callers that arrive during cutover behind this migration.
+-- validating legacy receipts or renaming the public RPCs. Give the drain a
+-- bounded quiet-window attempt: if the table cannot be locked within 10 seconds,
+-- abort the transaction and retry later instead of queueing production writers
+-- behind an indefinitely waiting migration.
+SET LOCAL lock_timeout = '10s';
 LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;
 
 -- A caller that resolved an old function body before the rename can resume

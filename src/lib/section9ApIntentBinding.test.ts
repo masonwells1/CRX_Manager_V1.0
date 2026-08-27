@@ -74,6 +74,9 @@ function hasIntentBindingContract(sql: string) {
     && (sql.match(/request_actor_id = v_actor/g) ?? []).length >= 7
     && (sql.match(/request_fingerprint = v_fingerprint/g) ?? []).length >= 7
     && (sql.match(/extensions\.digest\(/g) ?? []).length === 8
+    && sql.includes("SET LOCAL lock_timeout = '10s';")
+    && sql.indexOf("SET LOCAL lock_timeout = '10s';")
+      < sql.indexOf('LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;')
     && sql.includes('LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;')
     && sql.includes('SECTION9_UNEXPECTED_PUBLIC_OVERLOADS')
     && sql.includes('SECTION9_REVIEWED_BODY_DRIFT')
@@ -124,6 +127,9 @@ describe('Section 9 AP and receiving intent binding', () => {
     )).toBe(false);
     expect(hasIntentBindingContract(
       migration.replace('LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;', ''),
+    )).toBe(false);
+    expect(hasIntentBindingContract(
+      migration.replace("SET LOCAL lock_timeout = '10s';", ''),
     )).toBe(false);
     expect(hasIntentBindingContract(
       migration.replace("PERFORM set_config('crx.section9_idempotency_intent'", 'PERFORM set_config(\'crx.unbound_intent\''),
@@ -358,5 +364,7 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(intentDecoy).toContain('DROP FUNCTION IF EXISTS public.create_vendor_bill(text)');
     expect(agingDecoy).toContain('finally {');
     expect(agingDecoy).toContain('DROP FUNCTION IF EXISTS public.get_ap_aging(text)');
+    expect(periodCloseProof).toContain('CANDIDATE_SECTION9_BOUNDED_CUTOVER_LOCK_TIMEOUT_PASS');
+    expect(periodCloseProof).toContain("'canceling statement due to lock timeout'");
   });
 });
