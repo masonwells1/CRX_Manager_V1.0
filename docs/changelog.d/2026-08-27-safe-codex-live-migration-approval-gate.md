@@ -5,22 +5,20 @@ candidate fix used text from UserPromptSubmit as an approval token, but exact-co
 review proved that relayed machine text could be mistaken for Mason's authorship. That design was
 removed before release.
 
-The replacement disables Codex's raw Supabase `apply_migration` and `execute_sql` tools. A local,
-CRX-only bridge exposes one write tool: it reads the exact timestamped migration file from the repo,
-verifies the caller-supplied SHA-256, fixed production project, ordered snapshot, current review
-proof, and destructive-SQL rules inside the tool handler, and only then transmits an atomic batch.
-That tool uses Codex's native approval prompt routed to Mason, not the automatic reviewer.
+The replacement moves production credentials and execution out of the local Codex shell. A manual
+GitHub workflow accepts one exact current-main commit, timestamped migration filename, and SHA-256.
+Its `production-database` environment requires Mason's GitHub account, rejects administrator bypass,
+and releases its credentials only after the website approval. Mason does not need a second account:
+Codex uses a fine-grained machine credential with deployment read access but no deployment-write
+permission, so it can dispatch and inspect the run but GitHub refuses any approval attempt from it.
 
-The atomic batch refuses a duplicate version/name, runs compatible migration SQL and its ledger row
-in one transaction and verifies the content-bound ledger row afterwards. Before transmission it
-records a conservative source-containment attempt and invalidates the ordering snapshot, so a
-timeout cannot leave stale evidence usable; after success it runs source-ledger and registry-stale
-actions independently. Migrations with their own transaction
-control or operations such as `CONCURRENTLY` remain parked for a human-operated path. Passing the
-technical gate does not approve production: Mason must approve that specific native tool prompt.
+The generated batch takes a transaction-scoped advisory lock plus a live ledger table lock, refuses
+duplicates and any migration not newer than the live effective high-water mark, runs compatible SQL,
+writes and verifies the hash-bound ledger row, then commits. Migrations with transaction control,
+`CONCURRENTLY`, database-level DDL, client meta-commands, or other non-atomic forms remain parked.
 
-Prevention tests mutation-test the wrong-project, missing-file, wrong-hash, missing-review,
-non-transactional, duplicate-ledger, post-apply, and native protocol paths without a live
-connection. The bridge, configuration, shared migration rules, and maintenance producer become
-protected harness files only after a fresh exact-head gpt-5.6-sol/high proof validates the producer
-and its pinned preimages.
+Prevention tests mutation-test wrong project, missing file, wrong hash, PostgreSQL transaction
+aliases, escape-string parsing, non-atomic commands, lock/order placement, ledger binding, and
+no-overwrite behavior without a network or live database. Ordinary PR CI and the production
+workflow both run the owning test. The workflow remains inert until the protected environment,
+least-privilege Codex credential, and production secrets are installed and their deny path is proven.
