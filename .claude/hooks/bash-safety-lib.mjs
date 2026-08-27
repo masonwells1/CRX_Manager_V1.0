@@ -21,8 +21,61 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer",
 ]);
 
+// Remove the BODY of every QUOTED here-document (`<<'EOF'` / `<<"EOF"`, and the
+// `<<-` indented forms) from a command, leaving the command line itself — the
+// `<<'EOF'` marker, and any redirect target such as `cat > scripts/x.mjs` — intact.
+//
+// Why this specific carve-out and nothing wider (2026-08-26, PR #503): the guard
+// below scans the command as raw text, so a `node` token plus any dynamic
+// character anywhere in the string denies the command. That made a very common,
+// completely inert shape impossible — writing a script to a file with a heredoc,
+// where the FILE's contents happen to mention a variable or a node command — and
+// since the workaround for a denial is "write a script, then run it", both doors
+// were shut and sessions thrashed.
+//
+// A QUOTED heredoc body is the one region the shell guarantees it does not touch:
+// bash performs NO parameter expansion, command substitution, or arithmetic inside
+// it. It is literal data. So excluding it cannot create a bypass — there is nothing
+// in there for the shell to execute.
+//
+// This is deliberately NOT a per-segment or per-token model of shell grammar. An
+// earlier revision of this PR tried that and reopened three separate holes in three
+// review rounds (brace expansion, then process substitution, then `&>` redirects and
+// UNQUOTED heredocs) — each fix invited the next, because matching bash's real
+// parsing with this tokenizer is not achievable. Unquoted heredocs stay in scope
+// precisely because bash DOES expand them.
+export function stripQuotedHeredocBodies(text) {
+  const source = String(text || "");
+  // Capture: <<  optional -  optional quote  DELIM  matching quote
+  const opener = /<<(-?)\s*(['"])([A-Za-z_][\w-]*)\2/;
+  const lines = source.split(/\r?\n/);
+  const kept = [];
+  // Body lines are held aside rather than dropped immediately, so an UNTERMINATED
+  // heredoc can put them back. Otherwise an opener with no terminator would swallow
+  // the entire rest of the command — including a real invocation after it — and hide
+  // it from every check below. FAIL CLOSED: only a body we saw close is inert.
+  let pending = null;
+  for (const line of lines) {
+    if (pending) {
+      const candidate = pending.allowIndent ? line.replace(/^[\t ]+/, "") : line;
+      if (candidate === pending.closing) { kept.push(line); pending = null; }
+      else pending.lines.push(line);
+      continue;
+    }
+    kept.push(line);
+    const match = opener.exec(line);
+    if (match) pending = { allowIndent: match[1] === "-", closing: match[3], lines: [] };
+  }
+  if (pending) kept.push(...pending.lines);
+  return kept.join("\n");
+}
+
 export function maintenanceProducerCommandMentioned(command) {
-  const value = String(command || "");
+  // Quoted-heredoc bodies are inert shell data — see stripQuotedHeredocBodies.
+  // Everything downstream (tokenizing, the dynamic-syntax test, and the raw
+  // producer-name match) reads the stripped text, so a file being WRITTEN cannot
+  // trip the guard, while the command doing the writing still can.
+  const value = stripQuotedHeredocBodies(String(command || ""));
   const hasDynamicSyntax = (text) => /[*?\[\]{}$`@]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|\s-join(?:\s|$)|![^!\r\n]+!|%[^%\r\n]+%/i.test(text);
   const dynamicSyntax = hasDynamicSyntax(value);
   const tokenize = (text) => {
@@ -275,55 +328,15 @@ export function maintenanceProducerCommandMentioned(command) {
       return !(executableNamed(commandToken, "select-string", true) || executableNamed(commandToken, "sls", true));
     };
     const maxNestedShellDepth = 4;
-    // Dynamic syntax makes a `node` invocation opaque only when it appears in
-    // THAT invocation's own command segment. Testing `dynamicSyntax` against the
-    // whole command string meant a single `$`, `*`, `?` or backtick ANYWHERE —
-    // an unrelated pipeline stage, a `$VAR` in a sibling `echo`, or the body of a
-    // file being written by the same command — denied every `node` call in the
-    // command. That removed the one escape route agents had (write a script, then
-    // run it), so ordinary work thrashed against the guard (2026-08-26).
-    //
-    // The pinned region is unchanged for anything that could actually reach the
-    // producer: dynamic syntax in node's OWN segment (`node $VAR/x.mjs`,
-    // `node scripts/$(printf ...)`) still denies, as do the inline-interpreter,
-    // loader, encoded-command and raw-name checks elsewhere in this function.
-    // Segment bounds here use GENUINE command separators only (`;` `&` `|`
-    // newline). The tokenizer also emits `{ } ( ) < >` as control tokens, but
-    // those are expansion/grouping syntax, not command boundaries — treating them
-    // as boundaries would let brace expansion split the producer name across
-    // "segments" and slip past this check
-    // (`node scripts/apply-l{i..i}ve-testdata-...`, covered by bash-safety.test.mjs).
-    // Because they stay INSIDE the segment, `hasDynamicSyntax` still sees them.
-    const isSegmentSeparator = (entry) => Boolean(entry?.control) && /^(?:[;&|]|\n)$/.test(entry.value);
-    // `hasDynamicSyntax` spots process substitution via the two-character sequence
-    // `<(` / `>(`, but tokenizing splits those into two ADJACENT control tokens, so
-    // neither token carries the pattern on its own and a per-token scan would miss
-    // it. Re-join that adjacency explicitly (CodeRabbit, PR #503): without this,
-    // `node scripts/x.mjs <(printf ...)` fed node opaque generated content and was
-    // allowed, while the pre-change whole-string test denied it. A plain redirect
-    // (`node x.mjs > out.log`) is NOT substitution and stays allowed.
-    const isProcessSubstitutionAt = (list, cursor) => Boolean(list[cursor]?.control)
-      && /^[<>]$/.test(list[cursor].value)
-      && Boolean(list[cursor + 1]?.control)
-      && list[cursor + 1].value === "(";
-    const segmentHasDynamicSyntax = (list, index) => {
-      let start = index;
-      while (start > 0 && !isSegmentSeparator(list[start - 1])) start -= 1;
-      let end = index + 1;
-      while (end < list.length && !isSegmentSeparator(list[end])) end += 1;
-      for (let cursor = start; cursor < end; cursor += 1) {
-        if (hasDynamicSyntax(list[cursor].value)) return true;
-        if (cursor + 1 < end && isProcessSubstitutionAt(list, cursor)) return true;
-      }
-      return false;
-    };
     function analyzeText(text, depth) {
       if (depth > maxNestedShellDepth) return true;
       return analyzeTokens(tokenize(text), depth);
     }
     function analyzeTokens(candidateTokens, depth) {
-      if (dynamicSyntax && candidateTokens.some((token, index, list) =>
-        nodeExecutable(token, index, list) && segmentHasDynamicSyntax(list, index))) return true;
+      // Whole-command test, restored deliberately. `dynamicSyntax` is computed from
+      // the command with QUOTED heredoc bodies removed (see the top of this
+      // function), which is the only region the shell provably never expands.
+      if (dynamicSyntax && candidateTokens.some(nodeExecutable)) return true;
       for (let index = 0; index < candidateTokens.length; index += 1) {
         if (executableNamed(candidateTokens[index], "env") && invocationPosition(candidateTokens, index)) {
           for (let cursor = index + 1; cursor < candidateTokens.length && !candidateTokens[cursor].control; cursor += 1) {
