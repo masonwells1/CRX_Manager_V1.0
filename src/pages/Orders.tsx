@@ -110,7 +110,9 @@ export default function Orders() {
       supabase
         .from('invoices')
         .select('order_id, total_amount_cents, invoice_type, status, deleted_at')
-        .in('order_id', orderIds.length > 0 ? orderIds : [EMPTY_UUID]),
+        .in('order_id', orderIds.length > 0 ? orderIds : [EMPTY_UUID])
+        .not('status', 'in', '("voided","cancelled")')
+        .is('deleted_at', null),
       parentIds.length > 0
         ? supabase
             .from('customers')

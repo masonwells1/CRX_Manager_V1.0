@@ -91,5 +91,7 @@ describe('activeInvoiceCoversDelivery', () => {
     const orders = readFileSync(resolve(root, 'src/pages/Orders.tsx'), 'utf8');
     expect(orders).toContain('activeInvoiceCountsTowardBilling(inv)');
     expect(orders).toContain(".select('order_id, total_amount_cents, invoice_type, status, deleted_at')");
+    expect(orders).toContain(".not('status', 'in', '(\"voided\",\"cancelled\")')");
+    expect(orders).toContain(".is('deleted_at', null)");
   });
 });
