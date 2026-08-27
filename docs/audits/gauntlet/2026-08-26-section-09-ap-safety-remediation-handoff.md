@@ -4,7 +4,7 @@
 
 - Checkout: `C:\Users\mason\.codex\worktrees\section9-ap-safety-remediation\CRX_Manager`
 - Branch: `codex/section9-ap-safety-remediation-v2`
-- Current base: `origin/main` at `abbad8c2`; the branch is 0 commits behind and 30 commits ahead before the final evidence-stamp commit.
+- Current base: `origin/main` at `abbad8c2`; the branch is 0 commits behind and 32 commits ahead before the final evidence-stamp commit.
 - Repository: `masonwells1/CRX_Manager_V1.0`
 - Live database: Supabase project `rhyzpcqhnizqbxphqdkr`
 
@@ -52,6 +52,9 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Vendor-payment and vendor-bill void requests obtain keys by exact target plus normalized reason, so a failed request cannot lend its receipt to a different payment, bill, or reason.
 - Every locked form now explains that the previous response was uncertain and instructs the operator to retry the unchanged request; the New Vendor Bill icon-only back control also has an accessible name.
 - Vendor-payment input formatting now converts integer cents to a decimal string with integer arithmetic, avoiding a binary floating-point round trip.
+- Current-head CodeRabbit follow-up `90e8bd8c` makes failure classification non-throwing when IndexedDB/localStorage coordination fails, catches durable-intent preparation before the AP/receiving RPC call, and preserves the locked request on every uncertain outcome.
+- Receiving mismatch reconciliation now requires a non-empty list of committed record IDs in Quick Receive, Receiving Hub, PO Detail, and Inventory. An empty array can no longer vacuously prove that stock was already received.
+- Recovered vendor-bill payment terms preserve a signed due-date difference, vendor-bill edit inputs use the shared exact-cents formatter, and the active route identity is committed in a layout effect rather than mutated during render.
 - `section9ApIntentBinding.test.ts` mutation-tests the actor binding, fingerprints, cutover lock, insert trigger, transaction-local binding context, private implementation ACLs, helper dependency, receipt reconciliation, due-date basis, day-1 boundary, durable actor/surface/scope isolation, and restoration wiring in every high-risk form. `useUncertainMutationIntent.test.ts` proves same-payload/same-key restoration after unmount/reload, definitive cleanup, and fail-closed storage refusal. The Quick Receive component test additionally proves a restored request bypasses refreshed form validation and replays the frozen payload/key.
 - The public receiving wrapper raises the canonical `ACTOR_MISMATCH` refusal when `p_performed_by` disagrees with `auth.uid()`; the mutation guard goes red if that token is removed or renamed.
 - Both migrations fail closed on stale public overloads. Their preflights pin the sole expected signature, owner, language, security mode, fixed search path, and reviewed live-body SHA-256; their postflights require exactly one expected public overload after creation.
@@ -73,12 +76,14 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - `npm run test` after the final migration restamp/order guard — 342 files passed; 4,822 tests passed; 123 skipped.
 - `npm run test` on the final head after merging current `origin/main` — 342 files passed; 4,823 tests passed; 123 skipped.
 - `npm run test` after the same-surface intent and per-claim release correction — 342 files passed; 4,826 tests passed; 123 skipped.
+- `npm run test` after the current-head CodeRabbit corrections — 342 files passed; 4,829 tests passed; 123 skipped.
 - Durable retry focused contracts after the vendor-bill route correction — 3 files, 50/50 passed; hook-only reload/unmount/storage-failure/scope-switch proof 9/9 passed.
 - Final receiving review follow-up — typecheck, full lint, production build, documentation drift, and diff checks pass; 4 focused files, 19/19 tests pass, including an actual Quick Receive reload/retry.
 - Latest focused remediation/concurrency/money tests after the follow-up — 68/68 passed.
 - Latest PR-review follow-up guard — 4 files, 27/27 passed; the focused Section 9 contract alone passes 7/7.
 - Latest cross-tab completion-race proof — 7 focused files, 62/62 passed; typecheck and targeted lint pass.
 - Latest same-surface intent and per-claim release proof — 6 focused files, 50/50 passed; typecheck, targeted lint, and diff checks pass. The Quick Receive reload fixture now carries the real canonical fingerprint, so it proves exact frozen replay rather than bypassing the identity guard with synthetic metadata.
+- Latest current-head review proof — 6 focused files, 41/41 passed, including real browser-storage reconciliation failures and an expired Quick Receive click; typecheck, full lint, production build, documentation drift, and diff hygiene pass.
 - After merging current `origin/main` at `abbad8c2` (a documentation-only CI proof fragment), the same 6 focused files and 50/50 tests, typecheck, documentation drift, and diff hygiene pass; the branch is 0 behind.
 - Focused Section 9 guard after the canonical actor-refusal correction — 6/6 passed.
 - `npm run check:docs` — pass.
@@ -110,9 +115,10 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - Reconciliation against the current live name high-water then found that the two unchanged Section 9 candidates still carried their earlier `20260826125456`/`20260826140333` stamps, which the migration-ordering guard would refuse behind live `20260826150000`. They are now restamped `20260826221000`/`20260826222000`, immediately after pending quote-trust `20260826220000`, and an executable ordering contract pins that three-file release sequence.
 - Exact review of the current branch then found one HIGH in the first Section 9 candidate: its receipt-table `ACCESS EXCLUSIVE` cutover drain had no local lock timeout. A transaction-local 10-second `lock_timeout` now precedes the lock, so contention aborts safely for a quiet-window retry instead of waiting indefinitely; the focused contract mutation-tests removal or reordering of that bound. Fresh replay/full/exact proof remains pending.
 - The next exact-head review found two browser-coordination HIGHs: different requests from the same surface could silently share the winner's result, and one claimant's definitive rejection could delete the shared record while another claimant remained in flight. Exact same-intent matching and atomic per-tab claim release now close both races; 6 focused files and 50/50 tests plus the full 342-file, 4,826-test suite are green. Fresh exact-head proof remains pending.
+- CodeRabbit completed a real review of then-current PR head `4c769f39` at 2026-08-27 04:35Z and reported two inline findings plus five still-applicable duplicate/outside-diff findings: failure classification could throw, durable-intent preparation could escape three handlers, empty receiving IDs passed vacuously, recovered negative terms were clamped, edit money used floating conversion, route identity mutated during render, and the disabled-retry test asserted before a microtask flush. Commit `90e8bd8c` closes every item with executable prevention; a fresh exact-head Sol review and current-commit CodeRabbit pass are now required.
 - That review also reported one non-gating MEDIUM privacy follow-up: resolved cross-tab tombstones retain the frozen financial/receiving payload in browser storage. It does not reopen any of the three Section 9 HIGH findings and is not expanded into this HIGH-remediation release; it remains explicit for later minimization/expiry work.
 - Both migrations' final security and drift reviewers are CLEAN with SHA-bound proof files. The first intent/dashboard drift run timed out while scanning GitHub under a Windows read-only-shell limitation; the warm-cache retry completed CLEAN without changing the proof harness.
-- Replacement PR #500 is open and obsolete PR #491 is closed without rewriting published history. All earlier required checks passed on `a2ba3bf9`, but the actual CodeRabbit review text exposed the two durable-retry findings described above. They are corrected locally and the full/focused proofs pass; a fresh exact-head review and latest-commit CI/CodeRabbit pass remain pending after the documentation commit.
+- Replacement PR #500 is open and obsolete PR #491 is closed without rewriting published history. All required checks passed on prior head `4c769f39`, but the actual current-head CodeRabbit review text exposed the recovery-path findings described above. They are corrected locally at `90e8bd8c` and the full/focused proofs pass; a fresh exact-head review and latest-commit CI/CodeRabbit pass remain pending after the documentation commit.
 
 ## APPROVAL STATE
 
@@ -127,6 +133,6 @@ Done means the changed database and UI paths execute successfully in rollback-on
 
 ## FIRST ACTION
 
-Commit the same-surface intent and per-claim release correction, merge current `origin/main`, mint a fresh exact-head review, push to PR #500, and clear latest-commit CI/CodeRabbit before requesting the ordered live-migration approval.
+Commit this evidence stamp, mint a fresh exact-head review, push to PR #500, and clear latest-commit CI/CodeRabbit before requesting the ordered live-migration approval.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.
