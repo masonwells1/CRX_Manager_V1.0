@@ -30,6 +30,8 @@ eq(autopilotDecision("Bash", { command: "git push --force" }), "deny", "force pu
 eq(autopilotDecision("Bash", { command: "git push origin codex/routine-work --force-with-lease" }), "deny", "trailing force-with-lease denied");
 eq(autopilotDecision("Bash", { command: "git push -fu origin codex/routine-work" }), "deny", "combined short force flag denied");
 eq(autopilotDecision("Bash", { command: "git push origin +codex/routine-work:codex/routine-work" }), "deny", "forced refspec denied");
+eq(autopilotDecision("PowerShell", { command: "git push origin --delete feature/shared" }), "deny", "remote branch deletion denied");
+eq(autopilotDecision("PowerShell", { command: "git push origin :feature/shared" }), "deny", "deletion refspec denied");
 eq(autopilotDecision("Bash", { command: "git reset --hard HEAD~1" }), "deny", "hard reset denied");
 eq(autopilotDecision("Bash", { command: "rm -rf build" }), "deny", "rm -rf denied");
 eq(autopilotDecision("Bash", { command: "npm run test -- --no-verify" }), "deny", "--no-verify denied");
@@ -43,6 +45,7 @@ eq(autopilotDecision("Edit", { file_path: ".env" }), "deny", "Edit .env denied")
 eq(autopilotDecision("Bash", { command: "npx supabase functions deploy send-email" }), "deny", "CLI edge deploy denied");
 eq(autopilotDecision("Bash", { command: "supabase functions deploy process-document" }), "deny", "bare CLI edge deploy denied");
 eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash" }), "allow", "protected PR merge reaches the normal merge guard");
+eq(autopilotDecision("PowerShell", { command: "&gh pr merge 42 --squash --auto" }), "allow", "PowerShell call-operator merge reaches the normal merge guard");
 eq(autopilotDecision("Bash", { command: "$verb='merge'; gh pr $verb 42 --auto" }), "deny", "dynamic GitHub merge is never auto-approved");
 eq(autopilotDecision("mcp__github__push_files", {}), "deny", "GitHub MCP push_files denied");
 eq(autopilotDecision("mcp__github__merge_pull_request", {}), "allow", "GitHub MCP merge PR reaches the normal merge guard");

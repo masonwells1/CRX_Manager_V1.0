@@ -315,6 +315,11 @@ export function featurePushDestinations(cmd) {
     throw new Error("push options are not fully understood");
   }
   const tokens = splitShellArgs(argsText);
+  if (tokens.some((token) => token === "--delete"
+      || /^--de\S*$/.test(token)
+      || /^-[A-Za-z]*d[A-Za-z]*$/.test(token))) {
+    throw new Error("remote ref deletion is not an unattended feature push");
+  }
   const positionals = [];
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
@@ -337,6 +342,9 @@ export function featurePushDestinations(cmd) {
     throw new Error("feature pushes must name an explicit destination refspec");
   }
   const refspecs = positionals.slice(1);
+  if (refspecs.some((refspec) => String(refspec).replace(/^\+/, "").startsWith(":"))) {
+    throw new Error("remote ref deletion is not an unattended feature push");
+  }
   if (refspecs.some((refspec) => /[*?\[\\~^]/.test(String(refspec)))) {
     throw new Error("wildcard or non-literal feature destinations are not allowed");
   }
@@ -2052,7 +2060,7 @@ export function sessionProofDirs(root, hookCwd, listWorktrees) {
 // carrying its own copies.
 
 // gh binary reference — tolerates quoted absolute paths and gh.exe.
-const GH_BIN_RE = /(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i;
+const GH_BIN_RE = /(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i;
 
 // A command-text gate can only verify a GitHub action when the CLI words are
 // literal. `$verb`, `${...}`, command substitution, splats, delayed `%VAR%` /

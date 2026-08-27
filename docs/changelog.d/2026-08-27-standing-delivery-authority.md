@@ -68,6 +68,10 @@ REST request body could hide or override a visible SHA field, so REST merges now
 unconditionally. Autonomous delivery retains the single literal, standalone `gh pr merge`
 command with an explicit repository, PR number, and `--match-head-commit` SHA.
 
+PowerShell's no-space call operator form (`&gh`) now routes through the same merge parser, and
+remote branch/tag deletion is not part of unattended delivery. These close the exact-head review's
+last two shell edge cases while preserving automatic ordinary feature pushes and protected merges.
+
 Proof run: focused autopilot, prompt, hold, Claude/Codex merge-guard, and global risky-phrase
 tests; full correction-guard and agent-workflow suites; lint, typecheck, build, docs check, sync,
 and mutation tests. No business safety rule, branch protection, product model, migration, RPC,

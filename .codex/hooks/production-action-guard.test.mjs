@@ -614,6 +614,13 @@ try {
   });
   assert.equal(autoMergeDecision.blocked, true, "all main-bound auto-merges are denied even with green checks and valid proof");
   assert.match(autoMergeDecision.reason, /later commits could land/, "auto-merge deny names the exact-head race");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `&gh pr merge 123 --repo crop/crx --squash --auto --match-head-commit ${risky.sha}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "PowerShell call-operator auto-merge is denied");
   const missingHeadDecision = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh pr merge 123 --repo crop/crx --squash" },
@@ -885,7 +892,13 @@ try {
     toolInput: { command: "git push origin --delete feature/test" },
     repoDir: risky.repo,
     nowMs: now,
-  }).blocked, false, "deleting a feature branch stays allowed");
+  }).blocked, true, "deleting a remote feature branch is not unattended delivery");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push origin :feature/test" },
+    repoDir: risky.repo,
+    nowMs: now,
+  }).blocked, true, "empty-source remote branch deletion is denied");
 
   // R2-4: abbreviated force options are force intent, denied despite valid proof.
   for (const command of [

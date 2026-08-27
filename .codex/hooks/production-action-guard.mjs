@@ -440,7 +440,7 @@ function ghMergeRequest(command) {
   // whole segment. Over-matching (e.g. `gh pr view merge-notes`) only routes a
   // read through the gate, which fails safe.
   const text = String(command || "");
-  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i.test(text)) return null;
+  if (!/(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i.test(text)) return null;
   const words = shellWords(text);
   const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
   if (prIndex === -1) return null;
@@ -479,7 +479,7 @@ function ghMergeRequest(command) {
 
 function ghApiMergeRequest(command) {
   const text = String(command || "");
-  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i.test(text)) return null;
+  if (!/(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i.test(text)) return null;
   const words = shellWords(command);
   const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
   if (apiIndex === -1) return null;
@@ -526,7 +526,7 @@ function ghApiMergeRequest(command) {
 
 function ghApiMutates(command) {
   const text = String(command || "");
-  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
+  if (!/(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
     return false;
   }
   if (/\sapi\s+graphql\b/i.test(text) && /\bmutation\b/i.test(text)) return true;

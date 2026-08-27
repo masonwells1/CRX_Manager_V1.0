@@ -31,6 +31,7 @@ const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|
 // destructive deletes, force-pushes/deploys, DB resets, secret writes, hook bypass.
 const DENY_BASH_RES = [
   /\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--force(?:-with-lease)?(?:=\S+)?\b|--force-if-includes\b|(?:^|\s)-[A-Za-z]*f[A-Za-z]*\b|(?:^|\s)\+\S+)/i,
+  /\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--de\S*|(?:^|\s)-[A-Za-z]*d[A-Za-z]*(?:\s|$)|(?:^|\s):[^\s;&|]+)/i,
   /git\s+reset\s+--hard\b/,
   /git\s+clean\s+-[A-Za-z]*[fdx]/,
   /--no-verify\b/,

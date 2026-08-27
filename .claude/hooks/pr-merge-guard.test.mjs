@@ -26,6 +26,7 @@ eq(ghMergeRequest("gh pr merge --squash --auto 7"), { selector: "7", repo: "", a
 eq(ghMergeRequest("gh -R masonwells1/CRX_Manager_V1.0 pr merge 9"), { selector: "9", repo: "masonwells1/CRX_Manager_V1.0", auto: false, matchHead: "", atomicHeadMatch: true }, "global -R between gh and pr");
 eq(ghMergeRequest("gh pr merge --repo=o/r"), { selector: "", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: true }, "repo= form, selectorless (current branch)");
 eq(ghMergeRequest("gh pr merge 42 --match-head-commit 0123456789012345678901234567890123456789"), { selector: "42", repo: "", auto: false, matchHead: "0123456789012345678901234567890123456789", atomicHeadMatch: true }, "separate exact-head flag parses");
+eq(ghMergeRequest("&gh pr merge 42 --auto"), { selector: "42", repo: "", auto: true, matchHead: "", atomicHeadMatch: true }, "PowerShell call operator parses");
 eq(ghMergeRequest("gh pr merge 42 --match-head-commit=abcdefabcdefabcdefabcdefabcdefabcdefabcd"), { selector: "42", repo: "", auto: false, matchHead: "abcdefabcdefabcdefabcdefabcdefabcdefabcd", atomicHeadMatch: true }, "equals exact-head flag parses");
 ok(ghMergeRequest("gh pr merge") !== null, "selectorless merge still gated");
 eq(ghMergeRequest("gh pr merge 5 --disable-auto"), null, "--disable-auto stands down (cancels, does not land)");
@@ -95,6 +96,9 @@ ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL body denied b
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh api graphql -F query=@mutation.graphql" } });
 ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL query field denied before it can hide auto-merge");
+
+r = runHook({ tool_name: "PowerShell", tool_input: { command: "&gh pr merge 42 --auto" } });
+ok(r.decision?.permissionDecision === "deny", "PowerShell call-operator auto-merge is denied");
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh api -X PUT repos/o/r/pulls/12/merge --input payload.json -f sha=0123456789012345678901234567890123456789" } });
 ok(r.decision?.permissionDecision === "deny", "file-backed REST merge denied before it can override the visible SHA");

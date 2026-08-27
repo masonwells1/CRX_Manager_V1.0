@@ -113,12 +113,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after REST merge support was removed because file-backed request
   // bodies can override visible SHA fields. The maintenance anchors are still
   // unchanged.
-  codexGuard: "b31476bbaf931d2e72725aa8f4d9541e6ffe9fb3",
-  pushLib: "aeab7dd66fabfcec74c21360605655a577fd9848",
+  // Re-pinned after PowerShell call-operator GitHub commands and remote ref
+  // deletion were added to the fail-closed paths. The maintenance anchors are
+  // still unchanged.
+  codexGuard: "22ab97ca0d08ce9f241b7038e5c29689492fe54b",
+  pushLib: "247e693500f007008e68af09d136adac094bbb8f",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "8504643244907123b3dbb657dce81f72882a654c",
-  pushLib: "aeab7dd66fabfcec74c21360605655a577fd9848",
+  codexGuard: "cbe5f0609ab06498e7098e3b70bbf60ebdef30e3",
+  pushLib: "247e693500f007008e68af09d136adac094bbb8f",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
