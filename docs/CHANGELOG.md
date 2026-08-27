@@ -1,5 +1,18 @@
 # CRX Manager V1.0 — Development Changelog
 
+## 2026-08-27 — PR #361 rebuild closes exact return-cancel and delivery double-restock gaps
+
+The PR #361 successor now stores the exact inventory-unit quantity added by every return receipt and
+uses that value for a later cancellation. This matters for the pinned legacy RMA whose 15 containers
+convert to 37.5 gallons: cancellation now removes all 37.5 gallons instead of only 15. Delivery void
+and cancel also refuse to restore inventory after a received or credited return already restored the
+same order-line stock. Both paths fail closed if lineage is ambiguous.
+
+The production-schema disposable prover now executes the successful 37.5-in/37.5-out cancellation,
+both delivery denial paths, and three deliberately broken-function mutations. The complete chain has
+61 named signals, must end in `SMOKE_PASS_ROLLBACK`, and leaves zero fixture residue. These migrations
+remain local candidates only; production was not changed.
+
 ## 2026-08-26 — sql-safety and status-enum-check also judge the real post-edit file
 
 Follow-up closing the gap the "Migration guards judge the real post-edit file on CRLF

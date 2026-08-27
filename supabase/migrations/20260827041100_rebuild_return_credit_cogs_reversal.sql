@@ -411,6 +411,16 @@ CREATE INDEX returns_credit_invoice_id_active_idx
 ALTER TABLE public.return_items
   ADD CONSTRAINT return_items_return_order_item_unique UNIQUE (return_id, order_item_id);
 
+-- Persist the exact inventory-unit quantity that receive_return actually
+-- added. return_items.quantity remains the customer/source-unit quantity and
+-- cannot safely drive a later cancellation when the one pinned legacy RMA is
+-- converted from containers to gallons.
+ALTER TABLE public.return_items
+  ADD COLUMN restocked_quantity numeric;
+ALTER TABLE public.return_items
+  ADD CONSTRAINT return_items_restocked_quantity_positive_chk
+  CHECK (restocked_quantity IS NULL OR restocked_quantity > 0);
+
 ALTER FUNCTION public._receive_return_impl_20260714(uuid, uuid, text)
   RENAME TO _receive_return_impl_before_inventory_seed_20260825;
 REVOKE ALL ON FUNCTION public._receive_return_impl_before_inventory_seed_20260825(uuid, uuid, text)
@@ -424,7 +434,6 @@ CREATE FUNCTION public._receive_return_impl_20260714(
 ) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $function$
 DECLARE
   v_return record; v_item record; v_cached jsonb; v_result jsonb;
-  v_restocked_ids uuid[] := ARRAY[]::uuid[];
   v_restocked_qty numeric := 0; v_restocked_count int := 0;
   v_actor uuid := auth.uid();
   v_inventory_unit text;
@@ -512,13 +521,15 @@ BEGIN
     INSERT INTO public.inventory_transactions (product_id, transaction_type, quantity, to_location, performed_by, notes)
     VALUES (v_item.product_id, 'returned', v_restock_qty, 'Main Warehouse', v_actor,
             'Return ' || v_return.return_number || ': ' || v_item.product_name || ' (' || v_item.condition || ')');
-    v_restocked_ids := array_append(v_restocked_ids, v_item.item_id);
+    UPDATE public.return_items
+       SET restocked = true,
+           restocked_quantity = v_restock_qty
+     WHERE id = v_item.item_id;
     v_restocked_qty := v_restocked_qty + v_restock_qty;
     v_restocked_count := v_restocked_count + 1;
   END LOOP;
   PERFORM set_config('app.return_rpc', 'true', true);
   UPDATE public.returns SET status = 'received', received_by = v_actor, received_at = now(), updated_at = now() WHERE id = p_return_id;
-  IF cardinality(v_restocked_ids) > 0 THEN UPDATE public.return_items SET restocked = true WHERE id = ANY(v_restocked_ids); END IF;
   INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id, customer_id)
   VALUES ('return_received', 'Return ' || v_return.return_number || ' received - ' || v_restocked_count || ' item(s) restocked', v_actor, 'return', p_return_id, v_return.customer_id);
   v_result := jsonb_build_object('success', true, 'return_id', p_return_id, 'return_number', v_return.return_number, 'status', 'received', 'restocked_count', v_restocked_count, 'restocked_quantity', v_restocked_qty, 'skipped_count', 0);
@@ -1164,7 +1175,7 @@ DECLARE
     '_issue_return_credit_header_only_impl_20260825', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
     '_issue_return_credit_impl', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612',
     '_receive_return_impl_before_inventory_seed_20260825', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
-    '_receive_return_impl_20260714', 'f7e030b6d0b4c78c6049e2a7a16859c5b056fab5ebb2f6a2bf2eafa0303a53c1',
+    '_receive_return_impl_20260714', '12d48d1c9e6c2452720afa967d84bbeb9b5b0bcb85f3b02382e1c68bfead1b31',
     'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
     '_issue_return_credit_intent_impl_20260812', '55607c6dae0cc11f4837f67c54de88a6f4d83413cd3686e04c21bf33afa4ffa5',
     'receive_return', '80873cb93b67293a811f6be91efb224f7f4dd085fa8c4282267336be430b8b6a',
@@ -1178,6 +1189,16 @@ DECLARE
   v_lineage_guard_triggerdef text;
 BEGIN
   IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'return_items'
+      AND column_name = 'restocked_quantity'
+      AND data_type = 'numeric' AND is_nullable = 'YES'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.return_items'::regclass
+      AND conname = 'return_items_restocked_quantity_positive_chk'
+      AND contype = 'c' AND convalidated
+  ) OR NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'invoice_items'
       AND column_name = 'return_credit_cogs_cents'

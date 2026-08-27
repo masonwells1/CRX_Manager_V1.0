@@ -394,6 +394,11 @@ const expectedProofs = [
   'RETURN_CREDIT_CANCEL_WARNING_FILTER_PROVEN',
   'RETURN_CREDIT_TOTE_PROVENANCE_PROVEN',
   'GENERATED_INVOICE_EDIT_LINEAGE_PROVEN',
+  'VOID_DELIVERY_RETURN_GUARD_REMOVAL_DETECTED',
+  'CANCEL_DELIVERY_RETURN_GUARD_REMOVAL_DETECTED',
+  'LEGACY_CANCEL_EXACT_QUANTITY_MUTATION_DETECTED',
+  'DELIVERY_RECEIVED_RETURN_REVERSAL_GUARDS_PROVEN',
+  'LEGACY_RESTOCK_CANCEL_EXACT_PROVEN',
 ];
 const completedProofs = new Set();
 try {
@@ -1498,6 +1503,61 @@ try {
   copy(SMOKE, path.basename(SMOKE));
   const deliveryGateSql = readFileSync(DELIVERY_CREDIT_GATE_CANDIDATE, 'utf8');
   const deliverySurfaceSql = readFileSync(DELIVERY_SURFACE_CANDIDATE, 'utf8');
+  const invoiceLineageSql = readFileSync(INVOICE_LINEAGE_CANDIDATE, 'utf8');
+
+  const voidStart = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."void_delivery"(');
+  const voidEnd = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."cancel_delivery"(', voidStart);
+  assert.ok(voidStart >= 0 && voidEnd > voidStart, 'void_delivery helper slice is missing');
+  const canonicalVoidDelivery = deliverySurfaceSql.slice(voidStart, voidEnd);
+  const voidReturnGuardMutant = canonicalVoidDelivery.replace(
+    /  -- A received\/credited return has already put[\s\S]*?    RAISE EXCEPTION 'DELIVERY_HAS_RECEIVED_RETURN';\r?\n  END IF;\r?\n\r?\n/,
+    '',
+  );
+  assert.notEqual(voidReturnGuardMutant, canonicalVoidDelivery, 'void-delivery return guard mutant did not alter the executable helper');
+  psql(voidReturnGuardMutant);
+  const voidReturnGuardSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const voidReturnGuardOutput = `${voidReturnGuardSmoke.stdout}\n${voidReturnGuardSmoke.stderr}`;
+  assert.notEqual(voidReturnGuardSmoke.status, 0, 'void-delivery return guard mutant smoke unexpectedly committed');
+  assert.match(voidReturnGuardOutput, /SMOKE_FAIL: delivery with a received return was voided/, `void-delivery return guard mutant did not reach the double-restock oracle:\n${voidReturnGuardOutput}`);
+  completedProofs.add('VOID_DELIVERY_RETURN_GUARD_REMOVAL_DETECTED');
+  psql(canonicalVoidDelivery);
+  assertInstalledFunctionHash('public.void_delivery(uuid,text,uuid,text)', '81efbd554ce4023c177a92dd96e1331003550ecad3139a3cb8b25cddf0b7a1fc');
+
+  const cancelStart = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."cancel_delivery"(');
+  const cancelEnd = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION public._complete_delivery_authorized_impl(', cancelStart);
+  assert.ok(cancelStart >= 0 && cancelEnd > cancelStart, 'cancel_delivery helper slice is missing');
+  const canonicalCancelDelivery = deliverySurfaceSql.slice(cancelStart, cancelEnd);
+  const cancelReturnGuardMutant = canonicalCancelDelivery.replace(
+    /  -- Match void_delivery's fail-closed return-lineage boundary\.[\s\S]*?    RAISE EXCEPTION 'DELIVERY_HAS_RECEIVED_RETURN';\r?\n  END IF;\r?\n\r?\n/,
+    '',
+  );
+  assert.notEqual(cancelReturnGuardMutant, canonicalCancelDelivery, 'cancel-delivery return guard mutant did not alter the executable helper');
+  psql(cancelReturnGuardMutant);
+  const cancelReturnGuardSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const cancelReturnGuardOutput = `${cancelReturnGuardSmoke.stdout}\n${cancelReturnGuardSmoke.stderr}`;
+  assert.notEqual(cancelReturnGuardSmoke.status, 0, 'cancel-delivery return guard mutant smoke unexpectedly committed');
+  assert.match(cancelReturnGuardOutput, /SMOKE_FAIL: delivery with a received return was cancelled/, `cancel-delivery return guard mutant did not reach the double-restock oracle:\n${cancelReturnGuardOutput}`);
+  completedProofs.add('CANCEL_DELIVERY_RETURN_GUARD_REMOVAL_DETECTED');
+  psql(canonicalCancelDelivery);
+  assertInstalledFunctionHash('public.cancel_delivery(uuid,text,uuid,text)', '36c9407d2aa78a4d1e60ec790c99e32d8f8009c953ba9378595f6f5a358d76a5');
+
+  const cancelReturnStart = invoiceLineageSql.indexOf('CREATE OR REPLACE FUNCTION public._cancel_return_intent_impl_20260812(');
+  const cancelReturnEnd = invoiceLineageSql.indexOf('REVOKE ALL ON FUNCTION public._cancel_return_intent_impl_20260812', cancelReturnStart);
+  assert.ok(cancelReturnStart >= 0 && cancelReturnEnd > cancelReturnStart, 'cancel-return helper slice is missing');
+  const canonicalCancelReturn = invoiceLineageSql.slice(cancelReturnStart, cancelReturnEnd);
+  const cancelExactQuantityMutant = canonicalCancelReturn.replace(
+    'quantity_available = quantity_available - v_item.restocked_quantity',
+    'quantity_available = quantity_available - 15',
+  );
+  assert.notEqual(cancelExactQuantityMutant, canonicalCancelReturn, 'cancel-return exact-quantity mutant did not alter the executable helper');
+  psql(cancelExactQuantityMutant);
+  const cancelExactQuantitySmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const cancelExactQuantityOutput = `${cancelExactQuantitySmoke.stdout}\n${cancelExactQuantitySmoke.stderr}`;
+  assert.notEqual(cancelExactQuantitySmoke.status, 0, 'cancel-return exact-quantity mutant smoke unexpectedly committed');
+  assert.match(cancelExactQuantityOutput, /SMOKE_FAIL: legacy cancel left 22\.50* gallons, expected 0/, `cancel-return exact-quantity mutant did not reach the phantom-inventory oracle:\n${cancelExactQuantityOutput}`);
+  completedProofs.add('LEGACY_CANCEL_EXACT_QUANTITY_MUTATION_DETECTED');
+  psql(canonicalCancelReturn);
+  assertInstalledFunctionHash('public._cancel_return_intent_impl_20260812(uuid,text,uuid,text)', '42d9dd05aed5d40f2e2552c75a5e2dcf3faea6bfddb0404f2cda5598cfc14da1');
 
   const dashboardStart = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."get_dashboard_action_items"(');
   const dashboardEnd = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."void_delivery"(', dashboardStart);
@@ -2218,6 +2278,10 @@ try {
   completedProofs.add('RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN');
   assert.match(output, /GENERATED_INVOICE_EDIT_LINEAGE_PROVEN/, `canonical smoke did not prove generated invoice lineage preservation:\n${output}`);
   completedProofs.add('GENERATED_INVOICE_EDIT_LINEAGE_PROVEN');
+  assert.match(output, /DELIVERY_RECEIVED_RETURN_REVERSAL_GUARDS_PROVEN/, `canonical smoke did not prove delivery reversal guards after a received return:\n${output}`);
+  completedProofs.add('DELIVERY_RECEIVED_RETURN_REVERSAL_GUARDS_PROVEN');
+  assert.match(output, /LEGACY_RESTOCK_CANCEL_EXACT_PROVEN/, `canonical smoke did not prove exact legacy restock cancellation:\n${output}`);
+  completedProofs.add('LEGACY_RESTOCK_CANCEL_EXACT_PROVEN');
   assert.equal(psqlValue("SELECT count(*) FROM public.customers WHERE farm_name LIKE '[SMOKE] Return Credit Farm %';"), '0', 'customer fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.returns WHERE return_number LIKE 'SMK-%';"), '0', 'return fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.invoices WHERE invoice_number LIKE 'SMK-RCC-%';"), '0', 'invoice fixture residue remained');

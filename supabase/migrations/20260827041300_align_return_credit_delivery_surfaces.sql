@@ -384,6 +384,30 @@ BEGIN
     RAISE EXCEPTION 'Only completed deliveries can be voided (current status: %)', v_delivery.status;
   END IF;
 
+  -- A received/credited return has already put part of this delivery lineage
+  -- back into inventory. Restoring the delivery again would double-count that
+  -- stock and can leave active return-credit accounting attached to zero
+  -- delivered quantity. Source-free legacy lines are conservatively order-wide;
+  -- order-linked lines block only deliveries sharing that order line.
+  IF v_delivery.order_id IS NOT NULL AND EXISTS (
+    SELECT 1
+    FROM returns r
+    JOIN return_items ri ON ri.return_id = r.id
+    WHERE r.order_id = v_delivery.order_id
+      AND r.deleted_at IS NULL
+      AND r.status IN ('received', 'credited')
+      AND (
+        ri.order_item_id IS NULL
+        OR EXISTS (
+          SELECT 1 FROM delivery_items linked_di
+          WHERE linked_di.delivery_id = p_delivery_id
+            AND linked_di.order_item_id = ri.order_item_id
+        )
+      )
+  ) THEN
+    RAISE EXCEPTION 'DELIVERY_HAS_RECEIVED_RETURN';
+  END IF;
+
   -- A void reverses the completed delivery's accounting event, so period
   -- detection must use the actual Chicago completion business date rather
   -- than the schedule date. Keep the schedule date only as a legacy fallback.
@@ -581,6 +605,28 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'Delivery not found'; END IF;
   IF v_delivery.status NOT IN ('scheduled', 'in_progress', 'completed') THEN RAISE EXCEPTION 'Cannot cancel a % delivery', v_delivery.status; END IF;
   IF NOT EXISTS (SELECT 1 FROM profiles WHERE id = v_actor AND is_active = true AND role IN ('admin', 'sales_rep')) THEN RAISE EXCEPTION 'Not authorized to cancel deliveries'; END IF;
+
+  -- Match void_delivery's fail-closed return-lineage boundary. This also
+  -- prevents the quick-delivery branch from directly cancelling an order that
+  -- already has physically received or credited merchandise.
+  IF v_delivery.order_id IS NOT NULL AND EXISTS (
+    SELECT 1
+    FROM returns r
+    JOIN return_items ri ON ri.return_id = r.id
+    WHERE r.order_id = v_delivery.order_id
+      AND r.deleted_at IS NULL
+      AND r.status IN ('received', 'credited')
+      AND (
+        ri.order_item_id IS NULL
+        OR EXISTS (
+          SELECT 1 FROM delivery_items linked_di
+          WHERE linked_di.delivery_id = p_delivery_id
+            AND linked_di.order_item_id = ri.order_item_id
+        )
+      )
+  ) THEN
+    RAISE EXCEPTION 'DELIVERY_HAS_RECEIVED_RETURN';
+  END IF;
 
   PERFORM set_config('app.admin_override', 'true', true);
 
@@ -1269,7 +1315,7 @@ DECLARE
 BEGIN
   FOR v_check IN
     SELECT value
-    FROM jsonb_array_elements($checks$[{"name":"get_dashboard_action_items","signature":"public.get_dashboard_action_items(integer)","args":"23","hash":"583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769","private":false},{"name":"void_delivery","signature":"public.void_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"d7f0465616be4e125c0b5a1fd2b15a8b0b502b2f2ecaaeb4a981abb599837d25","private":false},{"name":"cancel_delivery","signature":"public.cancel_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"73be159b6793fb16580a702068974102e6ef12794be9f38af861b92e9d6495dd","private":false},{"name":"_complete_delivery_authorized_impl","signature":"public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)","args":"2950 25 2950 3802 25 25 25 1184","hash":"3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a","private":true}]$checks$::jsonb)
+    FROM jsonb_array_elements($checks$[{"name":"get_dashboard_action_items","signature":"public.get_dashboard_action_items(integer)","args":"23","hash":"583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769","private":false},{"name":"void_delivery","signature":"public.void_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"81efbd554ce4023c177a92dd96e1331003550ecad3139a3cb8b25cddf0b7a1fc","private":false},{"name":"cancel_delivery","signature":"public.cancel_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"36c9407d2aa78a4d1e60ec790c99e32d8f8009c953ba9378595f6f5a358d76a5","private":false},{"name":"_complete_delivery_authorized_impl","signature":"public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)","args":"2950 25 2950 3802 25 25 25 1184","hash":"3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a","private":true}]$checks$::jsonb)
   LOOP
     SELECT count(*)
       INTO v_count

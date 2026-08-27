@@ -181,8 +181,8 @@ describe('return-credit COGS migration', () => {
     expect(deliveryCreditGateMigration).toContain('UNBILLED_DELIVERY_RETURN_CREDIT_GATE_PREFLIGHT_CONTRACT_DRIFT');
     expect(deliveryCreditGateMigration).toContain('UNBILLED_DELIVERY_RETURN_CREDIT_GATE_POSTFLIGHT_DRIFT');
     expect(functionBodySha256(deliverySurfaceMigration, 'get_dashboard_action_items')).toBe('583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769');
-    expect(functionBodySha256(deliverySurfaceMigration, 'void_delivery')).toBe('d7f0465616be4e125c0b5a1fd2b15a8b0b502b2f2ecaaeb4a981abb599837d25');
-    expect(functionBodySha256(deliverySurfaceMigration, 'cancel_delivery')).toBe('73be159b6793fb16580a702068974102e6ef12794be9f38af861b92e9d6495dd');
+    expect(functionBodySha256(deliverySurfaceMigration, 'void_delivery')).toBe('81efbd554ce4023c177a92dd96e1331003550ecad3139a3cb8b25cddf0b7a1fc');
+    expect(functionBodySha256(deliverySurfaceMigration, 'cancel_delivery')).toBe('36c9407d2aa78a4d1e60ec790c99e32d8f8009c953ba9378595f6f5a358d76a5');
     expect(functionBodySha256(deliverySurfaceMigration, '_complete_delivery_authorized_impl')).toBe('3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a');
     expect(deliverySurfaceMigration.match(/invoice_type <> 'credit_memo'/g)).toHaveLength(7);
     expect(deliverySurfaceMigration).toContain('RETURN_CREDIT_DELIVERY_SURFACE_PREFLIGHT_CONTRACT_DRIFT');
@@ -211,9 +211,12 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain("p.prorettype = 'void'::regtype");
     expect(migration).toContain("p.prorettype = 'jsonb'::regtype");
     expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
-    expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('f7e030b6d0b4c78c6049e2a7a16859c5b056fab5ebb2f6a2bf2eafa0303a53c1');
+    expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('12d48d1c9e6c2452720afa967d84bbeb9b5b0bcb85f3b02382e1c68bfead1b31');
     expect(migration).toContain("p_return_id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid");
     expect(migration).toContain('v_restock_qty := v_item.quantity * v_container_size');
+    expect(migration).toContain('ADD COLUMN restocked_quantity numeric');
+    expect(migration).toContain('return_items_restocked_quantity_positive_chk');
+    expect(migration).toContain('restocked_quantity = v_restock_qty');
     expect(functionBodySha256(migration, 'void_invoice')).toBe('7d1eb3222e0cd59318919206d2338de7477c2091f22550671ecbcf5ff80a9d14');
     expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('005ce6a1cfbc7c7f7fcf4712104235bf884af9bc5b30e5f3cbf1edc0f2b6e63e');
     expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('17a9bc14956227793674efcb3011a81c38dfb3c864792173ad6d04e13b13d981');
@@ -228,11 +231,18 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('8db113f5da2277a791ca6f4744581faa1bc02fe532ca19fec93c8120f80c1a05');
     expect(functionBodySha256(invoiceLineageMigration, '_save_invoice_scoped_impl'))
       .toBe('cab2bde1aa6bf26d918639cfb8d328ac579d0b7f5429123aa24710a1a835866e');
+    expect(functionBodySha256(invoiceLineageMigration, '_cancel_return_intent_impl_20260812'))
+      .toBe('42d9dd05aed5d40f2e2552c75a5e2dcf3faea6bfddb0404f2cda5598cfc14da1');
+    expect(invoiceLineageMigration).toContain('RETURN_RESTOCKED_QUANTITY_MISSING');
+    expect(invoiceLineageMigration).toContain('quantity_available - v_item.restocked_quantity');
+    expect(invoiceLineageMigration).toContain('restocked_quantity = NULL');
     expect(invoiceLineageMigration).toContain('GENERATED_INVOICE_LINEAGE_LINE_REQUIRED');
     expect(invoiceLineageMigration).toContain('SET id = preserved.source_item_id');
     expect(invoiceLineageMigration).toContain('cost_cents = preserved.cost_cents');
     expect(invoiceLineageMigration).toContain('created_at = preserved.created_at');
     expect(returnCreditSmoke).toContain('generated invoice edit lost immutable order/cost lineage');
+    expect(returnCreditSmoke).toContain('DELIVERY_RECEIVED_RETURN_REVERSAL_GUARDS_PROVEN');
+    expect(returnCreditSmoke).toContain('LEGACY_RESTOCK_CANCEL_EXACT_PROVEN');
   });
 
   it('keeps report status alignment in the separate report-only migration', () => {
@@ -362,8 +372,13 @@ describe('return-credit COGS migration', () => {
     const migrationSha256 = createHash('sha256')
       .update(migration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(migrationSha256).toBe('097fdfb599b1538c0355690c51fec45cf1efe859b8e1de2fe8d9facb1f61f7ee');
+    expect(migrationSha256).toBe('28d2c2a9a959d0276dbf9cbd2c5e8ba98d3f6c1c5b92e0f13f20870f55694bde');
     expect(migrationHistory).toContain(`SQL sha256: \`${migrationSha256}\` (LF-normalized bytes)`);
+    const deliverySurfaceSha256 = createHash('sha256')
+      .update(deliverySurfaceMigration.replace(/\r\n/g, '\n'), 'utf8')
+      .digest('hex');
+    expect(deliverySurfaceSha256).toBe('49855f306e62e613542f99ace54a643da8ed73462fb25261671878a76377d1ec');
+    expect(migrationHistory).toContain(`SQL sha256: \`${deliverySurfaceSha256}\` (LF-normalized bytes)`);
     const orderInvoiceGateSha256 = createHash('sha256')
       .update(orderInvoiceGateMigration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
@@ -372,7 +387,7 @@ describe('return-credit COGS migration', () => {
     const invoiceLineageSha256 = createHash('sha256')
       .update(invoiceLineageMigration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(invoiceLineageSha256).toBe('63643cc0029c1ee5b41aaf09abb1071fedeabc96744c1e36b8c91847d0d46aad');
+    expect(invoiceLineageSha256).toBe('49b8d44c2fc2ec1b52febff3009afb45254d930b56d74fc627ee1ed6d46ac5c2');
     expect(migrationHistory).toContain(`SQL sha256: \`${invoiceLineageSha256}\` (LF-normalized bytes)`);
   });
 

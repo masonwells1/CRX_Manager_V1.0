@@ -807,6 +807,33 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: expected received-return cancel rejection, got %', v_reason;
     END IF;
   END;
+  BEGIN
+    PERFORM void_delivery(
+      v_delivery_id, 'smoke received-return delivery guard', v_admin,
+      'smk-rcc-' || v_suffix || '-void-delivery-after-receive'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: delivery with a received return was voided';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'DELIVERY_HAS_RECEIVED_RETURN%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected received-return delivery void rejection, got %', v_reason;
+    END IF;
+  END;
+  BEGIN
+    PERFORM cancel_delivery(
+      v_delivery_id, 'smoke received-return delivery guard', v_admin,
+      'smk-rcc-' || v_suffix || '-cancel-delivery-after-receive'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: delivery with a received return was cancelled';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'DELIVERY_HAS_RECEIVED_RETURN%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected received-return delivery cancel rejection, got %', v_reason;
+    END IF;
+  END;
+  RAISE NOTICE 'DELIVERY_RECEIVED_RETURN_REVERSAL_GUARDS_PROVEN';
   UPDATE return_items
      SET restock = true, restocked = true
    WHERE return_id = v_return_id;
@@ -1760,6 +1787,57 @@ BEGIN
             AND location = 'Main Warehouse') <> 37.5 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: legacy 15-each return was not converted to 37.5 gallons: %', v_res;
   END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM return_items
+    WHERE id = 'c4f6cc7d-0bbd-4c25-8bc0-c2c9e84aaadd'::uuid
+      AND restocked
+      AND restocked_quantity = 37.5
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact legacy restocked_quantity was not persisted';
+  END IF;
+  -- Prove successful cancellation subtracts the exact 37.5-gallon inventory
+  -- delta, then deliberately roll that proof subtransaction back so the same
+  -- received return can continue through credit issuance below.
+  BEGIN
+    v_res2 := cancel_return(
+      v_legacy_return_id, '[SMOKE] exact legacy restock reversal', v_admin,
+      'smk-rcc-' || v_suffix || '-legacy-cancel-proof'
+    );
+    IF COALESCE((v_res2->>'reversed_quantity')::numeric, 0) <> 37.5 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: legacy cancel reversed %, expected 37.5',
+        v_res2->>'reversed_quantity';
+    END IF;
+    SELECT quantity_available INTO v_qty
+    FROM inventory
+    WHERE product_id = 'fad3ea45-cd8c-4bb8-b0ce-8a515941586c'::uuid
+      AND location = 'Main Warehouse';
+    IF v_qty <> 0 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: legacy cancel left % gallons, expected 0', v_qty;
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM return_items
+      WHERE id = 'c4f6cc7d-0bbd-4c25-8bc0-c2c9e84aaadd'::uuid
+        AND (restocked OR restocked_quantity IS NOT NULL)
+    ) THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: legacy cancel did not clear exact restock state';
+    END IF;
+    RAISE EXCEPTION 'SMOKE_ROLLBACK_LEGACY_CANCEL_PROOF';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason IS DISTINCT FROM 'SMOKE_ROLLBACK_LEGACY_CANCEL_PROOF' THEN RAISE; END IF;
+  END;
+  IF (SELECT quantity_available FROM inventory
+      WHERE product_id = 'fad3ea45-cd8c-4bb8-b0ce-8a515941586c'::uuid
+        AND location = 'Main Warehouse') <> 37.5
+     OR NOT EXISTS (
+       SELECT 1 FROM return_items
+       WHERE id = 'c4f6cc7d-0bbd-4c25-8bc0-c2c9e84aaadd'::uuid
+         AND restocked
+         AND restocked_quantity = 37.5
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: legacy cancellation proof did not roll back cleanly';
+  END IF;
+  RAISE NOTICE 'LEGACY_RESTOCK_CANCEL_EXACT_PROVEN';
   v_res := issue_return_credit(
     v_legacy_return_id, v_admin, 'smk-rcc-' || v_suffix || '-legacy-credit'
   );
