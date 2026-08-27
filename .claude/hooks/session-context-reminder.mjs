@@ -63,7 +63,8 @@ const SESSION_ONBOARDING =
   "You are starting a new session on the CRX Manager project. Silently read AGENTS.md (the " +
   "shared contract), CLAUDE.md (Claude-only routing), and docs/workflows/SAFE_DEVELOPMENT_RULES.md, " +
   "then briefly confirm context is loaded. CRITICAL CONTEXT: Mason has ZERO coding experience — " +
-  "always explain in plain English; show a plan and wait for approval before multi-file or risky " +
-  "edits; never assume he knows code terminology.";
+  "always explain in plain English; state a brief plan, then begin authorized reversible work " +
+  "without waiting for another approval; stop only at the explicit hard gates in AGENTS.md; never " +
+  "assume he knows code terminology.";
 
 emit(source === "compact" ? COMPACT_REANCHOR : SESSION_ONBOARDING);

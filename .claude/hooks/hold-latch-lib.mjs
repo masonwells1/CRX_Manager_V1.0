@@ -50,14 +50,14 @@ const BUILD_BASH_RE = /(git\s+(commit|push|merge|rebase|cherry-pick|tag)\b|supab
 // hold-latch's mutate-tool set must be a SUPERSET of autopilot's deny set (2026-07-13
 // audit, FIX 3): a "stop" from Mason should pause at least every tool autopilot
 // refuses to auto-approve unattended (push_files, create_or_update_file,
-// merge_pull_request, delete_file, delete_branch, rebase_branch, the Desktop
+// delete_file, delete_branch, rebase_branch, the Desktop
 // Commander mutating tools, etc.), PLUS a few hold-latch-only additions that
-// autopilot deliberately allows (apply_migration/create_directory/kill_process —
+// autopilot deliberately allows (apply_migration/merge_pull_request/create_directory/kill_process —
 // Mason 2026-07-10 wants SQL/migrations to keep running unattended overnight,
 // but a mid-session "stop" should still pause them). Sharing DENY_TOOLNAME_RE
 // as the base means the two lists can't silently drift apart; guards.test.mjs
 // asserts the superset property directly against the live import.
-const HOLD_LATCH_EXTRA_RE = /(apply_migration|create_directory|kill_process)/i;
+const HOLD_LATCH_EXTRA_RE = /(apply_migration|merge_pull_request|create_directory|kill_process)/i;
 const MUTATE_TOOLNAME_RE = new RegExp(`(?:${DENY_TOOLNAME_RE.source}|${HOLD_LATCH_EXTRA_RE.source})`, "i");
 
 export function isBuildActionUnderHold(toolName, toolInput) {

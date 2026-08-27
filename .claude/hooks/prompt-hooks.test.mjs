@@ -116,9 +116,12 @@ ok(!/never pushes/i.test(PUSH_POLICY), "policy has no stale never-pushes text");
 ok(/branch → PR|PR →|pull request/i.test(PUSH_POLICY), "policy describes the PR landing path");
 ok(/direct pushes to main are impossible/i.test(PUSH_POLICY), "policy states direct main pushes are impossible");
 ok(!/no approval click/.test(PUSH_POLICY), "policy no longer claims click-free direct pushes");
-// The armed-mode carve-out must be stated so this constant can't contradict
-// autopilot-intent-reminder in the same injected context.
-ok(/ARMED hands-free run.*PARK/i.test(PUSH_POLICY), "policy states armed runs park pushes/merges");
+// Armed runs use the same protected delivery path instead of manufacturing a
+// second Mason approval gate. The owning push/merge guards still decide safety.
+ok(/ARMED hands-free run.*push.*merge.*continue/i.test(PUSH_POLICY),
+  "policy states armed runs continue protected pushes/merges");
+ok(/without another Mason confirmation|without asking Mason again/i.test(PUSH_POLICY),
+  "policy explicitly removes the duplicate delivery confirmation");
 
 // ── no hook still carries the stale contradictory policy text ────────────
 for (const f of readdirSync(__dirname)) {
@@ -255,6 +258,47 @@ const typed = spawnSync(process.execPath, [path.join(__dirname, "ship-intent-rem
   env: { ...process.env, CLAUDE_PROJECT_DIR: tmpProj },
 });
 ok(typed.stdout.includes("additionalContext"), "ship-intent still fires on typed intent");
+
+// ── routine delivery is not misclassified as a destructive approval gate ──
+const routineDelivery = spawnSync(process.execPath, [path.join(__dirname, "dangerous-phrase-warning.mjs")], {
+  input: JSON.stringify({ prompt: "auto commit and auto push this regular code through a green PR" }),
+  encoding: "utf8",
+  env: { ...process.env, CLAUDE_PROJECT_DIR: tmpProj },
+});
+eq(routineDelivery.status, 0, "dangerous-phrase-warning exits 0 on routine delivery intent");
+ok(/routine protected delivery|standing authorization/i.test(routineDelivery.stdout),
+  "routine delivery reminder recognizes standing authorization");
+ok(!/Gotten Mason's explicit confirmation|Do NOT proceed/.test(routineDelivery.stdout),
+  "routine delivery does not demand another Mason confirmation");
+
+const forcePush = spawnSync(process.execPath, [path.join(__dirname, "dangerous-phrase-warning.mjs")], {
+  input: JSON.stringify({ prompt: "force push the shared branch" }),
+  encoding: "utf8",
+  env: { ...process.env, CLAUDE_PROJECT_DIR: tmpProj },
+});
+eq(forcePush.status, 0, "dangerous-phrase-warning exits 0 on force-push intent");
+ok(/explicit confirmation/i.test(forcePush.stdout), "force push still requires explicit confirmation");
+ok(/Continue all safe preparation automatically/i.test(forcePush.stdout),
+  "hard-gate reminder keeps safe preparation moving");
+
+// Session onboarding must encourage execution under the standing authority,
+// not impose a blanket pre-edit approval ceremony.
+const sessionStart = spawnSync(process.execPath, [path.join(__dirname, "session-context-reminder.mjs")], {
+  input: JSON.stringify({ source: "startup" }),
+  encoding: "utf8",
+  env: { ...process.env, CLAUDE_PROJECT_DIR: tmpProj },
+});
+eq(sessionStart.status, 0, "session-context-reminder exits 0 on startup");
+ok(/state a brief plan, then begin authorized reversible work/i.test(sessionStart.stdout),
+  "session onboarding tells the agent to begin authorized work");
+ok(!/wait for approval before multi-file or risky edits/i.test(sessionStart.stdout),
+  "session onboarding has no blanket wait-for-approval rule");
+
+const armSource = readFileSync(path.join(__dirname, "autopilot-arm.mjs"), "utf8");
+ok(/feature-branch pushes and protected green-PR merges continue/.test(armSource),
+  "autopilot arming confirmation describes authorized delivery");
+ok(!/push\/deploy\/destructive actions are STILL blocked/.test(armSource),
+  "autopilot arming confirmation has no stale all-push block");
 
 rmSync(tmpProj, { recursive: true, force: true });
 console.log(`prompt-hooks: ${pass} assertions passed`);

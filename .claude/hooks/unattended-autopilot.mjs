@@ -30,7 +30,7 @@ function allow() {
   process.exit(0);
 }
 function deny(name) {
-  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `AUTOPILOT: "${name}" is in the never-auto-approve set (push / deploy / destructive delete / secret write). Autopilot suppresses ordinary permission prompts but NOT these — they need Mason's explicit OK. (Live migrations are gated separately: migration-apply-guard's proof gate, which also hard-refuses DESTRUCTIVE migrations while armed — Mason's settled 2026-07-13 policy.) Disarm with: node .claude/hooks/autopilot-arm.mjs --off` } }));
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `AUTOPILOT: "${name}" is in the never-auto-approve set (out-of-band deploy / force-push or history rewrite / destructive delete / secret or auth change / direct remote file write). Autopilot suppresses ordinary permission prompts but never bypasses these boundaries. Continue safe preparation automatically; ask Mason only if the exact hard-gated action is still required. Feature-branch pushes and protected green-PR merges are judged by their normal guards and do not need another confirmation. (Live migrations are gated separately: migration-apply-guard's proof gate, which also hard-refuses DESTRUCTIVE migrations while armed — Mason's settled 2026-07-13 policy.) Disarm with: node .claude/hooks/autopilot-arm.mjs --off` } }));
   process.exit(0);
 }
 

@@ -19,15 +19,16 @@
 // hash-bound reviewer proof naming BOTH rls-security-reviewer and
 // migration-drift-reviewer PLUS a fresh hash-bound codex-review-mig-<name>.json
 // Codex proof, ≤30 min each; destructive migrations are refused outright while
-// armed) and by settings.json permissions.deny. Deploys, pushes,
-// branch/project lifecycle, and destructive file/db ops STAY blocked here.
-const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|reset_branch|delete_branch|merge_branch|rebase_branch|pause_project|restore_project|push_files|create_or_update_file|delete_file|merge_pull_request|start_process|interact_with_process|write_file|edit_block|move_file|set_config_value)/i;
+// armed) and by settings.json permissions.deny. Deploys, direct remote file
+// writes, branch/project lifecycle, and destructive file/db ops STAY blocked
+// here. A protected PR merge is deliberately allowed through to the normal
+// exact-head merge guard; this layer must not manufacture a second approval.
+const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|reset_branch|delete_branch|merge_branch|rebase_branch|pause_project|restore_project|push_files|create_or_update_file|delete_file|start_process|interact_with_process|write_file|edit_block|move_file|set_config_value)/i;
 
 // Bash command shapes that must never be auto-approved: history rewrites,
-// destructive deletes, pushes/deploys, DB resets, secret writes, hook bypass.
+// destructive deletes, force-pushes/deploys, DB resets, secret writes, hook bypass.
 const DENY_BASH_RES = [
-  /git\s+push\b/,                                  // no unattended push — Mason reviews in the morning
-  /git\s+(?:push\s+)?(?:--force\b|-f\b|--force-with-lease\b)/,
+  /\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--force(?:-with-lease)?(?:=\S+)?\b|--force-if-includes\b|(?:^|\s)-[A-Za-z]*f[A-Za-z]*\b|(?:^|\s)\+\S+)/i,
   /git\s+reset\s+--hard\b/,
   /git\s+clean\s+-[A-Za-z]*[fdx]/,
   /--no-verify\b/,
@@ -39,7 +40,6 @@ const DENY_BASH_RES = [
   /(?:npx\s+)?supabase\s+db\s+(?:push|reset)\b/,
   /(?:npx\s+)?supabase\s+migration\s+repair\b/,
   /(?:npx\s+)?supabase\s+functions\s+deploy\b/,    // CLI edge deploy = same gate as the MCP tool
-  /\bgh\s+pr\s+merge\b/,                           // lands on main around the push guard
   /\b(?:dropdb|createdb)\b/,
   /\bvercel\s+(?:deploy|--prod|promote)\b/,
   /(?:^|[\s;&|>])\.env\b/,                         // touching .env

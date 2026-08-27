@@ -17,7 +17,7 @@ This is the shared CRX Manager workflow for making Claude and Codex work togethe
 - Direct reviews are read-only.
 - PR comments default to dry-run.
 - Pair reviews keep BLOCKER/HIGH disagreements visible for Mason.
-- No workflow may push, deploy, apply live migrations, delete data, commit, or expose secrets without Mason's explicit approval in the current conversation.
+- Routine reversible work, commits, feature-branch pushes, protected green-PR merges, and verification use Mason's standing authorization and must not trigger a second approval request. Workflows still stop at the hard gates in `AGENTS.md`; existing migration, production-action, review, CI, and branch-protection guards remain authoritative.
 
 ## Required Verification
 

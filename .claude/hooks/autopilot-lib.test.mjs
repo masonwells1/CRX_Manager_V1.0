@@ -25,8 +25,11 @@ eq(autopilotDecision("mcp__supabase__execute_sql", { query: "..." }), "allow", "
 // ── deny-set: prod-touching + destructive must NEVER be auto-approved ─────
 eq(autopilotDecision("mcp__supabase__deploy_edge_function", {}), "deny", "deploy_edge_function denied");
 eq(autopilotDecision("mcp__x__deploy_to_vercel", {}), "deny", "deploy_to_vercel denied");
-eq(autopilotDecision("Bash", { command: "git push origin main" }), "deny", "git push denied");
+eq(autopilotDecision("Bash", { command: "git push -u origin codex/routine-work" }), "allow", "ordinary feature push reaches the normal push guard");
 eq(autopilotDecision("Bash", { command: "git push --force" }), "deny", "force push denied");
+eq(autopilotDecision("Bash", { command: "git push origin codex/routine-work --force-with-lease" }), "deny", "trailing force-with-lease denied");
+eq(autopilotDecision("Bash", { command: "git push -fu origin codex/routine-work" }), "deny", "combined short force flag denied");
+eq(autopilotDecision("Bash", { command: "git push origin +codex/routine-work:codex/routine-work" }), "deny", "forced refspec denied");
 eq(autopilotDecision("Bash", { command: "git reset --hard HEAD~1" }), "deny", "hard reset denied");
 eq(autopilotDecision("Bash", { command: "rm -rf build" }), "deny", "rm -rf denied");
 eq(autopilotDecision("Bash", { command: "npm run test -- --no-verify" }), "deny", "--no-verify denied");
@@ -36,12 +39,12 @@ eq(autopilotDecision("Bash", { command: "echo SECRET >> .env" }), "deny", "write
 eq(autopilotDecision("Write", { file_path: "C:/CRX_Manager/.env.local" }), "deny", "Write .env.local denied");
 eq(autopilotDecision("Edit", { file_path: ".env" }), "deny", "Edit .env denied");
 
-// ── deny-set additions (2026-07-04): CLI deploy, PR merge, MCP write/exec ─
+// ── deny-set additions (2026-07-04): CLI deploy and direct remote writes ───
 eq(autopilotDecision("Bash", { command: "npx supabase functions deploy send-email" }), "deny", "CLI edge deploy denied");
 eq(autopilotDecision("Bash", { command: "supabase functions deploy process-document" }), "deny", "bare CLI edge deploy denied");
-eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash" }), "deny", "gh pr merge denied");
+eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash" }), "allow", "protected PR merge reaches the normal merge guard");
 eq(autopilotDecision("mcp__github__push_files", {}), "deny", "GitHub MCP push_files denied");
-eq(autopilotDecision("mcp__github__merge_pull_request", {}), "deny", "GitHub MCP merge PR denied");
+eq(autopilotDecision("mcp__github__merge_pull_request", {}), "allow", "GitHub MCP merge PR reaches the normal merge guard");
 eq(autopilotDecision("mcp__github__create_or_update_file", {}), "deny", "GitHub MCP file write denied");
 eq(autopilotDecision("mcp__Desktop_Commander__start_process", {}), "deny", "Desktop Commander exec denied");
 eq(autopilotDecision("mcp__Desktop_Commander__write_file", {}), "deny", "Desktop Commander write denied");

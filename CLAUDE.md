@@ -36,7 +36,7 @@ Direct reviews are read-only. PR comments default to dry-run. None of these work
 - `.claude/hooks/` is the single source of truth for shared guard logic. The tracked `.codex/hooks.json` invokes those files through a portable adapter; do not copy hook implementations into `.codex/`.
 - Full hook and reviewer-agent behavior is documented in `docs/reference/agent-guardrails.md`.
 - Migration work must satisfy the RLS/security and drift-review gates before a live apply can even be considered.
-- Unattended mode never loosens the hard deny set for push, production deploy, destructive data operations, or secrets. Live migrations in an armed hands-free run follow the settled 2026-07-13 policy in `AGENTS.md`/`docs/manual/DECISION_LOG.md`: the migration-apply-guard proof + Codex gates apply in full, and destructive migrations are hard-refused while armed.
+- Unattended mode lets ordinary feature-branch pushes and protected green-PR merges reach their existing exact-head guards without another Mason confirmation. It never loosens force-push/history-rewrite, out-of-band production deploy, destructive data, secret/auth, bypass, migration, or other hard gates. Live migrations in an armed hands-free run follow the settled 2026-07-13 policy in `AGENTS.md`/`docs/manual/DECISION_LOG.md`: the migration-apply-guard proof + Codex gates apply in full, and destructive migrations are hard-refused while armed.
 - Claude/Codex hook asymmetry is deliberate and enforced: `scripts/agent-manifest-parity.mjs` fails on any undeclared one-sided hook. Wire a new guard on both sides, or declare it in `CLAUDE_ONLY_HOOKS`/`CODEX_ONLY_HOOKS` with the reason.
 
 ## Model Tuning (Claude Opus 5)

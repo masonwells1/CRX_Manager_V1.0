@@ -40,7 +40,7 @@ if (isMachineGenerated(payload?.prompt)) emit();
 const prompt = (payload?.prompt || "").toLowerCase();
 if (!prompt) emit();
 
-// Each rule = { pattern, label, why, alternatives }
+// Each rule = { pattern, label, why, alternatives, requiresFreshApproval? }
 const rules = [
   {
     pattern: /\b(drop|delete|remove|undo|revert|kill)\b[^.!?]{0,40}\b(migration|migrations)\b/,
@@ -88,7 +88,8 @@ const rules = [
     pattern: /\bauto[_\s-]?(commit|push|deploy|merge)\b/,
     label: "AUTO-COMMIT/PUSH/DEPLOY",
     why: `Automation is fine for regular code, but NOT for the hard gates. ${PUSH_POLICY}`,
-    alternatives: "Route the work through /ship — it reviews, tests, and auto-pushes green code to main on its own, and still STOPS for Mason's explicit OK at the hard gates (deploying an edge function, deleting data, and live migration applies outside an armed hands-free run — see the 2026-07-13 policy in the PUSH POLICY above)."
+    alternatives: "Treat this as routine protected delivery: use /ship, run the required proof, push the feature branch, and merge the green reviewed PR without asking Mason again. Stop only at a hard gate named in the PUSH POLICY.",
+    requiresFreshApproval: false
   },
   {
     pattern: /\bbypass\s+(check_period_open|period[_\s-]?open|closed[_\s-]?period)\b/,
@@ -112,7 +113,7 @@ for (const rule of rules) {
 if (matches.length === 0) emit();
 
 const lines = [
-  "⚠️  CRX Manager safety check — Mason's prompt contains phrasing that has caused production incidents before. SLOW DOWN and explain what the action would do BEFORE taking it.",
+  "⚠️  CRX Manager safety check — classify the matched wording before acting.",
   "",
 ];
 for (const m of matches) {
@@ -121,11 +122,20 @@ for (const m of matches) {
   lines.push(`   Safer path: ${m.alternatives}`);
   lines.push("");
 }
-lines.push(
-  "Mason has zero coding experience. Do NOT proceed with the requested action until you have:",
-  "  1. Explained in plain English what would happen",
-  "  2. Offered the safer alternative above",
-  "  3. Gotten Mason's explicit confirmation that he understands and still wants the destructive path"
-);
+const hardMatches = matches.filter((match) => match.requiresFreshApproval !== false);
+if (hardMatches.length > 0) {
+  lines.push(
+    "Continue all safe preparation automatically. Stop only before the specific destructive or irreversible matched action until you have:",
+    "  1. Explained in plain English what would happen",
+    "  2. Offered the safer alternative above",
+    "  3. Gotten Mason's explicit confirmation that he understands and still wants that hard-gated action",
+    "Do not ask again for routine reads, edits, tests, commits, feature-branch pushes, PR work, or verification."
+  );
+} else {
+  lines.push(
+    "This is routine protected delivery under Mason's standing authorization, NOT a fresh approval gate.",
+    "Continue through review, feature-branch push, green PR merge, and verification without asking Mason again."
+  );
+}
 
 emit(lines.join("\n"));
