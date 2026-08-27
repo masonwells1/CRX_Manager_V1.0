@@ -6,6 +6,9 @@ import { spawnSync } from "node:child_process";
 
 import { checkWrappable, topLevelSkeleton } from "../.claude/hooks/migration-wrappability-lib.mjs";
 
+const destructiveModule = ["..", ".claude", "hooks", "live-testdata-lib.mjs"].join("/");
+const { destructiveMigrationCheck } = await import(new URL(destructiveModule, import.meta.url));
+
 export const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
 const MIGRATION_STEM_RE = /^(\d{14})_((?![A-Za-z0-9_-]*\d{14})[A-Za-z0-9][A-Za-z0-9_-]*)$/;
 
@@ -25,6 +28,8 @@ function sha256(value) {
 }
 
 export function transactionCompatibility(sql) {
+  const destructive = destructiveMigrationCheck(sql);
+  if (destructive.destructive) return { ok: false, reason: `destructive migration: ${destructive.reason}` };
   const verdict = checkWrappable(sql);
   if (!verdict.wrappable) return { ok: false, reason: verdict.reason };
   const skeleton = topLevelSkeleton(sql);

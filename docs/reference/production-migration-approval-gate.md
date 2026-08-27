@@ -115,6 +115,11 @@ artifact and rebuilds the batch directly from the same immutable Git blob, recon
 verifies the installed Supabase CLI version, obtains the
 environment secrets, and executes one transaction.
 
+The automated path refuses every migration classified as destructive by the repository's existing
+fail-closed detector, including top-level `DELETE`, `TRUNCATE`, `DROP TABLE`, dropped columns,
+`MERGE`, and schema/type/domain/extension drops. An intentional destructive migration remains
+outside this workflow and requires a separate current-conversation approval and recovery plan.
+
 That transaction locks the migration ledger, refuses duplicate versions, names, or exact SQL
 content and refuses out-of-order versions, runs the migration SQL, writes the content-bound ledger
 row, verifies it, and commits. A second 14-digit timestamp anywhere in the filename suffix is also

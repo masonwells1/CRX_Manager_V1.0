@@ -10,6 +10,8 @@ GitHub workflow accepts one exact current-main commit, reviewed PR-head commit, 
 full two-charter clean-review evidence, timestamped migration filename, and SQL SHA-256. The workflow
 parses and preserves that evidence, rejects non-regular Git migration entries, and rebuilds from the
 immutable commit blob so a symlink cannot redirect the bytes applied.
+The workflow also reuses the existing fail-closed destructive-migration classifier, so data deletes,
+truncation, dropped tables/columns/types/schemas, and `MERGE` cannot enter this automated path.
 Its `production-database` environment requires Mason's GitHub account, rejects administrator bypass,
 and releases its credentials only after the website approval. Mason does not need a second account:
 Codex uses a fine-grained machine credential with Actions and Deployments both read-only, so it can
