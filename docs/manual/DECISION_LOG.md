@@ -8,6 +8,53 @@ settled calls. Newest first. Each entry is a decision, why it was made, and the 
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
 
+## 2026-08-26 — ordinary documentation gets a trusted fast CI lane; uncertainty still runs everything
+
+**Source:** Mason's in-chat approval on 2026-08-26 after the containment scanner performance pass
+showed that a documentation-only merge still consumed about nine minutes of full CI.
+
+**Decision.** Add a narrow documentation-only route inside the existing required CI workflow. The
+workflow itself still runs, Phase 3C containment still runs first, SQL Migration Validation still
+runs its complete audit, and both required contexts still execute. Only the expensive application
+steps (dependency audit, lint, typecheck, guard/application tests, coverage, and build) plus the
+separate Windows containment regression job may be omitted after an exact trusted-base classifier
+proves every changed path is an ordinary Markdown record.
+
+The allowlist is intentionally small: only root `README.md`, `docs/CHANGELOG.md`, and correctly
+named and valid new records below `docs/changelog.d/`. Changelog records are validated from the candidate blob with the trusted
+base's shared entry rules; the folder README, malformed names, impossible dates, or invalid content
+do not earn the fast route. There is no directory-wide documentation prefix. In particular,
+`docs/archive/`, `docs/audits/`, `docs/build-loops/`, `docs/handoffs/`, `docs/loops/`, and
+`docs/plans/` always run complete CI because the repository already records that those locations
+contain or feed agent instructions. Agent-consumed manual synthesis such as
+`docs/manual/KNOWN_ISSUES.md` also remains full CI. Everything else runs complete CI. This is stricter than the
+exclusion floor recorded in the 2026-08-25 harness decision: agent instructions,
+manual workflow/reference sources, generated maps, hidden control directories, workflow files,
+hooks, configuration, dependencies, scripts, tests, source, migrations, unknown paths, mixed diffs,
+non-regular Git entries, malformed history, and empty ranges all resolve to complete CI.
+Reserved agent-instruction basename families (`AGENTS.md` / `AGENTS.*.md`, `CLAUDE.md` /
+`CLAUDE.*.md`, `GEMINI.md`, `SKILL.md`, and `copilot-instructions.md`)
+and control-directory segments (`.agents`, `.claude`, `.codex`, `.github`, and `.husky`) are rejected
+case-insensitively at every depth, including below an otherwise ordinary documentation folder.
+
+**Trust boundary.** For a pull request or push whose comparison base already contains the
+classifier, CI executes that exact base blob from a detached trusted worktree against the candidate
+history. A candidate that edits the classifier cannot use its edited bytes to classify itself. The
+introducing PR, first merge push, missing classifier, malformed event, or classifier failure forces
+the full lane. Required dependent jobs use `always()` and explicitly turn a failed containment,
+classifier, or SQL prerequisite into red; they are never conditionally skipped into an accepted
+success.
+
+**Event rule retained.** `pull_request.edited` remains enabled because a base-branch retarget must
+rerun proof. Same-PR concurrency still cancels only superseded in-progress PR work, while `main`
+pushes retain unique groups. This pass reduces repeated documentation work through the fast route;
+it does not create a metadata-only success that could overwrite a failed exact-SHA code check.
+
+**Operative rule.** Additions to the fast allowlist require a new decision, a real timing benefit,
+both-direction path tests, and proof that the path cannot affect runtime, build inputs, agent/harness
+behavior, generated truth, deployment, or database state. Ambiguity runs everything.
+
+
 ## 2026-08-26 — CORRECTION: a closed allowlist only closes what is inside it
 
 **This amends the 2026-08-25 entry immediately below**, which claimed pinning the guarded region
