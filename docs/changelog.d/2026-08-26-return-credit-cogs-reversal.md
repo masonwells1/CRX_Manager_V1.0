@@ -53,8 +53,13 @@ identity substitution, and the wrapper restores the server-held id, order link, 
 creation order, and delivery provenance after the legacy rewrite. Merge remains safe because these
 migrations do nothing until separately applied.
 
+The same final candidate now reverses received-return inventory once per product, using the combined
+persisted restock quantity from every return line. If two order lines return the same product after some
+of that stock has been consumed, cancellation fails closed against the one locked inventory balance
+instead of letting each line reuse a stale pre-update balance and drive inventory negative.
+
 No migration was applied to production by this repository change. The fresh read-only production
-schema passed the 56-signal disposable PostgreSQL proof, including an edit -> post -> return lineage case, an equal-timestamp source-line case, and a mutant that removes the open-return
+schema passed the disposable PostgreSQL proof, including an edit -> post -> return lineage case, an equal-timestamp source-line case, same-product cancellation after partial stock consumption, and a mutant that removes the open-return
 warehouse-unit preflight; the run ended in `SMOKE_PASS_ROLLBACK` with zero residue. A 2026-08-27 live
 read found one open restock row, exactly the pinned legacy RMA above, and zero unhandled warehouse-unit
 mismatches. Exact-SHA adversarial reviews, the governed migration review, and a fresh live ledger

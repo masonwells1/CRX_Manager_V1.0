@@ -724,10 +724,12 @@ const expectedProofs = [
   'CANCEL_DELIVERY_RECEIVE_RACE_PROVEN',
   'CANCEL_DELIVERY_LOCK_ORDER_MUTATION_DETECTED',
   'LEGACY_CANCEL_EXACT_QUANTITY_MUTATION_DETECTED',
+  'SAME_PRODUCT_CANCEL_AGGREGATION_MUTATION_DETECTED',
   'DELIVERY_RECEIVED_RETURN_REVERSAL_GUARDS_PROVEN',
   'DELIVERY_PENDING_RETURN_REVERSAL_GUARDS_PROVEN',
   'RETURN_RECEIPT_SOURCE_DELIVERY_REVALIDATION_PROVEN',
   'LEGACY_RESTOCK_CANCEL_EXACT_PROVEN',
+  'SAME_PRODUCT_CANCEL_AGGREGATE_GUARD_PROVEN',
 ];
 const completedProofs = new Set();
 try {
@@ -1969,7 +1971,45 @@ try {
   assert.match(cancelExactQuantityOutput, /SMOKE_FAIL: legacy cancel left 22\.50* gallons, expected 0/, `cancel-return exact-quantity mutant did not reach the phantom-inventory oracle:\n${cancelExactQuantityOutput}`);
   completedProofs.add('LEGACY_CANCEL_EXACT_QUANTITY_MUTATION_DETECTED');
   psql(canonicalCancelReturn);
-  assertInstalledFunctionHash('public._cancel_return_intent_impl_20260812(uuid,text,uuid,text)', '42d9dd05aed5d40f2e2552c75a5e2dcf3faea6bfddb0404f2cda5598cfc14da1');
+  assertInstalledFunctionHash('public._cancel_return_intent_impl_20260812(uuid,text,uuid,text)', '31d4fef2a8303aa3351b842cdd814ca38109fae8cc255df01929ffc745dc0618');
+
+  const cancelSameProductAggregateMutant = canonicalCancelReturn.replace(
+    /      SELECT ri\.product_id,[\s\S]*?      ORDER BY ri\.product_id\r?\n/,
+    `      SELECT ri.product_id,
+             ri.product_name,
+             ARRAY[ri.id] AS item_ids,
+             1::integer AS item_count,
+             ri.restocked_quantity,
+             inv.id AS inv_id,
+             inv.location AS inv_location,
+             inv.quantity_available
+      FROM public.return_items ri
+      LEFT JOIN LATERAL (
+        SELECT i.id, i.location, i.quantity_available
+        FROM public.inventory i
+        WHERE i.product_id = ri.product_id
+          AND i.location = 'Main Warehouse'
+        LIMIT 1
+        FOR UPDATE
+      ) inv ON true
+      WHERE ri.return_id = p_return_id
+        AND ri.restocked = true
+      ORDER BY ri.sort_order, ri.id
+`,
+  );
+  assert.notEqual(cancelSameProductAggregateMutant, canonicalCancelReturn, 'cancel-return same-product aggregate mutant did not alter the executable helper');
+  psql(cancelSameProductAggregateMutant);
+  const cancelSameProductAggregateSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const cancelSameProductAggregateOutput = `${cancelSameProductAggregateSmoke.stdout}\n${cancelSameProductAggregateSmoke.stderr}`;
+  assert.notEqual(cancelSameProductAggregateSmoke.status, 0, 'cancel-return same-product aggregate mutant smoke unexpectedly committed');
+  assert.match(
+    cancelSameProductAggregateOutput,
+    /SMOKE_FAIL: same-product cancel accepted 12 returned units with only 10 available/,
+    `cancel-return same-product aggregate mutant did not reach the negative-inventory oracle:\n${cancelSameProductAggregateOutput}`,
+  );
+  completedProofs.add('SAME_PRODUCT_CANCEL_AGGREGATION_MUTATION_DETECTED');
+  psql(canonicalCancelReturn);
+  assertInstalledFunctionHash('public._cancel_return_intent_impl_20260812(uuid,text,uuid,text)', '31d4fef2a8303aa3351b842cdd814ca38109fae8cc255df01929ffc745dc0618');
 
   const dashboardStart = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."get_dashboard_action_items"(');
   const dashboardEnd = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."void_delivery"(', dashboardStart);
@@ -2709,6 +2749,8 @@ try {
   completedProofs.add('RETURN_RECEIPT_SOURCE_DELIVERY_REVALIDATION_PROVEN');
   assert.match(output, /LEGACY_RESTOCK_CANCEL_EXACT_PROVEN/, `canonical smoke did not prove exact legacy restock cancellation:\n${output}`);
   completedProofs.add('LEGACY_RESTOCK_CANCEL_EXACT_PROVEN');
+  assert.match(output, /SAME_PRODUCT_CANCEL_AGGREGATE_GUARD_PROVEN/, `canonical smoke did not prove aggregate same-product cancellation refusal:\n${output}`);
+  completedProofs.add('SAME_PRODUCT_CANCEL_AGGREGATE_GUARD_PROVEN');
   assert.equal(psqlValue("SELECT count(*) FROM public.customers WHERE farm_name LIKE '[SMOKE] Return Credit Farm %';"), '0', 'customer fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.returns WHERE return_number LIKE 'SMK-%';"), '0', 'return fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.invoices WHERE invoice_number LIKE 'SMK-RCC-%';"), '0', 'invoice fixture residue remained');

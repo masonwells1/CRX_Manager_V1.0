@@ -83,6 +83,11 @@ DECLARE
   v_sequential_return_id uuid;
   v_sequential_return_id2 uuid;
   v_legacy_return_id uuid;
+  v_same_product_product_id uuid;
+  v_same_product_order_id uuid;
+  v_same_product_order_item_1 uuid;
+  v_same_product_order_item_2 uuid;
+  v_same_product_return_id uuid;
   v_future_unlinked_return_id uuid;
   v_reject_return_id uuid;
   v_cancel_return_id uuid;
@@ -1905,6 +1910,101 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: legacy cancellation proof did not roll back cleanly';
   END IF;
   RAISE NOTICE 'LEGACY_RESTOCK_CANCEL_EXACT_PROVEN';
+
+  -- A received return may contain separate order lines for the same product.
+  -- If part of that returned stock has already been consumed, cancellation
+  -- must compare the combined persisted restock against the one locked
+  -- inventory balance. Comparing each line to the same captured balance would
+  -- let two six-unit lines pass against ten available and commit negative two.
+  v_same_product_product_id := gen_random_uuid();
+  v_same_product_order_id := gen_random_uuid();
+  v_same_product_order_item_1 := gen_random_uuid();
+  v_same_product_order_item_2 := gen_random_uuid();
+  v_same_product_return_id := gen_random_uuid();
+  SET LOCAL session_replication_role = replica;
+  INSERT INTO products (id, product_name, current_cost, unit_size, inventory_unit)
+  VALUES (
+    v_same_product_product_id,
+    '[SMOKE] same-product cancel aggregate ' || v_suffix,
+    5, 'gal', 'gal'
+  );
+  INSERT INTO inventory (
+    product_id, location, quantity_available, quantity_prebooked, unit_size
+  ) VALUES (
+    v_same_product_product_id, 'Main Warehouse', 10, 0, 'gal'
+  );
+  INSERT INTO orders (id, order_number, customer_id, salesman_id, status)
+  VALUES (
+    v_same_product_order_id, 'SMK-RCC-SAME-PRODUCT-' || v_suffix,
+    v_customer_id, v_admin, 'confirmed'
+  );
+  INSERT INTO order_items (
+    id, order_id, product_id, product_name, price_per_unit, cost_per_unit,
+    total_units_needed, total_price, profit, net_margin,
+    quantity_delivered, quantity_remaining, unit_size
+  ) VALUES
+  (
+    v_same_product_order_item_1, v_same_product_order_id,
+    v_same_product_product_id, '[SMOKE] same-product cancel aggregate ' || v_suffix,
+    10, 5, 6, 60, 30, 50, 6, 0, 'gal'
+  ),
+  (
+    v_same_product_order_item_2, v_same_product_order_id,
+    v_same_product_product_id, '[SMOKE] same-product cancel aggregate ' || v_suffix,
+    10, 5, 6, 60, 30, 50, 6, 0, 'gal'
+  );
+  INSERT INTO returns (
+    id, return_number, customer_id, order_id, reason, requested_by, status,
+    approved_by, approved_at, received_by, received_at
+  ) VALUES (
+    v_same_product_return_id, 'SMK-RCC-SAME-PRODUCT-R-' || v_suffix,
+    v_customer_id, v_same_product_order_id, 'overstock', v_admin, 'received',
+    v_admin, now(), v_admin, now()
+  );
+  INSERT INTO return_items (
+    return_id, order_item_id, product_id, product_name, quantity, unit,
+    unit_price_cents, extended_cents, condition, restock, restocked,
+    restocked_quantity, sort_order
+  ) VALUES
+  (
+    v_same_product_return_id, v_same_product_order_item_1,
+    v_same_product_product_id, '[SMOKE] same-product cancel aggregate ' || v_suffix,
+    6, 'gal', 1000, 6000, 'unopened', true, true, 6, 0
+  ),
+  (
+    v_same_product_return_id, v_same_product_order_item_2,
+    v_same_product_product_id, '[SMOKE] same-product cancel aggregate ' || v_suffix,
+    6, 'gal', 1000, 6000, 'unopened', true, true, 6, 1
+  );
+  SET LOCAL session_replication_role = origin;
+
+  BEGIN
+    PERFORM cancel_return(
+      v_same_product_return_id,
+      '[SMOKE] must reject combined restock after consumption',
+      v_admin,
+      'smk-rcc-' || v_suffix || '-same-product-cancel-guard'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: same-product cancel accepted 12 returned units with only 10 available';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'RETURN_RESTOCK_INVENTORY_INSUFFICIENT:%available=10%required=12%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected aggregate same-product inventory refusal, got %', v_reason;
+    END IF;
+  END;
+  IF (SELECT quantity_available FROM inventory
+      WHERE product_id = v_same_product_product_id
+        AND location = 'Main Warehouse') <> 10
+     OR (SELECT status FROM returns WHERE id = v_same_product_return_id) <> 'received'
+     OR (SELECT count(*) FROM return_items
+         WHERE return_id = v_same_product_return_id
+           AND restocked
+           AND restocked_quantity = 6) <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: refused same-product cancellation changed inventory or return state';
+  END IF;
+  RAISE NOTICE 'SAME_PRODUCT_CANCEL_AGGREGATE_GUARD_PROVEN';
+
   v_res := issue_return_credit(
     v_legacy_return_id, v_admin, 'smk-rcc-' || v_suffix || '-legacy-credit'
   );

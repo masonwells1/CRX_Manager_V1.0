@@ -127,6 +127,7 @@ DECLARE
   v_was_received boolean;
   v_actor uuid := auth.uid();
   v_product_ids uuid[];
+  v_invalid_item_id uuid;
 BEGIN
   IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
   IF p_performed_by IS DISTINCT FROM v_actor THEN RAISE EXCEPTION 'ACTOR_MISMATCH'; END IF;
@@ -161,12 +162,24 @@ BEGIN
 
   v_was_received := (v_return.status = 'received');
   IF v_was_received THEN
+    SELECT ri.id
+      INTO v_invalid_item_id
+    FROM public.return_items ri
+    WHERE ri.return_id = p_return_id
+      AND ri.restocked = true
+      AND (ri.restocked_quantity IS NULL OR ri.restocked_quantity <= 0)
+    ORDER BY ri.sort_order, ri.id
+    LIMIT 1;
+    IF FOUND THEN
+      RAISE EXCEPTION 'RETURN_RESTOCKED_QUANTITY_MISSING:%', v_invalid_item_id;
+    END IF;
+
     FOR v_item IN
-      SELECT ri.id AS item_id,
-             ri.product_id,
-             ri.product_name,
-             ri.condition,
-             ri.restocked_quantity,
+      SELECT ri.product_id,
+             min(ri.product_name) AS product_name,
+             array_agg(ri.id ORDER BY ri.sort_order, ri.id) AS item_ids,
+             count(*)::integer AS item_count,
+             sum(ri.restocked_quantity) AS restocked_quantity,
              inv.id AS inv_id,
              inv.location AS inv_location,
              inv.quantity_available
@@ -181,17 +194,17 @@ BEGIN
       ) inv ON true
       WHERE ri.return_id = p_return_id
         AND ri.restocked = true
-      ORDER BY ri.sort_order, ri.id
+      GROUP BY ri.product_id, inv.id, inv.location, inv.quantity_available
+      ORDER BY ri.product_id
     LOOP
-      IF v_item.restocked_quantity IS NULL OR v_item.restocked_quantity <= 0 THEN
-        RAISE EXCEPTION 'RETURN_RESTOCKED_QUANTITY_MISSING:%', v_item.item_id;
-      END IF;
       IF v_item.inv_id IS NULL THEN
-        RAISE EXCEPTION 'RETURN_RESTOCK_INVENTORY_MISSING:%', v_item.item_id;
+        RAISE EXCEPTION 'RETURN_RESTOCK_INVENTORY_MISSING:product=% items=%',
+          v_item.product_id, v_item.item_ids;
       END IF;
       IF v_item.quantity_available < v_item.restocked_quantity THEN
-        RAISE EXCEPTION 'RETURN_RESTOCK_INVENTORY_INSUFFICIENT:item=% available=% required=%',
-          v_item.item_id, v_item.quantity_available, v_item.restocked_quantity;
+        RAISE EXCEPTION 'RETURN_RESTOCK_INVENTORY_INSUFFICIENT:product=% items=% available=% required=%',
+          v_item.product_id, v_item.item_ids,
+          v_item.quantity_available, v_item.restocked_quantity;
       END IF;
 
       UPDATE public.inventory
@@ -204,12 +217,12 @@ BEGIN
         v_item.product_id, 'returned', -v_item.restocked_quantity,
         v_item.inv_location, v_actor,
         'Cancel of return ' || v_return.return_number || ': ' ||
-          v_item.product_name || ' (' || v_item.condition ||
-          ') - exact restock reversed: ' || p_reason
+          v_item.product_name || ' (' || v_item.item_count ||
+          ' line(s)) - exact restock reversed: ' || p_reason
       );
-      v_reversed_ids := array_append(v_reversed_ids, v_item.item_id);
+      v_reversed_ids := v_reversed_ids || v_item.item_ids;
       v_reversed_qty := v_reversed_qty + v_item.restocked_quantity;
-      v_reversed_count := v_reversed_count + 1;
+      v_reversed_count := v_reversed_count + v_item.item_count;
     END LOOP;
   END IF;
 
@@ -516,9 +529,11 @@ BEGIN
          AND pg_get_userbyid(p.proowner) = 'postgres'
      )
      OR encode(sha256(convert_to(replace(v_cancel_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex')
-        <> '42d9dd05aed5d40f2e2552c75a5e2dcf3faea6bfddb0404f2cda5598cfc14da1'
+        <> '31d4fef2a8303aa3351b842cdd814ca38109fae8cc255df01929ffc745dc0618'
      OR position('RETURN_RESTOCKED_QUANTITY_MISSING' IN v_cancel_src) = 0
      OR position('RETURN_RESTOCK_INVENTORY_INSUFFICIENT' IN v_cancel_src) = 0
+     OR position('sum(ri.restocked_quantity) AS restocked_quantity' IN v_cancel_src) = 0
+     OR position('GROUP BY ri.product_id, inv.id, inv.location, inv.quantity_available' IN v_cancel_src) = 0
      OR position('quantity_available - v_item.restocked_quantity' IN v_cancel_src) = 0
      OR position('restocked_quantity = NULL' IN v_cancel_src) = 0
      OR has_function_privilege('anon', v_cancel_return, 'EXECUTE')

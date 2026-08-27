@@ -234,8 +234,10 @@ describe('return-credit COGS migration', () => {
     expect(functionBodySha256(invoiceLineageMigration, '_save_invoice_scoped_impl'))
       .toBe('cab2bde1aa6bf26d918639cfb8d328ac579d0b7f5429123aa24710a1a835866e');
     expect(functionBodySha256(invoiceLineageMigration, '_cancel_return_intent_impl_20260812'))
-      .toBe('42d9dd05aed5d40f2e2552c75a5e2dcf3faea6bfddb0404f2cda5598cfc14da1');
+      .toBe('31d4fef2a8303aa3351b842cdd814ca38109fae8cc255df01929ffc745dc0618');
     expect(invoiceLineageMigration).toContain('RETURN_RESTOCKED_QUANTITY_MISSING');
+    expect(invoiceLineageMigration).toContain('sum(ri.restocked_quantity) AS restocked_quantity');
+    expect(invoiceLineageMigration).toContain('GROUP BY ri.product_id, inv.id, inv.location, inv.quantity_available');
     expect(invoiceLineageMigration).toContain('quantity_available - v_item.restocked_quantity');
     expect(invoiceLineageMigration).toContain('restocked_quantity = NULL');
     expect(invoiceLineageMigration).toContain('GENERATED_INVOICE_LINEAGE_LINE_REQUIRED');
@@ -245,6 +247,8 @@ describe('return-credit COGS migration', () => {
     expect(returnCreditSmoke).toContain('generated invoice edit lost immutable order/cost lineage');
     expect(returnCreditSmoke).toContain('DELIVERY_RECEIVED_RETURN_REVERSAL_GUARDS_PROVEN');
     expect(returnCreditSmoke).toContain('LEGACY_RESTOCK_CANCEL_EXACT_PROVEN');
+    expect(returnCreditSmoke).toContain('SAME_PRODUCT_CANCEL_AGGREGATE_GUARD_PROVEN');
+    expect(returnCreditSmoke).toContain('same-product cancel accepted 12 returned units with only 10 available');
   });
 
   it('keeps report status alignment in the separate report-only migration', () => {
@@ -389,7 +393,7 @@ describe('return-credit COGS migration', () => {
     const invoiceLineageSha256 = createHash('sha256')
       .update(invoiceLineageMigration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(invoiceLineageSha256).toBe('49b8d44c2fc2ec1b52febff3009afb45254d930b56d74fc627ee1ed6d46ac5c2');
+    expect(invoiceLineageSha256).toBe('720f82c80671fab9099d0d28a5e6eee658d8af4138ab3f5c0304ed00613ac779');
     expect(migrationHistory).toContain(`SQL sha256: \`${invoiceLineageSha256}\` (LF-normalized bytes)`);
   });
 
