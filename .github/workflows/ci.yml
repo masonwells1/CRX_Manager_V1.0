@@ -15,7 +15,9 @@ on:
 # classification may shorten their expensive steps. Pushes to main receive a
 # run-id group and are never cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  # Metadata edits must not cancel an in-flight code-proof run. Base edits are
+  # still classified fail-closed below and receive complete proof.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.action == 'edited' && 'edited' || 'code' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # CI only reads repository content and artifacts. It never needs a writable
@@ -106,6 +108,7 @@ jobs:
   ci-scope:
     name: Classify CI scope
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: phase3-private-artifact-containment
     if: ${{ always() }}
     outputs:
@@ -113,6 +116,8 @@ jobs:
       full_ci: ${{ steps.scope.outputs.full_ci }}
       reason: ${{ steps.scope.outputs.reason }}
       changed_count: ${{ steps.scope.outputs.changed_count }}
+      event_route: ${{ steps.scope.outputs.event_route }}
+      prior_full_proof: ${{ steps.scope.outputs.prior_full_proof }}
     steps:
       - name: Bind containment result before classifying candidate paths
         env:
@@ -169,6 +174,8 @@ jobs:
               echo 'full_ci=true'
               echo 'reason=trusted-classifier-unavailable'
               echo 'changed_count=0'
+              echo 'event_route=force-full'
+              echo 'prior_full_proof=false'
             } >> "$GITHUB_OUTPUT"
             echo 'Trusted comparison base has no CI-scope classifier; forcing complete CI.'
           }
@@ -202,12 +209,20 @@ jobs:
           test -f "$trusted_classifier"
           test "$(git -C "$trusted_root" hash-object -- "$classifier_rel")" = "$classifier_oid"
           classifier_output="$RUNNER_TEMP/ci-scope-output-${compare_head}"
-          : > "$classifier_output"
+          {
+            # Bootstrap compatibility: the first introducing PR executes the
+            # older trusted-base classifier, which does not emit these keys.
+            echo 'event_route=code'
+            echo 'prior_full_proof=false'
+          } > "$classifier_output"
           if ! node "$trusted_classifier" \
             --repo-root "$GITHUB_WORKSPACE" \
             --event-name "$event_mode" \
             --base "$compare_base" \
             --head "$compare_head" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --repository "$GITHUB_REPOSITORY" \
+            --current-run-id "$GITHUB_RUN_ID" \
             --github-output "$classifier_output"; then
             emit_full_bootstrap
             exit 0
@@ -301,12 +316,18 @@ jobs:
           FULL_CI: ${{ needs.ci-scope.outputs.full_ci }}
           ROUTE_REASON: ${{ needs.ci-scope.outputs.reason }}
           CHANGED_COUNT: ${{ needs.ci-scope.outputs.changed_count }}
+          EVENT_ROUTE: ${{ needs.ci-scope.outputs.event_route }}
+          PRIOR_FULL_PROOF: ${{ needs.ci-scope.outputs.prior_full_proof }}
         run: |
           case "$DOCS_ONLY:$FULL_CI" in
             true:false|false:true) ;;
             *) echo "Trusted CI route is not a valid mutually-exclusive result: docs_only=$DOCS_ONLY full_ci=$FULL_CI" >&2; exit 1 ;;
           esac
-          echo "CI route: docs_only=$DOCS_ONLY full_ci=$FULL_CI reason=$ROUTE_REASON changed_count=$CHANGED_COUNT"
+          case "$EVENT_ROUTE:$PRIOR_FULL_PROOF" in
+            code:false|force-full:false|metadata:false|metadata:true) ;;
+            *) echo "Trusted event route is invalid: event_route=$EVENT_ROUTE prior_full_proof=$PRIOR_FULL_PROOF" >&2; exit 1 ;;
+          esac
+          echo "CI route: docs_only=$DOCS_ONLY full_ci=$FULL_CI reason=$ROUTE_REASON changed_count=$CHANGED_COUNT event_route=$EVENT_ROUTE prior_full_proof=$PRIOR_FULL_PROOF"
 
       - name: Cache node_modules
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
@@ -394,6 +415,33 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
         run: npm run build
+
+      - name: Write exact full-CI proof
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' && github.event_name == 'pull_request' }}
+        shell: bash
+        env:
+          PROOF_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PROOF_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PROOF_PATH: ${{ runner.temp }}/crx-full-ci-proof.json
+        run: |
+          set -euo pipefail
+          node --input-type=commonjs -e '
+            const fs = require("node:fs");
+            const sha = value => typeof value === "string" && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
+            const base = sha(process.env.PROOF_BASE_SHA);
+            const head = sha(process.env.PROOF_HEAD_SHA);
+            if (!base || !head || !process.env.PROOF_PATH) process.exit(2);
+            fs.writeFileSync(process.env.PROOF_PATH, `${JSON.stringify({ schema: 1, kind: "crx-full-ci-proof", base, head, run_id: process.env.GITHUB_RUN_ID, run_attempt: process.env.GITHUB_RUN_ATTEMPT })}\n`, { encoding: "utf8", flag: "wx" });
+          '
+
+      - name: Publish exact full-CI proof
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: crx-full-ci-proof-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/crx-full-ci-proof.json
+          if-no-files-found: error
+          retention-days: 14
 
   phase3c-containment-windows:
     name: Phase 3C Containment (Windows)
