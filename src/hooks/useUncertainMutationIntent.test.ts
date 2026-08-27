@@ -321,7 +321,7 @@ describe('useUncertainMutationIntent', () => {
       .toBe(firstTab.result.current.getIdempotencyKey());
   });
 
-  it('coordinates concurrent production-scope tabs under one request version and key', async () => {
+  it('rejects a different concurrent request from the same surface instead of reporting the winner as its result', async () => {
     window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'tab-a');
     const firstTab = renderHook(() => useUncertainMutationIntent<{ bill: string }>({
       operation: 'create_vendor_bill',
@@ -343,16 +343,125 @@ describe('useUncertainMutationIntent', () => {
       ]);
     });
 
-    expect(outcomes.every((outcome) => outcome.status === 'fulfilled')).toBe(true);
-    const values = outcomes.map((outcome) => outcome.status === 'fulfilled' ? outcome.value : null);
-    expect(values[0]).toEqual(values[1]);
-    expect([{ bill: 'VB-A' }, { bill: 'VB-B' }]).toContainEqual(values[0]);
-    expect(secondTab.result.current.getIdempotencyKey())
-      .toBe(firstTab.result.current.getIdempotencyKey());
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    const rejection = outcomes.find((outcome) => outcome.status === 'rejected');
+    expect(rejection).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({ message: 'DURABLE_MUTATION_INTENT_CONFLICT' }),
+    });
     const stored = JSON.parse(window.localStorage.getItem(
       `crx:uncertain-mutation:v4:${JSON.stringify(['create_vendor_bill', 'admin-race'])}`,
     )!);
-    expect(stored.claimTabIds).toEqual(expect.arrayContaining(['tab-a', 'tab-b']));
+    expect(stored.claimTabIds).toHaveLength(1);
+    expect([{ bill: 'VB-A' }, { bill: 'VB-B' }]).toContainEqual(stored.intent);
+  });
+
+  it('coordinates identical concurrent same-surface requests under one request version and key', async () => {
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'same-tab-a');
+    const firstTab = renderHook(() => useUncertainMutationIntent<{ bill: string }>({
+      operation: 'create_vendor_bill',
+      userId: 'admin-same-race',
+      surface: 'new-vendor-bill',
+    }));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'same-tab-b');
+    const secondTab = renderHook(() => useUncertainMutationIntent<{ bill: string }>({
+      operation: 'create_vendor_bill',
+      userId: 'admin-same-race',
+      surface: 'new-vendor-bill',
+    }));
+
+    await act(async () => {
+      const values = await Promise.all([
+        firstTab.result.current.beginIntent({ bill: 'VB-SAME' }),
+        secondTab.result.current.beginIntent({ bill: 'VB-SAME' }),
+      ]);
+      expect(values).toEqual([{ bill: 'VB-SAME' }, { bill: 'VB-SAME' }]);
+    });
+
+    expect(secondTab.result.current.getIdempotencyKey())
+      .toBe(firstTab.result.current.getIdempotencyKey());
+    const stored = JSON.parse(window.localStorage.getItem(
+      `crx:uncertain-mutation:v4:${JSON.stringify(['create_vendor_bill', 'admin-same-race'])}`,
+    )!);
+    expect(stored.claimTabIds).toEqual(expect.arrayContaining(['same-tab-a', 'same-tab-b']));
+  });
+
+  it('releases only the definitively rejected tab claim while a peer request remains in flight', async () => {
+    const options = {
+      operation: 'record_vendor_payment',
+      userId: 'admin-definitive-race',
+      surface: 'vendor-bill-detail',
+      scope: 'bill-definitive-race',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'reject-tab');
+    const rejectTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'commit-tab');
+    const commitTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+
+    await act(async () => rejectTab.result.current.beginIntent({ amount: 10_000 }));
+    await act(async () => commitTab.result.current.beginIntent({ amount: 10_000 }));
+    const originalKey = commitTab.result.current.getIdempotencyKey();
+
+    await act(async () => {
+      expect(await rejectTab.result.current.classifyFailure({
+        code: '23514',
+        message: 'request rejected in this tab',
+      })).toBe('definitive');
+    });
+    expect(rejectTab.result.current.isIntentLocked).toBe(true);
+    const pending = JSON.parse(window.localStorage.getItem(
+      `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`,
+    )!);
+    expect(pending.status).toBe('pending');
+    expect(pending.claimTabIds).toEqual(['commit-tab']);
+
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'blocked-tab');
+    const blockedTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    await expect(blockedTab.result.current.beginIntent({ amount: 20_000 }))
+      .rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+
+    await act(async () => commitTab.result.current.resolveIntent());
+    const resolved = JSON.parse(window.localStorage.getItem(
+      `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`,
+    )!);
+    expect(resolved.status).toBe('resolved');
+    expect(resolved.idempotencyKey).toBe(originalKey);
+  });
+
+  it('cannot erase a peer completion when the definitive rejection arrives second', async () => {
+    const options = {
+      operation: 'record_vendor_payment',
+      userId: 'admin-resolve-before-reject',
+      surface: 'vendor-bill-detail',
+      scope: 'bill-resolve-before-reject',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'resolve-first-tab');
+    const resolveTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'reject-second-tab');
+    const rejectTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+
+    await act(async () => resolveTab.result.current.beginIntent({ amount: 12_500 }));
+    await act(async () => rejectTab.result.current.beginIntent({ amount: 12_500 }));
+    const completedKey = resolveTab.result.current.getIdempotencyKey();
+    await act(async () => resolveTab.result.current.resolveIntent());
+    await act(async () => {
+      expect(await rejectTab.result.current.classifyFailure({
+        code: '23514',
+        message: 'late definitive rejection',
+      })).toBe('definitive');
+    });
+
+    const resolved = JSON.parse(window.localStorage.getItem(
+      `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`,
+    )!);
+    expect(resolved.status).toBe('resolved');
+    expect(resolved.idempotencyKey).toBe(completedKey);
+    expect(resolved.claimTabIds).toEqual(['resolve-first-tab']);
+
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'after-resolve-tab');
+    const afterResolve = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    await act(async () => afterResolve.result.current.beginIntent({ amount: 2_500 }));
+    expect(afterResolve.result.current.getIdempotencyKey()).not.toBe(completedKey);
   });
 
   it('distinguishes a peer-tab completion from a stale failure after a newer request starts', async () => {

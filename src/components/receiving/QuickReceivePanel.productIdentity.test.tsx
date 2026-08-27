@@ -185,7 +185,18 @@ describe('QuickReceivePanel Product identity', () => {
       surface: 'quick-receive',
       scope: '',
       idempotencyKey: 'receive_po_items:user-1:frozen-key',
-      intentIdentity: 'frozen-identity',
+      intentIdentity: JSON.stringify({
+        p_allow_over_receive: false,
+        p_items: [{
+          condition: 'good',
+          lot_number: null,
+          notes: null,
+          po_item_id: 'po-item-frozen',
+          quantity: 3,
+          storage_location: 'Cold Storage',
+        }],
+        p_performed_by: 'user-1',
+      }),
       createdAtMs: Date.now(),
       retryNotAfterMs: Date.now() + (23 * 60 * 60 * 1000),
       intent: {

@@ -284,22 +284,22 @@ async function coordinateDurableRecord<T>(
             : proposed;
         const owned = existing.surface === options.surface
           && existing.scope === (options.scope || '');
+        const candidateIdentity = fingerprintIntent(candidateIntent, options.getIntentIdentity);
+        const sameIntent = existing.intentIdentity !== null
+          && existing.intentIdentity === candidateIdentity;
+        const intentExpired = Date.now() >= existing.retryNotAfterMs;
+        const sameActiveIntent = sameIntent && !intentExpired;
         if (existing.status === 'resolved') {
           result = { record: proposed, conflict: false };
           store.put({ storageKey, record: proposed });
-        } else if (owned) {
+        } else if (owned && (sameIntent || intentExpired)) {
           const claimed = existing.claimTabIds.includes(tabId)
             ? existing
             : { ...existing, claimTabIds: [...existing.claimTabIds, tabId] };
           result = { record: claimed, conflict: false };
           store.put({ storageKey, record: claimed });
         } else {
-          const candidateIdentity = fingerprintIntent(candidateIntent, options.getIntentIdentity);
-          if (
-            existing.intentIdentity !== null
-            && existing.intentIdentity === candidateIdentity
-            && Date.now() < existing.retryNotAfterMs
-          ) {
+          if (sameActiveIntent) {
             const transferred = {
               ...existing,
               surface: options.surface,
@@ -412,8 +412,11 @@ async function deleteCoordinatedRecord<T>(
   storageKey: string | null,
   options: DurableMutationIntentOptions<T> | undefined,
   requestVersion: string | null,
+  tabId: string | null,
 ): Promise<{ deleted: boolean; current: DurableMutationIntentRecord<T> | null }> {
-  if (!storageKey || !options || !requestVersion) return { deleted: true, current: null };
+  if (!storageKey || !options || !requestVersion || !tabId) {
+    return { deleted: false, current: null };
+  }
   const db = await openDurableIntentDb();
   try {
     return await new Promise((resolve, reject) => {
@@ -429,8 +432,17 @@ async function deleteCoordinatedRecord<T>(
         const candidate = stored?.record as Partial<DurableMutationIntentRecord<T>> | undefined;
         if (!candidate || !isValidRecord(candidate, options)) return;
         if (candidate.requestVersion === requestVersion) {
-          store.delete(storageKey);
-          outcome = { deleted: true, current: null };
+          const remainingClaimTabIds = candidate.claimTabIds.filter(
+            (claimTabId) => claimTabId !== tabId,
+          );
+          if (remainingClaimTabIds.length === 0) {
+            store.delete(storageKey);
+            outcome = { deleted: true, current: null };
+          } else {
+            const current = { ...candidate, claimTabIds: remainingClaimTabIds };
+            store.put({ storageKey, record: current });
+            outcome = { deleted: false, current };
+          }
         } else {
           outcome = { deleted: false, current: candidate };
         }
@@ -643,6 +655,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
         storageKey,
         options,
         attempt?.requestVersion ?? null,
+        tabIdRef.current,
       );
       if (outcome.deleted) {
         removeDurableRecord(storageKey);
