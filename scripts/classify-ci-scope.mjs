@@ -10,6 +10,13 @@ const SHA_RE = /^[0-9a-f]{40}$/i;
 const SAFE_PATH_RE = /^[A-Za-z0-9._/-]+$/;
 const REGULAR_BLOB_MODES = new Set(['100644', '100755']);
 const MAX_CHANGED_PATHS = 5000;
+const PROTECTED_CONTROL_SEGMENTS = new Set(['.agents', '.claude', '.codex', '.github', '.husky']);
+const PROTECTED_INSTRUCTION_BASENAMES = new Set([
+  'agents.md',
+  'claude.md',
+  'claude.local.md',
+  'skill.md',
+]);
 
 const FAST_DOC_EXACT = new Set([
   'README.md',
@@ -108,8 +115,16 @@ function validateRepoPath(candidate) {
   return !segments.some(segment => segment === '' || segment === '.' || segment === '..');
 }
 
+function hasProtectedAgentControlMarker(candidate) {
+  const segments = candidate.split('/');
+  const basename = segments.at(-1).toLowerCase();
+  if (PROTECTED_INSTRUCTION_BASENAMES.has(basename)) return true;
+  return segments.slice(0, -1).some(segment => PROTECTED_CONTROL_SEGMENTS.has(segment.toLowerCase()));
+}
+
 export function isFastDocumentationPath(candidate) {
   if (!validateRepoPath(candidate) || !candidate.endsWith('.md')) return false;
+  if (hasProtectedAgentControlMarker(candidate)) return false;
   if (FAST_DOC_EXACT.has(candidate)) return true;
   if (ENTRY_RE.test(candidate)) return true;
   return FAST_DOC_PREFIXES.some(prefix => candidate.startsWith(prefix) && candidate.length > prefix.length);
