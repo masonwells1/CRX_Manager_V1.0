@@ -921,7 +921,7 @@
     "restore_quote_version_trust_boundary": {
       "chain": "smoke-quote-version-restore-trust.sql",
       "psql_only": true,
-      "description": "Rollback-only runtime proof for 20260825190000: an owner-created unmarked legacy version must raise the exact QUOTE_VERSION_LEGACY_UNTRUSTED error and leave quote/header/section/item state unchanged, while a newly RPC-created marked version restores successfully with the authoritative N+1 row-version token. The standing quote-versions-rpc-owned predicate separately pins that rejection before the sole owner-side restore call. EXPECT SMOKE_PREREQ until the trust-boundary migration is deployed.",
+      "description": "Rollback-only runtime proof for 20260826220000: an owner-created unmarked legacy version must raise the exact QUOTE_VERSION_LEGACY_UNTRUSTED error and leave quote/header/section/item state unchanged, while a newly RPC-created marked version restores successfully with the authoritative N+1 row-version token. The standing quote-versions-rpc-owned predicate separately pins that rejection before the sole owner-side restore call. EXPECT SMOKE_PREREQ until the trust-boundary migration is deployed.",
       "covers": [
         "create_quote_version",
         "restore_quote_version"
