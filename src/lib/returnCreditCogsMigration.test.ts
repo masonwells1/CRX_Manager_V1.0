@@ -106,9 +106,19 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_CREDIT_LEDGER_IMMUTABLE');
     expect(migration).toContain('BEFORE UPDATE OF status, deleted_at, total_amount_cents, total_cost_cents, season, invoice_type, invoice_date OR DELETE ON public.invoices');
     expect(migration).toContain('aa_crx_guard_return_credit_lineage');
-    expect(migration).toContain('BEFORE INSERT OR UPDATE OF invoice_id, order_item_id, product_id, quantity, unit_price_cents, extended_cents, cost_cents, unit_size OR DELETE');
+    expect(migration).toContain('BEFORE INSERT OR UPDATE OF invoice_id, order_item_id, product_id, quantity, unit_price_cents, extended_cents, cost_cents, return_credit_cogs_cents, return_credit_source_item_id, unit_size, created_at OR DELETE');
     expect(migration).toContain('RETURN_CREDIT_INVENTORY_UNIT_MISMATCH');
-    expect(migration).toContain('ROW(NEW.invoice_id, NEW.order_item_id, NEW.product_id, NEW.quantity, NEW.unit_price_cents, NEW.extended_cents, NEW.cost_cents, NEW.unit_size)');
+    expect(migration).toContain('return_credit_cogs_cents bigint');
+    expect(migration).toContain('return_credit_source_item_id uuid');
+    expect(migration).toContain('invoice_items_return_credit_cogs_cents_nonpositive_chk');
+    expect(migration).toContain('invoice_items_return_credit_source_item_fk');
+    expect(migration).toContain('invoice_items_return_credit_source_shape_chk');
+    expect(migration).toContain('RETURN_CREDIT_COGS_LEDGER_MISSING');
+    expect(migration).toContain('RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED');
+    expect(migration).toContain('ROW(NEW.invoice_id, NEW.order_item_id, NEW.product_id, NEW.quantity, NEW.unit_price_cents, NEW.extended_cents, NEW.cost_cents, NEW.return_credit_cogs_cents, NEW.return_credit_source_item_id, NEW.unit_size, NEW.created_at)');
+    expect(migration).toContain('pl.source_item_id = sl.source_item_id');
+    expect(migration).toContain('s.source_item_id, s.unit, s.sort_order');
+    expect(migration).not.toMatch(/ORDER BY (?:sl|al)\.invoice_date/);
     expect(returnCreditSmoke).toContain('SMOKE_FAIL: active return-credit cost line was reparented');
     expect(returnCreditSmoke).toContain('SMOKE_FAIL: active zero-cost return-credit line was costed later');
     expect(returnCreditSmoke).toContain('SMOKE_FAIL: active return-credit revenue fields were mutated');
@@ -186,7 +196,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DELIVERY_ALLOCATION_DRIFT');
     expect(migration).toContain("p.prorettype = 'void'::regtype");
     expect(migration).toContain("p.prorettype = 'jsonb'::regtype");
-    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
+    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('ef577f187119c17a13f8f49701e8497d04480287d5f52168f9e878d4420668f3');
     expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('f7e030b6d0b4c78c6049e2a7a16859c5b056fab5ebb2f6a2bf2eafa0303a53c1');
     expect(migration).toContain("p_return_id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid");
     expect(migration).toContain('v_restock_qty := v_item.quantity * v_container_size');
@@ -194,10 +204,10 @@ describe('return-credit COGS migration', () => {
     expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('005ce6a1cfbc7c7f7fcf4712104235bf884af9bc5b30e5f3cbf1edc0f2b6e63e');
     expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('17a9bc14956227793674efcb3011a81c38dfb3c864792173ad6d04e13b13d981');
     expect(functionBodySha256(migration, 'guard_recognized_return_credit_delete')).toBe('89c96dabb82f6dada53e0084d5c65e72f11ea0630b56cf6e4f7f99620be48a8d');
-    expect(functionBodySha256(migration, 'guard_return_credit_lineage')).toBe('315d7972f986523a48a3a4917ad4eb17b4594c45ee9e08777fdae69556588f64');
+    expect(functionBodySha256(migration, 'guard_return_credit_lineage')).toBe('c598d6afa59082e540b7d38c2f413bf204c5b93f938ab570cb82978c9c84a86d');
     expect(migration).toContain('bcc1c37c0256756656cbe06a04c9c8b36ea87703e9ce56f09f34a2f439f4b765');
     expect(migration).toContain('3d528e657bb97824f50145c7388f74da6da713d271268fba346e6e1a94cb84f7');
-    expect(migration).toContain('04ad4cc62f615e1783fdb0f5019324218ccbf3f3eef1dda0889673355367da8a');
+    expect(migration).toContain('24085771e3e024e9083140fe30f5bb3bbe5ecfb295d95f9df5ad2bcee1b0dc32');
     expect(migration).toContain('_issue_return_credit_header_only_impl_20260825');
     expect(migration).toContain('_receive_return_impl_before_inventory_seed_20260825');
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_CONTRACT_DRIFT');
@@ -281,6 +291,13 @@ describe('return-credit COGS migration', () => {
     expect(returnCreditSmoke).toContain("(v_res #>> '{invoices,total_cost_cents}')::numeric - v_monthly_cost_before <> 501");
     expect(returnCreditSmoke).toContain('FRACTIONAL_COGS_EXPECTED_251');
     expect(returnCreditSmoke).toContain('FRACTIONAL_COGS_EXPECTED_250');
+    expect(returnCreditSmoke).toContain('RETURN_CREDIT_COGS_BACKDATED_EXPECTED_375');
+    expect(returnCreditSmoke).toContain('backdated same-cost cumulative COGS=% (expected 626)');
+    expect(returnCreditSmoke).toContain('RETURN_CREDIT_EQUAL_TIMESTAMP_TIEBREAK_PROVEN');
+    expect(returnCreditSmoke).toContain("'00000000-0000-4000-8000-00000000f001'");
+    expect(returnCreditSmoke).toContain("'00000000-0000-4000-8000-00000000f002'");
+    expect(returnCreditSmoke).toMatch(/00000000-0000-4000-8000-00000000f001[\s\S]*?'gal', now\(\)/);
+    expect(returnCreditSmoke).toMatch(/00000000-0000-4000-8000-00000000f002[\s\S]*?'gal', now\(\)/);
     expect(returnCreditSmoke).toContain('current-season return credit restated the source-season year-end summary');
     expect(returnCreditSmoke).toContain('current-season credit usage quantity=% value=% (expected -15/-15000)');
     expect(returnCreditSmoke).toContain("legacy 15-each return was not converted to 37.5 gallons");
@@ -318,7 +335,7 @@ describe('return-credit COGS migration', () => {
     const migrationSha256 = createHash('sha256')
       .update(migration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(migrationSha256).toBe('9b8fa3d9d1dcbd05656d2c301a935a2405ef7aa484eae14a1e2f18fcb8a777f8');
+    expect(migrationSha256).toBe('dcf3ca5b33f44577e8e3157b887f79bf4006f0cb2b3e032c096a03bd3fe5f99c');
     expect(migrationHistory).toContain(`LF-normalized SQL SHA-256: \`${migrationSha256}\``);
   });
 

@@ -65,6 +65,10 @@ DECLARE
   v_source_paid_id uuid;
   v_source_overdue_id uuid;
   v_source_posted_id uuid;
+  v_rounding_source_id uuid;
+  v_backdated_source_id uuid;
+  v_rounding_order_id uuid;
+  v_rounding_order_item_id uuid;
   v_order_item_1 uuid;
   v_order_item_2 uuid;
   v_order_item_3 uuid;
@@ -308,15 +312,15 @@ BEGIN
   ) RETURNING id INTO v_source_paid_id;
   INSERT INTO invoice_items (
     invoice_id, order_item_id, product_id, description, quantity,
-    unit_price_cents, extended_cents, cost_cents, unit_size
+    unit_price_cents, extended_cents, cost_cents, unit_size, created_at
   ) VALUES
   (
     v_source_paid_id, v_order_item_1, v_product_id, '[SMOKE] paid source',
-    8, 1000, 8000, 500, 'gal'
+    8, 1000, 8000, 500, 'gal', now() - interval '4 seconds'
   ),
   (
     v_source_paid_id, v_order_item_2, v_product_id, '[SMOKE] first repeated-cost source',
-    1, 1000, 1000, 500, 'gal'
+    1, 1000, 1000, 500, 'gal', now() - interval '4 seconds'
   );
   UPDATE invoices
      SET status = 'posted', posted_at = now(), posted_by = v_admin
@@ -334,10 +338,10 @@ BEGIN
   ) RETURNING id INTO v_source_overdue_id;
   INSERT INTO invoice_items (
     invoice_id, order_item_id, product_id, description, quantity,
-    unit_price_cents, extended_cents, cost_cents, unit_size
+    unit_price_cents, extended_cents, cost_cents, unit_size, created_at
   ) VALUES (
     v_source_overdue_id, v_order_item_2, v_product_id, '[SMOKE] overdue source',
-    2, 1000, 2000, 600, 'gal'
+    2, 1000, 2000, 600, 'gal', now() - interval '3 seconds'
   );
   UPDATE invoices
      SET status = 'posted', posted_at = now(), posted_by = v_admin
@@ -357,11 +361,11 @@ BEGIN
   ) VALUES
   (
     v_source_posted_id, v_order_item_2, v_product_id, '[SMOKE] posted source',
-    2, 1000, 2000, 500, 'gal', now() - interval '1 second'
+    2, 1000, 2000, 500, 'gal', now() - interval '2 seconds'
   ),
   (
     v_source_posted_id, v_order_item_2, v_product_id, '[SMOKE] fractional source',
-    1, 1000, 1000, 501, 'gal', now()
+    1, 1000, 1000, 501, 'gal', now() - interval '1 second'
   );
   UPDATE invoices
      SET status = 'posted', posted_at = now(), posted_by = v_admin
@@ -1434,7 +1438,7 @@ BEGIN
   IF v_sequential_credit_id2 IS NULL OR COALESCE((v_res->>'cogs_reversed_cents')::bigint, 0) <> 250 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: FRACTIONAL_COGS_EXPECTED_250 got %', v_res;
   END IF;
-  SELECT -COALESCE(SUM(ii.cost_cents * ii.quantity), 0)::bigint INTO v_cogs
+  SELECT -COALESCE(SUM(ii.return_credit_cogs_cents), 0)::bigint INTO v_cogs
   FROM invoice_items ii
   JOIN invoices i ON i.id = ii.invoice_id
   WHERE i.invoice_type = 'credit_memo' AND i.customer_id = v_customer_id
@@ -1735,6 +1739,105 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: expected source-free receive rejection, got %', v_reason;
     END IF;
   END;
+
+  -- A later-created source invoice may legitimately be backdated ahead of an
+  -- earlier same-cost lot. Both lines deliberately share PostgreSQL's
+  -- transaction timestamp; fixed ascending ids prove the explicit immutable
+  -- tiebreaker. The exact extended-cost ledger must cap cumulative reversal at
+  -- 626 cents: 251 for the first 0.5 unit, then 375 for the remaining 0.75 unit.
+  INSERT INTO orders (order_number, customer_id, salesman_id)
+  VALUES ('SMK-RCC-ROUND-' || v_suffix, v_customer_id, v_admin)
+  RETURNING id INTO v_rounding_order_id;
+  INSERT INTO order_items (
+    order_id, product_id, product_name, price_per_unit, cost_per_unit,
+    total_units_needed, unit_size, total_price, quantity_delivered, quantity_remaining
+  ) VALUES (
+    v_rounding_order_id, v_product_id, '[SMOKE] RCC rounding product ' || v_suffix,
+    30, 5.01, 1.25, 'gal', 37.50, 1.25, 0
+  ) RETURNING id INTO v_rounding_order_item_id;
+
+  INSERT INTO invoices (
+    invoice_number, customer_id, order_id, invoice_type, status, season,
+    invoice_date, due_date, total_amount_cents, total_cost_cents, created_by
+  ) VALUES (
+    'SMK-RCC-ROUND-A-' || v_suffix, v_customer_id, v_rounding_order_id,
+    'chemical_sale', 'draft', v_source_season, current_date, current_date,
+    3000, 501, v_admin
+  ) RETURNING id INTO v_rounding_source_id;
+  INSERT INTO invoice_items (
+    id, invoice_id, order_item_id, product_id, description, quantity,
+    unit_price_cents, extended_cents, cost_cents, unit_size, created_at
+  ) VALUES (
+    '00000000-0000-4000-8000-00000000f001',
+    v_rounding_source_id, v_rounding_order_item_id, v_product_id,
+    '[SMOKE] original fractional same-cost source', 1, 3000, 3000, 501,
+    'gal', now()
+  );
+  UPDATE invoices SET status = 'posted', posted_at = now(), posted_by = v_admin
+  WHERE id = v_rounding_source_id;
+
+  v_res := create_return(
+    jsonb_build_object('customer_id', v_customer_id, 'order_id', v_rounding_order_id, 'reason', 'overstock'),
+    jsonb_build_array(jsonb_build_object(
+      'order_item_id', v_rounding_order_item_id, 'quantity', 0.5,
+      'condition', 'unopened', 'restock', true, 'sort_order', 0
+    )),
+    'smk-rcc-' || v_suffix || '-backdated-a-create'
+  );
+  v_sequential_return_id := (v_res->>'return_id')::uuid;
+  PERFORM approve_return(v_sequential_return_id, v_admin, 'smk-rcc-' || v_suffix || '-backdated-a-approve');
+  PERFORM receive_return(v_sequential_return_id, v_admin, 'smk-rcc-' || v_suffix || '-backdated-a-receive');
+  v_res := issue_return_credit(v_sequential_return_id, v_admin, 'smk-rcc-' || v_suffix || '-backdated-a-issue');
+  IF COALESCE((v_res->>'cogs_reversed_cents')::bigint, 0) <> 251 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: RETURN_CREDIT_COGS_BACKDATED_FIRST_EXPECTED_251 got %', v_res;
+  END IF;
+
+  INSERT INTO invoices (
+    invoice_number, customer_id, order_id, invoice_type, status, season,
+    invoice_date, due_date, total_amount_cents, total_cost_cents, created_by
+  ) VALUES (
+    'SMK-RCC-ROUND-B-' || v_suffix, v_customer_id, v_rounding_order_id,
+    'chemical_sale', 'draft', v_source_season, current_date - 3, current_date - 3,
+    750, 125, v_admin
+  ) RETURNING id INTO v_backdated_source_id;
+  INSERT INTO invoice_items (
+    id, invoice_id, order_item_id, product_id, description, quantity,
+    unit_price_cents, extended_cents, cost_cents, unit_size, created_at
+  ) VALUES (
+    '00000000-0000-4000-8000-00000000f002',
+    v_backdated_source_id, v_rounding_order_item_id, v_product_id,
+    '[SMOKE] later-created backdated same-cost source', 0.25, 3000, 750, 501,
+    'gal', now()
+  );
+  UPDATE invoices SET status = 'posted', posted_at = now(), posted_by = v_admin
+  WHERE id = v_backdated_source_id;
+
+  v_res := create_return(
+    jsonb_build_object('customer_id', v_customer_id, 'order_id', v_rounding_order_id, 'reason', 'overstock'),
+    jsonb_build_array(jsonb_build_object(
+      'order_item_id', v_rounding_order_item_id, 'quantity', 0.75,
+      'condition', 'unopened', 'restock', true, 'sort_order', 0
+    )),
+    'smk-rcc-' || v_suffix || '-backdated-b-create'
+  );
+  v_sequential_return_id2 := (v_res->>'return_id')::uuid;
+  PERFORM approve_return(v_sequential_return_id2, v_admin, 'smk-rcc-' || v_suffix || '-backdated-b-approve');
+  PERFORM receive_return(v_sequential_return_id2, v_admin, 'smk-rcc-' || v_suffix || '-backdated-b-receive');
+  v_res := issue_return_credit(v_sequential_return_id2, v_admin, 'smk-rcc-' || v_suffix || '-backdated-b-issue');
+  IF COALESCE((v_res->>'cogs_reversed_cents')::bigint, 0) <> 375 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: RETURN_CREDIT_COGS_BACKDATED_EXPECTED_375 got %', v_res;
+  END IF;
+  SELECT -COALESCE(SUM(ii.return_credit_cogs_cents), 0)::bigint INTO v_cogs
+  FROM invoice_items ii
+  JOIN invoices i ON i.id = ii.invoice_id
+  WHERE i.invoice_type = 'credit_memo'
+    AND i.status IN ('posted', 'overdue', 'paid') AND i.deleted_at IS NULL
+    AND ii.order_item_id = v_rounding_order_item_id;
+  IF v_cogs <> 626 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: backdated same-cost cumulative COGS=% (expected 626)', v_cogs;
+  END IF;
+  RAISE NOTICE 'RETURN_CREDIT_EQUAL_TIMESTAMP_TIEBREAK_PROVEN';
+  RAISE NOTICE 'RETURN_CREDIT_BACKDATED_SAME_COST_CAP_PROVEN';
 
   -- --------------------------------------------------------------------
   -- Full chain passed - force rollback of everything above.

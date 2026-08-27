@@ -93,6 +93,9 @@ export function groupReturnCreditDisplayItems<T extends ReturnCreditDisplayItem>
       ...existing,
       quantity: existing.quantity + item.quantity,
       extended_cents: existing.extended_cents + item.extended_cents,
+      // The merged quantity spans source-cost lots, so no single per-unit cost
+      // remains meaningful or safe for a future consumer to multiply.
+      cost_cents: 0,
     };
   }
   return grouped;

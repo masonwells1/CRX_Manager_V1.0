@@ -122,7 +122,7 @@ describe('groupReturnCreditDisplayItems', () => {
       makeItem({ order_item_id: 'order-item-1', product_id: 'product-1', description: 'Return credit - Atrazine 4L', quantity: -5, extended_cents: -9250, cost_cents: 1300 }),
     ]);
     expect(grouped).toHaveLength(1);
-    expect(grouped[0]).toMatchObject({ quantity: -15, extended_cents: -27750 });
+    expect(grouped[0]).toMatchObject({ quantity: -15, extended_cents: -27750, cost_cents: 0 });
   });
 
   it('does not collapse ordinary invoices or manual credit rows', () => {

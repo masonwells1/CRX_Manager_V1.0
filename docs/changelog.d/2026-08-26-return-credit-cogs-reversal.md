@@ -17,6 +17,14 @@ cannot introduce a one-cent display mismatch. Year-end
 financial access is also tightened: admins can read every customer, while sales reps can read only
 customers assigned to them; batch discovery pages and chunks both invoice and assignment reads.
 
+The allocator now orders source lots by the immutable `(created_at, line id)` tuple, not a backdateable
+invoice date; the line id is the explicit stable tiebreaker when one transaction gives several lines the
+same timestamp. Each generated return-credit line points to the exact original invoice line it consumed
+and stores its exact extended COGS in whole cents; a cumulative
+cost-bucket cap aborts if those stored reversals would exceed what the recognized source lines reported.
+The rollback smoke proves a later-created, backdated same-cost lot lands at 251 + 375 = 626 cents and
+mutation-tests both the stable ordering and the cap against the former 627-cent over-reversal.
+
 Usable returned product is restored transactionally to Main Warehouse, including creation of a missing
 inventory row. The warehouse stock unit must match the return source; the one pinned legacy RMA that
 records 15 containers as `ea` uses the product's authoritative 2.5-gallon container size and restores
@@ -42,7 +50,7 @@ nothing until separately applied; live apply waits for Mason to choose the durab
 writer fix or an explicit server/UI restriction on editing generated invoices.
 
 No migration was applied to production by this repository change. The fresh read-only production
-schema passed the 51-signal disposable PostgreSQL proof, including a mutant that removes the open-return
+schema passed the 55-signal disposable PostgreSQL proof, including an equal-timestamp source-line case and a mutant that removes the open-return
 warehouse-unit preflight; the run ended in `SMOKE_PASS_ROLLBACK` with zero residue. A 2026-08-27 live
 read found one open restock row, exactly the pinned legacy RMA above, and zero unhandled warehouse-unit
 mismatches. Exact-SHA adversarial reviews, the governed migration review, and a fresh live ledger
