@@ -8,24 +8,37 @@ settled calls. Newest first. Each entry is a decision, why it was made, and the 
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
 
-## 2026-08-27 — Codex live migrations use an exact same-turn owner approval
+## 2026-08-27 — Codex live migrations use the native owner approval prompt
 
 **Source:** Mason's in-chat request to build a safe Codex migration approval gate on 2026-08-27.
 
-**Decision.** An interactive Codex session may call the live Supabase migration tool only after a
-real Mason-authored prompt arms one exact migration for the CRX project. The approval is bound to
-the current Codex session and turn, Git HEAD, migration name, on-disk file, and normalized SQL hash;
-it expires after five minutes and is atomically consumed by the first matching attempt.
+**Decision.** Both supported Codex Supabase `apply_migration` tool channels must use Codex's native
+`prompt` approval mode. Supabase app approvals must be reviewed by the user, not the automatic
+reviewer. The production guard permits only the two exact configured tool identities; unknown or
+UUID-qualified lookalikes fail closed before they can reach the live tool.
 
 **Why.** Codex hooks cannot safely return an approval prompt from PreToolUse: the current runtime
-does not support that decision and continues the tool call after reporting the hook failure. A
-same-turn UserPromptSubmit token preserves Mason as the authorizing party without weakening the
-existing migration review, ordering, destructive-SQL, and exact-content gates.
+does not support that decision and continues the tool call after reporting the hook failure.
+UserPromptSubmit exposes prompt text but no positive proof that the text was authored by Mason, so a
+text token could be forged by relayed or machine-generated content. The native prompt is the only
+supported mechanism that keeps the user as the approving party.
 
-**Operative rule.** Approval is one migration at a time. Machine envelopes, peer-session messages,
-quoted approval text, wrong project/name/SQL, moved HEAD, another turn/session, expiry, replay, raw
-SQL, CLI apply paths, and manual invocation of the minting hook all deny. A failed attempt consumes
-the approval, so Mason must send the exact sentence again after the underlying gate is repaired.
+**Operative rule.** The existing migration apply guard remains responsible for the exact CRX
+project, migration name, ordered snapshot, SQL hash, review proof, proof freshness, and destructive
+SQL checks. Passing those checks never authorizes the live call by itself: Codex must still show the
+native approval prompt, and only Mason may approve it. No prompt-text approval token exists.
+
+
+## 2026-08-27 — preserve CRX safety rules while collapsing harness machinery
+
+**Decision:** Pause the recurring gauntlet, retune it to monthly/on-demand read-only review, retire
+Patrol, and consolidate prompt/post hook process launches plus Codex matcher scope without changing
+business safety rules or GitHub branch protection.
+**Why:** The audit found necessary safety invariants were being reimplemented and rerun through too
+many independent processes, while the audit policy itself rewarded creating more maintenance work.
+**What this forbids/implies:** A new hook needs a named reproducible BLOCKER/HIGH recurrence, a
+measured false-positive budget, and removal or consolidation of an existing mechanism; keep the
+underlying business invariant and prefer an owning regression test or existing static check.
 
 
 ## 2026-08-26 — ordinary documentation gets a trusted fast CI lane; uncertainty still runs everything
