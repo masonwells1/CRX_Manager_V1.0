@@ -69,6 +69,7 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - `npm run test` after versioned cross-tab completion coordination — 342 files passed; 4,820 tests passed; 123 skipped.
 - `npm run test` after restoring current-main quote-trust apply guards — 342 files passed; 4,821 tests passed; 123 skipped.
 - `npm run test` after the final migration restamp/order guard — 342 files passed; 4,822 tests passed; 123 skipped.
+- `npm run test` on the final head after merging current `origin/main` — 342 files passed; 4,823 tests passed; 123 skipped.
 - Durable retry focused contracts after the vendor-bill route correction — 3 files, 50/50 passed; hook-only reload/unmount/storage-failure/scope-switch proof 9/9 passed.
 - Final receiving review follow-up — typecheck, full lint, production build, documentation drift, and diff checks pass; 4 focused files, 19/19 tests pass, including an actual Quick Receive reload/retry.
 - Latest focused remediation/concurrency/money tests after the follow-up — 68/68 passed.
@@ -78,6 +79,7 @@ Done means the changed database and UI paths execute successfully in rollback-on
 - `npm run check:docs` — pass.
 - Disposable PostgreSQL proof after the follow-up — full replay of 64 post-baseline migrations, decoy overloads for `create_vendor_bill(text)` and `get_ap_aging(text)` were rejected before candidate apply, concurrent cutover drain passed, late-old-body rollback passed, both new candidates applied, all three sibling rollback chains passed, every two-session close/write schedule passed, future-dated payments were excluded from the selected month, terminal marker `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
 - Disposable PostgreSQL proof after restoring current-main quote trust and restamping Section 9 — full replay of 65 post-baseline migrations in safe order (`20260826220000` quote trust, then `20260826221000` intent/dashboard, then `20260826222000` aging); decoy overload, cutover drain, late-old-body rollback, sibling smoke, and every two-session close/write schedule passed; terminal marker `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
+- The same 65-migration disposable replay and terminal concurrency proof passed again after the normal current-main merge; the branch was 0 behind `origin/main` at that proof point.
 - The broader supplier-pricing return-policy proof now creates and restores its disposable migration ledger, then stops before the Section 9 object-identity assertion at the older `20260810010308_active_team_note_assignment_actor.sql` preflight because the baseline's `notify_team_note_assignment` body md5 is `ad8be4ed1d2bdd2a87acce255b38ab641` instead of the migration's pinned `ce356683fb140f2e0d3d8faee077cc1a`. This is an unrelated harness/baseline blocker, not a clean result; the corrected `days_1_30` expected signature is pinned by the focused test.
 - `git diff --check` — pass.
 - React best-practices review — no new waterfall, bundle, hook-dependency, transient-state, or rendering blocker found in the changed flow.
