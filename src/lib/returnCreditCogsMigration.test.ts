@@ -100,6 +100,11 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('BEFORE UPDATE OF status, deleted_at, total_amount_cents, total_cost_cents, season OR DELETE');
     expect(migration).toContain('ROW(NEW.total_amount_cents, NEW.total_cost_cents, NEW.season)');
     expect(migration).toContain('CREATE TRIGGER aa_crx_guard_recognized_return_credit_delete');
+    expect(migration).toContain("p.proname = 'current_season'");
+    expect(migration).toContain("to_regprocedure('public.current_season()')");
+    expect(migration).toContain("p.prorettype = 'integer'::regtype");
+    expect(migration).toContain("p.provolatile = 's'");
+    expect(migration).toContain("p.proconfig = ARRAY['search_path=public']::text[]");
     expect(migration).toContain('SET total_cost_cents = -v_cogs, season = public.current_season()');
     expect(migration).not.toContain('RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS');
     expect(returnCreditSmoke).toContain("PERFORM void_invoice(v_credit_id, '[SMOKE] chain void'");
