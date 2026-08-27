@@ -43,6 +43,7 @@ type LegacyDurableMutationIntentCandidate<T> = {
 const DURABLE_INTENT_PREFIX = 'crx:uncertain-mutation:v4:';
 const LEGACY_SESSION_PREFIX = 'crx:uncertain-mutation:v1:';
 const DURABLE_INTENT_TAB_ID = 'crx:durable-mutation:tab-id';
+const DURABLE_INTENT_LIVE_CLAIM_PREFIX = 'crx:durable-mutation:live-claim:';
 const DURABLE_INTENT_DB = 'crx_durable_mutation_intents';
 const DURABLE_INTENT_STORE = 'intents';
 const SAFE_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;
@@ -98,6 +99,41 @@ function currentPageClaimId(): string {
   // suffix makes each mounted page claimant distinct even when both pages
   // inherit the same tab ID.
   return `${currentTabId()}:${crypto.randomUUID()}`;
+}
+
+function markClaimLive(claimId: string): void {
+  try {
+    window.localStorage.setItem(`${DURABLE_INTENT_LIVE_CLAIM_PREFIX}${claimId}`, 'active');
+  } catch {
+    throw new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE');
+  }
+}
+
+function releaseLiveClaim(claimId: string): void {
+  try {
+    window.localStorage.removeItem(`${DURABLE_INTENT_LIVE_CLAIM_PREFIX}${claimId}`);
+  } catch {
+    // A failed release must preserve the peer claim and keep reconciliation
+    // fail-closed rather than pretending the claimant is gone.
+  }
+}
+
+function isClaimLive(claimId: string): boolean {
+  try {
+    return window.localStorage.getItem(
+      `${DURABLE_INTENT_LIVE_CLAIM_PREFIX}${claimId}`,
+    ) === 'active';
+  } catch {
+    // If liveness cannot be read, preserve the claim. A later definitive
+    // response can retry cleanup after durable storage recovers.
+    return true;
+  }
+}
+
+function retainLiveClaims(claimIds: string[], currentClaimId: string): string[] {
+  return claimIds.filter(
+    (claimId) => claimId === currentClaimId || isClaimLive(claimId),
+  );
 }
 
 function isValidRecord<T>(
@@ -300,20 +336,25 @@ async function coordinateDurableRecord<T>(
           result = { record: proposed, conflict: false };
           store.put({ storageKey, record: proposed });
         } else if (owned && (sameIntent || intentExpired)) {
-          const claimed = existing.claimTabIds.includes(tabId)
-            ? existing
-            : { ...existing, claimTabIds: [...existing.claimTabIds, tabId] };
+          const liveClaimTabIds = retainLiveClaims(existing.claimTabIds, tabId);
+          const claimed = {
+            ...existing,
+            claimTabIds: liveClaimTabIds.includes(tabId)
+              ? liveClaimTabIds
+              : [...liveClaimTabIds, tabId],
+          };
           result = { record: claimed, conflict: false };
           store.put({ storageKey, record: claimed });
         } else {
           if (sameActiveIntent) {
+            const liveClaimTabIds = retainLiveClaims(existing.claimTabIds, tabId);
             const transferred = {
               ...existing,
               surface: options.surface,
               scope: options.scope || '',
-              claimTabIds: existing.claimTabIds.includes(tabId)
-                ? existing.claimTabIds
-                : [...existing.claimTabIds, tabId],
+              claimTabIds: liveClaimTabIds.includes(tabId)
+                ? liveClaimTabIds
+                : [...liveClaimTabIds, tabId],
               intent: candidateIntent,
             };
             result = { record: transferred, conflict: false };
@@ -446,7 +487,7 @@ async function deleteCoordinatedRecord<T>(
             return;
           }
           const remainingClaimTabIds = candidate.claimTabIds.filter(
-            (claimTabId) => claimTabId !== tabId,
+            (claimTabId) => claimTabId !== tabId && isClaimLive(claimTabId),
           );
           if (remainingClaimTabIds.length === 0) {
             store.delete(storageKey);
@@ -536,6 +577,17 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
   }, [activateCurrentIdentity]);
 
   useEffect(() => {
+    const claimId = tabIdRef.current;
+    if (!claimId) return;
+    const release = () => releaseLiveClaim(claimId);
+    window.addEventListener('pagehide', release);
+    return () => {
+      window.removeEventListener('pagehide', release);
+      release();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!storageKey) return;
     const handleStorage = (event: StorageEvent) => {
       if (event.storageArea === window.localStorage && event.key === storageKey) {
@@ -566,6 +618,9 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     const existing = recordRef.current;
     if (options) {
       if (!storageKey) throw new Error('DURABLE_MUTATION_INTENT_IDENTITY_MISSING');
+      const currentClaimId = tabIdRef.current ?? currentPageClaimId();
+      tabIdRef.current = currentClaimId;
+      markClaimLive(currentClaimId);
       const idempotencyKey = generateIdempotencyKey(options.operation, options.userId);
       const createdAtMs = Date.now();
       const retryNotAfterMs = createdAtMs + SAFE_RETRY_WINDOW_MS;
@@ -573,7 +628,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
         version: 4,
         status: 'pending',
         requestVersion: crypto.randomUUID(),
-        claimTabIds: tabIdRef.current ? [tabIdRef.current] : [],
+        claimTabIds: [currentClaimId],
         resolvedAtMs: null,
         operation: options.operation,
         userId: options.userId,
@@ -585,18 +640,23 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
         createdAtMs,
         retryNotAfterMs,
       };
-      const coordinated = await coordinateDurableRecord(
-        storageKey,
-        proposed,
-        intent,
-        options,
-        tabIdRef.current ?? currentPageClaimId(),
-      );
-      writeDurableRecord(storageKey, coordinated.record);
-      applyRecord(coordinated.record);
-      if (coordinated.conflict) throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT);
-      attemptRecordRef.current = coordinated.record;
-      return coordinated.record.intent;
+      try {
+        const coordinated = await coordinateDurableRecord(
+          storageKey,
+          proposed,
+          intent,
+          options,
+          currentClaimId,
+        );
+        writeDurableRecord(storageKey, coordinated.record);
+        applyRecord(coordinated.record);
+        if (coordinated.conflict) throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT);
+        attemptRecordRef.current = coordinated.record;
+        return coordinated.record.intent;
+      } catch (error) {
+        releaseLiveClaim(currentClaimId);
+        throw error;
+      }
     }
 
     intentRef.current = intent;

@@ -360,13 +360,23 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(vendorBillDetail).toContain('Payment could not be safely prepared. Nothing was recorded');
     expect(purchaseOrderDetail).toContain('Receiving could not be safely prepared. Nothing was received');
     expect(receivingHub).toContain('Receiving could not be safely prepared. Nothing was received');
+    expect(receivingHub).toContain('onSuccess: (completedElsewhere) => {');
+    expect(receivingHub).not.toContain('successMessage: `Received ${fmtUnits(request.items[0].quantity)}');
+    expect(purchaseOrderDetail).toContain('onSuccess: (completedElsewhere) => {');
+    expect(purchaseOrderDetail).not.toContain("successMessage: 'Items received and inventory updated'");
 
     expect(newVendorBill).toContain('setPaymentTermsDays(Math.round((due - bill) / 86_400_000));');
     expect(newVendorBill).not.toContain('setPaymentTermsDays(Math.max(0');
     expect(vendorBillDetail).toContain('setEditSubtotal(centsToDollarInput(bill.subtotal_cents));');
     expect(vendorBillDetail).toContain('setEditAdjustment(centsToDollarInput(bill.adjustment_cents || 0));');
-    expect(vendorBillDetail).toContain('useLayoutEffect(() => {');
-    expect(vendorBillDetail).not.toContain('activeBillIdRef.current = id;\n  const paymentIntent');
+    const activeBillLayoutEffect = sliceBetween(
+      vendorBillDetail,
+      'useLayoutEffect(() => {',
+      'const paymentIntent',
+    );
+    expect(activeBillLayoutEffect).toContain('activeBillIdRef.current = id;');
+    expect(vendorBillDetail.slice(0, vendorBillDetail.indexOf('useLayoutEffect(() => {')))
+      .not.toContain('activeBillIdRef.current = id;');
   });
 
   it('keeps the disposable cutover proof deterministic after assertion failures', () => {

@@ -487,11 +487,14 @@ export default function PurchaseOrderDetail() {
         setReceiveOpen(false);
         fetchPO();
         fetchReceivingHistory();
+        return completedElsewhere;
       },
       toast,
-      successMessage: 'Items received and inventory updated',
       setLoading: setSaving,
       sentryTag: 'receive_po_items',
+      onSuccess: (completedElsewhere) => {
+        if (!completedElsewhere) toast('success', 'Items received and inventory updated');
+      },
     });
   };
 

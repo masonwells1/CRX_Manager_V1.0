@@ -34,6 +34,7 @@ import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
 import { centsToDollarInput, formatCents as fmt } from '../lib/money';
 import { getIdempotencyMismatchResult } from '../lib/idempotency';
+import { Sentry } from '../lib/sentry';
 import type { VendorBill, VendorPayment } from '../types';
 
 const statusVariant: Record<string, BadgeVariant> = {
@@ -244,7 +245,10 @@ export default function VendorBillDetail() {
         },
       });
       payKey = paymentIntent.getIdempotencyKey();
-    } catch {
+    } catch (error) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        tags: { source: 'durable-intent', page: 'vendor-bill-detail' },
+      });
       toast('error', 'Payment could not be safely prepared. Nothing was recorded; refresh and try again.');
       return;
     }

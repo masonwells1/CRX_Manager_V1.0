@@ -18,3 +18,11 @@
   inherits the original tab's session storage. Definitive failure cleanup never
   deletes a resolved peer tombstone, and a collision regression proves the
   committed payment/receipt marker survives the copied-tab race.
+- Durable claim liveness is now registered per mounted page and released on
+  unmount or page exit. A remounted retry can therefore remove stale claimants
+  after a definitive server refusal while still preserving every live peer.
+- Receiving Hub and PO Detail now suppress their normal stock-received success
+  toast when reconciliation proves the same receipt already completed, avoiding
+  contradictory success and warning messages. Vendor-payment preparation
+  failures are also captured through the shared Sentry boundary before the
+  fail-closed operator message is shown.

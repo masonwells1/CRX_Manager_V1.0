@@ -474,6 +474,37 @@ describe('useUncertainMutationIntent', () => {
     expect(resolved.idempotencyKey).toBe(originalKey);
   });
 
+  it('drops an unmounted claimant so a remounted definitive rejection clears the lock', async () => {
+    const options = {
+      operation: 'record_vendor_payment',
+      userId: 'admin-remounted-rejection',
+      surface: 'vendor-bill-detail',
+      scope: 'bill-remounted-rejection',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'first-mount');
+    const firstMount = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    await act(async () => firstMount.result.current.beginIntent({ amount: 11_000 }));
+    const originalKey = firstMount.result.current.getIdempotencyKey();
+    firstMount.unmount();
+
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'second-mount');
+    const secondMount = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    await act(async () => secondMount.result.current.beginIntent({ amount: 11_000 }));
+    expect(secondMount.result.current.getIdempotencyKey()).toBe(originalKey);
+
+    await act(async () => {
+      expect(await secondMount.result.current.classifyFailure({
+        code: '23514',
+        message: 'request rejected after remount',
+      })).toBe('definitive');
+    });
+
+    expect(secondMount.result.current.isIntentLocked).toBe(false);
+    expect(window.localStorage.getItem(
+      `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`,
+    )).toBeNull();
+  });
+
   it('cannot erase a peer completion when the definitive rejection arrives second', async () => {
     const options = {
       operation: 'record_vendor_payment',

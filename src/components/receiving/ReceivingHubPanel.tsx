@@ -228,6 +228,7 @@ export default function ReceivingHubPanel() {
     }
     await runCriticalAction({
       action: async () => {
+        let completedElsewhere = false;
         const { data, error } = await supabase.rpc('receive_po_items', {
           p_items: request.items,
           p_performed_by: request.performedBy,
@@ -238,10 +239,12 @@ export default function ReceivingHubPanel() {
           const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
           const recordIds = receipt?.receiving_record_ids;
           if (Array.isArray(recordIds) && recordIds.length > 0 && recordIds.every((id) => typeof id === 'string')) {
+            completedElsewhere = true;
             toast('warning', 'The earlier receipt already completed. Refreshing the receiving board instead of receiving it twice.');
           } else {
             const disposition = await receiveIntent.classifyFailure(error);
             if (disposition === 'resolved') {
+              completedElsewhere = true;
               toast('warning', 'This receipt completed in another tab. Refreshing the receiving board instead of receiving it twice.');
             } else if (disposition === 'definitive') {
               throw error;
@@ -253,12 +256,15 @@ export default function ReceivingHubPanel() {
           assertRpcResult(data, 'receive_po_items');
         }
         await receiveIntent.resolveIntent();
+        return completedElsewhere;
       },
       toast,
       setLoading: setReceiving,
-      successMessage: `Received ${fmtUnits(request.items[0].quantity)} of ${request.productName}`,
       sentryTag: 'receive_po_items',
-      onSuccess: () => {
+      onSuccess: (completedElsewhere) => {
+        if (!completedElsewhere) {
+          toast('success', `Received ${fmtUnits(request.items[0].quantity)} of ${request.productName}`);
+        }
         setReceiveTarget(null);
         setReceiveQty('');
         setRefreshKey((k) => k + 1);
