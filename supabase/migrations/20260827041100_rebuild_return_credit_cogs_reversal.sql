@@ -693,9 +693,7 @@ BEGIN
        SELECT 1
        FROM public.invoice_items source_line
        JOIN public.invoice_items credit_line
-        ON credit_line.order_item_id = source_line.order_item_id
-       AND credit_line.product_id = source_line.product_id
-        AND credit_line.unit_size IS NOT DISTINCT FROM source_line.unit_size
+        ON credit_line.return_credit_source_item_id = source_line.id
         AND credit_line.quantity < 0
        JOIN public.invoices credit_invoice ON credit_invoice.id = credit_line.invoice_id
        WHERE source_line.invoice_id = OLD.id
@@ -1594,7 +1592,7 @@ BEGIN
   FROM pg_proc p
   WHERE p.oid = to_regprocedure('public.guard_return_credit_source_recognition()');
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
-         '17a9bc14956227793674efcb3011a81c38dfb3c864792173ad6d04e13b13d981'
+         '0a5b569800bea5a0acbfaf55020ae4a9bde462a937e8db24597a586e477811b7'
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'guard_return_credit_source_recognition') <> 1
      OR NOT EXISTS (

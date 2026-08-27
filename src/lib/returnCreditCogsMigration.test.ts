@@ -147,6 +147,8 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain("NEW.status IN ('posted','overdue','paid')");
     expect(migration).toContain('pg_try_advisory_xact_lock');
     expect(migration).toContain('RETURN_CREDIT_SOURCE_POST_REQUIRES_REISSUE');
+    expect(migration).toContain('credit_line.return_credit_source_item_id = source_line.id');
+    expect(migration).not.toContain('credit_line.order_item_id = source_line.order_item_id');
     expect(migration).toContain('SUM(ri.quantity)');
     expect(migration).toContain('RETURN_CREDIT_PARENT_IMMUTABLE');
     expect(migration).toContain('RETURN_CREDIT_LINE_TOTAL_MISMATCH');
@@ -219,7 +221,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('restocked_quantity = v_restock_qty');
     expect(functionBodySha256(migration, 'void_invoice')).toBe('7d1eb3222e0cd59318919206d2338de7477c2091f22550671ecbcf5ff80a9d14');
     expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('005ce6a1cfbc7c7f7fcf4712104235bf884af9bc5b30e5f3cbf1edc0f2b6e63e');
-    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('17a9bc14956227793674efcb3011a81c38dfb3c864792173ad6d04e13b13d981');
+    expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('0a5b569800bea5a0acbfaf55020ae4a9bde462a937e8db24597a586e477811b7');
     expect(functionBodySha256(migration, 'guard_recognized_return_credit_delete')).toBe('89c96dabb82f6dada53e0084d5c65e72f11ea0630b56cf6e4f7f99620be48a8d');
     expect(functionBodySha256(migration, 'guard_return_credit_lineage')).toBe('c598d6afa59082e540b7d38c2f413bf204c5b93f938ab570cb82978c9c84a86d');
     expect(migration).toContain('bcc1c37c0256756656cbe06a04c9c8b36ea87703e9ce56f09f34a2f439f4b765');
@@ -372,7 +374,7 @@ describe('return-credit COGS migration', () => {
     const migrationSha256 = createHash('sha256')
       .update(migration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(migrationSha256).toBe('6201102ddc552a0ce24762b479e95d3e0b64f36c2bf99039a46dc5aa2018c0d3');
+    expect(migrationSha256).toBe('a59114aee44438617da1e2d0907de7c34581a524c8e6d9d99c108637087a622d');
     expect(migrationHistory).toContain(`SQL sha256: \`${migrationSha256}\` (LF-normalized bytes)`);
     const deliverySurfaceSha256 = createHash('sha256')
       .update(deliverySurfaceMigration.replace(/\r\n/g, '\n'), 'utf8')

@@ -20,7 +20,9 @@ customers assigned to them; batch discovery pages and chunks both invoice and as
 The allocator now orders source lots by the immutable `(created_at, line id)` tuple, not a backdateable
 invoice date; the line id is the explicit stable tiebreaker when one transaction gives several lines the
 same timestamp. Each generated return-credit line points to the exact original invoice line it consumed
-and stores its exact extended COGS in whole cents; a cumulative
+and stores its exact extended COGS in whole cents. The source-recognition guard now follows that exact
+line link, so a credit funded by one split invoice cannot freeze date, status, or deletion corrections
+on another invoice that happens to share the same order line, product, and unit. A cumulative
 cost-bucket cap aborts if those stored reversals would exceed what the recognized source lines reported.
 The rollback smoke proves a later-created, backdated same-cost lot lands at 251 + 375 = 626 cents and
 mutation-tests both the stable ordering and the cap against the former 627-cent over-reversal.

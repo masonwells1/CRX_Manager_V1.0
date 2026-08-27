@@ -2183,7 +2183,7 @@ try {
   );
   completedProofs.add('SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED');
   psql(canonicalSourceGuardHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '17a9bc14956227793674efcb3011a81c38dfb3c864792173ad6d04e13b13d981');
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '0a5b569800bea5a0acbfaf55020ae4a9bde462a937e8db24597a586e477811b7');
 
   // Sequential latent-defect proof: if a return credit was issued while its
   // source invoice was still a draft, later recognition must fail closed. A
@@ -2230,7 +2230,18 @@ try {
     'posted',
     'legitimate later invoice did not become recognized',
   );
+  psql(`
+    UPDATE public.invoices
+       SET invoice_date = invoice_date - 1
+     WHERE id = '${fullyCostedPosting.ids.laterInvoice}';
+  `);
+  assert.equal(
+    psqlValue(`SELECT invoice_date = current_date - 1 FROM public.invoices WHERE id = '${fullyCostedPosting.ids.laterInvoice}';`),
+    't',
+    'credit linked to a different source line blocked the later invoice date correction',
+  );
   completedProofs.add('SOURCE_POST_AFTER_FULLY_COSTED_CREDIT_ALLOWED');
+  completedProofs.add('UNRELATED_SOURCE_INVOICE_DATE_CORRECTION_ALLOWED');
 
   // Ordinary posting still participates in the lineage protocol because a
   // return credit could start at the same instant. Prove the operational
@@ -2359,7 +2370,7 @@ try {
   );
   completedProofs.add('SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED');
   psql(canonicalSourceGuardHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '17a9bc14956227793674efcb3011a81c38dfb3c864792173ad6d04e13b13d981');
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '0a5b569800bea5a0acbfaf55020ae4a9bde462a937e8db24597a586e477811b7');
 
   const allConcurrencyFixtures = [
     canonicalConcurrency,
@@ -2406,7 +2417,7 @@ try {
   assert.match(sourceGuardMutantOutput, /SMOKE_FAIL: source sale with an active return credit was soft-deleted/, `source-recognition guard mutant did not reach the source-sale oracle:\n${sourceGuardMutantOutput}`);
   completedProofs.add('SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED');
   psql(canonicalSourceGuardHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '17a9bc14956227793674efcb3011a81c38dfb3c864792173ad6d04e13b13d981');
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '0a5b569800bea5a0acbfaf55020ae4a9bde462a937e8db24597a586e477811b7');
 
   // Return-credit ledger mutation proof: without the line guard, the smoke
   // can rewrite an active negative-cost credit line and make a later return
