@@ -99,12 +99,16 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned 2026-08-27: every main-bound auto-merge is now denied so a
   // later risky commit cannot land after an earlier non-risky gate decision.
   // The maintenance anchors below are unchanged.
-  codexGuard: "997eb90daf381f03f8cc7d393700af3f10750d58",
-  pushLib: "747548a69be925628893801f0c6fcee9d885b046",
+  // Re-pinned again 2026-08-27: both push guards now refuse a feature push
+  // while an open main-bound PR has auto-merge armed. That closes the remaining
+  // path where GitHub could merge a later commit without an immediate exact-head
+  // merge command. The maintenance transform anchors remain unchanged.
+  codexGuard: "226cf8a4530920ad3485c334d48e5e3d3a26f376",
+  pushLib: "4cf2fc486fbec6f46ac3f6b35ced6ed28a7eb6ff",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "6272c01d15ed033a49458ae9d0524c1586e729df",
-  pushLib: "747548a69be925628893801f0c6fcee9d885b046",
+  codexGuard: "a73a72ffaf51a696b343f8f228dcbf99a2f208e7",
+  pushLib: "4cf2fc486fbec6f46ac3f6b35ced6ed28a7eb6ff",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

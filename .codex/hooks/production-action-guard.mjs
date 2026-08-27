@@ -6,8 +6,10 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
+  activeAutoMergePrNumbers,
   contentIsRisky,
   extractPatchDestinations,
+  featurePushDestinations,
   gitPushCwd,
   isGitPush,
   mainPushSource,
@@ -15,7 +17,6 @@ import {
   proofValid,
   pushContextIsAmbiguous,
   pushIsForced,
-  pushTargetsCurrentHead,
   pushUsesBulkMode,
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
@@ -861,6 +862,41 @@ export function evaluateProductionAction({
     if (sourceRef) {
       const result = gateMainChange({ repoDir: pushRepoDir, sourceRef, nowMs, runGit });
       if (result.blocked) return result;
+    } else {
+      let featureBranches;
+      try {
+        featureBranches = featurePushDestinations(segment);
+      } catch (error) {
+        return denied(
+          `CODEX PRODUCTION GATE: could not determine the exact remote feature branch for the auto-merge check, ` +
+          `so the push is denied (fail closed). ${error?.message || error}`,
+        );
+      }
+      for (const featureBranch of featureBranches) {
+        let activeAutoMergePrs;
+        try {
+          activeAutoMergePrs = activeAutoMergePrNumbers(runGh([
+            "pr", "list",
+            "--repo", "masonwells1/CRX_Manager_V1.0",
+            "--state", "open",
+            "--base", "main",
+            "--head", featureBranch,
+            "--json", "number,autoMergeRequest",
+          ], pushRepoDir));
+        } catch (error) {
+          return denied(
+            `CODEX PRODUCTION GATE: could not prove auto-merge is disabled for the open main-bound PR on branch ${featureBranch}, ` +
+            `so the feature push is denied (fail closed). ${error?.message || error}`,
+          );
+        }
+        if (activeAutoMergePrs.length > 0) {
+          return denied(
+            `CODEX PRODUCTION GATE: auto-merge is already armed on PR ${activeAutoMergePrs.map((number) => `#${number}`).join(", ")} ` +
+            `for branch ${featureBranch}. A later push could then merge without an exact-head review. ` +
+            `Run \`gh pr merge ${activeAutoMergePrs[0]} --disable-auto\`, verify auto-merge is off, and retry this push.`,
+          );
+        }
+      }
     }
   }
 

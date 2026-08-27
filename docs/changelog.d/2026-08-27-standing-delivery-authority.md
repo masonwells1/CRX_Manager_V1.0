@@ -40,6 +40,14 @@ their hidden body arms auto-merge. The standard ship command and frontend rollba
 read the PR head and require its literal SHA in `--match-head-commit`, so the documented workflow
 matches the enforced guard instead of failing at the last step.
 
+The final exact-head review found one remaining asynchronous path: auto-merge could have been
+armed before a later feature-branch push. GitHub would then merge the new commit when its checks
+finished without an immediate merge command ever reaching the exact-head gate. Both push guards
+now resolve every explicitly named feature destination against open main-bound PRs before the
+push, fail closed if GitHub state cannot be proven, and tell the agent to disable auto-merge and
+retry. This remains autonomous—the agent performs that recovery itself—and bare/config-directed
+feature pushes are refused because their destination cannot be bound to a specific PR.
+
 Proof run: focused autopilot, prompt, hold, Claude/Codex merge-guard, and global risky-phrase
 tests; full correction-guard and agent-workflow suites; lint, typecheck, build, docs check, sync,
 and mutation tests. No business safety rule, branch protection, product model, migration, RPC,

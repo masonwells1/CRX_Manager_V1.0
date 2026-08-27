@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { scratchHookEnvironment } from "./git-test-env.mjs";
 import {
+  activeAutoMergePrNumbers,
   claudeProofValid,
   contentIsRisky,
   describeRiskyContent,
@@ -34,6 +35,7 @@ import {
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   extractPatchDestinations,
+  featurePushDestinations,
   proofValid,
   repoIsGuardedApp,
   urlIsGuardedApp,
@@ -61,6 +63,28 @@ import {
 
 const now = Date.parse("2026-07-13T18:00:00.000Z");
 const sha = "a".repeat(40);
+
+assert.deepEqual(activeAutoMergePrNumbers("[]"), [], "no open PR means no armed auto-merge");
+assert.deepEqual(
+  activeAutoMergePrNumbers(JSON.stringify([
+    { number: 513, autoMergeRequest: null },
+    { number: 514, autoMergeRequest: { mergeMethod: "SQUASH" } },
+  ])),
+  [514],
+  "only PRs with an active autoMergeRequest are returned",
+);
+assert.throws(
+  () => activeAutoMergePrNumbers('[{"number":513}]'),
+  /omitted number or autoMergeRequest/,
+  "an incomplete GitHub response fails closed",
+);
+assert.deepEqual(featurePushDestinations("git push origin feature/test"), ["feature/test"]);
+assert.deepEqual(featurePushDestinations("git push origin local:review/next refs/tags/v1"), ["review/next"]);
+assert.throws(
+  () => featurePushDestinations("git push origin"),
+  /explicit destination refspec/,
+  "a config-directed bare push cannot bypass the branch-bound PR lookup",
+);
 
 assert.equal(mainPushSource("git push origin HEAD:main", "feature"), "HEAD");
 assert.equal(gitSubcommandIsDynamic("$verb='push'; git $verb origin HEAD:main"), true, "PowerShell variable subcommand");

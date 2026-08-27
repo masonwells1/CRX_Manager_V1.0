@@ -303,6 +303,79 @@ export function pushTargetsCurrentHead(cmd, currentBranch) {
     && destination === normalizedBranch;
 }
 
+// Return every explicitly named feature-branch destination in a push. A bare
+// push is intentionally refused: push.default / remote.<name>.push can redirect
+// it to a branch other than the checkout branch, so there is no trustworthy PR
+// selector for the pre-push auto-merge check. Tags are excluded because they
+// cannot be the head of a pull request. Main is handled by mainPushSource.
+export function featurePushDestinations(cmd) {
+  const argsText = String(cmd || "").match(GIT_PUSH_RE)?.[1];
+  if (argsText == null) return [];
+  if (unknownPushOptions(cmd).length > 0) {
+    throw new Error("push options are not fully understood");
+  }
+  const tokens = splitShellArgs(argsText);
+  const positionals = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") {
+      positionals.push(...tokens.slice(i + 1));
+      break;
+    }
+    if (!token.startsWith("-")) {
+      positionals.push(token);
+      continue;
+    }
+    const eq = token.indexOf("=");
+    const bare = eq === -1 ? token : token.slice(0, eq);
+    if (eq === -1 && (PUSH_OPTS_WITH_VALUE.has(bare)
+        || (!bare.startsWith("--") && bare.includes("o")))) i += 1;
+  }
+  // positionals[0] is the repository. Without at least one refspec, config
+  // decides the destination and the auto-merge lookup cannot bind to it.
+  if (positionals.length < 2) {
+    throw new Error("feature pushes must name an explicit destination refspec");
+  }
+  const destinations = [];
+  for (const refspec of positionals.slice(1)) {
+    const clean = String(refspec).replace(/^\+/, "");
+    const rawDestination = clean.includes(":") ? clean.split(":").at(-1) : clean;
+    if (!rawDestination || /^refs\/tags\//i.test(rawDestination)) continue;
+    const destination = rawDestination.replace(/^refs\/heads\//i, "");
+    if (["main", "master", "production"].includes(destination.toLowerCase())) continue;
+    if (destination.toUpperCase() === "HEAD") {
+      throw new Error("feature push destination HEAD is ambiguous");
+    }
+    if (!destinations.includes(destination)) destinations.push(destination);
+  }
+  return destinations;
+}
+
+// Parse the exact `gh pr list --json number,autoMergeRequest` response used by
+// both push guards. An open main-bound PR with auto-merge already armed is a
+// time-of-check/time-of-use bypass: a later feature push can become the commit
+// GitHub merges as soon as CI turns green, without an immediate exact-head merge
+// command ever reaching the merge guard. Malformed or incomplete API data must
+// fail closed, so callers can distinguish "no auto-merge" from "not proven".
+export function activeAutoMergePrNumbers(value) {
+  const records = typeof value === "string" ? JSON.parse(value) : value;
+  if (!Array.isArray(records)) throw new Error("pull-request lookup did not return an array");
+  const active = [];
+  for (const record of records) {
+    if (!record || typeof record !== "object"
+        || !Object.prototype.hasOwnProperty.call(record, "number")
+        || !Object.prototype.hasOwnProperty.call(record, "autoMergeRequest")) {
+      throw new Error("pull-request lookup omitted number or autoMergeRequest");
+    }
+    const number = Number(record.number);
+    if (!Number.isInteger(number) || number <= 0) {
+      throw new Error("pull-request lookup returned an invalid PR number");
+    }
+    if (record.autoMergeRequest !== null) active.push(number);
+  }
+  return active;
+}
+
 // Any push is forced when it carries a history-rewriting force flag anywhere
 // after `push`, or uses Git's `+<src>:<dst>` force-refspec syntax. This scan is
 // deliberately independent of target resolution: AGENTS.md requires approval

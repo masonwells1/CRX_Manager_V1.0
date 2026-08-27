@@ -65,6 +65,7 @@ function evaluatePush(repo, nowMs = Date.now(), command = "git push origin HEAD:
     toolInput: { command },
     repoDir: repo,
     nowMs,
+    runGh: () => "[]",
   });
 }
 
@@ -344,7 +345,31 @@ try {
     toolName: "PowerShell",
     toolInput: { command: "git push origin feature/test" },
     repoDir: risky.repo,
+    runGh: () => JSON.stringify([{ number: 513, autoMergeRequest: null }]),
   }).blocked, false, "branch pushes stay allowed");
+  let featurePushLookupArgs = [];
+  const preArmedAutoMergePush = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push origin HEAD:feature/test" },
+    repoDir: risky.repo,
+    runGh: (args) => {
+      featurePushLookupArgs = args;
+      return JSON.stringify([{ number: 513, autoMergeRequest: { mergeMethod: "SQUASH" } }]);
+    },
+  });
+  assert.equal(preArmedAutoMergePush.blocked, true, "an already-armed auto-merge blocks a later feature push");
+  assert.match(preArmedAutoMergePush.reason, /gh pr merge 513 --disable-auto/, "denial gives an agent-runnable recovery command");
+  assert.deepEqual(
+    featurePushLookupArgs,
+    ["pr", "list", "--repo", "masonwells1/CRX_Manager_V1.0", "--state", "open", "--base", "main", "--head", "feature/test", "--json", "number,autoMergeRequest"],
+    "feature push lookup binds the open PR query to main and the exact destination branch",
+  );
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push origin feature/test" },
+    repoDir: risky.repo,
+    runGh: () => { throw new Error("GitHub unavailable"); },
+  }).blocked, true, "feature pushes fail closed when auto-merge state cannot be proven");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "git push origin :main" },

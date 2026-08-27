@@ -15,9 +15,11 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
+  activeAutoMergePrNumbers,
   contentIsRisky,
   describeRiskyContent,
   eachPush,
+  featurePushDestinations,
   gitPushCwd,
   gitSubcommandIsDynamic,
   isGitPush,
@@ -27,7 +29,6 @@ import {
   pushContextIsAmbiguous,
   pushHiddenByShellComposition,
   pushIsForced,
-  pushTargetsCurrentHead,
   pushNamesRemoteProgram,
   pushUsesBulkMode,
   pushUsesInlineConfig,
@@ -745,6 +746,47 @@ for (const pushCmd of pushCommands) {
   }
 
   const srcRef = mainPushSource(pushCmd, branch);
+  if (!srcRef) {
+    // Auto-merge can be armed before a later commit is pushed. GitHub then
+    // merges that new commit after CI without any immediate merge command, so
+    // the exact-head merge proof never gets a chance to run. Check the remote
+    // PR state BEFORE every ordinary feature push and fail closed on an API
+    // error. The agent can disable auto-merge and retry without involving Mason.
+    let featureBranches;
+    try {
+      featureBranches = featurePushDestinations(pushCmd);
+    } catch (error) {
+      deny(`CODEX GATE: could not determine the exact remote feature branch for the auto-merge check, so the push is denied (fail closed). ${error?.message || error}`);
+    }
+    for (const featureBranch of featureBranches) {
+      let activeAutoMergePrs;
+      try {
+        const response = execFileSync("gh", [
+          "pr", "list",
+          "--repo", "masonwells1/CRX_Manager_V1.0",
+          "--state", "open",
+          "--base", "main",
+          "--head", featureBranch,
+          "--json", "number,autoMergeRequest",
+        ], {
+          cwd: pushRepoDir,
+          encoding: "utf8",
+          timeout: 10000,
+          stdio: ["ignore", "pipe", "pipe"],
+        }).trim();
+        activeAutoMergePrs = activeAutoMergePrNumbers(response);
+      } catch (error) {
+        deny(`CODEX GATE: could not prove auto-merge is disabled for the open main-bound PR on branch ${featureBranch}, so the feature push is denied (fail closed). ${error?.message || error}`);
+      }
+      if (activeAutoMergePrs.length > 0) {
+        deny(
+          `CODEX GATE: auto-merge is already armed on PR ${activeAutoMergePrs.map((number) => `#${number}`).join(", ")} for branch ${featureBranch}. ` +
+          `A later push could then merge without an exact-head review. Run \`gh pr merge ${activeAutoMergePrs[0]} --disable-auto\`, verify auto-merge is off, and retry this push.`,
+        );
+      }
+    }
+  }
+
   if (!srcRef) continue;
   if (srcRef === "DELETE") {
     deny("CODEX GATE: `git push origin :main` DELETES the production main branch. Never do this. If a bad commit landed, use the /rollback runbook (compensating commit / Vercel promote-previous) instead.");
