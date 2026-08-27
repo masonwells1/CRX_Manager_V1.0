@@ -229,6 +229,45 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'RETURN_COGS_RECEIVED_SOURCE_UNIT_REQUIRES_REPAIR';
   END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM public.returns r
+    JOIN public.return_items ri ON ri.return_id = r.id
+    LEFT JOIN public.order_items oi
+      ON oi.id = ri.order_item_id
+     AND oi.product_id = ri.product_id
+    JOIN public.products p ON p.id = ri.product_id
+    LEFT JOIN public.inventory i
+      ON i.product_id = ri.product_id
+     AND i.location = 'Main Warehouse'
+    CROSS JOIN LATERAL (
+      SELECT
+        CASE
+          WHEN ri.order_item_id IS NULL THEN ri.unit
+          ELSE COALESCE(oi.unit_size, 'ea')
+        END AS source_unit,
+        COALESCE(NULLIF(btrim(p.inventory_unit), ''), NULLIF(btrim(p.unit_size), '')) AS product_inventory_unit
+    ) units
+    WHERE r.deleted_at IS NULL
+      AND r.status IN ('requested','approved','received')
+      AND ri.restock
+      AND NOT ri.restocked
+      AND (
+        COALESCE(NULLIF(btrim(i.unit_size), ''), units.product_inventory_unit) IS NULL
+        OR lower(COALESCE(NULLIF(btrim(i.unit_size), ''), units.product_inventory_unit))
+           IS DISTINCT FROM lower(btrim(units.source_unit))
+      )
+      AND NOT (
+        r.id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid
+        AND ri.id = 'c4f6cc7d-0bbd-4c25-8bc0-c2c9e84aaadd'::uuid
+        AND lower(btrim(units.source_unit)) = 'ea'
+        AND p.container_size > 0
+        AND lower(COALESCE(NULLIF(btrim(i.unit_size), ''), units.product_inventory_unit))
+            = lower(units.product_inventory_unit)
+      )
+  ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_OPEN_RETURN_INVENTORY_UNIT_REQUIRES_REPAIR';
+  END IF;
   IF NOT EXISTS (
     SELECT 1
     FROM pg_constraint c

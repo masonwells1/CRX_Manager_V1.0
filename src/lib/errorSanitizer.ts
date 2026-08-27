@@ -11,6 +11,8 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'This return could not be found'],
   [/^RETURN_CREDIT_UNIT_MISMATCH\b/i,
    'The returned item unit does not match its original sale. Review the return before retrying'],
+  [/^RETURN_CREDIT_INVENTORY_UNIT_MISMATCH\b/i,
+   "This return's stock unit does not match the warehouse inventory unit. Review the product and return units before retrying"],
   [/^RETURN_CREDIT_UNLINKED_COST_LINE\b/i,
    'An existing credit cannot be matched safely to this return. Review the credit memo before retrying'],
   [/^RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED\b/i,

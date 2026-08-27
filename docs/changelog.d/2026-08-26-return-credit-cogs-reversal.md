@@ -33,5 +33,8 @@ intentionally freezes credit issuance until the second succeeds; if the second f
 fail-closed and an engineer must repair the reported drift and rerun it before credits resume.
 
 No migration was applied to production by this repository change. The fresh read-only production
-schema must pass the 50-signal disposable PostgreSQL proof, exact-SHA adversarial reviews, the governed
-migration review, and a fresh live ledger high-water check before the separately approved live apply.
+schema passed the 51-signal disposable PostgreSQL proof, including a mutant that removes the open-return
+warehouse-unit preflight; the run ended in `SMOKE_PASS_ROLLBACK` with zero residue. A 2026-08-27 live
+read found one open restock row, exactly the pinned legacy RMA above, and zero unhandled warehouse-unit
+mismatches. Exact-SHA adversarial reviews, the governed migration review, and a fresh live ledger
+high-water check remain required before the separately approved live apply.

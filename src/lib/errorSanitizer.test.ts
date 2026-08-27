@@ -5,6 +5,7 @@ describe('sanitizeError', () => {
   it('maps return-credit and customer-scope tokens to operator guidance', () => {
     expect(sanitizeError('CUSTOMER_SCOPE_DENIED')).toBe('You can only work with customers assigned to you');
     expect(sanitizeError('RETURN_CREDIT_UNIT_MISMATCH')).toContain('original sale');
+    expect(sanitizeError('RETURN_CREDIT_INVENTORY_UNIT_MISMATCH')).toContain('warehouse inventory unit');
     expect(sanitizeError('RETURN_CREDIT_UNLINKED_COST_LINE')).toContain('Review the credit memo');
     expect(sanitizeError('RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED')).toBe(
       'Void or unapply the related return credit before moving this sale invoice out of a recognized status or deleting it'

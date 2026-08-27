@@ -21,7 +21,9 @@ entries only; it does not re-certify unrelated issue narratives below.
 `_issue_return_credit_impl` still creates only the credit-memo header and writes no
 `invoice_items.cost_cents`; live PNL still recognizes only `posted`, and monthly reporting still
 omits `paid`. Production currently has zero credited returns, so the defect is real but latent rather
-than an existing wrong report. Pre-apply candidates `20260827041000`, `20260827041100`,
+than an existing wrong report. A 2026-08-27 read-only check found one open restock row: it is exactly
+the pinned legacy `15 ea` RMA with the authoritative `2.5 Gal` conversion, leaving zero unhandled
+warehouse-unit mismatches. Pre-apply candidates `20260827041000`, `20260827041100`,
 `20260827041200`, `20260827041300`, and `20260827041400` contain the durable repair and fail closed if the zero-credit/zero-legacy-restock
 assumptions or either delivery-invoice implementation contract stop being true. Do not call this
 resolved until all five migrations are reviewed, applied, and verified live. Apply the five files in order

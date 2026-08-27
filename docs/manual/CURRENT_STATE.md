@@ -83,14 +83,16 @@ recognized from the source sale, serializes source/credit lifecycle changes, and
 void, batch-void, and unapply cleanup. Per Mason's 2026-08-26 decision, an issued return credit uses
 `current_season()` so prior customer year-end summaries never restate. A late return can therefore
 show negative product usage in the current season when the original purchase belongs to an earlier
-season; that is the accepted simplicity tradeoff. A fresh read-only live-schema clone in disposable
-PostgreSQL passed the paid/overdue/posted multi-cost chain, current-season boundary, fractional-cent
-allocation, concurrency and lifecycle mutants. The third candidate prevents the order-linked credit
+season; that is the accepted simplicity tradeoff. A 2026-08-27 read-only production check found one
+open restock row, exactly the pinned legacy `15 ea` RMA that converts to `37.5 Gal`, and zero unhandled
+warehouse-unit mismatches. A fresh read-only live-schema clone in disposable PostgreSQL passed the
+paid/overdue/posted multi-cost chain, current-season boundary, fractional-cent allocation, concurrency
+and lifecycle mutants. The third candidate prevents the order-linked credit
 memo from suppressing either a later delivery's automatic draft invoice or the manual recovery path
 for a completed unbilled delivery. The fourth keeps the dashboard action queue and the void/cancel
 warning paths on that same active-sales-invoice definition and makes the complete-delivery gate ignore
 soft-deleted invoices. The fifth aligns both order-level invoice creators with that same active,
-non-deleted, non-credit definition. Fifty load-bearing proofs ended in `SMOKE_PASS_ROLLBACK` with zero residue,
+non-deleted, non-credit definition. Fifty-one load-bearing proofs ended in `SMOKE_PASS_ROLLBACK` with zero residue,
 including an ordinary non-credit invoice hard-delete proof so the new trigger cannot silently cancel
 unrelated deletes and a real completion proof that preserves return-credit tote provenance.
 Apply all five files in order only through the repository's guarded migration runner or the Supabase

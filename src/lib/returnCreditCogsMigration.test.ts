@@ -29,6 +29,7 @@ const orderInvoiceGateMigration = readFileSync(
 const migrationHistory = readFileSync('docs/reference/migration-history.md', 'utf8');
 const reportsPage = readFileSync('src/pages/Reports.tsx', 'utf8');
 const monthEndPage = readFileSync('src/pages/MonthEndClose.tsx', 'utf8');
+const invoicesPage = readFileSync('src/pages/Invoices.tsx', 'utf8');
 const recognizedInvoiceCustomers = readFileSync('src/lib/recognizedInvoiceCustomers.ts', 'utf8');
 const customerDetailPage = readFileSync('src/pages/CustomerDetail.tsx', 'utf8');
 const returnCreditSmoke = readFileSync('scripts/smoke/smoke-return-credit-chain.sql', 'utf8');
@@ -69,6 +70,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_COGS_RECEIVED_UNRESTOCKED_REQUIRES_REPAIR');
     expect(migration).toContain('RETURN_COGS_NONTERMINAL_RETURN_UNIT_REQUIRES_REPAIR');
     expect(migration).toContain('RETURN_COGS_RECEIVED_SOURCE_UNIT_REQUIRES_REPAIR');
+    expect(migration).toContain('RETURN_COGS_OPEN_RETURN_INVENTORY_UNIT_REQUIRES_REPAIR');
     expect(migration).toContain("r.status IN ('requested','approved','received')");
     expect(migration).toContain("inv.status IN ('posted','overdue','paid')");
     expect(migration).toContain('RETURN_COGS_PREFLIGHT_UNLINKED_COST_CREDIT');
@@ -239,6 +241,11 @@ describe('return-credit COGS migration', () => {
     expect(monthEndPage).not.toContain('Posted Invoices');
     expect(customerDetailPage).toContain("toast('error', sanitizeError(err))");
     expect(customerDetailPage).not.toContain("err instanceof Error ? err.message : 'Failed to generate summary'");
+    const batchPostHandler = invoicesPage.slice(
+      invoicesPage.indexOf('const handleBatchPost = async () =>'),
+      invoicesPage.indexOf('const handleBatchPrint = async () =>'),
+    );
+    expect(batchPostHandler).toContain('failures.push(`${target.label}: ${sanitizeError(err)}`)');
   });
 
   it('clears return-credit bypass settings on delegated failures and detects reset removal', () => {
@@ -301,6 +308,11 @@ describe('return-credit COGS migration', () => {
     );
     expect(reportMigration).toContain("replace(v_src, chr(13) || chr(10), chr(10))");
     expect(migration).toContain("replace(v_src, chr(13) || chr(10), chr(10))");
+    const migrationSha256 = createHash('sha256')
+      .update(migration.replace(/\r\n/g, '\n'), 'utf8')
+      .digest('hex');
+    expect(migrationSha256).toBe('8d7fe1918d2c1b87d0b57314eade3659c2895eeb6f847ac227aef8884c21a396');
+    expect(migrationHistory).toContain(`LF-normalized SQL SHA-256: \`${migrationSha256}\``);
   });
 
   it('does not claim field profitability consumes the credit-memo COGS reversal', () => {

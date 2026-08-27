@@ -346,6 +346,7 @@ const expectedProofs = [
   'RECEIVED_UNRESTOCKED_GUARD_REMOVAL_DETECTED',
   'NONTERMINAL_RETURN_UNIT_GUARD_REMOVAL_DETECTED',
   'RECEIVED_SOURCE_UNIT_GUARD_REMOVAL_DETECTED',
+  'OPEN_RETURN_INVENTORY_UNIT_GUARD_REMOVAL_DETECTED',
   'PREFLIGHT_OVERLOAD_COLLISION_REJECTED',
   'POSTFLIGHT_OVERLOAD_COLLISION_REJECTED',
   'QUOTE_TRUST_PREREQUISITE_GUARD_REMOVAL_DETECTED',
@@ -835,6 +836,32 @@ try {
   assert.notEqual(guardedReceivedSourceUnit.status, 0, 'canonical migration accepted a received return whose source unit drifted');
   assert.match(guardedReceivedSourceUnitOutput, /RETURN_COGS_RECEIVED_SOURCE_UNIT_REQUIRES_REPAIR/, `canonical migration did not reach the received source-unit guard:\n${guardedReceivedSourceUnitOutput}`);
   completedProofs.add('RECEIVED_SOURCE_UNIT_GUARD_REMOVAL_DETECTED');
+
+  const rolloutInventoryUnitFixture = concurrencyFixture(97);
+  const rolloutInventoryUnitSql = rolloutInventoryUnitFixture.sql
+    .replace("5.00, 'gal', 'gal'", "5.00, 'qt', 'qt'")
+    .replace(
+      /('00000000-0000-4000-8000-000000000081', )'received'(, 1000, NULL,)/,
+      "$1'approved'$2",
+    )
+    .replace("'unopened', true, true, 0", "'unopened', true, false, 0");
+  assert.notEqual(rolloutInventoryUnitSql, rolloutInventoryUnitFixture.sql, 'open-return inventory-unit fixture was not changed');
+  const noOpenInventoryUnitGuardMutant = cogsSql.replace(
+    /  IF EXISTS \(\r?\n    SELECT 1\r?\n    FROM public\.returns r\r?\n    JOIN public\.return_items ri ON ri\.return_id = r\.id\r?\n    LEFT JOIN public\.order_items oi[\s\S]*?RAISE EXCEPTION 'RETURN_COGS_OPEN_RETURN_INVENTORY_UNIT_REQUIRES_REPAIR';\r?\n  END IF;\r?\n/,
+    '',
+  );
+  assert.notEqual(noOpenInventoryUnitGuardMutant, cogsSql, 'open-return inventory-unit rollout mutant did not remove the guard');
+  const openInventoryUnitFixturePrefix = `
+    BEGIN;
+    ${rolloutInventoryUnitSql}
+  `;
+  const unguardedOpenInventoryUnit = psql(`${openInventoryUnitFixturePrefix}\n${noOpenInventoryUnitGuardMutant}\nROLLBACK;`, { allowFailure: true });
+  assert.equal(unguardedOpenInventoryUnit.status, 0, `open-return inventory-unit mutant did not expose the unsafe acceptance path:\n${unguardedOpenInventoryUnit.stderr || unguardedOpenInventoryUnit.stdout}`);
+  const guardedOpenInventoryUnit = psql(`${openInventoryUnitFixturePrefix}\n${cogsSql}\nCOMMIT;`, { allowFailure: true });
+  const guardedOpenInventoryUnitOutput = `${guardedOpenInventoryUnit.stdout}\n${guardedOpenInventoryUnit.stderr}`;
+  assert.notEqual(guardedOpenInventoryUnit.status, 0, 'canonical migration accepted an open return whose warehouse stock unit cannot be restored safely');
+  assert.match(guardedOpenInventoryUnitOutput, /RETURN_COGS_OPEN_RETURN_INVENTORY_UNIT_REQUIRES_REPAIR/, `canonical migration did not reach the open-return inventory-unit guard:\n${guardedOpenInventoryUnitOutput}`);
+  completedProofs.add('OPEN_RETURN_INVENTORY_UNIT_GUARD_REMOVAL_DETECTED');
 
   // Overload-collision proof: an unexpected public overload must abort before
   // any reviewed helper is renamed or replaced.
