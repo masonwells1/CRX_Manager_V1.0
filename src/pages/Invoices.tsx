@@ -396,6 +396,7 @@ export default function Invoices() {
             items: groupReturnCreditDisplayItems(inv.invoice_type, ((items || []) as Array<Record<string, unknown> & { product?: { product_name: string; epa_registration?: string | null; product_form?: string | null }; description?: string; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null }>).map((it) => ({
               order_item_id: (it.order_item_id as string) || null,
               product_id: (it.product_id as string) || null,
+              return_credit_cogs_cents: it.return_credit_cogs_cents != null ? Number(it.return_credit_cogs_cents) : null,
               description: it.description,
               product_name: it.product?.product_name || it.description,
               quantity: Number(it.quantity),

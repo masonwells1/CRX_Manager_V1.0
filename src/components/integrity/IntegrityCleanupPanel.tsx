@@ -139,6 +139,7 @@ export default function IntegrityCleanupPanel() {
   const [negatives, setNegatives] = useState<NegativeInvRow[]>([]);
   const [overReceived, setOverReceived] = useState<OverReceivedRow[]>([]);
   const [unbilled, setUnbilled] = useState<UnbilledDeliveryRow[]>([]);
+  const [invoiceCoverageFailed, setInvoiceCoverageFailed] = useState(false);
   const [manufactured, setManufactured] = useState<ManufacturedRow[]>([]);
   const [alerts, setAlerts] = useState<IntegrityAlertRow[]>([]);
   const [resolveBusy, setResolveBusy] = useState<Record<string, boolean>>({});
@@ -151,6 +152,7 @@ export default function IntegrityCleanupPanel() {
 
   const fetchAll = useCallback(async () => {
     setRefreshing(true);
+    setInvoiceCoverageFailed(false);
     try {
       // F3 fix: Promise.allSettled instead of Promise.all so a single query
       // failure (e.g. the manufactured_at_delivery query erroring during the
@@ -306,6 +308,7 @@ export default function IntegrityCleanupPanel() {
           if (invoiceCoverageError) {
             Sentry.captureException(invoiceCoverageError);
             toast('error', 'Failed to verify invoice coverage. Unbilled delivery results are hidden; refresh to try again.');
+            setInvoiceCoverageFailed(true);
             setUnbilled([]);
           } else {
             const invRows = invoiceRows || [];
@@ -329,6 +332,10 @@ export default function IntegrityCleanupPanel() {
         } else {
           setUnbilled([]);
         }
+      } else {
+        if (unbilledRes.error) Sentry.captureException(unbilledRes.error);
+        setInvoiceCoverageFailed(true);
+        setUnbilled([]);
       }
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
@@ -674,7 +681,9 @@ export default function IntegrityCleanupPanel() {
           row's button creates a draft invoice from the delivered quantities — same logic
           new completions use today.
         </p>
-        {unbilled.length === 0 ? (
+        {invoiceCoverageFailed ? (
+          <p className="text-sm text-amber-700 ml-7">Could not verify invoice coverage — refresh to try again.</p>
+        ) : unbilled.length === 0 ? (
           <p className="text-sm text-gray-500 ml-7">No unbilled completed deliveries.</p>
         ) : (
           <div className="rounded-lg border border-blue-200 bg-blue-50 overflow-hidden">

@@ -66,7 +66,8 @@ that delete-and-reinsert cycle. Keep the source invoice unchanged. If an edit is
 first void the return credit and then permanently delete that voided credit memo so its line-item link is
 removed; only then re-save the source invoice. Clearing the link while keeping the credit memo would
 make later reapply/reissue allocation ambiguous. The operator error sanitizer explains both the delete
-and re-save refusal.
+and re-save refusal. This restriction also applies to a zero-COGS damaged/non-restocked return credit:
+the source link is retained as customer-credit audit history even though no inventory value was reversed.
 
 **OPEN APPLY GATE — general Invoice Detail can strip return-cost lineage.** The live
 `_save_invoice_scoped_impl` rebuilds `invoice_items` without `order_item_id` and re-derives cost from

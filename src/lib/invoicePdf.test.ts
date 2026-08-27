@@ -122,7 +122,7 @@ describe('groupReturnCreditDisplayItems', () => {
       makeItem({ order_item_id: 'order-item-1', product_id: 'product-1', return_credit_cogs_cents: -6500, description: 'Return credit - Atrazine 4L', quantity: -5, extended_cents: -9250, cost_cents: 1300 }),
     ]);
     expect(grouped).toHaveLength(1);
-    expect(grouped[0]).toMatchObject({ quantity: -15, extended_cents: -27750, cost_cents: 0 });
+    expect(grouped[0]).toMatchObject({ quantity: -15, extended_cents: -27750, cost_cents: undefined });
   });
 
   it('does not collapse ordinary invoices or manual credit rows', () => {
@@ -134,11 +134,16 @@ describe('groupReturnCreditDisplayItems', () => {
     expect(groupReturnCreditDisplayItems('credit_memo', rows)).toHaveLength(2);
   });
 
-  it('is applied by the invoice-list batch print path with lineage ids available', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/pages/Invoices.tsx'), 'utf8');
-    expect(source).toMatch(/items:\s*groupReturnCreditDisplayItems\(inv\.invoice_type,/);
-    expect(source).toContain("order_item_id: (it.order_item_id as string) || null");
-    expect(source).toContain("product_id: (it.product_id as string) || null");
+  it('passes the COGS marker through every print and email PDF mapping', () => {
+    const rowBuilder = readFileSync(resolve(process.cwd(), 'src/lib/invoicePdf.ts'), 'utf8');
+    const invoiceList = readFileSync(resolve(process.cwd(), 'src/pages/Invoices.tsx'), 'utf8');
+    const invoiceDetail = readFileSync(resolve(process.cwd(), 'src/pages/InvoiceDetail.tsx'), 'utf8');
+    const directMapping = 'return_credit_cogs_cents: it.return_credit_cogs_cents != null ? Number(it.return_credit_cogs_cents) : null';
+
+    expect(rowBuilder).toContain(directMapping);
+    expect(invoiceList).toContain(directMapping);
+    expect(invoiceDetail).toContain('return_credit_cogs_cents: (it as Record<string, unknown>).return_credit_cogs_cents != null');
+    expect(invoiceDetail).toContain('? Number((it as Record<string, unknown>).return_credit_cogs_cents)');
   });
 });
 

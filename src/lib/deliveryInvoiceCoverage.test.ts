@@ -102,5 +102,7 @@ describe('activeInvoiceCoversDelivery', () => {
     expect(integrityCleanup).toContain('.range(from, from + INVOICE_COVERAGE_PAGE_SIZE - 1)');
     expect(integrityCleanup).toContain('from += page.length');
     expect(integrityCleanup).toContain('Failed to verify invoice coverage. Unbilled delivery results are hidden');
+    expect(integrityCleanup).toContain('setInvoiceCoverageFailed(true)');
+    expect(integrityCleanup).toContain('Could not verify invoice coverage — refresh to try again.');
   });
 });

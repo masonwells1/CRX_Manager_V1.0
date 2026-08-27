@@ -1260,6 +1260,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       items: groupReturnCreditDisplayItems(invoice.invoice_type, (enrichedItems || []).map((it) => ({
         order_item_id: it.order_item_id || null,
         product_id: it.product_id || null,
+        return_credit_cogs_cents: (it as Record<string, unknown>).return_credit_cogs_cents != null
+          ? Number((it as Record<string, unknown>).return_credit_cogs_cents)
+          : null,
         description: it.description,
         product_name: it.product?.product_name || it.description,
         quantity: Number(it.quantity),
