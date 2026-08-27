@@ -6,10 +6,11 @@ review proved that relayed machine text could be mistaken for Mason's authorship
 removed before release.
 
 The replacement moves production credentials and execution out of the local Codex shell. A manual
-GitHub workflow accepts one exact current-main commit, reviewed PR-head commit, human-dispatched
-full two-charter clean-review evidence, timestamped migration filename, and SQL SHA-256. The workflow
-parses and preserves that evidence, rejects non-regular Git migration entries, and rebuilds from the
-immutable commit blob so a symlink cannot redirect the bytes applied.
+GitHub workflow accepts one exact current-main commit, reviewed PR-head commit, timestamped migration
+filename, and SQL SHA-256. It accepts no caller-supplied review claim. Instead it reads GitHub's PR
+review API and requires the latest exact-head review from `coderabbitai[bot]` to be `APPROVED`; a
+plain green CodeRabbit status is deliberately insufficient. It rejects non-regular Git migration
+entries and rebuilds from the immutable commit blob so a symlink cannot redirect the bytes applied.
 The workflow also reuses the existing fail-closed destructive-migration classifier, so data deletes,
 truncation, dropped tables/columns/types/schemas, and `MERGE` cannot enter this automated path.
 Its `production-database` environment requires Mason's GitHub account, rejects administrator bypass,
@@ -33,7 +34,8 @@ is pinned to a full audited commit. The official Supabase setup action is pinned
 commit, which verifies npm package integrity; the workflow separately asserts CLI version 2.109.1.
 
 Prevention tests mutation-test wrong project, missing file, wrong hash, stale timestamp aliases,
-non-human dispatch and merged-PR mismatches, PostgreSQL transaction aliases, non-atomic commands,
+non-human dispatch, forged/stale/non-approved reviewer identities, merged-PR mismatches,
+PostgreSQL transaction aliases, destructive and non-atomic commands,
 lock/order placement, ledger binding, action pinning, and no-overwrite behavior without a network or
 live database. Ordinary PR CI and the production
 workflow both run the owning test. The workflow remains inert until the protected environment,

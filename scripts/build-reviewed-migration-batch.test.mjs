@@ -13,13 +13,11 @@ import {
   transactionCompatibility,
 } from "./build-reviewed-migration-batch.mjs";
 import {
-  decodeReviewEvidenceBase64,
-  parseReviewEvidence,
   selectExactMergedPr,
+  selectTrustedCodeRabbitApproval,
   validateReviewInputs,
   validateTrustedDispatch,
 } from "./production-migration-review-lib.mjs";
-import { transformReviewProducer } from "./apply-production-review-evidence-maintenance-20260827.mjs";
 
 const MIGRATION = "20990101010101_test_safe_batch";
 const SQL = [
@@ -54,14 +52,10 @@ assert.match(workflow, /Verify human-dispatched exact-commit migration review/,
   "preflight must bind Mason's manual dispatch to exact review evidence before approval");
 assert.match(workflow, /verify-production-migration-review\.mjs/,
   "the durable review verifier must be invoked by a literal script path");
-assert.match(workflow, /review_evidence_base64/,
-  "the human dispatch must carry the full machine-review evidence, not an unverified digest");
-assert.match(workflow, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/,
-  "verified review evidence must be preserved before the approval boundary");
-assert.match(workflow, /actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093/,
-  "the approved job must retrieve and revalidate the preserved evidence");
-assert.doesNotMatch(workflow, /review_proof_sha256/i,
-  "a caller-supplied proof digest without the reviewed artifact must never satisfy the gate");
+assert.doesNotMatch(workflow, /review_evidence|review_proof_sha256/i,
+  "caller-supplied review claims must never satisfy the production gate");
+assert.doesNotMatch(workflow, /actions\/(?:upload|download)-artifact/,
+  "the production gate must retrieve reviewer provenance from GitHub, not a caller-provided artifact");
 assert.doesNotMatch(workflow, /uses:\s+[^\s]+@v\d+/,
   "production workflows must never trust mutable major-version action tags");
 assert.match(workflow, /supabase\/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520/,
@@ -114,51 +108,23 @@ const mergedPr = {
 assert.equal(selectExactMergedPr([mergedPr], reviewInput), mergedPr);
 assert.throws(() => selectExactMergedPr([{ ...mergedPr, merge_commit_sha: "3".repeat(40) }], reviewInput), /current main/);
 
-const cleanReviewEvidence = {
-  schemaVersion: 1,
-  migrationName: MIGRATION,
-  reviewedCommit: REVIEWED,
-  querySha256: REVIEW_HASH,
-  model: "gpt-5.6-sol",
-  reasoningEffort: "high",
-  generatedAt: new Date().toISOString(),
-  reviews: ["rls-security-reviewer", "migration-drift-reviewer"].map((reviewer) => ({
-    reviewer,
-    exitCode: 0,
-    stdout: `No high findings.\nCODEX_PROOF_VERDICT: CLEAN\n`,
-  })),
+const codeRabbitApproval = {
+  id: 10,
+  user: { login: "coderabbitai[bot]", type: "Bot" },
+  state: "APPROVED",
+  commit_id: REVIEWED,
+  submitted_at: "2026-08-27T00:00:00Z",
 };
-const evidenceBytes = Buffer.from(JSON.stringify(cleanReviewEvidence));
-assert.deepEqual(parseReviewEvidence(evidenceBytes, reviewInput), cleanReviewEvidence);
-assert.deepEqual(decodeReviewEvidenceBase64(evidenceBytes.toString("base64")), evidenceBytes);
-assert.throws(() => decodeReviewEvidenceBase64("not base64"), /canonical base64/);
-assert.throws(() => parseReviewEvidence(Buffer.from(JSON.stringify({
-  ...cleanReviewEvidence,
-  querySha256: "0".repeat(64),
-})), reviewInput), /not bound/);
-assert.throws(() => parseReviewEvidence(Buffer.from(JSON.stringify({
-  ...cleanReviewEvidence,
-  reviews: cleanReviewEvidence.reviews.map((review, index) => index === 0 ? {
-    ...review,
-    stdout: `${review.stdout}CODEX_PROOF_VERDICT: CLEAN\n`,
-  } : review),
-})), reviewInput), /exactly one terminal clean/);
-assert.throws(() => parseReviewEvidence(Buffer.from(JSON.stringify({
-  ...cleanReviewEvidence,
-  generatedAt: "2099-01-01T00:00:00.000Z",
-})), reviewInput), /not future-dated/);
+assert.equal(selectTrustedCodeRabbitApproval([codeRabbitApproval], reviewInput), codeRabbitApproval);
+assert.throws(() => selectTrustedCodeRabbitApproval([{ ...codeRabbitApproval, user: { login: "masonwells1", type: "User" } }], reviewInput), /authenticated CodeRabbit approval/);
+assert.throws(() => selectTrustedCodeRabbitApproval([{ ...codeRabbitApproval, commit_id: "3".repeat(40) }], reviewInput), /authenticated CodeRabbit approval/);
+assert.throws(() => selectTrustedCodeRabbitApproval([{ ...codeRabbitApproval, state: "CHANGES_REQUESTED" }], reviewInput), /authenticated CodeRabbit approval/);
+assert.throws(() => selectTrustedCodeRabbitApproval([
+  codeRabbitApproval,
+  { ...codeRabbitApproval, id: 11, state: "CHANGES_REQUESTED", submitted_at: "2026-08-27T00:01:00Z" },
+], reviewInput), /authenticated CodeRabbit approval/,
+"a later exact-commit changes-requested review must supersede an earlier approval");
 
-const protectedProducerName = ["write", "apply", "proofs"].join("-") + ".mjs";
-const protectedProducer = readFileSync(path.join(process.cwd(), "scripts", protectedProducerName), "utf8");
-const transformedProducer = transformReviewProducer(protectedProducer);
-assert.match(transformedProducer, /committedReviewIdentity/,
-  "the reviewed maintenance must bind production evidence to the committed migration blob");
-assert.match(transformedProducer, /reviews: charterEvidence/,
-  "the trusted reviewer must directly emit the actual charter outputs");
-assert.match(transformedProducer, /exact committed migration review evidence/,
-  "the trusted reviewer must emit the durable production evidence artifact");
-assert.throws(() => transformReviewProducer(transformedProducer), /anchor is not unique/,
-  "the one-use maintenance must refuse a second application");
 
 assert.deepEqual(transactionCompatibility(SQL), { ok: true });
 assert.deepEqual(transactionCompatibility("SELECT CASE WHEN true THEN 1 ELSE 0 END;"), { ok: true });

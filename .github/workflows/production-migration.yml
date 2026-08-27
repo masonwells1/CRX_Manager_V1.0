@@ -19,10 +19,6 @@ on:
         description: Exact PR head commit reviewed by the migration gate
         required: true
         type: string
-      review_evidence_base64:
-        description: Base64 of the exact clean production review evidence file Mason inspected
-        required: true
-        type: string
 
 permissions:
   actions: read
@@ -96,17 +92,7 @@ jobs:
           REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
           MIGRATION_NAME: ${{ inputs.migration_name }}
           QUERY_SHA256: ${{ inputs.query_sha256 }}
-          REVIEW_EVIDENCE_BASE64: ${{ inputs.review_evidence_base64 }}
-          REVIEW_EVIDENCE_OUTPUT: ${{ runner.temp }}/production-migration-review-evidence.json
         run: node scripts/verify-production-migration-review.mjs
-
-      - name: Preserve the verified review evidence for the approval boundary
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: production-migration-review-evidence
-          path: ${{ runner.temp }}/production-migration-review-evidence.json
-          if-no-files-found: error
-          retention-days: 1
 
       - name: Prove deny paths and build the exact atomic batch
         env:
@@ -133,7 +119,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: production-database
     permissions:
-      actions: read
       contents: read
       pull-requests: read
     steps:
@@ -154,20 +139,13 @@ jobs:
         with:
           node-version: 24
 
-      - name: Retrieve the pre-approval review evidence
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: production-migration-review-evidence
-          path: .production-migration-review-evidence
-
-      - name: Revalidate review evidence after Mason approval
+      - name: Revalidate authenticated CodeRabbit approval after Mason approval
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
           REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
           MIGRATION_NAME: ${{ inputs.migration_name }}
           QUERY_SHA256: ${{ inputs.query_sha256 }}
-          REVIEW_EVIDENCE_FILE: .production-migration-review-evidence/production-migration-review-evidence.json
         run: node scripts/verify-production-migration-review.mjs
 
       - id: supabase-cli

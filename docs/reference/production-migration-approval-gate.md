@@ -68,50 +68,43 @@ CLI's hidden token prompt, then remove the old broad OAuth login.
 
 Repeat this proof whenever the Codex GitHub credential is replaced or its permissions change.
 
-## Human-dispatched migration review attestation
+## Human dispatch plus authenticated review provenance
 
-Before merging a migration PR, run the repository's trusted migration review wrapper against the
-clean exact PR head. After both required `gpt-5.6-sol`/high reviewer charters return clean, the
-trusted wrapper itself writes JSON plus a base64 copy of the two machine-verdict captures. It does
-so only after its unchanged-content check and only when the migration is a committed regular Git
-blob, binding the evidence to that PR-head commit and SQL SHA-256. Mason inspects the JSON. After the PR merges,
-Codex gives Mason the exact five workflow inputs: current-main commit, reviewed PR-head commit,
-migration stem, migration SHA-256, and the packaged review evidence in base64. Mason enters those
-inputs and presses **Run workflow** in GitHub's website.
+Before merging a migration PR, the existing local `gpt-5.6-sol`/high exact-head review remains the
+hard pre-push gate. The PR must also receive CodeRabbit's authenticated GitHub App review on that
+same exact head, and the latest exact-head CodeRabbit review state must be `APPROVED`. A plain
+`CodeRabbit` success status is insufficient because it can coexist with a `CHANGES_REQUESTED`
+review.
 
-The preparation sequence is one exact invocation of the existing migration-review producer. The
-wrapper writes a `.json` file for Mason to inspect plus a `.b64` file for the workflow input and
-refuses to overwrite either output. Do not hand-author or edit either evidence file.
+After the PR merges, Codex gives Mason four workflow inputs: current-main commit, reviewed PR-head
+commit, migration stem, and migration SHA-256. Mason enters those inputs and presses **Run
+workflow** in GitHub's website. No caller-supplied review text, hash, or artifact is accepted.
 
-That manual dispatch is the durable review attestation. It is a meaningful capability boundary
-because the Codex token has Actions read-only and therefore cannot create the event. The production
-workflow accepts it only when all of these are true:
+The production workflow accepts the dispatch only when all of these are true:
 
 1. GitHub records a manual `workflow_dispatch` by the repository owner.
 2. The exact reviewed commit is the head of one merged PR into `main`.
 3. That PR's recorded merge commit is still the current `main` commit.
 4. The migration is a regular `100644` Git blob, identical at the reviewed PR head and current
    `main`; symlinks are rejected.
-5. The supplied evidence is strict JSON containing exactly the two required successful reviewer
-   outputs, each with one terminal `CODEX_PROOF_VERDICT: CLEAN`, and its commit/name/SQL hash match
-   the requested migration.
-6. The verified evidence is preserved as a one-day GitHub run artifact and revalidated after
-   Mason's environment approval.
+5. GitHub's PR review API reports the latest review for that exact commit from
+   `coderabbitai[bot]` (type `Bot`) as `APPROVED`.
 
 Condition 3 deliberately makes the release window fail closed: if another PR reaches `main`, rerun
 the release preparation against current state rather than approving stale evidence. The workflow
 event does not replace technical review; it durably records that Mason released the exact artifact
-whose clean review evidence Codex presented. The second environment approval keeps secrets sealed
-until Mason makes the final release decision.
+whose separate authenticated GitHub review is clean. The local Sol/high proof remains required by
+the branch push guard. The second environment approval keeps secrets sealed until Mason makes the
+final release decision.
 
 ## Migration run
 
 The migration workflow accepts the exact current `main` commit, exact reviewed PR-head commit,
-base64 review-evidence artifact, exact timestamped migration stem, and lowercase SHA-256 of that file.
+exact timestamped migration stem, and lowercase SHA-256 of that file.
 Before approval it verifies current-main binding, the merged-PR and durable-review bindings,
 unchanged regular Git-blob and file/hash bindings, environment protection, parser deny paths, and
-atomic-batch compatibility. After Mason's website approval, it revalidates the preserved review
-artifact and rebuilds the batch directly from the same immutable Git blob, reconfirms current main,
+atomic-batch compatibility. After Mason's website approval, it re-queries the exact CodeRabbit
+approval and rebuilds the batch directly from the same immutable Git blob, reconfirms current main,
 verifies the installed Supabase CLI version, obtains the
 environment secrets, and executes one transaction.
 

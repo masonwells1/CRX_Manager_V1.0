@@ -15,7 +15,7 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 **Decision.** Codex prepares one exact main-branch migration for Mason to dispatch through the
 GitHub `production-database` environment. GitHub, not the local agent shell, holds the Supabase credential.
 The environment requires Mason's account, disallows administrator bypass, and binds current main,
-the exact reviewed PR head plus the full packaged two-charter clean-review evidence, filename, and SQL SHA-256. The local Codex GitHub
+the exact reviewed PR head plus CodeRabbit's authenticated exact-commit approval, filename, and SQL SHA-256. The local Codex GitHub
 credential is a fine-grained token with Actions and Deployments read-only; only Mason's website
 session can dispatch the reviewed artifact and approve release.
 
@@ -29,7 +29,9 @@ credentials outside the agent's local capability set.
 **Operative rule.** The workflow remains unusable unless its GitHub environment requires only Mason,
 prevents administrator bypass, accepts protected branches only, and carries its two production
 secrets. Codex may read a pending run but its machine token must not have Actions write or Deployments
-write. Mason's manual dispatch is the durable exact-artifact review attestation. The workflow locks
+write. Mason's manual dispatch is the human release attestation; the workflow independently reads
+the latest exact-head `coderabbitai[bot]` review and requires `APPROVED`. Caller-supplied review text,
+hashes, or artifacts are never accepted. The local Sol/high proof remains the separate pre-push gate. The workflow locks
 the live ledger inside the same transaction, applies only transaction-
 compatible SQL, refuses stale timestamp aliases and exact-content replay, writes and verifies the
 content-bound ledger row, then commits. Credential-bearing actions use full commit pins and the
