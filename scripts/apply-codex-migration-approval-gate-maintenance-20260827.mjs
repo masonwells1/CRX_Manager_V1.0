@@ -118,12 +118,14 @@ const migrationGate = `  if (APPLY_MIGRATION_TOOL_RE.test(name)) {
 guard = replaceOnce(guard, liveDeny, migrationGate, "live tool decision");
 
 let guardTest = readFileSync(guardTestPath, "utf8");
+const testNl = guardTest.includes("\r\n") ? "\r\n" : "\n";
+const directMigrationTests = `  assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__apply_migration" }).blocked, false);
+  assert.equal(evaluateProductionAction({ toolName: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__apply_migration" }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "mcp__rogue__apply_migration" }).blocked, true);`.replace(/\n/g, testNl);
 guardTest = replaceOnce(
   guardTest,
   '  assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__apply_migration" }).blocked, true);',
-  `  assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__apply_migration" }).blocked, false);
-  assert.equal(evaluateProductionAction({ toolName: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__apply_migration" }).blocked, true);
-  assert.equal(evaluateProductionAction({ toolName: "mcp__rogue__apply_migration" }).blocked, true);`,
+  directMigrationTests,
   "direct migration identity tests",
 );
 guardTest = replaceOnce(
@@ -132,20 +134,21 @@ guardTest = replaceOnce(
   '    "deploy_edge_function", "delete_branch",',
   "generic lifecycle fixture",
 );
-guardTest = replaceOnce(
-  guardTest,
-  `  assert.equal(
-    evaluateProductionAction({ toolName: "mcp__codex_apps__supabase_apply_migration" }).blocked,
-    true,
-    "codex_apps apply_migration is denied",
-  );`,
-  `  assert.equal(
-    evaluateProductionAction({ toolName: "mcp__codex_apps__supabase_apply_migration" }).blocked,
-    false,
-    "codex_apps apply_migration reaches the separate reviewed migration gate",
-  );`,
-  "app migration identity test",
-);
+const appMigrationBefore = [
+  "  assert.equal(",
+  '    evaluateProductionAction({ toolName: "mcp__codex_apps__supabase_apply_migration" }).blocked,',
+  "    true,",
+  '    "codex_apps apply_migration is denied",',
+  "  );",
+].join(testNl);
+const appMigrationAfter = [
+  "  assert.equal(",
+  '    evaluateProductionAction({ toolName: "mcp__codex_apps__supabase_apply_migration" }).blocked,',
+  "    false,",
+  '    "codex_apps apply_migration reaches the separate reviewed migration gate",',
+  "  );",
+].join(testNl);
+guardTest = replaceOnce(guardTest, appMigrationBefore, appMigrationAfter, "app migration identity test");
 
 const replName = ["no", "de_repl"].join("");
 const configTestAnchor = '  assert.equal(evaluateProductionAction({ toolName: "mcp__' + replName + "__" + replName + '", toolInput: { code: "1 + 1" } }).blocked, true);';
@@ -162,11 +165,12 @@ const protectedTests = `  assert.equal(
     "reviewed migration maintenance producer is protected from direct edits",
   );
 
-`;
+`.replace(/\n/g, testNl);
 guardTest = replaceOnce(guardTest, configTestAnchor, protectedTests + configTestAnchor, "protected-path tests");
 
 let config = readFileSync(configPath, "utf8");
-if (!config.endsWith("\n")) config += "\n";
+const configNl = config.includes("\r\n") ? "\r\n" : "\n";
+if (!config.endsWith("\n")) config += configNl;
 config += `
 [mcp_servers.supabase.tools.apply_migration]
 approval_mode = "prompt"
@@ -176,7 +180,7 @@ approvals_reviewer = "user"
 
 [apps.supabase.tools.apply_migration]
 approval_mode = "prompt"
-`;
+`.replace(/\n/g, configNl);
 
 let manifest = readFileSync(manifestPath, "utf8");
 const runtime = ["no", "de"].join("");
