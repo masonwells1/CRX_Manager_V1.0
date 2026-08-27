@@ -1043,6 +1043,44 @@ order**; they change **no settled decision**. D-A through D-X and the three 2026
 stand exactly as written. This section governs only the two subjects it names — Phase 1b's position
 in the sequence, and the workbook-as-proposal path — and nothing else in this plan.*
 
+> **Revision 13 — identity model SETTLED as D-AA (Mason), mechanism to WP-1's build cycle.**
+> **Revision 12's ingredient-identity mechanism is WITHDRAWN.** A `gpt-5.6-sol` proof run on that
+> small diff and five independent
+> connector findings converged on the same conclusion from different directions: **the eight findings
+> were not drafting defects in the mechanism — they were symptoms that the identity MODEL underneath
+> it was never decided**, and several of the choices it silently made were **Mason's calls about his
+> own catalogue**, not a builder's. Rather than patch a ninth time, the question went to its owner —
+> **and Mason settled it in chat the same night (2026-08-27), in plain English after the trade-offs
+> were explained.** **D-AA is SETTLED; the SQL that implements it is deliberately not written
+> tonight.**
+>
+> *What revision 13 changes:*
+>
+> - **R12-1's mechanism is replaced by D-AA, now SETTLED.** The UNIQUE key over
+>   `(lower(btrim(name)), coalesce(cas, ''))` and the mandated
+>   `INSERT … ON CONFLICT … DO UPDATE SET name = EXCLUDED.name` form are **withdrawn, not deferred** —
+>   and they are not a fallback, because **each contradicts a ruling**: the key contradicts D-AA-1/2,
+>   the `DO UPDATE SET name` contradicts D-AA-4.
+> - **Mason's rulings, in one line:** **CAS is the global identity where present, across alternate
+>   names and spellings** (same CAS = same chemical, merged; his per-row review catches a label
+>   typo); **a CAS-less row and a later same-name CAS-bearing proposal never auto-merge and never
+>   silently fork — the merge is QUEUED for his explicit approval, side by side**; **a proposal whose
+>   name matches an existing ingredient but claims a different canonical parent is REFUSED at import
+>   with a named error**, corrected in the sheet and re-uploaded, because ambiguous chemistry never
+>   enters the system. Plus the two technically-settled sub-answers: **no resolve path ever mutates a
+>   shared row's display name**, and **multi-identity inserts take a deterministic order.**
+> - **The GATE is reworded, not dropped:** it was *"WP-1 must not be built until D-AA is settled"*; it
+>   is now **"WP-1's migration implements D-AA as settled here, and the concrete constraint and
+>   resolve-or-create mechanism are specified and reviewed inside WP-1's own build cycle, under its
+>   gates."** **A ninth same-night mechanism attempt is exactly what was decided against** — the
+>   model needed an owner's answer, it has one, and the SQL is a build-cycle artifact with the
+>   acceptance criteria as its proof obligations.
+> - **The round-3 FINDING stays fully on record:** the cross-product same-form race is real and
+>   **still unfixed in code** — settling the model does not close it, only building the mechanism
+>   does. Carried as a **known open HIGH until WP-1 implements D-AA**, acceptable only because
+>   nothing is built yet.
+> - **R12-2 stands unchanged.** None of the eight findings touched the restamp fingerprint binding.
+>
 > **Revision 12 — hard merge-gate round three.** The third exact-SHA proof run returned **two HIGH
 > findings**, both accepted. **Both are the same shape as R11-1 and worth naming as a pattern:** a
 > rule that is correct **within the scope it was written for** and silent one level out. R11-1 was a
@@ -1057,9 +1095,11 @@ in the sequence, and the workbook-as-proposal path — and nothing else in this 
 >   `active_ingredients` row for **one real-world identity**. Nothing in the plan made them collide.
 >   The result is a **permanent silent split**: chemistry matching, MOA rollups and every
 >   ingredient-keyed query see two half-populated forms forever after, and no later constraint can
->   safely merge them. **Fixed: canonical form identity becomes a DATABASE UNIQUE constraint** on
->   `active_ingredients`, and the commit's resolve-or-create step becomes **conflict-safe** rather
->   than check-then-insert.
+>   safely merge them. *(**Revision 13 supersedes the fix, not the finding:** the constraint and
+>   conflict-safe form Revision 12 prescribed are **withdrawn**; the identity model is now **settled
+>   as D-AA (Mason, 2026-08-27)** with its mechanism assigned to WP-1's build cycle, and the race is
+>   carried as a **known open HIGH until that lands**. Read this bullet for the finding; read D-AA
+>   for its status.)*
 > - **R12-2 (HIGH — the restamp fingerprint was underspecified):** `create_workbook_import_proposals`
 >   serves **two modes** — batch import and by-id restamp — but R11-2 defined its
 >   `request_fingerprint` only as *"the batch's canonical content identity"*, which says **nothing
@@ -1831,6 +1871,10 @@ Its contract, per CRX canon and **D-J** / **D-S**:
   unknown, or whose `sku` no longer matches that id; a row populating both domains; **a draft whose
   `ingredients[]` carries TWO elements resolving to the same logical ingredient identity — the same
   `ingredient_id`, or two `proposed_form` elements of the same identity** *(FOLLOW-UP 2, below)*;
+  **a `proposed_form` whose name matches an existing ingredient but claims a DIFFERENT
+  `canonical_ingredient_id`** *(D-AA-3, Mason 2026-08-27 — refused HERE at import with a named error,
+  never queued and never resolved at commit, because ambiguous chemistry must not enter the system;
+  the correction is a corrected sheet, re-uploaded)*;
   **any field
   present with `null`**, and a `product_attributes` block with no fields at all (R2-4); **any TEXT
   field present with a blank or whitespace-only value — the same `NULLIF(btrim(x), '') IS NOT NULL`
@@ -2289,15 +2333,19 @@ concentration on spray paperwork must not depend on array order.**
   the reviewer cannot resolve it at approval time, because approval is one click on a whole draft.
 - **This rule is PER DRAFT, and per-draft is one scope too narrow to protect the identity itself
   *(R12-1)*.** It stops one draft contradicting itself; it says nothing about **two drafts on two
-  different products** proposing the same new form. That gap is closed by the global identity
-  constraint in the next block, and **the two compose deliberately:** per-draft uniqueness keeps a
-  single approval internally consistent, the **database UNIQUE constraint** keeps the catalogue
-  consistent across every approval that will ever run. **Neither substitutes for the other** — the
-  constraint cannot see two elements inside one payload, and the payload check cannot see another
-  session.
+  different products** proposing the same new form. **That gap's MODEL is settled as D-AA in the next
+  block *(Mason, 2026-08-27)*, and its mechanism is built in WP-1's cycle — so the gap is closed in
+  principle and still open in code until then *(Revision 13)*.** The two scopes were always meant to
+  compose:
+  per-draft uniqueness keeps a single approval internally consistent, and **the global identity
+  mechanism WP-1 builds for D-AA** keeps the catalogue consistent across every approval that will
+  ever run. **Neither substitutes for the other** — a global constraint cannot see two elements inside one
+  payload, and the payload check cannot see another session. **This rule stands and is unaffected by
+  the withdrawal**; it is simply half of a pair whose other half is undecided.
 
-**Canonical form identity is enforced by the DATABASE, because per-draft and per-product scopes both
-miss it *(HIGH, R12-1)*.** Every guard this amendment has built serializes on **the product**: the
+**Canonical form identity is SETTLED as D-AA *(Mason, 2026-08-27)*, its mechanism belongs to WP-1's
+build cycle, and the cross-product race stays a KNOWN OPEN HIGH until that mechanism ships
+*(R12-1, de-scoped and then settled by Revision 13)*.** Every guard this amendment has built serializes on **the product**: the
 mandatory product-row lock *(FOLLOW-UP 1)*, the version compare-and-set, the single-effective-row
 invariant, the per-draft duplicate rule. **`active_ingredients` is not product-scoped.** It is the
 shared chemical catalogue every product points into, and **nothing in the plan made two products
@@ -2316,71 +2364,122 @@ that its sibling does not share. **And it cannot be cleaned up cheaply later** �
 notices, both rows carry product links, provenance and possibly divergent canonical mappings, so
 merging them is a data migration with judgment calls in it, not a `DELETE`.
 
-- **The constraint, carried by WP-1's migration** — the package that owns `active_ingredients`
-  *(WP-1 is unbuilt and unapplied, so this is a specification change to a migration that does not yet
-  exist)*: **a UNIQUE constraint on the form's identity key.** The identity key is the **normalized
-  name plus the CAS where the row has one**, and **normalization is stated rather than left to a
-  builder: trimmed and case-folded** — `btrim` then `lower` — so `"Glyphosate "`, `"glyphosate"` and
-  `"GLYPHOSATE"` are one identity, not three. A row **with** a CAS is identified by normalized name
-  **and** that CAS; a row **without** one is identified by normalized name alone. Express it so
-  NULLs do not defeat it — a `UNIQUE` index over `(lower(btrim(name)), coalesce(cas, ''))` or an
-  equivalent that treats absent CAS as a value rather than as "matches nothing", because **a plain
-  multi-column UNIQUE over a nullable CAS would let unlimited duplicates through on exactly the rows
-  most likely to collide.**
-- **The commit's resolve-or-create step becomes CONFLICT-SAFE, and there is ONE permitted form,
-  written out exactly *(per the no-two-forms rule this amendment adopted in FOLLOW-UP 1)*:**
-  `INSERT INTO active_ingredients (…) VALUES (…) ON CONFLICT (<identity key>) DO UPDATE SET name =
-  EXCLUDED.name RETURNING id` — a deliberately no-op `DO UPDATE` — and the commit **takes the
-  returned id, whether it inserted or resolved**, and attaches the concentration to it.
-  **`DO NOTHING` is NOT the permitted form, and the reason is a trap worth naming: `ON CONFLICT DO
-  NOTHING … RETURNING` returns NO ROW on the conflict path.** A builder who writes it gets a null id
-  precisely in the case this rule exists to handle — the concurrent one — and then either inserts a
-  duplicate by another route or fails the attach. **`DO UPDATE` returns the row on both paths**,
-  which is the only reason it is specified rather than the more obvious-looking `DO NOTHING`.
-  **Check-then-insert is likewise forbidden**, because the check and the insert are two statements
-  with a race between them, which is precisely the bug. **The deterministic-advisory-lock alternative
-  is NOT adopted:** it would work, but two forms of the same guard is what Revision 10 spent a
-  follow-up removing, and `ON CONFLICT` needs no lock-ordering reasoning at all.
-- **Lock-order composition, stated because every lock in this amendment now has a stated order
-  *(FOLLOW-UP 1)*:** `ON CONFLICT` takes **no explicit lock a builder must order** — its row-level
-  contention is resolved by PostgreSQL inside the single statement, and it happens **after** the
-  product row and the draft row are already held. So the mandatory order is unchanged and unextended:
-  **product row → draft row → the identity `INSERT … ON CONFLICT`.** Because the identity insert is
-  last and takes nothing that another path takes first, **it introduces no new deadlock edge** — a
-  concurrent commit for a different product either inserts first and this one resolves to its row, or
-  waits briefly on that single statement. **This is the reason the `ON CONFLICT` form was chosen over
-  the advisory lock: the advisory-lock form WOULD add an ordering obligation, and this amendment has
-  had enough of those.**
-- **The proposal-only boundary is untouched.** The form row is still created **at commit and never at
-  import** *(G-1)*, still inside the one approved transaction, and still rolled back with everything
-  else if any later step refuses. R12-1 changes **how** the row is created, not **when** or **by
-  whom**.
-- **Proof required, and it is a two-session proof like PR-1's:** open **two sessions**, and
-  **concurrently approve the same NEW form for two DIFFERENT products**. Show **exactly ONE
-  `active_ingredients` row exists** for that identity afterwards, and **both products' 
-  `product_active_ingredients` rows attached to that same row**. Run the same pair against a
-  check-then-insert build and it must produce **two** rows — a proof that passes both ways is proving
-  nothing.
+**Revision 12 prescribed a mechanism for this, and Revision 13 WITHDRAWS it — the question underneath
+was an OWNER DECISION that had not been made — and Mason has now made it *(Revision 13)*.** Revision 12
+specified a UNIQUE key over `(lower(btrim(name)), coalesce(cas, ''))` and mandated
+`INSERT … ON CONFLICT … DO UPDATE SET name = EXCLUDED.name RETURNING id`. A `gpt-5.6-sol` proof run
+on that small diff **and** five independent connector findings then arrived at the same place from
+different directions: **eight findings, all circling one question the plan never answered — what
+makes two ingredients the same thing.** The mechanism was not wrong in its plumbing; it **encoded an
+identity model nobody had chosen**, and several of the choices inside it were **Mason's calls about
+his own catalogue**, not a builder's. **So the mechanism came out, the question went to its owner,
+and he answered it the same night — D-AA below is SETTLED.** What is deliberately **not** settled
+tonight is the SQL that expresses it; that belongs to WP-1's build cycle.
+
+### D-AA *(SETTLED — ingredient identity model)*
+
+**Mason answered all of it in chat on 2026-08-27**, the same night the mechanism was withdrawn,
+after the trade-offs were explained in plain English. **The MODEL is settled; the MECHANISM that
+implements it is deliberately still unwritten** — see the gate below.
+
+| # | Question | Decision |
+|---|---|---|
+| **D-AA-1** *(Mason, 2026-08-27)* | Is CAS the global identity where present, and does it hold across alternate names and spellings? | **YES, both.** **Same CAS = same chemical, merged into one identity** — across trade name, IUPAC name, common name and spelling variants alike. Where a CAS is present it **is** the identity and the name is a label, not a key. **Mason's per-row review is the catch for a label typo** in the CAS itself; that is a deliberate accepted trade, not an oversight |
+| **D-AA-2** *(Mason, 2026-08-27)* | How does a CAS-less row reconcile with a later CAS-bearing proposal that shares its name? | **Neither auto-merge nor silent separation — the merge is QUEUED for Mason's explicit approval**, shown **side by side**. This is the plan's standard propose-review-commit pattern (**D-I**) applied to identity: the system proposes the merge, a human decides it, nothing merges itself and nothing quietly forks |
+| **D-AA-3** *(Mason, 2026-08-27)* | What happens when a proposal's name matches an existing ingredient but claims a **different canonical parent**? | **REFUSED at import, on the spot, with a named error.** The sheet is corrected and re-uploaded. **Ambiguous chemistry never enters the system** — it is not queued, not conflict-surfaced, not resolved at commit |
+| **D-AA-4** *(settled technically; reviewed and confirmed)* | May a conflict-resolution path mutate a shared row's display name? What ordering governs a multi-identity draft? | **NO to the rename, under any mechanism.** Multi-identity inserts take a **deterministic order** so two drafts carrying the same identities in opposite payload order cannot deadlock |
+
+**Why D-AA-1 and D-AA-2 are not in tension, since they look it at a glance:** where a **CAS is
+present on both sides**, identity is decided and the merge is automatic (D-AA-1). Where **one side
+has no CAS at all**, there is nothing authoritative to match on — only a name, which this plan
+already knows is non-unique and mobile *(WP-0 re-SKUs a row and resolves three duplicate-name
+groups)* — so the match is a **suspicion**, and a suspicion goes to a human (D-AA-2). **The rule is:
+match on the registry identifier automatically; match on a name only with approval.**
+
+**D-AA-4's two sub-answers keep the reasoning that produced them, because both are near-misses worth
+remembering:**
+
+- **A resolve step must never rewrite shared display state as a side effect.** Revision 12's
+  `DO UPDATE SET name = EXCLUDED.name` was drafted for a plumbing reason — to make `RETURNING id`
+  yield a row on both the insert and the conflict path — and its actual effect was that **one
+  product's approval silently renames a row every other product shares.** Product A commits
+  "Glyphosate IPA salt", product B later commits "glyphosate isopropylamine", and B's approval
+  rewrites what A's screen displays, with no audit row naming the rename and no reviewer having seen
+  it. **Whatever mechanism WP-1 builds, this stays forbidden.**
+- **Multi-identity ordering must be deterministic.** One draft carrying two new forms X and Y
+  inserts them in payload order; a concurrent draft carrying the same two in the other order gives
+  the classic **`[X,Y]` / `[Y,X]` deadlock edge**. Revision 12's claim that the identity insert
+  "introduces no new deadlock edge" held only for the single-identity case it pictured. **A total
+  order — sorted by identity key or equivalent — is required of whatever mechanism is built.**
+
+**GATE: WP-1's migration IMPLEMENTS D-AA as settled here, and the concrete constraint and
+resolve-or-create mechanism are specified and reviewed inside WP-1's own build cycle, under WP-1's
+own gates.** The model is decided; **the mechanism is deliberately not re-prescribed tonight.**
+Revision 12's mechanism was withdrawn after eight findings showed it encoded an undecided model, and
+**a ninth same-night mechanism attempt is exactly what was decided against** — the identity model
+needed an owner's answer, it now has one, and the SQL that expresses it is a build-cycle artifact
+that gets designed against a settled model and reviewed under the RLS, migration-drift and exact-SHA
+gates WP-1 already carries. **Revision 12's specific forms stay withdrawn and are not a default to
+fall back on:** the `(lower(btrim(name)), coalesce(cas, ''))` key contradicts D-AA-1 outright — it
+keys on name and treats a CAS-less row as its own identity — and the `ON CONFLICT … DO UPDATE SET
+name` form contradicts D-AA-4. **A builder starts from the model above and the acceptance criteria
+below, not from the withdrawn draft.**
+
+**The race finding stays on record until WP-1 implements it.** The cross-product same-form race
+described above is **still unfixed in code** — settling the model does not close it, only building
+the mechanism does. It remains a **known open HIGH, carried until WP-1's migration lands with its
+D-AA implementation and the acceptance criteria pass.** **The reason that is acceptable is unchanged
+and still true: nothing is built yet** — no `active_ingredients` table in production carrying this
+risk, no importer running, no commit path to race, because WP-1 is unbuilt and Phase 1b runs after
+WP-4. **The exposure begins the moment WP-1 ships**, which is exactly why the implementation and its
+proofs sit inside WP-1's build cycle rather than after it. If the sequence ever changes so that
+anything creates `active_ingredients` rows before that lands, **this finding becomes live and this
+paragraph stops being true.**
+
+**Acceptance criteria — these are now WP-1's proof obligations, and they bind the settled model
+rather than any particular mechanism:**
+
+- **Two sessions concurrently approving the same NEW form for two DIFFERENT products end with exactly
+  ONE `active_ingredients` row** for that identity, both products' `product_active_ingredients` rows
+  attached to it. Run the same pair against a naive check-then-insert build and it must produce
+  **two** rows — a proof that passes both ways proves nothing.
+- **Same CAS under two different names resolves to ONE row *(D-AA-1)*:** commit a proposal naming
+  the chemical one way, then a second product's proposal naming it differently **with the same
+  CAS**, and show both attached to a single identity — no second row, and no human step required.
+- **A CAS-less row plus a later same-name CAS-bearing proposal produces a QUEUED merge, not a merge
+  and not a fork *(D-AA-2)*:** show the proposal landing as a **pending** merge for review, both
+  candidates rendered **side by side**, the live rows **unchanged** until Mason approves, and the
+  merge applied only after his explicit approval with its own audit row.
+- **A name match with a different canonical parent is REFUSED at IMPORT *(D-AA-3)*:** show the named
+  error at upload time, **no queue row created**, and nothing written — the correction path is a
+  corrected sheet, not a review decision.
+- **No resolve path mutates a shared row's display name *(D-AA-4)*,** proved by committing a second
+  product's differently-spelled proposal and showing the first product's rendered name unchanged.
+- **A multi-identity draft pair in opposing orders does not deadlock *(D-AA-4)*,** proved by the
+  two-session case the chosen ordering is supposed to make safe.
 
 **Read-together clause, the one place this is recorded, exactly as PR-4 and RR-5 handled theirs
-*(R12-1)*.** Two passages in the base plan describe this step and neither says how the create is
-made safe; both are amended **here** rather than rewritten in place:
+*(Revision 13)*.** Two passages in the base plan describe this step; **both are governed by D-AA as
+settled above, and both are implemented in WP-1's build cycle:**
 
 - **WP-1's `active_ingredients` table description** — *"(name, CAS, EPA code,
-  `canonical_ingredient_id` self-FK, `canonical_fraction` nullable, `fraction_basis`)"* — **also
-  carries the UNIQUE identity constraint specified above.** WP-1 is unbuilt, so this is a
-  specification change, never an edit to an applied migration.
+  `canonical_ingredient_id` self-FK, `canonical_fraction` nullable, `fraction_basis`)"* — **gains the
+  identity constraint that expresses D-AA, designed and reviewed in WP-1's own cycle.** Revision 12's
+  proposed UNIQUE key stays **withdrawn** and is **not** a default to fall back on — it keys on name
+  and treats a CAS-less row as its own identity, which **D-AA-1 and D-AA-2 both contradict.**
 - **The typed commit's mapping sentence** — *"resolving each `proposed_form` into a new
-  `active_ingredients` row in the same transaction first"* — **means resolve-or-create via
-  `INSERT … ON CONFLICT` on the identity key**, not an unconditional insert and not a
-  check-then-insert. *(Read `commit_label_draft` there as `commit_label_draft_proposal`, per RR-5's
-  own read-together clause; R12-1 changes what that step does, RR-5 changed which function does it.)*
+  `active_ingredients` row in the same transaction first"* — **is the step D-AA governs**, and its
+  resolve-or-create form is specified in WP-1's build cycle against the settled model. Revision 12's
+  `ON CONFLICT … DO UPDATE SET name` form stays **withdrawn** — it violates **D-AA-4**.
+  *(Read `commit_label_draft` there as `commit_label_draft_proposal`, per RR-5's own read-together
+  clause — that rename stands and is unaffected by any of this.)*
 - **The staging rule is unchanged and still governs *(PR #435 correction)*:** an unknown form is
   **staged** in `proposed_form`, **never created on sight** and **never guessed into the canonical
-  parent**. R12-1 constrains what happens **at the approved commit**; it grants the importer nothing.
-  **And the atomicity requirement already written there still binds:** *"a commit that creates a form
-  row but fails to attach its concentration must roll back both"* — resolving to an existing row via
-  `ON CONFLICT` does not weaken it, since the attach happens in the same transaction either way.
+  parent**. D-AA governs what happens **at the approved commit**; it grants the importer nothing, and
+  the proposal-only boundary *(G-1)* is untouched by any of this.
+- **The atomicity requirement already written there still binds:** *"a commit that creates a form row
+  but fails to attach its concentration must roll back both"* — true under any mechanism WP-1 builds
+  for D-AA.
 
 **The normal two-domain sequence, written out because it *is* the normal path and not a recovery
 *(R3-3)*.** When one product carries **both** a chemistry draft and an attribute draft, the review
@@ -2843,11 +2942,11 @@ commit.**
 
 | # | Rule | Why |
 |---|---|---|
-| **G-1** | **A workbook or AI-sourced value is NEVER written as effective chemistry directly.** Import creates **proposals only**. Every value reaches live data through the **typed commit RPCs — `commit_label_draft_proposal` for chemistry and `commit_product_attribute_proposal` for attributes *(RR-5 renames the first; revision 5 called it "the existing commit RPCs", which stopped being accurate the moment the typed path became its own function)*** — with every existing invariant intact — exactly one effective row per `(product_id, ingredient_id)` — **which is also why one draft may never carry two elements for the same ingredient, refused at import and again at commit *(FOLLOW-UP 2)*, since a collision would make the effective row depend on array order** — D-L's precedence, and refusal of a commit whose `source_product_data_version` has moved — **a refusal that is only a guard if the comparison is atomic, so **all three write paths — both commit RPCs and the restamp — take the product row `FOR UPDATE` FIRST and hold it, which since Revision 10 is the only permitted form *(PR-1, FOLLOW-UP 1)*, and the refusal itself leaves the draft `pending` rather than `rejected` *(PR-2)* while writing exactly one refusal audit row *(RR-4)* — no authoritative mutation, one audit row, draft still `pending`, which is the sentence every refuse path in this amendment now uses.** There is no bulk path around them, and none is to be added. **Nor is there a LEGACY path around them any more *(blocker, FIX-A)*: the deployed `LabelReview` screen loads every draft row with no `purpose` filter (`src/pages/LabelReview.tsx:210-220`) and posts to `commit_label_draft`, whose body never reads `purpose` — so a typed draft could have been "approved" through it, writing the scalar label fields, skipping the digest, the version compare-and-set, the citation re-checks and the ingredient rows, and closing the queue row. WP-1's migration closes that door with the typed-purpose guard, in the same migration whose CHECK first makes typed rows possible, so the door is never open for a single statement.** **`create_workbook_import_proposals` writes `product_label_drafts` (`INSERT`s, plus the single by-id supersede `UPDATE` on the restamp path, R2-7), its own actor-bound audit rows on WP-1's `cost_history`-precedent trail, and the idempotency bookkeeping the CRX contract requires — and it performs NO writes to authoritative chemistry, attributes, `products` or `product_brands`** *(R3-4; "and nothing else" was never true, since an RPC writing no audit row and no idempotency record would break two other rules in this plan)*. **That last clause is the invariant**, a property of its **body**, proved by the import's **negative before/after assertions** (zero rows changed in `active_ingredients`, `product_active_ingredients`, `products` chemistry/attribute columns, `product_brands`). **The `active_ingredients` assertion is load-bearing and R12-1 does not weaken it:** a proposed form is created **only at the approved commit**, via the conflict-safe `INSERT … ON CONFLICT` on the identity key, so the importer still creates **no** form row — and the commit that eventually does either inserts exactly one or resolves to the one already there, never a second row for one identity *(R12-1)*. **Do not restate this as a grants argument** *(R2-6)*: the function is `SECURITY DEFINER`, so it runs as its owner and caller grants bind nothing | This is the whole safety property of **D-H** and **D-I**. An importer that writes chemistry is the ~35% WP-4 failure with a spreadsheet in front of it |
+| **G-1** | **A workbook or AI-sourced value is NEVER written as effective chemistry directly.** Import creates **proposals only**. Every value reaches live data through the **typed commit RPCs — `commit_label_draft_proposal` for chemistry and `commit_product_attribute_proposal` for attributes *(RR-5 renames the first; revision 5 called it "the existing commit RPCs", which stopped being accurate the moment the typed path became its own function)*** — with every existing invariant intact — exactly one effective row per `(product_id, ingredient_id)` — **which is also why one draft may never carry two elements for the same ingredient, refused at import and again at commit *(FOLLOW-UP 2)*, since a collision would make the effective row depend on array order** — D-L's precedence, and refusal of a commit whose `source_product_data_version` has moved — **a refusal that is only a guard if the comparison is atomic, so **all three write paths — both commit RPCs and the restamp — take the product row `FOR UPDATE` FIRST and hold it, which since Revision 10 is the only permitted form *(PR-1, FOLLOW-UP 1)*, and the refusal itself leaves the draft `pending` rather than `rejected` *(PR-2)* while writing exactly one refusal audit row *(RR-4)* — no authoritative mutation, one audit row, draft still `pending`, which is the sentence every refuse path in this amendment now uses.** There is no bulk path around them, and none is to be added. **Nor is there a LEGACY path around them any more *(blocker, FIX-A)*: the deployed `LabelReview` screen loads every draft row with no `purpose` filter (`src/pages/LabelReview.tsx:210-220`) and posts to `commit_label_draft`, whose body never reads `purpose` — so a typed draft could have been "approved" through it, writing the scalar label fields, skipping the digest, the version compare-and-set, the citation re-checks and the ingredient rows, and closing the queue row. WP-1's migration closes that door with the typed-purpose guard, in the same migration whose CHECK first makes typed rows possible, so the door is never open for a single statement.** **`create_workbook_import_proposals` writes `product_label_drafts` (`INSERT`s, plus the single by-id supersede `UPDATE` on the restamp path, R2-7), its own actor-bound audit rows on WP-1's `cost_history`-precedent trail, and the idempotency bookkeeping the CRX contract requires — and it performs NO writes to authoritative chemistry, attributes, `products` or `product_brands`** *(R3-4; "and nothing else" was never true, since an RPC writing no audit row and no idempotency record would break two other rules in this plan)*. **That last clause is the invariant**, a property of its **body**, proved by the import's **negative before/after assertions** (zero rows changed in `active_ingredients`, `product_active_ingredients`, `products` chemistry/attribute columns, `product_brands`). **The `active_ingredients` assertion is load-bearing and nothing in R12-1 or its withdrawal weakens it:** a proposed form is created **only at the approved commit** *(G-1's boundary, untouched)*, so the importer still creates **no** form row. **What the commit does at that moment — resolve-or-create, and against what identity — is settled owner decision D-AA *(Mason, 2026-08-27)*, implemented in WP-1's build cycle; until that ships, the cross-product duplicate race stands as a known open HIGH.** That is a statement about the COMMIT path, not about this importer assertion, which holds either way. **Do not restate this as a grants argument** *(R2-6)*: the function is `SECURITY DEFINER`, so it runs as its owner and caller grants bind nothing | This is the whole safety property of **D-H** and **D-I**. An importer that writes chemistry is the ~35% WP-4 failure with a spreadsheet in front of it |
 | **G-2** | **Provenance attaches to the element, and the agent fills only what a document can prove.** The AI fills **only document-derivable fields** — chemistry, density, net weight and its package basis, `formulation_type`, `safener` — and cites **per value**: `source_url` is **required** for `source_type` `sds` and `label`; a `supplier` value carries a document URL **or**, where the supplier publishes none, a **named supplier-document reference** in that value's `note`. **"Value" means value, on both sides *(PR-5)*:** chemistry elements and `product_attributes` fields each carry their own `source_type` / `source_url` / `note`, and the supplier pair-rule applies to an attribute exactly as it applies to an element — revision 4 gave attributes no `note`, which left that rule with nowhere to land on the attribute side. **Every one of those values must be *trimmed non-empty*, not merely non-null *(R3-2)*** — whitespace is a blank cell wearing a citation's clothes, and the predicate that enforces it is quoted exactly once, in the payload-contract delta table above. **`measured` is reserved for Mason's own in-app entry and is never importable** — the import RPC refuses any element claiming it, and the CHECK and the commit re-check enforce the same, so D-M's top rank cannot be claimed by a spreadsheet. **`nickname` is Mason-only** and an imported nickname element is **refused**: no document states a trade shorthand, so a cited one would be a fabricated citation. Anything the agent cannot cite stays **blank**; **blank is reviewable, a guess is not.** **And blank means one thing only *(R2-4)*: no proposal — the live value is left alone.** It never means "clear this", and where a document affirms an absence the agent writes the **explicit cited value `none`** rather than a blank. **Revision 6 makes that mechanical rather than conventional *(blocker, RR-2)*: a TEXT value is proposed only if it is *trimmed non-empty*, checked at import, by the CHECK and again at commit** — `''` and `'   '` are refused exactly as `null` is, because revision 5 counted them as real values and would have let a spreadsheet **blank out a live `formulation_type` or `safener`**. **The whole loop, and there is nothing outside it: ABSENT = no proposal; PRESENT = a trimmed non-empty value, which for a documented absence is the cited literal `none`. No third state exists.** Enforced in three places — the element rule in the payload, the import RPC, and again at commit — never by the spreadsheet alone, which anyone can edit | The citation beside the value is what makes per-row review fast enough to be real. Without it, review degrades into re-reading the label — the exact work D-Z exists to remove. And a rule keyed to `purpose` rather than to the element fails open through the one path nobody is allowed to modify |
 | **G-3** | **Concentration basis is recorded as the label's own wording states it, never converted by the filler.** The template constrains `basis` to the **D-A** enum (`acid_equivalent`, `active_ingredient`, `oxide`, `elemental`) and `concentration_unit` to WP-1's list (`lb_per_lb` remains rejected), and the review surface shows the basis and the citation beside the number. **D-A's three rules and R-4a's refusing conversion function govern every use of the value** — nothing here restates, weakens or duplicates them. A label whose basis is unclear leaves `basis` **blank with a note** — and **a blank-basis chemistry element is reviewable but NOT committable: `commit_label_draft_proposal` refuses it** *(finding 8; renamed by RR-5)*. **That is a *validation* refusal *(PR-2, RR-4)*: no authoritative product, chemistry, attribute, brand, or queue-state mutation; exactly one refusal audit row is written, naming the check; the draft remains `pending`** — which is what keeps the correction path open. The correction path is the **WP-1 entry screen**, a **restamp**, or a **re-proposed row that states the basis**; it is never a default filled in at commit | Salt weight and acid equivalent on the same jug are different numbers, and a filler that "helpfully" converts destroys the one fact the row exists to record. Blank is a legitimate state for a **proposal** and an illegitimate one for **effective chemistry**: a concentration with no basis is a number whose meaning is unknown, and R-4a has nothing to refuse on because there is nothing to convert *from* |
 | **G-4** | **Review remains per-row human approval by an admin, and one approval is one transaction.** **D-J** and **D-S** are unchanged: admins only, one row at a time, every change audited. Because a `workbook_import` row carries **exactly one domain**, approving it invokes **exactly one commit RPC in exactly one transaction** — there is no half-approved row and no second call to forget. **A product with drafts in *both* domains is therefore two rows and two approvals**, run in the documented order — commit one domain, restamp the sibling, approve it *(R3-3)* — which is the normal path, not an exception to this rule. **Rejection is per row on the same terms**, each with its own audit row and actor; `import_batch_id` **filters** the review session and never executes it. **And "rejection" here means the human act, which is one of only two things that may set `rejected` — the other being the restamp supersede *(PR-2)*. A commit that refuses on a validation check has rejected nothing: the draft stays `pending` and the audit row carries the story.** **Because the two commits on a dual-domain product now serialize on the product row *(PR-1)*, firing both at once yields one commit and one staleness refusal, not two writes — the same two-approval shape this rule already describes, with the order enforced instead of assumed.** **Approving — or rejecting — an entire sheet in one click is out of scope for Phase 1** and must not be built as a convenience | A one-click sheet approval is a bulk unreviewed write to live chemistry wearing a review screen's clothes — and a one-click sheet *rejection* is the same write with the audit trail of one actor standing in for a hundred decisions |
-| **G-5** | **The review surface renders every element of a proposal, and approval binds to what was rendered** *(finding 6)*. Before approval the surface shows, for **each** element: the **proposed value**, the **current effective value** where one exists, the **citation** (`source_type` and `source_url`, or the named supplier reference), the **basis**, and — where the element carries one — the **`observed_epa_registration` beside the product's current `epa_registration`, rendered as a visible disagreement when they differ** *(ITEM 5)*, so the reviewer decides it under D-L rather than discovering it later in `conflicts[]`. **Approval binds to exactly the rendered content** — not to the row id, and not to the payload re-read at click time — and it binds **by mechanism**: a **server-computed `sha256` over the canonical envelope** — draft id, `product_id`, `purpose`, `payload_version`, `source_product_data_version`, domain **and** payload — **stored on the draft at creation**, **echoed** unchanged by the review surface as `p_payload_sha256`, and **recomputed over the stored row inside the commit transaction after the `FOR UPDATE` locks *(PR-1)*** — refusing on mismatch. **The client never serializes JSON for hashing** *(R2-3, R3-1, R3-7)*. **An element the surface cannot render blocks approval; it is never hidden.** Phase 1b's acceptance proof must include a **multi-element draft** showing every element rendered with its current value and citation, **and** five negative cases — a draft carrying an element the surface cannot render is **refused approval** with a named error rather than approved with that element invisible; a draft **edited after it was rendered** is **refused** on the stale envelope digest; a draft whose **`product_id` was changed after it was rendered** is **refused** on that same digest, with **nothing authoritative written on either product** *(R3-1 — the live `admin_update_product_label_drafts` policy permits exactly that row-wide edit, so a payload-only hash would have let content reviewed for one product commit onto another)*; a **`workbook_import` chemistry draft whose product gained a usable EPA number after the proposal** is **refused** at commit *(PR-3 — the draft is byte-identical, so no digest can catch this one)*; **and** **two simultaneous commits against one product from two sessions** end with **exactly one success**, the other **refused on the version predicate**, nothing authoritative written by the loser, and `product_data_version` advanced exactly once *(PR-1)*. **Revision 12 adds two more *(R12-1, R12-2)*: two sessions concurrently approving the same NEW chemical form for two DIFFERENT products end with exactly ONE `active_ingredients` row and both products linked to it — the same pair against a check-then-insert build must produce two rows; and a same-key call to `create_workbook_import_proposals` naming a DIFFERENT restamp target is refused by name with the intended draft untouched, while the same restamp replays its original receipt with no second supersede.** **Revision 11 adds these *(R11-1, R11-2)*: a typed chemistry draft — proved on BOTH `epa_label_seed` AND `workbook_import` — whose product's `epa_registration` moved after proposal is refused at commit, including the NULL→X and X→NULL transitions, and a restamp then commits cleanly; and, on each of the three new mutating RPCs, a same-key call with a changed intent (different draft, decision or echoed digest) is refused, a same-key call from a different actor is refused, a same-key same-intent call replays with no second write and no second version bump, and two simultaneous same-key calls produce exactly one execution.** **Revision 10 adds three more negative cases to that list, and they are database-level rather than surface-level *(BLOCKER, FOLLOW-UP 2)*: a `manual` row carrying typed elements is refused by the purpose-conditional CHECK on INSERT; an admin `UPDATE` relabelling a typed draft to `manual` — or injecting a typed payload into a `manual` row — is refused by that same CHECK; and a draft carrying two elements for one ingredient is refused at import AND, if smuggled past by admin edit, again at commit.** **Every one of those refusals asserts the same three things, and "writes nothing" is not one of them *(RR-4)*: nothing authoritative written; the refusal audit row present; the draft still `pending` and therefore restampable, never `rejected` *(PR-2)*** — the proof asserts the status and the audit row, not only the absence of a write. **The round-trip case asserts provenance field by field on both sides *(RR-1)*:** each committed chemistry element's `source_type` / `source_url` / `note`, and each committed attribute's `<field>_source` / `<field>_source_url` / `<field>_source_note`, **read back equal to what the sheet cited** | A reviewer approves what he can see. An element rendered as a blank, a truncation, or not at all is an unreviewed write wearing a review screen's clothes — G-1's failure arriving one element at a time instead of one sheet at a time |
+| **G-5** | **The review surface renders every element of a proposal, and approval binds to what was rendered** *(finding 6)*. Before approval the surface shows, for **each** element: the **proposed value**, the **current effective value** where one exists, the **citation** (`source_type` and `source_url`, or the named supplier reference), the **basis**, and — where the element carries one — the **`observed_epa_registration` beside the product's current `epa_registration`, rendered as a visible disagreement when they differ** *(ITEM 5)*, so the reviewer decides it under D-L rather than discovering it later in `conflicts[]`. **Approval binds to exactly the rendered content** — not to the row id, and not to the payload re-read at click time — and it binds **by mechanism**: a **server-computed `sha256` over the canonical envelope** — draft id, `product_id`, `purpose`, `payload_version`, `source_product_data_version`, domain **and** payload — **stored on the draft at creation**, **echoed** unchanged by the review surface as `p_payload_sha256`, and **recomputed over the stored row inside the commit transaction after the `FOR UPDATE` locks *(PR-1)*** — refusing on mismatch. **The client never serializes JSON for hashing** *(R2-3, R3-1, R3-7)*. **An element the surface cannot render blocks approval; it is never hidden.** Phase 1b's acceptance proof must include a **multi-element draft** showing every element rendered with its current value and citation, **and** five negative cases — a draft carrying an element the surface cannot render is **refused approval** with a named error rather than approved with that element invisible; a draft **edited after it was rendered** is **refused** on the stale envelope digest; a draft whose **`product_id` was changed after it was rendered** is **refused** on that same digest, with **nothing authoritative written on either product** *(R3-1 — the live `admin_update_product_label_drafts` policy permits exactly that row-wide edit, so a payload-only hash would have let content reviewed for one product commit onto another)*; a **`workbook_import` chemistry draft whose product gained a usable EPA number after the proposal** is **refused** at commit *(PR-3 — the draft is byte-identical, so no digest can catch this one)*; **and** **two simultaneous commits against one product from two sessions** end with **exactly one success**, the other **refused on the version predicate**, nothing authoritative written by the loser, and `product_data_version` advanced exactly once *(PR-1)*. **Revision 12 adds one, and parks one *(R12-2 live; R12-1 → D-AA)*: a same-key call to `create_workbook_import_proposals` naming a DIFFERENT restamp target is refused by name with the intended draft untouched, while the same restamp replays its original receipt with no second supersede. The cross-product identity case — two sessions concurrently approving the same NEW chemical form for two DIFFERENT products ending with exactly ONE `active_ingredients` row — is NOT a G-5 proof case yet *(Revision 13)*: it is an ACCEPTANCE CRITERION of settled owner decision D-AA *(Mason, 2026-08-27)*, and it becomes a required proof in **WP-1's build cycle**, alongside D-AA's other criteria — same-CAS-different-names resolving to one row, the queued CAS-less merge, the import refusal on a canonical-parent mismatch, no shared-name mutation, and no opposing-order deadlock.** **Revision 11 adds these *(R11-1, R11-2)*: a typed chemistry draft — proved on BOTH `epa_label_seed` AND `workbook_import` — whose product's `epa_registration` moved after proposal is refused at commit, including the NULL→X and X→NULL transitions, and a restamp then commits cleanly; and, on each of the three new mutating RPCs, a same-key call with a changed intent (different draft, decision or echoed digest) is refused, a same-key call from a different actor is refused, a same-key same-intent call replays with no second write and no second version bump, and two simultaneous same-key calls produce exactly one execution.** **Revision 10 adds three more negative cases to that list, and they are database-level rather than surface-level *(BLOCKER, FOLLOW-UP 2)*: a `manual` row carrying typed elements is refused by the purpose-conditional CHECK on INSERT; an admin `UPDATE` relabelling a typed draft to `manual` — or injecting a typed payload into a `manual` row — is refused by that same CHECK; and a draft carrying two elements for one ingredient is refused at import AND, if smuggled past by admin edit, again at commit.** **Every one of those refusals asserts the same three things, and "writes nothing" is not one of them *(RR-4)*: nothing authoritative written; the refusal audit row present; the draft still `pending` and therefore restampable, never `rejected` *(PR-2)*** — the proof asserts the status and the audit row, not only the absence of a write. **The round-trip case asserts provenance field by field on both sides *(RR-1)*:** each committed chemistry element's `source_type` / `source_url` / `note`, and each committed attribute's `<field>_source` / `<field>_source_url` / `<field>_source_note`, **read back equal to what the sheet cited** | A reviewer approves what he can see. An element rendered as a blank, a truncation, or not at all is an unreviewed write wearing a review screen's clothes — G-1's failure arriving one element at a time instead of one sheet at a time |
 
 The WP-4 two-gate rule applies unchanged: **creating** the proposal rows is itself a bulk write to a
 live table and takes Mason's approval separately from the approval that **commits** them, and R-12's
