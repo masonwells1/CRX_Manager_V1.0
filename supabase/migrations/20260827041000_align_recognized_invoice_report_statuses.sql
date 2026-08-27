@@ -2,15 +2,15 @@
 -- aged overdue or paid. This is intentionally report-only: it writes no
 -- business rows and does not alter AR's open-balance definition.
 --
--- APPLY-PAIR REQUIREMENT: this file intentionally pauses return-credit
--- issuance until 20260827041100 completes and removes the barrier. Apply both
--- files back-to-back in one governed session; this file is not safe to leave
--- half-applied as an ordinary operating state. If the second migration fails,
--- leave this barrier in place, repair the reported drift, and rerun the second
--- migration. An emergency reopen requires a separately reviewed forward
--- migration that verifies and removes the exact trigger/function; doing that
--- before the COGS repair deliberately reopens the known zero-COGS risk and is
--- therefore not the recommended recovery.
+-- CUTOVER-CHAIN REQUIREMENT: this file intentionally pauses return-credit
+-- issuance until every dependent PR #361 migration is installed. Apply
+-- 20260827041000 through 20260827041500 back-to-back in one governed session;
+-- this file is not safe to leave half-applied as an ordinary operating state.
+-- Each dependent file asserts the barrier is still exact. Only 041500 removes
+-- it, after the reporting, COGS, delivery/order billing gates, and durable
+-- generated-invoice lineage writer have all passed their postflights. If any
+-- file fails, leave this barrier in place, repair the reported drift, and rerun
+-- from the failed file.
 
 -- Freeze return-credit issuance while the authoritative credit-header
 -- assertion and report replacements run in the same migration transaction.
@@ -133,9 +133,10 @@ END;
 $preflight$;
 
 -- This report migration and the COGS migration are committed separately by the
--- production apply path. Persist a database-side barrier across that gap so the
--- old header-only RPC cannot issue a revenue credit with zero COGS. The COGS
--- migration verifies this exact barrier and removes it only after postflight.
+-- production apply path. Persist a database-side barrier across those gaps so
+-- no return credit can issue against a partially installed accounting chain.
+-- Migrations 041100 through 041500 verify this exact barrier; only 041500
+-- removes it after the final postflight.
 -- UPDATE is the governed issuance boundary: create_return never inserts a
 -- credited status or credit_invoice_id, and the existing lifecycle trigger
 -- rejects direct writes outside the RPC context. A superuser can bypass user

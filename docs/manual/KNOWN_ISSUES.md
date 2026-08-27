@@ -69,16 +69,18 @@ make later reapply/reissue allocation ambiguous. The operator error sanitizer ex
 and re-save refusal. This restriction also applies to a zero-COGS damaged/non-restocked return credit:
 the source link is retained as customer-credit audit history even though no inventory value was reversed.
 
-**OPEN APPLY GATE — general Invoice Detail can strip return-cost lineage.** The live
+**CLOSED IN THE SIX-FILE CANDIDATE; LIVE REMAINS OLD UNTIL APPLY — general Invoice Detail can strip return-cost lineage.** The live
 `_save_invoice_scoped_impl` rebuilds `invoice_items` without `order_item_id` and re-derives cost from
 the product's current cost. Editing a delivery/order-generated draft through the general Invoice
 Detail page can therefore erase the historical source line that the PR #361 allocator needs; a later
 return would refund revenue but conservatively reverse zero COGS, understating profit with no runtime
-error. The warning is also recorded in `docs/reference/gotchas.md`, but prose alone is not a durable
-fix. Merging the candidate does not activate this risk. **Do not apply the five PR #361 migrations
-live until Mason chooses one reviewed closure:** preserve `order_item_id` and historical `cost_cents`
-through the save RPC (recommended durable fix), or deliberately restrict/refuse general-editor saves
-for generated invoices. No acceptance of the accounting risk has been inferred or recorded.
+error. Migration `20260827041500_preserve_generated_invoice_lineage_and_finish_cutover.sql` now
+implements the approved durable fix: the client returns existing line ids, the server verifies every
+order-linked line and forbids product/unit/order-line substitution or deletion, then restores the
+server-held line id, `order_item_id`, historical `cost_cents`, `created_at`, tote, vendor, and warehouse
+after the legacy rewrite. The rollback-only chain proves edit -> post -> overdue -> return -> credit
+retains the exact 600-cent unit cost. Merging the candidate does not change live behavior; the fix
+becomes active only when all six reviewed migrations are applied in one guarded maintenance window.
 
 After the approved live apply, regenerate the live schema registry and Supabase-derived type artifacts,
 and confirm both nullable ledger columns (`invoice_items.return_credit_cogs_cents bigint` and

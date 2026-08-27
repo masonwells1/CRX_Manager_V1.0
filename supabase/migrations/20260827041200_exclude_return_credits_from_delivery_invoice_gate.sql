@@ -12,6 +12,35 @@
 -- signature, return type, owner, search_path, volatility, and effective grants
 -- before changing anything.
 
+DO $cutover_barrier$
+DECLARE
+  v_cutover_barrier regprocedure := to_regprocedure('public.block_return_credit_during_cogs_cutover()');
+BEGIN
+  IF v_cutover_barrier IS NULL
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'block_return_credit_during_cogs_cutover') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = v_cutover_barrier
+         AND p.prosecdef AND p.provolatile = 'v'
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+     )
+     OR has_function_privilege('anon', v_cutover_barrier, 'EXECUTE')
+     OR has_function_privilege('authenticated', v_cutover_barrier, 'EXECUTE')
+     OR has_function_privilege('service_role', v_cutover_barrier, 'EXECUTE')
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_trigger t
+       WHERE t.tgrelid = 'public.returns'::regclass
+         AND t.tgname = 'aa_crx_block_return_credit_during_cogs_cutover'
+         AND NOT t.tgisinternal
+         AND t.tgfoid = v_cutover_barrier
+     ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_CUTOVER_BARRIER_DRIFTED';
+  END IF;
+END;
+$cutover_barrier$;
+
 DO $preflight$
 DECLARE
   v_src text;

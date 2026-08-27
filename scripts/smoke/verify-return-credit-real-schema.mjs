@@ -16,6 +16,7 @@ const COGS_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041100
 const DELIVERY_CREDIT_GATE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041200_exclude_return_credits_from_delivery_invoice_gate.sql');
 const DELIVERY_SURFACE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041300_align_return_credit_delivery_surfaces.sql');
 const ORDER_INVOICE_GATE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041400_align_return_credit_order_invoice_gates.sql');
+const INVOICE_LINEAGE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041500_preserve_generated_invoice_lineage_and_finish_cutover.sql');
 const HELPER_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260813070000_pin_return_idempotency_helper_contract.sql');
 const FORWARD_COMPATIBILITY_REPLAY = [
   '20260813060000_require_completed_delivery_before_invoice_post.sql',
@@ -392,6 +393,7 @@ const expectedProofs = [
   'RETURN_CREDIT_VOID_WARNING_FILTER_PROVEN',
   'RETURN_CREDIT_CANCEL_WARNING_FILTER_PROVEN',
   'RETURN_CREDIT_TOTE_PROVENANCE_PROVEN',
+  'GENERATED_INVOICE_EDIT_LINEAGE_PROVEN',
 ];
 const completedProofs = new Set();
 try {
@@ -401,6 +403,7 @@ try {
   assert.ok(readFileSync(DELIVERY_CREDIT_GATE_CANDIDATE, 'utf8').length > 0, 'delivery credit-gate candidate migration is missing');
   assert.ok(readFileSync(DELIVERY_SURFACE_CANDIDATE, 'utf8').length > 0, 'delivery surface candidate migration is missing');
   assert.ok(readFileSync(ORDER_INVOICE_GATE_CANDIDATE, 'utf8').length > 0, 'order invoice-gate candidate migration is missing');
+  assert.ok(readFileSync(INVOICE_LINEAGE_CANDIDATE, 'utf8').length > 0, 'invoice-lineage candidate migration is missing');
   assert.ok(readFileSync(HELPER_GUARD, 'utf8').length > 0, 'helper guard migration is missing');
   for (const migration of FORWARD_COMPATIBILITY_REPLAY) {
     assert.ok(readFileSync(migration, 'utf8').length > 0, `forward replay migration is missing: ${path.basename(migration)}`);
@@ -575,23 +578,36 @@ try {
     '',
   );
   assert.notEqual(noQuoteTrustPrerequisiteGuard, reportMigrationSql, 'quote-trust prerequisite mutant did not remove the guard');
-  const guardedMissingQuoteTrust = psql(`BEGIN;\n${reportMigrationSql}\nROLLBACK;`, { allowFailure: true });
+  const quoteTrustAlreadyInstalled = psqlValue(`
+    SELECT CASE WHEN EXISTS (
+      SELECT 1 FROM pg_attribute
+      WHERE attrelid = 'public.quote_versions'::regclass
+        AND attname = 'restore_trusted_at'
+        AND NOT attisdropped
+    ) THEN 1 ELSE 0 END;
+  `) === '1';
+  const removeQuoteTrustForProof = quoteTrustAlreadyInstalled
+    ? 'ALTER TABLE public.quote_versions DROP COLUMN restore_trusted_at;\n'
+    : '';
+  const guardedMissingQuoteTrust = psql(`BEGIN;\n${removeQuoteTrustForProof}${reportMigrationSql}\nROLLBACK;`, { allowFailure: true });
   assert.notEqual(guardedMissingQuoteTrust.status, 0, 'canonical report migration accepted a missing quote-trust prerequisite');
   assert.match(
     `${guardedMissingQuoteTrust.stdout}\n${guardedMissingQuoteTrust.stderr}`,
     /RECOGNIZED_INVOICE_REPORT_PREREQUISITE_MISSING/,
     'canonical report migration did not reach the quote-trust prerequisite guard',
   );
-  const unguardedMissingQuoteTrust = psql(`BEGIN;\n${noQuoteTrustPrerequisiteGuard}\nROLLBACK;`, { allowFailure: true });
+  const unguardedMissingQuoteTrust = psql(`BEGIN;\n${removeQuoteTrustForProof}${noQuoteTrustPrerequisiteGuard}\nROLLBACK;`, { allowFailure: true });
   assert.equal(
     unguardedMissingQuoteTrust.status,
     0,
     `quote-trust prerequisite mutant did not expose the unsafe acceptance path:\n${unguardedMissingQuoteTrust.stderr || unguardedMissingQuoteTrust.stdout}`,
   );
   completedProofs.add('QUOTE_TRUST_PREREQUISITE_GUARD_REMOVAL_DETECTED');
-  copy(QUOTE_TRUST_PREREQUISITE, path.basename(QUOTE_TRUST_PREREQUISITE));
-  apply(path.basename(QUOTE_TRUST_PREREQUISITE));
-  migrations.push(QUOTE_TRUST_PREREQUISITE);
+  if (!quoteTrustAlreadyInstalled) {
+    copy(QUOTE_TRUST_PREREQUISITE, path.basename(QUOTE_TRUST_PREREQUISITE));
+    apply(path.basename(QUOTE_TRUST_PREREQUISITE));
+    migrations.push(QUOTE_TRUST_PREREQUISITE);
+  }
   assert.equal(psqlValue(`SELECT count(*) FROM (${predicate}) AS violations;`), '0', 'return-credit invariant reported candidate-state drift');
   const lifecyclePredicate = readFileSync(LIFECYCLE_PREDICATE, 'utf8').trim().replace(/;$/, '');
   const lifecycleViolations = psqlValue(`SELECT violation_key || ': ' || reason FROM (${lifecyclePredicate}) AS violations ORDER BY violation_key;`);
@@ -729,17 +745,12 @@ try {
     '',
   );
   assert.notEqual(cogsWithoutBarrierPreflight, cogsSql, 'cutover COGS mutant did not remove the barrier preflight');
-  const cogsWithoutBarrierGuard = cogsWithoutBarrierPreflight.replace(
-    /\r?\n-- Removal is deliberately last[\s\S]*?DROP FUNCTION public\.block_return_credit_during_cogs_cutover\(\);\r?\n?$/,
-    '',
-  );
-  assert.notEqual(cogsWithoutBarrierGuard, cogsWithoutBarrierPreflight, 'cutover COGS mutant did not remove the barrier cleanup contract');
   const missingCogsBarrierPrefix = `
     BEGIN;
     DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns;
     DROP FUNCTION public.block_return_credit_during_cogs_cutover();
   `;
-  const unguardedMissingCogsBarrier = psql(`${missingCogsBarrierPrefix}\n${cogsWithoutBarrierGuard}\nROLLBACK;`, { allowFailure: true });
+  const unguardedMissingCogsBarrier = psql(`${missingCogsBarrierPrefix}\n${cogsWithoutBarrierPreflight}\nROLLBACK;`, { allowFailure: true });
   assert.equal(unguardedMissingCogsBarrier.status, 0, `cutover COGS preflight mutant did not expose the missing-barrier acceptance path:\n${unguardedMissingCogsBarrier.stderr || unguardedMissingCogsBarrier.stdout}`);
   const guardedMissingCogsBarrier = psql(`${missingCogsBarrierPrefix}\n${cogsSql}\nCOMMIT;`, { allowFailure: true });
   const guardedMissingCogsBarrierOutput = `${guardedMissingCogsBarrier.stdout}\n${guardedMissingCogsBarrier.stderr}`;
@@ -922,6 +933,9 @@ try {
   copy(ORDER_INVOICE_GATE_CANDIDATE, path.basename(ORDER_INVOICE_GATE_CANDIDATE));
   apply(path.basename(ORDER_INVOICE_GATE_CANDIDATE));
   migrations.push(ORDER_INVOICE_GATE_CANDIDATE);
+  copy(INVOICE_LINEAGE_CANDIDATE, path.basename(INVOICE_LINEAGE_CANDIDATE));
+  apply(path.basename(INVOICE_LINEAGE_CANDIDATE));
+  migrations.push(INVOICE_LINEAGE_CANDIDATE);
 
   const inventoryMismatch = concurrencyFixture(10);
   const inventoryMismatchSql = inventoryMismatch.sql
@@ -1148,7 +1162,35 @@ try {
   assert.notEqual(oldSplitGateProbe.status, 0, 'split order gate mutant treated a posted return credit as recoverable');
   assert.match(`${oldSplitGateProbe.stdout}\n${oldSplitGateProbe.stderr}`, /Active invoice already exists/, 'split order gate mutant did not reach the stale credit-memo blocker');
   completedProofs.add('SPLIT_ORDER_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED');
+  // The canonical production migration now refuses to run outside the guarded
+  // 041000..041500 cutover. Recreate that exact barrier transaction-locally in
+  // this disposable database before using the whole migration as the mutant
+  // restorer, then remove it again so the later return-credit smoke can run.
+  psql(`
+    CREATE FUNCTION public.block_return_credit_during_cogs_cutover()
+    RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $function$
+    BEGIN
+      IF NEW.status = 'credited' OR NEW.credit_invoice_id IS NOT NULL THEN
+        RAISE EXCEPTION 'RETURN_CREDIT_CUTOVER_IN_PROGRESS';
+      END IF;
+      RETURN NEW;
+    END;
+    $function$;
+    REVOKE ALL ON FUNCTION public.block_return_credit_during_cogs_cutover()
+      FROM PUBLIC, anon, authenticated, service_role;
+    CREATE TRIGGER aa_crx_block_return_credit_during_cogs_cutover
+      BEFORE UPDATE OF status, credit_invoice_id ON public.returns
+      FOR EACH ROW
+      WHEN (NEW.status = 'credited' OR NEW.credit_invoice_id IS NOT NULL)
+      EXECUTE FUNCTION public.block_return_credit_during_cogs_cutover();
+  `);
   apply(path.basename(ORDER_INVOICE_GATE_CANDIDATE));
+  psql(`
+    DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns;
+    DROP FUNCTION public.block_return_credit_during_cogs_cutover();
+  `);
   const canonicalOrderGateProbe = psql(`${orderGateFixture('03', false)}
     SELECT public.create_invoice_from_order(
       'f3614000-0000-4000-8002-000000000003',
@@ -2174,6 +2216,8 @@ try {
   completedProofs.add('RETURN_CREDIT_UNBILLED_BACKFILL_PROVEN');
   assert.match(output, /RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN/, `canonical smoke did not prove return-credit header hard-delete refusal:\n${output}`);
   completedProofs.add('RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN');
+  assert.match(output, /GENERATED_INVOICE_EDIT_LINEAGE_PROVEN/, `canonical smoke did not prove generated invoice lineage preservation:\n${output}`);
+  completedProofs.add('GENERATED_INVOICE_EDIT_LINEAGE_PROVEN');
   assert.equal(psqlValue("SELECT count(*) FROM public.customers WHERE farm_name LIKE '[SMOKE] Return Credit Farm %';"), '0', 'customer fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.returns WHERE return_number LIKE 'SMK-%';"), '0', 'return fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.invoices WHERE invoice_number LIKE 'SMK-RCC-%';"), '0', 'invoice fixture residue remained');

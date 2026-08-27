@@ -27,8 +27,8 @@ The invoice-list Batch Print path now uses the same return-credit grouping as si
 so one credit memo cannot produce a simple customer line in one PDF and cost-lot fragments in another.
 
 Fresh read-only production schema was restored into disposable PostgreSQL and eight replay entries were
-applied there: the five PR #361 candidates plus two required compatibility/guard predecessors. The
-rollback-only harness passed 55 load-bearing predicates, including
+applied there: the six PR #361 candidates plus two required compatibility/guard predecessors. The
+rollback-only harness passed 56 load-bearing predicates, including
 separate mutants for the dashboard credit filter and both automatic-invoice filters; direct execution
 of the dashboard, void, cancel, and ordinary hard-delete paths; draft-credit preservation; and proof
 that both invoice paths still create the expected $25 revenue and $5 historical-cost draft. The full

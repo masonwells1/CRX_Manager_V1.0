@@ -65,6 +65,7 @@ DECLARE
   v_source_paid_id uuid;
   v_source_overdue_id uuid;
   v_source_posted_id uuid;
+  v_edit_source_item_id uuid;
   v_rounding_source_id uuid;
   v_backdated_source_id uuid;
   v_rounding_order_id uuid;
@@ -343,6 +344,58 @@ BEGIN
     v_source_overdue_id, v_order_item_2, v_product_id, '[SMOKE] overdue source',
     2, 1000, 2000, 600, 'gal', now() - interval '3 seconds'
   );
+
+  -- Exercise the real generic editor before recognition. The legacy writer
+  -- deleted/recreated this generated line, dropped order_item_id, and replaced
+  -- its historical 600-cent cost with the product's current 500-cent cost.
+  -- The durable wrapper must retain the server-held line id, order lineage,
+  -- historical cost, and source ordering even when the client sends stale cost.
+  SELECT id INTO v_edit_source_item_id
+  FROM invoice_items
+  WHERE invoice_id = v_source_overdue_id
+    AND order_item_id = v_order_item_2;
+  v_uuid := public.save_invoice(
+    jsonb_build_object(
+      'id', v_source_overdue_id,
+      'customer_id', v_customer_id,
+      'invoice_type', 'chemical_sale',
+      'status', 'draft',
+      'season', v_source_season,
+      'salesman_id', v_admin,
+      'invoice_date', current_date - 1,
+      'due_date', current_date - 2
+    ),
+    jsonb_build_array(jsonb_build_object(
+      'id', v_edit_source_item_id,
+      'order_item_id', v_order_item_2,
+      'product_id', v_product_id,
+      'description', '[SMOKE] overdue source edited',
+      'quantity', 2,
+      'unit_price_cents', 1000,
+      'extended_cents', 2000,
+      'cost_cents', 500,
+      'sort_order', 0,
+      'unit_size', 'gal',
+      'is_application_fee', false
+    )),
+    'smk-rcc-' || v_suffix || '-edit-source'
+  );
+  IF v_uuid IS DISTINCT FROM v_source_overdue_id THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: generated invoice edit returned wrong invoice id %', v_uuid;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM invoice_items
+    WHERE id = v_edit_source_item_id
+      AND invoice_id = v_source_overdue_id
+      AND order_item_id = v_order_item_2
+      AND product_id = v_product_id
+      AND unit_size = 'gal'
+      AND cost_cents = 600
+      AND quantity = 2
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: generated invoice edit lost immutable order/cost lineage';
+  END IF;
+  RAISE NOTICE 'GENERATED_INVOICE_EDIT_LINEAGE_PROVEN';
   UPDATE invoices
      SET status = 'posted', posted_at = now(), posted_by = v_admin
    WHERE id = v_source_overdue_id;
@@ -848,7 +901,8 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_reason := SQLERRM;
     IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_reason NOT LIKE 'BELOW_COST_CONTEXT_REQUIRED%' THEN
+    IF v_reason NOT LIKE 'BELOW_COST_CONTEXT_REQUIRED%'
+       AND v_reason NOT LIKE 'BELOW_COST_REASON_REQUIRED%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: ordinary below-cost guard raised %', v_reason;
     END IF;
   END;
@@ -1092,7 +1146,8 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_reason := SQLERRM;
     IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_reason NOT LIKE 'BELOW_COST_CONTEXT_REQUIRED%' THEN
+    IF v_reason NOT LIKE 'BELOW_COST_CONTEXT_REQUIRED%'
+       AND v_reason NOT LIKE 'BELOW_COST_REASON_REQUIRED%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: post-credit below-cost guard raised %', v_reason;
     END IF;
   END;

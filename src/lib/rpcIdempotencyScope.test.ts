@@ -225,6 +225,19 @@ const ALIAS_SCOPED: Record<string, string> = {
  */
 const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   _guard_idempotency_key_insert: ['allocate_payment'],
+  // Direct EXECUTE is revoked. This private implementation remains behind the
+  // public create_invoice_from_order wrapper and deliberately shares that
+  // wrapper's cache namespace so a retry through either layer finds the same
+  // completed invoice. Migration 20260827041400 only re-emits the established
+  // implementation to tighten return-credit order gates.
+  _create_invoice_from_order_impl_20260718: ['create_invoice_from_order'],
+  // Direct EXECUTE is revoked. This private split-invoice implementation is
+  // the implementation half of create_split_invoices_from_order and must use
+  // the public operation namespace for one replay result across both layers.
+  // Migration 20260827041400 only re-emits it to tighten return-credit gates.
+  _create_split_invoices_from_order_provenance_impl_20260719: [
+    'create_split_invoices_from_order',
+  ],
   // Direct EXECUTE is revoked. Private middle layer of the full-cancel chain
   // (cancel_order -> _cancel_order_idem_impl_20260721 ->
   // _cancel_order_provenance_wrapper_20260719 -> THIS ->

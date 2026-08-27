@@ -26,10 +26,15 @@ const orderInvoiceGateMigration = readFileSync(
   'supabase/migrations/20260827041400_align_return_credit_order_invoice_gates.sql',
   'utf8',
 );
+const invoiceLineageMigration = readFileSync(
+  'supabase/migrations/20260827041500_preserve_generated_invoice_lineage_and_finish_cutover.sql',
+  'utf8',
+);
 const migrationHistory = readFileSync('docs/reference/migration-history.md', 'utf8');
 const reportsPage = readFileSync('src/pages/Reports.tsx', 'utf8');
 const monthEndPage = readFileSync('src/pages/MonthEndClose.tsx', 'utf8');
 const invoicesPage = readFileSync('src/pages/Invoices.tsx', 'utf8');
+const invoiceSource = readFileSync('src/pages/InvoiceDetail.tsx', 'utf8');
 const recognizedInvoiceCustomers = readFileSync('src/lib/recognizedInvoiceCustomers.ts', 'utf8');
 const customerDetailPage = readFileSync('src/pages/CustomerDetail.tsx', 'utf8');
 const returnCreditSmoke = readFileSync('scripts/smoke/smoke-return-credit-chain.sql', 'utf8');
@@ -221,6 +226,13 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('_receive_return_impl_before_inventory_seed_20260825');
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_CONTRACT_DRIFT');
     expect(migration).toContain('8db113f5da2277a791ca6f4744581faa1bc02fe532ca19fec93c8120f80c1a05');
+    expect(functionBodySha256(invoiceLineageMigration, '_save_invoice_scoped_impl'))
+      .toBe('cab2bde1aa6bf26d918639cfb8d328ac579d0b7f5429123aa24710a1a835866e');
+    expect(invoiceLineageMigration).toContain('GENERATED_INVOICE_LINEAGE_LINE_REQUIRED');
+    expect(invoiceLineageMigration).toContain('SET id = preserved.source_item_id');
+    expect(invoiceLineageMigration).toContain('cost_cents = preserved.cost_cents');
+    expect(invoiceLineageMigration).toContain('created_at = preserved.created_at');
+    expect(returnCreditSmoke).toContain('generated invoice edit lost immutable order/cost lineage');
   });
 
   it('keeps report status alignment in the separate report-only migration', () => {
@@ -239,9 +251,13 @@ describe('return-credit COGS migration', () => {
     expect(reportMigration).toContain('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)');
     expect(reportMigration).toContain('public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)');
     expect(migration).toContain('RETURN_COGS_CUTOVER_BARRIER_MISSING');
-    expect(migration).toContain('DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns');
-    expect(migration.indexOf('DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover')).toBeGreaterThan(
-      migration.indexOf('$postflight$;'),
+    expect(migration).not.toContain('DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns');
+    for (const dependent of [deliveryCreditGateMigration, deliverySurfaceMigration, orderInvoiceGateMigration, invoiceLineageMigration]) {
+      expect(dependent).toContain('RETURN_COGS_CUTOVER_BARRIER_DRIFTED');
+    }
+    expect(invoiceLineageMigration).toContain('DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns');
+    expect(invoiceLineageMigration.indexOf('DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover')).toBeGreaterThan(
+      invoiceLineageMigration.indexOf('$postflight$;'),
     );
   });
 
@@ -272,6 +288,8 @@ describe('return-credit COGS migration', () => {
     expect(batchPrintStart).toBeGreaterThan(batchPostStart);
     const batchPostHandler = invoicesPage.slice(batchPostStart, batchPrintStart);
     expect(batchPostHandler).toContain('failures.push(`${target.label}: ${sanitizeError(err)}`)');
+    expect(invoiceSource).toContain('id: it.id');
+    expect(invoiceSource).toContain('order_item_id: it.order_item_id');
   });
 
   it('clears return-credit bypass settings on delegated failures and detects reset removal', () => {
@@ -344,13 +362,18 @@ describe('return-credit COGS migration', () => {
     const migrationSha256 = createHash('sha256')
       .update(migration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(migrationSha256).toBe('68eb8ac5af41372dbff199d4a7a69e2825d9b3340559bac9413663dcf8803354');
-    expect(migrationHistory).toContain(`LF-normalized SQL SHA-256: \`${migrationSha256}\``);
+    expect(migrationSha256).toBe('097fdfb599b1538c0355690c51fec45cf1efe859b8e1de2fe8d9facb1f61f7ee');
+    expect(migrationHistory).toContain(`SQL sha256: \`${migrationSha256}\` (LF-normalized bytes)`);
     const orderInvoiceGateSha256 = createHash('sha256')
       .update(orderInvoiceGateMigration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(orderInvoiceGateSha256).toBe('d19321931194db3dfa49f33ca9554940e86b80c97a80a0b8d172041a285308e5');
-    expect(migrationHistory).toContain(`LF-normalized SQL SHA-256: \`${orderInvoiceGateSha256}\``);
+    expect(orderInvoiceGateSha256).toBe('6f2ceb7b3ffb7ccead98327aa4430c8a337c223a057fd77c5852ec96d140e358');
+    expect(migrationHistory).toContain(`SQL sha256: \`${orderInvoiceGateSha256}\` (LF-normalized bytes)`);
+    const invoiceLineageSha256 = createHash('sha256')
+      .update(invoiceLineageMigration.replace(/\r\n/g, '\n'), 'utf8')
+      .digest('hex');
+    expect(invoiceLineageSha256).toBe('63643cc0029c1ee5b41aaf09abb1071fedeabc96744c1e36b8c91847d0d46aad');
+    expect(migrationHistory).toContain(`SQL sha256: \`${invoiceLineageSha256}\` (LF-normalized bytes)`);
   });
 
   it('does not claim field profitability consumes the credit-memo COGS reversal', () => {

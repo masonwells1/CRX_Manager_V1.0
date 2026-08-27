@@ -46,6 +46,10 @@ function buildChain(result: QueryResult): QueryChain {
   ]) {
     self[method] = vi.fn(() => self);
   }
+  let rangeCalls = 0;
+  self.range = vi.fn(() => Promise.resolve(
+    rangeCalls++ === 0 ? result : { data: [], error: null },
+  ));
   const promise = Promise.resolve(result);
   self.then = promise.then.bind(promise);
   return self as QueryChain;

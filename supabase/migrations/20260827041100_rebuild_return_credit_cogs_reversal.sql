@@ -1573,9 +1573,8 @@ BEGIN
 END;
 $postflight$;
 
--- Removal is deliberately last. If any statement or postflight assertion above
--- fails, the migration transaction rolls back and the persistent barrier keeps
--- return-credit issuance disabled rather than reopening the unsafe gap.
+-- Keep issuance fail-closed across the remaining dependent migrations. The
+-- delivery/order billing gates and durable generated-invoice lineage writer
+-- are required before return credits are safe to issue. Migration 041500 is
+-- the only file allowed to remove the exact barrier after its final postflight.
 RESET lock_timeout;
-DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns;
-DROP FUNCTION public.block_return_credit_during_cogs_cutover();

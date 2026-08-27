@@ -117,6 +117,7 @@ supabase/migrations/20260827041100_rebuild_return_credit_cogs_reversal.sql text 
 supabase/migrations/20260827041200_exclude_return_credits_from_delivery_invoice_gate.sql text eol=lf
 supabase/migrations/20260827041300_align_return_credit_delivery_surfaces.sql text eol=lf
 supabase/migrations/20260827041400_align_return_credit_order_invoice_gates.sql text eol=lf
+supabase/migrations/20260827041500_preserve_generated_invoice_lineage_and_finish_cutover.sql text eol=lf
 scripts/smoke/smoke-return-credit-chain.sql text eol=lf
 scripts/smoke/verify-return-credit-real-schema.mjs text eol=lf
 

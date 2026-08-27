@@ -756,6 +756,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         };
 
         const itemsPayload = items.map((it, idx) => ({
+          // Existing generated lines carry their server identity back to the
+          // writer so it can preserve immutable order-line and historical-cost
+          // lineage while rebuilding a draft invoice. New manual lines omit id.
+          id: it.id,
+          order_item_id: it.order_item_id,
           product_id: it.product_id,
           description: it.description || it.product_name,
           quantity: it.quantity,
