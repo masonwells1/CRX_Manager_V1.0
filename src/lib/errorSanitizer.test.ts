@@ -59,7 +59,7 @@ describe('sanitizeError', () => {
 
     expect(sanitizeError(
       'update or delete on table "invoice_items" violates foreign key constraint "invoice_items_return_credit_source_item_fk" on table "invoice_items"'
-    )).toContain('accounting history');
+    )).toBe('This source invoice line is retained as return-credit accounting history and cannot be deleted or re-saved. Keep the source invoice unchanged, or permanently delete the already-voided credit memo before editing it');
   });
 
   it('sanitizes check constraint violations', () => {

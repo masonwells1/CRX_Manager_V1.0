@@ -48,7 +48,7 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
   [/^RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED\b/i,
    'This return would reverse more product cost than the related sales invoices recorded. No changes were saved; review the source invoices and earlier return credits'],
   [/invoice_items_return_credit_source_item_fk/i,
-   'This invoice line is part of return-credit accounting history and cannot be deleted or linked to a missing source. Keep the source invoice and void it instead of deleting it'],
+   'This source invoice line is retained as return-credit accounting history and cannot be deleted or re-saved. Keep the source invoice unchanged, or permanently delete the already-voided credit memo before editing it'],
   [/duplicate key value violates unique constraint "[^"]+"/i,
    'A record with this information already exists'],
   [/violates foreign key constraint "[^"]+"/i,

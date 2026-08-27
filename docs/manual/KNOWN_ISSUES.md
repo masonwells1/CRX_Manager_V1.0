@@ -60,10 +60,13 @@ fail cleanly with a wait-and-retry message even when no return credit exists yet
 retry the refused post after the other finishes.
 
 The source-line foreign key is intentionally retained after a credit is voided or unapplied. It is an
-accounting audit link, so a source invoice that has ever funded a return credit cannot be hard-deleted;
-keep it and use the ordinary void workflow instead. Clearing the link would make later reapply/reissue
-allocation ambiguous. The operator error sanitizer explains this rule when the foreign key refuses a
-delete.
+accounting audit link, so a source invoice that has ever funded a return credit cannot be hard-deleted
+or re-saved: the general invoice writer rebuilds its line items, and the retained credit history refuses
+that delete-and-reinsert cycle. Keep the source invoice unchanged. If an edit is genuinely required,
+first void the return credit and then permanently delete that voided credit memo so its line-item link is
+removed; only then re-save the source invoice. Clearing the link while keeping the credit memo would
+make later reapply/reissue allocation ambiguous. The operator error sanitizer explains both the delete
+and re-save refusal.
 
 **OPEN APPLY GATE — general Invoice Detail can strip return-cost lineage.** The live
 `_save_invoice_scoped_impl` rebuilds `invoice_items` without `order_item_id` and re-derives cost from

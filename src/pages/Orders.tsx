@@ -32,6 +32,33 @@ import { getSeasonDates } from '../utils/season';
 import { activeInvoiceCountsTowardBilling, type InvoiceBillingCoverage } from '../lib/deliveryInvoiceCoverage';
 
 const EMPTY_UUID = '00000000-0000-0000-0000-000000000000';
+const INVOICE_QUERY_PAGE_SIZE = 1000;
+
+type OrderInvoiceCoverageRow = InvoiceBillingCoverage & {
+  id: string;
+  total_amount_cents: number;
+};
+
+async function fetchInvoiceCoveragePages(orderIds: string[]) {
+  const rows: OrderInvoiceCoverageRow[] = [];
+
+  for (let from = 0; ; from += INVOICE_QUERY_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('invoices')
+      .select('id, order_id, total_amount_cents, invoice_type, status, deleted_at')
+      .in('order_id', orderIds.length > 0 ? orderIds : [EMPTY_UUID])
+      .not('status', 'in', '("voided","cancelled")')
+      .is('deleted_at', null)
+      .order('id', { ascending: true })
+      .range(from, from + INVOICE_QUERY_PAGE_SIZE - 1);
+
+    if (error) return { data: null, error };
+
+    const page = (data || []) as OrderInvoiceCoverageRow[];
+    rows.push(...page);
+    if (page.length < INVOICE_QUERY_PAGE_SIZE) return { data: rows, error: null };
+  }
+}
 
 interface OrderWithFulfillment extends Order {
   fulfillment_pct: number;
@@ -107,12 +134,7 @@ export default function Orders() {
         .from('order_items')
         .select('order_id, total_units_needed, quantity_delivered, price_per_unit, product_name')
         .in('order_id', orderIds.length > 0 ? orderIds : [EMPTY_UUID]),
-      supabase
-        .from('invoices')
-        .select('order_id, total_amount_cents, invoice_type, status, deleted_at')
-        .in('order_id', orderIds.length > 0 ? orderIds : [EMPTY_UUID])
-        .not('status', 'in', '("voided","cancelled")')
-        .is('deleted_at', null),
+      fetchInvoiceCoveragePages(orderIds),
       parentIds.length > 0
         ? supabase
             .from('customers')
@@ -149,10 +171,14 @@ export default function Orders() {
     });
 
     // Fetch invoice totals per order for invoiced %
-    const { data: invoiceData } = invoiceResult;
+    const { data: invoiceData, error: invoiceError } = invoiceResult;
+    if (invoiceError) {
+      Sentry.captureException(invoiceError);
+      toast('error', 'Failed to load invoice coverage. Invoiced percentages may be incomplete; refresh to try again.');
+    }
     const invoicedByOrder: Record<string, number> = {};
     const visibleOrderIds = new Set(orderIds);
-    (invoiceData || []).forEach((inv: InvoiceBillingCoverage & { total_amount_cents: number }) => {
+    (invoiceData || []).forEach((inv: OrderInvoiceCoverageRow) => {
       if (inv.order_id && visibleOrderIds.has(inv.order_id) && activeInvoiceCountsTowardBilling(inv)) {
         invoicedByOrder[inv.order_id] = (invoicedByOrder[inv.order_id] || 0) + (inv.total_amount_cents || 0);
       }

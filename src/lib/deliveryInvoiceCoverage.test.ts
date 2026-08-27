@@ -90,8 +90,11 @@ describe('activeInvoiceCoversDelivery', () => {
 
     const orders = readFileSync(resolve(root, 'src/pages/Orders.tsx'), 'utf8');
     expect(orders).toContain('activeInvoiceCountsTowardBilling(inv)');
-    expect(orders).toContain(".select('order_id, total_amount_cents, invoice_type, status, deleted_at')");
+    expect(orders).toContain(".select('id, order_id, total_amount_cents, invoice_type, status, deleted_at')");
     expect(orders).toContain(".not('status', 'in', '(\"voided\",\"cancelled\")')");
     expect(orders).toContain(".is('deleted_at', null)");
+    expect(orders).toContain('.range(from, from + INVOICE_QUERY_PAGE_SIZE - 1)');
+    expect(orders).toContain('if (page.length < INVOICE_QUERY_PAGE_SIZE)');
+    expect(orders).toContain('Failed to load invoice coverage. Invoiced percentages may be incomplete');
   });
 });
