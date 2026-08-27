@@ -450,6 +450,7 @@ function ghMergeRequest(command) {
   let selector = "";
   let repo = "";
   let auto = false;
+  let disableAuto = false;
   let matchHead = "";
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
@@ -472,8 +473,14 @@ function ghMergeRequest(command) {
       index += 1;
       continue;
     }
+    if (word.toLowerCase() === "--disable-auto" || word.toLowerCase().startsWith("--disable-auto=")) {
+      disableAuto = true;
+      continue;
+    }
     if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
   }
+  if (disableAuto && auto) return { unsupportedAutoFlags: true };
+  if (disableAuto) return null;
   return { selector, repo, auto, matchHead, atomicHeadMatch: true };
 }
 
@@ -821,6 +828,9 @@ export function evaluateProductionAction({
     }
     if (ghRequest?.unsupportedRest) {
       return denied("CODEX PRODUCTION GATE: GitHub REST merge calls are denied because file-backed request bodies can hide or override the expected head SHA. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
+    }
+    if (ghRequest?.unsupportedAutoFlags) {
+      return denied("CODEX PRODUCTION GATE: mixed `--auto` and `--disable-auto` intent is denied. Use `--disable-auto` alone to cancel, or run one immediate exact-head merge without `--auto` after checks finish.");
     }
     if (ghRequest) {
       if (commandSegments.length !== 1) {

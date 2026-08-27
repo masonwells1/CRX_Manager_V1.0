@@ -116,12 +116,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after PowerShell call-operator GitHub commands and remote ref
   // deletion were added to the fail-closed paths. The maintenance anchors are
   // still unchanged.
-  codexGuard: "22ab97ca0d08ce9f241b7038e5c29689492fe54b",
-  pushLib: "247e693500f007008e68af09d136adac094bbb8f",
+  // Re-pinned after positional auto-flag parsing and empty-quote composition
+  // detection closed the last reviewed CLI evasions. The maintenance anchors
+  // are still unchanged.
+  codexGuard: "a5ac7494ff28c781021bba87734ad24389402a4f",
+  pushLib: "02b181cd0a0a76c77fba12e24ac2e4d05db924af",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "cbe5f0609ab06498e7098e3b70bbf60ebdef30e3",
-  pushLib: "247e693500f007008e68af09d136adac094bbb8f",
+  codexGuard: "a0066c86be40b5b475b6302d7f801740ea6bc025",
+  pushLib: "02b181cd0a0a76c77fba12e24ac2e4d05db924af",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

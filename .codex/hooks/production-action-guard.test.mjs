@@ -621,6 +621,20 @@ try {
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, true, "PowerShell call-operator auto-merge is denied");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --repo crop/crx --auto --match-head-commit ${risky.sha} --body --disable-auto` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "disable-auto consumed as body text cannot bypass real auto flag");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr m''erge 123 --repo crop/crx --auto --match-head-commit ${risky.sha}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "empty-quote composed merge token is denied");
   const missingHeadDecision = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh pr merge 123 --repo crop/crx --squash" },

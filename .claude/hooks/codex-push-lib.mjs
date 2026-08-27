@@ -2069,7 +2069,9 @@ const GH_BIN_RE = /(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?
 // hidden merge/auto-merge/API write cannot bypass the exact-head parser.
 export function githubCliCommandIsDynamic(command) {
   const text = String(command || "");
-  if (!/\bgh(?:\.exe)?\b/i.test(text)) return false;
+  const emptyQuoteNormalized = text.replace(/(?:''|"")+/g, "");
+  if (!/\bgh(?:\.exe)?\b/i.test(text) && !/\bgh(?:\.exe)?\b/i.test(emptyQuoteNormalized)) return false;
+  if (emptyQuoteNormalized !== text) return true;
   if (/\(\s*(['"])[^'"\r\n]*\1\s*\+\s*(['"])[^'"\r\n]*\2\s*\)/.test(text)) return true;
   if (/[A-Za-z0-9]["'][A-Za-z0-9]/.test(text)) return true;
   let singleQuoted = false;
@@ -2115,13 +2117,11 @@ export function ghMergeRequest(command) {
   if (prIndex === -1) return null;
   const mergeIndex = words.findIndex((word, index) => index > prIndex && word.toLowerCase() === "merge");
   if (mergeIndex === -1) return null;
-  // `--disable-auto` cancels a pending auto-merge — it does not land anything,
-  // so the gate stands down for it.
-  if (words.some((word) => word.toLowerCase() === "--disable-auto")) return null;
   const valueFlags = new Set(["--repo", "-R", "--match-head-commit", "--subject", "--body", "-t", "-b"]);
   let selector = "";
   let repo = "";
   let auto = false;
+  let disableAuto = false;
   let matchHead = "";
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
@@ -2135,8 +2135,11 @@ export function ghMergeRequest(command) {
       index += 1;
       continue;
     }
+    if (word.toLowerCase() === "--disable-auto" || word.toLowerCase().startsWith("--disable-auto=")) { disableAuto = true; continue; }
     if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
   }
+  if (disableAuto && auto) return { unsupportedAutoFlags: true };
+  if (disableAuto) return null;
   return { selector, repo, auto, matchHead, atomicHeadMatch: true };
 }
 

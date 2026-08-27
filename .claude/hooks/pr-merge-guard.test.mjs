@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   ghApiMergeRequest,
   ghMergeRequest,
+  githubCliCommandIsDynamic,
   mcpMergeRequest,
   mergeRequestHasExplicitContext,
   proofSearchDirs,
@@ -30,6 +31,10 @@ eq(ghMergeRequest("&gh pr merge 42 --auto"), { selector: "42", repo: "", auto: t
 eq(ghMergeRequest("gh pr merge 42 --match-head-commit=abcdefabcdefabcdefabcdefabcdefabcdefabcd"), { selector: "42", repo: "", auto: false, matchHead: "abcdefabcdefabcdefabcdefabcdefabcdefabcd", atomicHeadMatch: true }, "equals exact-head flag parses");
 ok(ghMergeRequest("gh pr merge") !== null, "selectorless merge still gated");
 eq(ghMergeRequest("gh pr merge 5 --disable-auto"), null, "--disable-auto stands down (cancels, does not land)");
+ok(ghMergeRequest("gh pr merge 5 --auto --disable-auto")?.unsupportedAutoFlags, "mixed auto flags deny closed");
+ok(ghMergeRequest("gh pr merge 5 --auto --body --disable-auto")?.auto, "--disable-auto consumed as body text cannot hide real auto flag");
+ok(githubCliCommandIsDynamic("gh pr m''erge 5 --auto"), "empty-quote composed merge token is dynamic");
+ok(githubCliCommandIsDynamic("g''h pr merge 5 --auto"), "empty-quote composed gh executable is dynamic");
 eq(ghMergeRequest("gh pr view merge-notes"), null, "merge-notes is not the word merge");
 ok(ghMergeRequest("gh pr view merge") !== null, "exact-word over-match routes read through gate (fails safe)");
 eq(ghMergeRequest("git merge main"), null, "git merge is not a gh merge");
@@ -99,6 +104,12 @@ ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL query field d
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "&gh pr merge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "PowerShell call-operator auto-merge is denied");
+
+r = runHook({ tool_name: "PowerShell", tool_input: { command: "gh pr merge 42 --auto --body --disable-auto" } });
+ok(r.decision?.permissionDecision === "deny", "disable-auto used as body text cannot bypass real auto flag");
+
+r = runHook({ tool_name: "PowerShell", tool_input: { command: "gh pr m''erge 42 --auto" } });
+ok(r.decision?.permissionDecision === "deny", "empty-quote composed merge token denies before parsing");
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh api -X PUT repos/o/r/pulls/12/merge --input payload.json -f sha=0123456789012345678901234567890123456789" } });
 ok(r.decision?.permissionDecision === "deny", "file-backed REST merge denied before it can override the visible SHA");

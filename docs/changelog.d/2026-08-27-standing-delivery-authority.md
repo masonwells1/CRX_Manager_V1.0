@@ -72,6 +72,10 @@ PowerShell's no-space call operator form (`&gh`) now routes through the same mer
 remote branch/tag deletion is not part of unattended delivery. These close the exact-head review's
 last two shell edge cases while preserving automatic ordinary feature pushes and protected merges.
 
+Merge flags are now parsed positionally: cancellation-only `--disable-auto` remains safe, while
+mixed auto intent and `--disable-auto` consumed as body text cannot hide a real `--auto` action.
+Empty-quote-composed GitHub executable or subcommand words also deny before unattended execution.
+
 Proof run: focused autopilot, prompt, hold, Claude/Codex merge-guard, and global risky-phrase
 tests; full correction-guard and agent-workflow suites; lint, typecheck, build, docs check, sync,
 and mutation tests. No business safety rule, branch protection, product model, migration, RPC,

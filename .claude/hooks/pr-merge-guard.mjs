@@ -80,7 +80,11 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     if (api?.unsupportedRest) {
       deny("PR MERGE GATE: GitHub REST merge calls are denied because file-backed request bodies can hide or override the expected head SHA. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
     }
-    const found = api || ghMergeRequest(segment);
+    const cli = ghMergeRequest(segment);
+    if (cli?.unsupportedAutoFlags) {
+      deny("PR MERGE GATE: mixed `--auto` and `--disable-auto` intent is denied. Use `--disable-auto` alone to cancel, or wait for checks and run one immediate exact-head merge without `--auto`.");
+    }
+    const found = api || cli;
     if (found) { requests.push(found); continue; }
     // Raw REST merges outside gh — curl/wget/Invoke-RestMethod/node fetch — name
     // the same endpoint but carry auth/context the guard cannot resolve, so they
