@@ -446,6 +446,7 @@ function ghMergeRequest(command) {
   let selector = "";
   let repo = "";
   let auto = false;
+  let matchHead = "";
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (word.toLowerCase() === "--auto" || word.toLowerCase().startsWith("--auto=")) {
@@ -456,15 +457,20 @@ function ghMergeRequest(command) {
       repo = word.slice("--repo=".length);
       continue;
     }
+    if (word.startsWith("--match-head-commit=")) {
+      matchHead = word.slice("--match-head-commit=".length);
+      continue;
+    }
     if (valueFlags.has(word)) {
       const value = words[index + 1] || "";
       if (word === "--repo" || word === "-R") repo = value;
+      if (word === "--match-head-commit") matchHead = value;
       index += 1;
       continue;
     }
     if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
   }
-  return { selector, repo, auto };
+  return { selector, repo, auto, matchHead, atomicHeadMatch: true };
 }
 
 function ghApiMergeRequest(command) {
@@ -479,6 +485,7 @@ function ghApiMergeRequest(command) {
   }
   let method = "GET";
   let endpoint = "";
+  let matchHead = "";
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (word === "-X" || word === "--method") {
@@ -494,6 +501,16 @@ function ghApiMergeRequest(command) {
       method = word.slice(2).toUpperCase();
       continue;
     }
+    if (["-f", "-F", "--field", "--raw-field"].includes(word)) {
+      const field = String(words[index + 1] || "");
+      if (/^sha=/i.test(field)) matchHead = field.slice(field.indexOf("=") + 1);
+      index += 1;
+      continue;
+    }
+    if (/^--(?:field|raw-field)=sha=/i.test(word)) {
+      matchHead = word.replace(/^--(?:field|raw-field)=sha=/i, "");
+      continue;
+    }
     const normalizedEndpoint = word
       .replace(/^https:\/\/api\.github\.com\//i, "")
       .replace(/^\//, "");
@@ -503,7 +520,7 @@ function ghApiMergeRequest(command) {
   }
   if (method !== "PUT" || !endpoint) return null;
   const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
-  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false } : null;
+  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false, matchHead, atomicHeadMatch: true } : null;
 }
 
 function ghApiMutates(command) {
@@ -558,7 +575,7 @@ function mcpMergeRequest(toolInput) {
   const repository = toolInput.repo ?? toolInput.repository ?? toolInput.repoName ??
     toolInput.repository_full_name ?? toolInput.repositoryFullName ?? toolInput.full_name ?? "";
   const repo = String(repository).includes("/") ? String(repository) : (owner && repository ? `${owner}/${repository}` : "");
-  return { selector: String(selector), repo, auto: false };
+  return { selector: String(selector), repo, auto: false, matchHead: "", atomicHeadMatch: false };
 }
 
 function resolvePullRequest({ request, repoDir, runGh }) {
@@ -612,6 +629,20 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     return denied(
       "CODEX PRODUCTION GATE: `--auto` is denied for every PR targeting main because later commits could land " +
       "after this exact-head gate ran. Wait for all checks, then merge immediately without `--auto`; no extra Mason approval is required."
+    );
+  }
+  const requestedHead = normalize(request.matchHead);
+  const actualHead = normalize(pullRequest.headRefOid);
+  if (request.atomicHeadMatch === false) {
+    return denied(
+      "CODEX PRODUCTION GATE: this merge tool cannot atomically require GitHub to merge the inspected head SHA. " +
+      "Use `gh pr merge <n> --squash --match-head-commit <head-sha>` instead; no extra Mason approval is required."
+    );
+  }
+  if (!/^[0-9a-f]{40}$/i.test(requestedHead) || requestedHead.toLowerCase() !== actualHead.toLowerCase()) {
+    return denied(
+      `CODEX PRODUCTION GATE: the merge must include --match-head-commit ${actualHead} so GitHub cannot land a different commit after inspection. ` +
+      "Refresh the PR, then retry the immediate merge with that exact SHA; no extra Mason approval is required."
     );
   }
   if (!pullRequest.baseRefOid) {

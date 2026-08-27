@@ -99,12 +99,12 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned 2026-08-27: every main-bound auto-merge is now denied so a
   // later risky commit cannot land after an earlier non-risky gate decision.
   // The maintenance anchors below are unchanged.
-  codexGuard: "67f5dda40fbcffbfa2b78cdb34e7089b2cca3137",
-  pushLib: "357e185c86781c9e3fc4ec647795a4f8c490359f",
+  codexGuard: "12dbf699fad3e9f40688d685240495ab4b7851e6",
+  pushLib: "9b8ff0649d44ec4d019a8bec79112b19a22ae08c",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "9a6158374cd1331b3c566dcf454467997c200044",
-  pushLib: "357e185c86781c9e3fc4ec647795a4f8c490359f",
+  codexGuard: "0328de0ead2c025a79330563f64311c91a46665b",
+  pushLib: "9b8ff0649d44ec4d019a8bec79112b19a22ae08c",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

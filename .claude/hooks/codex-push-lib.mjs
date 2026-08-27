@@ -1983,19 +1983,22 @@ export function ghMergeRequest(command) {
   let selector = "";
   let repo = "";
   let auto = false;
+  let matchHead = "";
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (word.startsWith("--repo=")) { repo = word.slice("--repo=".length); continue; }
+    if (word.startsWith("--match-head-commit=")) { matchHead = word.slice("--match-head-commit=".length); continue; }
     if (word.toLowerCase() === "--auto" || word.toLowerCase().startsWith("--auto=")) { auto = true; continue; }
     if (valueFlags.has(word)) {
       const value = words[index + 1] || "";
       if (word === "--repo" || word === "-R") repo = value;
+      if (word === "--match-head-commit") matchHead = value;
       index += 1;
       continue;
     }
     if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
   }
-  return { selector, repo, auto };
+  return { selector, repo, auto, matchHead, atomicHeadMatch: true };
 }
 
 // `gh api -X PUT repos/o/r/pulls/N/merge`, plus GraphQL operations that either
@@ -2016,17 +2019,25 @@ export function ghApiMergeRequest(command) {
   }
   let method = "GET";
   let endpoint = "";
+  let matchHead = "";
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (word === "-X" || word === "--method") { method = String(words[index + 1] || "").toUpperCase(); index += 1; continue; }
     if (word.startsWith("--method=")) { method = word.slice("--method=".length).toUpperCase(); continue; }
     if (/^-X\S+/i.test(word)) { method = word.slice(2).toUpperCase(); continue; }
+    if (["-f", "-F", "--field", "--raw-field"].includes(word)) {
+      const field = String(words[index + 1] || "");
+      if (/^sha=/i.test(field)) matchHead = field.slice(field.indexOf("=") + 1);
+      index += 1;
+      continue;
+    }
+    if (/^--(?:field|raw-field)=sha=/i.test(word)) matchHead = word.replace(/^--(?:field|raw-field)=sha=/i, "");
     const normalizedEndpoint = word.replace(/^https:\/\/api\.github\.com\//i, "").replace(/^\//, "");
     if (/^repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/i.test(normalizedEndpoint)) endpoint = normalizedEndpoint;
   }
   if (method !== "PUT" || !endpoint) return null;
   const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
-  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false } : null;
+  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false, matchHead, atomicHeadMatch: true } : null;
 }
 
 // MCP merge tool inputs — key spellings differ per connector (GitHub MCP uses
@@ -2038,7 +2049,10 @@ export function mcpMergeRequest(toolInput = {}) {
   const repository = toolInput.repo ?? toolInput.repository ?? toolInput.repoName ??
     toolInput.repository_full_name ?? toolInput.repositoryFullName ?? toolInput.full_name ?? "";
   const repo = String(repository).includes("/") ? String(repository) : (owner && repository ? `${owner}/${repository}` : "");
-  return { selector: String(selector), repo, auto: false };
+  // The installed merge MCP schemas do not expose GitHub's atomic expected-head
+  // parameter. A caller-supplied extra field would not prove the connector sent
+  // it, so main-bound MCP merges remain denied by the owning gate.
+  return { selector: String(selector), repo, auto: false, matchHead: "", atomicHeadMatch: false };
 }
 
 // Fully-green pipeline: mergeStateStatus CLEAN and every reported check

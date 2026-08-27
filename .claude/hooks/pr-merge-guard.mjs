@@ -144,6 +144,18 @@ function gateRequest(request) {
     );
   }
 
+  const requestedHead = String(request.matchHead || "").trim();
+  const actualHead = String(pr.headRefOid || "").trim();
+  if (request.atomicHeadMatch === false) {
+    deny("PR MERGE GATE: this merge tool cannot atomically require GitHub to merge the inspected head SHA. Use `gh pr merge <n> --squash --match-head-commit <head-sha>` instead; no extra Mason approval is required.");
+  }
+  if (!/^[0-9a-f]{40}$/i.test(requestedHead) || requestedHead.toLowerCase() !== actualHead.toLowerCase()) {
+    deny(
+      `PR MERGE GATE: the merge must include --match-head-commit ${actualHead} so GitHub cannot land a different commit after inspection. ` +
+      "Refresh the PR, then retry the immediate merge with that exact SHA; no extra Mason approval is required."
+    );
+  }
+
   // ── green-pipeline requirement ─────────────────────────────────────────────
   if (!pullRequestChecksGreen(pr)) {
     deny(

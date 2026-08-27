@@ -85,11 +85,17 @@ const rules = [
     alternatives: "Use a new commit. If the commit message is wrong, accept it — it's not worth the blast radius."
   },
   {
-    pattern: /\bauto[_\s-]?(commit|push|deploy|merge)\b/,
-    label: "AUTO-COMMIT/PUSH/DEPLOY",
+    pattern: /\bauto[_\s-]?(commit|push|merge)\b/,
+    label: "AUTO-COMMIT/PUSH/MERGE",
     why: `Automation is fine for regular code, but NOT for the hard gates. ${PUSH_POLICY}`,
     alternatives: "Treat this as routine protected delivery: use /ship, run the required proof, push the feature branch, and merge the green reviewed PR without asking Mason again. Stop only at a hard gate named in the PUSH POLICY.",
     requiresFreshApproval: false
+  },
+  {
+    pattern: /\bauto[_\s-]?deploy\b/,
+    label: "AUTO DEPLOY",
+    why: "A deployment outside the normal reviewed merge-to-main path is a production action and stays behind its existing explicit approval gate.",
+    alternatives: "Use the protected green PR path for ordinary app delivery. For an edge function or any out-of-band production deployment, finish all safe preparation and get Mason's explicit approval immediately before the deploy."
   },
   {
     pattern: /\bbypass\s+(check_period_open|period[_\s-]?open|closed[_\s-]?period)\b/,

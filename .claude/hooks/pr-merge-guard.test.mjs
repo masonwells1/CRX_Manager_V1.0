@@ -20,31 +20,34 @@ function ok(v, m) { assert.ok(v, m); pass++; }
 function eq(a, b, m) { assert.deepEqual(a, b, m); pass++; }
 
 // ── ghMergeRequest ───────────────────────────────────────────────────────────
-eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false }, "plain merge parses");
-eq(ghMergeRequest("gh pr merge --squash --auto 7"), { selector: "7", repo: "", auto: true }, "--auto detected");
-eq(ghMergeRequest("gh -R masonwells1/CRX_Manager_V1.0 pr merge 9"), { selector: "9", repo: "masonwells1/CRX_Manager_V1.0", auto: false }, "global -R between gh and pr");
-eq(ghMergeRequest("gh pr merge --repo=o/r"), { selector: "", repo: "o/r", auto: false }, "repo= form, selectorless (current branch)");
+eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false, matchHead: "", atomicHeadMatch: true }, "plain merge parses");
+eq(ghMergeRequest("gh pr merge --squash --auto 7"), { selector: "7", repo: "", auto: true, matchHead: "", atomicHeadMatch: true }, "--auto detected");
+eq(ghMergeRequest("gh -R masonwells1/CRX_Manager_V1.0 pr merge 9"), { selector: "9", repo: "masonwells1/CRX_Manager_V1.0", auto: false, matchHead: "", atomicHeadMatch: true }, "global -R between gh and pr");
+eq(ghMergeRequest("gh pr merge --repo=o/r"), { selector: "", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: true }, "repo= form, selectorless (current branch)");
+eq(ghMergeRequest("gh pr merge 42 --match-head-commit 0123456789012345678901234567890123456789"), { selector: "42", repo: "", auto: false, matchHead: "0123456789012345678901234567890123456789", atomicHeadMatch: true }, "separate exact-head flag parses");
+eq(ghMergeRequest("gh pr merge 42 --match-head-commit=abcdefabcdefabcdefabcdefabcdefabcdefabcd"), { selector: "42", repo: "", auto: false, matchHead: "abcdefabcdefabcdefabcdefabcdefabcdefabcd", atomicHeadMatch: true }, "equals exact-head flag parses");
 ok(ghMergeRequest("gh pr merge") !== null, "selectorless merge still gated");
 eq(ghMergeRequest("gh pr merge 5 --disable-auto"), null, "--disable-auto stands down (cancels, does not land)");
 eq(ghMergeRequest("gh pr view merge-notes"), null, "merge-notes is not the word merge");
 ok(ghMergeRequest("gh pr view merge") !== null, "exact-word over-match routes read through gate (fails safe)");
 eq(ghMergeRequest("git merge main"), null, "git merge is not a gh merge");
-eq(ghMergeRequest("echo gh pr merge docs"), { selector: "docs", repo: "", auto: false }, "gh token anywhere still matches (fails safe)");
+eq(ghMergeRequest("echo gh pr merge docs"), { selector: "docs", repo: "", auto: false, matchHead: "", atomicHeadMatch: true }, "gh token anywhere still matches (fails safe)");
 eq(ghMergeRequest("npm run build"), null, "unrelated command ignored");
 
 // ── ghApiMergeRequest ────────────────────────────────────────────────────────
-eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge"), { selector: "12", repo: "o/r", auto: false }, "REST merge endpoint parses");
-eq(ghApiMergeRequest("gh api --method=PUT https://api.github.com/repos/o/r/pulls/3/merge"), { selector: "3", repo: "o/r", auto: false }, "full-URL + --method= parses");
+eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge"), { selector: "12", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: true }, "REST merge endpoint parses");
+eq(ghApiMergeRequest("gh api --method=PUT https://api.github.com/repos/o/r/pulls/3/merge"), { selector: "3", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: true }, "full-URL + --method= parses");
+eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge -f sha=0123456789012345678901234567890123456789"), { selector: "12", repo: "o/r", auto: false, matchHead: "0123456789012345678901234567890123456789", atomicHeadMatch: true }, "REST atomic head SHA parses");
 eq(ghApiMergeRequest("gh api repos/o/r/pulls/12"), null, "non-merge endpoint ignored");
 ok(ghApiMergeRequest("gh api graphql -f query='mutation { mergePullRequest(input: {}) }'")?.unsupportedGraphql, "GraphQL merge flagged unresolvable");
 ok(ghApiMergeRequest("gh -R o/r api graphql -f query='mutation { mergePullRequest(input: {}) }'")?.unsupportedGraphql, "GraphQL merge with global flags between gh and api still flagged — Codex round-5");
 ok(ghApiMergeRequest("gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {}) }'")?.unsupportedGraphql, "GraphQL auto-merge enable flagged unresolvable");
-eq(ghApiMergeRequest("gh -R o/r api -X PUT repos/o/r/pulls/7/merge"), { selector: "7", repo: "o/r", auto: false }, "REST merge with global flags between gh and api still parses");
+eq(ghApiMergeRequest("gh -R o/r api -X PUT repos/o/r/pulls/7/merge"), { selector: "7", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: true }, "REST merge with global flags between gh and api still parses");
 eq(ghApiMergeRequest("curl -X PUT api.github.com/repos/o/r/pulls/12/merge"), null, "curl is not a gh api call (denied by the hook's raw-REST rule instead)");
 
 // ── mcpMergeRequest ──────────────────────────────────────────────────────────
-eq(mcpMergeRequest({ owner: "o", repo: "r", pull_number: 8 }), { selector: "8", repo: "o/r", auto: false }, "GitHub MCP spelling");
-eq(mcpMergeRequest({ repository_full_name: "o/r", pr_number: 4 }), { selector: "4", repo: "o/r", auto: false }, "app-style spelling");
+eq(mcpMergeRequest({ owner: "o", repo: "r", pull_number: 8 }), { selector: "8", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: false }, "GitHub MCP spelling is marked non-atomic");
+eq(mcpMergeRequest({ repository_full_name: "o/r", pr_number: 4 }), { selector: "4", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: false }, "app-style spelling is marked non-atomic");
 
 // ── pullRequestChecksGreen ───────────────────────────────────────────────────
 const greenCheck = { __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" };
@@ -164,6 +167,8 @@ const nonRiskyReturnIndex = guardSource.indexOf("if (risky.length === 0 && !cont
 ok(autoGateIndex !== -1 && nonRiskyReturnIndex !== -1 && autoGateIndex < nonRiskyReturnIndex,
   "the universal auto-merge deny executes before the non-risky early return");
 ok(/--match-head-commit <head-sha>/.test(guardSource), "auto-merge guidance requires an exact-head immediate merge");
+ok(/request\.atomicHeadMatch\s*===\s*false/.test(guardSource), "main-bound merge tools without atomic expected-head support deny");
+ok(/requestedHead\.toLowerCase\(\)\s*!==\s*actualHead\.toLowerCase\(\)/.test(guardSource), "the supplied expected head must equal GitHub's inspected head");
 
 const landPrSource = readFileSync(path.resolve(__dirname, "../../scripts/land-pr.mjs"), "utf8");
 ok(/--match-head-commit \$\{pr\.headRefOid\}/.test(landPrSource), "land-pr pins both printed merge commands to the inspected head SHA");

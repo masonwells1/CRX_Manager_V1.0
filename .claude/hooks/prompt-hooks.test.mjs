@@ -271,6 +271,15 @@ ok(/routine protected delivery|standing authorization/i.test(routineDelivery.std
 ok(!/Gotten Mason's explicit confirmation|Do NOT proceed/.test(routineDelivery.stdout),
   "routine delivery does not demand another Mason confirmation");
 
+const autoDeploy = spawnSync(process.execPath, [path.join(__dirname, "dangerous-phrase-warning.mjs")], {
+  input: JSON.stringify({ prompt: "auto deploy the edge function" }),
+  encoding: "utf8",
+  env: { ...process.env, CLAUDE_PROJECT_DIR: tmpProj },
+});
+eq(autoDeploy.status, 0, "dangerous-phrase-warning exits 0 on auto deploy wording");
+ok(/AUTO DEPLOY/.test(autoDeploy.stdout), "auto deploy is classified as an out-of-band production action");
+ok(/explicit confirmation/i.test(autoDeploy.stdout), "auto deploy retains the existing fresh approval gate");
+
 const forcePush = spawnSync(process.execPath, [path.join(__dirname, "dangerous-phrase-warning.mjs")], {
   input: JSON.stringify({ prompt: "force push the shared branch" }),
   encoding: "utf8",

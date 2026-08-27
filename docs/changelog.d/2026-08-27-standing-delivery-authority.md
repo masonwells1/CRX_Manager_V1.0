@@ -27,6 +27,13 @@ Claude and Codex guards now deny all main-bound auto-merge paths. `land-pr.mjs` 
 pre-existing auto-merge and prints an immediate merge command pinned to the inspected head SHA.
 This adds no Mason approval: the agent waits for checks and performs the guarded merge itself.
 
+A second exact-head review refused the candidate until the suggestion became enforcement. Every
+main-bound CLI merge must now carry `--match-head-commit` equal to GitHub's inspected head, REST
+merges must carry the same atomic `sha`, and MCP merge tools remain denied because their installed
+schemas cannot transmit that precondition. The same review caught `auto deploy` being grouped with
+routine commit/push/merge wording; it is again a hard-gated out-of-band production action, while
+normal Vercel deployment caused by a reviewed green merge remains part of routine delivery.
+
 Proof run: focused autopilot, prompt, hold, Claude/Codex merge-guard, and global risky-phrase
 tests; full correction-guard and agent-workflow suites; lint, typecheck, build, docs check, sync,
 and mutation tests. No business safety rule, branch protection, product model, migration, RPC,
