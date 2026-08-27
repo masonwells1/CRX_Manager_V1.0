@@ -118,15 +118,18 @@ function makeInvoiceData(overrides: Partial<InvoicePdfData> = {}): InvoicePdfDat
 describe('groupReturnCreditDisplayItems', () => {
   it('shows one customer line while preserving the exact summed credit', () => {
     const grouped = groupReturnCreditDisplayItems('credit_memo', [
-      makeItem({ order_item_id: 'order-item-1', product_id: 'product-1', description: 'Return credit - Atrazine 4L', quantity: -10, extended_cents: -18500, cost_cents: 1200 }),
-      makeItem({ order_item_id: 'order-item-1', product_id: 'product-1', description: 'Return credit - Atrazine 4L', quantity: -5, extended_cents: -9250, cost_cents: 1300 }),
+      makeItem({ order_item_id: 'order-item-1', product_id: 'product-1', return_credit_cogs_cents: -12000, description: 'Return credit - Atrazine 4L', quantity: -10, extended_cents: -18500, cost_cents: 1200 }),
+      makeItem({ order_item_id: 'order-item-1', product_id: 'product-1', return_credit_cogs_cents: -6500, description: 'Return credit - Atrazine 4L', quantity: -5, extended_cents: -9250, cost_cents: 1300 }),
     ]);
     expect(grouped).toHaveLength(1);
     expect(grouped[0]).toMatchObject({ quantity: -15, extended_cents: -27750, cost_cents: 0 });
   });
 
   it('does not collapse ordinary invoices or manual credit rows', () => {
-    const rows = [makeItem(), makeItem()];
+    const rows = [
+      makeItem({ order_item_id: 'order-item-1', description: 'Return credit - manually entered' }),
+      makeItem({ order_item_id: 'order-item-1', description: 'Return credit - manually entered' }),
+    ];
     expect(groupReturnCreditDisplayItems('chemical_sale', rows)).toBe(rows);
     expect(groupReturnCreditDisplayItems('credit_memo', rows)).toHaveLength(2);
   });

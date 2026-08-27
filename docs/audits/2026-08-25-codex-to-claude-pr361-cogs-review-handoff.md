@@ -306,8 +306,8 @@ This evidence was independently re-read during the current Codex session from Su
 - Live `get_field_profitability` reads `invoices.total_cost_cents`, filters to `invoice_type = 'field_application'`, and excludes credit memos. It does not consume the return-credit COGS reversal.
 - Live `get_detailed_statement_data` excludes `credit_memo` invoices from transaction and aging rows and exposes unapplied credit through `open_credit_cents`; the smoke preserves that design.
 - There are zero credited returns and zero credited returns with a credit invoice, so the return-credit defect is real but latent in production data.
-- Active recognized invoice COGS is: overdue `2,272,653` cents, paid `440,680` cents, and posted `1,023,750` cents.
-- For a date range covering current invoices, the live P&L omits overdue plus paid revenue of `$34,960.92` and COGS of `$27,133.33`; monthly omits paid revenue of `$5,020.40` and COGS of `$4,406.80`.
+- Active recognized invoice COGS is nonzero across overdue, paid, and posted statuses; exact production totals are intentionally withheld from this public repository.
+- For a date range covering current invoices, the live P&L omits material overdue-plus-paid revenue and COGS, while monthly omits paid revenue and COGS; exact production totals are intentionally withheld.
 - Live migration ledger latest observed version is `20260825142708`; its effective filename high-water is `20260820120000`. Both `20260825230150` and `20260825230209` are newer and absent live.
 
 The schema registry records apply high-water `20260825142708`, includes the save-job migration, and

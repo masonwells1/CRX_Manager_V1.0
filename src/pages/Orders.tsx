@@ -42,7 +42,7 @@ type OrderInvoiceCoverageRow = InvoiceBillingCoverage & {
 async function fetchInvoiceCoveragePages(orderIds: string[]) {
   const rows: OrderInvoiceCoverageRow[] = [];
 
-  for (let from = 0; ; from += INVOICE_QUERY_PAGE_SIZE) {
+  for (let from = 0; ;) {
     const { data, error } = await supabase
       .from('invoices')
       .select('id, order_id, total_amount_cents, invoice_type, status, deleted_at')
@@ -55,8 +55,11 @@ async function fetchInvoiceCoveragePages(orderIds: string[]) {
     if (error) return { data: null, error };
 
     const page = (data || []) as OrderInvoiceCoverageRow[];
+    if (page.length === 0) return { data: rows, error: null };
     rows.push(...page);
-    if (page.length < INVOICE_QUERY_PAGE_SIZE) return { data: rows, error: null };
+    // Advance by what the server actually returned. This remains complete if
+    // Supabase's configured row cap is lower than our requested page size.
+    from += page.length;
   }
 }
 

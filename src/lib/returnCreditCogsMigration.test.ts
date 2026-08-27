@@ -192,8 +192,12 @@ describe('return-credit COGS migration', () => {
     expect(orderInvoiceGateMigration).toContain('4e17b8eb18b544ebab5785f88c2346f76528a3a490c0a31b5f765b06db24d351');
     expect(orderInvoiceGateMigration).toContain('c8b12fc25025e598846b6b2fbdfe4e0fd0e30078086b17194807f1428b9d0d7e');
     expect(orderInvoiceGateMigration).toContain('9d3de61eb30e9b9435556da45fe17c15a1b83285c917e3a5e7c2893cb4428104');
-    expect(orderInvoiceGateMigration.match(/invoice_type <> ''credit_memo''/g)).toHaveLength(4);
+    expect(orderInvoiceGateMigration.match(/invoice_type <> ''credit_memo''/g)).toHaveLength(2);
+    expect(orderInvoiceGateMigration.match(/invoice_type <> 'credit_memo'/g)).toHaveLength(2);
     expect(orderInvoiceGateMigration.match(/deleted_at IS NULL/g)).toHaveLength(4);
+    expect(orderInvoiceGateMigration).not.toContain('EXECUTE format(');
+    expect(functionBodySha256(orderInvoiceGateMigration, '_create_invoice_from_order_impl_20260718')).toBe('c8b12fc25025e598846b6b2fbdfe4e0fd0e30078086b17194807f1428b9d0d7e');
+    expect(functionBodySha256(orderInvoiceGateMigration, '_create_split_invoices_from_order_provenance_impl_20260719')).toBe('9d3de61eb30e9b9435556da45fe17c15a1b83285c917e3a5e7c2893cb4428104');
     expect(orderInvoiceGateMigration).toContain('FROM PUBLIC, anon, authenticated, service_role;');
     expect(functionBodySha256(migration, '_allocated_delivery_cents')).toBe('44a739b026385996b66355ee5c4b1175dbe5260bad57a459a91e69c3873bae81');
     expect(migration).toContain("AND inv.invoice_type <> 'credit_memo'");
@@ -342,6 +346,11 @@ describe('return-credit COGS migration', () => {
       .digest('hex');
     expect(migrationSha256).toBe('68eb8ac5af41372dbff199d4a7a69e2825d9b3340559bac9413663dcf8803354');
     expect(migrationHistory).toContain(`LF-normalized SQL SHA-256: \`${migrationSha256}\``);
+    const orderInvoiceGateSha256 = createHash('sha256')
+      .update(orderInvoiceGateMigration.replace(/\r\n/g, '\n'), 'utf8')
+      .digest('hex');
+    expect(orderInvoiceGateSha256).toBe('d19321931194db3dfa49f33ca9554940e86b80c97a80a0b8d172041a285308e5');
+    expect(migrationHistory).toContain(`LF-normalized SQL SHA-256: \`${orderInvoiceGateSha256}\``);
   });
 
   it('does not claim field profitability consumes the credit-memo COGS reversal', () => {

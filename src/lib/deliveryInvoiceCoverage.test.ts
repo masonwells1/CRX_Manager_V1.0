@@ -94,7 +94,13 @@ describe('activeInvoiceCoversDelivery', () => {
     expect(orders).toContain(".not('status', 'in', '(\"voided\",\"cancelled\")')");
     expect(orders).toContain(".is('deleted_at', null)");
     expect(orders).toContain('.range(from, from + INVOICE_QUERY_PAGE_SIZE - 1)');
-    expect(orders).toContain('if (page.length < INVOICE_QUERY_PAGE_SIZE)');
+    expect(orders).toContain('if (page.length === 0)');
+    expect(orders).toContain('from += page.length');
     expect(orders).toContain('Failed to load invoice coverage. Invoiced percentages may be incomplete');
+
+    const integrityCleanup = readFileSync(resolve(root, 'src/components/integrity/IntegrityCleanupPanel.tsx'), 'utf8');
+    expect(integrityCleanup).toContain('.range(from, from + INVOICE_COVERAGE_PAGE_SIZE - 1)');
+    expect(integrityCleanup).toContain('from += page.length');
+    expect(integrityCleanup).toContain('Failed to verify invoice coverage. Unbilled delivery results are hidden');
   });
 });

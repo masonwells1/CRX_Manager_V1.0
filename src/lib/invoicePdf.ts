@@ -26,6 +26,7 @@ import type { autoTable as autoTableFn } from 'jspdf-autotable';
 export interface InvoicePdfItem {
   order_item_id?: string | null;
   product_id?: string | null;
+  return_credit_cogs_cents?: number | null;
   description: string;
   product_name?: string;
   quantity: number;
@@ -54,6 +55,7 @@ export interface InvoicePdfItem {
 interface ReturnCreditDisplayItem {
   order_item_id?: string | null;
   product_id?: string | null;
+  return_credit_cogs_cents?: number | null;
   description: string;
   quantity: number;
   unit_size?: string | null;
@@ -71,7 +73,7 @@ export function groupReturnCreditDisplayItems<T extends ReturnCreditDisplayItem>
   const grouped: T[] = [];
   const indexByKey = new Map<string, number>();
   for (const item of items) {
-    if (!item.order_item_id || !item.description.startsWith('Return credit - ')) {
+    if (!item.order_item_id || item.return_credit_cogs_cents == null) {
       grouped.push(item);
       continue;
     }
