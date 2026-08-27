@@ -989,13 +989,6 @@ BEGIN
       AND ci.id <> v_invoice_id
   ) THEN RAISE EXCEPTION 'RETURN_CREDIT_UNLINKED_COST_LINE'; END IF;
 
-  -- Row locks protect delivered-quantity state. Match the delivery-backfill
-  -- lock order as well as the advisory-lock protocol so the two workflows
-  -- cannot acquire overlapping order-item rows in opposite orders.
-  PERFORM 1 FROM public.order_items oi
-  WHERE oi.id IN (SELECT ri.order_item_id FROM public.return_items ri WHERE ri.return_id = p_return_id AND ri.order_item_id IS NOT NULL)
-  ORDER BY oi.id
-  FOR UPDATE;
   PERFORM set_config('app.crx_return_credit_lineage', '1', true);
 
   WITH return_src AS (
@@ -1169,7 +1162,7 @@ DO $postflight$
 DECLARE
   v_expected jsonb := jsonb_build_object(
     '_issue_return_credit_header_only_impl_20260825', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
-    '_issue_return_credit_impl', 'c264b6bab2f0a1c3f81ca5de54a7436b10a9e2dba001c80f2d240774a12804f4',
+    '_issue_return_credit_impl', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612',
     '_receive_return_impl_before_inventory_seed_20260825', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
     '_receive_return_impl_20260714', 'f7e030b6d0b4c78c6049e2a7a16859c5b056fab5ebb2f6a2bf2eafa0303a53c1',
     'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
