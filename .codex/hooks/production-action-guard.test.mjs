@@ -372,6 +372,24 @@ try {
   }).blocked, true, "feature pushes fail closed when auto-merge state cannot be proven");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
+    toolInput: { command: "git push origin refs/heads/*:refs/heads/*" },
+    repoDir: risky.repo,
+    runGh: () => "[]",
+  }).blocked, true, "wildcard branch pushes cannot query GitHub with a fake literal wildcard branch");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push origin HEAD:feature/test; $verb='merge'; gh pr $verb 513 --auto" },
+    repoDir: risky.repo,
+    runGh: () => "[]",
+  }).blocked, true, "a push chained with an indirect auto-merge action is denied before execution");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "$verb='merge'; gh pr $verb 513 --auto" },
+    repoDir: risky.repo,
+    runGh: () => "[]",
+  }).blocked, true, "a standalone dynamically constructed GitHub merge is denied");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
     toolInput: { command: "git push origin :main" },
     repoDir: risky.repo,
   }).blocked, true, "deleting main stays denied");
@@ -442,6 +460,10 @@ try {
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects every push in a command chain");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin feature/test`, projectRoot);
   assert.equal(claudeGuard.stdout, "", "Claude guard still allows an ordinary feature-branch push");
+  claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin refs/heads/*:refs/heads/*`, projectRoot);
+  assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard denies wildcard feature destinations");
+  claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin HEAD:feature/test; $verb='merge'; gh pr $verb 513 --auto`, projectRoot);
+  assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard requires a feature push to be a standalone command");
   claudeGuard = runClaudePushGuard(`git.exe -C "${risky.repo}" push origin HEAD:main`, projectRoot);
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard gates git.exe pushes");
   claudeGuard = runClaudePushGuard(`cd "${risky.repo}" && git push origin HEAD:main`, projectRoot);

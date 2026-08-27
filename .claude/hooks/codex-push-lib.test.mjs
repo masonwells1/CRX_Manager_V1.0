@@ -18,6 +18,7 @@ import {
   unquoteGitPath,
   gitPushCwd,
   gitSubcommandIsDynamic,
+  githubCliCommandIsDynamic,
   mainPushIsForced,
   mainPushSource,
   pushIsForced,
@@ -79,12 +80,27 @@ assert.throws(
   "an incomplete GitHub response fails closed",
 );
 assert.deepEqual(featurePushDestinations("git push origin feature/test"), ["feature/test"]);
-assert.deepEqual(featurePushDestinations("git push origin local:review/next refs/tags/v1"), ["review/next"]);
+assert.deepEqual(featurePushDestinations("git push origin local:review/next"), ["review/next"]);
+assert.deepEqual(featurePushDestinations("git push origin refs/tags/v1"), [], "tag-only pushes do not map to a PR head branch");
 assert.throws(
   () => featurePushDestinations("git push origin"),
   /explicit destination refspec/,
   "a config-directed bare push cannot bypass the branch-bound PR lookup",
 );
+assert.throws(
+  () => featurePushDestinations("git push origin refs/heads/*:refs/heads/feature-target"),
+  /wildcard or non-literal/,
+  "wildcard refspecs cannot collapse to a fake single PR branch selector",
+);
+assert.throws(
+  () => featurePushDestinations("git push origin HEAD:feature/one HEAD:feature/two"),
+  /exactly one literal branch/,
+  "one push cannot race multiple PR destinations past the pre-push lookup",
+);
+assert.equal(githubCliCommandIsDynamic("gh pr merge 513 --squash --match-head-commit abc"), false);
+assert.equal(githubCliCommandIsDynamic("gh pr view 513 --jq '$.headRefOid'"), false, "single-quoted jq data stays literal");
+assert.equal(githubCliCommandIsDynamic("$verb='merge'; gh pr $verb 513 --auto"), true, "dynamic merge verb is denied");
+assert.equal(githubCliCommandIsDynamic("gh api graphql -f query=$(Get-Content body.graphql)"), true, "command-substituted API body is denied");
 
 assert.equal(mainPushSource("git push origin HEAD:main", "feature"), "HEAD");
 assert.equal(gitSubcommandIsDynamic("$verb='push'; git $verb origin HEAD:main"), true, "PowerShell variable subcommand");
@@ -1942,15 +1958,10 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       assert.equal(result.decision, "deny", "an unreadable push does not get the explicit-refspec skip");
     }
     {
-      // 2026-08-06, Codex's PR #313 review — the NINTH over-refusal of this
-      // shape, and the one that shows a single command-wide verdict was still too
-      // coarse. A command that MIXES the forms keeps `remote.*.push` compared,
-      // correctly, because the bare `push archive` reads it — but the answer was
-      // scoped to every remote the command touches, so an inherited
-      // `remote.origin.push` denied it even though the origin push names its own
-      // refspec and git reads that key for NEITHER push. `git push -h` documents
-      // the forms per invocation; the dry-run destinations are identical with and
-      // without the variable.
+      // Chained pushes were once allowed after per-invocation config comparison.
+      // They are now refused earlier: the pre-push auto-merge lookup must bind one
+      // standalone push to one literal PR head, and a second push in the same
+      // shell action could invalidate that proof before either command returns.
       const mixed = `git -C ${work} push origin main:refs/heads/feature && git -C ${work} push archive`;
       assert.equal(
         runHook(mixed, {
@@ -1958,8 +1969,8 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
           GIT_CONFIG_KEY_0: "remote.origin.push",
           GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
         }).decision,
-        "allow",
-        "a default refspec belonging to the explicit push's remote is read by neither push",
+        "deny",
+        "multiple pushes in one shell action are refused before destination proof",
       );
       // The control that keeps the narrowing from becoming a fail-open: the same
       // override aimed at `archive` — the remote whose push IS bare — moves where
@@ -2415,8 +2426,8 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     );
     assert.equal(
       runHook(`export GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20"; ${push}`).decision,
-      "allow",
-      "and the same value written in an earlier segment",
+      "deny",
+      "even a sanctioned transport value is set separately before the standalone push",
     );
 
     // Round 22, end-to-end: a repository selector inherited from the shell. The

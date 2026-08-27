@@ -103,12 +103,16 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // while an open main-bound PR has auto-merge armed. That closes the remaining
   // path where GitHub could merge a later commit without an immediate exact-head
   // merge command. The maintenance transform anchors remain unchanged.
-  codexGuard: "226cf8a4530920ad3485c334d48e5e3d3a26f376",
-  pushLib: "4cf2fc486fbec6f46ac3f6b35ced6ed28a7eb6ff",
+  // Re-pinned after the exact-head reviewer required standalone single-ref
+  // feature pushes and literal GitHub CLI actions. Wildcard/multi-ref pushes and
+  // shell-expanded gh commands now fail closed; the transform anchors are still
+  // unchanged.
+  codexGuard: "5b8c0445e29a341ea169c0577938f49ec102abbf",
+  pushLib: "a9e1ca76a777325dc06b929a5ac9e7c7b56eff0d",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "a73a72ffaf51a696b343f8f228dcbf99a2f208e7",
-  pushLib: "4cf2fc486fbec6f46ac3f6b35ced6ed28a7eb6ff",
+  codexGuard: "5319bd07ce97f99ce3b23cd6847b21edcf7f0486",
+  pushLib: "a9e1ca76a777325dc06b929a5ac9e7c7b56eff0d",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

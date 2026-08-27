@@ -48,6 +48,14 @@ push, fail closed if GitHub state cannot be proven, and tell the agent to disabl
 retry. This remains autonomous—the agent performs that recovery itself—and bare/config-directed
 feature pushes are refused because their destination cannot be bound to a specific PR.
 
+The next review adversarially demonstrated two parser evasions: a wildcard refspec could update
+many PR branches while the lookup queried only `*`, and a shell variable could hide the word
+`merge` in a command chained after the push. Feature pushes are now one standalone command with
+exactly one literal valid branch destination; wildcard/multi-ref/config-directed forms fail
+closed. GitHub CLI actions containing shell expansion, substitutions, splats, or backticks are
+also denied by autopilot plus both merge guards. Ordinary literal push and exact-head merge
+commands remain unattended and do not ask Mason for another approval.
+
 Proof run: focused autopilot, prompt, hold, Claude/Codex merge-guard, and global risky-phrase
 tests; full correction-guard and agent-workflow suites; lint, typecheck, build, docs check, sync,
 and mutation tests. No business safety rule, branch protection, product model, migration, RPC,

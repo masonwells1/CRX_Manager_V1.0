@@ -31,6 +31,7 @@ import {
   contentIsRisky,
   describeRiskyContent,
   ghApiMergeRequest,
+  githubCliCommandIsDynamic,
   ghMergeRequest,
   mcpMergeRequest,
   proofSearchDirs,
@@ -63,6 +64,9 @@ const requests = [];
 if (GITHUB_MERGE_TOOL.test(toolName)) {
   requests.push(mcpMergeRequest(toolInput));
 } else if (typeof toolInput.command === "string" && toolInput.command) {
+  if (githubCliCommandIsDynamic(toolInput.command)) {
+    deny("PR MERGE GATE: GitHub CLI commands containing shell-expanded variables, substitutions, splats, or backticks are denied because a merge or auto-merge action could be hidden from the exact-head parser. Spell the complete `gh` command literally.");
+  }
   for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/)) {
     const api = ghApiMergeRequest(segment);
     if (api?.unsupportedGraphql) {

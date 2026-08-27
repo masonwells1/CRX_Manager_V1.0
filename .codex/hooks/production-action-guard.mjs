@@ -11,6 +11,7 @@ import {
   extractPatchDestinations,
   featurePushDestinations,
   gitPushCwd,
+  githubCliCommandIsDynamic,
   isGitPush,
   mainPushSource,
   proofSearchDirs,
@@ -809,6 +810,13 @@ export function evaluateProductionAction({
   // Split on single `|` too (Codex round-4): `git push a | git push b` runs
   // BOTH pushes in a shell pipeline, so every pipeline stage is a segment.
   const commandSegments = command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
+  if (githubCliCommandIsDynamic(command)) {
+    return denied("CODEX PRODUCTION GATE: GitHub CLI commands containing shell-expanded variables, substitutions, splats, or backticks are denied because a merge or auto-merge action could be hidden from the exact-head parser. Spell the complete `gh` command literally.");
+  }
+  const pushSegments = commandSegments.filter((part) => isGitPush(part));
+  if (pushSegments.length > 0 && (pushSegments.length !== 1 || commandSegments.length !== 1)) {
+    return denied("CODEX PRODUCTION GATE: a feature push must be one standalone command. Chaining a push with another shell action could arm auto-merge after the pre-push GitHub check, so run `git -C <repo> push <remote> <single-refspec>` by itself.");
+  }
   for (const segment of commandSegments) {
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     if (ghRequest?.unsupportedGraphql) {
@@ -830,7 +838,7 @@ export function evaluateProductionAction({
     }
   }
 
-  for (const segment of commandSegments.filter((part) => isGitPush(part))) {
+  for (const segment of pushSegments) {
     if (/--git-dir|--work-tree/i.test(segment)) {
       return denied("CODEX PRODUCTION GATE: pushes using explicit --git-dir/--work-tree contexts are denied because the guard cannot safely bind them to the inspected worktree. Use `git -C <repo> push` instead.");
     }

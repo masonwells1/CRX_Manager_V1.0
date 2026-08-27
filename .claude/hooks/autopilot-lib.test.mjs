@@ -43,6 +43,7 @@ eq(autopilotDecision("Edit", { file_path: ".env" }), "deny", "Edit .env denied")
 eq(autopilotDecision("Bash", { command: "npx supabase functions deploy send-email" }), "deny", "CLI edge deploy denied");
 eq(autopilotDecision("Bash", { command: "supabase functions deploy process-document" }), "deny", "bare CLI edge deploy denied");
 eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash" }), "allow", "protected PR merge reaches the normal merge guard");
+eq(autopilotDecision("Bash", { command: "$verb='merge'; gh pr $verb 42 --auto" }), "deny", "dynamic GitHub merge is never auto-approved");
 eq(autopilotDecision("mcp__github__push_files", {}), "deny", "GitHub MCP push_files denied");
 eq(autopilotDecision("mcp__github__merge_pull_request", {}), "allow", "GitHub MCP merge PR reaches the normal merge guard");
 eq(autopilotDecision("mcp__github__create_or_update_file", {}), "deny", "GitHub MCP file write denied");

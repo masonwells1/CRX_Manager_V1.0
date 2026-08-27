@@ -336,8 +336,12 @@ export function featurePushDestinations(cmd) {
   if (positionals.length < 2) {
     throw new Error("feature pushes must name an explicit destination refspec");
   }
+  const refspecs = positionals.slice(1);
+  if (refspecs.some((refspec) => /[*?\[\\~^]/.test(String(refspec)))) {
+    throw new Error("wildcard or non-literal feature destinations are not allowed");
+  }
   const destinations = [];
-  for (const refspec of positionals.slice(1)) {
+  for (const refspec of refspecs) {
     const clean = String(refspec).replace(/^\+/, "");
     const rawDestination = clean.includes(":") ? clean.split(":").at(-1) : clean;
     if (!rawDestination || /^refs\/tags\//i.test(rawDestination)) continue;
@@ -346,7 +350,19 @@ export function featurePushDestinations(cmd) {
     if (destination.toUpperCase() === "HEAD") {
       throw new Error("feature push destination HEAD is ambiguous");
     }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(destination)
+        || destination.includes("..")
+        || destination.includes("//")
+        || destination.includes("@{")
+        || destination.endsWith(".")
+        || destination.endsWith("/")
+        || destination.split("/").some((part) => part.startsWith(".") || part.endsWith(".lock"))) {
+      throw new Error("feature push destination is not one literal valid branch name");
+    }
     if (!destinations.includes(destination)) destinations.push(destination);
+  }
+  if (destinations.length > 0 && refspecs.length !== 1) {
+    throw new Error("feature pushes must update exactly one literal branch destination");
   }
   return destinations;
 }
@@ -2037,6 +2053,29 @@ export function sessionProofDirs(root, hookCwd, listWorktrees) {
 
 // gh binary reference — tolerates quoted absolute paths and gh.exe.
 const GH_BIN_RE = /(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i;
+
+// A command-text gate can only verify a GitHub action when the CLI words are
+// literal. `$verb`, `${...}`, command substitution, splats, delayed `%VAR%` /
+// `!VAR!` expansion, and backticks are all evaluated by the shell after the
+// hook runs. Deny any such construction in a command that references `gh` so a
+// hidden merge/auto-merge/API write cannot bypass the exact-head parser.
+export function githubCliCommandIsDynamic(command) {
+  const text = String(command || "");
+  if (!/\bgh(?:\.exe)?\b/i.test(text)) return false;
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "'" && !doubleQuoted) { singleQuoted = !singleQuoted; continue; }
+    if (char === '"' && !singleQuoted) { doubleQuoted = !doubleQuoted; continue; }
+    if (singleQuoted) continue;
+    if (char === "`" || char === "$") return true;
+    if (char === "%" && /%[A-Za-z_][A-Za-z0-9_]*%/.test(text.slice(index))) return true;
+    if (char === "!" && /![A-Za-z_][A-Za-z0-9_]*!/.test(text.slice(index))) return true;
+    if (char === "@" && /(?:^|\s)@[A-Za-z_][A-Za-z0-9_]*/.test(text.slice(Math.max(0, index - 1)))) return true;
+  }
+  return false;
+}
 
 // `gh pr merge` with global flags possibly between words (`gh -R o/r pr merge`).
 // Over-matching (e.g. `gh pr view merge-notes`) only routes a read through the

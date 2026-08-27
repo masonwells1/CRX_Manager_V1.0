@@ -91,6 +91,10 @@ ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL body denied b
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh api graphql -F query=@mutation.graphql" } });
 ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL query field denied before it can hide auto-merge");
 
+r = runHook({ tool_name: "Bash", tool_input: { command: "$verb='merge'; gh pr $verb 12 --squash --auto" } });
+ok(r.decision?.permissionDecision === "deny", "shell-expanded gh merge verb is denied before literal parsing");
+ok(/shell-expanded/.test(r.decision?.permissionDecisionReason || ""), "dynamic GitHub CLI denial explains the parser boundary");
+
 r = runHook({ tool_name: "Bash", tool_input: { command: "curl -X PUT -H 'Authorization: token x' https://api.github.com/repos/o/r/pulls/12/merge" } });
 ok(r.decision?.permissionDecision === "deny", "raw curl REST merge denied (Codex finding 2026-07-16)");
 

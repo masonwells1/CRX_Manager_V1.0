@@ -624,6 +624,10 @@ const pushCommands = shellSegments(cmd)
   .map((segment) => segment.trim())
   .filter((segment) => isGitPush(segment));
 
+if (pushCommands.length > 0 && (pushCommands.length !== 1 || shellSegments(cmd).filter((segment) => segment.trim()).length !== 1)) {
+  deny("CODEX GATE: a feature push must be one standalone command. Chaining a push with another shell action could arm auto-merge after the pre-push GitHub check, so run `git -C <repo> push <remote> <single-refspec>` by itself.");
+}
+
 // Backstop for the splitter itself. Every check below classifies ONE push, so a
 // segment holding two of them means the split failed and a push would be judged
 // by the other push's arguments — which is exactly how an escaped quote hid a
