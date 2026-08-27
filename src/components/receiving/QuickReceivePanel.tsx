@@ -278,6 +278,7 @@ export default function QuickReceivePanel() {
       if (
         receipt
         && Array.isArray(committedRecordIds)
+        && committedRecordIds.length > 0
         && committedRecordIds.every((recordId) => typeof recordId === 'string')
       ) {
         result = receipt;

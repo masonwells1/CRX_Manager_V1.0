@@ -75,7 +75,7 @@ export default function NewVendorBill() {
     setPaymentTerms(recovered.p_payment_terms || '');
     const due = parseLocalDate(recovered.p_due_date).getTime();
     const bill = parseLocalDate(recovered.p_bill_date).getTime();
-    setPaymentTermsDays(Math.max(0, Math.round((due - bill) / 86_400_000)));
+    setPaymentTermsDays(Math.round((due - bill) / 86_400_000));
     setSubtotalDollars(centsToDollarInput(recovered.p_subtotal_cents));
     setAdjustmentDollars(centsToDollarInput(recovered.p_adjustment_cents));
     setNotes(recovered.p_notes || '');

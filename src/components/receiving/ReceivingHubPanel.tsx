@@ -211,13 +211,21 @@ export default function ReceivingHubPanel() {
       toast('error', `Quick receive records the full ${fmtUnits(receiveTarget.line.remaining)} remaining. For a partial or damaged receipt, open the PO.`);
       return;
     }
-    const request = await receiveIntent.beginIntent({
-      items: [{ po_item_id: receiveTarget.line.po_item_id, quantity: qty, condition: 'good' }],
-      performedBy: profile.id,
-      productName: receiveTarget.product_name,
-      target: receiveTarget,
-    });
-    const idemKey = receiveIntent.getIdempotencyKey();
+    let request: NonNullable<typeof receiveIntent.unresolvedIntent>;
+    let idemKey: string;
+    try {
+      request = await receiveIntent.beginIntent({
+        items: [{ po_item_id: receiveTarget.line.po_item_id, quantity: qty, condition: 'good' }],
+        performedBy: profile.id,
+        productName: receiveTarget.product_name,
+        target: receiveTarget,
+      });
+      idemKey = receiveIntent.getIdempotencyKey();
+    } catch (error) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { tags: { source: 'durable-intent', page: 'receiving-hub' } });
+      toast('error', 'Receiving could not be safely prepared. Nothing was received; refresh and try again.');
+      return;
+    }
     await runCriticalAction({
       action: async () => {
         const { data, error } = await supabase.rpc('receive_po_items', {
@@ -229,7 +237,7 @@ export default function ReceivingHubPanel() {
         if (error) {
           const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
           const recordIds = receipt?.receiving_record_ids;
-          if (Array.isArray(recordIds) && recordIds.every((id) => typeof id === 'string')) {
+          if (Array.isArray(recordIds) && recordIds.length > 0 && recordIds.every((id) => typeof id === 'string')) {
             toast('warning', 'The earlier receipt already completed. Refreshing the receiving board instead of receiving it twice.');
           } else {
             const disposition = await receiveIntent.classifyFailure(error);

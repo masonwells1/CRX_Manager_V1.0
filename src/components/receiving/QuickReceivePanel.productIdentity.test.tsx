@@ -302,6 +302,7 @@ describe('QuickReceivePanel Product identity', () => {
     expect(retry).toBeDisabled();
     expect(screen.getByText(/safe automatic retry window expired/i)).toBeInTheDocument();
     fireEvent.click(retry);
+    await Promise.resolve();
     expect(mocks.rpc).not.toHaveBeenCalledWith('receive_po_items', expect.anything());
     expect(window.localStorage.getItem(storageKey)).toContain('expired-key');
   });

@@ -4,7 +4,7 @@
  * Shows bill info, linked PO, payment history, and "Record Payment" modal.
  * Uses record_vendor_payment() and void_vendor_bill() RPCs. Admin-only.
  */
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useLayoutEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -49,7 +49,9 @@ export default function VendorBillDetail() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const activeBillIdRef = useRef(id);
-  activeBillIdRef.current = id;
+  useLayoutEffect(() => {
+    activeBillIdRef.current = id;
+  }, [id]);
   const paymentIntent = useUncertainMutationIntent<{
     amountCents: number;
     args: {
@@ -227,21 +229,28 @@ export default function VendorBillDetail() {
     const amountCents = parseDollarsToCents(payAmount);
     if (amountCents <= 0) { toast('error', 'Enter a valid payment amount'); return; }
 
-    const request = await paymentIntent.beginIntent({
-      amountCents,
-      args: {
-        p_vendor_bill_id: id,
-        p_payment_date: payDate,
-        p_amount_cents: amountCents,
-        p_payment_method: payMethod || undefined,
-        p_reference_number: payRef || undefined,
-        p_notes: payNotes || undefined,
-      },
-    });
+    let request: NonNullable<typeof paymentIntent.unresolvedIntent>;
+    let payKey: string;
+    try {
+      request = await paymentIntent.beginIntent({
+        amountCents,
+        args: {
+          p_vendor_bill_id: id,
+          p_payment_date: payDate,
+          p_amount_cents: amountCents,
+          p_payment_method: payMethod || undefined,
+          p_reference_number: payRef || undefined,
+          p_notes: payNotes || undefined,
+        },
+      });
+      payKey = paymentIntent.getIdempotencyKey();
+    } catch (err) {
+      toast('error', 'Payment could not be safely prepared. Nothing was recorded; refresh and try again.');
+      return;
+    }
 
     setPaying(true);
     try {
-      const payKey = paymentIntent.getIdempotencyKey();
       const { data, error } = await supabase.rpc('record_vendor_payment', {
         ...request.args,
         p_idempotency_key: payKey,
@@ -294,8 +303,8 @@ export default function VendorBillDetail() {
 
   const openEditModal = () => {
     if (!bill || bill.id !== id) return;
-    setEditSubtotal((bill.subtotal_cents / 100).toFixed(2));
-    setEditAdjustment(((bill.adjustment_cents || 0) / 100).toFixed(2));
+    setEditSubtotal(centsToDollarInput(bill.subtotal_cents));
+    setEditAdjustment(centsToDollarInput(bill.adjustment_cents || 0));
     setEditBillDate(bill.bill_date);
     setEditDueDate(bill.due_date);
     setEditNotes(bill.notes || '');

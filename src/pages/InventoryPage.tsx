@@ -643,7 +643,7 @@ export default function InventoryPage() {
         if (error) {
           const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
           const recordIds = receipt?.receiving_record_ids;
-          if (Array.isArray(recordIds) && recordIds.every((id) => typeof id === 'string')) {
+          if (Array.isArray(recordIds) && recordIds.length > 0 && recordIds.every((id) => typeof id === 'string')) {
             toast('warning', 'The earlier receipt already completed. Refreshing inventory instead of receiving it twice.');
           } else {
             const disposition = await receivePoIntent.classifyFailure(error);

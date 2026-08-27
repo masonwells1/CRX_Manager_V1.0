@@ -645,54 +645,61 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     ) {
       return 'uncertain';
     }
-    if (isDefinitiveRpcRejection(error)) {
-      if (!options) {
+    try {
+      if (isDefinitiveRpcRejection(error)) {
+        if (!options) {
+          attemptRecordRef.current = null;
+          applyRecord(null);
+          return 'definitive';
+        }
+        const outcome = await deleteCoordinatedRecord(
+          storageKey,
+          options,
+          attempt?.requestVersion ?? null,
+          tabIdRef.current,
+        );
+        if (outcome.deleted) {
+          removeDurableRecord(storageKey);
+          applyRecord(null);
+        } else if (outcome.current) {
+          if (storageKey) writeDurableRecord(storageKey, outcome.current);
+          applyRecord(outcome.current);
+        }
         attemptRecordRef.current = null;
-        applyRecord(null);
         return 'definitive';
       }
-      const outcome = await deleteCoordinatedRecord(
-        storageKey,
-        options,
-        attempt?.requestVersion ?? null,
-        tabIdRef.current,
-      );
-      if (outcome.deleted) {
-        removeDurableRecord(storageKey);
-        applyRecord(null);
-      } else if (outcome.current) {
-        if (storageKey) writeDurableRecord(storageKey, outcome.current);
-        applyRecord(outcome.current);
+      const current = await readCoordinatedRecord(storageKey, options);
+      if (current) {
+        if (storageKey) writeDurableRecord(storageKey, current);
+        applyRecord(current);
+        if (
+          attempt
+          && current.requestVersion === attempt.requestVersion
+          && current.status === 'resolved'
+        ) {
+          attemptRecordRef.current = null;
+          return 'resolved';
+        }
+        return 'uncertain';
       }
-      attemptRecordRef.current = null;
-      return 'definitive';
-    }
-    const current = await readCoordinatedRecord(storageKey, options);
-    if (current) {
-      if (storageKey) writeDurableRecord(storageKey, current);
-      applyRecord(current);
-      if (
-        attempt
-        && current.requestVersion === attempt.requestVersion
-        && current.status === 'resolved'
-      ) {
-        attemptRecordRef.current = null;
-        return 'resolved';
+      if (attempt && options && storageKey && attempt.status === 'pending') {
+        const restored = await coordinateDurableRecord(
+          storageKey,
+          attempt,
+          attempt.intent,
+          options,
+          tabIdRef.current ?? currentTabId(),
+        );
+        writeDurableRecord(storageKey, restored.record);
+        applyRecord(restored.record);
       }
       return 'uncertain';
+    } catch {
+      // Failure classification runs inside mutation catch paths. If durable
+      // coordination is unavailable here, preserve the in-memory lock and
+      // report an uncertain outcome instead of throwing past the caller.
+      return 'uncertain';
     }
-    if (attempt && options && storageKey && attempt.status === 'pending') {
-      const restored = await coordinateDurableRecord(
-        storageKey,
-        attempt,
-        attempt.intent,
-        options,
-        tabIdRef.current ?? currentTabId(),
-      );
-      writeDurableRecord(storageKey, restored.record);
-      applyRecord(restored.record);
-    }
-    return 'uncertain';
   }, [applyRecord, options, storageKey]);
 
   return {

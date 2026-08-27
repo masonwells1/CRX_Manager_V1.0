@@ -347,6 +347,25 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(purchaseOrderDetail).not.toContain("useIdempotencyKey('receive_po_items'");
   });
 
+  it('fails closed when AP and receiving reconciliation evidence is incomplete', () => {
+    expect(quickReceive).toContain('committedRecordIds.length > 0');
+    expect(purchaseOrderDetail).toContain('committedRecordIds.length > 0');
+    expect(inventoryPage).toContain('recordIds.length > 0');
+    expect(receivingHub).toContain('recordIds.length > 0');
+
+    expect(uncertainMutationIntent).toContain('Failure classification runs inside mutation catch paths.');
+    expect(vendorBillDetail).toContain('Payment could not be safely prepared. Nothing was recorded');
+    expect(purchaseOrderDetail).toContain('Receiving could not be safely prepared. Nothing was received');
+    expect(receivingHub).toContain('Receiving could not be safely prepared. Nothing was received');
+
+    expect(newVendorBill).toContain('setPaymentTermsDays(Math.round((due - bill) / 86_400_000));');
+    expect(newVendorBill).not.toContain('setPaymentTermsDays(Math.max(0');
+    expect(vendorBillDetail).toContain('setEditSubtotal(centsToDollarInput(bill.subtotal_cents));');
+    expect(vendorBillDetail).toContain('setEditAdjustment(centsToDollarInput(bill.adjustment_cents || 0));');
+    expect(vendorBillDetail).toContain('useLayoutEffect(() => {');
+    expect(vendorBillDetail).not.toContain('activeBillIdRef.current = id;\n  const paymentIntent');
+  });
+
   it('keeps the disposable cutover proof deterministic after assertion failures', () => {
     expect(periodCloseProof).toContain('const SECTION9_LEGACY_RECEIPT_PREDICATE = `');
     expect(periodCloseProof.match(/SECTION9_LEGACY_RECEIPT_PREDICATE/g)).toHaveLength(4);

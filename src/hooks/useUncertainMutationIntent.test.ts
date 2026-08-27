@@ -52,6 +52,50 @@ describe('useUncertainMutationIntent', () => {
     expect(result.current.unresolvedIntent).toEqual({ amount: 100 });
   });
 
+  it('keeps transport failures locked when durable reconciliation storage fails', async () => {
+    const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>({
+      operation: 'record_vendor_payment',
+      userId: 'admin-classify-read-failure',
+      surface: 'vendor-bill-detail',
+      scope: 'bill-classify-read-failure',
+    }));
+    await act(async () => result.current.beginIntent({ amount: 100 }));
+    Object.defineProperty(globalThis, 'indexedDB', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+
+    await act(async () => {
+      expect(await result.current.classifyFailure({ code: 'ETIMEDOUT', message: 'socket timeout' }))
+        .toBe('uncertain');
+    });
+    expect(result.current.unresolvedIntent).toEqual({ amount: 100 });
+    expect(result.current.isIntentLocked).toBe(true);
+  });
+
+  it('does not unlock a definitive rejection when durable claim release fails', async () => {
+    const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>({
+      operation: 'record_vendor_payment',
+      userId: 'admin-classify-delete-failure',
+      surface: 'vendor-bill-detail',
+      scope: 'bill-classify-delete-failure',
+    }));
+    await act(async () => result.current.beginIntent({ amount: 100 }));
+    Object.defineProperty(globalThis, 'indexedDB', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+
+    await act(async () => {
+      expect(await result.current.classifyFailure({ code: '23514', message: 'validation failed' }))
+        .toBe('uncertain');
+    });
+    expect(result.current.unresolvedIntent).toEqual({ amount: 100 });
+    expect(result.current.isIntentLocked).toBe(true);
+  });
+
   it('keeps an intent mismatch locked until the caller reconciles the receipt', async () => {
     const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>());
     await act(async () => result.current.beginIntent({ amount: 100 }));
