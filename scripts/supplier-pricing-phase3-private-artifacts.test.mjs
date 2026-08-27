@@ -1446,7 +1446,11 @@ git() { return 0; }
   assert.equal((prePush.match(/if ! npm run build/g) ?? []).length, 1, 'pre-push build must retain one fail-closed shell guard');
   assert(packageScripts['test:supplier-pricing-phase3c-packet'].includes('supplier-pricing-phase3-private-artifacts.test.mjs'));
   assert(!packageScripts['test:correction-guards'].includes('supplier-pricing-phase3-private-artifacts.test.mjs'), 'the multi-minute packet suite must not run on every commit');
-  assert(ci.includes('- name: Phase 3C private-artifact regression tests\n        run: npm run test:supplier-pricing-phase3c-packet'), 'CI must run the packet suite explicitly');
+  assert.match(
+    ci,
+    /- name: Phase 3C private-artifact regression tests\r?\n\s+if: \$\{\{ needs\.ci-scope\.outputs\.full_ci == 'true' \}\}\r?\n\s+run: npm run test:supplier-pricing-phase3c-packet/,
+    'CI must run the packet suite explicitly in the trusted full-CI route',
+  );
   if (fixtureBash()) {
     const hookPath = path.join(REPO_ROOT, '.husky', 'pre-push');
     const runPrePushHook = (functions, args = [], input = '') => spawnSync(fixtureBash(), ['-c', `${functions}\nHOOK=$1; shift; source "$HOOK"`, 'synthetic-pre-push', hookPath, ...args], { cwd: REPO_ROOT, encoding: 'utf8', input, env: sanitizedFixtureGitEnv() });
@@ -1467,18 +1471,21 @@ git() { return 0; }
   assert.deepEqual(parseCli(['--pre-push', 'origin', 'https://example.invalid/repository.git']), { ranges: [], prePushRemote: 'origin', prePushLocation: 'https://example.invalid/repository.git', preCommit: false, commitMessageFile: null, githubEvent: false, root: null, attestGitHubHandoff: false });
   assert.deepEqual(parseCli(['--range', `${'a'.repeat(40)}..${'b'.repeat(40)}`]).ranges.length, 1);
   for (const args of [['--pre-commit', '--pre-commit'], ['--commit-msg', benignMessageFile, '--commit-msg', benignMessageFile], ['--commit-msg'], ['--pre-push', 'origin', 'url', '--pre-push', 'origin', 'url'], ['--github-event', '--github-event'], ['--range', 'a..b', '--range', 'c..d'], ['--pre-push'], ['--pre-push', 'origin'], ['--pre-push', '--range', 'a..b'], ['--range'], ['--pre-commit', '--range', 'a..b'], ['--commit-msg', benignMessageFile, '--range', 'a..b'], ['--pre-push', 'origin', 'url', '--range', 'a..b'], ['--github-event', '--range', 'a..b'], ['--pre-commit', '--pre-push', 'origin', 'url'], ['--commit-msg', benignMessageFile, '--pre-commit'], ['--github-event', '--pre-commit']]) assert.throws(() => parseCli(args), /disclosure-safe usage/);
-  assert(ci.indexOf('phase3-private-artifact-containment:') < ci.indexOf('sql-validation:'));
+  assert(ci.indexOf('phase3-private-artifact-containment:') < ci.indexOf('ci-scope:'));
+  assert(ci.indexOf('ci-scope:') < ci.indexOf('sql-validation:'));
   assert(ci.includes('name: Phase 3C Candidate Containment (CI)'));
-  const candidateContainmentJob = ci.slice(ci.indexOf('  phase3-private-artifact-containment:'), ci.indexOf('\n  sql-validation:'));
+  const candidateContainmentJob = ci.slice(ci.indexOf('  phase3-private-artifact-containment:'), ci.indexOf('\n  ci-scope:'));
   assert.match(candidateContainmentJob, /\n    timeout-minutes: 12\r?\n/, 'candidate Phase 3C containment must retain its 12-minute timeout');
   assert(!ci.includes('name: Phase 3C Private Artifact Containment'));
   assert(ci.includes('needs: phase3-private-artifact-containment'));
-  assert(ci.includes('needs: [phase3-private-artifact-containment, sql-validation]'));
+  assert(ci.includes('needs: [phase3-private-artifact-containment, ci-scope, sql-validation]'));
   const sqlValidationJob = ci.slice(ci.indexOf('  sql-validation:'), ci.indexOf('\n  lint-typecheck-test:'));
   assert(sqlValidationJob.includes('if: ${{ always() }}'), 'required SQL check must run even when unrequired containment fails or is cancelled');
   assert(sqlValidationJob.includes('CONTAINMENT_RESULT: ${{ needs.phase3-private-artifact-containment.result }}'));
+  assert(sqlValidationJob.includes('CI_SCOPE_RESULT: ${{ needs.ci-scope.result }}'));
   assert(sqlValidationJob.includes('test "$CONTAINMENT_RESULT" = "success"'), 'required SQL check must fail closed on every non-success containment result');
-  assert(sqlValidationJob.indexOf('Bind containment result into this required check') < sqlValidationJob.indexOf('Checkout code'), 'containment result binding must be the first SQL-check step');
+  assert(sqlValidationJob.includes('test "$CI_SCOPE_RESULT" = "success"'), 'required SQL check must fail closed on every non-success trusted routing result');
+  assert(sqlValidationJob.indexOf('Bind containment and trusted routing into this required check') < sqlValidationJob.indexOf('Checkout code'), 'containment and routing result binding must be the first SQL-check step');
   assert.match(ci, /^  pull_request:\r?\n    branches: \[main\]\r?$/m, 'CI pull-request trigger must restrict exactly to main so containment dependencies cannot skip open');
   assert(ci.includes('permissions:\n  contents: read'));
   assert(ci.includes('types: [opened, reopened, synchronize, ready_for_review, edited]'));
@@ -1486,13 +1493,13 @@ git() { return 0; }
   assert(!ci.includes('github.event.changes.base.ref.from'), 'PR metadata edits must run full CI rather than emitting skipped required checks');
   assert(ci.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"), 'only pull-request concurrency groups may cancel stale proof runs');
   const ciCheckoutBlocks = ci.split('uses: actions/checkout@v7').slice(1);
-  assert.equal(ciCheckoutBlocks.length, 5, 'CI checkout count changed; review least-privilege settings');
+  assert.equal(ciCheckoutBlocks.length, 6, 'CI checkout count changed; review least-privilege settings');
   for (const block of ciCheckoutBlocks) {
     const checkout = block.slice(0, block.indexOf('\n      - name:'));
     assert(checkout.includes('persist-credentials: false'), 'every CI checkout must drop the GitHub token');
   }
   assert(ci.includes('fetch-depth: 0'));
-  const containmentJob = ci.slice(ci.indexOf('phase3-private-artifact-containment:'), ci.indexOf('  sql-validation:'));
+  const containmentJob = ci.slice(ci.indexOf('phase3-private-artifact-containment:'), ci.indexOf('  ci-scope:'));
   assert(containmentJob.includes('node --version'));
   assert(containmentJob.includes('git -C "$GITHUB_WORKSPACE" worktree add --detach "$phase3_trusted_root" "$phase3_base"'));
   assert(containmentJob.includes(`phase3_bootstrap_ancestor='${PHASE3_BOOTSTRAP_ANCESTOR}'`));
