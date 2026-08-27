@@ -101,7 +101,7 @@
         ]
       },
       {
-        "matcher": "Bash|PowerShell|mcp__.*",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",

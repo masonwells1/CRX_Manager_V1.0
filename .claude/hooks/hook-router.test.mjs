@@ -102,9 +102,20 @@ eq(codex.hooks.PostToolUse[0].hooks.length, 1, "Codex post event launches one co
 function matcherFor(manifest, needle) {
   return manifest.hooks.PreToolUse.find((group) => group.hooks.some((hook) => `${hook.command} ${hook.commandWindows || ""}`.includes(needle)))?.matcher;
 }
+function configuredHooksFor(manifest, toolName) {
+  return manifest.hooks.PreToolUse
+    .filter((group) => group.matcher === "*" || new RegExp(`^(?:${group.matcher})$`, "i").test(toolName))
+    .flatMap((group) => group.hooks);
+}
 for (const hook of ["migration-apply-guard.mjs", "live-testdata-guard.mjs", "mcp-tool-guard.mjs"]) {
   eq(matcherFor(codex, hook), "mcp__.*", `${hook} is MCP-only on Codex`);
 }
-eq(matcherFor(codex, "production-action-guard.mjs"), "Bash|PowerShell|mcp__.*", "production guard runs only on action-capable surfaces");
+eq(matcherFor(codex, "production-action-guard.mjs"), "*", "production guard remains reachable for native Write, Edit, and apply_patch calls");
+for (const toolName of ["Write", "Edit", "apply_patch"]) {
+  ok(
+    configuredHooksFor(codex, toolName).some((hook) => `${hook.command} ${hook.commandWindows || ""}`.includes("production-action-guard.mjs")),
+    `configured Codex ${toolName} path invokes the production guard`,
+  );
+}
 
 console.log(`hook-router: ${pass} assertions passed`);

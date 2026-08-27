@@ -1,5 +1,11 @@
 # CRX Harness Simplification - Publish Handoff
 
+> **SUPERSEDED REVIEW STATE (2026-08-27):** The final-head refresh found CRX-SEC-1 HIGH:
+> narrowing the Codex production guard excluded native Write/Edit/apply_patch protection for the
+> harness files the guard owns. Publication is blocked until the matcher is restored to `*`, the
+> reachability regression test passes, and a new exact-head review returns clean. The earlier clean
+> verdict below is preserved as provenance, not as current approval.
+
 ## WHERE
 
 - Worktree: `C:\Users\mason\.codex\worktrees\harness-simplification-20260827\CRX_Manager`
@@ -14,7 +20,9 @@ Publish the proven first harness-simplification tranche through the protected pu
 ## PROVEN
 
 - Local router mutation, prompt, workflow, correction-guard, lint, typecheck, and build proofs are green; exact commands and results are recorded in the review handoff.
-- Sol High exact-head review completed at 2026-08-27T19:07:17Z with `CODEX_PROOF_VERDICT: CLEAN` and no BLOCKER/HIGH findings.
+- Sol High review of code commit `27689188` completed at 2026-08-27T19:07:17Z with
+  `CODEX_PROOF_VERDICT: CLEAN`, but the later final-head refresh found CRX-SEC-1 HIGH and superseded
+  that approval.
 - The reviewer independently matched all 5,653 sanitized snapshot files, parsed all changed scripts/configs, confirmed routing/blocking/agent-surface separation, found no active Patrol code/config references, and found no production code, migration, money, RLS, RPC, permission, or secret change.
 - The CRX Live Foundation Gauntlet is PAUSED and retuned monthly/on-demand outside the repository.
 - The product-data-model lane is separate and untouched.
@@ -25,7 +33,8 @@ Publish the proven first harness-simplification tranche through the protected pu
 
 ## NOT STARTED
 
-- Final exact-head proof including this handoff.
+- Restore production-guard native-edit reachability and rerun the affected tests.
+- Final exact-head proof including the correction.
 - Feature-branch push and pull-request creation.
 - Required GitHub/Vercel checks and CodeRabbit review.
 - Merge and post-merge verification of `main` plus the paused automation configuration.
