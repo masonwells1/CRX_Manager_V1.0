@@ -50,9 +50,14 @@ function commitAll(root, message) {
 
 function createRepo() {
   const root = mkdtempSync(path.join(tmpdir(), 'crx-ci-scope-'));
-  git(root, ['init', '--initial-branch=main']);
-  git(root, ['config', 'user.email', 'ci-scope@example.invalid']);
-  git(root, ['config', 'user.name', 'CI Scope Test']);
+  git(root, ['init', '--initial-branch=main', '--template=']);
+  const isolatedHooks = path.join(root, '.git', 'test-hooks');
+  mkdirSync(isolatedHooks, { recursive: true });
+  git(root, ['config', '--local', 'core.hooksPath', isolatedHooks]);
+  git(root, ['config', '--local', 'commit.gpgSign', 'false']);
+  git(root, ['config', '--local', 'tag.gpgSign', 'false']);
+  git(root, ['config', '--local', 'user.email', 'ci-scope@example.invalid']);
+  git(root, ['config', '--local', 'user.name', 'CI Scope Test']);
   write(root, 'docs/audits/evidence.md', '# baseline\n');
   write(root, 'docs/CHANGELOG.md', '# changelog\n');
   write(root, 'src/example.ts', 'export const value = 1;\n');
@@ -135,7 +140,10 @@ const workflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.y
 for (const requiredFragment of [
   'types: [opened, reopened, synchronize, ready_for_review, edited]',
   'name: Classify CI scope',
+  'if ! git -C "$GITHUB_WORKSPACE" cat-file -e "${compare_base}^{commit}" 2>/dev/null; then',
   'git -C "$GITHUB_WORKSPACE" worktree add --detach "$trusted_root" "$compare_base"',
+  '--github-output "$classifier_output"; then',
+  'cat "$classifier_output" >> "$GITHUB_OUTPUT"',
   'needs: [phase3-private-artifact-containment, ci-scope]',
   'needs: [phase3-private-artifact-containment, ci-scope, sql-validation]',
   'CI_SCOPE_RESULT: ${{ needs.ci-scope.result }}',
@@ -144,7 +152,7 @@ for (const requiredFragment of [
   equal(workflow.includes(requiredFragment), true, `workflow contract: ${requiredFragment}`);
 }
 equal(
-  /name: Lint, Type Check, Test, Build[\s\S]*?if: \$\{\{ always\(\) \}\}/.test(workflow),
+  /^  lint-typecheck-test:\r?\n    name: Lint, Type Check, Test, Build\r?\n    runs-on: ubuntu-latest\r?\n    needs: \[phase3-private-artifact-containment, ci-scope, sql-validation\]\r?\n(?:    #.*\r?\n){2}    if: \$\{\{ always\(\) \}\}/m.test(workflow),
   true,
   'required lint job must execute even after a failed dependency',
 );

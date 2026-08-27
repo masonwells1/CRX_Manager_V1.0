@@ -179,7 +179,10 @@ jobs:
               exit 0
               ;;
           esac
-          git -C "$GITHUB_WORKSPACE" cat-file -e "${compare_base}^{commit}"
+          if ! git -C "$GITHUB_WORKSPACE" cat-file -e "${compare_base}^{commit}" 2>/dev/null; then
+            emit_full_bootstrap
+            exit 0
+          fi
 
           if ! git -C "$GITHUB_WORKSPACE" cat-file -e "${compare_base}:${classifier_rel}" 2>/dev/null; then
             emit_full_bootstrap
@@ -198,12 +201,18 @@ jobs:
           trusted_classifier="$trusted_root/$classifier_rel"
           test -f "$trusted_classifier"
           test "$(git -C "$trusted_root" hash-object -- "$classifier_rel")" = "$classifier_oid"
-          node "$trusted_classifier" \
+          classifier_output="$RUNNER_TEMP/ci-scope-output-${compare_head}"
+          : > "$classifier_output"
+          if ! node "$trusted_classifier" \
             --repo-root "$GITHUB_WORKSPACE" \
             --event-name "$event_mode" \
             --base "$compare_base" \
             --head "$compare_head" \
-            --github-output "$GITHUB_OUTPUT"
+            --github-output "$classifier_output"; then
+            emit_full_bootstrap
+            exit 0
+          fi
+          cat "$classifier_output" >> "$GITHUB_OUTPUT"
 
   sql-validation:
     name: SQL Migration Validation

@@ -3,7 +3,7 @@
 ## WHERE
 
 - Repository: `https://github.com/masonwells1/CRX_Manager_V1.0`
-- Worktree: `C:\Users\mason\.codex\worktrees\docs-only-ci-routing-20260826\CRX_Manager`
+- Worktree: isolated Codex worktree for this branch
 - Branch: `codex/docs-only-ci-routing-20260826`
 - Starting `origin/main`: `090bce6298150a2650f5d8333e034c2bc7926d7d`
 - Current integrated `origin/main`: `08e773189bb71d0ddb3d80dd941e69ab70992dde`
