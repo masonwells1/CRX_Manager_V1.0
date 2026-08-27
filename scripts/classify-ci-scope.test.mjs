@@ -366,6 +366,7 @@ for (const requiredFragment of [
   'name: Publish exact full-CI proof',
   'crx-full-ci-proof-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}',
   "github.event.action == 'edited' && 'edited' || 'code'",
+  'code:false|force-full:false|error:false|metadata:false|metadata:true',
   'if ! git -C "$GITHUB_WORKSPACE" cat-file -e "${compare_base}^{commit}" 2>/dev/null; then',
   'git -C "$GITHUB_WORKSPACE" worktree add --detach "$trusted_root" "$compare_base"',
   '--github-output "$classifier_output"; then',
@@ -446,6 +447,29 @@ try {
     });
     equal(result.fullCi, true, 'CLI wiring forces full proof for a base edit');
     equal(readFileSync(outputPath, 'utf8').includes('event_route=force-full'), true, 'CLI output records forced base-edit routing');
+  }
+
+  {
+    const { root, base } = createRepo();
+    disposables.push(root);
+    write(root, 'src/example.ts', 'export const value = 31;\n');
+    const head = commitAll(root, 'malformed-event integration fixture');
+    const eventPath = path.join(root, 'malformed-event.json');
+    const outputPath = path.join(root, 'malformed-event-output.txt');
+    writeFileSync(eventPath, '{not valid json', 'utf8');
+    const result = await runClassifier({
+      repoRoot: root,
+      eventName: 'pull_request',
+      baseSha: base,
+      headSha: head,
+      githubOutput: outputPath,
+      eventPath,
+      repository: 'masonwells1/CRX_Manager_V1.0',
+      currentRunId: '999',
+    });
+    equal(result.fullCi, true, 'malformed event payload wiring preserves full CI');
+    equal(result.eventRoute, 'error', 'malformed event payload emits the accepted error route');
+    equal(readFileSync(outputPath, 'utf8').includes('event_route=error'), true, 'CLI output records the fail-closed error route');
   }
 
   {

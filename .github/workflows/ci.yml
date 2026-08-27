@@ -324,7 +324,7 @@ jobs:
             *) echo "Trusted CI route is not a valid mutually-exclusive result: docs_only=$DOCS_ONLY full_ci=$FULL_CI" >&2; exit 1 ;;
           esac
           case "$EVENT_ROUTE:$PRIOR_FULL_PROOF" in
-            code:false|force-full:false|metadata:false|metadata:true) ;;
+            code:false|force-full:false|error:false|metadata:false|metadata:true) ;;
             *) echo "Trusted event route is invalid: event_route=$EVENT_ROUTE prior_full_proof=$PRIOR_FULL_PROOF" >&2; exit 1 ;;
           esac
           echo "CI route: docs_only=$DOCS_ONLY full_ci=$FULL_CI reason=$ROUTE_REASON changed_count=$CHANGED_COUNT event_route=$EVENT_ROUTE prior_full_proof=$PRIOR_FULL_PROOF"
