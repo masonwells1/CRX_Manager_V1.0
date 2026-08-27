@@ -576,6 +576,16 @@ try {
   }).blocked, true, "GraphQL mergePullRequest mutations deny closed");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
+    toolInput: { command: "gh api graphql -f query='mutation{enablePullRequestAutoMerge(input:{pullRequestId:\"PR_1\"}){pullRequest{id}}}'" },
+    repoDir: risky.repo,
+  }).blocked, true, "GraphQL enablePullRequestAutoMerge mutations deny closed");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh -R crop/crx api graphql -f query='mutation{enablePullRequestAutoMerge(input:{pullRequestId:\"PR_1\"}){pullRequest{id}}}'" },
+    repoDir: risky.repo,
+  }).blocked, true, "GraphQL auto-merge with global gh flags also denies closed");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
     toolInput: { command: "gh api -X PUT repos/crop/crx/contents/file.txt -f branch=main" },
     repoDir: risky.repo,
   }).blocked, true, "unrecognized mutating gh API calls are denied");

@@ -469,13 +469,14 @@ function ghMergeRequest(command) {
 
 function ghApiMergeRequest(command) {
   const text = String(command || "");
-  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
-    return null;
-  }
-  if (/\sapi\s+graphql\b/i.test(text) && /\bmergePullRequest\b/i.test(text)) {
+  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i.test(text)) return null;
+  const words = shellWords(command);
+  const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
+  if (apiIndex === -1) return null;
+  if (words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql") &&
+      /\b(?:mergePullRequest|enablePullRequestAutoMerge)\b/i.test(text)) {
     return { unsupportedGraphql: true };
   }
-  const words = shellWords(command);
   let method = "GET";
   let endpoint = "";
   for (let index = 0; index < words.length; index += 1) {
@@ -771,7 +772,7 @@ export function evaluateProductionAction({
   for (const segment of commandSegments) {
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     if (ghRequest?.unsupportedGraphql) {
-      return denied("CODEX PRODUCTION GATE: GraphQL mergePullRequest mutations are denied because the guard cannot safely resolve and verify their PR head/checks. Use `gh pr merge <number>` instead.");
+      return denied("CODEX PRODUCTION GATE: GraphQL merge/auto-merge mutations are denied because the guard cannot safely resolve and verify their exact PR head/checks. Use `gh pr merge <number> --match-head-commit <head-sha>` instead.");
     }
     if (ghRequest) {
       const result = gatePullRequestMerge({

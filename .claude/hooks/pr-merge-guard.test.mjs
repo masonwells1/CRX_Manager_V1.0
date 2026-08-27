@@ -38,6 +38,7 @@ eq(ghApiMergeRequest("gh api --method=PUT https://api.github.com/repos/o/r/pulls
 eq(ghApiMergeRequest("gh api repos/o/r/pulls/12"), null, "non-merge endpoint ignored");
 ok(ghApiMergeRequest("gh api graphql -f query='mutation { mergePullRequest(input: {}) }'")?.unsupportedGraphql, "GraphQL merge flagged unresolvable");
 ok(ghApiMergeRequest("gh -R o/r api graphql -f query='mutation { mergePullRequest(input: {}) }'")?.unsupportedGraphql, "GraphQL merge with global flags between gh and api still flagged — Codex round-5");
+ok(ghApiMergeRequest("gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {}) }'")?.unsupportedGraphql, "GraphQL auto-merge enable flagged unresolvable");
 eq(ghApiMergeRequest("gh -R o/r api -X PUT repos/o/r/pulls/7/merge"), { selector: "7", repo: "o/r", auto: false }, "REST merge with global flags between gh and api still parses");
 eq(ghApiMergeRequest("curl -X PUT api.github.com/repos/o/r/pulls/12/merge"), null, "curl is not a gh api call (denied by the hook's raw-REST rule instead)");
 
@@ -73,7 +74,10 @@ ok(r.status === 0 && r.decision === null, "ordinary push not this hook's busines
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh api graphql -f query='mutation { mergePullRequest(input: {}) }'" } });
 ok(r.decision?.permissionDecision === "deny", "GraphQL merge denied");
-ok(/mergePullRequest/.test(r.decision?.permissionDecisionReason || ""), "GraphQL deny explains itself");
+ok(/GraphQL merge/.test(r.decision?.permissionDecisionReason || ""), "GraphQL deny explains itself");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {}) }'" } });
+ok(r.decision?.permissionDecision === "deny", "GraphQL auto-merge enable denied");
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "curl -X PUT -H 'Authorization: token x' https://api.github.com/repos/o/r/pulls/12/merge" } });
 ok(r.decision?.permissionDecision === "deny", "raw curl REST merge denied (Codex finding 2026-07-16)");
@@ -159,5 +163,9 @@ const autoGateIndex = guardSource.indexOf("if (request.auto)");
 const nonRiskyReturnIndex = guardSource.indexOf("if (risky.length === 0 && !contentFlagged) return;");
 ok(autoGateIndex !== -1 && nonRiskyReturnIndex !== -1 && autoGateIndex < nonRiskyReturnIndex,
   "the universal auto-merge deny executes before the non-risky early return");
+ok(/--match-head-commit <head-sha>/.test(guardSource), "auto-merge guidance requires an exact-head immediate merge");
+
+const landPrSource = readFileSync(path.resolve(__dirname, "../../scripts/land-pr.mjs"), "utf8");
+ok(/--match-head-commit \$\{pr\.headRefOid\}/.test(landPrSource), "land-pr pins both printed merge commands to the inspected head SHA");
 
 console.log(`pr-merge-guard: ${pass} assertions passed`);

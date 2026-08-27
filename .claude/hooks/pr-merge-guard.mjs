@@ -14,7 +14,8 @@
 //   * merge with a non-green pipeline → denied; `--auto` is denied for every
 //     main-bound PR because a PR that is non-risky now can receive a later risky
 //     commit after this hook has run and then land without exact-head review;
-//   * GraphQL mergePullRequest / unresolvable PR context → denied, fail closed.
+//   * GraphQL mergePullRequest / enablePullRequestAutoMerge / unresolvable PR
+//     context → denied, fail closed.
 //
 // Mirrors .codex/hooks/production-action-guard.mjs's merge route (the Codex
 // side has had this gate since 2026-07-14). Shared parsing/validation lives in
@@ -65,7 +66,7 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
   for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/)) {
     const api = ghApiMergeRequest(segment);
     if (api?.unsupportedGraphql) {
-      deny("PR MERGE GATE: GraphQL mergePullRequest mutations are denied because the guard cannot safely resolve and verify the PR's head/checks. Use `gh pr merge <number>` instead.");
+      deny("PR MERGE GATE: GraphQL merge/auto-merge mutations are denied because the guard cannot safely resolve and verify the PR's exact head/checks. Use `gh pr merge <number> --match-head-commit <head-sha>` instead.");
     }
     const found = api || ghMergeRequest(segment);
     if (found) { requests.push(found); continue; }
@@ -139,7 +140,7 @@ function gateRequest(request) {
     deny(
       "PR MERGE GATE: `--auto` is not allowed for any PR targeting main because later commits " +
       "could land after this exact-head gate has run. Wait for every check to finish, then run " +
-      "`gh pr merge <n> --squash` without `--auto`; no extra Mason approval is required."
+      "`gh pr merge <n> --squash --match-head-commit <head-sha>` without `--auto`; no extra Mason approval is required."
     );
   }
 

@@ -26,19 +26,20 @@ Remove repeated approval requests for routine, reversible work and protected gre
 - The CRX risky-phrase hook classifies auto-commit/push/merge as routine protected delivery, while every existing destructive phrase remains a fresh-approval match. Mixed prompts keep safe preparation moving and gate only the dangerous action.
 - Armed autopilot lets ordinary feature-branch pushes, CLI protected PR merges, and GitHub MCP protected PR merges reach the existing production guards. Its force-push detector covers long flags, trailing `--force-with-lease`, combined short flags, and forced `+refspec` forms. Direct remote file writes, deploys, destructive lifecycle actions, secret paths, resets, hook bypasses, and the rest of the prior deny set remain denied.
 - Mason's explicit stop/pause latch remains stronger than autopilot and still blocks every PR-merge spelling.
-- The shared push policy, arming confirmation, intent reminder, Claude guidance, collaboration/coding references, guardrail reference, changelog, and owning test script now agree.
+- The shared push policy, arming confirmation, intent reminder, Claude guidance, collaboration/coding references, guardrail reference, per-change changelog fragment, and owning test script now agree.
 - Global `C:\Users\mason\.codex\hooks\global-risky-phrase-nudge.mjs` now makes the same distinction. Its independent 11-assertion test is green.
 - `npm run test:correction-guards` passed, including 56 autopilot assertions, 167 hold/production guard assertions, 411 Bash-safety assertions, and the complete migration/live-data/review-proof suites.
 - `npm run test:agent-workflows` passed, including 166 prompt-hook assertions, Codex/Claude adapter parity, production-action guard proof, and agent-guidance checks.
 - `npm run check:docs`, `npm run typecheck`, and `npm run build` passed after installing the locked dependencies with `npm ci --ignore-scripts`; npm reported zero vulnerabilities.
 - Mutation proof was observed in both directions: neutering the force-push regex failed `force push denied`, and reclassifying routine auto-delivery as approval-required failed `routine delivery does not demand another Mason confirmation`. Both mutations were restored and focused tests passed again.
 - The first independent exact-head review of commit `413b0a16` returned BLOCKERS with one valid HIGH: enabling `--auto` while a PR was non-risky could let a later risky commit land without a fresh exact-head review. The remediation denies auto-merge for every main-bound PR in both Claude and Codex guards, updates `land-pr.mjs` to disable pre-existing auto-merge, and keeps autonomous delivery by waiting for checks then performing one immediate guarded merge. The new universal gate was mutation-proved load-bearing, and both owning guard suites plus the pinned live-maintenance producer test pass.
+- A later GitHub Codex review of commit `1bcb583e` found three valid delivery issues: GraphQL could still arm auto-merge, the printed immediate merge command was not pinned to the inspected head, and the ledger entry was in the shared changelog instead of `docs/changelog.d/`. The GraphQL routes now fail closed in both guards, both printed commands use `--match-head-commit`, regression tests cover those paths, and the ledger is a new per-change fragment. The protected producer input/output hashes were re-pinned to the tested source, and all affected producer/guard/workflow suites pass.
 
-## NOT STARTED
+## REMAINING DELIVERY
 
-- Commit the exact-head review remediation.
-- Re-run the independent exact-head adversarial review and resolve any real finding.
-- Push the feature branch, open the PR, read CodeRabbit, wait for required checks, merge, and verify the merged policy on `main`.
+- Commit and push the late review remediation.
+- Re-run the independent exact-head adversarial review on the new commit and resolve any real finding.
+- Wait for refreshed PR checks, merge with `--match-head-commit`, and verify the merged policy on `main` plus production health.
 
 ## APPROVAL STATE
 
@@ -53,6 +54,6 @@ Mason explicitly requested more Codex working room and authorized addressing unn
 
 ## FIRST ACTION
 
-Review the exact diff for accidental safety-rule removal, especially the autopilot deny set and mixed-prompt behavior. Then commit only the files named by this handoff and begin the protected delivery path.
+Commit only the late review remediation, push it, and run a fresh exact-head adversarial review before the protected merge.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

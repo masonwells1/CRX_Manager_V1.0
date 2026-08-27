@@ -159,14 +159,14 @@ for (;;) {
         `This script will not merge it (by design). Land it now, immediately, with a fresh proof:\n` +
         `  1. gh pr checkout ${prNumber} && git fetch origin\n` +
         `  2. node scripts/write-codex-push-proof.mjs\n` +
-        `  3. gh pr merge ${prNumber} --squash --delete-branch   (NO --auto — proof is bound to this exact head+base)\n` +
+        `  3. gh pr merge ${prNumber} --squash --delete-branch --match-head-commit ${pr.headRefOid}   (NO --auto — proof is bound to this exact head+base)\n` +
         `If main moves before you merge, re-run this script first.`
       );
       process.exit(2);
     }
     console.log(
       `[land-pr] PR #${prNumber} is green, up to date, and non-risky. Merge this exact head now through the normal guard:\n` +
-      `  gh pr merge ${prNumber} --squash --delete-branch   (NO --auto; no extra Mason approval required)`
+      `  gh pr merge ${prNumber} --squash --delete-branch --match-head-commit ${pr.headRefOid}   (NO --auto; no extra Mason approval required)`
     );
     process.exit(2);
   }

@@ -1998,8 +1998,9 @@ export function ghMergeRequest(command) {
   return { selector, repo, auto };
 }
 
-// `gh api -X PUT repos/o/r/pulls/N/merge`, plus the GraphQL mergePullRequest
-// mutation (unresolvable → caller must deny). The `api` subcommand is found by
+// `gh api -X PUT repos/o/r/pulls/N/merge`, plus GraphQL operations that either
+// merge a PR now or arm auto-merge for a future head (unresolvable → caller
+// must deny). The `api` subcommand is found by
 // word-scan, NOT by position — global flags may sit between `gh` and `api`
 // (`gh -R o/r api graphql ...` — Codex round-5 finding on this guard's own PR:
 // the position-anchored `gh\s+api` regex let that exact form pass ungated).
@@ -2010,7 +2011,7 @@ export function ghApiMergeRequest(command) {
   const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
   if (apiIndex === -1) return null;
   if (words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql") &&
-      /\bmergePullRequest\b/i.test(text)) {
+      /\b(?:mergePullRequest|enablePullRequestAutoMerge)\b/i.test(text)) {
     return { unsupportedGraphql: true };
   }
   let method = "GET";
