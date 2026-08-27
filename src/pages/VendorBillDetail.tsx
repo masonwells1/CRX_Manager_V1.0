@@ -244,7 +244,7 @@ export default function VendorBillDetail() {
         },
       });
       payKey = paymentIntent.getIdempotencyKey();
-    } catch (err) {
+    } catch {
       toast('error', 'Payment could not be safely prepared. Nothing was recorded; refresh and try again.');
       return;
     }
