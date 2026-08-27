@@ -10,6 +10,7 @@ const NAME = `crx-return-credit-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const EXTENSIONS = path.join(ROOT, 'supabase', 'baselines', '20260727174805_extensions.sql');
 const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql');
+const QUOTE_TRUST_PREREQUISITE = path.join(ROOT, 'supabase', 'migrations', '20260826220000_quote_version_restore_trust_boundary.sql');
 const REPORT_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041000_align_recognized_invoice_report_statuses.sql');
 const COGS_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041100_rebuild_return_credit_cogs_reversal.sql');
 const DELIVERY_CREDIT_GATE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827041200_exclude_return_credits_from_delivery_invoice_gate.sql');
@@ -173,8 +174,8 @@ function concurrencyFixture(slot) {
       SET session_replication_role = replica;
       INSERT INTO public.customers (id, farm_name)
       VALUES ('${ids.customer}', '[SMOKE] PR361 concurrency ${suffix}');
-      INSERT INTO public.products (id, product_name, current_cost)
-      VALUES ('${ids.product}', '[SMOKE] PR361 concurrency product ${suffix}', 5.00);
+      INSERT INTO public.products (id, product_name, current_cost, unit_size, inventory_unit)
+      VALUES ('${ids.product}', '[SMOKE] PR361 concurrency product ${suffix}', 5.00, 'gal', 'gal');
       INSERT INTO public.orders (id, order_number, customer_id, salesman_id, status)
       VALUES ('${ids.order}', 'SMK-RCC-CONC-${suffix}', '${ids.customer}', '00000000-0000-4000-8000-000000000081', 'confirmed');
       INSERT INTO public.order_items (
@@ -347,7 +348,11 @@ const expectedProofs = [
   'RECEIVED_SOURCE_UNIT_GUARD_REMOVAL_DETECTED',
   'PREFLIGHT_OVERLOAD_COLLISION_REJECTED',
   'POSTFLIGHT_OVERLOAD_COLLISION_REJECTED',
+  'QUOTE_TRUST_PREREQUISITE_GUARD_REMOVAL_DETECTED',
   'NON_RESTOCKED_RETURN_ZERO_COGS_PROVEN',
+  'SOURCE_BASIS_MUTATION_REJECTED',
+  'CREDIT_LINE_INSERT_REJECTED',
+  'INVENTORY_UNIT_MISMATCH_REJECTED',
   'SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED',
   'SOURCE_POST_AFTER_CREDIT_REJECTED',
   'SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED',
@@ -386,6 +391,7 @@ const expectedProofs = [
 const completedProofs = new Set();
 try {
   assert.ok(readFileSync(CANDIDATE, 'utf8').length > 0, 'candidate migration is missing');
+  assert.ok(readFileSync(QUOTE_TRUST_PREREQUISITE, 'utf8').length > 0, 'quote-trust prerequisite migration is missing');
   assert.ok(readFileSync(COGS_CANDIDATE, 'utf8').length > 0, 'COGS candidate migration is missing');
   assert.ok(readFileSync(DELIVERY_CREDIT_GATE_CANDIDATE, 'utf8').length > 0, 'delivery credit-gate candidate migration is missing');
   assert.ok(readFileSync(DELIVERY_SURFACE_CANDIDATE, 'utf8').length > 0, 'delivery surface candidate migration is missing');
@@ -557,6 +563,30 @@ try {
   copy(HELPER_GUARD, 'helper-guard.sql');
   apply('helper-guard.sql');
   migrations.push(HELPER_GUARD);
+  copy(REPORT_CANDIDATE, path.basename(REPORT_CANDIDATE));
+  const reportMigrationSql = readFileSync(REPORT_CANDIDATE, 'utf8');
+  const noQuoteTrustPrerequisiteGuard = reportMigrationSql.replace(
+    /  IF NOT EXISTS \(\r?\n       SELECT 1\r?\n       FROM pg_attribute a[\s\S]*?RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_PREREQUISITE_MISSING:[^']+';\r?\n  END IF;\r?\n/,
+    '',
+  );
+  assert.notEqual(noQuoteTrustPrerequisiteGuard, reportMigrationSql, 'quote-trust prerequisite mutant did not remove the guard');
+  const guardedMissingQuoteTrust = psql(`BEGIN;\n${reportMigrationSql}\nROLLBACK;`, { allowFailure: true });
+  assert.notEqual(guardedMissingQuoteTrust.status, 0, 'canonical report migration accepted a missing quote-trust prerequisite');
+  assert.match(
+    `${guardedMissingQuoteTrust.stdout}\n${guardedMissingQuoteTrust.stderr}`,
+    /RECOGNIZED_INVOICE_REPORT_PREREQUISITE_MISSING/,
+    'canonical report migration did not reach the quote-trust prerequisite guard',
+  );
+  const unguardedMissingQuoteTrust = psql(`BEGIN;\n${noQuoteTrustPrerequisiteGuard}\nROLLBACK;`, { allowFailure: true });
+  assert.equal(
+    unguardedMissingQuoteTrust.status,
+    0,
+    `quote-trust prerequisite mutant did not expose the unsafe acceptance path:\n${unguardedMissingQuoteTrust.stderr || unguardedMissingQuoteTrust.stdout}`,
+  );
+  completedProofs.add('QUOTE_TRUST_PREREQUISITE_GUARD_REMOVAL_DETECTED');
+  copy(QUOTE_TRUST_PREREQUISITE, path.basename(QUOTE_TRUST_PREREQUISITE));
+  apply(path.basename(QUOTE_TRUST_PREREQUISITE));
+  migrations.push(QUOTE_TRUST_PREREQUISITE);
   assert.equal(psqlValue(`SELECT count(*) FROM (${predicate}) AS violations;`), '0', 'return-credit invariant reported candidate-state drift');
   const lifecyclePredicate = readFileSync(LIFECYCLE_PREDICATE, 'utf8').trim().replace(/;$/, '');
   const lifecycleViolations = psqlValue(`SELECT violation_key || ': ' || reason FROM (${lifecyclePredicate}) AS violations ORDER BY violation_key;`);
@@ -581,9 +611,9 @@ try {
     INSERT INTO public.customers (id, farm_name) VALUES
       ('df6087cb-232f-4962-bb33-c74580a06935', '[SMOKE] Exact Legacy Return Customer')
     ON CONFLICT (id) DO NOTHING;
-    INSERT INTO public.products (id, product_name) VALUES
-      ('fad3ea45-cd8c-4bb8-b0ce-8a515941586c', 'Gen Capture LFR: (Batallion LFC, Seguro) - 2.5 Gal'),
-      ('fad3ea45-cd8c-4bb8-b0ce-8a515941586d', '[SMOKE] Second source-free return product')
+    INSERT INTO public.products (id, product_name, container_size, unit_size, inventory_unit) VALUES
+      ('fad3ea45-cd8c-4bb8-b0ce-8a515941586c', 'Gen Capture LFR: (Batallion LFC, Seguro) - 2.5 Gal', 2.5, 'Gal', 'Gal'),
+      ('fad3ea45-cd8c-4bb8-b0ce-8a515941586d', '[SMOKE] Second source-free return product', NULL, 'Ea', 'Ea')
     ON CONFLICT (id) DO NOTHING;
     SELECT set_config('app.return_rpc', 'true', false);
     INSERT INTO public.returns (
@@ -614,8 +644,6 @@ try {
     SELECT set_config('app.return_rpc', 'false', false);
   `);
 
-  copy(REPORT_CANDIDATE, path.basename(REPORT_CANDIDATE));
-  const reportMigrationSql = readFileSync(REPORT_CANDIDATE, 'utf8');
   const noExistingReturnCreditGuardReportMutant = reportMigrationSql.replace(
     /  IF EXISTS \(\r?\n    SELECT 1\r?\n    FROM public\.returns r\r?\n    JOIN public\.invoices i[\s\S]*?RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_PREFLIGHT_EXISTING_RETURN_CREDIT';\r?\n  END IF;\r?\n/,
     '',
@@ -861,6 +889,50 @@ try {
   apply(path.basename(ORDER_INVOICE_GATE_CANDIDATE));
   migrations.push(ORDER_INVOICE_GATE_CANDIDATE);
 
+  const inventoryMismatch = concurrencyFixture(10);
+  const inventoryMismatchSql = inventoryMismatch.sql
+    .replace("5.00, 'gal', 'gal'", "5.00, 'gal', 'qt'")
+    .replace(
+      /('00000000-0000-4000-8000-000000000081', )'received'(, 1000, NULL,)/,
+      "$1'approved'$2",
+    )
+    .replace("'unopened', true, true, 0", "'unopened', true, false, 0");
+  assert.notEqual(inventoryMismatchSql, inventoryMismatch.sql, 'inventory-unit mismatch fixture was not changed');
+  assert.match(inventoryMismatchSql, /'approved', 1000, NULL,/);
+  assert.match(inventoryMismatchSql, /'unopened', true, false, 0/);
+  psql(`
+    BEGIN;
+    ${inventoryMismatchSql}
+    SELECT set_config(
+      'request.jwt.claims',
+      '{"sub":"00000000-0000-4000-8000-000000000081","role":"authenticated"}',
+      true
+    );
+    DO $inventory_unit$
+    BEGIN
+      BEGIN
+        PERFORM public.receive_return(
+          '${inventoryMismatch.ids.return}',
+          '00000000-0000-4000-8000-000000000081',
+          'smk-rcc-inventory-unit-mismatch'
+        );
+        RAISE EXCEPTION 'SMOKE_FAIL: inventory-unit mismatch was accepted';
+      EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM <> 'RETURN_CREDIT_INVENTORY_UNIT_MISMATCH' THEN RAISE; END IF;
+      END;
+      IF EXISTS (
+        SELECT 1 FROM public.inventory
+        WHERE product_id = '${inventoryMismatch.ids.product}'
+          AND location = 'Main Warehouse'
+      ) THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: inventory-unit mismatch created a warehouse row';
+      END IF;
+    END;
+    $inventory_unit$;
+    ROLLBACK;
+  `);
+  completedProofs.add('INVENTORY_UNIT_MISMATCH_REJECTED');
+
   // A damaged/non-restocked return still refunds the customer, but it does not
   // bring saleable inventory value back. Prove the credit reverses revenue and
   // deliberately leaves COGS at zero rather than inflating profit.
@@ -911,11 +983,41 @@ try {
       IF v_total_cost IS DISTINCT FROM 0 OR v_line_cost_effect IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'NON_RESTOCKED_RETURN_COST_DRIFT:header=%,lines=%', v_total_cost, v_line_cost_effect;
       END IF;
+      BEGIN
+        UPDATE public.invoices
+           SET invoice_date = invoice_date - 1
+         WHERE id = '${damagedReturn.ids.sourceInvoice}';
+        RAISE EXCEPTION 'SMOKE_FAIL: recognized source invoice date changed around an active credit';
+      EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM <> 'RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED' THEN RAISE; END IF;
+      END;
+      BEGIN
+        UPDATE public.invoices
+           SET invoice_type = 'credit_memo'
+         WHERE id = '${damagedReturn.ids.sourceInvoice}';
+        RAISE EXCEPTION 'SMOKE_FAIL: recognized source invoice type changed around an active credit';
+      EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM <> 'RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED' THEN RAISE; END IF;
+      END;
+      BEGIN
+        INSERT INTO public.invoice_items (
+          invoice_id, order_item_id, product_id, description, quantity,
+          unit_price_cents, extended_cents, cost_cents, unit_size
+        ) VALUES (
+          v_credit_id, '${damagedReturn.ids.orderItem}', '${damagedReturn.ids.product}',
+          '[SMOKE] unauthorized appended return credit line', -1, 1000, -1000, 500, 'gal'
+        );
+        RAISE EXCEPTION 'SMOKE_FAIL: active return-credit memo accepted a new line';
+      EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM <> 'RETURN_CREDIT_LEDGER_IMMUTABLE' THEN RAISE; END IF;
+      END;
     END;
     $damaged_return$;
     ROLLBACK;
   `);
   completedProofs.add('NON_RESTOCKED_RETURN_ZERO_COGS_PROVEN');
+  completedProofs.add('SOURCE_BASIS_MUTATION_REJECTED');
+  completedProofs.add('CREDIT_LINE_INSERT_REJECTED');
 
   const orderGateFixture = (suffix, allocated) => `
     BEGIN;
@@ -1533,7 +1635,7 @@ try {
   );
   completedProofs.add('SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED');
   psql(canonicalSourceGuardHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', 'cce665d2c4b34a2b253a9e4518599f75d489309f25cc402fe6ae59269c41442e');
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '17a9bc14956227793674efcb3011a81c38dfb3c864792173ad6d04e13b13d981');
 
   // Sequential latent-defect proof: if a return credit was issued while its
   // source invoice was still a draft, later recognition must fail closed. A
@@ -1709,7 +1811,7 @@ try {
   );
   completedProofs.add('SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED');
   psql(canonicalSourceGuardHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', 'cce665d2c4b34a2b253a9e4518599f75d489309f25cc402fe6ae59269c41442e');
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '17a9bc14956227793674efcb3011a81c38dfb3c864792173ad6d04e13b13d981');
 
   const allConcurrencyFixtures = [
     canonicalConcurrency,
@@ -1756,7 +1858,7 @@ try {
   assert.match(sourceGuardMutantOutput, /SMOKE_FAIL: source sale with an active return credit was soft-deleted/, `source-recognition guard mutant did not reach the source-sale oracle:\n${sourceGuardMutantOutput}`);
   completedProofs.add('SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED');
   psql(canonicalSourceGuardHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', 'cce665d2c4b34a2b253a9e4518599f75d489309f25cc402fe6ae59269c41442e');
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '17a9bc14956227793674efcb3011a81c38dfb3c864792173ad6d04e13b13d981');
 
   // Return-credit ledger mutation proof: without the line guard, the smoke
   // can rewrite an active negative-cost credit line and make a later return
@@ -1793,7 +1895,7 @@ try {
   assert.match(zeroCostLineMutantOutput, /SMOKE_FAIL: active zero-cost return-credit line was costed later/, `zero-cost credit-line mutant did not reach the immutable-ledger oracle:\n${zeroCostLineMutantOutput}`);
   completedProofs.add('ZERO_COST_LEDGER_MUTATION_DETECTED');
   psql(canonicalLineageHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_lineage()', '7b5ccb72380c54cd2a202f891de659bce1b916c09c76ad9884446ba1544dd89f');
+  assertInstalledFunctionHash('public.guard_return_credit_lineage()', '315d7972f986523a48a3a4917ad4eb17b4594c45ee9e08777fdae69556588f64');
 
   psql(`
     DROP TRIGGER aa_crx_guard_return_credit_lineage ON public.invoice_items;

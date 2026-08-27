@@ -61,7 +61,11 @@ new owner decision.
 year-end reports include all recognized `posted`, `overdue`, and `paid` invoices. Regenerating a
 prior-season report can therefore differ from an older printed copy that incorrectly omitted paid
 or overdue invoices. That correction is separate from credit attribution: a 2026 return credit stays
-in 2026 and does not move the credit into the original sale season.
+in 2026 and does not move the credit into the original sale season. The same migration also changes
+invoice-basis P&L and monthly COGS to round each invoice line to exact whole cents before summing; this
+is required so a return can never reverse more COGS than those reports recognized, but it means a
+reprinted P&L or monthly summary containing fractional-quantity lines can differ by a cent from an
+older copy.
 
 
 **RESOLVED 2026-08-25 — the two `/patrol` findings first deferred at the round-3 review cap

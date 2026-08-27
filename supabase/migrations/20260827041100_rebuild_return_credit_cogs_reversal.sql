@@ -346,6 +346,10 @@ DECLARE
   v_restocked_ids uuid[] := ARRAY[]::uuid[];
   v_restocked_qty numeric := 0; v_restocked_count int := 0;
   v_actor uuid := auth.uid();
+  v_inventory_unit text;
+  v_product_inventory_unit text;
+  v_container_size numeric;
+  v_restock_qty numeric;
 BEGIN
   IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
   IF p_received_by IS NOT NULL AND p_received_by IS DISTINCT FROM v_actor THEN RAISE EXCEPTION 'ACTOR_MISMATCH'; END IF;
@@ -387,16 +391,47 @@ BEGIN
     WHERE ri.return_id = p_return_id AND ri.restock AND NOT ri.restocked
     ORDER BY ri.sort_order, ri.id
   LOOP
+    v_restock_qty := v_item.quantity;
+    SELECT NULLIF(btrim(i.unit_size), '')
+      INTO v_inventory_unit
+    FROM public.inventory i
+    WHERE i.product_id = v_item.product_id
+      AND i.location = 'Main Warehouse'
+    FOR UPDATE;
+    SELECT COALESCE(NULLIF(btrim(p.inventory_unit), ''), NULLIF(btrim(p.unit_size), '')),
+           p.container_size
+      INTO v_product_inventory_unit, v_container_size
+    FROM public.products p
+    WHERE p.id = v_item.product_id;
+    IF v_inventory_unit IS NULL THEN
+      v_inventory_unit := v_product_inventory_unit;
+    END IF;
+    IF v_inventory_unit IS NULL
+       OR lower(v_inventory_unit) IS DISTINCT FROM lower(btrim(v_item.source_unit)) THEN
+      -- The only source-free production RMA predates unit-lineage hardening and
+      -- records containers as "ea". Its exact product is stocked in gallons
+      -- with an authoritative 2.5-gallon container size. Preserve that pinned
+      -- compatibility path without allowing a general unit guess.
+      IF p_return_id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid
+         AND v_item.item_id = 'c4f6cc7d-0bbd-4c25-8bc0-c2c9e84aaadd'::uuid
+         AND lower(btrim(v_item.source_unit)) = 'ea'
+         AND v_container_size > 0
+         AND lower(v_inventory_unit) = lower(v_product_inventory_unit) THEN
+        v_restock_qty := v_item.quantity * v_container_size;
+      ELSE
+        RAISE EXCEPTION 'RETURN_CREDIT_INVENTORY_UNIT_MISMATCH';
+      END IF;
+    END IF;
     INSERT INTO public.inventory (product_id, location, quantity_available, quantity_prebooked, quantity_on_order, unit_size)
-    VALUES (v_item.product_id, 'Main Warehouse', v_item.quantity, 0, 0, v_item.source_unit)
+    VALUES (v_item.product_id, 'Main Warehouse', v_restock_qty, 0, 0, v_inventory_unit)
     ON CONFLICT (product_id, location) DO UPDATE
       SET quantity_available = public.inventory.quantity_available + EXCLUDED.quantity_available,
           updated_at = now();
     INSERT INTO public.inventory_transactions (product_id, transaction_type, quantity, to_location, performed_by, notes)
-    VALUES (v_item.product_id, 'returned', v_item.quantity, 'Main Warehouse', v_actor,
+    VALUES (v_item.product_id, 'returned', v_restock_qty, 'Main Warehouse', v_actor,
             'Return ' || v_return.return_number || ': ' || v_item.product_name || ' (' || v_item.condition || ')');
     v_restocked_ids := array_append(v_restocked_ids, v_item.item_id);
-    v_restocked_qty := v_restocked_qty + v_item.quantity;
+    v_restocked_qty := v_restocked_qty + v_restock_qty;
     v_restocked_count := v_restocked_count + 1;
   END LOOP;
   PERFORM set_config('app.return_rpc', 'true', true);
@@ -429,6 +464,7 @@ AS $function$
 DECLARE
   v_leaves_recognized boolean;
   v_enters_recognized boolean := false;
+  v_source_basis_changes boolean := false;
   v_lock_order_item_id uuid;
 BEGIN
   IF TG_OP = 'DELETE' THEN
@@ -436,8 +472,12 @@ BEGIN
   ELSE
     v_leaves_recognized := NEW.deleted_at IS NOT NULL
       OR NEW.status IS NULL
-      OR NEW.status NOT IN ('posted','overdue','paid');
+      OR NEW.status NOT IN ('posted','overdue','paid')
+      OR NEW.invoice_type = 'credit_memo';
+    v_source_basis_changes := NEW.invoice_type IS DISTINCT FROM OLD.invoice_type
+      OR NEW.invoice_date IS DISTINCT FROM OLD.invoice_date;
     v_enters_recognized := OLD.invoice_type <> 'credit_memo'
+      AND NEW.invoice_type <> 'credit_memo'
       AND (OLD.status IS NULL OR OLD.status NOT IN ('posted','overdue','paid') OR OLD.deleted_at IS NOT NULL)
       AND NEW.status IN ('posted','overdue','paid')
       AND NEW.deleted_at IS NULL;
@@ -455,6 +495,8 @@ BEGIN
     ELSIF TG_OP = 'UPDATE'
        AND current_setting('app.crx_return_credit_void', true) = '1'
        AND NEW.status = 'voided'
+       AND NEW.invoice_type IS NOT DISTINCT FROM OLD.invoice_type
+       AND NEW.invoice_date IS NOT DISTINCT FROM OLD.invoice_date
        AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
        AND NEW.season IS NOT DISTINCT FROM OLD.season
        AND NEW.total_amount_cents = 0
@@ -463,20 +505,22 @@ BEGIN
     ELSIF TG_OP = 'UPDATE'
        AND current_setting('app.crx_return_credit_unapply', true) = '1'
        AND NEW.status = 'voided'
+       AND NEW.invoice_type IS NOT DISTINCT FROM OLD.invoice_type
+       AND NEW.invoice_date IS NOT DISTINCT FROM OLD.invoice_date
        AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
        AND NEW.season IS NOT DISTINCT FROM OLD.season
        AND NEW.total_amount_cents IS NOT DISTINCT FROM OLD.total_amount_cents
        AND NEW.total_cost_cents IS NOT DISTINCT FROM OLD.total_cost_cents THEN
       NULL;
     ELSIF v_leaves_recognized
-       OR ROW(NEW.total_amount_cents, NEW.total_cost_cents, NEW.season)
-          IS DISTINCT FROM ROW(OLD.total_amount_cents, OLD.total_cost_cents, OLD.season) THEN
+       OR ROW(NEW.total_amount_cents, NEW.total_cost_cents, NEW.season, NEW.invoice_type, NEW.invoice_date)
+          IS DISTINCT FROM ROW(OLD.total_amount_cents, OLD.total_cost_cents, OLD.season, OLD.invoice_type, OLD.invoice_date) THEN
       RAISE EXCEPTION 'RETURN_CREDIT_HEADER_IMMUTABLE';
     END IF;
   END IF;
   IF OLD.invoice_type <> 'credit_memo'
      AND (
-       (OLD.status IN ('posted','overdue','paid') AND OLD.deleted_at IS NULL AND v_leaves_recognized)
+       (OLD.status IN ('posted','overdue','paid') AND OLD.deleted_at IS NULL AND (v_leaves_recognized OR v_source_basis_changes))
        OR v_enters_recognized
      ) THEN
     -- Only the dangerous transition takes the shared lineage locks. Fail fast
@@ -493,7 +537,7 @@ BEGIN
         RAISE EXCEPTION 'RETURN_CREDIT_SOURCE_CONCURRENT';
       END IF;
     END LOOP;
-    IF v_leaves_recognized AND EXISTS (
+    IF (v_leaves_recognized OR v_source_basis_changes) AND EXISTS (
        SELECT 1
        FROM public.invoice_items source_line
        JOIN public.invoice_items credit_line
@@ -551,7 +595,7 @@ END;
 $function$;
 REVOKE ALL ON FUNCTION public.guard_return_credit_source_recognition() FROM PUBLIC, anon, authenticated, service_role;
 CREATE TRIGGER aa_crx_guard_return_credit_source_recognition
-  BEFORE UPDATE OF status, deleted_at, total_amount_cents, total_cost_cents, season OR DELETE ON public.invoices
+  BEFORE UPDATE OF status, deleted_at, total_amount_cents, total_cost_cents, season, invoice_type, invoice_date OR DELETE ON public.invoices
   FOR EACH ROW EXECUTE FUNCTION public.guard_return_credit_source_recognition();
 
 -- Keep the protected header reachable. Deleting the parent return while its
@@ -721,6 +765,20 @@ DECLARE
   v_invoice_deleted_at timestamptz;
   v_material_change boolean := TG_OP = 'DELETE';
 BEGIN
+  IF TG_OP = 'INSERT' THEN
+    SELECT i.invoice_type, i.status, i.deleted_at
+      INTO v_invoice_type, v_invoice_status, v_invoice_deleted_at
+    FROM public.invoices i
+    WHERE i.id = NEW.invoice_id;
+    IF v_invoice_type = 'credit_memo'
+       AND v_invoice_status IN ('posted','overdue','paid')
+       AND v_invoice_deleted_at IS NULL
+       AND EXISTS (SELECT 1 FROM public.returns r WHERE r.credit_invoice_id = NEW.invoice_id)
+       AND current_setting('app.crx_return_credit_lineage', true) IS DISTINCT FROM '1' THEN
+      RAISE EXCEPTION 'RETURN_CREDIT_LEDGER_IMMUTABLE';
+    END IF;
+    RETURN NEW;
+  END IF;
   IF TG_OP = 'UPDATE' THEN
     v_material_change := ROW(NEW.invoice_id, NEW.order_item_id, NEW.product_id, NEW.quantity, NEW.unit_price_cents, NEW.extended_cents, NEW.cost_cents, NEW.unit_size)
       IS DISTINCT FROM ROW(OLD.invoice_id, OLD.order_item_id, OLD.product_id, OLD.quantity, OLD.unit_price_cents, OLD.extended_cents, OLD.cost_cents, OLD.unit_size);
@@ -768,7 +826,7 @@ END;
 $function$;
 REVOKE ALL ON FUNCTION public.guard_return_credit_lineage() FROM PUBLIC, anon, authenticated, service_role;
 CREATE TRIGGER aa_crx_guard_return_credit_lineage
-  BEFORE UPDATE OF invoice_id, order_item_id, product_id, quantity, unit_price_cents, extended_cents, cost_cents, unit_size OR DELETE
+  BEFORE INSERT OR UPDATE OF invoice_id, order_item_id, product_id, quantity, unit_price_cents, extended_cents, cost_cents, unit_size OR DELETE
   ON public.invoice_items
   FOR EACH ROW EXECUTE FUNCTION public.guard_return_credit_lineage();
 
@@ -937,7 +995,7 @@ DECLARE
     '_issue_return_credit_header_only_impl_20260825', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
     '_issue_return_credit_impl', '4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881',
     '_receive_return_impl_before_inventory_seed_20260825', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
-    '_receive_return_impl_20260714', '722ff281a364867058154c1c7d8060c6c6ea16a60f4c8764005d6ba0c8f0ef28',
+    '_receive_return_impl_20260714', 'bc4a792c968351d1aac3f4e5576ebb9b773fce896228647a32a5b14d93b1472b',
     'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
     '_issue_return_credit_intent_impl_20260812', '55607c6dae0cc11f4837f67c54de88a6f4d83413cd3686e04c21bf33afa4ffa5',
     'receive_return', '80873cb93b67293a811f6be91efb224f7f4dd085fa8c4282267336be430b8b6a',
@@ -1246,7 +1304,7 @@ BEGIN
   FROM pg_proc p
   WHERE p.oid = to_regprocedure('public.guard_return_credit_source_recognition()');
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
-         'cce665d2c4b34a2b253a9e4518599f75d489309f25cc402fe6ae59269c41442e'
+         '17a9bc14956227793674efcb3011a81c38dfb3c864792173ad6d04e13b13d981'
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'guard_return_credit_source_recognition') <> 1
      OR NOT EXISTS (
@@ -1268,7 +1326,7 @@ BEGIN
     AND t.tgname = 'aa_crx_guard_return_credit_source_recognition'
     AND NOT t.tgisinternal;
   IF encode(sha256(convert_to(v_source_guard_triggerdef, 'UTF8')), 'hex') IS DISTINCT FROM
-         '0f0ad06a8e8fe0994d051fc5b6659cef04f9f16829cbf9998e8b3f1265a257cb' THEN
+         'bcc1c37c0256756656cbe06a04c9c8b36ea87703e9ce56f09f34a2f439f4b765' THEN
     RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_SOURCE_GUARD_TRIGGER:%',
       encode(sha256(convert_to(v_source_guard_triggerdef, 'UTF8')), 'hex');
   END IF;
@@ -1276,7 +1334,7 @@ BEGIN
   FROM pg_proc p
   WHERE p.oid = to_regprocedure('public.guard_return_credit_lineage()');
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
-        '7b5ccb72380c54cd2a202f891de659bce1b916c09c76ad9884446ba1544dd89f'
+        '315d7972f986523a48a3a4917ad4eb17b4594c45ee9e08777fdae69556588f64'
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'guard_return_credit_lineage') <> 1
      OR NOT EXISTS (
@@ -1298,7 +1356,7 @@ BEGIN
     AND t.tgname = 'aa_crx_guard_return_credit_lineage'
     AND NOT t.tgisinternal;
   IF encode(sha256(convert_to(v_lineage_guard_triggerdef, 'UTF8')), 'hex') IS DISTINCT FROM
-       'cc146431df3ab52d734ce3f62189bbbd51e3779ce64cfa789ee829e704f9e27c' THEN
+       '04ad4cc62f615e1783fdb0f5019324218ccbf3f3eef1dda0889673355367da8a' THEN
     RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_LINEAGE_GUARD_TRIGGER:%',
       encode(sha256(convert_to(v_lineage_guard_triggerdef, 'UTF8')), 'hex');
   END IF;

@@ -27,6 +27,32 @@ DECLARE
   v_batch_year_end regprocedure := to_regprocedure('public.get_batch_year_end_summaries(uuid[],integer)');
   v_src text;
 BEGIN
+  IF NOT EXISTS (
+       SELECT 1
+       FROM pg_attribute a
+       WHERE a.attrelid = 'public.quote_versions'::regclass
+         AND a.attname = 'restore_trusted_at'
+         AND a.atttypid = 'timestamptz'::regtype
+         AND NOT a.attnotnull
+         AND NOT a.attisdropped
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)')
+         AND p.prosrc LIKE '%restore_trusted_at = clock_timestamp()%'
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)')
+         AND p.prosrc LIKE '%_restore_quote_version_below_cost_impl_20260810%'
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = to_regprocedure('public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)')
+         AND p.prosrc LIKE '%QUOTE_VERSION_LEGACY_UNTRUSTED%'
+     ) THEN
+    RAISE EXCEPTION 'RECOGNIZED_INVOICE_REPORT_PREREQUISITE_MISSING: apply 20260826220000_quote_version_restore_trust_boundary first';
+  END IF;
   IF v_pnl IS NULL OR v_monthly IS NULL OR v_year_end IS NULL
      OR v_require_role IS NULL OR v_is_admin IS NULL OR v_batch_year_end IS NULL
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace

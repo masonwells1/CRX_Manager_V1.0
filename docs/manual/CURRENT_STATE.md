@@ -90,7 +90,7 @@ memo from suppressing either a later delivery's automatic draft invoice or the m
 for a completed unbilled delivery. The fourth keeps the dashboard action queue and the void/cancel
 warning paths on that same active-sales-invoice definition and makes the complete-delivery gate ignore
 soft-deleted invoices. The fifth aligns both order-level invoice creators with that same active,
-non-deleted, non-credit definition. Forty-six load-bearing proofs ended in `SMOKE_PASS_ROLLBACK` with zero residue,
+non-deleted, non-credit definition. Fifty load-bearing proofs ended in `SMOKE_PASS_ROLLBACK` with zero residue,
 including an ordinary non-credit invoice hard-delete proof so the new trigger cannot silently cancel
 unrelated deletes and a real completion proof that preserves return-credit tote provenance.
 Apply all five files in order only through the repository's guarded migration runner or the Supabase

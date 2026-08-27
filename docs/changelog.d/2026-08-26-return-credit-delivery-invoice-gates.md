@@ -26,7 +26,7 @@ so one credit memo cannot produce a simple customer line in one PDF and cost-lot
 
 Fresh read-only production schema was restored into disposable PostgreSQL and seven replay entries were
 applied there: the five PR #361 candidates plus two required compatibility/guard predecessors. The
-rollback-only harness passed 46 load-bearing predicates, including
+rollback-only harness passed 50 load-bearing predicates, including
 separate mutants for the dashboard credit filter and both automatic-invoice filters; direct execution
 of the dashboard, void, cancel, and ordinary hard-delete paths; draft-credit preservation; and proof
 that both invoice paths still create the expected $25 revenue and $5 historical-cost draft. The full

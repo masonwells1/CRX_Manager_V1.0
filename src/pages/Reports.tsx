@@ -20,7 +20,10 @@ import { downloadYearEndSummaryPdf, downloadBatchYearEndSummaries } from '../lib
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import { localToday, formatLocalDate, parseLocalDate } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
-import { getRecognizedInvoiceCustomerIds } from '../lib/recognizedInvoiceCustomers';
+import {
+  getAssignedRecognizedInvoiceCustomerIds,
+  getRecognizedInvoiceCustomerIds,
+} from '../lib/recognizedInvoiceCustomers';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
   ChemicalHistoryRow, CommissionBalanceRow, InventoryCostRow,
@@ -453,13 +456,7 @@ export default function Reports() {
         let uniqueIds = discoveredIds;
         if (!isAdmin) {
           if (!profile) throw new Error('Your profile is still loading — try again in a moment.');
-          const { data: assignedCustomers, error: assignedError } = await supabase
-            .from('customers')
-            .select('id')
-            .in('id', discoveredIds)
-            .eq('assigned_sales_rep', profile.id);
-          if (assignedError) throw assignedError;
-          uniqueIds = (assignedCustomers || []).map((customer) => customer.id);
+          uniqueIds = await getAssignedRecognizedInvoiceCustomerIds(discoveredIds, profile.id);
           const skippedCount = discoveredIds.length - uniqueIds.length;
           if (skippedCount > 0 && uniqueIds.length > 0) {
             toast('warning', `Skipped ${skippedCount} customer${skippedCount === 1 ? '' : 's'} not assigned to you.`);

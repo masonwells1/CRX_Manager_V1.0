@@ -114,8 +114,7 @@ DECLARE
   v_reason       text;
   v_create_header jsonb;
   v_create_items jsonb;
-  v_season integer := CASE WHEN EXTRACT(MONTH FROM CURRENT_DATE) >= 10
-    THEN EXTRACT(YEAR FROM CURRENT_DATE)::integer + 1 ELSE EXTRACT(YEAR FROM CURRENT_DATE)::integer END;
+  v_season integer := public.current_season();
   v_source_season integer := v_season - 1;
 BEGIN
   -- --------------------------------------------------------------------
@@ -183,8 +182,8 @@ BEGIN
   -- same governed preview/apply RPC path used by the app. This keeps the smoke
   -- independent of live catalog contents without disabling product triggers or
   -- touching an existing business row. Everything remains rollback-scoped.
-  INSERT INTO products (product_name)
-  VALUES ('[SMOKE] RCC Governed Product ' || v_suffix)
+  INSERT INTO products (product_name, unit_size, inventory_unit)
+  VALUES ('[SMOKE] RCC Governed Product ' || v_suffix, 'gal', 'gal')
   RETURNING id INTO v_product_id;
 
   v_res := public.preview_product_pricing_changes(
@@ -221,8 +220,8 @@ BEGIN
   -- Delivery completion needs an inventory row. We deliberately remove it
   -- after completion below so receive_return must recreate usable stock rather
   -- than silently marking the return received with restocked=false.
-  INSERT INTO inventory (product_id, location, quantity_available)
-  VALUES (v_product_id, 'Main Warehouse', 100)
+  INSERT INTO inventory (product_id, location, quantity_available, unit_size)
+  VALUES (v_product_id, 'Main Warehouse', 100, 'gal')
   RETURNING id INTO v_inventory_id;
 
   -- Minimal order so issue_return_credit exercises its salesman_id lookup
@@ -1695,6 +1694,12 @@ BEGIN
   );
   IF v_res->>'status' IS DISTINCT FROM 'received' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: legacy receive returned %', v_res;
+  END IF;
+  IF COALESCE((v_res->>'restocked_quantity')::numeric, 0) <> 37.5
+     OR (SELECT quantity_available FROM inventory
+          WHERE product_id = 'fad3ea45-cd8c-4bb8-b0ce-8a515941586c'::uuid
+            AND location = 'Main Warehouse') <> 37.5 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: legacy 15-each return was not converted to 37.5 gallons: %', v_res;
   END IF;
   v_res := issue_return_credit(
     v_legacy_return_id, v_admin, 'smk-rcc-' || v_suffix || '-legacy-credit'
