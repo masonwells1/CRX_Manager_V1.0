@@ -2,28 +2,26 @@
 
 ## 2026-08-27 — safe Codex live-migration approval gate
 
-Codex previously blocked every live migration even after Mason explicitly approved it, because the
-live-action guard had no trustworthy way to distinguish Mason's current prompt from agent-authored
-text. The tempting hook response that asks for approval is not supported by the current Codex
-runtime and fails dangerously: it reports a hook error and continues the tool call.
+Codex previously blocked every live migration even after Mason explicitly approved it. The first
+candidate fix used text from UserPromptSubmit as an approval token, but exact-commit adversarial
+review proved that relayed machine text could be mistaken for Mason's authorship. That design was
+removed before release.
 
-This change adds a Codex-only UserPromptSubmit approval path. Mason sends one exact plain-text
-sentence naming the CRX project and one migration. The hook strips machine envelopes, peer-session
-messages, blockquotes, and code spans before matching, then binds the current migration file to the
-session, turn, Git HEAD, exact project and name, and a normalized SQL SHA-256. The live-action guard
-atomically consumes that token before allowing the matching migration tool call. It expires after
-five minutes and cannot be replayed; any mismatch or failed attempt requires a new owner prompt.
+The replacement uses Codex's native approval system. Both supported Supabase `apply_migration`
+channels are configured to prompt, and Supabase app approvals are routed to the user rather than
+the automatic reviewer. The production guard allows only those two exact tool identities to reach
+the existing migration apply guard; unknown, rogue, or UUID-qualified lookalikes fail closed.
 
-The new gate is additive. The existing migration-review proof, current ordering snapshot,
-destructive-content refusal, exact transmitted-SQL proof, and second-model requirements remain
-separate matching hooks and can still deny the call. Raw mutating SQL, CLI migration commands, the
-large-file apply script, edge-function deploys, and Supabase lifecycle tools remain blocked.
+The gate is additive. The existing exact project, ordered migration snapshot, reviewed SQL hash,
+proof freshness, destructive-content refusal, and second-model requirements can still deny the
+call. Passing them does not approve production: Codex must still show its native prompt and Mason
+must approve that specific tool call. Raw mutating SQL, CLI migration commands, the large-file apply
+script, edge-function deploys, and Supabase lifecycle tools remain blocked.
 
-Tests exercise both directions: exact approval succeeds once; replay, wrong project/name/SQL,
-moved HEAD, wrong session/turn, expiry, edited-after-approval source, machine/peer/quoted prompts,
-missing runtime identity, and manual mint-hook invocation all deny. The protected guard and hook
-manifest are changed only through a clean-HEAD maintenance producer that validates their current
-blobs and requires a fresh exact-head gpt-5.6-sol/high proof before writing.
+Prevention tests verify the native prompt/user-reviewer configuration, exact allowed identities,
+lookalike denial, and protection of the gate configuration and its reviewed maintenance producer.
+The protected guard, configuration, and workflow command are changed only after a fresh exact-head
+gpt-5.6-sol/high proof validates the producer and its expected preimages.
 
 ## 2026-08-26 — the hold latch matches only what Mason typed
 
