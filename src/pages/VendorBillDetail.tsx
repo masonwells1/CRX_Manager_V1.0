@@ -271,7 +271,19 @@ export default function VendorBillDetail() {
         setPaying(false);
         return;
       }
-      if (await paymentIntent.classifyFailure(err) === 'definitive') {
+      const disposition = await paymentIntent.classifyFailure(err);
+      if (disposition === 'resolved') {
+        toast('warning', 'This payment completed in another tab. The bill has been refreshed.');
+        setPayModalOpen(false);
+        setPayModalBillId(null);
+        setPayAmount('');
+        setPayRef('');
+        setPayNotes('');
+        fetchBill();
+        setPaying(false);
+        return;
+      }
+      if (disposition === 'definitive') {
         toast('error', sanitizeError(err));
       } else {
         toast('warning', 'The payment may already be recorded. The exact payment is locked; retry it unchanged to reconcile the result.');

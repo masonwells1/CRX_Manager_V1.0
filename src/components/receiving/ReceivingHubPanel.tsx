@@ -231,10 +231,15 @@ export default function ReceivingHubPanel() {
           const recordIds = receipt?.receiving_record_ids;
           if (Array.isArray(recordIds) && recordIds.every((id) => typeof id === 'string')) {
             toast('warning', 'The earlier receipt already completed. Refreshing the receiving board instead of receiving it twice.');
-          } else if (await receiveIntent.classifyFailure(error) === 'definitive') {
-            throw error;
           } else {
-            throw new Error('The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');
+            const disposition = await receiveIntent.classifyFailure(error);
+            if (disposition === 'resolved') {
+              toast('warning', 'This receipt completed in another tab. Refreshing the receiving board instead of receiving it twice.');
+            } else if (disposition === 'definitive') {
+              throw error;
+            } else {
+              throw new Error('The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');
+            }
           }
         } else {
           assertRpcResult(data, 'receive_po_items');

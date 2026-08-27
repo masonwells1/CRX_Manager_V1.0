@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { generateIdempotencyKey, isDefinitiveRpcRejection } from '../lib/idempotency';
 
-export type MutationFailureDisposition = 'definitive' | 'uncertain';
+export type MutationFailureDisposition = 'definitive' | 'resolved' | 'uncertain';
 
 export type DurableMutationIntentOptions<T> = {
   operation: string;
@@ -12,7 +12,11 @@ export type DurableMutationIntentOptions<T> = {
 };
 
 type DurableMutationIntentRecord<T> = {
-  version: 3;
+  version: 4;
+  status: 'pending' | 'resolved';
+  requestVersion: string;
+  claimTabIds: string[];
+  resolvedAtMs: number | null;
   operation: string;
   userId: string;
   surface: string;
@@ -36,8 +40,9 @@ type LegacyDurableMutationIntentCandidate<T> = {
   retryNotAfterMs?: number;
 };
 
-const DURABLE_INTENT_PREFIX = 'crx:uncertain-mutation:v3:';
+const DURABLE_INTENT_PREFIX = 'crx:uncertain-mutation:v4:';
 const LEGACY_SESSION_PREFIX = 'crx:uncertain-mutation:v1:';
+const DURABLE_INTENT_TAB_ID = 'crx:durable-mutation:tab-id';
 const DURABLE_INTENT_DB = 'crx_durable_mutation_intents';
 const DURABLE_INTENT_STORE = 'intents';
 const SAFE_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;
@@ -76,11 +81,30 @@ function durableStorageKey<T>(options: DurableMutationIntentOptions<T> | undefin
   return `${DURABLE_INTENT_PREFIX}${JSON.stringify([options.operation, options.userId])}`;
 }
 
+function currentTabId(): string {
+  try {
+    const existing = window.sessionStorage.getItem(DURABLE_INTENT_TAB_ID);
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    window.sessionStorage.setItem(DURABLE_INTENT_TAB_ID, created);
+    return created;
+  } catch {
+    return crypto.randomUUID();
+  }
+}
+
 function isValidRecord<T>(
   candidate: Partial<DurableMutationIntentRecord<T>>,
   options: DurableMutationIntentOptions<T>,
 ): candidate is DurableMutationIntentRecord<T> {
-  return candidate.version === 3
+  return candidate.version === 4
+    && (candidate.status === 'pending' || candidate.status === 'resolved')
+    && typeof candidate.requestVersion === 'string'
+    && candidate.requestVersion.length > 0
+    && Array.isArray(candidate.claimTabIds)
+    && candidate.claimTabIds.every((tabId) => typeof tabId === 'string' && tabId.length > 0)
+    && (candidate.resolvedAtMs === null
+      || (typeof candidate.resolvedAtMs === 'number' && Number.isFinite(candidate.resolvedAtMs)))
     && candidate.operation === options.operation
     && candidate.userId === options.userId
     && typeof candidate.surface === 'string'
@@ -101,7 +125,11 @@ function blockedDurableRecord<T>(
   options: DurableMutationIntentOptions<T>,
 ): DurableMutationIntentRecord<T> {
   return {
-    version: 3,
+    version: 4,
+    status: 'pending',
+    requestVersion: `${options.operation}:${options.userId}:blocked`,
+    claimTabIds: [],
+    resolvedAtMs: null,
     operation: options.operation,
     userId: options.userId,
     surface: '__reconciliation_required__',
@@ -147,7 +175,11 @@ function migrateLegacySessionRecord<T>(
         && Number.isFinite(candidate.retryNotAfterMs)
         && candidate.retryNotAfterMs > candidate.createdAtMs;
       const migrated: DurableMutationIntentRecord<T> = {
-        version: 3,
+        version: 4,
+        status: 'pending',
+        requestVersion: candidate.idempotencyKey,
+        claimTabIds: [currentTabId()],
+        resolvedAtMs: null,
         operation: options.operation,
         userId: options.userId,
         surface: candidate.surface,
@@ -232,6 +264,7 @@ async function coordinateDurableRecord<T>(
   proposed: DurableMutationIntentRecord<T>,
   candidateIntent: T,
   options: DurableMutationIntentOptions<T>,
+  tabId: string,
 ): Promise<{ record: DurableMutationIntentRecord<T>; conflict: boolean }> {
   const db = await openDurableIntentDb();
   try {
@@ -251,8 +284,15 @@ async function coordinateDurableRecord<T>(
             : proposed;
         const owned = existing.surface === options.surface
           && existing.scope === (options.scope || '');
-        if (owned) {
-          result = { record: existing, conflict: false };
+        if (existing.status === 'resolved') {
+          result = { record: proposed, conflict: false };
+          store.put({ storageKey, record: proposed });
+        } else if (owned) {
+          const claimed = existing.claimTabIds.includes(tabId)
+            ? existing
+            : { ...existing, claimTabIds: [...existing.claimTabIds, tabId] };
+          result = { record: claimed, conflict: false };
+          store.put({ storageKey, record: claimed });
         } else {
           const candidateIdentity = fingerprintIntent(candidateIntent, options.getIntentIdentity);
           if (
@@ -264,6 +304,9 @@ async function coordinateDurableRecord<T>(
               ...existing,
               surface: options.surface,
               scope: options.scope || '',
+              claimTabIds: existing.claimTabIds.includes(tabId)
+                ? existing.claimTabIds
+                : [...existing.claimTabIds, tabId],
               intent: candidateIntent,
             };
             result = { record: transferred, conflict: false };
@@ -293,14 +336,109 @@ async function coordinateDurableRecord<T>(
   }
 }
 
-async function deleteCoordinatedRecord(storageKey: string | null): Promise<void> {
-  if (!storageKey) return;
+async function readCoordinatedRecord<T>(
+  storageKey: string | null,
+  options: DurableMutationIntentOptions<T> | undefined,
+): Promise<DurableMutationIntentRecord<T> | null> {
+  if (!storageKey || !options) return null;
   const db = await openDurableIntentDb();
   try {
-    await new Promise<void>((resolve, reject) => {
+    return await new Promise((resolve, reject) => {
+      const transaction = db.transaction(DURABLE_INTENT_STORE, 'readonly');
+      const request = transaction.objectStore(DURABLE_INTENT_STORE).get(storageKey);
+      request.onsuccess = () => {
+        const stored = request.result as { record?: unknown } | undefined;
+        const candidate = stored?.record as Partial<DurableMutationIntentRecord<T>> | undefined;
+        resolve(candidate && isValidRecord(candidate, options)
+          ? candidate
+          : stored
+            ? blockedDurableRecord(options)
+            : null);
+      };
+      request.onerror = () => reject(
+        request.error ?? new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE'),
+      );
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function resolveCoordinatedRecord<T>(
+  storageKey: string | null,
+  options: DurableMutationIntentOptions<T> | undefined,
+  requestVersion: string | null,
+): Promise<DurableMutationIntentRecord<T> | null> {
+  if (!storageKey || !options || !requestVersion) return null;
+  const db = await openDurableIntentDb();
+  try {
+    return await new Promise((resolve, reject) => {
       const transaction = db.transaction(DURABLE_INTENT_STORE, 'readwrite');
-      transaction.objectStore(DURABLE_INTENT_STORE).delete(storageKey);
-      transaction.oncomplete = () => resolve();
+      const store = transaction.objectStore(DURABLE_INTENT_STORE);
+      const request = store.get(storageKey);
+      let result: DurableMutationIntentRecord<T> | null = null;
+      request.onsuccess = () => {
+        const stored = request.result as { record?: unknown } | undefined;
+        const candidate = stored?.record as Partial<DurableMutationIntentRecord<T>> | undefined;
+        if (!candidate || !isValidRecord(candidate, options)) return;
+        if (candidate.requestVersion !== requestVersion) {
+          result = candidate;
+          return;
+        }
+        result = {
+          ...candidate,
+          status: 'resolved',
+          resolvedAtMs: Date.now(),
+        };
+        store.put({ storageKey, record: result });
+      };
+      request.onerror = () => reject(
+        request.error ?? new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE'),
+      );
+      transaction.oncomplete = () => resolve(result);
+      transaction.onerror = () => reject(
+        transaction.error ?? new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE'),
+      );
+      transaction.onabort = () => reject(
+        transaction.error ?? new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE'),
+      );
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function deleteCoordinatedRecord<T>(
+  storageKey: string | null,
+  options: DurableMutationIntentOptions<T> | undefined,
+  requestVersion: string | null,
+): Promise<{ deleted: boolean; current: DurableMutationIntentRecord<T> | null }> {
+  if (!storageKey || !options || !requestVersion) return { deleted: true, current: null };
+  const db = await openDurableIntentDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const transaction = db.transaction(DURABLE_INTENT_STORE, 'readwrite');
+      const store = transaction.objectStore(DURABLE_INTENT_STORE);
+      const request = store.get(storageKey);
+      let outcome: { deleted: boolean; current: DurableMutationIntentRecord<T> | null } = {
+        deleted: false,
+        current: null,
+      };
+      request.onsuccess = () => {
+        const stored = request.result as { record?: unknown } | undefined;
+        const candidate = stored?.record as Partial<DurableMutationIntentRecord<T>> | undefined;
+        if (!candidate || !isValidRecord(candidate, options)) return;
+        if (candidate.requestVersion === requestVersion) {
+          store.delete(storageKey);
+          outcome = { deleted: true, current: null };
+        } else {
+          outcome = { deleted: false, current: candidate };
+        }
+      };
+      request.onerror = () => reject(
+        request.error ?? new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE'),
+      );
+      transaction.oncomplete = () => resolve(outcome);
       transaction.onerror = () => reject(
         transaction.error ?? new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE'),
       );
@@ -327,29 +465,38 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
   const identityToken = `${storageKey || ''}:${JSON.stringify([surface, scope])}`;
   const getIntentIdentityRef = useRef(options?.getIntentIdentity);
   getIntentIdentityRef.current = options?.getIntentIdentity;
+  const tabIdRef = useRef<string | null>(null);
+  if (tabIdRef.current === null && typeof window !== 'undefined') tabIdRef.current = currentTabId();
   const initialRecord = readDurableRecord<T>(storageKey, options);
-  const initialOwned = initialRecord?.surface === surface && initialRecord.scope === scope;
+  const initialPending = initialRecord?.status === 'pending';
+  const initialOwned = initialPending
+    && initialRecord.surface === surface
+    && initialRecord.scope === scope;
   const activeIdentityRef = useRef(identityToken);
   const recordRef = useRef<DurableMutationIntentRecord<T> | null>(initialRecord);
-  const idempotencyKeyRef = useRef<string | null>(initialRecord?.idempotencyKey ?? null);
+  const attemptRecordRef = useRef<DurableMutationIntentRecord<T> | null>(initialOwned ? initialRecord : null);
+  const idempotencyKeyRef = useRef<string | null>(initialPending ? initialRecord.idempotencyKey : null);
   const intentRef = useRef<T | null>(initialOwned ? initialRecord.intent : null);
-  const retryNotAfterRef = useRef<number | null>(initialRecord?.retryNotAfterMs ?? null);
+  const retryNotAfterRef = useRef<number | null>(initialPending ? initialRecord.retryNotAfterMs : null);
   const [unresolvedIntent, setUnresolvedIntent] = useState<T | null>(initialOwned ? initialRecord.intent : null);
-  const [hasUnresolvedRecord, setHasUnresolvedRecord] = useState(initialRecord !== null);
-  const [isForeignIntentLocked, setIsForeignIntentLocked] = useState(Boolean(initialRecord && !initialOwned));
-  const [retryNotAfterMs, setRetryNotAfterMs] = useState<number | null>(initialRecord?.retryNotAfterMs ?? null);
+  const [hasUnresolvedRecord, setHasUnresolvedRecord] = useState(initialPending);
+  const [isForeignIntentLocked, setIsForeignIntentLocked] = useState(Boolean(initialPending && !initialOwned));
+  const [retryNotAfterMs, setRetryNotAfterMs] = useState<number | null>(
+    initialPending ? initialRecord.retryNotAfterMs : null,
+  );
   const [, setExpiryRevision] = useState(0);
 
   const applyRecord = useCallback((record: DurableMutationIntentRecord<T> | null) => {
-    const owned = record?.surface === surface && record.scope === scope;
+    const pending = record?.status === 'pending';
+    const owned = pending && record.surface === surface && record.scope === scope;
     recordRef.current = record;
-    idempotencyKeyRef.current = record?.idempotencyKey ?? null;
+    idempotencyKeyRef.current = pending ? record.idempotencyKey : null;
     intentRef.current = owned ? record.intent : null;
-    retryNotAfterRef.current = record?.retryNotAfterMs ?? null;
+    retryNotAfterRef.current = pending ? record.retryNotAfterMs : null;
     setUnresolvedIntent(owned ? record.intent : null);
-    setHasUnresolvedRecord(record !== null);
-    setIsForeignIntentLocked(Boolean(record && !owned));
-    setRetryNotAfterMs(record?.retryNotAfterMs ?? null);
+    setHasUnresolvedRecord(pending);
+    setIsForeignIntentLocked(Boolean(pending && !owned));
+    setRetryNotAfterMs(pending ? record.retryNotAfterMs : null);
   }, [scope, surface]);
 
   const activateCurrentIdentity = useCallback((force = false) => {
@@ -397,8 +544,12 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
       const idempotencyKey = generateIdempotencyKey(options.operation, options.userId);
       const createdAtMs = Date.now();
       const retryNotAfterMs = createdAtMs + SAFE_RETRY_WINDOW_MS;
-      const proposed: DurableMutationIntentRecord<T> = existing ?? {
-        version: 3,
+      const proposed: DurableMutationIntentRecord<T> = existing?.status === 'pending' ? existing : {
+        version: 4,
+        status: 'pending',
+        requestVersion: crypto.randomUUID(),
+        claimTabIds: tabIdRef.current ? [tabIdRef.current] : [],
+        resolvedAtMs: null,
         operation: options.operation,
         userId: options.userId,
         surface,
@@ -409,10 +560,17 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
         createdAtMs,
         retryNotAfterMs,
       };
-      const coordinated = await coordinateDurableRecord(storageKey, proposed, intent, options);
+      const coordinated = await coordinateDurableRecord(
+        storageKey,
+        proposed,
+        intent,
+        options,
+        tabIdRef.current ?? currentTabId(),
+      );
       writeDurableRecord(storageKey, coordinated.record);
       applyRecord(coordinated.record);
       if (coordinated.conflict) throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT);
+      attemptRecordRef.current = coordinated.record;
       return coordinated.record.intent;
     }
 
@@ -426,7 +584,15 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     activateCurrentIdentity(true);
     if (
       recordRef.current
-      && (recordRef.current.surface !== surface || recordRef.current.scope !== scope)
+      && (recordRef.current.status !== 'pending'
+        || recordRef.current.surface !== surface
+        || recordRef.current.scope !== scope)
+    ) {
+      throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT);
+    }
+    if (
+      recordRef.current
+      && attemptRecordRef.current?.requestVersion !== recordRef.current.requestVersion
     ) {
       throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT);
     }
@@ -440,14 +606,26 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
   }, [activateCurrentIdentity, scope, surface]);
 
   const resolveIntent = useCallback(async () => {
-    activateCurrentIdentity(true);
-    await deleteCoordinatedRecord(storageKey);
-    removeDurableRecord(storageKey);
-    applyRecord(null);
-  }, [activateCurrentIdentity, applyRecord, storageKey]);
+    if (!options) {
+      attemptRecordRef.current = null;
+      applyRecord(null);
+      return;
+    }
+    const attempt = attemptRecordRef.current;
+    const resolved = await resolveCoordinatedRecord(
+      storageKey,
+      options,
+      attempt?.requestVersion ?? null,
+    );
+    if (resolved) {
+      if (storageKey) writeDurableRecord(storageKey, resolved);
+      applyRecord(resolved);
+    }
+    attemptRecordRef.current = null;
+  }, [applyRecord, options, storageKey]);
 
   const classifyFailure = useCallback(async (error: unknown): Promise<MutationFailureDisposition> => {
-    activateCurrentIdentity(true);
+    const attempt = attemptRecordRef.current;
     if (
       error instanceof Error
       && (error.message === UNCERTAIN_MUTATION_RETRY_EXPIRED
@@ -456,13 +634,53 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
       return 'uncertain';
     }
     if (isDefinitiveRpcRejection(error)) {
-      await deleteCoordinatedRecord(storageKey);
-      removeDurableRecord(storageKey);
-      applyRecord(null);
+      if (!options) {
+        attemptRecordRef.current = null;
+        applyRecord(null);
+        return 'definitive';
+      }
+      const outcome = await deleteCoordinatedRecord(
+        storageKey,
+        options,
+        attempt?.requestVersion ?? null,
+      );
+      if (outcome.deleted) {
+        removeDurableRecord(storageKey);
+        applyRecord(null);
+      } else if (outcome.current) {
+        if (storageKey) writeDurableRecord(storageKey, outcome.current);
+        applyRecord(outcome.current);
+      }
+      attemptRecordRef.current = null;
       return 'definitive';
     }
+    const current = await readCoordinatedRecord(storageKey, options);
+    if (current) {
+      if (storageKey) writeDurableRecord(storageKey, current);
+      applyRecord(current);
+      if (
+        attempt
+        && current.requestVersion === attempt.requestVersion
+        && current.status === 'resolved'
+      ) {
+        attemptRecordRef.current = null;
+        return 'resolved';
+      }
+      return 'uncertain';
+    }
+    if (attempt && options && storageKey && attempt.status === 'pending') {
+      const restored = await coordinateDurableRecord(
+        storageKey,
+        attempt,
+        attempt.intent,
+        options,
+        tabIdRef.current ?? currentTabId(),
+      );
+      writeDurableRecord(storageKey, restored.record);
+      applyRecord(restored.record);
+    }
     return 'uncertain';
-  }, [activateCurrentIdentity, applyRecord, storageKey]);
+  }, [applyRecord, options, storageKey]);
 
   return {
     beginIntent,

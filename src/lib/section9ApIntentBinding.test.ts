@@ -173,14 +173,16 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(vendorBillDetail).toContain('paymentIntent.beginIntent({');
     expect(vendorBillDetail).toContain("getIdempotencyMismatchResult(err, 'record_vendor_payment')");
     expect(vendorBillDetail).toContain("typeof receipt?.payment_id === 'string'");
-    expect(vendorBillDetail).toContain("paymentIntent.classifyFailure(err) === 'definitive'");
+    expect(vendorBillDetail).toContain('const disposition = await paymentIntent.classifyFailure(err)');
+    expect(vendorBillDetail).toContain("disposition === 'definitive'");
     expect(vendorBillDetail).toContain('Retry Exact Payment');
     expect(vendorBillDetail).toContain('disabled={paymentIntent.isIntentLocked}');
 
     expect(purchaseOrderDetail).toContain('receiveIntent.beginIntent({');
     expect(purchaseOrderDetail).toContain("getIdempotencyMismatchResult(error, 'receive_po_items')");
     expect(purchaseOrderDetail).toContain('Array.isArray(committedRecordIds)');
-    expect(purchaseOrderDetail).toContain("receiveIntent.classifyFailure(error) === 'definitive'");
+    expect(purchaseOrderDetail).toContain('const disposition = await receiveIntent.classifyFailure(error)');
+    expect(purchaseOrderDetail).toContain("disposition === 'definitive'");
     expect(purchaseOrderDetail).toContain('Retry Exact Receiving');
     expect(purchaseOrderDetail).toContain('disabled={receiveIntent.isIntentLocked}');
     expect(idempotency).toContain("candidate.message === 'IDEMPOTENCY_INTENT_MISMATCH'");
@@ -214,6 +216,7 @@ describe('Section 9 AP and receiving intent binding', () => {
     ]) {
       expect(caller).toContain('UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE');
       expect(caller).toContain('.isRetryExpired');
+      expect(caller).toContain("disposition === 'resolved'");
     }
 
     expect(purchaseOrderDetail).toContain("operation: 'receive_po_items'");
@@ -227,7 +230,7 @@ describe('Section 9 AP and receiving intent binding', () => {
     );
     expect(purchaseOrderReceive.indexOf('const lockedRequest = receiveIntent.unresolvedIntent;'))
       .toBeLessThan(purchaseOrderReceive.indexOf('const itemsPayload = items'));
-    expect(purchaseOrderReceive).toContain('request = lockedRequest;');
+    expect(purchaseOrderReceive).toContain('request = await receiveIntent.beginIntent(lockedRequest);');
     expect(vendorBillDetail).toContain('voidPaymentIdem.getKeyFor(voidPaymentScope)');
     expect(vendorBillDetail).toContain('voidPaymentIdem.resetKeyFor(voidPaymentScope)');
     expect(vendorBillDetail).toContain('voidIdem.getKeyFor(voidBillScope)');
@@ -235,7 +238,7 @@ describe('Section 9 AP and receiving intent binding', () => {
   });
 
   it('persists each critical payload and matching key across reopen, unmount, and reload', () => {
-    expect(uncertainMutationIntent).toContain("const DURABLE_INTENT_PREFIX = 'crx:uncertain-mutation:v3:'");
+    expect(uncertainMutationIntent).toContain("const DURABLE_INTENT_PREFIX = 'crx:uncertain-mutation:v4:'");
     expect(uncertainMutationIntent).toContain('const SAFE_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;');
     expect(uncertainMutationIntent).toContain("throw new Error(UNCERTAIN_MUTATION_RETRY_EXPIRED)");
     expect(uncertainMutationIntent).toContain('retryNotAfterMs: number;');
@@ -246,7 +249,8 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(uncertainMutationIntent).toContain("JSON.stringify([options.operation, options.userId])");
     expect(uncertainMutationIntent).toContain("window.addEventListener('storage', handleStorage)");
     expect(uncertainMutationIntent).toContain("db.transaction(DURABLE_INTENT_STORE, 'readwrite')");
-    expect(uncertainMutationIntent).toContain('coordinateDurableRecord(storageKey, proposed, intent, options)');
+    expect(uncertainMutationIntent).toContain('requestVersion: crypto.randomUUID()');
+    expect(uncertainMutationIntent).toContain('resolveCoordinatedRecord(');
     expect(uncertainMutationIntent).toContain('existing.intentIdentity === candidateIdentity');
     expect(uncertainMutationIntent).toContain('throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT)');
 

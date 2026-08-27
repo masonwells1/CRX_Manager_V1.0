@@ -205,7 +205,13 @@ export default function NewVendorBill() {
           navigate(`/accounts-payable/bills/${receipt.bill_id}`);
           return;
         }
-        if (await createBillIntent.classifyFailure(error) === 'definitive') {
+        const disposition = await createBillIntent.classifyFailure(error);
+        if (disposition === 'resolved') {
+          toast('warning', 'This vendor bill completed in another tab. Opening the bill list so you can confirm it.');
+          navigate('/accounts-payable/bills');
+          return;
+        }
+        if (disposition === 'definitive') {
           throw error;
         }
         toast('warning', 'The vendor bill may already exist. The exact request is locked; retry it unchanged to reconcile the result.');

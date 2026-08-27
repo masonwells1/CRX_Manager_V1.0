@@ -170,12 +170,16 @@ describe('QuickReceivePanel Product identity', () => {
       notes: null,
       storage_location: 'Cold Storage',
     }];
-    const storageKey = `crx:uncertain-mutation:v3:${JSON.stringify([
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([
       'receive_po_items',
       'user-1',
     ])}`;
     window.localStorage.setItem(storageKey, JSON.stringify({
-      version: 3,
+      version: 4,
+      status: 'pending',
+      requestVersion: 'frozen-version',
+      claimTabIds: ['frozen-tab'],
+      resolvedAtMs: null,
       operation: 'receive_po_items',
       userId: 'user-1',
       surface: 'quick-receive',
@@ -212,16 +216,20 @@ describe('QuickReceivePanel Product identity', () => {
       }),
     ));
     expect(await screen.findByText(/successfully received 1 item allocation/i)).toBeInTheDocument();
-    await waitFor(() => expect(window.localStorage.getItem(storageKey)).toBeNull());
+    await waitFor(() => expect(window.localStorage.getItem(storageKey)).toContain('"status":"resolved"'));
   });
 
   it('keeps an expired request locked and never calls the receiving RPC', async () => {
-    const storageKey = `crx:uncertain-mutation:v3:${JSON.stringify([
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([
       'receive_po_items',
       'user-1',
     ])}`;
     window.localStorage.setItem(storageKey, JSON.stringify({
-      version: 3,
+      version: 4,
+      status: 'pending',
+      requestVersion: 'expired-version',
+      claimTabIds: ['expired-tab'],
+      resolvedAtMs: null,
       operation: 'receive_po_items',
       userId: 'user-1',
       surface: 'quick-receive',

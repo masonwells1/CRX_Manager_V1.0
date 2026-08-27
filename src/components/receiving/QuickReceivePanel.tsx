@@ -364,7 +364,17 @@ export default function QuickReceivePanel() {
     if (!profile) return;
 
     let request = receiveIntent.unresolvedIntent;
-    if (!request) {
+    if (request) {
+      try {
+        request = await receiveIntent.beginIntent(request);
+      } catch (error) {
+        Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+          extra: { context: 'coordinate_quick_receive_retry' },
+        });
+        toast('error', 'Cannot safely coordinate this retry with another tab. No inventory was changed.');
+        return;
+      }
+    } else {
       if (!matchResults) return;
 
       // Defense in depth: refuse to submit if any price-variance product is missing an explicit PO choice.
@@ -464,7 +474,11 @@ export default function QuickReceivePanel() {
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
         extra: { context: 'confirm_quick_receive', disposition },
       });
-      if (disposition === 'definitive') {
+      if (disposition === 'resolved') {
+        toast('warning', 'This receipt completed in another tab. Showing the completed receipt instead of receiving it twice.');
+        setReceiveCount(request.itemsPayload.length);
+        setStep('success');
+      } else if (disposition === 'definitive') {
         toast('error', error instanceof Error ? error.message : 'Failed to receive items');
       } else {
         toast('warning', 'The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');

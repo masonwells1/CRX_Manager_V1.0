@@ -120,6 +120,7 @@ describe('useUncertainMutationIntent', () => {
   });
 
   it('fails closed before the caller can mutate when durable storage is unavailable', async () => {
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'storage-test-tab');
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
       throw new DOMException('quota exceeded', 'QuotaExceededError');
     });
@@ -202,7 +203,7 @@ describe('useUncertainMutationIntent', () => {
     expect(await restored.result.current.classifyFailure(new Error('DURABLE_MUTATION_INTENT_RETRY_EXPIRED')))
       .toBe('uncertain');
     expect(window.localStorage.getItem(
-      `crx:uncertain-mutation:v3:${JSON.stringify([
+      `crx:uncertain-mutation:v4:${JSON.stringify([
         options.operation,
         options.userId,
       ])}`,
@@ -240,7 +241,7 @@ describe('useUncertainMutationIntent', () => {
       .toThrow('DURABLE_MUTATION_INTENT_RETRY_EXPIRED');
     expect(window.sessionStorage.getItem(storageKey)).toBeNull();
     expect(window.localStorage.getItem(
-      `crx:uncertain-mutation:v3:${JSON.stringify([
+      `crx:uncertain-mutation:v4:${JSON.stringify([
         options.operation,
         options.userId,
       ])}`,
@@ -301,7 +302,7 @@ describe('useUncertainMutationIntent', () => {
     expect(secondTab.result.current.isIntentLocked).toBe(false);
 
     await act(async () => firstTab.result.current.beginIntent({ bill: 'VB-TABS' }));
-    const storageKey = `crx:uncertain-mutation:v3:${JSON.stringify([
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([
       options.operation,
       options.userId,
     ])}`;
@@ -315,22 +316,23 @@ describe('useUncertainMutationIntent', () => {
 
     expect(secondTab.result.current.isIntentLocked).toBe(true);
     expect(secondTab.result.current.unresolvedIntent).toEqual({ bill: 'VB-TABS' });
+    await act(async () => secondTab.result.current.beginIntent({ bill: 'VB-TABS' }));
     expect(secondTab.result.current.getIdempotencyKey())
       .toBe(firstTab.result.current.getIdempotencyKey());
   });
 
-  it('allows only one atomic intent claim when two tabs submit concurrently', async () => {
+  it('coordinates concurrent production-scope tabs under one request version and key', async () => {
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'tab-a');
     const firstTab = renderHook(() => useUncertainMutationIntent<{ bill: string }>({
       operation: 'create_vendor_bill',
       userId: 'admin-race',
       surface: 'new-vendor-bill',
-      scope: 'tab-a',
     }));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'tab-b');
     const secondTab = renderHook(() => useUncertainMutationIntent<{ bill: string }>({
       operation: 'create_vendor_bill',
       userId: 'admin-race',
       surface: 'new-vendor-bill',
-      scope: 'tab-b',
     }));
 
     let outcomes!: PromiseSettledResult<{ bill: string }>[];
@@ -341,12 +343,67 @@ describe('useUncertainMutationIntent', () => {
       ]);
     });
 
-    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
-    const rejected = outcomes.find((outcome) => outcome.status === 'rejected');
-    expect(rejected).toMatchObject({
-      status: 'rejected',
-      reason: expect.objectContaining({ message: 'DURABLE_MUTATION_INTENT_CONFLICT' }),
+    expect(outcomes.every((outcome) => outcome.status === 'fulfilled')).toBe(true);
+    const values = outcomes.map((outcome) => outcome.status === 'fulfilled' ? outcome.value : null);
+    expect(values[0]).toEqual(values[1]);
+    expect([{ bill: 'VB-A' }, { bill: 'VB-B' }]).toContainEqual(values[0]);
+    expect(secondTab.result.current.getIdempotencyKey())
+      .toBe(firstTab.result.current.getIdempotencyKey());
+    const stored = JSON.parse(window.localStorage.getItem(
+      `crx:uncertain-mutation:v4:${JSON.stringify(['create_vendor_bill', 'admin-race'])}`,
+    )!);
+    expect(stored.claimTabIds).toEqual(expect.arrayContaining(['tab-a', 'tab-b']));
+  });
+
+  it('distinguishes a peer-tab completion from a stale failure after a newer request starts', async () => {
+    const options = {
+      operation: 'record_vendor_payment',
+      userId: 'admin-success-race',
+      surface: 'vendor-bill-detail',
+      scope: 'bill-race',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'success-tab');
+    const successTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'lost-tab');
+    const lostTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'stale-tab');
+    const staleTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+
+    await act(async () => successTab.result.current.beginIntent({ amount: 10_000 }));
+    await act(async () => lostTab.result.current.beginIntent({ amount: 10_000 }));
+    await act(async () => staleTab.result.current.beginIntent({ amount: 10_000 }));
+    const completedKey = successTab.result.current.getIdempotencyKey();
+    await act(async () => successTab.result.current.resolveIntent());
+
+    let completedDisposition!: string;
+    await act(async () => {
+      completedDisposition = await lostTab.result.current.classifyFailure({
+        code: 'ETIMEDOUT',
+        message: 'response lost after peer commit',
+      });
     });
+    expect(completedDisposition).toBe('resolved');
+    expect(lostTab.result.current.isIntentLocked).toBe(false);
+
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'new-tab');
+    const newTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    await act(async () => newTab.result.current.beginIntent({ amount: 2_500 }));
+    const newerKey = newTab.result.current.getIdempotencyKey();
+    expect(newerKey).not.toBe(completedKey);
+
+    let disposition!: string;
+    await act(async () => {
+      disposition = await staleTab.result.current.classifyFailure({
+        code: 'ETIMEDOUT',
+        message: 'response lost after commit',
+      });
+    });
+    expect(disposition).toBe('uncertain');
+    expect(staleTab.result.current.isIntentLocked).toBe(true);
+    expect(staleTab.result.current.unresolvedIntent).toEqual({ amount: 2_500 });
+    expect(() => staleTab.result.current.getIdempotencyKey())
+      .toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    expect(newTab.result.current.getIdempotencyKey()).toBe(newerKey);
   });
 
   it('coordinates the same receiving payload across surfaces under the original key', async () => {
@@ -432,7 +489,7 @@ describe('useUncertainMutationIntent', () => {
       surface: 'vendor-bill-detail',
       scope: 'bill-corrupt',
     };
-    const storageKey = `crx:uncertain-mutation:v3:${JSON.stringify([
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([
       options.operation,
       options.userId,
     ])}`;

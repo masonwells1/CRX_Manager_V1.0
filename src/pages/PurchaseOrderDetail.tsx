@@ -311,7 +311,7 @@ export default function PurchaseOrderDetail() {
       // A committed receipt reduces the live remaining quantity. Revalidating
       // against that refreshed state would deadlock the exact replay that must
       // reconcile a lost response, so locked retries use the frozen request.
-      request = lockedRequest;
+      request = await receiveIntent.beginIntent(lockedRequest);
     } else {
       const itemsPayload = items
         .filter((item) => parseFloat(receiveItems[item.id]?.qty || '0') > 0)
@@ -383,6 +383,7 @@ export default function PurchaseOrderDetail() {
           p_allow_over_receive: request.allowOverReceive,
         });
         let responseData: unknown;
+        let completedElsewhere = false;
         if (error) {
           const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
           const committedRecordIds = receipt?.receiving_record_ids;
@@ -391,11 +392,19 @@ export default function PurchaseOrderDetail() {
             && committedRecordIds.every((recordId) => typeof recordId === 'string')
           ) {
             responseData = receipt;
+            completedElsewhere = true;
             toast('warning', 'The earlier receiving update already completed. The PO has been refreshed instead of receiving it twice.');
-          } else if (await receiveIntent.classifyFailure(error) === 'definitive') {
-            throw error;
           } else {
-            throw new Error('The receiving update may already be recorded. Retry the locked request unchanged to reconcile it.');
+            const disposition = await receiveIntent.classifyFailure(error);
+            if (disposition === 'resolved') {
+              responseData = receipt;
+              completedElsewhere = true;
+              toast('warning', 'This receiving update completed in another tab. The PO has been refreshed instead of receiving it twice.');
+            } else if (disposition === 'definitive') {
+              throw error;
+            } else {
+              throw new Error('The receiving update may already be recorded. Retry the locked request unchanged to reconcile it.');
+            }
           }
         } else {
           responseData = assertRpcResult(data, 'receive_po_items');
@@ -403,7 +412,7 @@ export default function PurchaseOrderDetail() {
         await receiveIntent.resolveIntent();
 
         // AUDIT 3.2: Notify admins about damaged/non-good items
-        if (po) {
+        if (po && !completedElsewhere) {
           const damagedItems = request.itemsPayload
             .filter((ip) => ip.condition && ip.condition !== 'good')
             .map((ip) => {
