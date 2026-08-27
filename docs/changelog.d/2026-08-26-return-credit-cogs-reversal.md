@@ -31,6 +31,13 @@ customer from the run.
 Apply warning: the quote-version trust migration must be live first. The first return-credit file then
 intentionally freezes credit issuance until the second succeeds; if the second fails, returns remain
 fail-closed and an engineer must repair the reported drift and rerun it before credits resume.
+Rerun the 29 read-only PR #361 predicates, including the open-restock unit query, inside that same
+maintenance window and stop before the first return-credit file if any new unhandled row appears.
+
+The general Invoice Detail writer's pre-existing loss of `invoice_items.order_item_id` is promoted to
+an explicit apply blocker in `docs/manual/KNOWN_ISSUES.md`. Merge is safe because these migrations do
+nothing until separately applied; live apply waits for Mason to choose the durable lineage-preserving
+writer fix or an explicit server/UI restriction on editing generated invoices.
 
 No migration was applied to production by this repository change. The fresh read-only production
 schema passed the 51-signal disposable PostgreSQL proof, including a mutant that removes the open-return

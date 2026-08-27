@@ -847,10 +847,13 @@ try {
     .replace("'unopened', true, true, 0", "'unopened', true, false, 0");
   assert.notEqual(rolloutInventoryUnitSql, rolloutInventoryUnitFixture.sql, 'open-return inventory-unit fixture was not changed');
   const noOpenInventoryUnitGuardMutant = cogsSql.replace(
-    /  IF EXISTS \(\r?\n    SELECT 1\r?\n    FROM public\.returns r\r?\n    JOIN public\.return_items ri ON ri\.return_id = r\.id\r?\n    LEFT JOIN public\.order_items oi[\s\S]*?RAISE EXCEPTION 'RETURN_COGS_OPEN_RETURN_INVENTORY_UNIT_REQUIRES_REPAIR';\r?\n  END IF;\r?\n/,
+    /  -- OPEN_RETURN_INVENTORY_UNIT_PREFLIGHT:[\s\S]*?RAISE EXCEPTION 'RETURN_COGS_OPEN_RETURN_INVENTORY_UNIT_REQUIRES_REPAIR';\r?\n  END IF;\r?\n/,
     '',
   );
   assert.notEqual(noOpenInventoryUnitGuardMutant, cogsSql, 'open-return inventory-unit rollout mutant did not remove the guard');
+  assert.match(noOpenInventoryUnitGuardMutant, /RETURN_COGS_NONTERMINAL_RETURN_UNIT_REQUIRES_REPAIR/, 'open-return mutant also removed the nonterminal unit guard');
+  assert.match(noOpenInventoryUnitGuardMutant, /RETURN_COGS_RECEIVED_SOURCE_UNIT_REQUIRES_REPAIR/, 'open-return mutant also removed the received source-unit guard');
+  assert.doesNotMatch(noOpenInventoryUnitGuardMutant, /RETURN_COGS_OPEN_RETURN_INVENTORY_UNIT_REQUIRES_REPAIR/, 'open-return mutant left its target guard installed');
   const openInventoryUnitFixturePrefix = `
     BEGIN;
     ${rolloutInventoryUnitSql}

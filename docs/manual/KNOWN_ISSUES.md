@@ -48,10 +48,25 @@ ordinary hard-delete path for unrelated invoices; the disposable proof executes 
 real draft header and cascaded line item.
 The fifth aligns both order-level invoice creators with the same active, non-deleted, non-credit
 predicate, so the server cannot refuse the billing-recovery action the UI correctly exposes.
+Immediately before the maintenance-window apply, rerun the open-restock inventory-unit predicate and
+all 29 read-only PR #361 invariant predicates. If any new unhandled mismatch exists, stop before row
+894; do not intentionally raise the cutover barrier until the row is repaired and the predicates are
+clean in that same window.
 Because every recognized-status transition must coordinate with a return credit that could start at
 the same instant, two people posting invoices for the same order line concurrently can make one post
 fail cleanly with a wait-and-retry message even when no return credit exists yet. No data is at risk;
 retry the refused post after the other finishes.
+
+**OPEN APPLY GATE — general Invoice Detail can strip return-cost lineage.** The live
+`_save_invoice_scoped_impl` rebuilds `invoice_items` without `order_item_id` and re-derives cost from
+the product's current cost. Editing a delivery/order-generated draft through the general Invoice
+Detail page can therefore erase the historical source line that the PR #361 allocator needs; a later
+return would refund revenue but conservatively reverse zero COGS, understating profit with no runtime
+error. The warning is also recorded in `docs/reference/gotchas.md`, but prose alone is not a durable
+fix. Merging the candidate does not activate this risk. **Do not apply the five PR #361 migrations
+live until Mason chooses one reviewed closure:** preserve `order_item_id` and historical `cost_cents`
+through the save RPC (recommended durable fix), or deliberately restrict/refuse general-editor saves
+for generated invoices. No acceptance of the accounting risk has been inferred or recorded.
 
 **ACCEPTED POLICY — late return credits stay in the current crop season.** Mason chose this on
 2026-08-26 to keep prior customer year-end summaries stable and the rule simple. Consequently, a

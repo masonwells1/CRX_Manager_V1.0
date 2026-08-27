@@ -71,6 +71,12 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_COGS_NONTERMINAL_RETURN_UNIT_REQUIRES_REPAIR');
     expect(migration).toContain('RETURN_COGS_RECEIVED_SOURCE_UNIT_REQUIRES_REPAIR');
     expect(migration).toContain('RETURN_COGS_OPEN_RETURN_INVENTORY_UNIT_REQUIRES_REPAIR');
+    expect(migration).toContain('-- OPEN_RETURN_INVENTORY_UNIT_PREFLIGHT:');
+    expect(migration).toContain('AND ri.quantity = 15');
+    expect(migration).toContain('AND p.container_size = 2.5');
+    expect(migration).toContain('AND v_item.quantity = 15');
+    expect(migration).toContain('AND v_container_size = 2.5');
+    expect(migration).toContain('AND NOT COALESCE((');
     expect(migration).toContain("r.status IN ('requested','approved','received')");
     expect(migration).toContain("inv.status IN ('posted','overdue','paid')");
     expect(migration).toContain('RETURN_COGS_PREFLIGHT_UNLINKED_COST_CREDIT');
@@ -181,7 +187,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain("p.prorettype = 'void'::regtype");
     expect(migration).toContain("p.prorettype = 'jsonb'::regtype");
     expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881');
-    expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('bc4a792c968351d1aac3f4e5576ebb9b773fce896228647a32a5b14d93b1472b');
+    expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('f7e030b6d0b4c78c6049e2a7a16859c5b056fab5ebb2f6a2bf2eafa0303a53c1');
     expect(migration).toContain("p_return_id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid");
     expect(migration).toContain('v_restock_qty := v_item.quantity * v_container_size');
     expect(functionBodySha256(migration, 'void_invoice')).toBe('7d1eb3222e0cd59318919206d2338de7477c2091f22550671ecbcf5ff80a9d14');
@@ -241,10 +247,11 @@ describe('return-credit COGS migration', () => {
     expect(monthEndPage).not.toContain('Posted Invoices');
     expect(customerDetailPage).toContain("toast('error', sanitizeError(err))");
     expect(customerDetailPage).not.toContain("err instanceof Error ? err.message : 'Failed to generate summary'");
-    const batchPostHandler = invoicesPage.slice(
-      invoicesPage.indexOf('const handleBatchPost = async () =>'),
-      invoicesPage.indexOf('const handleBatchPrint = async () =>'),
-    );
+    const batchPostStart = invoicesPage.indexOf('const handleBatchPost = async () =>');
+    const batchPrintStart = invoicesPage.indexOf('const handleBatchPrint = async (');
+    expect(batchPostStart).toBeGreaterThanOrEqual(0);
+    expect(batchPrintStart).toBeGreaterThan(batchPostStart);
+    const batchPostHandler = invoicesPage.slice(batchPostStart, batchPrintStart);
     expect(batchPostHandler).toContain('failures.push(`${target.label}: ${sanitizeError(err)}`)');
   });
 
@@ -311,7 +318,7 @@ describe('return-credit COGS migration', () => {
     const migrationSha256 = createHash('sha256')
       .update(migration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(migrationSha256).toBe('8d7fe1918d2c1b87d0b57314eade3659c2895eeb6f847ac227aef8884c21a396');
+    expect(migrationSha256).toBe('9b8fa3d9d1dcbd05656d2c301a935a2405ef7aa484eae14a1e2f18fcb8a777f8');
     expect(migrationHistory).toContain(`LF-normalized SQL SHA-256: \`${migrationSha256}\``);
   });
 

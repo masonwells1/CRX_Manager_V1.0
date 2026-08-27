@@ -97,6 +97,10 @@ including an ordinary non-credit invoice hard-delete proof so the new trigger ca
 unrelated deletes and a real completion proof that preserves return-credit tote provenance.
 Apply all five files in order only through the repository's guarded migration runner or the Supabase
 migration operation, never through the ad-hoc SQL channel.
+Live apply is additionally blocked on the open Invoice Detail lineage decision in `KNOWN_ISSUES.md`:
+the current general save writer can strip `order_item_id` from generated draft lines. Merge does not
+activate that path; Mason must choose the durable writer fix or an explicit generated-invoice edit
+restriction before the five migrations are applied.
 After an approved live apply, the schema registry must be regenerated from live before closeout.
 
 **Superseded 2026-08-22 header, kept for provenance — was last verified 2026-08-22 UTC for the ledger only** — a read-only re-read returning 971 rows, high-water `20260816174353`, 345 of 971 names timestamp-prefixed, every figure **unchanged** from the previous pass; that pass also read the four live `job_chemicals` rows while measuring the blast radius of parked migration `20260820120000` (history row 891), which is written and proven but **not applied**. The `quote_versions` write surface, the return-idempotency helper contract, and the section 2 counts were last read live **2026-08-19 UTC** and are carried forward on that reading, not re-verified since. **The live ledger has 971 rows.** Its highest `version` is `20260816174353`, carrying submitted migration name `20260813080000_lock_quote_versions_writes_to_rpc`, which is also the highest *timestamp-prefixed* `name` — so both orderings agree on the same row. (Only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is

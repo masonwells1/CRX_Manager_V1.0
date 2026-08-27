@@ -229,6 +229,8 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'RETURN_COGS_RECEIVED_SOURCE_UNIT_REQUIRES_REPAIR';
   END IF;
+  -- OPEN_RETURN_INVENTORY_UNIT_PREFLIGHT: keep this marker unique so the
+  -- mutation harness removes this guard and no neighboring preflight.
   IF EXISTS (
     SELECT 1
     FROM public.returns r
@@ -257,14 +259,15 @@ BEGIN
         OR lower(COALESCE(NULLIF(btrim(i.unit_size), ''), units.product_inventory_unit))
            IS DISTINCT FROM lower(btrim(units.source_unit))
       )
-      AND NOT (
+      AND NOT COALESCE((
         r.id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid
         AND ri.id = 'c4f6cc7d-0bbd-4c25-8bc0-c2c9e84aaadd'::uuid
         AND lower(btrim(units.source_unit)) = 'ea'
-        AND p.container_size > 0
+        AND ri.quantity = 15
+        AND p.container_size = 2.5
         AND lower(COALESCE(NULLIF(btrim(i.unit_size), ''), units.product_inventory_unit))
             = lower(units.product_inventory_unit)
-      )
+      ), false)
   ) THEN
     RAISE EXCEPTION 'RETURN_COGS_OPEN_RETURN_INVENTORY_UNIT_REQUIRES_REPAIR';
   END IF;
@@ -454,7 +457,8 @@ BEGIN
       IF p_return_id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid
          AND v_item.item_id = 'c4f6cc7d-0bbd-4c25-8bc0-c2c9e84aaadd'::uuid
          AND lower(btrim(v_item.source_unit)) = 'ea'
-         AND v_container_size > 0
+         AND v_item.quantity = 15
+         AND v_container_size = 2.5
          AND lower(v_inventory_unit) = lower(v_product_inventory_unit) THEN
         v_restock_qty := v_item.quantity * v_container_size;
       ELSE
@@ -1034,7 +1038,7 @@ DECLARE
     '_issue_return_credit_header_only_impl_20260825', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
     '_issue_return_credit_impl', '4724b26d13c30047b37c187b4a4d9058db2c35c531b825c8c040d90a7a3e3881',
     '_receive_return_impl_before_inventory_seed_20260825', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
-    '_receive_return_impl_20260714', 'bc4a792c968351d1aac3f4e5576ebb9b773fce896228647a32a5b14d93b1472b',
+    '_receive_return_impl_20260714', 'f7e030b6d0b4c78c6049e2a7a16859c5b056fab5ebb2f6a2bf2eafa0303a53c1',
     'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
     '_issue_return_credit_intent_impl_20260812', '55607c6dae0cc11f4837f67c54de88a6f4d83413cd3686e04c21bf33afa4ffa5',
     'receive_return', '80873cb93b67293a811f6be91efb224f7f4dd085fa8c4282267336be430b8b6a',
