@@ -58,6 +58,8 @@ interface LineItem {
    *  Undefined until the split-billing migration lands; when set, its quantity/price
    *  are server-allocated and must not be edited (would clobber the split amount). */
   billing_line_id?: string | null;
+  return_credit_cogs_cents?: number | null;
+  return_credit_source_item_id?: string | null;
   // Field-application detail — preserved through edits so the machine-fee flag,
   // applied amounts and EPA/form survive a "bill actual" edit (#3 edit-path).
   is_application_fee: boolean;
@@ -556,6 +558,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           tote_number: (it.tote_number as string) ?? null,
           price_source: (it.price_source as LineItem['price_source']) ?? null,
           quoted_price_cents: it.quoted_price_cents != null ? Number(it.quoted_price_cents) : null,
+          return_credit_cogs_cents: it.return_credit_cogs_cents != null ? Number(it.return_credit_cogs_cents) : null,
+          return_credit_source_item_id: (it.return_credit_source_item_id as string) ?? null,
           is_application_fee: Boolean((it as Record<string, unknown>).is_application_fee),
           rate_unit: ((it as Record<string, unknown>).rate_unit as string) ?? null,
           total_applied: (it as Record<string, unknown>).total_applied != null ? Number((it as Record<string, unknown>).total_applied) : null,
@@ -1375,15 +1379,19 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   //   total_cost_cents holds the penny-exact largest-remainder-allocated COGS — recomputing
   //   cost_cents*quantity here would mis-display it (1¢ cost split 50/50 shows 1¢+1¢ vs the
   //   authoritative 1¢+0¢). Use the header total.
-  // - Posted return credits also use the stored header because their grouped fractional lines
+  // - Protected return credits also use the stored header because their grouped fractional lines
   //   telescope to the original penny-exact COGS. Recomputing each line can differ by one cent.
   // - Otherwise mirror save_invoice DELTA-E: a machine-fee line stores its EXACT extended cost
   //   (its quantity is acres, not a multiplier), so add it as-is; product lines store a per-unit
   //   cost -> x quantity. Using x quantity for the fee line would inflate Total Cost by acres.
-  const useStoredTotalCost = isSplitInvoice || (invoice.invoice_type === 'credit_memo' && !editable);
-  const totalCostCents = useStoredTotalCost && storedTotalCostCents != null
-    ? Number(storedTotalCostCents)
-    : items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
+  const isProtectedReturnCredit = invoice.invoice_type === 'credit_memo'
+    && !editable
+    && items.some((item) => item.return_credit_source_item_id != null || item.return_credit_cogs_cents != null);
+  const totalCostCents = isSplitInvoice
+    ? Number(storedTotalCostCents ?? 0)
+    : isProtectedReturnCredit && storedTotalCostCents != null
+      ? Number(storedTotalCostCents)
+      : items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
   const displayItems = editable
     ? items
     : groupReturnCreditDisplayItems(invoice.invoice_type, items);

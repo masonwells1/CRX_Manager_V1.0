@@ -34,7 +34,9 @@ closing the otherwise unsafe commit gap between the two files. They must be appl
 second fails, leave the barrier active, repair the drift it reports, and rerun it; an emergency removal
 needs its own reviewed forward migration and would knowingly reopen the zero-COGS defect.
 Both files bound their table-lock wait at five seconds so a stuck reader causes a clean apply failure
-instead of leaving Returns queued indefinitely. The second blocks a draft source invoice only when
+instead of leaving Returns queued indefinitely. The new validated `invoice_items` constraints hold
+that table lock for the validating scan itself; schedule the back-to-back apply in the maintenance
+window even though waiting to acquire the lock is bounded. The second blocks a draft source invoice only when
 recognizing it would expose an uncosted, restocked return quantity; a fully costed prior return does not
 block a later delivery invoice. Posting uses the same ordered advisory-lock protocol as credit issuance
 and fails fast on contention. The migration also excludes new credit-memo lines from delivery billing
@@ -57,6 +59,12 @@ the same instant, two people posting invoices for the same order line concurrent
 fail cleanly with a wait-and-retry message even when no return credit exists yet. No data is at risk;
 retry the refused post after the other finishes.
 
+The source-line foreign key is intentionally retained after a credit is voided or unapplied. It is an
+accounting audit link, so a source invoice that has ever funded a return credit cannot be hard-deleted;
+keep it and use the ordinary void workflow instead. Clearing the link would make later reapply/reissue
+allocation ambiguous. The operator error sanitizer explains this rule when the foreign key refuses a
+delete.
+
 **OPEN APPLY GATE — general Invoice Detail can strip return-cost lineage.** The live
 `_save_invoice_scoped_impl` rebuilds `invoice_items` without `order_item_id` and re-derives cost from
 the product's current cost. Editing a delivery/order-generated draft through the general Invoice
@@ -67,6 +75,10 @@ fix. Merging the candidate does not activate this risk. **Do not apply the five 
 live until Mason chooses one reviewed closure:** preserve `order_item_id` and historical `cost_cents`
 through the save RPC (recommended durable fix), or deliberately restrict/refuse general-editor saves
 for generated invoices. No acceptance of the accounting risk has been inferred or recorded.
+
+After the approved live apply, regenerate the live schema registry and Supabase-derived type artifacts,
+and confirm both nullable ledger columns (`invoice_items.return_credit_cogs_cents bigint` and
+`invoice_items.return_credit_source_item_id uuid`) are present before declaring the rollout closed.
 
 **ACCEPTED POLICY — late return credits stay in the current crop season.** Mason chose this on
 2026-08-26 to keep prior customer year-end summaries stable and the rule simple. Consequently, a

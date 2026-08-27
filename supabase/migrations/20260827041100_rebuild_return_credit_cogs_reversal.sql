@@ -328,7 +328,7 @@ BEGIN
         'invoice_items_return_credit_source_item_fk',
         'invoice_items_return_credit_source_shape_chk'
       )
-  ) THEN
+  ) OR to_regclass('public.invoice_items_return_credit_source_item_idx') IS NOT NULL THEN
     RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_ALLOCATION_LEDGER_COLLISION';
   END IF;
 END;
@@ -348,6 +348,9 @@ ALTER TABLE public.invoice_items
   ADD CONSTRAINT invoice_items_return_credit_source_item_fk
   FOREIGN KEY (return_credit_source_item_id)
   REFERENCES public.invoice_items(id) ON DELETE RESTRICT;
+CREATE INDEX invoice_items_return_credit_source_item_idx
+  ON public.invoice_items (return_credit_source_item_id)
+  WHERE return_credit_source_item_id IS NOT NULL;
 ALTER TABLE public.invoice_items
   ADD CONSTRAINT invoice_items_return_credit_source_shape_chk
   CHECK (
@@ -986,10 +989,12 @@ BEGIN
       AND ci.id <> v_invoice_id
   ) THEN RAISE EXCEPTION 'RETURN_CREDIT_UNLINKED_COST_LINE'; END IF;
 
-  -- Row locks protect delivered-quantity state. The advisory loop above, not
-  -- this query's sort order, is the cross-table deadlock ordering protocol.
+  -- Row locks protect delivered-quantity state. Match the delivery-backfill
+  -- lock order as well as the advisory-lock protocol so the two workflows
+  -- cannot acquire overlapping order-item rows in opposite orders.
   PERFORM 1 FROM public.order_items oi
   WHERE oi.id IN (SELECT ri.order_item_id FROM public.return_items ri WHERE ri.return_id = p_return_id AND ri.order_item_id IS NOT NULL)
+  ORDER BY oi.id
   FOR UPDATE;
   PERFORM set_config('app.crx_return_credit_lineage', '1', true);
 
@@ -1120,9 +1125,10 @@ BEGIN
      AND s.cost_cents = r.cost_cents
     WHERE r.reversed_cents > COALESCE(s.recognized_cents, 0);
   IF v_cap_violation IS NOT NULL THEN
-    RAISE EXCEPTION 'RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED:%:%',
-      (SELECT r.return_number FROM public.returns r WHERE r.id = p_return_id),
-      v_cap_violation;
+    RAISE EXCEPTION USING
+      MESSAGE = 'RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED',
+      DETAIL = 'The requested reversal exceeded the recognized whole-cent source-cost ceiling.',
+      HINT = 'Void or unapply conflicting credits and review source-invoice COGS before retrying.';
   END IF;
   -- RETURN_CREDIT_RECOGNIZED_CAP_END
 
@@ -1163,7 +1169,7 @@ DO $postflight$
 DECLARE
   v_expected jsonb := jsonb_build_object(
     '_issue_return_credit_header_only_impl_20260825', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
-    '_issue_return_credit_impl', 'ef577f187119c17a13f8f49701e8497d04480287d5f52168f9e878d4420668f3',
+    '_issue_return_credit_impl', 'c264b6bab2f0a1c3f81ca5de54a7436b10a9e2dba001c80f2d240774a12804f4',
     '_receive_return_impl_before_inventory_seed_20260825', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
     '_receive_return_impl_20260714', 'f7e030b6d0b4c78c6049e2a7a16859c5b056fab5ebb2f6a2bf2eafa0303a53c1',
     'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
@@ -1275,6 +1281,16 @@ BEGIN
       AND i.indpred IS NOT NULL
       AND pg_get_indexdef(idx.oid) =
         'CREATE INDEX returns_credit_invoice_id_active_idx ON public.returns USING btree (credit_invoice_id) WHERE (credit_invoice_id IS NOT NULL)'
+  ) OR NOT EXISTS (
+    SELECT 1
+    FROM pg_class idx
+    JOIN pg_index i ON i.indexrelid = idx.oid
+    WHERE idx.oid = to_regclass('public.invoice_items_return_credit_source_item_idx')
+      AND i.indrelid = 'public.invoice_items'::regclass
+      AND i.indisvalid AND i.indisready
+      AND i.indpred IS NOT NULL
+      AND pg_get_indexdef(idx.oid) =
+        'CREATE INDEX invoice_items_return_credit_source_item_idx ON public.invoice_items USING btree (return_credit_source_item_id) WHERE (return_credit_source_item_id IS NOT NULL)'
   ) THEN
     RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_INDEX_DRIFT';
   END IF;

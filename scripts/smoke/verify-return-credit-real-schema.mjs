@@ -2020,7 +2020,7 @@ try {
   assert.match(unlinkedCostMutantOutput, /SMOKE_FAIL: unlinked cost credit was ignored by return issuance/, `unlinked-cost guard mutant did not reach the ambiguous-credit oracle:\n${unlinkedCostMutantOutput}`);
   completedProofs.add('UNLINKED_COST_GUARD_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'ef577f187119c17a13f8f49701e8497d04480287d5f52168f9e878d4420668f3');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'c264b6bab2f0a1c3f81ca5de54a7436b10a9e2dba001c80f2d240774a12804f4');
 
   const priorCreditConsumptionMutant = canonicalIssueHelper.replace(
     'COALESCE(pl.reversed_qty, 0)',
@@ -2034,7 +2034,7 @@ try {
   assert.match(priorCreditMutantOutput, /SMOKE_FAIL:|RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED/, `prior-credit-consumption mutant did not reach an accounting oracle:\n${priorCreditMutantOutput}`);
   completedProofs.add('PRIOR_CREDIT_CONSUMPTION_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'ef577f187119c17a13f8f49701e8497d04480287d5f52168f9e878d4420668f3');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'c264b6bab2f0a1c3f81ca5de54a7436b10a9e2dba001c80f2d240774a12804f4');
 
   const unclearedLineageMutant = canonicalIssueHelper.replace(
     /  PERFORM set_config\('app\.crx_return_credit_lineage', '0', true\);\r?\n/,
@@ -2048,7 +2048,7 @@ try {
   assert.match(unclearedLineageOutput, /SMOKE_FAIL: active return-credit header ledger was mutated/, `lineage-clear mutant did not reach the header bypass-window oracle:\n${unclearedLineageOutput}`);
   completedProofs.add('LINEAGE_CLEAR_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'ef577f187119c17a13f8f49701e8497d04480287d5f52168f9e878d4420668f3');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'c264b6bab2f0a1c3f81ca5de54a7436b10a9e2dba001c80f2d240774a12804f4');
 
   const groupedCostBucketMutant = canonicalIssueHelper.replaceAll(
     'PARTITION BY al.id ORDER BY al.created_at, al.source_item_id, al.line_cost_cents',
@@ -2062,7 +2062,7 @@ try {
   assert.match(mutantOutput, /SMOKE_FAIL: RETURN_COGS_EXPECTED_6700 got[\s\S]*6601/, `grouped-cost-bucket mutant did not reach the 6601 accounting oracle:\n${mutantOutput}`);
   completedProofs.add('GROUPED_COST_BUCKET_6601_REJECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'ef577f187119c17a13f8f49701e8497d04480287d5f52168f9e878d4420668f3');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'c264b6bab2f0a1c3f81ca5de54a7436b10a9e2dba001c80f2d240774a12804f4');
 
   const creditSeasonMutant = canonicalIssueHelper.replace(
     'SET total_cost_cents = -v_cogs, season = public.current_season()',
@@ -2080,7 +2080,7 @@ try {
   );
   completedProofs.add('CREDIT_CURRENT_SEASON_MUTATION_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'ef577f187119c17a13f8f49701e8497d04480287d5f52168f9e878d4420668f3');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'c264b6bab2f0a1c3f81ca5de54a7436b10a9e2dba001c80f2d240774a12804f4');
 
   const fractionalDoubleRoundMutant = canonicalIssueHelper.replace(
     `(ROUND(cp.line_cost_cents * (cp.posted_qty - cp.available_qty + cp.part_qty))
@@ -2099,7 +2099,7 @@ try {
   );
   completedProofs.add('FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'ef577f187119c17a13f8f49701e8497d04480287d5f52168f9e878d4420668f3');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'c264b6bab2f0a1c3f81ca5de54a7436b10a9e2dba001c80f2d240774a12804f4');
 
   const unstableBackdatedOrderMutant = canonicalIssueHelper
     .replace(
@@ -2138,7 +2138,7 @@ try {
   );
   completedProofs.add('BACKDATED_SAME_COST_ORDER_REGRESSION_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'ef577f187119c17a13f8f49701e8497d04480287d5f52168f9e878d4420668f3');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'c264b6bab2f0a1c3f81ca5de54a7436b10a9e2dba001c80f2d240774a12804f4');
 
   const recognizedCapMutant = unstableBackdatedOrderMutant.replace(
     /  -- RETURN_CREDIT_RECOGNIZED_CAP_BEGIN[\s\S]*?  -- RETURN_CREDIT_RECOGNIZED_CAP_END\r?\n/,
@@ -2156,7 +2156,7 @@ try {
   );
   completedProofs.add('BACKDATED_SAME_COST_RECOGNIZED_CAP_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'ef577f187119c17a13f8f49701e8497d04480287d5f52168f9e878d4420668f3');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'c264b6bab2f0a1c3f81ca5de54a7436b10a9e2dba001c80f2d240774a12804f4');
 
   const smoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
   const output = `${smoke.stdout}\n${smoke.stderr}`;

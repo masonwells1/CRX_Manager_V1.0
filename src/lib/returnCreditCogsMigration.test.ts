@@ -112,9 +112,14 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('return_credit_source_item_id uuid');
     expect(migration).toContain('invoice_items_return_credit_cogs_cents_nonpositive_chk');
     expect(migration).toContain('invoice_items_return_credit_source_item_fk');
+    expect(migration).toContain('CREATE INDEX invoice_items_return_credit_source_item_idx');
     expect(migration).toContain('invoice_items_return_credit_source_shape_chk');
     expect(migration).toContain('RETURN_CREDIT_COGS_LEDGER_MISSING');
     expect(migration).toContain('RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED');
+    expect(migration).toContain("MESSAGE = 'RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED'");
+    expect(migration).toContain("DETAIL = 'The requested reversal exceeded the recognized whole-cent source-cost ceiling.'");
+    expect(migration).not.toContain("'return_number=%s; violations=%s'");
+    expect(migration).toContain('ORDER BY oi.id');
     expect(migration).toContain('ROW(NEW.invoice_id, NEW.order_item_id, NEW.product_id, NEW.quantity, NEW.unit_price_cents, NEW.extended_cents, NEW.cost_cents, NEW.return_credit_cogs_cents, NEW.return_credit_source_item_id, NEW.unit_size, NEW.created_at)');
     expect(migration).toContain('pl.source_item_id = sl.source_item_id');
     expect(migration).toContain('s.source_item_id, s.unit, s.sort_order');
@@ -196,7 +201,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DELIVERY_ALLOCATION_DRIFT');
     expect(migration).toContain("p.prorettype = 'void'::regtype");
     expect(migration).toContain("p.prorettype = 'jsonb'::regtype");
-    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('ef577f187119c17a13f8f49701e8497d04480287d5f52168f9e878d4420668f3');
+    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('c264b6bab2f0a1c3f81ca5de54a7436b10a9e2dba001c80f2d240774a12804f4');
     expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('f7e030b6d0b4c78c6049e2a7a16859c5b056fab5ebb2f6a2bf2eafa0303a53c1');
     expect(migration).toContain("p_return_id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid");
     expect(migration).toContain('v_restock_qty := v_item.quantity * v_container_size');
@@ -335,7 +340,7 @@ describe('return-credit COGS migration', () => {
     const migrationSha256 = createHash('sha256')
       .update(migration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(migrationSha256).toBe('dcf3ca5b33f44577e8e3157b887f79bf4006f0cb2b3e032c096a03bd3fe5f99c');
+    expect(migrationSha256).toBe('93f7ffa7b1a7e1fdb50a6b1e8ef24e83594e394232a4fa6575c74594d34ef301');
     expect(migrationHistory).toContain(`LF-normalized SQL SHA-256: \`${migrationSha256}\``);
   });
 

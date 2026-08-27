@@ -24,6 +24,10 @@ describe('sanitizeError', () => {
     );
     expect(sanitizeError('RETURN_CREDIT_VOID_RELEASE_FAILED')).toContain('no changes were saved');
     expect(sanitizeError('RETURN_CREDIT_UNAPPLY_RELEASE_FAILED')).toContain('no changes were saved');
+    expect(sanitizeError('RETURN_CREDIT_COGS_LEDGER_MISSING')).toContain('protected cost source');
+    expect(sanitizeError('RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED')).toContain('No changes were saved');
+    expect(sanitizeError('RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED:RMA-2026-0007:[{"product_id":"secret"}]'))
+      .not.toContain('secret');
     expect(sanitizeError('RETURN_NOT_APPROVED:requested')).toContain('must be approved');
     expect(sanitizeError('RETURN_NOT_APPROVED:received')).toBe('This return is already received');
     expect(sanitizeError('RETURN_NOT_APPROVED:credited')).toBe('This return is credited and cannot be received');
@@ -52,6 +56,10 @@ describe('sanitizeError', () => {
     expect(sanitizeError(
       'insert or update on table "invoices" violates foreign key constraint "invoices_customer_id_fkey"'
     )).toBe('This record references data that does not exist or has been removed');
+
+    expect(sanitizeError(
+      'update or delete on table "invoice_items" violates foreign key constraint "invoice_items_return_credit_source_item_fk" on table "invoice_items"'
+    )).toContain('accounting history');
   });
 
   it('sanitizes check constraint violations', () => {
