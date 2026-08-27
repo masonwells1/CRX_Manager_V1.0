@@ -209,8 +209,12 @@ describe('MonthEndClose', () => {
   });
 
   it('sanitizes a batch year-end RPC guard error before showing it', async () => {
+    let invoicePage = 0;
     mockFrom.mockImplementation((table: string) => {
-      if (table === 'invoices') return buildChain({ data: [{ customer_id: 'customer-1' }], error: null });
+      if (table === 'invoices') {
+        const data = invoicePage++ === 0 ? [{ id: 'invoice-1', customer_id: 'customer-1' }] : [];
+        return buildChain({ data, error: null });
+      }
       if (table === 'orders') return buildChain({ data: [], count: 0, error: null });
       return buildChain({ data: [], error: null });
     });
