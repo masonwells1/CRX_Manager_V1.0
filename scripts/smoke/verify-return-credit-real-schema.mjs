@@ -14,6 +14,7 @@ const REPORT_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '202608252301
 const COGS_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260825230209_rebuild_return_credit_cogs_reversal.sql');
 const DELIVERY_CREDIT_GATE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260826215500_exclude_return_credits_from_delivery_invoice_gate.sql');
 const DELIVERY_SURFACE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260826234000_align_return_credit_delivery_surfaces.sql');
+const ORDER_INVOICE_GATE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260827031500_align_return_credit_order_invoice_gates.sql');
 const HELPER_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260813070000_pin_return_idempotency_helper_contract.sql');
 const FORWARD_COMPATIBILITY_REPLAY = [
   '20260813060000_require_completed_delivery_before_invoice_post.sql',
@@ -342,6 +343,8 @@ const expectedProofs = [
   'CUTOVER_COGS_PREFLIGHT_GUARD_REMOVAL_DETECTED',
   'EXISTING_CREDIT_GUARD_REMOVAL_DETECTED',
   'RECEIVED_UNRESTOCKED_GUARD_REMOVAL_DETECTED',
+  'NONTERMINAL_RETURN_UNIT_GUARD_REMOVAL_DETECTED',
+  'RECEIVED_SOURCE_UNIT_GUARD_REMOVAL_DETECTED',
   'PREFLIGHT_OVERLOAD_COLLISION_REJECTED',
   'POSTFLIGHT_OVERLOAD_COLLISION_REJECTED',
   'SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED',
@@ -354,6 +357,8 @@ const expectedProofs = [
   'DELIVERY_AUTO_INVOICE_DELETED_FILTER_REMOVAL_DETECTED',
   'UNBILLED_DELIVERY_CREDIT_FILTER_REMOVAL_DETECTED',
   'DASHBOARD_UNBILLED_CREDIT_FILTER_REMOVAL_DETECTED',
+  'ORDER_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED',
+  'SPLIT_ORDER_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED',
   'SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED',
   'RETURN_CREDIT_LEDGER_GUARD_REMOVAL_DETECTED',
   'ZERO_COST_LEDGER_MUTATION_DETECTED',
@@ -382,6 +387,7 @@ try {
   assert.ok(readFileSync(COGS_CANDIDATE, 'utf8').length > 0, 'COGS candidate migration is missing');
   assert.ok(readFileSync(DELIVERY_CREDIT_GATE_CANDIDATE, 'utf8').length > 0, 'delivery credit-gate candidate migration is missing');
   assert.ok(readFileSync(DELIVERY_SURFACE_CANDIDATE, 'utf8').length > 0, 'delivery surface candidate migration is missing');
+  assert.ok(readFileSync(ORDER_INVOICE_GATE_CANDIDATE, 'utf8').length > 0, 'order invoice-gate candidate migration is missing');
   assert.ok(readFileSync(HELPER_GUARD, 'utf8').length > 0, 'helper guard migration is missing');
   for (const migration of FORWARD_COMPATIBILITY_REPLAY) {
     assert.ok(readFileSync(migration, 'utf8').length > 0, `forward replay migration is missing: ${path.basename(migration)}`);
@@ -752,6 +758,54 @@ try {
   assert.equal(psqlValue("SELECT status FROM public.returns WHERE id = '0cb556ed-467a-4949-866d-8d9edbb09522';"), 'approved', 'received/unrestocked guard proof left return state behind');
   completedProofs.add('RECEIVED_UNRESTOCKED_GUARD_REMOVAL_DETECTED');
 
+  const rolloutUnitFixture = concurrencyFixture(98);
+  const noNonterminalUnitGuardMutant = cogsSql.replace(
+    /  IF EXISTS \(\r?\n    SELECT 1\r?\n    FROM public\.returns r\r?\n    JOIN public\.return_items ri ON ri\.return_id = r\.id\r?\n    LEFT JOIN public\.order_items oi[\s\S]*?RAISE EXCEPTION 'RETURN_COGS_NONTERMINAL_RETURN_UNIT_REQUIRES_REPAIR';\r?\n  END IF;\r?\n/,
+    '',
+  );
+  assert.notEqual(noNonterminalUnitGuardMutant, cogsSql, 'nonterminal return-unit rollout mutant did not remove the guard');
+  const nonterminalUnitFixturePrefix = `
+    BEGIN;
+    ${rolloutUnitFixture.sql}
+    SET LOCAL session_replication_role = replica;
+    UPDATE public.return_items
+       SET unit = 'qt'
+     WHERE id = '${rolloutUnitFixture.ids.returnItem}';
+    UPDATE public.invoice_items
+       SET unit_size = 'qt'
+     WHERE invoice_id = '${rolloutUnitFixture.ids.sourceInvoice}';
+    SET LOCAL session_replication_role = origin;
+  `;
+  const unguardedNonterminalUnit = psql(`${nonterminalUnitFixturePrefix}\n${noNonterminalUnitGuardMutant}\nROLLBACK;`, { allowFailure: true });
+  assert.equal(unguardedNonterminalUnit.status, 0, `nonterminal return-unit mutant did not expose the unsafe acceptance path:\n${unguardedNonterminalUnit.stderr || unguardedNonterminalUnit.stdout}`);
+  const guardedNonterminalUnit = psql(`${nonterminalUnitFixturePrefix}\n${cogsSql}\nCOMMIT;`, { allowFailure: true });
+  const guardedNonterminalUnitOutput = `${guardedNonterminalUnit.stdout}\n${guardedNonterminalUnit.stderr}`;
+  assert.notEqual(guardedNonterminalUnit.status, 0, 'canonical migration accepted a linked nonterminal return with order-unit drift');
+  assert.match(guardedNonterminalUnitOutput, /RETURN_COGS_NONTERMINAL_RETURN_UNIT_REQUIRES_REPAIR/, `canonical migration did not reach the nonterminal return-unit guard:\n${guardedNonterminalUnitOutput}`);
+  completedProofs.add('NONTERMINAL_RETURN_UNIT_GUARD_REMOVAL_DETECTED');
+
+  const noReceivedSourceUnitGuardMutant = cogsSql.replace(
+    /  IF EXISTS \(\r?\n    SELECT 1\r?\n    FROM public\.returns r\r?\n    JOIN public\.return_items ri ON ri\.return_id = r\.id\r?\n    JOIN public\.invoice_items ii[\s\S]*?RAISE EXCEPTION 'RETURN_COGS_RECEIVED_SOURCE_UNIT_REQUIRES_REPAIR';\r?\n  END IF;\r?\n/,
+    '',
+  );
+  assert.notEqual(noReceivedSourceUnitGuardMutant, cogsSql, 'received source-unit rollout mutant did not remove the guard');
+  const receivedSourceUnitFixturePrefix = `
+    BEGIN;
+    ${rolloutUnitFixture.sql}
+    SET LOCAL session_replication_role = replica;
+    UPDATE public.invoice_items
+       SET unit_size = 'qt'
+     WHERE invoice_id = '${rolloutUnitFixture.ids.sourceInvoice}';
+    SET LOCAL session_replication_role = origin;
+  `;
+  const unguardedReceivedSourceUnit = psql(`${receivedSourceUnitFixturePrefix}\n${noReceivedSourceUnitGuardMutant}\nROLLBACK;`, { allowFailure: true });
+  assert.equal(unguardedReceivedSourceUnit.status, 0, `received source-unit mutant did not expose the unsafe acceptance path:\n${unguardedReceivedSourceUnit.stderr || unguardedReceivedSourceUnit.stdout}`);
+  const guardedReceivedSourceUnit = psql(`${receivedSourceUnitFixturePrefix}\n${cogsSql}\nCOMMIT;`, { allowFailure: true });
+  const guardedReceivedSourceUnitOutput = `${guardedReceivedSourceUnit.stdout}\n${guardedReceivedSourceUnit.stderr}`;
+  assert.notEqual(guardedReceivedSourceUnit.status, 0, 'canonical migration accepted a received return whose source unit drifted');
+  assert.match(guardedReceivedSourceUnitOutput, /RETURN_COGS_RECEIVED_SOURCE_UNIT_REQUIRES_REPAIR/, `canonical migration did not reach the received source-unit guard:\n${guardedReceivedSourceUnitOutput}`);
+  completedProofs.add('RECEIVED_SOURCE_UNIT_GUARD_REMOVAL_DETECTED');
+
   // Overload-collision proof: an unexpected public overload must abort before
   // any reviewed helper is renamed or replaced.
   const overloadFixturePrefix = `
@@ -801,6 +855,122 @@ try {
   copy(DELIVERY_SURFACE_CANDIDATE, path.basename(DELIVERY_SURFACE_CANDIDATE));
   apply(path.basename(DELIVERY_SURFACE_CANDIDATE));
   migrations.push(DELIVERY_SURFACE_CANDIDATE);
+  copy(ORDER_INVOICE_GATE_CANDIDATE, path.basename(ORDER_INVOICE_GATE_CANDIDATE));
+  apply(path.basename(ORDER_INVOICE_GATE_CANDIDATE));
+  migrations.push(ORDER_INVOICE_GATE_CANDIDATE);
+
+  const orderGateFixture = (suffix, allocated) => `
+    BEGIN;
+    SELECT set_config(
+      'request.jwt.claims',
+      '{"sub":"00000000-0000-4000-8000-000000000081","role":"authenticated"}',
+      true
+    );
+    SET LOCAL session_replication_role = replica;
+    INSERT INTO public.customers (id, farm_name)
+    VALUES ('f3614000-0000-4000-8000-0000000000${suffix}', '[SMOKE] order credit gate ${suffix}');
+    INSERT INTO public.products (id, product_name, current_cost)
+    VALUES ('f3614000-0000-4000-8001-0000000000${suffix}', '[SMOKE] order credit product ${suffix}', 5);
+    INSERT INTO public.orders (id, order_number, customer_id, salesman_id, status)
+    VALUES (
+      'f3614000-0000-4000-8002-0000000000${suffix}', 'SMK-RCC-ORDER-GATE-${suffix}',
+      'f3614000-0000-4000-8000-0000000000${suffix}',
+      '00000000-0000-4000-8000-000000000081', 'confirmed'
+    );
+    INSERT INTO public.order_items (
+      id, order_id, product_id, product_name, price_per_unit, cost_per_unit,
+      total_units_needed, total_price, profit, net_margin, quantity_delivered,
+      quantity_remaining, unit_size, acres, pricing_pending
+    ) VALUES (
+      'f3614000-0000-4000-8003-0000000000${suffix}',
+      'f3614000-0000-4000-8002-0000000000${suffix}',
+      'f3614000-0000-4000-8001-0000000000${suffix}',
+      '[SMOKE] order credit product ${suffix}', 10, 5, 1, 10, 5, 50, 0, 1, 'gal', 10, false
+    );
+    ${allocated ? `
+    INSERT INTO public.fields (id, customer_id, field_name, total_acres)
+    VALUES (
+      'f3614000-0000-4000-8004-0000000000${suffix}',
+      'f3614000-0000-4000-8000-0000000000${suffix}',
+      '[SMOKE] order credit field ${suffix}', 10
+    );
+    INSERT INTO public.order_item_field_allocations (order_item_id, field_id, acres)
+    VALUES (
+      'f3614000-0000-4000-8003-0000000000${suffix}',
+      'f3614000-0000-4000-8004-0000000000${suffix}', 10
+    );` : ''}
+    INSERT INTO public.invoices (
+      id, invoice_number, customer_id, order_id, invoice_type, status,
+      invoice_date, due_date, total_amount_cents, total_cost_cents, created_by,
+      posted_at, posted_by
+    ) VALUES (
+      'f3614000-0000-4000-8005-0000000000${suffix}', 'SMK-RCC-ORDER-CREDIT-${suffix}',
+      'f3614000-0000-4000-8000-0000000000${suffix}',
+      'f3614000-0000-4000-8002-0000000000${suffix}', 'credit_memo', 'posted',
+      current_date, current_date, -1000, -500,
+      '00000000-0000-4000-8000-000000000081', now(),
+      '00000000-0000-4000-8000-000000000081'
+    );
+    SET LOCAL session_replication_role = origin;
+  `;
+  const restoreOldOrderGates = `
+    DO $restore_old_order_gates$
+    DECLARE
+      v_src text;
+      v_order_new text := E'SELECT COUNT(*) INTO v_existing_count\\n    FROM invoices\\n   WHERE order_id = p_order_id\\n     AND status NOT IN (''voided'', ''cancelled'')\\n     AND invoice_type <> ''credit_memo''\\n     AND deleted_at IS NULL;';
+      v_order_old text := E'SELECT COUNT(*) INTO v_existing_count\\n    FROM invoices\\n   WHERE order_id = p_order_id\\n     AND status NOT IN (''voided'', ''cancelled'');';
+      v_split_new text := E'SELECT COUNT(*) INTO v_existing_count FROM invoices\\n    WHERE order_id = p_order_id AND status NOT IN (''voided'', ''cancelled'')\\n     AND invoice_type <> ''credit_memo''\\n     AND deleted_at IS NULL;';
+      v_split_old text := E'SELECT COUNT(*) INTO v_existing_count FROM invoices\\n    WHERE order_id = p_order_id AND status NOT IN (''voided'', ''cancelled'');';
+    BEGIN
+      SELECT prosrc INTO v_src FROM pg_proc
+       WHERE oid = 'public._create_invoice_from_order_impl_20260718(uuid,uuid,text,text)'::regprocedure;
+      v_src := replace(v_src, v_order_new, v_order_old);
+      EXECUTE format('CREATE OR REPLACE FUNCTION public._create_invoice_from_order_impl_20260718(p_order_id uuid, p_salesman_id uuid DEFAULT NULL, p_invoice_type text DEFAULT ''chemical_sale'', p_idempotency_key text DEFAULT NULL) RETURNS uuid LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS %L', v_src);
+      SELECT prosrc INTO v_src FROM pg_proc
+       WHERE oid = 'public._create_split_invoices_from_order_provenance_impl_20260719(uuid,uuid,text,text)'::regprocedure;
+      v_src := replace(v_src, v_split_new, v_split_old);
+      EXECUTE format('CREATE OR REPLACE FUNCTION public._create_split_invoices_from_order_provenance_impl_20260719(p_order_id uuid, p_salesman_id uuid DEFAULT NULL, p_invoice_type text DEFAULT ''chemical_sale'', p_idempotency_key text DEFAULT NULL) RETURNS uuid[] LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS %L', v_src);
+    END;
+    $restore_old_order_gates$;
+  `;
+  psql(restoreOldOrderGates);
+  const oldOrderGateProbe = psql(`${orderGateFixture('01', false)}
+    SELECT public.create_invoice_from_order(
+      'f3614000-0000-4000-8002-000000000001',
+      '00000000-0000-4000-8000-000000000081', 'chemical_sale', 'smk-rcc-order-gate-01'
+    );
+    ROLLBACK;
+  `, { allowFailure: true });
+  assert.notEqual(oldOrderGateProbe.status, 0, 'order gate mutant treated a posted return credit as recoverable');
+  assert.match(`${oldOrderGateProbe.stdout}\n${oldOrderGateProbe.stderr}`, /Active invoice already exists/, 'order gate mutant did not reach the stale credit-memo blocker');
+  completedProofs.add('ORDER_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED');
+  const oldSplitGateProbe = psql(`${orderGateFixture('02', true)}
+    SELECT public.create_split_invoices_from_order(
+      'f3614000-0000-4000-8002-000000000002',
+      '00000000-0000-4000-8000-000000000081', 'chemical_sale', 'smk-rcc-order-gate-02'
+    );
+    ROLLBACK;
+  `, { allowFailure: true });
+  assert.notEqual(oldSplitGateProbe.status, 0, 'split order gate mutant treated a posted return credit as recoverable');
+  assert.match(`${oldSplitGateProbe.stdout}\n${oldSplitGateProbe.stderr}`, /Active invoice already exists/, 'split order gate mutant did not reach the stale credit-memo blocker');
+  completedProofs.add('SPLIT_ORDER_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED');
+  apply(path.basename(ORDER_INVOICE_GATE_CANDIDATE));
+  const canonicalOrderGateProbe = psql(`${orderGateFixture('03', false)}
+    SELECT public.create_invoice_from_order(
+      'f3614000-0000-4000-8002-000000000003',
+      '00000000-0000-4000-8000-000000000081', 'chemical_sale', 'smk-rcc-order-gate-03'
+    );
+    ROLLBACK;
+  `, { allowFailure: true });
+  assert.equal(canonicalOrderGateProbe.status, 0, `canonical order gate did not allow billing recovery after a return credit:\n${canonicalOrderGateProbe.stderr || canonicalOrderGateProbe.stdout}`);
+  const canonicalSplitGateProbe = psql(`${orderGateFixture('04', true)}
+    SELECT public.create_split_invoices_from_order(
+      'f3614000-0000-4000-8002-000000000004',
+      '00000000-0000-4000-8000-000000000081', 'chemical_sale', 'smk-rcc-order-gate-04'
+    );
+    ROLLBACK;
+  `, { allowFailure: true });
+  assert.equal(canonicalSplitGateProbe.status, 0, `canonical split order gate did not allow billing recovery after a return credit:\n${canonicalSplitGateProbe.stderr || canonicalSplitGateProbe.stdout}`);
   // The migration must accept multiple NULL-lineage items because PostgreSQL's
   // installed UNIQUE constraint does. Remove only the synthetic second item
   // after that apply proof so the later smoke can exercise the exact one-line

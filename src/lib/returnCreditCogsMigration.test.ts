@@ -22,9 +22,14 @@ const deliverySurfaceMigration = readFileSync(
   'supabase/migrations/20260826234000_align_return_credit_delivery_surfaces.sql',
   'utf8',
 );
+const orderInvoiceGateMigration = readFileSync(
+  'supabase/migrations/20260827031500_align_return_credit_order_invoice_gates.sql',
+  'utf8',
+);
 const migrationHistory = readFileSync('docs/reference/migration-history.md', 'utf8');
 const reportsPage = readFileSync('src/pages/Reports.tsx', 'utf8');
 const monthEndPage = readFileSync('src/pages/MonthEndClose.tsx', 'utf8');
+const customerDetailPage = readFileSync('src/pages/CustomerDetail.tsx', 'utf8');
 const returnCreditSmoke = readFileSync('scripts/smoke/smoke-return-credit-chain.sql', 'utf8');
 
 describe('return-credit COGS migration', () => {
@@ -53,6 +58,10 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RESET lock_timeout;');
     expect(migration).toContain('RETURN_COGS_PREEXISTING_CREDIT_REQUIRES_BACKFILL');
     expect(migration).toContain('RETURN_COGS_RECEIVED_UNRESTOCKED_REQUIRES_REPAIR');
+    expect(migration).toContain('RETURN_COGS_NONTERMINAL_RETURN_UNIT_REQUIRES_REPAIR');
+    expect(migration).toContain('RETURN_COGS_RECEIVED_SOURCE_UNIT_REQUIRES_REPAIR');
+    expect(migration).toContain("r.status IN ('requested','approved','received')");
+    expect(migration).toContain("inv.status IN ('posted','overdue','paid')");
     expect(migration).toContain('RETURN_COGS_PREFLIGHT_UNLINKED_COST_CREDIT');
     expect(migration).toContain('RETURN_COGS_PREFLIGHT_OVERLOAD_DRIFT');
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DEPENDENCY_OVERLOAD_DRIFT');
@@ -144,6 +153,15 @@ describe('return-credit COGS migration', () => {
     expect(deliverySurfaceMigration).toContain('FROM PUBLIC, anon, authenticated, service_role;');
     expect(deliverySurfaceMigration).toContain('AND i.deleted_at IS NULL');
     expect(deliverySurfaceMigration).toContain("AND deleted_at IS NULL\n      AND (delivery_id = p_delivery_id OR delivery_id IS NULL);");
+    expect(orderInvoiceGateMigration).toContain('RETURN_CREDIT_ORDER_GATE_PREFLIGHT_CONTRACT_DRIFT');
+    expect(orderInvoiceGateMigration).toContain('RETURN_CREDIT_ORDER_GATE_POSTFLIGHT_CONTRACT_DRIFT');
+    expect(orderInvoiceGateMigration).toContain('1280d2461c9e79712900a7208fc2fcd760ccd9b4448f7fb3fc89a5523196bfc5');
+    expect(orderInvoiceGateMigration).toContain('4e17b8eb18b544ebab5785f88c2346f76528a3a490c0a31b5f765b06db24d351');
+    expect(orderInvoiceGateMigration).toContain('c8b12fc25025e598846b6b2fbdfe4e0fd0e30078086b17194807f1428b9d0d7e');
+    expect(orderInvoiceGateMigration).toContain('9d3de61eb30e9b9435556da45fe17c15a1b83285c917e3a5e7c2893cb4428104');
+    expect(orderInvoiceGateMigration.match(/invoice_type <> ''credit_memo''/g)).toHaveLength(4);
+    expect(orderInvoiceGateMigration.match(/deleted_at IS NULL/g)).toHaveLength(4);
+    expect(orderInvoiceGateMigration).toContain('FROM PUBLIC, anon, authenticated, service_role;');
     expect(functionBodySha256(migration, '_allocated_delivery_cents')).toBe('44a739b026385996b66355ee5c4b1175dbe5260bad57a459a91e69c3873bae81');
     expect(migration).toContain("AND inv.invoice_type <> 'credit_memo'");
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DELIVERY_ALLOCATION_DRIFT');
@@ -200,6 +218,8 @@ describe('return-credit COGS migration', () => {
     expect(monthEndPage).toContain('Recognized Invoices');
     expect(monthEndPage).toContain('recognized, ${summary.invoices.voided_count} voided');
     expect(monthEndPage).not.toContain('Posted Invoices');
+    expect(customerDetailPage).toContain("toast('error', sanitizeError(err))");
+    expect(customerDetailPage).not.toContain("err instanceof Error ? err.message : 'Failed to generate summary'");
   });
 
   it('gives sales reps one clear empty-assignment message', () => {

@@ -11,6 +11,14 @@ export interface DeliveryInvoiceCoverage extends InvoiceBillingCoverage {
 
 const NON_COVERING_STATUSES = new Set(['voided', 'cancelled']);
 
+export function activeInvoiceCountsTowardBilling(
+  invoice: InvoiceBillingCoverage,
+): boolean {
+  return invoice.invoice_type !== 'credit_memo'
+    && !NON_COVERING_STATUSES.has(invoice.status)
+    && invoice.deleted_at === null;
+}
+
 /**
  * A return credit changes AR; it does not prove that the sale was billed.
  * Keep every order-level billing surface on the same active-sale predicate.
@@ -20,9 +28,7 @@ export function activeInvoiceCoversOrder(
   orderId: string,
 ): boolean {
   return invoice.order_id === orderId
-    && invoice.invoice_type !== 'credit_memo'
-    && !NON_COVERING_STATUSES.has(invoice.status)
-    && invoice.deleted_at === null;
+    && activeInvoiceCountsTowardBilling(invoice);
 }
 
 /**

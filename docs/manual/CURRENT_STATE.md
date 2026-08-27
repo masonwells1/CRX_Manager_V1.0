@@ -1,6 +1,7 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-08-26 ~21:30 UTC for the migration ledger only** — read-only re-read
+**Last verified: 2026-08-27 UTC for the PR #361 function/schema surface by fresh read-only live
+schema dump; 2026-08-26 ~21:30 UTC for the migration ledger** — read-only ledger re-read
 after the `20260826150000` apply: **977 ledger rows**, `max(version)` `20260826205935`, and
 current live effective ordering name high-water **`20260826150000`**
 (`20260826150000_fix_save_job_comment_refusal_count`, history row 893, **applied live
@@ -68,7 +69,8 @@ individually rewritten in this pass.
 `20260825230150_align_recognized_invoice_report_statuses` and
 `20260825230209_rebuild_return_credit_cogs_reversal`, plus the follow-up
 `20260826215500_exclude_return_credits_from_delivery_invoice_gate` and the delivery-surface alignment
-`20260826234000_align_return_credit_delivery_surfaces`, are absent from the live ledger. Production has
+`20260826234000_align_return_credit_delivery_surfaces`, plus the order-level alignment
+`20260827031500_align_return_credit_order_invoice_gates`, are absent from the live ledger. Production has
 zero credited returns, zero returns linked to credit invoices, and zero recognized return-credit
 memos, so the defect is real but latent. Current live return-credit issuance still creates a
 header-only credit, while the P&L and monthly reports use different recognized invoice-status sets.
@@ -87,9 +89,12 @@ allocation, concurrency and lifecycle mutants. The third candidate prevents the 
 memo from suppressing either a later delivery's automatic draft invoice or the manual recovery path
 for a completed unbilled delivery. The fourth keeps the dashboard action queue and the void/cancel
 warning paths on that same active-sales-invoice definition and makes the complete-delivery gate ignore
-soft-deleted invoices. Forty load-bearing proofs ended in `SMOKE_PASS_ROLLBACK` with zero residue,
+soft-deleted invoices. The fifth aligns both order-level invoice creators with that same active,
+non-deleted, non-credit definition. Forty-four load-bearing proofs ended in `SMOKE_PASS_ROLLBACK` with zero residue,
 including an ordinary non-credit invoice hard-delete proof so the new trigger cannot silently cancel
 unrelated deletes and a real completion proof that preserves return-credit tote provenance.
+Apply all five files in order only through the repository's guarded migration runner or the Supabase
+migration operation, never through the ad-hoc SQL channel.
 After an approved live apply, the schema registry must be regenerated from live before closeout.
 
 **Superseded 2026-08-22 header, kept for provenance — was last verified 2026-08-22 UTC for the ledger only** — a read-only re-read returning 971 rows, high-water `20260816174353`, 345 of 971 names timestamp-prefixed, every figure **unchanged** from the previous pass; that pass also read the four live `job_chemicals` rows while measuring the blast radius of parked migration `20260820120000` (history row 891), which is written and proven but **not applied**. The `quote_versions` write surface, the return-idempotency helper contract, and the section 2 counts were last read live **2026-08-19 UTC** and are carried forward on that reading, not re-verified since. **The live ledger has 971 rows.** Its highest `version` is `20260816174353`, carrying submitted migration name `20260813080000_lock_quote_versions_writes_to_rpc`, which is also the highest *timestamp-prefixed* `name` — so both orderings agree on the same row. (Only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is

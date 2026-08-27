@@ -193,6 +193,42 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'RETURN_COGS_RECEIVED_UNRESTOCKED_REQUIRES_REPAIR';
   END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM public.returns r
+    JOIN public.return_items ri ON ri.return_id = r.id
+    LEFT JOIN public.order_items oi
+      ON oi.id = ri.order_item_id
+     AND oi.product_id = ri.product_id
+    WHERE r.deleted_at IS NULL
+      AND r.status IN ('requested','approved','received')
+      AND ri.order_item_id IS NOT NULL
+      AND (
+        oi.id IS NULL
+        OR ri.unit IS DISTINCT FROM COALESCE(oi.unit_size, 'ea')
+      )
+  ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_NONTERMINAL_RETURN_UNIT_REQUIRES_REPAIR';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM public.returns r
+    JOIN public.return_items ri ON ri.return_id = r.id
+    JOIN public.invoice_items ii
+      ON ii.order_item_id = ri.order_item_id
+     AND ii.product_id = ri.product_id
+    JOIN public.invoices inv ON inv.id = ii.invoice_id
+    WHERE r.deleted_at IS NULL
+      AND r.status = 'received'
+      AND inv.invoice_type <> 'credit_memo'
+      AND inv.deleted_at IS NULL
+      AND inv.status IN ('posted','overdue','paid')
+      AND ii.quantity > 0
+      AND ii.cost_cents > 0
+      AND ii.unit_size IS DISTINCT FROM ri.unit
+  ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_RECEIVED_SOURCE_UNIT_REQUIRES_REPAIR';
+  END IF;
   IF NOT EXISTS (
     SELECT 1
     FROM pg_constraint c

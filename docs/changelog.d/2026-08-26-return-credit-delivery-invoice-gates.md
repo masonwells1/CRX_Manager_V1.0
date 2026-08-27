@@ -24,12 +24,12 @@ the recovery action or produce a false all-clear in the user interface.
 The invoice-list Batch Print path now uses the same return-credit grouping as single-invoice Print,
 so one credit memo cannot produce a simple customer line in one PDF and cost-lot fragments in another.
 
-Fresh read-only production schema was restored into disposable PostgreSQL and six replay entries were
-applied there: the four PR #361 candidates plus two required compatibility/guard predecessors. The
-rollback-only harness passed 40 load-bearing predicates, including
+Fresh read-only production schema was restored into disposable PostgreSQL and seven replay entries were
+applied there: the five PR #361 candidates plus two required compatibility/guard predecessors. The
+rollback-only harness passed 44 load-bearing predicates, including
 separate mutants for the dashboard credit filter and both automatic-invoice filters; direct execution
 of the dashboard, void, cancel, and ordinary hard-delete paths; draft-credit preservation; and proof
 that both invoice paths still create the expected $25 revenue and $5 historical-cost draft. The full
-application suite (342 files, 4,809 passed and 123 skipped), typecheck, lint, documentation check, and
+application suite passed 4,814 tests with 123 skipped; typecheck, lint, documentation check, and the
 production build are green.
 No migration was applied to the live database in this change.

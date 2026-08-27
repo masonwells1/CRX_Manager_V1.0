@@ -29,7 +29,7 @@ import HelpTip from '../components/ui/HelpTip';
 import PageHeader from '../components/ui/PageHeader';
 import type { Order } from '../types';
 import { getSeasonDates } from '../utils/season';
-import { activeInvoiceCoversOrder, type InvoiceBillingCoverage } from '../lib/deliveryInvoiceCoverage';
+import { activeInvoiceCountsTowardBilling, type InvoiceBillingCoverage } from '../lib/deliveryInvoiceCoverage';
 
 interface OrderWithFulfillment extends Order {
   fulfillment_pct: number;
@@ -147,8 +147,9 @@ export default function Orders() {
     // Fetch invoice totals per order for invoiced %
     const { data: invoiceData } = invoiceResult;
     const invoicedByOrder: Record<string, number> = {};
+    const visibleOrderIds = new Set(orderIds);
     (invoiceData || []).forEach((inv: InvoiceBillingCoverage & { total_amount_cents: number }) => {
-      if (inv.order_id && activeInvoiceCoversOrder(inv, inv.order_id)) {
+      if (inv.order_id && visibleOrderIds.has(inv.order_id) && activeInvoiceCountsTowardBilling(inv)) {
         invoicedByOrder[inv.order_id] = (invoicedByOrder[inv.order_id] || 0) + (inv.total_amount_cents || 0);
       }
     });

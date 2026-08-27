@@ -5,6 +5,6 @@ one zero-argument, stable, postgres-owned integer function with the reviewed sea
 normalized body must exist. A same-shaped helper that silently changes season semantics therefore
 aborts the migration instead of misfiling a return credit.
 
-Fresh read-only production schema restored into disposable PostgreSQL passed all 40 load-bearing
+Fresh read-only production schema restored into disposable PostgreSQL passed all 44 load-bearing
 return-credit predicates, rollback smoke, and zero-residue checks with the new dependency pin. The
-focused migration suite passes 12 tests. No migration was applied to the live database.
+focused return-credit suite passes. No migration was applied to the live database.

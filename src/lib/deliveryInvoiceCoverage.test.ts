@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   activeInvoiceCoversDelivery,
   activeInvoiceCoversOrder,
+  activeInvoiceCountsTowardBilling,
   type DeliveryInvoiceCoverage,
 } from './deliveryInvoiceCoverage';
 
@@ -22,6 +23,8 @@ function invoice(overrides: Partial<DeliveryInvoiceCoverage> = {}): DeliveryInvo
 
 describe('activeInvoiceCoversDelivery', () => {
   it('keeps order billing coverage limited to active sale invoices', () => {
+    expect(activeInvoiceCountsTowardBilling(invoice())).toBe(true);
+    expect(activeInvoiceCountsTowardBilling(invoice({ invoice_type: 'credit_memo' }))).toBe(false);
     expect(activeInvoiceCoversOrder(invoice(), 'order-1')).toBe(true);
     expect(activeInvoiceCoversOrder(invoice({ invoice_type: 'credit_memo' }), 'order-1')).toBe(false);
     expect(activeInvoiceCoversOrder(invoice({ status: 'voided' }), 'order-1')).toBe(false);
@@ -82,14 +85,11 @@ describe('activeInvoiceCoversDelivery', () => {
   });
 
   it('is used by every order UI that reports or recovers billing coverage', () => {
-    for (const relativePath of [
-      'src/pages/OrderDetail.tsx',
-      'src/pages/Orders.tsx',
-    ]) {
-      const source = readFileSync(resolve(root, relativePath), 'utf8');
-      expect(source).toContain('activeInvoiceCoversOrder');
-      expect(source).toContain('invoice_type');
-      expect(source).toContain('deleted_at');
-    }
+    const orderDetail = readFileSync(resolve(root, 'src/pages/OrderDetail.tsx'), 'utf8');
+    expect(orderDetail).toContain("activeInvoiceCoversOrder(inv, order?.id ?? '')");
+
+    const orders = readFileSync(resolve(root, 'src/pages/Orders.tsx'), 'utf8');
+    expect(orders).toContain('activeInvoiceCountsTowardBilling(inv)');
+    expect(orders).toContain(".select('order_id, total_amount_cents, invoice_type, status, deleted_at')");
   });
 });
