@@ -19,6 +19,13 @@ intent binding (`20260825034622`). See the rollout block at the top of
 `docs/reference/migration-history.md`. This pass re-read the ledger and updated the draw-down
 entries only; it does not re-certify unrelated issue narratives below.
 
+**RETIRED 2026-08-27 — Patrol is no longer an active CRX workflow.** Its command, generated
+skill adapter, runtime, monitor, classifier, renderer, trusted-exec layer, and dedicated tests
+were removed as part of the first harness-simplification tranche. The Patrol discussion below is
+preserved only as historical evidence; its file paths and operating instructions no longer exist.
+Use the smaller existing status/workspace tools for targeted read-only checks instead of rebuilding
+an always-on owner queue monitor.
+
 
 **RESOLVED 2026-08-25 — the two `/patrol` findings first deferred at the round-3 review cap
 are both closed.** Kept as history because the reasoning is the evidence for the
