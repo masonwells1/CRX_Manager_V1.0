@@ -875,6 +875,17 @@ BEGIN
   UPDATE orders SET status = 'partially_fulfilled' WHERE id = v_order_id;
   PERFORM set_config('app.admin_override', 'false', true);
 
+  -- A soft-deleted order-level sales draft is also not active billing coverage.
+  -- The complete-delivery helper must ignore it independently of the credit memo.
+  INSERT INTO invoices (
+    invoice_number, customer_id, order_id, invoice_type, status,
+    invoice_date, due_date, total_amount_cents, total_cost_cents, created_by,
+    deleted_at
+  ) VALUES (
+    'SMK-RCC-DELETED-' || v_suffix, v_customer_id, v_order_id,
+    'chemical_sale', 'draft', current_date, current_date, 0, 0, v_admin, now()
+  );
+
   INSERT INTO deliveries (
     delivery_number, order_id, customer_id, scheduled_date, status, created_by
   ) VALUES (
@@ -931,6 +942,15 @@ BEGIN
     v_backfill_delivery_id, v_order_item_4, v_product_id, 1, 1, 'gal'
   );
   SET LOCAL session_replication_role = origin;
+  v_res2 := public.get_dashboard_action_items(50);
+  IF NOT EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(v_res2->'unbilled_deliveries') item
+    WHERE item->>'id' = v_backfill_delivery_id::text
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: posted return credit suppressed the dashboard unbilled-delivery action';
+  END IF;
+  RAISE NOTICE 'RETURN_CREDIT_DASHBOARD_UNBILLED_PROVEN';
   BEGIN
     v_res2 := public.create_invoice_for_unbilled_delivery(
       v_backfill_delivery_id, v_admin, 'smk-rcc-backfill-' || v_suffix

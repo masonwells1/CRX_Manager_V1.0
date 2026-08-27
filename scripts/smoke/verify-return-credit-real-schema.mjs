@@ -13,6 +13,7 @@ const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260812130145_bind
 const REPORT_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260825230150_align_recognized_invoice_report_statuses.sql');
 const COGS_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260825230209_rebuild_return_credit_cogs_reversal.sql');
 const DELIVERY_CREDIT_GATE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260826215500_exclude_return_credits_from_delivery_invoice_gate.sql');
+const DELIVERY_SURFACE_CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260826234000_align_return_credit_delivery_surfaces.sql');
 const HELPER_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260813070000_pin_return_idempotency_helper_contract.sql');
 const FORWARD_COMPATIBILITY_REPLAY = [
   '20260813060000_require_completed_delivery_before_invoice_post.sql',
@@ -350,7 +351,9 @@ const expectedProofs = [
   'SOURCE_POST_CONCURRENT_RETRY_PROVEN',
   'DELIVERY_ALLOCATION_CREDIT_FILTER_REMOVAL_DETECTED',
   'DELIVERY_AUTO_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED',
+  'DELIVERY_AUTO_INVOICE_DELETED_FILTER_REMOVAL_DETECTED',
   'UNBILLED_DELIVERY_CREDIT_FILTER_REMOVAL_DETECTED',
+  'DASHBOARD_UNBILLED_CREDIT_FILTER_REMOVAL_DETECTED',
   'SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED',
   'RETURN_CREDIT_LEDGER_GUARD_REMOVAL_DETECTED',
   'ZERO_COST_LEDGER_MUTATION_DETECTED',
@@ -367,12 +370,18 @@ const expectedProofs = [
   'RETURN_CREDIT_FOLLOWUP_AUTO_INVOICE_PROVEN',
   'RETURN_CREDIT_UNBILLED_BACKFILL_PROVEN',
   'RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN',
+  'RETURN_CREDIT_ORDINARY_DELETE_ALLOWED',
+  'RETURN_CREDIT_DASHBOARD_UNBILLED_PROVEN',
+  'RETURN_CREDIT_VOID_WARNING_FILTER_PROVEN',
+  'RETURN_CREDIT_CANCEL_WARNING_FILTER_PROVEN',
+  'RETURN_CREDIT_TOTE_PROVENANCE_PROVEN',
 ];
 const completedProofs = new Set();
 try {
   assert.ok(readFileSync(CANDIDATE, 'utf8').length > 0, 'candidate migration is missing');
   assert.ok(readFileSync(COGS_CANDIDATE, 'utf8').length > 0, 'COGS candidate migration is missing');
   assert.ok(readFileSync(DELIVERY_CREDIT_GATE_CANDIDATE, 'utf8').length > 0, 'delivery credit-gate candidate migration is missing');
+  assert.ok(readFileSync(DELIVERY_SURFACE_CANDIDATE, 'utf8').length > 0, 'delivery surface candidate migration is missing');
   assert.ok(readFileSync(HELPER_GUARD, 'utf8').length > 0, 'helper guard migration is missing');
   for (const migration of FORWARD_COMPATIBILITY_REPLAY) {
     assert.ok(readFileSync(migration, 'utf8').length > 0, `forward replay migration is missing: ${path.basename(migration)}`);
@@ -789,6 +798,9 @@ try {
   copy(DELIVERY_CREDIT_GATE_CANDIDATE, path.basename(DELIVERY_CREDIT_GATE_CANDIDATE));
   apply(path.basename(DELIVERY_CREDIT_GATE_CANDIDATE));
   migrations.push(DELIVERY_CREDIT_GATE_CANDIDATE);
+  copy(DELIVERY_SURFACE_CANDIDATE, path.basename(DELIVERY_SURFACE_CANDIDATE));
+  apply(path.basename(DELIVERY_SURFACE_CANDIDATE));
+  migrations.push(DELIVERY_SURFACE_CANDIDATE);
   // The migration must accept multiple NULL-lineage items because PostgreSQL's
   // installed UNIQUE constraint does. Remove only the synthetic second item
   // after that apply proof so the later smoke can exercise the exact one-line
@@ -802,6 +814,193 @@ try {
   assert.equal(psqlValue(`SELECT count(*) FROM (${predicate}) AS violations;`), '0', 'return-credit invariant regressed after candidate apply');
   const postApplyLifecycleViolations = psqlValue(`SELECT violation_key || ': ' || reason FROM (${lifecyclePredicate}) AS violations ORDER BY violation_key;`);
   assert.equal(postApplyLifecycleViolations, '', `returns lifecycle invariant regressed after candidate apply:\n${postApplyLifecycleViolations}`);
+
+  // Exercise the three user-visible delivery surfaces Claude identified, plus
+  // the ordinary DELETE branch of the new return-credit header trigger. The
+  // whole fixture is rolled back; success means a credit memo cannot hide an
+  // unbilled delivery or create false void/cancel warnings, while unrelated
+  // draft invoices still hard-delete normally (including cascaded line items).
+  psql(`
+    BEGIN;
+    SELECT set_config(
+      'request.jwt.claims',
+      '{"sub":"00000000-0000-4000-8000-000000000081","role":"authenticated"}',
+      true
+    );
+    SET LOCAL session_replication_role = replica;
+    INSERT INTO public.customers (id, farm_name)
+    VALUES ('f3611000-0000-4000-8000-000000000001', '[SMOKE] PR361 delivery surfaces');
+    INSERT INTO public.orders (id, order_number, customer_id, salesman_id, status)
+    VALUES (
+      'f3611000-0000-4000-8000-000000000002', 'SMK-RCC-SURFACES',
+      'f3611000-0000-4000-8000-000000000001',
+      '00000000-0000-4000-8000-000000000081', 'confirmed'
+    );
+    INSERT INTO public.products (id, product_name, current_cost)
+    VALUES (
+      'f3611000-0000-4000-8000-000000000008',
+      '[SMOKE] PR361 tote provenance product', 5.00
+    );
+    INSERT INTO public.inventory (
+      product_id, location, quantity_available, quantity_prebooked, unit_size
+    ) VALUES (
+      'f3611000-0000-4000-8000-000000000008',
+      'Main Warehouse', 10, 1, 'gal'
+    );
+    INSERT INTO public.order_items (
+      id, order_id, product_id, product_name, price_per_unit, cost_per_unit,
+      total_units_needed, total_price, profit, net_margin,
+      quantity_delivered, quantity_remaining, unit_size
+    ) VALUES (
+      'f3611000-0000-4000-8000-000000000009',
+      'f3611000-0000-4000-8000-000000000002',
+      'f3611000-0000-4000-8000-000000000008',
+      '[SMOKE] PR361 tote provenance product', 10, 5, 1, 10, 5, 50, 0, 1, 'gal'
+    );
+    INSERT INTO public.deliveries (
+      id, delivery_number, order_id, customer_id, scheduled_date, status,
+      completed_at, signed_by, created_by
+    ) VALUES
+      (
+        'f3611000-0000-4000-8000-000000000003', 'SMK-RCC-SURFACE-VOID',
+        'f3611000-0000-4000-8000-000000000002',
+        'f3611000-0000-4000-8000-000000000001', current_date, 'completed',
+        now(), '[SMOKE] Receiver', '00000000-0000-4000-8000-000000000081'
+      ),
+      (
+        'f3611000-0000-4000-8000-000000000004', 'SMK-RCC-SURFACE-CANCEL',
+        'f3611000-0000-4000-8000-000000000002',
+        'f3611000-0000-4000-8000-000000000001', current_date, 'scheduled',
+        NULL, NULL, '00000000-0000-4000-8000-000000000081'
+      ),
+      (
+        'f3611000-0000-4000-8000-000000000010', 'SMK-RCC-SURFACE-TOTE',
+        'f3611000-0000-4000-8000-000000000002',
+        'f3611000-0000-4000-8000-000000000001', current_date, 'in_progress',
+        NULL, NULL, '00000000-0000-4000-8000-000000000081'
+      );
+    INSERT INTO public.delivery_items (
+      delivery_id, order_item_id, product_id, quantity, quantity_delivered,
+      unit_size, tote_number
+    ) VALUES (
+      'f3611000-0000-4000-8000-000000000010',
+      'f3611000-0000-4000-8000-000000000009',
+      'f3611000-0000-4000-8000-000000000008', 1, 0, 'gal', 'DELIVERY-TOTE'
+    );
+    INSERT INTO public.invoices (
+      id, invoice_number, customer_id, order_id, invoice_type, status,
+      invoice_date, due_date, total_amount_cents, total_cost_cents, created_by,
+      posted_at, posted_by
+    ) VALUES
+      (
+        'f3611000-0000-4000-8000-000000000005', 'SMK-RCC-SURFACE-CREDIT',
+        'f3611000-0000-4000-8000-000000000001',
+        'f3611000-0000-4000-8000-000000000002', 'credit_memo', 'posted',
+        current_date, current_date, -1000, -500,
+        '00000000-0000-4000-8000-000000000081', now(),
+        '00000000-0000-4000-8000-000000000081'
+      ),
+      (
+        'f3611000-0000-4000-8000-000000000006', 'SMK-RCC-ORDINARY-DELETE',
+        'f3611000-0000-4000-8000-000000000001', NULL,
+        'chemical_sale', 'draft', current_date, current_date, 1000, 500,
+        '00000000-0000-4000-8000-000000000081', NULL, NULL
+      );
+    INSERT INTO public.invoice_items (
+      id, invoice_id, product_id, description, quantity,
+      unit_price_cents, extended_cents, cost_cents
+    ) VALUES (
+      'f3611000-0000-4000-8000-000000000007',
+      'f3611000-0000-4000-8000-000000000006',
+      'fad3ea45-cd8c-4bb8-b0ce-8a515941586c', '[SMOKE] ordinary delete line',
+      1, 1000, 1000, 500
+    );
+    INSERT INTO public.invoice_items (
+      id, invoice_id, order_item_id, product_id, description, quantity,
+      unit_price_cents, extended_cents, cost_cents, unit_size, tote_number
+    ) VALUES (
+      'f3611000-0000-4000-8000-000000000011',
+      'f3611000-0000-4000-8000-000000000005',
+      'f3611000-0000-4000-8000-000000000009',
+      'f3611000-0000-4000-8000-000000000008',
+      '[SMOKE] return-credit tote provenance line', -1, 1000, -1000, 500,
+      'gal', 'RETURN-TOTE'
+    );
+    SET LOCAL session_replication_role = origin;
+    DO $surface_proof$
+    DECLARE
+      v_dashboard jsonb;
+      v_result jsonb;
+    BEGIN
+      DELETE FROM public.invoices
+       WHERE id = 'f3611000-0000-4000-8000-000000000006';
+      IF EXISTS (
+        SELECT 1 FROM public.invoices
+         WHERE id = 'f3611000-0000-4000-8000-000000000006'
+      ) OR EXISTS (
+        SELECT 1 FROM public.invoice_items
+         WHERE id = 'f3611000-0000-4000-8000-000000000007'
+      ) THEN
+        RAISE EXCEPTION 'ordinary draft invoice hard-delete was silently cancelled';
+      END IF;
+
+      v_dashboard := public.get_dashboard_action_items(50);
+      IF NOT EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(v_dashboard->'unbilled_deliveries') item
+        WHERE item->>'id' = 'f3611000-0000-4000-8000-000000000003'
+      ) THEN
+        RAISE EXCEPTION 'posted return credit hid the completed delivery from dashboard action items';
+      END IF;
+
+      v_result := public.complete_delivery(
+        'f3611000-0000-4000-8000-000000000010', '[SMOKE] Tote Receiver',
+        '00000000-0000-4000-8000-000000000081', NULL, NULL, NULL,
+        'smk-rcc-surface-tote-proof', now()
+      );
+      IF v_result->>'status' IS DISTINCT FROM 'completed' THEN
+        RAISE EXCEPTION 'tote-provenance delivery did not complete: %', v_result;
+      END IF;
+      IF (SELECT tote_number FROM public.invoice_items
+           WHERE id = 'f3611000-0000-4000-8000-000000000011')
+         IS DISTINCT FROM 'RETURN-TOTE' THEN
+        RAISE EXCEPTION 'later delivery overwrote return-credit tote provenance';
+      END IF;
+
+      v_result := public.void_delivery(
+        'f3611000-0000-4000-8000-000000000003',
+        '[SMOKE] prove credit warning filter',
+        '00000000-0000-4000-8000-000000000081', NULL
+      );
+      IF COALESCE((v_result->>'posted_invoices_exist')::boolean, true) THEN
+        RAISE EXCEPTION 'posted return credit produced a false void-delivery warning: %', v_result;
+      END IF;
+
+      v_result := public.cancel_delivery(
+        'f3611000-0000-4000-8000-000000000004',
+        '[SMOKE] prove credit warning filter',
+        '00000000-0000-4000-8000-000000000081', NULL
+      );
+      IF COALESCE((v_result->>'posted_invoices_flagged')::integer, -1) <> 0 THEN
+        RAISE EXCEPTION 'posted return credit produced a false cancel-delivery warning: %', v_result;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM public.notifications
+        WHERE related_entity_type = 'invoice'
+          AND related_entity_id = 'f3611000-0000-4000-8000-000000000005'
+          AND notification_type = 'invoice_review'
+      ) THEN
+        RAISE EXCEPTION 'posted return credit produced a false invoice-review notification';
+      END IF;
+    END
+    $surface_proof$;
+    ROLLBACK;
+  `);
+  completedProofs.add('RETURN_CREDIT_ORDINARY_DELETE_ALLOWED');
+  completedProofs.add('RETURN_CREDIT_DASHBOARD_UNBILLED_PROVEN');
+  completedProofs.add('RETURN_CREDIT_VOID_WARNING_FILTER_PROVEN');
+  completedProofs.add('RETURN_CREDIT_CANCEL_WARNING_FILTER_PROVEN');
+  completedProofs.add('RETURN_CREDIT_TOTE_PROVENANCE_PROVEN');
 
   const allocationStart = cogsSql.indexOf('CREATE OR REPLACE FUNCTION public._allocated_delivery_cents(');
   const allocationEnd = cogsSql.indexOf('REVOKE ALL ON FUNCTION public._allocated_delivery_cents', allocationStart);
@@ -842,10 +1041,34 @@ try {
 
   copy(SMOKE, path.basename(SMOKE));
   const deliveryGateSql = readFileSync(DELIVERY_CREDIT_GATE_CANDIDATE, 'utf8');
-  const completeGateStart = deliveryGateSql.indexOf('CREATE OR REPLACE FUNCTION public._complete_delivery_authorized_impl(');
-  const completeGateEnd = deliveryGateSql.indexOf('REVOKE ALL ON FUNCTION public._complete_delivery_authorized_impl', completeGateStart);
+  const deliverySurfaceSql = readFileSync(DELIVERY_SURFACE_CANDIDATE, 'utf8');
+
+  const dashboardStart = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."get_dashboard_action_items"(');
+  const dashboardEnd = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."void_delivery"(', dashboardStart);
+  assert.ok(dashboardStart >= 0 && dashboardEnd > dashboardStart, 'dashboard action-items helper slice is missing');
+  const canonicalDashboard = deliverySurfaceSql.slice(dashboardStart, dashboardEnd);
+  const dashboardCreditMutant = canonicalDashboard.replace(
+    /^\s*AND i\.invoice_type <> 'credit_memo'\r?\n/m,
+    '',
+  );
+  assert.notEqual(dashboardCreditMutant, canonicalDashboard, 'dashboard action-items mutant did not remove the credit-memo filter');
+  psql(dashboardCreditMutant);
+  const dashboardMutantSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const dashboardMutantOutput = `${dashboardMutantSmoke.stdout}\n${dashboardMutantSmoke.stderr}`;
+  assert.notEqual(dashboardMutantSmoke.status, 0, 'dashboard action-items mutant smoke unexpectedly committed');
+  assert.match(
+    dashboardMutantOutput,
+    /SMOKE_FAIL: posted return credit suppressed the dashboard unbilled-delivery action/,
+    `dashboard action-items mutant did not reach the credit-memo coverage oracle:\n${dashboardMutantOutput}`,
+  );
+  completedProofs.add('DASHBOARD_UNBILLED_CREDIT_FILTER_REMOVAL_DETECTED');
+  psql(canonicalDashboard);
+  assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', 'c876f69e11fafcd1bcb75d2554e71f6f1f9ed33ac08181a8bf207580edcc49a9');
+
+  const completeGateStart = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION public._complete_delivery_authorized_impl(');
+  const completeGateEnd = deliverySurfaceSql.indexOf('ALTER FUNCTION public.get_dashboard_action_items', completeGateStart);
   assert.ok(completeGateStart >= 0 && completeGateEnd > completeGateStart, 'delivery auto-invoice helper slice is missing');
-  const canonicalCompleteGate = deliveryGateSql.slice(completeGateStart, completeGateEnd);
+  const canonicalCompleteGate = deliverySurfaceSql.slice(completeGateStart, completeGateEnd);
   const completeGateMutant = canonicalCompleteGate.replace(
     /^\s*AND invoice_type <> 'credit_memo'\r?\n/m,
     '',
@@ -862,7 +1085,25 @@ try {
   );
   completedProofs.add('DELIVERY_AUTO_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED');
   psql(canonicalCompleteGate);
-  assertInstalledFunctionHash('public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamptz)', '15c5a7ddf836f402d52544a69b8628061b4e9042444362262c1d76d26916ee69');
+  assertInstalledFunctionHash('public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamptz)', '3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a');
+
+  const completeDeletedMutant = canonicalCompleteGate.replace(
+    /(\s+AND invoice_type <> 'credit_memo'\r?\n)\s+AND deleted_at IS NULL\r?\n(\s+AND \(delivery_id = p_delivery_id OR delivery_id IS NULL\);)/,
+    '$1$2',
+  );
+  assert.notEqual(completeDeletedMutant, canonicalCompleteGate, 'delivery auto-invoice mutant did not remove the deleted-at filter');
+  psql(completeDeletedMutant);
+  const completeDeletedMutantSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const completeDeletedMutantOutput = `${completeDeletedMutantSmoke.stdout}\n${completeDeletedMutantSmoke.stderr}`;
+  assert.notEqual(completeDeletedMutantSmoke.status, 0, 'delivery auto-invoice deleted-at mutant smoke unexpectedly committed');
+  assert.match(
+    completeDeletedMutantOutput,
+    /SMOKE_FAIL: posted return credit suppressed the follow-up delivery auto-invoice/,
+    `delivery auto-invoice deleted-at mutant did not reach the active-coverage oracle:\n${completeDeletedMutantOutput}`,
+  );
+  completedProofs.add('DELIVERY_AUTO_INVOICE_DELETED_FILTER_REMOVAL_DETECTED');
+  psql(canonicalCompleteGate);
+  assertInstalledFunctionHash('public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamptz)', '3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a');
 
   const backfillGateStart = deliveryGateSql.indexOf('CREATE OR REPLACE FUNCTION public._create_invoice_for_unbilled_delivery_impl_20260718(');
   const backfillGateEnd = deliveryGateSql.indexOf('REVOKE ALL ON FUNCTION public._create_invoice_for_unbilled_delivery_impl_20260718', backfillGateStart);

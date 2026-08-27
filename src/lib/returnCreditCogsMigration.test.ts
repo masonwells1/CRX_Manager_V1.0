@@ -18,6 +18,10 @@ const deliveryCreditGateMigration = readFileSync(
   'supabase/migrations/20260826215500_exclude_return_credits_from_delivery_invoice_gate.sql',
   'utf8',
 );
+const deliverySurfaceMigration = readFileSync(
+  'supabase/migrations/20260826234000_align_return_credit_delivery_surfaces.sql',
+  'utf8',
+);
 const migrationHistory = readFileSync('docs/reference/migration-history.md', 'utf8');
 const reportsPage = readFileSync('src/pages/Reports.tsx', 'utf8');
 const monthEndPage = readFileSync('src/pages/MonthEndClose.tsx', 'utf8');
@@ -25,9 +29,14 @@ const returnCreditSmoke = readFileSync('scripts/smoke/smoke-return-credit-chain.
 
 describe('return-credit COGS migration', () => {
   const functionBodySha256 = (sql: string, name: string) => {
-    const match = sql.match(new RegExp(
-      `CREATE(?: OR REPLACE)? FUNCTION public\\.${name}\\([\\s\\S]*?AS \\$function\\$\\r?\\n([\\s\\S]*?)\\r?\\n\\$function\\$;`,
-    ));
+    const match = [
+      new RegExp(
+        `CREATE(?: OR REPLACE)? FUNCTION public\\.${name}\\([\\s\\S]*?AS \\$function\\$\\r?\\n([\\s\\S]*?)\\r?\\n\\$function\\$;`,
+      ),
+      new RegExp(
+        `CREATE(?: OR REPLACE)? FUNCTION "public"\\."${name}"\\([\\s\\S]*?AS \\$\\$\\r?\\n([\\s\\S]*?)\\r?\\n\\$\\$;`,
+      ),
+    ].map((pattern) => sql.match(pattern)).find(Boolean);
     expect(match?.[1], `${name} body was not found`).toBeTruthy();
     const normalizedBody = match![1].replace(/\r\n/g, '\n');
     return createHash('sha256').update(`\n${normalizedBody}\n`, 'utf8').digest('hex');
@@ -98,6 +107,8 @@ describe('return-credit COGS migration', () => {
     expect(returnCreditSmoke).toContain("issue_return_credit(v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-reissue')");
     expect(returnCreditSmoke).toContain('batch void did not route the return credit through void_invoice');
     expect(returnCreditSmoke).toContain('assigned-only sales-rep year-end batch returned');
+    expect(returnCreditSmoke).toContain('RETURN_CREDIT_DASHBOARD_UNBILLED_PROVEN');
+    expect(returnCreditSmoke).toContain('SMK-RCC-DELETED-');
   });
 
   it('pins the replacement helper bodies used by the COGS postflight', () => {
@@ -109,6 +120,17 @@ describe('return-credit COGS migration', () => {
     expect(deliveryCreditGateMigration.match(/AND invoice_type <> 'credit_memo'/g)).toHaveLength(2);
     expect(deliveryCreditGateMigration).toContain('UNBILLED_DELIVERY_RETURN_CREDIT_GATE_PREFLIGHT_CONTRACT_DRIFT');
     expect(deliveryCreditGateMigration).toContain('UNBILLED_DELIVERY_RETURN_CREDIT_GATE_POSTFLIGHT_DRIFT');
+    expect(functionBodySha256(deliverySurfaceMigration, 'get_dashboard_action_items')).toBe('c876f69e11fafcd1bcb75d2554e71f6f1f9ed33ac08181a8bf207580edcc49a9');
+    expect(functionBodySha256(deliverySurfaceMigration, 'void_delivery')).toBe('426cea4c5e350350ce85249e9df2f1c9d8aa03da4868072bf395683e9254ba03');
+    expect(functionBodySha256(deliverySurfaceMigration, 'cancel_delivery')).toBe('73be159b6793fb16580a702068974102e6ef12794be9f38af861b92e9d6495dd');
+    expect(functionBodySha256(deliverySurfaceMigration, '_complete_delivery_authorized_impl')).toBe('3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a');
+    expect(deliverySurfaceMigration.match(/invoice_type <> 'credit_memo'/g)).toHaveLength(5);
+    expect(deliverySurfaceMigration).toContain('RETURN_CREDIT_DELIVERY_SURFACE_PREFLIGHT_CONTRACT_DRIFT');
+    expect(deliverySurfaceMigration).toContain('RETURN_CREDIT_DELIVERY_SURFACE_POSTFLIGHT_CONTRACT_DRIFT');
+    expect(deliverySurfaceMigration).toContain('"private":true');
+    expect(deliverySurfaceMigration).toContain('FROM PUBLIC, anon, authenticated, service_role;');
+    expect(deliverySurfaceMigration).toContain('AND i.deleted_at IS NULL');
+    expect(deliverySurfaceMigration).toContain("AND deleted_at IS NULL\n      AND (delivery_id = p_delivery_id OR delivery_id IS NULL);");
     expect(functionBodySha256(migration, '_allocated_delivery_cents')).toBe('44a739b026385996b66355ee5c4b1175dbe5260bad57a459a91e69c3873bae81');
     expect(migration).toContain("AND inv.invoice_type <> 'credit_memo'");
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DELIVERY_ALLOCATION_DRIFT');

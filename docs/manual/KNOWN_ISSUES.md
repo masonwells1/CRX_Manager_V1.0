@@ -1,14 +1,11 @@
 # Known Issues — Consolidated
 
 
-**Last verified: 2026-08-26 UTC, read-only live re-read while landing the COMMENT-only candidate
-`20260826150000` (history row 893, NOT applied) — every figure below unchanged from 2026-08-25.**
-**Live ledger is 976 rows, `max(version)` `20260825142708`, effective ordering high-water
-`20260820120000`** (name `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
-That migration applied live on 2026-08-25 on Mason's explicit in-chat approval; because its ledger
-`name` carries a `20260820120000` prefix, the effective ordering high-water advances past the
-draw-down chain's `20260819232000` even though the assigned `version` is later. History row 891
-and the header of `docs/reference/migration-history.md` carry the full apply record.
+**Last verified: 2026-08-26 UTC by read-only live ledger re-read. Live ledger is 977 rows,
+`max(version)` `20260826205935`, effective ordering high-water `20260826150000`** (name
+`20260826150000_fix_save_job_comment_refusal_count`). That COMMENT-only migration is applied live;
+it changed no function body, table, policy, grant, or business row. History row 893 and the header of
+`docs/reference/migration-history.md` carry the current ledger record.
 (Superseded reading, kept for provenance: 975 rows / `max(version)` `20260825034622` /
 high-water `20260819232000` — correct until the save_job apply, one migration behind live.)
 All four migrations
@@ -23,10 +20,10 @@ entries only; it does not re-certify unrelated issue narratives below.
 `_issue_return_credit_impl` still creates only the credit-memo header and writes no
 `invoice_items.cost_cents`; live PNL still recognizes only `posted`, and monthly reporting still
 omits `paid`. Production currently has zero credited returns, so the defect is real but latent rather
-than an existing wrong report. Pre-apply candidates `20260825230150`, `20260825230209`, and
-`20260826215500` contain the durable repair and fail closed if the zero-credit/zero-legacy-restock
+than an existing wrong report. Pre-apply candidates `20260825230150`, `20260825230209`,
+`20260826215500`, and `20260826234000` contain the durable repair and fail closed if the zero-credit/zero-legacy-restock
 assumptions or either delivery-invoice implementation contract stop being true. Do not call this
-resolved until all three migrations are reviewed, applied, and verified live.
+resolved until all four migrations are reviewed, applied, and verified live.
 The first migration blocks new return-credit issuance until the second migration's postflight succeeds,
 closing the otherwise unsafe commit gap between the two files. They must be applied back-to-back. If the
 second fails, leave the barrier active, repair the drift it reports, and rerun it; an emergency removal
@@ -40,6 +37,10 @@ allocation so a return cannot reopen customer billing headroom.
 The third migration also excludes the order-linked credit memo from both delivery invoice coverage
 checks, so it cannot suppress a later delivery's automatic invoice or block manual recovery of an
 already-completed unbilled delivery.
+The fourth applies that same rule to the main dashboard action queue and to void/cancel invoice-review
+warnings, and makes the automatic completion path ignore soft-deleted invoices. It preserves the
+ordinary hard-delete path for unrelated invoices; the disposable proof executes that branch with a
+real draft header and cascaded line item.
 Because every recognized-status transition must coordinate with a return credit that could start at
 the same instant, two people posting invoices for the same order line concurrently can make one post
 fail cleanly with a wait-and-retry message even when no return credit exists yet. No data is at risk;
