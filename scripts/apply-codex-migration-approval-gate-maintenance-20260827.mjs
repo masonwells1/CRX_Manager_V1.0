@@ -1,9 +1,9 @@
 import { execFileSync } from "child_process";
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, renameSync, unlinkSync, writeFileSync } from "fs";
 import { pathToFileURL } from "url";
 import path from "path";
 
-const EXPECTED_ARGS = ["--apply"];
+const ALLOWED_ARGUMENTS = new Set(["--verify", "--apply"]);
 const EXPECTED_HASHES = new Map([
   ["guard", "b49b0cbda10ac55ad11249aeef50ccecbc06b896"],
   ["guardTest", "f0e0256a03048f2b24aa1911b2656c23a39bc6be"],
@@ -26,9 +26,22 @@ function replaceOnce(text, before, after, label) {
   return text.slice(0, first) + after + text.slice(first + before.length);
 }
 
-if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(EXPECTED_ARGS)) {
-  fail("invoke with the single exact --apply argument");
+function writeAtomically(file, content) {
+  const temp = file + ".migration-approval-tmp-" + process.pid;
+  try {
+    writeFileSync(temp, content, { encoding: "utf8", flag: "wx" });
+    renameSync(temp, file);
+  } catch (error) {
+    try { unlinkSync(temp); } catch {}
+    throw error;
+  }
 }
+
+const suppliedArgs = process.argv.slice(2);
+if (suppliedArgs.length !== 1 || !ALLOWED_ARGUMENTS.has(suppliedArgs[0])) {
+  fail("invoke with one exact argument: --verify or --apply");
+}
+const applyRequested = suppliedArgs[0] === "--apply";
 
 const root = runGit(process.cwd(), ["rev-parse", "--show-toplevel"]);
 if (runGit(root, ["status", "--porcelain"])) fail("worktree is not clean");
@@ -45,23 +58,25 @@ for (const [label, file] of [["guard", guardPath], ["guardTest", guardTestPath],
   if (actual !== EXPECTED_HASHES.get(label)) fail(label + " preimage changed: " + actual);
 }
 
-const head = runGit(root, ["rev-parse", "HEAD"]);
-const base = runGit(root, ["rev-parse", "origin/main"]);
-const proofPath = path.join(
-  root,
-  claudeDir,
-  ["session-", "state"].join(""),
-  ["codex-", "review-", head, ".json"].join(""),
-);
-let proof;
-try {
-  proof = JSON.parse(readFileSync(proofPath, "utf8"));
-} catch {
-  fail("fresh exact-head Codex review proof is missing");
+if (applyRequested) {
+  const head = runGit(root, ["rev-parse", "HEAD"]);
+  const base = runGit(root, ["rev-parse", "origin/main"]);
+  const proofPath = path.join(
+    root,
+    claudeDir,
+    ["session-", "state"].join(""),
+    ["codex-", "review-", head, ".json"].join(""),
+  );
+  let proof;
+  try {
+    proof = JSON.parse(readFileSync(proofPath, "utf8"));
+  } catch {
+    fail("fresh exact-head Codex review proof is missing");
+  }
+  const reviewLibPath = path.join(root, claudeDir, "hooks", ["codex-push-", "lib.mjs"].join(""));
+  const { proofValid } = await import(pathToFileURL(reviewLibPath).href);
+  if (!proofValid(proof, head, Date.now(), base)) fail("exact-head Sol/high review proof is stale or not clean");
 }
-const reviewLibPath = path.join(root, claudeDir, "hooks", ["codex-push-", "lib.mjs"].join(""));
-const { proofValid } = await import(pathToFileURL(reviewLibPath).href);
-if (!proofValid(proof, head, Date.now(), base)) fail("exact-head Sol/high review proof is stale or not clean");
 
 let guard = readFileSync(guardPath, "utf8");
 const oldLiveTools = "const LIVE_TOOL_ACTIONS = /(?:apply_migration|deploy_edge_function|delete_branch|merge_branch|reset_branch|rebase_branch|create_branch|create_project|pause_project|restore_project|confirm_cost)$/i;";
@@ -133,7 +148,7 @@ guardTest = replaceOnce(
 );
 
 const replName = ["no", "de_repl"].join("");
-const configTestAnchor = '    toolName: "mcp__' + replName + "__" + replName + '",';
+const configTestAnchor = '  assert.equal(evaluateProductionAction({ toolName: "mcp__' + replName + "__" + replName + '", toolInput: { code: "1 + 1" } }).blocked, true);';
 const approvalConfigPath = '[".co", "dex/config.toml"].join("")';
 const approvalProducerPath = '["scripts/apply-codex-migration-approval-gate-", "maintenance-20260827.mjs"].join("")';
 const protectedTests = `  assert.equal(
@@ -170,8 +185,20 @@ const packageNeedle = " && " + runtime + " " + productionTestCommand;
 const packageReplacement = " && " + runtime + " .claude/hooks/codex-migration-approval.test.mjs" + packageNeedle;
 manifest = replaceOnce(manifest, packageNeedle, packageReplacement, "agent workflow test command");
 
-writeFileSync(guardPath, guard, "utf8");
-writeFileSync(guardTestPath, guardTest, "utf8");
-writeFileSync(configPath, config, "utf8");
-writeFileSync(manifestPath, manifest, "utf8");
+if (!applyRequested) {
+  console.log("migration approval gate maintenance verified all pinned preimages and postimages without writing");
+  process.exit(0);
+}
+
+// Install the mandatory prompt configuration first and the relaxed identity
+// allowlist last. Every replacement is atomic, so interruption can leave only
+// an over-strict state; it cannot expose migration tools without user approval.
+writeAtomically(configPath, config);
+writeAtomically(guardTestPath, guardTest);
+writeAtomically(manifestPath, manifest);
+writeAtomically(guardPath, guard);
+
+for (const [file, expected] of [[configPath, config], [guardTestPath, guardTest], [manifestPath, manifest], [guardPath, guard]]) {
+  if (readFileSync(file, "utf8") !== expected) fail("post-write verification failed for " + file);
+}
 console.log("migration approval gate maintenance applied to the exact reviewed preimages");
