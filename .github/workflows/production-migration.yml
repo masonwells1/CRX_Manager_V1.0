@@ -19,8 +19,8 @@ on:
         description: Exact PR head commit reviewed by the migration gate
         required: true
         type: string
-      review_proof_sha256:
-        description: SHA-256 of the clean exact-head Codex review capture Mason inspected
+      review_evidence_base64:
+        description: Base64 of the exact clean production review evidence file Mason inspected
         required: true
         type: string
 
@@ -75,12 +75,10 @@ jobs:
           MIGRATION_NAME: ${{ inputs.migration_name }}
           QUERY_SHA256: ${{ inputs.query_sha256 }}
           REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
-          REVIEW_PROOF_SHA256: ${{ inputs.review_proof_sha256 }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
           [[ "$REVIEWED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
-          [[ "$REVIEW_PROOF_SHA256" =~ ^[a-f0-9]{64}$ ]]
           [[ "$MIGRATION_NAME" =~ ^[0-9]{14}_[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
           ! [[ "${MIGRATION_NAME:15}" =~ [0-9]{14} ]]
           [[ "$QUERY_SHA256" =~ ^[a-f0-9]{64}$ ]]
@@ -98,14 +96,24 @@ jobs:
           REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
           MIGRATION_NAME: ${{ inputs.migration_name }}
           QUERY_SHA256: ${{ inputs.query_sha256 }}
-          REVIEW_PROOF_SHA256: ${{ inputs.review_proof_sha256 }}
+          REVIEW_EVIDENCE_BASE64: ${{ inputs.review_evidence_base64 }}
+          REVIEW_EVIDENCE_OUTPUT: ${{ runner.temp }}/production-migration-review-evidence.json
         run: node scripts/verify-production-migration-review.mjs
+
+      - name: Preserve the verified review evidence for the approval boundary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-migration-review-evidence
+          path: ${{ runner.temp }}/production-migration-review-evidence.json
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Prove deny paths and build the exact atomic batch
         env:
           MIGRATION_NAME: ${{ inputs.migration_name }}
           QUERY_SHA256: ${{ inputs.query_sha256 }}
           PROJECT_ID: rhyzpcqhnizqbxphqdkr
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
           BATCH_FILE: ${{ runner.temp }}/reviewed-production-migration.sql
           RUNTIME_A: no
           RUNTIME_B: de
@@ -114,6 +122,7 @@ jobs:
           "$RUNTIME_A$RUNTIME_B" scripts/build-reviewed-migration-batch.test.mjs
           "$RUNTIME_A$RUNTIME_B" scripts/build-reviewed-migration-batch.mjs \
             --project-id "$PROJECT_ID" \
+            --expected-commit "$EXPECTED_COMMIT" \
             --migration "$MIGRATION_NAME" \
             --query-sha256 "$QUERY_SHA256" \
             --output "$BATCH_FILE"
@@ -124,7 +133,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: production-database
     permissions:
+      actions: read
       contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -142,6 +153,22 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
+
+      - name: Retrieve the pre-approval review evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: production-migration-review-evidence
+          path: .production-migration-review-evidence
+
+      - name: Revalidate review evidence after Mason approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
+          REVIEW_EVIDENCE_FILE: .production-migration-review-evidence/production-migration-review-evidence.json
+        run: node scripts/verify-production-migration-review.mjs
 
       - id: supabase-cli
         uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520 # v3.0.0
@@ -161,6 +188,7 @@ jobs:
           MIGRATION_NAME: ${{ inputs.migration_name }}
           QUERY_SHA256: ${{ inputs.query_sha256 }}
           PROJECT_ID: rhyzpcqhnizqbxphqdkr
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
           BATCH_FILE: ${{ runner.temp }}/reviewed-production-migration.sql
           RUNTIME_A: no
           RUNTIME_B: de
@@ -168,6 +196,7 @@ jobs:
           set -euo pipefail
           "$RUNTIME_A$RUNTIME_B" scripts/build-reviewed-migration-batch.mjs \
             --project-id "$PROJECT_ID" \
+            --expected-commit "$EXPECTED_COMMIT" \
             --migration "$MIGRATION_NAME" \
             --query-sha256 "$QUERY_SHA256" \
             --output "$BATCH_FILE"

@@ -71,11 +71,20 @@ Repeat this proof whenever the Codex GitHub credential is replaced or its permis
 ## Human-dispatched migration review attestation
 
 Before merging a migration PR, run the repository's trusted migration review wrapper against the
-clean exact PR head. Only after both required reviewer charters and the independent
-`gpt-5.6-sol`/high review return clean, record the SHA-256 of that clean review capture. After the PR
-merges, Codex gives Mason the exact five workflow inputs: current-main commit, reviewed PR-head
-commit, migration stem, migration SHA-256, and review-capture SHA-256. Mason enters those inputs and
-presses **Run workflow** in GitHub's website.
+clean exact PR head. After both required `gpt-5.6-sol`/high reviewer charters return clean, package
+their two machine-verdict captures with
+`scripts/package-production-migration-review-evidence.mjs`. The packager reads the committed regular
+Git blob, binds the evidence to that PR-head commit and SQL SHA-256, rejects failed or duplicate
+verdict tokens, and produces JSON plus a base64 copy. Mason inspects the JSON. After the PR merges,
+Codex gives Mason the exact five workflow inputs: current-main commit, reviewed PR-head commit,
+migration stem, migration SHA-256, and the packaged review evidence in base64. Mason enters those
+inputs and presses **Run workflow** in GitHub's website.
+
+The preparation sequence is two separate commands: first the existing exact migration-review
+producer, then the evidence packager. The packager accepts only the migration name, discovers the
+two producer-named captures itself, requires both to be less than 30 minutes old, and writes a
+`.json` file for Mason to inspect plus a `.b64` file for the workflow input. It refuses to overwrite
+either output. Do not hand-author or edit either evidence file.
 
 That manual dispatch is the durable review attestation. It is a meaningful capability boundary
 because the Codex token has Actions read-only and therefore cannot create the event. The production
@@ -84,8 +93,13 @@ workflow accepts it only when all of these are true:
 1. GitHub records a manual `workflow_dispatch` by the repository owner.
 2. The exact reviewed commit is the head of one merged PR into `main`.
 3. That PR's recorded merge commit is still the current `main` commit.
-4. The migration's Git blob is identical at the reviewed PR head and current `main`.
-5. Both supplied SHA-256 values have canonical lowercase form and remain in the workflow audit log.
+4. The migration is a regular `100644` Git blob, identical at the reviewed PR head and current
+   `main`; symlinks are rejected.
+5. The supplied evidence is strict JSON containing exactly the two required successful reviewer
+   outputs, each with one terminal `CODEX_PROOF_VERDICT: CLEAN`, and its commit/name/SQL hash match
+   the requested migration.
+6. The verified evidence is preserved as a one-day GitHub run artifact and revalidated after
+   Mason's environment approval.
 
 Condition 3 deliberately makes the release window fail closed: if another PR reaches `main`, rerun
 the release preparation against current state rather than approving stale evidence. The workflow
@@ -96,11 +110,12 @@ until Mason makes the final release decision.
 ## Migration run
 
 The migration workflow accepts the exact current `main` commit, exact reviewed PR-head commit,
-review-capture SHA-256, exact timestamped migration stem, and lowercase SHA-256 of that file.
+base64 review-evidence artifact, exact timestamped migration stem, and lowercase SHA-256 of that file.
 Before approval it verifies current-main binding, the merged-PR and durable-review bindings,
-unchanged Git-blob and file/hash bindings, environment protection, parser deny paths, and
-atomic-batch compatibility. After Mason's website approval, it rebuilds the batch from the same
-commit, reconfirms current main, verifies the installed Supabase CLI version, obtains the
+unchanged regular Git-blob and file/hash bindings, environment protection, parser deny paths, and
+atomic-batch compatibility. After Mason's website approval, it revalidates the preserved review
+artifact and rebuilds the batch directly from the same immutable Git blob, reconfirms current main,
+verifies the installed Supabase CLI version, obtains the
 environment secrets, and executes one transaction.
 
 That transaction locks the migration ledger, refuses duplicate versions, names, or exact SQL

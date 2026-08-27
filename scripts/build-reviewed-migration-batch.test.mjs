@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,13 +9,17 @@ import {
   buildAtomicMigrationSql,
   CRX_PRODUCTION_REF,
   prepareBatch,
+  readRegularMigrationBlob,
   transactionCompatibility,
 } from "./build-reviewed-migration-batch.mjs";
 import {
+  decodeReviewEvidenceBase64,
+  parseReviewEvidence,
   selectExactMergedPr,
   validateReviewInputs,
   validateTrustedDispatch,
 } from "./production-migration-review-lib.mjs";
+import { buildEvidence, extractCapturedReview } from "./package-production-migration-review-evidence.mjs";
 
 const MIGRATION = "20990101010101_test_safe_batch";
 const SQL = [
@@ -47,6 +52,14 @@ assert.match(workflow, /Verify human-dispatched exact-commit migration review/,
   "preflight must bind Mason's manual dispatch to exact review evidence before approval");
 assert.match(workflow, /verify-production-migration-review\.mjs/,
   "the durable review verifier must be invoked by a literal script path");
+assert.match(workflow, /review_evidence_base64/,
+  "the human dispatch must carry the full machine-review evidence, not an unverified digest");
+assert.match(workflow, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/,
+  "verified review evidence must be preserved before the approval boundary");
+assert.match(workflow, /actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093/,
+  "the approved job must retrieve and revalidate the preserved evidence");
+assert.doesNotMatch(workflow, /review_proof_sha256/i,
+  "a caller-supplied proof digest without the reviewed artifact must never satisfy the gate");
 assert.doesNotMatch(workflow, /uses:\s+[^\s]+@v\d+/,
   "production workflows must never trust mutable major-version action tags");
 assert.match(workflow, /supabase\/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520/,
@@ -74,7 +87,6 @@ const reviewInput = {
   reviewedCommit: REVIEWED,
   migrationName: MIGRATION,
   queryHash: REVIEW_HASH,
-  reviewProofHash: "b".repeat(64),
 };
 assert.doesNotThrow(() => validateReviewInputs(reviewInput));
 assert.throws(() => validateReviewInputs({
@@ -97,6 +109,52 @@ const mergedPr = {
 };
 assert.equal(selectExactMergedPr([mergedPr], reviewInput), mergedPr);
 assert.throws(() => selectExactMergedPr([{ ...mergedPr, merge_commit_sha: "3".repeat(40) }], reviewInput), /current main/);
+
+const cleanReviewEvidence = {
+  schemaVersion: 1,
+  migrationName: MIGRATION,
+  reviewedCommit: REVIEWED,
+  querySha256: REVIEW_HASH,
+  model: "gpt-5.6-sol",
+  reasoningEffort: "high",
+  generatedAt: "2026-08-27T00:00:00.000Z",
+  reviews: ["rls-security-reviewer", "migration-drift-reviewer"].map((reviewer) => ({
+    reviewer,
+    exitCode: 0,
+    stdout: `No high findings.\nCODEX_PROOF_VERDICT: CLEAN\n`,
+  })),
+};
+const evidenceBytes = Buffer.from(JSON.stringify(cleanReviewEvidence));
+assert.deepEqual(parseReviewEvidence(evidenceBytes, reviewInput), cleanReviewEvidence);
+assert.deepEqual(decodeReviewEvidenceBase64(evidenceBytes.toString("base64")), evidenceBytes);
+assert.throws(() => decodeReviewEvidenceBase64("not base64"), /canonical base64/);
+assert.throws(() => parseReviewEvidence(Buffer.from(JSON.stringify({
+  ...cleanReviewEvidence,
+  querySha256: "0".repeat(64),
+})), reviewInput), /not bound/);
+assert.throws(() => parseReviewEvidence(Buffer.from(JSON.stringify({
+  ...cleanReviewEvidence,
+  reviews: cleanReviewEvidence.reviews.map((review, index) => index === 0 ? {
+    ...review,
+    stdout: `${review.stdout}CODEX_PROOF_VERDICT: CLEAN\n`,
+  } : review),
+})), reviewInput), /exactly one terminal clean/);
+const capture = "exit=0\n\nSTDOUT\nNo high findings.\nCODEX_PROOF_VERDICT: CLEAN\n\nSTDERR\n";
+assert.deepEqual(extractCapturedReview(capture, "rls-security-reviewer"), {
+  reviewer: "rls-security-reviewer",
+  exitCode: 0,
+  stdout: "No high findings.\nCODEX_PROOF_VERDICT: CLEAN",
+});
+const packaged = buildEvidence({
+  migrationName: MIGRATION,
+  reviewedCommit: REVIEWED,
+  querySha256: REVIEW_HASH,
+  rlsCapture: capture,
+  driftCapture: capture,
+  generatedAt: "2026-08-27T00:00:00.000Z",
+});
+assert.deepEqual(parseReviewEvidence(Buffer.from(JSON.stringify(packaged)), reviewInput), packaged);
+assert.throws(() => extractCapturedReview(capture.replace("exit=0", "exit=1"), "rls-security-reviewer"), /successful reviewer process/);
 
 assert.deepEqual(transactionCompatibility(SQL), { ok: true });
 assert.deepEqual(transactionCompatibility("SELECT CASE WHEN true THEN 1 ELSE 0 END;"), { ok: true });
@@ -157,20 +215,32 @@ try {
   const migrations = path.join(root, "supabase", "migrations");
   mkdirSync(migrations, { recursive: true });
   writeFileSync(path.join(migrations, `${MIGRATION}.sql`), SQL);
+  const runGit = (args, input) => {
+    const result = spawnSync("git", args, { cwd: root, encoding: "utf8", input, shell: false, windowsHide: true });
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+    return (result.stdout || "").trim();
+  };
+  runGit(["init", "-q"]);
+  runGit(["config", "user.email", "gate-test@example.invalid"]);
+  runGit(["config", "user.name", "Gate Test"]);
+  runGit(["add", "supabase/migrations"]);
+  runGit(["commit", "-q", "-m", "fixture"]);
+  const expectedCommit = runGit(["rev-parse", "HEAD"]);
   const output = path.join(root, "batch.sql");
 
   assert.throws(
-    () => prepareBatch({ repoRoot: root, projectId: "wrong", migrationName: MIGRATION, queryHash: HASH, output }),
+    () => prepareBatch({ repoRoot: root, projectId: "wrong", expectedCommit, migrationName: MIGRATION, queryHash: HASH, output }),
     /fixed CRX production project/,
   );
   assert.throws(
-    () => prepareBatch({ repoRoot: root, projectId: CRX_PRODUCTION_REF, migrationName: `${MIGRATION}.sql`, queryHash: HASH, output }),
+    () => prepareBatch({ repoRoot: root, projectId: CRX_PRODUCTION_REF, expectedCommit, migrationName: `${MIGRATION}.sql`, queryHash: HASH, output }),
     /exact file stem/,
   );
   assert.throws(
     () => prepareBatch({
       repoRoot: root,
       projectId: CRX_PRODUCTION_REF,
+      expectedCommit,
       migrationName: "99999999999999_alias_20260101000000_old_migration",
       queryHash: HASH,
       output,
@@ -179,22 +249,58 @@ try {
     "a second embedded timestamp must never be accepted as a fresh migration identity",
   );
   assert.throws(
-    () => prepareBatch({ repoRoot: root, projectId: CRX_PRODUCTION_REF, migrationName: "20990101010102_missing", queryHash: HASH, output }),
-    /does not exist/,
+    () => prepareBatch({ repoRoot: root, projectId: CRX_PRODUCTION_REF, expectedCommit, migrationName: "20990101010102_missing", queryHash: HASH, output }),
+    /regular 100644 Git blob/,
   );
   assert.throws(
-    () => prepareBatch({ repoRoot: root, projectId: CRX_PRODUCTION_REF, migrationName: MIGRATION, queryHash: "0".repeat(64), output }),
+    () => prepareBatch({ repoRoot: root, projectId: CRX_PRODUCTION_REF, expectedCommit, migrationName: MIGRATION, queryHash: "0".repeat(64), output }),
     /hash mismatch/,
   );
   assert.equal(existsSync(output), false, "invalid inputs must not create a batch");
 
-  const result = prepareBatch({ repoRoot: root, projectId: CRX_PRODUCTION_REF, migrationName: MIGRATION, queryHash: HASH, output });
+  assert.equal(readRegularMigrationBlob({ repoRoot: root, expectedCommit, migrationName: MIGRATION }), SQL);
+  const result = prepareBatch({ repoRoot: root, projectId: CRX_PRODUCTION_REF, expectedCommit, migrationName: MIGRATION, queryHash: HASH, output });
   assert.deepEqual(result, { migrationName: MIGRATION, queryHash: HASH, output });
   assert.equal(readFileSync(output, "utf8"), batch);
   assert.throws(
-    () => prepareBatch({ repoRoot: root, projectId: CRX_PRODUCTION_REF, migrationName: MIGRATION, queryHash: HASH, output }),
+    () => prepareBatch({ repoRoot: root, projectId: CRX_PRODUCTION_REF, expectedCommit, migrationName: MIGRATION, queryHash: HASH, output }),
     /EEXIST/,
     "batch output may not be overwritten",
+  );
+  const stateDir = path.join(root, ".claude", "session-state");
+  mkdirSync(stateDir, { recursive: true });
+  const rlsCapture = path.join(stateDir, `codex-review-mig-${MIGRATION}-rls-security-reviewer-capture.txt`);
+  const driftCapture = path.join(stateDir, `codex-review-mig-${MIGRATION}-migration-drift-reviewer-capture.txt`);
+  const evidenceOutput = path.join(root, "evidence.json");
+  const base64Output = path.join(root, "evidence.b64");
+  writeFileSync(rlsCapture, capture);
+  writeFileSync(driftCapture, capture);
+  const packageResult = spawnSync(process.execPath, [
+    path.join(process.cwd(), "scripts", "package-production-migration-review-evidence.mjs"),
+    "--migration", MIGRATION,
+    "--output", evidenceOutput,
+    "--base64-output", base64Output,
+  ], { cwd: root, encoding: "utf8", shell: false, windowsHide: true });
+  assert.equal(packageResult.status, 0, packageResult.stderr);
+  const packagedBytes = readFileSync(evidenceOutput);
+  assert.equal(readFileSync(base64Output, "ascii"), packagedBytes.toString("base64"));
+  assert.equal(JSON.parse(packagedBytes).reviewedCommit, expectedCommit);
+  assert.equal(JSON.parse(packagedBytes).querySha256, HASH);
+  const linkBlob = runGit(["hash-object", "-w", "--stdin"], "elsewhere.sql");
+  runGit(["update-index", "--add", "--cacheinfo", `120000,${linkBlob},supabase/migrations/${MIGRATION}.sql`]);
+  runGit(["commit", "-q", "-m", "symlink fixture"]);
+  const symlinkCommit = runGit(["rev-parse", "HEAD"]);
+  assert.throws(
+    () => prepareBatch({
+      repoRoot: root,
+      projectId: CRX_PRODUCTION_REF,
+      expectedCommit: symlinkCommit,
+      migrationName: MIGRATION,
+      queryHash: HASH,
+      output: path.join(root, "symlink-batch.sql"),
+    }),
+    /regular 100644 Git blob/,
+    "a committed symlink must never redirect the SQL bytes executed by the builder",
   );
 } finally {
   rmSync(root, { recursive: true, force: true });

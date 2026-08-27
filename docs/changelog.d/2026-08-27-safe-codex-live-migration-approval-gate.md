@@ -7,7 +7,9 @@ removed before release.
 
 The replacement moves production credentials and execution out of the local Codex shell. A manual
 GitHub workflow accepts one exact current-main commit, reviewed PR-head commit, human-dispatched
-review-capture hash, timestamped migration filename, and SHA-256.
+full two-charter clean-review evidence, timestamped migration filename, and SQL SHA-256. The workflow
+parses and preserves that evidence, rejects non-regular Git migration entries, and rebuilds from the
+immutable commit blob so a symlink cannot redirect the bytes applied.
 Its `production-database` environment requires Mason's GitHub account, rejects administrator bypass,
 and releases its credentials only after the website approval. Mason does not need a second account:
 Codex uses a fine-grained machine credential with Actions and Deployments both read-only, so it can

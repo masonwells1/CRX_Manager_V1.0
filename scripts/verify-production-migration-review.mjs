@@ -1,6 +1,10 @@
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 
 import {
+  decodeReviewEvidenceBase64,
+  parseReviewEvidence,
   selectExactMergedPr,
   validateReviewInputs,
   validateTrustedDispatch,
@@ -34,7 +38,6 @@ try {
     reviewedCommit: process.env.REVIEWED_COMMIT,
     migrationName: process.env.MIGRATION_NAME,
     queryHash: process.env.QUERY_SHA256,
-    reviewProofHash: process.env.REVIEW_PROOF_SHA256,
   };
   validateReviewInputs(input);
   validateTrustedDispatch({
@@ -49,14 +52,27 @@ try {
 
   git(["fetch", "--no-tags", "origin", input.reviewedCommit]);
   const relativeMigration = "supabase/migrations/" + input.migrationName + ".sql";
+  const reviewedEntry = git(["ls-tree", input.reviewedCommit, "--", relativeMigration]).split(/\s+/);
+  const currentEntry = git(["ls-tree", input.expectedCommit, "--", relativeMigration]).split(/\s+/);
+  if (reviewedEntry[0] !== "100644" || reviewedEntry[1] !== "blob" || currentEntry[0] !== "100644" || currentEntry[1] !== "blob") {
+    throw new Error("migration must be a regular 100644 Git blob at both reviewed and current commits");
+  }
   const reviewedBlob = git(["rev-parse", input.reviewedCommit + ":" + relativeMigration]);
   const currentBlob = git(["rev-parse", input.expectedCommit + ":" + relativeMigration]);
   if (reviewedBlob !== currentBlob) throw new Error("migration changed after its exact reviewed PR head");
+  const evidenceBytes = process.env.REVIEW_EVIDENCE_FILE
+    ? readFileSync(process.env.REVIEW_EVIDENCE_FILE)
+    : decodeReviewEvidenceBase64(process.env.REVIEW_EVIDENCE_BASE64);
+  parseReviewEvidence(evidenceBytes, input);
+  const reviewProofHash = createHash("sha256").update(evidenceBytes).digest("hex");
+  if (process.env.REVIEW_EVIDENCE_OUTPUT) {
+    writeFileSync(process.env.REVIEW_EVIDENCE_OUTPUT, evidenceBytes, { flag: "wx" });
+  }
   process.stdout.write(JSON.stringify({
     verified: true,
     pullRequest: mergedPr.number,
     reviewedBlob,
-    reviewProofSha256: input.reviewProofHash,
+    reviewProofSha256: reviewProofHash,
   }) + "\n");
 } catch (error) {
   process.stderr.write(String(error?.message || error) + "\n");

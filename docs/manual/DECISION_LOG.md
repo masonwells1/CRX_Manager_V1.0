@@ -15,7 +15,7 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 **Decision.** Codex prepares one exact main-branch migration for Mason to dispatch through the
 GitHub `production-database` environment. GitHub, not the local agent shell, holds the Supabase credential.
 The environment requires Mason's account, disallows administrator bypass, and binds current main,
-the exact reviewed PR head plus review-capture SHA-256, filename, and SHA-256. The local Codex GitHub
+the exact reviewed PR head plus the full packaged two-charter clean-review evidence, filename, and SQL SHA-256. The local Codex GitHub
 credential is a fine-grained token with Actions and Deployments read-only; only Mason's website
 session can dispatch the reviewed artifact and approve release.
 
