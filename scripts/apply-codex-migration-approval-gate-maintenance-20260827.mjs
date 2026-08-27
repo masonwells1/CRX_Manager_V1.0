@@ -84,10 +84,10 @@ guard = replaceOnce(
 );
 guard = replaceOnce(
   guard,
-  '/\\bsupabase\\s+(?:db\\s+push|migration\\s+up)\\b/i.test(command);',
+  '/\\bsupabase\\s+(?:db\\s+push|migration\\s+up)\\b/i.test(command) ||',
   '/\\bsupabase\\s+(?:db\\s+push|migration\\s+up)\\b/i.test(command) ||' +
     testNlPlaceholder() +
-    '    /\\bsupabase\\b[^\\r\\n;&|]*\\bdb\\s+query\\b[^\\r\\n;&|]*(?:--linked|--db-url)\\b/i.test(command);',
+    '    /\\bsupabase\\b[^\\r\\n;&|]*\\bdb\\s+query\\b[^\\r\\n;&|]*(?:--linked|--db-url)\\b/i.test(command) ||',
   "authenticated raw query command deny",
 );
 
