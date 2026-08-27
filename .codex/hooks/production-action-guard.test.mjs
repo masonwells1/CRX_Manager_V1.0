@@ -390,6 +390,18 @@ try {
   }).blocked, true, "a standalone dynamically constructed GitHub merge is denied");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
+    toolInput: { command: `git switch feature/test; gh pr merge --repo crop/crx --squash --match-head-commit ${risky.sha}` },
+    repoDir: risky.repo,
+    runGh: () => mainPrJson,
+  }).blocked, true, "a compound selectorless merge cannot inspect pre-switch branch context");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `GH_REPO=other/repo gh pr merge 513 --squash --match-head-commit ${risky.sha}` },
+    repoDir: risky.repo,
+    runGh: () => mainPrJson,
+  }).blocked, true, "GitHub repository environment overrides are denied");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
     toolInput: { command: "git push origin :main" },
     repoDir: risky.repo,
   }).blocked, true, "deleting main stays denied");
@@ -580,7 +592,7 @@ try {
   unlinkSync(proofPath(risky.repo));
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: `gh pr merge 123 --squash --match-head-commit ${risky.sha}` },
+    toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
@@ -588,14 +600,14 @@ try {
   writeProof(risky.repo, valid);
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: `gh pr merge 123 --squash --match-head-commit ${risky.sha}` },
+    toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, false, "gh PR merge to main uses the same valid proof gate");
   const autoMergeDecision = evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash --auto" },
+    toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --auto --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
@@ -604,7 +616,7 @@ try {
   assert.match(autoMergeDecision.reason, /later commits could land/, "auto-merge deny names the exact-head race");
   const missingHeadDecision = evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: "gh pr merge 123 --repo crop/crx --squash" },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
@@ -613,7 +625,7 @@ try {
   assert.match(missingHeadDecision.reason, /--match-head-commit/, "missing exact-head denial gives the pinned retry");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: `gh pr merge 123 --squash --match-head-commit ${"f".repeat(40)}` },
+    toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${"f".repeat(40)}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
@@ -671,7 +683,7 @@ try {
   }).blocked, true, "unrecognized mutating gh API calls are denied");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: `gh pr merge 123 --squash --match-head-commit ${risky.sha}` },
+    toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => JSON.stringify({
@@ -682,14 +694,14 @@ try {
   }).blocked, true, "gh PR merge denies when GitHub checks are not green");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: `"C:\\Program Files\\GitHub CLI\\gh.exe" pr merge 123 --squash --match-head-commit ${risky.sha}` },
+    toolInput: { command: `"C:\\Program Files\\GitHub CLI\\gh.exe" pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, false, "full Windows GitHub CLI paths are gated too");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     runGh: () => featurePrJson,
   }).blocked, false, "gh PR merge to a non-production base is allowed");
@@ -718,8 +730,7 @@ try {
     nowMs: now,
     runGh: (args) => { sawSelector = args.join(" "); return mainPrJson; },
   }).blocked, true, "Codex-app merge input spelling is recognized and denied without atomic head support");
-  assert.match(sawSelector, /\b123\b/, "guard verifies the exact requested PR number");
-  assert.match(sawSelector, /crop\/crx/, "guard verifies against the exact requested repo");
+  assert.equal(sawSelector, "", "MCP merge is refused before lookup because its schema cannot carry an atomic head SHA");
   assert.equal(evaluateProductionAction({
     toolName: "mcp__github__merge_pull_request",
     toolInput: { unexpected_key: true },
@@ -933,7 +944,7 @@ try {
       const inspected = JSON.parse(json);
       return evaluateProductionAction({
         toolName: "PowerShell",
-        toolInput: { command: `gh pr merge 123 --squash --match-head-commit ${inspected.headRefOid}` },
+        toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${inspected.headRefOid}` },
         repoDir: stale.repo,
         nowMs: now,
         runGh: () => json,
@@ -979,7 +990,7 @@ try {
     writeProof(stale.repo, { ...valid, head_sha: updatedHead, base_sha: githubBase });
     const upToDate = evaluateProductionAction({
       toolName: "PowerShell",
-      toolInput: { command: `gh pr merge 123 --squash --match-head-commit ${updatedHead}` },
+      toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${updatedHead}` },
       repoDir: stale.repo,
       nowMs: now,
       runGh: () => JSON.stringify({
@@ -1024,7 +1035,7 @@ try {
     let askedFor = "";
     evaluateProductionAction({
       toolName: "PowerShell",
-      toolInput: { command: `gh pr merge 123 --squash --match-head-commit ${stale.sha}` },
+      toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${stale.sha}` },
       repoDir: stale.repo,
       nowMs: now,
       runGh: (args) => { askedFor = args.join(" "); return prAt(githubBase); },
@@ -1049,7 +1060,7 @@ try {
     unlinkSync(proofPath(stale.repo));
     const guidance = String(evaluateProductionAction({
       toolName: "PowerShell",
-      toolInput: { command: `gh pr merge 123 --squash --match-head-commit ${updatedHead}` },
+      toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${updatedHead}` },
       repoDir: stale.repo,
       nowMs: now,
       runGh: () => JSON.stringify({

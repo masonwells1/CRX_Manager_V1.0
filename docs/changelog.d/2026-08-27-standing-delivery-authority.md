@@ -56,6 +56,13 @@ closed. GitHub CLI actions containing shell expansion, substitutions, splats, or
 also denied by autopilot plus both merge guards. Ordinary literal push and exact-head merge
 commands remain unattended and do not ask Mason for another approval.
 
+The following exact-head review removed the last context guess: a compound command could switch
+branches before a selectorless merge, making the hook inspect the old branch while the shell
+merged the new one. Every merge must now be one standalone literal action that explicitly names
+the numeric PR, `owner/repo`, and exact 40-character head SHA. Repository/host environment
+overrides are denied. The documented ship, rollback, and `land-pr` commands emit that complete
+form, so autonomous delivery remains one agent-owned command with no Mason prompt.
+
 Proof run: focused autopilot, prompt, hold, Claude/Codex merge-guard, and global risky-phrase
 tests; full correction-guard and agent-workflow suites; lint, typecheck, build, docs check, sync,
 and mutation tests. No business safety rule, branch protection, product model, migration, RPC,

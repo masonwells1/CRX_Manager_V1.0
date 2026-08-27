@@ -107,12 +107,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // feature pushes and literal GitHub CLI actions. Wildcard/multi-ref pushes and
   // shell-expanded gh commands now fail closed; the transform anchors are still
   // unchanged.
-  codexGuard: "5b8c0445e29a341ea169c0577938f49ec102abbf",
-  pushLib: "a9e1ca76a777325dc06b929a5ac9e7c7b56eff0d",
+  // Re-pinned after selectorless/compound merge context was removed. Every merge
+  // now names one PR, repository, and exact head in a standalone command; the
+  // maintenance transform anchors remain unchanged.
+  codexGuard: "842bf5391f9c08a55feea52b89c8c1f6bfef1d44",
+  pushLib: "90ed89244890269292a033af80da302a0fed683f",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "5319bd07ce97f99ce3b23cd6847b21edcf7f0486",
-  pushLib: "a9e1ca76a777325dc06b929a5ac9e7c7b56eff0d",
+  codexGuard: "569f3a70d9280a93b42eed2820718b2a45b2b6c4",
+  pushLib: "90ed89244890269292a033af80da302a0fed683f",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

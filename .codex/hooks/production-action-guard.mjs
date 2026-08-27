@@ -12,8 +12,10 @@ import {
   featurePushDestinations,
   gitPushCwd,
   githubCliCommandIsDynamic,
+  githubRepositoryContextOverrideMentioned,
   isGitPush,
   mainPushSource,
+  mergeRequestHasExplicitContext,
   proofSearchDirs,
   proofValid,
   pushContextIsAmbiguous,
@@ -622,6 +624,9 @@ export function pullRequestChecksGreen(pullRequest) {
 }
 
 function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
+  if (!mergeRequestHasExplicitContext(request)) {
+    return denied("CODEX PRODUCTION GATE: every merge must explicitly name one numeric PR, `--repo owner/repo`, and the exact 40-character `--match-head-commit` SHA in one standalone command. Selectorless/current-branch context and merge tools without an atomic head field are denied.");
+  }
   let pullRequest;
   try {
     pullRequest = resolvePullRequest({ request, repoDir, runGh });
@@ -646,7 +651,7 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
   if (request.atomicHeadMatch === false) {
     return denied(
       "CODEX PRODUCTION GATE: this merge tool cannot atomically require GitHub to merge the inspected head SHA. " +
-      "Use `gh pr merge <n> --squash --match-head-commit <head-sha>` instead; no extra Mason approval is required."
+      "Use one standalone `gh pr merge <n> --repo <owner/repo> --squash --match-head-commit <head-sha>` command instead; no extra Mason approval is required."
     );
   }
   if (!/^[0-9a-f]{40}$/i.test(requestedHead) || requestedHead.toLowerCase() !== actualHead.toLowerCase()) {
@@ -813,6 +818,9 @@ export function evaluateProductionAction({
   if (githubCliCommandIsDynamic(command)) {
     return denied("CODEX PRODUCTION GATE: GitHub CLI commands containing shell-expanded variables, substitutions, splats, or backticks are denied because a merge or auto-merge action could be hidden from the exact-head parser. Spell the complete `gh` command literally.");
   }
+  if (githubRepositoryContextOverrideMentioned(command)) {
+    return denied("CODEX PRODUCTION GATE: GH_REPO/GH_HOST/GH_CONFIG_DIR/GITHUB_API_URL overrides are denied for merges because they can make the guard inspect a different repository or host than the command executes. Use an explicit `--repo owner/repo`.");
+  }
   const pushSegments = commandSegments.filter((part) => isGitPush(part));
   if (pushSegments.length > 0 && (pushSegments.length !== 1 || commandSegments.length !== 1)) {
     return denied("CODEX PRODUCTION GATE: a feature push must be one standalone command. Chaining a push with another shell action could arm auto-merge after the pre-push GitHub check, so run `git -C <repo> push <remote> <single-refspec>` by itself.");
@@ -823,6 +831,12 @@ export function evaluateProductionAction({
       return denied("CODEX PRODUCTION GATE: GraphQL merge/auto-merge mutations are denied because the guard cannot safely resolve and verify their exact PR head/checks. Use `gh pr merge <number> --match-head-commit <head-sha>` instead.");
     }
     if (ghRequest) {
+      if (commandSegments.length !== 1) {
+        return denied("CODEX PRODUCTION GATE: a merge must be one standalone command so directory, branch, repository, and PR context cannot change after inspection.");
+      }
+      if (!mergeRequestHasExplicitContext(ghRequest)) {
+        return denied("CODEX PRODUCTION GATE: every merge must explicitly name one numeric PR, `--repo owner/repo`, and the exact 40-character `--match-head-commit` SHA in one standalone command. Selectorless/current-branch context is denied.");
+      }
       const result = gatePullRequestMerge({
         request: ghRequest,
         repoDir: actionRepoDir,

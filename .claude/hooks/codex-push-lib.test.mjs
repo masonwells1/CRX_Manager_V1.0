@@ -101,6 +101,8 @@ assert.equal(githubCliCommandIsDynamic("gh pr merge 513 --squash --match-head-co
 assert.equal(githubCliCommandIsDynamic("gh pr view 513 --jq '$.headRefOid'"), false, "single-quoted jq data stays literal");
 assert.equal(githubCliCommandIsDynamic("$verb='merge'; gh pr $verb 513 --auto"), true, "dynamic merge verb is denied");
 assert.equal(githubCliCommandIsDynamic("gh api graphql -f query=$(Get-Content body.graphql)"), true, "command-substituted API body is denied");
+assert.equal(githubCliCommandIsDynamic("gh pr ('mer'+'ge') 513 --auto"), true, "concatenated merge verb is denied");
+assert.equal(githubCliCommandIsDynamic('gh pr m"er"ge 513 --auto'), true, "quote-spliced merge verb is denied");
 
 assert.equal(mainPushSource("git push origin HEAD:main", "feature"), "HEAD");
 assert.equal(gitSubcommandIsDynamic("$verb='push'; git $verb origin HEAD:main"), true, "PowerShell variable subcommand");

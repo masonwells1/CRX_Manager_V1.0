@@ -10,6 +10,7 @@ import {
   ghApiMergeRequest,
   ghMergeRequest,
   mcpMergeRequest,
+  mergeRequestHasExplicitContext,
   proofSearchDirs,
   pullRequestChecksGreen,
 } from "./codex-push-lib.mjs";
@@ -33,6 +34,9 @@ ok(ghMergeRequest("gh pr view merge") !== null, "exact-word over-match routes re
 eq(ghMergeRequest("git merge main"), null, "git merge is not a gh merge");
 eq(ghMergeRequest("echo gh pr merge docs"), { selector: "docs", repo: "", auto: false, matchHead: "", atomicHeadMatch: true }, "gh token anywhere still matches (fails safe)");
 eq(ghMergeRequest("npm run build"), null, "unrelated command ignored");
+ok(mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge 42 --repo o/r --match-head-commit 0123456789012345678901234567890123456789")), "literal PR, repo, and head form is explicit");
+ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge --repo o/r --match-head-commit 0123456789012345678901234567890123456789")), "selectorless current-branch merges are not explicit");
+ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge 42 --match-head-commit 0123456789012345678901234567890123456789")), "current-repository merges are not explicit");
 
 // ── ghApiMergeRequest ────────────────────────────────────────────────────────
 eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge"), { selector: "12", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: true }, "REST merge endpoint parses");
@@ -94,6 +98,13 @@ ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL query field d
 r = runHook({ tool_name: "Bash", tool_input: { command: "$verb='merge'; gh pr $verb 12 --squash --auto" } });
 ok(r.decision?.permissionDecision === "deny", "shell-expanded gh merge verb is denied before literal parsing");
 ok(/shell-expanded/.test(r.decision?.permissionDecisionReason || ""), "dynamic GitHub CLI denial explains the parser boundary");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "git switch other-branch && gh pr merge --squash" } });
+ok(r.decision?.permissionDecision === "deny", "compound selectorless merge cannot inspect the pre-switch branch");
+ok(/standalone/.test(r.decision?.permissionDecisionReason || ""), "compound merge denial requires one stable command context");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "GH_REPO=other/repo gh pr merge 12 --match-head-commit 0123456789012345678901234567890123456789" } });
+ok(r.decision?.permissionDecision === "deny", "GitHub repository environment override is denied");
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "curl -X PUT -H 'Authorization: token x' https://api.github.com/repos/o/r/pulls/12/merge" } });
 ok(r.decision?.permissionDecision === "deny", "raw curl REST merge denied (Codex finding 2026-07-16)");

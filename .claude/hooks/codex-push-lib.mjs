@@ -2062,6 +2062,8 @@ const GH_BIN_RE = /(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.ex
 export function githubCliCommandIsDynamic(command) {
   const text = String(command || "");
   if (!/\bgh(?:\.exe)?\b/i.test(text)) return false;
+  if (/\(\s*(['"])[^'"\r\n]*\1\s*\+\s*(['"])[^'"\r\n]*\2\s*\)/.test(text)) return true;
+  if (/[A-Za-z0-9]["'][A-Za-z0-9]/.test(text)) return true;
   let singleQuoted = false;
   let doubleQuoted = false;
   for (let index = 0; index < text.length; index += 1) {
@@ -2075,6 +2077,23 @@ export function githubCliCommandIsDynamic(command) {
     if (char === "@" && /(?:^|\s)@[A-Za-z_][A-Za-z0-9_]*/.test(text.slice(Math.max(0, index - 1)))) return true;
   }
   return false;
+}
+
+export function githubRepositoryContextOverrideMentioned(command) {
+  const text = String(command || "");
+  if (!/\bgh(?:\.exe)?\b/i.test(text)) return false;
+  return /(?:^|[\s;&|])(?:env\s+)?(?:GH_REPO|GH_HOST|GH_CONFIG_DIR|GITHUB_API_URL)\s*=/i.test(text)
+    || /\$env:(?:GH_REPO|GH_HOST|GH_CONFIG_DIR|GITHUB_API_URL)\b/i.test(text);
+}
+
+export function mergeRequestHasExplicitContext(request) {
+  const selector = String(request?.selector || "").trim();
+  const repo = String(request?.repo || "").trim();
+  const head = String(request?.matchHead || "").trim();
+  return /^\d+$/.test(selector)
+    && /^[^\s/]+\/[^\s/]+$/.test(repo)
+    && /^[0-9a-f]{40}$/i.test(head)
+    && request?.atomicHeadMatch !== false;
 }
 
 // `gh pr merge` with global flags possibly between words (`gh -R o/r pr merge`).

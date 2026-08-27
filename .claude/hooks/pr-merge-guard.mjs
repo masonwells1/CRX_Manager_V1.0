@@ -32,8 +32,10 @@ import {
   describeRiskyContent,
   ghApiMergeRequest,
   githubCliCommandIsDynamic,
+  githubRepositoryContextOverrideMentioned,
   ghMergeRequest,
   mcpMergeRequest,
+  mergeRequestHasExplicitContext,
   proofSearchDirs,
   proofValid,
   pullRequestChecksGreen,
@@ -67,10 +69,13 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
   if (githubCliCommandIsDynamic(toolInput.command)) {
     deny("PR MERGE GATE: GitHub CLI commands containing shell-expanded variables, substitutions, splats, or backticks are denied because a merge or auto-merge action could be hidden from the exact-head parser. Spell the complete `gh` command literally.");
   }
+  if (githubRepositoryContextOverrideMentioned(toolInput.command)) {
+    deny("PR MERGE GATE: GH_REPO/GH_HOST/GH_CONFIG_DIR/GITHUB_API_URL overrides are denied for merges because they can make the hook inspect a different repository or host than the command executes. Use an explicit `--repo owner/repo`.");
+  }
   for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/)) {
     const api = ghApiMergeRequest(segment);
     if (api?.unsupportedGraphql) {
-      deny("PR MERGE GATE: GraphQL merge/auto-merge mutations are denied because the guard cannot safely resolve and verify the PR's exact head/checks. Use `gh pr merge <number> --match-head-commit <head-sha>` instead.");
+      deny("PR MERGE GATE: GraphQL merge/auto-merge mutations are denied because the guard cannot safely resolve and verify the PR's exact head/checks. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
     }
     const found = api || ghMergeRequest(segment);
     if (found) { requests.push(found); continue; }
@@ -79,11 +84,17 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     // are denied outright rather than gated (Codex round-2: an authenticated
     // `curl -X PUT .../pulls/N/merge` bypassed the gate entirely).
     if (/\/pulls\/[^\s/]+\/merge\b/i.test(segment)) {
-      deny("PR MERGE GATE: raw GitHub REST merge calls (curl/wget/Invoke-RestMethod/fetch against .../pulls/<n>/merge) are denied because the guard cannot resolve and verify the PR's base, head, and checks for them. Use `gh pr merge <number>` so the gate can verify the merge.");
+      deny("PR MERGE GATE: raw GitHub REST merge calls (curl/wget/Invoke-RestMethod/fetch against .../pulls/<n>/merge) are denied because the guard cannot resolve and verify the PR's base, head, and checks for them. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command so the gate can verify the merge.");
     }
   }
 }
 if (requests.length === 0) passthrough();
+if (typeof toolInput.command === "string") {
+  const commandSegments = toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
+  if (commandSegments.length !== 1 || requests.length !== 1) {
+    deny("PR MERGE GATE: a merge must be one standalone command so directory, branch, repository, and PR context cannot change after inspection. Run one literal `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command.");
+  }
+}
 
 // ── resolve the PR (fail closed) ─────────────────────────────────────────────
 const projectDir = path.resolve(
@@ -112,6 +123,9 @@ function listWorktreesFromProjectDir() {
 // deny() (which exits). The caller loops over every collected request — a
 // harmless merge earlier in a chain must never exempt a later one.
 function gateRequest(request) {
+  if (!mergeRequestHasExplicitContext(request)) {
+    deny("PR MERGE GATE: every merge must explicitly name one numeric PR, `--repo owner/repo`, and the exact 40-character `--match-head-commit` SHA in one standalone command. Selectorless/current-branch context is denied.");
+  }
   let pr;
   try {
     const viewArgs = ["pr", "view"];
@@ -144,14 +158,14 @@ function gateRequest(request) {
     deny(
       "PR MERGE GATE: `--auto` is not allowed for any PR targeting main because later commits " +
       "could land after this exact-head gate has run. Wait for every check to finish, then run " +
-      "`gh pr merge <n> --squash --match-head-commit <head-sha>` without `--auto`; no extra Mason approval is required."
+      "one standalone `gh pr merge <n> --repo <owner/repo> --squash --match-head-commit <head-sha>` command without `--auto`; no extra Mason approval is required."
     );
   }
 
   const requestedHead = String(request.matchHead || "").trim();
   const actualHead = String(pr.headRefOid || "").trim();
   if (request.atomicHeadMatch === false) {
-    deny("PR MERGE GATE: this merge tool cannot atomically require GitHub to merge the inspected head SHA. Use `gh pr merge <n> --squash --match-head-commit <head-sha>` instead; no extra Mason approval is required.");
+    deny("PR MERGE GATE: this merge tool cannot atomically require GitHub to merge the inspected head SHA. Use one standalone `gh pr merge <n> --repo <owner/repo> --squash --match-head-commit <head-sha>` command instead; no extra Mason approval is required.");
   }
   if (!/^[0-9a-f]{40}$/i.test(requestedHead) || requestedHead.toLowerCase() !== actualHead.toLowerCase()) {
     deny(
