@@ -176,9 +176,12 @@ export function stripCommentsQuoteAware(sql) {
   const n = src.length;
   while (i < n) {
     const ch = src[i];
-    if (ch === "'") {
-      let j = i + 1;
+    const escapeString = (ch === "e" || ch === "E") && src[i + 1] === "'" &&
+      !/[A-Za-z0-9_$]/.test(src[i - 1] || "");
+    if (ch === "'" || escapeString) {
+      let j = i + (escapeString ? 2 : 1);
       while (j < n) {
+        if (escapeString && src[j] === "\\") { j += Math.min(2, n - j); continue; }
         if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
         if (src[j] === "'") { j++; break; }
         j++;
