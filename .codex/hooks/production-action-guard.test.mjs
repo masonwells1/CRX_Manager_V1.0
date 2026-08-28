@@ -22,7 +22,7 @@ for (const key of [
 const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-guard.mjs");
 const claudeGuardPath = path.join(projectRoot, ".claude", "hooks", "codex-push-guard.mjs");
 const tempRoots = [];
-const { maintenanceProducerCommandMentioned } = await import("./production-action-" + "guard.mjs");
+const { landPrCommandMentioned, maintenanceProducerCommandMentioned } = await import("./production-action-" + "guard.mjs");
 
 const collectObjects = (value, found = []) => {
   if (!value || typeof value !== "object") return found;
@@ -240,6 +240,43 @@ try {
     assert.equal(maintenanceProducerCommandMentioned(command), true, `producer spelling recognized: ${command}`);
   }
   assert.equal(maintenanceProducerCommandMentioned("node scripts/ordinary-check.mjs"), false);
+  assert.equal(landPrCommandMentioned("node scripts/land-pr.mjs 513"), true, "land-pr execution is recognized");
+  assert.equal(landPrCommandMentioned("node scripts\\land-pr.mjs 513"), true, "Windows land-pr execution is recognized");
+  assert.equal(landPrCommandMentioned("node scripts/ordinary-check.mjs"), false);
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/land-pr.mjs" } }).blocked, true, "direct land-pr edits are denied");
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { patch: "*** Begin Patch\n*** Update File: scripts/land-pr-lib.mjs\n@@\n-old\n+new\n*** End Patch" } }).blocked, true, "direct land-pr helper patches are denied");
+
+  const landPrRepo = makeRepo("scripts/land-pr.mjs", "#!/usr/bin/env node\n");
+  const landPrLibPath = path.join(landPrRepo.repo, "scripts", "land-pr-lib.mjs");
+  writeFileSync(landPrLibPath, "export const safe = true;\n", "utf8");
+  git(landPrRepo.repo, ["add", "scripts/land-pr-lib.mjs"]);
+  git(landPrRepo.repo, ["commit", "-m", "add land-pr helper"]);
+  const landPrHead = git(landPrRepo.repo, ["rev-parse", "HEAD"]);
+  const landPrNow = Date.now();
+  writeProof(landPrRepo.repo, {
+    codex_ran: true,
+    verdict: "clean",
+    model: "gpt-5.6-sol",
+    reasoning_effort: "high",
+    head_sha: landPrHead,
+    base_sha: landPrRepo.base,
+    timestamp: new Date(landPrNow).toISOString(),
+  });
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "node scripts/land-pr.mjs 513" },
+    repoDir: landPrRepo.repo,
+    nowMs: landPrNow,
+  }).blocked, false, "reviewed land-pr files matching exact HEAD may execute");
+  writeFileSync(landPrLibPath, "export const safe = false;\n", "utf8");
+  const dirtyLandPrRun = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "node scripts/land-pr.mjs 513" },
+    repoDir: landPrRepo.repo,
+    nowMs: landPrNow,
+  });
+  assert.equal(dirtyLandPrRun.blocked, true, "dirty land-pr helper execution is denied");
+  assert.match(dirtyLandPrRun.reason, /differs from its exact committed HEAD blob/i, "dirty land-pr denial explains the exact-blob boundary");
 
   const producerWithoutProof = makeRepo(`scripts/${producerName}`, "#!/usr/bin/env node\n");
   const deniedProducerRun = evaluateProductionAction({

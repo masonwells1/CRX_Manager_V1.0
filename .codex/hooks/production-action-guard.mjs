@@ -95,15 +95,21 @@ const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 // (mcp__codex_apps__github_create_file) — Codex round-5.
 const GITHUB_TOOL = /(?:^|__)github_{1,2}/i;
 const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
-const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
+const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|land-pr(?:-lib)?|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
 const PROTECTED_HARNESS_PATH_RE = new RegExp(String.raw`(?:^|[\\/])${PROTECTED_HARNESS_SOURCE}$`, "i");
 const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\w.-])`, "i");
 const MAINTENANCE_PRODUCER = "scripts/apply-live-testdata-maintenance-20260812.mjs";
+const LAND_PR_FILES = ["scripts/land-pr.mjs", "scripts/land-pr-lib.mjs"];
 export function maintenanceProducerCommandMentioned(command) {
   const compact = String(command || "")
     .toLowerCase()
     .replace(/[\s\\/"'`^]/g, "");
   return compact.includes("apply-live-testdata-maintenance-20260812.mjs");
+}
+
+export function landPrCommandMentioned(command) {
+  const normalized = String(command || "").replaceAll("\\", "/");
+  return /(?:^|[\s'"/])(?:\.\/)?scripts\/land-pr\.mjs(?=$|[\s'"])/i.test(normalized);
 }
 
 function normalize(value) {
@@ -463,6 +469,39 @@ function gateMaintenanceProducerExecution({ command, repoDir, nowMs, runGit }) {
   return { blocked: false };
 }
 
+function gateLandPrExecution({ command, repoDir, nowMs, runGit }) {
+  if (!landPrCommandMentioned(command)) return { blocked: false };
+
+  let headSha;
+  let baseSha;
+  try {
+    headSha = runGit(["rev-parse", "HEAD"], repoDir);
+    baseSha = runGit(["rev-parse", "origin/main"], repoDir);
+    for (const relativePath of LAND_PR_FILES) {
+      const status = runGit(["status", "--porcelain", "--untracked-files=all", "--", relativePath], repoDir);
+      const headBlob = runGit(["rev-parse", `HEAD:${relativePath}`], repoDir);
+      const worktreeBlob = runGit(["hash-object", `--path=${relativePath}`, relativePath], repoDir);
+      if (status || headBlob !== worktreeBlob) {
+        return denied(`CODEX PRODUCTION GATE: ${relativePath} differs from its exact committed HEAD blob. Commit both land-pr files, obtain a fresh exact-head review, and retry.`);
+      }
+    }
+  } catch (error) {
+    return denied(`CODEX PRODUCTION GATE: cannot bind land-pr and its safety helper to the current committed HEAD: ${error?.message || error}`);
+  }
+
+  const proofPath = path.join(repoDir, ".claude", "session-state", `codex-review-${headSha}.json`);
+  let proof;
+  try {
+    proof = JSON.parse(readFileSync(proofPath, "utf8"));
+  } catch (error) {
+    return proofRequirement(headSha, "execution of the protected land-pr GitHub writer", `Missing or unreadable exact-head proof: ${proofPath}`, baseSha);
+  }
+  if (!proofValid(proof, headSha, nowMs, baseSha)) {
+    return proofRequirement(headSha, "execution of the protected land-pr GitHub writer", "The exact-head Sol-high proof is stale or does not match the current HEAD/base.", baseSha);
+  }
+  return { blocked: false };
+}
+
 function githubToolIsReadOnly(toolName) {
   // App-style names keep a `github_` prefix on the leaf
   // (mcp__codex_apps__github_get_file) — strip it before classifying
@@ -739,6 +778,8 @@ export function evaluateProductionAction({
   }
   const maintenanceProducerGate = gateMaintenanceProducerExecution({ command, repoDir: actionRepoDir, nowMs, runGit });
   if (maintenanceProducerGate.blocked) return maintenanceProducerGate;
+  const landPrGate = gateLandPrExecution({ command, repoDir: actionRepoDir, nowMs, runGit });
+  if (landPrGate.blocked) return landPrGate;
 
   if (/[\r\n]/.test(command) && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
     return denied("CODEX PRODUCTION GATE: multiline shell commands that reference the production/review harness are blocked.");

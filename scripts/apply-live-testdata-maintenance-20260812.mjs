@@ -169,11 +169,11 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after land-pr and its pure safety helper joined the risky harness
   // paths so future edits to its child update-branch route require exact-head
   // adversarial review.
-  codexGuard: "cc4d541e91540d43d2cc8289b8dab92b26a20abe",
+  codexGuard: "76e02e953d3a53377f9175fd01cff4fb9043fc91",
   pushLib: "aab3e52095fc2778e096193007016998105fd18c",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "b4c775cabf8f4289707f652a61b01ed20ac9270d",
+  codexGuard: "3f3383db2214365d07d7f226f4cd9695e9f4dcd6",
   pushLib: "aab3e52095fc2778e096193007016998105fd18c",
 };
 
@@ -647,8 +647,8 @@ export function buildProducerProtectionSources() {
     }
   }
 
-  const oldProtectedHarness = "(?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)";
-  const newProtectedHarness = "(?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)";
+  const oldProtectedHarness = "(?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|land-pr(?:-lib)?|apply-live-testdata-maintenance-20260812)";
+  const newProtectedHarness = "(?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|land-pr(?:-lib)?|apply-live-testdata-maintenance-20260812)";
   let codexGuard = replaceExactly(
     sources.codexGuard,
     oldProtectedHarness,
