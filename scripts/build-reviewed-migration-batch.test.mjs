@@ -74,6 +74,10 @@ assert.match(workflow, /^\s*environment: production-database\s*$/m,
   "the credential-bearing job must use the protected production-database environment");
 assert.match(workflow, /apply:[\s\S]*deployments: read[\s\S]*Revalidate production approval boundary after Mason approval[\s\S]*Reconfirm current main/,
   "the apply job must revalidate the protected environment after Mason approval and before production work");
+assert.match(workflow, /apply:[\s\S]*timeout-minutes: 20[\s\S]*actions\/setup-node[\s\S]*Revalidate production approval boundary after Mason approval/,
+  "the approved job must be bounded and use the pinned Node runtime before revalidating protection");
+assert.match(workflow, /Freeze main against concurrent migration merges\n\s+timeout-minutes: 2[\s\S]*Apply one locked migration and ledger row\n\s+timeout-minutes: 10/,
+  "the branch freeze and production SQL steps must have bounded execution times");
 assert.match(workflow, /test "\$GITHUB_REF" = "refs\/heads\/main"/,
   "workflow dispatch must fail unless GitHub runs the workflow definition from main");
 assert.match(workflow, /if \[\[ "\$\{MIGRATION_NAME:15\}" =~ \[0-9\]\{14\} \]\]; then[\s\S]*exit 1/,
@@ -126,6 +130,8 @@ assert.doesNotMatch(canary, /prevent_self_review \/\/ true|can_admins_bypass \/\
   "the canary must preserve explicit false environment settings");
 assert.match(canary, /node scripts\/assert-production-environment-protection\.mjs/,
   "the canary and migration workflow must share one environment assertion");
+assert.match(canary, /actions\/checkout[^\n]*\n\s+with:\n\s+persist-credentials: false/,
+  "the harmless canary must not leave a checkout credential available to later steps");
 
 const exactEnvironment = {
   protection_rules: [{
@@ -450,6 +456,8 @@ assert.ok(batch.indexOf("CRX older repository migration is not recorded live") <
 assert.equal((batch.match(/CRX global migration ledger ordering guard/g) || []).length, 2,
   "the exact global ledger guard must be checked before candidate SQL and immediately before ledger insert");
 assert.ok(batch.indexOf("guard changed during candidate SQL") < batch.indexOf("INSERT INTO supabase_migrations.schema_migrations"));
+assert.ok(batch.indexOf("CRX migration ledger is missing created_by or idempotency_key") < batch.indexOf(SQL.trimEnd()),
+  "the batch must prove the ledger can accept its provenance columns before candidate SQL runs");
 assert.ok(batch.includes(`  '${MIGRATION}',`), "the ledger row must retain the authored timestamped migration name");
 assert.ok(batch.includes(`OR idempotency_key = '${HASH}'`),
   "the live ledger must reject exact SQL replay under a renamed migration");

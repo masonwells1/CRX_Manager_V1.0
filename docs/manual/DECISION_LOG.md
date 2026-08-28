@@ -38,8 +38,7 @@ reopening the cross-system merge race. Mason's manual dispatch is the human rele
 the workflow independently reads
 the latest exact-head `coderabbitai[bot]` review and requires `APPROVED`. Caller-supplied review text,
 hashes, or artifacts are never accepted. The local Sol/high proof remains the separate pre-push gate. The workflow locks
-the live ledger inside the same transaction, applies only transaction-
-compatible SQL, refuses stale timestamp aliases and exact-content replay, writes and verifies the
+the live ledger inside the same transaction, applies only transaction-compatible SQL, refuses stale timestamp aliases and exact-content replay, writes and verifies the
 content-bound ledger row, then commits. Credential-bearing actions use full commit pins and the
 installed Supabase CLI version is verified. No prompt-text approval token is part of this gate.
 

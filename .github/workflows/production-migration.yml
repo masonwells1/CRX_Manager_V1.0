@@ -101,6 +101,7 @@ jobs:
     name: Apply after Mason approval
     needs: preflight
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: production-database
     permissions:
       contents: read
@@ -114,6 +115,10 @@ jobs:
           ref: ${{ inputs.expected_commit }}
           fetch-depth: 0
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
       - name: Revalidate production approval boundary after Mason approval
         run: node scripts/assert-production-environment-protection.mjs
 
@@ -124,10 +129,6 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24
 
       - name: Revalidate authenticated CodeRabbit approval after Mason approval
         env:
@@ -168,6 +169,7 @@ jobs:
             --output "$BATCH_FILE"
 
       - name: Freeze main against concurrent migration merges
+        timeout-minutes: 2
         env:
           PRODUCTION_BRANCH_FREEZE_TOKEN: ${{ secrets.PRODUCTION_BRANCH_FREEZE_TOKEN }}
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
@@ -181,6 +183,7 @@ jobs:
         run: node scripts/production-main-freeze.mjs verify
 
       - name: Apply one locked migration and ledger row
+        timeout-minutes: 10
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           PRODUCTION_DB_PASSWORD: ${{ secrets.PRODUCTION_DB_PASSWORD }}

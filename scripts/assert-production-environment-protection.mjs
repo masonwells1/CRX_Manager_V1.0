@@ -1,3 +1,5 @@
+import { pathToFileURL } from "node:url";
+
 const API_VERSION = "2022-11-28";
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -27,22 +29,15 @@ async function main() {
   if (!token || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error("GH_TOKEN and an exact GITHUB_REPOSITORY are required");
   }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  let response;
-  try {
-    response = await fetch("https://api.github.com/repos/" + repository + "/environments/production-database", {
-      signal: controller.signal,
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: "Bearer " + token,
-        "X-GitHub-Api-Version": API_VERSION,
-        "User-Agent": "crx-production-environment-gate",
-      },
-    });
-  } finally {
-    clearTimeout(timer);
-  }
+  const response = await fetch("https://api.github.com/repos/" + repository + "/environments/production-database", {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: "Bearer " + token,
+      "X-GitHub-Api-Version": API_VERSION,
+      "User-Agent": "crx-production-environment-gate",
+    },
+  });
   if (!response.ok) throw new Error("GitHub environment lookup failed with HTTP " + response.status);
   assertProductionEnvironmentProtection(await response.json(), owner);
   process.stdout.write("production-database environment protection is exact\n");
@@ -54,4 +49,3 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exitCode = 1;
   });
 }
-import { pathToFileURL } from "node:url";
