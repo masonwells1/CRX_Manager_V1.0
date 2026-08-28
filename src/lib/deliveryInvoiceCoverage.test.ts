@@ -93,7 +93,7 @@ describe('activeInvoiceCoversDelivery', () => {
     const orders = readFileSync(resolve(root, 'src/pages/Orders.tsx'), 'utf8');
     expect(orders).toContain('activeInvoiceCountsTowardBilling(inv)');
     expect(orders).toContain('fetchActiveInvoiceCoveragePages(orderIds)');
-    expect(orders).toContain('Failed to load invoice coverage. Invoiced percentages may be incomplete');
+    expect(orders).toContain('Failed to load invoice coverage. Invoiced percentages are unavailable; refresh to try again.');
 
     const integrityCleanup = readFileSync(resolve(root, 'src/components/integrity/IntegrityCleanupPanel.tsx'), 'utf8');
     expect(integrityCleanup).toContain('fetchActiveInvoiceCoveragePages(orderIds)');

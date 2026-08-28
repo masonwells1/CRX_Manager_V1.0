@@ -54,10 +54,10 @@ vi.mock('../components/ui/PageHeader', () => ({
   default: ({ actions }: { actions?: ReactNode }) => <div>{actions}</div>,
 }));
 vi.mock('../components/ui/DataTable', () => ({
-  default: ({ data }: { data: Array<{ id: string; invoiced_pct: number }> }) => (
+  default: ({ data }: { data: Array<{ id: string; invoiced_pct: number | null }> }) => (
     <div>
       orders table
-      {data.map((row) => <span key={row.id}>Invoiced {row.invoiced_pct}%</span>)}
+      {data.map((row) => <span key={row.id}>{row.invoiced_pct == null ? 'Invoiced unavailable' : `Invoiced ${row.invoiced_pct}%`}</span>)}
     </div>
   ),
 }));
@@ -176,5 +176,30 @@ describe('Orders bulk-delete lifecycle guard', () => {
 
     expect(await screen.findByText('Invoiced 60%')).toBeInTheDocument();
     expect(invoiceQuery.in).toHaveBeenCalledWith('order_id', ['order-1']);
+  });
+
+  it('shows invoice coverage as unavailable when the coverage query fails', async () => {
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') {
+        return buildChain({
+          data: [{
+            id: 'order-1', order_number: 'ORD-1', customer_id: 'customer-1',
+            status: 'confirmed', order_date: '2026-04-01', total_price: 1000,
+            customer: { farm_name: 'Test Farm', parent_customer_id: null },
+          }],
+          error: null,
+        });
+      }
+      if (table === 'invoices') return buildChain({ data: null, error: { message: 'coverage unavailable' } });
+      return buildChain({ data: [], error: null });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Invoiced unavailable')).toBeInTheDocument();
+    expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Failed to load invoice coverage. Invoiced percentages are unavailable; refresh to try again.',
+    );
   });
 });

@@ -5,7 +5,7 @@ production and merged-migration high-water marks (`20260827041000` through `2026
 reporting migration aligns invoice-basis P&L, monthly reporting, and customer year-end summaries on
 paid, overdue, and posted invoices. The COGS migration creates negative-cost return-credit lines from
 the exact historical source-invoice cost already recognized by those reports and assigns that reversal
-to the season for the current America/Chicago business date (2026 today), while customer prior-year reporting remains on the original invoice
+to the season for the America/Chicago business date at issuance time, while customer prior-year reporting remains on the original invoice
 season.
 
 Invoice-basis P&L and monthly COGS now round each ordinary sale line to whole cents before summing.

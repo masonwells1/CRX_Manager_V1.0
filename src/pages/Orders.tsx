@@ -39,7 +39,7 @@ const EMPTY_UUID = '00000000-0000-0000-0000-000000000000';
 
 interface OrderWithFulfillment extends Order {
   fulfillment_pct: number;
-  invoiced_pct: number;
+  invoiced_pct: number | null;
   farm_group_name: string | null;
   customer_name: string;
   active_delivery_count: number;
@@ -151,7 +151,7 @@ export default function Orders() {
     const { data: invoiceData, error: invoiceError } = invoiceResult;
     if (invoiceError) {
       Sentry.captureException(invoiceError);
-      toast('error', 'Failed to load invoice coverage. Invoiced percentages may be incomplete; refresh to try again.');
+      toast('error', 'Failed to load invoice coverage. Invoiced percentages are unavailable; refresh to try again.');
     }
     const invoicedByOrder: Record<string, number> = {};
     const visibleOrderIds = new Set(orderIds);
@@ -187,8 +187,8 @@ export default function Orders() {
       const counts = itemsByOrder[o.id] || { neededValue: 0, deliveredValue: 0 };
       const pct = counts.neededValue > 0 ? Math.round((counts.deliveredValue / counts.neededValue) * 100) : 0;
       const orderCents = Math.round((o.total_price || 0) * 100);
-      const invCents = invoicedByOrder[o.id] || 0;
-      const invPct = orderCents > 0 ? Math.round((invCents / orderCents) * 100) : 0;
+      const invCents = invoiceError ? null : (invoicedByOrder[o.id] || 0);
+      const invPct = invCents == null ? null : (orderCents > 0 ? Math.round((invCents / orderCents) * 100) : 0);
       const cust = o.customer;
       const farmGroupName = cust?.parent_customer_id ? parentNameMap[cust.parent_customer_id] || null : null;
       const customerName = cust?.farm_name || '';
@@ -196,7 +196,7 @@ export default function Orders() {
       return {
         ...o,
         fulfillment_pct: pct,
-        invoiced_pct: Math.min(invPct, 100),
+        invoiced_pct: invPct == null ? null : Math.min(invPct, 100),
         farm_group_name: farmGroupName,
         customer_name: customerName,
         active_delivery_count: delInfo.count,
@@ -238,7 +238,7 @@ export default function Orders() {
       { key: 'total_price', header: 'Total', format: (v) => fmtCSV(v) },
       { key: 'order_date', header: 'Order Date', format: (v) => fmtDateCSV(v) },
       { key: 'fulfillment_pct', header: 'Fulfillment %', format: (v) => `${v}%` },
-      { key: 'invoiced_pct', header: 'Invoiced %', format: (v) => `${v}%` },
+      { key: 'invoiced_pct', header: 'Invoiced %', format: (v) => v == null ? 'Unavailable' : `${v}%` },
     ], 'orders');
     toast('success', `Exported ${selectedRows.length} order(s) to CSV`);
   };
@@ -260,7 +260,7 @@ export default function Orders() {
           { header: 'Total', key: 'total_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
           { header: 'Date', key: 'order_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
           { header: 'Fulfillment', key: 'fulfillment_pct', align: 'right', format: (v) => `${v}%` },
-          { header: 'Invoiced', key: 'invoiced_pct', align: 'right', format: (v) => `${v}%` },
+          { header: 'Invoiced', key: 'invoiced_pct', align: 'right', format: (v) => v == null ? 'Unavailable' : `${v}%` },
         ],
         data: pdfData as unknown as Record<string, unknown>[],
         orientation: 'landscape',
@@ -599,7 +599,9 @@ export default function Orders() {
       key: 'invoiced_pct',
       header: 'Invoiced',
       sortable: true,
-      render: (row) => (
+      render: (row) => row.invoiced_pct == null ? (
+        <span className="text-xs text-secondary">Unavailable</span>
+      ) : (
         <div className="flex items-center gap-2">
           <div className="w-20 h-2 bg-gray-100 rounded-full overflow-hidden">
             <div

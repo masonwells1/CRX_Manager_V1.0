@@ -95,7 +95,8 @@ warning paths on that same active-sales-invoice definition and makes the complet
 soft-deleted invoices. The fifth aligns both order-level invoice creators with that same active,
 non-deleted, non-credit definition. The sixth preserves immutable source-line IDs and historical cost
 when a generated invoice is edited, then removes the temporary cutover barrier only after postflight.
-Fifty-five load-bearing proofs ended in `SMOKE_PASS_ROLLBACK` with zero residue,
+The latest recorded disposable-schema run counted 56 load-bearing predicates and ended in
+`SMOKE_PASS_ROLLBACK` with zero residue,
 including an ordinary non-credit invoice hard-delete proof so the new trigger cannot silently cancel
 unrelated deletes and a real completion proof that preserves return-credit tote provenance.
 Apply all six files in order only through the repository's guarded migration runner or the Supabase
