@@ -118,15 +118,32 @@ export function maintenanceProducerCommandMentioned(command) {
   return compact.includes("apply-live-testdata-maintenance-20260812.mjs");
 }
 
+function shellLiteralViews(command) {
+  const raw = String(command || "");
+  const dequoted = raw.replace(/["']/g, "");
+  const escapeCollapsed = dequoted
+    .replace(/[`^]/g, "")
+    .replace(/\\(?=[^\s\\/])/g, "");
+  return [...new Set([raw, dequoted, escapeCollapsed])];
+}
+
 export function landPrCommandMentioned(command) {
-  return /(?:^|[\s;&|'"/\\])land-pr\.mjs(?=$|[\s;&|'"/\\])/i.test(String(command || ""));
+  return shellLiteralViews(command).some((view) =>
+    /(?:^|[\s;&|'"/\\])land-pr\.mjs(?=$|[\s;&|'"/\\])/i.test(view));
 }
 
 function landPrInvocationPaths(command) {
-  const paths = [];
   const matcher = /(?:^|[\s;&|])(?:"([^"]*land-pr\.mjs)"|'([^']*land-pr\.mjs)'|([^\s;&|]*land-pr\.mjs))(?=$|[\s;&|])/gi;
-  for (const match of String(command || "").matchAll(matcher)) paths.push(match[1] || match[2] || match[3]);
-  return paths;
+  for (const view of shellLiteralViews(command)) {
+    const paths = [];
+    for (const match of view.matchAll(matcher)) paths.push(match[1] || match[2] || match[3]);
+    if (paths.length > 0) return paths;
+  }
+  return [];
+}
+
+function protectedHarnessCommandMentioned(command) {
+  return shellLiteralViews(command).some((view) => PROTECTED_HARNESS_FRAGMENT_RE.test(view));
 }
 
 function landPrInvocationIsCanonical(command, repoDir) {
@@ -871,11 +888,11 @@ export function evaluateProductionAction({
   const landPrGate = gateLandPrExecution({ command, repoDir: actionRepoDir, nowMs, runGit });
   if (landPrGate.blocked) return landPrGate;
 
-  if (/[\r\n]/.test(command) && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
+  if (/[\r\n]/.test(command) && protectedHarnessCommandMentioned(command)) {
     return denied("CODEX PRODUCTION GATE: multiline shell commands that reference the production/review harness are blocked.");
   }
   const shellMutatesPath = /(?:>|\b(?:set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|remove-item|move-item|copy-item|rename-item|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i.test(command);
-  if (shellMutatesPath && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
+  if (shellMutatesPath && protectedHarnessCommandMentioned(command)) {
     return denied("CODEX PRODUCTION GATE: direct shell mutation of the production/review harness is blocked. Use the reviewed maintenance workflow with Mason's approval.");
   }
   if (shellMutatesPath && landPrCommandMentioned(command)) {

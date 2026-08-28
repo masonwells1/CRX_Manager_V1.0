@@ -81,6 +81,8 @@ last two shell edge cases while preserving automatic ordinary feature pushes and
 Merge flags are now parsed positionally: cancellation-only `--disable-auto` is explicit and requires
 the fixed trusted GitHub CLI, a numeric PR, and the canonical repository, while
 mixed auto intent and `--disable-auto` consumed as body text cannot hide a real `--auto` action.
+The protected helper boundary also normalizes adjacent shell quotes and escape spellings, so
+`land-pr.mjs` cannot be edited or executed outside its exact-HEAD proof gate through a spliced path.
 Empty-quote-composed GitHub executable or subcommand words also deny before unattended execution.
 
 Feature pushes now resolve their effective push URL and query auto-merge state in that exact

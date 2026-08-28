@@ -169,11 +169,11 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after land-pr and its pure safety helper joined the risky harness
   // paths so future edits to its child update-branch route require exact-head
   // adversarial review.
-  codexGuard: "b5b5731a6a9a3903d6a7d8aa18093acfb4e19cd6",
+  codexGuard: "94e6db0607faaaa83821706746d4cadd0f3b36ab",
   pushLib: "9cc7b6ca2b2401fd2c30c3755b5bd9fac28dc955",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "a595bdfd1bf48bebbb2e7f378fc92ca77c929dbd",
+  codexGuard: "7714925fc26bee2b43544cdd2ff1536e5d3c380b",
   pushLib: "9cc7b6ca2b2401fd2c30c3755b5bd9fac28dc955",
 };
 
@@ -687,7 +687,7 @@ export function buildProducerProtectionSources() {
   );
   codexGuard = replaceExactly(codexGuard, maintenanceGate, hardenedMaintenanceGate, "maintenance producer execution gate");
 
-  const commandAnchor = "  if (/[\\r\\n]/.test(command) && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {";
+  const commandAnchor = "  if (/[\\r\\n]/.test(command) && protectedHarnessCommandMentioned(command)) {";
   const commandReplacement = commandAnchor;
   codexGuard = replaceExactly(codexGuard, commandAnchor, commandReplacement, "maintenance producer command gate call");
 
