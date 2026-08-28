@@ -166,12 +166,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // GitHub mutation and ambient shell-startup/GitHub-context overrides became
   // explicit fail-closed conditions, preventing execution from diverging after
   // review while ordinary inherited runner networking remains usable.
+  // Re-pinned after land-pr and its pure safety helper joined the risky harness
+  // paths so future edits to its child update-branch route require exact-head
+  // adversarial review.
   codexGuard: "038f57003d9071d809ee7c25527f763ca480c1ab",
-  pushLib: "eb0bccad201332f8d55cfeb0181a26814f0850d7",
+  pushLib: "7e36554887f6a7f2ca1635abddfdcdcf0f317003",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "2ff7233500eb88189f3cc2b10f760ed037803c20",
-  pushLib: "eb0bccad201332f8d55cfeb0181a26814f0850d7",
+  pushLib: "7e36554887f6a7f2ca1635abddfdcdcf0f317003",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

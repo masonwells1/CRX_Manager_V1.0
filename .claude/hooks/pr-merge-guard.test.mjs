@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assessLandPrUpdate } from "../../scripts/land-pr-lib.mjs";
 import {
   branchNameIsProtected,
   CLAUDE_MERGE_EVIDENCE_BUDGET_MS,
@@ -464,5 +465,18 @@ ok(/request\.updateBranch\s*&&\s*branchNameIsProtected\(destinationBranch\)/.tes
 
 const landPrSource = readFileSync(path.resolve(__dirname, "../../scripts/land-pr.mjs"), "utf8");
 ok(/--match-head-commit \$\{pr\.headRefOid\}/.test(landPrSource), "land-pr pins both printed merge commands to the inspected head SHA");
+ok(/trustedGitHubCliInvocation/.test(landPrSource), "land-pr child GitHub calls use the fixed executable and sanitized context");
+ok(/--head", headRefName/.test(landPrSource), "land-pr queries every open PR fed by the destination head branch");
+eq(assessLandPrUpdate({ headRefName: "feature/safe", openPullRequests: [] }).allowed, true, "land-pr permits an ordinary head with no armed protected-base PR");
+eq(assessLandPrUpdate({ headRefName: "main", openPullRequests: [] }).allowed, false, "land-pr refuses a protected destination head");
+const stackedUpdate = assessLandPrUpdate({
+  headRefName: "feature/shared",
+  openPullRequests: [
+    { number: 513, baseRefName: "develop", autoMergeRequest: null },
+    { number: 514, baseRefName: "main", autoMergeRequest: { enabledAt: "2026-08-28T00:00:00Z" } },
+  ],
+});
+eq(stackedUpdate.allowed, false, "land-pr refuses a shared head that feeds another armed main PR");
+eq(stackedUpdate.armed, [514], "land-pr reports the exact armed stacked PR");
 
 console.log(`pr-merge-guard: ${pass} assertions passed`);

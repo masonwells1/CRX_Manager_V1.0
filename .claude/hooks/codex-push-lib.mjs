@@ -630,6 +630,7 @@ const RISKY_PATH_RES = [
   /(^|\/)scripts\/run-claude-review\.mjs$/i,
   /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
   /(^|\/)scripts\/overnight-codex-gate\.mjs$/i,
+  /(^|\/)scripts\/land-pr(?:-lib)?\.mjs$/i,
   /(^|\/)scripts\/apply-live-testdata-maintenance-20260812\.mjs$/i,
   // The ONE sanctioned path that mutates the C3 source-containment ledger. A PR
   // that weakened its --i-verified-against-live gate or its exact-name match

@@ -12,8 +12,10 @@
 // DELIBERATELY NEVER MERGES. Merging stays with `gh pr merge`, which the
 // pr-merge-guard PreToolUse hook gates (green pipeline + Codex proof on risky
 // diffs). A script that shelled `gh pr merge` internally would bypass that
-// hook, so this one is scoped to the two ungated actions: update-branch and
-// polling. Do not add a merge call here.
+// hook, so this one is scoped to update-branch and polling. Its child GitHub
+// calls use the fixed sanitized CLI, and update-branch repeats the protected-
+// head and stacked-auto-merge checks that the outer guard cannot see. Do not add
+// an immediate merge call here.
 //
 // Usage:
 //   node scripts/land-pr.mjs <pr-number> [--timeout-mins N] [--once]
@@ -30,7 +32,8 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { riskyFiles, contentIsRisky } from "../.claude/hooks/codex-push-lib.mjs";
+import { riskyFiles, contentIsRisky, trustedGitHubCliInvocation } from "../.claude/hooks/codex-push-lib.mjs";
+import { assessLandPrUpdate } from "./land-pr-lib.mjs";
 
 const REPO = "masonwells1/CRX_Manager_V1.0";
 const POLL_SECONDS = 60;
@@ -48,8 +51,10 @@ if (!prNumber || !Number.isFinite(timeoutMins) || timeoutMins <= 0) {
 const projectDir = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 function gh(ghArgs) {
-  return execFileSync("gh", ghArgs, {
+  const invocation = trustedGitHubCliInvocation(ghArgs);
+  return execFileSync(invocation.executable, invocation.args, {
     cwd: projectDir,
+    env: invocation.env,
     encoding: "utf8",
     timeout: 60_000,
     stdio: ["ignore", "pipe", "pipe"],
@@ -60,7 +65,7 @@ function gh(ghArgs) {
 function view() {
   return JSON.parse(gh([
     "pr", "view", prNumber, "--repo", REPO,
-    "--json", "state,mergeStateStatus,statusCheckRollup,autoMergeRequest,baseRefName,headRefOid,mergeCommit,url",
+    "--json", "state,mergeStateStatus,statusCheckRollup,autoMergeRequest,baseRefName,headRefName,headRefOid,mergeCommit,url",
   ]));
 }
 
@@ -93,8 +98,19 @@ function classifyRisky() {
   return { risky: false, why: "" };
 }
 
-function updateBranch() {
+function updateBranch(pr) {
   try {
+    const headRefName = String(pr?.headRefName || "").trim();
+    if (!headRefName) throw new Error("GitHub did not report the PR head branch");
+    const openPullRequests = JSON.parse(gh([
+      "pr", "list", "--repo", REPO, "--state", "open", "--head", headRefName,
+      "--json", "number,autoMergeRequest,baseRefName",
+    ]));
+    const safety = assessLandPrUpdate({ headRefName, openPullRequests });
+    if (!safety.allowed) {
+      console.error(`[land-pr] Refusing update-branch: ${safety.reason}. Disable auto-merge on every listed PR or use an ordinary non-protected head branch, then retry.`);
+      process.exit(1);
+    }
     gh(["pr", "update-branch", prNumber, "--repo", REPO]);
     console.log(`[land-pr] PR was BEHIND main — ran 'gh pr update-branch ${prNumber}'; checks will re-run.`);
     return true;
@@ -140,7 +156,7 @@ for (;;) {
   }
 
   if (mss !== "DIRTY") dirtyStreak = 0;
-  if (mss === "BEHIND") updateBranch();
+  if (mss === "BEHIND") updateBranch(pr);
   else if (mss === "DIRTY") {
     dirtyStreak += 1;
     if (dirtyStreak >= 3 || once) {
