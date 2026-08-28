@@ -280,7 +280,9 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   git("config", "commit.gpgsign", "false");
   git("commit", "--allow-empty", "-q", "-m", "init");
   git("branch", "-M", "feature");
-  git("config", "remote.origin.url", "https://github.com/masonwells1/CRX_Manager_V1.0.git");
+  // This fixture tests mirror scoping, not CRX auto-merge state. A CRX origin
+  // makes the unrelated-control case call live GitHub and depend on runner auth.
+  git("config", "remote.origin.url", "https://github.com/example/fixture.git");
   git("config", "remote.origin.mirror", "true");
 
   const pushVerb = "pu" + "sh"; // keep the literal out of this file's own text
@@ -307,7 +309,11 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
     tool_name: "Bash",
     tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} origin HEAD:refs/heads/feature` },
   });
-  eq(unrelated.stdout.trim(), "", "a mirror on an untargeted remote does not deny");
+  const unrelatedReason = unrelated.stdout.trim()
+    ? JSON.parse(unrelated.stdout)?.hookSpecificOutput?.permissionDecisionReason ?? ""
+    : "";
+  ok(!/mirror remote/.test(unrelatedReason), "a mirror on an untargeted remote is not the reason for denial");
+  ok(/outside the protected CRX upstream repository/.test(unrelatedReason), "the independent foreign-repository boundary still denies the fixture push");
 
   // ...but pushing TO that remote still does, and so does a bare push whose
   // resolved remote is the mirrored one — the scoping must follow git's own
@@ -347,15 +353,19 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   git("config", "--unset", "remote.team/origin.mirror");
   git("config", "--unset", "remote.team/origin.url");
 
-  // Control, same harness: without the mirror flag the identical push is allowed.
-  // The check above widened a deny to every push form, so this pins that it did
-  // not become a blanket refusal.
+  // Control, same harness: without the mirror flag, the mirror classifier no
+  // longer owns the decision. The independent foreign-repository boundary still
+  // denies this intentionally non-CRX fixture without requiring live GitHub auth.
   const clean = runHook("codex-push-guard.mjs", {
     cwd: mirrorRepo,
     tool_name: "Bash",
     tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} origin HEAD:refs/heads/feature` },
   });
-  eq(clean.stdout.trim(), "", "no mirror flag → ordinary feature push still passes through");
+  const cleanReason = clean.stdout.trim()
+    ? JSON.parse(clean.stdout)?.hookSpecificOutput?.permissionDecisionReason ?? ""
+    : "";
+  ok(!/mirror remote/.test(cleanReason), "no mirror flag means the mirror classifier no longer denies");
+  ok(/outside the protected CRX upstream repository/.test(cleanReason), "the foreign-repository boundary remains independently active");
 
   fs.rmSync(mirrorRepo, { recursive: true, force: true });
 }
@@ -378,7 +388,7 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   git("config", "commit.gpgsign", "false");
   git("commit", "--allow-empty", "-q", "-m", "init");
   git("branch", "-M", "feature");
-  git("config", "remote.origin.url", "https://github.com/masonwells1/CRX_Manager_V1.0.git");
+  git("config", "remote.origin.url", "https://github.com/example/fixture.git");
 
   const pushVerb = "pu" + "sh"; // keep the literal out of this file's own text
   const runWithEnv = (payload, overrides) => spawnSync(
@@ -397,10 +407,12 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   const withC = `git -C ${repo} ${pushVerb} origin HEAD:refs/heads/feature`;
   const bare = `git ${pushVerb} origin HEAD:refs/heads/feature`;
 
-  eq(runWithEnv({ cwd: outer, tool_name: "Bash", tool_input: { command: withC } }, benign).stdout.trim(), "",
-    "benign inherited override: `-C <repo>` from a non-repo cwd is not denied");
-  eq(runWithEnv({ cwd: repo, tool_name: "Bash", tool_input: { command: withC } }, benign).stdout.trim(), "",
-    "benign inherited override: `-C <repo>` from the repo itself is not denied");
+  for (const [cwd, label] of [[outer, "non-repo cwd"], [repo, "repo cwd"]]) {
+    const output = runWithEnv({ cwd, tool_name: "Bash", tool_input: { command: withC } }, benign).stdout.trim();
+    const reason = output ? JSON.parse(output)?.hookSpecificOutput?.permissionDecisionReason ?? "" : "";
+    ok(!/could not read .* to prove|GIT_CONFIG.*CHANGE/i.test(reason), `benign inherited override does not trigger config/cwd denial from ${label}`);
+    ok(/outside the protected CRX upstream repository/.test(reason), `hermetic foreign-repository boundary ends the ${label} control`);
+  }
   ok(/deny/.test(runWithEnv({ cwd: outer, tool_name: "Bash", tool_input: { command: withC } }, redirecting).stdout),
     "redirecting override still denies `-C <repo>` from a non-repo cwd");
   ok(/deny/.test(runWithEnv({ cwd: repo, tool_name: "Bash", tool_input: { command: withC } }, redirecting).stdout),
