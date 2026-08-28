@@ -13,30 +13,16 @@ jobs:
     name: Verify protected environment configuration
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
       - name: Require Mason's protected one-account approval boundary
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          environment_json="$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-database")"
-          reviewer_rule="$(jq -c \
-            '[.protection_rules[]? | select(.type == "required_reviewers")][0] // null' \
-            <<<"$environment_json")"
-          expected_reviewer="$(jq -nc --arg login "$GITHUB_REPOSITORY_OWNER" \
-            '[{"type":"User","login":$login}]')"
-          actual_reviewers="$(jq -c \
-            '[.reviewers[]? | {type: .type, login: .reviewer.login}]' \
-            <<<"$reviewer_rule")"
-          prevent_self_review="$(jq -r 'if .prevent_self_review == null then true else .prevent_self_review end' <<<"$reviewer_rule")"
-          can_admins_bypass="$(jq -r 'if .can_admins_bypass == null then true else .can_admins_bypass end' <<<"$environment_json")"
-          protected_branches="$(jq -r '.deployment_branch_policy.protected_branches // false' <<<"$environment_json")"
-          if [[ "$actual_reviewers" != "$expected_reviewer" || \
-                "$prevent_self_review" != "false" || \
-                "$can_admins_bypass" != "false" || \
-                "$protected_branches" != "true" ]]; then
-            echo "production-database protection is incomplete" >&2
-            exit 1
-          fi
+        run: node scripts/assert-production-environment-protection.mjs
 
   approval:
     name: Harmless approval capability test

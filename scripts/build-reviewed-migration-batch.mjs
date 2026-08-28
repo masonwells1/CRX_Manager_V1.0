@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import { checkWrappable, topLevelSkeleton } from "../.claude/hooks/migration-wrappability-lib.mjs";
+import { SHA256_RE, STEM_RE } from "./production-migration-review-lib.mjs";
 
 const destructiveModule = ["..", ".claude", "hooks", "live-testdata-lib.mjs"].join("/");
 const { destructiveMigrationCheck, stripCommentsQuoteAware } = await import(new URL(destructiveModule, import.meta.url));
@@ -41,7 +42,6 @@ export const LEDGER_GUARD_PROSRC = "\n" + [
   "  RETURN NEW;",
   "END;",
 ].join("\n") + "\n";
-const MIGRATION_STEM_RE = /^(\d{14})_((?![A-Za-z0-9_-]*\d{14})[A-Za-z0-9][A-Za-z0-9_-]*)$/;
 
 function sqlLiteral(value) {
   return "'" + String(value).replaceAll("'", "''") + "'";
@@ -59,7 +59,7 @@ function sha256(value) {
 }
 
 function ledgerGuardInvariantLines(message) {
-  const bodyMd5 = createHash("md5").update(LEDGER_GUARD_PROSRC).digest("hex");
+  const bodySha256 = sha256(LEDGER_GUARD_PROSRC);
   return [
     "  IF (SELECT count(*) FROM pg_catalog.pg_trigger",
     "      WHERE tgrelid = 'supabase_migrations.schema_migrations'::regclass AND NOT tgisinternal) <> 1",
@@ -78,8 +78,8 @@ function ledgerGuardInvariantLines(message) {
     "           AND pg_catalog.pg_get_function_identity_arguments(p.oid) = ''",
     "           AND p.prorettype = 'pg_catalog.trigger'::regtype",
     "           AND p.prosecdef",
-    "           AND p.proconfig @> ARRAY['search_path=pg_catalog, pg_temp']::text[]",
-    `           AND pg_catalog.md5(p.prosrc) = ${sqlLiteral(bodyMd5)}) <> 1 THEN`,
+    "           AND p.proconfig @> ARRAY['search_path=public, pg_temp']::text[]",
+    `           AND pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8')), 'hex') = ${sqlLiteral(bodySha256)}) <> 1 THEN`,
     `    RAISE EXCEPTION ${sqlLiteral(message)};`,
     "  END IF;",
   ];
@@ -144,7 +144,7 @@ export function readRegularMigrationBlob({ repoRoot, expectedCommit, migrationNa
 
 export function listRequiredEarlierMigrations({ repoRoot, expectedCommit, migrationName }) {
   if (!/^[a-f0-9]{40}$/.test(String(expectedCommit))) throw new Error("expected commit must be a full lowercase Git commit id");
-  const selected = MIGRATION_STEM_RE.exec(String(migrationName));
+  const selected = STEM_RE.exec(String(migrationName));
   if (!selected) throw new Error("migration name must be an exact timestamped file stem");
   let baseline;
   try {
@@ -175,7 +175,7 @@ export function listRequiredEarlierMigrations({ repoRoot, expectedCommit, migrat
 }
 
 export function buildAtomicMigrationSql({ migrationName, query, queryHash, requiredEarlierMigrations = [] }) {
-  const match = MIGRATION_STEM_RE.exec(String(migrationName));
+  const match = STEM_RE.exec(String(migrationName));
   if (!match) throw new Error("migration name must be an exact timestamped file stem");
   const [, version, name] = match;
   const fullStem = `${version}_${name}`;
@@ -271,8 +271,8 @@ export function buildAtomicMigrationSql({ migrationName, query, queryHash, requi
 
 export function prepareBatch({ repoRoot, projectId, expectedCommit, migrationName, queryHash, output }) {
   if (String(projectId) !== CRX_PRODUCTION_REF) throw new Error("project id is not the fixed CRX production project");
-  if (!MIGRATION_STEM_RE.test(String(migrationName))) throw new Error("migration name must be the exact file stem");
-  if (!/^[a-f0-9]{64}$/.test(String(queryHash))) throw new Error("query hash must be lowercase SHA-256");
+  if (!STEM_RE.test(String(migrationName))) throw new Error("migration name must be the exact file stem");
+  if (!SHA256_RE.test(String(queryHash))) throw new Error("query hash must be lowercase SHA-256");
   const query = readRegularMigrationBlob({ repoRoot, expectedCommit, migrationName });
   const actualHash = sha256(query);
   if (actualHash !== queryHash) throw new Error(`migration hash mismatch (expected ${actualHash})`);

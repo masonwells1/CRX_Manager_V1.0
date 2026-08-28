@@ -146,6 +146,17 @@ denies(
     }),
     { query: DESTRUCTIVE }),
   "destructive statement", "armed run refuses a destructive migration even with a perfect proof");
+const ESCAPED_DESTRUCTIVE = "COMMENT ON TABLE public.customers IS E'escaped\\' quote /*'; DELETE FROM public.customers;";
+const escapedDestructiveHash = createHash("sha256").update(ESCAPED_DESTRUCTIVE).digest("hex");
+denies(
+  evaluate(
+    fixture({
+      autopilot: armed(),
+      proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: escapedDestructiveHash },
+      codexProof: { ...goodCodex, queryHash: escapedDestructiveHash },
+    }),
+    { query: ESCAPED_DESTRUCTIVE }),
+  "destructive statement", "armed run refuses DELETE after an escaped E-string even with perfect proof");
 
 // ── CHECK 4: reviewer proof ─────────────────────────────────────────────────
 denies(evaluate(fixture({ proof: null })), "without subagent review proof",

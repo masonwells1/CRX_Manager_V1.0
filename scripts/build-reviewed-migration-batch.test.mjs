@@ -27,12 +27,14 @@ import {
 } from "./production-migration-review-lib.mjs";
 import {
   acquireMainFreeze,
+  apiRequest,
   assertExactFreezeRuleset,
   buildFreezeRuleset,
   freezeName,
   releaseMainFreeze,
   verifyMainFreeze,
 } from "./production-main-freeze.mjs";
+import { assertProductionEnvironmentProtection } from "./assert-production-environment-protection.mjs";
 
 const MIGRATION = "20990101010101_test_safe_batch";
 const PRIOR = "20980101010101_prior_safe_batch";
@@ -59,6 +61,10 @@ assert.match(ledgerGuardMigration, /t\.tgenabled = 'A'/);
 assert.match(ledgerGuardMigration, /t\.tgqual IS NULL/,
   "a false WHEN condition must fail the trigger-shape verification");
 assert.match(ledgerGuardMigration, /t\.tgnargs = 0/);
+assert.match(ledgerGuardMigration, /count\(\*\)[\s\S]*NOT t\.tgisinternal\) <> 1/,
+  "the migration itself must reject any second non-internal ledger trigger");
+assert.match(ledgerGuardMigration, /SET search_path = public, pg_temp/,
+  "the SECURITY DEFINER trigger must use the repository-approved search path");
 assert.match(ledgerGuardMigration, /set_config\('session_replication_role', 'replica', true\)/,
   "the migration must exercise an out-of-order insert while ordinary triggers are suppressed");
 assert.match(ledgerGuardMigration, /global migration ledger ordering guard replica-mode verification failed/);
@@ -70,14 +76,12 @@ assert.match(workflow, /^\s*deployments: read\s*$/m,
   "the workflow may inspect deployments before approval");
 assert.doesNotMatch(workflow, /^\s*deployments: write\s*$/m,
   "the workflow token must never gain deployment approval capability");
-assert.match(workflow, /actual_reviewers.*expected_reviewer/,
-  "preflight must require Mason as the only configured reviewer");
-assert.match(workflow, /can_admins_bypass.*!=\s*"false"/,
-  "preflight must fail while administrators can bypass the approval");
-assert.doesNotMatch(workflow, /prevent_self_review \/\/ true|can_admins_bypass \/\/ true/,
-  "explicit false environment settings must not be replaced by jq's alternative operator");
-assert.match(workflow, /protected_branches.*!=\s*"true"/,
-  "preflight must require the environment to accept protected branches only");
+assert.match(workflow, /node scripts\/assert-production-environment-protection\.mjs/,
+  "preflight must use the shared executable environment-protection assertion");
+assert.doesNotMatch(workflow, /RUNTIME_A|RUNTIME_B/,
+  "workflow interpreter invocations must remain visible to repository guards");
+assert.match(workflow, /node scripts\/build-reviewed-migration-batch\.test\.mjs/);
+assert.match(workflow, /node scripts\/build-reviewed-migration-batch\.mjs/);
 assert.match(workflow, /Verify human-dispatched exact-commit migration review/,
   "preflight must bind Mason's manual dispatch to exact review evidence before approval");
 assert.match(workflow, /verify-production-migration-review\.mjs/,
@@ -114,6 +118,28 @@ assert.doesNotMatch(canary, /^\s*deployments: write\s*$/m,
   "the canary token must never gain deployment approval capability");
 assert.doesNotMatch(canary, /prevent_self_review \/\/ true|can_admins_bypass \/\/ true/,
   "the canary must preserve explicit false environment settings");
+assert.match(canary, /node scripts\/assert-production-environment-protection\.mjs/,
+  "the canary and migration workflow must share one environment assertion");
+
+const exactEnvironment = {
+  protection_rules: [{
+    type: "required_reviewers",
+    prevent_self_review: false,
+    reviewers: [{ type: "User", reviewer: { login: "masonwells1" } }],
+  }],
+  can_admins_bypass: false,
+  deployment_branch_policy: { protected_branches: true, custom_branch_policies: false },
+};
+assert.doesNotThrow(() => assertProductionEnvironmentProtection(exactEnvironment, "masonwells1"));
+assert.throws(() => assertProductionEnvironmentProtection({ ...exactEnvironment, can_admins_bypass: true }, "masonwells1"), /production-database/);
+assert.throws(() => assertProductionEnvironmentProtection({
+  ...exactEnvironment,
+  protection_rules: [{ ...exactEnvironment.protection_rules[0], prevent_self_review: true }],
+}, "masonwells1"), /production-database/);
+assert.throws(() => assertProductionEnvironmentProtection({
+  ...exactEnvironment,
+  deployment_branch_policy: { protected_branches: true, custom_branch_policies: true },
+}, "masonwells1"), /production-database/);
 
 const REVIEWED = "1".repeat(40);
 const MERGED = "2".repeat(40);
@@ -167,6 +193,25 @@ assert.throws(() => selectTrustedCodeRabbitApproval([{ ...codeRabbitApproval, co
 assert.throws(() => selectTrustedCodeRabbitApproval([{ ...codeRabbitApproval, state: "CHANGES_REQUESTED" }], reviewInput), /authenticated CodeRabbit approval/);
 
 const expectedMain = "9".repeat(40);
+const emptyHeaders = { get: () => "" };
+await assert.rejects(() => apiRequest("/x", { token: undefined, fetchImpl: async () => assert.fail("fetch must not run") }),
+  /credential is unavailable/);
+await assert.rejects(() => apiRequest("/x", { token: null, fetchImpl: async () => assert.fail("fetch must not run") }),
+  /credential is unavailable/);
+let freezeRequestSignal;
+await apiRequest("/x", {
+  token: "test-token",
+  fetchImpl: async (_url, options) => {
+    freezeRequestSignal = options.signal;
+    return { ok: true, status: 200, text: async () => "{}", headers: emptyHeaders };
+  },
+});
+assert.ok(freezeRequestSignal instanceof AbortSignal, "freeze API calls must carry a bounded abort signal");
+await assert.rejects(() => apiRequest("/x", {
+  token: "test-token",
+  fetchImpl: async () => ({ ok: false, status: 502, text: async () => "<html>bad gateway</html>", headers: emptyHeaders }),
+}), /failed with 502/,
+"non-JSON error responses must preserve the HTTP status instead of surfacing JSON.parse");
 const exactFreezeName = freezeName("12345", "2");
 const exactFreeze = { id: 77, ...buildFreezeRuleset(exactFreezeName) };
 assert.equal(assertExactFreezeRuleset(exactFreeze, exactFreezeName), 77);
@@ -205,6 +250,34 @@ await verifyMainFreeze({ repository: "masonwells1/CRX_Manager_V1.0", expectedCom
 assert.deepEqual(await releaseMainFreeze({ repository: "masonwells1/CRX_Manager_V1.0", name: exactFreezeName, request: freezeRequest }), { released: true, id: 77 });
 assert.equal(rulesets.length, 0);
 assert.ok(freezeCalls.some(([apiPath, method]) => apiPath.endsWith("/rulesets") && method === "POST"));
+rulesets = [exactFreeze];
+let deleteAttempts = 0;
+let absenceAttempts = 0;
+const flakyReleaseRequest = async (apiPath, options = {}) => {
+  if (apiPath.includes("/rulesets?") && (options.method || "GET") === "GET") return { body: rulesets, link: "" };
+  if (apiPath.endsWith("/rulesets/77") && (options.method || "GET") === "GET" && !options.allow404) {
+    return { body: exactFreeze, link: "" };
+  }
+  if (apiPath.endsWith("/rulesets/77") && options.method === "DELETE") {
+    deleteAttempts += 1;
+    if (deleteAttempts === 1) throw new Error("transient delete failure");
+    rulesets = [];
+    return { status: 204, body: null, link: "" };
+  }
+  if (apiPath.endsWith("/rulesets/77") && options.allow404) {
+    absenceAttempts += 1;
+    if (absenceAttempts === 1) return { status: 200, body: exactFreeze, link: "" };
+    return { status: 404, body: null, link: "" };
+  }
+  throw new Error(`unexpected flaky release request ${apiPath}`);
+};
+assert.deepEqual(await releaseMainFreeze({
+  repository: "masonwells1/CRX_Manager_V1.0",
+  name: exactFreezeName,
+  request: flakyReleaseRequest,
+}), { released: true, id: 77 });
+assert.equal(deleteAttempts, 2, "release must retry a transient ruleset deletion failure");
+assert.equal(absenceAttempts, 2, "release must retry until GitHub confirms the exact ruleset is absent");
 rulesets = [{ id: 88, ...buildFreezeRuleset(`${exactFreezeName}-stale`) }];
 await assert.rejects(() => acquireMainFreeze({
   repository: "masonwells1/CRX_Manager_V1.0",

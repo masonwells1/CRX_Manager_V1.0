@@ -8,7 +8,7 @@ sequence, and the automated path cannot safely admit the matching permission cle
 and revokes remain manual-review-only. `CREATE TYPE` and `CREATE DOMAIN` are also parked because their
 definitions can persist function calls or lifecycle semantics. Candidate-supplied `SET LOCAL` is fully
 parked so a migration cannot disable wrapper timeouts or change name-resolution and parser behavior.
-Only `COMMENT ON` remains admitted by the candidate-SQL allowlist.
+Among the statement classes discussed above, only `COMMENT ON` remains admitted by the candidate-SQL allowlist.
 
 Regression coverage rejects invoice-sequence resets, cycling and bounds changes; enum value rename
 and addition; new sequence, type, and domain creation; timeout and parser-setting changes; and

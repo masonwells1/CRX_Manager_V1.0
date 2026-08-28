@@ -91,6 +91,19 @@ try {
   );
 
   psql([
+    "CREATE TRIGGER crx_unreviewed_second_ledger_trigger",
+    "BEFORE INSERT ON supabase_migrations.schema_migrations",
+    "FOR EACH ROW EXECUTE FUNCTION supabase_migrations.crx_enforce_monotonic_migration_ledger();",
+  ].join("\n"));
+  const secondTriggerAttempt = psql("BEGIN;\n" + migrationSql + "\nCOMMIT;", false);
+  assert.notEqual(secondTriggerAttempt.status, 0, "migration must reject a second non-internal ledger trigger");
+  assert.match(
+    String(secondTriggerAttempt.stdout) + "\n" + String(secondTriggerAttempt.stderr),
+    /CRX global migration ledger ordering guard verification failed/,
+  );
+  psql("DROP TRIGGER crx_unreviewed_second_ledger_trigger ON supabase_migrations.schema_migrations;");
+
+  psql([
     "DROP TRIGGER crx_enforce_monotonic_migration_ledger ON supabase_migrations.schema_migrations;",
     "CREATE TRIGGER crx_enforce_monotonic_migration_ledger",
     "BEFORE INSERT ON supabase_migrations.schema_migrations",
@@ -106,7 +119,7 @@ try {
     /CRX global migration ledger ordering guard verification failed/,
   );
 
-  process.stdout.write("global ledger guard local proof passed: replica mode blocked; WHEN (false) rejected\n");
+  process.stdout.write("global ledger guard local proof passed: replica mode blocked; second trigger and WHEN (false) rejected\n");
 } finally {
   docker(["rm", "--force", container], { timeout: 30_000 });
 }

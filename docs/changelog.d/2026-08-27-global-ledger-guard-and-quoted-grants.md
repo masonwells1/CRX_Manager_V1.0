@@ -9,5 +9,5 @@ parks every `GRANT` and `REVOKE` for the separately reviewed manual path.
 The same review proved that a workstation could retain a fresh-looking local ledger snapshot while
 the GitHub workflow advanced production, then attempt an older direct migration. A new source-only
 bootstrap migration installs one exact database trigger that serializes every ledger-insert channel
-and rejects missing or non-forward authored timestamps. The workflow verifies that trigger's exact
+and rejects missing timestamps or timestamps that do not advance the ledger. The workflow verifies that trigger's exact
 shape and function-body hash before candidate SQL and immediately before its own ledger insert.

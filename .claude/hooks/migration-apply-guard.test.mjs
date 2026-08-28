@@ -39,6 +39,9 @@ ok(destructiveMigrationCheck("DELETE FROM invoice_shares;").destructive, "DELETE
 const bareCrExploit = "CREATE DOMAIN public.crx_probe AS text; -- review-only comment\rDELETE FROM public.customers;";
 ok(destructiveMigrationCheck(bareCrExploit).destructive, "a lone carriage return ends a PostgreSQL line comment and exposes DELETE");
 ok(/DELETE FROM public\.customers/i.test(stripCommentsQuoteAware(bareCrExploit)), "the destructive scanner terminates line comments on lone carriage returns");
+const escapeStringExploit = "COMMENT ON TABLE public.customers IS E'escaped\\' quote /*'; DELETE FROM public.customers;";
+ok(destructiveMigrationCheck(escapeStringExploit).destructive,
+  "an escaped E-string quote cannot hide a following destructive statement");
 eq(
   destructiveMigrationCheck("CREATE OR REPLACE FUNCTION cleanup() RETURNS void AS $$ BEGIN DELETE FROM invoices WHERE is_active = false; END $$ LANGUAGE plpgsql;").destructive,
   false,

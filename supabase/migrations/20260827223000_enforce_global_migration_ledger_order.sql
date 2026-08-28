@@ -8,7 +8,7 @@ CREATE OR REPLACE FUNCTION supabase_migrations.crx_enforce_monotonic_migration_l
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = pg_catalog, pg_temp
+SET search_path = public, pg_temp
 AS $function$
 DECLARE
   authored_version text;
@@ -58,6 +58,13 @@ DO $verify$
 BEGIN
   IF (SELECT count(*)
       FROM pg_catalog.pg_trigger t
+      WHERE t.tgrelid = 'supabase_migrations.schema_migrations'::regclass
+        AND NOT t.tgisinternal) <> 1 THEN
+    RAISE EXCEPTION 'CRX global migration ledger ordering guard verification failed';
+  END IF;
+
+  IF (SELECT count(*)
+      FROM pg_catalog.pg_trigger t
       JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
       JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
       WHERE t.tgrelid = 'supabase_migrations.schema_migrations'::regclass
@@ -72,7 +79,7 @@ BEGIN
         AND pg_catalog.pg_get_function_identity_arguments(p.oid) = ''
         AND p.prorettype = 'pg_catalog.trigger'::regtype
         AND p.prosecdef
-        AND p.proconfig @> ARRAY['search_path=pg_catalog, pg_temp']::text[]) <> 1 THEN
+        AND p.proconfig @> ARRAY['search_path=public, pg_temp']::text[]) <> 1 THEN
     RAISE EXCEPTION 'CRX global migration ledger ordering guard verification failed';
   END IF;
 END;

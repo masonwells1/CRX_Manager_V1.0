@@ -1,8 +1,10 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 export const FREEZE_PREFIX = "crx-production-migration-freeze-";
 const API_VERSION = "2022-11-28";
+const REQUEST_TIMEOUT_MS = 30_000;
+const RELEASE_ATTEMPTS = 3;
 
 function assertRepository(repository) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repository))) {
@@ -58,9 +60,10 @@ export function assertExactFreezeRuleset(ruleset, expectedName) {
 }
 
 export async function apiRequest(apiPath, { method = "GET", body, token, fetchImpl = fetch, allow404 = false } = {}) {
-  if (!String(token)) throw new Error("branch-freeze credential is unavailable");
+  if (typeof token !== "string" || token.length === 0) throw new Error("branch-freeze credential is unavailable");
   const response = await fetchImpl(`https://api.github.com${apiPath}`, {
     method,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${token}`,
@@ -71,10 +74,29 @@ export async function apiRequest(apiPath, { method = "GET", body, token, fetchIm
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const raw = await response.text();
-  const parsed = raw ? JSON.parse(raw) : null;
-  if (allow404 && response.status === 404) return { status: 404, body: parsed, link: response.headers.get("link") || "" };
+  const parseBody = () => {
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      throw new Error(`GitHub API ${method} ${apiPath} returned a non-JSON body with ${response.status}`);
+    }
+  };
+  if (allow404 && response.status === 404) return { status: 404, body: parseBody(), link: response.headers.get("link") || "" };
   if (!response.ok) throw new Error(`GitHub API ${method} ${apiPath} failed with ${response.status}`);
-  return { status: response.status, body: parsed, link: response.headers.get("link") || "" };
+  return { status: response.status, body: parseBody(), link: response.headers.get("link") || "" };
+}
+
+async function retryReleaseStep(operation, description) {
+  let lastError;
+  for (let attempt = 1; attempt <= RELEASE_ATTEMPTS; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(`${description} failed after ${RELEASE_ATTEMPTS} attempts: ${lastError?.message || lastError}`);
 }
 
 async function currentMain(repository, request) {
@@ -126,9 +148,15 @@ export async function releaseMainFreeze({ repository, name, request }) {
   if (!Number.isSafeInteger(matches[0]?.id)) throw new Error("production migration freeze id was invalid");
   const exact = await request(`/repos/${exactRepository}/rulesets/${matches[0].id}`);
   const id = assertExactFreezeRuleset(exact?.body, name);
-  await request(`/repos/${exactRepository}/rulesets/${id}`, { method: "DELETE" });
-  const after = await request(`/repos/${exactRepository}/rulesets/${id}`, { allow404: true });
-  if (after?.status !== 404) throw new Error("production migration freeze still exists after release");
+  await retryReleaseStep(
+    () => request(`/repos/${exactRepository}/rulesets/${id}`, { method: "DELETE", allow404: true }),
+    "production migration freeze deletion",
+  );
+  await retryReleaseStep(async () => {
+    const after = await request(`/repos/${exactRepository}/rulesets/${id}`, { allow404: true });
+    if (after?.status !== 404) throw new Error("production migration freeze still exists after release");
+    return after;
+  }, "production migration freeze absence confirmation");
   return { released: true, id };
 }
 
@@ -143,6 +171,9 @@ async function main() {
   if (!new Set(["acquire", "verify", "release"]).has(command)) throw new Error("usage: production-main-freeze.mjs acquire|verify|release");
   const repository = requiredEnvironment("GITHUB_REPOSITORY");
   const name = freezeName(requiredEnvironment("GITHUB_RUN_ID"), requiredEnvironment("GITHUB_RUN_ATTEMPT"));
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `- Production main freeze: \`${name}\`\n`, "utf8");
+  }
   const token = requiredEnvironment("PRODUCTION_BRANCH_FREEZE_TOKEN");
   const request = (apiPath, options = {}) => apiRequest(apiPath, { ...options, token });
   if (command === "acquire") {

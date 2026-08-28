@@ -1,6 +1,6 @@
-const STEM_RE = /^(\d{14})_((?![A-Za-z0-9_-]*\d{14})[A-Za-z0-9][A-Za-z0-9_-]*)$/;
+export const STEM_RE = /^(\d{14})_((?![A-Za-z0-9_-]*\d{14})[A-Za-z0-9][A-Za-z0-9_-]*)$/;
 const SHA1_RE = /^[a-f0-9]{40}$/;
-const SHA256_RE = /^[a-f0-9]{64}$/;
+export const SHA256_RE = /^[a-f0-9]{64}$/;
 
 export function validateReviewInputs({ expectedCommit, reviewedCommit, migrationName, queryHash }) {
   if (!SHA1_RE.test(String(expectedCommit))) throw new Error("expected commit must be a full lowercase Git commit id");
