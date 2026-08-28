@@ -279,6 +279,7 @@ try {
     assert.equal(evaluateProductionAction({
       toolName: "PowerShell",
       toolInput: { command: `node ${equivalentPath} 513` },
+      runGit: () => { throw new Error("recognized land-pr proof boundary"); },
     }).blocked, true, `execution through equivalent path is denied: ${equivalentPath}`);
   }
 
@@ -1383,13 +1384,14 @@ try {
       statusCheckRollup: [{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: "" }],
     }),
   }).blocked, true, "gh PR merge denies when GitHub checks are not green");
-  assert.equal(evaluateProductionAction({
+  const explicitWindowsGhDecision = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `"C:\\Program Files\\GitHub CLI\\gh.exe" pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --squash --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: runGhWithApprovedCodeRabbit,
-  }).blocked, false, "full Windows GitHub CLI paths are gated too");
+  });
+  assert.equal(explicitWindowsGhDecision.blocked, process.platform !== "win32", "a Windows GitHub CLI path is trusted only on Windows");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `${trustedGh} pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --squash --match-head-commit ${risky.sha}` },
