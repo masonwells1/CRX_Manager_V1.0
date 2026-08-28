@@ -11,8 +11,12 @@ filename, and SQL SHA-256. It accepts no caller-supplied review claim. Instead i
 review API and requires the latest exact-head review from `coderabbitai[bot]` to be `APPROVED`; a
 plain green CodeRabbit status is deliberately insufficient. It rejects non-regular Git migration
 entries and rebuilds from the immutable commit blob so a symlink cannot redirect the bytes applied.
+The review lookup paginates to exhaustion so a later changes-requested review cannot hide beyond
+the first API page.
 The workflow also reuses the existing fail-closed destructive-migration classifier, so data deletes,
 truncation, dropped tables/columns/types/schemas, and `MERGE` cannot enter this automated path.
+Top-level `SELECT`, dynamic SQL execution, and every unquoted client backslash command are also
+refused, closing function-call deletion and client meta-command escape paths.
 Its `production-database` environment requires Mason's GitHub account, rejects administrator bypass,
 and releases its credentials only after the website approval. Mason does not need a second account:
 Codex uses a fine-grained machine credential with Actions and Deployments both read-only, so it can

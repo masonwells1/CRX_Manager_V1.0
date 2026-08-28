@@ -13,6 +13,7 @@ import {
   transactionCompatibility,
 } from "./build-reviewed-migration-batch.mjs";
 import {
+  collectAllPages,
   selectExactMergedPr,
   selectTrustedCodeRabbitApproval,
   validateReviewInputs,
@@ -124,10 +125,19 @@ assert.throws(() => selectTrustedCodeRabbitApproval([
   { ...codeRabbitApproval, id: 11, state: "CHANGES_REQUESTED", submitted_at: "2026-08-27T00:01:00Z" },
 ], reviewInput), /authenticated CodeRabbit approval/,
 "a later exact-commit changes-requested review must supersede an earlier approval");
+const pagedReviews = await collectAllPages(async (page) => page === 1
+  ? Array.from({ length: 100 }, (_, index) => ({ ...codeRabbitApproval, id: index + 1 }))
+  : [{ ...codeRabbitApproval, id: 101, state: "CHANGES_REQUESTED", submitted_at: "2026-08-27T00:01:00Z" }]);
+assert.equal(pagedReviews.length, 101);
+assert.throws(() => selectTrustedCodeRabbitApproval(pagedReviews, reviewInput), /authenticated CodeRabbit approval/,
+  "a changes-requested review beyond the first API page must remain visible");
+await assert.rejects(() => collectAllPages(async () => Array.from({ length: 100 }, () => ({})), 100, 2),
+  /fail-closed page limit/,
+  "pagination must fail closed rather than silently truncate an unexpectedly large review history");
 
 
 assert.deepEqual(transactionCompatibility(SQL), { ok: true });
-assert.deepEqual(transactionCompatibility("SELECT CASE WHEN true THEN 1 ELSE 0 END;"), { ok: true });
+assert.deepEqual(transactionCompatibility("DO $safe$ BEGIN IF EXISTS (SELECT 1) THEN NULL; END IF; END $safe$;"), { ok: true });
 
 for (const [sql, reasonPattern] of [
   ["BEGIN; SELECT 1; COMMIT;", /top-level (?:BEGIN|COMMIT)/],
@@ -147,6 +157,8 @@ for (const [sql, reasonPattern] of [
   ["CREATE DATABASE shadow_copy;", /CREATE DATABASE/],
   ["CLUSTER public.widgets;", /CLUSTER/],
   ["CALL public.maybe_commits();", /^CALL$/],
+  ["SELECT public.close_accounting_period();", /top-level SELECT/],
+  ["DO $unsafe$ BEGIN EXECUTE 'DEL' || 'ETE FROM public.customers'; END $unsafe$;", /dynamic SQL execution/],
   ["DELETE FROM public.customers;", /destructive migration: top-level DELETE/],
   ["TRUNCATE public.inventory_transactions;", /destructive migration: TRUNCATE/],
   ["DROP TABLE public.customers;", /destructive migration: DROP TABLE/],
@@ -157,6 +169,8 @@ for (const [sql, reasonPattern] of [
   ["SET standard_conforming_strings = off;", /^standard_conforming_strings override$/],
   ["SELECT 'unterminated", /could not be tokenized/],
   ["\\copy public.x from 'x.csv'", /^client meta-command$/],
+  ["CREATE TABLE public.x(id bigint); \\! env", /^client meta-command$/],
+  ["CREATE TABLE public.x(id bigint); \\copy public.x from 'x.csv'", /^client meta-command$/],
 ]) {
   const result = transactionCompatibility(sql);
   assert.equal(result.ok, false, `${reasonPattern} must be rejected`);
@@ -166,8 +180,8 @@ assert.equal(transactionCompatibility("SELECT '\\'; COMMIT;").ok, false,
   "standard-string quoting cannot hide a following COMMIT");
 assert.equal(transactionCompatibility("SELECT E'escaped\\' quote'; COMMIT AND CHAIN;").ok, false,
   "escape-string quoting cannot hide a following transaction-ending statement");
-assert.deepEqual(transactionCompatibility("SELECT E'COMMIT\\' is text'; SELECT 1;"), { ok: true },
-  "transaction words inside a valid escape-string literal remain data");
+assert.match(transactionCompatibility("SELECT E'COMMIT\\' is text'; SELECT 1;").reason, /top-level SELECT/,
+  "even read-looking top-level SELECT statements stay outside the production migration path");
 
 const batch = buildAtomicMigrationSql({ migrationName: MIGRATION, query: SQL, queryHash: HASH });
 assert.ok(batch.startsWith("BEGIN;\n"));

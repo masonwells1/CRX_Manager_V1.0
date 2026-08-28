@@ -88,7 +88,8 @@ The production workflow accepts the dispatch only when all of these are true:
 4. The migration is a regular `100644` Git blob, identical at the reviewed PR head and current
    `main`; symlinks are rejected.
 5. GitHub's PR review API reports the latest review for that exact commit from
-   `coderabbitai[bot]` (type `Bot`) as `APPROVED`.
+   `coderabbitai[bot]` (type `Bot`) as `APPROVED`. The verifier paginates to exhaustion rather
+   than trusting only the first page.
 
 Condition 3 deliberately makes the release window fail closed: if another PR reaches `main`, rerun
 the release preparation against current state rather than approving stale evidence. The workflow
@@ -112,6 +113,9 @@ The automated path refuses every migration classified as destructive by the repo
 fail-closed detector, including top-level `DELETE`, `TRUNCATE`, `DROP TABLE`, dropped columns,
 `MERGE`, and schema/type/domain/extension drops. An intentional destructive migration remains
 outside this workflow and requires a separate current-conversation approval and recovery plan.
+The same path also rejects top-level `SELECT` (which could invoke a mutating function), dynamic SQL
+execution, and every unquoted client backslash command. These conservative refusals park unusual
+migrations for a separately reviewed manual path.
 
 That transaction locks the migration ledger, refuses duplicate versions, names, or exact SQL
 content and refuses out-of-order versions, runs the migration SQL, writes the content-bound ledger

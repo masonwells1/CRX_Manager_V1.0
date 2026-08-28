@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { checkWrappable, topLevelSkeleton } from "../.claude/hooks/migration-wrappability-lib.mjs";
 
 const destructiveModule = ["..", ".claude", "hooks", "live-testdata-lib.mjs"].join("/");
-const { destructiveMigrationCheck } = await import(new URL(destructiveModule, import.meta.url));
+const { destructiveMigrationCheck, stripCommentsQuoteAware } = await import(new URL(destructiveModule, import.meta.url));
 
 export const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
 const MIGRATION_STEM_RE = /^(\d{14})_((?![A-Za-z0-9_-]*\d{14})[A-Za-z0-9][A-Za-z0-9_-]*)$/;
@@ -33,8 +33,11 @@ export function transactionCompatibility(sql) {
   const verdict = checkWrappable(sql);
   if (!verdict.wrappable) return { ok: false, reason: verdict.reason };
   const skeleton = topLevelSkeleton(sql);
+  if (/\\/.test(skeleton)) return { ok: false, reason: "client meta-command" };
+  if (/(?:^|;)\s*select\b/i.test(skeleton)) return { ok: false, reason: "top-level SELECT is not allowed in the production migration path" };
+  const visible = stripCommentsQuoteAware(sql);
+  if (/\bexecute\s+(?!function\b|on\b)/i.test(visible)) return { ok: false, reason: "dynamic SQL execution" };
   if (/standard_conforming_strings/i.test(skeleton)) return { ok: false, reason: "standard_conforming_strings override" };
-  if (/(?:^|\n)\s*\\/m.test(skeleton)) return { ok: false, reason: "client meta-command" };
   if (/(?:^|;)\s*call\b/i.test(skeleton)) return { ok: false, reason: "CALL" };
   return { ok: true };
 }

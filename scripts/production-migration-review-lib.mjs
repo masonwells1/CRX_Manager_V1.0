@@ -26,6 +26,17 @@ export function selectTrustedCodeRabbitApproval(reviews, { reviewedCommit }) {
   return latest;
 }
 
+export async function collectAllPages(fetchPage, pageSize = 100, maxPages = 100) {
+  const rows = [];
+  for (let page = 1; page <= maxPages; page += 1) {
+    const current = await fetchPage(page, pageSize);
+    if (!Array.isArray(current)) throw new Error("paginated GitHub response must be an array");
+    rows.push(...current);
+    if (current.length < pageSize) return rows;
+  }
+  throw new Error("GitHub review pagination exceeded the fail-closed page limit");
+}
+
 export function selectExactMergedPr(pulls, { reviewedCommit, expectedCommit }) {
   const matching = (Array.isArray(pulls) ? pulls : []).filter((pr) =>
     pr?.state === "closed" && pr?.merged_at != null && pr?.base?.ref === "main" &&

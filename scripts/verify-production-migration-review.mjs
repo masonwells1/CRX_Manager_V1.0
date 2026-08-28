@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 
 import {
+  collectAllPages,
   selectExactMergedPr,
   selectTrustedCodeRabbitApproval,
   validateReviewInputs,
@@ -46,7 +47,8 @@ try {
 
   const pulls = await githubJson("/commits/" + input.reviewedCommit + "/pulls");
   const mergedPr = selectExactMergedPr(pulls, input);
-  const reviews = await githubJson("/pulls/" + mergedPr.number + "/reviews?per_page=100");
+  const reviews = await collectAllPages((page, pageSize) =>
+    githubJson("/pulls/" + mergedPr.number + "/reviews?per_page=" + pageSize + "&page=" + page));
   const codeRabbitApproval = selectTrustedCodeRabbitApproval(reviews, input);
 
   git(["fetch", "--no-tags", "origin", input.reviewedCommit]);
