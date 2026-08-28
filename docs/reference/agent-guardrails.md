@@ -86,7 +86,7 @@ Both agents share the same fail-closed GitHub API classifier. Any unrecognized m
 
 Global GitHub CLI flags cannot hide API writes because the classifier tokenizes the command and locates `api` after those flags. `gh pr update-branch --rebase` is denied as a shared-history rewrite, and all direct pushes to `main`, `master`, or `production` are denied unconditionally; standing delivery authority uses one explicit feature push followed by the reviewed green-PR merge.
 
-Auto-merge is denied for every PR, including PRs currently targeting ordinary branches, because a later base retarget could redirect the pending landing. CLI, GitHub-tool, REST, and GraphQL PR base-retarget operations are denied under unattended authority; ordinary title, body, label, and review metadata edits remain available.
+Auto-merge is denied for every PR, including PRs currently targeting ordinary branches, because a later base retarget could redirect the pending landing. CLI base changes using `--base`, `-B`, or attached forms, plus GitHub-tool, REST, and GraphQL PR base-retarget operations, are denied under unattended authority; ordinary title, body, label, and review metadata edits remain available.
 
 Direct GitHub API clients are normalized by executable basename across Windows/POSIX absolute paths, and `api.github.com` URLs with explicit ports are covered. GitHub CLI aliases and unknown top-level `gh` commands deny closed; known built-ins such as `gh pr view` remain available.
 

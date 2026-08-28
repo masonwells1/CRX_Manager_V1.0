@@ -59,6 +59,8 @@ eq(autopilotDecision("Bash", { command: "git push origin HEAD:main" }), "deny", 
 eq(autopilotDecision("Bash", { command: "git push origin HEAD:master" }), "deny", "direct master pushes are never auto-approved");
 eq(autopilotDecision("Bash", { command: "git push origin HEAD:production" }), "deny", "direct production pushes are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh pr edit 42 --repo o/r --base main" }), "deny", "PR base retargets are never auto-approved");
+eq(autopilotDecision("Bash", { command: "gh pr edit 42 --repo o/r -B main" }), "deny", "short PR base retargets are never auto-approved");
+eq(autopilotDecision("Bash", { command: "gh pr edit 42 --repo o/r -Bmain" }), "deny", "attached short PR base retargets are never auto-approved");
 eq(autopilotDecision("mcp__github__update_pull_request", { base: "main" }), "deny", "GitHub PR update tools are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh alias set ship 'api graphql'" }), "deny", "GitHub CLI alias management is never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh ship" }), "deny", "unknown GitHub CLI aliases are never auto-approved");

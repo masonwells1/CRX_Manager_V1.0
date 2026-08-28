@@ -63,6 +63,9 @@ ok(ghCliCommandIsUnknownOrAlias("gh ship"), "unknown top-level gh command is tre
 ok(!ghCliCommandIsUnknownOrAlias("gh -R o/r pr view 42"), "known gh command after global flags remains classified");
 ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r --base main"), "literal PR base retarget is classified");
 ok(ghPrBaseRetargets("gh -R o/r pr edit 42 --base=production"), "global flags and attached base values cannot hide retargeting");
+ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r -B main"), "short PR base retarget is classified");
+ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r -B=main"), "equals-attached short base values are classified");
+ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r -Bmain"), "directly attached short base values are classified");
 ok(!ghPrBaseRetargets("gh pr edit 42 --add-label ready"), "ordinary PR metadata edits are not base retargets");
 ok(githubCliCommandIsDynamic("(gh pr edit 42 --base main)"), "grouped PR base retarget is dynamic");
 
@@ -217,6 +220,15 @@ ok(r.status === 0 && r.decision === null, "known read-only gh command remains av
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr edit 123 --repo masonwells1/CRX_Manager_V1.0 --base main" } });
 ok(r.decision?.permissionDecision === "deny", "CLI PR base retarget is denied");
+
+for (const command of [
+  "gh pr edit 123 --repo masonwells1/CRX_Manager_V1.0 -B main",
+  "gh pr edit 123 --repo masonwells1/CRX_Manager_V1.0 -B=main",
+  "gh pr edit 123 --repo masonwells1/CRX_Manager_V1.0 -Bmain",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `short CLI PR base retarget is denied: ${command}`);
+}
 
 r = runHook({ tool_name: "mcp__github__update_pull_request", tool_input: { owner: "masonwells1", repo: "CRX_Manager_V1.0", pull_number: 123, base: "main" } });
 ok(r.decision?.permissionDecision === "deny", "GitHub tool PR base retarget is denied");

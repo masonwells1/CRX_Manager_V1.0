@@ -152,13 +152,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // global gh flags, remote rebases, direct protected pushes, auto-merge on any
   // base, and PR base retargeting deny too. Re-pinned after direct GitHub API
   // clients gained absolute-path/explicit-port normalization and unknown gh
-  // commands plus aliases became fail-closed.
+  // commands plus aliases became fail-closed, then again after GitHub's short
+  // `-B` PR-base flag and its attached forms joined the retarget denial.
   codexGuard: "71a8069e21b6f29c09b624f37614e295fde6da38",
-  pushLib: "c22697e8eb046d1b3faddfec60fac0df2141a451",
+  pushLib: "decd214d3d21af1339ecda284f027270141497a2",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "d42a76883fd120afc8adea34a004f53886188562",
-  pushLib: "c22697e8eb046d1b3faddfec60fac0df2141a451",
+  pushLib: "decd214d3d21af1339ecda284f027270141497a2",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

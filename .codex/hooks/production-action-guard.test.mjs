@@ -1090,6 +1090,17 @@ try {
     toolInput: { command: "gh pr view 123 --repo masonwells1/CRX_Manager_V1.0" },
     repoDir: risky.repo,
   }).blocked, false, "known read-only gh command remains allowed");
+  for (const command of [
+    "gh pr edit 123 --repo masonwells1/CRX_Manager_V1.0 -B main",
+    "gh pr edit 123 --repo masonwells1/CRX_Manager_V1.0 -B=main",
+    "gh pr edit 123 --repo masonwells1/CRX_Manager_V1.0 -Bmain",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+    }).blocked, true, `short CLI PR base retarget is denied: ${command}`);
+  }
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --squash --match-head-commit ${risky.sha}` },

@@ -2332,7 +2332,11 @@ export function ghPrBaseRetargets(command) {
   const editIndex = words.findIndex((word, index) => index > prIndex && String(word).toLowerCase() === "edit");
   if (prIndex === -1 || editIndex === -1) return false;
   return words.some((word, index) => index > editIndex && (
-    String(word).toLowerCase() === "--base" || String(word).toLowerCase().startsWith("--base=")
+    String(word).toLowerCase() === "--base"
+      || String(word).toLowerCase().startsWith("--base=")
+      || String(word) === "-B"
+      || String(word).startsWith("-B=")
+      || /^-B[^-\s=]/.test(String(word))
   ));
 }
 
