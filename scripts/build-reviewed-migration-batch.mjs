@@ -10,6 +10,37 @@ const destructiveModule = ["..", ".claude", "hooks", "live-testdata-lib.mjs"].jo
 const { destructiveMigrationCheck, stripCommentsQuoteAware } = await import(new URL(destructiveModule, import.meta.url));
 
 export const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
+export const LEDGER_GUARD_MIGRATION = "20260828020000_enforce_global_migration_ledger_order";
+export const LEDGER_GUARD_PROSRC = "\n" + [
+  "DECLARE",
+  "  authored_version text;",
+  "  latest_version text;",
+  "BEGIN",
+  "  PERFORM pg_catalog.pg_advisory_xact_lock(1129465937);",
+  "",
+  "  IF coalesce(NEW.name, '') !~ '^[0-9]{14}(_|$)' THEN",
+  "    RAISE EXCEPTION 'CRX migration ledger rows require an authored timestamp in name';",
+  "  END IF;",
+  "  authored_version := left(NEW.name, 14);",
+  "",
+  "  SELECT max(effective_version) INTO latest_version",
+  "  FROM (",
+  "    SELECT CASE",
+  "      WHEN coalesce(name, '') ~ '^[0-9]{14}(_|$)' THEN left(name, 14)",
+  "      WHEN coalesce(version, '') ~ '^[0-9]{14}$' THEN version",
+  "      ELSE NULL",
+  "    END AS effective_version",
+  "    FROM supabase_migrations.schema_migrations",
+  "  ) ledger",
+  "  WHERE effective_version IS NOT NULL;",
+  "",
+  "  IF latest_version IS NOT NULL AND authored_version <= latest_version THEN",
+  "    RAISE EXCEPTION 'CRX migration ledger ordering violation: authored %, live high-water %',",
+  "      authored_version, latest_version;",
+  "  END IF;",
+  "  RETURN NEW;",
+  "END;",
+].join("\n") + "\n";
 const MIGRATION_STEM_RE = /^(\d{14})_((?![A-Za-z0-9_-]*\d{14})[A-Za-z0-9][A-Za-z0-9_-]*)$/;
 
 function sqlLiteral(value) {
@@ -25,6 +56,31 @@ function dollarLiteral(value, prefix = "crx") {
 
 function sha256(value) {
   return createHash("sha256").update(String(value)).digest("hex");
+}
+
+function ledgerGuardInvariantLines(message) {
+  const bodyMd5 = createHash("md5").update(LEDGER_GUARD_PROSRC).digest("hex");
+  return [
+    "  IF (SELECT count(*) FROM pg_catalog.pg_trigger",
+    "      WHERE tgrelid = 'supabase_migrations.schema_migrations'::regclass AND NOT tgisinternal) <> 1",
+    "     OR (SELECT count(*)",
+    "         FROM pg_catalog.pg_trigger t",
+    "         JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid",
+    "         JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace",
+    "         WHERE t.tgrelid = 'supabase_migrations.schema_migrations'::regclass",
+    "           AND NOT t.tgisinternal",
+    "           AND t.tgname = 'crx_enforce_monotonic_migration_ledger'",
+    "           AND t.tgtype = 7 AND t.tgenabled = 'O'",
+    "           AND n.nspname = 'supabase_migrations'",
+    "           AND p.proname = 'crx_enforce_monotonic_migration_ledger'",
+    "           AND pg_catalog.pg_get_function_identity_arguments(p.oid) = ''",
+    "           AND p.prorettype = 'pg_catalog.trigger'::regtype",
+    "           AND p.prosecdef",
+    "           AND p.proconfig @> ARRAY['search_path=pg_catalog, pg_temp']::text[]",
+    `           AND pg_catalog.md5(p.prosrc) = ${sqlLiteral(bodyMd5)}) <> 1 THEN`,
+    `    RAISE EXCEPTION ${sqlLiteral(message)};`,
+    "  END IF;",
+  ];
 }
 
 function auditedDdlAdmission(skeleton) {
@@ -45,7 +101,8 @@ function auditedDdlAdmission(skeleton) {
     if (/^create\s+(?:type|domain|sequence|schema)\b/i.test(normalized)) continue;
     if (/^alter\s+(?:type|sequence)\b/i.test(normalized)) continue;
     if (/^drop\s+(?:view|index)\b/i.test(normalized)) continue;
-    if (/^(?:grant|revoke)\b/i.test(normalized)) continue;
+    if (/^grant\s+execute\s+on\s+(?:function|procedure)\b.+\s+to\s+(?:authenticated|service_role)(?:\s*,\s*(?:authenticated|service_role))*$/i.test(normalized)) continue;
+    if (/^revoke\s+(?:all(?:\s+privileges)?|execute)\s+on\s+(?:function|procedure)\b.+\s+from\s+(?:public|anon|authenticated|service_role)(?:\s*,\s*(?:public|anon|authenticated|service_role))*(?:\s+(?:cascade|restrict))?$/i.test(normalized)) continue;
     if (/^comment\s+on\b/i.test(normalized)) continue;
     return { ok: false, reason: "top-level statement is outside the audited DDL allowlist" };
   }
@@ -53,6 +110,7 @@ function auditedDdlAdmission(skeleton) {
 }
 
 export function transactionCompatibility(sql) {
+  if (/\bsupabase_migrations\b/i.test(String(sql))) return { ok: false, reason: "protected migration ledger reference" };
   const skeleton = topLevelSkeleton(sql);
   if (skeleton === null) return { ok: false, reason: "migration SQL could not be tokenized safely" };
   const destructive = destructiveMigrationCheck(skeleton);
@@ -66,7 +124,6 @@ export function transactionCompatibility(sql) {
   if (/\bexecute\s+(?!function\b|on\b)/i.test(visible)) return { ok: false, reason: "dynamic SQL execution" };
   if (/standard_conforming_strings/i.test(skeleton)) return { ok: false, reason: "standard_conforming_strings override" };
   if (/(?:^|;)\s*call\b/i.test(skeleton)) return { ok: false, reason: "CALL" };
-  if (/\bsupabase_migrations\b/i.test(skeleton)) return { ok: false, reason: "protected migration ledger reference" };
   const admission = auditedDdlAdmission(skeleton);
   if (!admission.ok) return admission;
   return { ok: true };
@@ -163,13 +220,7 @@ export function buildAtomicMigrationSql({ migrationName, query, queryHash, requi
     "  latest_version text;",
     "  missing_migration text;",
     "BEGIN",
-    "  IF EXISTS (",
-    "    SELECT 1 FROM pg_catalog.pg_trigger",
-    "    WHERE tgrelid = 'supabase_migrations.schema_migrations'::regclass",
-    "      AND NOT tgisinternal",
-    "  ) THEN",
-    "    RAISE EXCEPTION 'CRX migration ledger has a user-defined trigger';",
-    "  END IF;",
+    ...ledgerGuardInvariantLines("CRX global migration ledger ordering guard is missing or changed"),
     "",
     ...predecessorGuard,
     "  IF EXISTS (",
@@ -200,13 +251,7 @@ export function buildAtomicMigrationSql({ migrationName, query, queryHash, requi
     body,
     "DO $crx_ledger_surface$",
     "BEGIN",
-    "  IF EXISTS (",
-    "    SELECT 1 FROM pg_catalog.pg_trigger",
-    "    WHERE tgrelid = 'supabase_migrations.schema_migrations'::regclass",
-    "      AND NOT tgisinternal",
-    "  ) THEN",
-    "    RAISE EXCEPTION 'CRX migration ledger gained a user-defined trigger';",
-    "  END IF;",
+    ...ledgerGuardInvariantLines("CRX global migration ledger ordering guard changed during candidate SQL"),
     "END",
     "$crx_ledger_surface$;",
     "INSERT INTO supabase_migrations.schema_migrations",
@@ -214,7 +259,7 @@ export function buildAtomicMigrationSql({ migrationName, query, queryHash, requi
     "VALUES (",
     `  ${sqlLiteral(version)},`,
     `  ARRAY[${dollarLiteral(body, "stmt")}],`,
-    `  ${sqlLiteral(name)},`,
+    `  ${sqlLiteral(fullStem)},`,
     "  current_user,",
     `  ${sqlLiteral(queryHash)}`,
     ");",

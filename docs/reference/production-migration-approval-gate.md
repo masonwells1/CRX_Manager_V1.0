@@ -128,10 +128,27 @@ refusals park unusual migrations for a separately reviewed manual path.
 Admission is otherwise default-deny: only a narrow set of definition-only DDL statements is allowed.
 Top-level DML, `VALUES`, `COPY`, query-executing `CREATE TABLE AS`, materialized views, CTEs, index
 builds, trigger DDL, `ALTER TABLE`, extensions, direct migration-ledger references, and unknown
-statement forms are parked. The transaction also requires zero user-defined triggers on the live
-migration ledger both before candidate SQL and immediately before its ledger insert. This
-deliberately means many valid migrations cannot use the automated gate; safety takes priority over
-coverage.
+statement forms are parked. `GRANT` is limited to function/procedure execution for `authenticated`
+and `service_role`; `REVOKE` is limited to those executable objects and known CRX roles. Quoted or
+unquoted references to the migration schema are denied before tokenization.
+
+The transaction requires the exact reviewed global ledger-order trigger—name, event shape,
+SECURITY DEFINER setting, fixed search path, and function-body hash—both before candidate SQL and
+immediately before its ledger insert. This deliberately means many valid migrations cannot use the
+automated gate; safety takes priority over coverage.
+
+## One-time ledger-guard bootstrap
+
+The workflow remains inert until
+`20260828020000_enforce_global_migration_ledger_order.sql` is applied through the existing reviewed
+manual path. Resolve or apply every older approved pending migration first; installing the guard
+intentionally makes any later attempt to insert an older authored timestamp fail and roll back.
+
+The guard runs for every ledger insert, regardless of whether it came from GitHub, Supabase MCP, or
+another client. It takes the same transaction-scoped advisory lock, requires the ledger `name` to
+carry the authored 14-digit timestamp, recomputes the live row-by-row effective high-water, and
+rejects an authored timestamp at or below that value. This closes stale workstation-snapshot races
+without trusting one client to invalidate another client's local files.
 
 That transaction locks the migration ledger, refuses duplicate versions, names, or exact SQL
 content and refuses out-of-order versions, runs the migration SQL, writes the content-bound ledger
