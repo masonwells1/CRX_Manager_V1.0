@@ -2375,4 +2375,49 @@ export function pullRequestChecksGreen(pullRequest) {
   });
 }
 
+const CODERABBIT_STATUS_CONTEXT = "CodeRabbit";
+const CODERABBIT_CREATOR_ID = 136622811;
+const CODERABBIT_ACTOR_RE = /^coderabbitai(?:\[bot\])?$/i;
+const CODERABBIT_FAILURE_RE = /review failed|rate limit|spending cap|quota exceeded|error occurred during the review/i;
+
+// CodeRabbit is deliberately not branch-protection-required yet, but CRX policy
+// still requires its latest-head review before a merge. Bind the status to the
+// creating App id, then require a formal APPROVED review on the exact head. The
+// issue comment is checked too because CodeRabbit can post a false-green status
+// while its walkthrough reports a rate-limit or failed review.
+export function coderabbitReviewGate({ statuses, reviews, comments, headSha }) {
+  const expectedHead = String(headSha || "").toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(expectedHead)) return { ok: false, reason: "the pull request head SHA is unusable" };
+
+  const matchingStatuses = (Array.isArray(statuses) ? statuses : []).filter((status) =>
+    status?.context === CODERABBIT_STATUS_CONTEXT && status?.creator?.id === CODERABBIT_CREATOR_ID);
+  matchingStatuses.sort((a, b) => Date.parse(b?.updated_at || 0) - Date.parse(a?.updated_at || 0));
+  const latestStatus = matchingStatuses[0];
+  if (!latestStatus) return { ok: false, reason: "no verified CodeRabbit status exists on the exact head" };
+  if (String(latestStatus.state || "").toLowerCase() !== "success") {
+    return { ok: false, reason: `CodeRabbit is ${String(latestStatus.state || "not complete").toLowerCase()} on the exact head` };
+  }
+  if (CODERABBIT_FAILURE_RE.test(String(latestStatus.description || ""))) {
+    return { ok: false, reason: `CodeRabbit reported ${String(latestStatus.description).trim()}` };
+  }
+
+  const botComments = (Array.isArray(comments) ? comments : []).filter((comment) =>
+    CODERABBIT_ACTOR_RE.test(String(comment?.user?.login || "")));
+  botComments.sort((a, b) => Date.parse(b?.updated_at || b?.created_at || 0) - Date.parse(a?.updated_at || a?.created_at || 0));
+  if (CODERABBIT_FAILURE_RE.test(String(botComments[0]?.body || ""))) {
+    return { ok: false, reason: "CodeRabbit's latest walkthrough reports a failed or rate-limited review" };
+  }
+
+  const exactHeadReviews = (Array.isArray(reviews) ? reviews : []).filter((review) =>
+    CODERABBIT_ACTOR_RE.test(String(review?.user?.login || "")) &&
+    String(review?.commit_id || "").toLowerCase() === expectedHead);
+  exactHeadReviews.sort((a, b) => Date.parse(b?.submitted_at || 0) - Date.parse(a?.submitted_at || 0));
+  const latestReview = exactHeadReviews[0];
+  if (!latestReview) return { ok: false, reason: "CodeRabbit has not submitted a formal review on the exact head" };
+  if (String(latestReview.state || "").toUpperCase() !== "APPROVED") {
+    return { ok: false, reason: `CodeRabbit's exact-head review is ${String(latestReview.state || "not approved").toLowerCase()}` };
+  }
+  return { ok: true, reason: "CodeRabbit approved the exact head" };
+}
+
 export { RISKY_PATH_RES, RISKY_CONTENT_RE };

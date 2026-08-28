@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  coderabbitReviewGate,
   ghApiMergeRequest,
   ghMergeRequest,
   githubCliCommandIsDynamic,
@@ -86,6 +87,22 @@ ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [] })
 ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: "" }] }), "running check fails");
 ok(pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [greenCheck, { __typename: "CheckRun", status: "COMPLETED", conclusion: "SKIPPED" }] }), "skipped check tolerated");
 ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [{ __typename: "StatusContext", state: "PENDING" }] }), "pending status context fails");
+
+const reviewHead = "a".repeat(40);
+const crStatus = (state = "success", description = "Review completed", creatorId = 136622811) => ({
+  context: "CodeRabbit", state, description, creator: { id: creatorId }, updated_at: "2026-08-28T02:00:00Z",
+});
+const crReview = (state = "APPROVED", commitId = reviewHead) => ({
+  state, commit_id: commitId, submitted_at: "2026-08-28T02:01:00Z", user: { login: "coderabbitai[bot]" },
+});
+const completeCr = { statuses: [crStatus()], reviews: [crReview()], comments: [], headSha: reviewHead };
+ok(coderabbitReviewGate(completeCr).ok, "verified status plus APPROVED exact-head CodeRabbit review passes");
+ok(!coderabbitReviewGate({ ...completeCr, statuses: [crStatus("success", "Review completed", 1)] }).ok, "lookalike status creator fails closed");
+ok(!coderabbitReviewGate({ ...completeCr, statuses: [crStatus("pending", "Review in progress")] }).ok, "pending CodeRabbit status fails closed");
+ok(!coderabbitReviewGate({ ...completeCr, statuses: [crStatus("success", "Review rate limited")] }).ok, "false-green rate-limited status fails closed");
+ok(!coderabbitReviewGate({ ...completeCr, reviews: [crReview("APPROVED", "b".repeat(40))] }).ok, "review of an older head fails closed");
+ok(!coderabbitReviewGate({ ...completeCr, reviews: [crReview("CHANGES_REQUESTED")] }).ok, "unresolved CodeRabbit changes-requested review fails closed");
+ok(!coderabbitReviewGate({ ...completeCr, comments: [{ body: "Review failed", updated_at: "2026-08-28T02:02:00Z", user: { login: "coderabbitai[bot]" } }] }).ok, "false-green walkthrough failure fails closed");
 
 // ── hook decision paths that need no gh (stdin spawn) ────────────────────────
 const HOOK = path.join(__dirname, "pr-merge-guard.mjs");
@@ -244,6 +261,10 @@ eq(proofSearchDirs("C:/repo", () => undefined).length, 1, "undefined porcelain d
 // type-checks, passes a name-free regex, and silently restores primary-only discovery
 // -- the exact bug, wearing the fix's clothes.
 const guardSource = readFileSync(path.join(__dirname, "pr-merge-guard.mjs"), "utf8");
+ok(
+  /coderabbitReviewGate\([\s\S]{0,500}?statuses:[\s\S]{0,500}?reviews:[\s\S]{0,500}?comments:[\s\S]{0,500}?headSha:/.test(guardSource),
+  "the Claude merge guard binds CodeRabbit status, review, comment, and exact-head evidence before merging",
+);
 ok(
   /for\s*\(\s*const\s+stateDir\s+of\s+proofSearchDirs\(\s*projectDir\s*,\s*listWorktreesFromProjectDir\s*\)/.test(guardSource),
   "the proof scan iterates proofSearchDirs over the real worktree enumerator, not one hard-coded directory",

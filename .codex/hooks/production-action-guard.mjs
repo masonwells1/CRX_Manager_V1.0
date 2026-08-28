@@ -7,6 +7,7 @@ import path from "node:path";
 
 import {
   activeAutoMergePrNumbers,
+  coderabbitReviewGate,
   commandStartsWithGitHubCli,
   deliveryExecutableIsTrusted,
   destinationLooksLikeUrl,
@@ -548,6 +549,28 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     return denied(
       "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."
     );
+  }
+  let coderabbit;
+  try {
+    const readPages = (endpoint) => {
+      const pages = JSON.parse(runGh(["api", endpoint, "--paginate", "--slurp"], repoDir));
+      if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) throw new Error("GitHub returned malformed paginated evidence");
+      return pages.flat();
+    };
+    const repo = request.repo;
+    const number = request.selector;
+    const head = pullRequest.headRefOid;
+    coderabbit = coderabbitReviewGate({
+      statuses: readPages(`repos/${repo}/commits/${head}/statuses`),
+      reviews: readPages(`repos/${repo}/pulls/${number}/reviews`),
+      comments: readPages(`repos/${repo}/issues/${number}/comments`),
+      headSha: head,
+    });
+  } catch (error) {
+    return denied(`CODEX PRODUCTION GATE: CodeRabbit's exact-head review could not be verified, so the merge is denied (fail closed). ${error?.message || error}`);
+  }
+  if (!coderabbit.ok) {
+    return denied(`CODEX PRODUCTION GATE: CodeRabbit has not completed the mandatory latest-head review: ${coderabbit.reason}. Wait for or re-request the review, resolve any real findings, and retry the same exact-head merge; no extra Mason approval is required.`);
   }
   return gateMainChange({
     repoDir,

@@ -29,6 +29,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   contentIsRisky,
+  coderabbitReviewGate,
   commandStartsWithGitHubCli,
   deliveryExecutableIsTrusted,
   describeRiskyContent,
@@ -203,6 +204,26 @@ function gateRequest(request) {
       "(mergeStateStatus must be CLEAN and every reported check completed successfully). " +
       "Wait for the required checks, then retry the immediate merge."
     );
+  }
+
+  let coderabbit;
+  try {
+    const readPages = (endpoint) => {
+      const pages = JSON.parse(gh(["api", endpoint, "--paginate", "--slurp"]));
+      if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) throw new Error("GitHub returned malformed paginated evidence");
+      return pages.flat();
+    };
+    coderabbit = coderabbitReviewGate({
+      statuses: readPages(`repos/${request.repo}/commits/${actualHead}/statuses`),
+      reviews: readPages(`repos/${request.repo}/pulls/${request.selector}/reviews`),
+      comments: readPages(`repos/${request.repo}/issues/${request.selector}/comments`),
+      headSha: actualHead,
+    });
+  } catch (error) {
+    deny(`PR MERGE GATE: CodeRabbit's exact-head review could not be verified, so the merge is denied (fail closed). ${error?.message || error}`);
+  }
+  if (!coderabbit.ok) {
+    deny(`PR MERGE GATE: CodeRabbit has not completed the mandatory latest-head review: ${coderabbit.reason}. Wait for or re-request the review, resolve any real findings, and retry the same exact-head merge; no extra Mason approval is required.`);
   }
 
   // ── risky-diff classification (same rules as the push gate) ────────────────

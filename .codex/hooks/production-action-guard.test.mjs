@@ -689,6 +689,20 @@ try {
   };
   const mainPrJson = JSON.stringify(mainPr);
   const featurePrJson = JSON.stringify({ baseRefName: "develop", headRefName: "feature/test", headRefOid: risky.sha });
+  const approvedCodeRabbitResponse = (args, headSha) => {
+    const joined = args.join(" ");
+    if (joined.includes(`/commits/${headSha}/statuses`)) return JSON.stringify([[
+      { context: "CodeRabbit", state: "success", description: "Review completed", creator: { id: 136622811 }, updated_at: new Date(now).toISOString() },
+    ]]);
+    if (joined.includes("/pulls/123/reviews")) return JSON.stringify([[
+      { state: "APPROVED", commit_id: headSha, submitted_at: new Date(now).toISOString(), user: { login: "coderabbitai[bot]" } },
+    ]]);
+    if (joined.includes("/issues/123/comments")) return JSON.stringify([[]]);
+    throw new Error(`unexpected GitHub lookup: ${joined}`);
+  };
+  const runGhWithApprovedCodeRabbit = (args) => args.join(" ").startsWith("pr view ")
+    ? mainPrJson
+    : approvedCodeRabbitResponse(args, risky.sha);
   assert.equal(pullRequestChecksGreen(mainPr), true, "clean PR with completed passing checks is green");
   assert.equal(pullRequestChecksGreen({ ...mainPr, mergeStateStatus: "BLOCKED" }), false, "blocked merge state is not green");
   assert.equal(pullRequestChecksGreen({ ...mainPr, statusCheckRollup: [] }), false, "missing checks are not green");
@@ -707,15 +721,24 @@ try {
     toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,
-    runGh: () => mainPrJson,
+    runGh: runGhWithApprovedCodeRabbit,
   }).blocked, true, "risky gh merge to main is denied without Sol proof");
   writeProof(risky.repo, valid);
+  const missingCodeRabbit = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: (args) => args[0] === "pr" ? mainPrJson : JSON.stringify([[]]),
+  });
+  assert.equal(missingCodeRabbit.blocked, true, "a green PR without exact-head CodeRabbit evidence is denied");
+  assert.match(missingCodeRabbit.reason, /CodeRabbit/, "missing-review denial names the mandatory reviewer");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,
-    runGh: () => mainPrJson,
+    runGh: runGhWithApprovedCodeRabbit,
   }).blocked, false, "gh PR merge to main uses the same valid proof gate");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
@@ -736,7 +759,7 @@ try {
     toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --auto --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,
-    runGh: () => mainPrJson,
+    runGh: runGhWithApprovedCodeRabbit,
   });
   assert.equal(autoMergeDecision.blocked, true, "all main-bound auto-merges are denied even with green checks and valid proof");
   assert.match(autoMergeDecision.reason, /later commits could land/, "auto-merge deny names the exact-head race");
@@ -745,7 +768,7 @@ try {
     toolInput: { command: `&gh pr merge 123 --repo crop/crx --squash --auto --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,
-    runGh: () => mainPrJson,
+    runGh: runGhWithApprovedCodeRabbit,
   }).blocked, true, "PowerShell call-operator auto-merge is denied");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
@@ -881,7 +904,7 @@ try {
     toolInput: { command: `"C:\\Program Files\\GitHub CLI\\gh.exe" pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,
-    runGh: () => mainPrJson,
+    runGh: runGhWithApprovedCodeRabbit,
   }).blocked, false, "full Windows GitHub CLI paths are gated too");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
@@ -1137,7 +1160,7 @@ try {
         toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${inspected.headRefOid}` },
         repoDir: stale.repo,
         nowMs: now,
-        runGh: () => json,
+        runGh: (args) => args[0] === "pr" ? json : approvedCodeRabbitResponse(args, inspected.headRefOid),
       });
     };
 
@@ -1183,14 +1206,14 @@ try {
       toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${updatedHead}` },
       repoDir: stale.repo,
       nowMs: now,
-      runGh: () => JSON.stringify({
-        baseRefName: "main",
-        baseRefOid: githubBase,
-        headRefName: "feature/test",
-        headRefOid: updatedHead,
-        mergeStateStatus: "CLEAN",
-        statusCheckRollup: greenChecks,
-      }),
+      runGh: (args) => args[0] === "pr" ? JSON.stringify({
+          baseRefName: "main",
+          baseRefOid: githubBase,
+          headRefName: "feature/test",
+          headRefOid: updatedHead,
+          mergeStateStatus: "CLEAN",
+          statusCheckRollup: greenChecks,
+        }) : approvedCodeRabbitResponse(args, updatedHead),
     });
     assert.equal(
       upToDate.blocked,
@@ -1228,7 +1251,10 @@ try {
       toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${stale.sha}` },
       repoDir: stale.repo,
       nowMs: now,
-      runGh: (args) => { askedFor = args.join(" "); return prAt(githubBase); },
+      runGh: (args) => {
+        if (args[0] === "pr") { askedFor = args.join(" "); return prAt(githubBase); }
+        return approvedCodeRabbitResponse(args, stale.sha);
+      },
     });
     assert.match(askedFor, /baseRefOid/, "gh pr view requests baseRefOid");
 
@@ -1253,14 +1279,14 @@ try {
       toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${updatedHead}` },
       repoDir: stale.repo,
       nowMs: now,
-      runGh: () => JSON.stringify({
-        baseRefName: "main",
-        baseRefOid: githubBase,
-        headRefName: "feature/test",
-        headRefOid: updatedHead,
-        mergeStateStatus: "CLEAN",
-        statusCheckRollup: greenChecks,
-      }),
+      runGh: (args) => args[0] === "pr" ? JSON.stringify({
+          baseRefName: "main",
+          baseRefOid: githubBase,
+          headRefName: "feature/test",
+          headRefOid: updatedHead,
+          mergeStateStatus: "CLEAN",
+          statusCheckRollup: greenChecks,
+        }) : approvedCodeRabbitResponse(args, updatedHead),
     }).reason || "");
     assert.match(guidance, new RegExp(githubBase), "proof guidance states the exact expected base SHA");
     // run-claude-review.mjs reads its base from LOCAL origin/main and never

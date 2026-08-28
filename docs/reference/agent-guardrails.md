@@ -78,6 +78,8 @@ Runs on Codex's `*` (all-tools) PreToolUse matcher through portable POSIX and Wi
 
 GitHub CLI parsing also rejects unquoted POSIX backslash and Windows caret escapes anywhere in a `gh` command, plus GitHub CLI activity nested inside PowerShell, `cmd`, shell, or interpreter wrappers. Composed spellings such as `gh pr m\erge`, `gh a^pi`, or `powershell -Command "gh pr merge ..."` cannot hide a merge or API mutation from the canonical parser.
 
+Autonomous main merges also require CodeRabbit's verified `CodeRabbit` status from App id `136622811`, no failure/rate-limit signal in its latest walkthrough, and a formal `APPROVED` review whose `commit_id` equals the exact head being merged. Missing, stale, pending, failed, changes-requested, or unreadable evidence denies closed without asking Mason for a routine approval.
+
 ### UserPromptSubmit Hooks (`.claude/hooks/`)
 These run when Mason submits a prompt, BEFORE Claude reads it. They inject extra context via `additionalContext` — they don't block — so Mason's intent is preserved while Claude is forced to slow down on risky wording or nudged toward the right workflow.
 

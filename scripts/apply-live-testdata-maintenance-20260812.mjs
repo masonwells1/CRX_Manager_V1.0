@@ -137,13 +137,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // the guard inspected, with arbitrary paths plus current-directory/PATH
   // shadows denied, after inline/tool-environment Git configuration was denied
   // so the inspected destination cannot differ from the executed push, and
-  // after unquoted shell escapes were rejected for GitHub CLI commands.
-  codexGuard: "444aded2540fd0fb4c2aa77ba26bdaddc2834ba2",
-  pushLib: "4da53baf95e8ab6c6787868d49e89a3e16665fef",
+  // after unquoted shell escapes and nested wrappers were rejected for GitHub
+  // CLI commands, and after merges were bound to CodeRabbit's exact-head review.
+  codexGuard: "a3fedfa10023b97c30e9dea94e5310bbe21b67b8",
+  pushLib: "e52eb031fa6abf09d54e7d2d9f8c5ab1ad5b5f44",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "2bc9ed1767e25e2b106f1cd17c7789f11c22492b",
-  pushLib: "4da53baf95e8ab6c6787868d49e89a3e16665fef",
+  codexGuard: "f608a1842d815829737c7b4589bc283b4222c701",
+  pushLib: "e52eb031fa6abf09d54e7d2d9f8c5ab1ad5b5f44",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
