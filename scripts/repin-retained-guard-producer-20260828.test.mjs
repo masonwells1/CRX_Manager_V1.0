@@ -10,9 +10,9 @@ const inspection = inspectRepin();
 
 assert.equal(inspection.input, input);
 assert.equal(buildRepinnedSource(input), inspection.output);
-assert.match(inspection.input, /EXPECTED_INPUT_BLOB = "c8bec70830c643e474831985f5e6c3bd16630386"/);
-assert.match(inspection.output, /EXPECTED_INPUT_BLOB = "e09a88ff0df5c235ccb05e0df0ac818b622639d0"/);
-assert.doesNotMatch(inspection.output, /EXPECTED_INPUT_BLOB = "c8bec70830c643e474831985f5e6c3bd16630386"/);
+assert.match(inspection.input, /EXPECTED_OUTPUT_BLOB = "7bca8dce4fe2f58afabdbd09d1b31ecef61ce520"/);
+assert.match(inspection.output, /EXPECTED_OUTPUT_BLOB = "0e947bc2a86cda1bdb4b2ad860b3aef5e023e264"/);
+assert.doesNotMatch(inspection.output, /EXPECTED_OUTPUT_BLOB = "7bca8dce4fe2f58afabdbd09d1b31ecef61ce520"/);
 assert.equal(readFileSync(target, "utf8").replace(/\r\n/g, "\n"), input, "verification must not write the retained producer");
 
 process.stdout.write("retained producer repin: all assertions passed; target unchanged\n");

@@ -11,10 +11,10 @@ const TARGET = ["scripts", "apply-live-" + "testdata-maintenance-20260812.mjs"].
 const TARGET_PATH = path.join(REPO_DIR, ...TARGET.split("/"));
 const PRODUCER = "scripts/repin-retained-guard-producer-20260828.mjs";
 const PRODUCER_PATH = path.join(REPO_DIR, ...PRODUCER.split("/"));
-const OLD_PIN = 'const EXPECTED_INPUT_BLOB = "c8bec70830c643e474831985f5e6c3bd16630386";';
-const NEW_PIN = 'const EXPECTED_INPUT_BLOB = "e09a88ff0df5c235ccb05e0df0ac818b622639d0";';
-const EXPECTED_INPUT_BLOB = "d36285a53c304588d541343c3d8b3b8917948db9";
-const EXPECTED_OUTPUT_BLOB = "dd81f608e55e661a2e7825bf86ddfa64aa5e3535";
+const OLD_PIN = 'const EXPECTED_OUTPUT_BLOB = "7bca8dce4fe2f58afabdbd09d1b31ecef61ce520";';
+const NEW_PIN = 'const EXPECTED_OUTPUT_BLOB = "0e947bc2a86cda1bdb4b2ad860b3aef5e023e264";';
+const EXPECTED_INPUT_BLOB = "dd81f608e55e661a2e7825bf86ddfa64aa5e3535";
+const EXPECTED_OUTPUT_BLOB = "d8c2db9f2bc92f736bb6da6cdc5a74abe26ec62d";
 const APPROVAL = "--one-account-gate-approval=2026-08-27";
 
 function git(args) {
@@ -37,7 +37,7 @@ function gitBlob(value) {
 export function buildRepinnedSource(input) {
   const source = normalizeLf(input, "retained producer input");
   const matches = source.split(OLD_PIN).length - 1;
-  if (matches !== 1) throw new Error("expected one exact retained-producer input pin, found " + matches);
+  if (matches !== 1) throw new Error("expected one exact retained-producer output pin, found " + matches);
   return source.replace(OLD_PIN, NEW_PIN);
 }
 
