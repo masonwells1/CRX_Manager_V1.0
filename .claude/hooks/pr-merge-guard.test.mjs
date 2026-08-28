@@ -29,6 +29,13 @@ import {
   updateBranchRequestHasExplicitContext,
 } from "./codex-push-lib.mjs";
 
+// GitHub Actions injects canonical GitHub context variables. Remove all ambient
+// mutation-context inputs so each process-level regression controls its own
+// environment and cannot pass or fail according to the runner provider.
+for (const name of ["BASH_ENV", "ENV", "ZDOTDIR", "GH_CONFIG_DIR", "GH_HOST", "GITHUB_HOST", "GH_REPO", "GITHUB_API_URL"]) {
+  delete process.env[name];
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
 function ok(v, m) { assert.ok(v, m); pass++; }

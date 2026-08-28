@@ -11,6 +11,12 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { autopilotDecision, flagActive, intentFresh, overnightGateDecision } from "./autopilot-lib.mjs";
 
+// Keep the pure decision tests independent of CI/provider ambient variables.
+// Hostile ambient values are introduced explicitly by focused hook tests.
+for (const name of ["BASH_ENV", "ENV", "ZDOTDIR", "GH_CONFIG_DIR", "GH_HOST", "GITHUB_HOST", "GH_REPO", "GITHUB_API_URL"]) {
+  delete process.env[name];
+}
+
 let pass = 0;
 function ok(cond, msg) { assert.ok(cond, msg); pass++; }
 function eq(a, b, msg) { assert.equal(a, b, msg); pass++; }

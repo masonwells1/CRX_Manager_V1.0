@@ -13,7 +13,10 @@ const projectRoot = process.cwd();
 // Git exports repository selectors while running hooks. This test creates
 // independent temporary repositories, so inherited selectors would make the
 // production guard inspect the parent checkout instead of each fixture.
-for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR"]) {
+for (const key of [
+  "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR",
+  "BASH_ENV", "ENV", "ZDOTDIR", "GH_CONFIG_DIR", "GH_HOST", "GITHUB_HOST", "GH_REPO", "GITHUB_API_URL",
+]) {
   delete process.env[key];
 }
 const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-guard.mjs");
