@@ -8,6 +8,9 @@ the exact historical source-invoice cost already recognized by those reports and
 to the season for the America/Chicago business date at issuance time, while customer prior-year reporting remains on the original invoice
 season.
 
+Cached `unapply_credit_memo` retries revalidate authentication, exact actor binding,
+active-admin authorization, and the required reason before returning the financial result.
+
 Invoice-basis P&L and monthly COGS now round each ordinary sale line to whole cents before summing.
 That is a deliberate reporting change: it makes the report basis exactly match the return allocator's
 whole-cent ceiling, so a return cannot reverse more than the report recognized. Reprinting a period

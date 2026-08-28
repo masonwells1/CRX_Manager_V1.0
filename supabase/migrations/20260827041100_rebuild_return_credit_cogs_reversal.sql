@@ -855,10 +855,35 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
 DECLARE
+  v_actor uuid;
   v_is_return_credit boolean;
   v_cached jsonb;
   v_result jsonb;
 BEGIN
+  -- Revalidate the full authorization envelope before a cached replay can
+  -- disclose an admin-only financial result. The delegated legacy function
+  -- performs the same checks for first execution, but it is not reached when
+  -- this wrapper returns a cached result.
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN
+    RAISE EXCEPTION 'AUTH_REQUIRED';
+  END IF;
+  IF p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = v_actor
+      AND p.is_active = true
+      AND p.role = 'admin'
+  ) THEN
+    RAISE EXCEPTION 'INSUFFICIENT_ROLE';
+  END IF;
+  IF p_reason IS NULL OR btrim(p_reason) = '' THEN
+    RAISE EXCEPTION 'Reason is required to unapply a credit memo';
+  END IF;
+
   -- Acquire the shared key-only advisory lock before the delegated function can
   -- change AR or return state. The legacy implementation saves its result late;
   -- this early check makes concurrent same-key calls serialize before effects.
@@ -1443,7 +1468,7 @@ BEGIN
   FROM pg_proc p
   WHERE p.oid = to_regprocedure('public.unapply_credit_memo(uuid,text,uuid,text)');
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
-       '09849fc35e39939a1b7de81f29a2a98beae6bcb557b61ac6322cc7344437b525'
+       '3d4fa59a934832eb1a058b7a0bfdfb12316ac1ef6cee32724b1cd9dc30d38d41'
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'unapply_credit_memo') <> 1
      OR NOT EXISTS (

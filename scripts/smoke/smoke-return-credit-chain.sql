@@ -1812,6 +1812,79 @@ BEGIN
     v_credit_id2, '[SMOKE] unapply with active application', v_admin,
     'smk-rcc-' || v_suffix || '-unapply-with-application'
   );
+
+  -- A cached admin-only result must remain behind the same authorization and
+  -- intent checks as the first execution. Each rejected call reuses the exact
+  -- committed key so this proves the wrapper cannot leak the cached payload.
+  PERFORM set_config('request.jwt.claims', '{}'::text, true);
+  BEGIN
+    PERFORM unapply_credit_memo(
+      v_credit_id2, '[SMOKE] unauthenticated replay', v_admin,
+      'smk-rcc-' || v_suffix || '-unapply-with-application'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: unauthenticated caller received cached unapply result';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'AUTH_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: unauthenticated replay raised %, expected AUTH_REQUIRED', v_reason;
+    END IF;
+  END;
+
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub', v_sales_rep, 'role', 'authenticated')::text, true);
+  BEGIN
+    PERFORM unapply_credit_memo(
+      v_credit_id2, '[SMOKE] non-admin replay', v_sales_rep,
+      'smk-rcc-' || v_suffix || '-unapply-with-application'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: non-admin caller received cached unapply result';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'INSUFFICIENT_ROLE%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: non-admin replay raised %, expected INSUFFICIENT_ROLE', v_reason;
+    END IF;
+  END;
+
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  BEGIN
+    PERFORM unapply_credit_memo(
+      v_credit_id2, '[SMOKE] forged-actor replay', v_admin2,
+      'smk-rcc-' || v_suffix || '-unapply-with-application'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: forged actor received cached unapply result';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'ACTOR_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: forged-actor replay raised %, expected ACTOR_MISMATCH', v_reason;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM unapply_credit_memo(
+      v_credit_id2, '   ', v_admin,
+      'smk-rcc-' || v_suffix || '-unapply-with-application'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: blank-reason caller received cached unapply result';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'Reason is required to unapply a credit memo%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: blank-reason replay raised %, expected required reason', v_reason;
+    END IF;
+  END;
+
+  v_res2 := unapply_credit_memo(
+    v_credit_id2, '[SMOKE] authorized replay', v_admin,
+    'smk-rcc-' || v_suffix || '-unapply-with-application'
+  );
+  IF v_res2 IS DISTINCT FROM v_res THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: authorized unapply replay did not return the cached result';
+  END IF;
+
   SELECT status INTO v_status FROM invoices WHERE id = v_target_invoice_id;
   IF v_status <> 'overdue' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: unapply restored past-due invoice to %, expected overdue', v_status;

@@ -165,6 +165,16 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain("season = public.compute_season((now() AT TIME ZONE 'America/Chicago')::date)");
     expect(migration).toContain("v_cached := public.check_idempotency(p_idempotency_key, 'unapply_credit_memo')");
     const unapplyWrapper = migration.slice(migration.indexOf('CREATE FUNCTION public.unapply_credit_memo('));
+    const authRequired = unapplyWrapper.indexOf("RAISE EXCEPTION 'AUTH_REQUIRED'");
+    const actorBinding = unapplyWrapper.indexOf('IF p_performed_by IS DISTINCT FROM v_actor');
+    const adminGate = unapplyWrapper.indexOf("p.role = 'admin'");
+    const reasonGate = unapplyWrapper.indexOf("IF p_reason IS NULL OR btrim(p_reason) = ''");
+    const replayLookup = unapplyWrapper.indexOf("public.check_idempotency(p_idempotency_key, 'unapply_credit_memo')");
+    expect(authRequired).toBeGreaterThanOrEqual(0);
+    expect(actorBinding).toBeGreaterThan(authRequired);
+    expect(adminGate).toBeGreaterThan(actorBinding);
+    expect(reasonGate).toBeGreaterThan(adminGate);
+    expect(replayLookup).toBeGreaterThan(reasonGate);
     expect(unapplyWrapper.indexOf("public.check_idempotency(p_idempotency_key, 'unapply_credit_memo')"))
       .toBeLessThan(unapplyWrapper.indexOf('public._unapply_return_credit_guard_impl_20260826('));
     expect(migration).not.toContain('RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS');
@@ -175,6 +185,42 @@ describe('return-credit COGS migration', () => {
     expect(returnCreditSmoke).toContain('assigned-only sales-rep year-end batch returned');
     expect(returnCreditSmoke).toContain('RETURN_CREDIT_DASHBOARD_UNBILLED_PROVEN');
     expect(returnCreditSmoke).toContain('SMK-RCC-DELETED-');
+    expect(returnCreditSmoke).toContain('unauthenticated caller received cached unapply result');
+    expect(returnCreditSmoke).toContain('non-admin caller received cached unapply result');
+    expect(returnCreditSmoke).toContain('forged actor received cached unapply result');
+    expect(returnCreditSmoke).toContain('blank-reason caller received cached unapply result');
+    expect(returnCreditSmoke).toContain('authorized unapply replay did not return the cached result');
+  });
+
+  it('fails if an unapply replay authorization guard moves behind the cache lookup', () => {
+    const wrapper = migration.slice(migration.indexOf('CREATE FUNCTION public.unapply_credit_memo('));
+    const assertReplayAuthorizationFirst = (source: string) => {
+      const replayLookup = source.indexOf("public.check_idempotency(p_idempotency_key, 'unapply_credit_memo')");
+      const guards = [
+        "RAISE EXCEPTION 'AUTH_REQUIRED'",
+        'IF p_performed_by IS DISTINCT FROM v_actor',
+        "p.role = 'admin'",
+        "IF p_reason IS NULL OR btrim(p_reason) = ''",
+      ];
+      if (replayLookup < 0 || guards.some((guard) => {
+        const position = source.indexOf(guard);
+        return position < 0 || position >= replayLookup;
+      })) {
+        throw new Error('UNAPPLY_REPLAY_AUTHORIZATION_NOT_FIRST');
+      }
+    };
+
+    expect(() => assertReplayAuthorizationFirst(wrapper)).not.toThrow();
+    for (const guard of [
+      "RAISE EXCEPTION 'AUTH_REQUIRED'",
+      'IF p_performed_by IS DISTINCT FROM v_actor',
+      "p.role = 'admin'",
+      "IF p_reason IS NULL OR btrim(p_reason) = ''",
+    ]) {
+      const mutant = wrapper.replace(guard, '-- mutation removed replay authorization guard');
+      expect(mutant).not.toBe(wrapper);
+      expect(() => assertReplayAuthorizationFirst(mutant)).toThrow('UNAPPLY_REPLAY_AUTHORIZATION_NOT_FIRST');
+    }
   });
 
   it('fails its source-order proof if the early unapply idempotency lock is removed', () => {
@@ -240,7 +286,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('return_items_restocked_quantity_positive_chk');
     expect(migration).toContain('restocked_quantity = v_restock_qty');
     expect(functionBodySha256(migration, 'void_invoice')).toBe('7d1eb3222e0cd59318919206d2338de7477c2091f22550671ecbcf5ff80a9d14');
-    expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('09849fc35e39939a1b7de81f29a2a98beae6bcb557b61ac6322cc7344437b525');
+    expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('3d4fa59a934832eb1a058b7a0bfdfb12316ac1ef6cee32724b1cd9dc30d38d41');
     expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('0a5b569800bea5a0acbfaf55020ae4a9bde462a937e8db24597a586e477811b7');
     expect(functionBodySha256(migration, 'guard_recognized_return_credit_delete')).toBe('89c96dabb82f6dada53e0084d5c65e72f11ea0630b56cf6e4f7f99620be48a8d');
     expect(functionBodySha256(migration, 'guard_return_credit_lineage')).toBe('c598d6afa59082e540b7d38c2f413bf204c5b93f938ab570cb82978c9c84a86d');
@@ -402,7 +448,7 @@ describe('return-credit COGS migration', () => {
     const migrationSha256 = createHash('sha256')
       .update(migration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(migrationSha256).toBe('636210119f5cb1170a50259d90973782d4b1cb9d444e067abc9f7bdfce73dc34');
+    expect(migrationSha256).toBe('9f676f026b11e42445985193784fcf8c2a5c8a4d8ea7cca2bf0a7efd701cf888');
     expect(migrationHistory).toContain(`SQL sha256: \`${migrationSha256}\` (LF-normalized bytes)`);
     const deliverySurfaceSha256 = createHash('sha256')
       .update(deliverySurfaceMigration.replace(/\r\n/g, '\n'), 'utf8')
