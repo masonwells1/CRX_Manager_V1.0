@@ -456,7 +456,7 @@ for (const [name, source] of Object.entries(producerProtection.outputs)) {
 }
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "0e947bc2a86cda1bdb4b2ad860b3aef5e023e264", "pinned generated blob");
+assert.equal(blob, "79a11218ea45edb249d18669bb35723dd21ae151", "pinned generated blob");
 
 try {
   const candidatePath = path.join(scratch, "candidate.mjs");
