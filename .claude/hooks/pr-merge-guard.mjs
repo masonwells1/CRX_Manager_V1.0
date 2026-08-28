@@ -34,7 +34,6 @@ import {
   contentIsRisky,
   createEvidenceBudget,
   coderabbitReviewGate,
-  commandStartsWithGitHubCli,
   deliveryExecutableIsTrusted,
   describeRiskyContent,
   directGitHubApiWriter,
@@ -102,12 +101,6 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
   const unsafeAmbientEnv = githubMutationUnsafeAmbientEnvironmentNames(toolInput.command, process.env);
   if (unsafeAmbientEnv.length > 0) {
     deny(`PR MERGE GATE: GitHub mutations are denied while unsafe shell/network environment variables are active (${unsafeAmbientEnv.join(", ")}). Clear them before using the canonical guarded merge command.`);
-  }
-  const executionEnv = { ...process.env, ...(toolInput.env && typeof toolInput.env === "object" ? toolInput.env : {}) };
-  for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/).map((value) => value.trim()).filter(Boolean)) {
-    if (commandStartsWithGitHubCli(segment) && !deliveryExecutableIsTrusted(segment, "gh", { cwd: payload?.cwd || process.cwd(), env: executionEnv })) {
-      deny("PR MERGE GATE: this GitHub command does not resolve to the trusted GitHub CLI used for inspection. Remove arbitrary executable paths, current-directory shadows, or PATH overrides and use the normal GitHub CLI installation.");
-    }
   }
   if (githubCliCommandIsDynamic(toolInput.command)) {
     deny("PR MERGE GATE: GitHub CLI commands containing shell-expanded variables, substitutions, splats, or backticks are denied because a merge or auto-merge action could be hidden from the exact-head parser. Spell the complete `gh` command literally.");
@@ -203,6 +196,13 @@ function listWorktreesFromProjectDir() {
 function gateRequest(request) {
   if (request.updateBranch ? !updateBranchRequestHasExplicitContext(request) : !mergeRequestHasExplicitContext(request)) {
     deny("PR MERGE GATE: every merge must explicitly name one numeric PR, `--repo owner/repo`, and the exact 40-character `--match-head-commit` SHA in one standalone command. Selectorless/current-branch context is denied.");
+  }
+  if (typeof toolInput.command === "string"
+    && !deliveryExecutableIsTrusted(toolInput.command, "gh", {
+      cwd: payload?.cwd || process.cwd(),
+      env: { ...process.env, ...(toolInput.env && typeof toolInput.env === "object" ? toolInput.env : {}) },
+    })) {
+    deny("PR MERGE GATE: unattended delivery must invoke the literal absolute path of the trusted GitHub CLI. Bare `gh`, aliases, functions, arbitrary paths, and PATH resolution are denied.");
   }
   if (request.updateBranch && request.rebase) {
     deny("PR MERGE GATE: `gh pr update-branch --rebase` rewrites shared remote history and requires Mason's explicit history-rewrite approval. Use the merge-based update without --rebase for unattended delivery.");

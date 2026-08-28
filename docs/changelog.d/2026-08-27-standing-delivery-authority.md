@@ -56,6 +56,12 @@ closed. GitHub CLI actions containing shell expansion, substitutions, splats, or
 also denied by autopilot plus both merge guards. Ordinary literal push and exact-head merge
 commands remain unattended and do not ask Mason for another approval.
 
+A final shell-boundary review closed executable impersonation without adding an owner prompt.
+Unattended pushes, branch updates, and merges now invoke the literal absolute trusted `git` or
+`gh` executable; bare names, aliases/functions, exported Bash delivery functions, arbitrary
+paths, and PATH resolution cannot substitute a different program after inspection. `land-pr.mjs`
+prints the platform-correct guarded merge command, so this remains an automatic agent action.
+
 The following exact-head review removed the last context guess: a compound command could switch
 branches before a selectorless merge, making the hook inspect the old branch while the shell
 merged the new one. Every merge must now be one standalone literal action that explicitly names
@@ -65,7 +71,7 @@ form, so autonomous delivery remains one agent-owned command with no Mason promp
 
 The final exact-head review removed GitHub REST merges from the permitted route. A file-backed
 REST request body could hide or override a visible SHA field, so REST merges now deny
-unconditionally. Autonomous delivery retains the single literal, standalone `gh pr merge`
+unconditionally. Autonomous delivery retains the single literal, standalone absolute-CLI `pr merge`
 command with an explicit repository, PR number, and `--match-head-commit` SHA.
 
 PowerShell's no-space call operator form (`&gh`) now routes through the same merge parser, and

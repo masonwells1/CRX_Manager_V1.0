@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import {
   contentIsRisky,
   exhaustiveHeadPullRequestsLookupArgs,
+  fixedGitHubCliExecutable,
   riskyFiles,
   trustedGitHubCliInvocation,
 } from "../.claude/hooks/codex-push-lib.mjs";
@@ -42,6 +43,10 @@ import { assessLandPrUpdate } from "./land-pr-lib.mjs";
 
 const REPO = "masonwells1/CRX_Manager_V1.0";
 const POLL_SECONDS = 60;
+const fixedGhPath = fixedGitHubCliExecutable();
+const GUARDED_GH = process.platform === "win32"
+  ? `& '${fixedGhPath.replaceAll("'", "''")}'`
+  : JSON.stringify(fixedGhPath);
 
 const args = process.argv.slice(2);
 const prNumber = args.find((a) => /^\d+$/.test(a));
@@ -183,14 +188,14 @@ for (;;) {
         `This script will not merge it (by design). Land it now, immediately, with a fresh proof:\n` +
         `  1. gh pr checkout ${prNumber} && git fetch origin\n` +
         `  2. node scripts/write-codex-push-proof.mjs\n` +
-        `  3. gh pr merge ${prNumber} --repo ${REPO} --squash --delete-branch --match-head-commit ${pr.headRefOid}   (NO --auto — proof is bound to this exact head+base)\n` +
+        `  3. ${GUARDED_GH} pr merge ${prNumber} --repo ${REPO} --squash --delete-branch --match-head-commit ${pr.headRefOid}   (NO --auto — proof is bound to this exact head+base)\n` +
         `If main moves before you merge, re-run this script first.`
       );
       process.exit(2);
     }
     console.log(
       `[land-pr] PR #${prNumber} is green, up to date, and non-risky. Merge this exact head now through the normal guard:\n` +
-      `  gh pr merge ${prNumber} --repo ${REPO} --squash --delete-branch --match-head-commit ${pr.headRefOid}   (NO --auto; no extra Mason approval required)`
+      `  ${GUARDED_GH} pr merge ${prNumber} --repo ${REPO} --squash --delete-branch --match-head-commit ${pr.headRefOid}   (NO --auto; no extra Mason approval required)`
     );
     process.exit(2);
   }

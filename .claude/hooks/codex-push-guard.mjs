@@ -682,9 +682,6 @@ for (const pushCmd of pushCommands) {
 }
 
 for (const pushCmd of pushCommands) {
-  if (!deliveryExecutableIsTrusted(pushCmd, "git", { cwd: projectDir, env: { ...process.env, ...suppliedEnv } })) {
-    deny("CODEX GATE: this push does not resolve to the trusted Git executable used for inspection. Remove arbitrary executable paths, current-directory shadows, or PATH overrides and run the normal Git installation.");
-  }
   if (/--git-dir|--work-tree/i.test(pushCmd)) {
     deny("CODEX GATE: pushes using explicit --git-dir/--work-tree contexts are denied because the guard cannot safely bind them to the inspected worktree. Use `git -C <repo> push` instead.");
   }
@@ -822,6 +819,9 @@ for (const pushCmd of pushCommands) {
       }
     } catch (error) {
       deny(`CODEX GATE: unattended feature pushes must resolve to the exact CRX GitHub repository before auto-merge state is checked. ${error?.message || error}`);
+    }
+    if (!deliveryExecutableIsTrusted(pushCmd, "git", { cwd: projectDir, env: { ...process.env, ...suppliedEnv } })) {
+      deny("CODEX GATE: an unattended feature push must invoke the literal absolute path of the trusted Git executable. Bare `git`, aliases, functions, arbitrary paths, and PATH resolution are denied.");
     }
     for (const featureBranch of featureBranches) {
       let activeAutoMergePrs;

@@ -104,12 +104,15 @@ After deploy, smoke-test by triggering the function from the live app (or via `c
 ```bash
 git checkout -b revert/<short-name> origin/main
 git revert <bad-commit-sha>
-git push -u origin revert/<short-name>
+# Invoke the installed trusted Git by its literal absolute executable path:
+# Windows: & 'C:\Program Files\Git\cmd\git.exe' push -u origin HEAD:refs/heads/revert/<short-name>
+# Linux:   "/usr/bin/git" push -u origin HEAD:refs/heads/revert/<short-name>
 gh pr create --fill
 # Wait for required checks, then merge the exact reviewed head (auto-merge is intentionally disabled).
 gh pr view --repo masonwells1/CRX_Manager_V1.0 --json headRefOid --jq .headRefOid
 # Substitute the returned literal 40-character SHA below; do not use a shell variable because the guard must inspect it.
-gh pr merge <pr-number> --repo masonwells1/CRX_Manager_V1.0 --squash --match-head-commit <head-sha>
+# Run `node scripts/land-pr.mjs <pr-number>` and execute its printed merge command;
+# it names the literal trusted gh path and the exact inspected head SHA.
 ```
 The merge to `main` auto-deploys the revert via Vercel. (The Vercel dashboard
 rollback above is faster — prefer it mid-incident.)

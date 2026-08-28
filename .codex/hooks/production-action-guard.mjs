@@ -10,7 +10,6 @@ import {
   branchNameIsProtected,
   CODEX_MERGE_EVIDENCE_BUDGET_MS,
   coderabbitReviewGate,
-  commandStartsWithGitHubCli,
   deliveryExecutableIsTrusted,
   destinationLooksLikeUrl,
   directGitHubApiWriter,
@@ -919,9 +918,6 @@ export function evaluateProductionAction({
     if (ghPrBaseRetargets(segment)) {
       return denied("CODEX PRODUCTION GATE: `gh pr edit --base` is denied because an already-armed auto-merge could be redirected into a protected branch without an exact-head reviewed merge command.");
     }
-    if (commandStartsWithGitHubCli(segment) && !deliveryExecutableIsTrusted(segment, "gh", { cwd: actionRepoDir, env: executionEnv })) {
-      return denied("CODEX PRODUCTION GATE: this GitHub command does not resolve to the trusted GitHub CLI used for inspection. Remove arbitrary executable paths, current-directory shadows, or PATH overrides and use the normal GitHub CLI installation.");
-    }
   }
   if (githubCliCommandIsDynamic(command)) {
     return denied("CODEX PRODUCTION GATE: GitHub CLI commands containing shell-expanded variables, substitutions, splats, or backticks are denied because a merge or auto-merge action could be hidden from the exact-head parser. Spell the complete `gh` command literally.");
@@ -935,9 +931,6 @@ export function evaluateProductionAction({
   }
   if (pushSegments.length > 0 && (pushUsesConfigEnv(command) || Object.keys(suppliedEnv).some((key) => /^GIT_CONFIG(?:_|$)/i.test(key)))) {
     return denied("CODEX PRODUCTION GATE: feature pushes that name or supply GIT_CONFIG* environment overrides are denied because those variables can redirect the push away from the repository this guard inspected. Remove the override and use the repository's normal Git configuration.");
-  }
-  if (pushSegments.some((segment) => !deliveryExecutableIsTrusted(segment, "git", { cwd: actionRepoDir, env: executionEnv }))) {
-    return denied("CODEX PRODUCTION GATE: this push does not resolve to the trusted Git executable used for inspection. Remove arbitrary executable paths, current-directory shadows, or PATH overrides and run the normal Git installation.");
   }
   if (pushSegments.length > 0 && (pushSegments.length !== 1 || commandSegments.length !== 1)) {
     return denied("CODEX PRODUCTION GATE: a feature push must be one standalone command. Chaining a push with another shell action could arm auto-merge after the pre-push GitHub check, so run `git -C <repo> push <remote> <single-refspec>` by itself.");
@@ -967,6 +960,9 @@ export function evaluateProductionAction({
       if (!mergeRequestHasExplicitContext(ghRequest)) {
         return denied("CODEX PRODUCTION GATE: every merge must explicitly name one numeric PR, `--repo owner/repo`, and the exact 40-character `--match-head-commit` SHA in one standalone command. Selectorless/current-branch context is denied.");
       }
+      if (!deliveryExecutableIsTrusted(segment, "gh", { cwd: actionRepoDir, env: executionEnv })) {
+        return denied("CODEX PRODUCTION GATE: an unattended merge must invoke the literal absolute path of the trusted GitHub CLI. Bare `gh`, aliases, functions, arbitrary paths, and PATH resolution are denied.");
+      }
       const result = gatePullRequestMerge({
         request: ghRequest,
         repoDir: actionRepoDir,
@@ -979,6 +975,9 @@ export function evaluateProductionAction({
     }
     if (updateRequest) {
       if (commandSegments.length !== 1) return denied("CODEX PRODUCTION GATE: `gh pr update-branch` must be one standalone command so its destination branch cannot change after inspection.");
+      if (!deliveryExecutableIsTrusted(segment, "gh", { cwd: actionRepoDir, env: executionEnv })) {
+        return denied("CODEX PRODUCTION GATE: an unattended branch update must invoke the literal absolute path of the trusted GitHub CLI. Bare `gh`, aliases, functions, arbitrary paths, and PATH resolution are denied.");
+      }
       const result = gatePullRequestUpdateBranch({ request: updateRequest, repoDir: actionRepoDir, runGh });
       if (result.blocked) return result;
       continue;
@@ -1056,6 +1055,9 @@ export function evaluateProductionAction({
           return denied(
             `CODEX PRODUCTION GATE: unattended feature pushes must resolve to the exact CRX GitHub repository before auto-merge state is checked. ${error?.message || error}`,
           );
+        }
+        if (!deliveryExecutableIsTrusted(segment, "git", { cwd: actionRepoDir, env: executionEnv })) {
+          return denied("CODEX PRODUCTION GATE: an unattended feature push must invoke the literal absolute path of the trusted Git executable. Bare `git`, aliases, functions, arbitrary paths, and PATH resolution are denied.");
         }
         let activeAutoMergePrs;
         try {

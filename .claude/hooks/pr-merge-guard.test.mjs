@@ -33,7 +33,7 @@ import {
 // GitHub Actions injects canonical GitHub context variables. Remove all ambient
 // mutation-context inputs so each process-level regression controls its own
 // environment and cannot pass or fail according to the runner provider.
-for (const name of ["BASH_ENV", "ENV", "ZDOTDIR", "GH_CONFIG_DIR", "GH_HOST", "GITHUB_HOST", "GH_REPO", "GITHUB_API_URL"]) {
+for (const name of ["BASH_ENV", "ENV", "ZDOTDIR", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "GH_HOST", "GITHUB_HOST", "GH_REPO", "GITHUB_API_URL"]) {
   delete process.env[name];
 }
 
@@ -87,6 +87,8 @@ ok(!ghCliCommandIsUnknownOrAlias("gh -R o/r pr view 42"), "known gh command afte
 const canonicalMutation = "gh pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789";
 eq(githubMutationEnvironmentOverrideNames(canonicalMutation, { TRACE_LABEL: "fixture" }), ["TRACE_LABEL"], "every structured environment override on a GitHub mutation is classified");
 eq(githubMutationUnsafeAmbientEnvironmentNames(canonicalMutation, { BASH_ENV: "fixture", GH_HOST: "attacker.example", GH_TOKEN: "expected-auth" }), ["BASH_ENV", "GH_HOST"], "unsafe ambient shell and GitHub context variables are classified without rejecting normal inherited authentication");
+eq(githubMutationUnsafeAmbientEnvironmentNames(canonicalMutation, { "BASH_FUNC_gh%%": "() { attacker; }" }), ["BASH_FUNC_gh%%"], "exported Bash gh functions are classified");
+eq(githubMutationUnsafeAmbientEnvironmentNames("git push origin HEAD:refs/heads/feature/test", { "BASH_FUNC_git%%": "() { attacker; }" }), ["BASH_FUNC_git%%"], "exported Bash git functions are classified for feature pushes");
 eq(githubMutationEnvironmentOverrideNames("gh pr view 42 --repo o/r", { TRACE_LABEL: "fixture" }), [], "read-only GitHub commands do not acquire the mutation environment rule");
 ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r --base main"), "literal PR base retarget is classified");
 ok(ghPrBaseRetargets("gh -R o/r pr edit 42 --base=production"), "global flags and attached base values cannot hide retargeting");
@@ -310,6 +312,7 @@ for (const [name, value] of [
   ["ENV", "C:/fixture/startup.sh"],
   ["ZDOTDIR", "C:/fixture/zdot"],
   ["GH_CONFIG_DIR", "C:/fixture/gh-config"],
+  ["XDG_CONFIG_HOME", "C:/fixture/xdg-config"],
   ["GH_HOST", "attacker.example"],
   ["GITHUB_HOST", "attacker.example"],
   ["GH_REPO", "attacker/repo"],

@@ -7,15 +7,20 @@ const UNTRUSTED_GITHUB_CONTEXT_ENV = [
   "GH_HOST",
   "GITHUB_HOST",
   "GH_CONFIG_DIR",
+  "XDG_CONFIG_HOME",
   "GITHUB_API_URL",
   "GH_REPO",
   "GH_ENTERPRISE_TOKEN",
   "GITHUB_ENTERPRISE_TOKEN",
 ];
+const UNTRUSTED_GITHUB_CONTEXT_ENV_NAMES = new Set(UNTRUSTED_GITHUB_CONTEXT_ENV);
 
 export function sanitizedGitHubCliEnvironment(baseEnv = process.env) {
   const env = { ...baseEnv };
-  for (const name of UNTRUSTED_GITHUB_CONTEXT_ENV) delete env[name];
+  for (const name of Object.keys(env)) {
+    if (UNTRUSTED_GITHUB_CONTEXT_ENV_NAMES.has(String(name).toUpperCase())
+      || /^BASH_FUNC_(?:git|gh)(?:%%|\(\))$/i.test(name)) delete env[name];
+  }
   return env;
 }
 
@@ -79,29 +84,6 @@ function executableKey(value, platform = process.platform) {
   return platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-function resolvedBareExecutable(token, { cwd, env, platform, exists }) {
-  const pathImpl = platformPath(platform);
-  const searchPath = String(env?.PATH || env?.Path || env?.path || "");
-  // `platform` is injectable so the Windows trust boundary can be mutation-
-  // tested on Linux CI. Using the runner's `path.delimiter` here made a
-  // semicolon-delimited Windows PATH one giant directory on Linux, so the same
-  // guard assertion passed locally and failed hosted. Resolve the delimiter for
-  // the platform being classified, not the machine executing the test.
-  const delimiter = platform === "win32" ? ";" : ":";
-  const directories = [cwd, ...searchPath.split(delimiter)].map((entry) => String(entry || "").replace(/^"|"$/g, "")).filter(Boolean);
-  const hasExtension = /\.[A-Za-z0-9]+$/.test(token);
-  const extensions = platform === "win32" && !hasExtension
-    ? String(env?.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
-    : [""];
-  for (const directory of directories) {
-    for (const extension of extensions) {
-      const candidate = pathImpl.resolve(directory, `${token}${extension}`);
-      if (exists(candidate)) return candidate;
-    }
-  }
-  return null;
-}
-
 export function commandStartsWithGitHubCli(command) {
   return githubCliInvocationWords(command) !== null;
 }
@@ -111,16 +93,16 @@ export function deliveryExecutableIsTrusted(command, kind, options = {}) {
   const pathImpl = platformPath(platform);
   const exists = options.exists || existsSync;
   const cwd = pathImpl.resolve(options.cwd || process.cwd());
-  const env = options.env || process.env;
   const token = executableToken(command);
   const expected = kind === "gh"
     ? fixedGitHubCliExecutable({ platform, exists })
     : fixedGitExecutable({ platform, exists });
-  const validBare = kind === "gh" ? /^gh(?:\.exe)?$/i : /^git(?:\.exe)?$/i;
-  let actual;
-  if (/[\\/]/.test(token) || pathImpl.isAbsolute(token)) actual = pathImpl.resolve(cwd, token);
-  else if (validBare.test(token)) actual = resolvedBareExecutable(token, { cwd, env, platform, exists });
-  else return false;
+  // A bare `git` or `gh` can be intercepted by a shell alias/function before
+  // PATH lookup. Delivery actions therefore name the reviewed executable by
+  // its literal absolute path; PATH resolution is never part of this trust
+  // decision.
+  if (!pathImpl.isAbsolute(token)) return false;
+  const actual = pathImpl.resolve(cwd, token);
   return executableKey(actual, platform) === executableKey(expected, platform);
 }
 
@@ -2462,12 +2444,16 @@ export function githubMutationEnvironmentOverrideNames(command, env) {
 
 const GITHUB_MUTATION_UNSAFE_AMBIENT_ENV_NAMES = new Set([
   "BASH_ENV", "ENV", "ZDOTDIR",
-  "GH_CONFIG_DIR", "GH_HOST", "GITHUB_HOST", "GH_REPO", "GITHUB_API_URL",
+  "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "GH_HOST", "GITHUB_HOST", "GH_REPO", "GITHUB_API_URL",
 ]);
 
 export function githubMutationUnsafeAmbientEnvironmentNames(command, env) {
-  if (!githubMutationCommandMentioned(command) || !env || typeof env !== "object" || Array.isArray(env)) return [];
-  return Object.keys(env).filter((name) => GITHUB_MUTATION_UNSAFE_AMBIENT_ENV_NAMES.has(String(name).toUpperCase()));
+  if ((!githubMutationCommandMentioned(command) && !isGitPush(command))
+    || !env || typeof env !== "object" || Array.isArray(env)) return [];
+  return Object.keys(env).filter((name) => (
+    GITHUB_MUTATION_UNSAFE_AMBIENT_ENV_NAMES.has(String(name).toUpperCase())
+      || /^BASH_FUNC_(?:git|gh)(?:%%|\(\))$/i.test(String(name))
+  ));
 }
 
 export function mergeRequestHasExplicitContext(request) {

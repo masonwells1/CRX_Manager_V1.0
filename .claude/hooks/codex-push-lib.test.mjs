@@ -216,6 +216,8 @@ assert.throws(
   "missing trusted GitHub CLI fails closed instead of consulting PATH",
 );
 assert.equal(sanitizedGitHubCliEnvironment({ GH_HOST: "evil", GH_TOKEN: "ok" }).GH_HOST, undefined);
+assert.equal(sanitizedGitHubCliEnvironment({ XDG_CONFIG_HOME: "/attacker", GH_TOKEN: "ok" }).XDG_CONFIG_HOME, undefined);
+assert.equal(sanitizedGitHubCliEnvironment({ "BASH_FUNC_gh%%": "() { attacker; }", GH_TOKEN: "ok" })["BASH_FUNC_gh%%"], undefined);
 const trustedGitPath = "C:\\Program Files\\Git\\cmd\\git.exe";
 const trustedGhPath = "C:\\Program Files\\GitHub CLI\\gh.exe";
 const shadowGitPath = "C:\\attacker-bin\\git.exe";
@@ -226,13 +228,14 @@ const executableFixtures = new Set([trustedGitPath, trustedGhPath, shadowGitPath
 const fixtureExists = (candidate) => executableFixtures.has(path.win32.resolve(candidate).toLowerCase());
 const trustedPathEnv = { PATH: "C:\\Program Files\\Git\\cmd;C:\\Program Files\\GitHub CLI", PATHEXT: ".EXE" };
 const shadowedPathEnv = { PATH: "C:\\attacker-bin;C:\\Program Files\\Git\\cmd;C:\\Program Files\\GitHub CLI", PATHEXT: ".EXE" };
-assert.equal(deliveryExecutableIsTrusted("git push origin HEAD:refs/heads/feature/test", "git", { platform: "win32", cwd: "C:\\clean-repo", env: trustedPathEnv, exists: fixtureExists }), true, "bare git is allowed only when PATH resolves the trusted install");
-assert.equal(deliveryExecutableIsTrusted("git push origin HEAD:refs/heads/feature/test", "git", { platform: "win32", cwd: "C:\\clean-repo", env: shadowedPathEnv, exists: fixtureExists }), false, "PATH-shadowed git fails closed");
-assert.equal(deliveryExecutableIsTrusted("gh pr merge 1 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", "gh", { platform: "win32", cwd: "C:\\clean-repo", env: trustedPathEnv, exists: fixtureExists }), true, "bare gh is allowed only when PATH resolves the trusted install");
-assert.equal(deliveryExecutableIsTrusted("gh pr merge 1 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", "gh", { platform: "win32", cwd: "C:\\clean-repo", env: shadowedPathEnv, exists: fixtureExists }), false, "PATH-shadowed gh fails closed");
+assert.equal(deliveryExecutableIsTrusted("git push origin HEAD:refs/heads/feature/test", "git", { platform: "win32", cwd: "C:\\clean-repo", env: trustedPathEnv, exists: fixtureExists }), false, "bare git is denied even when PATH names the trusted install because a shell function can intercept it");
+assert.equal(deliveryExecutableIsTrusted("git push origin HEAD:refs/heads/feature/test", "git", { platform: "win32", cwd: "C:\\clean-repo", env: shadowedPathEnv, exists: fixtureExists }), false, "bare git remains denied with a PATH shadow");
+assert.equal(deliveryExecutableIsTrusted("gh pr merge 1 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", "gh", { platform: "win32", cwd: "C:\\clean-repo", env: trustedPathEnv, exists: fixtureExists }), false, "bare gh is denied even when PATH names the trusted install because a shell function can intercept it");
+assert.equal(deliveryExecutableIsTrusted("gh pr merge 1 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", "gh", { platform: "win32", cwd: "C:\\clean-repo", env: shadowedPathEnv, exists: fixtureExists }), false, "bare gh remains denied with a PATH shadow");
 assert.equal(deliveryExecutableIsTrusted("git push origin HEAD:refs/heads/feature/test", "git", { platform: "win32", cwd: "C:\\repo", env: trustedPathEnv, exists: fixtureExists }), false, "current-directory git shadow fails closed before PATH");
 assert.equal(deliveryExecutableIsTrusted("gh pr merge 1 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", "gh", { platform: "win32", cwd: "C:\\repo", env: trustedPathEnv, exists: fixtureExists }), false, "current-directory gh shadow fails closed before PATH");
 assert.equal(deliveryExecutableIsTrusted('"C:\\attacker-bin\\gh.exe" pr merge 1 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789', "gh", { platform: "win32", cwd: "C:\\repo", env: trustedPathEnv, exists: fixtureExists }), false, "arbitrary absolute gh path fails closed");
+assert.equal(deliveryExecutableIsTrusted('"C:\\Program Files\\Git\\cmd\\git.exe" push origin HEAD:refs/heads/feature/test', "git", { platform: "win32", cwd: "C:\\repo", env: shadowedPathEnv, exists: fixtureExists }), true, "fixed absolute git path is allowed regardless of PATH shadows");
 assert.equal(deliveryExecutableIsTrusted('"C:\\Program Files\\GitHub CLI\\gh.exe" pr merge 1 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789', "gh", { platform: "win32", cwd: "C:\\repo", env: trustedPathEnv, exists: fixtureExists }), true, "fixed absolute gh path is allowed");
 assert.equal(commandStartsWithGitHubCli('"C:\\attacker-bin\\gh.exe" pr merge 1'), true, "arbitrary GitHub executable paths are recognized before trust is decided");
 assert.throws(() => fixedGitExecutable({ platform: "win32", exists: () => false }), /fixed trusted Git executable/, "missing trusted Git fails closed");
