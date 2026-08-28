@@ -89,6 +89,7 @@ eq(githubMutationEnvironmentOverrideNames(canonicalMutation, { TRACE_LABEL: "fix
 eq(githubMutationUnsafeAmbientEnvironmentNames(canonicalMutation, { BASH_ENV: "fixture", GH_HOST: "attacker.example", GH_TOKEN: "expected-auth" }), ["BASH_ENV", "GH_HOST"], "unsafe ambient shell and GitHub context variables are classified without rejecting normal inherited authentication");
 eq(githubMutationUnsafeAmbientEnvironmentNames(canonicalMutation, { "BASH_FUNC_gh%%": "() { attacker; }" }), ["BASH_FUNC_gh%%"], "exported Bash gh functions are classified");
 eq(githubMutationUnsafeAmbientEnvironmentNames("git push origin HEAD:refs/heads/feature/test", { "BASH_FUNC_git%%": "() { attacker; }" }), ["BASH_FUNC_git%%"], "exported Bash git functions are classified for feature pushes");
+eq(githubMutationUnsafeAmbientEnvironmentNames("git push origin HEAD:refs/heads/feature/test", { GITHUB_API_URL: "https://api.github.com", GITHUB_REPOSITORY: "o/r" }), [], "normal hosted-runner GitHub context does not block a Git feature push");
 eq(githubMutationEnvironmentOverrideNames("gh pr view 42 --repo o/r", { TRACE_LABEL: "fixture" }), [], "read-only GitHub commands do not acquire the mutation environment rule");
 ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r --base main"), "literal PR base retarget is classified");
 ok(ghPrBaseRetargets("gh -R o/r pr edit 42 --base=production"), "global flags and attached base values cannot hide retargeting");

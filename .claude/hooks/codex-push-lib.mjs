@@ -2443,15 +2443,18 @@ export function githubMutationEnvironmentOverrideNames(command, env) {
 }
 
 const GITHUB_MUTATION_UNSAFE_AMBIENT_ENV_NAMES = new Set([
-  "BASH_ENV", "ENV", "ZDOTDIR",
   "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "GH_HOST", "GITHUB_HOST", "GH_REPO", "GITHUB_API_URL",
 ]);
+const DELIVERY_SHELL_UNSAFE_AMBIENT_ENV_NAMES = new Set(["BASH_ENV", "ENV", "ZDOTDIR"]);
 
 export function githubMutationUnsafeAmbientEnvironmentNames(command, env) {
-  if ((!githubMutationCommandMentioned(command) && !isGitPush(command))
+  const githubMutation = githubMutationCommandMentioned(command);
+  const push = isGitPush(command);
+  if ((!githubMutation && !push)
     || !env || typeof env !== "object" || Array.isArray(env)) return [];
   return Object.keys(env).filter((name) => (
-    GITHUB_MUTATION_UNSAFE_AMBIENT_ENV_NAMES.has(String(name).toUpperCase())
+    DELIVERY_SHELL_UNSAFE_AMBIENT_ENV_NAMES.has(String(name).toUpperCase())
+      || (githubMutation && GITHUB_MUTATION_UNSAFE_AMBIENT_ENV_NAMES.has(String(name).toUpperCase()))
       || /^BASH_FUNC_(?:git|gh)(?:%%|\(\))$/i.test(String(name))
   ));
 }
