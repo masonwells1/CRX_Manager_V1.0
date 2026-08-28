@@ -172,12 +172,13 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   codexGuard: "94e6db0607faaaa83821706746d4cadd0f3b36ab",
   // Re-pinned 2026-08-28 after feature-push repository resolution began
   // rejecting custom helpers and insecure GitHub transports before identity
-  // comparison. The protected producer anchor itself is unchanged.
-  pushLib: "b21f7743e392be0828d4b9cf677ff61e11cd0606",
+  // comparison, and grouped absolute gh mutations joined the shared dynamic
+  // classifier. The protected producer anchor itself is unchanged.
+  pushLib: "8cb3e6ff60c9db4d976a07ce09aeac3a8079c37f",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "7714925fc26bee2b43544cdd2ff1536e5d3c380b",
-  pushLib: "b21f7743e392be0828d4b9cf677ff61e11cd0606",
+  pushLib: "8cb3e6ff60c9db4d976a07ce09aeac3a8079c37f",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

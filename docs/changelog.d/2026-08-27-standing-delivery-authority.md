@@ -116,6 +116,12 @@ documented secure HTTPS and SSH forms before comparing owner/repository identity
 cleartext and local transports, nonstandard ports, and non-Git SSH users fail closed in both the
 Claude and Codex guard paths; normal HTTPS, SSH, and GitHub's port-443 SSH endpoint remain automatic.
 
+That review then demonstrated a separate shell-grouping bypass: a quoted absolute GitHub CLI path
+inside POSIX grouping or process substitution was not recognized as a mutation. The shared dynamic
+command classifier now recognizes absolute `gh` executables as well as bare `gh` after grouping
+normalization. The exact demonstrated API merge/ref-write forms deny in armed autopilot, the Claude
+merge guard, and the Codex production guard before any GitHub lookup.
+
 Unquoted shell comment markers in GitHub CLI commands now deny before parsing, so flags written
 after `#` cannot be mistaken for the repository, expected head, or auto-merge intent that the shell
 actually omits. Quoted hash characters remain ordinary message/body data.

@@ -1210,6 +1210,17 @@ try {
     repoDir: risky.repo,
     runGh: () => { throw new Error("quoted-path API mutation must deny before GitHub lookup"); },
   }).blocked, true, "quoted Unix gh path cannot bypass the production API guard");
+  for (const command of [
+    '("/usr/bin/gh" api --method PUT repos/o/r/pulls/7/merge)',
+    'cat <("/usr/bin/gh" api --method DELETE repos/o/r/git/refs/heads/main)',
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "Bash",
+      toolInput: { command },
+      repoDir: risky.repo,
+      runGh: () => { throw new Error("grouped quoted gh mutation must deny before GitHub lookup"); },
+    }).blocked, true, `grouped quoted absolute gh mutation is denied: ${command}`);
+  }
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `${trustedGh} pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --auto --match-head-commit ${risky.sha} --body --disable-auto` },

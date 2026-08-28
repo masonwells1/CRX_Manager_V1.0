@@ -132,6 +132,8 @@ ok(githubCliCommandIsDynamic("$env:PATH='C:\\attacker'; gh pr merge 513 --squash
 ok(githubCliCommandIsDynamic("g''h pr merge 5 --auto"), "empty-quote composed gh executable is dynamic");
 ok(githubCliCommandIsDynamic("g'h' pr merge 5 --auto"), "quote-spliced gh executable is dynamic");
 ok(githubCliCommandIsDynamic("(gh pr merge 5 --auto)"), "parenthesized gh merge is dynamic");
+ok(githubCliCommandIsDynamic('("/usr/bin/gh" api --method PUT repos/o/r/pulls/7/merge)'), "grouped quoted absolute gh API mutation is dynamic");
+ok(githubCliCommandIsDynamic('cat <("/usr/bin/gh" api --method DELETE repos/o/r/git/refs/heads/main)'), "process-substituted quoted absolute gh API mutation is dynamic");
 ok(githubCliCommandIsDynamic("echo <(gh api graphql --input payload.json)"), "process-substituted GitHub API is dynamic");
 ok(githubCliCommandIsDynamic("g`h pr merge 5 --auto"), "PowerShell-composed gh executable is dynamic");
 ok(githubCliCommandIsDynamic("g${EMPTY}h pr merge 5 --auto"), "POSIX-composed gh executable is dynamic");
@@ -358,6 +360,14 @@ ok(r.decision?.permissionDecision === "deny", "parenthesized gh merge denies bef
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "(gh pr update-branch 42 --repo o/r)" } });
 ok(r.decision?.permissionDecision === "deny", "parenthesized update-branch denies before parsing");
+
+for (const command of [
+  '("/usr/bin/gh" api --method PUT repos/o/r/pulls/7/merge)',
+  'cat <("/usr/bin/gh" api --method DELETE repos/o/r/git/refs/heads/main)',
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `grouped quoted absolute gh mutation denies before parsing: ${command}`);
+}
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr update-branch 42 --repo masonwells1/CRX_Manager_V1.0 --rebase" } });
 ok(r.decision?.permissionDecision === "deny", "unattended update-branch rebase is denied as a history rewrite");

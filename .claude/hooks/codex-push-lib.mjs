@@ -2337,6 +2337,7 @@ export function sessionProofDirs(root, hookCwd, listWorktrees) {
 // use `githubCliInvocationWords` above; this keeps legacy fail-closed treatment
 // of text such as `echo gh pr merge ...`, including both quote styles.
 const GH_BIN_RE = /(?:^|[\s;&|])(?:&\s*)?(?:"[^"]*[\\/]gh(?:\.exe)?"|'[^']*[\\/]gh(?:\.exe)?'|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i;
+const GH_MUTATION_ACTION_RE = /(?:^|[\s;&|])(?:&\s*)?(?:"[^"]*[\\/]gh(?:\.exe)?"|'[^']*[\\/]gh(?:\.exe)?'|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+(?:pr\s+(?:merge|update-branch|edit)|api\b)/i;
 
 function githubCliParserWords(command) {
   const direct = githubCliInvocationWords(command);
@@ -2369,11 +2370,11 @@ export function githubCliCommandIsDynamic(command) {
   const dequoted = text.replace(/["']/g, "");
   const groupingNormalized = text.replace(/[(){}<>]/g, " ");
   const groupedGitHubAction = groupingNormalized !== text
-    && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch|edit)|api\b)/i.test(groupingNormalized)
-    && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch|edit)|api\b)/i.test(text);
+    && GH_MUTATION_ACTION_RE.test(groupingNormalized)
+    && !GH_MUTATION_ACTION_RE.test(text);
   const quoteSplicedGitHubAction = dequoted !== text
-    && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch|edit)|api\b)/i.test(dequoted)
-    && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch|edit)|api\b)/i.test(text);
+    && GH_MUTATION_ACTION_RE.test(dequoted)
+    && !GH_MUTATION_ACTION_RE.test(text);
   const composedExecutable = /(?:^|[\s;&|])g(?:(?:''|"")|[`^\\]|\$\{[^}\r\n]*\}|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!)+h(?:\.exe)?(?=\s|$)/i.test(text);
   const dynamicExecutable = /(?:^|[\s;&|])&?(?:\$\{?[A-Za-z_][A-Za-z0-9_:]*\}?|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!|@[A-Za-z_][A-Za-z0-9_]*)\s+(?:pr\s+merge|api\b)/i.test(text);
   if (groupedGitHubAction || quoteSplicedGitHubAction || composedExecutable || dynamicExecutable) return true;
@@ -2438,7 +2439,7 @@ export function githubMutationCommandMentioned(command) {
       || Boolean(ghUpdateBranchRequest(segment))
       || ghPrBaseRetargets(segment)
       || ghApiMutates(segment)
-  )) || /(?:^|[\s;&|])gh(?:\.exe)?\s+pr\s+(?:merge|update-branch|edit)\b/i.test(normalized);
+  )) || GH_MUTATION_ACTION_RE.test(normalized);
 }
 
 export function githubMutationEnvironmentOverrideNames(command, env) {
