@@ -518,6 +518,26 @@ export function featurePushDestinations(cmd, currentBranch = "") {
 
 export const FEATURE_PUSH_GITHUB_TIMEOUT_MS = 10_000;
 
+// Exhaustively enumerate every open PR for one head branch. `gh pr list`
+// silently caps its result set unless a limit is supplied, which could hide an
+// older protected-base PR with auto-merge armed. The REST Link headers drive
+// `--paginate`; `--slurp` returns every page for local normalization because
+// some supported gh versions reject combining `--slurp` with `--jq`.
+export function exhaustiveHeadPullRequestsLookupArgs(repository, headBranch) {
+  const repoPath = String(repository || "").trim().replace(/^https?:\/\/github\.com\//i, "").replace(/^github\.com\//i, "").replace(/\.git$/i, "");
+  const match = repoPath.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/);
+  if (!match) throw new Error("GitHub repository must be one literal owner/name path");
+  const branch = String(headBranch || "").trim();
+  if (!branch || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch)) throw new Error("GitHub head branch must be one literal branch name");
+  return [
+    "api", "--method", "GET", "--paginate", "--slurp",
+    `repos/${match[1]}/${match[2]}/pulls`,
+    "-f", "state=open",
+    "-f", `head=${match[1]}:${branch}`,
+    "-f", "per_page=100",
+  ];
+}
+
 // Parse the exact `gh pr list --json number,autoMergeRequest` response used by
 // both push guards. An open main-bound PR with auto-merge already armed is a
 // time-of-check/time-of-use bypass: a later feature push can become the commit
@@ -566,17 +586,30 @@ export function createEvidenceBudget(totalMs, clock = Date.now) {
 }
 
 export function activeProtectedAutoMergePrNumbers(value) {
-  const records = typeof value === "string" ? JSON.parse(value) : value;
-  if (!Array.isArray(records)) throw new Error("pull-request lookup did not return an array");
+  const response = typeof value === "string" ? JSON.parse(value) : value;
+  if (!Array.isArray(response)) throw new Error("pull-request lookup did not return an array");
+  const records = response.length > 0 && response.every(Array.isArray) ? response.flat() : response;
   const protectedRecords = [];
   for (const record of records) {
-    if (!record || typeof record !== "object"
-        || !Object.prototype.hasOwnProperty.call(record, "baseRefName")) {
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      throw new Error("pull-request lookup returned an invalid record");
+    }
+    const hasGraphqlShape = Object.prototype.hasOwnProperty.call(record, "baseRefName")
+      && Object.prototype.hasOwnProperty.call(record, "autoMergeRequest");
+    const hasRestShape = Object.prototype.hasOwnProperty.call(record, "auto_merge")
+      && record.base && typeof record.base === "object"
+      && Object.prototype.hasOwnProperty.call(record.base, "ref");
+    if (!hasGraphqlShape && !hasRestShape) {
       throw new Error("pull-request lookup omitted baseRefName");
     }
-    const base = String(record.baseRefName || "").trim().toLowerCase();
+    const normalizedRecord = hasGraphqlShape ? record : {
+      number: record.number,
+      autoMergeRequest: record.auto_merge,
+      baseRefName: record.base.ref,
+    };
+    const base = String(normalizedRecord.baseRefName || "").trim().toLowerCase();
     if (!base) throw new Error("pull-request lookup returned an invalid baseRefName");
-    if (branchNameIsProtected(base)) protectedRecords.push(record);
+    if (branchNameIsProtected(base)) protectedRecords.push(normalizedRecord);
   }
   return activeAutoMergePrNumbers(protectedRecords);
 }

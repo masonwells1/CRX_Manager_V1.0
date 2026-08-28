@@ -38,6 +38,7 @@ import {
   reviewStateDirectoryMentioned,
   extractPatchDestinations,
   featurePushDestinations,
+  exhaustiveHeadPullRequestsLookupArgs,
   FEATURE_PUSH_GITHUB_TIMEOUT_MS,
   proofValid,
   repoIsGuardedApp,
@@ -86,6 +87,23 @@ assert.ok(
 );
 
 assert.deepEqual(activeAutoMergePrNumbers("[]"), [], "no open PR means no armed auto-merge");
+assert.deepEqual(
+  exhaustiveHeadPullRequestsLookupArgs("github.com/masonwells1/CRX_Manager_V1.0", "feature/test"),
+  [
+    "api", "--method", "GET", "--paginate", "--slurp",
+    "repos/masonwells1/CRX_Manager_V1.0/pulls",
+    "-f", "state=open", "-f", "head=masonwells1:feature/test", "-f", "per_page=100",
+  ],
+  "feature-branch PR lookup paginates every open PR before protected auto-merge filtering",
+);
+assert.deepEqual(
+  activeProtectedAutoMergePrNumbers(JSON.stringify([
+    [{ number: 513, auto_merge: null, base: { ref: "main" } }],
+    [{ number: 514, auto_merge: { merge_method: "squash" }, base: { ref: "production" } }],
+  ])),
+  [514],
+  "an armed protected-base PR on a later REST page cannot escape the push gate",
+);
 assert.deepEqual(
   activeAutoMergePrNumbers(JSON.stringify([
     { number: 513, autoMergeRequest: null },

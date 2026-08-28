@@ -539,8 +539,8 @@ try {
   assert.match(preArmedAutoMergePush.reason, /gh pr merge 513 --disable-auto/, "denial gives an agent-runnable recovery command");
   assert.deepEqual(
     featurePushLookupArgs,
-    ["pr", "list", "--repo", "github.com/masonwells1/crx_manager_v1.0", "--state", "open", "--head", "feature/test", "--json", "number,autoMergeRequest,baseRefName"],
-    "feature push lookup binds the open PR query to github.com and the exact destination branch, returning every base for protected-alias filtering",
+    ["api", "--method", "GET", "--paginate", "--slurp", "repos/masonwells1/crx_manager_v1.0/pulls", "-f", "state=open", "-f", "head=masonwells1:feature/test", "-f", "per_page=100"],
+    "feature push lookup exhaustively paginates every open PR for the exact destination branch before protected-alias filtering",
   );
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
@@ -882,7 +882,7 @@ try {
   });
   assert.equal(stackedMergeBlocked.blocked, true, "a stacked PR merge cannot mutate the head of an armed main PR");
   assert.match(stackedMergeBlocked.reason, /disable-auto/, "stacked merge denial gives the automatic recovery action");
-  assert.match(stackedLookupArgs, /--head develop/, "stacked merge checks the destination branch before GitHub mutates it");
+  assert.match(stackedLookupArgs, /head=masonwells1:develop/, "stacked merge checks the destination branch before GitHub mutates it");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: stackedMerge },
@@ -935,7 +935,7 @@ try {
     },
   });
   assert.equal(armedUpdate.blocked, true, "update-branch cannot mutate the head of an armed main PR");
-  assert.match(updateLookupArgs, /--head feature\/test/, "update-branch checks the PR head destination before mutation");
+  assert.match(updateLookupArgs, /head=masonwells1:feature\/test/, "update-branch checks the PR head destination before mutation");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: updateBranch },
@@ -1206,6 +1206,17 @@ try {
     toolInput: { command: "Invoke-RestMethod -Method Put https://api.github.com/repos/masonwells1/CRX_Manager_V1.0/pulls/123/update-branch" },
     repoDir: risky.repo,
   }).blocked, true, "direct REST branch writers are denied");
+  for (const command of [
+    "curl --config github-write.txt",
+    "curl -X POST https://api.github.com/%72epos/masonwells1/CRX_Manager_V1.0/pulls/123/merge",
+    "Invoke-WebRequest -InFile hidden-request.txt",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+    }).blocked, true, `raw HTTP clients deny even when the GitHub destination is hidden: ${command}`);
+  }
   for (const command of [
     "C:\\Windows\\System32\\curl.exe -X POST https://api.github.com/graphql -d mutation",
     "/usr/bin/curl -X POST https://api.github.com/graphql -d mutation",

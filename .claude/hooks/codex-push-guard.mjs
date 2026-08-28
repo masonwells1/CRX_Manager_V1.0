@@ -20,6 +20,7 @@ import {
   describeRiskyContent,
   eachPush,
   featurePushDestinations,
+  exhaustiveHeadPullRequestsLookupArgs,
   FEATURE_PUSH_GITHUB_TIMEOUT_MS,
   GUARDED_REPO_PATH,
   gitPushCwd,
@@ -825,13 +826,9 @@ for (const pushCmd of pushCommands) {
     for (const featureBranch of featureBranches) {
       let activeAutoMergePrs;
       try {
-        const ghLookup = trustedGitHubCliInvocation([
-          "pr", "list",
-          "--repo", `github.com/${pushRepository}`,
-          "--state", "open",
-          "--head", featureBranch,
-          "--json", "number,autoMergeRequest,baseRefName",
-        ]);
+        const ghLookup = trustedGitHubCliInvocation(
+          exhaustiveHeadPullRequestsLookupArgs(pushRepository, featureBranch),
+        );
         const response = execFileSync(ghLookup.executable, ghLookup.args, {
           cwd: pushRepoDir,
           env: ghLookup.env,

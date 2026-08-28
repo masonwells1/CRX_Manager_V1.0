@@ -17,6 +17,7 @@ import {
   contentIsRisky,
   createEvidenceBudget,
   extractPatchDestinations,
+  exhaustiveHeadPullRequestsLookupArgs,
   featurePushDestinations,
   fixedGitExecutable,
   GUARDED_REPO_PATH,
@@ -49,6 +50,7 @@ import {
   pushUsesBulkMode,
   pushUsesConfigEnv,
   pushUsesInlineConfig,
+  rawHttpClientCommand,
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   riskyFiles,
@@ -550,10 +552,10 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     const destinationBranch = normalize(pullRequest.baseRefName);
     let armed;
     try {
-      armed = activeProtectedAutoMergePrNumbers(runGh([
-        "pr", "list", "--repo", request.repo, "--state", "open", "--head", destinationBranch,
-        "--json", "number,autoMergeRequest,baseRefName",
-      ], repoDir));
+      armed = activeProtectedAutoMergePrNumbers(runGh(
+        exhaustiveHeadPullRequestsLookupArgs(request.repo, destinationBranch),
+        repoDir,
+      ));
     } catch (error) {
       return denied(`CODEX PRODUCTION GATE: could not prove auto-merge is disabled before mutating remote branch ${destinationBranch}, so the merge is denied (fail closed). ${error?.message || error}`);
     }
@@ -645,10 +647,10 @@ function gatePullRequestUpdateBranch({ request, repoDir, runGh }) {
   }
   let armed;
   try {
-    armed = activeProtectedAutoMergePrNumbers(runGh([
-      "pr", "list", "--repo", request.repo, "--state", "open", "--head", destinationBranch,
-      "--json", "number,autoMergeRequest,baseRefName",
-    ], repoDir));
+    armed = activeProtectedAutoMergePrNumbers(runGh(
+      exhaustiveHeadPullRequestsLookupArgs(request.repo, destinationBranch),
+      repoDir,
+    ));
   } catch (error) {
     return denied(`CODEX PRODUCTION GATE: could not prove auto-merge is disabled before updating remote branch ${destinationBranch}, so the action is denied (fail closed). ${error?.message || error}`);
   }
@@ -817,6 +819,9 @@ export function evaluateProductionAction({
   const commandSegments = command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
   const executionEnv = { ...process.env, ...suppliedEnv };
   for (const segment of commandSegments) {
+    if (rawHttpClientCommand(segment)) {
+      return denied("CODEX PRODUCTION GATE: raw HTTP clients are denied during unattended work because config files and encoded URLs can hide protected GitHub writes. Use the canonical guarded GitHub CLI workflow or a repository-specific application test client.");
+    }
     if (ghCliCommandIsUnknownOrAlias(segment)) {
       return denied("CODEX PRODUCTION GATE: GitHub CLI aliases and unknown top-level commands are denied because they can hide API writes from the exact-head parser. Use a known built-in `gh` command spelled literally.");
     }
@@ -963,13 +968,10 @@ export function evaluateProductionAction({
         }
         let activeAutoMergePrs;
         try {
-          activeAutoMergePrs = activeProtectedAutoMergePrNumbers(runGh([
-            "pr", "list",
-            "--repo", `github.com/${pushRepository}`,
-            "--state", "open",
-            "--head", featureBranch,
-            "--json", "number,autoMergeRequest,baseRefName",
-          ], pushRepoDir));
+          activeAutoMergePrs = activeProtectedAutoMergePrNumbers(runGh(
+            exhaustiveHeadPullRequestsLookupArgs(pushRepository, featureBranch),
+            pushRepoDir,
+          ));
         } catch (error) {
           return denied(
             `CODEX PRODUCTION GATE: could not prove auto-merge is disabled for the open main-bound PR on branch ${featureBranch}, ` +
