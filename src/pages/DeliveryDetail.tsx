@@ -32,6 +32,7 @@ import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
 import { formatCents as fmtCents } from '../lib/money';
 import { Sentry } from '../lib/sentry';
+import { activeInvoiceCoversDelivery } from '../lib/deliveryInvoiceCoverage';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import { addDeliveryEditItem, removeDeliveryEditItem, type AvailableDeliveryEditItem, type DeliveryEditItem } from '../lib/deliveryEditItems';
 import QuickTaskModal from '../components/team/QuickTaskModal';
@@ -177,7 +178,8 @@ export default function DeliveryDetail() {
   // Related invoices (cross-link via shared order)
   const [relatedInvoices, setRelatedInvoices] = useState<Array<{
     id: string; invoice_number: string; invoice_date: string; status: string;
-    total_amount_cents: number; delivery_id: string | null;
+    total_amount_cents: number; order_id: string; delivery_id: string | null;
+    invoice_type: string; deleted_at: string | null;
   }>>([]);
 
   // Sibling deliveries + quote context for transaction thread
@@ -193,9 +195,8 @@ export default function DeliveryDetail() {
   const isAssignedDriver = isDriver && profile?.id === delivery?.assigned_driver;
   const canConfirm = (isAdminOrRep || isAssignedDriver) && delivery?.status === 'scheduled';
   // Mirrors the server's per-delivery coverage guard (U2 #34).
-  const hasActiveRelatedInvoice = relatedInvoices.some(
-    (invoice) => !['voided', 'cancelled'].includes(invoice.status)
-      && (invoice.delivery_id === delivery?.id || invoice.delivery_id == null)
+  const hasActiveRelatedInvoice = delivery != null && relatedInvoices.some((invoice) =>
+    activeInvoiceCoversDelivery(invoice, delivery.id, delivery.order_id)
   );
   // RPC is admin-only (finding #78's backfill twin); sales_reps bill jobs, not stray deliveries.
   const canCreateInvoice = isAdmin && delivery?.status === 'completed' && !hasActiveRelatedInvoice;
@@ -263,8 +264,9 @@ export default function DeliveryDetail() {
               .maybeSingle(),
             supabase
               .from('invoices')
-              .select('id, invoice_number, invoice_date, status, total_amount_cents, delivery_id')
+              .select('id, invoice_number, invoice_date, status, total_amount_cents, order_id, delivery_id, invoice_type, deleted_at')
               .eq('order_id', del.order_id)
+              .is('deleted_at', null)
               .order('invoice_date', { ascending: false }),
           ]);
           if (oiRes.error) {
@@ -288,7 +290,10 @@ export default function DeliveryDetail() {
               invoice_date: inv.invoice_date as string,
               status: inv.status as string,
               total_amount_cents: Number(inv.total_amount_cents || 0),
+              order_id: inv.order_id as string,
               delivery_id: inv.delivery_id as string | null,
+              invoice_type: inv.invoice_type as string,
+              deleted_at: inv.deleted_at as string | null,
             }))
           );
 

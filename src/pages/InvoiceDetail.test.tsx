@@ -93,6 +93,8 @@ vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../lib/invoicePdf', () => ({
   downloadInvoicePdf: vi.fn(),
   generateInvoicePdf: vi.fn(),
+  deriveFieldAppAppliedAcres: vi.fn(),
+  groupReturnCreditDisplayItems: vi.fn((_invoiceType: string, items: unknown[]) => items),
 }));
 vi.mock('../lib/emailService', () => ({
   sendEmail: vi.fn(),
@@ -470,6 +472,101 @@ describe('InvoiceDetail', () => {
       const matches = screen.getAllByText('INV-0042');
       expect(matches.length).toBeGreaterThan(0);
     });
+  });
+
+  it('renders the stored penny-exact COGS total for a posted return credit', async () => {
+    const invoice = {
+      id: 'credit-return-1', invoice_number: 'CM-RETURN-1', status: 'posted',
+      invoice_type: 'credit_memo', customer_id: 'cust-1', total_amount_cents: -1000,
+      total_cost_cents: -251, paid_amount_cents: 0, prepay_applied_cents: 0,
+      credit_applied_cents: 0, balance_cents: -1000, invoice_date: '2026-03-15',
+      due_date: null, created_at: '2026-03-15T00:00:00Z',
+    };
+    const creditLines = [{
+      id: 'credit-line-1', invoice_id: invoice.id, product_id: 'product-1',
+      description: 'Return credit - Product', quantity: 1.5, unit_price_cents: -667,
+      extended_cents: -1000, cost_cents: -168, unit_size: 'Gal',
+      return_credit_cogs_cents: -251, return_credit_source_item_id: 'source-line-1',
+      is_application_fee: false,
+    }];
+    let invoiceCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : [], error: null });
+      }
+      if (table === 'invoice_items') return buildChain({ data: creditLines, error: null });
+      return buildChain({ data: [], error: null });
+    });
+
+    renderInvoiceDetail(invoice.id);
+    await waitFor(() => expect(screen.getAllByText('CM-RETURN-1').length).toBeGreaterThan(0));
+    const totalCostLabel = screen.getByText('Total Cost');
+    expect(totalCostLabel.parentElement).toHaveTextContent('-$2.51');
+    expect(totalCostLabel.parentElement).not.toHaveTextContent('-$2.52');
+  });
+
+  it('keeps a manual posted credit on its ordinary line-derived cost display', async () => {
+    const invoice = {
+      id: 'credit-manual-1', invoice_number: 'CM-MANUAL-1', status: 'posted',
+      invoice_type: 'credit_memo', customer_id: 'cust-1', total_amount_cents: -1000,
+      total_cost_cents: -999, paid_amount_cents: 0, prepay_applied_cents: 0,
+      credit_applied_cents: 0, balance_cents: -1000, invoice_date: '2026-03-15',
+      due_date: null, created_at: '2026-03-15T00:00:00Z',
+    };
+    const creditLines = [{
+      id: 'manual-credit-line-1', invoice_id: invoice.id, product_id: 'product-1',
+      description: 'Manual price adjustment', quantity: 1.5, unit_price_cents: -667,
+      extended_cents: -1000, cost_cents: -168, unit_size: 'Gal',
+      is_application_fee: false,
+    }];
+    let invoiceCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : [], error: null });
+      }
+      if (table === 'invoice_items') return buildChain({ data: creditLines, error: null });
+      return buildChain({ data: [], error: null });
+    });
+
+    renderInvoiceDetail(invoice.id);
+    await waitFor(() => expect(screen.getAllByText('CM-MANUAL-1').length).toBeGreaterThan(0));
+    const totalCostLabel = screen.getByText('Total Cost');
+    expect(totalCostLabel.parentElement).toHaveTextContent('-$2.52');
+    expect(totalCostLabel.parentElement).not.toHaveTextContent('-$9.99');
+  });
+
+  it('keeps the established zero fallback for a split invoice with no stored cost', async () => {
+    const invoice = {
+      id: 'split-null-cost-1', invoice_number: 'INV-SPLIT-NULL', status: 'posted',
+      invoice_type: 'field_application', customer_id: 'cust-1', total_amount_cents: 1000,
+      total_cost_cents: null, paid_amount_cents: 0, prepay_applied_cents: 0,
+      credit_applied_cents: 0, balance_cents: 1000, invoice_date: '2026-03-15',
+      due_date: null, created_at: '2026-03-15T00:00:00Z',
+      field_app_billing_set_id: 'billing-set-1',
+    };
+    const splitLines = [{
+      id: 'split-line-1', invoice_id: invoice.id, product_id: 'product-1',
+      description: 'Split product', quantity: 1.5, unit_price_cents: 667,
+      extended_cents: 1000, cost_cents: 168, unit_size: 'Gal',
+      is_application_fee: false,
+    }];
+    let invoiceCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : [], error: null });
+      }
+      if (table === 'invoice_items') return buildChain({ data: splitLines, error: null });
+      return buildChain({ data: [], error: null });
+    });
+
+    renderInvoiceDetail(invoice.id);
+    await waitFor(() => expect(screen.getAllByText('INV-SPLIT-NULL').length).toBeGreaterThan(0));
+    const totalCostLabel = screen.getByText('Total Cost');
+    expect(totalCostLabel.parentElement).toHaveTextContent('$0.00');
+    expect(totalCostLabel.parentElement).not.toHaveTextContent('$2.52');
   });
 });
 

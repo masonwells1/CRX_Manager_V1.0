@@ -8,6 +8,9 @@ read-only capture records **978 ledger rows**. The matching live-introspection r
 **`20260826220000`**. It also records `quote_versions.restore_trusted_at`. The earlier 976- and
 977-row readings are superseded. This pass does not re-certify every issue narrative below or
 claim a fresh post-apply read of function bodies, grants, or operational counts.
+The PR #361 function/schema surface was separately refreshed from a live schema dump on 2026-08-27;
+that evidence supports the six pending return-credit candidates without superseding the newer ledger
+capture above.
 All four migrations
 of the draw-down chain are applied live — the cutover barrier (2026-08-24 midday, version
 `20260824185408`) and, later that day with Mason's explicit in-chat approval, the tier split
@@ -16,6 +19,91 @@ intent binding (`20260825034622`). See the rollout block at the top of
 `docs/reference/migration-history.md`. This pass re-read the ledger and updated the draw-down
 entries only; it does not re-certify unrelated issue narratives below.
 
+**OPEN — return credits do not reverse COGS until the PR 361 rebuild is applied.** Live
+`_issue_return_credit_impl` still creates only the credit-memo header and writes no
+`invoice_items.cost_cents`; live PNL still recognizes only `posted`, and monthly reporting still
+omits `paid`. Production currently has zero credited returns, so the defect is real but latent rather
+than an existing wrong report. A 2026-08-27 read-only check found one open restock row: it is exactly
+the pinned legacy `15 ea` RMA with the authoritative `2.5 Gal` conversion, leaving zero unhandled
+warehouse-unit mismatches. Pre-apply candidates `20260827041000`, `20260827041100`,
+`20260827041200`, `20260827041300`, `20260827041400`, and `20260827041500` contain the durable
+repair and fail closed if the zero-credit/zero-legacy-restock assumptions or either delivery-invoice
+implementation contract stop being true. Do not call this resolved until all six migrations are
+reviewed, applied, and verified live. Apply the six files in order
+through the repository's guarded migration runner or the Supabase migration operation, never through
+the ad-hoc SQL channel.
+The first migration blocks new return-credit issuance until the second migration's postflight succeeds,
+closing the otherwise unsafe commit gap between the two files. They must be applied back-to-back. If the
+second fails, leave the barrier active, repair the drift it reports, and rerun it; an emergency removal
+needs its own reviewed forward migration and would knowingly reopen the zero-COGS defect.
+Both files bound their table-lock wait at five seconds so a stuck reader causes a clean apply failure
+instead of leaving Returns queued indefinitely. The new validated `invoice_items` constraints hold
+that table lock for the validating scan itself; schedule the back-to-back apply in the maintenance
+window even though waiting to acquire the lock is bounded. The second blocks a draft source invoice only when
+recognizing it would expose an uncosted, restocked return quantity; a fully costed prior return does not
+block a later delivery invoice. Posting uses the same ordered advisory-lock protocol as credit issuance
+and fails fast on contention. The migration also excludes new credit-memo lines from delivery billing
+allocation so a return cannot reopen customer billing headroom.
+The third migration also excludes the order-linked credit memo from both delivery invoice coverage
+checks, so it cannot suppress a later delivery's automatic invoice or block manual recovery of an
+already-completed unbilled delivery.
+The fourth applies that same rule to the main dashboard action queue and to void/cancel invoice-review
+warnings, and makes the automatic completion path ignore soft-deleted invoices. It preserves the
+ordinary hard-delete path for unrelated invoices; the disposable proof executes that branch with a
+real draft header and cascaded line item.
+The fifth aligns both order-level invoice creators with the same active, non-deleted, non-credit
+predicate, so the server cannot refuse the billing-recovery action the UI correctly exposes.
+Immediately before the maintenance-window apply, rerun the open-restock inventory-unit predicate and
+all 29 read-only PR #361 invariant predicates. If any new unhandled mismatch exists, stop before row
+894; do not intentionally raise the cutover barrier until the row is repaired and the predicates are
+clean in that same window.
+Because every recognized-status transition must coordinate with a return credit that could start at
+the same instant, two people posting invoices for the same order line concurrently can make one post
+fail cleanly with a wait-and-retry message even when no return credit exists yet. No data is at risk;
+retry the refused post after the other finishes.
+
+The source-line foreign key is intentionally retained after a credit is voided or unapplied. It is an
+accounting audit link, so a source invoice that has ever funded a return credit cannot be hard-deleted
+or re-saved: the general invoice writer rebuilds its line items, and the retained credit history refuses
+that delete-and-reinsert cycle. Keep the source invoice unchanged. If an edit is genuinely required,
+first void the return credit and then permanently delete that voided credit memo so its line-item link is
+removed; only then re-save the source invoice. Clearing the link while keeping the credit memo would
+make later reapply/reissue allocation ambiguous. The operator error sanitizer explains both the delete
+and re-save refusal. This restriction also applies to a zero-COGS damaged/non-restocked return credit:
+the source link is retained as customer-credit audit history even though no inventory value was reversed.
+
+**CLOSED IN THE SIX-FILE CANDIDATE; LIVE REMAINS OLD UNTIL APPLY — general Invoice Detail can strip return-cost lineage.** The live
+`_save_invoice_scoped_impl` rebuilds `invoice_items` without `order_item_id` and re-derives cost from
+the product's current cost. Editing a delivery/order-generated draft through the general Invoice
+Detail page can therefore erase the historical source line that the PR #361 allocator needs; a later
+return would refund revenue but conservatively reverse zero COGS, understating profit with no runtime
+error. Migration `20260827041500_preserve_generated_invoice_lineage_and_finish_cutover.sql` now
+implements the approved durable fix: the client returns existing line ids, the server verifies every
+order-linked line and forbids product/unit/order-line substitution or deletion, then restores the
+server-held line id, `order_item_id`, historical `cost_cents`, `created_at`, tote, vendor, and warehouse
+after the legacy rewrite. The rollback-only chain proves edit -> post -> overdue -> return -> credit
+retains the exact 600-cent unit cost. Merging the candidate does not change live behavior; the fix
+becomes active only when all six reviewed migrations are applied in one guarded maintenance window.
+
+After the approved live apply, regenerate the live schema registry and Supabase-derived type artifacts,
+and confirm both nullable ledger columns (`invoice_items.return_credit_cogs_cents bigint` and
+`invoice_items.return_credit_source_item_id uuid`) are present before declaring the rollout closed.
+
+**ACCEPTED POLICY — late return credits stay in the current crop season.** Mason chose this on
+2026-08-26 to keep prior customer year-end summaries stable and the rule simple. Consequently, a
+current-season summary can show negative product usage when the original purchase occurred in a
+prior season. Do not "correct" that by moving the credit backward; changing the policy requires a
+new owner decision.
+
+**EXPECTED REPRINT CHANGE — paid/overdue invoice repair.** The PR 361 report repair also makes old
+year-end reports include all recognized `posted`, `overdue`, and `paid` invoices. Regenerating a
+prior-season report can therefore differ from an older printed copy that incorrectly omitted paid
+or overdue invoices. That correction is separate from credit attribution: a 2026 return credit stays
+in 2026 and does not move the credit into the original sale season. The same migration also changes
+invoice-basis P&L and monthly COGS to round each invoice line to exact whole cents before summing; this
+is required so a return can never reverse more COGS than those reports recognized, but it means a
+reprinted P&L or monthly summary containing fractional-quantity lines can differ by a cent from an
+older copy.
 **RETIRED 2026-08-27 — Patrol is no longer an active CRX workflow.** Its command, generated
 skill adapter, runtime, monitor, classifier, renderer, trusted-exec layer, and dedicated tests
 were removed as part of the first harness-simplification tranche. The Patrol discussion below is
@@ -123,6 +211,17 @@ This file consolidates (does not replace) the source documents it points to. If 
 ---
 
 ## OPEN 2026-08-26 — the quote-version trust chain is whole-body hash-pinned in THREE files; any re-emission must update every pin site in the same change
+
+**Apply-order dependency with the PR #361 successor:** the merged-but-unapplied
+`20260826220000_quote_version_restore_trust_boundary.sql` must apply before the six pending
+`20260827041000`–`20260827041500` return-credit migrations. Reversing that order would move the
+high-water past the quote security migration and wedge it again. If the quote migration cannot apply
+first, it must be renumbered above the new high-water before either chain is released.
+
+**Non-restocked return policy:** damaged or otherwise non-restocked returns still refund the customer,
+but intentionally reverse zero COGS because no saleable inventory value returned to Crop RX. This is
+the conservative direction: revenue falls while profit is not inflated by an inventory-value reversal.
+The disposable PR #361 proof executes this branch and pins the credit to `-1000` revenue and `0` cost.
 
 PR #401 rounds 8-10 pinned the ENTIRE normalized bodies (length + md5, normalization
 `md5(btrim(regexp_replace(prosrc, '\s+', ' ', 'g')))`) of all five chain routines —

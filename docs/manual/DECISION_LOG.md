@@ -285,6 +285,21 @@ migration to silence it.
 
 ---
 
+## 2026-08-26 — Return credits belong to the current crop season
+
+**Source:** Mason's in-chat decision while rebuilding PR #361.
+**Decision:** A return credit uses the current Crop RX business season when it is issued; it does not
+restate the customer year-end summary for the original sale season. The business date is explicitly
+derived in `America/Chicago`, rather than inheriting the database session's UTC date at the season
+boundary.
+**Why:** Keeping the credit in the current season is simpler to explain and preserves previously
+generated customer summaries.
+**What this forbids/implies:** A late return can create negative product usage in the current
+season even when the original purchase was in a prior season. That is an accepted reporting
+tradeoff; company P&L and monthly reports likewise recognize the credit in its current period.
+
+---
+
 ## 2026-08-26 — Ignored tool output is outside the local content-scan boundary until Git-visible
 
 **Source:** Mason's requested narrow harness-efficiency pass, measured against the remaining
@@ -424,6 +439,18 @@ stop-and-report. Checking `config.worktree` alone is insufficient — `core.hook
 system, global and local scope, and precedence decides which one wins. (Verified 2026-08-25: a
 single worktree carried two configured values, at `local` and `worktree` scope, so a
 worktree-only inspection sees one of them.)
+
+---
+
+## 2026-08-25 — The verified PR 361 E2E credit-demo rows were disposable test data
+
+**Decision:** Mason directed permanent deletion of two verified E2E invoices plus their related credit
+application, identified in the owner-approved maintenance instruction; their customer must remain.
+Exact production record identifiers are intentionally withheld from this public repository.
+**Why:** all three rows were explicitly marked `[E2E]`, distorted recognized-invoice reporting,
+and were backed up and dependency-checked before the exact-row purge.
+**What this forbids/implies:** this is not general deletion authority; only these three IDs were
+approved. The 2026-08-25 purge left both invoice/application counts at zero and the customer at one.
 
 ---
 

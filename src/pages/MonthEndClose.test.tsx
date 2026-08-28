@@ -96,7 +96,7 @@ vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
-  sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
+  sanitizeError: vi.fn((e: unknown) => `Safe: ${(e as Error)?.message || 'Error'}`),
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -120,7 +120,11 @@ vi.mock('../lib/yearEndSummaryPdf', () => ({
 }));
 
 vi.mock('../components/statements/StatementPrintDialog', () => ({ default: () => null }));
-vi.mock('../components/reports/YearEndSummaryDialog', () => ({ default: () => null }));
+vi.mock('../components/reports/YearEndSummaryDialog', () => ({
+  default: ({ open, onGenerate }: { open: boolean; onGenerate: (season: number, options: Record<string, boolean>) => void }) => (
+    open ? <button onClick={() => onGenerate(2026, {})}>Run year-end test</button> : null
+  ),
+}));
 
 import MonthEndClose from './MonthEndClose';
 
@@ -201,6 +205,32 @@ describe('MonthEndClose', () => {
     renderMonthEnd();
     await waitFor(() => {
       expect(screen.getByText(/statement/i)).toBeInTheDocument();
+    });
+  });
+
+  it('sanitizes a batch year-end RPC guard error before showing it', async () => {
+    let invoicePage = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        const data = invoicePage++ === 0 ? [{ id: 'invoice-1', customer_id: 'customer-1' }] : [];
+        return buildChain({ data, error: null });
+      }
+      if (table === 'orders') return buildChain({ data: [], count: 0, error: null });
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_batch_year_end_summaries') {
+        return Promise.resolve({ data: null, error: { message: 'CUSTOMER_SCOPE_DENIED' } });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    renderMonthEnd();
+    fireEvent.click(await screen.findByRole('button', { name: 'Year-End Summaries' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Run year-end test' }));
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith('error', 'Safe: CUSTOMER_SCOPE_DENIED');
     });
   });
 
