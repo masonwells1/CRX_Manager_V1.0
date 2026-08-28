@@ -24,8 +24,8 @@ soft-deleted invoices and credit memos from that queue.
 The delivery detail page, integrity cleanup panel, and office exception dashboard now share the same
 active, non-deleted sales-invoice coverage predicate, so a return credit or deleted invoice cannot hide
 the recovery action or produce a false all-clear in the user interface.
-Their shared coverage fetch paginates through every active invoice row instead of trusting the API's
-per-response cap.
+Their shared coverage fetch de-duplicates and chunks large order-id filters, then paginates through
+every active invoice row instead of trusting the gateway URL limit or API per-response cap.
 
 The invoice-list Batch Print path now uses the same return-credit grouping as single-invoice Print,
 so one credit memo cannot produce a simple customer line in one PDF and cost-lot fragments in another.

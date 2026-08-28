@@ -1,12 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { supabase } from './db';
 import {
   activeInvoiceCoversDelivery,
   activeInvoiceCoversOrder,
   activeInvoiceCountsTowardBilling,
+  fetchActiveInvoiceCoveragePages,
+  type ActiveInvoiceCoverageRow,
   type DeliveryInvoiceCoverage,
 } from './deliveryInvoiceCoverage';
+
+vi.mock('./db', () => ({
+  supabase: { from: vi.fn() },
+}));
 
 const root = process.cwd();
 
@@ -21,7 +28,56 @@ function invoice(overrides: Partial<DeliveryInvoiceCoverage> = {}): DeliveryInvo
   };
 }
 
+function coverageRow(id: string, orderId: string): ActiveInvoiceCoverageRow {
+  return {
+    id,
+    order_id: orderId,
+    delivery_id: null,
+    total_amount_cents: 100,
+    invoice_type: 'chemical_sale',
+    status: 'posted',
+    deleted_at: null,
+  };
+}
+
+function queryReturning(data: ActiveInvoiceCoverageRow[]) {
+  const chain: Record<string, ReturnType<typeof vi.fn>> = {};
+  for (const method of ['select', 'in', 'not', 'is', 'order']) {
+    chain[method] = vi.fn(() => chain);
+  }
+  chain.range = vi.fn(() => Promise.resolve({ data, error: null }));
+  return chain;
+}
+
 describe('activeInvoiceCoversDelivery', () => {
+  beforeEach(() => {
+    vi.mocked(supabase.from).mockReset();
+  });
+
+  it('chunks large order filters and paginates each chunk without duplicate ids', async () => {
+    const orderIds = Array.from({ length: 201 }, (_, index) => `order-${index}`);
+    const queryResults = [
+      [coverageRow('invoice-1', 'order-0')],
+      [],
+      [coverageRow('invoice-2', 'order-200')],
+      [],
+    ];
+    const queries = queryResults.map(queryReturning);
+    const pendingQueries = [...queries];
+    vi.mocked(supabase.from).mockImplementation(() => pendingQueries.shift() as never);
+
+    const result = await fetchActiveInvoiceCoveragePages([...orderIds, 'order-0']);
+
+    expect(result).toEqual({
+      data: [coverageRow('invoice-1', 'order-0'), coverageRow('invoice-2', 'order-200')],
+      error: null,
+    });
+    expect(vi.mocked(supabase.from)).toHaveBeenCalledTimes(4);
+    expect(pendingQueries).toHaveLength(0);
+    expect(queries[0].in).toHaveBeenCalledWith('order_id', orderIds.slice(0, 200));
+    expect(queries[2].in).toHaveBeenCalledWith('order_id', orderIds.slice(200));
+  });
+
   it('keeps order billing coverage limited to active sale invoices', () => {
     expect(activeInvoiceCountsTowardBilling(invoice())).toBe(true);
     expect(activeInvoiceCountsTowardBilling(invoice({ invoice_type: 'credit_memo' }))).toBe(false);
@@ -103,6 +159,7 @@ describe('activeInvoiceCoversDelivery', () => {
 
     const sharedSource = readFileSync(resolve(root, 'src/lib/deliveryInvoiceCoverage.ts'), 'utf8');
     expect(sharedSource).toContain(".select('id, order_id, delivery_id, total_amount_cents, invoice_type, status, deleted_at')");
+    expect(sharedSource).toContain('chunkIds(uniqueOrderIds, INVOICE_COVERAGE_ID_CHUNK_SIZE)');
     expect(sharedSource).toContain(".not('status', 'in', '(\"voided\",\"cancelled\")')");
     expect(sharedSource).toContain(".is('deleted_at', null)");
     expect(sharedSource).toContain('.range(from, from + INVOICE_COVERAGE_PAGE_SIZE - 1)');
