@@ -7,11 +7,13 @@ import path from "node:path";
 
 import {
   activeProtectedAutoMergePrNumbers,
+  CODEX_MERGE_EVIDENCE_BUDGET_MS,
   coderabbitReviewGate,
   commandStartsWithGitHubCli,
   deliveryExecutableIsTrusted,
   destinationLooksLikeUrl,
   contentIsRisky,
+  createEvidenceBudget,
   extractPatchDestinations,
   featurePushDestinations,
   fixedGitExecutable,
@@ -223,13 +225,13 @@ function defaultRunGit(args, cwd) {
   }).trim();
 }
 
-function defaultRunGh(args, cwd) {
+function defaultRunGh(args, cwd, options = {}) {
   const invocation = trustedGitHubCliInvocation(args);
   return execFileSync(invocation.executable, invocation.args, {
     cwd,
     env: invocation.env,
     encoding: "utf8",
-    timeout: 5000,
+    timeout: Math.max(1, Math.min(5_000, Number(options.timeoutMs) || 5_000)),
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   }).trim();
@@ -635,6 +637,7 @@ export function evaluateProductionAction({
   nowMs = Date.now(),
   runGit = defaultRunGit,
   runGh = defaultRunGh,
+  wallClock = Date.now,
 } = {}) {
   const name = String(toolName);
   const baseRepoDir = path.resolve(repoDir);
@@ -642,6 +645,10 @@ export function evaluateProductionAction({
   const actionRepoDir = requestedWorkingDir
     ? path.resolve(baseRepoDir, String(requestedWorkingDir))
     : baseRepoDir;
+  const unbudgetedRunGh = runGh;
+  const githubEvidenceBudget = createEvidenceBudget(CODEX_MERGE_EVIDENCE_BUDGET_MS, wallClock);
+  runGh = (args, cwd) => githubEvidenceBudget.run((remainingMs) =>
+    unbudgetedRunGh(args, cwd, { timeoutMs: Math.max(1, Math.min(3_000, remainingMs)) }));
 
   const pathCandidates = [
     toolInput.file_path,

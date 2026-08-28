@@ -2,11 +2,12 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { evaluateProductionAction, isClearlyReadOnlySql, pullRequestChecksGreen } from "./production-action-guard.mjs";
+import { CODEX_MERGE_EVIDENCE_BUDGET_MS } from "../../.claude/hooks/codex-push-lib.mjs";
 
 const projectRoot = process.cwd();
 // Git exports repository selectors while running hooks. This test creates
@@ -19,6 +20,16 @@ const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-g
 const claudeGuardPath = path.join(projectRoot, ".claude", "hooks", "codex-push-guard.mjs");
 const tempRoots = [];
 const { maintenanceProducerCommandMentioned } = await import("./production-action-" + "guard.mjs");
+
+const collectObjects = (value, found = []) => {
+  if (!value || typeof value !== "object") return found;
+  found.push(value);
+  for (const child of Object.values(value)) collectObjects(child, found);
+  return found;
+};
+const codexHooks = JSON.parse(readFileSync(path.join(projectRoot, ".codex", "hooks.json"), "utf8"));
+const codexProductionHook = collectObjects(codexHooks).find((entry) => String(entry.command || "").includes("production-action-guard.mjs"));
+assert.ok(Number(codexProductionHook?.timeout) * 1000 - CODEX_MERGE_EVIDENCE_BUDGET_MS >= 5_000, "Codex evidence budget leaves at least five seconds for an explicit decision before the outer timeout");
 
 function git(cwd, args) {
   const env = { ...process.env };
@@ -727,6 +738,20 @@ try {
   const runGhWithApprovedCodeRabbit = (args) => args.join(" ").startsWith("pr view ")
     ? mainPrJson
     : approvedCodeRabbitResponse(args, risky.sha);
+  let slowEvidenceClock = 0;
+  const slowEvidence = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    wallClock: () => slowEvidenceClock,
+    runGh: (args) => {
+      slowEvidenceClock += 3_000;
+      return args.join(" ").startsWith("pr view ") ? mainPrJson : approvedCodeRabbitResponse(args, risky.sha);
+    },
+  });
+  assert.equal(slowEvidence.blocked, true, "cumulative slow GitHub evidence fails closed before the outer Codex hook timeout");
+  assert.match(slowEvidence.reason, /budget expired/, "cumulative evidence denial names the exhausted total budget");
   assert.equal(pullRequestChecksGreen(mainPr), true, "clean PR with completed passing checks is green");
   assert.equal(pullRequestChecksGreen({ ...mainPr, mergeStateStatus: "BLOCKED" }), false, "blocked merge state is not green");
   assert.equal(pullRequestChecksGreen({ ...mainPr, statusCheckRollup: [] }), false, "missing checks are not green");

@@ -29,7 +29,9 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   activeProtectedAutoMergePrNumbers,
+  CLAUDE_MERGE_EVIDENCE_BUDGET_MS,
   contentIsRisky,
+  createEvidenceBudget,
   coderabbitReviewGate,
   commandStartsWithGitHubCli,
   deliveryExecutableIsTrusted,
@@ -132,17 +134,20 @@ if (typeof toolInput.command === "string") {
 const projectDir = path.resolve(
   payload?.cwd || payload?.tool_input?.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd(),
 );
+const githubEvidenceBudget = createEvidenceBudget(CLAUDE_MERGE_EVIDENCE_BUDGET_MS);
 
 function gh(args) {
-  const invocation = trustedGitHubCliInvocation(args);
-  return execFileSync(invocation.executable, invocation.args, {
-    cwd: projectDir,
-    env: invocation.env,
-    encoding: "utf8",
-    timeout: 10_000,
-    stdio: ["ignore", "pipe", "ignore"],
-    maxBuffer: 16 * 1024 * 1024,
-    windowsHide: true,
+  return githubEvidenceBudget.run((remainingMs) => {
+    const invocation = trustedGitHubCliInvocation(args);
+    return execFileSync(invocation.executable, invocation.args, {
+      cwd: projectDir,
+      env: invocation.env,
+      encoding: "utf8",
+      timeout: Math.max(1, Math.min(5_000, remainingMs)),
+      stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: 16 * 1024 * 1024,
+      windowsHide: true,
+    });
   });
 }
 

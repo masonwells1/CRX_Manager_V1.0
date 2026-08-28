@@ -7,7 +7,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  CLAUDE_MERGE_EVIDENCE_BUDGET_MS,
   coderabbitReviewGate,
+  createEvidenceBudget,
   ghApiMergeRequest,
   ghMergeRequest,
   ghUpdateBranchRequest,
@@ -23,6 +25,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
 function ok(v, m) { assert.ok(v, m); pass++; }
 function eq(a, b, m) { assert.deepEqual(a, b, m); pass++; }
+
+const collectObjects = (value, found = []) => {
+  if (!value || typeof value !== "object") return found;
+  found.push(value);
+  for (const child of Object.values(value)) collectObjects(child, found);
+  return found;
+};
+const claudeSettings = JSON.parse(readFileSync(path.resolve(__dirname, "..", "settings.json"), "utf8"));
+const claudeMergeHook = collectObjects(claudeSettings).find((entry) => String(entry.command || "").includes("pr-merge-guard.mjs"));
+ok(Number(claudeMergeHook?.timeout) * 1000 - CLAUDE_MERGE_EVIDENCE_BUDGET_MS >= 5_000, "Claude evidence budget leaves at least five seconds for an explicit decision before the outer timeout");
+let budgetClock = 0;
+const budget = createEvidenceBudget(CLAUDE_MERGE_EVIDENCE_BUDGET_MS, () => budgetClock);
+assert.throws(() => budget.run(() => { budgetClock = CLAUDE_MERGE_EVIDENCE_BUDGET_MS; return "late"; }), /budget expired/, "evidence budget rejects a request that consumes the remaining total deadline");
+pass++;
 
 // ── ghMergeRequest ───────────────────────────────────────────────────────────
 eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false, matchHead: "", squash: true, atomicHeadMatch: true }, "plain squash merge parses");

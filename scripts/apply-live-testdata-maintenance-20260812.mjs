@@ -145,13 +145,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // were refused, auto-merge lookup covered every protected base alias,
   // structured GitHub context overrides were denied, local pushes stopped,
   // grouped/process-substituted GitHub actions became fail-closed, and remote
-  // branch mutations were bound to protected-PR auto-merge state.
-  codexGuard: "f6eac43043ad4147ae3d7661b283e19930fa3928",
-  pushLib: "91bda5c4ca98c04a003fef7890572e7a28e0af0c",
+  // branch mutations were bound to protected-PR auto-merge state, with a total
+  // evidence deadline below each outer hook timeout.
+  codexGuard: "98d6231df438e3b98d19194b5947915240db3d9b",
+  pushLib: "b04605e2c3d15fb0adf39fb7c1745e3f051e344c",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "c2a11eac70f83f52a57f0024b348c93c2938273e",
-  pushLib: "91bda5c4ca98c04a003fef7890572e7a28e0af0c",
+  codexGuard: "12c22abba3af7b0e8a3a80af07b343f39df13a20",
+  pushLib: "b04605e2c3d15fb0adf39fb7c1745e3f051e344c",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

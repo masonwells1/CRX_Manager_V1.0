@@ -516,6 +516,24 @@ export function activeAutoMergePrNumbers(value) {
 }
 
 const PROTECTED_BRANCH_NAMES = new Set(["main", "master", "production"]);
+export const CLAUDE_MERGE_EVIDENCE_BUDGET_MS = 20_000;
+export const CODEX_MERGE_EVIDENCE_BUDGET_MS = 9_000;
+
+export function createEvidenceBudget(totalMs, clock = Date.now) {
+  const budgetMs = Number(totalMs);
+  if (!Number.isFinite(budgetMs) || budgetMs <= 0) throw new Error("evidence budget must be positive");
+  const deadlineMs = Number(clock()) + budgetMs;
+  return {
+    run(operation) {
+      const remainingMs = Math.floor(deadlineMs - Number(clock()));
+      if (remainingMs <= 0) throw new Error("GitHub evidence budget expired before the guard could decide");
+      const result = operation(remainingMs);
+      if (Number(clock()) >= deadlineMs) throw new Error("GitHub evidence budget expired before the guard could decide");
+      return result;
+    },
+  };
+}
+
 export function activeProtectedAutoMergePrNumbers(value) {
   const records = typeof value === "string" ? JSON.parse(value) : value;
   if (!Array.isArray(records)) throw new Error("pull-request lookup did not return an array");
