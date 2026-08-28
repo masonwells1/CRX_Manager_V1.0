@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
-  activeAutoMergePrNumbers,
+  activeProtectedAutoMergePrNumbers,
   coderabbitReviewGate,
   commandStartsWithGitHubCli,
   deliveryExecutableIsTrusted,
@@ -846,13 +846,12 @@ export function evaluateProductionAction({
         }
         let activeAutoMergePrs;
         try {
-          activeAutoMergePrs = activeAutoMergePrNumbers(runGh([
+          activeAutoMergePrs = activeProtectedAutoMergePrNumbers(runGh([
             "pr", "list",
             "--repo", `github.com/${pushRepository}`,
             "--state", "open",
-            "--base", "main",
             "--head", featureBranch,
-            "--json", "number,autoMergeRequest",
+            "--json", "number,autoMergeRequest,baseRefName",
           ], pushRepoDir));
         } catch (error) {
           return denied(

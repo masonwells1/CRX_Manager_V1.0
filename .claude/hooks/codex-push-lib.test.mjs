@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { scratchHookEnvironment } from "./git-test-env.mjs";
 import {
   activeAutoMergePrNumbers,
+  activeProtectedAutoMergePrNumbers,
   claudeProofValid,
   contentIsRisky,
   describeRiskyContent,
@@ -91,6 +92,20 @@ assert.deepEqual(
   ])),
   [514],
   "only PRs with an active autoMergeRequest are returned",
+);
+assert.deepEqual(
+  activeProtectedAutoMergePrNumbers(JSON.stringify([
+    { number: 515, autoMergeRequest: { mergeMethod: "SQUASH" }, baseRefName: "production" },
+    { number: 516, autoMergeRequest: { mergeMethod: "SQUASH" }, baseRefName: "develop" },
+    { number: 517, autoMergeRequest: null, baseRefName: "master" },
+  ])),
+  [515],
+  "only armed auto-merges targeting a protected base are returned",
+);
+assert.throws(
+  () => activeProtectedAutoMergePrNumbers('[{"number":515,"autoMergeRequest":null}]'),
+  /omitted baseRefName/,
+  "protected auto-merge lookup fails closed when GitHub omits the base branch",
 );
 assert.throws(
   () => activeAutoMergePrNumbers('[{"number":513}]'),
@@ -1882,6 +1897,11 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     };
     const denied = (command, message) => deniedBecause(command, /GIT_CONFIG/, message);
     const workForShell = work.replaceAll("\\", "/");
+    deniedBecause(
+      `git -C ${workForShell} push https://gitlab.example.invalid/other/repo.git HEAD:refs/heads/main`,
+      /direct pushes to main are denied outside the protected CRX pull-request flow/i,
+      "the installed hook denies an unrelated-network direct main push",
+    );
     for (const protectedBranch of ["master", "production"]) {
       deniedBecause(
         `git -C ${workForShell} push origin HEAD:refs/heads/${protectedBranch}`,
@@ -1963,22 +1983,19 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     {
       // Same mechanism, but the rewrite makes a short alias reach production.
       // The rewrite table is not compared for equality — it is UNIONED into the
-      // gate's own classifier — so this is caught by the app-repo gate applying
-      // to a main-bound push, which then demands the Sol proof. Denied either
-      // way; what matters is that a rewrite visible ONLY in the inherited
-      // environment still gates, which the pre-2026-08-04 single scrubbed read
-      // would have missed entirely had presence not been blanket-denied.
-      const result = runHook(push, {
+      // gate's own classifier — so this is caught by the feature-push GitHub
+      // lookup. An invalid token makes that lookup fail closed, proving the
+      // inherited rewrite reached it; without the rewrite, this local feature
+      // push takes the local-repository exception and allows.
+      const result = runHook(featurePush, {
         GIT_CONFIG_COUNT: "1",
         GIT_CONFIG_KEY_0: `url.${CRX_URL}.insteadOf`,
         GIT_CONFIG_VALUE_0: "crx:",
+        GH_TOKEN: "invalid-test-token",
+        GITHUB_TOKEN: "invalid-test-token",
       });
       assert.equal(result.decision, "deny", "an inherited rewrite that reaches the production app repo still gates");
-      // Getting THIS far is the proof: both messages come from inside the
-      // app-repo gate, i.e. past the "unrelated repository, skip the gate" exit.
-      // (The scratch remote has never been pushed to, so origin/main is the ref
-      // that fails first; on a real checkout it is the Sol proof demand.)
-      assert.match(result.reason, /proof|origin\/main/i, "the app-repo gate applied rather than being skipped");
+      assert.match(result.reason, /could not prove auto-merge is disabled/i, "the protected upstream lookup applied rather than being skipped");
     }
     {
       // Not the destination but the REFSPEC: a bare push's default can be moved

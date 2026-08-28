@@ -346,7 +346,7 @@ try {
     toolName: "PowerShell",
     toolInput: { command: "git push origin HEAD:refs/heads/feature/test" },
     repoDir: risky.repo,
-    runGh: () => JSON.stringify([{ number: 513, autoMergeRequest: null }]),
+    runGh: () => JSON.stringify([{ number: 513, autoMergeRequest: null, baseRefName: "main" }]),
   }).blocked, false, "branch pushes stay allowed");
   const inlinePushUrlOverride = evaluateProductionAction({
     toolName: "PowerShell",
@@ -433,7 +433,7 @@ try {
     toolName: "PowerShell",
     toolInput: { command: "git push other HEAD:refs/heads/feature/test" },
     repoDir: risky.repo,
-    runGh: () => JSON.stringify([{ number: 999, autoMergeRequest: { mergeMethod: "SQUASH" } }]),
+    runGh: () => JSON.stringify([{ number: 999, autoMergeRequest: { mergeMethod: "SQUASH" }, baseRefName: "main" }]),
   }).blocked, true, "alternate repository pushes remain denied regardless of its reported PR state");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
@@ -448,15 +448,15 @@ try {
     repoDir: risky.repo,
     runGh: (args) => {
       featurePushLookupArgs = args;
-      return JSON.stringify([{ number: 513, autoMergeRequest: { mergeMethod: "SQUASH" } }]);
+      return JSON.stringify([{ number: 513, autoMergeRequest: { mergeMethod: "SQUASH" }, baseRefName: "production" }]);
     },
   });
   assert.equal(preArmedAutoMergePush.blocked, true, "an already-armed auto-merge blocks a later feature push");
   assert.match(preArmedAutoMergePush.reason, /gh pr merge 513 --disable-auto/, "denial gives an agent-runnable recovery command");
   assert.deepEqual(
     featurePushLookupArgs,
-    ["pr", "list", "--repo", "github.com/masonwells1/crx_manager_v1.0", "--state", "open", "--base", "main", "--head", "feature/test", "--json", "number,autoMergeRequest"],
-    "feature push lookup binds the open PR query to github.com, main, and the exact destination branch",
+    ["pr", "list", "--repo", "github.com/masonwells1/crx_manager_v1.0", "--state", "open", "--head", "feature/test", "--json", "number,autoMergeRequest,baseRefName"],
+    "feature push lookup binds the open PR query to github.com and the exact destination branch, returning every base for protected-alias filtering",
   );
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
@@ -483,6 +483,7 @@ try {
     runGh: () => "[]",
   }).blocked, true, "a standalone dynamically constructed GitHub merge is denied");
   for (const command of [
+    "g'h' pr merge 513 --auto",
     "gh p\\r merge 513 --auto",
     "gh pr m\\erge 513 --auto",
     "gh a\\pi graphql --input payload.json",

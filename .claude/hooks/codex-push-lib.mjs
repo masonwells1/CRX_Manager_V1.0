@@ -515,6 +515,23 @@ export function activeAutoMergePrNumbers(value) {
   return active;
 }
 
+const PROTECTED_BRANCH_NAMES = new Set(["main", "master", "production"]);
+export function activeProtectedAutoMergePrNumbers(value) {
+  const records = typeof value === "string" ? JSON.parse(value) : value;
+  if (!Array.isArray(records)) throw new Error("pull-request lookup did not return an array");
+  const protectedRecords = [];
+  for (const record of records) {
+    if (!record || typeof record !== "object"
+        || !Object.prototype.hasOwnProperty.call(record, "baseRefName")) {
+      throw new Error("pull-request lookup omitted baseRefName");
+    }
+    const base = String(record.baseRefName || "").trim().toLowerCase();
+    if (!base) throw new Error("pull-request lookup returned an invalid baseRefName");
+    if (PROTECTED_BRANCH_NAMES.has(base)) protectedRecords.push(record);
+  }
+  return activeAutoMergePrNumbers(protectedRecords);
+}
+
 // Any push is forced when it carries a history-rewriting force flag anywhere
 // after `push`, or uses Git's `+<src>:<dst>` force-refspec syntax. This scan is
 // deliberately independent of target resolution: AGENTS.md requires approval
@@ -2207,9 +2224,13 @@ const GH_BIN_RE = /(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?
 export function githubCliCommandIsDynamic(command) {
   const text = String(command || "");
   const emptyQuoteNormalized = text.replace(/(?:''|"")+/g, "");
+  const dequoted = text.replace(/["']/g, "");
+  const quoteSplicedGitHubAction = dequoted !== text
+    && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+merge|api\b)/i.test(dequoted)
+    && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+merge|api\b)/i.test(text);
   const composedExecutable = /(?:^|[\s;&|])g(?:(?:''|"")|[`^\\]|\$\{[^}\r\n]*\}|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!)+h(?:\.exe)?(?=\s|$)/i.test(text);
   const dynamicExecutable = /(?:^|[\s;&|])&?(?:\$\{?[A-Za-z_][A-Za-z0-9_:]*\}?|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!|@[A-Za-z_][A-Za-z0-9_]*)\s+(?:pr\s+merge|api\b)/i.test(text);
-  if (composedExecutable || dynamicExecutable) return true;
+  if (quoteSplicedGitHubAction || composedExecutable || dynamicExecutable) return true;
   if (!/\bgh(?:\.exe)?\b/i.test(text) && !/\bgh(?:\.exe)?\b/i.test(emptyQuoteNormalized)) return false;
   const outerWords = splitShellArgs(text);
   const outerToken = String(outerWords[0] === "&" ? outerWords[1] : outerWords[0] || "");

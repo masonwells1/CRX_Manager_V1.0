@@ -140,13 +140,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // after unquoted shell escapes and nested wrappers were rejected for GitHub
   // CLI commands, after merges were bound to CodeRabbit's exact-head review,
   // after local-looking feature destinations stopped bypassing review, and
-  // after protected master/production pushes became explicit fail-closed cases.
-  codexGuard: "1390322b11c4add2b8cb3aa4f08067f8877d2bd2",
-  pushLib: "0fd69324f2f71dfad5edb1d4250065fdf8a9653c",
+  // after protected master/production pushes became explicit fail-closed cases,
+  // quote-spliced GitHub actions were denied, direct main pushes outside CRX
+  // were refused, and auto-merge lookup covered every protected base alias.
+  codexGuard: "8613f3ba174bcc5cf4bee2dc912155bd93f3bee0",
+  pushLib: "d2165757e3da279c099cd4d19a8668f2ba3d206d",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "3980ec04db58e5c5b961eb5b1fac109abe8d2f2a",
-  pushLib: "0fd69324f2f71dfad5edb1d4250065fdf8a9653c",
+  codexGuard: "2e565581195b4fdd4254eb1612f076ab1be3efa1",
+  pushLib: "d2165757e3da279c099cd4d19a8668f2ba3d206d",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

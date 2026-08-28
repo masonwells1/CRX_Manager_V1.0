@@ -15,7 +15,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  activeAutoMergePrNumbers,
+  activeProtectedAutoMergePrNumbers,
   contentIsRisky,
   describeRiskyContent,
   eachPush,
@@ -814,9 +814,8 @@ for (const pushCmd of pushCommands) {
           "pr", "list",
           "--repo", `github.com/${pushRepository}`,
           "--state", "open",
-          "--base", "main",
           "--head", featureBranch,
-          "--json", "number,autoMergeRequest",
+          "--json", "number,autoMergeRequest,baseRefName",
         ]);
         const response = execFileSync(ghLookup.executable, ghLookup.args, {
           cwd: pushRepoDir,
@@ -826,7 +825,7 @@ for (const pushCmd of pushCommands) {
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
         }).trim();
-        activeAutoMergePrs = activeAutoMergePrNumbers(response);
+        activeAutoMergePrs = activeProtectedAutoMergePrNumbers(response);
       } catch (error) {
         deny(`CODEX GATE: could not prove auto-merge is disabled for the open main-bound PR on branch ${featureBranch}, so the feature push is denied (fail closed). ${error?.message || error}`);
       }
@@ -920,7 +919,10 @@ for (const pushCmd of pushCommands) {
     !destinationUrls.some((url) => urlIsGuardedApp(url)) &&
     !repoIsGuardedApp(remoteList) &&
     !rewritesReachGuardedApp(urlRewrites)
-  ) continue;
+  ) {
+    if (!targetIsRawUrl && pushUrlsAreLocalPaths(destinationUrls)) continue;
+    deny("CODEX GATE: unattended direct pushes to main are denied outside the protected CRX pull-request flow. Push one explicit feature branch and merge it through reviewed green checks instead.");
+  }
 
   let baseSha = "";
   try {
