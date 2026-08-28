@@ -184,6 +184,16 @@ assert.equal(pushGitHubRepository(["git@github.com:masonwells1/CRX_Manager_V1.0.
 assert.equal(pushGitHubRepository(["https://github.com/other/repo.git"]), "other/repo");
 assert.equal(pushGitHubRepository(["https://github.com/masonwells1/CRX_Manager_V1.0.git", "https://github.com/other/repo.git"]), null, "multiple repository destinations are ambiguous");
 assert.equal(pushGitHubRepository(["../local.git"]), null, "non-GitHub destination is unresolved");
+for (const unsafeTransport of [
+  "relay://github.com/masonwells1/CRX_Manager_V1.0.git",
+  "http://github.com/masonwells1/CRX_Manager_V1.0.git",
+  "git://github.com/masonwells1/CRX_Manager_V1.0.git",
+  "file://github.com/masonwells1/CRX_Manager_V1.0.git",
+  "https://github.com:8443/masonwells1/CRX_Manager_V1.0.git",
+  "ssh://alice@github.com/masonwells1/CRX_Manager_V1.0.git",
+]) {
+  assert.equal(pushGitHubRepository([unsafeTransport]), null, `unsafe GitHub transport is unresolved: ${unsafeTransport}`);
+}
 assert.equal(pushUrlsAreLocalPaths(["../local.git", "C:/repos/local.git"]), true, "local repository paths are recognized");
 assert.equal(pushUrlsAreLocalPaths(["https://gitlab.example/repo.git"]), false, "network repository is not a local path");
 const hostileGitHubEnv = {

@@ -42,9 +42,9 @@ Remove repeated approval requests for routine, reversible work and protected gre
 
 ## REMAINING DELIVERY
 
-- Commit and push the final pre-armed-auto-merge remediation.
+- Commit and push the final secure-transport remediation.
 - Re-run the independent exact-head adversarial review on the new commit and resolve any real finding.
-- Wait for refreshed PR checks, merge with `--match-head-commit`, and verify the merged policy on `main` plus production health.
+- Wait for refreshed PR checks and exact-head CodeRabbit review, merge with `--match-head-commit`, and verify the merged policy on `main` plus production health.
 
 ## APPROVAL STATE
 
@@ -61,6 +61,7 @@ Mason explicitly requested more Codex working room and authorized addressing unn
 - Exact-head review of `1ad8e0bd` found unquoted `#` comments could hide the real end of a merge command while fake repository/head flags were inspected. GitHub CLI commands with unquoted comment markers now fail closed before parsing; quoted hashes remain data.
 - Exact-head review of `bd547ab9` found that armed unattended approval could still edit a trusted delivery wrapper and then execute that modified proof or landing logic. The protected boundary now includes proof producers, landing helpers, maintenance executors, hook manifests, and their registration surface. Wrapper execution proceeds automatically only when every boundary file is tracked and Git-unchanged from the current HEAD; clean and dirty `land-pr` plus push-proof paths have end-to-end regressions.
 - Exact-head GitHub review of `b37ecfe3` found that dot-segment spellings such as `scripts/./land-pr.mjs` and `.claude/foo/../hooks/pr-merge-guard.mjs` still reached the same protected files without matching the integrity boundary. CodeRabbit also demonstrated grouped PowerShell paths and a missing trusted-CLI fail-closed catch, then identified inaccurate recovery text in the landing helper and rollback runbook. Protected file-tool paths are now canonicalized, shell grouping boundaries and explicit inline-interpreter writes are recognized without blocking read-only searches, trusted executable resolution fails closed, integrity/update-branch errors name their real recovery, and the runbook passes the explicit PR number. The non-main `baseRefOid` difference is documented rather than tightened because only protected-main merges consume that SHA; no business safety rule changed.
+- Exact-head local review of `c1c1057f` found that `pushGitHubRepository()` accepted custom helpers and cleartext GitHub URLs after canonicalizing away the transport. Effective feature-push URLs now have to match the existing secure GitHub HTTPS/SSH allowlist before repository identity is considered. Library regressions cover helper, cleartext, Git, file, nonstandard-port, and non-Git-user spellings; end-to-end Codex and Claude guard tests prove the demonstrated helper and cleartext routes deny before GitHub lookup.
 
 - Do not edit product-data-model plans, migrations/RPCs, or product-model tests.
 - Do not absorb the separate `codex/migration-approval-gate` worktree; live migration approval behavior is outside this tranche.

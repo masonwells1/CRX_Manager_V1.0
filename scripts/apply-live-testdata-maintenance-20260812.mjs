@@ -170,11 +170,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // paths so future edits to its child update-branch route require exact-head
   // adversarial review.
   codexGuard: "94e6db0607faaaa83821706746d4cadd0f3b36ab",
-  pushLib: "9cc7b6ca2b2401fd2c30c3755b5bd9fac28dc955",
+  // Re-pinned 2026-08-28 after feature-push repository resolution began
+  // rejecting custom helpers and insecure GitHub transports before identity
+  // comparison. The protected producer anchor itself is unchanged.
+  pushLib: "b21f7743e392be0828d4b9cf677ff61e11cd0606",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "7714925fc26bee2b43544cdd2ff1536e5d3c380b",
-  pushLib: "9cc7b6ca2b2401fd2c30c3755b5bd9fac28dc955",
+  pushLib: "b21f7743e392be0828d4b9cf677ff61e11cd0606",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

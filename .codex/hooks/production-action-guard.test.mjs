@@ -562,6 +562,27 @@ try {
     repoDir: risky.repo,
     runGh: () => "[]",
   }).blocked, false, "raw CRX repository URL remains unattended");
+  for (const [transportName, unsafeUrl] of [
+    ["relay", "relay://github.com/masonwells1/CRX_Manager_V1.0.git"],
+    ["cleartext", "http://github.com/masonwells1/CRX_Manager_V1.0.git"],
+  ]) {
+    git(risky.repo, ["remote", "add", transportName, unsafeUrl]);
+    const codexUnsafeTransport = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: `${trustedGit} push ${transportName} HEAD:refs/heads/feature/test` },
+      repoDir: risky.repo,
+      runGh: () => { throw new Error("unsafe transport must deny before GitHub lookup"); },
+    });
+    assert.equal(codexUnsafeTransport.blocked, true, `Codex denies the ${transportName} GitHub transport`);
+    assert.match(codexUnsafeTransport.reason, /exact CRX GitHub repository|destination/i);
+
+    const claudeUnsafeTransport = runClaudePushGuard(
+      `git -C "${risky.repo}" push ${transportName} HEAD:refs/heads/feature/test`,
+      projectRoot,
+    );
+    assert.equal(claudeUnsafeTransport.status, 0);
+    assert.match(claudeUnsafeTransport.stdout, /"permissionDecision":"deny"/, `Claude denies the ${transportName} GitHub transport`);
+  }
   for (const command of [
     "$verb = 'push'; git $verb origin HEAD:refs/heads/feature/test",
     "git @args",

@@ -809,13 +809,17 @@ export function canonicalRepoId(url) {
 }
 
 // Resolve a set of effective push URLs to one exact GitHub owner/repository.
-// Multiple push URLs are accepted only when they all identify the same repo;
-// aliases, helpers, filesystem paths, non-GitHub hosts, and ambiguity fail closed.
+// Multiple push URLs are accepted only when they all use GitHub's documented
+// secure HTTPS/SSH spellings and identify the same repo. Custom remote helpers,
+// cleartext transports, filesystem paths, non-GitHub hosts, and ambiguity fail
+// closed before repository identity is considered.
 export function pushGitHubRepository(urls) {
   const values = Array.isArray(urls) ? urls : [];
   if (values.length === 0) return null;
   const repos = values.map((url) => {
-    const id = canonicalRepoId(url);
+    const text = String(url || "").trim();
+    if (!githubSpelling(text)) return null;
+    const id = canonicalRepoId(text);
     const match = /^github\.com\/([^/]+)\/([^/]+)$/i.exec(String(id || ""));
     return match ? `${match[1]}/${match[2]}`.toLowerCase() : null;
   });

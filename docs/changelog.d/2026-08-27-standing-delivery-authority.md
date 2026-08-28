@@ -109,6 +109,13 @@ GitHub repository; an alternate remote cannot borrow CRX's result. The unattende
 one explicit branch only (`HEAD:refs/heads/<branch>`). Tags, notes, implicit tag propagation,
 ambiguous network destinations, and multiple repositories deny, while local test repositories remain available.
 
+The closing exact-head review found that repository identity was still normalized independently
+of transport safety: a custom `relay://` helper or cleartext `http://github.com/...` URL could
+canonicalize to the protected CRX repository. Feature-push resolution now accepts only GitHub's
+documented secure HTTPS and SSH forms before comparing owner/repository identity. Custom helpers,
+cleartext and local transports, nonstandard ports, and non-Git SSH users fail closed in both the
+Claude and Codex guard paths; normal HTTPS, SSH, and GitHub's port-443 SSH endpoint remain automatic.
+
 Unquoted shell comment markers in GitHub CLI commands now deny before parsing, so flags written
 after `#` cannot be mistaken for the repository, expected head, or auto-merge intent that the shell
 actually omits. Quoted hash characters remain ordinary message/body data.
