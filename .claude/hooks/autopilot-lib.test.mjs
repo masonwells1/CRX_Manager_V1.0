@@ -113,6 +113,10 @@ eq(autopilotDecision("PowerShell", { command: "patch -p1 < C:/Temp/guard.patch" 
 eq(autopilotDecision("PowerShell", { command: "& 'C:\\Program Files\\Git\\cmd\\git.exe' apply C:/Temp/guard.patch" }), "deny", "absolute git executables cannot bypass the patch gate");
 eq(autopilotDecision("Bash", { command: '"/usr/bin/patch" -p1 < /tmp/guard.patch' }), "deny", "absolute patch executables cannot bypass the patch gate");
 eq(autopilotDecision("Bash", { command: `rg "git apply" .claude/hooks/autopilot-lib.mjs` }), "allow", "read-only searches mentioning git apply remain unattended");
+eq(autopilotDecision("Bash", { command: "ln -sf /tmp/noop .claude/hooks/pr-merge-guard.mjs" }), "deny", "links cannot replace a protected guard");
+eq(autopilotDecision("PowerShell", { command: "mklink .codex/hooks/production-action-guard.mjs C:/Temp/noop.mjs" }), "deny", "Windows links cannot replace a protected guard");
+eq(autopilotDecision("Bash", { command: '"/usr/bin/ln" -sf /tmp/noop .claude/hooks/pr-merge-guard.mjs' }), "deny", "absolute link executables cannot bypass the protected-path gate");
+eq(autopilotDecision("Bash", { command: `rg "ln -sf" .claude/hooks/autopilot-lib.mjs` }), "allow", "read-only searches mentioning link commands remain unattended");
 eq(autopilotDecision("Bash", { command: "node scripts/./land-pr.mjs 513" }), "verify-integrity", "dot-segment wrapper execution still reaches integrity proof");
 
 // ── deny-set additions (2026-07-04): CLI deploy and direct remote writes ───
