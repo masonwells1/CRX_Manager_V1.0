@@ -39,6 +39,12 @@ ok(githubCliCommandIsDynamic("gh pr m''erge 5 --auto"), "empty-quote composed me
 ok(githubCliCommandIsDynamic("g''h pr merge 5 --auto"), "empty-quote composed gh executable is dynamic");
 ok(githubCliCommandIsDynamic("g`h pr merge 5 --auto"), "PowerShell-composed gh executable is dynamic");
 ok(githubCliCommandIsDynamic("g${EMPTY}h pr merge 5 --auto"), "POSIX-composed gh executable is dynamic");
+ok(githubCliCommandIsDynamic("gh p\\r merge 5 --auto"), "POSIX-escaped pr token is dynamic");
+ok(githubCliCommandIsDynamic("gh pr m\\erge 5 --auto"), "POSIX-escaped merge token is dynamic");
+ok(githubCliCommandIsDynamic("gh a\\pi graphql --input payload.json"), "POSIX-escaped api token is dynamic");
+ok(githubCliCommandIsDynamic("gh p^r merge 5 --auto"), "cmd-caret-composed pr token is dynamic");
+ok(githubCliCommandIsDynamic("gh pr m^erge 5 --auto"), "cmd-caret-composed merge token is dynamic");
+ok(githubCliCommandIsDynamic("gh a^pi graphql --input payload.json"), "cmd-caret-composed api token is dynamic");
 eq(ghMergeRequest("gh pr view merge-notes"), null, "merge-notes is not the word merge");
 ok(ghMergeRequest("gh pr view merge")?.unsupportedSyntax, "ambiguous exact merge words fail closed outside the canonical grammar");
 eq(ghMergeRequest("git merge main"), null, "git merge is not a gh merge");
@@ -125,6 +131,18 @@ ok(/trusted GitHub CLI/.test(r.decision?.permissionDecisionReason || ""), "untru
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "g${EMPTY}h pr merge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "POSIX-composed gh executable denies before parsing");
+
+for (const command of [
+  "gh p\\r merge 42 --auto",
+  "gh pr m\\erge 42 --auto",
+  "gh a\\pi graphql --input payload.json",
+  "gh p^r merge 42 --auto",
+  "gh pr m^erge 42 --auto",
+  "gh a^pi graphql --input payload.json",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `escaped GitHub CLI command denies before parsing: ${command}`);
+}
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge --body-file 123 456 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789" } });
 ok(r.decision?.permissionDecision === "deny", "unknown body-file option cannot shift the inspected PR selector");

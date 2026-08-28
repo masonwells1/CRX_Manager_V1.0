@@ -468,6 +468,21 @@ try {
     repoDir: risky.repo,
     runGh: () => "[]",
   }).blocked, true, "a standalone dynamically constructed GitHub merge is denied");
+  for (const command of [
+    "gh p\\r merge 513 --auto",
+    "gh pr m\\erge 513 --auto",
+    "gh a\\pi graphql --input payload.json",
+    "gh p^r merge 513 --auto",
+    "gh pr m^erge 513 --auto",
+    "gh a^pi graphql --input payload.json",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      runGh: () => { throw new Error(`escaped command must deny before GitHub lookup: ${command}`); },
+    }).blocked, true, `escaped GitHub CLI command denies before parsing: ${command}`);
+  }
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `git switch feature/test; gh pr merge --repo crop/crx --squash --match-head-commit ${risky.sha}` },

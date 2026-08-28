@@ -2204,6 +2204,12 @@ export function githubCliCommandIsDynamic(command) {
   let doubleQuoted = false;
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
+    if (char === "\\") {
+      if (!singleQuoted && !doubleQuoted) return true;
+      if (doubleQuoted && ['"', "\\", "$", "`"].includes(text[index + 1])) index += 1;
+      continue;
+    }
+    if (char === "^" && !singleQuoted && !doubleQuoted) return true;
     if (char === "'" && !doubleQuoted) { singleQuoted = !singleQuoted; continue; }
     if (char === '"' && !singleQuoted) { doubleQuoted = !doubleQuoted; continue; }
     if (singleQuoted) continue;
