@@ -148,13 +148,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // branch mutations were bound to protected-PR auto-merge state, with a total
   // evidence deadline below each outer hook timeout, and unattended GitHub
   // mutations were scoped to the canonical CRX repository, with all other
-  // GitHub API writes sharing one fail-closed classifier across both agents.
-  codexGuard: "e424a63a2d5468144954f015b0651e4019d3a6cb",
-  pushLib: "2c2b8cb91863aad27c15d710bbdf99e7b3f9eae5",
+  // GitHub API writes sharing one fail-closed classifier across both agents;
+  // global gh flags, remote rebases, and direct protected pushes deny too.
+  codexGuard: "ad79fec5be160c541f6116e784590db49454d6c7",
+  pushLib: "7a3d4692efb7cec0c13d138fec5bbf110e327efe",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "5a14a7a8fae6449d28d491db32a461cda02cb798",
-  pushLib: "2c2b8cb91863aad27c15d710bbdf99e7b3f9eae5",
+  codexGuard: "74fffe87abbe93a8336ea06e48df40db2010e90c",
+  pushLib: "7a3d4692efb7cec0c13d138fec5bbf110e327efe",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

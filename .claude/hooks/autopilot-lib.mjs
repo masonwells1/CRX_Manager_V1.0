@@ -8,7 +8,7 @@
 // settings.json permissions.deny + bash-safety/migration-apply-guard, so this is
 // defense in depth, not the only line.
 
-import { githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames } from "./codex-push-lib.mjs";
+import { ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames } from "./codex-push-lib.mjs";
 
 // Tool NAMES that must never be auto-approved during an unattended run: live
 // prod mutations and branch/project lifecycle ops. Matched case-insensitively
@@ -30,6 +30,7 @@ const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|
 // Bash command shapes that must never be auto-approved: history rewrites,
 // destructive deletes, force-pushes/deploys, DB resets, secret writes, hook bypass.
 const DENY_BASH_RES = [
+  /\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:refs\/heads\/|:)?(?:main|master|production)(?:\s|$)/i,
   /\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--force(?:-with-lease)?(?:=\S+)?\b|--force-if-includes\b|(?:^|\s)-[A-Za-z]*f[A-Za-z]*\b|(?:^|\s)\+\S+)/i,
   /\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--de\S*|(?:^|\s)-[A-Za-z]*d[A-Za-z]*(?:\s|$)|(?:^|\s):[^\s;&|]+)/i,
   /git\s+reset\s+--hard\b/,
@@ -63,6 +64,7 @@ export function autopilotDecision(toolName, toolInput) {
   const cmd = typeof input.command === "string" ? input.command : "";
   if (cmd) {
     if (githubCliCommandIsDynamic(cmd)) return "deny";
+    if (ghUpdateBranchRequest(cmd)?.rebase) return "deny";
     for (const re of DENY_BASH_RES) {
       if (re.test(cmd)) return "deny";
     }

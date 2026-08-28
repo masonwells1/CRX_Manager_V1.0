@@ -175,6 +175,9 @@ function gateRequest(request) {
   if (request.updateBranch ? !updateBranchRequestHasExplicitContext(request) : !mergeRequestHasExplicitContext(request)) {
     deny("PR MERGE GATE: every merge must explicitly name one numeric PR, `--repo owner/repo`, and the exact 40-character `--match-head-commit` SHA in one standalone command. Selectorless/current-branch context is denied.");
   }
+  if (request.updateBranch && request.rebase) {
+    deny("PR MERGE GATE: `gh pr update-branch --rebase` rewrites shared remote history and requires Mason's explicit history-rewrite approval. Use the merge-based update without --rebase for unattended delivery.");
+  }
   let pr;
   try {
     const viewArgs = ["pr", "view"];

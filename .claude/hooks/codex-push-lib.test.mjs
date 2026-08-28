@@ -1898,7 +1898,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     const denied = (command, message) => deniedBecause(command, /GIT_CONFIG/, message);
     const reachedLocalBoundary = (result, message) => {
       assert.equal(result.decision, "deny", `${message} — local push must deny`);
-      assert.match(result.reason, /local-looking repository paths.*receive hooks/i, `${message} — earlier classifiers must reach the local-repository boundary`);
+      assert.match(result.reason, /(?:local-looking repository paths.*receive hooks|direct pushes to main are denied outside the protected CRX pull-request flow)/i, `${message} — earlier classifiers must reach a valid hard-denial boundary`);
     };
     const workForShell = work.replaceAll("\\", "/");
     deniedBecause(

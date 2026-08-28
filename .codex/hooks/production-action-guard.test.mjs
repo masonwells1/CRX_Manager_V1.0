@@ -330,7 +330,9 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "node scripts/run-claude-review.mjs --scope base-main" } }).blocked, false);
 
   const ordinary = makeRepo("src/components/Label.tsx", "export const label = 'ordinary';\n");
-  assert.equal(evaluatePush(ordinary.repo).blocked, false, "non-risky main push allowed without proof");
+  assert.equal(evaluatePush(ordinary.repo).blocked, true, "non-risky direct main push is denied in favor of the reviewed PR path");
+  const ordinaryClaudeMain = runClaudePushGuard(`git -C "${ordinary.repo}" push origin HEAD:main`, projectRoot);
+  assert.match(ordinaryClaudeMain.stdout, /"permissionDecision":"deny"/, "Claude also denies a non-risky direct main push unconditionally");
 
   const guardrailChange = makeRepo(".claude/hooks/codex-push-lib.mjs", "export const ordinary = true;\n");
   assert.equal(
@@ -635,12 +637,11 @@ try {
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard fails closed when origin/main is unavailable");
 
   const missingProof = evaluatePush(risky.repo, now);
-  assert.equal(missingProof.blocked, true, "risky main push denied without proof");
-  assert.match(String(missingProof.reason || ""), /"verdict":"clean"/, "proof guidance requires a clean verdict");
-  assert.doesNotMatch(String(missingProof.reason || ""), /blockers-fixed/, "proof guidance omits obsolete verdicts");
+  assert.equal(missingProof.blocked, true, "risky direct main push is denied unconditionally");
+  assert.match(String(missingProof.reason || ""), /reviewed, green pull-request path/, "direct-main denial routes delivery through the protected PR path");
 
   writeProof(risky.repo, valid);
-  assert.equal(evaluatePush(risky.repo, now).blocked, false, "risky main push allowed with valid proof");
+  assert.equal(evaluatePush(risky.repo, now).blocked, true, "risky direct main push remains denied even with a valid proof");
 
   writeProof(risky.repo, { ...valid, timestamp: new Date(now - 30 * 60 * 1000 - 1).toISOString() });
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "stale proof denied");
@@ -693,7 +694,7 @@ try {
     toolInput: { command: gitCCommand },
     repoDir: projectRoot,
     nowMs: now,
-  }).blocked, false, "git -C main push accepts proof from the selected repo");
+  }).blocked, true, "git -C direct main push remains denied even with proof from the selected repo");
   writeFileSync(proofPath(risky.repo), "{not-json", "utf8");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
@@ -824,6 +825,14 @@ try {
       throw new Error("GitHub unavailable");
     },
   }).blocked, true, "update-branch fails closed when destination auto-merge state cannot be read");
+  const rebaseUpdate = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr update-branch 123 --repo masonwells1/CRX_Manager_V1.0 --rebase" },
+    repoDir: risky.repo,
+    runGh: () => { throw new Error("rebase must deny before GitHub lookup"); },
+  });
+  assert.equal(rebaseUpdate.blocked, true, "update-branch rebase is denied as an unattended history rewrite");
+  assert.match(rebaseUpdate.reason, /rewrites shared remote history/, "rebase denial names the hard history-rewrite boundary");
 
   for (const foreignPr of [
     { ...mainPr, baseRefName: "main" },
@@ -1021,6 +1030,16 @@ try {
     repoDir: risky.repo,
   }).blocked, true, "unrecognized mutating gh API calls are denied");
   assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh -R masonwells1/CRX_Manager_V1.0 api --method PUT repos/masonwells1/CRX_Manager_V1.0/pulls/123/update-branch" },
+    repoDir: risky.repo,
+  }).blocked, true, "global gh flags cannot hide a REST update-branch mutation");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh -R masonwells1/CRX_Manager_V1.0 api --method PATCH repos/masonwells1/CRX_Manager_V1.0/git/refs/heads/main -f force=true" },
+    repoDir: risky.repo,
+  }).blocked, true, "global gh flags cannot hide a forced ref update");
+  assert.equal(evaluateProductionAction({
     toolName: "Bash",
     toolInput: { command: "curl -X POST https://api.github.com/graphql -d '{\"query\":\"mutation { enablePullRequestAutoMerge(input: {}) }\"}'" },
     repoDir: risky.repo,
@@ -1184,14 +1203,13 @@ try {
   }
   // R4-3: single-pipe pipelines run every stage — the later main push is seen.
   {
-    const proofWasValid = evaluatePush(risky.repo, now).blocked === false;
     assert.equal(evaluateProductionAction({
       toolName: "PowerShell",
       toolInput: { command: "git push origin feature/test | git push origin main --force" },
       repoDir: risky.repo,
       nowMs: now,
     }).blocked, true, "piped force main push is inspected and denied");
-    assert.ok(proofWasValid, "sanity: proof was valid, so the deny came from the pipe stage");
+    assert.equal(evaluatePush(risky.repo, now).blocked, true, "direct main stays denied independently of the piped force regression");
   }
   // R4-4: abbreviated bulk options are still bulk.
   for (const command of [
@@ -1268,7 +1286,7 @@ try {
     input: JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "git push origin HEAD:main" } }),
   });
   assert.equal(allowedProcess.status, 0);
-  assert.equal(allowedProcess.stdout, "", "allow path stays silent for Codex hook compatibility");
+  assert.match(allowedProcess.stdout, /"permissionDecision":"deny"/, "direct main stays denied even with a valid proof");
 
   // --- Codex P1 (2026-07-25): PR merges must bind to GitHub's CURRENT base ---
   // Before this fix resolvePullRequest() never requested baseRefOid and
@@ -1448,7 +1466,7 @@ try {
   }
 
   console.log(`TRANSCRIPT DENY (no proof): exit=${deniedProcess.status} stdout=${deniedProcess.stdout}`);
-  console.log(`TRANSCRIPT ALLOW (valid wrapper-shaped proof): exit=${allowedProcess.status} stdout=${JSON.stringify(allowedProcess.stdout)}`);
+  console.log(`TRANSCRIPT DIRECT-MAIN DENY (even with valid proof): exit=${allowedProcess.status} stdout=${JSON.stringify(allowedProcess.stdout)}`);
   console.log("OK - production action guard checks passed.");
 } finally {
   for (const root of tempRoots) rmSync(root, { recursive: true, force: true });

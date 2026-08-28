@@ -46,6 +46,8 @@ ok(githubRepositoryIsGuarded("masonwells1/CRX_Manager_V1.0"), "canonical CRX rep
 ok(githubRepositoryIsGuarded("MASONWELLS1/crx_manager_v1.0"), "CRX repository identity is case-insensitive");
 ok(!githubRepositoryIsGuarded("other/repository"), "foreign repository identity is rejected");
 ok(ghApiMutates("gh api --method PUT repos/o/r/pulls/42/update-branch"), "unrecognized REST branch mutation is classified as a write");
+ok(ghApiMutates("gh -R o/r api --method PUT repos/o/r/pulls/42/update-branch"), "global gh flags cannot hide a REST branch mutation");
+ok(ghApiMutates("gh -R o/r api --method PATCH repos/o/r/git/refs/heads/main -f force=true"), "global gh flags cannot hide a forced ref update");
 ok(ghApiMutates("gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {}) }'"), "unrecognized GraphQL mutation is classified as a write");
 ok(!ghApiMutates("gh api repos/o/r/pulls/42"), "plain gh API GET remains read-only");
 ok(directGitHubApiWriter("curl -X POST https://api.github.com/graphql -d mutation"), "direct GraphQL writer is classified");
@@ -178,6 +180,9 @@ ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL query field d
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh api --method PUT repos/masonwells1/CRX_Manager_V1.0/pulls/123/update-branch" } });
 ok(r.decision?.permissionDecision === "deny", "unrecognized gh REST update-branch mutation is denied");
 
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh -R masonwells1/CRX_Manager_V1.0 api --method PATCH repos/masonwells1/CRX_Manager_V1.0/git/refs/heads/main -f force=true" } });
+ok(r.decision?.permissionDecision === "deny", "global gh flags cannot hide a forced ref update");
+
 r = runHook({ tool_name: "Bash", tool_input: { command: "curl -X POST https://api.github.com/graphql -d '{\"query\":\"mutation { enablePullRequestAutoMerge(input: {}) }\"}'" } });
 ok(r.decision?.permissionDecision === "deny", "direct curl GraphQL auto-merge mutation is denied");
 
@@ -208,6 +213,9 @@ ok(r.decision?.permissionDecision === "deny", "parenthesized gh merge denies bef
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "(gh pr update-branch 42 --repo o/r)" } });
 ok(r.decision?.permissionDecision === "deny", "parenthesized update-branch denies before parsing");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr update-branch 42 --repo masonwells1/CRX_Manager_V1.0 --rebase" } });
+ok(r.decision?.permissionDecision === "deny", "unattended update-branch rebase is denied as a history rewrite");
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "C:/attacker/gh.exe pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789" } });
 ok(r.decision?.permissionDecision === "deny", "arbitrary GitHub CLI path denies before PR inspection");

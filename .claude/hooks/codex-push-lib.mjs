@@ -2454,9 +2454,11 @@ export function ghApiMergeRequest(command) {
 // shared so Claude and Codex cannot disagree about a REST/GraphQL mutation.
 export function ghApiMutates(command) {
   const text = String(command || "");
-  if (!/(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) return false;
-  if (/\sapi\s+graphql\b/i.test(text) && /\bmutation\b/i.test(text)) return true;
+  if (!GH_BIN_RE.test(text)) return false;
   const words = splitShellArgs(text);
+  const apiIndex = words.findIndex((word) => String(word).toLowerCase() === "api");
+  if (apiIndex === -1) return false;
+  if (words.some((word, index) => index > apiIndex && String(word).toLowerCase() === "graphql") && /\bmutation\b/i.test(text)) return true;
   let method = "GET";
   let methodExplicit = false;
   let hasFields = false;

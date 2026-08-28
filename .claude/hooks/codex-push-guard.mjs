@@ -761,6 +761,9 @@ for (const pushCmd of pushCommands) {
   }
 
   const srcRef = mainPushSource(pushCmd, branch);
+  if (srcRef) {
+    deny("CODEX GATE: direct pushes to main are denied outside the protected CRX pull-request flow, unconditionally. Push one explicit feature branch and land it through the reviewed, green pull-request path; no extra Mason approval is required for that protected delivery.");
+  }
   if (!srcRef) {
     // Auto-merge can be armed before a later commit is pushed. GitHub then
     // merges that new commit after CI without any immediate merge command, so

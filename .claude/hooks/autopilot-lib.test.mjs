@@ -54,6 +54,10 @@ eq(autopilotDecision("PowerShell", { command: "g`h pr merge 42 --auto" }), "deny
 eq(autopilotDecision("Bash", { command: "g${EMPTY}h pr merge 42 --auto" }), "deny", "POSIX-composed gh is never auto-approved");
 eq(autopilotDecision("Bash", { command: "(gh pr merge 42 --auto)" }), "deny", "parenthesized gh merges are never auto-approved");
 eq(autopilotDecision("Bash", { command: "(gh pr update-branch 42 --repo o/r)" }), "deny", "parenthesized update-branch is never auto-approved");
+eq(autopilotDecision("Bash", { command: "gh pr update-branch 42 --repo o/r --rebase" }), "deny", "remote branch rebases are never auto-approved");
+eq(autopilotDecision("Bash", { command: "git push origin HEAD:main" }), "deny", "direct main pushes are never auto-approved");
+eq(autopilotDecision("Bash", { command: "git push origin HEAD:master" }), "deny", "direct master pushes are never auto-approved");
+eq(autopilotDecision("Bash", { command: "git push origin HEAD:production" }), "deny", "direct production pushes are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh p\\r m\\erge 42 --auto" }), "deny", "POSIX-escaped GitHub words are never auto-approved");
 eq(autopilotDecision("PowerShell", { command: "gh p^r m^erge 42 --auto" }), "deny", "cmd-caret-composed GitHub words are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh a\\pi graphql --input payload.json" }), "deny", "POSIX-escaped GitHub API is never auto-approved");

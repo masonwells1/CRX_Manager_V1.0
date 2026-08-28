@@ -569,6 +569,9 @@ function gatePullRequestUpdateBranch({ request, repoDir, runGh }) {
   if (!updateBranchRequestHasExplicitContext(request)) {
     return denied("CODEX PRODUCTION GATE: `gh pr update-branch` must explicitly name one numeric PR and `--repo owner/repo` in one standalone command.");
   }
+  if (request.rebase) {
+    return denied("CODEX PRODUCTION GATE: `gh pr update-branch --rebase` rewrites shared remote history and requires Mason's explicit history-rewrite approval. Use the merge-based update without --rebase for unattended delivery.");
+  }
   let pullRequest;
   try {
     pullRequest = resolvePullRequest({ request, repoDir, runGh });
@@ -842,8 +845,7 @@ export function evaluateProductionAction({
       return denied("CODEX PRODUCTION GATE: `git push origin :main` deletes the production branch and is always denied.");
     }
     if (sourceRef) {
-      const result = gateMainChange({ repoDir: pushRepoDir, sourceRef, nowMs, runGit });
-      if (result.blocked) return result;
+      return denied("CODEX PRODUCTION GATE: direct pushes to main are denied unconditionally. Push one explicit feature branch and land it through the reviewed, green pull-request path; no extra Mason approval is required for that protected delivery.");
     } else {
       let featureBranches;
       try {
