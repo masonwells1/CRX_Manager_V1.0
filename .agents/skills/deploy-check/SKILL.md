@@ -130,9 +130,13 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 4. Freeze the candidate after the separate Codex review is clean, record its head SHA, then post
    exactly **`@coderabbitai review`**. Read the resulting review and fix every real issue; nitpicks
    may be dismissed with a one-line reason. If a fix or base update creates a new commit, restart
-   checks and request one follow-up review. Never use `@coderabbitai resume`, and reserve
+   required checks, rerun the exact-HEAD Codex proof when the corrected diff is Codex-worthy,
+   freeze and record the new SHA, and request one follow-up review. Never use `@coderabbitai resume`, and reserve
    `@coderabbitai full review` for a deliberately justified complete reread. GitHub requires one
-   current formal approval and dismisses it after a new commit. A separate exact-SHA
+   current formal approval and dismisses it after a new commit. Before merge, verify live `main`
+   protection still requires current approval with stale-review dismissal and confirm an
+   `APPROVED` CodeRabbit review has `commit_id` equal to the final `headRefOid`; a green status row
+   is insufficient. A separate exact-SHA
    `gpt-5.6-sol` high-effort proof remains the additional hard gate for risky money/RLS/migration
    diffs — both run, neither replaces the other.
 5. Merge. **The merge is the deploy.**

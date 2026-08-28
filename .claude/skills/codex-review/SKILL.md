@@ -199,11 +199,15 @@ freeze the candidate commit → trigger and resolve one CodeRabbit review → me
 the Codex review first, bring the branch current and green, freeze the release-candidate commit,
 record its head SHA, then post exactly `@coderabbitai review` on the PR. Read that review and fix any
 real issue before merging; nitpicks may be dismissed with a one-line reason. A fix or base update
-that changes the commit requires restarted checks and one follow-up review. Never use
+that changes the commit requires restarted checks, a refreshed exact-HEAD Codex proof when the
+corrected diff is Codex-worthy, a newly frozen and recorded SHA, and one follow-up review. Never use
 `@coderabbitai resume`, and reserve `@coderabbitai full review` for a deliberately justified
 complete reread. GitHub requires one current formal approval, dismisses stale approvals after a
-new commit, and requires approval from someone other than the last pusher. CodeRabbit's final
-approval is the normal merge-unlock path; the Codex proof below remains an additional hard gate
+new commit, and requires approval from someone other than the last pusher. Immediately before
+merge, verify live `main` protection still requires current approval with stale-review dismissal,
+then confirm an `APPROVED` CodeRabbit review has `commit_id` equal to the PR's final `headRefOid`;
+a green status row is not approval proof. CodeRabbit's final approval is the normal merge-unlock
+path; the Codex proof below remains an additional hard gate
 for risky money/RLS/migration diffs. Both run — neither replaces the other.
 
 **If the goal is a risky push to `main`** — the diff touches migrations / edge functions /
