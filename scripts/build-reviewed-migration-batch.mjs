@@ -10,7 +10,7 @@ const destructiveModule = ["..", ".claude", "hooks", "live-testdata-lib.mjs"].jo
 const { destructiveMigrationCheck, stripCommentsQuoteAware } = await import(new URL(destructiveModule, import.meta.url));
 
 export const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
-export const LEDGER_GUARD_MIGRATION = "20260828020000_enforce_global_migration_ledger_order";
+export const LEDGER_GUARD_MIGRATION = "20260827223000_enforce_global_migration_ledger_order";
 export const LEDGER_GUARD_PROSRC = "\n" + [
   "DECLARE",
   "  authored_version text;",

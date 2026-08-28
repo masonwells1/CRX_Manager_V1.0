@@ -1,17 +1,27 @@
-# Migration History (893 migration-history entries)
+# Migration History (894 migration-history entries)
 
 > **PRE-APPLY LIVE EVIDENCE (read this first).** The most recent read-only
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
-**Live-ledger re-read — 2026-08-25, after the save_job chem-unit invariant apply.**
-Read read-only from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`:
-**976 ledger rows**, `max(version)` `20260825142708`, and current live effective ordering
-high-water **`20260820120000`** (derived row by row: timestamp embedded in `name` when present,
-else that row's `version`). The newest row is `version = 20260825142708`, `name =
-20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` — see history row 891.
-Because that `name` carries a `20260820120000` prefix, the effective ordering high-water advances
-past the draw-down chain's `20260819232000` even though the assigned `version` is later.
+**Live-ledger/schema capture — 2026-08-27 11:43:53 UTC, after the quote-version trust apply.**
+The durable read-only capture from project `rhyzpcqhnizqbxphqdkr` records **978 ledger rows**.
+The matching live-introspection registry records `migrations_high_water` **`20260827113443`**,
+with `20260826220000_quote_version_restore_trust_boundary` as the latest applied authored name;
+the current effective ordering high-water is therefore **`20260826220000`**. The same registry
+records `quote_versions.restore_trusted_at`, proving the schema addition is present. This update
+does not claim a fresh re-read of function bodies or grants.
+
+**Status override for history row 892:** its embedded `MERGED TO MAIN — NOT APPLIED` candidate
+label is superseded by this newer live capture. The migration is applied as ledger version
+`20260827113443`; the row's remaining text is retained as its pre-apply design and ordering record.
+
+**Superseded 2026-08-25 header, kept for provenance** — its 976-row / `20260820120000` figures
+are two applies behind live and must not be used as the current ordering boundary:
+
+**Live-ledger re-read — 2026-08-25, after the save_job chem-unit invariant apply.** Read read-only
+from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`: **976 ledger rows**,
+`max(version)` `20260825142708`, and effective ordering high-water `20260820120000`.
 
 **Superseded 2026-08-24 (evening) header, kept for provenance** — correct as of that read, but its
 975-row / `20260819232000` figures are one apply behind live and must not be used as the current
@@ -1610,7 +1620,7 @@ These 10 historical migrations apply by timestamp order like all others; they si
 | 893 | 20260826150000 | **APPLIED LIVE 2026-08-26 20:59:35 UTC** (ledger version `20260826205935`; verified read-only from the ledger by the PR #499 session — 977 rows, name high-water now `20260826150000`; the applying session's own closeout is PR #501 and its record supersedes this line's apply details if they differ). **The apply out-ordered history row 892** — it advanced the name high-water past the then-pending `20260825190000` security migration, whose renumber to `20260826220000` (row 892) is the direct consequence. Original candidate record follows. File: `20260826150000_fix_save_job_comment_refusal_count.sql`, branch `claude/savejob-comment-twelve`. COMMENT-ONLY follow-up to row 891: exactly one `COMMENT ON FUNCTION public.save_job(uuid, jsonb, jsonb, jsonb, uuid, text)` statement, dollar-quoted; no body, ACL, table, policy, grant, or data change of any kind. The applied body raises TWELVE distinct refusal families (verified live 2026-08-26 by regexp over `pg_proc.prosrc`: 12 distinct `(CHEM|JOB)_*` tokens, including `JOB_ACRES_NOT_FINITE` from rounds 23–26), but the live comment says "ELEVEN refusals" and omits that token — the exact "comment can go stale the same way its first draft did" failure row 891's own header warns about. Four edits relative to the live `pg_description` text, otherwise byte-identical: the count word; a new "Job fields:" clause for `JOB_ACRES_NOT_FINITE` matching the body's check (every `acres_to_treat` ≥ 0 and finite, raised before any write; table-level residual stays recorded in row 891's KNOWN RESIDUALS); a missing comma after the `CHEM_RATE_UNIT_UNRECOGNIZED` clause; and — per the 2026-08-26 drift/RLS reviews (both CLEAN, drift H1 / rls M1) — the stale "NO save-blocking unit guard in JobDetail.tsx" passage replaced with the current truth that PR #436's merged client mirror fails closed while this function stays the authoritative boundary. Both reviewers' shared 5-arg-overload concern (drift H2) was refuted against live `pg_proc` the same day: exactly one `save_job`, six arguments. The "$931/lb" figure is retained deliberately — pre-existing in the applied comment and covered by Mason's 2026-08-24 public-repo decision. Ordering: authored stamp `20260826150000` > effective high-water `20260820120000`. LF-normalized SQL sha256: `b0c08e30d96e734c50495a249d1e4123f69ffc1966fdee79a8cd6605c9947dc0`. **No live apply is authorized by this repository change; the apply needs its own reviewer proofs and Mason's explicit in-chat OK.** |
 
 
-| 894 | 20260828020000 | **SOURCE ONLY — NOT APPLIED LIVE.** File: `20260828020000_enforce_global_migration_ledger_order.sql`, branch `codex/migration-approval-gate`. Installs a `BEFORE INSERT` trigger on `supabase_migrations.schema_migrations` that takes the production migration advisory lock and rejects an authored timestamp at or below the live effective high-water. The workflow byte-binds the trigger body and verifies its name, event shape, owner-execution mode, search path, signature, return type, enabled state, and body hash before candidate SQL and again before recording the candidate ledger row. This guard is deliberately a manual bootstrap: every older approved pending migration, including the Section 9 sequence, must be resolved first. No live apply is part of this repository change; the migration remains absent from production until its own reviewed rollout. |
+| 894 | 20260827223000 | **SOURCE ONLY — NOT APPLIED LIVE.** File: `20260827223000_enforce_global_migration_ledger_order.sql`, branch `codex/migration-approval-gate`. Installs a `BEFORE INSERT` trigger on `supabase_migrations.schema_migrations` that takes the production migration advisory lock and rejects an authored timestamp at or below the live effective high-water. The workflow byte-binds the trigger body and verifies its name, event shape, owner-execution mode, search path, signature, return type, enabled state, and body hash before candidate SQL and again before recording the candidate ledger row. This guard is deliberately a manual bootstrap: every older approved pending migration, including the Section 9 sequence, must be resolved first. No live apply is part of this repository change; the migration remains absent from production until its own reviewed rollout. |
 
 > **Recovery note (2026-08-12; rows 880-885).** These six migrations were **applied to production on 2026-08-12 by concurrent sessions that never landed their files** — no branch, no worktree and no pull request carried them, so for part of a day `main` did not describe production and six migrations running against live money could not be reviewed by anyone. This is the same class of gap PR #371 closed on 2026-08-11; it reopened the next day, six files wide. The files here are **not reconstructions**. Each is the exact `apply_migration` payload recovered verbatim — five from the applying session's transcript and `20260812115238` from the live ledger — complete with its original header, preconditions and review history. **All six are published byte-identical.** `20260812115238`'s 35-row approved preimage map was withheld when the file first landed, because it lists live order-line identifiers with their prices and profit and this repository is public; Mason directed on 2026-08-14 that it be published in full, on his stated basis that the figures in this system are not real or operational. Fidelity was then proven rather than asserted: function bodies extracted from the recovered text were md5-compared against live `pg_proc.prosrc`, matching exactly and at identical length for `_guard_below_cost_approval_immutable`, `_resnapshot_order_item_cost_on_product_change`, `_snapshot_quote_item_cost` and `_guard_quote_item_cost_snapshot`. Landing them changes no production behaviour — every one is already running — it only makes the repository match what production is actually doing. The `version` column above carries the **file** timestamp, which is what the disk filename and the ordering guard key on; each row names the ledger version Supabase assigned at apply time, which is what `supabase_migrations.schema_migrations` records. The six are pinned `text eol=lf` in `.gitattributes` for the same reason as the Wave A files: several carry md5 pins computed against the live catalog, and a CRLF checkout would install bytes those pins were never computed against.
 >

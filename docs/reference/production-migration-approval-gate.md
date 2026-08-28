@@ -168,7 +168,7 @@ automated gate; safety takes priority over coverage.
 ## One-time ledger-guard bootstrap
 
 The workflow remains inert until
-`20260828020000_enforce_global_migration_ledger_order.sql` is applied through the existing reviewed
+`20260827223000_enforce_global_migration_ledger_order.sql` is applied through the existing reviewed
 manual path. Resolve or apply every older approved pending migration first; installing the guard
 intentionally makes any later attempt to insert an older authored timestamp fail and roll back.
 

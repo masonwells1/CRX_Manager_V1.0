@@ -1,16 +1,13 @@
 # Known Issues — Consolidated
 
 
-**Last verified: 2026-08-26 UTC, read-only live re-read while landing the COMMENT-only candidate
-`20260826150000` (history row 893, NOT applied) — every figure below unchanged from 2026-08-25.**
-**Live ledger is 976 rows, `max(version)` `20260825142708`, effective ordering high-water
-`20260820120000`** (name `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
-That migration applied live on 2026-08-25 on Mason's explicit in-chat approval; because its ledger
-`name` carries a `20260820120000` prefix, the effective ordering high-water advances past the
-draw-down chain's `20260819232000` even though the assigned `version` is later. History row 891
-and the header of `docs/reference/migration-history.md` carry the full apply record.
-(Superseded reading, kept for provenance: 975 rows / `max(version)` `20260825034622` /
-high-water `20260819232000` — correct until the save_job apply, one migration behind live.)
+**Last verified: 2026-08-27 11:43:53 UTC for migration-ledger and schema facts only.** A durable
+read-only capture records **978 ledger rows**. The matching live-introspection registry records
+`migrations_high_water` **`20260827113443`**, latest applied authored name
+`20260826220000_quote_version_restore_trust_boundary`, and effective ordering high-water
+**`20260826220000`**. It also records `quote_versions.restore_trusted_at`. The earlier 976- and
+977-row readings are superseded. This pass does not re-certify every issue narrative below or
+claim a fresh post-apply read of function bodies, grants, or operational counts.
 All four migrations
 of the draw-down chain are applied live — the cutover barrier (2026-08-24 midday, version
 `20260824185408`) and, later that day with Mason's explicit in-chat approval, the tier split
@@ -140,10 +137,10 @@ and updated in **all three pin locations in the SAME change**:
 1. `scripts/db-invariant-sweeps/predicates/quote-versions-rpc-owned.sql` (the standing sweep —
    its violation reasons print expected vs measured values, so an operator can tell an expected
    pin update from a real bypass);
-2. `supabase/migrations/20260826220000_quote_version_restore_trust_boundary.sql` (renumbered
-   from `20260825190000` on 2026-08-26 after the `20260826150000` COMMENT-only apply moved the
-   ledger high-water past it — see history entry 892 for the causal record) if it has not
-   yet applied (precondition preimage/helper/route pins AND postcondition body pins);
+2. the immutable applied migration
+   `supabase/migrations/20260826220000_quote_version_restore_trust_boundary.sql` as the historical
+   pin source; future re-emissions must place the new precondition/postcondition pins in a new
+   migration because applied migration files are never edited;
 3. `src/lib/quoteVersionWriteBoundary.test.ts` (the mirror test, which binds each pin to its
    own predicate branch).
 That forced review is the guard working, not a false positive.

@@ -1,29 +1,19 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-08-26 ~21:30 UTC for the migration ledger only** — read-only re-read
-after the `20260826150000` apply: **977 ledger rows**, `max(version)` `20260826205935`, and
-current live effective ordering name high-water **`20260826150000`**
-(`20260826150000_fix_save_job_comment_refusal_count`, history row 893, **applied live
-2026-08-26 20:59:35 UTC**). That apply superseded the earlier reading this header carried
-(976 rows / high-water `20260820120000`, taken while row 893 was still a candidate) — kept
-below for provenance, per this file's convention. Superseded text follows: re-read read-only
-on 2026-08-26 while landing the COMMENT-only candidate `20260826150000` (history row
-893, then NOT applied): still **976 ledger rows**, `max(version)` `20260825142708`, newest name
-`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` — every figure unchanged
-from the 2026-08-25 reading below. Original stamp text follows — a read-only
-re-read. **The live ledger has 976 rows**, `max(version)` `20260825142708`, and current live
-effective ordering high-water `20260820120000` (name
-`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
+**Last verified: 2026-08-27 11:43:53 UTC for the migration ledger and schema shape.** A durable
+read-only capture records **978 ledger rows**. The matching live-introspection registry records
+`migrations_high_water` **`20260827113443`**, with
+`20260826220000_quote_version_restore_trust_boundary` as the latest applied authored name; the
+current effective ordering name high-water is therefore **`20260826220000`**. The same registry
+records `quote_versions.restore_trusted_at`, so the quote-version trust migration is **applied
+live** and its schema marker exists. This evidence does not include a fresh post-apply read of the
+five routine bodies or their grants; the 2026-08-26 pre-apply fingerprint paragraph is superseded,
+not promoted into post-apply proof.
 
-**Also read live 2026-08-26, for the pending `20260826220000_quote_version_restore_trust_boundary`
-(PR #401; renumbered from `20260825190000` by PR #499 after the `20260826150000` COMMENT-only
-apply at 20:59:35 UTC moved the ledger name high-water past the old stamp — 977 rows now, see
-history entry 892 for the causal record):** `quote_versions.restore_trusted_at` is **absent** (the migration is unapplied), the
-table holds **3 rows across 2 quotes**, and all five routines of the quote-version trust chain
-(`create_quote_version`, `restore_quote_version`, `_create_quote_version_owner_impl`,
-`_restore_quote_version_owner_impl`, `_restore_quote_version_below_cost_impl_20260810`) have
-exactly **one overload each** with live normalized-body fingerprints matching the migration's
-precondition pins — so its preconditions hold and its blast radius is unchanged.
+The prior header readings are retained as provenance: 977 rows / `20260826205935` / authored
+high-water `20260826150000` after the COMMENT-only apply, and before that 976 rows /
+`20260825142708` / authored high-water `20260820120000`. They are historical and must not be used
+as the current ordering boundary.
 
 All four migrations of the draw-down chain are applied live: the cutover barrier (ledger version
 `20260824185408`) and, later on 2026-08-24 with Mason's explicit in-chat approval, the tier split
@@ -38,9 +28,10 @@ draw-down rollout closed. Its full apply record — approval, proofs, postflight
 history row 891 and the `KNOWN_ISSUES.md` entry, both landed by PR #475 from the session that ran
 it. This document states only the ledger fact and defers to those.
 
-**The schema registry matches live.** `.claude/schema-registry.json` records `migrations_high_water`
-`20260825142708`, refreshed after the `save_job` apply. (It was briefly one migration behind, at the
-`20260825034622` draw-down boundary; PR #475 closed that gap.)
+**Live schema evidence is newer than this branch's tracked registry.** The live-introspection
+registry generated 2026-08-27 records `migrations_high_water` `20260827113443` and the trust-marker
+column. This branch's `.claude/schema-registry.json` remains at `20260825142708`; its refresh belongs
+to a separate active product-data worktree and is intentionally not copied into this change.
 
 **Booking draws are RESUMED** — Mason released the pause in chat on 2026-08-25. The decision, the
 evidence it rests on, and what was explicitly *not* proven are recorded in
