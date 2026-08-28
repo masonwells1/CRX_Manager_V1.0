@@ -228,6 +228,11 @@ function gateRequest(request) {
     viewArgs.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,headRepositoryOwner,mergeStateStatus,statusCheckRollup,autoMergeRequest");
     if (request.repo) viewArgs.push("--repo", request.repo);
     pr = JSON.parse(gh(viewArgs));
+    // This shared Claude handler keeps one complete PR evidence shape for both
+    // merge and update-branch routes. The Codex hook intentionally requires
+    // baseRefOid only after it proves the target is main, because non-main work
+    // never consumes that SHA; the divergence is fail-closed here, not drift in
+    // the protected-main proof contract.
     if (!pr?.baseRefName || !pr?.headRefName || !pr?.headRefOid || !pr?.baseRefOid) {
       throw new Error("GitHub did not return baseRefName, baseRefOid, headRefName, and headRefOid");
     }

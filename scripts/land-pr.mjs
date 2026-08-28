@@ -109,21 +109,28 @@ function classifyRisky() {
 }
 
 function updateBranch(pr) {
+  let safety;
   try {
     const headRefName = String(pr?.headRefName || "").trim();
     if (!headRefName) throw new Error("GitHub did not report the PR head branch");
     const openPullRequests = JSON.parse(gh(exhaustiveHeadPullRequestsLookupArgs(REPO, headRefName)));
-    const safety = assessLandPrUpdate({
+    safety = assessLandPrUpdate({
       headRefName,
       headRepositoryOwner: pr.headRepositoryOwner,
       autoMergeRequest: pr.autoMergeRequest,
       repository: REPO,
       openPullRequests,
     });
-    if (!safety.allowed) {
-      console.error(`[land-pr] Refusing update-branch: ${safety.reason}. Disable auto-merge on every listed PR or use an ordinary non-protected head branch, then retry.`);
-      process.exit(1);
-    }
+  } catch (error) {
+    const msg = String(error?.stderr || error?.message || error);
+    console.error(`[land-pr] Could not prove the update-branch safety conditions, so no branch update was attempted. Details: ${msg.trim()}`);
+    process.exit(1);
+  }
+  if (!safety.allowed) {
+    console.error(`[land-pr] Refusing update-branch: ${safety.reason}. Disable auto-merge on every listed PR or use an ordinary non-protected head branch, then retry.`);
+    process.exit(1);
+  }
+  try {
     gh(["pr", "update-branch", prNumber, "--repo", REPO]);
     console.log(`[land-pr] PR was BEHIND main — ran 'gh pr update-branch ${prNumber}'; checks will re-run.`);
     return true;

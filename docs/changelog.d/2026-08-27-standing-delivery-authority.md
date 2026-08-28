@@ -93,6 +93,17 @@ the hook verifies that the complete boundary is tracked and Git-unchanged from t
 HEAD commit. A locally modified `land-pr.mjs` or `write-codex-push-proof.mjs` is denied instead of
 receiving unattended approval; committed exact-HEAD copies remain automatic.
 
+Final GitHub review closed two path-spelling gaps in that boundary. File-tool targets are now
+canonicalized before matching, so `./` and `../` cannot disguise a protected helper, and shell
+grouping characters such as PowerShell parentheses are recognized as path boundaries. Failure to
+resolve the fixed trusted GitHub CLI denies instead of letting the approval hook exit ambiguously.
+Inline interpreter write commands that explicitly name protected sources are also denied, while
+read-only searches containing the same text remain automatic.
+Integrity denials now state the actual recovery, the landing helper distinguishes safety-evidence
+failures from real update-branch conflicts, and the rollback runbook passes the required PR number
+to `gh pr view`. The Claude/Codex difference for non-main `baseRefOid` handling is documented as
+intentional; protected-main exact-base proof remains identical and unchanged.
+
 Feature pushes now resolve their effective push URL and query auto-merge state in that exact
 GitHub repository; an alternate remote cannot borrow CRX's result. The unattended form updates
 one explicit branch only (`HEAD:refs/heads/<branch>`). Tags, notes, implicit tag propagation,

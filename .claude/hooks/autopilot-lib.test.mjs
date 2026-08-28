@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { autopilotDecision, flagActive, intentFresh, overnightGateDecision, UNATTENDED_INTEGRITY_PATHS } from "./autopilot-lib.mjs";
+import { autopilotDecision, deliveryExecutableTrustedOrFalse, flagActive, intentFresh, overnightGateDecision, UNATTENDED_INTEGRITY_PATHS } from "./autopilot-lib.mjs";
 import { fixedGitHubCliExecutable } from "./codex-push-lib.mjs";
 
 // Keep the pure decision tests independent of CI/provider ambient variables.
@@ -80,9 +80,21 @@ for (const filePath of [
   eq(autopilotDecision("Edit", { file_path: filePath }), "deny", `armed autopilot cannot edit its guard boundary: ${filePath}`);
 }
 eq(autopilotDecision("apply_patch", { patch: "*** Update File: .claude/hooks/pr-merge-guard.mjs\n-old\n+disabled" }), "deny", "armed autopilot cannot patch its merge guard");
+for (const filePath of [
+  "scripts/./land-pr.mjs",
+  ".claude/foo/../hooks/pr-merge-guard.mjs",
+  ".codex/temporary/../hooks/production-action-guard.mjs",
+]) {
+  eq(autopilotDecision("Edit", { file_path: filePath }), "deny", `dot-segment protected path is canonicalized: ${filePath}`);
+}
 for (const command of [
   "Set-Content .claude/hooks/pr-merge-guard.mjs -Value disabled",
   'Set-Content .claude/hooks/pr"-"merge-guard.mjs -Value disabled',
+  "Set-Content ('.claude/hooks/pr-merge-guard.mjs') -Value disabled",
+  "Set-Content .claude/foo/../hooks/pr-merge-guard.mjs -Value disabled",
+  "Set-Content scripts/./land-pr.mjs -Value disabled",
+  `node -e "require('fs').writeFileSync('.claude/hooks/pr-merge-guard.mjs','disabled')"`,
+  `python -c "open('scripts/land-pr.mjs','w').write('disabled')"`,
   "echo disabled > .claude/hooks/pr-merge-guard.mjs",
   "rm .claude/hooks/pr-merge-guard.mjs",
   "sed -i s/deny/allow/ .claude/hooks/pr-merge-guard.mjs",
@@ -90,16 +102,19 @@ for (const command of [
   eq(autopilotDecision("PowerShell", { command }), "deny", `armed autopilot cannot shell-mutate its merge guard: ${command}`);
 }
 eq(autopilotDecision("Edit", { file_path: "src/components/OrderForm.tsx" }), "allow", "ordinary product edits remain unattended");
+eq(autopilotDecision("Bash", { command: `rg "node -e writeFileSync" .claude/hooks/autopilot-lib.mjs` }), "allow", "read-only searches that quote risky interpreter text remain unattended");
 for (const wrapper of ["scripts/write-codex-push-proof.mjs", "scripts/land-pr.mjs", "scripts/apply-live-testdata-maintenance-20260812.mjs"]) {
   eq(autopilotDecision("Bash", { command: `node ${wrapper}` }), "verify-integrity", `trusted wrapper execution requires committed integrity: ${wrapper}`);
   eq(autopilotDecision("PowerShell", { command: `Set-Content ${wrapper} -Value disabled` }), "deny", `trusted wrapper shell mutation is denied: ${wrapper}`);
 }
+eq(autopilotDecision("Bash", { command: "node scripts/./land-pr.mjs 513" }), "verify-integrity", "dot-segment wrapper execution still reaches integrity proof");
 
 // ── deny-set additions (2026-07-04): CLI deploy and direct remote writes ───
 eq(autopilotDecision("Bash", { command: "npx supabase functions deploy send-email" }), "deny", "CLI edge deploy denied");
 eq(autopilotDecision("Bash", { command: "supabase functions deploy process-document" }), "deny", "bare CLI edge deploy denied");
 eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash" }), "allow", "protected PR merge reaches the normal merge guard");
 eq(autopilotDecision("PowerShell", { command: `${trustedGh} pr merge 42 --repo masonwells1/CRX_Manager_V1.0 --disable-auto` }), "allow", "canonical trusted auto-merge cancellation proceeds without a prompt");
+eq(deliveryExecutableTrustedOrFalse("gh pr merge 42 --disable-auto", "gh", {}, () => { throw new Error("fixed CLI unavailable"); }), false, "trusted executable resolution exceptions fail closed");
 eq(autopilotDecision("PowerShell", { command: "gh pr merge 42 --repo masonwells1/CRX_Manager_V1.0 --disable-auto" }), "deny", "bare GitHub CLI cancellation is never auto-approved");
 eq(autopilotDecision("PowerShell", { command: "C:/attacker/gh.exe pr merge 42 --repo masonwells1/CRX_Manager_V1.0 --disable-auto" }), "deny", "arbitrary GitHub CLI cancellation is never auto-approved");
 eq(autopilotDecision("PowerShell", { command: `${trustedGh} pr merge 42 --repo attacker/repository --disable-auto` }), "deny", "foreign-repository cancellation is never auto-approved");
@@ -285,6 +300,7 @@ try {
     writeFileSync(wrapperPath, "// modified\n", "utf8");
     result = runHook(integrityDir, payload);
     ok(/"permissionDecision":\s*"deny"/.test(result.stdout), `dirty trusted wrapper execution is denied: ${wrapper.file}`);
+    ok(/AUTOPILOT INTEGRITY/.test(result.stdout), `dirty trusted wrapper explains the integrity recovery: ${wrapper.file}`);
     writeFileSync(wrapperPath, original, "utf8");
   }
 } finally {

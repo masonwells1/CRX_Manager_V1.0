@@ -35,6 +35,10 @@ function deny(name) {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `AUTOPILOT: "${name}" is in the never-auto-approve set (out-of-band deploy / force-push or history rewrite / destructive delete / secret or auth change / direct remote file write). Autopilot suppresses ordinary permission prompts but never bypasses these boundaries. Continue safe preparation automatically; ask Mason only if the exact hard-gated action is still required. Feature-branch pushes and protected green-PR merges are judged by their normal guards and do not need another confirmation. (Live migrations are gated separately: migration-apply-guard's proof gate, which also hard-refuses DESTRUCTIVE migrations while armed — Mason's settled 2026-07-13 policy.) Disarm with: node .claude/hooks/autopilot-arm.mjs --off` } }));
   process.exit(0);
 }
+function denyIntegrity(name) {
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `AUTOPILOT INTEGRITY: "${name}" runs a trusted delivery helper, but at least one protected source is untracked or differs from the current HEAD. Commit the intended changes or restore the protected files, then retry; unattended mode never runs a locally modified proof producer or landing helper.` } }));
+  process.exit(0);
+}
 
 function denyUnarmed(name) {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `OVERNIGHT HANDSHAKE: Mason asked for a hands-free run but autopilot is NOT armed, so "${name}" is paused. Arm it FIRST (node .claude/hooks/autopilot-arm.mjs --hours N), confirm to Mason in one plain-English line, then continue. If this is NOT actually a hands-free run, delete .claude/session-state/OVERNIGHT-INTENT.flag and continue normally. Reassurance without arming is the exact repeated failure this blocks.` } }));
@@ -97,6 +101,6 @@ const decision = autopilotDecision(payload?.tool_name, payload?.tool_input);
 if (decision === "deny") deny(payload?.tool_name || "(tool)");
 if (decision === "verify-integrity") {
   const command = String(payload?.tool_input?.command ?? payload?.tool_input?.cmd ?? "");
-  if (!integrityBoundaryMatchesHead(projectDir, command)) deny(payload?.tool_name || "(tool)");
+  if (!integrityBoundaryMatchesHead(projectDir, command)) denyIntegrity(payload?.tool_name || "(tool)");
 }
 allow();

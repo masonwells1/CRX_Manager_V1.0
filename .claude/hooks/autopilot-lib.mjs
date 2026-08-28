@@ -8,6 +8,7 @@
 // settings.json permissions.deny + bash-safety/migration-apply-guard, so this is
 // defense in depth, not the only line.
 
+import path from "node:path";
 import { deliveryExecutableIsTrusted, directGitHubApiWriter, disableAutoRequestHasExplicitContext, extractPatchDestinations, ghApiMutates, ghCliCommandIsUnknownOrAlias, ghMergeRequest, ghPrBaseRetargets, ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames, githubMutationEnvironmentOverrideNames, githubMutationUnsafeAmbientEnvironmentNames, githubRepositoryIsGuarded, rawHttpClientCommand, structuredPushEnvironmentOverrideNames } from "./codex-push-lib.mjs";
 
 // Tool NAMES that must never be auto-approved during an unattended run: live
@@ -54,8 +55,9 @@ const DENY_BASH_RES = [
 // cannot approve changes to itself, its owning guards, or their hook manifests:
 // otherwise one allowed edit could erase the independent delivery boundary and
 // a later merge would inherit the same armed approval.
-const DENY_PATH_RE = /(?:^|[\s"'=\\/])(?:\.env(?:\.|$)|\.claude[\\/](?:hooks(?:[\\/]|$)|settings(?:\.local)?\.json(?:$|[\s;&|]))|\.codex[\\/](?:hooks(?:[\\/]|$)|hooks\.json(?:$|[\s;&|])))/i;
+const DENY_PATH_RE = /(?:^|[\s"'=(),{}\[\]\\/])(?:\.env(?:\.|$)|\.claude[\\/](?:hooks(?:[\\/]|$)|settings(?:\.local)?\.json(?:$|[\s;&|(),{}\[\]]))|\.codex[\\/](?:hooks(?:[\\/]|$)|hooks\.json(?:$|[\s;&|(),{}\[\]])))/i;
 const SHELL_PATH_MUTATOR_RE = /(?:>|\b(?:set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|remove-item|move-item|copy-item|rename-item|ac|clc|cpi|mi|ni|ri|ren|rni|sc|si|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i;
+const INLINE_INTERPRETER_RE = /(?:^|[;&|()])\s*(?:&\s*)?(?:(?:"[^"]*[\\/](?:node|nodejs|bun|deno)(?:\.exe)?"|'[^']*[\\/](?:node|nodejs|bun|deno)(?:\.exe)?'|(?:\S*[\\/])?(?:node|nodejs|bun|deno)(?:\.exe)?)\s+(?:--eval|--print|-e|-p)\b|(?:"[^"]*[\\/](?:python\d*|py|ruby|perl)(?:\.exe)?"|'[^']*[\\/](?:python\d*|py|ruby|perl)(?:\.exe)?'|(?:\S*[\\/])?(?:python\d*|py|ruby|perl)(?:\.exe)?)\s+(?:-c|-e)\b|(?:"[^"]*[\\/](?:powershell|pwsh)(?:\.exe)?"|'[^']*[\\/](?:powershell|pwsh)(?:\.exe)?'|(?:\S*[\\/])?(?:powershell|pwsh)(?:\.exe)?)\s+-(?:command|encodedcommand)\b|(?:"[^"]*[\\/](?:bash|sh|zsh|cmd)(?:\.exe)?"|'[^']*[\\/](?:bash|sh|zsh|cmd)(?:\.exe)?'|(?:\S*[\\/])?(?:bash|sh|zsh|cmd)(?:\.exe)?)\s+(?:-c|\/c)\b)/i;
 export const UNATTENDED_INTEGRITY_PATHS = Object.freeze([
   ".claude/hooks/autopilot-lib.mjs",
   ".claude/hooks/unattended-autopilot.mjs",
@@ -80,10 +82,17 @@ const UNATTENDED_EXECUTOR_PATHS = UNATTENDED_INTEGRITY_PATHS.filter((filePath) =
 
 function shellLiteralViews(value) {
   const raw = String(value || "");
+  const dequoted = raw.replace(/["']/g, "");
+  const deescaped = dequoted.replace(/[`^]/g, "").replace(/\\(?=[^\s\\/])/g, "");
+  const pathTokens = [raw, dequoted, deescaped]
+    .flatMap((view) => view.split(/[\s"'`;|&=(),{}\[\]]+/))
+    .filter((token) => /[\\/]/.test(token))
+    .map((token) => path.posix.normalize(token.replaceAll("\\", "/")));
   return [...new Set([
     raw,
-    raw.replace(/["']/g, ""),
-    raw.replace(/["']/g, "").replace(/[`^]/g, "").replace(/\\(?=[^\s\\/])/g, ""),
+    dequoted,
+    deescaped,
+    ...pathTokens,
   ])];
 }
 
@@ -94,7 +103,7 @@ function normalizedViewContainsPath(view, filePath) {
   while (index !== -1) {
     const before = index === 0 ? "" : normalized[index - 1];
     const after = normalized[index + target.length] || "";
-    if ((!before || /[\s"'=;/]/.test(before)) && (!after || /[\s;&|]/.test(after))) return true;
+    if ((!before || /[\s"'=;/(),{}\[\]]/.test(before)) && (!after || /[\s;&|(),{}\[\]]/.test(after))) return true;
     index = normalized.indexOf(target, index + 1);
   }
   return false;
@@ -114,6 +123,14 @@ function unattendedBoundaryPathMentioned(value) {
   return shellLiteralViews(value).some((view) =>
     DENY_PATH_RE.test(view)
       || UNATTENDED_INTEGRITY_PATHS.some((filePath) => normalizedViewContainsPath(view, filePath)));
+}
+
+export function deliveryExecutableTrustedOrFalse(command, kind, options = {}, trust = deliveryExecutableIsTrusted) {
+  try {
+    return trust(command, kind, options);
+  } catch {
+    return false;
+  }
 }
 
 export function autopilotDecision(toolName, toolInput) {
@@ -140,9 +157,10 @@ export function autopilotDecision(toolName, toolInput) {
     if (mergeRequest?.disableAuto && (
       !disableAutoRequestHasExplicitContext(mergeRequest)
       || !githubRepositoryIsGuarded(mergeRequest.repo)
-      || !deliveryExecutableIsTrusted(cmd, "gh", { cwd: process.cwd(), env: { ...process.env, ...(input.env && typeof input.env === "object" ? input.env : {}) } })
+      || !deliveryExecutableTrustedOrFalse(cmd, "gh", { cwd: process.cwd(), env: { ...process.env, ...(input.env && typeof input.env === "object" ? input.env : {}) } })
     )) return "deny";
-    if (SHELL_PATH_MUTATOR_RE.test(cmd) && unattendedBoundaryPathMentioned(cmd)) return "deny";
+    if ((SHELL_PATH_MUTATOR_RE.test(cmd) || shellLiteralViews(cmd).some((view) => INLINE_INTERPRETER_RE.test(view)))
+      && unattendedBoundaryPathMentioned(cmd)) return "deny";
     for (const re of DENY_BASH_RES) {
       if (re.test(cmd)) return "deny";
     }
