@@ -178,6 +178,8 @@ for (const [sql, reasonPattern] of [
   ["CREATE MATERIALIZED VIEW public.crx_review_mv AS SELECT public.close_accounting_period();", /outside the audited DDL allowlist/],
   ["WITH changed AS (UPDATE public.customers SET active = false RETURNING id) SELECT count(*) FROM changed;", /outside the audited DDL allowlist/],
   ["INSERT INTO public.customers (name) VALUES ('unsafe');", /outside the audited DDL allowlist/],
+  ["CREATE TRIGGER crx_review_bypass BEFORE INSERT ON public.customers FOR EACH ROW EXECUTE FUNCTION public.crx_review_bypass();", /outside the audited DDL allowlist/],
+  ["CREATE FUNCTION public.crx_review_bypass() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN DELETE FROM public.customers; RETURN NEW; END $body$; CREATE TRIGGER crx_review_bypass BEFORE INSERT ON supabase_migrations.schema_migrations FOR EACH ROW EXECUTE FUNCTION public.crx_review_bypass();", /protected migration ledger reference/],
   ["DO $safe$ BEGIN IF EXISTS (SELECT 1) THEN NULL; END IF; END $safe$;", /top-level DO/],
   ["DO $unsafe$ BEGIN DELETE/**/FROM public.customers; END $unsafe$;", /top-level DO/],
   ["DO $unsafe$ BEGIN PERFORM public.close_accounting_period(); END $unsafe$;", /top-level DO/],
@@ -218,6 +220,9 @@ assert.ok(batch.includes("CRX migration is not newer than the live ledger"));
 assert.ok(batch.includes(PRIOR));
 assert.ok(batch.includes("CRX older repository migration is not recorded live"));
 assert.ok(batch.indexOf("CRX older repository migration is not recorded live") < batch.indexOf(SQL.trimEnd()));
+assert.equal((batch.match(/migration ledger (?:has|gained) a user-defined trigger/g) || []).length, 2,
+  "the ledger trigger surface must be checked before candidate SQL and immediately before ledger insert");
+assert.ok(batch.indexOf("migration ledger gained a user-defined trigger") < batch.indexOf("INSERT INTO supabase_migrations.schema_migrations"));
 assert.ok(batch.includes(`OR idempotency_key = '${HASH}'`),
   "the live ledger must reject exact SQL replay under a renamed migration");
 assert.ok(batch.indexOf("LOCK TABLE") < batch.indexOf("SELECT max(effective_version)"));

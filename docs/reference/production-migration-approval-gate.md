@@ -127,8 +127,11 @@ refusals park unusual migrations for a separately reviewed manual path.
 
 Admission is otherwise default-deny: only a narrow set of definition-only DDL statements is allowed.
 Top-level DML, `VALUES`, `COPY`, query-executing `CREATE TABLE AS`, materialized views, CTEs, index
-builds, `ALTER TABLE`, extensions, and unknown statement forms are parked. This deliberately means
-many valid migrations cannot use the automated gate; safety takes priority over coverage.
+builds, trigger DDL, `ALTER TABLE`, extensions, direct migration-ledger references, and unknown
+statement forms are parked. The transaction also requires zero user-defined triggers on the live
+migration ledger both before candidate SQL and immediately before its ledger insert. This
+deliberately means many valid migrations cannot use the automated gate; safety takes priority over
+coverage.
 
 That transaction locks the migration ledger, refuses duplicate versions, names, or exact SQL
 content and refuses out-of-order versions, runs the migration SQL, writes the content-bound ledger

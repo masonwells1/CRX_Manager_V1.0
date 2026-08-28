@@ -41,7 +41,6 @@ function auditedDdlAdmission(skeleton) {
       continue;
     }
     if (/^create\s+(?:or\s+replace\s+)?view\b/i.test(normalized)) continue;
-    if (/^(?:create|alter|drop)\s+(?:constraint\s+)?trigger\b/i.test(normalized)) continue;
     if (/^(?:create|alter|drop)\s+policy\b/i.test(normalized)) continue;
     if (/^create\s+(?:type|domain|sequence|schema)\b/i.test(normalized)) continue;
     if (/^alter\s+(?:type|sequence)\b/i.test(normalized)) continue;
@@ -67,6 +66,7 @@ export function transactionCompatibility(sql) {
   if (/\bexecute\s+(?!function\b|on\b)/i.test(visible)) return { ok: false, reason: "dynamic SQL execution" };
   if (/standard_conforming_strings/i.test(skeleton)) return { ok: false, reason: "standard_conforming_strings override" };
   if (/(?:^|;)\s*call\b/i.test(skeleton)) return { ok: false, reason: "CALL" };
+  if (/\bsupabase_migrations\b/i.test(skeleton)) return { ok: false, reason: "protected migration ledger reference" };
   const admission = auditedDdlAdmission(skeleton);
   if (!admission.ok) return admission;
   return { ok: true };
@@ -163,6 +163,14 @@ export function buildAtomicMigrationSql({ migrationName, query, queryHash, requi
     "  latest_version text;",
     "  missing_migration text;",
     "BEGIN",
+    "  IF EXISTS (",
+    "    SELECT 1 FROM pg_catalog.pg_trigger",
+    "    WHERE tgrelid = 'supabase_migrations.schema_migrations'::regclass",
+    "      AND NOT tgisinternal",
+    "  ) THEN",
+    "    RAISE EXCEPTION 'CRX migration ledger has a user-defined trigger';",
+    "  END IF;",
+    "",
     ...predecessorGuard,
     "  IF EXISTS (",
     "    SELECT 1 FROM supabase_migrations.schema_migrations",
@@ -190,6 +198,17 @@ export function buildAtomicMigrationSql({ migrationName, query, queryHash, requi
     "END",
     "$crx_guard$;",
     body,
+    "DO $crx_ledger_surface$",
+    "BEGIN",
+    "  IF EXISTS (",
+    "    SELECT 1 FROM pg_catalog.pg_trigger",
+    "    WHERE tgrelid = 'supabase_migrations.schema_migrations'::regclass",
+    "      AND NOT tgisinternal",
+    "  ) THEN",
+    "    RAISE EXCEPTION 'CRX migration ledger gained a user-defined trigger';",
+    "  END IF;",
+    "END",
+    "$crx_ledger_surface$;",
     "INSERT INTO supabase_migrations.schema_migrations",
     "  (version, statements, name, created_by, idempotency_key)",
     "VALUES (",
