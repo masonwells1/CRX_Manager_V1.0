@@ -45,6 +45,8 @@ import {
   ghUpdateBranchRequest,
   githubCliCommandIsDynamic,
   githubContextEnvironmentOverrideNames,
+  githubMutationEnvironmentOverrideNames,
+  githubMutationUnsafeAmbientEnvironmentNames,
   githubRepositoryContextOverrideMentioned,
   githubRepositoryIsGuarded,
   ghMergeRequest,
@@ -90,6 +92,14 @@ const requests = [];
 if (GITHUB_MERGE_TOOL.test(toolName)) {
   requests.push(mcpMergeRequest(toolInput));
 } else if (typeof toolInput.command === "string" && toolInput.command) {
+  const mutationEnv = githubMutationEnvironmentOverrideNames(toolInput.command, toolInput.env);
+  if (mutationEnv.length > 0) {
+    deny(`PR MERGE GATE: GitHub mutations cannot carry tool-level environment overrides (${mutationEnv.join(", ")}) because the shell could execute a different command than the guard inspected. Use the normal environment.`);
+  }
+  const unsafeAmbientEnv = githubMutationUnsafeAmbientEnvironmentNames(toolInput.command, process.env);
+  if (unsafeAmbientEnv.length > 0) {
+    deny(`PR MERGE GATE: GitHub mutations are denied while unsafe shell/network environment variables are active (${unsafeAmbientEnv.join(", ")}). Clear them before using the canonical guarded merge command.`);
+  }
   const executionEnv = { ...process.env, ...(toolInput.env && typeof toolInput.env === "object" ? toolInput.env : {}) };
   for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/).map((value) => value.trim()).filter(Boolean)) {
     if (commandStartsWithGitHubCli(segment) && !deliveryExecutableIsTrusted(segment, "gh", { cwd: payload?.cwd || process.cwd(), env: executionEnv })) {

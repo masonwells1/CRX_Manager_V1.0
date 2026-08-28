@@ -515,6 +515,14 @@ try {
     repoDir: risky.repo,
     runGh: () => { throw new Error("structured GitHub context override must deny before lookup"); },
   }).blocked, true, "a structured GH_CONFIG_DIR override is denied before merge inspection");
+  for (const name of ["BASH_ENV", "ENV", "HTTP_PROXY", "SSL_CERT_FILE", "HOME", "PATH", "TRACE_LABEL"]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: "gh pr merge 513 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", env: { [name]: "fixture" } },
+      repoDir: risky.repo,
+      runGh: () => { throw new Error(`structured GitHub mutation environment must deny before lookup: ${name}`); },
+    }).blocked, true, `structured GitHub mutation environment is denied before inspection: ${name}`);
+  }
   for (const command of [
     "(gh pr merge 513 --auto)",
     "echo <(gh api graphql --input payload.json)",

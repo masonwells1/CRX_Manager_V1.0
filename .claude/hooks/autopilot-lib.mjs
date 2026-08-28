@@ -8,7 +8,7 @@
 // settings.json permissions.deny + bash-safety/migration-apply-guard, so this is
 // defense in depth, not the only line.
 
-import { directGitHubApiWriter, ghCliCommandIsUnknownOrAlias, ghPrBaseRetargets, ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames, rawHttpClientCommand, structuredPushEnvironmentOverrideNames } from "./codex-push-lib.mjs";
+import { directGitHubApiWriter, ghCliCommandIsUnknownOrAlias, ghPrBaseRetargets, ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames, githubMutationEnvironmentOverrideNames, githubMutationUnsafeAmbientEnvironmentNames, rawHttpClientCommand, structuredPushEnvironmentOverrideNames } from "./codex-push-lib.mjs";
 
 // Tool NAMES that must never be auto-approved during an unattended run: live
 // prod mutations and branch/project lifecycle ops. Matched case-insensitively
@@ -63,6 +63,8 @@ export function autopilotDecision(toolName, toolInput) {
   // Bash
   const cmd = typeof input.command === "string" ? input.command : "";
   if (cmd) {
+    if (githubMutationEnvironmentOverrideNames(cmd, input.env).length > 0) return "deny";
+    if (githubMutationUnsafeAmbientEnvironmentNames(cmd, process.env).length > 0) return "deny";
     if (rawHttpClientCommand(cmd)) return "deny";
     if (directGitHubApiWriter(cmd)) return "deny";
     if (structuredPushEnvironmentOverrideNames(cmd, input.env).length > 0) return "deny";

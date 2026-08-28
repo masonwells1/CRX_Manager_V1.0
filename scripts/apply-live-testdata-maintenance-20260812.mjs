@@ -162,12 +162,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // quote-spliced GitHub API hostnames were normalized before classification,
   // and GitHub CLI extensions joined the unknown-command denial. The protected
   // producer transform remains identity-only for this shared push library.
-  codexGuard: "97af16d29153e39ed3b5df69cd6b2bb6baf60ed5",
-  pushLib: "4b4df96e4edb25bb37015386d7483fa6cfe693c4",
+  // Re-pinned after every structured environment override became invalid on a
+  // GitHub mutation and ambient shell-startup/network overrides became explicit
+  // fail-closed conditions, preventing execution from diverging after review.
+  codexGuard: "038f57003d9071d809ee7c25527f763ca480c1ab",
+  pushLib: "e2e00993306691f7e67e7af9cfa3a6dda6f4902d",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "f1b23f2c299e453b9d14c12788e297f0023785d6",
-  pushLib: "4b4df96e4edb25bb37015386d7483fa6cfe693c4",
+  codexGuard: "2ff7233500eb88189f3cc2b10f760ed037803c20",
+  pushLib: "e2e00993306691f7e67e7af9cfa3a6dda6f4902d",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

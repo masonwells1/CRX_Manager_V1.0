@@ -29,6 +29,8 @@ import {
   ghMergeRequest,
   githubCliCommandIsDynamic,
   githubContextEnvironmentOverrideNames,
+  githubMutationEnvironmentOverrideNames,
+  githubMutationUnsafeAmbientEnvironmentNames,
   githubRepositoryContextOverrideMentioned,
   githubRepositoryIsGuarded,
   isGitPush,
@@ -734,6 +736,14 @@ export function evaluateProductionAction({
     return denied("CODEX PRODUCTION GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");
   }
   const suppliedEnv = toolInput.env && typeof toolInput.env === "object" ? toolInput.env : {};
+  const mutationEnv = githubMutationEnvironmentOverrideNames(command, suppliedEnv);
+  if (mutationEnv.length > 0) {
+    return denied(`CODEX PRODUCTION GATE: GitHub mutations cannot carry tool-level environment overrides (${mutationEnv.join(", ")}) because the shell could execute a different command than the guard inspected. Use the normal environment.`);
+  }
+  const unsafeAmbientEnv = githubMutationUnsafeAmbientEnvironmentNames(command, process.env);
+  if (unsafeAmbientEnv.length > 0) {
+    return denied(`CODEX PRODUCTION GATE: GitHub mutations are denied while unsafe shell/network environment variables are active (${unsafeAmbientEnv.join(", ")}). Clear them before using the canonical guarded merge command.`);
+  }
   const githubContextEnv = githubContextEnvironmentOverrideNames(suppliedEnv);
   if (githubContextEnv.length > 0) {
     return denied(`CODEX PRODUCTION GATE: structured GitHub context overrides are denied (${githubContextEnv.join(", ")}) because the executed host/repository/configuration could differ from the sanitized inspection. Use an explicit --repo owner/repo with the normal environment.`);

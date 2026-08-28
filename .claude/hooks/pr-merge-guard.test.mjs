@@ -19,6 +19,8 @@ import {
   ghMergeRequest,
   ghUpdateBranchRequest,
   githubCliCommandIsDynamic,
+  githubMutationEnvironmentOverrideNames,
+  githubMutationUnsafeAmbientEnvironmentNames,
   githubRepositoryIsGuarded,
   mcpMergeRequest,
   mergeRequestHasExplicitContext,
@@ -73,6 +75,10 @@ ok(ghCliCommandIsUnknownOrAlias("gh alias set ship 'api graphql'"), "GitHub CLI 
 ok(ghCliCommandIsUnknownOrAlias("gh extension exec unsafe"), "GitHub CLI extensions are denied");
 ok(ghCliCommandIsUnknownOrAlias("gh ship"), "unknown top-level gh command is treated as an alias");
 ok(!ghCliCommandIsUnknownOrAlias("gh -R o/r pr view 42"), "known gh command after global flags remains classified");
+const canonicalMutation = "gh pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789";
+eq(githubMutationEnvironmentOverrideNames(canonicalMutation, { TRACE_LABEL: "fixture" }), ["TRACE_LABEL"], "every structured environment override on a GitHub mutation is classified");
+eq(githubMutationUnsafeAmbientEnvironmentNames(canonicalMutation, { BASH_ENV: "fixture", GH_TOKEN: "expected-auth" }), ["BASH_ENV"], "unsafe ambient shell startup variables are classified without rejecting normal inherited authentication");
+eq(githubMutationEnvironmentOverrideNames("gh pr view 42 --repo o/r", { TRACE_LABEL: "fixture" }), [], "read-only GitHub commands do not acquire the mutation environment rule");
 ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r --base main"), "literal PR base retarget is classified");
 ok(ghPrBaseRetargets("gh -R o/r pr edit 42 --base=production"), "global flags and attached base values cannot hide retargeting");
 ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r -B main"), "short PR base retarget is classified");
@@ -180,9 +186,10 @@ ok(!coderabbitReviewGate({ ...completeCr, comments: [{ body: "Review failed", up
 
 // ── hook decision paths that need no gh (stdin spawn) ────────────────────────
 const HOOK = path.join(__dirname, "pr-merge-guard.mjs");
-function runHook(payload) {
+function runHook(payload, extraEnv = {}) {
   const res = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(payload), encoding: "utf8", timeout: 15000,
+    env: { ...process.env, ...extraEnv },
   });
   let decision = null;
   try { decision = JSON.parse(res.stdout).hookSpecificOutput; } catch { decision = null; }
@@ -267,6 +274,14 @@ ok(r.decision?.permissionDecision === "deny", "disable-auto used as body text ca
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", env: { GH_HOST: "attacker.example" } } });
 ok(r.decision?.permissionDecision === "deny", "structured GH_HOST override denies before merge inspection");
 ok(/structured GitHub context overrides/.test(r.decision?.permissionDecisionReason || ""), "structured environment denial explains the execution-context mismatch");
+
+for (const name of ["BASH_ENV", "ENV", "HTTP_PROXY", "SSL_CERT_FILE", "HOME", "PATH", "TRACE_LABEL"]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", env: { [name]: "fixture" } } });
+  ok(r.decision?.permissionDecision === "deny", `structured GitHub mutation environment is denied: ${name}`);
+}
+
+r = runHook({ tool_name: "Bash", tool_input: { command: canonicalMutation } }, { BASH_ENV: "C:/fixture/startup.sh" });
+ok(r.decision?.permissionDecision === "deny", "ambient BASH_ENV denies a GitHub mutation before merge inspection");
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "gh pr m''erge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "empty-quote composed merge token denies before parsing");

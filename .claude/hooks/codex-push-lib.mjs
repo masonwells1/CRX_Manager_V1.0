@@ -2321,6 +2321,38 @@ export function githubContextEnvironmentOverrideNames(env) {
   return Object.keys(env).filter((name) => GITHUB_CONTEXT_ENV_NAMES.has(String(name).toUpperCase()));
 }
 
+// A GitHub mutation must execute in the same environment the guard inspected.
+// Even an apparently unrelated tool-level variable can change shell startup,
+// executable resolution, proxying, certificate trust, or gh configuration.
+export function githubMutationCommandMentioned(command) {
+  const text = String(command || "");
+  const normalized = text.replace(/["'`^\\]/g, "").replace(/[(){}<>]/g, " ");
+  if (directGitHubApiWriter(text)) return true;
+  return text.split(/(?:&&|\|\|?|;|\r?\n)/).some((segment) => (
+    Boolean(ghMergeRequest(segment))
+      || Boolean(ghUpdateBranchRequest(segment))
+      || ghPrBaseRetargets(segment)
+      || ghApiMutates(segment)
+  )) || /(?:^|[\s;&|])gh(?:\.exe)?\s+pr\s+(?:merge|update-branch|edit)\b/i.test(normalized);
+}
+
+export function githubMutationEnvironmentOverrideNames(command, env) {
+  if (!githubMutationCommandMentioned(command) || !env || typeof env !== "object" || Array.isArray(env)) return [];
+  return Object.keys(env);
+}
+
+const GITHUB_MUTATION_UNSAFE_AMBIENT_ENV_NAMES = new Set([
+  "BASH_ENV", "ENV", "ZDOTDIR",
+  "GH_CONFIG_DIR", "GH_HOST", "GH_REPO", "GITHUB_API_URL",
+  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+  "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO",
+]);
+
+export function githubMutationUnsafeAmbientEnvironmentNames(command, env) {
+  if (!githubMutationCommandMentioned(command) || !env || typeof env !== "object" || Array.isArray(env)) return [];
+  return Object.keys(env).filter((name) => GITHUB_MUTATION_UNSAFE_AMBIENT_ENV_NAMES.has(String(name).toUpperCase()));
+}
+
 export function mergeRequestHasExplicitContext(request) {
   const selector = String(request?.selector || "").trim();
   const repo = String(request?.repo || "").trim();

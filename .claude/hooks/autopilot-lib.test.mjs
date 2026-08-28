@@ -77,6 +77,10 @@ eq(autopilotDecision("Bash", { command: "gh alias set ship 'api graphql'" }), "d
 eq(autopilotDecision("Bash", { command: "gh extension exec unsafe" }), "deny", "GitHub CLI extensions are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh ship" }), "deny", "unknown GitHub CLI aliases are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh pr view 42 --repo o/r" }), "allow", "known read-only GitHub CLI commands remain auto-approved");
+eq(autopilotDecision("Bash", { command: "gh pr view 42 --repo o/r", env: { TRACE_LABEL: "fixture" } }), "allow", "read-only GitHub CLI commands may carry ordinary structured environment values");
+for (const name of ["BASH_ENV", "ENV", "HTTP_PROXY", "SSL_CERT_FILE", "HOME", "PATH", "TRACE_LABEL"]) {
+  eq(autopilotDecision("Bash", { command: "gh pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", env: { [name]: "fixture" } }), "deny", `GitHub mutations never auto-approve a structured environment override: ${name}`);
+}
 for (const command of [
   "cmd /c curl -X POST https://api.github.com/graphql -d mutation",
   "env -i curl -X POST https://api.github.com./graphql -d mutation",
