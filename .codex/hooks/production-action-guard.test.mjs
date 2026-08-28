@@ -242,9 +242,23 @@ try {
   assert.equal(maintenanceProducerCommandMentioned("node scripts/ordinary-check.mjs"), false);
   assert.equal(landPrCommandMentioned("node scripts/land-pr.mjs 513"), true, "land-pr execution is recognized");
   assert.equal(landPrCommandMentioned("node scripts\\land-pr.mjs 513"), true, "Windows land-pr execution is recognized");
+  assert.equal(landPrCommandMentioned("node scripts/./land-pr.mjs 513"), true, "dot-segment land-pr execution is recognized before canonical validation");
+  assert.equal(landPrCommandMentioned("node scripts//land-pr.mjs 513"), true, "duplicate-separator land-pr execution is recognized before canonical validation");
   assert.equal(landPrCommandMentioned("node scripts/ordinary-check.mjs"), false);
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/land-pr.mjs" } }).blocked, true, "direct land-pr edits are denied");
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/./land-pr.mjs" } }).blocked, true, "dot-segment land-pr edits are denied");
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts//land-pr.mjs" } }).blocked, true, "duplicate-separator land-pr edits are denied");
   assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { patch: "*** Begin Patch\n*** Update File: scripts/land-pr-lib.mjs\n@@\n-old\n+new\n*** End Patch" } }).blocked, true, "direct land-pr helper patches are denied");
+  for (const equivalentPath of ["scripts/./land-pr.mjs", "scripts//land-pr.mjs"]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: `Set-Content ${equivalentPath} -Value unsafe` },
+    }).blocked, true, `shell mutation through equivalent path is denied: ${equivalentPath}`);
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: `node ${equivalentPath} 513` },
+    }).blocked, true, `execution through equivalent path is denied: ${equivalentPath}`);
+  }
 
   const landPrRepo = makeRepo("scripts/land-pr.mjs", "#!/usr/bin/env node\n");
   const landPrLibPath = path.join(landPrRepo.repo, "scripts", "land-pr-lib.mjs");

@@ -111,16 +111,41 @@ export function maintenanceProducerCommandMentioned(command) {
 }
 
 export function landPrCommandMentioned(command) {
-  const normalized = String(command || "").replaceAll("\\", "/");
-  return /(?:^|[\s'"/])(?:\.\/)?scripts\/land-pr\.mjs(?=$|[\s'"])/i.test(normalized);
+  return /(?:^|[\s;&|'"/\\])land-pr\.mjs(?=$|[\s;&|'"/\\])/i.test(String(command || ""));
+}
+
+function landPrInvocationPaths(command) {
+  const paths = [];
+  const matcher = /(?:^|[\s;&|])(?:"([^"]*land-pr\.mjs)"|'([^']*land-pr\.mjs)'|([^\s;&|]*land-pr\.mjs))(?=$|[\s;&|])/gi;
+  for (const match of String(command || "").matchAll(matcher)) paths.push(match[1] || match[2] || match[3]);
+  return paths;
+}
+
+function landPrInvocationIsCanonical(command, repoDir) {
+  const expected = path.resolve(repoDir, LAND_PR_FILES[0]);
+  const candidates = landPrInvocationPaths(command);
+  if (candidates.length !== 1) return false;
+  const literal = String(candidates[0] || "");
+  const slashView = literal.replaceAll("\\", "/");
+  if (/(?:^|\/)\.{1,2}(?:\/|$)/.test(slashView) || /\/\//.test(slashView)) return false;
+  return path.resolve(repoDir, literal) === expected;
 }
 
 function normalize(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
 }
 
-function protectedHarnessPathMentioned(value) {
-  return PROTECTED_HARNESS_PATH_RE.test(String(value || "").trim());
+function protectedHarnessPathMentioned(value, repoDir) {
+  const literal = String(value || "").trim().replace(/^['"]|['"]$/g, "");
+  if (!literal) return false;
+  const resolvedRepo = path.resolve(repoDir);
+  const resolvedCandidate = path.resolve(resolvedRepo, literal);
+  const relative = path.relative(resolvedRepo, resolvedCandidate).replaceAll("\\", "/");
+  if (!relative) return false;
+  if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
+    return PROTECTED_HARNESS_PATH_RE.test(path.normalize(literal).replaceAll("\\", "/"));
+  }
+  return PROTECTED_HARNESS_PATH_RE.test(relative);
 }
 
 // scripts/apply-migration-file.mjs mutates the LIVE database. It was added
@@ -474,6 +499,9 @@ function gateMaintenanceProducerExecution({ command, repoDir, nowMs, runGit }) {
 
 function gateLandPrExecution({ command, repoDir, nowMs, runGit }) {
   if (!landPrCommandMentioned(command)) return { blocked: false };
+  if (!landPrInvocationIsCanonical(command, repoDir)) {
+    return denied("CODEX PRODUCTION GATE: land-pr must be invoked through the single canonical repository-relative path scripts/land-pr.mjs. Dot segments, duplicate separators, alternate roots, wrappers, and multiple script paths are denied.");
+  }
 
   let headSha;
   let baseSha;
@@ -706,7 +734,7 @@ export function evaluateProductionAction({
   }
   const mutatingFileTool = /(?:write|edit|delete|move|rename|patch|replace|create|update)/i.test(name);
   if (mutatingFileTool && (
-    [...pathCandidates, ...patchDestinations].some((candidate) => protectedHarnessPathMentioned(candidate))
+    [...pathCandidates, ...patchDestinations].some((candidate) => protectedHarnessPathMentioned(candidate, baseRepoDir))
   )) {
     return denied("CODEX PRODUCTION GATE: the production/review harness is a security boundary and cannot be changed through a direct file-write tool. Use the reviewed maintenance workflow with Mason's approval.");
   }
@@ -796,6 +824,9 @@ export function evaluateProductionAction({
   const shellMutatesPath = /(?:>|\b(?:set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|remove-item|move-item|copy-item|rename-item|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i.test(command);
   if (shellMutatesPath && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
     return denied("CODEX PRODUCTION GATE: direct shell mutation of the production/review harness is blocked. Use the reviewed maintenance workflow with Mason's approval.");
+  }
+  if (shellMutatesPath && landPrCommandMentioned(command)) {
+    return denied("CODEX PRODUCTION GATE: direct shell mutation of land-pr is blocked even through equivalent path spellings. Use the reviewed maintenance workflow with Mason's approval.");
   }
   if (isGitPush(command) && pushContextIsAmbiguous(command)) {
     return denied("CODEX PRODUCTION GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");

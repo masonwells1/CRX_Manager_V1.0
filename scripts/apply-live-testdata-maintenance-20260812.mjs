@@ -169,11 +169,11 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after land-pr and its pure safety helper joined the risky harness
   // paths so future edits to its child update-branch route require exact-head
   // adversarial review.
-  codexGuard: "4b6c88178fbd04fca19d955ee732df3aa57a3329",
+  codexGuard: "3debe66b52dd4fcaf6cfddbffaef3d3c38108e7e",
   pushLib: "01c30f112bb013ec538421dfd7af49ce53b7696b",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "9005003a60e74606f2c466576e97b2bd6f96fa5b",
+  codexGuard: "bd68edaaf63409d023511e919a08731de3e19ebf",
   pushLib: "01c30f112bb013ec538421dfd7af49ce53b7696b",
 };
 
