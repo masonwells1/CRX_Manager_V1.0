@@ -109,7 +109,9 @@ function auditedDdlAdmission(skeleton) {
 }
 
 export function transactionCompatibility(sql) {
-  if (/\bsupabase_migrations\b/i.test(String(sql))) return { ok: false, reason: "protected migration ledger reference" };
+  const rawSql = String(sql);
+  if (/\bU\s*&\s*["']/i.test(rawSql)) return { ok: false, reason: "Unicode-escaped SQL syntax is outside the audited migration path" };
+  if (/\bsupabase_migrations\b/i.test(rawSql)) return { ok: false, reason: "protected migration ledger reference" };
   const skeleton = topLevelSkeleton(sql);
   if (skeleton === null) return { ok: false, reason: "migration SQL could not be tokenized safely" };
   const destructive = destructiveMigrationCheck(skeleton);

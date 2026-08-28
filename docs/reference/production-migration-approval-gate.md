@@ -132,7 +132,9 @@ statement forms are parked. `CREATE SCHEMA` is also parked because PostgreSQL pe
 and trigger declarations inside that single statement. `CREATE VIEW` is parked because owner-run
 views can bypass underlying RLS and inherit permissive default relation grants. `GRANT` is limited to function/procedure execution for `authenticated`
 and `service_role`; `REVOKE` is limited to those executable objects and known CRX roles. Quoted or
-unquoted references to the migration schema are denied before tokenization.
+unquoted references to the migration schema are denied before tokenization. PostgreSQL Unicode-escape
+syntax is denied anywhere in an automated migration, including inside stored-function bodies, so an
+escaped identifier cannot disguise a protected schema reference.
 
 The transaction requires the exact reviewed global ledger-order trigger—name, event shape,
 SECURITY DEFINER setting, fixed search path, and function-body hash—both before candidate SQL and
