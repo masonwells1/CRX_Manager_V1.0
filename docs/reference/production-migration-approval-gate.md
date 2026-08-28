@@ -148,7 +148,9 @@ refusals park unusual migrations for a separately reviewed manual path.
 Admission is otherwise default-deny: only a narrow set of definition-only DDL statements is allowed.
 Top-level DML, `VALUES`, `COPY`, query-executing `CREATE TABLE AS`, materialized views, CTEs, index
 builds, trigger DDL, `ALTER TABLE`, extensions, direct migration-ledger references, and unknown
-statement forms are parked. New or changed tables, functions, procedures, policies, grants, and
+statement forms are parked. Migration blobs are normalized from CRLF to LF and rejected if any lone
+carriage return remains; the top-level tokenizer also ends line comments on either carriage return
+or line feed. New or changed tables, functions, procedures, policies, grants, and
 revokes are also parked because they require semantic proof of RLS, actor binding, fixed search
 paths, deliberate access, and mutating-RPC idempotency. `CREATE SCHEMA` is parked because PostgreSQL
 permits embedded grants and trigger declarations inside that single statement. `CREATE VIEW` is

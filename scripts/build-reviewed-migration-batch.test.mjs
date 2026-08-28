@@ -5,6 +5,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { topLevelSkeleton } from "../.claude/hooks/migration-wrappability-lib.mjs";
+
 import {
   buildAtomicMigrationSql,
   CRX_PRODUCTION_REF,
@@ -238,6 +240,11 @@ await assert.rejects(() => collectAllPages(async () => Array.from({ length: 100 
 
 
 assert.deepEqual(transactionCompatibility(SQL), { ok: true });
+const bareCrExploit = "CREATE DOMAIN public.crx_probe AS text; -- review-only comment\rDELETE FROM public.customers;";
+assert.match(transactionCompatibility(bareCrExploit).reason, /bare carriage return/,
+  "a lone carriage return must be refused before PostgreSQL can end the line comment");
+assert.match(topLevelSkeleton(bareCrExploit), /DELETE FROM public\.customers/i,
+  "the shared top-level scanner must terminate a line comment on a lone carriage return");
 
 for (const [sql, reasonPattern] of [
   ["BEGIN; SELECT 1; COMMIT;", /top-level (?:BEGIN|COMMIT)/],

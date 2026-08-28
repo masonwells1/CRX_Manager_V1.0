@@ -97,6 +97,7 @@ function auditedDdlAdmission(skeleton) {
 
 export function transactionCompatibility(sql) {
   const rawSql = String(sql);
+  if (/\r(?!\n)/.test(rawSql)) return { ok: false, reason: "bare carriage return is not allowed in migration SQL" };
   if (/\bU\s*&\s*["']/i.test(rawSql)) return { ok: false, reason: "Unicode-escaped SQL syntax is outside the audited migration path" };
   if (/\bsupabase_migrations\b/i.test(rawSql)) return { ok: false, reason: "protected migration ledger reference" };
   const skeleton = topLevelSkeleton(sql);
@@ -125,8 +126,12 @@ function git(repoRoot, args, encoding = "utf8") {
 
 function readGitBlobUtf8(repoRoot, objectName, label) {
   const bytes = git(repoRoot, ["cat-file", "blob", objectName], null);
-  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes).replace(/\r\n/g, "\n"); }
+  let decoded;
+  try { decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
   catch { throw new Error(`${label} must be strict UTF-8`); }
+  const normalized = decoded.replace(/\r\n/g, "\n");
+  if (normalized.includes("\r")) throw new Error(`${label} contains a bare carriage return`);
+  return normalized;
 }
 
 export function readRegularMigrationBlob({ repoRoot, expectedCommit, migrationName }) {

@@ -41,7 +41,7 @@ export function topLevelSkeleton(sql) {
   while (i < n) {
     const ch = s[i];
     if (ch === "-" && s[i + 1] === "-") {
-      while (i < n && s[i] !== "\n") i++;
+      while (i < n && s[i] !== "\n" && s[i] !== "\r") i++;
       out += " ";
       continue;
     }
