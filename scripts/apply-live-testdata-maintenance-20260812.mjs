@@ -158,12 +158,16 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // then after PowerShell's `irm`/`iwr` GitHub API aliases were classified,
   // then after update-branch was barred from protected PR head branches, then
   // after wrapped GitHub API clients and normalized URL forms were classified.
+  // Re-pinned after raw HTTP clients became fail-closed during unattended work,
+  // quote-spliced GitHub API hostnames were normalized before classification,
+  // and GitHub CLI extensions joined the unknown-command denial. The protected
+  // producer transform remains identity-only for this shared push library.
   codexGuard: "97af16d29153e39ed3b5df69cd6b2bb6baf60ed5",
-  pushLib: "18753e8276d2c2bfc61ab1b0a09299ed15d0c47a",
+  pushLib: "4b4df96e4edb25bb37015386d7483fa6cfe693c4",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "f1b23f2c299e453b9d14c12788e297f0023785d6",
-  pushLib: "18753e8276d2c2bfc61ab1b0a09299ed15d0c47a",
+  pushLib: "4b4df96e4edb25bb37015386d7483fa6cfe693c4",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

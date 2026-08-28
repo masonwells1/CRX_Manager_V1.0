@@ -74,6 +74,7 @@ eq(autopilotDecision("Bash", { command: "gh pr edit 42 --repo o/r -B main" }), "
 eq(autopilotDecision("Bash", { command: "gh pr edit 42 --repo o/r -Bmain" }), "deny", "attached short PR base retargets are never auto-approved");
 eq(autopilotDecision("mcp__github__update_pull_request", { base: "main" }), "deny", "GitHub PR update tools are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh alias set ship 'api graphql'" }), "deny", "GitHub CLI alias management is never auto-approved");
+eq(autopilotDecision("Bash", { command: "gh extension exec unsafe" }), "deny", "GitHub CLI extensions are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh ship" }), "deny", "unknown GitHub CLI aliases are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh pr view 42 --repo o/r" }), "allow", "known read-only GitHub CLI commands remain auto-approved");
 for (const command of [
@@ -83,6 +84,8 @@ for (const command of [
 ]) {
   eq(autopilotDecision("Bash", { command }), "deny", `wrapped GitHub API writer is never auto-approved: ${command}`);
 }
+eq(autopilotDecision("Bash", { command: 'curl -X POST https://api.""github.com/graphql -d mutation' }), "deny", "quote-spliced GitHub API writer is never auto-approved");
+eq(autopilotDecision("Bash", { command: "curl https://example.com/health" }), "deny", "unbound raw HTTP clients are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh p\\r m\\erge 42 --auto" }), "deny", "POSIX-escaped GitHub words are never auto-approved");
 eq(autopilotDecision("PowerShell", { command: "gh p^r m^erge 42 --auto" }), "deny", "cmd-caret-composed GitHub words are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh a\\pi graphql --input payload.json" }), "deny", "POSIX-escaped GitHub API is never auto-approved");

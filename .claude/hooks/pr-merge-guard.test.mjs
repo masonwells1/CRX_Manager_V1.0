@@ -65,9 +65,12 @@ ok(directGitHubApiWriter("pwsh -Command irm https://api.github.com/graphql -Meth
 ok(directGitHubApiWriter("cmd /c curl -X POST https://api.github.com/graphql -d mutation"), "cmd-wrapped GitHub API writer is classified");
 ok(directGitHubApiWriter("env -i curl -X POST https://api.github.com./graphql -d mutation"), "env-wrapped trailing-dot GitHub API host is classified");
 ok(directGitHubApiWriter("cmd /c \"curl -X POST https://user:token@api.github.com/graphql -d mutation\""), "wrapped userinfo GitHub API URL is classified");
+ok(directGitHubApiWriter('curl -X POST https://api.""github.com/graphql -d mutation'), "quote-spliced GitHub API hostname is classified");
+ok(directGitHubApiWriter("curl -X POST https://api.'git'hub.com/graphql -d mutation"), "embedded-quote GitHub API hostname is classified");
 ok(!directGitHubApiWriter("curl https://api.github.com.evil.example/graphql"), "lookalike GitHub API host is not classified");
 ok(!directGitHubApiWriter("curl https://api.github.com@evil.example/graphql"), "userinfo cannot disguise a non-GitHub host");
 ok(ghCliCommandIsUnknownOrAlias("gh alias set ship 'api graphql'"), "GitHub CLI alias management is denied");
+ok(ghCliCommandIsUnknownOrAlias("gh extension exec unsafe"), "GitHub CLI extensions are denied");
 ok(ghCliCommandIsUnknownOrAlias("gh ship"), "unknown top-level gh command is treated as an alias");
 ok(!ghCliCommandIsUnknownOrAlias("gh -R o/r pr view 42"), "known gh command after global flags remains classified");
 ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r --base main"), "literal PR base retarget is classified");
@@ -227,7 +230,10 @@ for (const command of [
   "cmd /c curl -X POST https://api.github.com/graphql -d mutation",
   "env -i curl -X POST https://api.github.com./graphql -d mutation",
   "cmd /c \"curl -X POST https://user:token@api.github.com/graphql -d mutation\"",
+  'curl -X POST https://api.""github.com/graphql -d mutation',
+  "curl -X POST https://api.'git'hub.com/graphql -d mutation",
   "gh alias set ship 'api graphql'",
+  "gh extension exec unsafe",
   "gh ship",
 ]) {
   r = runHook({ tool_name: "Bash", tool_input: { command } });

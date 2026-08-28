@@ -2516,12 +2516,33 @@ export function ghApiMutates(command) {
   return !methodExplicit && hasFields;
 }
 
+const RAW_HTTP_CLIENT_NAMES = new Set([
+  "curl", "wget", "invoke-restmethod", "invoke-webrequest", "irm", "iwr",
+]);
+
+// Raw HTTP clients can assemble their target after the hook has inspected the
+// command. Unattended work therefore must use a repository-aware client such as
+// the guarded `gh` grammar instead of an unbound HTTP writer.
+export function rawHttpClientCommand(command) {
+  const text = String(command || "");
+  const words = splitShellArgs(text);
+  const literalClientMention = /(?:^|[\s;&|("'])(?:(?:[A-Za-z]:)?[^\s;&|"']*[\\/])?(?:curl(?:\.exe)?|wget(?:\.exe)?|invoke-restmethod|invoke-webrequest|irm|iwr)(?=\s|[)"']|$)/i.test(text);
+  if (literalClientMention) return true;
+  return words.some((word) => {
+    const basename = String(word || "").replace(/^&/, "").replace(/^['"]|['"]$/g, "").replaceAll("\\", "/").split("/").at(-1).replace(/\.exe$/i, "").toLowerCase();
+    return RAW_HTTP_CLIENT_NAMES.has(basename);
+  });
+}
+
 // Raw HTTP clients do not share the trusted gh environment or canonical
 // repository parser. Deny direct calls to GitHub's API from common writers;
-// read-only GitHub evidence must use the fixed `gh` invocation above.
+// read-only GitHub evidence must use the fixed `gh` invocation above. Parse a
+// dequoted view as well: shells join `api.""github.com` and similar quote-spliced
+// tokens after this hook runs, so matching only the literal command is unsafe.
 export function directGitHubApiWriter(command) {
   const text = String(command || "");
-  const hasGitHubApiEndpoint = (text.match(/https?:\/\/[^\s'"`]+/gi) || []).some((raw) => {
+  const endpointView = text.replace(/["'`^\\]/g, "");
+  const hasGitHubApiEndpoint = (endpointView.match(/https?:\/\/[^\s]+/gi) || []).some((raw) => {
     try {
       const parsed = new URL(raw.replace(/[),;\]}]+$/, ""));
       const hostname = parsed.hostname.toLowerCase().replace(/\.+$/, "");
@@ -2532,7 +2553,7 @@ export function directGitHubApiWriter(command) {
   });
   if (!hasGitHubApiEndpoint) return false;
   const writerNames = new Set([
-    "curl", "wget", "invoke-restmethod", "invoke-webrequest", "irm", "iwr",
+    ...RAW_HTTP_CLIENT_NAMES,
     "node", "python", "python3", "py", "ruby", "perl",
     "powershell", "pwsh", "cmd", "bash", "sh", "zsh", "fish", "env",
     "xargs", "start-process",
@@ -2565,7 +2586,7 @@ export function ghCliCommandIsUnknownOrAlias(command) {
     topLevel = word.toLowerCase();
     break;
   }
-  return !topLevel || topLevel === "alias" || !KNOWN_GH_TOP_LEVEL_COMMANDS.has(topLevel);
+  return !topLevel || topLevel === "alias" || topLevel === "extension" || !KNOWN_GH_TOP_LEVEL_COMMANDS.has(topLevel);
 }
 
 // MCP merge tool inputs — key spellings differ per connector (GitHub MCP uses
