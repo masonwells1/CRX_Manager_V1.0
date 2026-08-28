@@ -14,7 +14,7 @@ import { fixedGitHubCliExecutable } from "./codex-push-lib.mjs";
 
 // Keep the pure decision tests independent of CI/provider ambient variables.
 // Hostile ambient values are introduced explicitly by focused hook tests.
-for (const name of ["BASH_ENV", "ENV", "ZDOTDIR", "GH_CONFIG_DIR", "GH_HOST", "GITHUB_HOST", "GH_REPO", "GITHUB_API_URL"]) {
+for (const name of ["BASH_ENV", "ENV", "ZDOTDIR", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "GH_HOST", "GITHUB_HOST", "GH_REPO", "GITHUB_API_URL"]) {
   delete process.env[name];
 }
 
