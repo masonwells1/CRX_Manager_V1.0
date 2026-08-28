@@ -8,7 +8,7 @@
 // settings.json permissions.deny + bash-safety/migration-apply-guard, so this is
 // defense in depth, not the only line.
 
-import { directGitHubApiWriter, ghApiMutates, ghCliCommandIsUnknownOrAlias, ghPrBaseRetargets, ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames, githubMutationEnvironmentOverrideNames, githubMutationUnsafeAmbientEnvironmentNames, rawHttpClientCommand, structuredPushEnvironmentOverrideNames } from "./codex-push-lib.mjs";
+import { deliveryExecutableIsTrusted, directGitHubApiWriter, disableAutoRequestHasExplicitContext, ghApiMutates, ghCliCommandIsUnknownOrAlias, ghMergeRequest, ghPrBaseRetargets, ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames, githubMutationEnvironmentOverrideNames, githubMutationUnsafeAmbientEnvironmentNames, githubRepositoryIsGuarded, rawHttpClientCommand, structuredPushEnvironmentOverrideNames } from "./codex-push-lib.mjs";
 
 // Tool NAMES that must never be auto-approved during an unattended run: live
 // prod mutations and branch/project lifecycle ops. Matched case-insensitively
@@ -73,6 +73,12 @@ export function autopilotDecision(toolName, toolInput) {
     if (ghCliCommandIsUnknownOrAlias(cmd)) return "deny";
     if (ghPrBaseRetargets(cmd)) return "deny";
     if (ghUpdateBranchRequest(cmd)?.rebase) return "deny";
+    const mergeRequest = ghMergeRequest(cmd);
+    if (mergeRequest?.disableAuto && (
+      !disableAutoRequestHasExplicitContext(mergeRequest)
+      || !githubRepositoryIsGuarded(mergeRequest.repo)
+      || !deliveryExecutableIsTrusted(cmd, "gh", { cwd: process.cwd(), env: { ...process.env, ...(input.env && typeof input.env === "object" ? input.env : {}) } })
+    )) return "deny";
     for (const re of DENY_BASH_RES) {
       if (re.test(cmd)) return "deny";
     }

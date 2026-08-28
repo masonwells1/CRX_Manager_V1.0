@@ -2470,6 +2470,14 @@ export function mergeRequestHasExplicitContext(request) {
     && request?.atomicHeadMatch !== false;
 }
 
+export function disableAutoRequestHasExplicitContext(request) {
+  const selector = String(request?.selector || "").trim();
+  const repo = String(request?.repo || "").trim();
+  return request?.disableAuto === true
+    && /^\d+$/.test(selector)
+    && /^[^\s/]+\/[^\s/]+$/.test(repo);
+}
+
 export function updateBranchRequestHasExplicitContext(request) {
   const selector = String(request?.selector || "").trim();
   const repo = String(request?.repo || "").trim();
@@ -2576,7 +2584,8 @@ export function ghMergeRequest(command) {
   }
   if (disableAuto && auto) return { unsupportedAutoFlags: true };
   if (disableAuto) {
-    return selector && words.length === 5 ? null : { unsupportedSyntax: true };
+    if (squash || deleteBranch || matchHead) return { unsupportedSyntax: true };
+    return { selector, repo, disableAuto: true };
   }
   return { selector, repo, auto, matchHead, squash, atomicHeadMatch: true };
 }

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { autopilotDecision, flagActive, intentFresh, overnightGateDecision } from "./autopilot-lib.mjs";
+import { fixedGitHubCliExecutable } from "./codex-push-lib.mjs";
 
 // Keep the pure decision tests independent of CI/provider ambient variables.
 // Hostile ambient values are introduced explicitly by focused hook tests.
@@ -20,6 +21,10 @@ for (const name of ["BASH_ENV", "ENV", "ZDOTDIR", "GH_CONFIG_DIR", "GH_HOST", "G
 let pass = 0;
 function ok(cond, msg) { assert.ok(cond, msg); pass++; }
 function eq(a, b, msg) { assert.equal(a, b, msg); pass++; }
+const shellExecutable = (executable) => process.platform === "win32"
+  ? `& ${JSON.stringify(executable)}`
+  : JSON.stringify(executable);
+const trustedGh = shellExecutable(fixedGitHubCliExecutable());
 
 // ── SQL/migration: Mason-authorized to auto-run unattended (2026-07-10) ────
 // apply_migration + execute_sql are intentionally NOT denied — Mason owns this live
@@ -62,6 +67,10 @@ eq(autopilotDecision("Edit", { file_path: ".env" }), "deny", "Edit .env denied")
 eq(autopilotDecision("Bash", { command: "npx supabase functions deploy send-email" }), "deny", "CLI edge deploy denied");
 eq(autopilotDecision("Bash", { command: "supabase functions deploy process-document" }), "deny", "bare CLI edge deploy denied");
 eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash" }), "allow", "protected PR merge reaches the normal merge guard");
+eq(autopilotDecision("PowerShell", { command: `${trustedGh} pr merge 42 --repo masonwells1/CRX_Manager_V1.0 --disable-auto` }), "allow", "canonical trusted auto-merge cancellation proceeds without a prompt");
+eq(autopilotDecision("PowerShell", { command: "gh pr merge 42 --repo masonwells1/CRX_Manager_V1.0 --disable-auto" }), "deny", "bare GitHub CLI cancellation is never auto-approved");
+eq(autopilotDecision("PowerShell", { command: "C:/attacker/gh.exe pr merge 42 --repo masonwells1/CRX_Manager_V1.0 --disable-auto" }), "deny", "arbitrary GitHub CLI cancellation is never auto-approved");
+eq(autopilotDecision("PowerShell", { command: `${trustedGh} pr merge 42 --repo attacker/repository --disable-auto` }), "deny", "foreign-repository cancellation is never auto-approved");
 eq(autopilotDecision("Bash", { command: "PATH=/tmp/attacker gh pr merge 42 --squash" }), "deny", "command-local PATH overrides are never auto-approved for GitHub mutations");
 eq(autopilotDecision("PowerShell", { command: "&gh pr merge 42 --squash --auto" }), "allow", "PowerShell call-operator merge reaches the normal merge guard");
 eq(autopilotDecision("PowerShell", { command: "gh pr m''erge 42 --auto" }), "deny", "empty-quote composed merge is never auto-approved");

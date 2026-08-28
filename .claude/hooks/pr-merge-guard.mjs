@@ -35,6 +35,7 @@ import {
   createEvidenceBudget,
   coderabbitReviewGate,
   deliveryExecutableIsTrusted,
+  disableAutoRequestHasExplicitContext,
   describeRiskyContent,
   directGitHubApiWriter,
   exhaustiveHeadPullRequestsLookupArgs,
@@ -134,7 +135,7 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     }
     const cli = ghMergeRequest(segment);
     if (cli?.unsupportedSyntax) {
-      deny("PR MERGE GATE: noncanonical `gh pr merge` syntax is denied. Use exactly one literal `gh pr merge <number> --repo <owner/repo> --squash [--delete-branch] --match-head-commit <head-sha>` command, or `gh pr merge <number> --disable-auto` only to cancel auto-merge.");
+      deny("PR MERGE GATE: noncanonical `gh pr merge` syntax is denied. Use exactly one literal trusted-CLI `gh pr merge <number> --repo <owner/repo> --squash [--delete-branch] --match-head-commit <head-sha>` command, or run `node scripts/land-pr.mjs <number> --once` to cancel auto-merge through the fixed trusted CLI.");
     }
     if (cli?.unsupportedAutoFlags) {
       deny("PR MERGE GATE: mixed `--auto` and `--disable-auto` intent is denied. Use `--disable-auto` alone to cancel, or wait for checks and run one immediate exact-head merge without `--auto`.");
@@ -194,7 +195,12 @@ function listWorktreesFromProjectDir() {
 // deny() (which exits). The caller loops over every collected request — a
 // harmless merge earlier in a chain must never exempt a later one.
 function gateRequest(request) {
-  if (request.updateBranch ? !updateBranchRequestHasExplicitContext(request) : !mergeRequestHasExplicitContext(request)) {
+  const hasExplicitContext = request.updateBranch
+    ? updateBranchRequestHasExplicitContext(request)
+    : request.disableAuto
+      ? disableAutoRequestHasExplicitContext(request)
+      : mergeRequestHasExplicitContext(request);
+  if (!hasExplicitContext) {
     deny("PR MERGE GATE: every merge must explicitly name one numeric PR, `--repo owner/repo`, and the exact 40-character `--match-head-commit` SHA in one standalone command. Selectorless/current-branch context is denied.");
   }
   if (typeof toolInput.command === "string"
@@ -207,6 +213,10 @@ function gateRequest(request) {
   if (request.updateBranch && request.rebase) {
     deny("PR MERGE GATE: `gh pr update-branch --rebase` rewrites shared remote history and requires Mason's explicit history-rewrite approval. Use the merge-based update without --rebase for unattended delivery.");
   }
+  if (!githubRepositoryIsGuarded(request.repo)) {
+    deny("PR MERGE GATE: unattended merges, auto-merge cancellation, and branch updates are restricted to masonwells1/CRX_Manager_V1.0. Use a separate explicitly authorized workflow for any other repository.");
+  }
+  if (request.disableAuto) return;
   let pr;
   try {
     const viewArgs = ["pr", "view"];
@@ -225,10 +235,6 @@ function gateRequest(request) {
     deny(`PR MERGE GATE: could not resolve this pull request's base branch and exact SHAs, so the merge is denied (fail closed). ${error?.message || error}`);
   }
 
-  if (!githubRepositoryIsGuarded(request.repo)) {
-    deny("PR MERGE GATE: unattended merges and branch updates are restricted to masonwells1/CRX_Manager_V1.0. Use a separate explicitly authorized workflow for any other repository.");
-  }
-
   if (request.auto) {
     deny("PR MERGE GATE: `--auto` is denied for every PR regardless of its current base because a later base retarget or head mutation could bypass the exact-head reviewed merge path. Wait for checks, then perform one immediate guarded merge without `--auto`.");
   }
@@ -239,7 +245,7 @@ function gateRequest(request) {
     deny(`PR MERGE GATE: update-branch cannot mutate protected head branch "${destinationBranch}". Protected branches change only through the exact-head reviewed merge path.`);
   }
   if (request.updateBranch && pr.autoMergeRequest !== null) {
-    deny("PR MERGE GATE: update-branch is denied while auto-merge is armed on the target PR. Run gh pr merge <number> --disable-auto first, then retry; no Mason approval is required.");
+      deny("PR MERGE GATE: update-branch is denied while auto-merge is armed on the target PR. Run `node scripts/land-pr.mjs <number> --once` to cancel it through the fixed trusted GitHub CLI, then retry; no Mason approval is required.");
   }
   if (request.updateBranch && !pullRequestHeadMatchesRepository(pr, request.repo)) {
     deny("PR MERGE GATE: unattended update-branch is limited to same-repository PR heads. Fork heads require a separately reviewed workflow because their owner cannot be inferred from the base repository.");
@@ -254,7 +260,7 @@ function gateRequest(request) {
       deny(`PR MERGE GATE: could not prove auto-merge is disabled before mutating remote branch "${destinationBranch}", so the action is denied (fail closed). ${error?.message || error}`);
     }
     if (armed.length > 0) {
-      deny(`PR MERGE GATE: remote branch "${destinationBranch}" feeds an armed protected-branch PR (${armed.join(", ")}). Run gh pr merge ${armed[0]} --disable-auto first, then retry; no Mason approval is required.`);
+      deny(`PR MERGE GATE: remote branch "${destinationBranch}" feeds an armed protected-branch PR (${armed.join(", ")}). Run \`node scripts/land-pr.mjs ${armed[0]} --once\` to cancel it through the fixed trusted GitHub CLI, then retry; no Mason approval is required.`);
     }
     if (request.updateBranch) return;
   }

@@ -11,6 +11,7 @@ import {
   CODEX_MERGE_EVIDENCE_BUDGET_MS,
   coderabbitReviewGate,
   deliveryExecutableIsTrusted,
+  disableAutoRequestHasExplicitContext,
   destinationLooksLikeUrl,
   directGitHubApiWriter,
   contentIsRisky,
@@ -596,7 +597,7 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       return denied(`CODEX PRODUCTION GATE: could not prove auto-merge is disabled before mutating remote branch ${destinationBranch}, so the merge is denied (fail closed). ${error?.message || error}`);
     }
     if (armed.length > 0) {
-      return denied(`CODEX PRODUCTION GATE: remote branch ${destinationBranch} feeds an armed protected-branch PR (${armed.join(", ")}). Run gh pr merge ${armed[0]} --disable-auto first, then retry; no Mason approval is required.`);
+      return denied(`CODEX PRODUCTION GATE: remote branch ${destinationBranch} feeds an armed protected-branch PR (${armed.join(", ")}). Run \`node scripts/land-pr.mjs ${armed[0]} --once\` to cancel it through the fixed trusted GitHub CLI, then retry; no Mason approval is required.`);
     }
   }
   if (base === "master" || base === "production") {
@@ -682,7 +683,7 @@ function gatePullRequestUpdateBranch({ request, repoDir, runGh }) {
     return denied(`CODEX PRODUCTION GATE: update-branch cannot mutate protected head branch ${destinationBranch}. Protected branches change only through the exact-head reviewed merge path.`);
   }
   if (pullRequest.autoMergeRequest !== null) {
-    return denied("CODEX PRODUCTION GATE: update-branch is denied while auto-merge is armed on the target PR. Run gh pr merge <number> --disable-auto first, then retry; no Mason approval is required.");
+    return denied("CODEX PRODUCTION GATE: update-branch is denied while auto-merge is armed on the target PR. Run `node scripts/land-pr.mjs <number> --once` to cancel it through the fixed trusted GitHub CLI, then retry; no Mason approval is required.");
   }
   if (!pullRequestHeadMatchesRepository(pullRequest, request.repo)) {
     return denied("CODEX PRODUCTION GATE: unattended update-branch is limited to same-repository PR heads. Fork heads require a separately reviewed workflow because their owner cannot be inferred from the base repository.");
@@ -697,7 +698,7 @@ function gatePullRequestUpdateBranch({ request, repoDir, runGh }) {
     return denied(`CODEX PRODUCTION GATE: could not prove auto-merge is disabled before updating remote branch ${destinationBranch}, so the action is denied (fail closed). ${error?.message || error}`);
   }
   if (armed.length > 0) {
-    return denied(`CODEX PRODUCTION GATE: remote branch ${destinationBranch} feeds an armed protected-branch PR (${armed.join(", ")}). Run gh pr merge ${armed[0]} --disable-auto first, then retry; no Mason approval is required.`);
+      return denied(`CODEX PRODUCTION GATE: remote branch ${destinationBranch} feeds an armed protected-branch PR (${armed.join(", ")}). Run \`node scripts/land-pr.mjs ${armed[0]} --once\` to cancel it through the fixed trusted GitHub CLI, then retry; no Mason approval is required.`);
   }
   return { blocked: false };
 }
@@ -948,7 +949,7 @@ export function evaluateProductionAction({
       return denied("CODEX PRODUCTION GATE: GitHub REST merge calls are denied because file-backed request bodies can hide or override the expected head SHA. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
     }
     if (ghRequest?.unsupportedSyntax) {
-      return denied("CODEX PRODUCTION GATE: noncanonical `gh pr merge` syntax is denied. Use exactly one literal `gh pr merge <number> --repo <owner/repo> --squash [--delete-branch] --match-head-commit <head-sha>` command, or `gh pr merge <number> --disable-auto` only to cancel auto-merge.");
+      return denied("CODEX PRODUCTION GATE: noncanonical `gh pr merge` syntax is denied. Use exactly one literal trusted-CLI `gh pr merge <number> --repo <owner/repo> --squash [--delete-branch] --match-head-commit <head-sha>` command, or run `node scripts/land-pr.mjs <number> --once` to cancel auto-merge through the fixed trusted CLI.");
     }
     if (ghRequest?.unsupportedAutoFlags) {
       return denied("CODEX PRODUCTION GATE: mixed `--auto` and `--disable-auto` intent is denied. Use `--disable-auto` alone to cancel, or run one immediate exact-head merge without `--auto` after checks finish.");
@@ -956,6 +957,15 @@ export function evaluateProductionAction({
     if (ghRequest) {
       if (commandSegments.length !== 1) {
         return denied("CODEX PRODUCTION GATE: a merge must be one standalone command so directory, branch, repository, and PR context cannot change after inspection.");
+      }
+      if (ghRequest.disableAuto) {
+        if (!disableAutoRequestHasExplicitContext(ghRequest) || !githubRepositoryIsGuarded(ghRequest.repo)) {
+          return denied("CODEX PRODUCTION GATE: auto-merge cancellation must explicitly name one numeric PR and `--repo masonwells1/CRX_Manager_V1.0` in one standalone command.");
+        }
+        if (!deliveryExecutableIsTrusted(segment, "gh", { cwd: actionRepoDir, env: executionEnv })) {
+          return denied("CODEX PRODUCTION GATE: unattended auto-merge cancellation must invoke the literal absolute path of the trusted GitHub CLI. Bare `gh`, aliases, functions, arbitrary paths, and PATH resolution are denied.");
+        }
+        continue;
       }
       if (!mergeRequestHasExplicitContext(ghRequest)) {
         return denied("CODEX PRODUCTION GATE: every merge must explicitly name one numeric PR, `--repo owner/repo`, and the exact 40-character `--match-head-commit` SHA in one standalone command. Selectorless/current-branch context is denied.");
@@ -1075,7 +1085,7 @@ export function evaluateProductionAction({
           return denied(
             `CODEX PRODUCTION GATE: auto-merge is already armed on PR ${activeAutoMergePrs.map((number) => `#${number}`).join(", ")} ` +
             `for branch ${featureBranch}. A later push could then merge without an exact-head review. ` +
-            `Run \`gh pr merge ${activeAutoMergePrs[0]} --disable-auto\`, verify auto-merge is off, and retry this push.`,
+            `Run \`node scripts/land-pr.mjs ${activeAutoMergePrs[0]} --once\` to cancel it through the fixed trusted GitHub CLI, then retry this push.`,
           );
         }
       }

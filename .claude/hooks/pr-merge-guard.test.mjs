@@ -13,6 +13,8 @@ import {
   coderabbitReviewGate,
   createEvidenceBudget,
   directGitHubApiWriter,
+  disableAutoRequestHasExplicitContext,
+  fixedGitHubCliExecutable,
   ghApiMergeRequest,
   ghApiMutates,
   ghCliCommandIsUnknownOrAlias,
@@ -38,6 +40,10 @@ for (const name of ["BASH_ENV", "ENV", "ZDOTDIR", "GH_CONFIG_DIR", "XDG_CONFIG_H
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const shellExecutable = (executable) => process.platform === "win32"
+  ? `& ${JSON.stringify(executable)}`
+  : JSON.stringify(executable);
+const trustedGh = shellExecutable(fixedGitHubCliExecutable());
 let pass = 0;
 function ok(v, m) { assert.ok(v, m); pass++; }
 function eq(a, b, m) { assert.deepEqual(a, b, m); pass++; }
@@ -111,7 +117,9 @@ eq(ghMergeRequest("& 'C:\\Program Files\\GitHub CLI\\gh.exe' pr merge 42 --squas
 eq(ghMergeRequest('"/usr/bin/gh" pr merge 42 --squash'), { selector: "42", repo: "", auto: false, matchHead: "", squash: true, atomicHeadMatch: true }, "quoted Unix gh paths enter the merge parser");
 ok(ghMergeRequest("gh pr merge 42 --match-head-commit=abcdefabcdefabcdefabcdefabcdefabcdefabcd")?.unsupportedSyntax, "attached exact-head values are outside the canonical grammar");
 ok(ghMergeRequest("gh pr merge") !== null, "selectorless merge still gated");
-eq(ghMergeRequest("gh pr merge 5 --disable-auto"), null, "--disable-auto stands down (cancels, does not land)");
+eq(ghMergeRequest("gh pr merge 5 --repo masonwells1/CRX_Manager_V1.0 --disable-auto"), { selector: "5", repo: "masonwells1/CRX_Manager_V1.0", disableAuto: true }, "--disable-auto is represented explicitly for guard validation");
+ok(disableAutoRequestHasExplicitContext(ghMergeRequest("gh pr merge 5 --repo masonwells1/CRX_Manager_V1.0 --disable-auto")), "canonical cancellation has explicit PR and repository context");
+ok(!disableAutoRequestHasExplicitContext(ghMergeRequest("gh pr merge 5 --disable-auto")), "cancellation without an explicit repository fails context validation");
 ok(ghMergeRequest("gh pr merge 5 --auto --disable-auto")?.unsupportedAutoFlags, "mixed auto flags deny closed");
 ok(ghMergeRequest("gh pr merge 5 --auto --body --disable-auto")?.unsupportedSyntax, "body options are outside the canonical grammar");
 ok(ghMergeRequest("gh pr merge --body-file 123 456 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789")?.unsupportedSyntax, "unknown value-taking options cannot shift the inspected selector");
@@ -298,6 +306,19 @@ ok(r.decision?.permissionDecision === "deny", "quoted Unix gh path cannot bypass
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "gh pr merge 42 --auto --body --disable-auto" } });
 ok(r.decision?.permissionDecision === "deny", "disable-auto used as body text cannot bypass real auto flag");
+
+r = runHook({ tool_name: "PowerShell", tool_input: { command: `${trustedGh} pr merge 42 --repo masonwells1/CRX_Manager_V1.0 --disable-auto` } });
+ok(!r.decision, "canonical trusted auto-merge cancellation passes without full merge evidence lookup");
+
+for (const command of [
+  "gh pr merge 42 --repo masonwells1/CRX_Manager_V1.0 --disable-auto",
+  "C:/attacker/gh.exe pr merge 42 --repo masonwells1/CRX_Manager_V1.0 --disable-auto",
+  `${trustedGh} pr merge 42 --repo attacker/repository --disable-auto`,
+  `${trustedGh} pr merge 42 --repo masonwells1/CRX_Manager_V1.0 --disable-auto; echo chained`,
+]) {
+  r = runHook({ tool_name: "PowerShell", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `unsafe auto-merge cancellation is denied: ${command}`);
+}
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", env: { GH_HOST: "attacker.example" } } });
 ok(r.decision?.permissionDecision === "deny", "structured GH_HOST override denies before merge inspection");

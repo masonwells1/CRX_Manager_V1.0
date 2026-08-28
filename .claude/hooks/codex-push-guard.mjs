@@ -844,7 +844,7 @@ for (const pushCmd of pushCommands) {
       if (activeAutoMergePrs.length > 0) {
         deny(
           `CODEX GATE: auto-merge is already armed on PR ${activeAutoMergePrs.map((number) => `#${number}`).join(", ")} for branch ${featureBranch}. ` +
-          `A later push could then merge without an exact-head review. Run \`gh pr merge ${activeAutoMergePrs[0]} --disable-auto\`, verify auto-merge is off, and retry this push.`,
+          `A later push could then merge without an exact-head review. Run \`node scripts/land-pr.mjs ${activeAutoMergePrs[0]} --once\` to cancel it through the fixed trusted GitHub CLI, then retry this push.`,
         );
       }
     }

@@ -599,7 +599,7 @@ try {
     },
   });
   assert.equal(preArmedAutoMergePush.blocked, true, "an already-armed auto-merge blocks a later feature push");
-  assert.match(preArmedAutoMergePush.reason, /gh pr merge 513 --disable-auto/, "denial gives an agent-runnable recovery command");
+  assert.match(preArmedAutoMergePush.reason, /node scripts\/land-pr\.mjs 513 --once/, "denial gives an agent-runnable recovery command through the fixed CLI");
   assert.deepEqual(
     featurePushLookupArgs,
     ["api", "--method", "GET", "--paginate", "--slurp", "repos/masonwells1/crx_manager_v1.0/pulls", "-f", "state=open", "-f", "head=masonwells1:feature/test", "-f", "per_page=100"],
@@ -945,7 +945,7 @@ try {
     },
   });
   assert.equal(stackedMergeBlocked.blocked, true, "a stacked PR merge cannot mutate the head of an armed main PR");
-  assert.match(stackedMergeBlocked.reason, /disable-auto/, "stacked merge denial gives the automatic recovery action");
+  assert.match(stackedMergeBlocked.reason, /node scripts\/land-pr\.mjs 513 --once/, "stacked merge denial gives the automatic recovery action through the fixed CLI");
   assert.match(stackedLookupArgs, /head=masonwells1:develop/, "stacked merge checks the destination branch before GitHub mutates it");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
@@ -1104,6 +1104,25 @@ try {
     nowMs: now,
     runGh: runGhWithApprovedCodeRabbit,
   }).blocked, false, "gh PR merge to main uses the same valid proof gate");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `${trustedGh} pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --disable-auto` },
+    repoDir: risky.repo,
+    runGh: () => { throw new Error("cancellation must not require merge-readiness evidence"); },
+  }).blocked, false, "canonical trusted auto-merge cancellation is allowed without full merge evidence");
+  for (const command of [
+    "gh pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --disable-auto",
+    "C:/attacker/gh.exe pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --disable-auto",
+    `${trustedGh} pr merge 123 --repo attacker/repository --disable-auto`,
+    `${trustedGh} pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --disable-auto; echo chained`,
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      runGh: () => { throw new Error("unsafe cancellation must deny before evidence lookup"); },
+    }).blocked, true, `unsafe auto-merge cancellation is denied: ${command}`);
+  }
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `C:/attacker/gh.exe pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --squash --match-head-commit ${risky.sha}` },
