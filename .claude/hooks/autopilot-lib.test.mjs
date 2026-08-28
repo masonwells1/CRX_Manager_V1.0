@@ -117,6 +117,10 @@ eq(autopilotDecision("Bash", { command: "ln -sf /tmp/noop .claude/hooks/pr-merge
 eq(autopilotDecision("PowerShell", { command: "mklink .codex/hooks/production-action-guard.mjs C:/Temp/noop.mjs" }), "deny", "Windows links cannot replace a protected guard");
 eq(autopilotDecision("Bash", { command: '"/usr/bin/ln" -sf /tmp/noop .claude/hooks/pr-merge-guard.mjs' }), "deny", "absolute link executables cannot bypass the protected-path gate");
 eq(autopilotDecision("Bash", { command: `rg "ln -sf" .claude/hooks/autopilot-lib.mjs` }), "allow", "read-only searches mentioning link commands remain unattended");
+eq(autopilotDecision("Bash", { command: "tar -xf /tmp/guards.tar" }), "deny", "file-backed archive extraction is never auto-approved");
+eq(autopilotDecision("PowerShell", { command: "unzip -o C:/Temp/guards.zip" }), "deny", "zip extraction is never auto-approved");
+eq(autopilotDecision("Bash", { command: '"/usr/bin/tar" --extract --file /tmp/guards.tar' }), "deny", "absolute archive extractors cannot bypass the gate");
+eq(autopilotDecision("Bash", { command: `rg "tar -xf" .claude/hooks/autopilot-lib.mjs` }), "allow", "read-only searches mentioning archive extraction remain unattended");
 eq(autopilotDecision("Bash", { command: "node scripts/./land-pr.mjs 513" }), "verify-integrity", "dot-segment wrapper execution still reaches integrity proof");
 
 // ── deny-set additions (2026-07-04): CLI deploy and direct remote writes ───
