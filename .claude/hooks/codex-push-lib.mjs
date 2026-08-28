@@ -2317,6 +2317,18 @@ function githubCliParserWords(command) {
 // hidden merge/auto-merge/API write cannot bypass the exact-head parser.
 export function githubCliCommandIsDynamic(command) {
   const text = String(command || "");
+  // A command-local environment assignment changes what the shell executes,
+  // while the guard itself still sees the parent/tool environment. Most
+  // critically, `PATH=/tmp/shim gh pr merge ...` can run an attacker program
+  // after the trusted-executable check resolved /usr/bin/gh. GitHub mutations
+  // therefore require a standalone literal environment. Cover the native
+  // assignment forms of POSIX shells, cmd, and PowerShell; structured tool
+  // environments are rejected separately.
+  const inlineEnvironmentAssignment =
+    /(?:^|[;&|\r\n])\s*(?:(?:env(?:\s+(?:-[A-Za-z]+|--[A-Za-z][\w-]*(?:=\S+)?))*\s+)|export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)/i.test(text)
+    || /(?:^|[;&|\r\n])\s*set\s+(?:"[A-Za-z_][A-Za-z0-9_]*=|[A-Za-z_][A-Za-z0-9_]*=)/i.test(text)
+    || /\$env:[A-Za-z_][A-Za-z0-9_]*\s*=|(?:Set-Item|New-Item)\b[^\r\n;]*\bEnv:|\[Environment\]::SetEnvironmentVariable\s*\(/i.test(text);
+  if (inlineEnvironmentAssignment && githubMutationCommandMentioned(text)) return true;
   const emptyQuoteNormalized = text.replace(/(?:''|"")+/g, "");
   const dequoted = text.replace(/["']/g, "");
   const groupingNormalized = text.replace(/[(){}<>]/g, " ");

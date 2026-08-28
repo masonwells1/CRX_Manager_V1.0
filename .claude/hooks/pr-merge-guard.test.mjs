@@ -114,6 +114,10 @@ ok(ghMergeRequest("gh pr merge 5 --auto --body --disable-auto")?.unsupportedSynt
 ok(ghMergeRequest("gh pr merge --body-file 123 456 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789")?.unsupportedSyntax, "unknown value-taking options cannot shift the inspected selector");
 ok(ghMergeRequest("gh pr merge 123 456 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789")?.unsupportedSyntax, "multiple positional selectors fail closed");
 ok(githubCliCommandIsDynamic("gh pr m''erge 5 --auto"), "empty-quote composed merge token is dynamic");
+ok(githubCliCommandIsDynamic("PATH=/tmp/attacker gh pr merge 513 --squash"), "POSIX inline environments cannot replace the inspected gh executable");
+ok(githubCliCommandIsDynamic("env -i PATH=/tmp/attacker gh api --method PATCH repos/o/r/git/refs/heads/main"), "env-wrapped GitHub mutations are dynamic");
+ok(githubCliCommandIsDynamic("set PATH=C:\\attacker && gh pr merge 513 --squash"), "cmd environment setters cannot precede a GitHub mutation");
+ok(githubCliCommandIsDynamic("$env:PATH='C:\\attacker'; gh pr merge 513 --squash"), "PowerShell environment setters cannot precede a GitHub mutation");
 ok(githubCliCommandIsDynamic("g''h pr merge 5 --auto"), "empty-quote composed gh executable is dynamic");
 ok(githubCliCommandIsDynamic("g'h' pr merge 5 --auto"), "quote-spliced gh executable is dynamic");
 ok(githubCliCommandIsDynamic("(gh pr merge 5 --auto)"), "parenthesized gh merge is dynamic");
@@ -372,6 +376,9 @@ ok(r.decision?.permissionDecision === "deny", "file-backed REST merge denied bef
 r = runHook({ tool_name: "Bash", tool_input: { command: "$verb='merge'; gh pr $verb 12 --squash --auto" } });
 ok(r.decision?.permissionDecision === "deny", "shell-expanded gh merge verb is denied before literal parsing");
 ok(/shell-expanded/.test(r.decision?.permissionDecisionReason || ""), "dynamic GitHub CLI denial explains the parser boundary");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "PATH=/tmp/attacker gh pr merge 12 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789" } });
+ok(r.decision?.permissionDecision === "deny", "command-local PATH cannot replace the gh executable after inspection");
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "git switch other-branch && gh pr merge --squash" } });
 ok(r.decision?.permissionDecision === "deny", "compound selectorless merge cannot inspect the pre-switch branch");

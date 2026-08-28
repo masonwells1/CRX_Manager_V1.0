@@ -62,6 +62,7 @@ eq(autopilotDecision("Edit", { file_path: ".env" }), "deny", "Edit .env denied")
 eq(autopilotDecision("Bash", { command: "npx supabase functions deploy send-email" }), "deny", "CLI edge deploy denied");
 eq(autopilotDecision("Bash", { command: "supabase functions deploy process-document" }), "deny", "bare CLI edge deploy denied");
 eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash" }), "allow", "protected PR merge reaches the normal merge guard");
+eq(autopilotDecision("Bash", { command: "PATH=/tmp/attacker gh pr merge 42 --squash" }), "deny", "command-local PATH overrides are never auto-approved for GitHub mutations");
 eq(autopilotDecision("PowerShell", { command: "&gh pr merge 42 --squash --auto" }), "allow", "PowerShell call-operator merge reaches the normal merge guard");
 eq(autopilotDecision("PowerShell", { command: "gh pr m''erge 42 --auto" }), "deny", "empty-quote composed merge is never auto-approved");
 eq(autopilotDecision("PowerShell", { command: "g''h pr merge 42 --auto" }), "deny", "empty-quote composed gh executable is never auto-approved");

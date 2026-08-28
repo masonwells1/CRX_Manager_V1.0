@@ -1034,6 +1034,12 @@ try {
     nowMs: now,
     runGh: () => { throw new Error("PATH-shadowed gh must deny before PR inspection"); },
   }).blocked, true, "PATH-shadowed GitHub CLI cannot perform an unattended merge");
+  assert.equal(evaluateProductionAction({
+    toolName: "Bash",
+    toolInput: { command: `PATH=/tmp/attacker gh pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --squash --match-head-commit ${risky.sha}` },
+    repoDir: risky.repo,
+    runGh: () => { throw new Error("inline PATH denial must happen before PR inspection"); },
+  }).blocked, true, "command-local PATH cannot replace the GitHub CLI after the production guard inspects it");
   const autoMergeDecision = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --squash --auto --match-head-commit ${risky.sha}` },
