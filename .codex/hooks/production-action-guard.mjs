@@ -48,6 +48,7 @@ import {
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   riskyFiles,
+  structuredPushEnvironmentOverrideNames,
   trustedGitHubCliInvocation,
   updateBranchRequestHasExplicitContext,
 } from "../../.claude/hooks/codex-push-lib.mjs";
@@ -735,6 +736,10 @@ export function evaluateProductionAction({
   }
   if (isGitPush(command) && Object.keys(suppliedEnv).some((key) => /^(?:GIT_DIR|GIT_WORK_TREE)$/i.test(key))) {
     return denied("CODEX PRODUCTION GATE: pushes with GIT_DIR/GIT_WORK_TREE tool environment overrides are denied. Use `git -C <repo> push`.");
+  }
+  const structuredPushEnv = structuredPushEnvironmentOverrideNames(command, suppliedEnv);
+  if (structuredPushEnv.length > 0) {
+    return denied(`CODEX PRODUCTION GATE: this push supplies structured environment overrides (${structuredPushEnv.join(", ")}) that cannot be bound to the inspected Git process. Remove tool-level env overrides; only GIT_TERMINAL_PROMPT=0/1 and the exact documented SSH keepalive command are accepted.`);
   }
 
   // Split on single `|` too (Codex round-4): `git push a | git push b` runs

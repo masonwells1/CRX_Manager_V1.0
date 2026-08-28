@@ -43,6 +43,7 @@ import {
   repoIsGuardedApp,
   urlIsGuardedApp,
   pushUsesTransportEnv,
+  structuredPushEnvironmentOverrideNames,
   environmentCarriesTransportOverride,
   pushDestinationToken,
   pushGitHubRepository,
@@ -113,6 +114,22 @@ assert.throws(
   "an incomplete GitHub response fails closed",
 );
 assert.deepEqual(featurePushDestinations("git push origin HEAD:refs/heads/feature/test"), ["feature/test"]);
+for (const env of [
+  { GIT_SSH_COMMAND: "malicious-helper" },
+  { GIT_PROXY_COMMAND: "malicious-proxy" },
+  { GIT_EXEC_PATH: "C:/attacker/git-core" },
+  { GIT_CONFIG_COUNT: "1" },
+  { PATH: "C:/attacker/bin" },
+]) {
+  assert.deepEqual(
+    structuredPushEnvironmentOverrideNames("git push origin HEAD:refs/heads/feature/test", env),
+    [Object.keys(env)[0]],
+    `structured push environment is rejected: ${Object.keys(env)[0]}`,
+  );
+}
+assert.deepEqual(structuredPushEnvironmentOverrideNames("git status", { PATH: "C:/attacker/bin" }), [], "non-push commands do not trigger the push environment rule");
+assert.deepEqual(structuredPushEnvironmentOverrideNames("git push origin feature", { GIT_TERMINAL_PROMPT: "0" }), [], "documented terminal prompt control is allowed");
+assert.deepEqual(structuredPushEnvironmentOverrideNames("git push origin feature", { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20 -o BatchMode=yes" }), [], "documented SSH keepalive is allowed");
 assert.deepEqual(featurePushDestinations("git push origin refs/heads/local:refs/heads/review/next"), ["review/next"]);
 for (const protectedBranch of ["master", "production"]) {
   assert.throws(
@@ -1842,9 +1859,9 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   const dest = path.join(tmp, "dest.git");
   const git = (args, cwd) => spawnSync("git", args, { cwd, encoding: "utf8", env: scratchHookEnvironment(cwd, process.env) });
 
-  const runHook = (command, extraEnv = {}) => {
+  const runHook = (command, extraEnv = {}, structuredEnv = undefined) => {
     const res = spawnSync(process.execPath, [HOOK], {
-      input: JSON.stringify({ cwd: work, tool_input: { command } }),
+      input: JSON.stringify({ cwd: work, tool_input: { command, ...(structuredEnv ? { env: structuredEnv } : {}) } }),
       encoding: "utf8",
       env: { ...scratchHookEnvironment(work, process.env), ...extraEnv },
     });
@@ -1875,6 +1892,17 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     // app-repo gate for this one, which is what makes it the right shape for
     // asking "does an inherited GIT_CONFIG* variable block a normal push?".
     const featurePush = `git -C ${work} push origin refs/heads/main:refs/heads/feature`;
+    for (const structuredEnv of [
+      { GIT_SSH_COMMAND: "malicious-helper" },
+      { GIT_PROXY_COMMAND: "malicious-proxy" },
+      { GIT_EXEC_PATH: "C:/attacker/git-core" },
+      { GIT_CONFIG_COUNT: "1" },
+      { HOME: "C:/attacker/home" },
+    ]) {
+      const result = runHook(featurePush, {}, structuredEnv);
+      assert.equal(result.decision, "deny", `Claude push guard denies structured environment: ${Object.keys(structuredEnv)[0]}`);
+      assert.match(result.reason, /structured environment overrides/i, "Claude push guard explains the structured environment denial");
+    }
     // A push that names NO refspec, so git falls back to the default-refspec
     // configuration (`push.default`, `remote.<n>.push`, `branch.<b>.merge`). The
     // two forms are not interchangeable for those keys: git reads them for this

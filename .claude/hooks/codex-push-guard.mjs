@@ -39,6 +39,7 @@ import {
   pushUsesTransportEnv,
   pushSetsInlineEnv,
   shellSegments,
+  structuredPushEnvironmentOverrideNames,
   trustedGitHubCliInvocation,
   unknownPushOptions,
   unknownGitGlobalOptions,
@@ -97,6 +98,11 @@ if (strangeGlobalOptions.length > 0) {
   deny(`CODEX GATE: this command places unrecognised Git global options before push (${strangeGlobalOptions.join(", ")}). The literal push parser cannot safely determine which later token is the subcommand, so allowing it would skip every destination, force, and proof check. Use the supported plain form: \`git -C <repo> push <remote> <refspec>\`.`);
 }
 if (!isGitPush(cmd)) passthrough();
+const suppliedEnv = payload?.tool_input?.env && typeof payload.tool_input.env === "object" ? payload.tool_input.env : {};
+const structuredEnv = structuredPushEnvironmentOverrideNames(cmd, suppliedEnv);
+if (structuredEnv.length > 0) {
+  deny(`CODEX GATE: this push supplies structured environment overrides (${structuredEnv.join(", ")}) that the guard cannot safely bind to the executed Git process. Remove tool-level env overrides; only GIT_TERMINAL_PROMPT=0/1 and the exact documented SSH keepalive command are accepted.`);
+}
 if (pushContextIsAmbiguous(cmd)) {
   deny("CODEX GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");
 }
@@ -656,7 +662,6 @@ for (const pushCmd of pushCommands) {
 }
 
 for (const pushCmd of pushCommands) {
-  const suppliedEnv = payload?.tool_input?.env && typeof payload.tool_input.env === "object" ? payload.tool_input.env : {};
   if (!deliveryExecutableIsTrusted(pushCmd, "git", { cwd: projectDir, env: { ...process.env, ...suppliedEnv } })) {
     deny("CODEX GATE: this push does not resolve to the trusted Git executable used for inspection. Remove arbitrary executable paths, current-directory shadows, or PATH overrides and run the normal Git installation.");
   }

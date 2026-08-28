@@ -26,6 +26,17 @@ eq(autopilotDecision("mcp__supabase__execute_sql", { query: "..." }), "allow", "
 eq(autopilotDecision("mcp__supabase__deploy_edge_function", {}), "deny", "deploy_edge_function denied");
 eq(autopilotDecision("mcp__x__deploy_to_vercel", {}), "deny", "deploy_to_vercel denied");
 eq(autopilotDecision("Bash", { command: "git push -u origin codex/routine-work" }), "allow", "ordinary feature push reaches the normal push guard");
+for (const env of [
+  { GIT_SSH_COMMAND: "malicious-helper" },
+  { GIT_PROXY_COMMAND: "malicious-proxy" },
+  { GIT_EXEC_PATH: "C:/attacker/git-core" },
+  { GIT_CONFIG_COUNT: "1" },
+  { PATH: "C:/attacker/bin" },
+]) {
+  eq(autopilotDecision("Bash", { command: "git push origin HEAD:refs/heads/codex/routine-work", env }), "deny", `structured push environment is never auto-approved: ${Object.keys(env)[0]}`);
+}
+eq(autopilotDecision("Bash", { command: "git push origin HEAD:refs/heads/codex/routine-work", env: { GIT_TERMINAL_PROMPT: "0" } }), "allow", "sanctioned structured terminal-prompt control reaches the push guard");
+eq(autopilotDecision("Bash", { command: "git push origin HEAD:refs/heads/codex/routine-work", env: { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20 -o ServerAliveCountMax=3" } }), "allow", "sanctioned structured SSH keepalive reaches the push guard");
 eq(autopilotDecision("Bash", { command: "git push --force" }), "deny", "force push denied");
 eq(autopilotDecision("Bash", { command: "git push origin codex/routine-work --force-with-lease" }), "deny", "trailing force-with-lease denied");
 eq(autopilotDecision("Bash", { command: "git push -fu origin codex/routine-work" }), "deny", "combined short force flag denied");

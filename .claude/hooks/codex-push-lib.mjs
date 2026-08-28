@@ -1669,6 +1669,19 @@ function transportValueIsAllowed(name, rawValue) {
   const quoted = /^(['"])([\s\S]*)\1$/.exec(value.trim());
   return shape.test(quoted ? quoted[2].trim() : value.trim());
 }
+
+// A tool's structured `env` is applied by the shell after this hook starts, so
+// the guard cannot safely compare the push it inspects with the process that
+// will execute it. Keep a deliberately tiny shared allowlist: only the same two
+// value-checked transport settings accepted inline are safe. Ordinary pushes do
+// not need structured environment overrides.
+export function structuredPushEnvironmentOverrideNames(command, env) {
+  if (!isGitPush(command) || !env || typeof env !== "object") return [];
+  return Object.entries(env)
+    .filter(([name, value]) => !transportValueIsAllowed(name, value))
+    .map(([name]) => name);
+}
+
 export function pushUsesTransportEnv(cmd) {
   const text = String(cmd || "");
   if (!isGitPush(text)) return [];

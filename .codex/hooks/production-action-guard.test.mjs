@@ -395,6 +395,20 @@ try {
     branch: "feature/test",
     runGh: () => { throw new Error("GIT_CONFIG tool environment denial must happen before GitHub lookup"); },
   }).blocked, true, "GIT_CONFIG tool environments cannot redirect an unattended feature push");
+  for (const env of [
+    { GIT_SSH_COMMAND: "malicious-helper" },
+    { GIT_PROXY_COMMAND: "malicious-proxy" },
+    { GIT_EXEC_PATH: "C:/attacker/git-core" },
+    { HOME: "C:/attacker/home" },
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: "git push origin HEAD:refs/heads/feature/test", env },
+      repoDir: risky.repo,
+      branch: "feature/test",
+      runGh: () => { throw new Error("structured push environment denial must happen before GitHub lookup"); },
+    }).blocked, true, `structured push environment is denied: ${Object.keys(env)[0]}`);
+  }
   git(risky.repo, ["config", "url.https://github.com/masonwells1/CRX_Manager_V1.0.git.insteadOf", "C:/review-local"]);
   try {
     const rewrittenLocalPush = evaluateProductionAction({
