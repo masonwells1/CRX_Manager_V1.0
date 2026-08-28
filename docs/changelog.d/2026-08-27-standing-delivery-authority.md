@@ -122,6 +122,12 @@ command classifier now recognizes absolute `gh` executables as well as bare `gh`
 normalization. The exact demonstrated API merge/ref-write forms deny in armed autopilot, the Claude
 merge guard, and the Codex production guard before any GitHub lookup.
 
+The following review found that autonomous landing still printed `--delete-branch` while the
+canonical parser discarded that option. Merge-side branch deletion is now outside the unattended
+grammar for every head branch and repository owner, and `land-pr.mjs` no longer recommends it.
+Routine exact-head squash merges remain automatic; branch cleanup is a separate destructive
+lifecycle action instead of a side effect hidden inside delivery.
+
 Unquoted shell comment markers in GitHub CLI commands now deny before parsing, so flags written
 after `#` cannot be mistaken for the repository, expected head, or auto-merge intent that the shell
 actually omits. Quoted hash characters remain ordinary message/body data.

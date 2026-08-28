@@ -116,6 +116,7 @@ eq(ghMergeRequest("&gh pr merge 42 --auto"), { selector: "42", repo: "", auto: t
 eq(ghMergeRequest("& 'C:\\Program Files\\GitHub CLI\\gh.exe' pr merge 42 --squash"), { selector: "42", repo: "", auto: false, matchHead: "", squash: true, atomicHeadMatch: true }, "quoted Windows gh paths enter the merge parser");
 eq(ghMergeRequest('"/usr/bin/gh" pr merge 42 --squash'), { selector: "42", repo: "", auto: false, matchHead: "", squash: true, atomicHeadMatch: true }, "quoted Unix gh paths enter the merge parser");
 ok(ghMergeRequest("gh pr merge 42 --match-head-commit=abcdefabcdefabcdefabcdefabcdefabcdefabcd")?.unsupportedSyntax, "attached exact-head values are outside the canonical grammar");
+ok(ghMergeRequest("gh pr merge 42 --repo o/r --squash --delete-branch --match-head-commit 0123456789012345678901234567890123456789")?.unsupportedSyntax, "merge-side branch deletion is outside the unattended grammar");
 ok(ghMergeRequest("gh pr merge") !== null, "selectorless merge still gated");
 eq(ghMergeRequest("gh pr merge 5 --repo masonwells1/CRX_Manager_V1.0 --disable-auto"), { selector: "5", repo: "masonwells1/CRX_Manager_V1.0", disableAuto: true }, "--disable-auto is represented explicitly for guard validation");
 ok(disableAutoRequestHasExplicitContext(ghMergeRequest("gh pr merge 5 --repo masonwells1/CRX_Manager_V1.0 --disable-auto")), "canonical cancellation has explicit PR and repository context");
@@ -321,6 +322,10 @@ for (const command of [
   r = runHook({ tool_name: "PowerShell", tool_input: { command } });
   ok(r.decision?.permissionDecision === "deny", `unsafe auto-merge cancellation is denied: ${command}`);
 }
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 42 --repo o/r --squash --delete-branch --match-head-commit 0123456789012345678901234567890123456789" } });
+ok(r.decision?.permissionDecision === "deny", "merge-side branch deletion denies before PR lookup");
+ok(/separate destructive action/.test(r.decision?.permissionDecisionReason || ""), "branch-deletion denial explains the separate lifecycle boundary");
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", env: { GH_HOST: "attacker.example" } } });
 ok(r.decision?.permissionDecision === "deny", "structured GH_HOST override denies before merge inspection");

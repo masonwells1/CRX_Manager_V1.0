@@ -2564,7 +2564,6 @@ export function ghMergeRequest(command) {
   let disableAuto = false;
   let matchHead = "";
   let squash = false;
-  let deleteBranch = false;
   for (let index = 3; index < words.length; index += 1) {
     const word = String(words[index] || "");
     const lower = word.toLowerCase();
@@ -2582,14 +2581,16 @@ export function ghMergeRequest(command) {
       continue;
     }
     if (lower === "--squash" && !squash) { squash = true; continue; }
-    if (lower === "--delete-branch" && !deleteBranch) { deleteBranch = true; continue; }
+    // Branch cleanup is a separate destructive lifecycle action. It is never
+    // part of an unattended merge, regardless of the PR head name or owner.
+    if (lower === "--delete-branch") return { unsupportedSyntax: true };
     if (lower === "--auto" && !auto) { auto = true; continue; }
     if (lower === "--disable-auto" && !disableAuto) { disableAuto = true; continue; }
     return { unsupportedSyntax: true };
   }
   if (disableAuto && auto) return { unsupportedAutoFlags: true };
   if (disableAuto) {
-    if (squash || deleteBranch || matchHead) return { unsupportedSyntax: true };
+    if (squash || matchHead) return { unsupportedSyntax: true };
     return { selector, repo, disableAuto: true };
   }
   return { selector, repo, auto, matchHead, squash, atomicHeadMatch: true };

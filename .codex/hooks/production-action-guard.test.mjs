@@ -1198,6 +1198,16 @@ try {
     nowMs: now,
     runGh: runGhWithApprovedCodeRabbit,
   }).blocked, true, "PowerShell call-operator auto-merge is denied");
+  for (const headKind of ["main", "master", "production", "fork-owner:feature/test"]) {
+    const branchDeletingMerge = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: `${trustedGh} pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --squash --delete-branch --match-head-commit ${risky.sha}` },
+      repoDir: risky.repo,
+      runGh: () => { throw new Error(`branch deletion for ${headKind} must deny before PR lookup`); },
+    });
+    assert.equal(branchDeletingMerge.blocked, true, `merge-side branch deletion is denied for ${headKind} heads`);
+    assert.match(branchDeletingMerge.reason, /separate destructive action/);
+  }
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "& 'C:\\Program Files\\GitHub CLI\\gh.exe' pr merge 123 --auto" },

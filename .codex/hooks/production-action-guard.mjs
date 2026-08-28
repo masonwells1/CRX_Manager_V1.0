@@ -966,7 +966,7 @@ export function evaluateProductionAction({
       return denied("CODEX PRODUCTION GATE: GitHub REST merge calls are denied because file-backed request bodies can hide or override the expected head SHA. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
     }
     if (ghRequest?.unsupportedSyntax) {
-      return denied("CODEX PRODUCTION GATE: noncanonical `gh pr merge` syntax is denied. Use exactly one literal trusted-CLI `gh pr merge <number> --repo <owner/repo> --squash [--delete-branch] --match-head-commit <head-sha>` command, or run `node scripts/land-pr.mjs <number> --once` to cancel auto-merge through the fixed trusted CLI.");
+      return denied("CODEX PRODUCTION GATE: noncanonical `gh pr merge` syntax is denied. Use exactly one literal trusted-CLI `gh pr merge <number> --repo <owner/repo> --squash --match-head-commit <head-sha>` command, or run `node scripts/land-pr.mjs <number> --once` to cancel auto-merge through the fixed trusted CLI. Branch deletion is a separate destructive action and is not unattended.");
     }
     if (ghRequest?.unsupportedAutoFlags) {
       return denied("CODEX PRODUCTION GATE: mixed `--auto` and `--disable-auto` intent is denied. Use `--disable-auto` alone to cancel, or run one immediate exact-head merge without `--auto` after checks finish.");

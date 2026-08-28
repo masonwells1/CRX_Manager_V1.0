@@ -130,6 +130,7 @@ eq(autopilotDecision("Bash", { command: "(gh pr merge 42 --auto)" }), "deny", "p
 eq(autopilotDecision("Bash", { command: "(gh pr update-branch 42 --repo o/r)" }), "deny", "parenthesized update-branch is never auto-approved");
 eq(autopilotDecision("Bash", { command: '("/usr/bin/gh" api --method PUT repos/o/r/pulls/7/merge)' }), "deny", "grouped quoted absolute gh API mutations are never auto-approved");
 eq(autopilotDecision("Bash", { command: 'cat <("/usr/bin/gh" api --method DELETE repos/o/r/git/refs/heads/main)' }), "deny", "process-substituted quoted absolute gh API mutations are never auto-approved");
+eq(autopilotDecision("Bash", { command: "gh pr merge 42 --repo o/r --squash --delete-branch --match-head-commit 0123456789012345678901234567890123456789" }), "deny", "merge-side branch deletion is never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh pr update-branch 42 --repo o/r --rebase" }), "deny", "remote branch rebases are never auto-approved");
 eq(autopilotDecision("Bash", { command: "git push origin HEAD:main" }), "deny", "direct main pushes are never auto-approved");
 eq(autopilotDecision("Bash", { command: "git push origin HEAD:master" }), "deny", "direct master pushes are never auto-approved");

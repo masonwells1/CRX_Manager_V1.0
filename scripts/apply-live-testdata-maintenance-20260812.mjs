@@ -169,16 +169,16 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after land-pr and its pure safety helper joined the risky harness
   // paths so future edits to its child update-branch route require exact-head
   // adversarial review.
-  codexGuard: "94e6db0607faaaa83821706746d4cadd0f3b36ab",
+  codexGuard: "f5b8d53fc7248464ef749fbb840131170c455a8d",
   // Re-pinned 2026-08-28 after feature-push repository resolution began
   // rejecting custom helpers and insecure GitHub transports before identity
   // comparison, and grouped absolute gh mutations joined the shared dynamic
   // classifier. The protected producer anchor itself is unchanged.
-  pushLib: "8cb3e6ff60c9db4d976a07ce09aeac3a8079c37f",
+  pushLib: "d4b69f026d22afacd111d9938f48a2fefc992943",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "7714925fc26bee2b43544cdd2ff1536e5d3c380b",
-  pushLib: "8cb3e6ff60c9db4d976a07ce09aeac3a8079c37f",
+  codexGuard: "78a290e76354f55b6cb0dbce802d0abe2ed612df",
+  pushLib: "d4b69f026d22afacd111d9938f48a2fefc992943",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

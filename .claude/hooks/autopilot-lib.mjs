@@ -154,6 +154,7 @@ export function autopilotDecision(toolName, toolInput) {
     if (ghPrBaseRetargets(cmd)) return "deny";
     if (ghUpdateBranchRequest(cmd)?.rebase) return "deny";
     const mergeRequest = ghMergeRequest(cmd);
+    if (mergeRequest?.unsupportedSyntax || mergeRequest?.unsupportedAutoFlags) return "deny";
     if (mergeRequest?.disableAuto && (
       !disableAutoRequestHasExplicitContext(mergeRequest)
       || !githubRepositoryIsGuarded(mergeRequest.repo)

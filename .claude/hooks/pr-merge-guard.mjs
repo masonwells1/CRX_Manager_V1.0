@@ -135,7 +135,7 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     }
     const cli = ghMergeRequest(segment);
     if (cli?.unsupportedSyntax) {
-      deny("PR MERGE GATE: noncanonical `gh pr merge` syntax is denied. Use exactly one literal trusted-CLI `gh pr merge <number> --repo <owner/repo> --squash [--delete-branch] --match-head-commit <head-sha>` command, or run `node scripts/land-pr.mjs <number> --once` to cancel auto-merge through the fixed trusted CLI.");
+      deny("PR MERGE GATE: noncanonical `gh pr merge` syntax is denied. Use exactly one literal trusted-CLI `gh pr merge <number> --repo <owner/repo> --squash --match-head-commit <head-sha>` command, or run `node scripts/land-pr.mjs <number> --once` to cancel auto-merge through the fixed trusted CLI. Branch deletion is a separate destructive action and is not unattended.");
     }
     if (cli?.unsupportedAutoFlags) {
       deny("PR MERGE GATE: mixed `--auto` and `--disable-auto` intent is denied. Use `--disable-auto` alone to cancel, or wait for checks and run one immediate exact-head merge without `--auto`.");
