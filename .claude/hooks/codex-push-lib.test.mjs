@@ -1926,7 +1926,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     const denied = (command, message) => deniedBecause(command, /GIT_CONFIG/, message);
     const reachedLocalBoundary = (result, message) => {
       assert.equal(result.decision, "deny", `${message} — local push must deny`);
-      assert.match(result.reason, /(?:local-looking repository paths.*receive hooks|direct pushes to main are denied outside the protected CRX pull-request flow)/i, `${message} — earlier classifiers must reach a valid hard-denial boundary`);
+      assert.match(result.reason, /(?:local-looking repository paths.*receive hooks|literal destination is subject to a configured url\.|direct pushes to main are denied outside the protected CRX pull-request flow)/i, `${message} — earlier classifiers must reach a valid hard-denial boundary`);
     };
     const workForShell = work.replaceAll("\\", "/");
     deniedBecause(
@@ -2678,6 +2678,22 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       reachedLocalBoundary(rewrittenLocal, "a local-looking feature destination rewritten to CRX reaches the intended local boundary");
     } finally {
       git(["config", "--unset-all", `url.${CRX_URL}.insteadOf`], work);
+    }
+
+    // The reverse rewrite is more dangerous for unattended feature pushes: the
+    // command visibly names the canonical GitHub URL, while Git sends objects to
+    // a local receiver. Cover both rewrite spellings; `ls-remote --get-url` alone
+    // does not apply pushInsteadOf.
+    for (const rewriteKind of ["insteadOf", "pushInsteadOf"]) {
+      const rewriteKey = `url.file:///${workForShell}/hidden-receiver/.${rewriteKind}`;
+      try {
+        git(["config", rewriteKey, CRX_URL], work);
+        const rewrittenCanonical = runHook(`git -C ${workForShell} push ${CRX_URL} HEAD:refs/heads/feature`);
+        assert.equal(rewrittenCanonical.decision, "deny", `a canonical raw URL rewritten by ${rewriteKind} is denied`);
+        assert.match(rewrittenCanonical.reason || "", /insteadOf|exact CRX GitHub repository/i, "the denial names the unresolved destination boundary");
+      } finally {
+        git(["config", "--unset-all", rewriteKey], work);
+      }
     }
 
     // A mirror remote configured in the repository's OWN config. This diverges

@@ -422,9 +422,26 @@ try {
       runGh: () => { throw new Error("local-looking destination must deny before GitHub lookup"); },
     });
     assert.equal(rewrittenLocalPush.blocked, true, "a local-looking path cannot bypass the feature-push review gate through insteadOf");
-    assert.match(rewrittenLocalPush.reason, /local-looking paths/i, "local-path denial explains the rewrite risk");
+    assert.match(rewrittenLocalPush.reason, /local-looking paths|insteadOf/i, "local-path denial explains the rewrite risk");
   } finally {
     git(risky.repo, ["config", "--unset-all", "url.https://github.com/masonwells1/CRX_Manager_V1.0.git.insteadOf"]);
+  }
+  for (const rewriteKind of ["insteadOf", "pushInsteadOf"]) {
+    const rewriteKey = `url.file:///C:/review-receiver/.${rewriteKind}`;
+    git(risky.repo, ["config", rewriteKey, "https://github.com/masonwells1/CRX_Manager_V1.0.git"]);
+    try {
+      const rewrittenCanonicalPush = evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command: "git push https://github.com/masonwells1/CRX_Manager_V1.0.git HEAD:refs/heads/feature/test" },
+        repoDir: risky.repo,
+        branch: "feature/test",
+        runGh: () => { throw new Error("rewritten literal destination must deny before GitHub lookup"); },
+      });
+      assert.equal(rewrittenCanonicalPush.blocked, true, `a canonical raw URL rewritten by ${rewriteKind} cannot reach a local receiver`);
+      assert.match(rewrittenCanonicalPush.reason, /insteadOf|resolve to the exact CRX GitHub repository/i, "literal rewrite denial explains the untrusted destination");
+    } finally {
+      git(risky.repo, ["config", "--unset-all", rewriteKey]);
+    }
   }
   const shadowBin = mkdtempSync(path.join(tmpdir(), "crx-delivery-shadow-"));
   tempRoots.push(shadowBin);

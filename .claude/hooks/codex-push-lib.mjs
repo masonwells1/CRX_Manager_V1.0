@@ -1774,6 +1774,30 @@ export function rewritesReachGuardedApp(configOutput) {
     return rewriteBaseReachesGuardedApp(match[1]);
   });
 }
+
+// A literal push destination is still subject to Git's URL rewrite rules. In
+// particular, a command can visibly name the canonical CRX GitHub URL while a
+// repository/global `insteadOf` or `pushInsteadOf` rule sends the objects to a
+// local repository whose receive hooks execute arbitrary commands. For an
+// unattended push there is no useful reason to accept that ambiguity: if any
+// configured rewrite prefix applies to the literal token, deny and require the
+// ordinary named CRX remote instead.
+//
+// Accepts `git config --get-regexp '^url\..*insteadof$'` output. Git chooses the
+// longest matching prefix, but this guard only needs to know whether at least
+// one prefix matches. Malformed non-empty output fails closed.
+export function pushUrlRewriteApplies(configOutput, destination) {
+  const target = String(destination ?? "");
+  const lines = String(configOutput ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return lines.some((line) => {
+    const separator = line.search(/\s/);
+    if (separator <= 0) return true;
+    const key = line.slice(0, separator);
+    const prefix = line.slice(separator).trim();
+    if (!/^url\..+\.(?:push)?insteadof$/i.test(key) || prefix === "") return true;
+    return target.startsWith(prefix);
+  });
+}
 // insteadOf is a PREFIX substitution, not an exact-URL alias: git replaces the
 // matched alias text with the base and keeps whatever followed. So
 //   url.git@github.com:masonwells1/.insteadOf = ghm:

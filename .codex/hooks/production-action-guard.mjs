@@ -41,6 +41,7 @@ import {
   proofValid,
   pullRequestChecksGreen,
   pushDestinationToken,
+  pushUrlRewriteApplies,
   pushGitHubRepository,
   pushUrlsAreLocalPaths,
   pushContextIsAmbiguous,
@@ -244,6 +245,20 @@ function defaultRunGh(args, cwd, options = {}) {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   }).trim();
+}
+
+function literalPushDestinationUrls(destinationToken, repoDir, runGit) {
+  let rewrites = "";
+  try {
+    rewrites = runGit(["config", "--get-regexp", "^url\\..*insteadof$"], repoDir);
+  } catch (error) {
+    if (error?.status !== 1) throw error;
+  }
+  if (pushUrlRewriteApplies(rewrites, destinationToken)) {
+    throw new Error("literal destination is subject to a configured url.*.insteadOf/pushInsteadOf rewrite");
+  }
+  return String(runGit(["ls-remote", "--get-url", destinationToken], repoDir) || "")
+    .split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
 }
 
 function proofRequirement(headSha, riskDescription, detail, baseSha) {
@@ -886,7 +901,7 @@ export function evaluateProductionAction({
         try {
           const destinationToken = pushDestinationToken(segment);
           const destinationUrls = destinationLooksLikeUrl(destinationToken)
-            ? [destinationToken]
+            ? literalPushDestinationUrls(destinationToken, pushRepoDir, runGit)
             : String(runGit(["remote", "get-url", "--push", "--all", destinationToken], pushRepoDir) || "")
                 .split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
           pushRepository = pushGitHubRepository(destinationUrls);

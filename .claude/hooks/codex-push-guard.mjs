@@ -61,6 +61,7 @@ import {
   pushUrlsAreLocalPaths,
   repoIsGuardedApp,
   rewritesReachGuardedApp,
+  pushUrlRewriteApplies,
   executableTransportSettings,
   configuredMirrorRemotes,
   deliveryExecutableIsTrusted,
@@ -145,6 +146,24 @@ function gitIn(args, cwd, { keepConfigOverrides = false } = {}) {
   }).trim();
 }
 const git = (args, cwd) => gitIn(args, cwd);
+
+function literalPushDestinationUrls(destinationToken, repoDir) {
+  const readRewrites = (keepConfigOverrides) => {
+    try {
+      return gitIn(["config", "--get-regexp", "^url\\..*insteadof$"], repoDir, { keepConfigOverrides });
+    } catch (error) {
+      if (error?.status === 1) return ""; // no matching rewrite keys
+      throw error;
+    }
+  };
+  for (const keepConfigOverrides of [false, true]) {
+    if (pushUrlRewriteApplies(readRewrites(keepConfigOverrides), destinationToken)) {
+      throw new Error("literal destination is subject to a configured url.*.insteadOf/pushInsteadOf rewrite");
+    }
+  }
+  return gitIn(["ls-remote", "--get-url", destinationToken], repoDir, { keepConfigOverrides: true })
+    .split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
+}
 
 // The remote names this repository actually has, read under BOTH environments —
 // an inherited GIT_CONFIG* can define a remote the scrubbed read cannot see, and
@@ -786,7 +805,7 @@ for (const pushCmd of pushCommands) {
     try {
       const destinationToken = pushDestinationToken(pushCmd);
       const destinationUrls = targetIsRawUrl
-        ? [destinationToken]
+        ? literalPushDestinationUrls(destinationToken, pushRepoDir)
         : git(["remote", "get-url", "--push", "--all", targetRemote], pushRepoDir)
             .split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
       pushRepository = pushGitHubRepository(destinationUrls);
@@ -860,7 +879,7 @@ for (const pushCmd of pushCommands) {
   try {
     const destinationToken = pushDestinationToken(pushCmd);
     if (destinationToken && destinationLooksLikeUrl(destinationToken)) {
-      destinationUrls = [destinationToken];
+      destinationUrls = literalPushDestinationUrls(destinationToken, pushRepoDir);
     } else {
       // No destination named → git resolves its own default, in this order.
       const config = (key) => { try { return git(["config", "--get", key], pushRepoDir); } catch { return ""; } };
