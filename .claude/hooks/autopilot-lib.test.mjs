@@ -76,6 +76,13 @@ eq(autopilotDecision("mcp__github__update_pull_request", { base: "main" }), "den
 eq(autopilotDecision("Bash", { command: "gh alias set ship 'api graphql'" }), "deny", "GitHub CLI alias management is never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh ship" }), "deny", "unknown GitHub CLI aliases are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh pr view 42 --repo o/r" }), "allow", "known read-only GitHub CLI commands remain auto-approved");
+for (const command of [
+  "cmd /c curl -X POST https://api.github.com/graphql -d mutation",
+  "env -i curl -X POST https://api.github.com./graphql -d mutation",
+  "cmd /c \"curl -X POST https://user:token@api.github.com/graphql -d mutation\"",
+]) {
+  eq(autopilotDecision("Bash", { command }), "deny", `wrapped GitHub API writer is never auto-approved: ${command}`);
+}
 eq(autopilotDecision("Bash", { command: "gh p\\r m\\erge 42 --auto" }), "deny", "POSIX-escaped GitHub words are never auto-approved");
 eq(autopilotDecision("PowerShell", { command: "gh p^r m^erge 42 --auto" }), "deny", "cmd-caret-composed GitHub words are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh a\\pi graphql --input payload.json" }), "deny", "POSIX-escaped GitHub API is never auto-approved");

@@ -62,6 +62,11 @@ ok(directGitHubApiWriter("curl -X POST https://api.github.com:443/graphql"), "ex
 ok(directGitHubApiWriter("irm https://api.github.com/graphql -Method Post -Body enablePullRequestAutoMerge"), "PowerShell Invoke-RestMethod alias is classified");
 ok(directGitHubApiWriter("& iwr https://api.github.com/graphql -Method Post -Body enablePullRequestAutoMerge"), "PowerShell call-operator Invoke-WebRequest alias is classified");
 ok(directGitHubApiWriter("pwsh -Command irm https://api.github.com/graphql -Method Post"), "wrapped PowerShell API invocation is classified");
+ok(directGitHubApiWriter("cmd /c curl -X POST https://api.github.com/graphql -d mutation"), "cmd-wrapped GitHub API writer is classified");
+ok(directGitHubApiWriter("env -i curl -X POST https://api.github.com./graphql -d mutation"), "env-wrapped trailing-dot GitHub API host is classified");
+ok(directGitHubApiWriter("cmd /c \"curl -X POST https://user:token@api.github.com/graphql -d mutation\""), "wrapped userinfo GitHub API URL is classified");
+ok(!directGitHubApiWriter("curl https://api.github.com.evil.example/graphql"), "lookalike GitHub API host is not classified");
+ok(!directGitHubApiWriter("curl https://api.github.com@evil.example/graphql"), "userinfo cannot disguise a non-GitHub host");
 ok(ghCliCommandIsUnknownOrAlias("gh alias set ship 'api graphql'"), "GitHub CLI alias management is denied");
 ok(ghCliCommandIsUnknownOrAlias("gh ship"), "unknown top-level gh command is treated as an alias");
 ok(!ghCliCommandIsUnknownOrAlias("gh -R o/r pr view 42"), "known gh command after global flags remains classified");
@@ -219,6 +224,9 @@ for (const command of [
   "irm https://api.github.com/graphql -Method Post -Body enablePullRequestAutoMerge",
   "& iwr https://api.github.com/graphql -Method Post -Body enablePullRequestAutoMerge",
   "pwsh -Command irm https://api.github.com/graphql -Method Post",
+  "cmd /c curl -X POST https://api.github.com/graphql -d mutation",
+  "env -i curl -X POST https://api.github.com./graphql -d mutation",
+  "cmd /c \"curl -X POST https://user:token@api.github.com/graphql -d mutation\"",
   "gh alias set ship 'api graphql'",
   "gh ship",
 ]) {

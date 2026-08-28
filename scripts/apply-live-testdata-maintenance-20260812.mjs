@@ -156,13 +156,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // `-B` PR-base flag and its attached forms joined the retarget denial, then
   // after structured tool environments gained one shared narrow push allowlist,
   // then after PowerShell's `irm`/`iwr` GitHub API aliases were classified,
-  // then after update-branch was barred from protected PR head branches.
+  // then after update-branch was barred from protected PR head branches, then
+  // after wrapped GitHub API clients and normalized URL forms were classified.
   codexGuard: "97af16d29153e39ed3b5df69cd6b2bb6baf60ed5",
-  pushLib: "915f7078694c96cdeba8ed9063ebeec17964fb74",
+  pushLib: "18753e8276d2c2bfc61ab1b0a09299ed15d0c47a",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "f1b23f2c299e453b9d14c12788e297f0023785d6",
-  pushLib: "915f7078694c96cdeba8ed9063ebeec17964fb74",
+  pushLib: "18753e8276d2c2bfc61ab1b0a09299ed15d0c47a",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

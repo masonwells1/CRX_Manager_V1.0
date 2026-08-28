@@ -1106,6 +1106,9 @@ try {
     "irm https://api.github.com/graphql -Method Post -Body enablePullRequestAutoMerge",
     "& iwr https://api.github.com/graphql -Method Post -Body enablePullRequestAutoMerge",
     "pwsh -Command irm https://api.github.com/graphql -Method Post",
+    "cmd /c curl -X POST https://api.github.com/graphql -d mutation",
+    "env -i curl -X POST https://api.github.com./graphql -d mutation",
+    "cmd /c \"curl -X POST https://user:token@api.github.com/graphql -d mutation\"",
     "gh alias set ship 'api graphql'",
     "gh ship",
   ]) {

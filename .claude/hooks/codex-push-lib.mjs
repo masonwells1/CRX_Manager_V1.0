@@ -2521,10 +2521,24 @@ export function ghApiMutates(command) {
 // read-only GitHub evidence must use the fixed `gh` invocation above.
 export function directGitHubApiWriter(command) {
   const text = String(command || "");
-  if (!/https?:\/\/api\.github\.com(?::\d+)?\/(?:graphql|repos\/)/i.test(text)) return false;
-  const writerNames = new Set(["curl", "wget", "invoke-restmethod", "invoke-webrequest", "irm", "iwr", "node", "python", "python3", "py", "ruby", "perl", "powershell", "pwsh"]);
+  const hasGitHubApiEndpoint = (text.match(/https?:\/\/[^\s'"`]+/gi) || []).some((raw) => {
+    try {
+      const parsed = new URL(raw.replace(/[),;\]}]+$/, ""));
+      const hostname = parsed.hostname.toLowerCase().replace(/\.+$/, "");
+      return hostname === "api.github.com" && /^(?:\/graphql|\/repos\/)/i.test(parsed.pathname);
+    } catch {
+      return false;
+    }
+  });
+  if (!hasGitHubApiEndpoint) return false;
+  const writerNames = new Set([
+    "curl", "wget", "invoke-restmethod", "invoke-webrequest", "irm", "iwr",
+    "node", "python", "python3", "py", "ruby", "perl",
+    "powershell", "pwsh", "cmd", "bash", "sh", "zsh", "fish", "env",
+    "xargs", "start-process",
+  ]);
   const words = splitShellArgs(text);
-  return words.slice(0, 2).some((word) => {
+  return words.some((word) => {
     const basename = String(word || "").replace(/^&/, "").replace(/^['"]|['"]$/g, "").replaceAll("\\", "/").split("/").at(-1).replace(/\.exe$/i, "").toLowerCase();
     return writerNames.has(basename);
   });
