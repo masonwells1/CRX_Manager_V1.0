@@ -348,6 +348,22 @@ try {
     repoDir: risky.repo,
     runGh: () => JSON.stringify([{ number: 513, autoMergeRequest: null }]),
   }).blocked, false, "branch pushes stay allowed");
+  const shadowBin = mkdtempSync(path.join(tmpdir(), "crx-delivery-shadow-"));
+  tempRoots.push(shadowBin);
+  writeFileSync(path.join(shadowBin, "git.exe"), "shadow", "utf8");
+  writeFileSync(path.join(shadowBin, "gh.exe"), "shadow", "utf8");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push origin HEAD:refs/heads/feature/test", env: { PATH: shadowBin, PATHEXT: ".EXE" } },
+    repoDir: risky.repo,
+    runGh: () => { throw new Error("PATH-shadowed git must deny before GitHub lookup"); },
+  }).blocked, true, "PATH-shadowed git cannot perform an unattended feature push");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "C:/attacker/git.exe push origin HEAD:refs/heads/feature/test" },
+    repoDir: risky.repo,
+    runGh: () => { throw new Error("arbitrary git path must deny before GitHub lookup"); },
+  }).blocked, true, "arbitrary git executable paths cannot perform an unattended feature push");
   git(risky.repo, ["remote", "add", "other", "https://github.com/other/repository.git"]);
   const alternateRemotePush = evaluateProductionAction({
     toolName: "PowerShell",
@@ -502,6 +518,8 @@ try {
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects every push in a command chain");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin HEAD:refs/heads/feature/test`, projectRoot);
   assert.equal(claudeGuard.stdout, "", "Claude guard still allows an ordinary feature-branch push");
+  claudeGuard = runClaudePushGuard(`C:/attacker/git.exe -C "${risky.repo}" push origin HEAD:refs/heads/feature/test`, projectRoot);
+  assert.match(claudeGuard.stdout, /trusted Git executable/, "Claude guard denies arbitrary Git executable paths");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push other HEAD:refs/heads/feature/test`, projectRoot);
   assert.match(claudeGuard.stdout, /outside the protected CRX upstream repository/, "Claude guard denies fork and alternate network pushes before PR lookup");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin refs/heads/*:refs/heads/*`, projectRoot);
@@ -637,6 +655,20 @@ try {
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, false, "gh PR merge to main uses the same valid proof gate");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `C:/attacker/gh.exe pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => { throw new Error("arbitrary gh path must deny before PR inspection"); },
+  }).blocked, true, "arbitrary GitHub CLI paths cannot perform an unattended merge");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}`, env: { PATH: shadowBin, PATHEXT: ".EXE" } },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => { throw new Error("PATH-shadowed gh must deny before PR inspection"); },
+  }).blocked, true, "PATH-shadowed GitHub CLI cannot perform an unattended merge");
   const autoMergeDecision = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --auto --match-head-commit ${risky.sha}` },

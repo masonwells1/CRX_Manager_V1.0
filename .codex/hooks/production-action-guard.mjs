@@ -7,10 +7,13 @@ import path from "node:path";
 
 import {
   activeAutoMergePrNumbers,
+  commandStartsWithGitHubCli,
+  deliveryExecutableIsTrusted,
   destinationLooksLikeUrl,
   contentIsRisky,
   extractPatchDestinations,
   featurePushDestinations,
+  fixedGitExecutable,
   GUARDED_REPO_PATH,
   gitPushCwd,
   ghApiMergeRequest,
@@ -205,7 +208,7 @@ export function isClearlyReadOnlySql(sql) {
 function defaultRunGit(args, cwd) {
   const env = { ...process.env };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
-  return execFileSync("git", args, {
+  return execFileSync(fixedGitExecutable(), args, {
     cwd,
     env,
     encoding: "utf8",
@@ -688,6 +691,12 @@ export function evaluateProductionAction({
   // Split on single `|` too (Codex round-4): `git push a | git push b` runs
   // BOTH pushes in a shell pipeline, so every pipeline stage is a segment.
   const commandSegments = command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
+  const executionEnv = { ...process.env, ...suppliedEnv };
+  for (const segment of commandSegments) {
+    if (commandStartsWithGitHubCli(segment) && !deliveryExecutableIsTrusted(segment, "gh", { cwd: actionRepoDir, env: executionEnv })) {
+      return denied("CODEX PRODUCTION GATE: this GitHub command does not resolve to the trusted GitHub CLI used for inspection. Remove arbitrary executable paths, current-directory shadows, or PATH overrides and use the normal GitHub CLI installation.");
+    }
+  }
   if (githubCliCommandIsDynamic(command)) {
     return denied("CODEX PRODUCTION GATE: GitHub CLI commands containing shell-expanded variables, substitutions, splats, or backticks are denied because a merge or auto-merge action could be hidden from the exact-head parser. Spell the complete `gh` command literally.");
   }
@@ -695,6 +704,9 @@ export function evaluateProductionAction({
     return denied("CODEX PRODUCTION GATE: GH_REPO/GH_HOST/GH_CONFIG_DIR/GITHUB_API_URL overrides are denied for merges because they can make the guard inspect a different repository or host than the command executes. Use an explicit `--repo owner/repo`.");
   }
   const pushSegments = commandSegments.filter((part) => isGitPush(part));
+  if (pushSegments.some((segment) => !deliveryExecutableIsTrusted(segment, "git", { cwd: actionRepoDir, env: executionEnv }))) {
+    return denied("CODEX PRODUCTION GATE: this push does not resolve to the trusted Git executable used for inspection. Remove arbitrary executable paths, current-directory shadows, or PATH overrides and run the normal Git installation.");
+  }
   if (pushSegments.length > 0 && (pushSegments.length !== 1 || commandSegments.length !== 1)) {
     return denied("CODEX PRODUCTION GATE: a feature push must be one standalone command. Chaining a push with another shell action could arm auto-merge after the pre-push GitHub check, so run `git -C <repo> push <remote> <single-refspec>` by itself.");
   }

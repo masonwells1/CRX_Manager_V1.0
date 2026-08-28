@@ -119,6 +119,10 @@ ok(r.decision?.permissionDecision === "deny", "empty-quote composed merge token 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "g`h pr merge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "PowerShell-composed gh executable denies before parsing");
 
+r = runHook({ tool_name: "PowerShell", tool_input: { command: "C:/attacker/gh.exe pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789" } });
+ok(r.decision?.permissionDecision === "deny", "arbitrary GitHub CLI path denies before PR inspection");
+ok(/trusted GitHub CLI/.test(r.decision?.permissionDecisionReason || ""), "untrusted executable denial explains the fixed binary boundary");
+
 r = runHook({ tool_name: "Bash", tool_input: { command: "g${EMPTY}h pr merge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "POSIX-composed gh executable denies before parsing");
 

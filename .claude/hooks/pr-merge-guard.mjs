@@ -29,6 +29,8 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   contentIsRisky,
+  commandStartsWithGitHubCli,
+  deliveryExecutableIsTrusted,
   describeRiskyContent,
   ghApiMergeRequest,
   githubCliCommandIsDynamic,
@@ -67,6 +69,12 @@ const requests = [];
 if (GITHUB_MERGE_TOOL.test(toolName)) {
   requests.push(mcpMergeRequest(toolInput));
 } else if (typeof toolInput.command === "string" && toolInput.command) {
+  const executionEnv = { ...process.env, ...(toolInput.env && typeof toolInput.env === "object" ? toolInput.env : {}) };
+  for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/).map((value) => value.trim()).filter(Boolean)) {
+    if (commandStartsWithGitHubCli(segment) && !deliveryExecutableIsTrusted(segment, "gh", { cwd: payload?.cwd || process.cwd(), env: executionEnv })) {
+      deny("PR MERGE GATE: this GitHub command does not resolve to the trusted GitHub CLI used for inspection. Remove arbitrary executable paths, current-directory shadows, or PATH overrides and use the normal GitHub CLI installation.");
+    }
+  }
   if (githubCliCommandIsDynamic(toolInput.command)) {
     deny("PR MERGE GATE: GitHub CLI commands containing shell-expanded variables, substitutions, splats, or backticks are denied because a merge or auto-merge action could be hidden from the exact-head parser. Spell the complete `gh` command literally.");
   }

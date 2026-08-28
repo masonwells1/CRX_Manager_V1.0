@@ -133,12 +133,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after shell-composed GitHub executables and noncanonical merge
   // options were denied, and Codex began importing the shared merge parsers
   // instead of maintaining a second copy. The anchors remain unchanged.
-  codexGuard: "465480c5239a70490cfac52d53b925a0efd2306d",
-  pushLib: "4c6681c35e8ae56c77cc2c0d17278040b342a358",
+  // Re-pinned after pushes and merges were bound to the trusted executable that
+  // the guard inspected, with arbitrary paths plus current-directory/PATH
+  // shadows denied. The maintenance anchors remain unchanged.
+  codexGuard: "b4029454c406ba3c8d4c631a72a5b244b8a70f0b",
+  pushLib: "37c170847ed5f754351c2294c633018da604be2e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "07973dddfed1c4bf7aa936f726000da5c5e85761",
-  pushLib: "4c6681c35e8ae56c77cc2c0d17278040b342a358",
+  codexGuard: "3f4fe19bcb32c86b55b760e607fddfa713a3ea99",
+  pushLib: "37c170847ed5f754351c2294c633018da604be2e",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

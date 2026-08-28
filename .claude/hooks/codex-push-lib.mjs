@@ -28,12 +28,72 @@ export function fixedGitHubCliExecutable({ platform = process.platform, exists =
   return executable;
 }
 
+export function fixedGitExecutable({ platform = process.platform, exists = existsSync } = {}) {
+  const candidates = platform === "win32"
+    ? ["C:\\Program Files\\Git\\cmd\\git.exe"]
+    : ["/usr/bin/git", "/usr/local/bin/git"];
+  const executable = candidates.find((candidate) => exists(candidate));
+  if (!executable) throw new Error("a fixed trusted Git executable is required");
+  return executable;
+}
+
 export function trustedGitHubCliInvocation(args, options = {}) {
   return {
     executable: fixedGitHubCliExecutable(options),
     args: [...args],
     env: sanitizedGitHubCliEnvironment(options.baseEnv),
   };
+}
+
+function executableToken(command) {
+  const withoutLeadingEnvironment = String(command || "").replace(
+    /^\s*(?:env\s+)?(?:(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+))\s+)*/,
+    "",
+  );
+  return String(splitShellArgs(withoutLeadingEnvironment)[0] || "");
+}
+
+function executableKey(value, platform = process.platform) {
+  const resolved = path.resolve(String(value || ""));
+  return platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function resolvedBareExecutable(token, { cwd, env, platform, exists }) {
+  const searchPath = String(env?.PATH || env?.Path || env?.path || "");
+  const directories = [cwd, ...searchPath.split(path.delimiter)].map((entry) => String(entry || "").replace(/^"|"$/g, "")).filter(Boolean);
+  const hasExtension = /\.[A-Za-z0-9]+$/.test(token);
+  const extensions = platform === "win32" && !hasExtension
+    ? String(env?.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    : [""];
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidate = path.resolve(directory, `${token}${extension}`);
+      if (exists(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+export function commandStartsWithGitHubCli(command) {
+  const token = executableToken(command);
+  return /(?:^|[\\/])gh(?:\.exe)?$/i.test(token);
+}
+
+export function deliveryExecutableIsTrusted(command, kind, options = {}) {
+  const platform = options.platform || process.platform;
+  const exists = options.exists || existsSync;
+  const cwd = path.resolve(options.cwd || process.cwd());
+  const env = options.env || process.env;
+  const token = executableToken(command);
+  const expected = kind === "gh"
+    ? fixedGitHubCliExecutable({ platform, exists })
+    : fixedGitExecutable({ platform, exists });
+  const validBare = kind === "gh" ? /^gh(?:\.exe)?$/i : /^git(?:\.exe)?$/i;
+  let actual;
+  if (/[\\/]/.test(token) || path.isAbsolute(token)) actual = path.resolve(cwd, token);
+  else if (validBare.test(token)) actual = resolvedBareExecutable(token, { cwd, env, platform, exists });
+  else return false;
+  return executableKey(actual, platform) === executableKey(expected, platform);
 }
 
 // Does the git command push (to main)? We fire on any `git push`; the hook then

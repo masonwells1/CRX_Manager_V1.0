@@ -61,6 +61,8 @@ import {
   rewritesReachGuardedApp,
   executableTransportSettings,
   configuredMirrorRemotes,
+  deliveryExecutableIsTrusted,
+  fixedGitExecutable,
   urlIsGuardedApp,
   riskyFiles,
 } from "./codex-push-lib.mjs";
@@ -127,7 +129,7 @@ function gitIn(args, cwd, { keepConfigOverrides = false } = {}) {
   if (!keepConfigOverrides) {
     for (const key of Object.keys(env)) if (/^GIT_CONFIG(_|$)/i.test(key)) delete env[key];
   }
-  return execFileSync("git", args, {
+  return execFileSync(fixedGitExecutable(), args, {
     cwd,
     env,
     encoding: "utf8",
@@ -653,6 +655,10 @@ for (const pushCmd of pushCommands) {
 }
 
 for (const pushCmd of pushCommands) {
+  const suppliedEnv = payload?.tool_input?.env && typeof payload.tool_input.env === "object" ? payload.tool_input.env : {};
+  if (!deliveryExecutableIsTrusted(pushCmd, "git", { cwd: projectDir, env: { ...process.env, ...suppliedEnv } })) {
+    deny("CODEX GATE: this push does not resolve to the trusted Git executable used for inspection. Remove arbitrary executable paths, current-directory shadows, or PATH overrides and run the normal Git installation.");
+  }
   if (/--git-dir|--work-tree/i.test(pushCmd)) {
     deny("CODEX GATE: pushes using explicit --git-dir/--work-tree contexts are denied because the guard cannot safely bind them to the inspected worktree. Use `git -C <repo> push` instead.");
   }
