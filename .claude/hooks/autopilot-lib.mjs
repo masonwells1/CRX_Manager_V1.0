@@ -56,7 +56,7 @@ const DENY_BASH_RES = [
 // otherwise one allowed edit could erase the independent delivery boundary and
 // a later merge would inherit the same armed approval.
 const DENY_PATH_RE = /(?:^|[\s"'=(),{}\[\]\\/])(?:\.env(?:\.|$)|\.claude[\\/](?:hooks(?:[\\/]|$)|settings(?:\.local)?\.json(?:$|[\s;&|(),{}\[\]]))|\.codex[\\/](?:hooks(?:[\\/]|$)|hooks\.json(?:$|[\s;&|(),{}\[\]])))/i;
-const SHELL_PATH_MUTATOR_RE = /(?:>|\b(?:set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|remove-item|move-item|copy-item|rename-item|ac|clc|cpi|mi|ni|ri|ren|rni|sc|si|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i;
+const SHELL_PATH_MUTATOR_RE = /(?:>|\b(?:tee|set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|remove-item|move-item|copy-item|rename-item|ac|clc|cpi|mi|ni|ri|ren|rni|sc|si|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i;
 const INLINE_INTERPRETER_RE = /(?:^|[;&|()])\s*(?:&\s*)?(?:(?:"[^"]*[\\/](?:node|nodejs|bun|deno)(?:\.exe)?"|'[^']*[\\/](?:node|nodejs|bun|deno)(?:\.exe)?'|(?:\S*[\\/])?(?:node|nodejs|bun|deno)(?:\.exe)?)\s+(?:--eval|--print|-e|-p)\b|(?:"[^"]*[\\/](?:python\d*|py|ruby|perl)(?:\.exe)?"|'[^']*[\\/](?:python\d*|py|ruby|perl)(?:\.exe)?'|(?:\S*[\\/])?(?:python\d*|py|ruby|perl)(?:\.exe)?)\s+(?:-c|-e)\b|(?:"[^"]*[\\/](?:powershell|pwsh)(?:\.exe)?"|'[^']*[\\/](?:powershell|pwsh)(?:\.exe)?'|(?:\S*[\\/])?(?:powershell|pwsh)(?:\.exe)?)\s+-(?:command|encodedcommand)\b|(?:"[^"]*[\\/](?:bash|sh|zsh|cmd)(?:\.exe)?"|'[^']*[\\/](?:bash|sh|zsh|cmd)(?:\.exe)?'|(?:\S*[\\/])?(?:bash|sh|zsh|cmd)(?:\.exe)?)\s+(?:-c|\/c)\b)/i;
 export const UNATTENDED_INTEGRITY_PATHS = Object.freeze([
   ".claude/hooks/autopilot-lib.mjs",

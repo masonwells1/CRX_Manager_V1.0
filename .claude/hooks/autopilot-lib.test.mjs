@@ -107,6 +107,7 @@ for (const wrapper of ["scripts/write-codex-push-proof.mjs", "scripts/land-pr.mj
   eq(autopilotDecision("Bash", { command: `node ${wrapper}` }), "verify-integrity", `trusted wrapper execution requires committed integrity: ${wrapper}`);
   eq(autopilotDecision("PowerShell", { command: `Set-Content ${wrapper} -Value disabled` }), "deny", `trusted wrapper shell mutation is denied: ${wrapper}`);
 }
+eq(autopilotDecision("Bash", { command: "printf disabled | tee .claude/hooks/unattended-autopilot.mjs" }), "deny", "tee cannot rewrite the unattended hook before integrity proof");
 eq(autopilotDecision("Bash", { command: "node scripts/./land-pr.mjs 513" }), "verify-integrity", "dot-segment wrapper execution still reaches integrity proof");
 
 // ── deny-set additions (2026-07-04): CLI deploy and direct remote writes ───
