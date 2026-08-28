@@ -13,6 +13,7 @@ const producer = readFileSync(new URL("./prepare-escape-string-scanner-maintenan
 assert.match(producer, /"--model", "gpt-5\.6-sol"/);
 assert.match(producer, /model_reasoning_effort=\\"high\\"/);
 assert.match(producer, /"--sandbox", "read-only"/);
+assert.match(producer, /"--skip-git-repo-check"/);
 assert.match(producer, /tokens\.length !== 1 \|\| tokens\[0\]\[1\] !== "CLEAN"/);
 assert.match(producer, /git\(\["status", "--porcelain", "--untracked-files=all"\]\)/);
 assert.ok(producer.indexOf("runArtifactReview({") < producer.indexOf("writeFileSync(TARGET_PATH, built.output"),

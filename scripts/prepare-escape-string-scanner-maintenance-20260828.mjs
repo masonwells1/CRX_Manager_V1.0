@@ -105,7 +105,7 @@ function runArtifactReview({ input, output }) {
     ].join("\n");
     const reviewed = spawnSync(resolveCodexExecutable(), [
       "exec", "--model", "gpt-5.6-sol", "-c", "model_reasoning_effort=\"high\"",
-      "--sandbox", "read-only", "-C", reviewDir, prompt,
+      "--sandbox", "read-only", "--skip-git-repo-check", "-C", reviewDir, prompt,
     ], { cwd: reviewDir, encoding: "utf8", shell: false, windowsHide: true, timeout: 900_000, maxBuffer: 16 * 1024 * 1024 });
     if (reviewed.status !== 0) throw new Error("artifact review process failed: " + String(reviewed.stderr || reviewed.stdout || reviewed.error || "unknown error").slice(-2000));
     const stdout = String(reviewed.stdout || "").trim();
