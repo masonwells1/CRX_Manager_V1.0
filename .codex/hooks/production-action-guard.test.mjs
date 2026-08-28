@@ -1090,6 +1090,9 @@ try {
     "C:\\Windows\\System32\\curl.exe -X POST https://api.github.com/graphql -d mutation",
     "/usr/bin/curl -X POST https://api.github.com/graphql -d mutation",
     "curl -X POST https://api.github.com:443/graphql -d mutation",
+    "irm https://api.github.com/graphql -Method Post -Body enablePullRequestAutoMerge",
+    "& iwr https://api.github.com/graphql -Method Post -Body enablePullRequestAutoMerge",
+    "pwsh -Command irm https://api.github.com/graphql -Method Post",
     "gh alias set ship 'api graphql'",
     "gh ship",
   ]) {

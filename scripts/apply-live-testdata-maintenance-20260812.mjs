@@ -154,13 +154,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // clients gained absolute-path/explicit-port normalization and unknown gh
   // commands plus aliases became fail-closed, then again after GitHub's short
   // `-B` PR-base flag and its attached forms joined the retarget denial, then
-  // after structured tool environments gained one shared narrow push allowlist.
+  // after structured tool environments gained one shared narrow push allowlist,
+  // then after PowerShell's `irm`/`iwr` GitHub API aliases were classified.
   codexGuard: "95e2e31dff0107d7f41f5e74b467fdc7b7a950e0",
-  pushLib: "29b0410d22aecbf1e078bbc1c3cb458a4a4d383b",
+  pushLib: "ba5744506c6bb880b68097b90fe8e034ab38f738",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "34dabbe5cffbb0ab2e22abd63fb90a21e3ac3f95",
-  pushLib: "29b0410d22aecbf1e078bbc1c3cb458a4a4d383b",
+  pushLib: "ba5744506c6bb880b68097b90fe8e034ab38f738",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

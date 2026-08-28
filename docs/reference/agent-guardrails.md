@@ -88,7 +88,7 @@ Global GitHub CLI flags cannot hide API writes because the classifier tokenizes 
 
 Auto-merge is denied for every PR, including PRs currently targeting ordinary branches, because a later base retarget could redirect the pending landing. CLI base changes using `--base`, `-B`, or attached forms, plus GitHub-tool, REST, and GraphQL PR base-retarget operations, are denied under unattended authority; ordinary title, body, label, and review metadata edits remain available.
 
-Direct GitHub API clients are normalized by executable basename across Windows/POSIX absolute paths, and `api.github.com` URLs with explicit ports are covered. GitHub CLI aliases and unknown top-level `gh` commands deny closed; known built-ins such as `gh pr view` remain available.
+Direct GitHub API clients are normalized by executable basename across Windows/POSIX absolute paths, PowerShell's `irm`/`iwr` aliases and wrappers are covered, and `api.github.com` URLs with explicit ports are covered. GitHub CLI aliases and unknown top-level `gh` commands deny closed; known built-ins such as `gh pr view` remain available.
 
 Feature pushes reject tool-level structured environment overrides before execution. Only `GIT_TERMINAL_PROMPT=0/1` and the exact documented SSH keepalive command are value-checked exceptions; transport helpers, Git configuration, repository selectors, executable paths, and generic environment changes deny closed in Claude, Codex, and unattended autopilot.
 

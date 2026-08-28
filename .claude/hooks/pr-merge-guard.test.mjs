@@ -58,6 +58,9 @@ ok(!directGitHubApiWriter("echo https://api.github.com/graphql"), "documentation
 ok(directGitHubApiWriter("C:\\Windows\\System32\\curl.exe -X POST https://api.github.com/graphql"), "absolute Windows curl is classified");
 ok(directGitHubApiWriter("/usr/bin/curl -X POST https://api.github.com/graphql"), "absolute POSIX curl is classified");
 ok(directGitHubApiWriter("curl -X POST https://api.github.com:443/graphql"), "explicit GitHub API ports are classified");
+ok(directGitHubApiWriter("irm https://api.github.com/graphql -Method Post -Body enablePullRequestAutoMerge"), "PowerShell Invoke-RestMethod alias is classified");
+ok(directGitHubApiWriter("& iwr https://api.github.com/graphql -Method Post -Body enablePullRequestAutoMerge"), "PowerShell call-operator Invoke-WebRequest alias is classified");
+ok(directGitHubApiWriter("pwsh -Command irm https://api.github.com/graphql -Method Post"), "wrapped PowerShell API invocation is classified");
 ok(ghCliCommandIsUnknownOrAlias("gh alias set ship 'api graphql'"), "GitHub CLI alias management is denied");
 ok(ghCliCommandIsUnknownOrAlias("gh ship"), "unknown top-level gh command is treated as an alias");
 ok(!ghCliCommandIsUnknownOrAlias("gh -R o/r pr view 42"), "known gh command after global flags remains classified");
@@ -208,6 +211,9 @@ for (const command of [
   "C:\\Windows\\System32\\curl.exe -X POST https://api.github.com/graphql -d mutation",
   "/usr/bin/curl -X POST https://api.github.com/graphql -d mutation",
   "curl -X POST https://api.github.com:443/graphql -d mutation",
+  "irm https://api.github.com/graphql -Method Post -Body enablePullRequestAutoMerge",
+  "& iwr https://api.github.com/graphql -Method Post -Body enablePullRequestAutoMerge",
+  "pwsh -Command irm https://api.github.com/graphql -Method Post",
   "gh alias set ship 'api graphql'",
   "gh ship",
 ]) {

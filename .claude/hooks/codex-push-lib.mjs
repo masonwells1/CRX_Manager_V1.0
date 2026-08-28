@@ -2519,7 +2519,7 @@ export function ghApiMutates(command) {
 export function directGitHubApiWriter(command) {
   const text = String(command || "");
   if (!/https?:\/\/api\.github\.com(?::\d+)?\/(?:graphql|repos\/)/i.test(text)) return false;
-  const writerNames = new Set(["curl", "wget", "invoke-restmethod", "invoke-webrequest", "node", "python", "python3", "py", "ruby", "perl", "powershell", "pwsh"]);
+  const writerNames = new Set(["curl", "wget", "invoke-restmethod", "invoke-webrequest", "irm", "iwr", "node", "python", "python3", "py", "ruby", "perl", "powershell", "pwsh"]);
   const words = splitShellArgs(text);
   return words.slice(0, 2).some((word) => {
     const basename = String(word || "").replace(/^&/, "").replace(/^['"]|['"]$/g, "").replaceAll("\\", "/").split("/").at(-1).replace(/\.exe$/i, "").toLowerCase();
