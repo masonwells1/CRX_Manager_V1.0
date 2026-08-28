@@ -153,7 +153,9 @@ revokes are also parked because they require semantic proof of RLS, actor bindin
 paths, deliberate access, and mutating-RPC idempotency. `CREATE SCHEMA` is parked because PostgreSQL
 permits embedded grants and trigger declarations inside that single statement. `CREATE VIEW` is
 parked because owner-run views can bypass underlying RLS and inherit permissive default relation
-grants. Quoted or
+grants. Every `ALTER TYPE` and `ALTER SEQUENCE` is parked because those statements can immediately
+rewrite lifecycle meaning or live numbering behavior; view and index drops are parked as operationally
+destructive. Quoted or
 unquoted references to the migration schema are denied before tokenization. PostgreSQL Unicode-escape
 syntax is denied anywhere in an automated migration, including inside stored-function bodies, so an
 escaped identifier cannot disguise a protected schema reference.

@@ -89,8 +89,6 @@ function auditedDdlAdmission(skeleton) {
     const normalized = statement.replace(/\s+/g, " ");
     if (/^set\s+local\s+(?:statement_timeout|lock_timeout|search_path|check_function_bodies)\b/i.test(normalized)) continue;
     if (/^create\s+(?:type|domain|sequence)\b/i.test(normalized)) continue;
-    if (/^alter\s+(?:type|sequence)\b/i.test(normalized)) continue;
-    if (/^drop\s+(?:view|index)\b/i.test(normalized)) continue;
     if (/^comment\s+on\b/i.test(normalized)) continue;
     return { ok: false, reason: "top-level statement is outside the audited DDL allowlist" };
   }
