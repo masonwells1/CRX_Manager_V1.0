@@ -96,7 +96,6 @@ function auditedDdlAdmission(skeleton) {
       }
       continue;
     }
-    if (/^create\s+(?:or\s+replace\s+)?view\b/i.test(normalized)) continue;
     if (/^(?:create|alter|drop)\s+policy\b/i.test(normalized)) continue;
     if (/^create\s+(?:type|domain|sequence)\b/i.test(normalized)) continue;
     if (/^alter\s+(?:type|sequence)\b/i.test(normalized)) continue;

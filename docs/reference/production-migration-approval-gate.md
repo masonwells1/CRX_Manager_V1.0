@@ -129,7 +129,8 @@ Admission is otherwise default-deny: only a narrow set of definition-only DDL st
 Top-level DML, `VALUES`, `COPY`, query-executing `CREATE TABLE AS`, materialized views, CTEs, index
 builds, trigger DDL, `ALTER TABLE`, extensions, direct migration-ledger references, and unknown
 statement forms are parked. `CREATE SCHEMA` is also parked because PostgreSQL permits embedded grants
-and trigger declarations inside that single statement. `GRANT` is limited to function/procedure execution for `authenticated`
+and trigger declarations inside that single statement. `CREATE VIEW` is parked because owner-run
+views can bypass underlying RLS and inherit permissive default relation grants. `GRANT` is limited to function/procedure execution for `authenticated`
 and `service_role`; `REVOKE` is limited to those executable objects and known CRX roles. Quoted or
 unquoted references to the migration schema are denied before tokenization.
 
