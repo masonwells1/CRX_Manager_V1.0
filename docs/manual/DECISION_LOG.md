@@ -1,11 +1,36 @@
 # Decision Log
 
-Last verified: 2026-08-27
+Last verified: 2026-08-28
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-08-28 — CodeRabbit reviews only frozen release candidates
+
+**Source:** Mason's in-chat decision on 2026-08-28 after the shared CodeRabbit budget was consumed
+by automatic reviews during active Codex/Claude implementation.
+
+**Decision.** Disable automatic and automatic-incremental CodeRabbit reviews in both CRX Manager
+and FarmRx. Opening a PR and pushing work-in-progress commits must not spend a review. Once the
+implementation is usable and deployable, the branch is current, required checks are green, the
+candidate commit is frozen, and the separate Codex review is clean, the landing owner records the
+head SHA and posts exactly `@coderabbitai review`. CodeRabbit documents that this manual incremental
+command remains available when automatic review is disabled.
+
+**Operative rule.** CodeRabbit is the last broad outside review, not a concurrent implementation
+reviewer. Read and resolve its findings, then merge with
+`--match-head-commit <reviewed-head-sha>`. Mason explicitly approved the corresponding GitHub
+protection change for both repositories: require one approval, dismiss stale approvals after a new
+commit, require approval from someone other than the last pusher, and enforce the rule for
+administrators. CodeRabbit's formal approval is the normal merge-unlock path; existing build and
+deployment checks remain separate. If a finding or base update creates a new commit, restart checks
+and request one follow-up incremental review of that corrected candidate. Do not use
+`@coderabbitai resume`, which restarts automatic review, and use `@coderabbitai full review` only
+when a complete reread is deliberately justified. This decision supersedes the automatic-review
+and two-commit throttle portions of the 2026-07-17 and 2026-08-24 entries; their review-quality,
+path-selection, and final-head safety rules remain active.
 
 
 ## 2026-08-27 — Codex live migrations use a protected GitHub approval environment
@@ -534,13 +559,10 @@ the entry below.
    `override_requested_reviewers_only` stays **false** on purpose: false lets the PR *author*
    override a failing check, and Mason authors every PR here.
 
-**The limit, stated so nobody oversells it later.** These produce a red X and a withheld approval.
-They do **not** disable the merge button. `protect-main` requires exactly `Vercel`,
-`Lint, Type Check, Test, Build`, and `SQL Migration Validation`, with
-`required_approving_review_count: 0` and CodeRabbit absent from the required list. The status
-context name is confirmed to be `CodeRabbit`, so promoting it is now only a decision, not a
-discovery — deferred deliberately until the error-mode checks have run long enough to show their
-false-positive rate, and it needs Mason's explicit OK when that time comes.
+**Historical enforcement limit (superseded 2026-08-28).** At this decision's date these produced a
+red X and withheld approval but did not disable the merge button because GitHub required zero
+approvals. Mason's 2026-08-28 decision above replaced that posture with one required current
+approval, stale-review dismissal, last-pusher separation, and administrator enforcement.
 
 **Also settled: the dashboard is inert and must not be used.** CodeRabbit config sources do not
 merge. The repo `.coderabbit.yaml` outranks the repository and organization UI settings, and any

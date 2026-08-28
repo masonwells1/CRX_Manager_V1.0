@@ -24,13 +24,11 @@ reviews:
   # switch that gives the `mode: error` checks below any force at all: per
   # CodeRabbit's docs, an error-mode check only holds a PR when this is enabled.
   #
-  # Scope, stated honestly: this is pressure, NOT a hard block. The protect-main
-  # ruleset requires exactly three contexts - Vercel, "Lint, Type Check, Test,
-  # Build", and "SQL Migration Validation" - with required_approving_review_count
-  # 0 and CodeRabbit absent from the required list. A failing check therefore
-  # shows red and refuses approval; it does not disable the merge button. Making
-  # it a true gate means adding the CodeRabbit context to that ruleset, which is
-  # a separate deliberate change and needs Mason's OK.
+  # Mason approved the hard final-review gate on 2026-08-28. GitHub now requires
+  # one approval, dismisses stale approvals after a new commit, requires approval
+  # from someone other than the last pusher, and enforces those rules for admins.
+  # CodeRabbit's formal approval is therefore the normal merge-unlock path; the
+  # existing required build/deployment contexts remain separate and unchanged.
   request_changes_workflow: true
   high_level_summary: true
   poem: false
@@ -77,23 +75,14 @@ reviews:
   # enforces this rule, are parked in PR #441.
 
   auto_review:
-    enabled: true
+    # Do not spend a review on PR creation or work-in-progress pushes. Post
+    # `@coderabbitai review` once the candidate is frozen, checks are green, and
+    # the separate Codex review is clean.
+    enabled: false
+    auto_incremental_review: false
     drafts: false
-    base_branches:
-      - main
-    # Pause AUTOMATIC review after 2 reviewed commits on a PR (this applies to
-    # ordinary non-draft PRs, not just drafts). Later pushes are then not
-    # auto-reviewed until someone comments `@coderabbitai review`, which
-    # resumes it. The default of 5 spent the weekly allowance on half-finished
-    # commits and left nothing for the finished code: PR #429 (21 commits) and
-    # PR #434 both hit "Review limit reached".
-    #
-    # This number is NOT the pre-merge gate and must never be treated as one.
-    # The gate is reading a fresh CodeRabbit review of the FINAL commit before
-    # merging - the standing policy in AGENTS.md, with the procedure in
-    # .claude/skills/deploy-check/SKILL.md. That procedure is documented, not
-    # yet machine-enforced; the enforcement is parked in PR #441.
-    auto_pause_after_reviewed_commits: 2
+    # Keep opt-in sources empty so only the explicit PR comment starts a review.
+    description_keyword: ""
 
   # Project-specific review guidance. These mirror the "CRX Hard Rules" in
   # AGENTS.md so CodeRabbit flags the exact mistakes that have bitten this
@@ -164,10 +153,11 @@ reviews:
   # something a PR is measured against before it lands. Custom checks require
   # the Pro+ plan; this org is on Pro Plus (verified 2026-08-24).
   #
-  # Approved by Mason 2026-08-24 after being shown that these produce a red X
-  # and a withheld approval rather than a disabled merge button - see the
-  # `request_changes_workflow` note above for why, and do not describe these as
-  # a hard gate anywhere.
+  # Approved by Mason 2026-08-24 when these produced a red X and withheld
+  # approval under the former zero-required-review rule. Mason's 2026-08-28
+  # protection change now requires a current approval, so an unresolved failed
+  # check blocks the merge-unlocking approval unless the author explicitly uses
+  # the documented "Ignore failed checks" override below.
   pre_merge_checks:
     # FALSE ON PURPOSE. False lets the PR AUTHOR override a failing check by
     # ticking "Ignore failed checks" in the Walkthrough comment. Mason authors
