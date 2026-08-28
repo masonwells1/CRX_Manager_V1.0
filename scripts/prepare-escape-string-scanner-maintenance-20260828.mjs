@@ -10,7 +10,7 @@ const TARGET = [".claude", "hooks", "live-" + "testdata-lib.mjs"].join("/");
 const TARGET_PATH = path.join(REPO_DIR, TARGET);
 const EXPECTED_INPUT_BLOB = "e09a88ff0df5c235ccb05e0df0ac818b622639d0";
 const EXPECTED_OUTPUT_BLOB = "3875e085266f6f0395ea16ad2fa2032b56ae3373";
-const APPROVAL = "--approved-by-mason=2026-08-28";
+const APPROVAL = "--mason-authorized-one-account-gate=2026-08-28";
 const REVIEW_TOKEN = "SCANNER_MAINTENANCE_VERDICT";
 
 const OLD_SCANNER = `    if (ch === "'") {
