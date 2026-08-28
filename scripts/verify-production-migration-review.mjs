@@ -15,6 +15,10 @@ function git(args) {
   return (result.stdout || "").trim();
 }
 
+function gitSucceeds(args) {
+  return spawnSync("git", args, { cwd: process.cwd(), encoding: "utf8", shell: false, windowsHide: true }).status === 0;
+}
+
 async function githubJson(pathname) {
   const token = String(process.env.GH_TOKEN || "");
   const repository = String(process.env.GITHUB_REPOSITORY || "");
@@ -53,15 +57,20 @@ try {
   const codeRabbitApproval = selectTrustedCodeRabbitApproval(reviews, input);
 
   git(["fetch", "--no-tags", "origin", input.reviewedCommit]);
+  if (!gitSucceeds(["merge-base", "--is-ancestor", mergedPr.merge_commit_sha, input.expectedCommit])) {
+    throw new Error("reviewed PR merge is not an ancestor of current main");
+  }
   const relativeMigration = "supabase/migrations/" + input.migrationName + ".sql";
-  const mergeBaseCommit = git(["rev-parse", input.expectedCommit + "^1"]);
+  const mergeBaseCommit = git(["rev-parse", mergedPr.merge_commit_sha + "^1"]);
   const baseEntry = git(["ls-tree", mergeBaseCommit, "--", relativeMigration]);
   const reviewedEntry = git(["ls-tree", input.reviewedCommit, "--", relativeMigration]);
+  const mergedEntry = git(["ls-tree", mergedPr.merge_commit_sha, "--", relativeMigration]);
   const currentEntry = git(["ls-tree", input.expectedCommit, "--", relativeMigration]);
-  const reviewedBlob = validateNewMigrationGitBinding({ baseEntry, reviewedEntry, currentEntry });
+  const reviewedBlob = validateNewMigrationGitBinding({ baseEntry, reviewedEntry, mergedEntry, currentEntry });
   process.stdout.write(JSON.stringify({
     verified: true,
     pullRequest: mergedPr.number,
+    reviewedMergeCommit: mergedPr.merge_commit_sha,
     reviewedBlob,
     codeRabbitReviewId: codeRabbitApproval.id,
     codeRabbitSubmittedAt: codeRabbitApproval.submitted_at,

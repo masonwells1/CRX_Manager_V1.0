@@ -37,15 +37,15 @@ export async function collectAllPages(fetchPage, pageSize = 100, maxPages = 100)
   throw new Error("GitHub review pagination exceeded the fail-closed page limit");
 }
 
-export function selectExactMergedPr(pulls, { reviewedCommit, expectedCommit }) {
+export function selectExactMergedPr(pulls, { reviewedCommit }) {
   const matching = (Array.isArray(pulls) ? pulls : []).filter((pr) =>
     pr?.state === "closed" && pr?.merged_at != null && pr?.base?.ref === "main" &&
-    pr?.head?.sha === reviewedCommit && pr?.merge_commit_sha === expectedCommit);
-  if (matching.length !== 1) throw new Error("reviewed commit is not the unique head of the PR merged as current main");
+    pr?.head?.sha === reviewedCommit && SHA1_RE.test(String(pr?.merge_commit_sha)));
+  if (matching.length !== 1) throw new Error("reviewed commit is not the unique head of one merged PR into main");
   return matching[0];
 }
 
-export function validateNewMigrationGitBinding({ baseEntry, reviewedEntry, currentEntry }) {
+export function validateNewMigrationGitBinding({ baseEntry, reviewedEntry, mergedEntry, currentEntry }) {
   if (String(baseEntry || "").trim()) {
     throw new Error("migration must be newly added by the exact reviewed PR");
   }
@@ -55,7 +55,10 @@ export function validateNewMigrationGitBinding({ baseEntry, reviewedEntry, curre
     return match[1];
   };
   const reviewedBlob = parseRegularBlob(reviewedEntry);
+  const mergedBlob = parseRegularBlob(mergedEntry);
   const currentBlob = parseRegularBlob(currentEntry);
-  if (reviewedBlob !== currentBlob) throw new Error("migration changed after its exact reviewed PR head");
+  if (reviewedBlob !== mergedBlob || reviewedBlob !== currentBlob) {
+    throw new Error("migration changed between its reviewed PR head, reviewed merge, and current main");
+  }
   return reviewedBlob;
 }

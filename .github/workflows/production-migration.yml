@@ -185,9 +185,15 @@ jobs:
           PRODUCTION_DB_PASSWORD: ${{ secrets.PRODUCTION_DB_PASSWORD }}
           PROJECT_ID: rhyzpcqhnizqbxphqdkr
           BATCH_FILE: ${{ runner.temp }}/reviewed-production-migration.sql
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
         run: |
           set -euo pipefail
           test -n "$SUPABASE_ACCESS_TOKEN"
           test -n "$PRODUCTION_DB_PASSWORD"
           supabase link --project-ref "$PROJECT_ID" --password "$PRODUCTION_DB_PASSWORD"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
+          test "$(git cat-file blob "$EXPECTED_COMMIT:supabase/migrations/$MIGRATION_NAME.sql" | sha256sum | cut -d' ' -f1)" = "$QUERY_SHA256"
           supabase db query --linked --agent yes --file "$BATCH_FILE"

@@ -78,22 +78,80 @@ function git(repoRoot, args, encoding = "utf8") {
   return result.stdout;
 }
 
+function readGitBlobUtf8(repoRoot, objectName, label) {
+  const bytes = git(repoRoot, ["cat-file", "blob", objectName], null);
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes).replace(/\r\n/g, "\n"); }
+  catch { throw new Error(`${label} must be strict UTF-8`); }
+}
+
 export function readRegularMigrationBlob({ repoRoot, expectedCommit, migrationName }) {
   if (!/^[a-f0-9]{40}$/.test(String(expectedCommit))) throw new Error("expected commit must be a full lowercase Git commit id");
   const relativeMigration = `supabase/migrations/${migrationName}.sql`;
   const entry = String(git(repoRoot, ["ls-tree", expectedCommit, "--", relativeMigration])).trim().split(/\s+/);
   if (entry[0] !== "100644" || entry[1] !== "blob") throw new Error("exact migration must be a regular 100644 Git blob");
-  const bytes = git(repoRoot, ["cat-file", "blob", `${expectedCommit}:${relativeMigration}`], null);
-  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes).replace(/\r\n/g, "\n"); }
-  catch { throw new Error("migration blob must be strict UTF-8 SQL"); }
+  return readGitBlobUtf8(repoRoot, `${expectedCommit}:${relativeMigration}`, "migration blob");
 }
 
-export function buildAtomicMigrationSql({ migrationName, query, queryHash }) {
+export function listRequiredEarlierMigrations({ repoRoot, expectedCommit, migrationName }) {
+  if (!/^[a-f0-9]{40}$/.test(String(expectedCommit))) throw new Error("expected commit must be a full lowercase Git commit id");
+  const selected = MIGRATION_STEM_RE.exec(String(migrationName));
+  if (!selected) throw new Error("migration name must be an exact timestamped file stem");
+  let baseline;
+  try {
+    baseline = JSON.parse(readGitBlobUtf8(repoRoot, `${expectedCommit}:supabase/baselines/manifest.json`, "baseline manifest"));
+  } catch (error) {
+    throw new Error(`baseline manifest is unavailable or invalid: ${error?.message || error}`);
+  }
+  const highWater = String(baseline?.migrations_high_water || "");
+  if (!/^\d{14}$/.test(highWater)) throw new Error("baseline migration high-water must be a 14-digit timestamp");
+  const selectedVersion = selected[1];
+  if (selectedVersion <= highWater) throw new Error("selected migration is not newer than the repository baseline");
+
+  const required = [];
+  const listing = String(git(repoRoot, ["ls-tree", "-r", expectedCommit, "--", "supabase/migrations"]));
+  for (const line of listing.split(/\r?\n/).filter(Boolean)) {
+    const entry = /^(\d{6})\s+(\w+)\s+[a-f0-9]+\t(.+)$/.exec(line);
+    if (!entry) throw new Error("migration Git tree entry could not be parsed safely");
+    const [, mode, type, relativePath] = entry;
+    const file = /^supabase\/migrations\/(\d{14})_(.+)\.sql$/.exec(relativePath);
+    if (!file) continue;
+    if (mode !== "100644" || type !== "blob") throw new Error(`repository migration must be a regular 100644 Git blob: ${relativePath}`);
+    const [, version, name] = file;
+    const fullStem = `${version}_${name}`;
+    if (version === selectedVersion && fullStem !== migrationName) throw new Error("repository contains duplicate migration timestamps");
+    if (version > highWater && version < selectedVersion) required.push({ version, name, fullStem });
+  }
+  return required.sort((left, right) => left.fullStem.localeCompare(right.fullStem));
+}
+
+export function buildAtomicMigrationSql({ migrationName, query, queryHash, requiredEarlierMigrations = [] }) {
   const match = MIGRATION_STEM_RE.exec(String(migrationName));
   if (!match) throw new Error("migration name must be an exact timestamped file stem");
   const [, version, name] = match;
   const fullStem = `${version}_${name}`;
   const body = String(query).replace(/\s+$/, "") + "\n";
+  const requiredRows = requiredEarlierMigrations.map((migration) =>
+    `      (${sqlLiteral(migration.version)}, ${sqlLiteral(migration.name)}, ${sqlLiteral(migration.fullStem)})`);
+  const predecessorGuard = requiredRows.length ? [
+    "  SELECT min(required.full_stem) INTO missing_migration",
+    "  FROM (VALUES",
+    requiredRows.join(",\n"),
+    "  ) AS required(version, name, full_stem)",
+    "  WHERE NOT EXISTS (",
+    "    SELECT 1 FROM supabase_migrations.schema_migrations applied",
+    "    WHERE (applied.version = required.version AND applied.name IN (required.name, required.full_stem))",
+    "       OR applied.name = required.full_stem",
+    "       OR (char_length(coalesce(applied.name, '')) = 15 + char_length(required.full_stem)",
+    "           AND substring(applied.name from 1 for 14) ~ '^[0-9]{14}$'",
+    "           AND substring(applied.name from 15 for 1) = '_'",
+    "           AND right(applied.name, char_length(required.full_stem)) = required.full_stem)",
+    "  );",
+    "",
+    "  IF missing_migration IS NOT NULL THEN",
+    "    RAISE EXCEPTION 'CRX older repository migration is not recorded live: %', missing_migration;",
+    "  END IF;",
+    "",
+  ] : [];
   return [
     "BEGIN;",
     "SET LOCAL standard_conforming_strings = on;",
@@ -103,7 +161,9 @@ export function buildAtomicMigrationSql({ migrationName, query, queryHash }) {
     "DO $crx_guard$",
     "DECLARE",
     "  latest_version text;",
+    "  missing_migration text;",
     "BEGIN",
+    ...predecessorGuard,
     "  IF EXISTS (",
     "    SELECT 1 FROM supabase_migrations.schema_migrations",
     `    WHERE version = ${sqlLiteral(version)}`,
@@ -161,7 +221,8 @@ export function prepareBatch({ repoRoot, projectId, expectedCommit, migrationNam
   if (actualHash !== queryHash) throw new Error(`migration hash mismatch (expected ${actualHash})`);
   const compatible = transactionCompatibility(query);
   if (!compatible.ok) throw new Error(`migration is not atomic-batch compatible: ${compatible.reason}`);
-  const batch = buildAtomicMigrationSql({ migrationName, query, queryHash });
+  const requiredEarlierMigrations = listRequiredEarlierMigrations({ repoRoot, expectedCommit, migrationName });
+  const batch = buildAtomicMigrationSql({ migrationName, query, queryHash, requiredEarlierMigrations });
   writeFileSync(output, batch, { encoding: "utf8", flag: "wx" });
   return { migrationName, queryHash, output };
 }

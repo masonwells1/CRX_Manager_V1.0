@@ -8,6 +8,7 @@ import path from "node:path";
 import {
   buildAtomicMigrationSql,
   CRX_PRODUCTION_REF,
+  listRequiredEarlierMigrations,
   prepareBatch,
   readRegularMigrationBlob,
   transactionCompatibility,
@@ -22,6 +23,8 @@ import {
 } from "./production-migration-review-lib.mjs";
 
 const MIGRATION = "20990101010101_test_safe_batch";
+const PRIOR = "20980101010101_prior_safe_batch";
+const REQUIRED_EARLIER = [{ version: "20980101010101", name: "prior_safe_batch", fullStem: PRIOR }];
 const SQL = [
   "-- transaction words in comments are data: COMMIT",
   "CREATE TABLE public.safe_batch_probe (note text DEFAULT 'END');",
@@ -60,6 +63,8 @@ assert.doesNotMatch(workflow, /actions\/(?:upload|download)-artifact/,
   "the production gate must retrieve reviewer provenance from GitHub, not a caller-provided artifact");
 assert.doesNotMatch(workflow, /uses:\s+[^\s]+@v\d+/,
   "production workflows must never trust mutable major-version action tags");
+assert.match(workflow, /supabase link[\s\S]*git ls-remote origin refs\/heads\/main[\s\S]*git cat-file blob[\s\S]*supabase db query/,
+  "current main and the exact migration blob must be rechecked immediately before SQL execution");
 assert.match(workflow, /supabase\/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520/,
   "the credential-bearing job must pin the audited Supabase setup action release");
 assert.match(workflow, /INSTALLED_VERSION[\s\S]*2\.109\.1/,
@@ -108,12 +113,15 @@ const mergedPr = {
   merge_commit_sha: MERGED,
 };
 assert.equal(selectExactMergedPr([mergedPr], reviewInput), mergedPr);
-assert.throws(() => selectExactMergedPr([{ ...mergedPr, merge_commit_sha: "3".repeat(40) }], reviewInput), /current main/);
+assert.equal(selectExactMergedPr([{ ...mergedPr, merge_commit_sha: "3".repeat(40) }], reviewInput).merge_commit_sha, "3".repeat(40),
+  "an unchanged migration may retain approval from its original merged PR after main advances");
+assert.throws(() => selectExactMergedPr([{ ...mergedPr, merge_commit_sha: "not-a-commit" }], reviewInput), /one merged PR into main/);
 const reviewedEntry = `100644 blob ${"4".repeat(40)}\tsupabase/migrations/${MIGRATION}.sql`;
-assert.equal(validateNewMigrationGitBinding({ baseEntry: "", reviewedEntry, currentEntry: reviewedEntry }), "4".repeat(40));
-assert.throws(() => validateNewMigrationGitBinding({ baseEntry: reviewedEntry, reviewedEntry, currentEntry: reviewedEntry }), /newly added by the exact reviewed PR/);
-assert.throws(() => validateNewMigrationGitBinding({ baseEntry: "", reviewedEntry, currentEntry: reviewedEntry.replace("4".repeat(40), "5".repeat(40)) }), /changed after its exact reviewed PR head/);
-assert.throws(() => validateNewMigrationGitBinding({ baseEntry: "", reviewedEntry: reviewedEntry.replace("100644", "120000"), currentEntry: reviewedEntry }), /regular 100644 Git blob/);
+assert.equal(validateNewMigrationGitBinding({ baseEntry: "", reviewedEntry, mergedEntry: reviewedEntry, currentEntry: reviewedEntry }), "4".repeat(40));
+assert.throws(() => validateNewMigrationGitBinding({ baseEntry: reviewedEntry, reviewedEntry, mergedEntry: reviewedEntry, currentEntry: reviewedEntry }), /newly added by the exact reviewed PR/);
+assert.throws(() => validateNewMigrationGitBinding({ baseEntry: "", reviewedEntry, mergedEntry: reviewedEntry, currentEntry: reviewedEntry.replace("4".repeat(40), "5".repeat(40)) }), /reviewed PR head, reviewed merge, and current main/);
+assert.throws(() => validateNewMigrationGitBinding({ baseEntry: "", reviewedEntry, mergedEntry: reviewedEntry.replace("4".repeat(40), "5".repeat(40)), currentEntry: reviewedEntry }), /reviewed PR head, reviewed merge, and current main/);
+assert.throws(() => validateNewMigrationGitBinding({ baseEntry: "", reviewedEntry: reviewedEntry.replace("100644", "120000"), mergedEntry: reviewedEntry, currentEntry: reviewedEntry }), /regular 100644 Git blob/);
 
 const codeRabbitApproval = {
   id: 10,
@@ -198,7 +206,7 @@ assert.equal(transactionCompatibility("SELECT E'escaped\\' quote'; COMMIT AND CH
 assert.match(transactionCompatibility("SELECT E'COMMIT\\' is text'; SELECT 1;").reason, /top-level SELECT/,
   "even read-looking top-level SELECT statements stay outside the production migration path");
 
-const batch = buildAtomicMigrationSql({ migrationName: MIGRATION, query: SQL, queryHash: HASH });
+const batch = buildAtomicMigrationSql({ migrationName: MIGRATION, query: SQL, queryHash: HASH, requiredEarlierMigrations: REQUIRED_EARLIER });
 assert.ok(batch.startsWith("BEGIN;\n"));
 assert.ok(batch.endsWith("COMMIT;\n"));
 assert.match(batch, /^SET LOCAL standard_conforming_strings = on;$/m);
@@ -207,6 +215,9 @@ assert.match(batch, /^LOCK TABLE supabase_migrations\.schema_migrations IN SHARE
 assert.ok(batch.includes("SELECT max(effective_version) INTO latest_version"));
 assert.ok(batch.includes("latest_version >= '20990101010101'"));
 assert.ok(batch.includes("CRX migration is not newer than the live ledger"));
+assert.ok(batch.includes(PRIOR));
+assert.ok(batch.includes("CRX older repository migration is not recorded live"));
+assert.ok(batch.indexOf("CRX older repository migration is not recorded live") < batch.indexOf(SQL.trimEnd()));
 assert.ok(batch.includes(`OR idempotency_key = '${HASH}'`),
   "the live ledger must reject exact SQL replay under a renamed migration");
 assert.ok(batch.indexOf("LOCK TABLE") < batch.indexOf("SELECT max(effective_version)"));
@@ -219,7 +230,11 @@ assert.ok(batch.includes(HASH));
 const root = mkdtempSync(path.join(tmpdir(), "crx-reviewed-batch-"));
 try {
   const migrations = path.join(root, "supabase", "migrations");
+  const baselines = path.join(root, "supabase", "baselines");
   mkdirSync(migrations, { recursive: true });
+  mkdirSync(baselines, { recursive: true });
+  writeFileSync(path.join(baselines, "manifest.json"), JSON.stringify({ migrations_high_water: "20970101010101" }));
+  writeFileSync(path.join(migrations, `${PRIOR}.sql`), "CREATE TABLE public.prior_safe_batch_probe (id bigint);\n");
   writeFileSync(path.join(migrations, `${MIGRATION}.sql`), SQL);
   const runGit = (args, input) => {
     const result = spawnSync("git", args, { cwd: root, encoding: "utf8", input, shell: false, windowsHide: true });
@@ -229,7 +244,7 @@ try {
   runGit(["init", "-q"]);
   runGit(["config", "user.email", "gate-test@example.invalid"]);
   runGit(["config", "user.name", "Gate Test"]);
-  runGit(["add", "supabase/migrations"]);
+  runGit(["add", "supabase"]);
   runGit(["commit", "-q", "-m", "fixture"]);
   const expectedCommit = runGit(["rev-parse", "HEAD"]);
   const output = path.join(root, "batch.sql");
@@ -265,6 +280,7 @@ try {
   assert.equal(existsSync(output), false, "invalid inputs must not create a batch");
 
   assert.equal(readRegularMigrationBlob({ repoRoot: root, expectedCommit, migrationName: MIGRATION }), SQL);
+  assert.deepEqual(listRequiredEarlierMigrations({ repoRoot: root, expectedCommit, migrationName: MIGRATION }), REQUIRED_EARLIER);
   const result = prepareBatch({ repoRoot: root, projectId: CRX_PRODUCTION_REF, expectedCommit, migrationName: MIGRATION, queryHash: HASH, output });
   assert.deepEqual(result, { migrationName: MIGRATION, queryHash: HASH, output });
   assert.equal(readFileSync(output, "utf8"), batch);

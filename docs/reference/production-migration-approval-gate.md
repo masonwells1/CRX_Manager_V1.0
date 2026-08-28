@@ -84,20 +84,23 @@ The production workflow accepts the dispatch only when all of these are true:
 
 1. GitHub records a manual `workflow_dispatch` by the repository owner.
 2. The exact reviewed commit is the head of one merged PR into `main`.
-3. That PR's recorded merge commit is still the current `main` commit.
+3. That PR's recorded merge commit is an ancestor of the exact current `main` commit.
 4. The migration path is absent from the merge commit's first parent, proving that exact reviewed PR
-   newly added it. It is a regular `100644` Git blob, identical at the reviewed PR head and current
-   `main`; symlinks are rejected.
+   newly added it. It is a regular `100644` Git blob, identical at the reviewed PR head, that PR's
+   merge commit, and current `main`; symlinks are rejected.
 5. GitHub's PR review API reports the latest review for that exact commit from
    `coderabbitai[bot]` (type `Bot`) as `APPROVED`. The verifier paginates to exhaustion rather
    than trusting only the first page.
+6. Every repository migration newer than the baseline but older than the selected migration is
+   already represented in the locked live migration ledger.
 
-Condition 3 deliberately makes the release window fail closed: if another PR reaches `main`, rerun
-the release preparation against current state rather than approving stale evidence. The workflow
-event does not replace technical review; it durably records that Mason released the exact artifact
-whose separate authenticated GitHub review is clean. The local Sol/high proof remains required by
-the branch push guard. The second environment approval keeps secrets sealed until Mason makes the
-final release decision.
+Conditions 3 and 4 allow an unchanged migration to retain the approval from the exact PR that added
+it after unrelated work reaches `main`; it cannot borrow approval from another PR. The expected
+current-main commit and exact blob hash are checked again immediately before SQL execution. The
+workflow event does not replace technical review; it durably records that Mason released the exact
+artifact whose separate authenticated GitHub review is clean. The local Sol/high proof remains
+required by the branch push guard. The second environment approval keeps secrets sealed until Mason
+makes the final release decision.
 
 ## Migration run
 
@@ -107,8 +110,12 @@ Before approval it verifies current-main binding, the merged-PR and durable-revi
 unchanged regular Git-blob and file/hash bindings, environment protection, parser deny paths, and
 atomic-batch compatibility. After Mason's website approval, it re-queries the exact CodeRabbit
 approval and rebuilds the batch directly from the same immutable Git blob, reconfirms current main,
-verifies the installed Supabase CLI version, obtains the
-environment secrets, and executes one transaction.
+verifies the installed Supabase CLI version, obtains the environment secrets, then rechecks remote
+`main` and the exact Git-blob SHA-256 immediately before executing one transaction.
+
+Inside that transaction, the workflow locks the live migration ledger and refuses the selected
+migration if any earlier post-baseline migration in current `main` is missing. A newer migration
+therefore cannot skip and permanently strand an older pending migration.
 
 The automated path refuses every migration classified as destructive by the repository's existing
 fail-closed detector, including top-level `DELETE`, `TRUNCATE`, `DROP TABLE`, dropped columns,
