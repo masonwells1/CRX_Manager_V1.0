@@ -5,6 +5,7 @@ export const FREEZE_PREFIX = "crx-production-migration-freeze-";
 const API_VERSION = "2022-11-28";
 const REQUEST_TIMEOUT_MS = 30_000;
 const RELEASE_ATTEMPTS = 3;
+export const RELEASE_RETRY_DELAY_MS = 250;
 
 function assertRepository(repository) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repository))) {
@@ -94,6 +95,9 @@ async function retryReleaseStep(operation, description) {
       return await operation();
     } catch (error) {
       lastError = error;
+      if (attempt < RELEASE_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, RELEASE_RETRY_DELAY_MS));
+      }
     }
   }
   throw new Error(`${description} failed after ${RELEASE_ATTEMPTS} attempts: ${lastError?.message || lastError}`);

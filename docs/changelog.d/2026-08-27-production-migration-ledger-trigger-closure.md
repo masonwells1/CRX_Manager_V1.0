@@ -5,6 +5,7 @@ destructive trigger on `supabase_migrations.schema_migrations` and have the wrap
 ledger insert fire it. The automated path now rejects every trigger statement and every direct
 reference to the protected migration schema.
 
-As independent defense in depth, the locked transaction requires the live ledger table to have no
-user-defined triggers before candidate SQL and checks the same invariant again immediately before
-the ledger insert. Regression coverage includes the exact destructive trigger-function sequence.
+As independent defense in depth, the locked transaction requires the exact reviewed global
+ledger-order trigger before candidate SQL and immediately before the ledger insert, while rejecting
+unexpected or additional user-defined triggers. Regression coverage includes the exact destructive
+trigger-function sequence.

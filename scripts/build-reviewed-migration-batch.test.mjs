@@ -31,6 +31,7 @@ import {
   assertExactFreezeRuleset,
   buildFreezeRuleset,
   freezeName,
+  RELEASE_RETRY_DELAY_MS,
   releaseMainFreeze,
   verifyMainFreeze,
 } from "./production-main-freeze.mjs";
@@ -72,6 +73,8 @@ assert.match(workflow, /^\s*environment: production-database\s*$/m,
   "the credential-bearing job must use the protected production-database environment");
 assert.match(workflow, /test "\$GITHUB_REF" = "refs\/heads\/main"/,
   "workflow dispatch must fail unless GitHub runs the workflow definition from main");
+assert.match(workflow, /if \[\[ "\$\{MIGRATION_NAME:15\}" =~ \[0-9\]\{14\} \]\]; then[\s\S]*exit 1/,
+  "a second 14-digit timestamp in the migration name must explicitly fail the workflow guard");
 assert.match(workflow, /^\s*deployments: read\s*$/m,
   "the workflow may inspect deployments before approval");
 assert.doesNotMatch(workflow, /^\s*deployments: write\s*$/m,
@@ -253,6 +256,7 @@ assert.ok(freezeCalls.some(([apiPath, method]) => apiPath.endsWith("/rulesets") 
 rulesets = [exactFreeze];
 let deleteAttempts = 0;
 let absenceAttempts = 0;
+const flakyReleaseStartedAt = Date.now();
 const flakyReleaseRequest = async (apiPath, options = {}) => {
   if (apiPath.includes("/rulesets?") && (options.method || "GET") === "GET") return { body: rulesets, link: "" };
   if (apiPath.endsWith("/rulesets/77") && (options.method || "GET") === "GET" && !options.allow404) {
@@ -278,6 +282,8 @@ assert.deepEqual(await releaseMainFreeze({
 }), { released: true, id: 77 });
 assert.equal(deleteAttempts, 2, "release must retry a transient ruleset deletion failure");
 assert.equal(absenceAttempts, 2, "release must retry until GitHub confirms the exact ruleset is absent");
+assert.ok(Date.now() - flakyReleaseStartedAt >= RELEASE_RETRY_DELAY_MS * 2,
+  "release retries must wait between failed GitHub API operations");
 rulesets = [{ id: 88, ...buildFreezeRuleset(`${exactFreezeName}-stale`) }];
 await assert.rejects(() => acquireMainFreeze({
   repository: "masonwells1/CRX_Manager_V1.0",

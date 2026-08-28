@@ -63,7 +63,10 @@ jobs:
           [[ "$EXPECTED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
           [[ "$REVIEWED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
           [[ "$MIGRATION_NAME" =~ ^[0-9]{14}_[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
-          ! [[ "${MIGRATION_NAME:15}" =~ [0-9]{14} ]]
+          if [[ "${MIGRATION_NAME:15}" =~ [0-9]{14} ]]; then
+            echo "migration name must contain exactly one leading 14-digit timestamp" >&2
+            exit 1
+          fi
           [[ "$QUERY_SHA256" =~ ^[a-f0-9]{64}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
