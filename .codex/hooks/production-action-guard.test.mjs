@@ -539,6 +539,19 @@ try {
     repoDir: risky.repo,
     runGh: () => "[]",
   }).blocked, false, "raw CRX repository URL remains unattended");
+  for (const command of [
+    "$verb = 'push'; git $verb origin HEAD:refs/heads/feature/test",
+    "git @args",
+    "env PATH=/attacker git push origin HEAD:refs/heads/feature/test",
+    "GIT_EXEC_PATH=/attacker/git-core git push origin HEAD:refs/heads/feature/test",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      runGh: () => { throw new Error("dynamic or transport-overridden push must deny before GitHub evidence"); },
+    }).blocked, true, `dynamic or transport-overridden feature push is denied: ${command}`);
+  }
   let featurePushLookupArgs = [];
   const preArmedAutoMergePush = evaluateProductionAction({
     toolName: "PowerShell",

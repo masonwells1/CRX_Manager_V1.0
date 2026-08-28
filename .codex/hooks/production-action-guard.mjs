@@ -21,6 +21,7 @@ import {
   featurePushDestinations,
   fixedGitExecutable,
   GUARDED_REPO_PATH,
+  gitSubcommandIsDynamic,
   gitPushCwd,
   ghApiMergeRequest,
   ghApiMutates,
@@ -35,6 +36,8 @@ import {
   githubRepositoryContextOverrideMentioned,
   githubRepositoryIsGuarded,
   isGitPush,
+  environmentCarriesConfigOverride,
+  environmentCarriesTransportOverride,
   mainPushSource,
   mergeRequestHasExplicitContext,
   mcpMergeRequest,
@@ -47,10 +50,15 @@ import {
   pushGitHubRepository,
   pushUrlsAreLocalPaths,
   pushContextIsAmbiguous,
+  pushHiddenByShellComposition,
   pushIsForced,
+  pushSetsInlineEnv,
   pushUsesBulkMode,
   pushUsesConfigEnv,
+  pushUsesConfigRootEnv,
+  pushUsesExecPathOption,
   pushUsesInlineConfig,
+  pushUsesTransportEnv,
   rawHttpClientCommand,
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
@@ -812,6 +820,51 @@ export function evaluateProductionAction({
   }
   if (usesDynamicProcessEval(command)) {
     return denied("CODEX PRODUCTION GATE: Node eval/print modes are blocked because generated code can hide uninspected git or GitHub writes. Put ordinary diagnostic code in a reviewed script instead.");
+  }
+  if (gitSubcommandIsDynamic(command)) {
+    return denied("CODEX PRODUCTION GATE: Git's subcommand must be written literally. Shell variables, substitutions, splats, and globs can turn an unclassified command into a push after this guard runs.");
+  }
+  if (pushHiddenByShellComposition(command)) {
+    return denied("CODEX PRODUCTION GATE: shell composition changes this push after inspection. Write one literal git push command with an explicit destination and refspec.");
+  }
+  if (pushUsesExecPathOption(command)) {
+    return denied("CODEX PRODUCTION GATE: git --exec-path is denied for pushes because it can replace the transport helper after destination inspection.");
+  }
+  const inlinePushEnv = pushSetsInlineEnv(command);
+  if (inlinePushEnv.length > 0) {
+    return denied(`CODEX PRODUCTION GATE: this push sets executable or configuration environment variables inline (${inlinePushEnv.join(", ")}), so the executed Git process cannot be bound to the inspected one.`);
+  }
+  const namedTransportEnv = pushUsesTransportEnv(command);
+  if (namedTransportEnv.length > 0) {
+    return denied(`CODEX PRODUCTION GATE: this push names unsafe Git transport or executable-search variables (${namedTransportEnv.join(", ")}). Remove them and use the normal trusted Git installation.`);
+  }
+  if (pushUsesConfigRootEnv(command)) {
+    return denied("CODEX PRODUCTION GATE: pushes that name HOME, XDG_CONFIG_HOME, or Git repository-selection variables are denied because they can redirect configuration or objects after inspection.");
+  }
+  if (isGitPush(command)) {
+    const inheritedConfig = environmentCarriesConfigOverride(process.env);
+    if (inheritedConfig.length > 0) {
+      return denied(`CODEX PRODUCTION GATE: inherited Git configuration overrides are active (${inheritedConfig.join(", ")}), so the push destination cannot be proven.`);
+    }
+    let trustedGitExecPath = "";
+    try {
+      const env = { ...process.env };
+      delete env.GIT_EXEC_PATH;
+      trustedGitExecPath = execFileSync(fixedGitExecutable(), ["--exec-path"], {
+        cwd: actionRepoDir,
+        env,
+        encoding: "utf8",
+        timeout: 5_000,
+        stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
+      }).trim();
+    } catch {
+      return denied("CODEX PRODUCTION GATE: the trusted Git executable path could not be verified, so the push is denied fail closed.");
+    }
+    const inheritedTransport = environmentCarriesTransportOverride(process.env, trustedGitExecPath);
+    if (inheritedTransport.length > 0) {
+      return denied(`CODEX PRODUCTION GATE: inherited Git transport overrides are active (${inheritedTransport.join(", ")}), so the executed transport cannot be bound to the inspected destination.`);
+    }
   }
   const maintenanceProducerGate = gateMaintenanceProducerExecution({ command, repoDir: actionRepoDir, nowMs, runGit });
   if (maintenanceProducerGate.blocked) return maintenanceProducerGate;
