@@ -348,6 +348,40 @@ try {
     repoDir: risky.repo,
     runGh: () => JSON.stringify([{ number: 513, autoMergeRequest: null }]),
   }).blocked, false, "branch pushes stay allowed");
+  const inlinePushUrlOverride = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git -c remote.scratch.pushurl=https://github.com/masonwells1/CRX_Manager_V1.0.git push scratch HEAD:refs/heads/feature/test" },
+    repoDir: risky.repo,
+    branch: "feature/test",
+    runGit: (args) => {
+      if (args.join(" ") === "remote get-url --push --all scratch") return "../local-bare.git";
+      throw new Error(`inline-config denial must happen before Git lookup: ${args.join(" ")}`);
+    },
+    runGh: () => { throw new Error("inline-config denial must happen before GitHub lookup"); },
+  });
+  assert.equal(inlinePushUrlOverride.blocked, true, "inline remote.pushurl cannot turn a local exception into an unattended network push");
+  assert.match(inlinePushUrlOverride.reason, /inline Git configuration/i);
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git --config-env=remote.scratch.pushurl=PUSH_URL push scratch HEAD:refs/heads/feature/test" },
+    repoDir: risky.repo,
+    branch: "feature/test",
+    runGh: () => { throw new Error("--config-env denial must happen before GitHub lookup"); },
+  }).blocked, true, "--config-env cannot redirect an unattended feature push");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: {
+      command: "git push scratch HEAD:refs/heads/feature/test",
+      env: {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.scratch.pushurl",
+        GIT_CONFIG_VALUE_0: "https://github.com/masonwells1/CRX_Manager_V1.0.git",
+      },
+    },
+    repoDir: risky.repo,
+    branch: "feature/test",
+    runGh: () => { throw new Error("GIT_CONFIG tool environment denial must happen before GitHub lookup"); },
+  }).blocked, true, "GIT_CONFIG tool environments cannot redirect an unattended feature push");
   const shadowBin = mkdtempSync(path.join(tmpdir(), "crx-delivery-shadow-"));
   tempRoots.push(shadowBin);
   writeFileSync(path.join(shadowBin, "git.exe"), "shadow", "utf8");

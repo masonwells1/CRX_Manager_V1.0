@@ -135,12 +135,13 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // instead of maintaining a second copy. The anchors remain unchanged.
   // Re-pinned after pushes and merges were bound to the trusted executable that
   // the guard inspected, with arbitrary paths plus current-directory/PATH
-  // shadows denied. The maintenance anchors remain unchanged.
-  codexGuard: "b4029454c406ba3c8d4c631a72a5b244b8a70f0b",
+  // shadows denied, and after inline/tool-environment Git configuration was
+  // denied so the inspected destination cannot differ from the executed push.
+  codexGuard: "444aded2540fd0fb4c2aa77ba26bdaddc2834ba2",
   pushLib: "37c170847ed5f754351c2294c633018da604be2e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "3f4fe19bcb32c86b55b760e607fddfa713a3ea99",
+  codexGuard: "2bc9ed1767e25e2b106f1cd17c7789f11c22492b",
   pushLib: "37c170847ed5f754351c2294c633018da604be2e",
 };
 

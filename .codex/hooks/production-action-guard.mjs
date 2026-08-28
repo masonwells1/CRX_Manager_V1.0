@@ -33,6 +33,8 @@ import {
   pushContextIsAmbiguous,
   pushIsForced,
   pushUsesBulkMode,
+  pushUsesConfigEnv,
+  pushUsesInlineConfig,
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   riskyFiles,
@@ -704,6 +706,12 @@ export function evaluateProductionAction({
     return denied("CODEX PRODUCTION GATE: GH_REPO/GH_HOST/GH_CONFIG_DIR/GITHUB_API_URL overrides are denied for merges because they can make the guard inspect a different repository or host than the command executes. Use an explicit `--repo owner/repo`.");
   }
   const pushSegments = commandSegments.filter((part) => isGitPush(part));
+  if (pushSegments.some((segment) => pushUsesInlineConfig(segment))) {
+    return denied("CODEX PRODUCTION GATE: pushes carrying inline Git configuration (`git -c ...` / `--config-env`) are denied because the override can redirect the push away from the repository this guard inspected. Use `git -C <repo> push` without inline configuration.");
+  }
+  if (pushSegments.length > 0 && (pushUsesConfigEnv(command) || Object.keys(suppliedEnv).some((key) => /^GIT_CONFIG(?:_|$)/i.test(key)))) {
+    return denied("CODEX PRODUCTION GATE: feature pushes that name or supply GIT_CONFIG* environment overrides are denied because those variables can redirect the push away from the repository this guard inspected. Remove the override and use the repository's normal Git configuration.");
+  }
   if (pushSegments.some((segment) => !deliveryExecutableIsTrusted(segment, "git", { cwd: actionRepoDir, env: executionEnv }))) {
     return denied("CODEX PRODUCTION GATE: this push does not resolve to the trusted Git executable used for inspection. Remove arbitrary executable paths, current-directory shadows, or PATH overrides and run the normal Git installation.");
   }
