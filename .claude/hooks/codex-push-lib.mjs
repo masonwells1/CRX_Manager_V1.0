@@ -70,12 +70,17 @@ function githubCliInvocationWords(command) {
   return /^gh(?:\.exe)?$/i.test(basename) ? words : null;
 }
 
+function platformPath(platform = process.platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
 function executableKey(value, platform = process.platform) {
-  const resolved = path.resolve(String(value || ""));
+  const resolved = platformPath(platform).resolve(String(value || ""));
   return platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function resolvedBareExecutable(token, { cwd, env, platform, exists }) {
+  const pathImpl = platformPath(platform);
   const searchPath = String(env?.PATH || env?.Path || env?.path || "");
   // `platform` is injectable so the Windows trust boundary can be mutation-
   // tested on Linux CI. Using the runner's `path.delimiter` here made a
@@ -90,7 +95,7 @@ function resolvedBareExecutable(token, { cwd, env, platform, exists }) {
     : [""];
   for (const directory of directories) {
     for (const extension of extensions) {
-      const candidate = path.resolve(directory, `${token}${extension}`);
+      const candidate = pathImpl.resolve(directory, `${token}${extension}`);
       if (exists(candidate)) return candidate;
     }
   }
@@ -103,8 +108,9 @@ export function commandStartsWithGitHubCli(command) {
 
 export function deliveryExecutableIsTrusted(command, kind, options = {}) {
   const platform = options.platform || process.platform;
+  const pathImpl = platformPath(platform);
   const exists = options.exists || existsSync;
-  const cwd = path.resolve(options.cwd || process.cwd());
+  const cwd = pathImpl.resolve(options.cwd || process.cwd());
   const env = options.env || process.env;
   const token = executableToken(command);
   const expected = kind === "gh"
@@ -112,7 +118,7 @@ export function deliveryExecutableIsTrusted(command, kind, options = {}) {
     : fixedGitExecutable({ platform, exists });
   const validBare = kind === "gh" ? /^gh(?:\.exe)?$/i : /^git(?:\.exe)?$/i;
   let actual;
-  if (/[\\/]/.test(token) || path.isAbsolute(token)) actual = path.resolve(cwd, token);
+  if (/[\\/]/.test(token) || pathImpl.isAbsolute(token)) actual = pathImpl.resolve(cwd, token);
   else if (validBare.test(token)) actual = resolvedBareExecutable(token, { cwd, env, platform, exists });
   else return false;
   return executableKey(actual, platform) === executableKey(expected, platform);
