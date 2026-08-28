@@ -663,6 +663,13 @@ try {
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, true, "empty-quote composed merge token is denied");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --squash # --repo attacker/safe --match-head-commit ${risky.sha}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => { throw new Error("comment-forged command must deny before GitHub lookup"); },
+  }).blocked, true, "PowerShell comment cannot forge repository and head context");
   const missingHeadDecision = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh pr merge 123 --repo crop/crx --squash" },

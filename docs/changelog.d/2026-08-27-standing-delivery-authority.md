@@ -81,6 +81,10 @@ GitHub repository; an alternate remote cannot borrow CRX's result. The unattende
 one explicit branch only (`HEAD:refs/heads/<branch>`). Tags, notes, implicit tag propagation,
 ambiguous network destinations, and multiple repositories deny, while local test repositories remain available.
 
+Unquoted shell comment markers in GitHub CLI commands now deny before parsing, so flags written
+after `#` cannot be mistaken for the repository, expected head, or auto-merge intent that the shell
+actually omits. Quoted hash characters remain ordinary message/body data.
+
 Proof run: focused autopilot, prompt, hold, Claude/Codex merge-guard, and global risky-phrase
 tests; full correction-guard and agent-workflow suites; lint, typecheck, build, docs check, sync,
 and mutation tests. No business safety rule, branch protection, product model, migration, RPC,

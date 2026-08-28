@@ -122,12 +122,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after feature pushes were bound to their actual GitHub repository
   // and restricted to one explicit refs/heads destination. The maintenance
   // anchors are still unchanged.
+  // Re-pinned after unquoted GitHub CLI comment markers became fail-closed; the
+  // maintenance anchors remain unchanged.
   codexGuard: "d022e6980f23883f58dbfeaf9292f2f0ec784a79",
-  pushLib: "88a819ac6d57b675ebd503e8aa1fbfd9b76ff413",
+  pushLib: "014420e0e92257921864e8f696a9e102bc55cfe6",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "72999f1bdcd25c0638fc325ed59917eca38b1834",
-  pushLib: "88a819ac6d57b675ebd503e8aa1fbfd9b76ff413",
+  pushLib: "014420e0e92257921864e8f696a9e102bc55cfe6",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

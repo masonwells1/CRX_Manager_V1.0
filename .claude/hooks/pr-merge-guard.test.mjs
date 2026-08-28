@@ -111,6 +111,9 @@ ok(r.decision?.permissionDecision === "deny", "disable-auto used as body text ca
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "gh pr m''erge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "empty-quote composed merge token denies before parsing");
 
+r = runHook({ tool_name: "PowerShell", tool_input: { command: "gh pr merge 42 --squash # --repo attacker/safe --match-head-commit 0123456789012345678901234567890123456789" } });
+ok(r.decision?.permissionDecision === "deny", "PowerShell comment cannot forge repository and head context");
+
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh api -X PUT repos/o/r/pulls/12/merge --input payload.json -f sha=0123456789012345678901234567890123456789" } });
 ok(r.decision?.permissionDecision === "deny", "file-backed REST merge denied before it can override the visible SHA");
 

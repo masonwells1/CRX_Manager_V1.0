@@ -2110,6 +2110,7 @@ export function githubCliCommandIsDynamic(command) {
     if (char === "'" && !doubleQuoted) { singleQuoted = !singleQuoted; continue; }
     if (char === '"' && !singleQuoted) { doubleQuoted = !doubleQuoted; continue; }
     if (singleQuoted) continue;
+    if (char === "#" && !doubleQuoted) return true;
     if (char === "`" || char === "$") return true;
     if (char === "%" && /%[A-Za-z_][A-Za-z0-9_]*%/.test(text.slice(index))) return true;
     if (char === "!" && /![A-Za-z_][A-Za-z0-9_]*!/.test(text.slice(index))) return true;
