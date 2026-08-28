@@ -155,7 +155,9 @@ permits embedded grants and trigger declarations inside that single statement. `
 parked because owner-run views can bypass underlying RLS and inherit permissive default relation
 grants. Every `ALTER TYPE` and `ALTER SEQUENCE` is parked because those statements can immediately
 rewrite lifecycle meaning or live numbering behavior; view and index drops are parked as operationally
-destructive. Quoted or
+destructive. `CREATE SEQUENCE` is also parked because the production baseline can grant browser roles
+access to newly created public sequences, while this automated path deliberately refuses the corrective
+`REVOKE`. Quoted or
 unquoted references to the migration schema are denied before tokenization. PostgreSQL Unicode-escape
 syntax is denied anywhere in an automated migration, including inside stored-function bodies, so an
 escaped identifier cannot disguise a protected schema reference.

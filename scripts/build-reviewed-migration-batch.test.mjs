@@ -271,6 +271,7 @@ for (const [sql, reasonPattern] of [
   ["CREATE FUNCTION public.no_idempotency_key(p_customer_id uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $body$ BEGIN UPDATE public.customers SET active = false WHERE id = p_customer_id; END $body$;", /outside the audited DDL allowlist/],
   ["CREATE PROCEDURE public.insecure_procedure() LANGUAGE plpgsql AS $body$ BEGIN UPDATE public.customers SET active = false; END $body$;", /outside the audited DDL allowlist/],
   ["CREATE POLICY permissive_probe ON public.customers FOR ALL TO authenticated USING (true) WITH CHECK (true);", /outside the audited DDL allowlist/],
+  ["CREATE SEQUENCE public.unreviewed_number_seq;", /outside the audited DDL allowlist/],
   ["ALTER SEQUENCE public.invoice_number_seq RESTART WITH 1;", /outside the audited DDL allowlist/],
   ["ALTER SEQUENCE public.invoice_number_seq CYCLE;", /outside the audited DDL allowlist/],
   ["ALTER SEQUENCE public.invoice_number_seq MAXVALUE 10;", /outside the audited DDL allowlist/],
