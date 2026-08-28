@@ -60,7 +60,13 @@ function executableKey(value, platform = process.platform) {
 
 function resolvedBareExecutable(token, { cwd, env, platform, exists }) {
   const searchPath = String(env?.PATH || env?.Path || env?.path || "");
-  const directories = [cwd, ...searchPath.split(path.delimiter)].map((entry) => String(entry || "").replace(/^"|"$/g, "")).filter(Boolean);
+  // `platform` is injectable so the Windows trust boundary can be mutation-
+  // tested on Linux CI. Using the runner's `path.delimiter` here made a
+  // semicolon-delimited Windows PATH one giant directory on Linux, so the same
+  // guard assertion passed locally and failed hosted. Resolve the delimiter for
+  // the platform being classified, not the machine executing the test.
+  const delimiter = platform === "win32" ? ";" : ":";
+  const directories = [cwd, ...searchPath.split(delimiter)].map((entry) => String(entry || "").replace(/^"|"$/g, "")).filter(Boolean);
   const hasExtension = /\.[A-Za-z0-9]+$/.test(token);
   const extensions = platform === "win32" && !hasExtension
     ? String(env?.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)

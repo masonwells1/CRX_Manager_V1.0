@@ -170,11 +170,11 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // paths so future edits to its child update-branch route require exact-head
   // adversarial review.
   codexGuard: "cc4d541e91540d43d2cc8289b8dab92b26a20abe",
-  pushLib: "664fd092fae97278e73f997a52c3db062410443d",
+  pushLib: "dab071a803128a86d87d51ae448dfd11f83eb20f",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "b4c775cabf8f4289707f652a61b01ed20ac9270d",
-  pushLib: "664fd092fae97278e73f997a52c3db062410443d",
+  pushLib: "dab071a803128a86d87d51ae448dfd11f83eb20f",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
