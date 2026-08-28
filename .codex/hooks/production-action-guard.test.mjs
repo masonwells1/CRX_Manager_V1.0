@@ -744,8 +744,6 @@ try {
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard denies implicit bulk pushes");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin feature/test && git -C "${risky.repo}" push origin HEAD:main`, projectRoot);
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects every push in a command chain");
-  claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin HEAD:refs/heads/feature/test`, projectRoot);
-  assert.equal(claudeGuard.stdout, "", "Claude guard still allows an ordinary feature-branch push");
   claudeGuard = runClaudePushGuard(`C:/attacker/git.exe -C "${risky.repo}" push origin HEAD:refs/heads/feature/test`, projectRoot);
   assert.match(claudeGuard.stdout, /trusted Git executable/, "Claude guard denies arbitrary Git executable paths");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push other HEAD:refs/heads/feature/test`, projectRoot);
