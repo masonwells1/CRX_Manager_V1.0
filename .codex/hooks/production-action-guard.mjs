@@ -12,6 +12,7 @@ import {
   commandStartsWithGitHubCli,
   deliveryExecutableIsTrusted,
   destinationLooksLikeUrl,
+  directGitHubApiWriter,
   contentIsRisky,
   createEvidenceBudget,
   extractPatchDestinations,
@@ -20,6 +21,7 @@ import {
   GUARDED_REPO_PATH,
   gitPushCwd,
   ghApiMergeRequest,
+  ghApiMutates,
   ghUpdateBranchRequest,
   ghMergeRequest,
   githubCliCommandIsDynamic,
@@ -440,49 +442,6 @@ function gateMaintenanceProducerExecution({ command, repoDir, nowMs, runGit }) {
   return { blocked: false };
 }
 
-function shellWords(value) {
-  return String(value || "").match(/"[^"]*"|'[^']*'|\S+/g)?.map((word) => {
-    if ((word.startsWith('"') && word.endsWith('"')) || (word.startsWith("'") && word.endsWith("'"))) {
-      return word.slice(1, -1);
-    }
-    return word;
-  }) || [];
-}
-
-function ghApiMutates(command) {
-  const text = String(command || "");
-  if (!/(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
-    return false;
-  }
-  if (/\sapi\s+graphql\b/i.test(text) && /\bmutation\b/i.test(text)) return true;
-  const words = shellWords(text);
-  let method = "GET";
-  let methodExplicit = false;
-  let hasFields = false;
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index];
-    if (word === "-X" || word === "--method") {
-      method = String(words[index + 1] || "").toUpperCase();
-      methodExplicit = true;
-      index += 1;
-    } else if (word.startsWith("--method=")) {
-      method = word.slice("--method=".length).toUpperCase();
-      methodExplicit = true;
-    } else if (/^-X\S+/i.test(word)) {
-      method = word.slice(2).toUpperCase();
-      methodExplicit = true;
-    } else if (["-f", "-F", "--field", "--raw-field", "--input"].includes(word) ||
-               /^(?:--field|--raw-field|--input)=/.test(word) ||
-               /^-[fF]\S/.test(word)) {
-      // The /^-[fF]\S/ arm catches gh's attached short-value form
-      // (`-fquery=...`, `-Fbase=main`) — Codex round-5.
-      hasFields = true;
-    }
-  }
-  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) return true;
-  return !methodExplicit && hasFields; // gh defaults field-bearing API calls to POST
-}
-
 function githubToolIsReadOnly(toolName) {
   // App-style names keep a `github_` prefix on the leaf
   // (mcp__codex_apps__github_get_file) — strip it before classifying
@@ -844,6 +803,9 @@ export function evaluateProductionAction({
       const result = gatePullRequestUpdateBranch({ request: updateRequest, repoDir: actionRepoDir, runGh });
       if (result.blocked) return result;
       continue;
+    }
+    if (directGitHubApiWriter(segment)) {
+      return denied("CODEX PRODUCTION GATE: direct GitHub REST/GraphQL clients are denied because their repository, mutation body, and exact PR head cannot be bound to the trusted merge evidence path. Use the canonical guarded `gh pr` workflow.");
     }
     if (ghApiMutates(segment)) {
       return denied("CODEX PRODUCTION GATE: unrecognized mutating `gh api` calls are blocked because they can bypass the reviewed branch/push workflow.");

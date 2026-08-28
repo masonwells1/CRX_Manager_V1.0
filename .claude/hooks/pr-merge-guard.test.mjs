@@ -10,7 +10,9 @@ import {
   CLAUDE_MERGE_EVIDENCE_BUDGET_MS,
   coderabbitReviewGate,
   createEvidenceBudget,
+  directGitHubApiWriter,
   ghApiMergeRequest,
+  ghApiMutates,
   ghMergeRequest,
   ghUpdateBranchRequest,
   githubCliCommandIsDynamic,
@@ -43,6 +45,12 @@ pass++;
 ok(githubRepositoryIsGuarded("masonwells1/CRX_Manager_V1.0"), "canonical CRX repository identity is guarded");
 ok(githubRepositoryIsGuarded("MASONWELLS1/crx_manager_v1.0"), "CRX repository identity is case-insensitive");
 ok(!githubRepositoryIsGuarded("other/repository"), "foreign repository identity is rejected");
+ok(ghApiMutates("gh api --method PUT repos/o/r/pulls/42/update-branch"), "unrecognized REST branch mutation is classified as a write");
+ok(ghApiMutates("gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {}) }'"), "unrecognized GraphQL mutation is classified as a write");
+ok(!ghApiMutates("gh api repos/o/r/pulls/42"), "plain gh API GET remains read-only");
+ok(directGitHubApiWriter("curl -X POST https://api.github.com/graphql -d mutation"), "direct GraphQL writer is classified");
+ok(directGitHubApiWriter("Invoke-RestMethod -Method Put https://api.github.com/repos/o/r/pulls/42/update-branch"), "direct REST writer is classified");
+ok(!directGitHubApiWriter("echo https://api.github.com/graphql"), "documentation text is not mistaken for a direct API writer");
 
 // ── ghMergeRequest ───────────────────────────────────────────────────────────
 eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false, matchHead: "", squash: true, atomicHeadMatch: true }, "plain squash merge parses");
@@ -167,6 +175,15 @@ ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL body denied b
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh api graphql -F query=@mutation.graphql" } });
 ok(r.decision?.permissionDecision === "deny", "file-backed GraphQL query field denied before it can hide auto-merge");
 
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh api --method PUT repos/masonwells1/CRX_Manager_V1.0/pulls/123/update-branch" } });
+ok(r.decision?.permissionDecision === "deny", "unrecognized gh REST update-branch mutation is denied");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "curl -X POST https://api.github.com/graphql -d '{\"query\":\"mutation { enablePullRequestAutoMerge(input: {}) }\"}'" } });
+ok(r.decision?.permissionDecision === "deny", "direct curl GraphQL auto-merge mutation is denied");
+
+r = runHook({ tool_name: "PowerShell", tool_input: { command: "Invoke-RestMethod -Method Put https://api.github.com/repos/masonwells1/CRX_Manager_V1.0/pulls/123/update-branch" } });
+ok(r.decision?.permissionDecision === "deny", "direct PowerShell REST branch mutation is denied");
+
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "&gh pr merge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "PowerShell call-operator auto-merge is denied");
 
@@ -254,7 +271,7 @@ ok(r.status === 0 && r.decision === null, "merge-suffixed word boundary respecte
 // Codex round-6: a gh merge earlier in the chain must not exempt later segments.
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 5 --squash; curl -X PUT https://api.github.com/repos/o/r/pulls/9/merge" } });
 ok(r.decision?.permissionDecision === "deny", "raw REST merge after a gh merge in the same chain still denied");
-ok(/raw GitHub REST merge/.test(r.decision?.permissionDecisionReason || "") || /fail closed/.test(r.decision?.permissionDecisionReason || ""), "chain deny cites the REST rule or fails closed on PR resolution");
+ok(/(?:raw|direct) GitHub REST/.test(r.decision?.permissionDecisionReason || "") || /fail closed/.test(r.decision?.permissionDecisionReason || ""), "chain deny cites the REST rule or fails closed on PR resolution");
 
 r = runHook({ tool_name: "mcp__Desktop_Commander__read_file", tool_input: { path: "x" } });
 ok(r.status === 0 && r.decision === null, "unrelated MCP tool passes through");

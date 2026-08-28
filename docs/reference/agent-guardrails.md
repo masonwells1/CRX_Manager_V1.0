@@ -82,6 +82,8 @@ Server-side branch mutations are checked too: before a stacked PR merge changes 
 
 Unattended PR merges and branch updates are scoped to the canonical `masonwells1/CRX_Manager_V1.0` repository. Naming any other repository denies regardless of its branch names; other repositories require their own explicit authorization and guard contract.
 
+Both agents share the same fail-closed GitHub API classifier. Any unrecognized mutating `gh api` request, including REST `update-branch`, is denied, as are direct GitHub REST/GraphQL clients whose request body and exact PR head cannot be bound to the trusted evidence path.
+
 All GitHub merge evidence shares one cumulative deadline: 20 seconds inside Claude's 30-second outer hook and 9 seconds inside Codex's 15-second outer hook. Each subprocess receives only the remaining time, and an exhausted budget becomes an explicit fail-closed decision before the harness itself can time out.
 
 Autonomous main merges also require CodeRabbit's verified `CodeRabbit` status from App id `136622811`, no failure/rate-limit signal in its latest walkthrough, and a formal `APPROVED` review whose `commit_id` equals the exact head being merged. Missing, stale, pending, failed, changes-requested, or unreadable evidence denies closed without asking Mason for a routine approval.

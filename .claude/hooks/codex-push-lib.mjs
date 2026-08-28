@@ -2450,6 +2450,47 @@ export function ghApiMergeRequest(command) {
   return { unsupportedRest: true };
 }
 
+// Any other `gh api` write is outside the exact-head merge grammar. Keep this
+// shared so Claude and Codex cannot disagree about a REST/GraphQL mutation.
+export function ghApiMutates(command) {
+  const text = String(command || "");
+  if (!/(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) return false;
+  if (/\sapi\s+graphql\b/i.test(text) && /\bmutation\b/i.test(text)) return true;
+  const words = splitShellArgs(text);
+  let method = "GET";
+  let methodExplicit = false;
+  let hasFields = false;
+  for (let index = 0; index < words.length; index += 1) {
+    const word = String(words[index] || "");
+    if (word === "-X" || word === "--method") {
+      method = String(words[index + 1] || "").toUpperCase();
+      methodExplicit = true;
+      index += 1;
+    } else if (word.startsWith("--method=")) {
+      method = word.slice("--method=".length).toUpperCase();
+      methodExplicit = true;
+    } else if (/^-X\S+/i.test(word)) {
+      method = word.slice(2).toUpperCase();
+      methodExplicit = true;
+    } else if (["-f", "-F", "--field", "--raw-field", "--input"].includes(word)
+        || /^(?:--field|--raw-field|--input)=/.test(word)
+        || /^-[fF]\S/.test(word)) {
+      hasFields = true;
+    }
+  }
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) return true;
+  return !methodExplicit && hasFields;
+}
+
+// Raw HTTP clients do not share the trusted gh environment or canonical
+// repository parser. Deny direct calls to GitHub's API from common writers;
+// read-only GitHub evidence must use the fixed `gh` invocation above.
+export function directGitHubApiWriter(command) {
+  const text = String(command || "");
+  if (!/https?:\/\/api\.github\.com\/(?:graphql|repos\/)/i.test(text)) return false;
+  return /(?:^|[\s;&|])(?:curl(?:\.exe)?|wget(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|node(?:\.exe)?|python(?:3|\.exe)?|py(?:\.exe)?|ruby(?:\.exe)?|perl(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?)\b/i.test(text);
+}
+
 // MCP merge tool inputs — key spellings differ per connector (GitHub MCP uses
 // pull_number/owner/repo; app-style connectors use pr_number/repository_full_name).
 export function mcpMergeRequest(toolInput = {}) {

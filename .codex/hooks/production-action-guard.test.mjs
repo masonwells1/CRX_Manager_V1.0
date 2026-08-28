@@ -1021,6 +1021,16 @@ try {
     repoDir: risky.repo,
   }).blocked, true, "unrecognized mutating gh API calls are denied");
   assert.equal(evaluateProductionAction({
+    toolName: "Bash",
+    toolInput: { command: "curl -X POST https://api.github.com/graphql -d '{\"query\":\"mutation { enablePullRequestAutoMerge(input: {}) }\"}'" },
+    repoDir: risky.repo,
+  }).blocked, true, "direct GraphQL writers are denied");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "Invoke-RestMethod -Method Put https://api.github.com/repos/masonwells1/CRX_Manager_V1.0/pulls/123/update-branch" },
+    repoDir: risky.repo,
+  }).blocked, true, "direct REST branch writers are denied");
+  assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --squash --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,

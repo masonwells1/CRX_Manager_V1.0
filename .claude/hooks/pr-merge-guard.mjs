@@ -36,7 +36,9 @@ import {
   commandStartsWithGitHubCli,
   deliveryExecutableIsTrusted,
   describeRiskyContent,
+  directGitHubApiWriter,
   ghApiMergeRequest,
+  ghApiMutates,
   ghUpdateBranchRequest,
   githubCliCommandIsDynamic,
   githubContextEnvironmentOverrideNames,
@@ -100,6 +102,12 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     }
     if (api?.unsupportedRest) {
       deny("PR MERGE GATE: GitHub REST merge calls are denied because file-backed request bodies can hide or override the expected head SHA. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
+    }
+    if (ghApiMutates(segment)) {
+      deny("PR MERGE GATE: unrecognized mutating `gh api` calls are denied because they can change a PR head, arm auto-merge, or bypass the exact-head reviewed delivery path.");
+    }
+    if (directGitHubApiWriter(segment)) {
+      deny("PR MERGE GATE: direct GitHub REST/GraphQL clients are denied because their repository, mutation body, and exact PR head cannot be bound to the trusted merge evidence path. Use the canonical guarded `gh pr` workflow.");
     }
     const update = ghUpdateBranchRequest(segment);
     if (update?.unsupportedSyntax) {
