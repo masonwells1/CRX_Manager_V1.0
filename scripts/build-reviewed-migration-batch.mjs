@@ -28,11 +28,12 @@ function sha256(value) {
 }
 
 export function transactionCompatibility(sql) {
-  const destructive = destructiveMigrationCheck(sql);
+  const skeleton = topLevelSkeleton(sql);
+  if (skeleton === null) return { ok: false, reason: "migration SQL could not be tokenized safely" };
+  const destructive = destructiveMigrationCheck(skeleton);
   if (destructive.destructive) return { ok: false, reason: `destructive migration: ${destructive.reason}` };
   const verdict = checkWrappable(sql);
   if (!verdict.wrappable) return { ok: false, reason: verdict.reason };
-  const skeleton = topLevelSkeleton(sql);
   if (/\\/.test(skeleton)) return { ok: false, reason: "client meta-command" };
   if (/(?:^|;)\s*select\b/i.test(skeleton)) return { ok: false, reason: "top-level SELECT is not allowed in the production migration path" };
   if (/(?:^|;)\s*do\b/i.test(skeleton)) return { ok: false, reason: "top-level DO is not allowed in the production migration path" };

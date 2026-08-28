@@ -85,7 +85,8 @@ The production workflow accepts the dispatch only when all of these are true:
 1. GitHub records a manual `workflow_dispatch` by the repository owner.
 2. The exact reviewed commit is the head of one merged PR into `main`.
 3. That PR's recorded merge commit is still the current `main` commit.
-4. The migration is a regular `100644` Git blob, identical at the reviewed PR head and current
+4. The migration path is absent from the merge commit's first parent, proving that exact reviewed PR
+   newly added it. It is a regular `100644` Git blob, identical at the reviewed PR head and current
    `main`; symlinks are rejected.
 5. GitHub's PR review API reports the latest review for that exact commit from
    `coderabbitai[bot]` (type `Bot`) as `APPROVED`. The verifier paginates to exhaustion rather

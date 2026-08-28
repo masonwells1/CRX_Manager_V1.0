@@ -4,6 +4,7 @@ import {
   collectAllPages,
   selectExactMergedPr,
   selectTrustedCodeRabbitApproval,
+  validateNewMigrationGitBinding,
   validateReviewInputs,
   validateTrustedDispatch,
 } from "./production-migration-review-lib.mjs";
@@ -53,14 +54,11 @@ try {
 
   git(["fetch", "--no-tags", "origin", input.reviewedCommit]);
   const relativeMigration = "supabase/migrations/" + input.migrationName + ".sql";
-  const reviewedEntry = git(["ls-tree", input.reviewedCommit, "--", relativeMigration]).split(/\s+/);
-  const currentEntry = git(["ls-tree", input.expectedCommit, "--", relativeMigration]).split(/\s+/);
-  if (reviewedEntry[0] !== "100644" || reviewedEntry[1] !== "blob" || currentEntry[0] !== "100644" || currentEntry[1] !== "blob") {
-    throw new Error("migration must be a regular 100644 Git blob at both reviewed and current commits");
-  }
-  const reviewedBlob = git(["rev-parse", input.reviewedCommit + ":" + relativeMigration]);
-  const currentBlob = git(["rev-parse", input.expectedCommit + ":" + relativeMigration]);
-  if (reviewedBlob !== currentBlob) throw new Error("migration changed after its exact reviewed PR head");
+  const mergeBaseCommit = git(["rev-parse", input.expectedCommit + "^1"]);
+  const baseEntry = git(["ls-tree", mergeBaseCommit, "--", relativeMigration]);
+  const reviewedEntry = git(["ls-tree", input.reviewedCommit, "--", relativeMigration]);
+  const currentEntry = git(["ls-tree", input.expectedCommit, "--", relativeMigration]);
+  const reviewedBlob = validateNewMigrationGitBinding({ baseEntry, reviewedEntry, currentEntry });
   process.stdout.write(JSON.stringify({
     verified: true,
     pullRequest: mergedPr.number,

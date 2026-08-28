@@ -44,3 +44,18 @@ export function selectExactMergedPr(pulls, { reviewedCommit, expectedCommit }) {
   if (matching.length !== 1) throw new Error("reviewed commit is not the unique head of the PR merged as current main");
   return matching[0];
 }
+
+export function validateNewMigrationGitBinding({ baseEntry, reviewedEntry, currentEntry }) {
+  if (String(baseEntry || "").trim()) {
+    throw new Error("migration must be newly added by the exact reviewed PR");
+  }
+  const parseRegularBlob = (entry) => {
+    const match = /^100644 blob ([a-f0-9]{40})\t/.exec(String(entry || "").trim());
+    if (!match) throw new Error("migration must be a regular 100644 Git blob at both reviewed and current commits");
+    return match[1];
+  };
+  const reviewedBlob = parseRegularBlob(reviewedEntry);
+  const currentBlob = parseRegularBlob(currentEntry);
+  if (reviewedBlob !== currentBlob) throw new Error("migration changed after its exact reviewed PR head");
+  return reviewedBlob;
+}

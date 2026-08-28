@@ -16,6 +16,7 @@ import {
   collectAllPages,
   selectExactMergedPr,
   selectTrustedCodeRabbitApproval,
+  validateNewMigrationGitBinding,
   validateReviewInputs,
   validateTrustedDispatch,
 } from "./production-migration-review-lib.mjs";
@@ -108,6 +109,11 @@ const mergedPr = {
 };
 assert.equal(selectExactMergedPr([mergedPr], reviewInput), mergedPr);
 assert.throws(() => selectExactMergedPr([{ ...mergedPr, merge_commit_sha: "3".repeat(40) }], reviewInput), /current main/);
+const reviewedEntry = `100644 blob ${"4".repeat(40)}\tsupabase/migrations/${MIGRATION}.sql`;
+assert.equal(validateNewMigrationGitBinding({ baseEntry: "", reviewedEntry, currentEntry: reviewedEntry }), "4".repeat(40));
+assert.throws(() => validateNewMigrationGitBinding({ baseEntry: reviewedEntry, reviewedEntry, currentEntry: reviewedEntry }), /newly added by the exact reviewed PR/);
+assert.throws(() => validateNewMigrationGitBinding({ baseEntry: "", reviewedEntry, currentEntry: reviewedEntry.replace("4".repeat(40), "5".repeat(40)) }), /changed after its exact reviewed PR head/);
+assert.throws(() => validateNewMigrationGitBinding({ baseEntry: "", reviewedEntry: reviewedEntry.replace("100644", "120000"), currentEntry: reviewedEntry }), /regular 100644 Git blob/);
 
 const codeRabbitApproval = {
   id: 10,
@@ -157,6 +163,7 @@ for (const [sql, reasonPattern] of [
   ["CLUSTER public.widgets;", /CLUSTER/],
   ["CALL public.maybe_commits();", /^CALL$/],
   ["SELECT public.close_accounting_period();", /top-level SELECT/],
+  ["COMMENT ON TABLE public.safe_batch_probe IS E'escaped\\' quote'; DELETE FROM public.customers;", /destructive migration: top-level DELETE/],
   ["DO $safe$ BEGIN IF EXISTS (SELECT 1) THEN NULL; END IF; END $safe$;", /top-level DO/],
   ["DO $unsafe$ BEGIN DELETE/**/FROM public.customers; END $unsafe$;", /top-level DO/],
   ["DO $unsafe$ BEGIN PERFORM public.close_accounting_period(); END $unsafe$;", /top-level DO/],
