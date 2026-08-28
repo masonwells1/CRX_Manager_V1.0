@@ -28,8 +28,14 @@ credentials outside the agent's local capability set.
 
 **Operative rule.** The workflow remains unusable unless its GitHub environment requires only Mason,
 prevents administrator bypass, accepts protected branches only, and carries its two production
-secrets. Codex may read a pending run but its machine token must not have Actions write or Deployments
-write. Mason's manual dispatch is the human release attestation; the workflow independently reads
+database secrets plus the environment-only branch-freeze credential. Codex may read a pending run
+but its machine token must not have Actions write, Deployments write, or Administration write.
+After Mason's approval, the workflow creates a no-bypass ruleset that freezes `main` at the verified
+commit through the database transaction; the separate freeze token has Contents read only and is
+available only to the in-repository acquire, verify, and cleanup helper steps. Codex cannot retrieve
+that environment secret. A failed cleanup leaves `main` frozen for manual inspection rather than
+reopening the cross-system merge race. Mason's manual dispatch is the human release attestation;
+the workflow independently reads
 the latest exact-head `coderabbitai[bot]` review and requires `APPROVED`. Caller-supplied review text,
 hashes, or artifacts are never accepted. The local Sol/high proof remains the separate pre-push gate. The workflow locks
 the live ledger inside the same transaction, applies only transaction-

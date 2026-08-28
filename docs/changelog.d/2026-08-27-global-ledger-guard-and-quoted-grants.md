@@ -3,8 +3,8 @@
 Exact-commit adversarial review found that quoted `supabase_migrations` identifiers disappeared from
 the top-level skeleton before the protected-schema check, and that unrestricted `GRANT` statements
 could expose the ledger. Protected-schema text is now rejected before tokenization. Automated grants
-are limited to function/procedure execution for `authenticated` and `service_role`, while revokes are
-limited to executable objects and known CRX roles.
+were first narrowed to executable objects and known CRX roles; the final fail-closed allowlist now
+parks every `GRANT` and `REVOKE` for the separately reviewed manual path.
 
 The same review proved that a workstation could retain a fresh-looking local ledger snapshot while
 the GitHub workflow advanced production, then attempt an older direct migration. A new source-only
