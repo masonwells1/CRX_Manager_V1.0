@@ -18,6 +18,7 @@ import {
   GUARDED_REPO_PATH,
   gitPushCwd,
   ghApiMergeRequest,
+  ghUpdateBranchRequest,
   ghMergeRequest,
   githubCliCommandIsDynamic,
   githubContextEnvironmentOverrideNames,
@@ -41,6 +42,7 @@ import {
   reviewStateDirectoryMentioned,
   riskyFiles,
   trustedGitHubCliInvocation,
+  updateBranchRequestHasExplicitContext,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
 
@@ -516,6 +518,21 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     );
   }
   const base = normalize(pullRequest.baseRefName).toLowerCase();
+  if (!["main", "master", "production"].includes(base)) {
+    const destinationBranch = normalize(pullRequest.baseRefName);
+    let armed;
+    try {
+      armed = activeProtectedAutoMergePrNumbers(runGh([
+        "pr", "list", "--repo", request.repo, "--state", "open", "--head", destinationBranch,
+        "--json", "number,autoMergeRequest,baseRefName",
+      ], repoDir));
+    } catch (error) {
+      return denied(`CODEX PRODUCTION GATE: could not prove auto-merge is disabled before mutating remote branch ${destinationBranch}, so the merge is denied (fail closed). ${error?.message || error}`);
+    }
+    if (armed.length > 0) {
+      return denied(`CODEX PRODUCTION GATE: remote branch ${destinationBranch} feeds an armed protected-branch PR (${armed.join(", ")}). Run gh pr merge ${armed[0]} --disable-auto first, then retry; no Mason approval is required.`);
+    }
+  }
   if (base === "master" || base === "production") {
     return denied(`CODEX PRODUCTION GATE: merges to protected branch ${base} remain blocked.`);
   }
@@ -581,6 +598,33 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     nowMs,
     runGit,
   });
+}
+
+function gatePullRequestUpdateBranch({ request, repoDir, runGh }) {
+  if (!updateBranchRequestHasExplicitContext(request)) {
+    return denied("CODEX PRODUCTION GATE: `gh pr update-branch` must explicitly name one numeric PR and `--repo owner/repo` in one standalone command.");
+  }
+  let pullRequest;
+  try {
+    pullRequest = resolvePullRequest({ request, repoDir, runGh });
+  } catch (error) {
+    return denied(`CODEX PRODUCTION GATE: could not resolve the PR head branch before updating it, so the action is denied (fail closed). ${error?.message || error}`);
+  }
+  const destinationBranch = normalize(pullRequest.headRefName);
+  if (!destinationBranch) return denied("CODEX PRODUCTION GATE: GitHub did not report the PR head branch, so update-branch is denied (fail closed).");
+  let armed;
+  try {
+    armed = activeProtectedAutoMergePrNumbers(runGh([
+      "pr", "list", "--repo", request.repo, "--state", "open", "--head", destinationBranch,
+      "--json", "number,autoMergeRequest,baseRefName",
+    ], repoDir));
+  } catch (error) {
+    return denied(`CODEX PRODUCTION GATE: could not prove auto-merge is disabled before updating remote branch ${destinationBranch}, so the action is denied (fail closed). ${error?.message || error}`);
+  }
+  if (armed.length > 0) {
+    return denied(`CODEX PRODUCTION GATE: remote branch ${destinationBranch} feeds an armed protected-branch PR (${armed.join(", ")}). Run gh pr merge ${armed[0]} --disable-auto first, then retry; no Mason approval is required.`);
+  }
+  return { blocked: false };
 }
 
 export function evaluateProductionAction({
@@ -747,6 +791,10 @@ export function evaluateProductionAction({
     return denied("CODEX PRODUCTION GATE: a feature push must be one standalone command. Chaining a push with another shell action could arm auto-merge after the pre-push GitHub check, so run `git -C <repo> push <remote> <single-refspec>` by itself.");
   }
   for (const segment of commandSegments) {
+    const updateRequest = ghUpdateBranchRequest(segment);
+    if (updateRequest?.unsupportedSyntax) {
+      return denied("CODEX PRODUCTION GATE: noncanonical `gh pr update-branch` syntax is denied. Use one literal `gh pr update-branch <number> --repo <owner/repo> [--rebase]` command.");
+    }
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     if (ghRequest?.unsupportedGraphql) {
       return denied("CODEX PRODUCTION GATE: GraphQL merge/auto-merge mutations are denied because the guard cannot safely resolve and verify their exact PR head/checks. Use `gh pr merge <number> --match-head-commit <head-sha>` instead.");
@@ -774,6 +822,12 @@ export function evaluateProductionAction({
         runGit,
         runGh,
       });
+      if (result.blocked) return result;
+      continue;
+    }
+    if (updateRequest) {
+      if (commandSegments.length !== 1) return denied("CODEX PRODUCTION GATE: `gh pr update-branch` must be one standalone command so its destination branch cannot change after inspection.");
+      const result = gatePullRequestUpdateBranch({ request: updateRequest, repoDir: actionRepoDir, runGh });
       if (result.blocked) return result;
       continue;
     }

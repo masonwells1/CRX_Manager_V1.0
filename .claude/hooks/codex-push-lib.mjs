@@ -2227,11 +2227,11 @@ export function githubCliCommandIsDynamic(command) {
   const dequoted = text.replace(/["']/g, "");
   const groupingNormalized = text.replace(/[(){}<>]/g, " ");
   const groupedGitHubAction = groupingNormalized !== text
-    && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+merge|api\b)/i.test(groupingNormalized)
-    && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+merge|api\b)/i.test(text);
+    && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch)|api\b)/i.test(groupingNormalized)
+    && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch)|api\b)/i.test(text);
   const quoteSplicedGitHubAction = dequoted !== text
-    && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+merge|api\b)/i.test(dequoted)
-    && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+merge|api\b)/i.test(text);
+    && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch)|api\b)/i.test(dequoted)
+    && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch)|api\b)/i.test(text);
   const composedExecutable = /(?:^|[\s;&|])g(?:(?:''|"")|[`^\\]|\$\{[^}\r\n]*\}|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!)+h(?:\.exe)?(?=\s|$)/i.test(text);
   const dynamicExecutable = /(?:^|[\s;&|])&?(?:\$\{?[A-Za-z_][A-Za-z0-9_:]*\}?|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!|@[A-Za-z_][A-Za-z0-9_]*)\s+(?:pr\s+merge|api\b)/i.test(text);
   if (groupedGitHubAction || quoteSplicedGitHubAction || composedExecutable || dynamicExecutable) return true;
@@ -2293,6 +2293,48 @@ export function mergeRequestHasExplicitContext(request) {
     && /^[0-9a-f]{40}$/i.test(head)
     && request?.squash === true
     && request?.atomicHeadMatch !== false;
+}
+
+export function updateBranchRequestHasExplicitContext(request) {
+  const selector = String(request?.selector || "").trim();
+  const repo = String(request?.repo || "").trim();
+  return request?.updateBranch === true
+    && /^\d+$/.test(selector)
+    && /^[^\s/]+\/[^\s/]+$/.test(repo);
+}
+
+// Updating a PR branch mutates its remote head without running `git push`.
+// Keep one strict grammar so the guard can resolve the exact destination branch
+// and prove it is not feeding an armed protected-branch auto-merge.
+export function ghUpdateBranchRequest(command) {
+  const text = String(command || "");
+  if (!GH_BIN_RE.test(text)) return null;
+  const words = splitShellArgs(text);
+  const executable = String(words[0] || "");
+  const executableIsLiteral = /^(?:gh(?:\.exe)?|[^;&|\r\n]*[\\/]gh(?:\.exe)?)$/i.test(executable);
+  const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
+  const hasUpdateBranchWords = prIndex !== -1 && words.some((word, index) =>
+    index > prIndex && word.toLowerCase() === "update-branch");
+  if (!executableIsLiteral || String(words[1] || "").toLowerCase() !== "pr" || String(words[2] || "").toLowerCase() !== "update-branch") {
+    return hasUpdateBranchWords ? { unsupportedSyntax: true, updateBranch: true } : null;
+  }
+  let selector = "";
+  let repo = "";
+  let rebase = false;
+  for (let index = 3; index < words.length; index += 1) {
+    const word = String(words[index] || "");
+    const lower = word.toLowerCase();
+    if (/^\d+$/.test(word) && !selector) { selector = word; continue; }
+    if (lower === "--repo" && !repo) {
+      repo = String(words[index + 1] || "");
+      if (!repo || repo.startsWith("-")) return { unsupportedSyntax: true, updateBranch: true };
+      index += 1;
+      continue;
+    }
+    if (lower === "--rebase" && !rebase) { rebase = true; continue; }
+    return { unsupportedSyntax: true, updateBranch: true };
+  }
+  return { selector, repo, rebase, updateBranch: true };
 }
 
 // One canonical merge grammar keeps the inspected PR identical to the PR that

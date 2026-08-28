@@ -78,6 +78,8 @@ Runs on Codex's `*` (all-tools) PreToolUse matcher through portable POSIX and Wi
 
 GitHub CLI parsing also rejects quote-spliced executables such as `g'h'`, parenthesized/grouped or process-substituted GitHub actions, unquoted POSIX backslash and Windows caret escapes anywhere in a `gh` command, plus GitHub CLI activity nested inside PowerShell, `cmd`, shell, or interpreter wrappers. Composed spellings such as `(gh pr merge ...)`, `g'h' pr merge`, `gh pr m\erge`, `gh a^pi`, or `powershell -Command "gh pr merge ..."` cannot hide a merge or API mutation from the canonical parser. Structured tool environments that supply `GH_REPO`, `GH_HOST`, `GITHUB_HOST`, `GH_CONFIG_DIR`, or `GITHUB_API_URL` deny before inspection, so the executed GitHub host/repository/configuration cannot differ from the sanitized evidence lookup.
 
+Server-side branch mutations are checked too: before a stacked PR merge changes its base branch, or `gh pr update-branch` changes a PR head, the guards query whether that destination branch feeds an armed PR to `main`, `master`, or `production`. An armed protected auto-merge or an unreadable lookup denies closed; Codex can disable auto-merge and retry without asking Mason.
+
 Autonomous main merges also require CodeRabbit's verified `CodeRabbit` status from App id `136622811`, no failure/rate-limit signal in its latest walkthrough, and a formal `APPROVED` review whose `commit_id` equals the exact head being merged. Missing, stale, pending, failed, changes-requested, or unreadable evidence denies closed without asking Mason for a routine approval.
 
 ### UserPromptSubmit Hooks (`.claude/hooks/`)

@@ -10,11 +10,13 @@ import {
   coderabbitReviewGate,
   ghApiMergeRequest,
   ghMergeRequest,
+  ghUpdateBranchRequest,
   githubCliCommandIsDynamic,
   mcpMergeRequest,
   mergeRequestHasExplicitContext,
   proofSearchDirs,
   pullRequestChecksGreen,
+  updateBranchRequestHasExplicitContext,
 } from "./codex-push-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -62,6 +64,14 @@ ok(mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge 42 --repo o/r --sq
 ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789")), "selectorless current-branch merges are not explicit");
 ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge 42 --squash --match-head-commit 0123456789012345678901234567890123456789")), "current-repository merges are not explicit");
 ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge 42 --repo o/r --match-head-commit 0123456789012345678901234567890123456789")), "merge method must be explicitly squash");
+
+// ── ghUpdateBranchRequest ───────────────────────────────────────────────────
+eq(ghUpdateBranchRequest("gh pr update-branch 42 --repo o/r"), { selector: "42", repo: "o/r", rebase: false, updateBranch: true }, "canonical update-branch parses");
+eq(ghUpdateBranchRequest("gh pr update-branch --rebase 42 --repo o/r"), { selector: "42", repo: "o/r", rebase: true, updateBranch: true }, "canonical rebase update parses");
+ok(updateBranchRequestHasExplicitContext(ghUpdateBranchRequest("gh pr update-branch 42 --repo o/r")), "explicit update-branch context is accepted");
+ok(!updateBranchRequestHasExplicitContext(ghUpdateBranchRequest("gh pr update-branch --repo o/r")), "selectorless update-branch context is rejected");
+ok(ghUpdateBranchRequest("gh pr update-branch 42 --repo=o/r")?.unsupportedSyntax, "attached update-branch repo is outside the canonical grammar");
+ok(githubCliCommandIsDynamic("(gh pr update-branch 42 --repo o/r)"), "grouped update-branch is dynamic");
 
 // ── ghApiMergeRequest ────────────────────────────────────────────────────────
 ok(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge")?.unsupportedRest, "REST merge endpoint is unsupported");
@@ -158,6 +168,9 @@ ok(r.decision?.permissionDecision === "deny", "quote-spliced gh executable denie
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "(gh pr merge 42 --auto)" } });
 ok(r.decision?.permissionDecision === "deny", "parenthesized gh merge denies before parsing");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "(gh pr update-branch 42 --repo o/r)" } });
+ok(r.decision?.permissionDecision === "deny", "parenthesized update-branch denies before parsing");
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "C:/attacker/gh.exe pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789" } });
 ok(r.decision?.permissionDecision === "deny", "arbitrary GitHub CLI path denies before PR inspection");

@@ -28,12 +28,14 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
+  activeProtectedAutoMergePrNumbers,
   contentIsRisky,
   coderabbitReviewGate,
   commandStartsWithGitHubCli,
   deliveryExecutableIsTrusted,
   describeRiskyContent,
   ghApiMergeRequest,
+  ghUpdateBranchRequest,
   githubCliCommandIsDynamic,
   githubContextEnvironmentOverrideNames,
   githubRepositoryContextOverrideMentioned,
@@ -45,6 +47,7 @@ import {
   pullRequestChecksGreen,
   riskyFiles,
   trustedGitHubCliInvocation,
+  updateBranchRequestHasExplicitContext,
 } from "./codex-push-lib.mjs";
 
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
@@ -95,6 +98,10 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     if (api?.unsupportedRest) {
       deny("PR MERGE GATE: GitHub REST merge calls are denied because file-backed request bodies can hide or override the expected head SHA. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
     }
+    const update = ghUpdateBranchRequest(segment);
+    if (update?.unsupportedSyntax) {
+      deny("PR MERGE GATE: noncanonical `gh pr update-branch` syntax is denied. Use one literal `gh pr update-branch <number> --repo <owner/repo> [--rebase]` command so the destination branch can be checked.");
+    }
     const cli = ghMergeRequest(segment);
     if (cli?.unsupportedSyntax) {
       deny("PR MERGE GATE: noncanonical `gh pr merge` syntax is denied. Use exactly one literal `gh pr merge <number> --repo <owner/repo> --squash [--delete-branch] --match-head-commit <head-sha>` command, or `gh pr merge <number> --disable-auto` only to cancel auto-merge.");
@@ -102,7 +109,7 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     if (cli?.unsupportedAutoFlags) {
       deny("PR MERGE GATE: mixed `--auto` and `--disable-auto` intent is denied. Use `--disable-auto` alone to cancel, or wait for checks and run one immediate exact-head merge without `--auto`.");
     }
-    const found = api || cli;
+    const found = api || cli || update;
     if (found) { requests.push(found); continue; }
     // Raw REST merges outside gh — curl/wget/Invoke-RestMethod/node fetch — name
     // the same endpoint but carry auth/context the guard cannot resolve, so they
@@ -151,7 +158,7 @@ function listWorktreesFromProjectDir() {
 // deny() (which exits). The caller loops over every collected request — a
 // harmless merge earlier in a chain must never exempt a later one.
 function gateRequest(request) {
-  if (!mergeRequestHasExplicitContext(request)) {
+  if (request.updateBranch ? !updateBranchRequestHasExplicitContext(request) : !mergeRequestHasExplicitContext(request)) {
     deny("PR MERGE GATE: every merge must explicitly name one numeric PR, `--repo owner/repo`, and the exact 40-character `--match-head-commit` SHA in one standalone command. Selectorless/current-branch context is denied.");
   }
   let pr;
@@ -162,17 +169,33 @@ function gateRequest(request) {
     // merge actually lands on. The proof must be bound to THAT, not to the local
     // origin/main, which can be stale (Codex round-6: a proof reviewed against an
     // old local base validated while GitHub merged onto newer main content).
-    viewArgs.push("--json", "baseRefName,baseRefOid,headRefOid,mergeStateStatus,statusCheckRollup,autoMergeRequest");
+    viewArgs.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,statusCheckRollup,autoMergeRequest");
     if (request.repo) viewArgs.push("--repo", request.repo);
     pr = JSON.parse(gh(viewArgs));
-    if (!pr?.baseRefName || !pr?.headRefOid || !pr?.baseRefOid) {
-      throw new Error("GitHub did not return baseRefName, baseRefOid, and headRefOid");
+    if (!pr?.baseRefName || !pr?.headRefName || !pr?.headRefOid || !pr?.baseRefOid) {
+      throw new Error("GitHub did not return baseRefName, baseRefOid, headRefName, and headRefOid");
     }
   } catch (error) {
     deny(`PR MERGE GATE: could not resolve this pull request's base branch and exact SHAs, so the merge is denied (fail closed). ${error?.message || error}`);
   }
 
   const base = String(pr.baseRefName || "").trim().toLowerCase();
+  const destinationBranch = request.updateBranch ? String(pr.headRefName || "").trim() : String(pr.baseRefName || "").trim();
+  if (request.updateBranch || !["main", "master", "production"].includes(base)) {
+    let armed;
+    try {
+      armed = activeProtectedAutoMergePrNumbers(gh([
+        "pr", "list", "--repo", request.repo, "--state", "open", "--head", destinationBranch,
+        "--json", "number,autoMergeRequest,baseRefName",
+      ]));
+    } catch (error) {
+      deny(`PR MERGE GATE: could not prove auto-merge is disabled before mutating remote branch "${destinationBranch}", so the action is denied (fail closed). ${error?.message || error}`);
+    }
+    if (armed.length > 0) {
+      deny(`PR MERGE GATE: remote branch "${destinationBranch}" feeds an armed protected-branch PR (${armed.join(", ")}). Run gh pr merge ${armed[0]} --disable-auto first, then retry; no Mason approval is required.`);
+    }
+    if (request.updateBranch) return;
+  }
   if (base === "master" || base === "production") {
     deny(`PR MERGE GATE: merges into protected branch "${base}" are always blocked.`);
   }

@@ -712,6 +712,7 @@ try {
   };
   const mainPrJson = JSON.stringify(mainPr);
   const featurePrJson = JSON.stringify({ baseRefName: "develop", headRefName: "feature/test", headRefOid: risky.sha });
+  const armedProtectedPrsJson = JSON.stringify([{ number: 513, autoMergeRequest: { mergeMethod: "SQUASH" }, baseRefName: "main" }]);
   const approvedCodeRabbitResponse = (args, headSha) => {
     const joined = args.join(" ");
     if (joined.includes(`/commits/${headSha}/statuses`)) return JSON.stringify([[
@@ -737,6 +738,67 @@ try {
     ...mainPr,
     statusCheckRollup: [{ __typename: "StatusContext", state: "FAILURE" }],
   }), false, "failed status contexts are not green");
+
+  const stackedMerge = `gh pr merge 456 --repo crop/crx --squash --match-head-commit ${risky.sha}`;
+  let stackedLookupArgs = "";
+  const stackedMergeBlocked = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: stackedMerge },
+    repoDir: risky.repo,
+    runGh: (args) => {
+      if (args.join(" ").startsWith("pr view ")) return featurePrJson;
+      stackedLookupArgs = args.join(" ");
+      return armedProtectedPrsJson;
+    },
+  });
+  assert.equal(stackedMergeBlocked.blocked, true, "a stacked PR merge cannot mutate the head of an armed main PR");
+  assert.match(stackedMergeBlocked.reason, /disable-auto/, "stacked merge denial gives the automatic recovery action");
+  assert.match(stackedLookupArgs, /--head develop/, "stacked merge checks the destination branch before GitHub mutates it");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: stackedMerge },
+    repoDir: risky.repo,
+    runGh: (args) => args.join(" ").startsWith("pr view ") ? featurePrJson : "[]",
+  }).blocked, false, "a stacked PR merge remains unattended when its destination does not feed armed protected auto-merge");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: stackedMerge },
+    repoDir: risky.repo,
+    runGh: (args) => {
+      if (args.join(" ").startsWith("pr view ")) return featurePrJson;
+      throw new Error("GitHub unavailable");
+    },
+  }).blocked, true, "a stacked PR merge fails closed when destination auto-merge state cannot be read");
+
+  const updateBranch = "gh pr update-branch 123 --repo crop/crx";
+  let updateLookupArgs = "";
+  const armedUpdate = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: updateBranch },
+    repoDir: risky.repo,
+    runGh: (args) => {
+      if (args.join(" ").startsWith("pr view ")) return mainPrJson;
+      updateLookupArgs = args.join(" ");
+      return armedProtectedPrsJson;
+    },
+  });
+  assert.equal(armedUpdate.blocked, true, "update-branch cannot mutate the head of an armed main PR");
+  assert.match(updateLookupArgs, /--head feature\/test/, "update-branch checks the PR head destination before mutation");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: updateBranch },
+    repoDir: risky.repo,
+    runGh: (args) => args.join(" ").startsWith("pr view ") ? mainPrJson : "[]",
+  }).blocked, false, "update-branch remains unattended when protected auto-merge is disabled");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: updateBranch },
+    repoDir: risky.repo,
+    runGh: (args) => {
+      if (args.join(" ").startsWith("pr view ")) return mainPrJson;
+      throw new Error("GitHub unavailable");
+    },
+  }).blocked, true, "update-branch fails closed when destination auto-merge state cannot be read");
 
   unlinkSync(proofPath(risky.repo));
   assert.equal(evaluateProductionAction({
@@ -933,7 +995,7 @@ try {
     toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
-    runGh: () => featurePrJson,
+    runGh: (args) => args.join(" ").startsWith("pr view ") ? featurePrJson : "[]",
   }).blocked, false, "gh PR merge to a non-production base is allowed");
   assert.equal(evaluateProductionAction({
     toolName: "mcp__github__merge_pull_request",
