@@ -127,12 +127,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after unattended network pushes were restricted to the protected
   // CRX upstream repository, closing the fork auto-merge lookup bypass. Local
   // repository pushes remain allowed; the maintenance anchors are unchanged.
-  codexGuard: "9172e1d83859c570518a6221b17d4c007e6a065b",
-  pushLib: "fee176b80f88b654c3cd7a54e9653a7d1cf52923",
+  // Re-pinned after GitHub evidence lookups were bound to a fixed trusted CLI,
+  // explicit github.com repository context, and a sanitized host/config
+  // environment. The maintenance anchors remain unchanged.
+  codexGuard: "c4c8a75b1663f287b7430f9061442faaa57b1c01",
+  pushLib: "674801db4db68a274f9196b80521f258fc4245a5",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "e57c7487a2932380ba84afa7f06ec823b8245cfb",
-  pushLib: "fee176b80f88b654c3cd7a54e9653a7d1cf52923",
+  codexGuard: "5ce70c98ab8bb9a84408f2c87803231c9c2e4d00",
+  pushLib: "674801db4db68a274f9196b80521f258fc4245a5",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

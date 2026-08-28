@@ -391,8 +391,8 @@ try {
   assert.match(preArmedAutoMergePush.reason, /gh pr merge 513 --disable-auto/, "denial gives an agent-runnable recovery command");
   assert.deepEqual(
     featurePushLookupArgs,
-    ["pr", "list", "--repo", "masonwells1/crx_manager_v1.0", "--state", "open", "--base", "main", "--head", "feature/test", "--json", "number,autoMergeRequest"],
-    "feature push lookup binds the open PR query to main and the exact destination branch",
+    ["pr", "list", "--repo", "github.com/masonwells1/crx_manager_v1.0", "--state", "open", "--base", "main", "--head", "feature/test", "--json", "number,autoMergeRequest"],
+    "feature push lookup binds the open PR query to github.com, main, and the exact destination branch",
   );
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",

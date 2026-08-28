@@ -29,6 +29,7 @@ import {
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   riskyFiles,
+  trustedGitHubCliInvocation,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
 
@@ -208,23 +209,15 @@ function defaultRunGit(args, cwd) {
 }
 
 function defaultRunGh(args, cwd) {
-  const candidates = process.platform === "win32"
-    ? ["gh", "C:\\Program Files\\GitHub CLI\\gh.exe"]
-    : ["gh"];
-  let lastError;
-  for (const executable of candidates) {
-    try {
-      return execFileSync(executable, args, {
-        cwd,
-        encoding: "utf8",
-        timeout: 5000,
-        stdio: ["ignore", "pipe", "pipe"],
-      }).trim();
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError || new Error("GitHub CLI is unavailable");
+  const invocation = trustedGitHubCliInvocation(args);
+  return execFileSync(invocation.executable, invocation.args, {
+    cwd,
+    env: invocation.env,
+    encoding: "utf8",
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  }).trim();
 }
 
 function proofRequirement(headSha, riskDescription, detail, baseSha) {
@@ -928,7 +921,7 @@ export function evaluateProductionAction({
         try {
           activeAutoMergePrs = activeAutoMergePrNumbers(runGh([
             "pr", "list",
-            "--repo", pushRepository,
+            "--repo", `github.com/${pushRepository}`,
             "--state", "open",
             "--base", "main",
             "--head", featureBranch,

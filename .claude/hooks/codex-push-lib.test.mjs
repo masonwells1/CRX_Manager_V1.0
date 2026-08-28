@@ -53,6 +53,9 @@ import {
   pushUsesConfigRootEnv,
   pushSetsInlineEnv,
   shellSegments,
+  fixedGitHubCliExecutable,
+  sanitizedGitHubCliEnvironment,
+  trustedGitHubCliInvocation,
   unknownPushOptions,
   unknownGitGlobalOptions,
   environmentCarriesConfigOverride,
@@ -108,6 +111,36 @@ assert.equal(pushGitHubRepository(["https://github.com/masonwells1/CRX_Manager_V
 assert.equal(pushGitHubRepository(["../local.git"]), null, "non-GitHub destination is unresolved");
 assert.equal(pushUrlsAreLocalPaths(["../local.git", "C:/repos/local.git"]), true, "local repository paths are recognized");
 assert.equal(pushUrlsAreLocalPaths(["https://gitlab.example/repo.git"]), false, "network repository is not a local path");
+const hostileGitHubEnv = {
+  PATH: "C:/attacker-controlled-bin",
+  GH_HOST: "ghe.attacker.example",
+  GITHUB_HOST: "ghe.attacker.example",
+  GH_CONFIG_DIR: "C:/attacker-controlled-config",
+  GITHUB_API_URL: "https://ghe.attacker.example/api/v3",
+  GH_REPO: "attacker/decoy",
+  GH_TOKEN: "preserved-github-token",
+};
+const trustedGh = trustedGitHubCliInvocation(
+  ["pr", "list", "--repo", "github.com/masonwells1/crx_manager_v1.0"],
+  {
+    platform: "win32",
+    exists: (candidate) => candidate === "C:\\Program Files\\GitHub CLI\\gh.exe",
+    baseEnv: hostileGitHubEnv,
+  },
+);
+assert.equal(trustedGh.executable, "C:\\Program Files\\GitHub CLI\\gh.exe", "GitHub checks use a fixed executable instead of attacker-controlled PATH");
+assert.equal(trustedGh.args[3], "github.com/masonwells1/crx_manager_v1.0", "GitHub checks bind the explicit github.com repository");
+assert.equal(trustedGh.env.PATH, hostileGitHubEnv.PATH, "PATH may remain for child dependencies because the executable itself is absolute");
+assert.equal(trustedGh.env.GH_TOKEN, "preserved-github-token", "github.com authentication remains available");
+for (const name of ["GH_HOST", "GITHUB_HOST", "GH_CONFIG_DIR", "GITHUB_API_URL", "GH_REPO"]) {
+  assert.equal(trustedGh.env[name], undefined, `${name} cannot redirect the trusted lookup`);
+}
+assert.throws(
+  () => fixedGitHubCliExecutable({ platform: "win32", exists: () => false }),
+  /fixed trusted GitHub CLI executable/,
+  "missing trusted GitHub CLI fails closed instead of consulting PATH",
+);
+assert.equal(sanitizedGitHubCliEnvironment({ GH_HOST: "evil", GH_TOKEN: "ok" }).GH_HOST, undefined);
 assert.equal(githubCliCommandIsDynamic("gh pr merge 513 --squash --match-head-commit abc"), false);
 assert.equal(githubCliCommandIsDynamic("gh pr view 513 --jq '$.headRefOid'"), false, "single-quoted jq data stays literal");
 assert.equal(githubCliCommandIsDynamic("$verb='merge'; gh pr $verb 513 --auto"), true, "dynamic merge verb is denied");

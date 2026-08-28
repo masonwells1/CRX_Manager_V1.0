@@ -1,6 +1,40 @@
 // Shared helpers for Claude's and Codex's production-push guards.
 
+import { existsSync } from "node:fs";
 import path from "node:path";
+
+const UNTRUSTED_GITHUB_CONTEXT_ENV = [
+  "GH_HOST",
+  "GITHUB_HOST",
+  "GH_CONFIG_DIR",
+  "GITHUB_API_URL",
+  "GH_REPO",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+];
+
+export function sanitizedGitHubCliEnvironment(baseEnv = process.env) {
+  const env = { ...baseEnv };
+  for (const name of UNTRUSTED_GITHUB_CONTEXT_ENV) delete env[name];
+  return env;
+}
+
+export function fixedGitHubCliExecutable({ platform = process.platform, exists = existsSync } = {}) {
+  const candidates = platform === "win32"
+    ? ["C:\\Program Files\\GitHub CLI\\gh.exe"]
+    : ["/usr/bin/gh", "/usr/local/bin/gh", "/opt/homebrew/bin/gh"];
+  const executable = candidates.find((candidate) => exists(candidate));
+  if (!executable) throw new Error("a fixed trusted GitHub CLI executable is required");
+  return executable;
+}
+
+export function trustedGitHubCliInvocation(args, options = {}) {
+  return {
+    executable: fixedGitHubCliExecutable(options),
+    args: [...args],
+    env: sanitizedGitHubCliEnvironment(options.baseEnv),
+  };
+}
 
 // Does the git command push (to main)? We fire on any `git push`; the hook then
 // checks whether the push actually TARGETS main before doing anything.

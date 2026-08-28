@@ -38,6 +38,7 @@ import {
   pushUsesTransportEnv,
   pushSetsInlineEnv,
   shellSegments,
+  trustedGitHubCliInvocation,
   unknownPushOptions,
   unknownGitGlobalOptions,
   environmentCarriesConfigOverride,
@@ -788,18 +789,21 @@ for (const pushCmd of pushCommands) {
       if (destinationIsLocal) continue;
       let activeAutoMergePrs;
       try {
-        const response = execFileSync("gh", [
+        const ghLookup = trustedGitHubCliInvocation([
           "pr", "list",
-          "--repo", pushRepository,
+          "--repo", `github.com/${pushRepository}`,
           "--state", "open",
           "--base", "main",
           "--head", featureBranch,
           "--json", "number,autoMergeRequest",
-        ], {
+        ]);
+        const response = execFileSync(ghLookup.executable, ghLookup.args, {
           cwd: pushRepoDir,
+          env: ghLookup.env,
           encoding: "utf8",
           timeout: 10000,
           stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
         }).trim();
         activeAutoMergePrs = activeAutoMergePrNumbers(response);
       } catch (error) {
