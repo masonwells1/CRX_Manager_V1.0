@@ -124,12 +124,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // anchors are still unchanged.
   // Re-pinned after unquoted GitHub CLI comment markers became fail-closed; the
   // maintenance anchors remain unchanged.
-  codexGuard: "d022e6980f23883f58dbfeaf9292f2f0ec784a79",
-  pushLib: "014420e0e92257921864e8f696a9e102bc55cfe6",
+  // Re-pinned after unattended network pushes were restricted to the protected
+  // CRX upstream repository, closing the fork auto-merge lookup bypass. Local
+  // repository pushes remain allowed; the maintenance anchors are unchanged.
+  codexGuard: "9172e1d83859c570518a6221b17d4c007e6a065b",
+  pushLib: "fee176b80f88b654c3cd7a54e9653a7d1cf52923",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "72999f1bdcd25c0638fc325ed59917eca38b1834",
-  pushLib: "014420e0e92257921864e8f696a9e102bc55cfe6",
+  codexGuard: "e57c7487a2932380ba84afa7f06ec823b8245cfb",
+  pushLib: "fee176b80f88b654c3cd7a54e9653a7d1cf52923",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

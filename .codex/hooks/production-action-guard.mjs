@@ -11,6 +11,7 @@ import {
   contentIsRisky,
   extractPatchDestinations,
   featurePushDestinations,
+  GUARDED_REPO_PATH,
   gitPushCwd,
   githubCliCommandIsDynamic,
   githubRepositoryContextOverrideMentioned,
@@ -913,6 +914,9 @@ export function evaluateProductionAction({
           destinationIsLocal = pushUrlsAreLocalPaths(destinationUrls);
           if (!pushRepository && !destinationIsLocal) {
             throw new Error("destination is not one exact GitHub repository or local repository path");
+          }
+          if (pushRepository && pushRepository !== GUARDED_REPO_PATH) {
+            throw new Error(`network destination ${pushRepository} is outside the protected CRX upstream repository`);
           }
         } catch (error) {
           return denied(

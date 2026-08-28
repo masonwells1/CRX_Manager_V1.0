@@ -349,26 +349,28 @@ try {
     runGh: () => JSON.stringify([{ number: 513, autoMergeRequest: null }]),
   }).blocked, false, "branch pushes stay allowed");
   git(risky.repo, ["remote", "add", "other", "https://github.com/other/repository.git"]);
-  let alternateLookupArgs = [];
-  assert.equal(evaluateProductionAction({
+  const alternateRemotePush = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "git push other HEAD:refs/heads/feature/test" },
     repoDir: risky.repo,
-    runGh: (args) => { alternateLookupArgs = args; return "[]"; },
-  }).blocked, false, "alternate GitHub remote uses its own auto-merge lookup");
-  assert.equal(alternateLookupArgs[3], "other/repository", "alternate remote lookup is bound to the pushed repository");
-  assert.equal(evaluateProductionAction({
+    runGh: () => { throw new Error("alternate repository denial must happen before any PR lookup"); },
+  });
+  assert.equal(alternateRemotePush.blocked, true, "alternate network repositories are denied so fork PR auto-merge cannot be missed");
+  assert.match(alternateRemotePush.reason, /outside the protected CRX upstream repository/);
+  const rawAlternateRemotePush = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "git push https://github.com/other/repository.git HEAD:refs/heads/feature/test" },
     repoDir: risky.repo,
-    runGh: () => "[]",
-  }).blocked, false, "raw alternate repository URL uses its own auto-merge lookup");
+    runGh: () => { throw new Error("raw alternate repository denial must happen before any PR lookup"); },
+  });
+  assert.equal(rawAlternateRemotePush.blocked, true, "raw fork or alternate repository URLs are denied");
+  assert.match(rawAlternateRemotePush.reason, /outside the protected CRX upstream repository/);
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "git push other HEAD:refs/heads/feature/test" },
     repoDir: risky.repo,
     runGh: () => JSON.stringify([{ number: 999, autoMergeRequest: { mergeMethod: "SQUASH" } }]),
-  }).blocked, true, "pre-armed auto-merge on the actual alternate repository blocks its push");
+  }).blocked, true, "alternate repository pushes remain denied regardless of its reported PR state");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "git push https://github.com/masonwells1/CRX_Manager_V1.0.git HEAD:refs/heads/feature/test" },
@@ -500,6 +502,8 @@ try {
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects every push in a command chain");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin HEAD:refs/heads/feature/test`, projectRoot);
   assert.equal(claudeGuard.stdout, "", "Claude guard still allows an ordinary feature-branch push");
+  claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push other HEAD:refs/heads/feature/test`, projectRoot);
+  assert.match(claudeGuard.stdout, /outside the protected CRX upstream repository/, "Claude guard denies fork and alternate network pushes before PR lookup");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin refs/heads/*:refs/heads/*`, projectRoot);
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard denies wildcard feature destinations");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin HEAD:refs/heads/feature/test; $verb='merge'; gh pr $verb 513 --auto`, projectRoot);

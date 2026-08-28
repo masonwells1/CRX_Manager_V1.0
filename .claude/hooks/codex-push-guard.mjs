@@ -20,6 +20,7 @@ import {
   describeRiskyContent,
   eachPush,
   featurePushDestinations,
+  GUARDED_REPO_PATH,
   gitPushCwd,
   gitSubcommandIsDynamic,
   isGitPush,
@@ -776,6 +777,9 @@ for (const pushCmd of pushCommands) {
       destinationIsLocal = pushUrlsAreLocalPaths(destinationUrls);
       if (!pushRepository && !destinationIsLocal) {
         throw new Error("destination is not one exact GitHub repository or local repository path");
+      }
+      if (pushRepository && pushRepository !== GUARDED_REPO_PATH) {
+        throw new Error(`network destination ${pushRepository} is outside the protected CRX upstream repository`);
       }
     } catch (error) {
       deny(`CODEX GATE: unattended feature pushes must resolve to the exact CRX GitHub repository before auto-merge state is checked. ${error?.message || error}`);

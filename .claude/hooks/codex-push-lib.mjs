@@ -657,7 +657,7 @@ function canonicalHost(host) {
 // unknown host. That gates slightly more than git would actually deliver — the
 // safe direction, because a false positive costs one extra review and a false
 // negative is an ungated production push.
-const GUARDED_REPO_PATH = "masonwells1/crx_manager_v1.0";
+export const GUARDED_REPO_PATH = "masonwells1/crx_manager_v1.0";
 function idPath(id) {
   const slash = String(id).indexOf("/");
   return slash === -1 ? "" : String(id).slice(slash + 1);
