@@ -1,23 +1,5 @@
 # CRX Manager V1.0 — Development Changelog
 
-## 2026-08-27 — PR #509 rebuild of PR #361 closes exact return-cancel and delivery double-restock gaps
-
-The PR #509 rebuild of the PR #361 successor now stores the exact inventory-unit quantity added by every return receipt and
-uses that value for a later cancellation. This matters for the pinned legacy RMA whose 15 containers
-convert to 37.5 gallons: cancellation now removes all 37.5 gallons instead of only 15. Delivery void
-and cancel also refuse to restore inventory after a received or credited return already restored the
-same order-line stock. Both paths fail closed if lineage is ambiguous.
-
-The current review hardening also serializes credit-memo unapply retries before any side effect,
-uses one paginated invoice-coverage fetch across Orders and both recovery dashboards, fixes dashboard
-overdue filtering for deleted/credit invoices, and evaluates season/invoice dates in the
-America/Chicago business day instead of the database server's timezone.
-
-The production-schema disposable prover now executes the successful 37.5-in/37.5-out cancellation,
-both delivery denial paths, and three deliberately broken-function mutations. The complete chain has
-61 named signals, must end in `SMOKE_PASS_ROLLBACK`, and leaves zero fixture residue. These migrations
-remain local candidates only; production was not changed.
-
 ## 2026-08-26 — the hold latch matches only what Mason typed
 
 Two sessions could not talk to each other. A coordinator session sent a peer a
@@ -61,6 +43,7 @@ Both hold-latch hooks were already wired on the Codex side through the portable 
 still are — `scripts/agent-manifest-parity.mjs` passes, no asymmetry declared. `stop-wrap.mjs`
 was inspected and is NOT involved: it is the Stop hook that lists uncommitted work and does no
 prompt phrase matching.
+
 ## 2026-08-26 — sql-safety and status-enum-check also judge the real post-edit file
 
 Follow-up closing the gap the "Migration guards judge the real post-edit file on CRLF

@@ -76,6 +76,10 @@ describe('activeInvoiceCoversDelivery', () => {
     expect(pendingQueries).toHaveLength(0);
     expect(queries[0].in).toHaveBeenCalledWith('order_id', orderIds.slice(0, 200));
     expect(queries[2].in).toHaveBeenCalledWith('order_id', orderIds.slice(200));
+    expect(queries[0].range).toHaveBeenCalledWith(0, 999);
+    expect(queries[1].range).toHaveBeenCalledWith(1, 1000);
+    expect(queries[2].range).toHaveBeenCalledWith(0, 999);
+    expect(queries[3].range).toHaveBeenCalledWith(1, 1000);
   });
 
   it('keeps order billing coverage limited to active sale invoices', () => {
