@@ -83,6 +83,8 @@ the fixed trusted GitHub CLI, a numeric PR, and the canonical repository, while
 mixed auto intent and `--disable-auto` consumed as body text cannot hide a real `--auto` action.
 The protected helper boundary also normalizes adjacent shell quotes and escape spellings, so
 `land-pr.mjs` cannot be edited or executed outside its exact-HEAD proof gate through a spliced path.
+Armed unattended mode cannot edit, patch, or shell-mutate its own approval/delivery guards or
+their hook manifests; ordinary product-file edits remain automatic.
 Empty-quote-composed GitHub executable or subcommand words also deny before unattended execution.
 
 Feature pushes now resolve their effective push URL and query auto-merge state in that exact

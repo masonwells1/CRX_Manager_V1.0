@@ -8,7 +8,7 @@
 // settings.json permissions.deny + bash-safety/migration-apply-guard, so this is
 // defense in depth, not the only line.
 
-import { deliveryExecutableIsTrusted, directGitHubApiWriter, disableAutoRequestHasExplicitContext, ghApiMutates, ghCliCommandIsUnknownOrAlias, ghMergeRequest, ghPrBaseRetargets, ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames, githubMutationEnvironmentOverrideNames, githubMutationUnsafeAmbientEnvironmentNames, githubRepositoryIsGuarded, rawHttpClientCommand, structuredPushEnvironmentOverrideNames } from "./codex-push-lib.mjs";
+import { deliveryExecutableIsTrusted, directGitHubApiWriter, disableAutoRequestHasExplicitContext, extractPatchDestinations, ghApiMutates, ghCliCommandIsUnknownOrAlias, ghMergeRequest, ghPrBaseRetargets, ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames, githubMutationEnvironmentOverrideNames, githubMutationUnsafeAmbientEnvironmentNames, githubRepositoryIsGuarded, rawHttpClientCommand, structuredPushEnvironmentOverrideNames } from "./codex-push-lib.mjs";
 
 // Tool NAMES that must never be auto-approved during an unattended run: live
 // prod mutations and branch/project lifecycle ops. Matched case-insensitively
@@ -50,8 +50,22 @@ const DENY_BASH_RES = [
   /(?:>>?|tee)\s+['"]?[^\s'";|&]*\.env\b/,         // writing to .env
 ];
 
-// Edit/Write targets that must never be auto-approved.
-const DENY_PATH_RE = /(^|[\\/])\.env(\.|$)/i;
+// Edit/Write targets that must never be auto-approved. The unattended approver
+// cannot approve changes to itself, its owning guards, or their hook manifests:
+// otherwise one allowed edit could erase the independent delivery boundary and
+// a later merge would inherit the same armed approval.
+const DENY_PATH_RE = /(?:^|[\s"'=\\/])(?:\.env(?:\.|$)|\.claude[\\/](?:hooks(?:[\\/]|$)|settings(?:\.local)?\.json(?:$|[\s;&|]))|\.codex[\\/](?:hooks(?:[\\/]|$)|hooks\.json(?:$|[\s;&|])))/i;
+const SHELL_PATH_MUTATOR_RE = /(?:>|\b(?:set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|remove-item|move-item|copy-item|rename-item|ac|clc|cpi|mi|ni|ri|ren|rni|sc|si|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i;
+
+function unattendedBoundaryPathMentioned(value) {
+  const raw = String(value || "");
+  const views = [
+    raw,
+    raw.replace(/["']/g, ""),
+    raw.replace(/["']/g, "").replace(/[`^]/g, "").replace(/\\(?=[^\s\\/])/g, ""),
+  ];
+  return views.some((view) => DENY_PATH_RE.test(view));
+}
 
 export function autopilotDecision(toolName, toolInput) {
   const name = String(toolName || "");
@@ -79,14 +93,17 @@ export function autopilotDecision(toolName, toolInput) {
       || !githubRepositoryIsGuarded(mergeRequest.repo)
       || !deliveryExecutableIsTrusted(cmd, "gh", { cwd: process.cwd(), env: { ...process.env, ...(input.env && typeof input.env === "object" ? input.env : {}) } })
     )) return "deny";
+    if (SHELL_PATH_MUTATOR_RE.test(cmd) && unattendedBoundaryPathMentioned(cmd)) return "deny";
     for (const re of DENY_BASH_RES) {
       if (re.test(cmd)) return "deny";
     }
   }
 
   // Edit/Write/file tools
-  const filePath = input.file_path || input.path || input.filePath || "";
-  if (filePath && DENY_PATH_RE.test(String(filePath))) return "deny";
+  const filePaths = [input.file_path, input.path, input.filePath, input.target, input.source, input.destination];
+  const patchDestinations = [input.patch, input.diff, input.input, input.changes]
+    .flatMap((payloadText) => extractPatchDestinations(payloadText));
+  if ([...filePaths, ...patchDestinations].some((filePath) => filePath && unattendedBoundaryPathMentioned(filePath))) return "deny";
 
   return "allow";
 }

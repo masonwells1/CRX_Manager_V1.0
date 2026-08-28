@@ -62,6 +62,29 @@ eq(autopilotDecision("Bash", { command: "git worktree remove ../x" }), "deny", "
 eq(autopilotDecision("Bash", { command: "echo SECRET >> .env" }), "deny", "write to .env denied");
 eq(autopilotDecision("Write", { file_path: "C:/CRX_Manager/.env.local" }), "deny", "Write .env.local denied");
 eq(autopilotDecision("Edit", { file_path: ".env" }), "deny", "Edit .env denied");
+for (const filePath of [
+  ".claude/hooks/autopilot-lib.mjs",
+  ".claude/hooks/unattended-autopilot.mjs",
+  ".claude/hooks/pr-merge-guard.mjs",
+  ".claude/hooks/codex-push-guard.mjs",
+  ".claude/settings.json",
+  ".claude/settings.local.json",
+  ".codex/hooks/production-action-guard.mjs",
+  ".codex/hooks.json",
+]) {
+  eq(autopilotDecision("Edit", { file_path: filePath }), "deny", `armed autopilot cannot edit its guard boundary: ${filePath}`);
+}
+eq(autopilotDecision("apply_patch", { patch: "*** Update File: .claude/hooks/pr-merge-guard.mjs\n-old\n+disabled" }), "deny", "armed autopilot cannot patch its merge guard");
+for (const command of [
+  "Set-Content .claude/hooks/pr-merge-guard.mjs -Value disabled",
+  'Set-Content .claude/hooks/pr"-"merge-guard.mjs -Value disabled',
+  "echo disabled > .claude/hooks/pr-merge-guard.mjs",
+  "rm .claude/hooks/pr-merge-guard.mjs",
+  "sed -i s/deny/allow/ .claude/hooks/pr-merge-guard.mjs",
+]) {
+  eq(autopilotDecision("PowerShell", { command }), "deny", `armed autopilot cannot shell-mutate its merge guard: ${command}`);
+}
+eq(autopilotDecision("Edit", { file_path: "src/components/OrderForm.tsx" }), "allow", "ordinary product edits remain unattended");
 
 // ── deny-set additions (2026-07-04): CLI deploy and direct remote writes ───
 eq(autopilotDecision("Bash", { command: "npx supabase functions deploy send-email" }), "deny", "CLI edge deploy denied");
