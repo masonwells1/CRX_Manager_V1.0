@@ -22,27 +22,32 @@ function ok(v, m) { assert.ok(v, m); pass++; }
 function eq(a, b, m) { assert.deepEqual(a, b, m); pass++; }
 
 // ── ghMergeRequest ───────────────────────────────────────────────────────────
-eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false, matchHead: "", atomicHeadMatch: true }, "plain merge parses");
-eq(ghMergeRequest("gh pr merge --squash --auto 7"), { selector: "7", repo: "", auto: true, matchHead: "", atomicHeadMatch: true }, "--auto detected");
-eq(ghMergeRequest("gh -R masonwells1/CRX_Manager_V1.0 pr merge 9"), { selector: "9", repo: "masonwells1/CRX_Manager_V1.0", auto: false, matchHead: "", atomicHeadMatch: true }, "global -R between gh and pr");
-eq(ghMergeRequest("gh pr merge --repo=o/r"), { selector: "", repo: "o/r", auto: false, matchHead: "", atomicHeadMatch: true }, "repo= form, selectorless (current branch)");
-eq(ghMergeRequest("gh pr merge 42 --match-head-commit 0123456789012345678901234567890123456789"), { selector: "42", repo: "", auto: false, matchHead: "0123456789012345678901234567890123456789", atomicHeadMatch: true }, "separate exact-head flag parses");
-eq(ghMergeRequest("&gh pr merge 42 --auto"), { selector: "42", repo: "", auto: true, matchHead: "", atomicHeadMatch: true }, "PowerShell call operator parses");
-eq(ghMergeRequest("gh pr merge 42 --match-head-commit=abcdefabcdefabcdefabcdefabcdefabcdefabcd"), { selector: "42", repo: "", auto: false, matchHead: "abcdefabcdefabcdefabcdefabcdefabcdefabcd", atomicHeadMatch: true }, "equals exact-head flag parses");
+eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false, matchHead: "", squash: true, atomicHeadMatch: true }, "plain squash merge parses");
+eq(ghMergeRequest("gh pr merge --squash --auto 7"), { selector: "7", repo: "", auto: true, matchHead: "", squash: true, atomicHeadMatch: true }, "--auto detected");
+ok(ghMergeRequest("gh -R masonwells1/CRX_Manager_V1.0 pr merge 9")?.unsupportedSyntax, "global flags are outside the canonical grammar");
+ok(ghMergeRequest("gh pr merge --repo=o/r")?.unsupportedSyntax, "attached repo values are outside the canonical grammar");
+eq(ghMergeRequest("gh pr merge 42 --match-head-commit 0123456789012345678901234567890123456789"), { selector: "42", repo: "", auto: false, matchHead: "0123456789012345678901234567890123456789", squash: false, atomicHeadMatch: true }, "separate exact-head flag parses");
+ok(ghMergeRequest("&gh pr merge 42 --auto")?.unsupportedSyntax, "PowerShell call operator is outside the canonical grammar");
+ok(ghMergeRequest("gh pr merge 42 --match-head-commit=abcdefabcdefabcdefabcdefabcdefabcdefabcd")?.unsupportedSyntax, "attached exact-head values are outside the canonical grammar");
 ok(ghMergeRequest("gh pr merge") !== null, "selectorless merge still gated");
 eq(ghMergeRequest("gh pr merge 5 --disable-auto"), null, "--disable-auto stands down (cancels, does not land)");
 ok(ghMergeRequest("gh pr merge 5 --auto --disable-auto")?.unsupportedAutoFlags, "mixed auto flags deny closed");
-ok(ghMergeRequest("gh pr merge 5 --auto --body --disable-auto")?.auto, "--disable-auto consumed as body text cannot hide real auto flag");
+ok(ghMergeRequest("gh pr merge 5 --auto --body --disable-auto")?.unsupportedSyntax, "body options are outside the canonical grammar");
+ok(ghMergeRequest("gh pr merge --body-file 123 456 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789")?.unsupportedSyntax, "unknown value-taking options cannot shift the inspected selector");
+ok(ghMergeRequest("gh pr merge 123 456 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789")?.unsupportedSyntax, "multiple positional selectors fail closed");
 ok(githubCliCommandIsDynamic("gh pr m''erge 5 --auto"), "empty-quote composed merge token is dynamic");
 ok(githubCliCommandIsDynamic("g''h pr merge 5 --auto"), "empty-quote composed gh executable is dynamic");
+ok(githubCliCommandIsDynamic("g`h pr merge 5 --auto"), "PowerShell-composed gh executable is dynamic");
+ok(githubCliCommandIsDynamic("g${EMPTY}h pr merge 5 --auto"), "POSIX-composed gh executable is dynamic");
 eq(ghMergeRequest("gh pr view merge-notes"), null, "merge-notes is not the word merge");
-ok(ghMergeRequest("gh pr view merge") !== null, "exact-word over-match routes read through gate (fails safe)");
+ok(ghMergeRequest("gh pr view merge")?.unsupportedSyntax, "ambiguous exact merge words fail closed outside the canonical grammar");
 eq(ghMergeRequest("git merge main"), null, "git merge is not a gh merge");
-eq(ghMergeRequest("echo gh pr merge docs"), { selector: "docs", repo: "", auto: false, matchHead: "", atomicHeadMatch: true }, "gh token anywhere still matches (fails safe)");
+ok(ghMergeRequest("echo gh pr merge docs")?.unsupportedSyntax, "wrapped merge commands fail closed");
 eq(ghMergeRequest("npm run build"), null, "unrelated command ignored");
-ok(mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge 42 --repo o/r --match-head-commit 0123456789012345678901234567890123456789")), "literal PR, repo, and head form is explicit");
-ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge --repo o/r --match-head-commit 0123456789012345678901234567890123456789")), "selectorless current-branch merges are not explicit");
-ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge 42 --match-head-commit 0123456789012345678901234567890123456789")), "current-repository merges are not explicit");
+ok(mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789")), "literal PR, repo, squash, and head form is explicit");
+ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789")), "selectorless current-branch merges are not explicit");
+ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge 42 --squash --match-head-commit 0123456789012345678901234567890123456789")), "current-repository merges are not explicit");
+ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge 42 --repo o/r --match-head-commit 0123456789012345678901234567890123456789")), "merge method must be explicitly squash");
 
 // ── ghApiMergeRequest ────────────────────────────────────────────────────────
 ok(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge")?.unsupportedRest, "REST merge endpoint is unsupported");
@@ -110,6 +115,16 @@ ok(r.decision?.permissionDecision === "deny", "disable-auto used as body text ca
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "gh pr m''erge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "empty-quote composed merge token denies before parsing");
+
+r = runHook({ tool_name: "PowerShell", tool_input: { command: "g`h pr merge 42 --auto" } });
+ok(r.decision?.permissionDecision === "deny", "PowerShell-composed gh executable denies before parsing");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "g${EMPTY}h pr merge 42 --auto" } });
+ok(r.decision?.permissionDecision === "deny", "POSIX-composed gh executable denies before parsing");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge --body-file 123 456 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789" } });
+ok(r.decision?.permissionDecision === "deny", "unknown body-file option cannot shift the inspected PR selector");
+ok(/noncanonical/.test(r.decision?.permissionDecisionReason || ""), "unknown merge option denial names the canonical grammar");
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "gh pr merge 42 --squash # --repo attacker/safe --match-head-commit 0123456789012345678901234567890123456789" } });
 ok(r.decision?.permissionDecision === "deny", "PowerShell comment cannot forge repository and head context");

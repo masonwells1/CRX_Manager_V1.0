@@ -669,6 +669,29 @@ try {
   }).blocked, true, "empty-quote composed merge token is denied");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
+    toolInput: { command: "g`h pr merge 123 --repo crop/crx --squash --auto" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => { throw new Error("PowerShell-composed gh must deny before GitHub lookup"); },
+  }).blocked, true, "PowerShell-composed gh executable is denied");
+  assert.equal(evaluateProductionAction({
+    toolName: "Bash",
+    toolInput: { command: "g${EMPTY}h pr merge 123 --repo crop/crx --squash --auto" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => { throw new Error("POSIX-composed gh must deny before GitHub lookup"); },
+  }).blocked, true, "POSIX-composed gh executable is denied");
+  const shiftedSelectorDecision = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge --body-file 123 456 --repo crop/crx --squash --match-head-commit ${risky.sha}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => { throw new Error("noncanonical body-file merge must deny before GitHub lookup"); },
+  });
+  assert.equal(shiftedSelectorDecision.blocked, true, "body-file option cannot shift the inspected PR selector");
+  assert.match(shiftedSelectorDecision.reason, /noncanonical/, "unknown merge option denial names the strict grammar");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --squash # --repo attacker/safe --match-head-commit ${risky.sha}` },
     repoDir: risky.repo,
     nowMs: now,

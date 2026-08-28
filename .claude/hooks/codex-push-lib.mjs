@@ -2133,6 +2133,9 @@ const GH_BIN_RE = /(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?
 export function githubCliCommandIsDynamic(command) {
   const text = String(command || "");
   const emptyQuoteNormalized = text.replace(/(?:''|"")+/g, "");
+  const composedExecutable = /(?:^|[\s;&|])g(?:(?:''|"")|[`^\\]|\$\{[^}\r\n]*\}|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!)+h(?:\.exe)?(?=\s|$)/i.test(text);
+  const dynamicExecutable = /(?:^|[\s;&|])&?(?:\$\{?[A-Za-z_][A-Za-z0-9_:]*\}?|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!|@[A-Za-z_][A-Za-z0-9_]*)\s+(?:pr\s+merge|api\b)/i.test(text);
+  if (composedExecutable || dynamicExecutable) return true;
   if (!/\bgh(?:\.exe)?\b/i.test(text) && !/\bgh(?:\.exe)?\b/i.test(emptyQuoteNormalized)) return false;
   if (emptyQuoteNormalized !== text) return true;
   if (/\(\s*(['"])[^'"\r\n]*\1\s*\+\s*(['"])[^'"\r\n]*\2\s*\)/.test(text)) return true;
@@ -2167,44 +2170,60 @@ export function mergeRequestHasExplicitContext(request) {
   return /^\d+$/.test(selector)
     && /^[^\s/]+\/[^\s/]+$/.test(repo)
     && /^[0-9a-f]{40}$/i.test(head)
+    && request?.squash === true
     && request?.atomicHeadMatch !== false;
 }
 
-// `gh pr merge` with global flags possibly between words (`gh -R o/r pr merge`).
-// Over-matching (e.g. `gh pr view merge-notes`) only routes a read through the
-// gate, which fails safe.
+// One canonical merge grammar keeps the inspected PR identical to the PR that
+// GitHub CLI will execute. Unknown options, multiple positionals, global flags,
+// attached values, and body/title/admin options fail closed instead of teaching
+// this guard every value-taking option the CLI may add over time.
 export function ghMergeRequest(command) {
   const text = String(command || "");
   if (!GH_BIN_RE.test(text)) return null;
   const words = splitShellArgs(text);
+  const executable = String(words[0] || "");
+  const executableIsLiteral = /^(?:gh(?:\.exe)?|[^;&|\r\n]*[\\/]gh(?:\.exe)?)$/i.test(executable);
   const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
-  if (prIndex === -1) return null;
-  const mergeIndex = words.findIndex((word, index) => index > prIndex && word.toLowerCase() === "merge");
-  if (mergeIndex === -1) return null;
-  const valueFlags = new Set(["--repo", "-R", "--match-head-commit", "--subject", "--body", "-t", "-b"]);
+  const hasPrMergeWords = prIndex !== -1 && words.some((word, index) =>
+    index > prIndex && word.toLowerCase() === "merge");
+  if (!executableIsLiteral || String(words[1] || "").toLowerCase() !== "pr" || String(words[2] || "").toLowerCase() !== "merge") {
+    return hasPrMergeWords ? { unsupportedSyntax: true } : null;
+  }
   let selector = "";
   let repo = "";
   let auto = false;
   let disableAuto = false;
   let matchHead = "";
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index];
-    if (word.startsWith("--repo=")) { repo = word.slice("--repo=".length); continue; }
-    if (word.startsWith("--match-head-commit=")) { matchHead = word.slice("--match-head-commit=".length); continue; }
-    if (word.toLowerCase() === "--auto" || word.toLowerCase().startsWith("--auto=")) { auto = true; continue; }
-    if (valueFlags.has(word)) {
-      const value = words[index + 1] || "";
-      if (word === "--repo" || word === "-R") repo = value;
-      if (word === "--match-head-commit") matchHead = value;
+  let squash = false;
+  let deleteBranch = false;
+  for (let index = 3; index < words.length; index += 1) {
+    const word = String(words[index] || "");
+    const lower = word.toLowerCase();
+    if (/^\d+$/.test(word) && !selector) { selector = word; continue; }
+    if (lower === "--repo" && !repo) {
+      repo = String(words[index + 1] || "");
+      if (!repo || repo.startsWith("-")) return { unsupportedSyntax: true };
       index += 1;
       continue;
     }
-    if (word.toLowerCase() === "--disable-auto" || word.toLowerCase().startsWith("--disable-auto=")) { disableAuto = true; continue; }
-    if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
+    if (lower === "--match-head-commit" && !matchHead) {
+      matchHead = String(words[index + 1] || "");
+      if (!matchHead || matchHead.startsWith("-")) return { unsupportedSyntax: true };
+      index += 1;
+      continue;
+    }
+    if (lower === "--squash" && !squash) { squash = true; continue; }
+    if (lower === "--delete-branch" && !deleteBranch) { deleteBranch = true; continue; }
+    if (lower === "--auto" && !auto) { auto = true; continue; }
+    if (lower === "--disable-auto" && !disableAuto) { disableAuto = true; continue; }
+    return { unsupportedSyntax: true };
   }
   if (disableAuto && auto) return { unsupportedAutoFlags: true };
-  if (disableAuto) return null;
-  return { selector, repo, auto, matchHead, atomicHeadMatch: true };
+  if (disableAuto) {
+    return selector && words.length === 5 ? null : { unsupportedSyntax: true };
+  }
+  return { selector, repo, auto, matchHead, squash, atomicHeadMatch: true };
 }
 
 // GitHub API operations that merge a PR now or arm auto-merge for a future

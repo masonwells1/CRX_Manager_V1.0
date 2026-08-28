@@ -40,6 +40,7 @@ import {
   proofValid,
   pullRequestChecksGreen,
   riskyFiles,
+  trustedGitHubCliInvocation,
 } from "./codex-push-lib.mjs";
 
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
@@ -81,6 +82,9 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
       deny("PR MERGE GATE: GitHub REST merge calls are denied because file-backed request bodies can hide or override the expected head SHA. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
     }
     const cli = ghMergeRequest(segment);
+    if (cli?.unsupportedSyntax) {
+      deny("PR MERGE GATE: noncanonical `gh pr merge` syntax is denied. Use exactly one literal `gh pr merge <number> --repo <owner/repo> --squash [--delete-branch] --match-head-commit <head-sha>` command, or `gh pr merge <number> --disable-auto` only to cancel auto-merge.");
+    }
     if (cli?.unsupportedAutoFlags) {
       deny("PR MERGE GATE: mixed `--auto` and `--disable-auto` intent is denied. Use `--disable-auto` alone to cancel, or wait for checks and run one immediate exact-head merge without `--auto`.");
     }
@@ -109,12 +113,15 @@ const projectDir = path.resolve(
 );
 
 function gh(args) {
-  return execFileSync("gh", args, {
+  const invocation = trustedGitHubCliInvocation(args);
+  return execFileSync(invocation.executable, invocation.args, {
     cwd: projectDir,
+    env: invocation.env,
     encoding: "utf8",
     timeout: 10_000,
     stdio: ["ignore", "pipe", "ignore"],
     maxBuffer: 16 * 1024 * 1024,
+    windowsHide: true,
   });
 }
 

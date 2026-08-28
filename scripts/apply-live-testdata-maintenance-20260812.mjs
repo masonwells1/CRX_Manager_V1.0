@@ -130,12 +130,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after GitHub evidence lookups were bound to a fixed trusted CLI,
   // explicit github.com repository context, and a sanitized host/config
   // environment. The maintenance anchors remain unchanged.
-  codexGuard: "c4c8a75b1663f287b7430f9061442faaa57b1c01",
-  pushLib: "674801db4db68a274f9196b80521f258fc4245a5",
+  // Re-pinned after shell-composed GitHub executables and noncanonical merge
+  // options were denied, and Codex began importing the shared merge parsers
+  // instead of maintaining a second copy. The anchors remain unchanged.
+  codexGuard: "465480c5239a70490cfac52d53b925a0efd2306d",
+  pushLib: "4c6681c35e8ae56c77cc2c0d17278040b342a358",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "5ce70c98ab8bb9a84408f2c87803231c9c2e4d00",
-  pushLib: "674801db4db68a274f9196b80521f258fc4245a5",
+  codexGuard: "07973dddfed1c4bf7aa936f726000da5c5e85761",
+  pushLib: "4c6681c35e8ae56c77cc2c0d17278040b342a358",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

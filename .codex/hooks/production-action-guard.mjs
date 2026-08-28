@@ -13,13 +13,17 @@ import {
   featurePushDestinations,
   GUARDED_REPO_PATH,
   gitPushCwd,
+  ghApiMergeRequest,
+  ghMergeRequest,
   githubCliCommandIsDynamic,
   githubRepositoryContextOverrideMentioned,
   isGitPush,
   mainPushSource,
   mergeRequestHasExplicitContext,
+  mcpMergeRequest,
   proofSearchDirs,
   proofValid,
+  pullRequestChecksGreen,
   pushDestinationToken,
   pushGitHubRepository,
   pushUrlsAreLocalPaths,
@@ -32,6 +36,8 @@ import {
   trustedGitHubCliInvocation,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
+
+export { pullRequestChecksGreen };
 
 // Sol HIGH finding (2026-08-14, write-scope review): with the Supabase connector
 // write-enabled, ANY mutating Supabase tool Codex can reach is a route to
@@ -431,104 +437,6 @@ function shellWords(value) {
   }) || [];
 }
 
-function ghMergeRequest(command) {
-  // Global flags may sit between `gh`, `pr`, and `merge` (`gh -R o/r pr merge`,
-  // `gh pr -R o/r merge` — Codex round-4). Require the gh binary, then scan the
-  // segment's words for `pr` followed later by `merge`; parse flags across the
-  // whole segment. Over-matching (e.g. `gh pr view merge-notes`) only routes a
-  // read through the gate, which fails safe.
-  const text = String(command || "");
-  if (!/(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i.test(text)) return null;
-  const words = shellWords(text);
-  const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
-  if (prIndex === -1) return null;
-  const mergeIndex = words.findIndex((word, index) => index > prIndex && word.toLowerCase() === "merge");
-  if (mergeIndex === -1) return null;
-  const valueFlags = new Set(["--repo", "-R", "--match-head-commit", "--subject", "--body"]);
-  let selector = "";
-  let repo = "";
-  let auto = false;
-  let disableAuto = false;
-  let matchHead = "";
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index];
-    if (word.toLowerCase() === "--auto" || word.toLowerCase().startsWith("--auto=")) {
-      auto = true;
-      continue;
-    }
-    if (word.startsWith("--repo=")) {
-      repo = word.slice("--repo=".length);
-      continue;
-    }
-    if (word.startsWith("--match-head-commit=")) {
-      matchHead = word.slice("--match-head-commit=".length);
-      continue;
-    }
-    if (valueFlags.has(word)) {
-      const value = words[index + 1] || "";
-      if (word === "--repo" || word === "-R") repo = value;
-      if (word === "--match-head-commit") matchHead = value;
-      index += 1;
-      continue;
-    }
-    if (word.toLowerCase() === "--disable-auto" || word.toLowerCase().startsWith("--disable-auto=")) {
-      disableAuto = true;
-      continue;
-    }
-    if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
-  }
-  if (disableAuto && auto) return { unsupportedAutoFlags: true };
-  if (disableAuto) return null;
-  return { selector, repo, auto, matchHead, atomicHeadMatch: true };
-}
-
-function ghApiMergeRequest(command) {
-  const text = String(command || "");
-  if (!/(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i.test(text)) return null;
-  const words = shellWords(command);
-  const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
-  if (apiIndex === -1) return null;
-  const isGraphql = words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql");
-  if (isGraphql) {
-    const fileBackedBody = words.some((word, index) => {
-      const lower = word.toLowerCase();
-      if (lower === "--input" || lower.startsWith("--input=")) return true;
-      if (["-F", "--field"].includes(word) && /^query=@/i.test(String(words[index + 1] || ""))) return true;
-      return /^-Fquery=@/i.test(word) || /^--field=query=@/i.test(word);
-    });
-    if (fileBackedBody || /\b(?:mergePullRequest|enablePullRequestAutoMerge)\b/i.test(text)) {
-      return { unsupportedGraphql: true, fileBackedBody };
-    }
-  }
-  let method = "GET";
-  let endpoint = "";
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index];
-    if (word === "-X" || word === "--method") {
-      method = String(words[index + 1] || "").toUpperCase();
-      index += 1;
-      continue;
-    }
-    if (word.startsWith("--method=")) {
-      method = word.slice("--method=".length).toUpperCase();
-      continue;
-    }
-    if (/^-X\S+/i.test(word)) {
-      method = word.slice(2).toUpperCase();
-      continue;
-    }
-    if (["-f", "-F", "--field", "--raw-field"].includes(word)) { index += 1; continue; }
-    const normalizedEndpoint = word
-      .replace(/^https:\/\/api\.github\.com\//i, "")
-      .replace(/^\//, "");
-    if (/^repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/i.test(normalizedEndpoint)) {
-      endpoint = normalizedEndpoint;
-    }
-  }
-  if (method !== "PUT" || !endpoint) return null;
-  return { unsupportedRest: true };
-}
-
 function ghApiMutates(command) {
   const text = String(command || "");
   if (!/(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
@@ -572,18 +480,6 @@ function githubToolIsReadOnly(toolName) {
     /_(?:read|get|list|search)$/i.test(leaf);
 }
 
-function mcpMergeRequest(toolInput) {
-  // Key spellings differ per connector: the GitHub MCP uses pull_number/owner/repo,
-  // the Codex GitHub app uses pr_number/repository_full_name (Codex review 2026-07-13).
-  const selector = toolInput.pull_number ?? toolInput.pullNumber ?? toolInput.pullRequestNumber ??
-    toolInput.pr_number ?? toolInput.prNumber ?? toolInput.number ?? "";
-  const owner = toolInput.owner ?? toolInput.organization ?? "";
-  const repository = toolInput.repo ?? toolInput.repository ?? toolInput.repoName ??
-    toolInput.repository_full_name ?? toolInput.repositoryFullName ?? toolInput.full_name ?? "";
-  const repo = String(repository).includes("/") ? String(repository) : (owner && repository ? `${owner}/${repository}` : "");
-  return { selector: String(selector), repo, auto: false, matchHead: "", atomicHeadMatch: false };
-}
-
 function resolvePullRequest({ request, repoDir, runGh }) {
   const args = ["pr", "view"];
   if (request.selector) args.push(request.selector);
@@ -598,23 +494,6 @@ function resolvePullRequest({ request, repoDir, runGh }) {
   // needlessly failed closed.
   if (!data?.baseRefName || !data?.headRefOid) throw new Error("GitHub did not return baseRefName and headRefOid");
   return data;
-}
-
-export function pullRequestChecksGreen(pullRequest) {
-  if (String(pullRequest?.mergeStateStatus || "").toUpperCase() !== "CLEAN") return false;
-  const checks = pullRequest?.statusCheckRollup;
-  if (!Array.isArray(checks) || checks.length === 0) return false;
-  return checks.every((check) => {
-    if (check?.__typename === "StatusContext") {
-      return String(check.state || "").toUpperCase() === "SUCCESS";
-    }
-    if (check?.__typename === "CheckRun") {
-      const status = String(check.status || "").toUpperCase();
-      const conclusion = String(check.conclusion || "").toUpperCase();
-      return status === "COMPLETED" && ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(conclusion);
-    }
-    return false;
-  });
 }
 
 function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
@@ -826,6 +705,9 @@ export function evaluateProductionAction({
     }
     if (ghRequest?.unsupportedRest) {
       return denied("CODEX PRODUCTION GATE: GitHub REST merge calls are denied because file-backed request bodies can hide or override the expected head SHA. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
+    }
+    if (ghRequest?.unsupportedSyntax) {
+      return denied("CODEX PRODUCTION GATE: noncanonical `gh pr merge` syntax is denied. Use exactly one literal `gh pr merge <number> --repo <owner/repo> --squash [--delete-branch] --match-head-commit <head-sha>` command, or `gh pr merge <number> --disable-auto` only to cancel auto-merge.");
     }
     if (ghRequest?.unsupportedAutoFlags) {
       return denied("CODEX PRODUCTION GATE: mixed `--auto` and `--disable-auto` intent is denied. Use `--disable-auto` alone to cancel, or run one immediate exact-head merge without `--auto` after checks finish.");
