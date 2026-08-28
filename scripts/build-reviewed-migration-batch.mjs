@@ -27,6 +27,32 @@ function sha256(value) {
   return createHash("sha256").update(String(value)).digest("hex");
 }
 
+function auditedDdlAdmission(skeleton) {
+  const statements = String(skeleton).split(";").map((statement) => statement.trim()).filter(Boolean);
+  for (const statement of statements) {
+    const normalized = statement.replace(/\s+/g, " ");
+    if (/^set\s+local\s+(?:statement_timeout|lock_timeout|search_path|check_function_bodies)\b/i.test(normalized)) continue;
+    if (/^create\s+(?:or\s+replace\s+)?(?:function|procedure)\b/i.test(normalized)) continue;
+    if (/^(?:alter|drop)\s+(?:function|procedure)\b/i.test(normalized)) continue;
+    if (/^create\s+(?:temporary\s+|temp\s+|unlogged\s+)?table\b/i.test(normalized)) {
+      if (/\bpartition\s+of\b/i.test(normalized) || /\bas\s*\(*\s*(?:select|table|values|with|execute)\b/i.test(normalized)) {
+        return { ok: false, reason: "query-executing CREATE TABLE is outside the audited DDL allowlist" };
+      }
+      continue;
+    }
+    if (/^create\s+(?:or\s+replace\s+)?view\b/i.test(normalized)) continue;
+    if (/^(?:create|alter|drop)\s+(?:constraint\s+)?trigger\b/i.test(normalized)) continue;
+    if (/^(?:create|alter|drop)\s+policy\b/i.test(normalized)) continue;
+    if (/^create\s+(?:type|domain|sequence|schema)\b/i.test(normalized)) continue;
+    if (/^alter\s+(?:type|sequence)\b/i.test(normalized)) continue;
+    if (/^drop\s+(?:view|index)\b/i.test(normalized)) continue;
+    if (/^(?:grant|revoke)\b/i.test(normalized)) continue;
+    if (/^comment\s+on\b/i.test(normalized)) continue;
+    return { ok: false, reason: "top-level statement is outside the audited DDL allowlist" };
+  }
+  return { ok: true };
+}
+
 export function transactionCompatibility(sql) {
   const skeleton = topLevelSkeleton(sql);
   if (skeleton === null) return { ok: false, reason: "migration SQL could not be tokenized safely" };
@@ -41,6 +67,8 @@ export function transactionCompatibility(sql) {
   if (/\bexecute\s+(?!function\b|on\b)/i.test(visible)) return { ok: false, reason: "dynamic SQL execution" };
   if (/standard_conforming_strings/i.test(skeleton)) return { ok: false, reason: "standard_conforming_strings override" };
   if (/(?:^|;)\s*call\b/i.test(skeleton)) return { ok: false, reason: "CALL" };
+  const admission = auditedDdlAdmission(skeleton);
+  if (!admission.ok) return admission;
   return { ok: true };
 }
 
