@@ -830,7 +830,10 @@ export function evaluateProductionAction({
                 .split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
           pushRepository = pushGitHubRepository(destinationUrls);
           destinationIsLocal = pushUrlsAreLocalPaths(destinationUrls);
-          if (!pushRepository && !destinationIsLocal) {
+          if (destinationIsLocal) {
+            return denied("CODEX PRODUCTION GATE: unattended feature pushes to local-looking paths are denied because Git url.*.insteadOf rules can silently rewrite them to the production GitHub repository. Push the explicit verified CRX GitHub upstream instead.");
+          }
+          if (!pushRepository) {
             throw new Error("destination is not one exact GitHub repository or local repository path");
           }
           if (pushRepository && pushRepository !== GUARDED_REPO_PATH) {
@@ -841,7 +844,6 @@ export function evaluateProductionAction({
             `CODEX PRODUCTION GATE: unattended feature pushes must resolve to the exact CRX GitHub repository before auto-merge state is checked. ${error?.message || error}`,
           );
         }
-        if (destinationIsLocal) continue;
         let activeAutoMergePrs;
         try {
           activeAutoMergePrs = activeAutoMergePrNumbers(runGh([

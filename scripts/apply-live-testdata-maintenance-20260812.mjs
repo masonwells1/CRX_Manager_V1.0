@@ -138,12 +138,13 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // shadows denied, after inline/tool-environment Git configuration was denied
   // so the inspected destination cannot differ from the executed push, and
   // after unquoted shell escapes and nested wrappers were rejected for GitHub
-  // CLI commands, and after merges were bound to CodeRabbit's exact-head review.
-  codexGuard: "a3fedfa10023b97c30e9dea94e5310bbe21b67b8",
+  // CLI commands, after merges were bound to CodeRabbit's exact-head review,
+  // and after local-looking feature destinations stopped bypassing review.
+  codexGuard: "dea09630a3d02d51b117c9b9fdacac024fc88afc",
   pushLib: "e52eb031fa6abf09d54e7d2d9f8c5ab1ad5b5f44",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "f608a1842d815829737c7b4589bc283b4222c701",
+  codexGuard: "31f0d1b21f1fb98d7e861b17e777b5b96561b923",
   pushLib: "e52eb031fa6abf09d54e7d2d9f8c5ab1ad5b5f44",
 };
 

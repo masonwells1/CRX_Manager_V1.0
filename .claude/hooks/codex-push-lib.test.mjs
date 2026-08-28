@@ -2591,6 +2591,23 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       git(["config", "--unset-all", "url.git@github.com:masonwells1/CRX_.insteadOf"], work);
     }
 
+    // A raw path is not necessarily local after Git configuration is applied:
+    // insteadOf can replace the entire apparent path with the production URL.
+    // The feature-push path must consult the exact push environment before it
+    // takes the local-repository exception and skips the auto-merge lookup.
+    try {
+      const localDestination = dest.replaceAll("\\", "/");
+      git(["config", `url.${CRX_URL}.insteadOf`, localDestination], work);
+      const rewrittenLocal = runHook(
+        `git -C ${work.replaceAll("\\", "/")} push ${localDestination} HEAD:refs/heads/feature`,
+        { GH_TOKEN: "invalid-test-token", GITHUB_TOKEN: "invalid-test-token" },
+      );
+      assert.equal(rewrittenLocal.decision, "deny", "a local-looking feature destination rewritten to CRX is gated");
+      assert.match(rewrittenLocal.reason, /could not prove auto-merge is disabled/i, "the rewrite reaches the protected feature-push lookup");
+    } finally {
+      git(["config", "--unset-all", `url.${CRX_URL}.insteadOf`], work);
+    }
+
     // A mirror remote configured in the repository's OWN config. This diverges
     // from nothing, so the scrubbed-vs-ambient comparison cannot catch it — and
     // `mainPushSource` only ever reads command TEXT, so a bare `git push origin`

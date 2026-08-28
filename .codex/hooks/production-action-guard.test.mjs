@@ -382,6 +382,20 @@ try {
     branch: "feature/test",
     runGh: () => { throw new Error("GIT_CONFIG tool environment denial must happen before GitHub lookup"); },
   }).blocked, true, "GIT_CONFIG tool environments cannot redirect an unattended feature push");
+  git(risky.repo, ["config", "url.https://github.com/masonwells1/CRX_Manager_V1.0.git.insteadOf", "C:/review-local"]);
+  try {
+    const rewrittenLocalPush = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: "git push C:/review-local HEAD:refs/heads/feature/test" },
+      repoDir: risky.repo,
+      branch: "feature/test",
+      runGh: () => { throw new Error("local-looking destination must deny before GitHub lookup"); },
+    });
+    assert.equal(rewrittenLocalPush.blocked, true, "a local-looking path cannot bypass the feature-push review gate through insteadOf");
+    assert.match(rewrittenLocalPush.reason, /local-looking paths/i, "local-path denial explains the rewrite risk");
+  } finally {
+    git(risky.repo, ["config", "--unset-all", "url.https://github.com/masonwells1/CRX_Manager_V1.0.git.insteadOf"]);
+  }
   const shadowBin = mkdtempSync(path.join(tmpdir(), "crx-delivery-shadow-"));
   tempRoots.push(shadowBin);
   writeFileSync(path.join(shadowBin, "git.exe"), "shadow", "utf8");

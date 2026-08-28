@@ -782,6 +782,20 @@ for (const pushCmd of pushCommands) {
             .split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
       pushRepository = pushGitHubRepository(destinationUrls);
       destinationIsLocal = pushUrlsAreLocalPaths(destinationUrls);
+      if (destinationIsLocal) {
+        const readRewrites = (keepConfigOverrides) => {
+          try {
+            return gitIn(["config", "--get-regexp", "^url\\..*insteadof$"], pushRepoDir, { keepConfigOverrides });
+          } catch {
+            return ""; // exit 1 means no matching rewrite, the ordinary case
+          }
+        };
+        const rewriteConfig = [readRewrites(false), readRewrites(true)].filter(Boolean).join("\n");
+        if (rewritesReachGuardedApp(rewriteConfig)) {
+          pushRepository = GUARDED_REPO_PATH;
+          destinationIsLocal = false;
+        }
+      }
       if (!pushRepository && !destinationIsLocal) {
         throw new Error("destination is not one exact GitHub repository or local repository path");
       }
