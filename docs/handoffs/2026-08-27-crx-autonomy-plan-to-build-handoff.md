@@ -55,6 +55,7 @@ Mason explicitly requested more Codex working room and authorized addressing unn
 - Exact-head review of `01147bea` found that a GitHub REST merge could combine a visible SHA with an uninspected file-backed body that overrides it. REST merges now deny unconditionally; autonomous delivery retains only the standalone, explicit `gh pr merge ... --match-head-commit ...` path.
 - Exact-head review of `6836076d` found PowerShell `&gh` could evade the merge parser and unattended pushes still admitted remote branch deletion. The parser now recognizes shell separators/call operators, while `--delete`, `-d`, and empty-source deletion refspecs deny before any push.
 - Exact-head review of `86155cb4` found `--disable-auto` could be consumed as body text while hiding a real `--auto`, and empty quote pairs could compose executable/subcommand tokens after inspection. Auto flags are now parsed positionally, mixed intent denies, and quote-composed GitHub words fail closed.
+- Exact-head review of `f69ae3a5` found feature pushes queried CRX even when another remote was targeted, and non-branch refs could pass outside the intended lane. Push URLs now resolve to the exact GitHub repository used in the lookup, and unattended pushes require one explicit `refs/heads` destination; tags, notes, follow-tags, ambiguity, and multi-repository destinations deny.
 
 - Do not edit product-data-model plans, migrations/RPCs, or product-model tests.
 - Do not absorb the separate `codex/migration-approval-gate` worktree; live migration approval behavior is outside this tranche.

@@ -119,12 +119,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after positional auto-flag parsing and empty-quote composition
   // detection closed the last reviewed CLI evasions. The maintenance anchors
   // are still unchanged.
-  codexGuard: "a5ac7494ff28c781021bba87734ad24389402a4f",
-  pushLib: "02b181cd0a0a76c77fba12e24ac2e4d05db924af",
+  // Re-pinned after feature pushes were bound to their actual GitHub repository
+  // and restricted to one explicit refs/heads destination. The maintenance
+  // anchors are still unchanged.
+  codexGuard: "d022e6980f23883f58dbfeaf9292f2f0ec784a79",
+  pushLib: "88a819ac6d57b675ebd503e8aa1fbfd9b76ff413",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "a0066c86be40b5b475b6302d7f801740ea6bc025",
-  pushLib: "02b181cd0a0a76c77fba12e24ac2e4d05db924af",
+  codexGuard: "72999f1bdcd25c0638fc325ed59917eca38b1834",
+  pushLib: "88a819ac6d57b675ebd503e8aa1fbfd9b76ff413",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

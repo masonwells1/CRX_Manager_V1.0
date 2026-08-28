@@ -305,7 +305,7 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   const unrelated = runHook("codex-push-guard.mjs", {
     cwd: mirrorRepo,
     tool_name: "Bash",
-    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} origin HEAD:feature` },
+    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} origin HEAD:refs/heads/feature` },
   });
   eq(unrelated.stdout.trim(), "", "a mirror on an untargeted remote does not deny");
 
@@ -353,7 +353,7 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   const clean = runHook("codex-push-guard.mjs", {
     cwd: mirrorRepo,
     tool_name: "Bash",
-    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} origin feature` },
+    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} origin HEAD:refs/heads/feature` },
   });
   eq(clean.stdout.trim(), "", "no mirror flag → ordinary feature push still passes through");
 
@@ -394,8 +394,8 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
     GIT_CONFIG_KEY_0: "url.https://evil.example.com/.insteadOf",
     GIT_CONFIG_VALUE_0: "https://github.com/",
   };
-  const withC = `git -C ${repo} ${pushVerb} origin HEAD:feature`;
-  const bare = `git ${pushVerb} origin HEAD:feature`;
+  const withC = `git -C ${repo} ${pushVerb} origin HEAD:refs/heads/feature`;
+  const bare = `git ${pushVerb} origin HEAD:refs/heads/feature`;
 
   eq(runWithEnv({ cwd: outer, tool_name: "Bash", tool_input: { command: withC } }, benign).stdout.trim(), "",
     "benign inherited override: `-C <repo>` from a non-repo cwd is not denied");

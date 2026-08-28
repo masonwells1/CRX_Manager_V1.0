@@ -43,6 +43,8 @@ import {
   pushUsesTransportEnv,
   environmentCarriesTransportOverride,
   pushDestinationToken,
+  pushGitHubRepository,
+  pushUrlsAreLocalPaths,
   pushNamesRefspec,
   pushDefaultConsultsBranchMerge,
   destinationLooksLikeUrl,
@@ -79,9 +81,11 @@ assert.throws(
   /omitted number or autoMergeRequest/,
   "an incomplete GitHub response fails closed",
 );
-assert.deepEqual(featurePushDestinations("git push origin feature/test"), ["feature/test"]);
-assert.deepEqual(featurePushDestinations("git push origin local:review/next"), ["review/next"]);
-assert.deepEqual(featurePushDestinations("git push origin refs/tags/v1"), [], "tag-only pushes do not map to a PR head branch");
+assert.deepEqual(featurePushDestinations("git push origin HEAD:refs/heads/feature/test"), ["feature/test"]);
+assert.deepEqual(featurePushDestinations("git push origin refs/heads/local:refs/heads/review/next"), ["review/next"]);
+assert.throws(() => featurePushDestinations("git push origin refs/tags/v1"), /explicit source:refs\/heads|refs\/heads/, "tag-only pushes are denied");
+assert.throws(() => featurePushDestinations("git push origin HEAD:refs/notes/review"), /refs\/heads/, "notes refs are denied");
+assert.throws(() => featurePushDestinations("git push origin --follow-tags HEAD:refs/heads/feature/test"), /tag propagation/, "implicit tag propagation is denied");
 assert.throws(
   () => featurePushDestinations("git push origin"),
   /explicit destination refspec/,
@@ -93,10 +97,17 @@ assert.throws(
   "wildcard refspecs cannot collapse to a fake single PR branch selector",
 );
 assert.throws(
-  () => featurePushDestinations("git push origin HEAD:feature/one HEAD:feature/two"),
+  () => featurePushDestinations("git push origin HEAD:refs/heads/feature/one HEAD:refs/heads/feature/two"),
   /exactly one literal branch/,
   "one push cannot race multiple PR destinations past the pre-push lookup",
 );
+assert.equal(pushGitHubRepository(["https://github.com/masonwells1/CRX_Manager_V1.0.git"]), "masonwells1/crx_manager_v1.0");
+assert.equal(pushGitHubRepository(["git@github.com:masonwells1/CRX_Manager_V1.0.git", "ssh://git@ssh.github.com:443/masonwells1/CRX_Manager_V1.0.git"]), "masonwells1/crx_manager_v1.0");
+assert.equal(pushGitHubRepository(["https://github.com/other/repo.git"]), "other/repo");
+assert.equal(pushGitHubRepository(["https://github.com/masonwells1/CRX_Manager_V1.0.git", "https://github.com/other/repo.git"]), null, "multiple repository destinations are ambiguous");
+assert.equal(pushGitHubRepository(["../local.git"]), null, "non-GitHub destination is unresolved");
+assert.equal(pushUrlsAreLocalPaths(["../local.git", "C:/repos/local.git"]), true, "local repository paths are recognized");
+assert.equal(pushUrlsAreLocalPaths(["https://gitlab.example/repo.git"]), false, "network repository is not a local path");
 assert.equal(githubCliCommandIsDynamic("gh pr merge 513 --squash --match-head-commit abc"), false);
 assert.equal(githubCliCommandIsDynamic("gh pr view 513 --jq '$.headRefOid'"), false, "single-quoted jq data stays literal");
 assert.equal(githubCliCommandIsDynamic("$verb='merge'; gh pr $verb 513 --auto"), true, "dynamic merge verb is denied");
@@ -1767,7 +1778,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     // An ordinary non-production push. The main-bound checks exit before the
     // app-repo gate for this one, which is what makes it the right shape for
     // asking "does an inherited GIT_CONFIG* variable block a normal push?".
-    const featurePush = `git -C ${work} push origin main:refs/heads/feature`;
+    const featurePush = `git -C ${work} push origin refs/heads/main:refs/heads/feature`;
     // A push that names NO refspec, so git falls back to the default-refspec
     // configuration (`push.default`, `remote.<n>.push`, `branch.<b>.merge`). The
     // two forms are not interchangeable for those keys: git reads them for this

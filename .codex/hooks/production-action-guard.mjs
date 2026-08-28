@@ -7,6 +7,7 @@ import path from "node:path";
 
 import {
   activeAutoMergePrNumbers,
+  destinationLooksLikeUrl,
   contentIsRisky,
   extractPatchDestinations,
   featurePushDestinations,
@@ -18,6 +19,9 @@ import {
   mergeRequestHasExplicitContext,
   proofSearchDirs,
   proofValid,
+  pushDestinationToken,
+  pushGitHubRepository,
+  pushUrlsAreLocalPaths,
   pushContextIsAmbiguous,
   pushIsForced,
   pushUsesBulkMode,
@@ -897,11 +901,30 @@ export function evaluateProductionAction({
         );
       }
       for (const featureBranch of featureBranches) {
+        let pushRepository;
+        let destinationIsLocal = false;
+        try {
+          const destinationToken = pushDestinationToken(segment);
+          const destinationUrls = destinationLooksLikeUrl(destinationToken)
+            ? [destinationToken]
+            : String(runGit(["remote", "get-url", "--push", "--all", destinationToken], pushRepoDir) || "")
+                .split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
+          pushRepository = pushGitHubRepository(destinationUrls);
+          destinationIsLocal = pushUrlsAreLocalPaths(destinationUrls);
+          if (!pushRepository && !destinationIsLocal) {
+            throw new Error("destination is not one exact GitHub repository or local repository path");
+          }
+        } catch (error) {
+          return denied(
+            `CODEX PRODUCTION GATE: unattended feature pushes must resolve to the exact CRX GitHub repository before auto-merge state is checked. ${error?.message || error}`,
+          );
+        }
+        if (destinationIsLocal) continue;
         let activeAutoMergePrs;
         try {
           activeAutoMergePrs = activeAutoMergePrNumbers(runGh([
             "pr", "list",
-            "--repo", "masonwells1/CRX_Manager_V1.0",
+            "--repo", pushRepository,
             "--state", "open",
             "--base", "main",
             "--head", featureBranch,

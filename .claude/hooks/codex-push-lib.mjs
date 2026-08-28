@@ -306,8 +306,8 @@ export function pushTargetsCurrentHead(cmd, currentBranch) {
 // Return every explicitly named feature-branch destination in a push. A bare
 // push is intentionally refused: push.default / remote.<name>.push can redirect
 // it to a branch other than the checkout branch, so there is no trustworthy PR
-// selector for the pre-push auto-merge check. Tags are excluded because they
-// cannot be the head of a pull request. Main is handled by mainPushSource.
+// selector for the pre-push auto-merge check. Non-branch refs are denied because
+// they sit outside protected PR delivery. Main is handled by mainPushSource.
 export function featurePushDestinations(cmd) {
   const argsText = String(cmd || "").match(GIT_PUSH_RE)?.[1];
   if (argsText == null) return [];
@@ -317,8 +317,9 @@ export function featurePushDestinations(cmd) {
   const tokens = splitShellArgs(argsText);
   if (tokens.some((token) => token === "--delete"
       || /^--de\S*$/.test(token)
-      || /^-[A-Za-z]*d[A-Za-z]*$/.test(token))) {
-    throw new Error("remote ref deletion is not an unattended feature push");
+      || /^-[A-Za-z]*d[A-Za-z]*$/.test(token)
+      || ["--tags", "--follow-tags"].includes(token))) {
+    throw new Error("remote deletion or tag propagation is not an unattended feature push");
   }
   const positionals = [];
   for (let i = 0; i < tokens.length; i += 1) {
@@ -348,11 +349,20 @@ export function featurePushDestinations(cmd) {
   if (refspecs.some((refspec) => /[*?\[\\~^]/.test(String(refspec)))) {
     throw new Error("wildcard or non-literal feature destinations are not allowed");
   }
+  if (refspecs.length !== 1) {
+    throw new Error("feature pushes must update exactly one literal branch destination");
+  }
   const destinations = [];
   for (const refspec of refspecs) {
     const clean = String(refspec).replace(/^\+/, "");
-    const rawDestination = clean.includes(":") ? clean.split(":").at(-1) : clean;
-    if (!rawDestination || /^refs\/tags\//i.test(rawDestination)) continue;
+    if (!clean.includes(":")) {
+      throw new Error("feature push must use an explicit source:refs/heads/destination refspec");
+    }
+    const [rawSource, rawDestination] = [clean.split(":")[0], clean.split(":").at(-1)];
+    if (!/^(?:HEAD|refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]*)$/.test(rawSource)
+        || !/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(rawDestination)) {
+      throw new Error("unattended pushes must move one explicit branch ref into refs/heads");
+    }
     const destination = rawDestination.replace(/^refs\/heads\//i, "");
     if (["main", "master", "production"].includes(destination.toLowerCase())) continue;
     if (destination.toUpperCase() === "HEAD") {
@@ -368,9 +378,6 @@ export function featurePushDestinations(cmd) {
       throw new Error("feature push destination is not one literal valid branch name");
     }
     if (!destinations.includes(destination)) destinations.push(destination);
-  }
-  if (destinations.length > 0 && refspecs.length !== 1) {
-    throw new Error("feature pushes must update exactly one literal branch destination");
   }
   return destinations;
 }
@@ -598,6 +605,28 @@ export function canonicalRepoId(url) {
   segments[segments.length - 1] = segments[segments.length - 1].replace(/\.git$/i, "");
   if (!segments[segments.length - 1]) return null;
   return `${canonicalHost(host)}/${segments.join("/")}`.toLowerCase();
+}
+
+// Resolve a set of effective push URLs to one exact GitHub owner/repository.
+// Multiple push URLs are accepted only when they all identify the same repo;
+// aliases, helpers, filesystem paths, non-GitHub hosts, and ambiguity fail closed.
+export function pushGitHubRepository(urls) {
+  const values = Array.isArray(urls) ? urls : [];
+  if (values.length === 0) return null;
+  const repos = values.map((url) => {
+    const id = canonicalRepoId(url);
+    const match = /^github\.com\/([^/]+)\/([^/]+)$/i.exec(String(id || ""));
+    return match ? `${match[1]}/${match[2]}`.toLowerCase() : null;
+  });
+  if (repos.some((repo) => !repo)) return null;
+  return new Set(repos).size === 1 ? repos[0] : null;
+}
+
+export function pushUrlsAreLocalPaths(urls) {
+  const values = Array.isArray(urls) ? urls.map((url) => String(url || "").trim()).filter(Boolean) : [];
+  return values.length > 0 && values.every((url) =>
+    /^[A-Za-z]:[\\/]/.test(url)
+    || /^(?:\.\.?[\\/]|[\\/])/.test(url));
 }
 // One repository, several hostnames. `ssh://git@ssh.github.com:443/owner/repo.git`
 // is GitHub's documented endpoint for networks that block port 22 — it reaches the

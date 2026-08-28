@@ -32,6 +32,7 @@ function makeRepo(changePath, changeContent) {
   git(repo, ["init", "-b", "main"]);
   git(repo, ["config", "user.email", "guard-test@example.com"]);
   git(repo, ["config", "user.name", "Guard Test"]);
+  git(repo, ["remote", "add", "origin", "https://github.com/masonwells1/CRX_Manager_V1.0.git"]);
   writeFileSync(path.join(repo, "README.md"), "base\n", "utf8");
   git(repo, ["add", "README.md"]);
   git(repo, ["commit", "-m", "base"]);
@@ -343,14 +344,41 @@ try {
 
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "git push origin feature/test" },
+    toolInput: { command: "git push origin HEAD:refs/heads/feature/test" },
     repoDir: risky.repo,
     runGh: () => JSON.stringify([{ number: 513, autoMergeRequest: null }]),
   }).blocked, false, "branch pushes stay allowed");
+  git(risky.repo, ["remote", "add", "other", "https://github.com/other/repository.git"]);
+  let alternateLookupArgs = [];
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push other HEAD:refs/heads/feature/test" },
+    repoDir: risky.repo,
+    runGh: (args) => { alternateLookupArgs = args; return "[]"; },
+  }).blocked, false, "alternate GitHub remote uses its own auto-merge lookup");
+  assert.equal(alternateLookupArgs[3], "other/repository", "alternate remote lookup is bound to the pushed repository");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push https://github.com/other/repository.git HEAD:refs/heads/feature/test" },
+    repoDir: risky.repo,
+    runGh: () => "[]",
+  }).blocked, false, "raw alternate repository URL uses its own auto-merge lookup");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push other HEAD:refs/heads/feature/test" },
+    repoDir: risky.repo,
+    runGh: () => JSON.stringify([{ number: 999, autoMergeRequest: { mergeMethod: "SQUASH" } }]),
+  }).blocked, true, "pre-armed auto-merge on the actual alternate repository blocks its push");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "git push https://github.com/masonwells1/CRX_Manager_V1.0.git HEAD:refs/heads/feature/test" },
+    repoDir: risky.repo,
+    runGh: () => "[]",
+  }).blocked, false, "raw CRX repository URL remains unattended");
   let featurePushLookupArgs = [];
   const preArmedAutoMergePush = evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "git push origin HEAD:feature/test" },
+    toolInput: { command: "git push origin HEAD:refs/heads/feature/test" },
     repoDir: risky.repo,
     runGh: (args) => {
       featurePushLookupArgs = args;
@@ -361,12 +389,12 @@ try {
   assert.match(preArmedAutoMergePush.reason, /gh pr merge 513 --disable-auto/, "denial gives an agent-runnable recovery command");
   assert.deepEqual(
     featurePushLookupArgs,
-    ["pr", "list", "--repo", "masonwells1/CRX_Manager_V1.0", "--state", "open", "--base", "main", "--head", "feature/test", "--json", "number,autoMergeRequest"],
+    ["pr", "list", "--repo", "masonwells1/crx_manager_v1.0", "--state", "open", "--base", "main", "--head", "feature/test", "--json", "number,autoMergeRequest"],
     "feature push lookup binds the open PR query to main and the exact destination branch",
   );
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "git push origin feature/test" },
+    toolInput: { command: "git push origin HEAD:refs/heads/feature/test" },
     repoDir: risky.repo,
     runGh: () => { throw new Error("GitHub unavailable"); },
   }).blocked, true, "feature pushes fail closed when auto-merge state cannot be proven");
@@ -378,7 +406,7 @@ try {
   }).blocked, true, "wildcard branch pushes cannot query GitHub with a fake literal wildcard branch");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "git push origin HEAD:feature/test; $verb='merge'; gh pr $verb 513 --auto" },
+    toolInput: { command: "git push origin HEAD:refs/heads/feature/test; $verb='merge'; gh pr $verb 513 --auto" },
     repoDir: risky.repo,
     runGh: () => "[]",
   }).blocked, true, "a push chained with an indirect auto-merge action is denied before execution");
@@ -470,11 +498,11 @@ try {
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard denies implicit bulk pushes");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin feature/test && git -C "${risky.repo}" push origin HEAD:main`, projectRoot);
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects every push in a command chain");
-  claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin feature/test`, projectRoot);
+  claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin HEAD:refs/heads/feature/test`, projectRoot);
   assert.equal(claudeGuard.stdout, "", "Claude guard still allows an ordinary feature-branch push");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin refs/heads/*:refs/heads/*`, projectRoot);
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard denies wildcard feature destinations");
-  claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin HEAD:feature/test; $verb='merge'; gh pr $verb 513 --auto`, projectRoot);
+  claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin HEAD:refs/heads/feature/test; $verb='merge'; gh pr $verb 513 --auto`, projectRoot);
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard requires a feature push to be a standalone command");
   claudeGuard = runClaudePushGuard(`git.exe -C "${risky.repo}" push origin HEAD:main`, projectRoot);
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard gates git.exe pushes");

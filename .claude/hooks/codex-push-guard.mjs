@@ -53,6 +53,8 @@ import {
   environmentSelectsDifferentRepo,
   destinationLooksLikeUrl,
   pushDestinationToken,
+  pushGitHubRepository,
+  pushUrlsAreLocalPaths,
   repoIsGuardedApp,
   rewritesReachGuardedApp,
   executableTransportSettings,
@@ -762,12 +764,29 @@ for (const pushCmd of pushCommands) {
     } catch (error) {
       deny(`CODEX GATE: could not determine the exact remote feature branch for the auto-merge check, so the push is denied (fail closed). ${error?.message || error}`);
     }
+    let pushRepository;
+    let destinationIsLocal = false;
+    try {
+      const destinationToken = pushDestinationToken(pushCmd);
+      const destinationUrls = targetIsRawUrl
+        ? [destinationToken]
+        : git(["remote", "get-url", "--push", "--all", targetRemote], pushRepoDir)
+            .split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
+      pushRepository = pushGitHubRepository(destinationUrls);
+      destinationIsLocal = pushUrlsAreLocalPaths(destinationUrls);
+      if (!pushRepository && !destinationIsLocal) {
+        throw new Error("destination is not one exact GitHub repository or local repository path");
+      }
+    } catch (error) {
+      deny(`CODEX GATE: unattended feature pushes must resolve to the exact CRX GitHub repository before auto-merge state is checked. ${error?.message || error}`);
+    }
     for (const featureBranch of featureBranches) {
+      if (destinationIsLocal) continue;
       let activeAutoMergePrs;
       try {
         const response = execFileSync("gh", [
           "pr", "list",
-          "--repo", "masonwells1/CRX_Manager_V1.0",
+          "--repo", pushRepository,
           "--state", "open",
           "--base", "main",
           "--head", featureBranch,

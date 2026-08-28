@@ -76,6 +76,11 @@ Merge flags are now parsed positionally: cancellation-only `--disable-auto` rema
 mixed auto intent and `--disable-auto` consumed as body text cannot hide a real `--auto` action.
 Empty-quote-composed GitHub executable or subcommand words also deny before unattended execution.
 
+Feature pushes now resolve their effective push URL and query auto-merge state in that exact
+GitHub repository; an alternate remote cannot borrow CRX's result. The unattended form updates
+one explicit branch only (`HEAD:refs/heads/<branch>`). Tags, notes, implicit tag propagation,
+ambiguous network destinations, and multiple repositories deny, while local test repositories remain available.
+
 Proof run: focused autopilot, prompt, hold, Claude/Codex merge-guard, and global risky-phrase
 tests; full correction-guard and agent-workflow suites; lint, typecheck, build, docs check, sync,
 and mutation tests. No business safety rule, branch protection, product model, migration, RPC,
