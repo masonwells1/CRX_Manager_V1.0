@@ -17,6 +17,8 @@ Official references:
 - <https://docs.github.com/en/rest/actions/workflow-runs#review-pending-deployments-for-a-workflow-run>
 - <https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event>
 - <https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments>
+- <https://docs.github.com/en/rest/repos/rules#create-a-repository-ruleset>
+- <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets#restrict-updates>
 
 ## Required GitHub environment
 
@@ -28,7 +30,8 @@ Create `production-database` with all of these settings:
    Deployments write. Mason must be able to approve the workflow he manually dispatched.
 3. Allow administrators to bypass configured protection rules: off.
 4. Deployment branches: protected branches only.
-5. Environment secrets: `SUPABASE_ACCESS_TOKEN` and `PRODUCTION_DB_PASSWORD`.
+5. Environment secrets: `SUPABASE_ACCESS_TOKEN`, `PRODUCTION_DB_PASSWORD`, and
+   `PRODUCTION_BRANCH_FREEZE_TOKEN`.
 
 The workflow verifies settings 1-4 before it can reach its approval job. Secrets are referenced
 only by the approved job and are never stored in the repository.
@@ -53,6 +56,23 @@ Create a fine-grained personal access token owned by `masonwells1`, limited to o
 Do not grant Actions write, Deployments write, Administration write, Environments write, or Secrets access. Never
 paste the token into chat, a tracked file, or a command argument. Enter it only through the GitHub
 CLI's hidden token prompt, then remove the old broad OAuth login.
+
+## Protected branch-freeze credential
+
+Create a second fine-grained token under Mason's same GitHub account, limited to
+`CRX_Manager_V1.0`, with **Administration: read and write** and **Contents: read only**. Grant no
+Actions, Deployments, Pull requests, Issues, Workflows, or Contents write permission. Store it only as the
+`PRODUCTION_BRANCH_FREEZE_TOKEN` secret in `production-database`; do not install it in Codex or the
+local GitHub CLI.
+
+After Mason approves the protected environment, the workflow uses this narrow credential to create
+an active, no-bypass ruleset that temporarily forbids every update to `main`. It verifies the exact
+ruleset and unchanged `main`, runs the database transaction, and then deletes only the ruleset named
+for that exact workflow run. A failed or cancelled cleanup deliberately leaves `main` frozen. Inspect
+and remove that exact stale freeze through GitHub's Rulesets page only after confirming no migration
+run remains active. This administrative token cannot push code because it has no Contents write
+permission, and Codex cannot retrieve it because protected environment secrets remain sealed until
+Mason's website approval.
 
 ## Boundary proof before first use
 
@@ -128,10 +148,12 @@ refusals park unusual migrations for a separately reviewed manual path.
 Admission is otherwise default-deny: only a narrow set of definition-only DDL statements is allowed.
 Top-level DML, `VALUES`, `COPY`, query-executing `CREATE TABLE AS`, materialized views, CTEs, index
 builds, trigger DDL, `ALTER TABLE`, extensions, direct migration-ledger references, and unknown
-statement forms are parked. `CREATE SCHEMA` is also parked because PostgreSQL permits embedded grants
-and trigger declarations inside that single statement. `CREATE VIEW` is parked because owner-run
-views can bypass underlying RLS and inherit permissive default relation grants. `GRANT` is limited to function/procedure execution for `authenticated`
-and `service_role`; `REVOKE` is limited to those executable objects and known CRX roles. Quoted or
+statement forms are parked. New or changed tables, functions, procedures, policies, grants, and
+revokes are also parked because they require semantic proof of RLS, actor binding, fixed search
+paths, deliberate access, and mutating-RPC idempotency. `CREATE SCHEMA` is parked because PostgreSQL
+permits embedded grants and trigger declarations inside that single statement. `CREATE VIEW` is
+parked because owner-run views can bypass underlying RLS and inherit permissive default relation
+grants. Quoted or
 unquoted references to the migration schema are denied before tokenization. PostgreSQL Unicode-escape
 syntax is denied anywhere in an automated migration, including inside stored-function bodies, so an
 escaped identifier cannot disguise a protected schema reference.
@@ -154,6 +176,11 @@ carry the authored 14-digit timestamp, recomputes the live row-by-row effective 
 rejects an authored timestamp at or below that value. This closes stale workstation-snapshot races
 without trusting one client to invalidate another client's local files.
 
+While the transaction runs, the protected no-bypass ruleset holds `main` at the exact verified
+commit. This closes the cross-system race in which a newly merged older-timestamp migration could
+otherwise appear between the last Git check and the database transaction and become permanently
+stranded by the global ordering trigger.
+
 That transaction locks the migration ledger, refuses duplicate versions, names, or exact SQL
 content and refuses out-of-order versions, runs the migration SQL, writes the content-bound ledger
 row, verifies it, and commits. A second 14-digit timestamp anywhere in the filename suffix is also
@@ -162,6 +189,6 @@ transaction remains parked for a separately reviewed manual path.
 
 ## Emergency stop
 
-Removing either environment secret or disabling `Approved production migration` makes the gate
+Removing any environment secret or disabling `Approved production migration` makes the gate
 inert. Do not bypass a waiting approval, add Actions or Deployments write to the Codex token, or move production
 credentials back into the local shell.

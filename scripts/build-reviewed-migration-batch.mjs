@@ -88,20 +88,9 @@ function auditedDdlAdmission(skeleton) {
   for (const statement of statements) {
     const normalized = statement.replace(/\s+/g, " ");
     if (/^set\s+local\s+(?:statement_timeout|lock_timeout|search_path|check_function_bodies)\b/i.test(normalized)) continue;
-    if (/^create\s+(?:or\s+replace\s+)?(?:function|procedure)\b/i.test(normalized)) continue;
-    if (/^(?:alter|drop)\s+(?:function|procedure)\b/i.test(normalized)) continue;
-    if (/^create\s+(?:temporary\s+|temp\s+|unlogged\s+)?table\b/i.test(normalized)) {
-      if (/\bpartition\s+of\b/i.test(normalized) || /\bas\s*\(*\s*(?:select|table|values|with|execute)\b/i.test(normalized)) {
-        return { ok: false, reason: "query-executing CREATE TABLE is outside the audited DDL allowlist" };
-      }
-      continue;
-    }
-    if (/^(?:create|alter|drop)\s+policy\b/i.test(normalized)) continue;
     if (/^create\s+(?:type|domain|sequence)\b/i.test(normalized)) continue;
     if (/^alter\s+(?:type|sequence)\b/i.test(normalized)) continue;
     if (/^drop\s+(?:view|index)\b/i.test(normalized)) continue;
-    if (/^grant\s+execute\s+on\s+(?:function|procedure)\b.+\s+to\s+(?:authenticated|service_role)(?:\s*,\s*(?:authenticated|service_role))*$/i.test(normalized)) continue;
-    if (/^revoke\s+(?:all(?:\s+privileges)?|execute)\s+on\s+(?:function|procedure)\b.+\s+from\s+(?:public|anon|authenticated|service_role)(?:\s*,\s*(?:public|anon|authenticated|service_role))*(?:\s+(?:cascade|restrict))?$/i.test(normalized)) continue;
     if (/^comment\s+on\b/i.test(normalized)) continue;
     return { ok: false, reason: "top-level statement is outside the audited DDL allowlist" };
   }

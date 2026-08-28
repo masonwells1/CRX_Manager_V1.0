@@ -179,6 +179,19 @@ jobs:
             --query-sha256 "$QUERY_SHA256" \
             --output "$BATCH_FILE"
 
+      - name: Freeze main against concurrent migration merges
+        env:
+          PRODUCTION_BRANCH_FREEZE_TOKEN: ${{ secrets.PRODUCTION_BRANCH_FREEZE_TOKEN }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          FREEZE_STATE_FILE: ${{ runner.temp }}/production-main-freeze.json
+        run: node scripts/production-main-freeze.mjs acquire
+
+      - name: Verify the exact main freeze before database access
+        env:
+          PRODUCTION_BRANCH_FREEZE_TOKEN: ${{ secrets.PRODUCTION_BRANCH_FREEZE_TOKEN }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: node scripts/production-main-freeze.mjs verify
+
       - name: Apply one locked migration and ledger row
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -197,3 +210,10 @@ jobs:
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
           test "$(git cat-file blob "$EXPECTED_COMMIT:supabase/migrations/$MIGRATION_NAME.sql" | sha256sum | cut -d' ' -f1)" = "$QUERY_SHA256"
           supabase db query --linked --agent yes --file "$BATCH_FILE"
+
+      - name: Release this run's exact main freeze
+        if: always()
+        env:
+          PRODUCTION_BRANCH_FREEZE_TOKEN: ${{ secrets.PRODUCTION_BRANCH_FREEZE_TOKEN }}
+          FREEZE_STATE_FILE: ${{ runner.temp }}/production-main-freeze.json
+        run: node scripts/production-main-freeze.mjs release

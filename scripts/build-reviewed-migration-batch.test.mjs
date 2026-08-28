@@ -23,18 +23,22 @@ import {
   validateReviewInputs,
   validateTrustedDispatch,
 } from "./production-migration-review-lib.mjs";
+import {
+  acquireMainFreeze,
+  assertExactFreezeRuleset,
+  buildFreezeRuleset,
+  freezeName,
+  releaseMainFreeze,
+  verifyMainFreeze,
+} from "./production-main-freeze.mjs";
 
 const MIGRATION = "20990101010101_test_safe_batch";
 const PRIOR = "20980101010101_prior_safe_batch";
 const REQUIRED_EARLIER = [{ version: "20980101010101", name: "prior_safe_batch", fullStem: PRIOR }];
 const SQL = [
   "-- transaction words in comments are data: COMMIT",
-  "CREATE TABLE public.safe_batch_probe (note text DEFAULT 'END');",
-  "CREATE FUNCTION public.safe_batch_probe_fn() RETURNS void LANGUAGE plpgsql AS $body$",
-  "BEGIN",
-  "  RAISE NOTICE 'ROLLBACK';",
-  "END",
-  "$body$;",
+  "CREATE TYPE public.safe_batch_probe_status AS ENUM ('ready', 'END');",
+  "COMMENT ON TYPE public.safe_batch_probe_status IS 'ROLLBACK is text';",
   "",
 ].join("\n");
 const HASH = createHash("sha256").update(SQL).digest("hex");
@@ -74,6 +78,12 @@ assert.doesNotMatch(workflow, /uses:\s+[^\s]+@v\d+/,
   "production workflows must never trust mutable major-version action tags");
 assert.match(workflow, /supabase link[\s\S]*git ls-remote origin refs\/heads\/main[\s\S]*git cat-file blob[\s\S]*supabase db query/,
   "current main and the exact migration blob must be rechecked immediately before SQL execution");
+assert.match(workflow, /production-main-freeze\.mjs acquire[\s\S]*production-main-freeze\.mjs verify[\s\S]*supabase db query[\s\S]*if:\s*always\(\)[\s\S]*production-main-freeze\.mjs release/,
+  "the workflow must freeze main before its final verification and release the exact freeze after SQL finishes");
+assert.match(workflow, /PRODUCTION_BRANCH_FREEZE_TOKEN:\s*\$\{\{\s*secrets\.PRODUCTION_BRANCH_FREEZE_TOKEN\s*\}\}/,
+  "the branch-freeze credential must come from the protected environment");
+assert.equal((workflow.match(/PRODUCTION_BRANCH_FREEZE_TOKEN:\s*\$\{\{\s*secrets\.PRODUCTION_BRANCH_FREEZE_TOKEN\s*\}\}/g) || []).length, 3,
+  "only the acquire, verify, and cleanup helper steps may receive the branch-freeze credential");
 assert.match(workflow, /supabase\/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520/,
   "the credential-bearing job must pin the audited Supabase setup action release");
 assert.match(workflow, /INSTALLED_VERSION[\s\S]*2\.109\.1/,
@@ -143,6 +153,74 @@ assert.equal(selectTrustedCodeRabbitApproval([codeRabbitApproval], reviewInput),
 assert.throws(() => selectTrustedCodeRabbitApproval([{ ...codeRabbitApproval, user: { login: "masonwells1", type: "User" } }], reviewInput), /authenticated CodeRabbit approval/);
 assert.throws(() => selectTrustedCodeRabbitApproval([{ ...codeRabbitApproval, commit_id: "3".repeat(40) }], reviewInput), /authenticated CodeRabbit approval/);
 assert.throws(() => selectTrustedCodeRabbitApproval([{ ...codeRabbitApproval, state: "CHANGES_REQUESTED" }], reviewInput), /authenticated CodeRabbit approval/);
+
+const expectedMain = "9".repeat(40);
+const exactFreezeName = freezeName("12345", "2");
+const exactFreeze = { id: 77, ...buildFreezeRuleset(exactFreezeName) };
+assert.equal(assertExactFreezeRuleset(exactFreeze, exactFreezeName), 77);
+assert.throws(() => assertExactFreezeRuleset({ ...exactFreeze, bypass_actors: [{ actor_id: 5 }] }, exactFreezeName), /fail-closed ruleset/);
+let liveMain = expectedMain;
+let rulesets = [];
+const freezeCalls = [];
+const freezeRequest = async (apiPath, options = {}) => {
+  freezeCalls.push([apiPath, options.method || "GET"]);
+  if (apiPath.endsWith("/git/ref/heads/main")) return { body: { object: { sha: liveMain } }, link: "" };
+  if (apiPath.includes("/rulesets?") && (options.method || "GET") === "GET") return { body: rulesets, link: "" };
+  if (apiPath.endsWith("/rulesets") && options.method === "POST") {
+    rulesets = [{ id: 77, ...options.body }];
+    return { body: rulesets[0], link: "" };
+  }
+  if (apiPath.endsWith("/rulesets/77") && (options.method || "GET") === "GET" && !options.allow404) {
+    return { body: rulesets[0], link: "" };
+  }
+  if (apiPath.endsWith("/rulesets/77") && options.method === "DELETE") {
+    rulesets = [];
+    return { status: 204, body: null, link: "" };
+  }
+  if (apiPath.endsWith("/rulesets/77") && options.allow404) return { status: 404, body: null, link: "" };
+  throw new Error(`unexpected freeze request ${apiPath}`);
+};
+const createdState = [];
+assert.deepEqual(await acquireMainFreeze({
+  repository: "masonwells1/CRX_Manager_V1.0",
+  expectedCommit: expectedMain,
+  name: exactFreezeName,
+  request: freezeRequest,
+  onCreated: (state) => createdState.push(state),
+}), { id: 77, name: exactFreezeName });
+assert.deepEqual(createdState, [{ id: 77, name: exactFreezeName }], "freeze state must be durable immediately after creation");
+await verifyMainFreeze({ repository: "masonwells1/CRX_Manager_V1.0", expectedCommit: expectedMain, name: exactFreezeName, request: freezeRequest });
+assert.deepEqual(await releaseMainFreeze({ repository: "masonwells1/CRX_Manager_V1.0", name: exactFreezeName, request: freezeRequest }), { released: true, id: 77 });
+assert.equal(rulesets.length, 0);
+assert.ok(freezeCalls.some(([apiPath, method]) => apiPath.endsWith("/rulesets") && method === "POST"));
+rulesets = [{ id: 88, ...buildFreezeRuleset(`${exactFreezeName}-stale`) }];
+await assert.rejects(() => acquireMainFreeze({
+  repository: "masonwells1/CRX_Manager_V1.0",
+  expectedCommit: expectedMain,
+  name: exactFreezeName,
+  request: freezeRequest,
+}), /existing production migration freeze/);
+rulesets = [];
+let movingMainChecks = 0;
+const raceState = [];
+const movingMainRequest = async (apiPath, options = {}) => {
+  if (apiPath.endsWith("/git/ref/heads/main")) {
+    movingMainChecks += 1;
+    return { body: { object: { sha: movingMainChecks === 1 ? expectedMain : "8".repeat(40) } }, link: "" };
+  }
+  if (apiPath.includes("/rulesets?")) return { body: [], link: "" };
+  if (apiPath.endsWith("/rulesets") && options.method === "POST") return { body: exactFreeze, link: "" };
+  throw new Error(`unexpected moving-main request ${apiPath}`);
+};
+await assert.rejects(() => acquireMainFreeze({
+  repository: "masonwells1/CRX_Manager_V1.0",
+  expectedCommit: expectedMain,
+  name: exactFreezeName,
+  request: movingMainRequest,
+  onCreated: (state) => raceState.push(state),
+}), /main moved while the production freeze was being acquired/);
+assert.deepEqual(raceState, [{ id: 77, name: exactFreezeName }],
+  "a freeze created during a main race must be recorded for the always-run cleanup step");
 assert.throws(() => selectTrustedCodeRabbitApproval([
   codeRabbitApproval,
   { ...codeRabbitApproval, id: 11, state: "CHANGES_REQUESTED", submitted_at: "2026-08-27T00:01:00Z" },
@@ -160,8 +238,6 @@ await assert.rejects(() => collectAllPages(async () => Array.from({ length: 100 
 
 
 assert.deepEqual(transactionCompatibility(SQL), { ok: true });
-assert.deepEqual(transactionCompatibility("GRANT EXECUTE ON FUNCTION public.safe_batch_probe_fn() TO authenticated, service_role;"), { ok: true });
-assert.deepEqual(transactionCompatibility("REVOKE ALL ON FUNCTION public.safe_batch_probe_fn() FROM PUBLIC, anon;"), { ok: true });
 
 for (const [sql, reasonPattern] of [
   ["BEGIN; SELECT 1; COMMIT;", /top-level (?:BEGIN|COMMIT)/],
@@ -184,12 +260,20 @@ for (const [sql, reasonPattern] of [
   ["SELECT public.close_accounting_period();", /top-level SELECT/],
   ["COMMENT ON TABLE public.safe_batch_probe IS E'escaped\\' quote'; DELETE FROM public.customers;", /destructive migration: top-level DELETE/],
   ["CREATE FUNCTION public.crx_review_bypass() RETURNS integer LANGUAGE plpgsql AS $body$ BEGIN DELETE FROM public.customers; RETURN 1; END $body$; VALUES (public.crx_review_bypass());", /outside the audited DDL allowlist/],
-  ["CREATE TABLE public.crx_review_copy AS SELECT public.close_accounting_period();", /query-executing CREATE TABLE/],
+  ["CREATE TABLE public.crx_review_copy AS SELECT public.close_accounting_period();", /outside the audited DDL allowlist/],
   ["COPY (SELECT public.close_accounting_period()) TO STDOUT;", /outside the audited DDL allowlist/],
   ["CREATE MATERIALIZED VIEW public.crx_review_mv AS SELECT public.close_accounting_period();", /outside the audited DDL allowlist/],
   ["WITH changed AS (UPDATE public.customers SET active = false RETURNING id) SELECT count(*) FROM changed;", /outside the audited DDL allowlist/],
   ["INSERT INTO public.customers (name) VALUES ('unsafe');", /outside the audited DDL allowlist/],
+  ["CREATE TABLE public.unprotected_probe (id bigint);", /outside the audited DDL allowlist/],
+  ["CREATE TABLE public.rls_probe (id bigint); ALTER TABLE public.rls_probe ENABLE ROW LEVEL SECURITY;", /outside the audited DDL allowlist/],
+  ["CREATE FUNCTION public.insecure_mutator() RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $body$ BEGIN UPDATE public.customers SET active = false; END $body$;", /outside the audited DDL allowlist/],
+  ["CREATE FUNCTION public.no_idempotency_key(p_customer_id uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $body$ BEGIN UPDATE public.customers SET active = false WHERE id = p_customer_id; END $body$;", /outside the audited DDL allowlist/],
+  ["CREATE PROCEDURE public.insecure_procedure() LANGUAGE plpgsql AS $body$ BEGIN UPDATE public.customers SET active = false; END $body$;", /outside the audited DDL allowlist/],
+  ["CREATE POLICY permissive_probe ON public.customers FOR ALL TO authenticated USING (true) WITH CHECK (true);", /outside the audited DDL allowlist/],
   ["GRANT SELECT ON TABLE public.customers TO authenticated;", /outside the audited DDL allowlist/],
+  ["GRANT EXECUTE ON FUNCTION public.safe_batch_probe_fn() TO authenticated, service_role;", /outside the audited DDL allowlist/],
+  ["REVOKE ALL ON FUNCTION public.safe_batch_probe_fn() FROM PUBLIC, anon;", /outside the audited DDL allowlist/],
   ["GRANT EXECUTE ON FUNCTION public.safe_batch_probe_fn() TO PUBLIC;", /outside the audited DDL allowlist/],
   ["GRANT USAGE ON SCHEMA \"supabase_migrations\" TO PUBLIC; GRANT INSERT, UPDATE, DELETE ON TABLE \"supabase_migrations\".\"schema_migrations\" TO PUBLIC;", /protected migration ledger reference/],
   ["CREATE FUNCTION public.crx_unicode_ledger_bypass() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $body$ BEGIN DELETE FROM U&\"supabase\\005fmigrations\".schema_migrations; END $body$; GRANT EXECUTE ON FUNCTION public.crx_unicode_ledger_bypass() TO authenticated;", /Unicode-escaped SQL syntax/],
