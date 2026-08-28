@@ -80,6 +80,8 @@ GitHub CLI parsing also rejects quote-spliced executables such as `g'h'`, parent
 
 Server-side branch mutations are checked too: before a stacked PR merge changes its base branch, or `gh pr update-branch` changes a PR head, the guards query whether that destination branch feeds an armed PR to `main`, `master`, or `production`. An armed protected auto-merge or an unreadable lookup denies closed; Codex can disable auto-merge and retry without asking Mason.
 
+Unattended PR merges and branch updates are scoped to the canonical `masonwells1/CRX_Manager_V1.0` repository. Naming any other repository denies regardless of its branch names; other repositories require their own explicit authorization and guard contract.
+
 All GitHub merge evidence shares one cumulative deadline: 20 seconds inside Claude's 30-second outer hook and 9 seconds inside Codex's 15-second outer hook. Each subprocess receives only the remaining time, and an exhausted budget becomes an explicit fail-closed decision before the harness itself can time out.
 
 Autonomous main merges also require CodeRabbit's verified `CodeRabbit` status from App id `136622811`, no failure/rate-limit signal in its latest walkthrough, and a formal `APPROVED` review whose `commit_id` equals the exact head being merged. Missing, stale, pending, failed, changes-requested, or unreadable evidence denies closed without asking Mason for a routine approval.

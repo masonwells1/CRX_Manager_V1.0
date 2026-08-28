@@ -14,6 +14,7 @@ import {
   ghMergeRequest,
   ghUpdateBranchRequest,
   githubCliCommandIsDynamic,
+  githubRepositoryIsGuarded,
   mcpMergeRequest,
   mergeRequestHasExplicitContext,
   proofSearchDirs,
@@ -39,6 +40,9 @@ let budgetClock = 0;
 const budget = createEvidenceBudget(CLAUDE_MERGE_EVIDENCE_BUDGET_MS, () => budgetClock);
 assert.throws(() => budget.run(() => { budgetClock = CLAUDE_MERGE_EVIDENCE_BUDGET_MS; return "late"; }), /budget expired/, "evidence budget rejects a request that consumes the remaining total deadline");
 pass++;
+ok(githubRepositoryIsGuarded("masonwells1/CRX_Manager_V1.0"), "canonical CRX repository identity is guarded");
+ok(githubRepositoryIsGuarded("MASONWELLS1/crx_manager_v1.0"), "CRX repository identity is case-insensitive");
+ok(!githubRepositoryIsGuarded("other/repository"), "foreign repository identity is rejected");
 
 // ── ghMergeRequest ───────────────────────────────────────────────────────────
 eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false, matchHead: "", squash: true, atomicHeadMatch: true }, "plain squash merge parses");

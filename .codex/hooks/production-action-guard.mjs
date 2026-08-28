@@ -25,6 +25,7 @@ import {
   githubCliCommandIsDynamic,
   githubContextEnvironmentOverrideNames,
   githubRepositoryContextOverrideMentioned,
+  githubRepositoryIsGuarded,
   isGitPush,
   mainPushSource,
   mergeRequestHasExplicitContext,
@@ -519,6 +520,9 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       `CODEX PRODUCTION GATE: could not determine the pull request's base branch and exact head SHA, so the merge is denied (fail closed). ${error?.message || error}`
     );
   }
+  if (!githubRepositoryIsGuarded(request.repo)) {
+    return denied("CODEX PRODUCTION GATE: unattended merges are restricted to masonwells1/CRX_Manager_V1.0. Use a separate explicitly authorized workflow for any other repository.");
+  }
   const base = normalize(pullRequest.baseRefName).toLowerCase();
   if (!["main", "master", "production"].includes(base)) {
     const destinationBranch = normalize(pullRequest.baseRefName);
@@ -611,6 +615,9 @@ function gatePullRequestUpdateBranch({ request, repoDir, runGh }) {
     pullRequest = resolvePullRequest({ request, repoDir, runGh });
   } catch (error) {
     return denied(`CODEX PRODUCTION GATE: could not resolve the PR head branch before updating it, so the action is denied (fail closed). ${error?.message || error}`);
+  }
+  if (!githubRepositoryIsGuarded(request.repo)) {
+    return denied("CODEX PRODUCTION GATE: unattended branch updates are restricted to masonwells1/CRX_Manager_V1.0. Use a separate explicitly authorized workflow for any other repository.");
   }
   const destinationBranch = normalize(pullRequest.headRefName);
   if (!destinationBranch) return denied("CODEX PRODUCTION GATE: GitHub did not report the PR head branch, so update-branch is denied (fail closed).");

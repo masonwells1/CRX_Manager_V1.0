@@ -801,6 +801,9 @@ function canonicalHost(host) {
 // safe direction, because a false positive costs one extra review and a false
 // negative is an ungated production push.
 export const GUARDED_REPO_PATH = "masonwells1/crx_manager_v1.0";
+export function githubRepositoryIsGuarded(repo) {
+  return String(repo || "").trim().toLowerCase() === GUARDED_REPO_PATH;
+}
 function idPath(id) {
   const slash = String(id).indexOf("/");
   return slash === -1 ? "" : String(id).slice(slash + 1);

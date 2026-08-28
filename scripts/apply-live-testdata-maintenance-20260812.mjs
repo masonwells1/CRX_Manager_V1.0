@@ -146,13 +146,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // structured GitHub context overrides were denied, local pushes stopped,
   // grouped/process-substituted GitHub actions became fail-closed, and remote
   // branch mutations were bound to protected-PR auto-merge state, with a total
-  // evidence deadline below each outer hook timeout.
-  codexGuard: "98d6231df438e3b98d19194b5947915240db3d9b",
-  pushLib: "b04605e2c3d15fb0adf39fb7c1745e3f051e344c",
+  // evidence deadline below each outer hook timeout, and unattended GitHub
+  // mutations were scoped to the canonical CRX repository.
+  codexGuard: "b9266062dfefc13ce372e7fb5bd840b900df4d3e",
+  pushLib: "04f0cca01b006cd977eea39d448504d6c16cebb6",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "12c22abba3af7b0e8a3a80af07b343f39df13a20",
-  pushLib: "b04605e2c3d15fb0adf39fb7c1745e3f051e344c",
+  codexGuard: "db3b5ec87ae107cc6fe8a71b54a983f9b75ef75d",
+  pushLib: "04f0cca01b006cd977eea39d448504d6c16cebb6",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

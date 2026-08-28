@@ -41,6 +41,7 @@ import {
   githubCliCommandIsDynamic,
   githubContextEnvironmentOverrideNames,
   githubRepositoryContextOverrideMentioned,
+  githubRepositoryIsGuarded,
   ghMergeRequest,
   mcpMergeRequest,
   mergeRequestHasExplicitContext,
@@ -182,6 +183,10 @@ function gateRequest(request) {
     }
   } catch (error) {
     deny(`PR MERGE GATE: could not resolve this pull request's base branch and exact SHAs, so the merge is denied (fail closed). ${error?.message || error}`);
+  }
+
+  if (!githubRepositoryIsGuarded(request.repo)) {
+    deny("PR MERGE GATE: unattended merges and branch updates are restricted to masonwells1/CRX_Manager_V1.0. Use a separate explicitly authorized workflow for any other repository.");
   }
 
   const base = String(pr.baseRefName || "").trim().toLowerCase();
