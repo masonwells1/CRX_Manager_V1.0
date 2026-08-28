@@ -139,13 +139,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // so the inspected destination cannot differ from the executed push, and
   // after unquoted shell escapes and nested wrappers were rejected for GitHub
   // CLI commands, after merges were bound to CodeRabbit's exact-head review,
-  // and after local-looking feature destinations stopped bypassing review.
-  codexGuard: "dea09630a3d02d51b117c9b9fdacac024fc88afc",
-  pushLib: "e52eb031fa6abf09d54e7d2d9f8c5ab1ad5b5f44",
+  // after local-looking feature destinations stopped bypassing review, and
+  // after protected master/production pushes became explicit fail-closed cases.
+  codexGuard: "1390322b11c4add2b8cb3aa4f08067f8877d2bd2",
+  pushLib: "0fd69324f2f71dfad5edb1d4250065fdf8a9653c",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "31f0d1b21f1fb98d7e861b17e777b5b96561b923",
-  pushLib: "e52eb031fa6abf09d54e7d2d9f8c5ab1ad5b5f44",
+  codexGuard: "3980ec04db58e5c5b961eb5b1fac109abe8d2f2a",
+  pushLib: "0fd69324f2f71dfad5edb1d4250065fdf8a9653c",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { scratchHookEnvironment } from "./git-test-env.mjs";
@@ -37,6 +37,7 @@ import {
   reviewStateDirectoryMentioned,
   extractPatchDestinations,
   featurePushDestinations,
+  FEATURE_PUSH_GITHUB_TIMEOUT_MS,
   proofValid,
   repoIsGuardedApp,
   urlIsGuardedApp,
@@ -72,6 +73,15 @@ import {
 
 const now = Date.parse("2026-07-13T18:00:00.000Z");
 const sha = "a".repeat(40);
+const claudeSettings = JSON.parse(readFileSync(new URL("../settings.json", import.meta.url), "utf8"));
+const pushHookConfig = claudeSettings.hooks.PreToolUse
+  .flatMap((group) => group.hooks || [])
+  .find((hook) => String(hook.command || "").includes("codex-push-guard.mjs"));
+assert.ok(pushHookConfig, "Claude settings register the push guard");
+assert.ok(
+  Number(pushHookConfig.timeout) * 1000 >= FEATURE_PUSH_GITHUB_TIMEOUT_MS + 10_000,
+  "the outer hook budget leaves at least 10 seconds beyond the slow GitHub child lookup",
+);
 
 assert.deepEqual(activeAutoMergePrNumbers("[]"), [], "no open PR means no armed auto-merge");
 assert.deepEqual(
@@ -89,6 +99,18 @@ assert.throws(
 );
 assert.deepEqual(featurePushDestinations("git push origin HEAD:refs/heads/feature/test"), ["feature/test"]);
 assert.deepEqual(featurePushDestinations("git push origin refs/heads/local:refs/heads/review/next"), ["review/next"]);
+for (const protectedBranch of ["master", "production"]) {
+  assert.throws(
+    () => featurePushDestinations(`git push origin HEAD:refs/heads/${protectedBranch}`, "feature/test"),
+    new RegExp(`protected branch ${protectedBranch}`),
+    `explicit unattended pushes to ${protectedBranch} are denied`,
+  );
+  assert.throws(
+    () => featurePushDestinations("git push origin HEAD", protectedBranch),
+    new RegExp(`protected branch ${protectedBranch}`),
+    `current-branch unattended pushes from ${protectedBranch} are denied`,
+  );
+}
 assert.throws(() => featurePushDestinations("git push origin refs/tags/v1"), /explicit source:refs\/heads|refs\/heads/, "tag-only pushes are denied");
 assert.throws(() => featurePushDestinations("git push origin HEAD:refs/notes/review"), /refs\/heads/, "notes refs are denied");
 assert.throws(() => featurePushDestinations("git push origin --follow-tags HEAD:refs/heads/feature/test"), /tag propagation/, "implicit tag propagation is denied");
@@ -1859,6 +1881,26 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       assert.match(result.reason, pattern, `${message} — denial should explain itself`);
     };
     const denied = (command, message) => deniedBecause(command, /GIT_CONFIG/, message);
+    const workForShell = work.replaceAll("\\", "/");
+    for (const protectedBranch of ["master", "production"]) {
+      deniedBecause(
+        `git -C ${workForShell} push origin HEAD:refs/heads/${protectedBranch}`,
+        new RegExp(`protected branch ${protectedBranch}`),
+        `the installed hook denies an explicit ${protectedBranch} destination`,
+      );
+      const created = git(["switch", "-q", "-c", protectedBranch], work);
+      assert.equal(created.status, 0, `scratch ${protectedBranch} branch creation failed: ${created.stderr}`);
+      try {
+        deniedBecause(
+          `git -C ${workForShell} push origin HEAD`,
+          new RegExp(`protected branch ${protectedBranch}`),
+          `the installed hook denies a current-branch push from ${protectedBranch}`,
+        );
+      } finally {
+        git(["switch", "-q", "main"], work);
+        git(["branch", "-D", protectedBranch], work);
+      }
+    }
 
     denied(`env 'GIT_CONFIG_COUNT=1' 'GIT_CONFIG_KEY_0=remote.origin.pushurl' 'GIT_CONFIG_VALUE_0=${CRX_URL}' ${push}`, "single-quoted env assignments");
     denied(`env "GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=remote.origin.pushurl" ${push}`, "double-quoted env assignments");

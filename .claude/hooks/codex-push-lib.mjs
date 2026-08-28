@@ -402,7 +402,7 @@ export function pushTargetsCurrentHead(cmd, currentBranch) {
 // it to a branch other than the checkout branch, so there is no trustworthy PR
 // selector for the pre-push auto-merge check. Non-branch refs are denied because
 // they sit outside protected PR delivery. Main is handled by mainPushSource.
-export function featurePushDestinations(cmd) {
+export function featurePushDestinations(cmd, currentBranch = "") {
   const argsText = String(cmd || "").match(GIT_PUSH_RE)?.[1];
   if (argsText == null) return [];
   if (unknownPushOptions(cmd).length > 0) {
@@ -433,7 +433,12 @@ export function featurePushDestinations(cmd) {
   }
   // positionals[0] is the repository. Without at least one refspec, config
   // decides the destination and the auto-merge lookup cannot bind to it.
+  const protectedBranches = new Set(["main", "master", "production"]);
+  const normalizedCurrentBranch = String(currentBranch || "").trim().replace(/^refs\/heads\//i, "").toLowerCase();
   if (positionals.length < 2) {
+    if (protectedBranches.has(normalizedCurrentBranch)) {
+      throw new Error(`unattended pushes from protected branch ${normalizedCurrentBranch} are denied`);
+    }
     throw new Error("feature pushes must name an explicit destination refspec");
   }
   const refspecs = positionals.slice(1);
@@ -450,6 +455,11 @@ export function featurePushDestinations(cmd) {
   for (const refspec of refspecs) {
     const clean = String(refspec).replace(/^\+/, "");
     if (!clean.includes(":")) {
+      const bareDestination = clean.replace(/^refs\/heads\//i, "").toLowerCase();
+      if (protectedBranches.has(bareDestination)
+          || (bareDestination === "head" && protectedBranches.has(normalizedCurrentBranch))) {
+        throw new Error(`unattended pushes to protected branch ${bareDestination === "head" ? normalizedCurrentBranch : bareDestination} are denied`);
+      }
       throw new Error("feature push must use an explicit source:refs/heads/destination refspec");
     }
     const [rawSource, rawDestination] = [clean.split(":")[0], clean.split(":").at(-1)];
@@ -458,7 +468,9 @@ export function featurePushDestinations(cmd) {
       throw new Error("unattended pushes must move one explicit branch ref into refs/heads");
     }
     const destination = rawDestination.replace(/^refs\/heads\//i, "");
-    if (["main", "master", "production"].includes(destination.toLowerCase())) continue;
+    if (protectedBranches.has(destination.toLowerCase())) {
+      throw new Error(`unattended pushes to protected branch ${destination.toLowerCase()} are denied`);
+    }
     if (destination.toUpperCase() === "HEAD") {
       throw new Error("feature push destination HEAD is ambiguous");
     }
@@ -475,6 +487,8 @@ export function featurePushDestinations(cmd) {
   }
   return destinations;
 }
+
+export const FEATURE_PUSH_GITHUB_TIMEOUT_MS = 10_000;
 
 // Parse the exact `gh pr list --json number,autoMergeRequest` response used by
 // both push guards. An open main-bound PR with auto-merge already armed is a

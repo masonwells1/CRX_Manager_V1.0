@@ -20,6 +20,7 @@ import {
   describeRiskyContent,
   eachPush,
   featurePushDestinations,
+  FEATURE_PUSH_GITHUB_TIMEOUT_MS,
   GUARDED_REPO_PATH,
   gitPushCwd,
   gitSubcommandIsDynamic,
@@ -768,7 +769,7 @@ for (const pushCmd of pushCommands) {
     // error. The agent can disable auto-merge and retry without involving Mason.
     let featureBranches;
     try {
-      featureBranches = featurePushDestinations(pushCmd);
+      featureBranches = featurePushDestinations(pushCmd, branch);
     } catch (error) {
       deny(`CODEX GATE: could not determine the exact remote feature branch for the auto-merge check, so the push is denied (fail closed). ${error?.message || error}`);
     }
@@ -821,7 +822,7 @@ for (const pushCmd of pushCommands) {
           cwd: pushRepoDir,
           env: ghLookup.env,
           encoding: "utf8",
-          timeout: 10000,
+          timeout: FEATURE_PUSH_GITHUB_TIMEOUT_MS,
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
         }).trim();

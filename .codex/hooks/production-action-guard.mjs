@@ -812,7 +812,7 @@ export function evaluateProductionAction({
     } else {
       let featureBranches;
       try {
-        featureBranches = featurePushDestinations(segment);
+        featureBranches = featurePushDestinations(segment, branch);
       } catch (error) {
         return denied(
           `CODEX PRODUCTION GATE: could not determine the exact remote feature branch for the auto-merge check, ` +
