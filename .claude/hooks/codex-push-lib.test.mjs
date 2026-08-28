@@ -1854,6 +1854,9 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
 // through. Exercising the HOOK is the only thing that proves the gate closed.
 {
   const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "codex-push-guard.mjs");
+  const pushGuardSource = readFileSync(HOOK, "utf8");
+  assert.equal(/execFileSync\(\s*["']git["']/.test(pushGuardSource), false, "push guard never launches PATH-resolved bare git before its trust check");
+  assert.match(pushGuardSource, /execFileSync\(fixedGitExecutable\(\), \["--exec-path"\]/, "push guard resolves Git's exec path through the fixed executable");
   const tmp = mkdtempSync(path.join(os.tmpdir(), "codex-push-guard-env-"));
   const work = path.join(tmp, "work");
   const dest = path.join(tmp, "dest.git");

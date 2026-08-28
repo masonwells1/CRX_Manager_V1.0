@@ -202,6 +202,9 @@ ok(!coderabbitReviewGate({ ...completeCr, comments: [{ body: "Review failed", up
 
 // ── hook decision paths that need no gh (stdin spawn) ────────────────────────
 const HOOK = path.join(__dirname, "pr-merge-guard.mjs");
+const mergeGuardSource = readFileSync(HOOK, "utf8");
+ok(!/execFileSync\(\s*["']git["']/.test(mergeGuardSource), "merge guard never launches PATH-resolved bare git before making a security decision");
+ok(/execFileSync\(fixedGitExecutable\(\)/.test(mergeGuardSource), "merge guard worktree discovery uses the fixed Git executable");
 function runHook(payload, extraEnv = {}) {
   const res = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(payload), encoding: "utf8", timeout: 15000,

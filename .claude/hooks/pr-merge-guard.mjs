@@ -49,6 +49,7 @@ import {
   githubMutationUnsafeAmbientEnvironmentNames,
   githubRepositoryContextOverrideMentioned,
   githubRepositoryIsGuarded,
+  fixedGitExecutable,
   ghMergeRequest,
   mcpMergeRequest,
   mergeRequestHasExplicitContext,
@@ -184,8 +185,11 @@ function gh(args) {
 }
 
 function listWorktreesFromProjectDir() {
-  return execFileSync("git", ["worktree", "list", "--porcelain"], {
+  const env = { ...process.env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR"]) delete env[key];
+  return execFileSync(fixedGitExecutable(), ["worktree", "list", "--porcelain"], {
     cwd: projectDir,
+    env,
     encoding: "utf8",
     timeout: 10_000,
     stdio: ["ignore", "pipe", "ignore"],

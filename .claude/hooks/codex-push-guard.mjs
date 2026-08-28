@@ -626,7 +626,7 @@ let trustedGitExecPath = null;
 try {
   const cleanExecEnv = { ...process.env };
   delete cleanExecEnv.GIT_EXEC_PATH;
-  trustedGitExecPath = execFileSync("git", ["--exec-path"], {
+  trustedGitExecPath = execFileSync(fixedGitExecutable(), ["--exec-path"], {
     encoding: "utf8",
     env: cleanExecEnv,
     windowsHide: true,
