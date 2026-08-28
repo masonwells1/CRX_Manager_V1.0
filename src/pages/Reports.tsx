@@ -9,7 +9,7 @@ import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { hasPageAccess } from '../lib/pagePermissions';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -20,6 +20,10 @@ import { downloadYearEndSummaryPdf, downloadBatchYearEndSummaries } from '../lib
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import { localToday, formatLocalDate, parseLocalDate } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
+import {
+  getAssignedRecognizedInvoiceCustomerIds,
+  getRecognizedInvoiceCustomerIds,
+} from '../lib/recognizedInvoiceCustomers';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
   ChemicalHistoryRow, CommissionBalanceRow, InventoryCostRow,
@@ -441,18 +445,25 @@ export default function Reports() {
     setYeLoading(true);
     try {
       if (yeBatchMode) {
-        // Batch: get all customers with invoices for this season
-        const { data: custIds, error: custErr } = await supabase
-          .from('invoices')
-          .select('customer_id')
-          .eq('season', season)
-          .in('status', ['posted', 'voided'])
-          .is('deleted_at', null);
-        if (custErr) throw custErr;
-
-        const uniqueIds = [...new Set((custIds || []).map((r) => r.customer_id))];
-        if (uniqueIds.length === 0) {
+        // Batch: page through every recognized invoice so the API row cap cannot
+        // silently omit customers as the season grows.
+        const discoveredIds = await getRecognizedInvoiceCustomerIds(season);
+        if (discoveredIds.length === 0) {
           toast('info', `No customers have invoices for season ${season}`);
+          setYeLoading(false);
+          return;
+        }
+        let uniqueIds = discoveredIds;
+        if (!isAdmin) {
+          if (!profile) throw new Error('Your profile is still loading — try again in a moment.');
+          uniqueIds = await getAssignedRecognizedInvoiceCustomerIds(discoveredIds, profile.id);
+          const skippedCount = discoveredIds.length - uniqueIds.length;
+          if (skippedCount > 0 && uniqueIds.length > 0) {
+            toast('warning', `Skipped ${skippedCount} customer${skippedCount === 1 ? '' : 's'} not assigned to you.`);
+          }
+        }
+        if (uniqueIds.length === 0) {
+          toast('info', `No assigned customers have invoices for season ${season}`);
           setYeLoading(false);
           return;
         }
@@ -464,7 +475,7 @@ export default function Reports() {
           p_season: season,
         });
         if (batchError) {
-          toast('error', 'Failed to generate summaries: ' + batchError.message);
+          toast('error', sanitizeError(batchError));
           setYeLoading(false);
           return;
         }
@@ -485,7 +496,7 @@ export default function Reports() {
       setShowYeDialog(false);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'generate_year_end_summary' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to generate summary');
+      toast('error', sanitizeError(err));
     }
     setYeLoading(false);
   };

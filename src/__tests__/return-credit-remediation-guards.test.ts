@@ -421,6 +421,8 @@ describe('return/credit remediation durable guards', () => {
     expect(smokeSpecs.specs.issue_return_credit.area).toEqual(expect.arrayContaining([
       'billing', 'inventory', 'idempotency', 'security',
     ]));
+    expect(smokeSpecs.specs.issue_return_credit.container_only).toBe(true);
+    expect(smokeSpecs.specs.issue_return_credit.container_prover).toBe('verify-return-credit-real-schema.mjs');
   });
 
   it('fails closed when the Returns status registry or exact retry rollout state drifts', () => {

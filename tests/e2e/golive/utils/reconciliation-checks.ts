@@ -91,6 +91,7 @@ export interface InvoiceItemCheckRow {
   order_id: string;
   product_id: string;
   quantity: number;
+  invoice_type: string;
 }
 
 export interface InventoryPrebookRow {
@@ -329,6 +330,7 @@ export function checkDeliveryInvoiceQuantityParity(
 
   const invoicedByKey = new Map<string, number>();
   for (const ii of invoiceItems) {
+    if (ii.invoice_type === 'credit_memo') continue;
     if (!ii.order_id || !ii.product_id) continue;
     const key = `${ii.order_id}::${ii.product_id}`;
     invoicedByKey.set(key, (invoicedByKey.get(key) ?? 0) + ii.quantity);
