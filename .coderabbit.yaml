@@ -153,10 +153,11 @@ reviews:
   # something a PR is measured against before it lands. Custom checks require
   # the Pro+ plan; this org is on Pro Plus (verified 2026-08-24).
   #
-  # Approved by Mason 2026-08-24 after being shown that these produce a red X
-  # and a withheld approval rather than a disabled merge button - see the
-  # `request_changes_workflow` note above for why, and do not describe these as
-  # a hard gate anywhere.
+  # Approved by Mason 2026-08-24 when these produced a red X and withheld
+  # approval under the former zero-required-review rule. Mason's 2026-08-28
+  # protection change now requires a current approval, so an unresolved failed
+  # check blocks the merge-unlocking approval unless the author explicitly uses
+  # the documented "Ignore failed checks" override below.
   pre_merge_checks:
     # FALSE ON PURPOSE. False lets the PR AUTHOR override a failing check by
     # ticking "Ignore failed checks" in the Walkthrough comment. Mason authors
