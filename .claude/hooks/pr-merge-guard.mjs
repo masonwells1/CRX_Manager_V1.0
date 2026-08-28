@@ -39,6 +39,7 @@ import {
   directGitHubApiWriter,
   ghApiMergeRequest,
   ghApiMutates,
+  ghCliCommandIsUnknownOrAlias,
   ghPrBaseRetargets,
   ghUpdateBranchRequest,
   githubCliCommandIsDynamic,
@@ -101,6 +102,9 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     deny("PR MERGE GATE: GH_REPO/GH_HOST/GH_CONFIG_DIR/GITHUB_API_URL overrides are denied for merges because they can make the hook inspect a different repository or host than the command executes. Use an explicit `--repo owner/repo`.");
   }
   for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/)) {
+    if (ghCliCommandIsUnknownOrAlias(segment)) {
+      deny("PR MERGE GATE: GitHub CLI aliases and unknown top-level commands are denied because they can hide API writes from the exact-head parser. Use a known built-in `gh` command spelled literally.");
+    }
     if (ghPrBaseRetargets(segment)) {
       deny("PR MERGE GATE: `gh pr edit --base` is denied because an already-armed auto-merge could be redirected into a protected branch without an exact-head reviewed merge command.");
     }

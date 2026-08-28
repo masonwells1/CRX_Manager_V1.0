@@ -2501,8 +2501,37 @@ export function ghApiMutates(command) {
 // read-only GitHub evidence must use the fixed `gh` invocation above.
 export function directGitHubApiWriter(command) {
   const text = String(command || "");
-  if (!/https?:\/\/api\.github\.com\/(?:graphql|repos\/)/i.test(text)) return false;
-  return /(?:^|[\s;&|])(?:curl(?:\.exe)?|wget(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|node(?:\.exe)?|python(?:3|\.exe)?|py(?:\.exe)?|ruby(?:\.exe)?|perl(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?)\b/i.test(text);
+  if (!/https?:\/\/api\.github\.com(?::\d+)?\/(?:graphql|repos\/)/i.test(text)) return false;
+  const writerNames = new Set(["curl", "wget", "invoke-restmethod", "invoke-webrequest", "node", "python", "python3", "py", "ruby", "perl", "powershell", "pwsh"]);
+  const words = splitShellArgs(text);
+  return words.slice(0, 2).some((word) => {
+    const basename = String(word || "").replace(/^&/, "").replace(/^['"]|['"]$/g, "").replaceAll("\\", "/").split("/").at(-1).replace(/\.exe$/i, "").toLowerCase();
+    return writerNames.has(basename);
+  });
+}
+
+const KNOWN_GH_TOP_LEVEL_COMMANDS = new Set([
+  "api", "attestation", "auth", "browse", "cache", "codespace", "completion",
+  "config", "extension", "gist", "gpg-key", "issue", "label", "org", "pr",
+  "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key",
+  "status", "variable", "workflow",
+]);
+const GH_GLOBAL_OPTIONS_WITH_VALUE = new Set(["-R", "--repo", "--hostname", "--config"]);
+
+export function ghCliCommandIsUnknownOrAlias(command) {
+  const text = String(command || "");
+  if (!GH_BIN_RE.test(text)) return false;
+  const words = splitShellArgs(text);
+  let topLevel = "";
+  for (let index = 1; index < words.length; index += 1) {
+    const word = String(words[index] || "");
+    if (GH_GLOBAL_OPTIONS_WITH_VALUE.has(word)) { index += 1; continue; }
+    if (/^(?:--repo|--hostname|--config)=/i.test(word)) continue;
+    if (word.startsWith("-")) continue;
+    topLevel = word.toLowerCase();
+    break;
+  }
+  return !topLevel || topLevel === "alias" || !KNOWN_GH_TOP_LEVEL_COMMANDS.has(topLevel);
 }
 
 // MCP merge tool inputs — key spellings differ per connector (GitHub MCP uses

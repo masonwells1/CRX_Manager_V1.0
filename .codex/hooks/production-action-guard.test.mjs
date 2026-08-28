@@ -1072,6 +1072,24 @@ try {
     toolInput: { command: "Invoke-RestMethod -Method Put https://api.github.com/repos/masonwells1/CRX_Manager_V1.0/pulls/123/update-branch" },
     repoDir: risky.repo,
   }).blocked, true, "direct REST branch writers are denied");
+  for (const command of [
+    "C:\\Windows\\System32\\curl.exe -X POST https://api.github.com/graphql -d mutation",
+    "/usr/bin/curl -X POST https://api.github.com/graphql -d mutation",
+    "curl -X POST https://api.github.com:443/graphql -d mutation",
+    "gh alias set ship 'api graphql'",
+    "gh ship",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+    }).blocked, true, `normalized GitHub writer or alias is denied: ${command}`);
+  }
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr view 123 --repo masonwells1/CRX_Manager_V1.0" },
+    repoDir: risky.repo,
+  }).blocked, false, "known read-only gh command remains allowed");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --squash --match-head-commit ${risky.sha}` },

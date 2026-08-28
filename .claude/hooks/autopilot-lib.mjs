@@ -8,7 +8,7 @@
 // settings.json permissions.deny + bash-safety/migration-apply-guard, so this is
 // defense in depth, not the only line.
 
-import { ghPrBaseRetargets, ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames } from "./codex-push-lib.mjs";
+import { ghCliCommandIsUnknownOrAlias, ghPrBaseRetargets, ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames } from "./codex-push-lib.mjs";
 
 // Tool NAMES that must never be auto-approved during an unattended run: live
 // prod mutations and branch/project lifecycle ops. Matched case-insensitively
@@ -64,6 +64,7 @@ export function autopilotDecision(toolName, toolInput) {
   const cmd = typeof input.command === "string" ? input.command : "";
   if (cmd) {
     if (githubCliCommandIsDynamic(cmd)) return "deny";
+    if (ghCliCommandIsUnknownOrAlias(cmd)) return "deny";
     if (ghPrBaseRetargets(cmd)) return "deny";
     if (ghUpdateBranchRequest(cmd)?.rebase) return "deny";
     for (const re of DENY_BASH_RES) {

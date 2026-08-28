@@ -22,6 +22,7 @@ import {
   gitPushCwd,
   ghApiMergeRequest,
   ghApiMutates,
+  ghCliCommandIsUnknownOrAlias,
   ghPrBaseRetargets,
   ghUpdateBranchRequest,
   ghMergeRequest,
@@ -741,6 +742,9 @@ export function evaluateProductionAction({
   const commandSegments = command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
   const executionEnv = { ...process.env, ...suppliedEnv };
   for (const segment of commandSegments) {
+    if (ghCliCommandIsUnknownOrAlias(segment)) {
+      return denied("CODEX PRODUCTION GATE: GitHub CLI aliases and unknown top-level commands are denied because they can hide API writes from the exact-head parser. Use a known built-in `gh` command spelled literally.");
+    }
     if (ghPrBaseRetargets(segment)) {
       return denied("CODEX PRODUCTION GATE: `gh pr edit --base` is denied because an already-armed auto-merge could be redirected into a protected branch without an exact-head reviewed merge command.");
     }

@@ -150,13 +150,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // mutations were scoped to the canonical CRX repository, with all other
   // GitHub API writes sharing one fail-closed classifier across both agents;
   // global gh flags, remote rebases, direct protected pushes, auto-merge on any
-  // base, and PR base retargeting deny too.
-  codexGuard: "4b785209143fa77ced3e38774fa9869d10427011",
-  pushLib: "8d5ad5a6bcfb44a095bd07dded66a02d695c9f52",
+  // base, and PR base retargeting deny too. Re-pinned after direct GitHub API
+  // clients gained absolute-path/explicit-port normalization and unknown gh
+  // commands plus aliases became fail-closed.
+  codexGuard: "71a8069e21b6f29c09b624f37614e295fde6da38",
+  pushLib: "c22697e8eb046d1b3faddfec60fac0df2141a451",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "f8c75e637879b097623cd90d5de91409b0fd36bf",
-  pushLib: "8d5ad5a6bcfb44a095bd07dded66a02d695c9f52",
+  codexGuard: "d42a76883fd120afc8adea34a004f53886188562",
+  pushLib: "c22697e8eb046d1b3faddfec60fac0df2141a451",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

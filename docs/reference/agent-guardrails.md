@@ -88,6 +88,8 @@ Global GitHub CLI flags cannot hide API writes because the classifier tokenizes 
 
 Auto-merge is denied for every PR, including PRs currently targeting ordinary branches, because a later base retarget could redirect the pending landing. CLI, GitHub-tool, REST, and GraphQL PR base-retarget operations are denied under unattended authority; ordinary title, body, label, and review metadata edits remain available.
 
+Direct GitHub API clients are normalized by executable basename across Windows/POSIX absolute paths, and `api.github.com` URLs with explicit ports are covered. GitHub CLI aliases and unknown top-level `gh` commands deny closed; known built-ins such as `gh pr view` remain available.
+
 All GitHub merge evidence shares one cumulative deadline: 20 seconds inside Claude's 30-second outer hook and 9 seconds inside Codex's 15-second outer hook. Each subprocess receives only the remaining time, and an exhausted budget becomes an explicit fail-closed decision before the harness itself can time out.
 
 Autonomous main merges also require CodeRabbit's verified `CodeRabbit` status from App id `136622811`, no failure/rate-limit signal in its latest walkthrough, and a formal `APPROVED` review whose `commit_id` equals the exact head being merged. Missing, stale, pending, failed, changes-requested, or unreadable evidence denies closed without asking Mason for a routine approval.

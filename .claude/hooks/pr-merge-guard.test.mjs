@@ -13,6 +13,7 @@ import {
   directGitHubApiWriter,
   ghApiMergeRequest,
   ghApiMutates,
+  ghCliCommandIsUnknownOrAlias,
   ghPrBaseRetargets,
   ghMergeRequest,
   ghUpdateBranchRequest,
@@ -54,6 +55,12 @@ ok(!ghApiMutates("gh api repos/o/r/pulls/42"), "plain gh API GET remains read-on
 ok(directGitHubApiWriter("curl -X POST https://api.github.com/graphql -d mutation"), "direct GraphQL writer is classified");
 ok(directGitHubApiWriter("Invoke-RestMethod -Method Put https://api.github.com/repos/o/r/pulls/42/update-branch"), "direct REST writer is classified");
 ok(!directGitHubApiWriter("echo https://api.github.com/graphql"), "documentation text is not mistaken for a direct API writer");
+ok(directGitHubApiWriter("C:\\Windows\\System32\\curl.exe -X POST https://api.github.com/graphql"), "absolute Windows curl is classified");
+ok(directGitHubApiWriter("/usr/bin/curl -X POST https://api.github.com/graphql"), "absolute POSIX curl is classified");
+ok(directGitHubApiWriter("curl -X POST https://api.github.com:443/graphql"), "explicit GitHub API ports are classified");
+ok(ghCliCommandIsUnknownOrAlias("gh alias set ship 'api graphql'"), "GitHub CLI alias management is denied");
+ok(ghCliCommandIsUnknownOrAlias("gh ship"), "unknown top-level gh command is treated as an alias");
+ok(!ghCliCommandIsUnknownOrAlias("gh -R o/r pr view 42"), "known gh command after global flags remains classified");
 ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r --base main"), "literal PR base retarget is classified");
 ok(ghPrBaseRetargets("gh -R o/r pr edit 42 --base=production"), "global flags and attached base values cannot hide retargeting");
 ok(!ghPrBaseRetargets("gh pr edit 42 --add-label ready"), "ordinary PR metadata edits are not base retargets");
@@ -193,6 +200,20 @@ ok(r.decision?.permissionDecision === "deny", "direct curl GraphQL auto-merge mu
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "Invoke-RestMethod -Method Put https://api.github.com/repos/masonwells1/CRX_Manager_V1.0/pulls/123/update-branch" } });
 ok(r.decision?.permissionDecision === "deny", "direct PowerShell REST branch mutation is denied");
+
+for (const command of [
+  "C:\\Windows\\System32\\curl.exe -X POST https://api.github.com/graphql -d mutation",
+  "/usr/bin/curl -X POST https://api.github.com/graphql -d mutation",
+  "curl -X POST https://api.github.com:443/graphql -d mutation",
+  "gh alias set ship 'api graphql'",
+  "gh ship",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `normalized GitHub writer or alias is denied: ${command}`);
+}
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr view 123 --repo masonwells1/CRX_Manager_V1.0" } });
+ok(r.status === 0 && r.decision === null, "known read-only gh command remains available");
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr edit 123 --repo masonwells1/CRX_Manager_V1.0 --base main" } });
 ok(r.decision?.permissionDecision === "deny", "CLI PR base retarget is denied");
