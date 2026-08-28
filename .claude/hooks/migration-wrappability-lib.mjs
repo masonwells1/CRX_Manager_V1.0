@@ -58,7 +58,7 @@ export function topLevelSkeleton(sql) {
       continue;
     }
     const escapeString = (ch === "e" || ch === "E") && s[i + 1] === "'" &&
-      !/[A-Za-z0-9_$]/.test(s[i - 1] || "");
+      !/[\u0080-\uFFFFA-Za-z0-9_$]/.test(s[i - 1] || "");
     if (ch === "'" || escapeString) {
       i += escapeString ? 2 : 1;
       let closed = false;
@@ -84,8 +84,12 @@ export function topLevelSkeleton(sql) {
       out += ' "ident" ';
       continue;
     }
-    if (ch === "$") {
+    if (ch === "$" && !/[\u0080-\uFFFFA-Za-z0-9_$]/.test(s[i - 1] || "")) {
       // $tag$ … $tag$ or $$ … $$. `$1` positional parameters do not match.
+      // PostgreSQL permits '$' plus a wider non-ASCII set in unquoted
+      // identifiers. Treat every non-ASCII code unit before '$' as identifier
+      // content: a false negative can reject a harmless migration, but a false
+      // positive can hide destructive SQL (for example fake·$x$).
       const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(s.slice(i));
       if (m) {
         const tag = m[0];

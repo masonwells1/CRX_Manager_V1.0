@@ -16,6 +16,7 @@ DECLARE
   latest_version text;
 BEGIN
   PERFORM pg_catalog.pg_advisory_xact_lock(1129465937);
+  PERFORM pg_catalog.set_config('TimeZone', 'UTC', true);
 
   IF coalesce(NEW.name, '') !~ '^[0-9]{14}(_|$)' THEN
     RAISE EXCEPTION 'CRX migration ledger rows require an authored timestamp in name';

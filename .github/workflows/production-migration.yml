@@ -40,8 +40,29 @@ jobs:
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.expected_commit }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind dispatch to protected main before repository scripts
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
+          [[ "$EXPECTED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$REVIEWED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$MIGRATION_NAME" =~ ^[0-9]{14}_[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
+          if [[ "${MIGRATION_NAME:15}" =~ [0-9]{14} ]]; then
+            echo "migration name must contain exactly one leading 14-digit timestamp" >&2
+            exit 1
+          fi
+          [[ "$QUERY_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -112,8 +133,29 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.expected_commit }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind approved run to protected main before repository scripts
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
+          [[ "$EXPECTED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$REVIEWED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$MIGRATION_NAME" =~ ^[0-9]{14}_[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
+          if [[ "${MIGRATION_NAME:15}" =~ [0-9]{14} ]]; then
+            echo "migration name must contain exactly one leading 14-digit timestamp" >&2
+            exit 1
+          fi
+          [[ "$QUERY_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:

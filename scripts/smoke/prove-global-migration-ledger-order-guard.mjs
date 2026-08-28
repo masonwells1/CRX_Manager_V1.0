@@ -63,7 +63,7 @@ try {
     "  name varchar(255)",
     ");",
     "INSERT INTO supabase_migrations.schema_migrations(version, statements, name)",
-    "VALUES ('20260827000000', ARRAY['local baseline'], '20260827000000_local_baseline');",
+    "VALUES ('20230101000000', ARRAY['local baseline'], '20230101000000_local_baseline');",
   ].join("\n"));
 
   psql("BEGIN;\n" + migrationSql + "\nCOMMIT;");
@@ -81,6 +81,16 @@ try {
     "invalid authored timestamps must be rejected by the ledger trigger",
   );
 
+  const dstGapAttempt = psql([
+    "BEGIN;",
+    "SET LOCAL TimeZone = 'America/Chicago';",
+    "INSERT INTO supabase_migrations.schema_migrations(version, statements, name)",
+    "VALUES ('20240310023000', ARRAY['DST gap timestamp probe'], '20240310023000_dst_gap_timestamp_probe');",
+    "COMMIT;",
+  ].join("\n"));
+  assert.equal(dstGapAttempt.status, 0,
+    "the ledger trigger must validate zone-less authored timestamps in UTC, not the caller session zone");
+
   const shape = psql([
     "SELECT t.tgenabled::text || '|' || (t.tgqual IS NULL)::text || '|' || t.tgnargs::text",
     "FROM pg_catalog.pg_trigger t",
@@ -93,7 +103,7 @@ try {
     "BEGIN;",
     "SET LOCAL session_replication_role = replica;",
     "INSERT INTO supabase_migrations.schema_migrations(version, statements, name)",
-    "VALUES ('20260826000000', ARRAY['must roll back'], '20260826000000_replica_bypass_probe');",
+    "VALUES ('20220101000000', ARRAY['must roll back'], '20220101000000_replica_bypass_probe');",
     "COMMIT;",
   ].join("\n"), false);
   assert.notEqual(replicaAttempt.status, 0, "replica mode must not suppress the ordering trigger");

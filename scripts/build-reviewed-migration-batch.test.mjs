@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { topLevelSkeleton } from "../.claude/hooks/migration-wrappability-lib.mjs";
+import { checkWrappable, topLevelSkeleton } from "../.claude/hooks/migration-wrappability-lib.mjs";
 
 import {
   buildAtomicMigrationSql,
@@ -15,6 +15,7 @@ import {
   listRequiredEarlierMigrations,
   prepareBatch,
   readRegularMigrationBlob,
+  trustedBaselineCommitForMigration,
   transactionCompatibility,
 } from "./build-reviewed-migration-batch.mjs";
 import {
@@ -50,11 +51,14 @@ const HASH = createHash("sha256").update(SQL).digest("hex");
 
 const workflow = readFileSync(path.join(process.cwd(), ".github", "workflows", "production-migration.yml"), "utf8");
 const runbook = readFileSync(path.join(process.cwd(), "docs", "reference", "production-migration-approval-gate.md"), "utf8");
+const reviewVerifier = readFileSync(path.join(process.cwd(), "scripts", "verify-production-migration-review.mjs"), "utf8");
 const ledgerGuardMigration = readFileSync(path.join(process.cwd(), "supabase", "migrations", `${LEDGER_GUARD_MIGRATION}.sql`), "utf8").replace(/\r\n/g, "\n");
 const ledgerGuardBody = /AS \$function\$([\s\S]*?)\$function\$;/.exec(ledgerGuardMigration);
 assert.equal(ledgerGuardBody?.[1], LEDGER_GUARD_PROSRC,
   "the live ledger trigger body must stay byte-bound to the workflow invariant check");
 assert.match(ledgerGuardMigration, /pg_advisory_xact_lock\(1129465937\)/);
+assert.match(ledgerGuardMigration, /set_config\('TimeZone', 'UTC', true\)/,
+  "calendar timestamp validation must be independent of the caller session time zone");
 assert.match(ledgerGuardMigration, /authored_version <= latest_version/);
 assert.match(ledgerGuardMigration, /BEFORE INSERT ON supabase_migrations\.schema_migrations/);
 assert.match(ledgerGuardMigration, /ENABLE ALWAYS TRIGGER crx_enforce_monotonic_migration_ledger/,
@@ -74,6 +78,16 @@ assert.match(workflow, /^\s*environment: production-database\s*$/m,
   "the credential-bearing job must use the protected production-database environment");
 assert.match(workflow, /apply:[\s\S]*deployments: read[\s\S]*Revalidate production approval boundary after Mason approval[\s\S]*Reconfirm current main/,
   "the apply job must revalidate the protected environment after Mason approval and before production work");
+const preflightMainBinding = workflow.indexOf("Bind dispatch to protected main before repository scripts");
+const applyMainBinding = workflow.indexOf("Bind approved run to protected main before repository scripts");
+assert.ok(preflightMainBinding >= 0 && preflightMainBinding < workflow.indexOf("node scripts/assert-production-environment-protection.mjs"),
+  "preflight must bind the protected main checkout before executing repository scripts");
+assert.ok(applyMainBinding >= 0 && applyMainBinding < workflow.lastIndexOf("node scripts/assert-production-environment-protection.mjs"),
+  "the approved job must bind the protected main checkout before executing repository scripts");
+assert.equal((workflow.match(/persist-credentials: false/g) || []).length, 2,
+  "both credential-bearing jobs must not leave checkout credentials in Git configuration");
+assert.doesNotMatch(workflow, /ref:\s*\$\{\{\s*inputs\.expected_commit\s*\}\}/,
+  "a caller-selected commit must never be checked out before protected-main binding");
 assert.match(workflow, /apply:[\s\S]*timeout-minutes: 20[\s\S]*actions\/setup-node[\s\S]*Revalidate production approval boundary after Mason approval/,
   "the approved job must be bounded and use the pinned Node runtime before revalidating protection");
 assert.match(workflow, /Freeze main against concurrent migration merges\n\s+timeout-minutes: 2[\s\S]*Apply one locked migration and ledger row\n\s+timeout-minutes: 10/,
@@ -96,6 +110,12 @@ assert.match(workflow, /Verify human-dispatched exact-commit migration review/,
   "preflight must bind Mason's manual dispatch to exact review evidence before approval");
 assert.match(workflow, /verify-production-migration-review\.mjs/,
   "the durable review verifier must be invoked by a literal script path");
+assert.match(reviewVerifier, /AbortSignal\.timeout\(REQUEST_TIMEOUT_MS\)/,
+  "GitHub provenance reads must remain bounded through response parsing");
+assert.doesNotMatch(reviewVerifier, /AbortController|clearTimeout/,
+  "the provenance timeout must not end before the response body is read");
+assert.match(reviewVerifier, /const pulls = await collectAllPages\([\s\S]*\/commits\/" \+ input\.reviewedCommit \+ "\/pulls\?per_page=/,
+  "the reviewed-commit PR lookup must inspect every GitHub API page");
 assert.doesNotMatch(workflow, /review_evidence|review_proof_sha256/i,
   "caller-supplied review claims must never satisfy the production gate");
 assert.doesNotMatch(workflow, /actions\/(?:upload|download)-artifact/,
@@ -344,6 +364,16 @@ assert.match(transactionCompatibility(bareCrExploit).reason, /bare carriage retu
   "a lone carriage return must be refused before PostgreSQL can end the line comment");
 assert.match(topLevelSkeleton(bareCrExploit), /DELETE FROM public\.customers/i,
   "the shared top-level scanner must terminate a line comment on a lone carriage return");
+const nonAsciiEscapeIdentifierExploit = [
+  "SET LOCAL standard_conforming_strings = on;",
+  "CREATE DOMAIN public.éE AS text;",
+  "SELECT public.éE'foo\\';",
+  "COMMIT;",
+  "BEGIN TRANSACTION READ ONLY;",
+  "-- '",
+].join("\n");
+assert.match(checkWrappable(nonAsciiEscapeIdentifierExploit).reason || "", /top-level COMMIT/,
+  "a non-ASCII identifier ending in E must not turn its following quote into an escape string and hide COMMIT");
 
 for (const [sql, reasonPattern] of [
   ["BEGIN; SELECT 1; COMMIT;", /top-level (?:BEGIN|COMMIT)/],
@@ -365,6 +395,10 @@ for (const [sql, reasonPattern] of [
   ["CALL public.maybe_commits();", /^CALL$/],
   ["SELECT public.close_accounting_period();", /top-level SELECT/],
   ["COMMENT ON TABLE public.safe_batch_probe IS E'escaped\\' quote'; DELETE FROM public.customers;", /destructive migration: top-level DELETE/],
+  ["COMMENT ON FUNCTION public.check_period_open(fake$x$ date) IS 'before'; DELETE FROM public.customers; COMMENT ON FUNCTION public.check_period_open(fake$x$ date) IS 'after';", /destructive migration: top-level DELETE/],
+  ["COMMENT ON FUNCTION public.check_period_open(fakeé$x$ date) IS 'before'; DELETE FROM public.customers; COMMENT ON FUNCTION public.check_period_open(fakeé$x$ date) IS 'after';", /non-ASCII SQL/],
+  ["COMMENT ON FUNCTION public.check_period_open(fake·$x$ date) IS 'before'; DROP TABLE public.customers; COMMENT ON FUNCTION public.check_period_open(fake$x$ date) IS 'after';", /non-ASCII SQL/],
+  ["COMMENT ON TABLE public.customers IS $é$safe $x$ $é$; DELETE FROM public.customers; -- $x$", /non-ASCII SQL/],
   ["CREATE FUNCTION public.crx_review_bypass() RETURNS integer LANGUAGE plpgsql AS $body$ BEGIN DELETE FROM public.customers; RETURN 1; END $body$; VALUES (public.crx_review_bypass());", /outside the audited DDL allowlist/],
   ["CREATE TABLE public.crx_review_copy AS SELECT public.close_accounting_period();", /outside the audited DDL allowlist/],
   ["COPY (SELECT public.close_accounting_period()) TO STDOUT;", /outside the audited DDL allowlist/],
@@ -476,7 +510,6 @@ try {
   mkdirSync(baselines, { recursive: true });
   writeFileSync(path.join(baselines, "manifest.json"), JSON.stringify({ migrations_high_water: "20970101010101" }));
   writeFileSync(path.join(migrations, `${PRIOR}.sql`), "CREATE TABLE public.prior_safe_batch_probe (id bigint);\n");
-  writeFileSync(path.join(migrations, `${MIGRATION}.sql`), SQL);
   const runGit = (args, input) => {
     const result = spawnSync("git", args, { cwd: root, encoding: "utf8", input, shell: false, windowsHide: true });
     if (result.status !== 0) throw new Error(result.stderr || result.stdout);
@@ -486,7 +519,11 @@ try {
   runGit(["config", "user.email", "gate-test@example.invalid"]);
   runGit(["config", "user.name", "Gate Test"]);
   runGit(["add", "supabase"]);
-  runGit(["commit", "-q", "-m", "fixture"]);
+  runGit(["commit", "-q", "-m", "trusted baseline"]);
+  const trustedBaselineCommit = runGit(["rev-parse", "HEAD"]);
+  writeFileSync(path.join(migrations, `${MIGRATION}.sql`), SQL);
+  runGit(["add", "supabase"]);
+  runGit(["commit", "-q", "-m", "introduce selected migration"]);
   const expectedCommit = runGit(["rev-parse", "HEAD"]);
   const output = path.join(root, "batch.sql");
 
@@ -521,6 +558,8 @@ try {
   assert.equal(existsSync(output), false, "invalid inputs must not create a batch");
 
   assert.equal(readRegularMigrationBlob({ repoRoot: root, expectedCommit, migrationName: MIGRATION }), SQL);
+  assert.equal(trustedBaselineCommitForMigration({ repoRoot: root, expectedCommit, migrationName: MIGRATION }), trustedBaselineCommit,
+    "predecessor discovery must anchor the cutoff before the selected migration appeared");
   assert.deepEqual(listRequiredEarlierMigrations({ repoRoot: root, expectedCommit, migrationName: MIGRATION }), REQUIRED_EARLIER);
   const result = prepareBatch({ repoRoot: root, projectId: CRX_PRODUCTION_REF, expectedCommit, migrationName: MIGRATION, queryHash: HASH, output });
   assert.deepEqual(result, { migrationName: MIGRATION, queryHash: HASH, output });
@@ -545,6 +584,17 @@ try {
     }),
     /regular 100644 Git blob/,
     "a committed symlink must never redirect the SQL bytes executed by the builder",
+  );
+  const tamperedMigration = "20990202020202_raised_baseline_bypass";
+  writeFileSync(path.join(migrations, `${tamperedMigration}.sql`), SQL);
+  writeFileSync(path.join(baselines, "manifest.json"), JSON.stringify({ migrations_high_water: MIGRATION.slice(0, 14) }));
+  runGit(["add", "supabase"]);
+  runGit(["commit", "-q", "-m", "attempt raised baseline with migration"]);
+  const tamperedCommit = runGit(["rev-parse", "HEAD"]);
+  assert.throws(
+    () => listRequiredEarlierMigrations({ repoRoot: root, expectedCommit: tamperedCommit, migrationName: tamperedMigration }),
+    /baseline manifest changed in the migration-introduction commit/,
+    "a selected migration cannot raise its own cutoff to hide an unapplied predecessor",
   );
 } finally {
   rmSync(root, { recursive: true, force: true });

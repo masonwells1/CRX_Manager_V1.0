@@ -19,6 +19,7 @@ export const LEDGER_GUARD_PROSRC = "\n" + [
   "  latest_version text;",
   "BEGIN",
   "  PERFORM pg_catalog.pg_advisory_xact_lock(1129465937);",
+  "  PERFORM pg_catalog.set_config('TimeZone', 'UTC', true);",
   "",
   "  IF coalesce(NEW.name, '') !~ '^[0-9]{14}(_|$)' THEN",
   "    RAISE EXCEPTION 'CRX migration ledger rows require an authored timestamp in name';",
@@ -108,6 +109,10 @@ function auditedDdlAdmission(skeleton) {
 export function transactionCompatibility(sql) {
   const rawSql = String(sql);
   if (/\r(?!\n)/.test(rawSql)) return { ok: false, reason: "bare carriage return is not allowed in migration SQL" };
+  // This deliberately narrow production channel admits only metadata-only SQL.
+  // PostgreSQL's complete Unicode identifier and dollar-quote grammar is wider
+  // than this lightweight scanner; refuse it rather than risk hiding a command.
+  if (/[^\x00-\x7F]/.test(rawSql)) return { ok: false, reason: "non-ASCII SQL is outside the audited production migration path" };
   if (/\bU\s*&\s*["']/i.test(rawSql)) return { ok: false, reason: "Unicode-escaped SQL syntax is outside the audited migration path" };
   if (/\bsupabase_migrations\b/i.test(rawSql)) return { ok: false, reason: "protected migration ledger reference" };
   const skeleton = topLevelSkeleton(sql);
@@ -147,6 +152,46 @@ function readGitBlobUtf8(repoRoot, objectName, label) {
   return normalized;
 }
 
+function pathEntry(repoRoot, commit, relativePath) {
+  return String(git(repoRoot, ["ls-tree", commit, "--", relativePath])).trim();
+}
+
+function firstParent(repoRoot, commit) {
+  return String(git(repoRoot, ["rev-parse", `${commit}^`])).trim();
+}
+
+// The migration being applied may be candidate-controlled; its contemporaneous
+// baseline manifest cannot decide which predecessors are required. Find the
+// first protected-main history commit that introduced this exact path and read
+// the manifest from its parent instead. A manifest change in the introduction
+// commit is refused, so it cannot raise the cutoff and strand an older file.
+export function trustedBaselineCommitForMigration({ repoRoot, expectedCommit, migrationName }) {
+  if (!/^[a-f0-9]{40}$/.test(String(expectedCommit))) throw new Error("expected commit must be a full lowercase Git commit id");
+  if (!STEM_RE.test(String(migrationName))) throw new Error("migration name must be an exact timestamped file stem");
+  const relativeMigration = `supabase/migrations/${migrationName}.sql`;
+  const history = String(git(repoRoot, ["rev-list", "--first-parent", "--reverse", expectedCommit]))
+    .split(/\r?\n/).filter(Boolean);
+  let introduction = "";
+  let previousPresent = false;
+  for (const commit of history) {
+    const present = pathEntry(repoRoot, commit, relativeMigration) !== "";
+    if (present && !previousPresent) {
+      introduction = commit;
+      break;
+    }
+    previousPresent = present;
+  }
+  if (!introduction) throw new Error("selected migration is absent from first-parent history");
+  let baselineCommit;
+  try { baselineCommit = firstParent(repoRoot, introduction); }
+  catch { throw new Error("selected migration has no separately trusted predecessor commit"); }
+  const baselinePath = "supabase/baselines/manifest.json";
+  if (pathEntry(repoRoot, baselineCommit, baselinePath) !== pathEntry(repoRoot, introduction, baselinePath)) {
+    throw new Error("baseline manifest changed in the migration-introduction commit");
+  }
+  return baselineCommit;
+}
+
 export function readRegularMigrationBlob({ repoRoot, expectedCommit, migrationName }) {
   if (!/^[a-f0-9]{40}$/.test(String(expectedCommit))) throw new Error("expected commit must be a full lowercase Git commit id");
   const relativeMigration = `supabase/migrations/${migrationName}.sql`;
@@ -159,9 +204,10 @@ export function listRequiredEarlierMigrations({ repoRoot, expectedCommit, migrat
   if (!/^[a-f0-9]{40}$/.test(String(expectedCommit))) throw new Error("expected commit must be a full lowercase Git commit id");
   const selected = STEM_RE.exec(String(migrationName));
   if (!selected) throw new Error("migration name must be an exact timestamped file stem");
+  const baselineCommit = trustedBaselineCommitForMigration({ repoRoot, expectedCommit, migrationName });
   let baseline;
   try {
-    baseline = JSON.parse(readGitBlobUtf8(repoRoot, `${expectedCommit}:supabase/baselines/manifest.json`, "baseline manifest"));
+    baseline = JSON.parse(readGitBlobUtf8(repoRoot, `${baselineCommit}:supabase/baselines/manifest.json`, "trusted baseline manifest"));
   } catch (error) {
     throw new Error(`baseline manifest is unavailable or invalid: ${error?.message || error}`);
   }
