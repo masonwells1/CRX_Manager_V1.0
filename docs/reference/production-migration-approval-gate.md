@@ -126,7 +126,8 @@ makes the final release decision.
 
 The migration workflow accepts the exact current `main` commit, exact reviewed PR-head commit,
 exact timestamped migration stem, and lowercase SHA-256 of that file.
-Before approval it verifies current-main binding, the merged-PR and durable-review bindings,
+It refuses dispatches whose workflow definition was not loaded from `main`. Before approval it
+verifies current-main binding, the merged-PR and durable-review bindings,
 unchanged regular Git-blob and file/hash bindings, environment protection, parser deny paths, and
 atomic-batch compatibility. After Mason's website approval, it re-queries the exact CodeRabbit
 approval and rebuilds the batch directly from the same immutable Git blob, reconfirms current main,
@@ -145,7 +146,9 @@ The same path also rejects top-level `SELECT` (which could invoke a mutating fun
 `DO` blocks, dynamic SQL execution, and every unquoted client backslash command. These conservative
 refusals park unusual migrations for a separately reviewed manual path.
 
-Admission is otherwise default-deny: only a narrow set of definition-only DDL statements is allowed.
+Admission is otherwise default-deny: only `COMMENT ON` statements are allowed. This makes the
+automated path intentionally metadata-only until each additional DDL family has its own executable
+semantic proof.
 Top-level DML, `VALUES`, `COPY`, query-executing `CREATE TABLE AS`, materialized views, CTEs, index
 builds, trigger DDL, `ALTER TABLE`, extensions, direct migration-ledger references, and unknown
 statement forms are parked. Migration blobs are normalized from CRLF to LF and rejected if any lone
@@ -155,11 +158,15 @@ revokes are also parked because they require semantic proof of RLS, actor bindin
 paths, deliberate access, and mutating-RPC idempotency. `CREATE SCHEMA` is parked because PostgreSQL
 permits embedded grants and trigger declarations inside that single statement. `CREATE VIEW` is
 parked because owner-run views can bypass underlying RLS and inherit permissive default relation
-grants. Every `ALTER TYPE` and `ALTER SEQUENCE` is parked because those statements can immediately
+grants. `CREATE TYPE` and `CREATE DOMAIN` are parked because their definitions can persist function
+calls or lifecycle semantics that this gate does not yet prove. Every candidate-supplied `SET LOCAL`
+statement is parked so a reviewed migration cannot disable the gate's timeouts or alter parsing and
+resolution behavior. Every `ALTER TYPE` and `ALTER SEQUENCE` is parked because those statements can immediately
 rewrite lifecycle meaning or live numbering behavior; view and index drops are parked as operationally
 destructive. `CREATE SEQUENCE` is also parked because the production baseline can grant browser roles
 access to newly created public sequences, while this automated path deliberately refuses the corrective
-`REVOKE`. Quoted or
+`REVOKE`. The wrapper obtains the migration-ledger table lock before its advisory lock, matching the
+ordinary ledger-insert trigger's lock order and avoiding a cross-path deadlock. Quoted or
 unquoted references to the migration schema are denied before tokenization. PostgreSQL Unicode-escape
 syntax is denied anywhere in an automated migration, including inside stored-function bodies, so an
 escaped identifier cannot disguise a protected schema reference.

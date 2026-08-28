@@ -86,7 +86,7 @@ function stripTrailingComments(s) {
     prev = t;
     t = t.replace(/\s+$/, "");
     t = t.replace(/\/\*(?:[^*]|\*(?!\/))*\*\/$/, "");
-    t = t.replace(/--[^\n]*$/, "");
+    t = t.replace(/--[^\r\n]*$/, "");
   } while (t !== prev);
   return t;
 }
@@ -116,8 +116,8 @@ function stripDollarQuotedCore(sql, keepBody) {
       out += src.slice(i, j); i = j; continue;
     }
     if (ch === "-" && src[i + 1] === "-") {
-      let j = src.indexOf("\n", i);
-      if (j === -1) j = n;
+      let j = i + 2;
+      while (j < n && src[j] !== "\n" && src[j] !== "\r") j++;
       out += src.slice(i, j); i = j; continue;
     }
     if (ch === "/" && src[i + 1] === "*") {
@@ -200,8 +200,8 @@ export function stripCommentsQuoteAware(sql) {
       }
     }
     if (ch === "-" && src[i + 1] === "-") {
-      let j = src.indexOf("\n", i);
-      if (j === -1) j = n;
+      let j = i + 2;
+      while (j < n && src[j] !== "\n" && src[j] !== "\r") j++;
       out += " "; i = j; continue;
     }
     if (ch === "/" && src[i + 1] === "*") {

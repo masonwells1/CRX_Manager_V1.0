@@ -39,8 +39,7 @@ const PRIOR = "20980101010101_prior_safe_batch";
 const REQUIRED_EARLIER = [{ version: "20980101010101", name: "prior_safe_batch", fullStem: PRIOR }];
 const SQL = [
   "-- transaction words in comments are data: COMMIT",
-  "CREATE TYPE public.safe_batch_probe_status AS ENUM ('ready', 'END');",
-  "COMMENT ON TYPE public.safe_batch_probe_status IS 'ROLLBACK is text';",
+  "COMMENT ON TABLE public.customers IS 'ROLLBACK is text';",
   "",
 ].join("\n");
 const HASH = createHash("sha256").update(SQL).digest("hex");
@@ -56,6 +55,8 @@ assert.match(ledgerGuardMigration, /authored_version <= latest_version/);
 assert.match(ledgerGuardMigration, /BEFORE INSERT ON supabase_migrations\.schema_migrations/);
 assert.match(workflow, /^\s*environment: production-database\s*$/m,
   "the credential-bearing job must use the protected production-database environment");
+assert.match(workflow, /test "\$GITHUB_REF" = "refs\/heads\/main"/,
+  "workflow dispatch must fail unless GitHub runs the workflow definition from main");
 assert.match(workflow, /^\s*deployments: read\s*$/m,
   "the workflow may inspect deployments before approval");
 assert.doesNotMatch(workflow, /^\s*deployments: write\s*$/m,
@@ -278,6 +279,12 @@ for (const [sql, reasonPattern] of [
   ["CREATE FUNCTION public.no_idempotency_key(p_customer_id uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $body$ BEGIN UPDATE public.customers SET active = false WHERE id = p_customer_id; END $body$;", /outside the audited DDL allowlist/],
   ["CREATE PROCEDURE public.insecure_procedure() LANGUAGE plpgsql AS $body$ BEGIN UPDATE public.customers SET active = false; END $body$;", /outside the audited DDL allowlist/],
   ["CREATE POLICY permissive_probe ON public.customers FOR ALL TO authenticated USING (true) WITH CHECK (true);", /outside the audited DDL allowlist/],
+  ["SET LOCAL statement_timeout = 0;", /outside the audited DDL allowlist/],
+  ["SET LOCAL lock_timeout = 0;", /outside the audited DDL allowlist/],
+  ["SET LOCAL search_path = attacker, public;", /outside the audited DDL allowlist/],
+  ["SET LOCAL check_function_bodies = off;", /outside the audited DDL allowlist/],
+  ["CREATE TYPE public.unreviewed_status AS ENUM ('ready');", /outside the audited DDL allowlist/],
+  ["CREATE DOMAIN public.unreviewed_text AS text CHECK (public.some_function(VALUE));", /outside the audited DDL allowlist/],
   ["CREATE SEQUENCE public.unreviewed_number_seq;", /outside the audited DDL allowlist/],
   ["ALTER SEQUENCE public.invoice_number_seq RESTART WITH 1;", /outside the audited DDL allowlist/],
   ["ALTER SEQUENCE public.invoice_number_seq CYCLE;", /outside the audited DDL allowlist/],
@@ -333,6 +340,8 @@ assert.ok(batch.endsWith("COMMIT;\n"));
 assert.match(batch, /^SET LOCAL standard_conforming_strings = on;$/m);
 assert.match(batch, /^SELECT pg_advisory_xact_lock\(1129465937\);$/m);
 assert.match(batch, /^LOCK TABLE supabase_migrations\.schema_migrations IN SHARE ROW EXCLUSIVE MODE;$/m);
+assert.ok(batch.indexOf("LOCK TABLE") < batch.indexOf("SELECT pg_advisory_xact_lock"),
+  "the ledger table lock must precede the advisory lock to match ordinary INSERT lock order");
 assert.ok(batch.includes("SELECT max(effective_version) INTO latest_version"));
 assert.ok(batch.includes("latest_version >= '20990101010101'"));
 assert.ok(batch.includes("CRX migration is not newer than the live ledger"));

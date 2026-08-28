@@ -87,8 +87,6 @@ function auditedDdlAdmission(skeleton) {
   const statements = String(skeleton).split(";").map((statement) => statement.trim()).filter(Boolean);
   for (const statement of statements) {
     const normalized = statement.replace(/\s+/g, " ");
-    if (/^set\s+local\s+(?:statement_timeout|lock_timeout|search_path|check_function_bodies)\b/i.test(normalized)) continue;
-    if (/^create\s+(?:type|domain)\b/i.test(normalized)) continue;
     if (/^comment\s+on\b/i.test(normalized)) continue;
     return { ok: false, reason: "top-level statement is outside the audited DDL allowlist" };
   }
@@ -206,8 +204,8 @@ export function buildAtomicMigrationSql({ migrationName, query, queryHash, requi
     "BEGIN;",
     "SET LOCAL standard_conforming_strings = on;",
     "SET LOCAL lock_timeout = '30s';",
-    "SELECT pg_advisory_xact_lock(1129465937);",
     "LOCK TABLE supabase_migrations.schema_migrations IN SHARE ROW EXCLUSIVE MODE;",
+    "SELECT pg_advisory_xact_lock(1129465937);",
     "DO $crx_guard$",
     "DECLARE",
     "  latest_version text;",

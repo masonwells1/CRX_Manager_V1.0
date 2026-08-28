@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
+import { destructiveMigrationCheck, stripCommentsQuoteAware } from "./live-testdata-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
@@ -36,6 +36,9 @@ eq(destructiveMigrationCheck("DROP POLICY p ON customers; DROP INDEX idx_x; DROP
 eq(destructiveMigrationCheck("CREATE TABLE new_thing (id bigint); ALTER TABLE new_thing ENABLE ROW LEVEL SECURITY;").destructive, false, "ordinary additive migration is not destructive");
 ok(destructiveMigrationCheck("DELETE FROM migration_scratch_map WHERE 1=1;").destructive, "ANY top-level DELETE is destructive — no table allowlist (Codex R2: hard-coded lists missed live tables)");
 ok(destructiveMigrationCheck("DELETE FROM invoice_shares;").destructive, "DELETE FROM invoice_shares (was missed by the old table list) is destructive");
+const bareCrExploit = "CREATE DOMAIN public.crx_probe AS text; -- review-only comment\rDELETE FROM public.customers;";
+ok(destructiveMigrationCheck(bareCrExploit).destructive, "a lone carriage return ends a PostgreSQL line comment and exposes DELETE");
+ok(/DELETE FROM public\.customers/i.test(stripCommentsQuoteAware(bareCrExploit)), "the destructive scanner terminates line comments on lone carriage returns");
 eq(
   destructiveMigrationCheck("CREATE OR REPLACE FUNCTION cleanup() RETURNS void AS $$ BEGIN DELETE FROM invoices WHERE is_active = false; END $$ LANGUAGE plpgsql;").destructive,
   false,

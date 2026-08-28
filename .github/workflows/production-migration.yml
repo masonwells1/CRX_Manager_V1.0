@@ -40,6 +40,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
           environment_json="$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-database")"
           reviewer_rule="$(jq -c \
             '[.protection_rules[]? | select(.type == "required_reviewers")][0] // null' \
