@@ -190,15 +190,21 @@ Notes:
 ## Step 5: Hand back to the push gate
 
 `/codex-review` NEVER pushes, merges, or deploys — it is a read gate. When the verdict is
-clean, hand back to the landing flow in `AGENTS.md`: **push a branch → open a PR → checks pass
-(Vercel required) → read and resolve CodeRabbit's automated review → merge**. Direct pushes to
+clean, hand back to the landing flow in `AGENTS.md`: **push a branch → open a PR → finish checks →
+freeze the candidate commit → trigger and resolve one CodeRabbit review → merge with
+`--match-head-commit <reviewed-head-sha>`**. Direct pushes to
 `main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
 
-**CodeRabbit (standing policy, 2026-07-17):** every PR on `CRX_Manager_V1.0` is auto-reviewed by
-CodeRabbit. Once the PR exists, read that review and fix any real issue before merging; nitpicks
-may be dismissed with a one-line reason. CodeRabbit is advisory and does not block; the Codex
-proof below remains the hard gate for risky money/RLS/migration diffs. Both run — neither replaces
-the other. CodeRabbit cannot be consulted before a PR exists, so never wait on it pre-push.
+**CodeRabbit (standing policy, timing updated 2026-08-28):** automatic reviews are disabled. Finish
+the Codex review first, bring the branch current and green, freeze the release-candidate commit,
+record its head SHA, then post exactly `@coderabbitai review` on the PR. Read that review and fix any
+real issue before merging; nitpicks may be dismissed with a one-line reason. A fix or base update
+that changes the commit requires restarted checks and one follow-up review. Never use
+`@coderabbitai resume`, and reserve `@coderabbitai full review` for a deliberately justified
+complete reread. GitHub requires one current formal approval, dismisses stale approvals after a
+new commit, and requires approval from someone other than the last pusher. CodeRabbit's final
+approval is the normal merge-unlock path; the Codex proof below remains an additional hard gate
+for risky money/RLS/migration diffs. Both run — neither replaces the other.
 
 **If the goal is a risky push to `main`** — the diff touches migrations / edge functions /
 RLS-policy files / `src/lib/db.ts` / `src/lib/sentry`, or the diff text matches the money
