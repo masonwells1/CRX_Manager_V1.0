@@ -2225,12 +2225,16 @@ export function githubCliCommandIsDynamic(command) {
   const text = String(command || "");
   const emptyQuoteNormalized = text.replace(/(?:''|"")+/g, "");
   const dequoted = text.replace(/["']/g, "");
+  const groupingNormalized = text.replace(/[(){}<>]/g, " ");
+  const groupedGitHubAction = groupingNormalized !== text
+    && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+merge|api\b)/i.test(groupingNormalized)
+    && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+merge|api\b)/i.test(text);
   const quoteSplicedGitHubAction = dequoted !== text
     && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+merge|api\b)/i.test(dequoted)
     && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+merge|api\b)/i.test(text);
   const composedExecutable = /(?:^|[\s;&|])g(?:(?:''|"")|[`^\\]|\$\{[^}\r\n]*\}|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!)+h(?:\.exe)?(?=\s|$)/i.test(text);
   const dynamicExecutable = /(?:^|[\s;&|])&?(?:\$\{?[A-Za-z_][A-Za-z0-9_:]*\}?|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!|@[A-Za-z_][A-Za-z0-9_]*)\s+(?:pr\s+merge|api\b)/i.test(text);
-  if (quoteSplicedGitHubAction || composedExecutable || dynamicExecutable) return true;
+  if (groupedGitHubAction || quoteSplicedGitHubAction || composedExecutable || dynamicExecutable) return true;
   if (!/\bgh(?:\.exe)?\b/i.test(text) && !/\bgh(?:\.exe)?\b/i.test(emptyQuoteNormalized)) return false;
   const outerWords = splitShellArgs(text);
   const outerToken = String(outerWords[0] === "&" ? outerWords[1] : outerWords[0] || "");

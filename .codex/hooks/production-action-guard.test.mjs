@@ -489,6 +489,8 @@ try {
     runGh: () => { throw new Error("structured GitHub context override must deny before lookup"); },
   }).blocked, true, "a structured GH_CONFIG_DIR override is denied before merge inspection");
   for (const command of [
+    "(gh pr merge 513 --auto)",
+    "echo <(gh api graphql --input payload.json)",
     "g'h' pr merge 513 --auto",
     "gh p\\r merge 513 --auto",
     "gh pr m\\erge 513 --auto",

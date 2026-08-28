@@ -143,13 +143,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // after protected master/production pushes became explicit fail-closed cases,
   // quote-spliced GitHub actions were denied, direct main pushes outside CRX
   // were refused, auto-merge lookup covered every protected base alias,
-  // structured GitHub context overrides were denied, and local pushes stopped.
+  // structured GitHub context overrides were denied, local pushes stopped, and
+  // grouped/process-substituted GitHub actions became fail-closed.
   codexGuard: "83c74a282fdcdbbad2d55be0d0ececa11e0dff79",
-  pushLib: "8ba82160ef3bc59f07a9b7244a8337a8b904c30b",
+  pushLib: "ff1a566922807b3a81a9c51be7215212299b7877",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "92234aa04c9f6062a5320cbd2d1a7807578e082b",
-  pushLib: "8ba82160ef3bc59f07a9b7244a8337a8b904c30b",
+  pushLib: "ff1a566922807b3a81a9c51be7215212299b7877",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

@@ -39,6 +39,8 @@ ok(ghMergeRequest("gh pr merge 123 456 --repo o/r --squash --match-head-commit 0
 ok(githubCliCommandIsDynamic("gh pr m''erge 5 --auto"), "empty-quote composed merge token is dynamic");
 ok(githubCliCommandIsDynamic("g''h pr merge 5 --auto"), "empty-quote composed gh executable is dynamic");
 ok(githubCliCommandIsDynamic("g'h' pr merge 5 --auto"), "quote-spliced gh executable is dynamic");
+ok(githubCliCommandIsDynamic("(gh pr merge 5 --auto)"), "parenthesized gh merge is dynamic");
+ok(githubCliCommandIsDynamic("echo <(gh api graphql --input payload.json)"), "process-substituted GitHub API is dynamic");
 ok(githubCliCommandIsDynamic("g`h pr merge 5 --auto"), "PowerShell-composed gh executable is dynamic");
 ok(githubCliCommandIsDynamic("g${EMPTY}h pr merge 5 --auto"), "POSIX-composed gh executable is dynamic");
 ok(githubCliCommandIsDynamic("gh p\\r merge 5 --auto"), "POSIX-escaped pr token is dynamic");
@@ -153,6 +155,9 @@ ok(r.decision?.permissionDecision === "deny", "PowerShell-composed gh executable
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "g'h' pr merge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "quote-spliced gh executable denies before parsing");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "(gh pr merge 42 --auto)" } });
+ok(r.decision?.permissionDecision === "deny", "parenthesized gh merge denies before parsing");
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "C:/attacker/gh.exe pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789" } });
 ok(r.decision?.permissionDecision === "deny", "arbitrary GitHub CLI path denies before PR inspection");
