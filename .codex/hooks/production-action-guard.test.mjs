@@ -795,6 +795,29 @@ try {
       throw new Error("GitHub unavailable");
     },
   }).blocked, true, "a stacked PR merge fails closed when destination auto-merge state cannot be read");
+  const ordinaryBaseAutoMerge = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 456 --repo masonwells1/CRX_Manager_V1.0 --squash --auto --match-head-commit ${risky.sha}` },
+    repoDir: risky.repo,
+    runGh: (args) => {
+      if (args.join(" ").startsWith("pr view ")) return featurePrJson;
+      throw new Error("auto-merge must deny before any destination lookup");
+    },
+  });
+  assert.equal(ordinaryBaseAutoMerge.blocked, true, "auto-merge is denied even while the PR targets an ordinary branch");
+  assert.match(ordinaryBaseAutoMerge.reason, /every PR regardless of its current base/, "ordinary-base auto-merge denial names the retarget race");
+
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr edit 456 --repo masonwells1/CRX_Manager_V1.0 --base main" },
+    repoDir: risky.repo,
+    runGh: () => { throw new Error("base retarget must deny before GitHub lookup"); },
+  }).blocked, true, "CLI PR base retarget is denied");
+  assert.equal(evaluateProductionAction({
+    toolName: "mcp__github__update_pull_request",
+    toolInput: { owner: "masonwells1", repo: "CRX_Manager_V1.0", pull_number: 456, base: "main" },
+    repoDir: risky.repo,
+  }).blocked, true, "GitHub tool PR base retarget is denied");
 
   const updateBranch = "gh pr update-branch 123 --repo masonwells1/CRX_Manager_V1.0";
   let updateLookupArgs = "";
@@ -903,7 +926,7 @@ try {
     runGh: runGhWithApprovedCodeRabbit,
   });
   assert.equal(autoMergeDecision.blocked, true, "all main-bound auto-merges are denied even with green checks and valid proof");
-  assert.match(autoMergeDecision.reason, /later commits could land/, "auto-merge deny names the exact-head race");
+  assert.match(autoMergeDecision.reason, /base retarget or head mutation/, "auto-merge deny names the exact-head race");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `&gh pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --squash --auto --match-head-commit ${risky.sha}` },

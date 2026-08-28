@@ -8,7 +8,7 @@
 // settings.json permissions.deny + bash-safety/migration-apply-guard, so this is
 // defense in depth, not the only line.
 
-import { ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames } from "./codex-push-lib.mjs";
+import { ghPrBaseRetargets, ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames } from "./codex-push-lib.mjs";
 
 // Tool NAMES that must never be auto-approved during an unattended run: live
 // prod mutations and branch/project lifecycle ops. Matched case-insensitively
@@ -25,7 +25,7 @@ import { ghUpdateBranchRequest, githubCliCommandIsDynamic, githubContextEnvironm
 // writes, branch/project lifecycle, and destructive file/db ops STAY blocked
 // here. A protected PR merge is deliberately allowed through to the normal
 // exact-head merge guard; this layer must not manufacture a second approval.
-const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|reset_branch|delete_branch|merge_branch|rebase_branch|pause_project|restore_project|push_files|create_or_update_file|delete_file|start_process|interact_with_process|write_file|edit_block|move_file|set_config_value)/i;
+const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|reset_branch|delete_branch|merge_branch|rebase_branch|update_pull_request|edit_pull_request|pause_project|restore_project|push_files|create_or_update_file|delete_file|start_process|interact_with_process|write_file|edit_block|move_file|set_config_value)/i;
 
 // Bash command shapes that must never be auto-approved: history rewrites,
 // destructive deletes, force-pushes/deploys, DB resets, secret writes, hook bypass.
@@ -64,6 +64,7 @@ export function autopilotDecision(toolName, toolInput) {
   const cmd = typeof input.command === "string" ? input.command : "";
   if (cmd) {
     if (githubCliCommandIsDynamic(cmd)) return "deny";
+    if (ghPrBaseRetargets(cmd)) return "deny";
     if (ghUpdateBranchRequest(cmd)?.rebase) return "deny";
     for (const re of DENY_BASH_RES) {
       if (re.test(cmd)) return "deny";

@@ -58,6 +58,8 @@ eq(autopilotDecision("Bash", { command: "gh pr update-branch 42 --repo o/r --reb
 eq(autopilotDecision("Bash", { command: "git push origin HEAD:main" }), "deny", "direct main pushes are never auto-approved");
 eq(autopilotDecision("Bash", { command: "git push origin HEAD:master" }), "deny", "direct master pushes are never auto-approved");
 eq(autopilotDecision("Bash", { command: "git push origin HEAD:production" }), "deny", "direct production pushes are never auto-approved");
+eq(autopilotDecision("Bash", { command: "gh pr edit 42 --repo o/r --base main" }), "deny", "PR base retargets are never auto-approved");
+eq(autopilotDecision("mcp__github__update_pull_request", { base: "main" }), "deny", "GitHub PR update tools are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh p\\r m\\erge 42 --auto" }), "deny", "POSIX-escaped GitHub words are never auto-approved");
 eq(autopilotDecision("PowerShell", { command: "gh p^r m^erge 42 --auto" }), "deny", "cmd-caret-composed GitHub words are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh a\\pi graphql --input payload.json" }), "deny", "POSIX-escaped GitHub API is never auto-approved");

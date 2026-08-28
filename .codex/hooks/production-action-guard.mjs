@@ -22,6 +22,7 @@ import {
   gitPushCwd,
   ghApiMergeRequest,
   ghApiMutates,
+  ghPrBaseRetargets,
   ghUpdateBranchRequest,
   ghMergeRequest,
   githubCliCommandIsDynamic,
@@ -482,6 +483,9 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
   if (!githubRepositoryIsGuarded(request.repo)) {
     return denied("CODEX PRODUCTION GATE: unattended merges are restricted to masonwells1/CRX_Manager_V1.0. Use a separate explicitly authorized workflow for any other repository.");
   }
+  if (request.auto) {
+    return denied("CODEX PRODUCTION GATE: `--auto` is denied for every PR regardless of its current base because a later base retarget or head mutation could bypass the exact-head reviewed merge path. Wait for checks, then perform one immediate guarded merge without `--auto`.");
+  }
   const base = normalize(pullRequest.baseRefName).toLowerCase();
   if (!["main", "master", "production"].includes(base)) {
     const destinationBranch = normalize(pullRequest.baseRefName);
@@ -502,12 +506,6 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     return denied(`CODEX PRODUCTION GATE: merges to protected branch ${base} remain blocked.`);
   }
   if (base !== "main") return { blocked: false };
-  if (request.auto) {
-    return denied(
-      "CODEX PRODUCTION GATE: `--auto` is denied for every PR targeting main because later commits could land " +
-      "after this exact-head gate ran. Wait for all checks, then merge immediately without `--auto`; no extra Mason approval is required."
-    );
-  }
   const requestedHead = normalize(request.matchHead);
   const actualHead = normalize(pullRequest.headRefOid);
   if (request.atomicHeadMatch === false) {
@@ -743,6 +741,9 @@ export function evaluateProductionAction({
   const commandSegments = command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
   const executionEnv = { ...process.env, ...suppliedEnv };
   for (const segment of commandSegments) {
+    if (ghPrBaseRetargets(segment)) {
+      return denied("CODEX PRODUCTION GATE: `gh pr edit --base` is denied because an already-armed auto-merge could be redirected into a protected branch without an exact-head reviewed merge command.");
+    }
     if (commandStartsWithGitHubCli(segment) && !deliveryExecutableIsTrusted(segment, "gh", { cwd: actionRepoDir, env: executionEnv })) {
       return denied("CODEX PRODUCTION GATE: this GitHub command does not resolve to the trusted GitHub CLI used for inspection. Remove arbitrary executable paths, current-directory shadows, or PATH overrides and use the normal GitHub CLI installation.");
     }

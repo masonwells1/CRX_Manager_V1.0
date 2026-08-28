@@ -2248,11 +2248,11 @@ export function githubCliCommandIsDynamic(command) {
   const dequoted = text.replace(/["']/g, "");
   const groupingNormalized = text.replace(/[(){}<>]/g, " ");
   const groupedGitHubAction = groupingNormalized !== text
-    && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch)|api\b)/i.test(groupingNormalized)
-    && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch)|api\b)/i.test(text);
+    && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch|edit)|api\b)/i.test(groupingNormalized)
+    && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch|edit)|api\b)/i.test(text);
   const quoteSplicedGitHubAction = dequoted !== text
-    && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch)|api\b)/i.test(dequoted)
-    && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch)|api\b)/i.test(text);
+    && /(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch|edit)|api\b)/i.test(dequoted)
+    && !/(?:^|[\s;&|])gh(?:\.exe)?\s+(?:pr\s+(?:merge|update-branch|edit)|api\b)/i.test(text);
   const composedExecutable = /(?:^|[\s;&|])g(?:(?:''|"")|[`^\\]|\$\{[^}\r\n]*\}|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!)+h(?:\.exe)?(?=\s|$)/i.test(text);
   const dynamicExecutable = /(?:^|[\s;&|])&?(?:\$\{?[A-Za-z_][A-Za-z0-9_:]*\}?|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!|@[A-Za-z_][A-Za-z0-9_]*)\s+(?:pr\s+merge|api\b)/i.test(text);
   if (groupedGitHubAction || quoteSplicedGitHubAction || composedExecutable || dynamicExecutable) return true;
@@ -2322,6 +2322,18 @@ export function updateBranchRequestHasExplicitContext(request) {
   return request?.updateBranch === true
     && /^\d+$/.test(selector)
     && /^[^\s/]+\/[^\s/]+$/.test(repo);
+}
+
+export function ghPrBaseRetargets(command) {
+  const text = String(command || "");
+  if (!GH_BIN_RE.test(text)) return false;
+  const words = splitShellArgs(text);
+  const prIndex = words.findIndex((word) => String(word).toLowerCase() === "pr");
+  const editIndex = words.findIndex((word, index) => index > prIndex && String(word).toLowerCase() === "edit");
+  if (prIndex === -1 || editIndex === -1) return false;
+  return words.some((word, index) => index > editIndex && (
+    String(word).toLowerCase() === "--base" || String(word).toLowerCase().startsWith("--base=")
+  ));
 }
 
 // Updating a PR branch mutates its remote head without running `git push`.

@@ -39,6 +39,7 @@ import {
   directGitHubApiWriter,
   ghApiMergeRequest,
   ghApiMutates,
+  ghPrBaseRetargets,
   ghUpdateBranchRequest,
   githubCliCommandIsDynamic,
   githubContextEnvironmentOverrideNames,
@@ -56,6 +57,7 @@ import {
 } from "./codex-push-lib.mjs";
 
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
+const GITHUB_BASE_RETARGET_TOOL = /(?:update|edit)_pull_request$/i;
 
 function passthrough() { process.exit(0); }
 function deny(reason) {
@@ -68,6 +70,9 @@ try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { passthrough(); }
 
 const toolName = String(payload?.tool_name || "");
 const toolInput = payload?.tool_input || {};
+if (GITHUB_BASE_RETARGET_TOOL.test(toolName) && ["base", "baseRef", "base_ref", "baseBranch", "base_branch"].some((key) => toolInput[key] != null)) {
+  deny("PR MERGE GATE: PR base retargeting is denied because an already-armed auto-merge could be redirected into a protected branch without an exact-head reviewed merge command.");
+}
 const githubContextEnv = githubContextEnvironmentOverrideNames(toolInput.env);
 if (githubContextEnv.length > 0) {
   deny(`PR MERGE GATE: structured GitHub context overrides are denied (${githubContextEnv.join(", ")}) because the executed host/repository/configuration could differ from the sanitized inspection. Use an explicit --repo owner/repo with the normal environment.`);
@@ -96,6 +101,9 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     deny("PR MERGE GATE: GH_REPO/GH_HOST/GH_CONFIG_DIR/GITHUB_API_URL overrides are denied for merges because they can make the hook inspect a different repository or host than the command executes. Use an explicit `--repo owner/repo`.");
   }
   for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/)) {
+    if (ghPrBaseRetargets(segment)) {
+      deny("PR MERGE GATE: `gh pr edit --base` is denied because an already-armed auto-merge could be redirected into a protected branch without an exact-head reviewed merge command.");
+    }
     const api = ghApiMergeRequest(segment);
     if (api?.unsupportedGraphql) {
       deny("PR MERGE GATE: GraphQL merge/auto-merge mutations are denied because the guard cannot safely resolve and verify the PR's exact head/checks. Use one standalone `gh pr merge <number> --repo <owner/repo> --match-head-commit <head-sha>` command instead.");
@@ -200,6 +208,10 @@ function gateRequest(request) {
     deny("PR MERGE GATE: unattended merges and branch updates are restricted to masonwells1/CRX_Manager_V1.0. Use a separate explicitly authorized workflow for any other repository.");
   }
 
+  if (request.auto) {
+    deny("PR MERGE GATE: `--auto` is denied for every PR regardless of its current base because a later base retarget or head mutation could bypass the exact-head reviewed merge path. Wait for checks, then perform one immediate guarded merge without `--auto`.");
+  }
+
   const base = String(pr.baseRefName || "").trim().toLowerCase();
   const destinationBranch = request.updateBranch ? String(pr.headRefName || "").trim() : String(pr.baseRefName || "").trim();
   if (request.updateBranch || !["main", "master", "production"].includes(base)) {
@@ -226,14 +238,6 @@ function gateRequest(request) {
   // commits after this hook returns, so today's non-risky classification cannot
   // prove the eventual merge head is non-risky. Wait for checks and perform one
   // immediate guarded merge on the exact head instead.
-  if (request.auto) {
-    deny(
-      "PR MERGE GATE: `--auto` is not allowed for any PR targeting main because later commits " +
-      "could land after this exact-head gate has run. Wait for every check to finish, then run " +
-      "one standalone `gh pr merge <n> --repo <owner/repo> --squash --match-head-commit <head-sha>` command without `--auto`; no extra Mason approval is required."
-    );
-  }
-
   const requestedHead = String(request.matchHead || "").trim();
   const actualHead = String(pr.headRefOid || "").trim();
   if (request.atomicHeadMatch === false) {

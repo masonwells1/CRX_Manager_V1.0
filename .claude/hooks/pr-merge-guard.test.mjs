@@ -13,6 +13,7 @@ import {
   directGitHubApiWriter,
   ghApiMergeRequest,
   ghApiMutates,
+  ghPrBaseRetargets,
   ghMergeRequest,
   ghUpdateBranchRequest,
   githubCliCommandIsDynamic,
@@ -53,6 +54,10 @@ ok(!ghApiMutates("gh api repos/o/r/pulls/42"), "plain gh API GET remains read-on
 ok(directGitHubApiWriter("curl -X POST https://api.github.com/graphql -d mutation"), "direct GraphQL writer is classified");
 ok(directGitHubApiWriter("Invoke-RestMethod -Method Put https://api.github.com/repos/o/r/pulls/42/update-branch"), "direct REST writer is classified");
 ok(!directGitHubApiWriter("echo https://api.github.com/graphql"), "documentation text is not mistaken for a direct API writer");
+ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r --base main"), "literal PR base retarget is classified");
+ok(ghPrBaseRetargets("gh -R o/r pr edit 42 --base=production"), "global flags and attached base values cannot hide retargeting");
+ok(!ghPrBaseRetargets("gh pr edit 42 --add-label ready"), "ordinary PR metadata edits are not base retargets");
+ok(githubCliCommandIsDynamic("(gh pr edit 42 --base main)"), "grouped PR base retarget is dynamic");
 
 // ── ghMergeRequest ───────────────────────────────────────────────────────────
 eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false, matchHead: "", squash: true, atomicHeadMatch: true }, "plain squash merge parses");
@@ -188,6 +193,12 @@ ok(r.decision?.permissionDecision === "deny", "direct curl GraphQL auto-merge mu
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "Invoke-RestMethod -Method Put https://api.github.com/repos/masonwells1/CRX_Manager_V1.0/pulls/123/update-branch" } });
 ok(r.decision?.permissionDecision === "deny", "direct PowerShell REST branch mutation is denied");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr edit 123 --repo masonwells1/CRX_Manager_V1.0 --base main" } });
+ok(r.decision?.permissionDecision === "deny", "CLI PR base retarget is denied");
+
+r = runHook({ tool_name: "mcp__github__update_pull_request", tool_input: { owner: "masonwells1", repo: "CRX_Manager_V1.0", pull_number: 123, base: "main" } });
+ok(r.decision?.permissionDecision === "deny", "GitHub tool PR base retarget is denied");
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "&gh pr merge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "PowerShell call-operator auto-merge is denied");
@@ -348,8 +359,8 @@ ok(
 );
 ok(!/const\s+stateDir\s*=\s*path\.join\(/.test(guardSource), "the single-directory proof scan that made PR #252 unmergeable has not returned");
 ok(
-  /if\s*\(\s*request\.auto\s*\)[\s\S]{0,500}?not allowed for any PR targeting main/.test(guardSource),
-  "every main-bound --auto request is denied before risk classification",
+  /if\s*\(\s*request\.auto\s*\)[\s\S]{0,500}?denied for every PR regardless of its current base/.test(guardSource),
+  "every --auto request is denied regardless of base before risk classification",
 );
 const autoGateIndex = guardSource.indexOf("if (request.auto)");
 const nonRiskyReturnIndex = guardSource.indexOf("if (risky.length === 0 && !contentFlagged) return;");
