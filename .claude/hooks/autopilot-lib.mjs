@@ -8,7 +8,7 @@
 // settings.json permissions.deny + bash-safety/migration-apply-guard, so this is
 // defense in depth, not the only line.
 
-import { githubCliCommandIsDynamic } from "./codex-push-lib.mjs";
+import { githubCliCommandIsDynamic, githubContextEnvironmentOverrideNames } from "./codex-push-lib.mjs";
 
 // Tool NAMES that must never be auto-approved during an unattended run: live
 // prod mutations and branch/project lifecycle ops. Matched case-insensitively
@@ -57,6 +57,7 @@ export function autopilotDecision(toolName, toolInput) {
   if (DENY_TOOLNAME_RE.test(name)) return "deny";
 
   const input = toolInput || {};
+  if (githubContextEnvironmentOverrideNames(input.env).length > 0) return "deny";
 
   // Bash
   const cmd = typeof input.command === "string" ? input.command : "";

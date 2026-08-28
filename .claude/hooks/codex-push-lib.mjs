@@ -2272,6 +2272,14 @@ export function githubRepositoryContextOverrideMentioned(command) {
     || /\$env:(?:GH_REPO|GH_HOST|GH_CONFIG_DIR|GITHUB_API_URL)\b/i.test(text);
 }
 
+const GITHUB_CONTEXT_ENV_NAMES = new Set([
+  "GH_REPO", "GH_HOST", "GITHUB_HOST", "GH_CONFIG_DIR", "GITHUB_API_URL",
+]);
+export function githubContextEnvironmentOverrideNames(env) {
+  if (!env || typeof env !== "object" || Array.isArray(env)) return [];
+  return Object.keys(env).filter((name) => GITHUB_CONTEXT_ENV_NAMES.has(String(name).toUpperCase()));
+}
+
 export function mergeRequestHasExplicitContext(request) {
   const selector = String(request?.selector || "").trim();
   const repo = String(request?.repo || "").trim();

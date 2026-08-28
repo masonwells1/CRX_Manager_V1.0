@@ -141,6 +141,10 @@ ok(r.decision?.permissionDecision === "deny", "PowerShell call-operator auto-mer
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "gh pr merge 42 --auto --body --disable-auto" } });
 ok(r.decision?.permissionDecision === "deny", "disable-auto used as body text cannot bypass real auto flag");
 
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", env: { GH_HOST: "attacker.example" } } });
+ok(r.decision?.permissionDecision === "deny", "structured GH_HOST override denies before merge inspection");
+ok(/structured GitHub context overrides/.test(r.decision?.permissionDecisionReason || ""), "structured environment denial explains the execution-context mismatch");
+
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "gh pr m''erge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "empty-quote composed merge token denies before parsing");
 

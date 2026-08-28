@@ -20,6 +20,7 @@ import {
   ghApiMergeRequest,
   ghMergeRequest,
   githubCliCommandIsDynamic,
+  githubContextEnvironmentOverrideNames,
   githubRepositoryContextOverrideMentioned,
   isGitPush,
   mainPushSource,
@@ -709,6 +710,10 @@ export function evaluateProductionAction({
     return denied("CODEX PRODUCTION GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");
   }
   const suppliedEnv = toolInput.env && typeof toolInput.env === "object" ? toolInput.env : {};
+  const githubContextEnv = githubContextEnvironmentOverrideNames(suppliedEnv);
+  if (githubContextEnv.length > 0) {
+    return denied(`CODEX PRODUCTION GATE: structured GitHub context overrides are denied (${githubContextEnv.join(", ")}) because the executed host/repository/configuration could differ from the sanitized inspection. Use an explicit --repo owner/repo with the normal environment.`);
+  }
   if (isGitPush(command) && Object.keys(suppliedEnv).some((key) => /^(?:GIT_DIR|GIT_WORK_TREE)$/i.test(key))) {
     return denied("CODEX PRODUCTION GATE: pushes with GIT_DIR/GIT_WORK_TREE tool environment overrides are denied. Use `git -C <repo> push`.");
   }

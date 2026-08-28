@@ -482,6 +482,12 @@ try {
     repoDir: risky.repo,
     runGh: () => "[]",
   }).blocked, true, "a standalone dynamically constructed GitHub merge is denied");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 513 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", env: { GH_CONFIG_DIR: "C:/attacker-config" } },
+    repoDir: risky.repo,
+    runGh: () => { throw new Error("structured GitHub context override must deny before lookup"); },
+  }).blocked, true, "a structured GH_CONFIG_DIR override is denied before merge inspection");
   for (const command of [
     "g'h' pr merge 513 --auto",
     "gh p\\r merge 513 --auto",

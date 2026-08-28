@@ -35,6 +35,7 @@ import {
   describeRiskyContent,
   ghApiMergeRequest,
   githubCliCommandIsDynamic,
+  githubContextEnvironmentOverrideNames,
   githubRepositoryContextOverrideMentioned,
   ghMergeRequest,
   mcpMergeRequest,
@@ -59,6 +60,10 @@ try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { passthrough(); }
 
 const toolName = String(payload?.tool_name || "");
 const toolInput = payload?.tool_input || {};
+const githubContextEnv = githubContextEnvironmentOverrideNames(toolInput.env);
+if (githubContextEnv.length > 0) {
+  deny(`PR MERGE GATE: structured GitHub context overrides are denied (${githubContextEnv.join(", ")}) because the executed host/repository/configuration could differ from the sanitized inspection. Use an explicit --repo owner/repo with the normal environment.`);
+}
 
 // ── detect merge intent — EVERY segment, EVERY request ───────────────────────
 // The parse loop must not stop at the first hit: `gh pr merge <feature-PR>;

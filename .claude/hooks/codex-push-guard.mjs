@@ -784,20 +784,9 @@ for (const pushCmd of pushCommands) {
       pushRepository = pushGitHubRepository(destinationUrls);
       destinationIsLocal = pushUrlsAreLocalPaths(destinationUrls);
       if (destinationIsLocal) {
-        const readRewrites = (keepConfigOverrides) => {
-          try {
-            return gitIn(["config", "--get-regexp", "^url\\..*insteadof$"], pushRepoDir, { keepConfigOverrides });
-          } catch {
-            return ""; // exit 1 means no matching rewrite, the ordinary case
-          }
-        };
-        const rewriteConfig = [readRewrites(false), readRewrites(true)].filter(Boolean).join("\n");
-        if (rewritesReachGuardedApp(rewriteConfig)) {
-          pushRepository = GUARDED_REPO_PATH;
-          destinationIsLocal = false;
-        }
+        deny("CODEX GATE: unattended pushes to local-looking repository paths are denied because receive hooks can execute unreviewed commands. Push the explicit verified CRX GitHub upstream instead.");
       }
-      if (!pushRepository && !destinationIsLocal) {
+      if (!pushRepository) {
         throw new Error("destination is not one exact GitHub repository or local repository path");
       }
       if (pushRepository && pushRepository !== GUARDED_REPO_PATH) {
@@ -807,7 +796,6 @@ for (const pushCmd of pushCommands) {
       deny(`CODEX GATE: unattended feature pushes must resolve to the exact CRX GitHub repository before auto-merge state is checked. ${error?.message || error}`);
     }
     for (const featureBranch of featureBranches) {
-      if (destinationIsLocal) continue;
       let activeAutoMergePrs;
       try {
         const ghLookup = trustedGitHubCliInvocation([
@@ -913,6 +901,9 @@ for (const pushCmd of pushCommands) {
     }
   };
   urlRewrites = [readRewrites(false), readRewrites(true)].filter(Boolean).join("\n");
+  if (pushUrlsAreLocalPaths(destinationUrls)) {
+    deny("CODEX GATE: unattended pushes to local-looking repository paths are denied because receive hooks can execute unreviewed commands. Push the explicit verified CRX GitHub upstream instead.");
+  }
   // The transport-program and mirror-remote checks that used to sit here now run
   // above, before the `if (!srcRef) continue` — see the note at that call site.
   if (
@@ -920,7 +911,6 @@ for (const pushCmd of pushCommands) {
     !repoIsGuardedApp(remoteList) &&
     !rewritesReachGuardedApp(urlRewrites)
   ) {
-    if (!targetIsRawUrl && pushUrlsAreLocalPaths(destinationUrls)) continue;
     deny("CODEX GATE: unattended direct pushes to main are denied outside the protected CRX pull-request flow. Push one explicit feature branch and merge it through reviewed green checks instead.");
   }
 

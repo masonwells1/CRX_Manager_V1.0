@@ -1896,6 +1896,10 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       assert.match(result.reason, pattern, `${message} — denial should explain itself`);
     };
     const denied = (command, message) => deniedBecause(command, /GIT_CONFIG/, message);
+    const reachedLocalBoundary = (result, message) => {
+      assert.equal(result.decision, "deny", `${message} — local push must deny`);
+      assert.match(result.reason, /local-looking repository paths.*receive hooks/i, `${message} — earlier classifiers must reach the local-repository boundary`);
+    };
     const workForShell = work.replaceAll("\\", "/");
     deniedBecause(
       `git -C ${workForShell} push https://gitlab.example.invalid/other/repo.git HEAD:refs/heads/main`,
@@ -1967,7 +1971,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
         GIT_CONFIG_KEY_0: "url.http://proxy.invalid/.insteadOf",
         GIT_CONFIG_VALUE_0: "https://unrelated.invalid/",
       });
-      assert.equal(result.decision, "allow", "an inherited rewrite that moves nothing in this repo is allowed");
+      reachedLocalBoundary(result, "an inherited rewrite that moves nothing reaches the intended local boundary");
     }
     {
       // Same ordinary push, but the variables move the destination to production.
@@ -1983,19 +1987,15 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     {
       // Same mechanism, but the rewrite makes a short alias reach production.
       // The rewrite table is not compared for equality — it is UNIONED into the
-      // gate's own classifier — so this is caught by the feature-push GitHub
-      // lookup. An invalid token makes that lookup fail closed, proving the
-      // inherited rewrite reached it; without the rewrite, this local feature
-      // push takes the local-repository exception and allows.
+      // gate's own classifier. The local-repository boundary now denies before
+      // executing any receive hook, so the rewrite cannot turn that local path
+      // into a hidden production transport.
       const result = runHook(featurePush, {
         GIT_CONFIG_COUNT: "1",
         GIT_CONFIG_KEY_0: `url.${CRX_URL}.insteadOf`,
         GIT_CONFIG_VALUE_0: "crx:",
-        GH_TOKEN: "invalid-test-token",
-        GITHUB_TOKEN: "invalid-test-token",
       });
-      assert.equal(result.decision, "deny", "an inherited rewrite that reaches the production app repo still gates");
-      assert.match(result.reason, /could not prove auto-merge is disabled/i, "the protected upstream lookup applied rather than being skipped");
+      reachedLocalBoundary(result, "an inherited rewrite on a local destination reaches the intended local boundary");
     }
     {
       // Not the destination but the REFSPEC: a bare push's default can be moved
@@ -2025,11 +2025,9 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
         assert.equal(denied.decision, "deny", `an inherited ${key} override is denied on a push that names no remote`);
         assert.match(denied.reason, new RegExp(key.replace(".", "\\.")), "the denial names the answer that changed");
 
-        const allowed = runHook(featurePush, env);
-        assert.notEqual(
-          allowed.decision,
-          "deny",
-          `${key} must not deny a push that names its destination — git never consults it there`,
+        reachedLocalBoundary(
+          runHook(featurePush, env),
+          `${key} is not consulted and reaches the intended local boundary`,
         );
       }
     }
@@ -2047,7 +2045,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
         GIT_CONFIG_KEY_0: "remote.archive.push",
         GIT_CONFIG_VALUE_0: "HEAD:refs/heads/archive",
       });
-      assert.equal(result.decision, "allow", "an inherited refspec for a remote this push never consults is allowed");
+      reachedLocalBoundary(result, "an inherited refspec for an unselected remote reaches the intended local boundary");
     }
     {
       // The other side of that scoping: the SAME override on the remote the push
@@ -2074,7 +2072,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
         GIT_CONFIG_KEY_0: "remote.origin.push",
         GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
       });
-      assert.equal(result.decision, "allow", "a default refspec git never consults does not block an explicit push");
+      reachedLocalBoundary(result, "an unconsulted default refspec reaches the intended local boundary");
     }
     {
       // The fix keys off the refspec being NAMED, not off the command being long:
@@ -2145,9 +2143,9 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       };
       try {
         git(["config", "push.default", "current"], work);
-        assert.equal(
-          runHook(barePush, mergeOverride).decision, "allow",
-          "under push.default=current a bare push never reads branch.merge, so an inherited value is inert",
+        reachedLocalBoundary(
+          runHook(barePush, mergeOverride),
+          "under push.default=current an inert branch.merge reaches the intended local boundary",
         );
         // The control that keeps that skip from widening into a fail-open: the
         // identical override under a mode that DOES consult the key moves where
@@ -2184,14 +2182,13 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       // resolves to. An inherited `remote.<other>.url` adds a `(push)` line on the
       // ambient side alone, so the decision sets differed and denied a push that
       // could not have touched that remote.
-      assert.equal(
+      reachedLocalBoundary(
         runHook(featurePush, {
           GIT_CONFIG_COUNT: "1",
           GIT_CONFIG_KEY_0: "remote.mirrorbox.url",
           GIT_CONFIG_VALUE_0: path.join(tmp, "mirrorbox.git"),
-        }).decision,
-        "allow",
-        "an inherited remote this push never selects does not change where it goes",
+        }),
+        "an inherited unselected remote reaches the intended local boundary",
       );
       // The control: the same override on the remote this push DOES select is the
       // redirect the comparison exists to catch.
@@ -2235,14 +2232,13 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
         // The allow direction still holds for the same name shape: a whitespace-named
         // remote this push does NOT select must stay narrowable, or the fix above
         // would just be the over-refusal coming back.
-        assert.equal(
+        reachedLocalBoundary(
           runHook(featurePush, {
             GIT_CONFIG_COUNT: "1",
             GIT_CONFIG_KEY_0: "remote.my remote.push",
             GIT_CONFIG_VALUE_0: "HEAD:refs/heads/elsewhere",
-          }).decision,
-          "allow",
-          "a whitespace-named remote this push never selects is still narrowed away",
+          }),
+          "a whitespace-named unselected remote reaches the intended local boundary",
         );
       } finally {
         git(["config", "--unset", "branch.main.remote"], work);
@@ -2283,21 +2279,19 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       // `push.default` half; the probe showed `branch.merge` rides along.
       git(["config", "remote.origin.push", "HEAD:refs/heads/fixed"], work);
       try {
-        assert.equal(
+        reachedLocalBoundary(
           runHook(barePush, {
             GIT_CONFIG_COUNT: "1",
             GIT_CONFIG_KEY_0: "push.default", GIT_CONFIG_VALUE_0: "current",
-          }).decision,
-          "allow",
-          "with remote.<n>.push supplying the refspec, an inherited push.default is inert",
+          }),
+          "with remote.<n>.push supplying the refspec, inert push.default reaches the intended local boundary",
         );
-        assert.equal(
+        reachedLocalBoundary(
           runHook(barePush, {
             GIT_CONFIG_COUNT: "1",
             GIT_CONFIG_KEY_0: "branch.main.merge", GIT_CONFIG_VALUE_0: "refs/heads/elsewhere",
-          }).decision,
-          "allow",
-          "the same precedence makes an inherited branch.merge inert",
+          }),
+          "with remote.<n>.push supplying the refspec, inert branch.merge reaches the intended local boundary",
         );
         // The control that stops this becoming a fail-open: the key that actually
         // supplies the refspec is still compared, so changing IT still denies.
@@ -2330,10 +2324,9 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
         git(["config", "--unset", "branch.main.merge"], work);
       }
     }
-    assert.equal(
-      runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }).decision,
-      "allow",
-      "an inherited transport variable is not a destination override",
+    reachedLocalBoundary(
+      runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }),
+      "an allowed inherited transport value reaches the intended local boundary",
     );
 
     // Round 7: config ROOT overrides, arbitrary inline variables, and an option
@@ -2365,10 +2358,9 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       `git -C ${work} push https://github.com/masonwells1/./CRX_Manager_V1.0.git HEAD:main`,
       /codex/i, "a `.` segment does not disguise the production destination",
     );
-    assert.equal(
-      runHook(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20" ${push}`).decision,
-      "allow",
-      "the documented keepalive prefix still works",
+    reachedLocalBoundary(
+      runHook(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20" ${push}`),
+      "the documented keepalive prefix reaches the intended local boundary",
     );
 
     // Round 10, end-to-end: `\"` is an escaped quote, not a delimiter. A tracker
@@ -2550,10 +2542,9 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       assert.equal(result.decision, "deny", "an inherited transport variable denies");
       assert.match(result.reason || "", /GIT_SSH_COMMAND/, "and the denial names it");
     }
-    assert.equal(
-      runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }).decision,
-      "allow",
-      "an inherited keepalive value in the documented shape still works",
+    reachedLocalBoundary(
+      runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }),
+      "an inherited keepalive value reaches the intended local boundary",
     );
     assert.equal(
       runHook(`export GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20"; ${push}`).decision,
@@ -2574,7 +2565,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       assert.equal(result.decision, "deny", "so is an inherited GIT_WORK_TREE");
       assert.match(result.reason, /GIT_WORK_TREE/, "and the denial names that too");
     }
-    assert.equal(runHook(push, { GIT_DIR: "" }).decision, "allow", "an empty selector is not a selection");
+    reachedLocalBoundary(runHook(push, { GIT_DIR: "" }), "an empty repository selector reaches the intended local boundary");
 
     // Round 21, end-to-end: the STORED twins of round 17's `--receive-pack`.
     // Nothing about the command line is unusual — the checkout itself remembers
@@ -2596,7 +2587,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
         git(["config", "--unset", key], work);
       }
     }
-    assert.equal(runHook(push).decision, "allow", "and unsetting them restores an ordinary push");
+    reachedLocalBoundary(runHook(push), "unsetting transport programs reaches the intended local boundary");
 
     // 2026-08-05 hoist regression: the transport-program and mirror-remote
     // checks used to sit AFTER `mainPushSource`'s `if (!srcRef) continue`, so
@@ -2617,7 +2608,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     } finally {
       git(["config", "--unset", "core.sshCommand"], work);
     }
-    assert.equal(runHook(featurePush).decision, "allow", "and unsetting it restores the ordinary feature-branch push");
+    reachedLocalBoundary(runHook(featurePush), "unsetting the feature transport program reaches the intended local boundary");
 
     // A named remote can push to every configured pushurl. The first URL is the
     // harmless local bare repo; the second invokes a custom remote helper that
@@ -2650,19 +2641,13 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       git(["config", "--unset-all", "url.git@github.com:masonwells1/CRX_.insteadOf"], work);
     }
 
-    // A raw path is not necessarily local after Git configuration is applied:
-    // insteadOf can replace the entire apparent path with the production URL.
-    // The feature-push path must consult the exact push environment before it
-    // takes the local-repository exception and skips the auto-merge lookup.
+    // A local raw destination can run receive hooks and can also be rewritten by
+    // Git configuration. It is denied before either hidden execution route.
     try {
       const localDestination = dest.replaceAll("\\", "/");
       git(["config", `url.${CRX_URL}.insteadOf`, localDestination], work);
-      const rewrittenLocal = runHook(
-        `git -C ${work.replaceAll("\\", "/")} push ${localDestination} HEAD:refs/heads/feature`,
-        { GH_TOKEN: "invalid-test-token", GITHUB_TOKEN: "invalid-test-token" },
-      );
-      assert.equal(rewrittenLocal.decision, "deny", "a local-looking feature destination rewritten to CRX is gated");
-      assert.match(rewrittenLocal.reason, /could not prove auto-merge is disabled/i, "the rewrite reaches the protected feature-push lookup");
+      const rewrittenLocal = runHook(`git -C ${work.replaceAll("\\", "/")} push ${localDestination} HEAD:refs/heads/feature`);
+      reachedLocalBoundary(rewrittenLocal, "a local-looking feature destination rewritten to CRX reaches the intended local boundary");
     } finally {
       git(["config", "--unset-all", `url.${CRX_URL}.insteadOf`], work);
     }
@@ -2694,21 +2679,20 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     // Control for the pair above: the same key set to false must still push.
     try {
       git(["config", "remote.origin.mirror", "false"], work);
-      assert.equal(
-        runHook(push).decision, "allow",
-        "a mirror setting explicitly turned off denies nothing",
+      reachedLocalBoundary(
+        runHook(push),
+        "a disabled mirror reaches the intended local boundary",
       );
     } finally {
       git(["config", "--unset-all", "remote.origin.mirror"], work);
     }
 
-    // Controls: the guard must not have become a blanket denier. Both of these
-    // run all the way through the destination lookups against the scratch repo.
-    assert.equal(runHook(push).decision, "allow", "an ordinary push to an unrelated remote stays allowed");
-    assert.equal(
-      runHook(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20" ${push}`).decision,
-      "allow",
-      "the documented SSH keepalive workaround is a transport option, not a destination override",
+    // Controls: ordinary local pushes reach the deliberate receive-hook boundary,
+    // rather than being refused earlier by an unrelated classifier.
+    reachedLocalBoundary(runHook(push), "an ordinary local push reaches the intended local boundary");
+    reachedLocalBoundary(
+      runHook(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20" ${push}`),
+      "the documented SSH keepalive workaround reaches the intended local boundary",
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });

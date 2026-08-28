@@ -49,6 +49,7 @@ eq(autopilotDecision("PowerShell", { command: "&gh pr merge 42 --squash --auto" 
 eq(autopilotDecision("PowerShell", { command: "gh pr m''erge 42 --auto" }), "deny", "empty-quote composed merge is never auto-approved");
 eq(autopilotDecision("PowerShell", { command: "g''h pr merge 42 --auto" }), "deny", "empty-quote composed gh executable is never auto-approved");
 eq(autopilotDecision("PowerShell", { command: "gh pr merge 42 --squash # --repo attacker/safe --match-head-commit deadbeef" }), "deny", "comment-forged merge context is never auto-approved");
+eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash", env: { GH_HOST: "attacker.example" } }), "deny", "structured GitHub host overrides are never auto-approved");
 eq(autopilotDecision("PowerShell", { command: "g`h pr merge 42 --auto" }), "deny", "PowerShell-composed gh is never auto-approved");
 eq(autopilotDecision("Bash", { command: "g${EMPTY}h pr merge 42 --auto" }), "deny", "POSIX-composed gh is never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh p\\r m\\erge 42 --auto" }), "deny", "POSIX-escaped GitHub words are never auto-approved");
