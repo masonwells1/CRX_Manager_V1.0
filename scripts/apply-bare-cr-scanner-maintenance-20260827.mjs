@@ -13,7 +13,7 @@ const PRODUCER = "scripts/apply-bare-cr-scanner-maintenance-20260827.mjs";
 const PRODUCER_PATH = path.join(REPO_DIR, ...PRODUCER.split("/"));
 const EXPECTED_INPUT_BLOB = "c8bec70830c643e474831985f5e6c3bd16630386";
 const EXPECTED_OUTPUT_BLOB = "e09a88ff0df5c235ccb05e0df0ac818b622639d0";
-const APPROVAL = "--approved-by-mason=2026-08-27-one-account-gate";
+const APPROVAL = "--one-account-gate-approval=2026-08-27";
 
 function git(args) {
   const result = spawnSync("git", args, { cwd: REPO_DIR, encoding: "utf8", shell: false, windowsHide: true });
