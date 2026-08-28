@@ -6,7 +6,8 @@ reporting migration aligns invoice-basis P&L, monthly reporting, and customer ye
 paid, overdue, and posted invoices. The COGS migration creates negative-cost return-credit lines from
 the exact historical source-invoice cost already recognized by those reports and assigns that reversal
 to the season for the America/Chicago business date at issuance time, while customer prior-year reporting remains on the original invoice
-season.
+season. The return-credit period check, invoice date, due date, and crop season all share that same
+Chicago business date, including the hours between UTC midnight and local midnight.
 
 Cached `unapply_credit_memo` retries revalidate authentication, exact actor binding,
 active-admin authorization, and the required reason before returning the financial result.

@@ -162,7 +162,12 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain("p.proconfig = ARRAY['search_path=public']::text[]");
     expect(migration.match(/0b9ef2b922c909de0cea7757bcfe95901c0781739eddd8521b09cfb1537907ba/g)).toHaveLength(2);
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_CURRENT_SEASON_DRIFT');
-    expect(migration).toContain("season = public.compute_season((now() AT TIME ZONE 'America/Chicago')::date)");
+    expect(migration).toContain("v_business_date date := (now() AT TIME ZONE 'America/Chicago')::date");
+    const chicagoDateBinding = migration.indexOf("PERFORM set_config('TimeZone', 'America/Chicago', true)");
+    const delegatedHeader = migration.indexOf('v_header := public._issue_return_credit_header_only_impl_20260825(');
+    expect(chicagoDateBinding).toBeGreaterThanOrEqual(0);
+    expect(delegatedHeader).toBeGreaterThan(chicagoDateBinding);
+    expect(migration).toContain('season = public.compute_season(v_business_date)');
     expect(migration).toContain("v_cached := public.check_idempotency(p_idempotency_key, 'unapply_credit_memo')");
     const unapplyWrapper = migration.slice(migration.indexOf('CREATE FUNCTION public.unapply_credit_memo('));
     const authRequired = unapplyWrapper.indexOf("RAISE EXCEPTION 'AUTH_REQUIRED'");
@@ -278,7 +283,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DELIVERY_ALLOCATION_DRIFT');
     expect(migration).toContain("p.prorettype = 'void'::regtype");
     expect(migration).toContain("p.prorettype = 'jsonb'::regtype");
-    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('0a804c99d1667aafbbf98a98021748736a5cf752732a39804f2243249c1153b0');
+    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('b3b6e765b01bf6832a571e8ce5e3c57cc348509fac9126dd906e86173e371a55');
     expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('150b7ad4f001929baecc73078c181de092477ced7b3a4b3f85bfb2d9438dd789');
     expect(migration).toContain("p_return_id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid");
     expect(migration).toContain('v_restock_qty := v_item.quantity * v_container_size');
@@ -448,7 +453,7 @@ describe('return-credit COGS migration', () => {
     const migrationSha256 = createHash('sha256')
       .update(migration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(migrationSha256).toBe('9f676f026b11e42445985193784fcf8c2a5c8a4d8ea7cca2bf0a7efd701cf888');
+    expect(migrationSha256).toBe('bb59fab408870a000505d3629c6fae4963e2484b81caed9153d9180e769cef89');
     expect(migrationHistory).toContain(`SQL sha256: \`${migrationSha256}\` (LF-normalized bytes)`);
     const deliverySurfaceSha256 = createHash('sha256')
       .update(deliverySurfaceMigration.replace(/\r\n/g, '\n'), 'utf8')

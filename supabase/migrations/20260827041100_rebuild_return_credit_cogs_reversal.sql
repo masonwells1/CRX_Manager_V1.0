@@ -1028,6 +1028,7 @@ CREATE FUNCTION public._issue_return_credit_impl(
 ) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $function$
 DECLARE
   v_cached jsonb; v_header jsonb; v_result jsonb; v_invoice_id uuid;
+  v_business_date date := (now() AT TIME ZONE 'America/Chicago')::date;
   v_cogs bigint;
   v_lock_order_item_id uuid;
   v_cap_violation jsonb;
@@ -1054,9 +1055,12 @@ BEGIN
     PERFORM pg_advisory_xact_lock(hashtextextended(v_lock_order_item_id::text, 361));
   END LOOP;
 
-  -- Preserve the current authorization, lifecycle, invoice-header, period and
-  -- financial-audit behavior; defer caching until the cost lines are complete.
-  -- This statement receives a fresh READ COMMITTED snapshot after any wait.
+  -- The delegated header helper uses CURRENT_DATE for its period gate and
+  -- invoice/due dates. Bind that entire header to the same Chicago business
+  -- date used for the credit season, including during the UTC/local-midnight
+  -- gap; defer caching until the cost lines are complete. This statement
+  -- receives a fresh READ COMMITTED snapshot after any wait.
+  PERFORM set_config('TimeZone', 'America/Chicago', true);
   v_header := public._issue_return_credit_header_only_impl_20260825(p_return_id, p_actor_id, NULL);
   v_invoice_id := (v_header ->> 'credit_invoice_id')::uuid;
   IF v_invoice_id IS NULL THEN RAISE EXCEPTION 'RETURN_CREDIT_HEADER_RESULT_INVALID'; END IF;
@@ -1240,7 +1244,7 @@ BEGIN
   -- can therefore produce negative current-season usage instead of restating
   -- the season in which the original sale occurred.
   SET total_cost_cents = -v_cogs,
-      season = public.compute_season((now() AT TIME ZONE 'America/Chicago')::date)
+      season = public.compute_season(v_business_date)
   WHERE id = v_invoice_id;
   IF EXISTS (
     SELECT 1
@@ -1270,7 +1274,7 @@ DO $postflight$
 DECLARE
   v_expected jsonb := jsonb_build_object(
     '_issue_return_credit_header_only_impl_20260825', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
-    '_issue_return_credit_impl', '0a804c99d1667aafbbf98a98021748736a5cf752732a39804f2243249c1153b0',
+    '_issue_return_credit_impl', 'b3b6e765b01bf6832a571e8ce5e3c57cc348509fac9126dd906e86173e371a55',
     '_receive_return_impl_before_inventory_seed_20260825', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
     '_receive_return_impl_20260714', '150b7ad4f001929baecc73078c181de092477ced7b3a4b3f85bfb2d9438dd789',
     'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
