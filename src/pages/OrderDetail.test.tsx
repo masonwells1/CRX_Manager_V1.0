@@ -7,7 +7,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const {
   mockFrom, mockRpc, mockToast, mockNavigate,
-  mockLogActivity, mockNotifyOrderStatusChange,
+  mockLogActivity, mockNotifyOrderStatusChange, mockSanitizeError,
 } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
@@ -15,6 +15,7 @@ const {
   mockNavigate: vi.fn(),
   mockLogActivity: vi.fn(),
   mockNotifyOrderStatusChange: vi.fn(),
+  mockSanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
 }));
 
 function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
@@ -53,7 +54,8 @@ vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
-  sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
+  describePostInvoiceBlock: vi.fn(() => null),
+  sanitizeError: mockSanitizeError,
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -150,6 +152,30 @@ describe('OrderDetail', () => {
       const matches = screen.getAllByText('ORD-0099');
       expect(matches.length).toBeGreaterThan(0);
     });
+  });
+
+  it('keeps Create Invoice available when the only linked invoice is a posted return credit', async () => {
+    const orderData = {
+      id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
+      order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
+      total_profit: 20000, total_margin_pct: 40.0, order_name: 'Spring Order', notes: '',
+      created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
+    };
+    const returnCredit = {
+      id: 'credit-1', order_id: 'ord-123', invoice_number: 'CM-0001',
+      invoice_type: 'credit_memo', status: 'posted', deleted_at: null,
+      total_amount_cents: -15000, paid_amount_cents: 0, prepay_applied_cents: 0,
+      balance_cents: -15000, write_off_cents: 0,
+    };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') return buildChain({ data: orderData, error: null });
+      if (table === 'invoices') return buildChain({ data: [returnCredit], error: null });
+      return buildChain({ data: [], error: null });
+    });
+
+    renderOrderDetail();
+
+    expect(await screen.findByRole('button', { name: 'Create Invoice' })).toBeInTheDocument();
   });
 
   it('#67: shows a plain Cancel Order action on a confirmed order, not the old dead-option Change Status dropdown', async () => {
@@ -313,5 +339,36 @@ describe('OrderDetail', () => {
       }),
     ));
     expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice')).toBe(false);
+  });
+
+  it('sanitizes an internal contention token when posting draft invoices', async () => {
+    const orderData = {
+      id: 'ord-123', order_number: 'ORD-0099', status: 'confirmed', customer_id: 'cust-1',
+      order_date: '2026-03-15', total_cents: 50000, total_cost: 30000, total_price: 50000,
+      total_profit: 20000, total_margin_pct: 40, order_name: 'Spring Order', notes: '',
+      created_at: '2026-03-15T00:00:00Z', delivery_priority: 'normal', po_number: null,
+    };
+    const splitDrafts = [{
+      id: 'inv-1', invoice_number: 'INV-1', invoice_group_id: 'group-1',
+      status: 'draft', invoice_type: 'chemical_sale', invoice_date: '2026-03-15',
+      due_date: null, total_amount_cents: 25000, balance_cents: 25000,
+    }];
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'orders') return buildChain({ data: orderData, error: null });
+      if (table === 'invoices') return buildChain({ data: splitDrafts, error: null });
+      return buildChain({ data: [], error: null });
+    });
+    const contention = { message: 'RETURN_CREDIT_SOURCE_CONCURRENT' };
+    mockRpc.mockResolvedValue({ data: null, error: contention });
+
+    renderOrderDetail();
+    fireEvent.click(await screen.findByRole('button', { name: /post all drafts/i }));
+
+    await waitFor(() => expect(mockSanitizeError).toHaveBeenCalledWith(contention));
+    expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('Wait a moment and try again'),
+    );
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('RETURN_CREDIT_SOURCE_CONCURRENT'));
   });
 });

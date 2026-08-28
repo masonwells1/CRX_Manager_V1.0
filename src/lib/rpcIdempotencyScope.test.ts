@@ -225,6 +225,25 @@ const ALIAS_SCOPED: Record<string, string> = {
  */
 const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   _guard_idempotency_key_insert: ['allocate_payment'],
+  // Direct EXECUTE is revoked. Migration 20260812130145 renamed the original
+  // cancel_return implementation behind the public cancel_return wrapper, and
+  // migration 20260827041500 re-emits that private implementation to preserve
+  // exact inventory reversal. Both layers deliberately share the one public
+  // cancel_return cache namespace so retries cannot create divergent receipts.
+  _cancel_return_intent_impl_20260812: ['cancel_return'],
+  // Direct EXECUTE is revoked. This private implementation remains behind the
+  // public create_invoice_from_order wrapper and deliberately shares that
+  // wrapper's cache namespace so a retry through either layer finds the same
+  // completed invoice. Migration 20260827041400 only re-emits the established
+  // implementation to tighten return-credit order gates.
+  _create_invoice_from_order_impl_20260718: ['create_invoice_from_order'],
+  // Direct EXECUTE is revoked. This private split-invoice implementation is
+  // the implementation half of create_split_invoices_from_order and must use
+  // the public operation namespace for one replay result across both layers.
+  // Migration 20260827041400 only re-emits it to tighten return-credit gates.
+  _create_split_invoices_from_order_provenance_impl_20260719: [
+    'create_split_invoices_from_order',
+  ],
   // Direct EXECUTE is revoked. Private middle layer of the full-cancel chain
   // (cancel_order -> _cancel_order_idem_impl_20260721 ->
   // _cancel_order_provenance_wrapper_20260719 -> THIS ->
@@ -309,6 +328,17 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // body only to consume the order line's allocated cents instead of
   // re-extending price x quantity.
   _create_invoice_for_unbilled_delivery_impl_20260718: ['create_invoice_for_unbilled_delivery'],
+  // Direct browser EXECUTE is revoked. This is the original business body
+  // behind the intent-bound public issue_return_credit wrapper: the public
+  // wrapper claims/replays the actor+return fingerprint, then the private
+  // implementation preserves the established issue_return_credit operation
+  // namespace for its legacy check/save pair. Giving the implementation a new
+  // private namespace would strand existing receipts and could replay a credit.
+  _issue_return_credit_impl: ['issue_return_credit'],
+  // Same legacy-operation contract for the private inventory receipt body.
+  // The intent-bound public wrapper owns the actor+return fingerprint while
+  // this service-role-only helper preserves the committed receive namespace.
+  _receive_return_impl_20260714: ['receive_return'],
   // Restore the Wave A alias exemption when its drafts are promoted from
   // scripts/.staging-migrations/.
 };

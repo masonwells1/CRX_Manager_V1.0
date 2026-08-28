@@ -1,0 +1,1702 @@
+-- Return-credit COGS reversal. A usable returned product is restored to the
+-- Main Warehouse even when its inventory row has not been created yet; the
+-- credit then reverses only the cost recognized by its original sale lines.
+-- Credit-memo reversals are not new below-cost sales, so their tightly scoped
+-- server context bypasses sale-only guards without weakening normal writes.
+-- This file must be applied transactionally; the guarded repository apply
+-- path and disposable prover both wrap each migration in one transaction.
+
+-- Freeze return reads and writes until the migration commits. ACCESS EXCLUSIVE
+-- is acquired up front because removing the cutover trigger needs that mode;
+-- taking it now avoids a late lock upgrade and its reader/return_items deadlock
+-- cycle. The zero-credit assertion below is therefore race-free.
+SET lock_timeout = '5s';
+LOCK TABLE public.returns IN ACCESS EXCLUSIVE MODE;
+
+DO $cutover_barrier$
+DECLARE
+  v_cutover_barrier regprocedure := to_regprocedure('public.block_return_credit_during_cogs_cutover()');
+BEGIN
+  IF v_cutover_barrier IS NULL THEN
+    RAISE EXCEPTION 'RETURN_COGS_CUTOVER_BARRIER_MISSING';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = v_cutover_barrier
+      AND p.prosecdef AND p.provolatile = 'v'
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+  )
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'block_return_credit_during_cogs_cutover') <> 1
+     OR has_function_privilege('anon', v_cutover_barrier, 'EXECUTE')
+     OR has_function_privilege('authenticated', v_cutover_barrier, 'EXECUTE')
+     OR has_function_privilege('service_role', v_cutover_barrier, 'EXECUTE')
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_trigger t
+       WHERE t.tgrelid = 'public.returns'::regclass
+         AND t.tgname = 'aa_crx_block_return_credit_during_cogs_cutover'
+         AND NOT t.tgisinternal
+         AND t.tgfoid = v_cutover_barrier
+    ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_CUTOVER_BARRIER_DRIFTED';
+  END IF;
+END;
+$cutover_barrier$;
+
+DO $preflight$
+DECLARE
+  v_expected jsonb := jsonb_build_object(
+    'void_invoice', 'c7a488d58bd876e92565bca9bd4edc90',
+    'unapply_credit_memo', '286de5b0ac196331713278f335ba1b02e73e9de334cc2fb5f22e49629922b374',
+    '_issue_return_credit_impl', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
+    '_receive_return_impl_20260714', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
+    '_enforce_below_cost_line', '42f7bcfb02fc14b82a9d994236d466130c372cd632ee63c22cda47733d3f8f51',
+    'guard_terminal_order_invoice_items', '62ab7b24b32b4ebfecb6c7046d747a1875eb3bd8ab3e9b3f6e1d115e7c761a9f',
+    '_allocated_delivery_cents', '1df1d230c19e5d129038b1e5dfbca30db0b369ea5a91a22f19dd98cc53129142',
+    'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
+    '_issue_return_credit_intent_impl_20260812', '55607c6dae0cc11f4837f67c54de88a6f4d83413cd3686e04c21bf33afa4ffa5',
+    'receive_return', '80873cb93b67293a811f6be91efb224f7f4dd085fa8c4282267336be430b8b6a',
+    '_receive_return_intent_impl_20260812', '9f5e2cfa95f6c0fb6ae06c3d7f0c04a31efdd8309b431f6dba5330c78aad9ded'
+  );
+  v_name text;
+  v_hash text;
+  v_trigger_hash text;
+BEGIN
+  SELECT encode(sha256(convert_to(pg_get_triggerdef(t.oid), 'UTF8')), 'hex') INTO v_trigger_hash
+  FROM pg_trigger t
+  WHERE t.tgrelid = 'public.invoice_items'::regclass AND t.tgname = 'zz_crx_below_cost_invoice_items' AND NOT t.tgisinternal;
+  FOREACH v_name IN ARRAY ARRAY[
+    'void_invoice','unapply_credit_memo','_issue_return_credit_impl','_receive_return_impl_20260714',
+    '_enforce_below_cost_line','guard_terminal_order_invoice_items',
+    '_allocated_delivery_cents',
+    'issue_return_credit','_issue_return_credit_intent_impl_20260812',
+    'receive_return','_receive_return_intent_impl_20260812'
+  ] LOOP
+    IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = v_name) <> 1 THEN
+      RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_OVERLOAD_DRIFT:%', v_name;
+    END IF;
+    SELECT CASE WHEN v_name = 'void_invoice'
+      THEN md5(p.prosrc)
+      ELSE encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex')
+    END INTO v_hash
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname = v_name;
+    IF v_hash IS DISTINCT FROM (v_expected ->> v_name) THEN
+      RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_DRIFT:%', v_name;
+    END IF;
+  END LOOP;
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'current_season') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = to_regprocedure('public.current_season()')
+         AND p.proargtypes = ''::oidvector
+         AND p.prorettype = 'integer'::regtype
+         AND NOT p.prosecdef AND p.provolatile = 's'
+         AND p.proconfig = ARRAY['search_path=public']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+         AND encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') =
+             '0b9ef2b922c909de0cea7757bcfe95901c0781739eddd8521b09cfb1537907ba'
+     )
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'void_invoice' AND p.proargtypes = '2950 25 25'::oidvector AND p.prorettype = 'void'::regtype) <> 1
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'unapply_credit_memo' AND p.proargtypes = '2950 25 2950 25'::oidvector AND p.prorettype = 'jsonb'::regtype) <> 1
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = '_issue_return_credit_impl' AND p.proargtypes = '2950 2950 25'::oidvector AND p.prorettype = 'jsonb'::regtype) <> 1
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = '_receive_return_impl_20260714' AND p.proargtypes = '2950 2950 25'::oidvector AND p.prorettype = 'jsonb'::regtype) <> 1
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = '_enforce_below_cost_line' AND p.proargtypes = ''::oidvector) <> 1
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'guard_terminal_order_invoice_items' AND p.proargtypes = ''::oidvector) <> 1
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = '_allocated_delivery_cents' AND p.proargtypes = '2950 1700 2950'::oidvector) <> 1
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'issue_return_credit' AND p.proargtypes = '2950 2950 25'::oidvector) <> 1
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = '_issue_return_credit_intent_impl_20260812' AND p.proargtypes = '2950 2950 25'::oidvector) <> 1
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'receive_return' AND p.proargtypes = '2950 2950 25'::oidvector) <> 1
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = '_receive_return_intent_impl_20260812' AND p.proargtypes = '2950 2950 25'::oidvector) <> 1
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public.void_invoice(uuid,text,text)'::regprocedure AND p.prosecdef AND p.provolatile = 'v' AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public.unapply_credit_memo(uuid,text,uuid,text)'::regprocedure AND p.prosecdef AND p.provolatile = 'v' AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public._issue_return_credit_impl(uuid,uuid,text)'::regprocedure AND p.prosecdef AND p.provolatile = 'v' AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public._receive_return_impl_20260714(uuid,uuid,text)'::regprocedure AND p.prosecdef AND p.provolatile = 'v' AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public.issue_return_credit(uuid,uuid,text)'::regprocedure AND p.prosecdef AND p.provolatile = 'v' AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public._issue_return_credit_intent_impl_20260812(uuid,uuid,text)'::regprocedure AND p.prosecdef AND p.provolatile = 'v' AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public.receive_return(uuid,uuid,text)'::regprocedure AND p.prosecdef AND p.provolatile = 'v' AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public._receive_return_intent_impl_20260812(uuid,uuid,text)'::regprocedure AND p.prosecdef AND p.provolatile = 'v' AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public._enforce_below_cost_line()'::regprocedure AND p.prosecdef AND p.provolatile = 'v' AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public.guard_terminal_order_invoice_items()'::regprocedure AND p.prosecdef AND p.provolatile = 'v' AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public._allocated_delivery_cents(uuid,numeric,uuid)'::regprocedure AND NOT p.prosecdef AND p.provolatile = 's' AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres')
+     OR has_function_privilege('anon', 'public.void_invoice(uuid,text,text)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.void_invoice(uuid,text,text)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.void_invoice(uuid,text,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.unapply_credit_memo(uuid,text,uuid,text)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.unapply_credit_memo(uuid,text,uuid,text)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.unapply_credit_memo(uuid,text,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._issue_return_credit_impl(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._issue_return_credit_impl(uuid,uuid,text)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public._issue_return_credit_impl(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._receive_return_impl_20260714(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._receive_return_impl_20260714(uuid,uuid,text)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public._receive_return_impl_20260714(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.issue_return_credit(uuid,uuid,text)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.issue_return_credit(uuid,uuid,text)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.issue_return_credit(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.receive_return(uuid,uuid,text)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.receive_return(uuid,uuid,text)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.receive_return(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._issue_return_credit_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._issue_return_credit_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public._issue_return_credit_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._receive_return_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._receive_return_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public._receive_return_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._enforce_below_cost_line()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._enforce_below_cost_line()', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public._enforce_below_cost_line()', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.guard_terminal_order_invoice_items()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.guard_terminal_order_invoice_items()', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.guard_terminal_order_invoice_items()', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._allocated_delivery_cents(uuid,numeric,uuid)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._allocated_delivery_cents(uuid,numeric,uuid)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public._allocated_delivery_cents(uuid,numeric,uuid)', 'EXECUTE') IS NOT TRUE
+     OR v_trigger_hash IS DISTINCT FROM 'c2ae0d583e558d9ea86f69a4870f35e324adf029798e54543fccf9a2dc0eb367' THEN
+    RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_CONTRACT_DRIFT';
+  END IF;
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'batch_void_invoices') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = 'public.batch_void_invoices(uuid[],text,uuid,text)'::regprocedure
+         AND p.prosecdef AND p.provolatile = 'v'
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+         AND position('PERFORM void_invoice(v_inv.id, p_void_reason)' IN p.prosrc) > 0
+         AND position('UPDATE invoices SET' IN p.prosrc) = 0
+     )
+     OR has_function_privilege('anon', 'public.batch_void_invoices(uuid[],text,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.batch_void_invoices(uuid[],text,uuid,text)', 'EXECUTE') IS NOT TRUE
+     OR has_function_privilege('service_role', 'public.batch_void_invoices(uuid[],text,uuid,text)', 'EXECUTE') IS NOT TRUE THEN
+    RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_BATCH_VOID_CONTRACT_DRIFT';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.return_items
+    WHERE order_item_id IS NOT NULL
+    GROUP BY return_id, order_item_id HAVING count(*) > 1
+  ) THEN RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_DUPLICATE_RETURN_LINE'; END IF;
+  IF EXISTS (SELECT 1 FROM public.returns WHERE status = 'credited') THEN
+    RAISE EXCEPTION 'RETURN_COGS_PREEXISTING_CREDIT_REQUIRES_BACKFILL';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM public.returns r
+    WHERE r.status = 'received'
+      AND EXISTS (
+        SELECT 1 FROM public.return_items ri
+        WHERE ri.return_id = r.id AND ri.restock AND NOT ri.restocked
+      )
+  ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_RECEIVED_UNRESTOCKED_REQUIRES_REPAIR';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM public.returns r
+    JOIN public.return_items ri ON ri.return_id = r.id
+    LEFT JOIN public.order_items oi
+      ON oi.id = ri.order_item_id
+     AND oi.product_id = ri.product_id
+    WHERE r.deleted_at IS NULL
+      AND r.status IN ('requested','approved','received')
+      AND ri.order_item_id IS NOT NULL
+      AND (
+        oi.id IS NULL
+        OR ri.unit IS DISTINCT FROM COALESCE(oi.unit_size, 'ea')
+      )
+  ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_NONTERMINAL_RETURN_UNIT_REQUIRES_REPAIR';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM public.returns r
+    JOIN public.return_items ri ON ri.return_id = r.id
+    JOIN public.invoice_items ii
+      ON ii.order_item_id = ri.order_item_id
+     AND ii.product_id = ri.product_id
+    JOIN public.invoices inv ON inv.id = ii.invoice_id
+    WHERE r.deleted_at IS NULL
+      AND r.status = 'received'
+      AND inv.invoice_type <> 'credit_memo'
+      AND inv.deleted_at IS NULL
+      AND inv.status IN ('posted','overdue','paid')
+      AND ii.quantity > 0
+      AND ii.cost_cents > 0
+      AND ii.unit_size IS DISTINCT FROM ri.unit
+  ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_RECEIVED_SOURCE_UNIT_REQUIRES_REPAIR';
+  END IF;
+  -- OPEN_RETURN_INVENTORY_UNIT_PREFLIGHT: keep this marker unique so the
+  -- mutation harness removes this guard and no neighboring preflight.
+  IF EXISTS (
+    SELECT 1
+    FROM public.returns r
+    JOIN public.return_items ri ON ri.return_id = r.id
+    LEFT JOIN public.order_items oi
+      ON oi.id = ri.order_item_id
+     AND oi.product_id = ri.product_id
+    JOIN public.products p ON p.id = ri.product_id
+    LEFT JOIN public.inventory i
+      ON i.product_id = ri.product_id
+     AND i.location = 'Main Warehouse'
+    CROSS JOIN LATERAL (
+      SELECT
+        CASE
+          WHEN ri.order_item_id IS NULL THEN ri.unit
+          ELSE COALESCE(oi.unit_size, 'ea')
+        END AS source_unit,
+        COALESCE(NULLIF(btrim(p.inventory_unit), ''), NULLIF(btrim(p.unit_size), '')) AS product_inventory_unit
+    ) units
+    WHERE r.deleted_at IS NULL
+      AND r.status IN ('requested','approved','received')
+      AND ri.restock
+      AND NOT ri.restocked
+      AND (
+        COALESCE(NULLIF(btrim(i.unit_size), ''), units.product_inventory_unit) IS NULL
+        OR lower(COALESCE(NULLIF(btrim(i.unit_size), ''), units.product_inventory_unit))
+           IS DISTINCT FROM lower(btrim(units.source_unit))
+      )
+      AND NOT COALESCE((
+        r.id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid
+        AND ri.id = 'c4f6cc7d-0bbd-4c25-8bc0-c2c9e84aaadd'::uuid
+        AND lower(btrim(units.source_unit)) = 'ea'
+        AND ri.quantity = 15
+        AND p.container_size = 2.5
+        AND lower(COALESCE(NULLIF(btrim(i.unit_size), ''), units.product_inventory_unit))
+            = lower(units.product_inventory_unit)
+      ), false)
+  ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_OPEN_RETURN_INVENTORY_UNIT_REQUIRES_REPAIR';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint c
+    WHERE c.conrelid = 'public.inventory'::regclass
+      AND c.contype = 'u'
+      AND c.convalidated
+      AND pg_get_constraintdef(c.oid) = 'UNIQUE (product_id, location)'
+  ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_INVENTORY_UPSERT_CONSTRAINT';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM public.invoice_items ii
+    JOIN public.invoices i ON i.id = ii.invoice_id
+    WHERE i.invoice_type = 'credit_memo'
+      AND i.status IN ('posted','overdue','paid') AND i.deleted_at IS NULL
+      AND ii.quantity < 0 AND ii.cost_cents > 0 AND ii.order_item_id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_UNLINKED_COST_CREDIT';
+  END IF;
+  IF EXISTS (
+       SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public'
+         AND p.proname IN (
+           'guard_return_credit_source_recognition',
+           'guard_return_credit_lineage',
+           'guard_recognized_return_credit_delete',
+           '_void_invoice_return_credit_guard_impl_20260826',
+           '_unapply_return_credit_guard_impl_20260826'
+         )
+     )
+     OR EXISTS (
+       SELECT 1 FROM pg_trigger t
+       WHERE (t.tgrelid, t.tgname) IN (
+         ('public.invoices'::regclass, 'aa_crx_guard_return_credit_source_recognition'),
+         ('public.invoice_items'::regclass, 'aa_crx_guard_return_credit_lineage'),
+         ('public.returns'::regclass, 'aa_crx_guard_recognized_return_credit_delete')
+       )
+         AND NOT t.tgisinternal
+     ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_SOURCE_GUARD_COLLISION';
+  END IF;
+  IF to_regclass('public.returns_credit_invoice_id_active_idx') IS NOT NULL THEN
+    RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_INDEX_COLLISION';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'invoice_items'
+      AND column_name IN ('return_credit_cogs_cents', 'return_credit_source_item_id')
+  ) OR EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.invoice_items'::regclass
+      AND conname IN (
+        'invoice_items_return_credit_cogs_cents_nonpositive_chk',
+        'invoice_items_return_credit_source_item_fk',
+        'invoice_items_return_credit_source_shape_chk'
+      )
+  ) OR to_regclass('public.invoice_items_return_credit_source_item_idx') IS NOT NULL THEN
+    RAISE EXCEPTION 'RETURN_COGS_PREFLIGHT_ALLOCATION_LEDGER_COLLISION';
+  END IF;
+END;
+$preflight$;
+
+-- Exact extended COGS attributed to each RPC-authored return-credit line.
+-- cost_cents remains the source lot's per-unit cost for lineage; this bigint
+-- ledger preserves the penny-exact telescoped allocation for cumulative caps.
+ALTER TABLE public.invoice_items
+  ADD COLUMN return_credit_cogs_cents bigint;
+ALTER TABLE public.invoice_items
+  ADD COLUMN return_credit_source_item_id uuid;
+ALTER TABLE public.invoice_items
+  ADD CONSTRAINT invoice_items_return_credit_cogs_cents_nonpositive_chk
+  CHECK (return_credit_cogs_cents IS NULL OR return_credit_cogs_cents <= 0);
+ALTER TABLE public.invoice_items
+  ADD CONSTRAINT invoice_items_return_credit_source_item_fk
+  FOREIGN KEY (return_credit_source_item_id)
+  REFERENCES public.invoice_items(id) ON DELETE RESTRICT;
+CREATE INDEX invoice_items_return_credit_source_item_idx
+  ON public.invoice_items (return_credit_source_item_id)
+  WHERE return_credit_source_item_id IS NOT NULL;
+ALTER TABLE public.invoice_items
+  ADD CONSTRAINT invoice_items_return_credit_source_shape_chk
+  CHECK (
+    return_credit_source_item_id IS NULL
+    OR (quantity < 0 AND cost_cents > 0 AND return_credit_cogs_cents IS NOT NULL)
+  );
+
+-- Credit-memo lines are accounting reversals, not proof that product was sold
+-- or delivered. Deliberately exclude every credit memo (including a manual
+-- memo) from billable allocation: an AR adjustment never creates fresh
+-- delivery billing headroom. Only active non-credit sale invoices allocate it.
+CREATE OR REPLACE FUNCTION public._allocated_delivery_cents(
+  p_order_item_id uuid,
+  p_quantity numeric,
+  p_exclude_invoice_id uuid DEFAULT NULL
+)
+RETURNS bigint
+LANGUAGE plpgsql
+STABLE
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_prior_qty numeric := 0;
+  v_prior_cents bigint := 0;
+BEGIN
+  IF p_order_item_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT COALESCE(SUM(ii.quantity), 0), COALESCE(SUM(ii.extended_cents), 0)
+    INTO v_prior_qty, v_prior_cents
+    FROM public.invoice_items ii
+    JOIN public.invoices inv ON inv.id = ii.invoice_id
+   WHERE ii.order_item_id = p_order_item_id
+     AND inv.invoice_type <> 'credit_memo'
+     AND inv.deleted_at IS NULL
+     AND inv.status NOT IN ('voided', 'cancelled')
+     AND (p_exclude_invoice_id IS NULL OR inv.id <> p_exclude_invoice_id);
+
+  RETURN GREATEST(
+    public._allocated_cumulative_cents(
+      p_order_item_id,
+      v_prior_qty + GREATEST(COALESCE(p_quantity, 0), 0)
+    ) - v_prior_cents,
+    0);
+END;
+$function$;
+REVOKE ALL ON FUNCTION public._allocated_delivery_cents(uuid, numeric, uuid)
+  FROM PUBLIC, anon, authenticated;
+
+CREATE INDEX returns_credit_invoice_id_active_idx
+  ON public.returns (credit_invoice_id)
+  WHERE credit_invoice_id IS NOT NULL;
+
+-- The database already rejects duplicate payload order-item ids. Make the
+-- invariant structural too, so a future direct writer cannot double-spend a
+-- recognized invoice lot.
+ALTER TABLE public.return_items
+  ADD CONSTRAINT return_items_return_order_item_unique UNIQUE (return_id, order_item_id);
+
+-- Persist the exact inventory-unit quantity that receive_return actually
+-- added. return_items.quantity remains the customer/source-unit quantity and
+-- cannot safely drive a later cancellation when the one pinned legacy RMA is
+-- converted from containers to gallons.
+ALTER TABLE public.return_items
+  ADD COLUMN restocked_quantity numeric;
+ALTER TABLE public.return_items
+  ADD CONSTRAINT return_items_restocked_quantity_positive_chk
+  CHECK (restocked_quantity IS NULL OR restocked_quantity > 0);
+
+ALTER FUNCTION public._receive_return_impl_20260714(uuid, uuid, text)
+  RENAME TO _receive_return_impl_before_inventory_seed_20260825;
+REVOKE ALL ON FUNCTION public._receive_return_impl_before_inventory_seed_20260825(uuid, uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+-- A received return is physically verified stock coming back into the
+-- warehouse. It is not a phantom row manufactured by a delivery shortage, so
+-- manufactured_at_delivery deliberately keeps its false default.
+CREATE FUNCTION public._receive_return_impl_20260714(
+  p_return_id uuid, p_received_by uuid, p_idempotency_key text DEFAULT NULL
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $function$
+DECLARE
+  v_return record; v_item record; v_cached jsonb; v_result jsonb;
+  v_restocked_qty numeric := 0; v_restocked_count int := 0;
+  v_actor uuid := auth.uid();
+  v_source_delivery_id uuid;
+  v_inventory_unit text;
+  v_product_inventory_unit text;
+  v_container_size numeric;
+  v_restock_qty numeric;
+BEGIN
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF p_received_by IS NOT NULL AND p_received_by IS DISTINCT FROM v_actor THEN RAISE EXCEPTION 'ACTOR_MISMATCH'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = v_actor AND is_active AND role IN ('admin','sales_rep')) THEN RAISE EXCEPTION 'INSUFFICIENT_ROLE'; END IF;
+  IF p_idempotency_key IS NOT NULL THEN
+    v_cached := public.check_idempotency(p_idempotency_key, 'receive_return');
+    IF v_cached IS NOT NULL THEN RETURN v_cached; END IF;
+  END IF;
+  SELECT id, return_number, status, customer_id, order_id INTO v_return FROM public.returns WHERE id = p_return_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'RETURN_NOT_FOUND'; END IF;
+  IF v_return.status <> 'approved' THEN RAISE EXCEPTION 'RETURN_NOT_APPROVED:%', v_return.status; END IF;
+
+  -- Serialize receipt against every delivery that can back this return. Delivery
+  -- void/cancel locks the same row first, so whichever operation wins forces the
+  -- loser to re-read the committed delivery state before changing inventory.
+  -- The one pinned source-free legacy RMA has no order_id and is handled by its
+  -- exact item/product/unit compatibility branch below.
+  IF v_return.order_id IS NOT NULL THEN
+    IF EXISTS (
+      SELECT 1 FROM public.return_items ri
+      WHERE ri.return_id = p_return_id
+        AND ri.order_item_id IS NULL
+    ) THEN
+      RAISE EXCEPTION 'RETURN_SOURCE_DELIVERY_AMBIGUOUS';
+    END IF;
+
+    FOR v_source_delivery_id IN
+      SELECT d.id
+      FROM public.deliveries d
+      WHERE d.order_id = v_return.order_id
+        AND d.deleted_at IS NULL
+        AND EXISTS (
+          SELECT 1
+          FROM public.delivery_items di
+          JOIN public.return_items ri
+            ON ri.return_id = p_return_id
+           AND ri.order_item_id = di.order_item_id
+          WHERE di.delivery_id = d.id
+        )
+      ORDER BY d.id
+    LOOP
+      PERFORM 1
+      FROM public.deliveries d
+      WHERE d.id = v_source_delivery_id
+      FOR UPDATE;
+    END LOOP;
+
+    IF EXISTS (
+      SELECT 1
+      FROM public.return_items ri
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(di.quantity_delivered), 0) AS delivered_quantity
+        FROM public.deliveries d
+        JOIN public.delivery_items di ON di.delivery_id = d.id
+        WHERE d.order_id = v_return.order_id
+          AND d.status = 'completed'
+          AND d.deleted_at IS NULL
+          AND di.order_item_id = ri.order_item_id
+      ) backed ON true
+      WHERE ri.return_id = p_return_id
+        AND (
+          ri.order_item_id IS NULL
+          OR backed.delivered_quantity < ri.quantity
+        )
+    ) THEN
+      RAISE EXCEPTION 'RETURN_SOURCE_DELIVERY_NOT_COMPLETED';
+    END IF;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.return_items ri
+    LEFT JOIN public.order_items oi
+      ON oi.id = ri.order_item_id
+     AND oi.product_id = ri.product_id
+    WHERE ri.return_id = p_return_id
+      AND ri.restock
+      AND NOT ri.restocked
+      AND ri.order_item_id IS NOT NULL
+      AND (
+        oi.id IS NULL
+        OR ri.unit IS DISTINCT FROM COALESCE(oi.unit_size, 'ea')
+      )
+  ) THEN
+    RAISE EXCEPTION 'RETURN_CREDIT_UNIT_MISMATCH';
+  END IF;
+  FOR v_item IN
+    SELECT ri.id AS item_id, ri.product_id, ri.quantity, ri.product_name, ri.condition,
+           CASE
+             WHEN ri.order_item_id IS NULL THEN ri.unit
+             ELSE COALESCE(oi.unit_size, 'ea')
+           END AS source_unit
+    FROM public.return_items ri
+    LEFT JOIN public.order_items oi
+      ON oi.id = ri.order_item_id
+     AND oi.product_id = ri.product_id
+    WHERE ri.return_id = p_return_id AND ri.restock AND NOT ri.restocked
+    ORDER BY ri.sort_order, ri.id
+  LOOP
+    v_restock_qty := v_item.quantity;
+    SELECT NULLIF(btrim(i.unit_size), '')
+      INTO v_inventory_unit
+    FROM public.inventory i
+    WHERE i.product_id = v_item.product_id
+      AND i.location = 'Main Warehouse'
+    FOR UPDATE;
+    SELECT COALESCE(NULLIF(btrim(p.inventory_unit), ''), NULLIF(btrim(p.unit_size), '')),
+           p.container_size
+      INTO v_product_inventory_unit, v_container_size
+    FROM public.products p
+    WHERE p.id = v_item.product_id;
+    IF v_inventory_unit IS NULL THEN
+      v_inventory_unit := v_product_inventory_unit;
+    END IF;
+    IF v_inventory_unit IS NULL
+       OR lower(v_inventory_unit) IS DISTINCT FROM lower(btrim(v_item.source_unit)) THEN
+      -- The only source-free production RMA predates unit-lineage hardening and
+      -- records containers as "ea". Its exact product is stocked in gallons
+      -- with an authoritative 2.5-gallon container size. Preserve that pinned
+      -- compatibility path without allowing a general unit guess.
+      IF p_return_id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid
+         AND v_item.item_id = 'c4f6cc7d-0bbd-4c25-8bc0-c2c9e84aaadd'::uuid
+         AND lower(btrim(v_item.source_unit)) = 'ea'
+         AND v_item.quantity = 15
+         AND v_container_size = 2.5
+         AND lower(v_inventory_unit) = lower(v_product_inventory_unit) THEN
+        v_restock_qty := v_item.quantity * v_container_size;
+      ELSE
+        RAISE EXCEPTION 'RETURN_CREDIT_INVENTORY_UNIT_MISMATCH';
+      END IF;
+    END IF;
+    INSERT INTO public.inventory (product_id, location, quantity_available, quantity_prebooked, quantity_on_order, unit_size)
+    VALUES (v_item.product_id, 'Main Warehouse', v_restock_qty, 0, 0, v_inventory_unit)
+    ON CONFLICT (product_id, location) DO UPDATE
+      SET quantity_available = public.inventory.quantity_available + EXCLUDED.quantity_available,
+          updated_at = now();
+    INSERT INTO public.inventory_transactions (product_id, transaction_type, quantity, to_location, performed_by, notes)
+    VALUES (v_item.product_id, 'returned', v_restock_qty, 'Main Warehouse', v_actor,
+            'Return ' || v_return.return_number || ': ' || v_item.product_name || ' (' || v_item.condition || ')');
+    UPDATE public.return_items
+       SET restocked = true,
+           restocked_quantity = v_restock_qty
+     WHERE id = v_item.item_id;
+    v_restocked_qty := v_restocked_qty + v_restock_qty;
+    v_restocked_count := v_restocked_count + 1;
+  END LOOP;
+  PERFORM set_config('app.return_rpc', 'true', true);
+  UPDATE public.returns SET status = 'received', received_by = v_actor, received_at = now(), updated_at = now() WHERE id = p_return_id;
+  INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id, customer_id)
+  VALUES ('return_received', 'Return ' || v_return.return_number || ' received - ' || v_restocked_count || ' item(s) restocked', v_actor, 'return', p_return_id, v_return.customer_id);
+  v_result := jsonb_build_object('success', true, 'return_id', p_return_id, 'return_number', v_return.return_number, 'status', 'received', 'restocked_count', v_restocked_count, 'restocked_quantity', v_restocked_qty, 'skipped_count', 0);
+  IF p_idempotency_key IS NOT NULL THEN PERFORM public.save_idempotency(p_idempotency_key, 'receive_return', v_result); END IF;
+  RETURN v_result;
+END;
+$function$;
+REVOKE ALL ON FUNCTION public._receive_return_impl_20260714(uuid, uuid, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._receive_return_impl_20260714(uuid, uuid, text) TO service_role;
+
+DROP TRIGGER IF EXISTS zz_crx_below_cost_invoice_items ON public.invoice_items;
+CREATE TRIGGER zz_crx_below_cost_invoice_items BEFORE INSERT OR UPDATE OF product_id, order_item_id, unit_price_cents, extended_cents, cost_cents, quantity, is_application_fee ON public.invoice_items
+  FOR EACH ROW WHEN (NOT (NEW.quantity < 0 AND current_setting('app.crx_return_credit_lineage', true) = '1'))
+  EXECUTE FUNCTION public._enforce_below_cost_line();
+
+-- Once an active return credit reverses a sale line, that source sale must
+-- remain recognized until the credit is voided/unapplied. Otherwise the
+-- positive sale COGS/revenue disappears while the negative reversal remains.
+CREATE FUNCTION public.guard_return_credit_source_recognition()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_leaves_recognized boolean;
+  v_enters_recognized boolean := false;
+  v_source_basis_changes boolean := false;
+  v_lock_order_item_id uuid;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    v_leaves_recognized := true;
+  ELSE
+    v_leaves_recognized := NEW.deleted_at IS NOT NULL
+      OR NEW.status IS NULL
+      OR NEW.status NOT IN ('posted','overdue','paid')
+      OR NEW.invoice_type = 'credit_memo';
+    v_source_basis_changes := NEW.invoice_type IS DISTINCT FROM OLD.invoice_type
+      OR NEW.invoice_date IS DISTINCT FROM OLD.invoice_date;
+    v_enters_recognized := OLD.invoice_type <> 'credit_memo'
+      AND NEW.invoice_type <> 'credit_memo'
+      AND (OLD.status IS NULL OR OLD.status NOT IN ('posted','overdue','paid') OR OLD.deleted_at IS NOT NULL)
+      AND NEW.status IN ('posted','overdue','paid')
+      AND NEW.deleted_at IS NULL;
+  END IF;
+  IF OLD.invoice_type = 'credit_memo'
+     AND OLD.status IN ('posted','overdue','paid')
+     AND OLD.deleted_at IS NULL
+     AND EXISTS (
+       SELECT 1 FROM public.returns r WHERE r.credit_invoice_id = OLD.id
+     ) THEN
+    IF TG_OP = 'DELETE' THEN
+      RAISE EXCEPTION 'RETURN_CREDIT_HEADER_IMMUTABLE';
+    ELSIF current_setting('app.crx_return_credit_lineage', true) = '1' THEN
+      NULL;
+    ELSIF TG_OP = 'UPDATE'
+       AND current_setting('app.crx_return_credit_void', true) = '1'
+       AND NEW.status = 'voided'
+       AND NEW.invoice_type IS NOT DISTINCT FROM OLD.invoice_type
+       AND NEW.invoice_date IS NOT DISTINCT FROM OLD.invoice_date
+       AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
+       AND NEW.season IS NOT DISTINCT FROM OLD.season
+       AND NEW.total_amount_cents = 0
+       AND NEW.total_cost_cents IS NOT DISTINCT FROM OLD.total_cost_cents THEN
+      NULL;
+    ELSIF TG_OP = 'UPDATE'
+       AND current_setting('app.crx_return_credit_unapply', true) = '1'
+       AND NEW.status = 'voided'
+       AND NEW.invoice_type IS NOT DISTINCT FROM OLD.invoice_type
+       AND NEW.invoice_date IS NOT DISTINCT FROM OLD.invoice_date
+       AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at
+       AND NEW.season IS NOT DISTINCT FROM OLD.season
+       AND NEW.total_amount_cents IS NOT DISTINCT FROM OLD.total_amount_cents
+       AND NEW.total_cost_cents IS NOT DISTINCT FROM OLD.total_cost_cents THEN
+      NULL;
+    ELSIF v_leaves_recognized
+       OR ROW(NEW.total_amount_cents, NEW.total_cost_cents, NEW.season, NEW.invoice_type, NEW.invoice_date)
+          IS DISTINCT FROM ROW(OLD.total_amount_cents, OLD.total_cost_cents, OLD.season, OLD.invoice_type, OLD.invoice_date) THEN
+      RAISE EXCEPTION 'RETURN_CREDIT_HEADER_IMMUTABLE';
+    END IF;
+  END IF;
+  IF OLD.invoice_type <> 'credit_memo'
+     AND (
+       (OLD.status IN ('posted','overdue','paid') AND OLD.deleted_at IS NULL AND (v_leaves_recognized OR v_source_basis_changes))
+       OR v_enters_recognized
+     ) THEN
+    -- Only the dangerous transition takes the shared lineage locks. Fail fast
+    -- if credit issuance already owns one: the posting path holds its invoice
+    -- row before this trigger, so waiting here would create a three-way cycle
+    -- with delivery completion's order-item -> invoice lock order.
+    FOR v_lock_order_item_id IN
+      SELECT DISTINCT ii.order_item_id
+      FROM public.invoice_items ii
+      WHERE ii.invoice_id = OLD.id AND ii.order_item_id IS NOT NULL
+      ORDER BY ii.order_item_id
+    LOOP
+      IF NOT pg_try_advisory_xact_lock(hashtextextended(v_lock_order_item_id::text, 361)) THEN
+        RAISE EXCEPTION 'RETURN_CREDIT_SOURCE_CONCURRENT';
+      END IF;
+    END LOOP;
+    IF (v_leaves_recognized OR v_source_basis_changes) AND EXISTS (
+       SELECT 1
+       FROM public.invoice_items source_line
+       JOIN public.invoice_items credit_line
+        ON credit_line.return_credit_source_item_id = source_line.id
+        AND credit_line.quantity < 0
+       JOIN public.invoices credit_invoice ON credit_invoice.id = credit_line.invoice_id
+       WHERE source_line.invoice_id = OLD.id
+         AND source_line.order_item_id IS NOT NULL
+         AND credit_invoice.invoice_type = 'credit_memo'
+         AND credit_invoice.status IN ('posted','overdue','paid')
+         AND credit_invoice.deleted_at IS NULL
+     ) THEN
+      RAISE EXCEPTION 'RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED';
+    END IF;
+    IF v_enters_recognized AND EXISTS (
+       SELECT 1
+       FROM public.invoice_items source_line
+       WHERE source_line.invoice_id = OLD.id
+         AND source_line.order_item_id IS NOT NULL
+         AND source_line.quantity > 0
+         AND (
+           SELECT COALESCE(SUM(ri.quantity), 0)
+           FROM public.returns r
+           JOIN public.invoices credit_invoice ON credit_invoice.id = r.credit_invoice_id
+           JOIN public.return_items ri ON ri.return_id = r.id
+           WHERE credit_invoice.invoice_type = 'credit_memo'
+             AND credit_invoice.status IN ('posted','overdue','paid')
+             AND credit_invoice.deleted_at IS NULL
+             AND ri.restock
+             AND ri.restocked
+             AND ri.order_item_id = source_line.order_item_id
+             AND ri.product_id = source_line.product_id
+             AND ri.unit IS NOT DISTINCT FROM source_line.unit_size
+         ) > (
+           SELECT COALESCE(SUM(existing_line.quantity), 0)
+           FROM public.invoice_items existing_line
+           JOIN public.invoices existing_invoice ON existing_invoice.id = existing_line.invoice_id
+           WHERE existing_invoice.id <> OLD.id
+             AND existing_invoice.invoice_type <> 'credit_memo'
+             AND existing_invoice.status IN ('posted','overdue','paid')
+             AND existing_invoice.deleted_at IS NULL
+             AND existing_line.quantity > 0
+             AND existing_line.order_item_id = source_line.order_item_id
+             AND existing_line.product_id = source_line.product_id
+             AND existing_line.unit_size IS NOT DISTINCT FROM source_line.unit_size
+         )
+     ) THEN
+      RAISE EXCEPTION 'RETURN_CREDIT_SOURCE_POST_REQUIRES_REISSUE';
+    END IF;
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$function$;
+REVOKE ALL ON FUNCTION public.guard_return_credit_source_recognition() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER aa_crx_guard_return_credit_source_recognition
+  BEFORE UPDATE OF status, deleted_at, total_amount_cents, total_cost_cents, season, invoice_type, invoice_date OR DELETE ON public.invoices
+  FOR EACH ROW EXECUTE FUNCTION public.guard_return_credit_source_recognition();
+
+-- Keep the protected header reachable. Deleting the parent return while its
+-- credit is recognized would silently switch reports from the exact header
+-- reversal to per-line fallback rounding.
+CREATE FUNCTION public.guard_recognized_return_credit_delete()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  IF OLD.credit_invoice_id IS NOT NULL
+     AND EXISTS (
+       SELECT 1
+       FROM public.invoices i
+       WHERE i.id = OLD.credit_invoice_id
+         AND i.invoice_type = 'credit_memo'
+         AND i.status IN ('posted','overdue','paid')
+         AND i.deleted_at IS NULL
+     ) THEN
+    RAISE EXCEPTION 'RETURN_CREDIT_PARENT_IMMUTABLE';
+  END IF;
+  RETURN OLD;
+END;
+$function$;
+REVOKE ALL ON FUNCTION public.guard_recognized_return_credit_delete() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER aa_crx_guard_recognized_return_credit_delete
+  BEFORE DELETE ON public.returns
+  FOR EACH ROW EXECUTE FUNCTION public.guard_recognized_return_credit_delete();
+
+-- The normal invoice-detail action calls void_invoice for every invoice type.
+-- Preserve that supported lifecycle for return-linked credit memos, but expose
+-- the narrow trigger context only around the existing admin-only, atomic void
+-- implementation. Its established return cleanup must complete before this
+-- wrapper returns, or the whole transaction fails closed.
+ALTER FUNCTION public.void_invoice(uuid, text, text)
+  RENAME TO _void_invoice_return_credit_guard_impl_20260826;
+REVOKE ALL ON FUNCTION public._void_invoice_return_credit_guard_impl_20260826(uuid, text, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE FUNCTION public.void_invoice(
+  p_invoice_id uuid,
+  p_void_reason text,
+  p_idempotency_key text DEFAULT NULL::text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_is_return_credit boolean;
+BEGIN
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.returns r
+    WHERE r.credit_invoice_id = p_invoice_id
+  ) INTO v_is_return_credit;
+
+  IF v_is_return_credit THEN
+    PERFORM set_config('app.crx_return_credit_void', '1', true);
+  END IF;
+
+  BEGIN
+    PERFORM public._void_invoice_return_credit_guard_impl_20260826(
+      p_invoice_id,
+      p_void_reason,
+      p_idempotency_key
+    );
+  EXCEPTION WHEN OTHERS THEN
+    IF v_is_return_credit THEN
+      PERFORM set_config('app.crx_return_credit_void', '0', true);
+    END IF;
+    RAISE;
+  END;
+
+  IF v_is_return_credit THEN
+    PERFORM set_config('app.crx_return_credit_void', '0', true);
+    IF EXISTS (
+      SELECT 1
+      FROM public.returns r
+      WHERE r.credit_invoice_id = p_invoice_id
+    ) THEN
+      RAISE EXCEPTION 'RETURN_CREDIT_VOID_RELEASE_FAILED';
+    END IF;
+  END IF;
+END;
+$function$;
+REVOKE ALL ON FUNCTION public.void_invoice(uuid, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.void_invoice(uuid, text, text) TO authenticated, service_role;
+
+ALTER FUNCTION public.unapply_credit_memo(uuid, text, uuid, text)
+  RENAME TO _unapply_return_credit_guard_impl_20260826;
+REVOKE ALL ON FUNCTION public._unapply_return_credit_guard_impl_20260826(uuid, text, uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE FUNCTION public.unapply_credit_memo(
+  p_credit_memo_id uuid,
+  p_reason text,
+  p_performed_by uuid DEFAULT NULL::uuid,
+  p_idempotency_key text DEFAULT NULL::text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_actor uuid;
+  v_is_return_credit boolean;
+  v_cached jsonb;
+  v_result jsonb;
+BEGIN
+  -- Revalidate the full authorization envelope before a cached replay can
+  -- disclose an admin-only financial result. The delegated legacy function
+  -- performs the same checks for first execution, but it is not reached when
+  -- this wrapper returns a cached result.
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN
+    RAISE EXCEPTION 'AUTH_REQUIRED';
+  END IF;
+  IF p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = v_actor
+      AND p.is_active = true
+      AND p.role = 'admin'
+  ) THEN
+    RAISE EXCEPTION 'INSUFFICIENT_ROLE';
+  END IF;
+  IF p_reason IS NULL OR btrim(p_reason) = '' THEN
+    RAISE EXCEPTION 'Reason is required to unapply a credit memo';
+  END IF;
+
+  -- Acquire the shared key-only advisory lock before the delegated function can
+  -- change AR or return state. The legacy implementation saves its result late;
+  -- this early check makes concurrent same-key calls serialize before effects.
+  IF p_idempotency_key IS NOT NULL THEN
+    v_cached := public.check_idempotency(p_idempotency_key, 'unapply_credit_memo');
+    IF v_cached IS NOT NULL THEN
+      IF (v_cached->>'credit_memo_id')::uuid IS DISTINCT FROM p_credit_memo_id THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_ARGUMENT_MISMATCH: idempotency key was already used for a different credit memo';
+      END IF;
+      RETURN v_cached;
+    END IF;
+  END IF;
+
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.returns r
+    WHERE r.credit_invoice_id = p_credit_memo_id
+  ) INTO v_is_return_credit;
+
+  IF v_is_return_credit THEN
+    PERFORM set_config('app.crx_return_credit_unapply', '1', true);
+  END IF;
+
+  BEGIN
+    v_result := public._unapply_return_credit_guard_impl_20260826(
+      p_credit_memo_id,
+      p_reason,
+      p_performed_by,
+      p_idempotency_key
+    );
+  EXCEPTION WHEN OTHERS THEN
+    IF v_is_return_credit THEN
+      PERFORM set_config('app.crx_return_credit_unapply', '0', true);
+    END IF;
+    RAISE;
+  END;
+
+  IF v_is_return_credit THEN
+    PERFORM set_config('app.crx_return_credit_unapply', '0', true);
+    IF EXISTS (
+      SELECT 1
+      FROM public.returns r
+      WHERE r.credit_invoice_id = p_credit_memo_id
+    ) THEN
+      RAISE EXCEPTION 'RETURN_CREDIT_UNAPPLY_RELEASE_FAILED';
+    END IF;
+  END IF;
+
+  RETURN v_result;
+END;
+$function$;
+REVOKE ALL ON FUNCTION public.unapply_credit_memo(uuid, text, uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.unapply_credit_memo(uuid, text, uuid, text) TO authenticated, service_role;
+
+-- The active source and credit lines are the ledger that caps every later
+-- reversal. Keep their lineage, unit, quantity, and cost immutable until the
+-- credit memo is first voided/unapplied; otherwise a later return could
+-- consume the same recognized cost twice.
+CREATE FUNCTION public.guard_return_credit_lineage()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_invoice_type text;
+  v_invoice_status text;
+  v_invoice_deleted_at timestamptz;
+  v_material_change boolean := TG_OP = 'DELETE';
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    SELECT i.invoice_type, i.status, i.deleted_at
+      INTO v_invoice_type, v_invoice_status, v_invoice_deleted_at
+    FROM public.invoices i
+    WHERE i.id = NEW.invoice_id;
+    IF v_invoice_type = 'credit_memo'
+       AND v_invoice_status IN ('posted','overdue','paid')
+       AND v_invoice_deleted_at IS NULL
+       AND EXISTS (SELECT 1 FROM public.returns r WHERE r.credit_invoice_id = NEW.invoice_id)
+       AND current_setting('app.crx_return_credit_lineage', true) IS DISTINCT FROM '1' THEN
+      RAISE EXCEPTION 'RETURN_CREDIT_LEDGER_IMMUTABLE';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'UPDATE' THEN
+    v_material_change := ROW(NEW.invoice_id, NEW.order_item_id, NEW.product_id, NEW.quantity, NEW.unit_price_cents, NEW.extended_cents, NEW.cost_cents, NEW.return_credit_cogs_cents, NEW.return_credit_source_item_id, NEW.unit_size, NEW.created_at)
+      IS DISTINCT FROM ROW(OLD.invoice_id, OLD.order_item_id, OLD.product_id, OLD.quantity, OLD.unit_price_cents, OLD.extended_cents, OLD.cost_cents, OLD.return_credit_cogs_cents, OLD.return_credit_source_item_id, OLD.unit_size, OLD.created_at);
+  END IF;
+  IF NOT v_material_change THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT i.invoice_type, i.status, i.deleted_at
+    INTO v_invoice_type, v_invoice_status, v_invoice_deleted_at
+  FROM public.invoices i
+  WHERE i.id = OLD.invoice_id;
+
+  IF v_invoice_status IN ('posted','overdue','paid')
+     AND v_invoice_deleted_at IS NULL THEN
+    IF v_invoice_type = 'credit_memo'
+       AND OLD.order_item_id IS NOT NULL
+       AND OLD.quantity < 0 THEN
+      RAISE EXCEPTION 'RETURN_CREDIT_LEDGER_IMMUTABLE';
+    END IF;
+    IF v_invoice_type <> 'credit_memo'
+       AND OLD.order_item_id IS NOT NULL
+       AND OLD.quantity > 0 THEN
+      IF NOT pg_try_advisory_xact_lock(hashtextextended(OLD.order_item_id::text, 361)) THEN
+        RAISE EXCEPTION 'RETURN_CREDIT_SOURCE_CONCURRENT';
+      END IF;
+      IF EXISTS (
+         SELECT 1
+         FROM public.invoice_items credit_line
+         JOIN public.invoices credit_invoice ON credit_invoice.id = credit_line.invoice_id
+         WHERE credit_line.order_item_id = OLD.order_item_id
+           AND credit_line.product_id = OLD.product_id
+           AND credit_line.unit_size IS NOT DISTINCT FROM OLD.unit_size
+           AND credit_line.quantity < 0
+           AND credit_invoice.invoice_type = 'credit_memo'
+           AND credit_invoice.status IN ('posted','overdue','paid')
+           AND credit_invoice.deleted_at IS NULL
+       ) THEN
+        RAISE EXCEPTION 'RETURN_CREDIT_LEDGER_IMMUTABLE';
+      END IF;
+    END IF;
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$function$;
+REVOKE ALL ON FUNCTION public.guard_return_credit_lineage() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER aa_crx_guard_return_credit_lineage
+  BEFORE INSERT OR UPDATE OF invoice_id, order_item_id, product_id, quantity, unit_price_cents, extended_cents, cost_cents, return_credit_cogs_cents, return_credit_source_item_id, unit_size, created_at OR DELETE
+  ON public.invoice_items
+  FOR EACH ROW EXECUTE FUNCTION public.guard_return_credit_lineage();
+
+ALTER FUNCTION public._issue_return_credit_impl(uuid, uuid, text)
+  RENAME TO _issue_return_credit_header_only_impl_20260825;
+REVOKE ALL ON FUNCTION public._issue_return_credit_header_only_impl_20260825(uuid, uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+CREATE FUNCTION public._issue_return_credit_impl(
+  p_return_id uuid, p_actor_id uuid, p_idempotency_key text DEFAULT NULL
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $function$
+DECLARE
+  v_cached jsonb; v_header jsonb; v_result jsonb; v_invoice_id uuid;
+  v_business_date date := (now() AT TIME ZONE 'America/Chicago')::date;
+  v_cogs bigint;
+  v_lock_order_item_id uuid;
+  v_cap_violation jsonb;
+BEGIN
+  IF p_idempotency_key IS NOT NULL THEN
+    v_cached := public.check_idempotency(p_idempotency_key, 'issue_return_credit');
+    IF v_cached IS NOT NULL THEN RETURN v_cached; END IF;
+  END IF;
+
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'RETURN_CREDIT_ISOLATION_UNSUPPORTED';
+  END IF;
+
+  -- Lock before the header-only helper changes the return or creates its
+  -- credit memo. A concurrent source void/edit must therefore either commit
+  -- first and be visible to the helper, or wait and be rejected after the
+  -- credit lines exist. Every participant uses the same UUID order.
+  FOR v_lock_order_item_id IN
+    SELECT DISTINCT ri.order_item_id
+    FROM public.return_items ri
+    WHERE ri.return_id = p_return_id AND ri.order_item_id IS NOT NULL
+    ORDER BY ri.order_item_id
+  LOOP
+    PERFORM pg_advisory_xact_lock(hashtextextended(v_lock_order_item_id::text, 361));
+  END LOOP;
+
+  -- The delegated header helper uses CURRENT_DATE for its period gate and
+  -- invoice/due dates. Bind that entire header to the same Chicago business
+  -- date used for the credit season, including during the UTC/local-midnight
+  -- gap; defer caching until the cost lines are complete. This statement
+  -- receives a fresh READ COMMITTED snapshot after any wait.
+  PERFORM set_config('TimeZone', 'America/Chicago', true);
+  v_header := public._issue_return_credit_header_only_impl_20260825(p_return_id, p_actor_id, NULL);
+  v_invoice_id := (v_header ->> 'credit_invoice_id')::uuid;
+  IF v_invoice_id IS NULL THEN RAISE EXCEPTION 'RETURN_CREDIT_HEADER_RESULT_INVALID'; END IF;
+
+  -- A source unit mismatch indicates broken lineage. Do not silently turn a
+  -- known sale lot into a zero-cost reversal.
+  IF EXISTS (
+    SELECT 1 FROM public.return_items ri
+    JOIN public.invoice_items ii ON ii.order_item_id = ri.order_item_id AND ii.product_id = ri.product_id AND ii.quantity > 0
+    JOIN public.invoices i ON i.id = ii.invoice_id
+    WHERE ri.return_id = p_return_id AND i.invoice_type <> 'credit_memo'
+      AND i.status IN ('posted','overdue','paid') AND i.deleted_at IS NULL
+      AND ii.unit_size IS DISTINCT FROM ri.unit
+  ) THEN RAISE EXCEPTION 'RETURN_CREDIT_UNIT_MISMATCH'; END IF;
+
+  -- A manually created cost credit without order-item lineage cannot be
+  -- allocated safely against one source lot. Fail closed instead of risking a
+  -- second reversal of the same recognized cost.
+  IF EXISTS (
+    SELECT 1
+    FROM public.return_items ri
+    JOIN public.returns r ON r.id = ri.return_id
+    JOIN public.invoices ci
+      ON ci.customer_id = r.customer_id
+     AND (ci.order_id = r.order_id OR ci.order_id IS NULL)
+     AND ci.invoice_type = 'credit_memo'
+     AND ci.status IN ('posted','overdue','paid')
+     AND ci.deleted_at IS NULL
+    JOIN public.invoice_items ii
+      ON ii.invoice_id = ci.id
+     AND ii.product_id = ri.product_id
+     AND ii.order_item_id IS NULL
+     AND ii.quantity < 0
+     AND ii.cost_cents > 0
+    WHERE ri.return_id = p_return_id
+      AND ri.order_item_id IS NOT NULL
+      AND ci.id <> v_invoice_id
+  ) THEN RAISE EXCEPTION 'RETURN_CREDIT_UNLINKED_COST_LINE'; END IF;
+
+  PERFORM set_config('app.crx_return_credit_lineage', '1', true);
+
+  WITH return_src AS (
+    SELECT ri.id, ri.order_item_id, ri.product_id, ri.product_name, ri.quantity, ri.unit_price_cents, ri.extended_cents, ri.unit, ri.sort_order, ri.restocked
+    FROM public.return_items ri WHERE ri.return_id = p_return_id
+  ), source_lots AS (
+    SELECT rs.*, ii.id AS source_item_id, ii.cost_cents AS line_cost_cents, ii.quantity AS posted_qty, i.invoice_date, ii.created_at
+    FROM return_src rs JOIN public.invoice_items ii ON ii.order_item_id = rs.order_item_id AND ii.product_id = rs.product_id AND ii.quantity > 0 AND ii.cost_cents > 0 AND ii.unit_size IS NOT DISTINCT FROM rs.unit
+    JOIN public.invoices i ON i.id = ii.invoice_id AND i.invoice_type <> 'credit_memo' AND i.deleted_at IS NULL AND i.status IN ('posted','overdue','paid')
+  ), prior_lots AS (
+    SELECT rs.id AS return_item_id,
+           ii.return_credit_source_item_id AS source_item_id,
+           SUM(-ii.quantity) AS reversed_qty
+    FROM return_src rs JOIN public.invoice_items ii ON ii.order_item_id = rs.order_item_id AND ii.product_id = rs.product_id AND ii.quantity < 0 AND ii.cost_cents > 0 AND ii.unit_size IS NOT DISTINCT FROM rs.unit
+    JOIN public.invoices i ON i.id = ii.invoice_id AND i.invoice_type = 'credit_memo' AND i.deleted_at IS NULL AND i.status IN ('posted','overdue','paid')
+    WHERE ii.return_credit_source_item_id IS NOT NULL
+    GROUP BY rs.id, ii.return_credit_source_item_id
+  ), available_lots AS (
+    -- This is the stable deterministic order for still-unconsumed source lots.
+    -- Rows inserted in one transaction can share created_at, so source_item_id
+    -- is the explicit immutable tiebreaker. Prior consumption is joined to its
+    -- exact source_item_id below, so later source rows cannot shift an earlier
+    -- allocation. Invoice dates are backdateable and cannot anchor this order.
+    SELECT sl.*, GREATEST(sl.posted_qty - COALESCE(pl.reversed_qty, 0), 0) AS available_qty
+    FROM source_lots sl LEFT JOIN prior_lots pl
+      ON pl.return_item_id = sl.id AND pl.source_item_id = sl.source_item_id
+  ), cost_parts AS (
+    SELECT al.*, ROW_NUMBER() OVER (PARTITION BY al.id ORDER BY al.created_at, al.source_item_id, al.line_cost_cents) AS part_order,
+      GREATEST(LEAST(al.quantity - COALESCE(SUM(al.available_qty) OVER (PARTITION BY al.id ORDER BY al.created_at, al.source_item_id, al.line_cost_cents ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0), al.available_qty),0) AS part_qty
+    FROM available_lots al WHERE al.available_qty > 0 AND al.restocked
+  ), cost_allocated_parts AS (
+    SELECT cp.*,
+      (ROUND(cp.line_cost_cents * (cp.posted_qty - cp.available_qty + cp.part_qty))
+       - ROUND(cp.line_cost_cents * (cp.posted_qty - cp.available_qty)))::bigint AS part_cost_cents
+    FROM cost_parts cp WHERE cp.part_qty > 0
+  ), all_parts AS (
+    SELECT id, order_item_id, product_id, product_name, quantity, unit_price_cents, extended_cents, unit, sort_order, part_order, part_qty, line_cost_cents, part_cost_cents, source_item_id FROM cost_allocated_parts
+    UNION ALL
+    SELECT rs.id, rs.order_item_id, rs.product_id, rs.product_name, rs.quantity, rs.unit_price_cents, rs.extended_cents, rs.unit, rs.sort_order, 2147483647::bigint,
+      rs.quantity - COALESCE((SELECT SUM(cp.part_qty) FROM cost_allocated_parts cp WHERE cp.id = rs.id),0), 0::bigint, 0::bigint, NULL::uuid
+    FROM return_src rs WHERE rs.quantity > COALESCE((SELECT SUM(cp.part_qty) FROM cost_allocated_parts cp WHERE cp.id = rs.id),0)
+  ), sequenced AS (
+    SELECT ap.*, SUM(ap.part_qty) OVER (PARTITION BY ap.id ORDER BY ap.part_order, ap.line_cost_cents ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_qty,
+      COALESCE(SUM(ap.part_qty) OVER (PARTITION BY ap.id ORDER BY ap.part_order, ap.line_cost_cents ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) AS prior_qty
+    FROM all_parts ap
+  ), inserted AS (
+    INSERT INTO public.invoice_items (invoice_id, order_item_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents, return_credit_cogs_cents, return_credit_source_item_id, unit_size, sort_order)
+    SELECT v_invoice_id, s.order_item_id, s.product_id, 'Return credit - ' || s.product_name, -s.part_qty, s.unit_price_cents,
+      -(ROUND(s.extended_cents * s.cum_qty / NULLIF(s.quantity,0)) - ROUND(s.extended_cents * s.prior_qty / NULLIF(s.quantity,0))),
+      s.line_cost_cents, -s.part_cost_cents, s.source_item_id, s.unit, s.sort_order
+    FROM sequenced s
+    RETURNING id
+  )
+  SELECT COALESCE(SUM(s.part_cost_cents),0)::bigint INTO v_cogs FROM sequenced s;
+
+  -- A new, backdated same-cost source lot can change the quantity allocator's
+  -- FIFO anchors after an earlier fractional return. Cap against the exact
+  -- extended cents persisted above, never against a re-derived line product.
+  IF EXISTS (
+    SELECT 1
+    FROM public.invoice_items credit_line
+    JOIN public.invoices credit_invoice ON credit_invoice.id = credit_line.invoice_id
+    WHERE credit_line.order_item_id IN (
+      SELECT ri.order_item_id FROM public.return_items ri
+      WHERE ri.return_id = p_return_id AND ri.order_item_id IS NOT NULL
+    )
+      AND credit_line.quantity < 0
+      AND credit_line.cost_cents > 0
+      AND (credit_line.return_credit_cogs_cents IS NULL
+           OR credit_line.return_credit_source_item_id IS NULL)
+      AND credit_invoice.invoice_type = 'credit_memo'
+      AND credit_invoice.status IN ('posted','overdue','paid')
+      AND credit_invoice.deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'RETURN_CREDIT_COGS_LEDGER_MISSING';
+  END IF;
+  -- RETURN_CREDIT_RECOGNIZED_CAP_BEGIN
+  WITH reversed AS (
+      SELECT credit_line.order_item_id, credit_line.product_id,
+             credit_line.unit_size, credit_line.cost_cents,
+             SUM(-credit_line.return_credit_cogs_cents)::bigint AS reversed_cents
+      FROM public.invoice_items credit_line
+      JOIN public.invoices credit_invoice ON credit_invoice.id = credit_line.invoice_id
+      WHERE credit_line.order_item_id IN (
+        SELECT ri.order_item_id FROM public.return_items ri
+        WHERE ri.return_id = p_return_id AND ri.order_item_id IS NOT NULL
+      )
+        AND credit_line.quantity < 0
+        AND credit_line.cost_cents > 0
+        AND credit_line.return_credit_cogs_cents IS NOT NULL
+        AND credit_invoice.invoice_type = 'credit_memo'
+        AND credit_invoice.status IN ('posted','overdue','paid')
+        AND credit_invoice.deleted_at IS NULL
+      GROUP BY credit_line.order_item_id, credit_line.product_id,
+               credit_line.unit_size, credit_line.cost_cents
+    ), recognized AS (
+      SELECT source_line.order_item_id, source_line.product_id,
+             source_line.unit_size, source_line.cost_cents,
+             SUM(ROUND(source_line.cost_cents * source_line.quantity))::bigint AS recognized_cents
+      FROM public.invoice_items source_line
+      JOIN public.invoices source_invoice ON source_invoice.id = source_line.invoice_id
+      WHERE source_line.order_item_id IN (
+        SELECT ri.order_item_id FROM public.return_items ri
+        WHERE ri.return_id = p_return_id AND ri.order_item_id IS NOT NULL
+      )
+        AND source_line.quantity > 0
+        AND source_line.cost_cents > 0
+        AND source_invoice.invoice_type <> 'credit_memo'
+        AND source_invoice.status IN ('posted','overdue','paid')
+        AND source_invoice.deleted_at IS NULL
+      GROUP BY source_line.order_item_id, source_line.product_id,
+               source_line.unit_size, source_line.cost_cents
+    )
+    SELECT jsonb_agg(jsonb_build_object(
+      'order_item_id', r.order_item_id,
+      'product_id', r.product_id,
+      'unit_size', r.unit_size,
+      'cost_cents', r.cost_cents,
+      'reversed_cents', r.reversed_cents,
+      'recognized_cents', COALESCE(s.recognized_cents, 0)
+    )) INTO v_cap_violation
+    FROM reversed r
+    LEFT JOIN recognized s
+      ON s.order_item_id = r.order_item_id
+     AND s.product_id = r.product_id
+     AND s.unit_size IS NOT DISTINCT FROM r.unit_size
+     AND s.cost_cents = r.cost_cents
+    WHERE r.reversed_cents > COALESCE(s.recognized_cents, 0);
+  IF v_cap_violation IS NOT NULL THEN
+    RAISE EXCEPTION USING
+      MESSAGE = 'RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED',
+      DETAIL = 'The requested reversal exceeded the recognized whole-cent source-cost ceiling.',
+      HINT = 'Void or unapply conflicting credits and review source-invoice COGS before retrying.';
+  END IF;
+  -- RETURN_CREDIT_RECOGNIZED_CAP_END
+
+  -- Cost allocation telescopes per source line, so sequential fractional
+  -- returns share the exact whole-cent source cost without double-rounding.
+  UPDATE public.invoices
+  -- Owner decision 2026-08-26: keep prior customer year-end summaries stable
+  -- by recognizing the return credit in the current crop season. A late return
+  -- can therefore produce negative current-season usage instead of restating
+  -- the season in which the original sale occurred.
+  SET total_cost_cents = -v_cogs,
+      season = public.compute_season(v_business_date)
+  WHERE id = v_invoice_id;
+  IF EXISTS (
+    SELECT 1
+    FROM public.invoices i
+    WHERE i.id = v_invoice_id
+      AND i.total_amount_cents IS DISTINCT FROM (
+        SELECT COALESCE(SUM(ii.extended_cents), 0)::bigint
+        FROM public.invoice_items ii
+        WHERE ii.invoice_id = v_invoice_id
+      )
+  ) THEN
+    RAISE EXCEPTION 'RETURN_CREDIT_LINE_TOTAL_MISMATCH';
+  END IF;
+  PERFORM set_config('app.crx_return_credit_lineage', '0', true);
+  v_result := v_header || jsonb_build_object('cogs_reversed_cents', v_cogs);
+  IF p_idempotency_key IS NOT NULL THEN PERFORM public.save_idempotency(p_idempotency_key, 'issue_return_credit', v_result); END IF;
+  RETURN v_result;
+END;
+$function$;
+REVOKE ALL ON FUNCTION public._issue_return_credit_impl(uuid, uuid, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._issue_return_credit_impl(uuid, uuid, text) TO service_role;
+
+-- Credit dates can differ from original-sale dates. This is normal credit-memo
+-- accounting: date-ranged reports recognize the reversal in its credit period.
+
+DO $postflight$
+DECLARE
+  v_expected jsonb := jsonb_build_object(
+    '_issue_return_credit_header_only_impl_20260825', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
+    '_issue_return_credit_impl', 'b3b6e765b01bf6832a571e8ce5e3c57cc348509fac9126dd906e86173e371a55',
+    '_receive_return_impl_before_inventory_seed_20260825', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
+    '_receive_return_impl_20260714', '150b7ad4f001929baecc73078c181de092477ced7b3a4b3f85bfb2d9438dd789',
+    'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
+    '_issue_return_credit_intent_impl_20260812', '55607c6dae0cc11f4837f67c54de88a6f4d83413cd3686e04c21bf33afa4ffa5',
+    'receive_return', '80873cb93b67293a811f6be91efb224f7f4dd085fa8c4282267336be430b8b6a',
+    '_receive_return_intent_impl_20260812', '9f5e2cfa95f6c0fb6ae06c3d7f0c04a31efdd8309b431f6dba5330c78aad9ded'
+  );
+  v_name text;
+  v_src text;
+  v_triggerdef text;
+  v_source_guard_triggerdef text;
+  v_parent_guard_triggerdef text;
+  v_lineage_guard_triggerdef text;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'return_items'
+      AND column_name = 'restocked_quantity'
+      AND data_type = 'numeric' AND is_nullable = 'YES'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.return_items'::regclass
+      AND conname = 'return_items_restocked_quantity_positive_chk'
+      AND contype = 'c' AND convalidated
+  ) OR NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'invoice_items'
+      AND column_name = 'return_credit_cogs_cents'
+      AND data_type = 'bigint' AND is_nullable = 'YES'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'invoice_items'
+      AND column_name = 'return_credit_source_item_id'
+      AND data_type = 'uuid' AND is_nullable = 'YES'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.invoice_items'::regclass
+      AND conname = 'invoice_items_return_credit_cogs_cents_nonpositive_chk'
+      AND contype = 'c' AND convalidated
+      AND pg_get_constraintdef(oid) = 'CHECK (((return_credit_cogs_cents IS NULL) OR (return_credit_cogs_cents <= 0)))'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.invoice_items'::regclass
+      AND conname = 'invoice_items_return_credit_source_item_fk'
+      AND contype = 'f' AND convalidated
+      AND confrelid = 'public.invoice_items'::regclass
+      AND confdeltype = 'r'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.invoice_items'::regclass
+      AND conname = 'invoice_items_return_credit_source_shape_chk'
+      AND contype = 'c' AND convalidated
+  ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_ALLOCATION_LEDGER_DRIFT';
+  END IF;
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'current_season') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = to_regprocedure('public.current_season()')
+         AND p.proargtypes = ''::oidvector
+         AND p.prorettype = 'integer'::regtype
+         AND NOT p.prosecdef AND p.provolatile = 's'
+         AND p.proconfig = ARRAY['search_path=public']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+         AND encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') =
+             '0b9ef2b922c909de0cea7757bcfe95901c0781739eddd8521b09cfb1537907ba'
+     ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_CURRENT_SEASON_DRIFT';
+  END IF;
+  FOREACH v_name IN ARRAY ARRAY[
+    '_issue_return_credit_header_only_impl_20260825',
+    '_issue_return_credit_impl',
+    '_receive_return_impl_before_inventory_seed_20260825',
+    '_receive_return_impl_20260714',
+    'issue_return_credit',
+    '_issue_return_credit_intent_impl_20260812',
+    'receive_return',
+    '_receive_return_intent_impl_20260812'
+  ] LOOP
+    IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = v_name) <> 1
+       OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname = 'public' AND p.proname = v_name AND p.proargtypes = '2950 2950 25'::oidvector) <> 1 THEN
+      RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_CONTRACT_DRIFT:%', v_name;
+    END IF;
+    SELECT p.prosrc INTO v_src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname = v_name AND p.proargtypes = '2950 2950 25'::oidvector;
+    IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') <> (v_expected ->> v_name) THEN
+      RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_BODY_DRIFT:%', v_name;
+    END IF;
+  END LOOP;
+  SELECT p.prosrc INTO v_src
+  FROM pg_proc p
+  WHERE p.oid = to_regprocedure('public._allocated_delivery_cents(uuid,numeric,uuid)');
+  IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
+       '44a739b026385996b66355ee5c4b1175dbe5260bad57a459a91e69c3873bae81'
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = '_allocated_delivery_cents') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = 'public._allocated_delivery_cents(uuid,numeric,uuid)'::regprocedure
+         AND NOT p.prosecdef AND p.provolatile = 's'
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+     )
+     OR has_function_privilege('anon', 'public._allocated_delivery_cents(uuid,numeric,uuid)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._allocated_delivery_cents(uuid,numeric,uuid)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public._allocated_delivery_cents(uuid,numeric,uuid)', 'EXECUTE') IS NOT TRUE THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_DELIVERY_ALLOCATION_DRIFT';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_class idx
+    JOIN pg_index i ON i.indexrelid = idx.oid
+    WHERE idx.oid = to_regclass('public.returns_credit_invoice_id_active_idx')
+      AND i.indrelid = 'public.returns'::regclass
+      AND i.indisvalid AND i.indisready
+      AND i.indpred IS NOT NULL
+      AND pg_get_indexdef(idx.oid) =
+        'CREATE INDEX returns_credit_invoice_id_active_idx ON public.returns USING btree (credit_invoice_id) WHERE (credit_invoice_id IS NOT NULL)'
+  ) OR NOT EXISTS (
+    SELECT 1
+    FROM pg_class idx
+    JOIN pg_index i ON i.indexrelid = idx.oid
+    WHERE idx.oid = to_regclass('public.invoice_items_return_credit_source_item_idx')
+      AND i.indrelid = 'public.invoice_items'::regclass
+      AND i.indisvalid AND i.indisready
+      AND i.indpred IS NOT NULL
+      AND pg_get_indexdef(idx.oid) =
+        'CREATE INDEX invoice_items_return_credit_source_item_idx ON public.invoice_items USING btree (return_credit_source_item_id) WHERE (return_credit_source_item_id IS NOT NULL)'
+  ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_INDEX_DRIFT';
+  END IF;
+  FOREACH v_name IN ARRAY ARRAY['_enforce_below_cost_line','guard_terminal_order_invoice_items'] LOOP
+    IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = v_name) <> 1
+       OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname = 'public' AND p.proname = v_name AND p.proargtypes = ''::oidvector) <> 1 THEN
+      RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_DEPENDENCY_OVERLOAD_DRIFT:%', v_name;
+    END IF;
+    SELECT p.prosrc INTO v_src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname = v_name AND p.proargtypes = ''::oidvector;
+    IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM (CASE v_name
+         WHEN '_enforce_below_cost_line' THEN '42f7bcfb02fc14b82a9d994236d466130c372cd632ee63c22cda47733d3f8f51'
+         ELSE '62ab7b24b32b4ebfecb6c7046d747a1875eb3bd8ab3e9b3f6e1d115e7c761a9f'
+       END)
+       OR NOT EXISTS (
+         SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = v_name AND p.proargtypes = ''::oidvector
+           AND p.prosecdef AND p.provolatile = 'v'
+           AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+           AND pg_get_userbyid(p.proowner) = 'postgres'
+       )
+       OR has_function_privilege('anon', format('public.%I()', v_name), 'EXECUTE')
+       OR has_function_privilege('authenticated', format('public.%I()', v_name), 'EXECUTE')
+       OR (v_name = '_enforce_below_cost_line'
+           AND NOT has_function_privilege('service_role', format('public.%I()', v_name), 'EXECUTE'))
+       OR (v_name = 'guard_terminal_order_invoice_items'
+           AND has_function_privilege('service_role', format('public.%I()', v_name), 'EXECUTE')) THEN
+      RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_DEPENDENCY_DRIFT:%', v_name;
+    END IF;
+  END LOOP;
+  SELECT p.prosrc INTO v_src
+  FROM pg_proc p
+  WHERE p.oid = to_regprocedure('public.void_invoice(uuid,text,text)');
+  IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
+       '7d1eb3222e0cd59318919206d2338de7477c2091f22550671ecbcf5ff80a9d14'
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'void_invoice') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = 'public.void_invoice(uuid,text,text)'::regprocedure
+         AND p.prosecdef AND p.provolatile = 'v'
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = 'public._void_invoice_return_credit_guard_impl_20260826(uuid,text,text)'::regprocedure
+         AND md5(p.prosrc) = 'c7a488d58bd876e92565bca9bd4edc90'
+         AND p.prosecdef AND p.provolatile = 'v'
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+     )
+     OR has_function_privilege('anon', 'public.void_invoice(uuid,text,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.void_invoice(uuid,text,text)', 'EXECUTE') IS NOT TRUE
+     OR has_function_privilege('service_role', 'public.void_invoice(uuid,text,text)', 'EXECUTE') IS NOT TRUE
+     OR has_function_privilege('anon', 'public._void_invoice_return_credit_guard_impl_20260826(uuid,text,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._void_invoice_return_credit_guard_impl_20260826(uuid,text,text)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public._void_invoice_return_credit_guard_impl_20260826(uuid,text,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_VOID_CONTRACT_DRIFT';
+  END IF;
+  SELECT p.prosrc INTO v_src
+  FROM pg_proc p
+  WHERE p.oid = to_regprocedure('public.unapply_credit_memo(uuid,text,uuid,text)');
+  IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
+       '3d4fa59a934832eb1a058b7a0bfdfb12316ac1ef6cee32724b1cd9dc30d38d41'
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'unapply_credit_memo') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = 'public.unapply_credit_memo(uuid,text,uuid,text)'::regprocedure
+         AND p.prosecdef AND p.provolatile = 'v'
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = 'public._unapply_return_credit_guard_impl_20260826(uuid,text,uuid,text)'::regprocedure
+         AND encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') =
+             '286de5b0ac196331713278f335ba1b02e73e9de334cc2fb5f22e49629922b374'
+         AND p.prosecdef AND p.provolatile = 'v'
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+     )
+     OR has_function_privilege('anon', 'public.unapply_credit_memo(uuid,text,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.unapply_credit_memo(uuid,text,uuid,text)', 'EXECUTE') IS NOT TRUE
+     OR has_function_privilege('service_role', 'public.unapply_credit_memo(uuid,text,uuid,text)', 'EXECUTE') IS NOT TRUE
+     OR has_function_privilege('anon', 'public._unapply_return_credit_guard_impl_20260826(uuid,text,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._unapply_return_credit_guard_impl_20260826(uuid,text,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public._unapply_return_credit_guard_impl_20260826(uuid,text,uuid,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_UNAPPLY_CONTRACT_DRIFT';
+  END IF;
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'batch_void_invoices') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = 'public.batch_void_invoices(uuid[],text,uuid,text)'::regprocedure
+         AND p.prosecdef AND p.provolatile = 'v'
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+         AND position('PERFORM void_invoice(v_inv.id, p_void_reason)' IN p.prosrc) > 0
+         AND position('UPDATE invoices SET' IN p.prosrc) = 0
+     )
+     OR has_function_privilege('anon', 'public.batch_void_invoices(uuid[],text,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.batch_void_invoices(uuid[],text,uuid,text)', 'EXECUTE') IS NOT TRUE
+     OR has_function_privilege('service_role', 'public.batch_void_invoices(uuid[],text,uuid,text)', 'EXECUTE') IS NOT TRUE THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_BATCH_VOID_CONTRACT_DRIFT';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public._issue_return_credit_impl(uuid,uuid,text)'::regprocedure
+      AND p.prosecdef AND p.provolatile = 'v'
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public._receive_return_impl_20260714(uuid,uuid,text)'::regprocedure
+      AND p.prosecdef AND p.provolatile = 'v'
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public._issue_return_credit_header_only_impl_20260825(uuid,uuid,text)'::regprocedure
+      AND p.prosecdef AND p.provolatile = 'v'
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public._receive_return_impl_before_inventory_seed_20260825(uuid,uuid,text)'::regprocedure
+      AND p.prosecdef AND p.provolatile = 'v'
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public.issue_return_credit(uuid,uuid,text)'::regprocedure
+      AND p.prosecdef AND p.provolatile = 'v'
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public._issue_return_credit_intent_impl_20260812(uuid,uuid,text)'::regprocedure
+      AND p.prosecdef AND p.provolatile = 'v'
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public.receive_return(uuid,uuid,text)'::regprocedure
+      AND p.prosecdef AND p.provolatile = 'v'
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public._receive_return_intent_impl_20260812(uuid,uuid,text)'::regprocedure
+      AND p.prosecdef AND p.provolatile = 'v'
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+  ) OR has_function_privilege('anon', 'public._issue_return_credit_impl(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('authenticated', 'public._issue_return_credit_impl(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('anon', 'public._receive_return_impl_20260714(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('authenticated', 'public._receive_return_impl_20260714(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('service_role', 'public._issue_return_credit_impl(uuid,uuid,text)', 'EXECUTE') IS NOT TRUE
+    OR has_function_privilege('service_role', 'public._receive_return_impl_20260714(uuid,uuid,text)', 'EXECUTE') IS NOT TRUE
+    OR has_function_privilege('anon', 'public._issue_return_credit_header_only_impl_20260825(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('authenticated', 'public._issue_return_credit_header_only_impl_20260825(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('service_role', 'public._issue_return_credit_header_only_impl_20260825(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('anon', 'public._receive_return_impl_before_inventory_seed_20260825(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('authenticated', 'public._receive_return_impl_before_inventory_seed_20260825(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('service_role', 'public._receive_return_impl_before_inventory_seed_20260825(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('anon', 'public.issue_return_credit(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('authenticated', 'public.issue_return_credit(uuid,uuid,text)', 'EXECUTE') IS NOT TRUE
+    OR has_function_privilege('service_role', 'public.issue_return_credit(uuid,uuid,text)', 'EXECUTE') IS NOT TRUE
+    OR has_function_privilege('anon', 'public.receive_return(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('authenticated', 'public.receive_return(uuid,uuid,text)', 'EXECUTE') IS NOT TRUE
+    OR has_function_privilege('service_role', 'public.receive_return(uuid,uuid,text)', 'EXECUTE') IS NOT TRUE
+    OR has_function_privilege('anon', 'public._issue_return_credit_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('authenticated', 'public._issue_return_credit_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('service_role', 'public._issue_return_credit_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('anon', 'public._receive_return_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE')
+    OR has_function_privilege('authenticated', 'public._receive_return_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public._receive_return_intent_impl_20260812(uuid,uuid,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_SECURITY_DRIFT';
+  END IF;
+  SELECT p.prosrc INTO v_src
+  FROM pg_proc p
+  WHERE p.oid = to_regprocedure('public.guard_recognized_return_credit_delete()');
+  IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
+       '89c96dabb82f6dada53e0084d5c65e72f11ea0630b56cf6e4f7f99620be48a8d'
+     OR NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public.guard_recognized_return_credit_delete()'::regprocedure
+      AND p.prosecdef AND p.provolatile = 'v'
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND pg_get_userbyid(p.proowner) = 'postgres'
+  )
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'guard_recognized_return_credit_delete') <> 1
+     OR has_function_privilege('anon', 'public.guard_recognized_return_credit_delete()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.guard_recognized_return_credit_delete()', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.guard_recognized_return_credit_delete()', 'EXECUTE')
+     OR NOT EXISTS (
+       SELECT 1
+       FROM pg_trigger t
+       WHERE t.tgrelid = 'public.returns'::regclass
+         AND t.tgname = 'aa_crx_guard_recognized_return_credit_delete'
+         AND NOT t.tgisinternal
+         AND t.tgfoid = 'public.guard_recognized_return_credit_delete()'::regprocedure
+     ) THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_PARENT_GUARD_DRIFT';
+  END IF;
+  SELECT pg_get_triggerdef(t.oid) INTO v_parent_guard_triggerdef
+  FROM pg_trigger t
+  WHERE t.tgrelid = 'public.returns'::regclass
+    AND t.tgname = 'aa_crx_guard_recognized_return_credit_delete'
+    AND NOT t.tgisinternal;
+  IF encode(sha256(convert_to(v_parent_guard_triggerdef, 'UTF8')), 'hex') IS DISTINCT FROM
+       '3d528e657bb97824f50145c7388f74da6da713d271268fba346e6e1a94cb84f7' THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_PARENT_GUARD_TRIGGER:%',
+      encode(sha256(convert_to(v_parent_guard_triggerdef, 'UTF8')), 'hex');
+  END IF;
+  SELECT pg_get_triggerdef(t.oid) INTO v_triggerdef FROM pg_trigger t WHERE t.tgrelid = 'public.invoice_items'::regclass AND t.tgname = 'zz_crx_below_cost_invoice_items' AND NOT t.tgisinternal;
+  IF v_triggerdef IS NULL
+     OR encode(sha256(convert_to(v_triggerdef, 'UTF8')), 'hex') IS DISTINCT FROM
+        '8db113f5da2277a791ca6f4744581faa1bc02fe532ca19fec93c8120f80c1a05' THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_TRIGGER_DRIFT';
+  END IF;
+  SELECT p.prosrc INTO v_src
+  FROM pg_proc p
+  WHERE p.oid = to_regprocedure('public.guard_return_credit_source_recognition()');
+  IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
+         '0a5b569800bea5a0acbfaf55020ae4a9bde462a937e8db24597a586e477811b7'
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'guard_return_credit_source_recognition') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = 'public.guard_return_credit_source_recognition()'::regprocedure
+         AND p.prosecdef AND p.provolatile = 'v'
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+     )
+     OR has_function_privilege('anon', 'public.guard_return_credit_source_recognition()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.guard_return_credit_source_recognition()', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.guard_return_credit_source_recognition()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_SOURCE_GUARD_BODY:%',
+      encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex');
+  END IF;
+  SELECT pg_get_triggerdef(t.oid) INTO v_source_guard_triggerdef
+  FROM pg_trigger t
+  WHERE t.tgrelid = 'public.invoices'::regclass
+    AND t.tgname = 'aa_crx_guard_return_credit_source_recognition'
+    AND NOT t.tgisinternal;
+  IF encode(sha256(convert_to(v_source_guard_triggerdef, 'UTF8')), 'hex') IS DISTINCT FROM
+         'bcc1c37c0256756656cbe06a04c9c8b36ea87703e9ce56f09f34a2f439f4b765' THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_SOURCE_GUARD_TRIGGER:%',
+      encode(sha256(convert_to(v_source_guard_triggerdef, 'UTF8')), 'hex');
+  END IF;
+  SELECT p.prosrc INTO v_src
+  FROM pg_proc p
+  WHERE p.oid = to_regprocedure('public.guard_return_credit_lineage()');
+  IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
+        'c598d6afa59082e540b7d38c2f413bf204c5b93f938ab570cb82978c9c84a86d'
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'guard_return_credit_lineage') <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_proc p
+       WHERE p.oid = 'public.guard_return_credit_lineage()'::regprocedure
+         AND p.prosecdef AND p.provolatile = 'v'
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+     )
+     OR has_function_privilege('anon', 'public.guard_return_credit_lineage()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.guard_return_credit_lineage()', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.guard_return_credit_lineage()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_LINEAGE_GUARD_BODY:%',
+      encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex');
+  END IF;
+  SELECT pg_get_triggerdef(t.oid) INTO v_lineage_guard_triggerdef
+  FROM pg_trigger t
+  WHERE t.tgrelid = 'public.invoice_items'::regclass
+    AND t.tgname = 'aa_crx_guard_return_credit_lineage'
+    AND NOT t.tgisinternal;
+  IF encode(sha256(convert_to(v_lineage_guard_triggerdef, 'UTF8')), 'hex') IS DISTINCT FROM
+       '24085771e3e024e9083140fe30f5bb3bbe5ecfb295d95f9df5ad2bcee1b0dc32' THEN
+    RAISE EXCEPTION 'RETURN_COGS_POSTFLIGHT_LINEAGE_GUARD_TRIGGER:%',
+      encode(sha256(convert_to(v_lineage_guard_triggerdef, 'UTF8')), 'hex');
+  END IF;
+END;
+$postflight$;
+
+-- Keep issuance fail-closed across the remaining dependent migrations. The
+-- delivery/order billing gates and durable generated-invoice lineage writer
+-- are required before return credits are safe to issue. Migration 041500 is
+-- the only file allowed to remove the exact barrier after its final postflight.
+RESET lock_timeout;

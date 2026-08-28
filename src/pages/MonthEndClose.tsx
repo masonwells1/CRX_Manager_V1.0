@@ -25,6 +25,7 @@ import StatementPrintDialog from '../components/statements/StatementPrintDialog'
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import type { DetailedStatementData, StatementOptions, YearEndSummaryData } from '../types';
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
+import { getRecognizedInvoiceCustomerIds } from '../lib/recognizedInvoiceCustomers';
 
 interface PeriodInfo {
   id?: string;
@@ -215,7 +216,7 @@ export default function MonthEndClose() {
           done: summary.invoices.draft_count === 0,
           detail: summary.invoices.draft_count > 0
             ? `${summary.invoices.draft_count} unposted invoice(s) remain`
-            : `${summary.invoices.posted_count} posted, ${summary.invoices.voided_count} voided`,
+            : `${summary.invoices.posted_count} recognized, ${summary.invoices.voided_count} voided`,
         },
         {
           label: 'Payments reconciled',
@@ -372,16 +373,9 @@ export default function MonthEndClose() {
   const handleGenerateYearEnd = async (season: number, options: YearEndSummaryOptions) => {
     setYeLoading(true);
     try {
-      // Get all customers with invoices for this season
-      const { data: custIds, error: custErr } = await supabase
-        .from('invoices')
-        .select('customer_id')
-        .eq('season', season)
-        .in('status', ['posted', 'voided'])
-        .is('deleted_at', null);
-      if (custErr) throw custErr;
-
-      const uniqueIds = [...new Set((custIds || []).map((r) => r.customer_id))];
+      // Page through every recognized invoice so the API row cap cannot
+      // silently omit customers as the season grows.
+      const uniqueIds = await getRecognizedInvoiceCustomerIds(season);
       if (uniqueIds.length === 0) {
         toast('info', `No customers have invoices for season ${season}`);
         setYeLoading(false);
@@ -396,7 +390,7 @@ export default function MonthEndClose() {
         p_season: season,
       });
       if (batchError) {
-        toast('error', 'Failed to generate year-end summaries: ' + batchError.message);
+        toast('error', sanitizeError(batchError));
         setYeLoading(false);
         return;
       }
@@ -515,7 +509,7 @@ export default function MonthEndClose() {
             <h3 className="text-sm font-semibold text-nav-dark mb-4">Period Summary</h3>
             <div className="space-y-3">
               <div className="flex justify-between text-sm">
-                <span className="text-secondary">Posted Invoices</span>
+                <span className="text-secondary">Recognized Invoices</span>
                 <span className="font-medium">{summary.invoices.posted_count} — {fmt(summary.invoices.total_amount_cents)}</span>
               </div>
               <div className="flex justify-between text-sm">

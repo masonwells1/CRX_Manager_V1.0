@@ -20,7 +20,12 @@ import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 import CustomerDrawer from '../components/customers/CustomerDrawer';
 import { hasPageAccess } from '../lib/pagePermissions';
 import type { Invoice, InvoiceStatus, InvoicePrintOptions } from '../types';
-import { generateBatchInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
+import {
+  generateBatchInvoicePdf,
+  groupReturnCreditDisplayItems,
+  mapInvoicePdfItem,
+  type InvoicePdfData,
+} from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import { getSeasonDates } from '../utils/season';
@@ -388,24 +393,7 @@ export default function Invoices() {
               price_per_acre_cents: s.price_per_acre_cents || null,
               pricing_note: s.pricing_note || null,
             })) : undefined,
-            items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name: string; epa_registration?: string | null; product_form?: string | null }; description?: string; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null }>).map((it) => ({
-              description: it.description,
-              product_name: it.product?.product_name || it.description,
-              quantity: Number(it.quantity),
-              unit_size: it.unit_size || undefined,
-              unit_price_cents: it.unit_price_cents,
-              extended_cents: it.extended_cents,
-              cost_cents: it.cost_cents,
-              rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
-              rate_unit: it.rate_unit || null,
-              total_applied: it.total_applied ? Number(it.total_applied) : null,
-              total_applied_unit: it.total_applied_unit || null,
-              total_applied_gl_lb: it.total_applied_gl_lb ? Number(it.total_applied_gl_lb) : null,
-              gl_lb_unit: it.gl_lb_unit || null,
-              epa_registration: it.epa_registration || it.product?.epa_registration || null,
-              is_application_fee: it.is_application_fee || false,
-              product_form: it.product_form || it.product?.product_form || null,
-            })) as InvoicePdfItem[],
+            items: groupReturnCreditDisplayItems(inv.invoice_type, (items || []).map(mapInvoicePdfItem)),
             total_amount_cents: inv.total_amount_cents || 0,
             total_cost_cents: inv.total_cost_cents || 0,
             paid_amount_cents: inv.paid_amount_cents || 0,

@@ -202,12 +202,13 @@ test.describe.serial('Stream 0 — Database Integrity', () => {
     }));
 
     const iiResult = await supabaseRest(
-      page, 'GET', 'invoice_items?select=product_id,quantity,invoices(order_id)&limit=5000',
+      page, 'GET', 'invoice_items?select=product_id,quantity,invoices(order_id,invoice_type)&limit=5000',
     );
     const invoiceItemsRaw = asArray<Record<string, unknown>>(iiResult, 'invoice_items');
 
     const invoiceItems: InvoiceItemCheckRow[] = invoiceItemsRaw.map((r) => ({
       order_id: (r.invoices as Record<string, unknown>)?.order_id as string,
+      invoice_type: (r.invoices as Record<string, unknown>)?.invoice_type as string,
       product_id: r.product_id as string,
       quantity: r.quantity as number,
     }));

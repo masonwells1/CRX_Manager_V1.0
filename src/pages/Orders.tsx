@@ -29,10 +29,17 @@ import HelpTip from '../components/ui/HelpTip';
 import PageHeader from '../components/ui/PageHeader';
 import type { Order } from '../types';
 import { getSeasonDates } from '../utils/season';
+import {
+  activeInvoiceCountsTowardBilling,
+  fetchActiveInvoiceCoveragePages,
+  type ActiveInvoiceCoverageRow,
+} from '../lib/deliveryInvoiceCoverage';
+
+const EMPTY_UUID = '00000000-0000-0000-0000-000000000000';
 
 interface OrderWithFulfillment extends Order {
   fulfillment_pct: number;
-  invoiced_pct: number;
+  invoiced_pct: number | null;
   farm_group_name: string | null;
   customer_name: string;
   active_delivery_count: number;
@@ -103,11 +110,8 @@ export default function Orders() {
       supabase
         .from('order_items')
         .select('order_id, total_units_needed, quantity_delivered, price_per_unit, product_name')
-        .in('order_id', orderIds.length > 0 ? orderIds : ['__none__']),
-      supabase
-        .from('invoices')
-        .select('order_id, total_amount_cents')
-        .not('status', 'in', '("voided","cancelled")'),
+        .in('order_id', orderIds.length > 0 ? orderIds : [EMPTY_UUID]),
+      fetchActiveInvoiceCoveragePages(orderIds),
       parentIds.length > 0
         ? supabase
             .from('customers')
@@ -117,7 +121,7 @@ export default function Orders() {
       supabase
         .from('deliveries')
         .select('order_id, scheduled_date, status')
-        .in('order_id', orderIds.length > 0 ? orderIds : ['__none__'])
+        .in('order_id', orderIds.length > 0 ? orderIds : [EMPTY_UUID])
         .in('status', ['scheduled', 'in_progress']),
     ]);
 
@@ -144,10 +148,15 @@ export default function Orders() {
     });
 
     // Fetch invoice totals per order for invoiced %
-    const { data: invoiceData } = invoiceResult;
+    const { data: invoiceData, error: invoiceError } = invoiceResult;
+    if (invoiceError) {
+      Sentry.captureException(invoiceError);
+      toast('error', 'Failed to load invoice coverage. Invoiced percentages are unavailable; refresh to try again.');
+    }
     const invoicedByOrder: Record<string, number> = {};
-    (invoiceData || []).forEach((inv: { order_id: string | null; total_amount_cents: number }) => {
-      if (inv.order_id) {
+    const visibleOrderIds = new Set(orderIds);
+    (invoiceData || []).forEach((inv: ActiveInvoiceCoverageRow) => {
+      if (inv.order_id && visibleOrderIds.has(inv.order_id) && activeInvoiceCountsTowardBilling(inv)) {
         invoicedByOrder[inv.order_id] = (invoicedByOrder[inv.order_id] || 0) + (inv.total_amount_cents || 0);
       }
     });
@@ -178,8 +187,8 @@ export default function Orders() {
       const counts = itemsByOrder[o.id] || { neededValue: 0, deliveredValue: 0 };
       const pct = counts.neededValue > 0 ? Math.round((counts.deliveredValue / counts.neededValue) * 100) : 0;
       const orderCents = Math.round((o.total_price || 0) * 100);
-      const invCents = invoicedByOrder[o.id] || 0;
-      const invPct = orderCents > 0 ? Math.round((invCents / orderCents) * 100) : 0;
+      const invCents = invoiceError ? null : (invoicedByOrder[o.id] || 0);
+      const invPct = invCents == null ? null : (orderCents > 0 ? Math.round((invCents / orderCents) * 100) : 0);
       const cust = o.customer;
       const farmGroupName = cust?.parent_customer_id ? parentNameMap[cust.parent_customer_id] || null : null;
       const customerName = cust?.farm_name || '';
@@ -187,7 +196,7 @@ export default function Orders() {
       return {
         ...o,
         fulfillment_pct: pct,
-        invoiced_pct: Math.min(invPct, 100),
+        invoiced_pct: invPct == null ? null : Math.min(invPct, 100),
         farm_group_name: farmGroupName,
         customer_name: customerName,
         active_delivery_count: delInfo.count,
@@ -229,7 +238,7 @@ export default function Orders() {
       { key: 'total_price', header: 'Total', format: (v) => fmtCSV(v) },
       { key: 'order_date', header: 'Order Date', format: (v) => fmtDateCSV(v) },
       { key: 'fulfillment_pct', header: 'Fulfillment %', format: (v) => `${v}%` },
-      { key: 'invoiced_pct', header: 'Invoiced %', format: (v) => `${v}%` },
+      { key: 'invoiced_pct', header: 'Invoiced %', format: (v) => v == null ? 'Unavailable' : `${v}%` },
     ], 'orders');
     toast('success', `Exported ${selectedRows.length} order(s) to CSV`);
   };
@@ -251,7 +260,7 @@ export default function Orders() {
           { header: 'Total', key: 'total_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
           { header: 'Date', key: 'order_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
           { header: 'Fulfillment', key: 'fulfillment_pct', align: 'right', format: (v) => `${v}%` },
-          { header: 'Invoiced', key: 'invoiced_pct', align: 'right', format: (v) => `${v}%` },
+          { header: 'Invoiced', key: 'invoiced_pct', align: 'right', format: (v) => v == null ? 'Unavailable' : `${v}%` },
         ],
         data: pdfData as unknown as Record<string, unknown>[],
         orientation: 'landscape',
@@ -590,7 +599,9 @@ export default function Orders() {
       key: 'invoiced_pct',
       header: 'Invoiced',
       sortable: true,
-      render: (row) => (
+      render: (row) => row.invoiced_pct == null ? (
+        <span className="text-xs text-secondary">Unavailable</span>
+      ) : (
         <div className="flex items-center gap-2">
           <div className="w-20 h-2 bg-gray-100 rounded-full overflow-hidden">
             <div

@@ -524,7 +524,8 @@
     "issue_return_credit": {
       "chain": "smoke-return-credit-chain.sql",
       "container_prover": "verify-return-credit-real-schema.mjs",
-      "description": "THE canonical return->credit chain: direct return writes are denied; all six return RPC receipts bind actor plus exact return/create payload with exact replay and changed-actor/target/payload refusal; source-derived create -> approve/reject/cancel/receive -> issue credit -> statement single-count -> unapply/re-issue; Apply Credit lost-response retry creates one application; explicit reversal and memo unapply immediately restore a past-due target to overdue; only the exact verified production source-free RMA remains finishable.",
+      "container_only": true,
+      "description": "THE canonical return->credit chain: direct return writes are denied; all six return RPC receipts bind actor plus exact return/create payload with exact replay and changed-actor/target/payload refusal; source-derived create -> approve/reject/cancel/receive -> issue credit -> statement single-count -> unapply/re-issue; paid, overdue, and posted source invoices all fund COGS reversal, noncontiguous repeated-cost source lots remain chronological instead of collapsing by cost, and uninvoiced returned quantity stays zero-cost; invoice-basis PNL and monthly summary retain all three recognized statuses; Apply Credit lost-response retry creates one application; explicit reversal and memo unapply immediately restore a past-due target to overdue; only the exact verified production source-free RMA remains finishable.",
       "covers": [
         "create_return",
         "approve_return",
@@ -537,6 +538,21 @@
         "void_order",
         "cancel_order",
         "get_customer_statement",
+        "get_bottom_line_pnl",
+        "get_monthly_summary",
+        "get_customer_year_end_summary",
+        "get_batch_year_end_summaries",
+        "get_detailed_statement_data",
+        "complete_delivery",
+        "create_invoice_for_unbilled_delivery",
+        "get_dashboard_action_items",
+        "void_invoice",
+        "batch_void_invoices",
+        "void_delivery",
+        "cancel_delivery",
+        "save_invoice",
+        "preview_product_pricing_changes",
+        "apply_product_pricing_change_set",
         "unapply_credit_memo"
       ],
       "area": [
