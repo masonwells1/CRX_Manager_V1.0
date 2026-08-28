@@ -139,11 +139,11 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // so the inspected destination cannot differ from the executed push, and
   // after unquoted shell escapes were rejected for GitHub CLI commands.
   codexGuard: "444aded2540fd0fb4c2aa77ba26bdaddc2834ba2",
-  pushLib: "15239c41806536dcbf1bdfb3aa65fa3253a3da8b",
+  pushLib: "4da53baf95e8ab6c6787868d49e89a3e16665fef",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "2bc9ed1767e25e2b106f1cd17c7789f11c22492b",
-  pushLib: "15239c41806536dcbf1bdfb3aa65fa3253a3da8b",
+  pushLib: "4da53baf95e8ab6c6787868d49e89a3e16665fef",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

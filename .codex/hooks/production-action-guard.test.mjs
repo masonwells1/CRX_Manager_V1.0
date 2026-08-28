@@ -483,6 +483,19 @@ try {
       runGh: () => { throw new Error(`escaped command must deny before GitHub lookup: ${command}`); },
     }).blocked, true, `escaped GitHub CLI command denies before parsing: ${command}`);
   }
+  for (const command of [
+    'powershell -Command "gh pr merge 513 --admin"',
+    'cmd /c "gh pr merge 513 --admin"',
+    "bash -c 'gh api graphql --input payload.json'",
+    "node -e \"require('child_process').execSync('gh pr merge 513 --admin')\"",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      runGh: () => { throw new Error(`nested command must deny before GitHub lookup: ${command}`); },
+    }).blocked, true, `nested GitHub CLI activity denies before parsing: ${command}`);
+  }
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `git switch feature/test; gh pr merge --repo crop/crx --squash --match-head-commit ${risky.sha}` },

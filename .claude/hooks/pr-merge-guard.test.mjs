@@ -45,6 +45,10 @@ ok(githubCliCommandIsDynamic("gh a\\pi graphql --input payload.json"), "POSIX-es
 ok(githubCliCommandIsDynamic("gh p^r merge 5 --auto"), "cmd-caret-composed pr token is dynamic");
 ok(githubCliCommandIsDynamic("gh pr m^erge 5 --auto"), "cmd-caret-composed merge token is dynamic");
 ok(githubCliCommandIsDynamic("gh a^pi graphql --input payload.json"), "cmd-caret-composed api token is dynamic");
+ok(githubCliCommandIsDynamic('powershell -Command "gh pr merge 5 --admin"'), "nested PowerShell merge is dynamic");
+ok(githubCliCommandIsDynamic('cmd /c "gh pr merge 5 --admin"'), "nested cmd merge is dynamic");
+ok(githubCliCommandIsDynamic("bash -c 'gh api graphql --input payload.json'"), "nested Bash API call is dynamic");
+ok(githubCliCommandIsDynamic("node -e \"require('child_process').execSync('gh pr merge 5 --admin')\""), "nested interpreter merge is dynamic");
 eq(ghMergeRequest("gh pr view merge-notes"), null, "merge-notes is not the word merge");
 ok(ghMergeRequest("gh pr view merge")?.unsupportedSyntax, "ambiguous exact merge words fail closed outside the canonical grammar");
 eq(ghMergeRequest("git merge main"), null, "git merge is not a gh merge");
@@ -142,6 +146,16 @@ for (const command of [
 ]) {
   r = runHook({ tool_name: "Bash", tool_input: { command } });
   ok(r.decision?.permissionDecision === "deny", `escaped GitHub CLI command denies before parsing: ${command}`);
+}
+
+for (const command of [
+  'powershell -Command "gh pr merge 42 --admin"',
+  'cmd /c "gh pr merge 42 --admin"',
+  "bash -c 'gh api graphql --input payload.json'",
+  "node -e \"require('child_process').execSync('gh pr merge 42 --admin')\"",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `nested GitHub CLI activity denies before parsing: ${command}`);
 }
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge --body-file 123 456 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789" } });

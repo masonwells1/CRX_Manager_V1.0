@@ -2197,6 +2197,14 @@ export function githubCliCommandIsDynamic(command) {
   const dynamicExecutable = /(?:^|[\s;&|])&?(?:\$\{?[A-Za-z_][A-Za-z0-9_:]*\}?|\$\([^\r\n)]*\)|%[^%\r\n]+%|![^!\r\n]+!|@[A-Za-z_][A-Za-z0-9_]*)\s+(?:pr\s+merge|api\b)/i.test(text);
   if (composedExecutable || dynamicExecutable) return true;
   if (!/\bgh(?:\.exe)?\b/i.test(text) && !/\bgh(?:\.exe)?\b/i.test(emptyQuoteNormalized)) return false;
+  const outerWords = splitShellArgs(text);
+  const outerToken = String(outerWords[0] === "&" ? outerWords[1] : outerWords[0] || "");
+  const outerExecutable = path.basename(outerToken).replace(/\.exe$/i, "").toLowerCase();
+  const nestedShellOrInterpreter = new Set([
+    "bash", "cmd", "fish", "node", "nodejs", "perl", "powershell", "pwsh",
+    "py", "python", "python3", "ruby", "sh", "wsl", "zsh",
+  ]).has(outerExecutable) || /(?:^|[\s;&|])(?:eval|iex|invoke-expression|start-process)\b/i.test(text);
+  if (nestedShellOrInterpreter && !commandStartsWithGitHubCli(text)) return true;
   if (emptyQuoteNormalized !== text) return true;
   if (/\(\s*(['"])[^'"\r\n]*\1\s*\+\s*(['"])[^'"\r\n]*\2\s*\)/.test(text)) return true;
   if (/[A-Za-z0-9]["'][A-Za-z0-9]/.test(text)) return true;

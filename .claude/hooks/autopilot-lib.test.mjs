@@ -54,6 +54,9 @@ eq(autopilotDecision("Bash", { command: "g${EMPTY}h pr merge 42 --auto" }), "den
 eq(autopilotDecision("Bash", { command: "gh p\\r m\\erge 42 --auto" }), "deny", "POSIX-escaped GitHub words are never auto-approved");
 eq(autopilotDecision("PowerShell", { command: "gh p^r m^erge 42 --auto" }), "deny", "cmd-caret-composed GitHub words are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh a\\pi graphql --input payload.json" }), "deny", "POSIX-escaped GitHub API is never auto-approved");
+eq(autopilotDecision("PowerShell", { command: 'powershell -Command "gh pr merge 42 --admin"' }), "deny", "nested PowerShell merge is never auto-approved");
+eq(autopilotDecision("PowerShell", { command: 'cmd /c "gh pr merge 42 --admin"' }), "deny", "nested cmd merge is never auto-approved");
+eq(autopilotDecision("Bash", { command: "bash -c 'gh api graphql --input payload.json'" }), "deny", "nested Bash GitHub API call is never auto-approved");
 eq(autopilotDecision("Bash", { command: "$verb='merge'; gh pr $verb 42 --auto" }), "deny", "dynamic GitHub merge is never auto-approved");
 eq(autopilotDecision("mcp__github__push_files", {}), "deny", "GitHub MCP push_files denied");
 eq(autopilotDecision("mcp__github__merge_pull_request", {}), "allow", "GitHub MCP merge PR reaches the normal merge guard");
