@@ -41,6 +41,7 @@ import {
   proofSearchDirs,
   proofValid,
   pullRequestChecksGreen,
+  pullRequestHeadMatchesRepository,
   pushDestinationToken,
   pushUrlRewriteApplies,
   pushGitHubRepository,
@@ -519,7 +520,7 @@ function resolvePullRequest({ request, repoDir, runGh }) {
   // baseRefOid is GitHub's CURRENT tip of the base branch — the commit the merge
   // will actually land on. Without it the gate falls back to local origin/main,
   // which can be stale (Codex P1, 2026-07-25).
-  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,statusCheckRollup,autoMergeRequest");
+  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,headRepositoryOwner,mergeStateStatus,statusCheckRollup,autoMergeRequest");
   if (request.repo) args.push("--repo", request.repo);
   const data = JSON.parse(runGh(args, repoDir));
   // baseRefOid is required only for main-bound merges; gatePullRequestMerge
@@ -644,6 +645,12 @@ function gatePullRequestUpdateBranch({ request, repoDir, runGh }) {
   if (!destinationBranch) return denied("CODEX PRODUCTION GATE: GitHub did not report the PR head branch, so update-branch is denied (fail closed).");
   if (branchNameIsProtected(destinationBranch)) {
     return denied(`CODEX PRODUCTION GATE: update-branch cannot mutate protected head branch ${destinationBranch}. Protected branches change only through the exact-head reviewed merge path.`);
+  }
+  if (pullRequest.autoMergeRequest !== null) {
+    return denied("CODEX PRODUCTION GATE: update-branch is denied while auto-merge is armed on the target PR. Run gh pr merge <number> --disable-auto first, then retry; no Mason approval is required.");
+  }
+  if (!pullRequestHeadMatchesRepository(pullRequest, request.repo)) {
+    return denied("CODEX PRODUCTION GATE: unattended update-branch is limited to same-repository PR heads. Fork heads require a separately reviewed workflow because their owner cannot be inferred from the base repository.");
   }
   let armed;
   try {

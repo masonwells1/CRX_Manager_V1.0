@@ -538,6 +538,17 @@ export function exhaustiveHeadPullRequestsLookupArgs(repository, headBranch) {
   ];
 }
 
+export function pullRequestHeadMatchesRepository(pullRequest, repository) {
+  const repoPath = String(repository || "").trim().replace(/^https?:\/\/github\.com\//i, "").replace(/^github\.com\//i, "").replace(/\.git$/i, "");
+  const repositoryOwner = String(repoPath.split("/")[0] || "").trim().toLowerCase();
+  const headOwner = String(
+    pullRequest?.headRepositoryOwner?.login
+      || pullRequest?.headRepositoryOwner
+      || "",
+  ).trim().toLowerCase();
+  return Boolean(repositoryOwner && headOwner && repositoryOwner === headOwner);
+}
+
 // Parse the exact `gh pr list --json number,autoMergeRequest` response used by
 // both push guards. An open main-bound PR with auto-merge already armed is a
 // time-of-check/time-of-use bypass: a later feature push can become the commit

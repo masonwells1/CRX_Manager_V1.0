@@ -822,11 +822,13 @@ try {
     baseRefOid: risky.base,
     headRefName: "feature/test",
     headRefOid: risky.sha,
+    headRepositoryOwner: { login: "masonwells1" },
+    autoMergeRequest: null,
     mergeStateStatus: "CLEAN",
     statusCheckRollup: greenChecks,
   };
   const mainPrJson = JSON.stringify(mainPr);
-  const featurePrJson = JSON.stringify({ baseRefName: "develop", headRefName: "feature/test", headRefOid: risky.sha });
+  const featurePrJson = JSON.stringify({ baseRefName: "develop", headRefName: "feature/test", headRefOid: risky.sha, headRepositoryOwner: { login: "masonwells1" }, autoMergeRequest: null });
   const armedProtectedPrsJson = JSON.stringify([{ number: 513, autoMergeRequest: { mergeMethod: "SQUASH" }, baseRefName: "main" }]);
   const approvedCodeRabbitResponse = (args, headSha) => {
     const joined = args.join(" ");
@@ -942,6 +944,26 @@ try {
     repoDir: risky.repo,
     runGh: (args) => args.join(" ").startsWith("pr view ") ? mainPrJson : "[]",
   }).blocked, false, "update-branch remains unattended when protected auto-merge is disabled");
+  for (const forkAutoMerge of [null, { enabledAt: "2026-08-28T00:00:00Z" }]) {
+    let lookupAttempted = false;
+    const forkUpdate = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: updateBranch },
+      repoDir: risky.repo,
+      runGh: (args) => {
+        if (args.join(" ").startsWith("pr view ")) return JSON.stringify({
+          ...mainPr,
+          headRefName: "contributor-topic",
+          headRepositoryOwner: { login: "outside-contributor" },
+          autoMergeRequest: forkAutoMerge,
+        });
+        lookupAttempted = true;
+        return "[]";
+      },
+    });
+    assert.equal(forkUpdate.blocked, true, `fork update-branch is denied with auto-merge ${forkAutoMerge ? "armed" : "off"}`);
+    assert.equal(lookupAttempted, false, "fork ownership or target auto-merge denies before a base-owner PR lookup can miss the target");
+  }
   for (const protectedHead of ["main", "master", "production"]) {
     const protectedHeadUpdate = evaluateProductionAction({
       toolName: "PowerShell",

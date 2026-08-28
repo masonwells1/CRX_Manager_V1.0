@@ -169,12 +169,12 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned after land-pr and its pure safety helper joined the risky harness
   // paths so future edits to its child update-branch route require exact-head
   // adversarial review.
-  codexGuard: "42f4b13d7a2290ebbe3b3b132d799bf20b378a8f",
-  pushLib: "213f8d5c04e15ddd65d0a80f95369f44f0fc6d43",
+  codexGuard: "4b6c88178fbd04fca19d955ee732df3aa57a3329",
+  pushLib: "01c30f112bb013ec538421dfd7af49ce53b7696b",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "3c57c1a483eb70dea4d6fec9124d59c530eedf0b",
-  pushLib: "213f8d5c04e15ddd65d0a80f95369f44f0fc6d43",
+  codexGuard: "9005003a60e74606f2c466576e97b2bd6f96fa5b",
+  pushLib: "01c30f112bb013ec538421dfd7af49ce53b7696b",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

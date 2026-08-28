@@ -57,6 +57,7 @@ import {
   proofSearchDirs,
   proofValid,
   pullRequestChecksGreen,
+  pullRequestHeadMatchesRepository,
   riskyFiles,
   trustedGitHubCliInvocation,
   updateBranchRequestHasExplicitContext,
@@ -214,7 +215,7 @@ function gateRequest(request) {
     // merge actually lands on. The proof must be bound to THAT, not to the local
     // origin/main, which can be stale (Codex round-6: a proof reviewed against an
     // old local base validated while GitHub merged onto newer main content).
-    viewArgs.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,statusCheckRollup,autoMergeRequest");
+    viewArgs.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,headRepositoryOwner,mergeStateStatus,statusCheckRollup,autoMergeRequest");
     if (request.repo) viewArgs.push("--repo", request.repo);
     pr = JSON.parse(gh(viewArgs));
     if (!pr?.baseRefName || !pr?.headRefName || !pr?.headRefOid || !pr?.baseRefOid) {
@@ -236,6 +237,12 @@ function gateRequest(request) {
   const destinationBranch = request.updateBranch ? String(pr.headRefName || "").trim() : String(pr.baseRefName || "").trim();
   if (request.updateBranch && branchNameIsProtected(destinationBranch)) {
     deny(`PR MERGE GATE: update-branch cannot mutate protected head branch "${destinationBranch}". Protected branches change only through the exact-head reviewed merge path.`);
+  }
+  if (request.updateBranch && pr.autoMergeRequest !== null) {
+    deny("PR MERGE GATE: update-branch is denied while auto-merge is armed on the target PR. Run gh pr merge <number> --disable-auto first, then retry; no Mason approval is required.");
+  }
+  if (request.updateBranch && !pullRequestHeadMatchesRepository(pr, request.repo)) {
+    deny("PR MERGE GATE: unattended update-branch is limited to same-repository PR heads. Fork heads require a separately reviewed workflow because their owner cannot be inferred from the base repository.");
   }
   if (request.updateBranch || !["main", "master", "production"].includes(base)) {
     let armed;

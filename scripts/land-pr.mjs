@@ -70,7 +70,7 @@ function gh(ghArgs) {
 function view() {
   return JSON.parse(gh([
     "pr", "view", prNumber, "--repo", REPO,
-    "--json", "state,mergeStateStatus,statusCheckRollup,autoMergeRequest,baseRefName,headRefName,headRefOid,mergeCommit,url",
+    "--json", "state,mergeStateStatus,statusCheckRollup,autoMergeRequest,baseRefName,headRefName,headRefOid,headRepositoryOwner,mergeCommit,url",
   ]));
 }
 
@@ -108,7 +108,13 @@ function updateBranch(pr) {
     const headRefName = String(pr?.headRefName || "").trim();
     if (!headRefName) throw new Error("GitHub did not report the PR head branch");
     const openPullRequests = JSON.parse(gh(exhaustiveHeadPullRequestsLookupArgs(REPO, headRefName)));
-    const safety = assessLandPrUpdate({ headRefName, openPullRequests });
+    const safety = assessLandPrUpdate({
+      headRefName,
+      headRepositoryOwner: pr.headRepositoryOwner,
+      autoMergeRequest: pr.autoMergeRequest,
+      repository: REPO,
+      openPullRequests,
+    });
     if (!safety.allowed) {
       console.error(`[land-pr] Refusing update-branch: ${safety.reason}. Disable auto-merge on every listed PR or use an ordinary non-protected head branch, then retry.`);
       process.exit(1);

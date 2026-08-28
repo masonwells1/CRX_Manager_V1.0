@@ -482,14 +482,29 @@ ok(/--match-head-commit <head-sha>/.test(guardSource), "auto-merge guidance requ
 ok(/request\.atomicHeadMatch\s*===\s*false/.test(guardSource), "main-bound merge tools without atomic expected-head support deny");
 ok(/requestedHead\.toLowerCase\(\)\s*!==\s*actualHead\.toLowerCase\(\)/.test(guardSource), "the supplied expected head must equal GitHub's inspected head");
 ok(/request\.updateBranch\s*&&\s*branchNameIsProtected\(destinationBranch\)/.test(guardSource), "the Claude guard denies update-branch when the PR head is protected");
+ok(/request\.updateBranch\s*&&\s*pr\.autoMergeRequest\s*!==\s*null/.test(guardSource), "the Claude guard denies update-branch when the target PR already has auto-merge armed");
+ok(/request\.updateBranch\s*&&\s*!pullRequestHeadMatchesRepository\(pr, request\.repo\)/.test(guardSource), "the Claude guard fails closed on fork-owned update-branch heads");
 
 const landPrSource = readFileSync(path.resolve(__dirname, "../../scripts/land-pr.mjs"), "utf8");
 ok(/--match-head-commit \$\{pr\.headRefOid\}/.test(landPrSource), "land-pr pins both printed merge commands to the inspected head SHA");
 ok(/trustedGitHubCliInvocation/.test(landPrSource), "land-pr child GitHub calls use the fixed executable and sanitized context");
 ok(/exhaustiveHeadPullRequestsLookupArgs\(REPO, headRefName\)/.test(landPrSource), "land-pr exhaustively paginates every open PR fed by the destination head branch");
-eq(assessLandPrUpdate({ headRefName: "feature/safe", openPullRequests: [] }).allowed, true, "land-pr permits an ordinary head with no armed protected-base PR");
-eq(assessLandPrUpdate({ headRefName: "main", openPullRequests: [] }).allowed, false, "land-pr refuses a protected destination head");
+const sameRepoUpdate = {
+  headRepositoryOwner: { login: "masonwells1" },
+  autoMergeRequest: null,
+  repository: "masonwells1/CRX_Manager_V1.0",
+};
+eq(assessLandPrUpdate({ ...sameRepoUpdate, headRefName: "feature/safe", openPullRequests: [] }).allowed, true, "land-pr permits an ordinary head with no armed protected-base PR");
+eq(assessLandPrUpdate({ ...sameRepoUpdate, headRefName: "main", openPullRequests: [] }).allowed, false, "land-pr refuses a protected destination head");
+eq(assessLandPrUpdate({
+  ...sameRepoUpdate,
+  headRefName: "contributor-topic",
+  headRepositoryOwner: { login: "outside-contributor" },
+  autoMergeRequest: { enabledAt: "2026-08-28T00:00:00Z" },
+  openPullRequests: [],
+}).allowed, false, "land-pr refuses an armed fork PR before attempting update-branch");
 const stackedUpdate = assessLandPrUpdate({
+  ...sameRepoUpdate,
   headRefName: "feature/shared",
   openPullRequests: [
     { number: 513, baseRefName: "develop", autoMergeRequest: null },
@@ -499,6 +514,7 @@ const stackedUpdate = assessLandPrUpdate({
 eq(stackedUpdate.allowed, false, "land-pr refuses a shared head that feeds another armed main PR");
 eq(stackedUpdate.armed, [514], "land-pr reports the exact armed stacked PR");
 const laterPageUpdate = assessLandPrUpdate({
+  ...sameRepoUpdate,
   headRefName: "feature/shared",
   openPullRequests: [
     Array.from({ length: 30 }, (_, index) => ({ number: 600 + index, auto_merge: null, base: { ref: "main" } })),
