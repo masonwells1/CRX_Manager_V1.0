@@ -29,6 +29,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   activeProtectedAutoMergePrNumbers,
+  branchNameIsProtected,
   CLAUDE_MERGE_EVIDENCE_BUDGET_MS,
   contentIsRisky,
   createEvidenceBudget,
@@ -218,6 +219,9 @@ function gateRequest(request) {
 
   const base = String(pr.baseRefName || "").trim().toLowerCase();
   const destinationBranch = request.updateBranch ? String(pr.headRefName || "").trim() : String(pr.baseRefName || "").trim();
+  if (request.updateBranch && branchNameIsProtected(destinationBranch)) {
+    deny(`PR MERGE GATE: update-branch cannot mutate protected head branch "${destinationBranch}". Protected branches change only through the exact-head reviewed merge path.`);
+  }
   if (request.updateBranch || !["main", "master", "production"].includes(base)) {
     let armed;
     try {

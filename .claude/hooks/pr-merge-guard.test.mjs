@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  branchNameIsProtected,
   CLAUDE_MERGE_EVIDENCE_BUDGET_MS,
   coderabbitReviewGate,
   createEvidenceBudget,
@@ -117,6 +118,10 @@ ok(!mergeRequestHasExplicitContext(ghMergeRequest("gh pr merge 42 --repo o/r --m
 eq(ghUpdateBranchRequest("gh pr update-branch 42 --repo o/r"), { selector: "42", repo: "o/r", rebase: false, updateBranch: true }, "canonical update-branch parses");
 eq(ghUpdateBranchRequest("gh pr update-branch --rebase 42 --repo o/r"), { selector: "42", repo: "o/r", rebase: true, updateBranch: true }, "canonical rebase update parses");
 ok(updateBranchRequestHasExplicitContext(ghUpdateBranchRequest("gh pr update-branch 42 --repo o/r")), "explicit update-branch context is accepted");
+for (const branch of ["main", "master", "production", "MAIN"]) {
+  ok(branchNameIsProtected(branch), `protected update-branch head is classified: ${branch}`);
+}
+ok(!branchNameIsProtected("feature/test"), "ordinary feature head is not protected");
 ok(!updateBranchRequestHasExplicitContext(ghUpdateBranchRequest("gh pr update-branch --repo o/r")), "selectorless update-branch context is rejected");
 ok(ghUpdateBranchRequest("gh pr update-branch 42 --repo=o/r")?.unsupportedSyntax, "attached update-branch repo is outside the canonical grammar");
 ok(githubCliCommandIsDynamic("(gh pr update-branch 42 --repo o/r)"), "grouped update-branch is dynamic");
@@ -408,6 +413,7 @@ ok(autoGateIndex !== -1 && nonRiskyReturnIndex !== -1 && autoGateIndex < nonRisk
 ok(/--match-head-commit <head-sha>/.test(guardSource), "auto-merge guidance requires an exact-head immediate merge");
 ok(/request\.atomicHeadMatch\s*===\s*false/.test(guardSource), "main-bound merge tools without atomic expected-head support deny");
 ok(/requestedHead\.toLowerCase\(\)\s*!==\s*actualHead\.toLowerCase\(\)/.test(guardSource), "the supplied expected head must equal GitHub's inspected head");
+ok(/request\.updateBranch\s*&&\s*branchNameIsProtected\(destinationBranch\)/.test(guardSource), "the Claude guard denies update-branch when the PR head is protected");
 
 const landPrSource = readFileSync(path.resolve(__dirname, "../../scripts/land-pr.mjs"), "utf8");
 ok(/--match-head-commit \$\{pr\.headRefOid\}/.test(landPrSource), "land-pr pins both printed merge commands to the inspected head SHA");

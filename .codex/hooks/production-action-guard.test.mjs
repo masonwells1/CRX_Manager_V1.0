@@ -853,6 +853,19 @@ try {
     repoDir: risky.repo,
     runGh: (args) => args.join(" ").startsWith("pr view ") ? mainPrJson : "[]",
   }).blocked, false, "update-branch remains unattended when protected auto-merge is disabled");
+  for (const protectedHead of ["main", "master", "production"]) {
+    const protectedHeadUpdate = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: updateBranch },
+      repoDir: risky.repo,
+      runGh: (args) => {
+        if (args.join(" ").startsWith("pr view ")) return JSON.stringify({ ...mainPr, baseRefName: "feature/source", headRefName: protectedHead });
+        throw new Error("protected-head denial must happen before auto-merge lookup");
+      },
+    });
+    assert.equal(protectedHeadUpdate.blocked, true, `update-branch cannot mutate protected head ${protectedHead}`);
+    assert.match(protectedHeadUpdate.reason, /protected head branch/, "protected-head denial explains the exact boundary");
+  }
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: updateBranch },

@@ -7,6 +7,7 @@ import path from "node:path";
 
 import {
   activeProtectedAutoMergePrNumbers,
+  branchNameIsProtected,
   CODEX_MERGE_EVIDENCE_BUDGET_MS,
   coderabbitReviewGate,
   commandStartsWithGitHubCli,
@@ -583,6 +584,9 @@ function gatePullRequestUpdateBranch({ request, repoDir, runGh }) {
   }
   const destinationBranch = normalize(pullRequest.headRefName);
   if (!destinationBranch) return denied("CODEX PRODUCTION GATE: GitHub did not report the PR head branch, so update-branch is denied (fail closed).");
+  if (branchNameIsProtected(destinationBranch)) {
+    return denied(`CODEX PRODUCTION GATE: update-branch cannot mutate protected head branch ${destinationBranch}. Protected branches change only through the exact-head reviewed merge path.`);
+  }
   let armed;
   try {
     armed = activeProtectedAutoMergePrNumbers(runGh([

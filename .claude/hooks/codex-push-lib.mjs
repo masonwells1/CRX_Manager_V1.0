@@ -516,6 +516,9 @@ export function activeAutoMergePrNumbers(value) {
 }
 
 const PROTECTED_BRANCH_NAMES = new Set(["main", "master", "production"]);
+export function branchNameIsProtected(value) {
+  return PROTECTED_BRANCH_NAMES.has(String(value || "").trim().toLowerCase());
+}
 export const CLAUDE_MERGE_EVIDENCE_BUDGET_MS = 20_000;
 export const CODEX_MERGE_EVIDENCE_BUDGET_MS = 9_000;
 
@@ -545,7 +548,7 @@ export function activeProtectedAutoMergePrNumbers(value) {
     }
     const base = String(record.baseRefName || "").trim().toLowerCase();
     if (!base) throw new Error("pull-request lookup returned an invalid baseRefName");
-    if (PROTECTED_BRANCH_NAMES.has(base)) protectedRecords.push(record);
+    if (branchNameIsProtected(base)) protectedRecords.push(record);
   }
   return activeAutoMergePrNumbers(protectedRecords);
 }

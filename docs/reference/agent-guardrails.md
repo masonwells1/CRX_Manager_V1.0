@@ -92,6 +92,8 @@ Direct GitHub API clients are normalized by executable basename across Windows/P
 
 Feature pushes reject tool-level structured environment overrides before execution. Only `GIT_TERMINAL_PROMPT=0/1` and the exact documented SSH keepalive command are value-checked exceptions; transport helpers, Git configuration, repository selectors, executable paths, and generic environment changes deny closed in Claude, Codex, and unattended autopilot.
 
+`gh pr update-branch` remains available for ordinary feature heads when protected auto-merge is off, but it can never target a PR whose head branch is `main`, `master`, or `production`; protected heads change only through the exact-head reviewed merge path.
+
 All GitHub merge evidence shares one cumulative deadline: 20 seconds inside Claude's 30-second outer hook and 9 seconds inside Codex's 15-second outer hook. Each subprocess receives only the remaining time, and an exhausted budget becomes an explicit fail-closed decision before the harness itself can time out.
 
 Autonomous main merges also require CodeRabbit's verified `CodeRabbit` status from App id `136622811`, no failure/rate-limit signal in its latest walkthrough, and a formal `APPROVED` review whose `commit_id` equals the exact head being merged. Missing, stale, pending, failed, changes-requested, or unreadable evidence denies closed without asking Mason for a routine approval.
