@@ -128,7 +128,8 @@ refusals park unusual migrations for a separately reviewed manual path.
 Admission is otherwise default-deny: only a narrow set of definition-only DDL statements is allowed.
 Top-level DML, `VALUES`, `COPY`, query-executing `CREATE TABLE AS`, materialized views, CTEs, index
 builds, trigger DDL, `ALTER TABLE`, extensions, direct migration-ledger references, and unknown
-statement forms are parked. `GRANT` is limited to function/procedure execution for `authenticated`
+statement forms are parked. `CREATE SCHEMA` is also parked because PostgreSQL permits embedded grants
+and trigger declarations inside that single statement. `GRANT` is limited to function/procedure execution for `authenticated`
 and `service_role`; `REVOKE` is limited to those executable objects and known CRX roles. Quoted or
 unquoted references to the migration schema are denied before tokenization.
 

@@ -192,6 +192,8 @@ for (const [sql, reasonPattern] of [
   ["GRANT SELECT ON TABLE public.customers TO authenticated;", /outside the audited DDL allowlist/],
   ["GRANT EXECUTE ON FUNCTION public.safe_batch_probe_fn() TO PUBLIC;", /outside the audited DDL allowlist/],
   ["GRANT USAGE ON SCHEMA \"supabase_migrations\" TO PUBLIC; GRANT INSERT, UPDATE, DELETE ON TABLE \"supabase_migrations\".\"schema_migrations\" TO PUBLIC;", /protected migration ledger reference/],
+  ["CREATE SCHEMA crx_gate_probe GRANT ALL ON TABLE public.customers TO anon;", /outside the audited DDL allowlist/],
+  ["CREATE SCHEMA crx_gate_probe CREATE TRIGGER crx_probe BEFORE INSERT ON public.customers FOR EACH ROW EXECUTE FUNCTION public.crx_review_bypass();", /outside the audited DDL allowlist/],
   ["CREATE TRIGGER crx_review_bypass BEFORE INSERT ON public.customers FOR EACH ROW EXECUTE FUNCTION public.crx_review_bypass();", /outside the audited DDL allowlist/],
   ["CREATE FUNCTION public.crx_review_bypass() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN DELETE FROM public.customers; RETURN NEW; END $body$; CREATE TRIGGER crx_review_bypass BEFORE INSERT ON supabase_migrations.schema_migrations FOR EACH ROW EXECUTE FUNCTION public.crx_review_bypass();", /protected migration ledger reference/],
   ["DO $safe$ BEGIN IF EXISTS (SELECT 1) THEN NULL; END IF; END $safe$;", /top-level DO/],

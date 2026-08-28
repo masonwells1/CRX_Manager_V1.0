@@ -98,7 +98,7 @@ function auditedDdlAdmission(skeleton) {
     }
     if (/^create\s+(?:or\s+replace\s+)?view\b/i.test(normalized)) continue;
     if (/^(?:create|alter|drop)\s+policy\b/i.test(normalized)) continue;
-    if (/^create\s+(?:type|domain|sequence|schema)\b/i.test(normalized)) continue;
+    if (/^create\s+(?:type|domain|sequence)\b/i.test(normalized)) continue;
     if (/^alter\s+(?:type|sequence)\b/i.test(normalized)) continue;
     if (/^drop\s+(?:view|index)\b/i.test(normalized)) continue;
     if (/^grant\s+execute\s+on\s+(?:function|procedure)\b.+\s+to\s+(?:authenticated|service_role)(?:\s*,\s*(?:authenticated|service_role))*$/i.test(normalized)) continue;
