@@ -42,6 +42,9 @@ ok(/DELETE FROM public\.customers/i.test(stripCommentsQuoteAware(bareCrExploit))
 const escapeStringExploit = "COMMENT ON TABLE public.customers IS E'escaped\\' quote /*'; DELETE FROM public.customers;";
 ok(destructiveMigrationCheck(escapeStringExploit).destructive,
   "an escaped E-string quote cannot hide a following destructive statement");
+const escapeStringDollarQuoteExploit = "COMMENT ON TABLE public.customers IS E'foo\\' AS $x$ junk'; DELETE FROM public.customers; -- $x$\nSELECT 1;";
+ok(destructiveMigrationCheck(escapeStringDollarQuoteExploit).destructive,
+  "a dollar-quote marker inside an escaped E-string cannot hide a following destructive statement");
 eq(
   destructiveMigrationCheck("CREATE OR REPLACE FUNCTION cleanup() RETURNS void AS $$ BEGIN DELETE FROM invoices WHERE is_active = false; END $$ LANGUAGE plpgsql;").destructive,
   false,

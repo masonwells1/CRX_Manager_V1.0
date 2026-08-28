@@ -157,6 +157,17 @@ denies(
     }),
     { query: ESCAPED_DESTRUCTIVE }),
   "destructive statement", "armed run refuses DELETE after an escaped E-string even with perfect proof");
+const ESCAPED_DOLLAR_QUOTE_DESTRUCTIVE = "COMMENT ON TABLE public.customers IS E'foo\\' AS $x$ junk'; DELETE FROM public.customers; -- $x$\nSELECT 1;";
+const escapedDollarQuoteDestructiveHash = createHash("sha256").update(ESCAPED_DOLLAR_QUOTE_DESTRUCTIVE).digest("hex");
+denies(
+  evaluate(
+    fixture({
+      autopilot: armed(),
+      proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: escapedDollarQuoteDestructiveHash },
+      codexProof: { ...goodCodex, queryHash: escapedDollarQuoteDestructiveHash },
+    }),
+    { query: ESCAPED_DOLLAR_QUOTE_DESTRUCTIVE }),
+  "destructive statement", "armed run refuses DELETE after a dollar-quote marker inside an escaped E-string");
 
 // ── CHECK 4: reviewer proof ─────────────────────────────────────────────────
 denies(evaluate(fixture({ proof: null })), "without subagent review proof",
