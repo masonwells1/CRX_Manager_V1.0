@@ -349,6 +349,7 @@ export function evaluateMigrationApply({
   const MAX_AGE_MS = PROOF_MAX_AGE_MS;
 
   let validProof = null;
+  let contentMismatchedProof = null;
   const freshCleanProofNames = [];
   for (const dir of proofDirs) {
     if (validProof) break;
@@ -407,13 +408,26 @@ export function evaluateMigrationApply({
             // Exact content binding is mandatory in every mode. A missing hash
             // or any mismatch means the proof does not attest to the SQL being
             // transmitted and cannot authorize this apply.
-            if (!data.queryHash || data.queryHash !== currentHash) continue;
+            if (!data.queryHash || data.queryHash !== currentHash) {
+              if (!contentMismatchedProof) contentMismatchedProof = { file: f, dir, data };
+              continue;
+            }
             validProof = { file: f, dir, data };
             break;
           }
         }
       }
     } catch { /* directory unreadable — try the next one, then fall through to block */ }
+  }
+
+  if (!validProof && handsFree && contentMismatchedProof) {
+    const proofHash = String(contentMismatchedProof.data.queryHash || "");
+    return block(
+      `MIGRATION APPLY GUARD (hands-free run): the reviewer proof for "${migName || "(unnamed)"}" ` +
+      `is not content-bound — autonomous applies require "queryHash" in the proof to be present and ` +
+      `exactly match the SHA-256 of the transmitted SQL (expected: ${currentHash || "(no query text)"}; ` +
+      `received: ${proofHash || "(missing)"}). Re-confirm the reviewers against the CURRENT SQL, ` +
+      `update the proof's queryHash, and retry.`);
   }
 
   if (validProof) {

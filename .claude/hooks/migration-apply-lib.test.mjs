@@ -175,6 +175,14 @@ denies(
 denies(
   evaluate(fixture({
     autopilot: armed(),
+    proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: "0".repeat(64) },
+    codexProof: goodCodex,
+  })),
+  "not content-bound", "armed run identifies a reviewer proof bound to different SQL");
+
+denies(
+  evaluate(fixture({
+    autopilot: armed(),
     proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer"], findings: "clean", queryHash: HASH },
     codexProof: goodCodex,
   })),
