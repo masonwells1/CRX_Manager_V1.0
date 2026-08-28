@@ -184,7 +184,10 @@ manual path. Resolve or apply every older approved pending migration first; inst
 intentionally makes any later attempt to insert an older authored timestamp fail and roll back.
 
 The guard runs for every ledger insert, regardless of whether it came from GitHub, Supabase MCP, or
-another client. It takes the same transaction-scoped advisory lock, requires the ledger `name` to
+another client. Its trigger is enabled in PostgreSQL `ALWAYS` mode, so a privileged client cannot
+suppress it with `session_replication_role = replica`; installation includes a rollback-only replica-mode
+probe. Both the bootstrap and automated batch require an unconditional, zero-argument trigger, so a
+replacement carrying `WHEN (false)` is rejected. It takes the same transaction-scoped advisory lock, requires the ledger `name` to
 carry the authored 14-digit timestamp, recomputes the live row-by-row effective high-water, and
 rejects an authored timestamp at or below that value. This closes stale workstation-snapshot races
 without trusting one client to invalidate another client's local files.

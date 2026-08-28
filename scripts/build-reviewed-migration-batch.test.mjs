@@ -53,6 +53,15 @@ assert.equal(ledgerGuardBody?.[1], LEDGER_GUARD_PROSRC,
 assert.match(ledgerGuardMigration, /pg_advisory_xact_lock\(1129465937\)/);
 assert.match(ledgerGuardMigration, /authored_version <= latest_version/);
 assert.match(ledgerGuardMigration, /BEFORE INSERT ON supabase_migrations\.schema_migrations/);
+assert.match(ledgerGuardMigration, /ENABLE ALWAYS TRIGGER crx_enforce_monotonic_migration_ledger/,
+  "the global order trigger must fire even when a privileged session selects replica mode");
+assert.match(ledgerGuardMigration, /t\.tgenabled = 'A'/);
+assert.match(ledgerGuardMigration, /t\.tgqual IS NULL/,
+  "a false WHEN condition must fail the trigger-shape verification");
+assert.match(ledgerGuardMigration, /t\.tgnargs = 0/);
+assert.match(ledgerGuardMigration, /set_config\('session_replication_role', 'replica', true\)/,
+  "the migration must exercise an out-of-order insert while ordinary triggers are suppressed");
+assert.match(ledgerGuardMigration, /global migration ledger ordering guard replica-mode verification failed/);
 assert.match(workflow, /^\s*environment: production-database\s*$/m,
   "the credential-bearing job must use the protected production-database environment");
 assert.match(workflow, /test "\$GITHUB_REF" = "refs\/heads\/main"/,
@@ -342,6 +351,13 @@ assert.match(batch, /^SELECT pg_advisory_xact_lock\(1129465937\);$/m);
 assert.match(batch, /^LOCK TABLE supabase_migrations\.schema_migrations IN SHARE ROW EXCLUSIVE MODE;$/m);
 assert.ok(batch.indexOf("LOCK TABLE") < batch.indexOf("SELECT pg_advisory_xact_lock"),
   "the ledger table lock must precede the advisory lock to match ordinary INSERT lock order");
+assert.equal((batch.match(/t\.tgenabled = 'A'/g) || []).length, 2,
+  "the batch must require ALWAYS mode before candidate SQL and before its ledger insert");
+assert.equal((batch.match(/t\.tgqual IS NULL/g) || []).length, 2,
+  "the batch must reject a trigger carrying any WHEN condition at both invariant checks");
+assert.equal((batch.match(/t\.tgnargs = 0/g) || []).length, 2,
+  "the batch must reject trigger arguments at both invariant checks");
+assert.doesNotMatch(batch, /t\.tgenabled = 'O'/);
 assert.ok(batch.includes("SELECT max(effective_version) INTO latest_version"));
 assert.ok(batch.includes("latest_version >= '20990101010101'"));
 assert.ok(batch.includes("CRX migration is not newer than the live ledger"));
