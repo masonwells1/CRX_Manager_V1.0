@@ -62,6 +62,7 @@ ok(ghApiMutates("gh api --method PUT repos/o/r/pulls/42/update-branch"), "unreco
 ok(ghApiMutates("gh -R o/r api --method PUT repos/o/r/pulls/42/update-branch"), "global gh flags cannot hide a REST branch mutation");
 ok(ghApiMutates("gh -R o/r api --method PATCH repos/o/r/git/refs/heads/main -f force=true"), "global gh flags cannot hide a forced ref update");
 ok(ghApiMutates("gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {}) }'"), "unrecognized GraphQL mutation is classified as a write");
+ok(ghApiMutates('"/usr/bin/gh" api --method PATCH repos/o/r/git/refs/heads/main -f force=true'), "quoted Unix gh paths cannot hide API mutations");
 ok(!ghApiMutates("gh api repos/o/r/pulls/42"), "plain gh API GET remains read-only");
 ok(directGitHubApiWriter("curl -X POST https://api.github.com/graphql -d mutation"), "direct GraphQL writer is classified");
 ok(directGitHubApiWriter("Invoke-RestMethod -Method Put https://api.github.com/repos/o/r/pulls/42/update-branch"), "direct REST writer is classified");
@@ -92,6 +93,7 @@ ok(ghPrBaseRetargets("gh -R o/r pr edit 42 --base=production"), "global flags an
 ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r -B main"), "short PR base retarget is classified");
 ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r -B=main"), "equals-attached short base values are classified");
 ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r -Bmain"), "directly attached short base values are classified");
+ok(ghPrBaseRetargets("& 'C:\\Program Files\\GitHub CLI\\gh.exe' pr edit 42 --repo o/r --base main"), "PowerShell call-operator plus a quoted Windows gh path cannot hide a base retarget");
 ok(!ghPrBaseRetargets("gh pr edit 42 --add-label ready"), "ordinary PR metadata edits are not base retargets");
 ok(githubCliCommandIsDynamic("(gh pr edit 42 --base main)"), "grouped PR base retarget is dynamic");
 
@@ -101,7 +103,9 @@ eq(ghMergeRequest("gh pr merge --squash --auto 7"), { selector: "7", repo: "", a
 ok(ghMergeRequest("gh -R masonwells1/CRX_Manager_V1.0 pr merge 9")?.unsupportedSyntax, "global flags are outside the canonical grammar");
 ok(ghMergeRequest("gh pr merge --repo=o/r")?.unsupportedSyntax, "attached repo values are outside the canonical grammar");
 eq(ghMergeRequest("gh pr merge 42 --match-head-commit 0123456789012345678901234567890123456789"), { selector: "42", repo: "", auto: false, matchHead: "0123456789012345678901234567890123456789", squash: false, atomicHeadMatch: true }, "separate exact-head flag parses");
-ok(ghMergeRequest("&gh pr merge 42 --auto")?.unsupportedSyntax, "PowerShell call operator is outside the canonical grammar");
+eq(ghMergeRequest("&gh pr merge 42 --auto"), { selector: "42", repo: "", auto: true, matchHead: "", squash: false, atomicHeadMatch: true }, "PowerShell call operator is normalized into the canonical grammar");
+eq(ghMergeRequest("& 'C:\\Program Files\\GitHub CLI\\gh.exe' pr merge 42 --squash"), { selector: "42", repo: "", auto: false, matchHead: "", squash: true, atomicHeadMatch: true }, "quoted Windows gh paths enter the merge parser");
+eq(ghMergeRequest('"/usr/bin/gh" pr merge 42 --squash'), { selector: "42", repo: "", auto: false, matchHead: "", squash: true, atomicHeadMatch: true }, "quoted Unix gh paths enter the merge parser");
 ok(ghMergeRequest("gh pr merge 42 --match-head-commit=abcdefabcdefabcdefabcdefabcdefabcdefabcd")?.unsupportedSyntax, "attached exact-head values are outside the canonical grammar");
 ok(ghMergeRequest("gh pr merge") !== null, "selectorless merge still gated");
 eq(ghMergeRequest("gh pr merge 5 --disable-auto"), null, "--disable-auto stands down (cancels, does not land)");
@@ -275,6 +279,12 @@ ok(r.decision?.permissionDecision === "deny", "GitHub tool PR base retarget is d
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "&gh pr merge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "PowerShell call-operator auto-merge is denied");
+
+r = runHook({ tool_name: "PowerShell", tool_input: { command: "& 'C:\\Program Files\\GitHub CLI\\gh.exe' pr merge 42 --auto" } });
+ok(r.decision?.permissionDecision === "deny", "quoted Windows gh path cannot bypass the merge guard");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: '"/usr/bin/gh" api --method PATCH repos/o/r/git/refs/heads/main -f force=true' } });
+ok(r.decision?.permissionDecision === "deny", "quoted Unix gh path cannot bypass the API mutation guard");
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "gh pr merge 42 --auto --body --disable-auto" } });
 ok(r.decision?.permissionDecision === "deny", "disable-auto used as body text cannot bypass real auto flag");

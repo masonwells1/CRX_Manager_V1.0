@@ -78,6 +78,8 @@ eq(autopilotDecision("Bash", { command: "git push origin HEAD:production" }), "d
 eq(autopilotDecision("Bash", { command: "gh pr edit 42 --repo o/r --base main" }), "deny", "PR base retargets are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh pr edit 42 --repo o/r -B main" }), "deny", "short PR base retargets are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh pr edit 42 --repo o/r -Bmain" }), "deny", "attached short PR base retargets are never auto-approved");
+eq(autopilotDecision("PowerShell", { command: "& 'C:\\Program Files\\GitHub CLI\\gh.exe' pr edit 42 --repo o/r --base main" }), "deny", "quoted Windows gh paths cannot auto-approve a PR base retarget");
+eq(autopilotDecision("Bash", { command: '"/usr/bin/gh" api --method PATCH repos/o/r/git/refs/heads/main -f force=true' }), "deny", "quoted Unix gh paths cannot auto-approve an API mutation");
 eq(autopilotDecision("mcp__github__update_pull_request", { base: "main" }), "deny", "GitHub PR update tools are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh alias set ship 'api graphql'" }), "deny", "GitHub CLI alias management is never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh extension exec unsafe" }), "deny", "GitHub CLI extensions are never auto-approved");

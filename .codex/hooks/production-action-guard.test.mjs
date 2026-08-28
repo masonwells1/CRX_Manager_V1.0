@@ -1015,6 +1015,18 @@ try {
   }).blocked, true, "PowerShell call-operator auto-merge is denied");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
+    toolInput: { command: "& 'C:\\Program Files\\GitHub CLI\\gh.exe' pr merge 123 --auto" },
+    repoDir: risky.repo,
+    runGh: () => { throw new Error("quoted-path auto-merge must deny before GitHub lookup"); },
+  }).blocked, true, "quoted Windows gh path cannot bypass the production merge guard");
+  assert.equal(evaluateProductionAction({
+    toolName: "Bash",
+    toolInput: { command: '"/usr/bin/gh" api --method PATCH repos/o/r/git/refs/heads/main -f force=true' },
+    repoDir: risky.repo,
+    runGh: () => { throw new Error("quoted-path API mutation must deny before GitHub lookup"); },
+  }).blocked, true, "quoted Unix gh path cannot bypass the production API guard");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --repo masonwells1/CRX_Manager_V1.0 --auto --match-head-commit ${risky.sha} --body --disable-auto` },
     repoDir: risky.repo,
     nowMs: now,

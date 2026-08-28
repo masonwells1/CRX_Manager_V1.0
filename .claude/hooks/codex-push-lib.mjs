@@ -45,12 +45,29 @@ export function trustedGitHubCliInvocation(args, options = {}) {
   };
 }
 
-function executableToken(command) {
+function executableWords(command) {
   const withoutLeadingEnvironment = String(command || "").replace(
     /^\s*(?:env\s+)?(?:(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+))\s+)*/,
     "",
   );
-  return String(splitShellArgs(withoutLeadingEnvironment)[0] || "");
+  const words = splitShellArgs(withoutLeadingEnvironment);
+  if (words[0] === "&") words.shift();
+  else if (String(words[0] || "").startsWith("&")) words[0] = String(words[0]).slice(1);
+  return words;
+}
+
+function executableToken(command) {
+  return String(executableWords(command)[0] || "");
+}
+
+// One authoritative answer to "does this command directly execute gh?".
+// Tokenization removes either quote style, and `executableWords` normalizes the
+// optional PowerShell call operator. Convert both separators explicitly so a
+// quoted Windows path is recognized even while the parser runs on Linux CI.
+function githubCliInvocationWords(command) {
+  const words = executableWords(command);
+  const basename = String(words[0] || "").replaceAll("\\", "/").split("/").at(-1);
+  return /^gh(?:\.exe)?$/i.test(basename) ? words : null;
 }
 
 function executableKey(value, platform = process.platform) {
@@ -81,8 +98,7 @@ function resolvedBareExecutable(token, { cwd, env, platform, exists }) {
 }
 
 export function commandStartsWithGitHubCli(command) {
-  const token = executableToken(command);
-  return /(?:^|[\\/])gh(?:\.exe)?$/i.test(token);
+  return githubCliInvocationWords(command) !== null;
 }
 
 export function deliveryExecutableIsTrusted(command, kind, options = {}) {
@@ -2281,8 +2297,18 @@ export function sessionProofDirs(root, hookCwd, listWorktrees) {
 // logic. Follow-up: production-action-guard should import these instead of
 // carrying its own copies.
 
-// gh binary reference — tolerates quoted absolute paths and gh.exe.
-const GH_BIN_RE = /(?:^|[\s;&|])(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i;
+// Secondary mention detector for wrapped/dynamic commands. Direct invocations
+// use `githubCliInvocationWords` above; this keeps legacy fail-closed treatment
+// of text such as `echo gh pr merge ...`, including both quote styles.
+const GH_BIN_RE = /(?:^|[\s;&|])(?:&\s*)?(?:"[^"]*[\\/]gh(?:\.exe)?"|'[^']*[\\/]gh(?:\.exe)?'|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i;
+
+function githubCliParserWords(command) {
+  const direct = githubCliInvocationWords(command);
+  if (direct) return { words: direct, direct: true };
+  const text = String(command || "");
+  if (!GH_BIN_RE.test(text)) return null;
+  return { words: splitShellArgs(text), direct: false };
+}
 
 // A command-text gate can only verify a GitHub action when the CLI words are
 // literal. `$verb`, `${...}`, command substitution, splats, delayed `%VAR%` /
@@ -2403,8 +2429,9 @@ export function updateBranchRequestHasExplicitContext(request) {
 
 export function ghPrBaseRetargets(command) {
   const text = String(command || "");
-  if (!GH_BIN_RE.test(text)) return false;
-  const words = splitShellArgs(text);
+  const parsed = githubCliParserWords(text);
+  if (!parsed) return false;
+  const { words } = parsed;
   const prIndex = words.findIndex((word) => String(word).toLowerCase() === "pr");
   const editIndex = words.findIndex((word, index) => index > prIndex && String(word).toLowerCase() === "edit");
   if (prIndex === -1 || editIndex === -1) return false;
@@ -2422,10 +2449,10 @@ export function ghPrBaseRetargets(command) {
 // and prove it is not feeding an armed protected-branch auto-merge.
 export function ghUpdateBranchRequest(command) {
   const text = String(command || "");
-  if (!GH_BIN_RE.test(text)) return null;
-  const words = splitShellArgs(text);
-  const executable = String(words[0] || "");
-  const executableIsLiteral = /^(?:gh(?:\.exe)?|[^;&|\r\n]*[\\/]gh(?:\.exe)?)$/i.test(executable);
+  const parsed = githubCliParserWords(text);
+  if (!parsed) return null;
+  const { words } = parsed;
+  const executableIsLiteral = parsed.direct;
   const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
   const hasUpdateBranchWords = prIndex !== -1 && words.some((word, index) =>
     index > prIndex && word.toLowerCase() === "update-branch");
@@ -2457,10 +2484,10 @@ export function ghUpdateBranchRequest(command) {
 // this guard every value-taking option the CLI may add over time.
 export function ghMergeRequest(command) {
   const text = String(command || "");
-  if (!GH_BIN_RE.test(text)) return null;
-  const words = splitShellArgs(text);
-  const executable = String(words[0] || "");
-  const executableIsLiteral = /^(?:gh(?:\.exe)?|[^;&|\r\n]*[\\/]gh(?:\.exe)?)$/i.test(executable);
+  const parsed = githubCliParserWords(text);
+  if (!parsed) return null;
+  const { words } = parsed;
+  const executableIsLiteral = parsed.direct;
   const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
   const hasPrMergeWords = prIndex !== -1 && words.some((word, index) =>
     index > prIndex && word.toLowerCase() === "merge");
@@ -2512,8 +2539,9 @@ export function ghMergeRequest(command) {
 // the position-anchored `gh\s+api` regex let that exact form pass ungated).
 export function ghApiMergeRequest(command) {
   const text = String(command || "");
-  if (!GH_BIN_RE.test(text)) return null;
-  const words = splitShellArgs(text);
+  const parsed = githubCliParserWords(text);
+  if (!parsed) return null;
+  const { words } = parsed;
   const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
   if (apiIndex === -1) return null;
   const isGraphql = words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql");
@@ -2547,8 +2575,9 @@ export function ghApiMergeRequest(command) {
 // shared so Claude and Codex cannot disagree about a REST/GraphQL mutation.
 export function ghApiMutates(command) {
   const text = String(command || "");
-  if (!GH_BIN_RE.test(text)) return false;
-  const words = splitShellArgs(text);
+  const parsed = githubCliParserWords(text);
+  if (!parsed) return false;
+  const { words } = parsed;
   const apiIndex = words.findIndex((word) => String(word).toLowerCase() === "api");
   if (apiIndex === -1) return false;
   if (words.some((word, index) => index > apiIndex && String(word).toLowerCase() === "graphql") && /\bmutation\b/i.test(text)) return true;
@@ -2636,8 +2665,10 @@ const GH_GLOBAL_OPTIONS_WITH_VALUE = new Set(["-R", "--repo", "--hostname", "--c
 
 export function ghCliCommandIsUnknownOrAlias(command) {
   const text = String(command || "");
-  if (!GH_BIN_RE.test(text)) return false;
-  const words = splitShellArgs(text);
+  const parsed = githubCliParserWords(text);
+  if (!parsed) return false;
+  const { words } = parsed;
+  if (!parsed.direct) return true;
   let topLevel = "";
   for (let index = 1; index < words.length; index += 1) {
     const word = String(words[index] || "");
