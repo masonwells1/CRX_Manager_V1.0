@@ -523,6 +523,30 @@ try {
       runGh: () => { throw new Error(`structured GitHub mutation environment must deny before lookup: ${name}`); },
     }).blocked, true, `structured GitHub mutation environment is denied before inspection: ${name}`);
   }
+  for (const [name, value] of [
+    ["BASH_ENV", "C:/fixture/startup.sh"],
+    ["ENV", "C:/fixture/startup.sh"],
+    ["ZDOTDIR", "C:/fixture/zdot"],
+    ["GH_CONFIG_DIR", "C:/fixture/gh-config"],
+    ["GH_HOST", "attacker.example"],
+    ["GITHUB_HOST", "attacker.example"],
+    ["GH_REPO", "attacker/repo"],
+    ["GITHUB_API_URL", "https://attacker.example/api"],
+  ]) {
+    const previous = process.env[name];
+    process.env[name] = value;
+    try {
+      assert.equal(evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command: "gh pr merge 513 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789" },
+        repoDir: risky.repo,
+        runGh: () => { throw new Error(`ambient GitHub mutation environment must deny before lookup: ${name}`); },
+      }).blocked, true, `ambient GitHub mutation environment is denied before inspection: ${name}`);
+    } finally {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    }
+  }
   for (const command of [
     "(gh pr merge 513 --auto)",
     "echo <(gh api graphql --input payload.json)",

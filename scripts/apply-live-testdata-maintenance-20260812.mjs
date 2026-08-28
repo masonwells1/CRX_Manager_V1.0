@@ -163,14 +163,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // and GitHub CLI extensions joined the unknown-command denial. The protected
   // producer transform remains identity-only for this shared push library.
   // Re-pinned after every structured environment override became invalid on a
-  // GitHub mutation and ambient shell-startup overrides became explicit
-  // fail-closed conditions, preventing execution from diverging after review.
+  // GitHub mutation and ambient shell-startup/GitHub-context overrides became
+  // explicit fail-closed conditions, preventing execution from diverging after
+  // review while ordinary inherited runner networking remains usable.
   codexGuard: "038f57003d9071d809ee7c25527f763ca480c1ab",
-  pushLib: "29aadd2f577bfd8467629a44044e325126d84243",
+  pushLib: "eb0bccad201332f8d55cfeb0181a26814f0850d7",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "2ff7233500eb88189f3cc2b10f760ed037803c20",
-  pushLib: "29aadd2f577bfd8467629a44044e325126d84243",
+  pushLib: "eb0bccad201332f8d55cfeb0181a26814f0850d7",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

@@ -77,7 +77,7 @@ ok(ghCliCommandIsUnknownOrAlias("gh ship"), "unknown top-level gh command is tre
 ok(!ghCliCommandIsUnknownOrAlias("gh -R o/r pr view 42"), "known gh command after global flags remains classified");
 const canonicalMutation = "gh pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789";
 eq(githubMutationEnvironmentOverrideNames(canonicalMutation, { TRACE_LABEL: "fixture" }), ["TRACE_LABEL"], "every structured environment override on a GitHub mutation is classified");
-eq(githubMutationUnsafeAmbientEnvironmentNames(canonicalMutation, { BASH_ENV: "fixture", GH_TOKEN: "expected-auth" }), ["BASH_ENV"], "unsafe ambient shell startup variables are classified without rejecting normal inherited authentication");
+eq(githubMutationUnsafeAmbientEnvironmentNames(canonicalMutation, { BASH_ENV: "fixture", GH_HOST: "attacker.example", GH_TOKEN: "expected-auth" }), ["BASH_ENV", "GH_HOST"], "unsafe ambient shell and GitHub context variables are classified without rejecting normal inherited authentication");
 eq(githubMutationEnvironmentOverrideNames("gh pr view 42 --repo o/r", { TRACE_LABEL: "fixture" }), [], "read-only GitHub commands do not acquire the mutation environment rule");
 ok(ghPrBaseRetargets("gh pr edit 42 --repo o/r --base main"), "literal PR base retarget is classified");
 ok(ghPrBaseRetargets("gh -R o/r pr edit 42 --base=production"), "global flags and attached base values cannot hide retargeting");
@@ -280,8 +280,19 @@ for (const name of ["BASH_ENV", "ENV", "HTTP_PROXY", "SSL_CERT_FILE", "HOME", "P
   ok(r.decision?.permissionDecision === "deny", `structured GitHub mutation environment is denied: ${name}`);
 }
 
-r = runHook({ tool_name: "Bash", tool_input: { command: canonicalMutation } }, { BASH_ENV: "C:/fixture/startup.sh" });
-ok(r.decision?.permissionDecision === "deny", "ambient BASH_ENV denies a GitHub mutation before merge inspection");
+for (const [name, value] of [
+  ["BASH_ENV", "C:/fixture/startup.sh"],
+  ["ENV", "C:/fixture/startup.sh"],
+  ["ZDOTDIR", "C:/fixture/zdot"],
+  ["GH_CONFIG_DIR", "C:/fixture/gh-config"],
+  ["GH_HOST", "attacker.example"],
+  ["GITHUB_HOST", "attacker.example"],
+  ["GH_REPO", "attacker/repo"],
+  ["GITHUB_API_URL", "https://attacker.example/api"],
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command: canonicalMutation } }, { [name]: value });
+  ok(r.decision?.permissionDecision === "deny", `ambient ${name} denies a GitHub mutation before merge inspection`);
+}
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: "gh pr m''erge 42 --auto" } });
 ok(r.decision?.permissionDecision === "deny", "empty-quote composed merge token denies before parsing");

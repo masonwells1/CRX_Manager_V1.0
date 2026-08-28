@@ -2343,6 +2343,7 @@ export function githubMutationEnvironmentOverrideNames(command, env) {
 
 const GITHUB_MUTATION_UNSAFE_AMBIENT_ENV_NAMES = new Set([
   "BASH_ENV", "ENV", "ZDOTDIR",
+  "GH_CONFIG_DIR", "GH_HOST", "GITHUB_HOST", "GH_REPO", "GITHUB_API_URL",
 ]);
 
 export function githubMutationUnsafeAmbientEnvironmentNames(command, env) {
