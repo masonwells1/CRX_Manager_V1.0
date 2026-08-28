@@ -29,39 +29,13 @@ import HelpTip from '../components/ui/HelpTip';
 import PageHeader from '../components/ui/PageHeader';
 import type { Order } from '../types';
 import { getSeasonDates } from '../utils/season';
-import { activeInvoiceCountsTowardBilling, type InvoiceBillingCoverage } from '../lib/deliveryInvoiceCoverage';
+import {
+  activeInvoiceCountsTowardBilling,
+  fetchActiveInvoiceCoveragePages,
+  type ActiveInvoiceCoverageRow,
+} from '../lib/deliveryInvoiceCoverage';
 
 const EMPTY_UUID = '00000000-0000-0000-0000-000000000000';
-const INVOICE_QUERY_PAGE_SIZE = 1000;
-
-type OrderInvoiceCoverageRow = InvoiceBillingCoverage & {
-  id: string;
-  total_amount_cents: number;
-};
-
-async function fetchInvoiceCoveragePages(orderIds: string[]) {
-  const rows: OrderInvoiceCoverageRow[] = [];
-
-  for (let from = 0; ;) {
-    const { data, error } = await supabase
-      .from('invoices')
-      .select('id, order_id, total_amount_cents, invoice_type, status, deleted_at')
-      .in('order_id', orderIds.length > 0 ? orderIds : [EMPTY_UUID])
-      .not('status', 'in', '("voided","cancelled")')
-      .is('deleted_at', null)
-      .order('id', { ascending: true })
-      .range(from, from + INVOICE_QUERY_PAGE_SIZE - 1);
-
-    if (error) return { data: null, error };
-
-    const page = (data || []) as OrderInvoiceCoverageRow[];
-    if (page.length === 0) return { data: rows, error: null };
-    rows.push(...page);
-    // Advance by what the server actually returned. This remains complete if
-    // Supabase's configured row cap is lower than our requested page size.
-    from += page.length;
-  }
-}
 
 interface OrderWithFulfillment extends Order {
   fulfillment_pct: number;
@@ -137,7 +111,7 @@ export default function Orders() {
         .from('order_items')
         .select('order_id, total_units_needed, quantity_delivered, price_per_unit, product_name')
         .in('order_id', orderIds.length > 0 ? orderIds : [EMPTY_UUID]),
-      fetchInvoiceCoveragePages(orderIds),
+      fetchActiveInvoiceCoveragePages(orderIds),
       parentIds.length > 0
         ? supabase
             .from('customers')
@@ -181,7 +155,7 @@ export default function Orders() {
     }
     const invoicedByOrder: Record<string, number> = {};
     const visibleOrderIds = new Set(orderIds);
-    (invoiceData || []).forEach((inv: OrderInvoiceCoverageRow) => {
+    (invoiceData || []).forEach((inv: ActiveInvoiceCoverageRow) => {
       if (inv.order_id && visibleOrderIds.has(inv.order_id) && activeInvoiceCountsTowardBilling(inv)) {
         invoicedByOrder[inv.order_id] = (invoicedByOrder[inv.order_id] || 0) + (inv.total_amount_cents || 0);
       }

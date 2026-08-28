@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { buildPaginatedQueryChain as buildChain, type QueryResult } from '../test-utils/supabaseChain';
 
 const {
   mockFrom,
@@ -21,25 +22,6 @@ const {
     status: 'confirmed' as 'confirmed' | 'cancelled' | 'voided',
   },
 }));
-
-type QueryResult = { data: unknown; error: { message: string } | null };
-type QueryChain = Record<string, ReturnType<typeof vi.fn>> & PromiseLike<QueryResult>;
-
-function buildChain(result: QueryResult): QueryChain {
-  const self: Record<string, unknown> = {};
-  for (const method of [
-    'select', 'update', 'eq', 'gte', 'lte', 'is', 'in', 'not', 'order', 'limit',
-  ]) {
-    self[method] = vi.fn(() => self);
-  }
-  let rangeCalls = 0;
-  self.range = vi.fn(() => Promise.resolve(
-    rangeCalls++ === 0 ? result : { data: [], error: null },
-  ));
-  const promise = Promise.resolve(result);
-  self.then = promise.then.bind(promise);
-  return self as QueryChain;
-}
 
 vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom },

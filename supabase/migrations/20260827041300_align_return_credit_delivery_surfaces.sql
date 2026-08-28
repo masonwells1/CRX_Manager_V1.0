@@ -119,7 +119,7 @@ CREATE OR REPLACE FUNCTION "public"."get_dashboard_action_items"("p_limit" integ
     AS $$
 DECLARE
   v_result jsonb := '{}'::jsonb;
-  v_today date := current_date;
+  v_today date := (now() AT TIME ZONE 'America/Chicago')::date;
 BEGIN
   -- 1. Overdue Invoices
   SELECT jsonb_agg(row_to_json(t))
@@ -136,6 +136,8 @@ BEGIN
     JOIN customers c ON c.id = i.customer_id
     WHERE i.status = 'overdue'
       AND i.balance_cents > 0
+      AND i.invoice_type <> 'credit_memo'
+      AND i.deleted_at IS NULL
     ORDER BY (v_today - i.due_date) DESC
     LIMIT p_limit
   ) t;
@@ -1356,7 +1358,7 @@ DECLARE
 BEGIN
   FOR v_check IN
     SELECT value
-    FROM jsonb_array_elements($checks$[{"name":"get_dashboard_action_items","signature":"public.get_dashboard_action_items(integer)","args":"23","hash":"583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769","private":false},{"name":"void_delivery","signature":"public.void_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"7086ec87e31f5c2a59fda75ea6966e2bac3e7140366bc92d3e44765400f68af4","private":false},{"name":"cancel_delivery","signature":"public.cancel_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"07eb823ddb26899dba8379c1c9596a0a52dd9d8dcf8530de680f8d33571d98fa","private":false},{"name":"_complete_delivery_authorized_impl","signature":"public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)","args":"2950 25 2950 3802 25 25 25 1184","hash":"3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a","private":true}]$checks$::jsonb)
+    FROM jsonb_array_elements($checks$[{"name":"get_dashboard_action_items","signature":"public.get_dashboard_action_items(integer)","args":"23","hash":"f70e6c5d6f192d8e5cb355dde8126f353842f20191c32d27a7ca28342fc385d5","private":false},{"name":"void_delivery","signature":"public.void_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"7086ec87e31f5c2a59fda75ea6966e2bac3e7140366bc92d3e44765400f68af4","private":false},{"name":"cancel_delivery","signature":"public.cancel_delivery(uuid,text,uuid,text)","args":"2950 25 2950 25","hash":"07eb823ddb26899dba8379c1c9596a0a52dd9d8dcf8530de680f8d33571d98fa","private":false},{"name":"_complete_delivery_authorized_impl","signature":"public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)","args":"2950 25 2950 3802 25 25 25 1184","hash":"3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a","private":true}]$checks$::jsonb)
   LOOP
     SELECT count(*)
       INTO v_count

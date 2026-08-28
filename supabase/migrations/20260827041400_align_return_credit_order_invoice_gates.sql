@@ -150,9 +150,9 @@ BEGIN
     salesman_id, created_by, total_amount_cents, invoice_date
   ) VALUES (
     p_order_id, v_order.customer_id, p_invoice_type, 'draft',
-    COALESCE(v_order.season, (SELECT current_season())),
+    COALESCE(v_order.season, compute_season((now() AT TIME ZONE 'America/Chicago')::date)),
     COALESCE(p_salesman_id, v_order.salesman_id),
-    v_actor, 0, CURRENT_DATE
+    v_actor, 0, (now() AT TIME ZONE 'America/Chicago')::date
   )
   RETURNING id INTO v_invoice_id;
 
@@ -415,8 +415,9 @@ BEGIN
     INSERT INTO invoices (order_id, customer_id, invoice_type, status, season, salesman_id,
       created_by, total_amount_cents, invoice_date, invoice_group_id, header_notes)
     VALUES (p_order_id, v_cust.customer_id, p_invoice_type, 'draft',
-      COALESCE(v_order.season, current_season()),
-      COALESCE(p_salesman_id, v_order.salesman_id), auth.uid(), 0, CURRENT_DATE, v_group_id,
+      COALESCE(v_order.season, compute_season((now() AT TIME ZONE 'America/Chicago')::date)),
+      COALESCE(p_salesman_id, v_order.salesman_id), auth.uid(), 0,
+      (now() AT TIME ZONE 'America/Chicago')::date, v_group_id,
       'Split invoice (by field/acre) from order ' || v_order.order_number)
     RETURNING id INTO v_invoice_id;
 
@@ -503,7 +504,7 @@ BEGIN
          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
          AND pg_get_userbyid(p.proowner) = 'postgres'
          AND encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') =
-             'c8b12fc25025e598846b6b2fbdfe4e0fd0e30078086b17194807f1428b9d0d7e'
+             '67e0077287a535c49adb0ad31e8b686194c35f04ae923f1b56212cc38f0b67c9'
          AND (length(p.prosrc) - length(replace(p.prosrc, v_order_new, ''))) / length(v_order_new) = 1
      )
      OR NOT EXISTS (
@@ -515,7 +516,7 @@ BEGIN
          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
          AND pg_get_userbyid(p.proowner) = 'postgres'
          AND encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') =
-             '9d3de61eb30e9b9435556da45fe17c15a1b83285c917e3a5e7c2893cb4428104'
+             'bb9740b494da3d5ea8495158b8bf9830cc2bb8f679ca10764d3de1a52ab692fa'
          AND (length(p.prosrc) - length(replace(p.prosrc, v_split_new, ''))) / length(v_split_new) = 1
      )
      OR EXISTS (

@@ -46,6 +46,35 @@ export interface InvoicePdfItem {
   product_form?: string | null;
 }
 
+/** Convert a database invoice-item row into the one PDF shape every caller uses. */
+export function mapInvoicePdfItem(item: unknown): InvoicePdfItem {
+  const row = item as Record<string, unknown> & {
+    product?: { product_name?: string; epa_registration?: string | null; product_form?: string | null };
+  };
+  return {
+    order_item_id: (row.order_item_id as string) || null,
+    product_id: (row.product_id as string) || null,
+    return_credit_cogs_cents: row.return_credit_cogs_cents != null ? Number(row.return_credit_cogs_cents) : null,
+    description: String(row.description ?? ''),
+    product_name: row.product?.product_name || String(row.description ?? ''),
+    quantity: Number(row.quantity),
+    unit_size: (row.unit_size as string) || undefined,
+    unit_price_cents: Number(row.unit_price_cents) || 0,
+    extended_cents: Number(row.extended_cents) || 0,
+    cost_cents: Number(row.cost_cents) || 0,
+    rate_per_acre: row.rate_per_acre != null ? Number(row.rate_per_acre) : null,
+    rate_unit: (row.rate_unit as string) || null,
+    acres: row.acres != null ? Number(row.acres) : null,
+    total_applied: row.total_applied != null ? Number(row.total_applied) : null,
+    total_applied_unit: (row.total_applied_unit as string) || null,
+    total_applied_gl_lb: row.total_applied_gl_lb != null ? Number(row.total_applied_gl_lb) : null,
+    gl_lb_unit: (row.gl_lb_unit as string) || null,
+    epa_registration: (row.epa_registration as string) || row.product?.epa_registration || null,
+    is_application_fee: Boolean(row.is_application_fee),
+    product_form: (row.product_form as string) || row.product?.product_form || null,
+  };
+}
+
 /**
  * Return-credit accounting keeps one internal line per consumed source-cost lot.
  * Customers should still see one simple product line. Collapse only the
@@ -334,28 +363,7 @@ export async function buildInvoicePdfDataFromRow(
 
   const pdfItems = groupReturnCreditDisplayItems(
     inv.invoice_type,
-    ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string; epa_registration?: string | null; product_form?: string | null } }>).map((it) => ({
-      order_item_id: (it.order_item_id as string) || null,
-      product_id: (it.product_id as string) || null,
-      return_credit_cogs_cents: it.return_credit_cogs_cents != null ? Number(it.return_credit_cogs_cents) : null,
-      description: String(it.description ?? ''),
-      product_name: it.product?.product_name || String(it.description ?? ''),
-      quantity: Number(it.quantity),
-      unit_size: (it.unit_size as string) || undefined,
-      unit_price_cents: Number(it.unit_price_cents) || 0,
-      extended_cents: Number(it.extended_cents) || 0,
-      cost_cents: Number(it.cost_cents) || 0,
-      rate_per_acre: it.rate_per_acre != null ? Number(it.rate_per_acre) : null,
-      rate_unit: (it.rate_unit as string) || null,
-      acres: it.acres != null ? Number(it.acres) : null,
-      total_applied: it.total_applied != null ? Number(it.total_applied) : null,
-      total_applied_unit: (it.total_applied_unit as string) || null,
-      total_applied_gl_lb: it.total_applied_gl_lb != null ? Number(it.total_applied_gl_lb) : null,
-      gl_lb_unit: (it.gl_lb_unit as string) || null,
-      epa_registration: (it.epa_registration as string) || it.product?.epa_registration || null,
-      is_application_fee: Boolean(it.is_application_fee),
-      product_form: (it.product_form as string) || it.product?.product_form || null,
-    })) as InvoicePdfItem[],
+    (items || []).map(mapInvoicePdfItem),
   );
 
   return {

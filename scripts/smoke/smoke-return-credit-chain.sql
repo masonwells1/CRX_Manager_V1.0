@@ -2005,6 +2005,35 @@ BEGIN
   END IF;
   RAISE NOTICE 'SAME_PRODUCT_CANCEL_AGGREGATE_GUARD_PROVEN';
 
+  -- The reversal must also fail closed when the warehouse row disappears.
+  -- The inner exception block is a PostgreSQL subtransaction, so the fixture
+  -- delete and every attempted side effect roll back together.
+  BEGIN
+    DELETE FROM inventory
+    WHERE product_id = v_same_product_product_id
+      AND location = 'Main Warehouse';
+    PERFORM cancel_return(
+      v_same_product_return_id,
+      '[SMOKE] must reject missing warehouse inventory',
+      v_admin,
+      'smk-rcc-' || v_suffix || '-missing-inventory-guard'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: missing-inventory cancellation succeeded';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'RETURN_RESTOCK_INVENTORY_MISSING:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected missing inventory refusal, got %', v_reason;
+    END IF;
+  END;
+  IF (SELECT quantity_available FROM inventory
+      WHERE product_id = v_same_product_product_id
+        AND location = 'Main Warehouse') <> 10
+     OR (SELECT status FROM returns WHERE id = v_same_product_return_id) <> 'received' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: missing-inventory refusal changed inventory or return state';
+  END IF;
+  RAISE NOTICE 'MISSING_INVENTORY_CANCEL_GUARD_PROVEN';
+
   v_res := issue_return_credit(
     v_legacy_return_id, v_admin, 'smk-rcc-' || v_suffix || '-legacy-credit'
   );

@@ -5,7 +5,7 @@ production and merged-migration high-water marks (`20260827041000` through `2026
 reporting migration aligns invoice-basis P&L, monthly reporting, and customer year-end summaries on
 paid, overdue, and posted invoices. The COGS migration creates negative-cost return-credit lines from
 the exact historical source-invoice cost already recognized by those reports and assigns that reversal
-to `current_season()` (2026 today), while customer prior-year reporting remains on the original invoice
+to the season for the current America/Chicago business date (2026 today), while customer prior-year reporting remains on the original invoice
 season.
 
 Invoice-basis P&L and monthly COGS now round each ordinary sale line to whole cents before summing.
@@ -34,6 +34,9 @@ exactly 37.5 gallons. Every other unit mismatch fails closed. Credit memos never
 the delivery, dashboard, and order invoice gates all use the same active, non-deleted, non-credit
 intersection. Void and unapply wrappers clear their narrow trigger-bypass settings on both success and
 failure before rethrowing an error.
+
+The unapply wrapper now acquires its idempotency-key lock before it delegates any state change, so
+concurrent retries with the same key serialize before accounts-receivable or return state can move.
 
 Damaged or otherwise non-restocked returns still reverse the customer's revenue but intentionally
 reverse zero COGS because no saleable inventory value returned. Batch year-end customer discovery now

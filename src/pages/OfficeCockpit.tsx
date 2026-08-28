@@ -72,7 +72,7 @@ import { SkeletonCard } from '../components/ui/Skeleton';
 import type { WatchdogFlag } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import FinanceSnapshotCard from '../components/dashboard/FinanceSnapshotCard';
-import { activeInvoiceCoversDelivery, type DeliveryInvoiceCoverage } from '../lib/deliveryInvoiceCoverage';
+import { activeInvoiceCoversDelivery, fetchActiveInvoiceCoveragePages, type DeliveryInvoiceCoverage } from '../lib/deliveryInvoiceCoverage';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -603,12 +603,7 @@ export default function OfficeCockpit() {
     let activeDeliveryInvoices: DeliveryInvoiceCoverage[] = [];
 
     if (deliveryOrderIds.length > 0) {
-      const invoiceCoverageRes = await supabase
-        .from('invoices')
-        .select('order_id, delivery_id, invoice_type, status, deleted_at')
-        .in('order_id', deliveryOrderIds)
-        .not('status', 'in', '("voided","cancelled")')
-        .is('deleted_at', null);
+      const invoiceCoverageRes = await fetchActiveInvoiceCoveragePages(deliveryOrderIds);
       deliveryInvoiceError = invoiceCoverageRes.error;
       activeDeliveryInvoices = (invoiceCoverageRes.data || []) as DeliveryInvoiceCoverage[];
     }

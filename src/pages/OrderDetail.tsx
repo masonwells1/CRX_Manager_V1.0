@@ -999,7 +999,13 @@ export default function OrderDetail() {
       } catch (err) {
         const blocked = describePostInvoiceBlock(err);
         if (blocked) errors.push(`${target.label}: ${blocked}`);
-        else errors.push(`${target.label}: ${sanitizeError(err)}`);
+        else {
+          const sanitized = sanitizeError(err);
+          const message = sanitized.includes('RETURN_CREDIT_SOURCE_CONCURRENT')
+            ? 'A related invoice or return credit is being changed elsewhere. Wait a moment and try again.'
+            : sanitized;
+          errors.push(`${target.label}: ${message}`);
+        }
       }
     }
     if (alreadyPosted > 0 && posted === 0 && errors.length === 0) {

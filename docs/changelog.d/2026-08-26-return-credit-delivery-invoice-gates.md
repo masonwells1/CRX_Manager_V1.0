@@ -18,10 +18,14 @@ Delivery voiding leaves draft/manual and soft-deleted credit memos untouched, an
 not create a false cancelled-order billing warning.
 The cancelled-order review queue also ignores soft-deleted posted invoices, so deleted billing
 history no longer creates a false active-invoice warning.
+The dashboard uses the explicit America/Chicago business date for overdue classification and excludes
+soft-deleted invoices and credit memos from that queue.
 
 The delivery detail page, integrity cleanup panel, and office exception dashboard now share the same
 active, non-deleted sales-invoice coverage predicate, so a return credit or deleted invoice cannot hide
 the recovery action or produce a false all-clear in the user interface.
+Their shared coverage fetch paginates through every active invoice row instead of trusting the API's
+per-response cap.
 
 The invoice-list Batch Print path now uses the same return-credit grouping as single-invoice Print,
 so one credit memo cannot produce a simple customer line in one PDF and cost-lot fragments in another.

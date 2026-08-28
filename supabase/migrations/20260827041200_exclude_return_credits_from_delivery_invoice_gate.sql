@@ -695,7 +695,7 @@ BEGIN
   INSERT INTO invoices (invoice_number, invoice_type, order_id, customer_id, delivery_id,
     status, invoice_date, total_amount_cents, total_cost_cents, created_by)
   VALUES (v_invoice_number, 'chemical_sale', v_delivery.order_id, v_delivery.customer_id,
-    p_delivery_id, 'draft', CURRENT_DATE, 0, 0, v_actor) RETURNING id INTO v_invoice_id;
+    p_delivery_id, 'draft', (now() AT TIME ZONE 'America/Chicago')::date, 0, 0, v_actor) RETURNING id INTO v_invoice_id;
   FOR v_item IN
     SELECT di.product_id, di.quantity_delivered, di.unit_size, di.order_item_id,
       oi.price_per_unit, oi.cost_per_unit, oi.product_name AS oi_product_name, p.product_name AS p_name
@@ -781,7 +781,7 @@ BEGIN
   );
 
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex')
-       IS DISTINCT FROM 'd74e002a01fffedbb69322174f1da1cad8b86b0df4312c5ac56257f1f6077f5f'
+       IS DISTINCT FROM '89149c4596b68c8f98c52118433b21afc515f8af2e10d2ffa7ccb11cd87002e8'
      OR position('AND invoice_type <> ''credit_memo''' IN v_src) = 0
      OR (SELECT count(*)
          FROM pg_proc p

@@ -211,8 +211,8 @@ This file consolidates (does not replace) the source documents it points to. If 
 ## OPEN 2026-08-26 — the quote-version trust chain is whole-body hash-pinned in THREE files; any re-emission must update every pin site in the same change
 
 **Apply-order dependency with the PR #361 successor:** the merged-but-unapplied
-`20260826220000_quote_version_restore_trust_boundary.sql` must apply before the five pending
-`20260827041000`–`20260827041400` return-credit migrations. Reversing that order would move the
+`20260826220000_quote_version_restore_trust_boundary.sql` must apply before the six pending
+`20260827041000`–`20260827041500` return-credit migrations. Reversing that order would move the
 high-water past the quote security migration and wedge it again. If the quote migration cannot apply
 first, it must be renumbered above the new high-water before either chain is released.
 

@@ -17,7 +17,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
-import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
+import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, mapInvoicePdfItem, type InvoicePdfData } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { withBelowCostReason } from '../lib/belowCostApproval';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../lib/emailService';
@@ -1262,30 +1262,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         acres: s.acres,
         amount_cents: s.amount_cents,
       })) : undefined,
-      items: groupReturnCreditDisplayItems(invoice.invoice_type, (enrichedItems || []).map((it) => ({
-        order_item_id: it.order_item_id || null,
-        product_id: it.product_id || null,
-        return_credit_cogs_cents: (it as Record<string, unknown>).return_credit_cogs_cents != null
-          ? Number((it as Record<string, unknown>).return_credit_cogs_cents)
-          : null,
-        description: it.description,
-        product_name: it.product?.product_name || it.description,
-        quantity: Number(it.quantity),
-        unit_size: it.unit_size || undefined,
-        unit_price_cents: it.unit_price_cents,
-        extended_cents: it.extended_cents,
-        cost_cents: it.cost_cents,
-        rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
-        rate_unit: it.rate_unit || null,
-        acres: it.acres ? Number(it.acres) : null,
-        total_applied: it.total_applied ? Number(it.total_applied) : null,
-        total_applied_unit: it.total_applied_unit || null,
-        total_applied_gl_lb: it.total_applied_gl_lb ? Number(it.total_applied_gl_lb) : null,
-        gl_lb_unit: it.gl_lb_unit || null,
-        epa_registration: it.epa_registration || it.product?.epa_registration || null,
-        is_application_fee: it.is_application_fee || false,
-        product_form: it.product_form || it.product?.product_form || null,
-      })) as InvoicePdfItem[]),
+      items: groupReturnCreditDisplayItems(invoice.invoice_type, (enrichedItems || []).map(mapInvoicePdfItem)),
       total_amount_cents: invoice.total_amount_cents ?? items.reduce((s, i) => s + i.extended_cents, 0),
       total_cost_cents: invoice.total_cost_cents ?? items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : Math.round(i.cost_cents * i.quantity)), 0),
       paid_amount_cents: invoice.paid_amount_cents ?? 0,

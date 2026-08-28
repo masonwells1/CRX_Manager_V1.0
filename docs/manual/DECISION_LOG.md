@@ -252,8 +252,10 @@ migration to silence it.
 ## 2026-08-26 — Return credits belong to the current crop season
 
 **Source:** Mason's in-chat decision while rebuilding PR #361.
-**Decision:** A return credit uses `current_season()` when it is issued; it does not restate the
-customer year-end summary for the original sale season.
+**Decision:** A return credit uses the current Crop RX business season when it is issued; it does not
+restate the customer year-end summary for the original sale season. The business date is explicitly
+derived in `America/Chicago`, rather than inheriting the database session's UTC date at the season
+boundary.
 **Why:** Keeping the credit in the current season is simpler to explain and preserves previously
 generated customer summaries.
 **What this forbids/implies:** A late return can create negative product usage in the current

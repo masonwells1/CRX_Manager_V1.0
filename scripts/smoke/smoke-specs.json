@@ -548,6 +548,11 @@
         "get_dashboard_action_items",
         "void_invoice",
         "batch_void_invoices",
+        "void_delivery",
+        "cancel_delivery",
+        "save_invoice",
+        "preview_product_pricing_changes",
+        "apply_product_pricing_change_set",
         "unapply_credit_memo"
       ],
       "area": [

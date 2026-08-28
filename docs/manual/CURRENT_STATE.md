@@ -70,7 +70,8 @@ individually rewritten in this pass.
 `20260827041100_rebuild_return_credit_cogs_reversal`, plus the follow-up
 `20260827041200_exclude_return_credits_from_delivery_invoice_gate` and the delivery-surface alignment
 `20260827041300_align_return_credit_delivery_surfaces`, plus the order-level alignment
-`20260827041400_align_return_credit_order_invoice_gates`, are absent from the live ledger. Production has
+`20260827041400_align_return_credit_order_invoice_gates`, and the generated-invoice lineage/cutover finish
+`20260827041500_preserve_generated_invoice_lineage_and_finish_cutover`, are absent from the live ledger. Production has
 zero credited returns, zero returns linked to credit invoices, and zero recognized return-credit
 memos, so the defect is real but latent. Current live return-credit issuance still creates a
 header-only credit, while the P&L and monthly reports use different recognized invoice-status sets.
@@ -81,7 +82,7 @@ sales rep, including through the batch wrapper.
 The second candidate writes immutable credit cost-lot lines, bounds reversal to COGS previously
 recognized from the source sale, serializes source/credit lifecycle changes, and protects normal
 void, batch-void, and unapply cleanup. Per Mason's 2026-08-26 decision, an issued return credit uses
-`current_season()` so prior customer year-end summaries never restate. A late return can therefore
+the season for the current America/Chicago business date so prior customer year-end summaries never restate. A late return can therefore
 show negative product usage in the current season when the original purchase belongs to an earlier
 season; that is the accepted simplicity tradeoff. A 2026-08-27 read-only production check found one
 open restock row, exactly the pinned legacy `15 ea` RMA that converts to `37.5 Gal`, and zero unhandled
@@ -92,15 +93,15 @@ memo from suppressing either a later delivery's automatic draft invoice or the m
 for a completed unbilled delivery. The fourth keeps the dashboard action queue and the void/cancel
 warning paths on that same active-sales-invoice definition and makes the complete-delivery gate ignore
 soft-deleted invoices. The fifth aligns both order-level invoice creators with that same active,
-non-deleted, non-credit definition. Fifty-five load-bearing proofs ended in `SMOKE_PASS_ROLLBACK` with zero residue,
+non-deleted, non-credit definition. The sixth preserves immutable source-line IDs and historical cost
+when a generated invoice is edited, then removes the temporary cutover barrier only after postflight.
+Fifty-five load-bearing proofs ended in `SMOKE_PASS_ROLLBACK` with zero residue,
 including an ordinary non-credit invoice hard-delete proof so the new trigger cannot silently cancel
 unrelated deletes and a real completion proof that preserves return-credit tote provenance.
-Apply all five files in order only through the repository's guarded migration runner or the Supabase
+Apply all six files in order only through the repository's guarded migration runner or the Supabase
 migration operation, never through the ad-hoc SQL channel.
-Live apply is additionally blocked on the open Invoice Detail lineage decision in `KNOWN_ISSUES.md`:
-the current general save writer can strip `order_item_id` from generated draft lines. Merge does not
-activate that path; Mason must choose the durable writer fix or an explicit generated-invoice edit
-restriction before the five migrations are applied.
+The sixth file closes the former Invoice Detail lineage prerequisite in `KNOWN_ISSUES.md`; merge still
+does not activate any candidate migration, and live apply remains a separate explicit-approval gate.
 After an approved live apply, regenerate the schema registry and Supabase-derived type artifacts from
 live, then verify they contain nullable `invoice_items.return_credit_cogs_cents bigint` and
 `invoice_items.return_credit_source_item_id uuid` before closeout.

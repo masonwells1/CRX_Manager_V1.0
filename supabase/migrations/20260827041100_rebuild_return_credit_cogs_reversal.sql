@@ -856,8 +856,22 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_is_return_credit boolean;
+  v_cached jsonb;
   v_result jsonb;
 BEGIN
+  -- Acquire the shared key-only advisory lock before the delegated function can
+  -- change AR or return state. The legacy implementation saves its result late;
+  -- this early check makes concurrent same-key calls serialize before effects.
+  IF p_idempotency_key IS NOT NULL THEN
+    v_cached := public.check_idempotency(p_idempotency_key, 'unapply_credit_memo');
+    IF v_cached IS NOT NULL THEN
+      IF (v_cached->>'credit_memo_id')::uuid IS DISTINCT FROM p_credit_memo_id THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_ARGUMENT_MISMATCH: idempotency key was already used for a different credit memo';
+      END IF;
+      RETURN v_cached;
+    END IF;
+  END IF;
+
   SELECT EXISTS (
     SELECT 1
     FROM public.returns r
@@ -1200,7 +1214,8 @@ BEGIN
   -- by recognizing the return credit in the current crop season. A late return
   -- can therefore produce negative current-season usage instead of restating
   -- the season in which the original sale occurred.
-  SET total_cost_cents = -v_cogs, season = public.current_season()
+  SET total_cost_cents = -v_cogs,
+      season = public.compute_season((now() AT TIME ZONE 'America/Chicago')::date)
   WHERE id = v_invoice_id;
   IF EXISTS (
     SELECT 1
@@ -1230,7 +1245,7 @@ DO $postflight$
 DECLARE
   v_expected jsonb := jsonb_build_object(
     '_issue_return_credit_header_only_impl_20260825', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
-    '_issue_return_credit_impl', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612',
+    '_issue_return_credit_impl', '0a804c99d1667aafbbf98a98021748736a5cf752732a39804f2243249c1153b0',
     '_receive_return_impl_before_inventory_seed_20260825', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
     '_receive_return_impl_20260714', '150b7ad4f001929baecc73078c181de092477ced7b3a4b3f85bfb2d9438dd789',
     'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
@@ -1428,7 +1443,7 @@ BEGIN
   FROM pg_proc p
   WHERE p.oid = to_regprocedure('public.unapply_credit_memo(uuid,text,uuid,text)');
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
-       '005ce6a1cfbc7c7f7fcf4712104235bf884af9bc5b30e5f3cbf1edc0f2b6e63e'
+       '09849fc35e39939a1b7de81f29a2a98beae6bcb557b61ac6322cc7344437b525'
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'unapply_credit_memo') <> 1
      OR NOT EXISTS (

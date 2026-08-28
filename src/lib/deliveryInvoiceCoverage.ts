@@ -1,3 +1,5 @@
+import { supabase } from './db';
+
 export interface InvoiceBillingCoverage {
   order_id: string | null;
   invoice_type: string;
@@ -7,6 +9,40 @@ export interface InvoiceBillingCoverage {
 
 export interface DeliveryInvoiceCoverage extends InvoiceBillingCoverage {
   delivery_id: string | null;
+}
+
+export interface ActiveInvoiceCoverageRow extends DeliveryInvoiceCoverage {
+  id: string;
+  total_amount_cents: number;
+}
+
+const INVOICE_COVERAGE_PAGE_SIZE = 1000;
+
+/**
+ * Fetch every active invoice row for a set of orders without trusting the
+ * PostgREST server row cap. Advancing by the rows actually returned also keeps
+ * the loop complete when a deployment uses a cap below our requested size.
+ */
+export async function fetchActiveInvoiceCoveragePages(orderIds: string[]) {
+  const rows: ActiveInvoiceCoverageRow[] = [];
+  if (orderIds.length === 0) return { data: rows, error: null };
+
+  for (let from = 0; ;) {
+    const { data, error } = await supabase
+      .from('invoices')
+      .select('id, order_id, delivery_id, total_amount_cents, invoice_type, status, deleted_at')
+      .in('order_id', orderIds)
+      .not('status', 'in', '("voided","cancelled")')
+      .is('deleted_at', null)
+      .order('id', { ascending: true })
+      .range(from, from + INVOICE_COVERAGE_PAGE_SIZE - 1);
+
+    if (error) return { data: null, error };
+    const page = (data || []) as ActiveInvoiceCoverageRow[];
+    if (page.length === 0) return { data: rows, error: null };
+    rows.push(...page);
+    from += page.length;
+  }
 }
 
 const NON_COVERING_STATUSES = new Set(['voided', 'cancelled']);

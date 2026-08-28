@@ -3,8 +3,6 @@
  * Uses the same jsPDF/autoTable mock pattern as statementPdf.test.ts
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Mock jsPDF doc instance ─────────────────────────────────────────────
@@ -40,7 +38,7 @@ vi.mock('jspdf-autotable', () => ({
   }),
 }));
 
-import { generateInvoicePdf, downloadInvoicePdf, generateBatchInvoicePdf, groupReturnCreditDisplayItems } from './invoicePdf';
+import { generateInvoicePdf, downloadInvoicePdf, generateBatchInvoicePdf, groupReturnCreditDisplayItems, mapInvoicePdfItem } from './invoicePdf';
 import type { InvoicePdfData, InvoicePdfItem, InvoicePdfShare } from './invoicePdf';
 
 // ── Test Data Factories ─────────────────────────────────────────────────
@@ -134,16 +132,27 @@ describe('groupReturnCreditDisplayItems', () => {
     expect(groupReturnCreditDisplayItems('credit_memo', rows)).toHaveLength(2);
   });
 
-  it('passes the COGS marker through every print and email PDF mapping', () => {
-    const rowBuilder = readFileSync(resolve(process.cwd(), 'src/lib/invoicePdf.ts'), 'utf8');
-    const invoiceList = readFileSync(resolve(process.cwd(), 'src/pages/Invoices.tsx'), 'utf8');
-    const invoiceDetail = readFileSync(resolve(process.cwd(), 'src/pages/InvoiceDetail.tsx'), 'utf8');
-    const directMapping = 'return_credit_cogs_cents: it.return_credit_cogs_cents != null ? Number(it.return_credit_cogs_cents) : null';
+  it('maps the stored COGS marker into the shared PDF item shape', () => {
+    const mapped = mapInvoicePdfItem({
+      order_item_id: 'order-item-1',
+      product_id: 'product-1',
+      return_credit_cogs_cents: '-12000',
+      description: 'Return credit - Atrazine 4L',
+      quantity: '-10',
+      unit_price_cents: '1850',
+      extended_cents: '-18500',
+      cost_cents: '1200',
+      product: { product_name: 'Atrazine 4L' },
+    });
 
-    expect(rowBuilder).toContain(directMapping);
-    expect(invoiceList).toContain(directMapping);
-    expect(invoiceDetail).toContain('return_credit_cogs_cents: (it as Record<string, unknown>).return_credit_cogs_cents != null');
-    expect(invoiceDetail).toContain('? Number((it as Record<string, unknown>).return_credit_cogs_cents)');
+    expect(mapped).toMatchObject({
+      order_item_id: 'order-item-1',
+      product_id: 'product-1',
+      return_credit_cogs_cents: -12000,
+      product_name: 'Atrazine 4L',
+      quantity: -10,
+      extended_cents: -18500,
+    });
   });
 });
 

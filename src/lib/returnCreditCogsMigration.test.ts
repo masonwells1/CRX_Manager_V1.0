@@ -162,7 +162,11 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain("p.proconfig = ARRAY['search_path=public']::text[]");
     expect(migration.match(/0b9ef2b922c909de0cea7757bcfe95901c0781739eddd8521b09cfb1537907ba/g)).toHaveLength(2);
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_CURRENT_SEASON_DRIFT');
-    expect(migration).toContain('SET total_cost_cents = -v_cogs, season = public.current_season()');
+    expect(migration).toContain("season = public.compute_season((now() AT TIME ZONE 'America/Chicago')::date)");
+    expect(migration).toContain("v_cached := public.check_idempotency(p_idempotency_key, 'unapply_credit_memo')");
+    const unapplyWrapper = migration.slice(migration.indexOf('CREATE FUNCTION public.unapply_credit_memo('));
+    expect(unapplyWrapper.indexOf("public.check_idempotency(p_idempotency_key, 'unapply_credit_memo')"))
+      .toBeLessThan(unapplyWrapper.indexOf('public._unapply_return_credit_guard_impl_20260826('));
     expect(migration).not.toContain('RETURN_CREDIT_SOURCE_SEASON_AMBIGUOUS');
     expect(returnCreditSmoke).toContain("PERFORM void_invoice(v_credit_id, '[SMOKE] chain void'");
     expect(returnCreditSmoke).toContain("operation_type = 'invoice_voided'");
@@ -173,20 +177,36 @@ describe('return-credit COGS migration', () => {
     expect(returnCreditSmoke).toContain('SMK-RCC-DELETED-');
   });
 
+  it('fails its source-order proof if the early unapply idempotency lock is removed', () => {
+    const wrapper = migration.slice(migration.indexOf('CREATE FUNCTION public.unapply_credit_memo('));
+    const assertEarlyLock = (source: string) => {
+      const check = source.indexOf("public.check_idempotency(p_idempotency_key, 'unapply_credit_memo')");
+      const delegate = source.indexOf('public._unapply_return_credit_guard_impl_20260826(');
+      if (check < 0 || delegate < 0 || check >= delegate) throw new Error('UNAPPLY_IDEMPOTENCY_LOCK_NOT_EARLY');
+    };
+    expect(() => assertEarlyLock(wrapper)).not.toThrow();
+    const mutant = wrapper.replace(
+      "v_cached := public.check_idempotency(p_idempotency_key, 'unapply_credit_memo');",
+      'v_cached := NULL; -- mutation: early serialization removed',
+    );
+    expect(mutant).not.toBe(wrapper);
+    expect(() => assertEarlyLock(mutant)).toThrow('UNAPPLY_IDEMPOTENCY_LOCK_NOT_EARLY');
+  });
+
   it('pins the replacement helper bodies used by the COGS postflight', () => {
     expect(functionBodySha256(allocatedDeliveryMigration, '_allocated_delivery_cents')).toBe('1df1d230c19e5d129038b1e5dfbca30db0b369ea5a91a22f19dd98cc53129142');
     expect(functionBodySha256(allocatedDeliveryMigration, '_complete_delivery_authorized_impl')).toBe('0e889bb6e0bc998d2833081e8e6f8e801e032595e7360e09d4f594e13ed7ad24');
     expect(functionBodySha256(allocatedDeliveryMigration, '_create_invoice_for_unbilled_delivery_impl_20260718')).toBe('6543165d2c7cb6acbffd222adb28fee9b66278338ec401f6b2f19537c8aebcaa');
     expect(functionBodySha256(deliveryCreditGateMigration, '_complete_delivery_authorized_impl')).toBe('15c5a7ddf836f402d52544a69b8628061b4e9042444362262c1d76d26916ee69');
-    expect(functionBodySha256(deliveryCreditGateMigration, '_create_invoice_for_unbilled_delivery_impl_20260718')).toBe('d74e002a01fffedbb69322174f1da1cad8b86b0df4312c5ac56257f1f6077f5f');
+    expect(functionBodySha256(deliveryCreditGateMigration, '_create_invoice_for_unbilled_delivery_impl_20260718')).toBe('89149c4596b68c8f98c52118433b21afc515f8af2e10d2ffa7ccb11cd87002e8');
     expect(deliveryCreditGateMigration.match(/AND invoice_type <> 'credit_memo'/g)).toHaveLength(2);
     expect(deliveryCreditGateMigration).toContain('UNBILLED_DELIVERY_RETURN_CREDIT_GATE_PREFLIGHT_CONTRACT_DRIFT');
     expect(deliveryCreditGateMigration).toContain('UNBILLED_DELIVERY_RETURN_CREDIT_GATE_POSTFLIGHT_DRIFT');
-    expect(functionBodySha256(deliverySurfaceMigration, 'get_dashboard_action_items')).toBe('583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769');
+    expect(functionBodySha256(deliverySurfaceMigration, 'get_dashboard_action_items')).toBe('f70e6c5d6f192d8e5cb355dde8126f353842f20191c32d27a7ca28342fc385d5');
     expect(functionBodySha256(deliverySurfaceMigration, 'void_delivery')).toBe('7086ec87e31f5c2a59fda75ea6966e2bac3e7140366bc92d3e44765400f68af4');
     expect(functionBodySha256(deliverySurfaceMigration, 'cancel_delivery')).toBe('07eb823ddb26899dba8379c1c9596a0a52dd9d8dcf8530de680f8d33571d98fa');
     expect(functionBodySha256(deliverySurfaceMigration, '_complete_delivery_authorized_impl')).toBe('3c2dc6185c3f0de6beb32641f3963eacc4845ca2c22ad2575a72d2cb2892594a');
-    expect(deliverySurfaceMigration.match(/invoice_type <> 'credit_memo'/g)).toHaveLength(7);
+    expect(deliverySurfaceMigration.match(/invoice_type <> 'credit_memo'/g)).toHaveLength(8);
     expect(deliverySurfaceMigration).toContain('RETURN_CREDIT_DELIVERY_SURFACE_PREFLIGHT_CONTRACT_DRIFT');
     expect(deliverySurfaceMigration).toContain('RETURN_CREDIT_DELIVERY_SURFACE_POSTFLIGHT_CONTRACT_DRIFT');
     expect(deliverySurfaceMigration).toContain('"private":true');
@@ -197,14 +217,14 @@ describe('return-credit COGS migration', () => {
     expect(orderInvoiceGateMigration).toContain('RETURN_CREDIT_ORDER_GATE_POSTFLIGHT_CONTRACT_DRIFT');
     expect(orderInvoiceGateMigration).toContain('1280d2461c9e79712900a7208fc2fcd760ccd9b4448f7fb3fc89a5523196bfc5');
     expect(orderInvoiceGateMigration).toContain('4e17b8eb18b544ebab5785f88c2346f76528a3a490c0a31b5f765b06db24d351');
-    expect(orderInvoiceGateMigration).toContain('c8b12fc25025e598846b6b2fbdfe4e0fd0e30078086b17194807f1428b9d0d7e');
-    expect(orderInvoiceGateMigration).toContain('9d3de61eb30e9b9435556da45fe17c15a1b83285c917e3a5e7c2893cb4428104');
+    expect(orderInvoiceGateMigration).toContain('67e0077287a535c49adb0ad31e8b686194c35f04ae923f1b56212cc38f0b67c9');
+    expect(orderInvoiceGateMigration).toContain('bb9740b494da3d5ea8495158b8bf9830cc2bb8f679ca10764d3de1a52ab692fa');
     expect(orderInvoiceGateMigration.match(/invoice_type <> ''credit_memo''/g)).toHaveLength(2);
     expect(orderInvoiceGateMigration.match(/invoice_type <> 'credit_memo'/g)).toHaveLength(2);
     expect(orderInvoiceGateMigration.match(/deleted_at IS NULL/g)).toHaveLength(4);
     expect(orderInvoiceGateMigration).not.toContain('EXECUTE format(');
-    expect(functionBodySha256(orderInvoiceGateMigration, '_create_invoice_from_order_impl_20260718')).toBe('c8b12fc25025e598846b6b2fbdfe4e0fd0e30078086b17194807f1428b9d0d7e');
-    expect(functionBodySha256(orderInvoiceGateMigration, '_create_split_invoices_from_order_provenance_impl_20260719')).toBe('9d3de61eb30e9b9435556da45fe17c15a1b83285c917e3a5e7c2893cb4428104');
+    expect(functionBodySha256(orderInvoiceGateMigration, '_create_invoice_from_order_impl_20260718')).toBe('67e0077287a535c49adb0ad31e8b686194c35f04ae923f1b56212cc38f0b67c9');
+    expect(functionBodySha256(orderInvoiceGateMigration, '_create_split_invoices_from_order_provenance_impl_20260719')).toBe('bb9740b494da3d5ea8495158b8bf9830cc2bb8f679ca10764d3de1a52ab692fa');
     expect(orderInvoiceGateMigration).toContain('FROM PUBLIC, anon, authenticated, service_role;');
     expect(functionBodySha256(migration, '_allocated_delivery_cents')).toBe('44a739b026385996b66355ee5c4b1175dbe5260bad57a459a91e69c3873bae81');
     expect(migration).toContain("AND inv.invoice_type <> 'credit_memo'");
@@ -212,7 +232,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_COGS_POSTFLIGHT_DELIVERY_ALLOCATION_DRIFT');
     expect(migration).toContain("p.prorettype = 'void'::regtype");
     expect(migration).toContain("p.prorettype = 'jsonb'::regtype");
-    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+    expect(functionBodySha256(migration, '_issue_return_credit_impl')).toBe('0a804c99d1667aafbbf98a98021748736a5cf752732a39804f2243249c1153b0');
     expect(functionBodySha256(migration, '_receive_return_impl_20260714')).toBe('150b7ad4f001929baecc73078c181de092477ced7b3a4b3f85bfb2d9438dd789');
     expect(migration).toContain("p_return_id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid");
     expect(migration).toContain('v_restock_qty := v_item.quantity * v_container_size');
@@ -220,7 +240,7 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('return_items_restocked_quantity_positive_chk');
     expect(migration).toContain('restocked_quantity = v_restock_qty');
     expect(functionBodySha256(migration, 'void_invoice')).toBe('7d1eb3222e0cd59318919206d2338de7477c2091f22550671ecbcf5ff80a9d14');
-    expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('005ce6a1cfbc7c7f7fcf4712104235bf884af9bc5b30e5f3cbf1edc0f2b6e63e');
+    expect(functionBodySha256(migration, 'unapply_credit_memo')).toBe('09849fc35e39939a1b7de81f29a2a98beae6bcb557b61ac6322cc7344437b525');
     expect(functionBodySha256(migration, 'guard_return_credit_source_recognition')).toBe('0a5b569800bea5a0acbfaf55020ae4a9bde462a937e8db24597a586e477811b7');
     expect(functionBodySha256(migration, 'guard_recognized_return_credit_delete')).toBe('89c96dabb82f6dada53e0084d5c65e72f11ea0630b56cf6e4f7f99620be48a8d');
     expect(functionBodySha256(migration, 'guard_return_credit_lineage')).toBe('c598d6afa59082e540b7d38c2f413bf204c5b93f938ab570cb82978c9c84a86d');
@@ -248,6 +268,8 @@ describe('return-credit COGS migration', () => {
     expect(returnCreditSmoke).toContain('DELIVERY_RECEIVED_RETURN_REVERSAL_GUARDS_PROVEN');
     expect(returnCreditSmoke).toContain('LEGACY_RESTOCK_CANCEL_EXACT_PROVEN');
     expect(returnCreditSmoke).toContain('SAME_PRODUCT_CANCEL_AGGREGATE_GUARD_PROVEN');
+    expect(returnCreditSmoke).toContain('MISSING_INVENTORY_CANCEL_GUARD_PROVEN');
+    expect(returnCreditSmoke).toContain('RETURN_RESTOCK_INVENTORY_MISSING:%');
     expect(returnCreditSmoke).toContain('same-product cancel accepted 12 returned units with only 10 available');
   });
 
@@ -272,8 +294,10 @@ describe('return-credit COGS migration', () => {
       expect(dependent).toContain('RETURN_COGS_CUTOVER_BARRIER_DRIFTED');
     }
     expect(invoiceLineageMigration).toContain('DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns');
+    const postflightEnd = invoiceLineageMigration.indexOf('$postflight$;');
+    expect(postflightEnd).toBeGreaterThanOrEqual(0);
     expect(invoiceLineageMigration.indexOf('DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover')).toBeGreaterThan(
-      invoiceLineageMigration.indexOf('$postflight$;'),
+      postflightEnd,
     );
   });
 
@@ -378,17 +402,17 @@ describe('return-credit COGS migration', () => {
     const migrationSha256 = createHash('sha256')
       .update(migration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(migrationSha256).toBe('a59114aee44438617da1e2d0907de7c34581a524c8e6d9d99c108637087a622d');
+    expect(migrationSha256).toBe('636210119f5cb1170a50259d90973782d4b1cb9d444e067abc9f7bdfce73dc34');
     expect(migrationHistory).toContain(`SQL sha256: \`${migrationSha256}\` (LF-normalized bytes)`);
     const deliverySurfaceSha256 = createHash('sha256')
       .update(deliverySurfaceMigration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(deliverySurfaceSha256).toBe('231ec190e345810bc97af712f59a68aea376945aa99d77da9d484cca30bad291');
+    expect(deliverySurfaceSha256).toBe('6a82256d2e252641469bba409e96a98fd8f10750e413eb869fbd0f70cfe1f3ea');
     expect(migrationHistory).toContain(`SQL sha256: \`${deliverySurfaceSha256}\` (LF-normalized bytes)`);
     const orderInvoiceGateSha256 = createHash('sha256')
       .update(orderInvoiceGateMigration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(orderInvoiceGateSha256).toBe('6f2ceb7b3ffb7ccead98327aa4430c8a337c223a057fd77c5852ec96d140e358');
+    expect(orderInvoiceGateSha256).toBe('91a338e9b7802302d5eac2ef97f33cfd065e5b1f82bc3176d01c99de4019d816');
     expect(migrationHistory).toContain(`SQL sha256: \`${orderInvoiceGateSha256}\` (LF-normalized bytes)`);
     const invoiceLineageSha256 = createHash('sha256')
       .update(invoiceLineageMigration.replace(/\r\n/g, '\n'), 'utf8')

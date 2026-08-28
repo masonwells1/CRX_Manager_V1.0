@@ -360,9 +360,6 @@ describe('OrderDetail', () => {
     });
     const contention = { message: 'RETURN_CREDIT_SOURCE_CONCURRENT' };
     mockRpc.mockResolvedValue({ data: null, error: contention });
-    mockSanitizeError.mockReturnValueOnce(
-      'A related invoice or return credit is being changed elsewhere. Wait a moment and try again',
-    );
 
     renderOrderDetail();
     fireEvent.click(await screen.findByRole('button', { name: /post all drafts/i }));

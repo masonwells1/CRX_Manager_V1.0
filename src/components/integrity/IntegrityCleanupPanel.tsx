@@ -6,7 +6,7 @@ import { useToast } from '../ui/Toast';
 import Button from '../ui/Button';
 import ConfirmModal from '../ui/ConfirmModal';
 import { Sentry } from '../../lib/sentry';
-import { activeInvoiceCoversDelivery, type DeliveryInvoiceCoverage } from '../../lib/deliveryInvoiceCoverage';
+import { activeInvoiceCoversDelivery, fetchActiveInvoiceCoveragePages } from '../../lib/deliveryInvoiceCoverage';
 
 interface NegativeInvRow {
   id: string;
@@ -58,32 +58,6 @@ interface IntegrityAlertRow {
   entity_id: string;
   details: Record<string, unknown> | null;
   detected_at: string;
-}
-
-const INVOICE_COVERAGE_PAGE_SIZE = 1000;
-
-type IntegrityInvoiceCoverageRow = DeliveryInvoiceCoverage & { id: string };
-
-async function fetchInvoiceCoveragePages(orderIds: string[]) {
-  const rows: IntegrityInvoiceCoverageRow[] = [];
-
-  for (let from = 0; ;) {
-    const { data, error } = await supabase
-      .from('invoices')
-      .select('id, order_id, delivery_id, invoice_type, status, deleted_at')
-      .in('order_id', orderIds)
-      .not('status', 'in', '("voided","cancelled")')
-      .is('deleted_at', null)
-      .order('id', { ascending: true })
-      .range(from, from + INVOICE_COVERAGE_PAGE_SIZE - 1);
-
-    if (error) return { data: null, error };
-
-    const page = (data || []) as IntegrityInvoiceCoverageRow[];
-    if (page.length === 0) return { data: rows, error: null };
-    rows.push(...page);
-    from += page.length;
-  }
 }
 
 function shortId(v: unknown): string {
@@ -304,7 +278,7 @@ export default function IntegrityCleanupPanel() {
           // (delivery_id IS NULL) covers the whole order. An invoice tied to a DIFFERENT
           // delivery on the same order must NOT hide this delivery — mirrors the
           // complete_delivery auto-invoice guard.
-          const { data: invoiceRows, error: invoiceCoverageError } = await fetchInvoiceCoveragePages(orderIds);
+          const { data: invoiceRows, error: invoiceCoverageError } = await fetchActiveInvoiceCoveragePages(orderIds);
           if (invoiceCoverageError) {
             Sentry.captureException(invoiceCoverageError);
             toast('error', 'Failed to verify invoice coverage. Unbilled delivery results are hidden; refresh to try again.');
