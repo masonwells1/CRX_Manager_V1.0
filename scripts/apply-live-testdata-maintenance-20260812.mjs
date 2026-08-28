@@ -19,8 +19,8 @@ const SNIPPETS = {
   classify: "docs/maintenance/2026-08-12-live-testdata-classify.snippet.txt",
 };
 
-const EXPECTED_INPUT_BLOB = "3875e085266f6f0395ea16ad2fa2032b56ae3373";
-const EXPECTED_OUTPUT_BLOB = "79a11218ea45edb249d18669bb35723dd21ae151";
+const EXPECTED_INPUT_BLOB = "419f4e8fc0b08566c6ebd139dde312d7553eb3f7";
+const EXPECTED_OUTPUT_BLOB = "bf5aded1d1445ae76d3fff4780ace71ffb11dee0";
 const EXPECTED_SNIPPET_SHA256 = {
   constants: "53c658d7eb8aab2a60b4314f533f61b7472f8d686f4b81d483d57b20950022a9",
   helpers: "8fa108c52b4423b7d269d94d19b91726fe880b6d2ea403c5c9665c686b532398",
