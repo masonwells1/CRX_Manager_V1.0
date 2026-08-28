@@ -35,6 +35,7 @@ export function transactionCompatibility(sql) {
   const skeleton = topLevelSkeleton(sql);
   if (/\\/.test(skeleton)) return { ok: false, reason: "client meta-command" };
   if (/(?:^|;)\s*select\b/i.test(skeleton)) return { ok: false, reason: "top-level SELECT is not allowed in the production migration path" };
+  if (/(?:^|;)\s*do\b/i.test(skeleton)) return { ok: false, reason: "top-level DO is not allowed in the production migration path" };
   const visible = stripCommentsQuoteAware(sql);
   if (/\bexecute\s+(?!function\b|on\b)/i.test(visible)) return { ok: false, reason: "dynamic SQL execution" };
   if (/standard_conforming_strings/i.test(skeleton)) return { ok: false, reason: "standard_conforming_strings override" };

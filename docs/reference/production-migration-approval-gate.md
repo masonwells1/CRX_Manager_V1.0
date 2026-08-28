@@ -113,9 +113,9 @@ The automated path refuses every migration classified as destructive by the repo
 fail-closed detector, including top-level `DELETE`, `TRUNCATE`, `DROP TABLE`, dropped columns,
 `MERGE`, and schema/type/domain/extension drops. An intentional destructive migration remains
 outside this workflow and requires a separate current-conversation approval and recovery plan.
-The same path also rejects top-level `SELECT` (which could invoke a mutating function), dynamic SQL
-execution, and every unquoted client backslash command. These conservative refusals park unusual
-migrations for a separately reviewed manual path.
+The same path also rejects top-level `SELECT` (which could invoke a mutating function), all top-level
+`DO` blocks, dynamic SQL execution, and every unquoted client backslash command. These conservative
+refusals park unusual migrations for a separately reviewed manual path.
 
 That transaction locks the migration ledger, refuses duplicate versions, names, or exact SQL
 content and refuses out-of-order versions, runs the migration SQL, writes the content-bound ledger

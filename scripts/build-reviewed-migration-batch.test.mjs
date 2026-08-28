@@ -137,7 +137,6 @@ await assert.rejects(() => collectAllPages(async () => Array.from({ length: 100 
 
 
 assert.deepEqual(transactionCompatibility(SQL), { ok: true });
-assert.deepEqual(transactionCompatibility("DO $safe$ BEGIN IF EXISTS (SELECT 1) THEN NULL; END IF; END $safe$;"), { ok: true });
 
 for (const [sql, reasonPattern] of [
   ["BEGIN; SELECT 1; COMMIT;", /top-level (?:BEGIN|COMMIT)/],
@@ -158,7 +157,10 @@ for (const [sql, reasonPattern] of [
   ["CLUSTER public.widgets;", /CLUSTER/],
   ["CALL public.maybe_commits();", /^CALL$/],
   ["SELECT public.close_accounting_period();", /top-level SELECT/],
-  ["DO $unsafe$ BEGIN EXECUTE 'DEL' || 'ETE FROM public.customers'; END $unsafe$;", /dynamic SQL execution/],
+  ["DO $safe$ BEGIN IF EXISTS (SELECT 1) THEN NULL; END IF; END $safe$;", /top-level DO/],
+  ["DO $unsafe$ BEGIN DELETE/**/FROM public.customers; END $unsafe$;", /top-level DO/],
+  ["DO $unsafe$ BEGIN PERFORM public.close_accounting_period(); END $unsafe$;", /top-level DO/],
+  ["DO $unsafe$ BEGIN EXECUTE 'DEL' || 'ETE FROM public.customers'; END $unsafe$;", /top-level DO/],
   ["DELETE FROM public.customers;", /destructive migration: top-level DELETE/],
   ["TRUNCATE public.inventory_transactions;", /destructive migration: TRUNCATE/],
   ["DROP TABLE public.customers;", /destructive migration: DROP TABLE/],
