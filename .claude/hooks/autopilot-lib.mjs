@@ -57,6 +57,7 @@ const DENY_BASH_RES = [
 // a later merge would inherit the same armed approval.
 const DENY_PATH_RE = /(?:^|[\s"'=(),{}\[\]\\/])(?:\.env(?:\.|$)|\.claude[\\/](?:hooks(?:[\\/]|$)|settings(?:\.local)?\.json(?:$|[\s;&|(),{}\[\]]))|\.codex[\\/](?:hooks(?:[\\/]|$)|hooks\.json(?:$|[\s;&|(),{}\[\]])))/i;
 const SHELL_PATH_MUTATOR_RE = /(?:>|\b(?:tee|set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|remove-item|move-item|copy-item|rename-item|ac|clc|cpi|mi|ni|ri|ren|rni|sc|si|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i;
+const FILE_BACKED_PATCH_COMMAND_RE = /(?:^|[;&|()]\s*)(?:&\s*)?(?:(?:git(?:\.exe)?|\S*[\\/]git(?:\.exe)?|"[^"]*[\\/]git(?:\.exe)?"|'[^']*[\\/]git(?:\.exe)?')(?=\s|$)[^\r\n;&|]*\bapply\b|(?:patch(?:\.exe)?|\S*[\\/]patch(?:\.exe)?|"[^"]*[\\/]patch(?:\.exe)?"|'[^']*[\\/]patch(?:\.exe)?')(?=\s|$))/i;
 const INLINE_INTERPRETER_RE = /(?:^|[;&|()])\s*(?:&\s*)?(?:(?:"[^"]*[\\/](?:node|nodejs|bun|deno)(?:\.exe)?"|'[^']*[\\/](?:node|nodejs|bun|deno)(?:\.exe)?'|(?:\S*[\\/])?(?:node|nodejs|bun|deno)(?:\.exe)?)\s+(?:--eval|--print|-e|-p)\b|(?:"[^"]*[\\/](?:python\d*|py|ruby|perl)(?:\.exe)?"|'[^']*[\\/](?:python\d*|py|ruby|perl)(?:\.exe)?'|(?:\S*[\\/])?(?:python\d*|py|ruby|perl)(?:\.exe)?)\s+(?:-c|-e)\b|(?:"[^"]*[\\/](?:powershell|pwsh)(?:\.exe)?"|'[^']*[\\/](?:powershell|pwsh)(?:\.exe)?'|(?:\S*[\\/])?(?:powershell|pwsh)(?:\.exe)?)\s+-(?:command|encodedcommand)\b|(?:"[^"]*[\\/](?:bash|sh|zsh|cmd)(?:\.exe)?"|'[^']*[\\/](?:bash|sh|zsh|cmd)(?:\.exe)?'|(?:\S*[\\/])?(?:bash|sh|zsh|cmd)(?:\.exe)?)\s+(?:-c|\/c)\b)/i;
 export const UNATTENDED_INTEGRITY_PATHS = Object.freeze([
   ".claude/hooks/autopilot-lib.mjs",
@@ -160,6 +161,7 @@ export function autopilotDecision(toolName, toolInput) {
       || !githubRepositoryIsGuarded(mergeRequest.repo)
       || !deliveryExecutableTrustedOrFalse(cmd, "gh", { cwd: process.cwd(), env: { ...process.env, ...(input.env && typeof input.env === "object" ? input.env : {}) } })
     )) return "deny";
+    if (shellLiteralViews(cmd).some((view) => FILE_BACKED_PATCH_COMMAND_RE.test(view))) return "deny";
     if ((SHELL_PATH_MUTATOR_RE.test(cmd) || shellLiteralViews(cmd).some((view) => INLINE_INTERPRETER_RE.test(view)))
       && unattendedBoundaryPathMentioned(cmd)) return "deny";
     for (const re of DENY_BASH_RES) {

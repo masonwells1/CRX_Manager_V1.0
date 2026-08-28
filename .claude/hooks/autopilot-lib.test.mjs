@@ -108,6 +108,11 @@ for (const wrapper of ["scripts/write-codex-push-proof.mjs", "scripts/land-pr.mj
   eq(autopilotDecision("PowerShell", { command: `Set-Content ${wrapper} -Value disabled` }), "deny", `trusted wrapper shell mutation is denied: ${wrapper}`);
 }
 eq(autopilotDecision("Bash", { command: "printf disabled | tee .claude/hooks/unattended-autopilot.mjs" }), "deny", "tee cannot rewrite the unattended hook before integrity proof");
+eq(autopilotDecision("Bash", { command: "git apply /tmp/guard.patch" }), "deny", "file-backed git patches are never auto-approved");
+eq(autopilotDecision("PowerShell", { command: "patch -p1 < C:/Temp/guard.patch" }), "deny", "file-backed patch commands are never auto-approved");
+eq(autopilotDecision("PowerShell", { command: "& 'C:\\Program Files\\Git\\cmd\\git.exe' apply C:/Temp/guard.patch" }), "deny", "absolute git executables cannot bypass the patch gate");
+eq(autopilotDecision("Bash", { command: '"/usr/bin/patch" -p1 < /tmp/guard.patch' }), "deny", "absolute patch executables cannot bypass the patch gate");
+eq(autopilotDecision("Bash", { command: `rg "git apply" .claude/hooks/autopilot-lib.mjs` }), "allow", "read-only searches mentioning git apply remain unattended");
 eq(autopilotDecision("Bash", { command: "node scripts/./land-pr.mjs 513" }), "verify-integrity", "dot-segment wrapper execution still reaches integrity proof");
 
 // ── deny-set additions (2026-07-04): CLI deploy and direct remote writes ───
