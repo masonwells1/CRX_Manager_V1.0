@@ -104,12 +104,18 @@ jobs:
     environment: production-database
     permissions:
       contents: read
+      deployments: read # Read the protected environment again after Mason's approval.
       pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.expected_commit }}
           fetch-depth: 0
+
+      - name: Revalidate production approval boundary after Mason approval
+        run: node scripts/assert-production-environment-protection.mjs
 
       - name: Reconfirm current main
         env:

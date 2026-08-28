@@ -12,6 +12,7 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   authored_version text;
+  authored_timestamp timestamptz;
   latest_version text;
 BEGIN
   PERFORM pg_catalog.pg_advisory_xact_lock(1129465937);
@@ -20,6 +21,15 @@ BEGIN
     RAISE EXCEPTION 'CRX migration ledger rows require an authored timestamp in name';
   END IF;
   authored_version := left(NEW.name, 14);
+  BEGIN
+    authored_timestamp := pg_catalog.to_timestamp(authored_version, 'FXYYYYMMDDHH24MISS');
+  EXCEPTION
+    WHEN invalid_datetime_format OR datetime_field_overflow THEN
+      RAISE EXCEPTION 'CRX migration ledger rows require a valid calendar timestamp in name';
+  END;
+  IF pg_catalog.to_char(authored_timestamp, 'YYYYMMDDHH24MISS') <> authored_version THEN
+    RAISE EXCEPTION 'CRX migration ledger rows require a valid calendar timestamp in name';
+  END IF;
 
   SELECT max(effective_version) INTO latest_version
   FROM (
@@ -108,7 +118,10 @@ BEGIN
   END IF;
 
   LOOP
-    probe_version := pg_catalog.lpad(probe_counter::text, 14, '0');
+    probe_version := pg_catalog.to_char(
+      pg_catalog.make_timestamp(1900, 1, 1, 0, 0, 0) + probe_counter * interval '1 second',
+      'YYYYMMDDHH24MISS'
+    );
     EXIT WHEN NOT EXISTS (
       SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = probe_version
     );

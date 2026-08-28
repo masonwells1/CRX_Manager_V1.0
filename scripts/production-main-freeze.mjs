@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 export const FREEZE_PREFIX = "crx-production-migration-freeze-";
 const API_VERSION = "2022-11-28";
 const REQUEST_TIMEOUT_MS = 30_000;
-const RELEASE_ATTEMPTS = 3;
+export const RELEASE_ATTEMPTS = 4;
 export const RELEASE_RETRY_DELAY_MS = 250;
 
 function assertRepository(repository) {
@@ -96,7 +96,8 @@ async function retryReleaseStep(operation, description) {
     } catch (error) {
       lastError = error;
       if (attempt < RELEASE_ATTEMPTS) {
-        await new Promise((resolve) => setTimeout(resolve, RELEASE_RETRY_DELAY_MS));
+        const delayMs = RELEASE_RETRY_DELAY_MS * (2 ** (attempt - 1));
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
     }
   }

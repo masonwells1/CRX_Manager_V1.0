@@ -15,6 +15,7 @@ export const LEDGER_GUARD_MIGRATION = "20260827223000_enforce_global_migration_l
 export const LEDGER_GUARD_PROSRC = "\n" + [
   "DECLARE",
   "  authored_version text;",
+  "  authored_timestamp timestamptz;",
   "  latest_version text;",
   "BEGIN",
   "  PERFORM pg_catalog.pg_advisory_xact_lock(1129465937);",
@@ -23,6 +24,15 @@ export const LEDGER_GUARD_PROSRC = "\n" + [
   "    RAISE EXCEPTION 'CRX migration ledger rows require an authored timestamp in name';",
   "  END IF;",
   "  authored_version := left(NEW.name, 14);",
+  "  BEGIN",
+  "    authored_timestamp := pg_catalog.to_timestamp(authored_version, 'FXYYYYMMDDHH24MISS');",
+  "  EXCEPTION",
+  "    WHEN invalid_datetime_format OR datetime_field_overflow THEN",
+  "      RAISE EXCEPTION 'CRX migration ledger rows require a valid calendar timestamp in name';",
+  "  END;",
+  "  IF pg_catalog.to_char(authored_timestamp, 'YYYYMMDDHH24MISS') <> authored_version THEN",
+  "    RAISE EXCEPTION 'CRX migration ledger rows require a valid calendar timestamp in name';",
+  "  END IF;",
   "",
   "  SELECT max(effective_version) INTO latest_version",
   "  FROM (",
@@ -120,7 +130,10 @@ export function transactionCompatibility(sql) {
 
 function git(repoRoot, args, encoding = "utf8") {
   const result = spawnSync("git", args, { cwd: repoRoot, encoding, shell: false, windowsHide: true });
-  if (result.status !== 0) throw new Error(`git ${args[0]} failed`);
+  if (result.status !== 0) {
+    const detail = String(result.stderr || "").trim() || String(result.error?.message || "").trim();
+    throw new Error("git " + args[0] + " failed" + (detail ? ": " + detail : ""));
+  }
   return result.stdout;
 }
 

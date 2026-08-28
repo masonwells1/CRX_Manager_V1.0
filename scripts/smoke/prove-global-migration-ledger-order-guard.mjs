@@ -68,6 +68,19 @@ try {
 
   psql("BEGIN;\n" + migrationSql + "\nCOMMIT;");
 
+  const invalidTimestampAttempt = psql([
+    "BEGIN;",
+    "INSERT INTO supabase_migrations.schema_migrations(version, statements, name)",
+    "VALUES ('20269901000000', ARRAY['invalid timestamp probe'], '20269901000000_invalid_timestamp_probe');",
+    "COMMIT;",
+  ].join("\n"), false);
+  assert.notEqual(invalidTimestampAttempt.status, 0, "ledger rows must reject non-calendar authored timestamps");
+  assert.match(
+    String(invalidTimestampAttempt.stdout) + "\n" + String(invalidTimestampAttempt.stderr),
+    /valid calendar timestamp/,
+    "invalid authored timestamps must be rejected by the ledger trigger",
+  );
+
   const shape = psql([
     "SELECT t.tgenabled::text || '|' || (t.tgqual IS NULL)::text || '|' || t.tgnargs::text",
     "FROM pg_catalog.pg_trigger t",

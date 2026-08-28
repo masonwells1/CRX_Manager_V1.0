@@ -31,6 +31,7 @@ import {
   assertExactFreezeRuleset,
   buildFreezeRuleset,
   freezeName,
+  RELEASE_ATTEMPTS,
   RELEASE_RETRY_DELAY_MS,
   releaseMainFreeze,
   verifyMainFreeze,
@@ -71,11 +72,13 @@ assert.match(ledgerGuardMigration, /set_config\('session_replication_role', 'rep
 assert.match(ledgerGuardMigration, /global migration ledger ordering guard replica-mode verification failed/);
 assert.match(workflow, /^\s*environment: production-database\s*$/m,
   "the credential-bearing job must use the protected production-database environment");
+assert.match(workflow, /apply:[\s\S]*deployments: read[\s\S]*Revalidate production approval boundary after Mason approval[\s\S]*Reconfirm current main/,
+  "the apply job must revalidate the protected environment after Mason approval and before production work");
 assert.match(workflow, /test "\$GITHUB_REF" = "refs\/heads\/main"/,
   "workflow dispatch must fail unless GitHub runs the workflow definition from main");
 assert.match(workflow, /if \[\[ "\$\{MIGRATION_NAME:15\}" =~ \[0-9\]\{14\} \]\]; then[\s\S]*exit 1/,
   "a second 14-digit timestamp in the migration name must explicitly fail the workflow guard");
-assert.match(workflow, /^\s*deployments: read\s*$/m,
+assert.match(workflow, /^\s*deployments: read(?:\s+#.*)?\s*$/m,
   "the workflow may inspect deployments before approval");
 assert.doesNotMatch(workflow, /^\s*deployments: write\s*$/m,
   "the workflow token must never gain deployment approval capability");
@@ -264,13 +267,13 @@ const flakyReleaseRequest = async (apiPath, options = {}) => {
   }
   if (apiPath.endsWith("/rulesets/77") && options.method === "DELETE") {
     deleteAttempts += 1;
-    if (deleteAttempts === 1) throw new Error("transient delete failure");
+    if (deleteAttempts < 3) throw new Error("transient delete failure");
     rulesets = [];
     return { status: 204, body: null, link: "" };
   }
   if (apiPath.endsWith("/rulesets/77") && options.allow404) {
     absenceAttempts += 1;
-    if (absenceAttempts === 1) return { status: 200, body: exactFreeze, link: "" };
+    if (absenceAttempts < 3) return { status: 200, body: exactFreeze, link: "" };
     return { status: 404, body: null, link: "" };
   }
   throw new Error(`unexpected flaky release request ${apiPath}`);
@@ -280,10 +283,11 @@ assert.deepEqual(await releaseMainFreeze({
   name: exactFreezeName,
   request: flakyReleaseRequest,
 }), { released: true, id: 77 });
-assert.equal(deleteAttempts, 2, "release must retry a transient ruleset deletion failure");
-assert.equal(absenceAttempts, 2, "release must retry until GitHub confirms the exact ruleset is absent");
-assert.ok(Date.now() - flakyReleaseStartedAt >= RELEASE_RETRY_DELAY_MS * 2,
-  "release retries must wait between failed GitHub API operations");
+assert.equal(RELEASE_ATTEMPTS, 4, "release cleanup must retain an expanded retry budget");
+assert.equal(deleteAttempts, 3, "release must retry transient ruleset deletion failures");
+assert.equal(absenceAttempts, 3, "release must retry until GitHub confirms the exact ruleset is absent");
+assert.ok(Date.now() - flakyReleaseStartedAt >= RELEASE_RETRY_DELAY_MS * 6,
+  "release retries must apply exponential backoff between failed GitHub API operations");
 rulesets = [{ id: 88, ...buildFreezeRuleset(`${exactFreezeName}-stale`) }];
 await assert.rejects(() => acquireMainFreeze({
   repository: "masonwells1/CRX_Manager_V1.0",
