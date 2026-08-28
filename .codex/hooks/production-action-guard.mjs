@@ -931,7 +931,7 @@ export function evaluateProductionAction({
       return denied("CODEX PRODUCTION GATE: raw HTTP clients are denied during unattended work because config files and encoded URLs can hide protected GitHub writes. Use the canonical guarded GitHub CLI workflow or a repository-specific application test client.");
     }
     if (ghCliCommandIsUnknownOrAlias(segment)) {
-      return denied("CODEX PRODUCTION GATE: GitHub CLI aliases and unknown top-level commands are denied because they can hide API writes from the exact-head parser. Use a known built-in `gh` command spelled literally.");
+      return denied("CODEX PRODUCTION GATE: this GitHub CLI action is outside the explicit read-only and guarded-delivery allowlist. Repository administration, credential output, secrets, rulesets, keys, variables, and workflow administration are never unattended.");
     }
     if (ghPrBaseRetargets(segment)) {
       return denied("CODEX PRODUCTION GATE: `gh pr edit --base` is denied because an already-armed auto-merge could be redirected into a protected branch without an exact-head reviewed merge command.");

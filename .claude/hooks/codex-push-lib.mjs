@@ -2721,11 +2721,28 @@ export function directGitHubApiWriter(command) {
   });
 }
 
-const KNOWN_GH_TOP_LEVEL_COMMANDS = new Set([
-  "api", "attestation", "auth", "browse", "cache", "codespace", "completion",
-  "config", "extension", "gist", "gpg-key", "issue", "label", "org", "pr",
-  "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key",
-  "status", "variable", "workflow",
+// Explicitly allow only inspection plus the ordinary PR delivery actions that
+// have dedicated guards below. A top-level-name allowlist was unsafe: `repo`,
+// `secret`, `ruleset`, `workflow`, and `auth` each mix harmless reads with
+// repository deletion, credential output, and administration. New gh commands
+// therefore fail closed until their exact action is deliberately classified.
+const ALLOWED_GH_ACTIONS = new Map([
+  ["attestation", new Set(["download", "trusted-root", "verify"])],
+  ["auth", new Set(["status"])],
+  ["browse", new Set([""])],
+  ["cache", new Set(["list"])],
+  ["gist", new Set(["list", "view"])],
+  ["issue", new Set(["close", "comment", "create", "edit", "list", "reopen", "status", "view"])],
+  ["label", new Set(["list"])],
+  ["org", new Set(["list"])],
+  ["pr", new Set(["checks", "checkout", "close", "comment", "create", "diff", "edit", "list", "merge", "ready", "reopen", "review", "status", "update-branch", "view"])],
+  ["project", new Set(["list", "view"])],
+  ["release", new Set(["download", "list", "view"])],
+  ["repo", new Set(["clone", "list", "view"])],
+  ["run", new Set(["cancel", "download", "list", "rerun", "view", "watch"])],
+  ["search", new Set(["code", "commits", "issues", "prs", "repos"])],
+  ["status", new Set([""])],
+  ["workflow", new Set(["list", "view"])],
 ]);
 const GH_GLOBAL_OPTIONS_WITH_VALUE = new Set(["-R", "--repo", "--hostname", "--config"]);
 
@@ -2735,16 +2752,21 @@ export function ghCliCommandIsUnknownOrAlias(command) {
   if (!parsed) return false;
   const { words } = parsed;
   if (!parsed.direct) return true;
-  let topLevel = "";
+  const positionals = [];
   for (let index = 1; index < words.length; index += 1) {
     const word = String(words[index] || "");
     if (GH_GLOBAL_OPTIONS_WITH_VALUE.has(word)) { index += 1; continue; }
     if (/^(?:--repo|--hostname|--config)=/i.test(word)) continue;
     if (word.startsWith("-")) continue;
-    topLevel = word.toLowerCase();
-    break;
+    positionals.push(word.toLowerCase());
+    if (positionals.length === 2) break;
   }
-  return !topLevel || topLevel === "alias" || topLevel === "extension" || !KNOWN_GH_TOP_LEVEL_COMMANDS.has(topLevel);
+  if (positionals.length === 0) return !words.slice(1).some((word) => ["--help", "-h", "--version"].includes(String(word).toLowerCase()));
+  const [topLevel, action = ""] = positionals;
+  // API writes are denied by ghApiMutates before this classifier runs; an API
+  // request that survives that gate is explicit read-only evidence.
+  if (topLevel === "api") return false;
+  return !ALLOWED_GH_ACTIONS.get(topLevel)?.has(action);
 }
 
 // MCP merge tool inputs — key spellings differ per connector (GitHub MCP uses

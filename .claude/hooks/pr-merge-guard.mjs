@@ -111,7 +111,7 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
   }
   for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/)) {
     if (ghCliCommandIsUnknownOrAlias(segment)) {
-      deny("PR MERGE GATE: GitHub CLI aliases and unknown top-level commands are denied because they can hide API writes from the exact-head parser. Use a known built-in `gh` command spelled literally.");
+      deny("PR MERGE GATE: this GitHub CLI action is outside the explicit read-only and guarded-delivery allowlist. Repository administration, credential output, secrets, rulesets, keys, variables, and workflow administration are never unattended.");
     }
     if (ghPrBaseRetargets(segment)) {
       deny("PR MERGE GATE: `gh pr edit --base` is denied because an already-armed auto-merge could be redirected into a protected branch without an exact-head reviewed merge command.");

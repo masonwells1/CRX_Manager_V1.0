@@ -128,6 +128,12 @@ grammar for every head branch and repository owner, and `land-pr.mjs` no longer 
 Routine exact-head squash merges remain automatic; branch cleanup is a separate destructive
 lifecycle action instead of a side effect hidden inside delivery.
 
+The last broad review replaced the old top-level GitHub CLI family list with a compact action
+allowlist. Read-only inspection, ordinary PR collaboration, CI rerun/cancel, and the separately
+guarded delivery actions remain automatic. Repository administration, authentication token output,
+secrets, variables, rulesets, keys, workflow administration, aliases, extensions, and any new
+unclassified GitHub action fail closed instead of inheriting trust from a familiar command family.
+
 Unquoted shell comment markers in GitHub CLI commands now deny before parsing, so flags written
 after `#` cannot be mistaken for the repository, expected head, or auto-merge intent that the shell
 actually omits. Quoted hash characters remain ordinary message/body data.

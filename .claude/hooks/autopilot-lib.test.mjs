@@ -144,7 +144,19 @@ eq(autopilotDecision("mcp__github__update_pull_request", { base: "main" }), "den
 eq(autopilotDecision("Bash", { command: "gh alias set ship 'api graphql'" }), "deny", "GitHub CLI alias management is never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh extension exec unsafe" }), "deny", "GitHub CLI extensions are never auto-approved");
 eq(autopilotDecision("Bash", { command: "gh ship" }), "deny", "unknown GitHub CLI aliases are never auto-approved");
+for (const command of [
+  "gh repo delete o/r --yes",
+  "gh repo edit o/r --visibility public",
+  "gh secret set API_TOKEN",
+  "gh ruleset delete 7 --repo o/r",
+  "gh workflow disable deploy.yml --repo o/r",
+  "gh auth token",
+]) {
+  eq(autopilotDecision("Bash", { command }), "deny", `sensitive GitHub administration is never auto-approved: ${command}`);
+}
 eq(autopilotDecision("Bash", { command: "gh pr view 42 --repo o/r" }), "allow", "known read-only GitHub CLI commands remain auto-approved");
+eq(autopilotDecision("Bash", { command: "gh auth status" }), "allow", "GitHub authentication status remains readable");
+eq(autopilotDecision("Bash", { command: "gh workflow view deploy.yml --repo o/r" }), "allow", "GitHub workflow inspection remains readable");
 eq(autopilotDecision("Bash", { command: "gh pr view 42 --repo o/r", env: { TRACE_LABEL: "fixture" } }), "allow", "read-only GitHub CLI commands may carry ordinary structured environment values");
 for (const name of ["BASH_ENV", "ENV", "HTTP_PROXY", "SSL_CERT_FILE", "HOME", "PATH", "TRACE_LABEL"]) {
   eq(autopilotDecision("Bash", { command: "gh pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789", env: { [name]: "fixture" } }), "deny", `GitHub mutations never auto-approve a structured environment override: ${name}`);

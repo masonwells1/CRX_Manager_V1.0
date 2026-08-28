@@ -90,6 +90,27 @@ ok(ghCliCommandIsUnknownOrAlias("gh alias set ship 'api graphql'"), "GitHub CLI 
 ok(ghCliCommandIsUnknownOrAlias("gh extension exec unsafe"), "GitHub CLI extensions are denied");
 ok(ghCliCommandIsUnknownOrAlias("gh ship"), "unknown top-level gh command is treated as an alias");
 ok(!ghCliCommandIsUnknownOrAlias("gh -R o/r pr view 42"), "known gh command after global flags remains classified");
+for (const command of [
+  "gh repo delete o/r --yes",
+  "gh repo edit o/r --visibility public",
+  "gh secret set API_TOKEN",
+  "gh ruleset delete 7 --repo o/r",
+  "gh workflow disable deploy.yml --repo o/r",
+  "gh auth token",
+]) {
+  ok(ghCliCommandIsUnknownOrAlias(command), `sensitive GitHub administration is outside the allowlist: ${command}`);
+}
+for (const command of [
+  "gh auth status",
+  "gh repo view o/r",
+  "gh workflow view deploy.yml --repo o/r",
+  "gh run view 7 --repo o/r",
+  "gh issue list --repo o/r",
+  "gh pr view 42 --repo o/r",
+  "gh api repos/o/r/pulls/42",
+]) {
+  ok(!ghCliCommandIsUnknownOrAlias(command), `explicit read-only GitHub action remains allowed: ${command}`);
+}
 const canonicalMutation = "gh pr merge 42 --repo o/r --squash --match-head-commit 0123456789012345678901234567890123456789";
 eq(githubMutationEnvironmentOverrideNames(canonicalMutation, { TRACE_LABEL: "fixture" }), ["TRACE_LABEL"], "every structured environment override on a GitHub mutation is classified");
 eq(githubMutationUnsafeAmbientEnvironmentNames(canonicalMutation, { BASH_ENV: "fixture", GH_HOST: "attacker.example", GH_TOKEN: "expected-auth" }), ["BASH_ENV", "GH_HOST"], "unsafe ambient shell and GitHub context variables are classified without rejecting normal inherited authentication");
@@ -282,6 +303,18 @@ for (const command of [
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr view 123 --repo masonwells1/CRX_Manager_V1.0" } });
 ok(r.status === 0 && r.decision === null, "known read-only gh command remains available");
+
+for (const command of [
+  "gh repo delete o/r --yes",
+  "gh repo edit o/r --visibility public",
+  "gh secret set API_TOKEN",
+  "gh ruleset delete 7 --repo o/r",
+  "gh workflow disable deploy.yml --repo o/r",
+  "gh auth token",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `sensitive GitHub administration is denied: ${command}`);
+}
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr edit 123 --repo masonwells1/CRX_Manager_V1.0 --base main" } });
 ok(r.decision?.permissionDecision === "deny", "CLI PR base retarget is denied");

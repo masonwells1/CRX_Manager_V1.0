@@ -674,6 +674,37 @@ try {
     repoDir: risky.repo,
     runGh: () => { throw new Error("structured GitHub context override must deny before lookup"); },
   }).blocked, true, "a structured GH_CONFIG_DIR override is denied before merge inspection");
+  for (const command of [
+    "gh repo delete o/r --yes",
+    "gh repo edit o/r --visibility public",
+    "gh secret set API_TOKEN",
+    "gh ruleset delete 7 --repo o/r",
+    "gh workflow disable deploy.yml --repo o/r",
+    "gh auth token",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      runGh: () => { throw new Error("sensitive GitHub administration must deny before lookup"); },
+    }).blocked, true, `sensitive GitHub administration is denied: ${command}`);
+  }
+  for (const command of [
+    "gh auth status",
+    "gh repo view o/r",
+    "gh workflow view deploy.yml --repo o/r",
+    "gh run view 7 --repo o/r",
+    "gh issue list --repo o/r",
+    "gh pr view 42 --repo o/r",
+    "gh api repos/o/r/pulls/42",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      runGh: () => "[]",
+    }).blocked, false, `explicit read-only GitHub action remains allowed: ${command}`);
+  }
   for (const name of ["BASH_ENV", "ENV", "HTTP_PROXY", "SSL_CERT_FILE", "HOME", "PATH", "TRACE_LABEL"]) {
     assert.equal(evaluateProductionAction({
       toolName: "PowerShell",
