@@ -56,15 +56,64 @@ const DENY_BASH_RES = [
 // a later merge would inherit the same armed approval.
 const DENY_PATH_RE = /(?:^|[\s"'=\\/])(?:\.env(?:\.|$)|\.claude[\\/](?:hooks(?:[\\/]|$)|settings(?:\.local)?\.json(?:$|[\s;&|]))|\.codex[\\/](?:hooks(?:[\\/]|$)|hooks\.json(?:$|[\s;&|])))/i;
 const SHELL_PATH_MUTATOR_RE = /(?:>|\b(?:set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|remove-item|move-item|copy-item|rename-item|ac|clc|cpi|mi|ni|ri|ren|rni|sc|si|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i;
+export const UNATTENDED_INTEGRITY_PATHS = Object.freeze([
+  ".claude/hooks/autopilot-lib.mjs",
+  ".claude/hooks/unattended-autopilot.mjs",
+  ".claude/hooks/pr-merge-guard.mjs",
+  ".claude/hooks/codex-push-guard.mjs",
+  ".claude/hooks/codex-push-lib.mjs",
+  ".claude/hooks/review-proof-guard.mjs",
+  ".claude/settings.json",
+  ".codex/hooks/production-action-guard.mjs",
+  ".codex/hooks.json",
+  "scripts/run-claude-review.mjs",
+  "scripts/write-codex-push-proof.mjs",
+  "scripts/write-apply-proofs.mjs",
+  "scripts/overnight-codex-gate.mjs",
+  "scripts/land-pr.mjs",
+  "scripts/land-pr-lib.mjs",
+  "scripts/apply-live-testdata-maintenance-20260812.mjs",
+  "scripts/post-agent-review-to-pr.mjs",
+  "package.json",
+]);
+const UNATTENDED_EXECUTOR_PATHS = UNATTENDED_INTEGRITY_PATHS.filter((filePath) => filePath.startsWith("scripts/") && !filePath.endsWith("-lib.mjs"));
 
-function unattendedBoundaryPathMentioned(value) {
+function shellLiteralViews(value) {
   const raw = String(value || "");
-  const views = [
+  return [...new Set([
     raw,
     raw.replace(/["']/g, ""),
     raw.replace(/["']/g, "").replace(/[`^]/g, "").replace(/\\(?=[^\s\\/])/g, ""),
-  ];
-  return views.some((view) => DENY_PATH_RE.test(view));
+  ])];
+}
+
+function normalizedViewContainsPath(view, filePath) {
+  const normalized = String(view || "").replaceAll("\\", "/").toLowerCase();
+  const target = String(filePath || "").toLowerCase();
+  let index = normalized.indexOf(target);
+  while (index !== -1) {
+    const before = index === 0 ? "" : normalized[index - 1];
+    const after = normalized[index + target.length] || "";
+    if ((!before || /[\s"'=;/]/.test(before)) && (!after || /[\s;&|]/.test(after))) return true;
+    index = normalized.indexOf(target, index + 1);
+  }
+  return false;
+}
+
+export function protectedUnattendedExecutorPaths(command) {
+  const found = new Set();
+  for (const view of shellLiteralViews(command)) {
+    for (const filePath of UNATTENDED_EXECUTOR_PATHS) {
+      if (normalizedViewContainsPath(view, filePath)) found.add(filePath);
+    }
+  }
+  return [...found];
+}
+
+function unattendedBoundaryPathMentioned(value) {
+  return shellLiteralViews(value).some((view) =>
+    DENY_PATH_RE.test(view)
+      || UNATTENDED_INTEGRITY_PATHS.some((filePath) => normalizedViewContainsPath(view, filePath)));
 }
 
 export function autopilotDecision(toolName, toolInput) {
@@ -97,6 +146,7 @@ export function autopilotDecision(toolName, toolInput) {
     for (const re of DENY_BASH_RES) {
       if (re.test(cmd)) return "deny";
     }
+    if (protectedUnattendedExecutorPaths(cmd).length > 0) return "verify-integrity";
   }
 
   // Edit/Write/file tools

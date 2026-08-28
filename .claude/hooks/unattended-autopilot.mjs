@@ -20,9 +20,11 @@
 // FAIL-SAFE: the flag is OFF by default, and ANY error here → emit nothing (defer
 // to the normal permission flow / prompt). It never auto-allows on uncertainty.
 
+import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
-import { autopilotDecision, flagActive, intentFresh, overnightGateDecision } from "./autopilot-lib.mjs";
+import { autopilotDecision, flagActive, intentFresh, overnightGateDecision, protectedUnattendedExecutorPaths, UNATTENDED_INTEGRITY_PATHS } from "./autopilot-lib.mjs";
+import { fixedGitExecutable } from "./codex-push-lib.mjs";
 
 function nothing() { process.exit(0); }               // defer to normal flow
 function allow() {
@@ -37,6 +39,30 @@ function deny(name) {
 function denyUnarmed(name) {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `OVERNIGHT HANDSHAKE: Mason asked for a hands-free run but autopilot is NOT armed, so "${name}" is paused. Arm it FIRST (node .claude/hooks/autopilot-arm.mjs --hours N), confirm to Mason in one plain-English line, then continue. If this is NOT actually a hands-free run, delete .claude/session-state/OVERNIGHT-INTENT.flag and continue normally. Reassurance without arming is the exact repeated failure this blocks.` } }));
   process.exit(0);
+}
+
+function integrityBoundaryMatchesHead(projectDir, command) {
+  if (protectedUnattendedExecutorPaths(command).length === 0) return false;
+  const env = { ...process.env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR"]) delete env[key];
+  const git = (args) => execFileSync(fixedGitExecutable(), args, {
+    cwd: projectDir,
+    env,
+    encoding: "utf8",
+    timeout: 10_000,
+    stdio: ["ignore", "pipe", "ignore"],
+    windowsHide: true,
+  }).trim();
+  try {
+    git(["rev-parse", "--verify", "HEAD^{commit}"]);
+    git(["ls-files", "--error-unmatch", "--", ...UNATTENDED_INTEGRITY_PATHS]);
+    const status = git(["status", "--porcelain=v1", "--untracked-files=all", "--", ...UNATTENDED_INTEGRITY_PATHS]);
+    if (status) return false;
+    git(["diff", "--quiet", "HEAD", "--", ...UNATTENDED_INTEGRITY_PATHS]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 let payload;
@@ -69,4 +95,8 @@ try { if (existsSync(intentPath)) unlinkSync(intentPath); } catch { /* ignore */
 
 const decision = autopilotDecision(payload?.tool_name, payload?.tool_input);
 if (decision === "deny") deny(payload?.tool_name || "(tool)");
+if (decision === "verify-integrity") {
+  const command = String(payload?.tool_input?.command ?? payload?.tool_input?.cmd ?? "");
+  if (!integrityBoundaryMatchesHead(projectDir, command)) deny(payload?.tool_name || "(tool)");
+}
 allow();

@@ -4,7 +4,7 @@
 
 - Checkout: `C:\Users\mason\.codex\worktrees\autonomy-with-hard-boundaries-20260827\CRX_Manager`
 - Branch: `codex/autonomy-with-hard-boundaries-20260827`
-- Base: `origin/main` at `0b3bc84cc407a35172623a13b94ac6e2b8a1f006`
+- Base: `origin/main` at `63839dbbc4d5a24d226830aa2cfa448f0f2f8187`
 - Repository: `masonwells1/CRX_Manager_V1.0`
 - Global Codex configuration: `C:\Users\mason\.codex\config.toml`
 
@@ -59,6 +59,7 @@ Mason explicitly requested more Codex working room and authorized addressing unn
 - Exact-head review of `a8fef393` found armed unattended approval could authorize editing its own merge guard before a later delivery action. Autopilot now has a non-auto-approvable integrity boundary around Claude/Codex hook sources and manifests across file tools, patches, redirects, and shell mutators, while ordinary app-file edits remain automatic.
 - Exact-head review of `f69ae3a5` found feature pushes queried CRX even when another remote was targeted, and non-branch refs could pass outside the intended lane. Push URLs now resolve to the exact GitHub repository used in the lookup, and unattended pushes require one explicit `refs/heads` destination; tags, notes, follow-tags, ambiguity, and multi-repository destinations deny.
 - Exact-head review of `1ad8e0bd` found unquoted `#` comments could hide the real end of a merge command while fake repository/head flags were inspected. GitHub CLI commands with unquoted comment markers now fail closed before parsing; quoted hashes remain data.
+- Exact-head review of `bd547ab9` found that armed unattended approval could still edit a trusted delivery wrapper and then execute that modified proof or landing logic. The protected boundary now includes proof producers, landing helpers, maintenance executors, hook manifests, and their registration surface. Wrapper execution proceeds automatically only when every boundary file is tracked and Git-unchanged from the current HEAD; clean and dirty `land-pr` plus push-proof paths have end-to-end regressions.
 
 - Do not edit product-data-model plans, migrations/RPCs, or product-model tests.
 - Do not absorb the separate `codex/migration-approval-gate` worktree; live migration approval behavior is outside this tranche.

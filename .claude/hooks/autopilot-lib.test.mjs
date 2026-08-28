@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { autopilotDecision, flagActive, intentFresh, overnightGateDecision } from "./autopilot-lib.mjs";
+import { autopilotDecision, flagActive, intentFresh, overnightGateDecision, UNATTENDED_INTEGRITY_PATHS } from "./autopilot-lib.mjs";
 import { fixedGitHubCliExecutable } from "./codex-push-lib.mjs";
 
 // Keep the pure decision tests independent of CI/provider ambient variables.
@@ -71,6 +71,11 @@ for (const filePath of [
   ".claude/settings.local.json",
   ".codex/hooks/production-action-guard.mjs",
   ".codex/hooks.json",
+  "scripts/write-codex-push-proof.mjs",
+  "scripts/land-pr.mjs",
+  "scripts/land-pr-lib.mjs",
+  "scripts/apply-live-testdata-maintenance-20260812.mjs",
+  "package.json",
 ]) {
   eq(autopilotDecision("Edit", { file_path: filePath }), "deny", `armed autopilot cannot edit its guard boundary: ${filePath}`);
 }
@@ -85,6 +90,10 @@ for (const command of [
   eq(autopilotDecision("PowerShell", { command }), "deny", `armed autopilot cannot shell-mutate its merge guard: ${command}`);
 }
 eq(autopilotDecision("Edit", { file_path: "src/components/OrderForm.tsx" }), "allow", "ordinary product edits remain unattended");
+for (const wrapper of ["scripts/write-codex-push-proof.mjs", "scripts/land-pr.mjs", "scripts/apply-live-testdata-maintenance-20260812.mjs"]) {
+  eq(autopilotDecision("Bash", { command: `node ${wrapper}` }), "verify-integrity", `trusted wrapper execution requires committed integrity: ${wrapper}`);
+  eq(autopilotDecision("PowerShell", { command: `Set-Content ${wrapper} -Value disabled` }), "deny", `trusted wrapper shell mutation is denied: ${wrapper}`);
+}
 
 // ── deny-set additions (2026-07-04): CLI deploy and direct remote writes ───
 eq(autopilotDecision("Bash", { command: "npx supabase functions deploy send-email" }), "deny", "CLI edge deploy denied");
@@ -200,12 +209,18 @@ function safeTempDir(testDir) {
   return resolvedTestDir;
 }
 
-function runHook(projectDir) {
+function runHook(projectDir, payload = { tool_name: "Bash", tool_input: { command: "rm -rf /" } }) {
   return spawnSync(process.execPath, [hookPath], {
-    input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "rm -rf /" } }),
+    input: JSON.stringify(payload),
     encoding: "utf8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
   });
+}
+
+function tempGit(projectDir, args) {
+  const result = spawnSync("git", args, { cwd: projectDir, encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`temp git failed: ${args.join(" ")} ${result.stderr}`);
+  return result.stdout.trim();
 }
 
 // (1) flag ABSENT → hook is inert (emits nothing, defers to normal flow).
@@ -235,6 +250,45 @@ try {
   ok(/"permissionDecision":\s*"deny"/.test(r.stdout), "hook DENIES a deny-set command (rm -rf /) when armed");
 } finally {
   rmSync(resolvedArmedDir, { recursive: true, force: true });
+}
+
+// (3) Trusted delivery wrappers auto-run only while every integrity-bound source
+// matches its committed HEAD blob. This keeps routine delivery hands-free while
+// preventing an armed session from editing its proof producer or landing helper
+// and then executing the modified copy.
+const integrityDir = mkdtempSync(path.join(tmpdir(), "autopilot-integrity-"));
+const resolvedIntegrityDir = safeTempDir(integrityDir);
+try {
+  for (const relativePath of UNATTENDED_INTEGRITY_PATHS) {
+    const absolutePath = path.join(integrityDir, ...relativePath.split("/"));
+    mkdirSync(path.dirname(absolutePath), { recursive: true });
+    writeFileSync(absolutePath, relativePath === "package.json" ? "{}\n" : `// ${relativePath}\n`, "utf8");
+  }
+  tempGit(integrityDir, ["init", "-b", "main"]);
+  tempGit(integrityDir, ["config", "user.email", "guard-test@example.com"]);
+  tempGit(integrityDir, ["config", "user.name", "Guard Test"]);
+  tempGit(integrityDir, ["add", "."]);
+  tempGit(integrityDir, ["commit", "-m", "integrity fixture"]);
+  const integrityStateDir = path.join(integrityDir, ".claude", "session-state");
+  mkdirSync(integrityStateDir, { recursive: true });
+  writeFileSync(path.join(integrityStateDir, "AUTOPILOT.on"), JSON.stringify({ expires: new Date(Date.now() + 3600e3).toISOString() }), "utf8");
+  const wrappers = [
+    { file: "scripts/land-pr.mjs", command: "node scripts/land-pr.mjs 513" },
+    { file: "scripts/write-codex-push-proof.mjs", command: "node scripts/write-codex-push-proof.mjs" },
+  ];
+  for (const wrapper of wrappers) {
+    const payload = { tool_name: "Bash", tool_input: { command: wrapper.command } };
+    let result = runHook(integrityDir, payload);
+    ok(/"permissionDecision":\s*"allow"/.test(result.stdout), `committed trusted wrapper execution is auto-approved: ${wrapper.file}`);
+    const wrapperPath = path.join(integrityDir, ...wrapper.file.split("/"));
+    const original = `// ${wrapper.file}\n`;
+    writeFileSync(wrapperPath, "// modified\n", "utf8");
+    result = runHook(integrityDir, payload);
+    ok(/"permissionDecision":\s*"deny"/.test(result.stdout), `dirty trusted wrapper execution is denied: ${wrapper.file}`);
+    writeFileSync(wrapperPath, original, "utf8");
+  }
+} finally {
+  rmSync(resolvedIntegrityDir, { recursive: true, force: true });
 }
 
 console.log(`autopilot-lib: ${pass} assertions passed`);

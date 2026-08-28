@@ -87,6 +87,12 @@ Armed unattended mode cannot edit, patch, or shell-mutate its own approval/deliv
 their hook manifests; ordinary product-file edits remain automatic.
 Empty-quote-composed GitHub executable or subcommand words also deny before unattended execution.
 
+The integrity boundary also covers every trusted proof producer, landing helper, live-maintenance
+executor, and registration surface used by unattended delivery. Before any of those helpers runs,
+the hook verifies that the complete boundary is tracked and Git-unchanged from the current
+HEAD commit. A locally modified `land-pr.mjs` or `write-codex-push-proof.mjs` is denied instead of
+receiving unattended approval; committed exact-HEAD copies remain automatic.
+
 Feature pushes now resolve their effective push URL and query auto-merge state in that exact
 GitHub repository; an alternate remote cannot borrow CRX's result. The unattended form updates
 one explicit branch only (`HEAD:refs/heads/<branch>`). Tags, notes, implicit tag propagation,
