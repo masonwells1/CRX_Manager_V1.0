@@ -486,7 +486,7 @@ ok(/request\.updateBranch\s*&&\s*branchNameIsProtected\(destinationBranch\)/.tes
 const landPrSource = readFileSync(path.resolve(__dirname, "../../scripts/land-pr.mjs"), "utf8");
 ok(/--match-head-commit \$\{pr\.headRefOid\}/.test(landPrSource), "land-pr pins both printed merge commands to the inspected head SHA");
 ok(/trustedGitHubCliInvocation/.test(landPrSource), "land-pr child GitHub calls use the fixed executable and sanitized context");
-ok(/--head", headRefName/.test(landPrSource), "land-pr queries every open PR fed by the destination head branch");
+ok(/exhaustiveHeadPullRequestsLookupArgs\(REPO, headRefName\)/.test(landPrSource), "land-pr exhaustively paginates every open PR fed by the destination head branch");
 eq(assessLandPrUpdate({ headRefName: "feature/safe", openPullRequests: [] }).allowed, true, "land-pr permits an ordinary head with no armed protected-base PR");
 eq(assessLandPrUpdate({ headRefName: "main", openPullRequests: [] }).allowed, false, "land-pr refuses a protected destination head");
 const stackedUpdate = assessLandPrUpdate({
@@ -498,5 +498,14 @@ const stackedUpdate = assessLandPrUpdate({
 });
 eq(stackedUpdate.allowed, false, "land-pr refuses a shared head that feeds another armed main PR");
 eq(stackedUpdate.armed, [514], "land-pr reports the exact armed stacked PR");
+const laterPageUpdate = assessLandPrUpdate({
+  headRefName: "feature/shared",
+  openPullRequests: [
+    Array.from({ length: 30 }, (_, index) => ({ number: 600 + index, auto_merge: null, base: { ref: "main" } })),
+    [{ number: 999, auto_merge: { merge_method: "squash" }, base: { ref: "production" } }],
+  ],
+});
+eq(laterPageUpdate.allowed, false, "land-pr catches an armed protected PR after the old 30-result boundary");
+eq(laterPageUpdate.armed, [999], "land-pr reports the exact later-page armed PR");
 
 console.log(`pr-merge-guard: ${pass} assertions passed`);

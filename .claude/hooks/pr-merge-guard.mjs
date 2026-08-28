@@ -38,6 +38,7 @@ import {
   deliveryExecutableIsTrusted,
   describeRiskyContent,
   directGitHubApiWriter,
+  exhaustiveHeadPullRequestsLookupArgs,
   ghApiMergeRequest,
   ghApiMutates,
   ghCliCommandIsUnknownOrAlias,
@@ -239,10 +240,9 @@ function gateRequest(request) {
   if (request.updateBranch || !["main", "master", "production"].includes(base)) {
     let armed;
     try {
-      armed = activeProtectedAutoMergePrNumbers(gh([
-        "pr", "list", "--repo", request.repo, "--state", "open", "--head", destinationBranch,
-        "--json", "number,autoMergeRequest,baseRefName",
-      ]));
+      armed = activeProtectedAutoMergePrNumbers(gh(
+        exhaustiveHeadPullRequestsLookupArgs(request.repo, destinationBranch),
+      ));
     } catch (error) {
       deny(`PR MERGE GATE: could not prove auto-merge is disabled before mutating remote branch "${destinationBranch}", so the action is denied (fail closed). ${error?.message || error}`);
     }

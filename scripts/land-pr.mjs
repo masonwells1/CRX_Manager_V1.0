@@ -32,7 +32,12 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { riskyFiles, contentIsRisky, trustedGitHubCliInvocation } from "../.claude/hooks/codex-push-lib.mjs";
+import {
+  contentIsRisky,
+  exhaustiveHeadPullRequestsLookupArgs,
+  riskyFiles,
+  trustedGitHubCliInvocation,
+} from "../.claude/hooks/codex-push-lib.mjs";
 import { assessLandPrUpdate } from "./land-pr-lib.mjs";
 
 const REPO = "masonwells1/CRX_Manager_V1.0";
@@ -102,10 +107,7 @@ function updateBranch(pr) {
   try {
     const headRefName = String(pr?.headRefName || "").trim();
     if (!headRefName) throw new Error("GitHub did not report the PR head branch");
-    const openPullRequests = JSON.parse(gh([
-      "pr", "list", "--repo", REPO, "--state", "open", "--head", headRefName,
-      "--json", "number,autoMergeRequest,baseRefName",
-    ]));
+    const openPullRequests = JSON.parse(gh(exhaustiveHeadPullRequestsLookupArgs(REPO, headRefName)));
     const safety = assessLandPrUpdate({ headRefName, openPullRequests });
     if (!safety.allowed) {
       console.error(`[land-pr] Refusing update-branch: ${safety.reason}. Disable auto-merge on every listed PR or use an ordinary non-protected head branch, then retry.`);
