@@ -125,6 +125,7 @@ jobs:
     timeout-minutes: 20
     environment: production-database
     permissions:
+      actions: read # Read the protected environment after Mason's approval.
       contents: read
       deployments: read # Read the protected environment again after Mason's approval.
       pull-requests: read

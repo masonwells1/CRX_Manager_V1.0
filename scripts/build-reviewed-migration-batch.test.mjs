@@ -50,6 +50,7 @@ const SQL = [
 const HASH = createHash("sha256").update(SQL).digest("hex");
 
 const workflow = readFileSync(path.join(process.cwd(), ".github", "workflows", "production-migration.yml"), "utf8");
+const applyJob = workflow.slice(workflow.indexOf("\n  apply:"));
 const runbook = readFileSync(path.join(process.cwd(), "docs", "reference", "production-migration-approval-gate.md"), "utf8");
 const reviewVerifier = readFileSync(path.join(process.cwd(), "scripts", "verify-production-migration-review.mjs"), "utf8");
 const ledgerGuardMigration = readFileSync(path.join(process.cwd(), "supabase", "migrations", `${LEDGER_GUARD_MIGRATION}.sql`), "utf8").replace(/\r\n/g, "\n");
@@ -76,6 +77,8 @@ assert.match(ledgerGuardMigration, /set_config\('session_replication_role', 'rep
 assert.match(ledgerGuardMigration, /global migration ledger ordering guard replica-mode verification failed/);
 assert.match(workflow, /^\s*environment: production-database\s*$/m,
   "the credential-bearing job must use the protected production-database environment");
+assert.match(applyJob, /^\s{6}actions: read(?:\s+#.*)?$/m,
+  "the apply job must retain read access to the protected environment API");
 assert.match(workflow, /apply:[\s\S]*deployments: read[\s\S]*Revalidate production approval boundary after Mason approval[\s\S]*Reconfirm current main/,
   "the apply job must revalidate the protected environment after Mason approval and before production work");
 const preflightMainBinding = workflow.indexOf("Bind dispatch to protected main before repository scripts");
