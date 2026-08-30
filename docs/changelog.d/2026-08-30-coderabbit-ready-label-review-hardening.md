@@ -20,6 +20,8 @@
 - Reconciled every pull-request edit that can replace a queued reset event: base-branch changes clear
   both labels, unrelated edits preserve a confirmed current-head command, and stale or unconfirmed
   workflow state clears so an old exact-head command cannot suppress review of a different candidate diff.
+- Treated an edited event's label payload as potentially older than an in-flight marker write, preserving
+  live dedupe state through pull-snapshot or command-lookup failures so a retry cannot post a second command.
 - Required `ready-for-coderabbit` to remain attached at every live pull-request recheck, allowing a
   maintainer to cancel a queued request during the quiet period.
 - Added marker and raced-command cleanup when final or post-comment GitHub API snapshots fail.

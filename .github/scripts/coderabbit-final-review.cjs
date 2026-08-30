@@ -319,6 +319,11 @@ async function runGate({ github, context, core, config, attemptState }) {
   }
 
   if (action === 'edited') {
+    // An edited event can be queued before an in-flight run records its marker.
+    // Treat requested state as possibly pre-existing until the live snapshot and
+    // command lookup succeed, so recovery never clears a valid dedupe marker
+    // based on the older event payload.
+    attemptState.requestedMarkerPreexisted = true;
     const editedPullRequest = (await github.rest.pulls.get({
       owner,
       repo,

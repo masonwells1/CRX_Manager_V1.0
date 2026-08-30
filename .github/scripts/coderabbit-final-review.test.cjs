@@ -433,6 +433,46 @@ test('a metadata edit with no workflow state is ignored', async () => {
   assert.deepEqual(harness.comments, []);
 });
 
+for (const [failureName, failureOptions] of [
+  ['live pull snapshot failure', { pullFailuresAt: [1] }],
+  ['current-head command lookup failure', { commentListFailuresAt: [1] }],
+]) {
+  test(`a displaced metadata edit preserves dedupe state after ${failureName}`, async () => {
+    const harness = makeHarness({
+      action: 'edited',
+      changes: { title: { from: 'Old title' } },
+      eventLabel: null,
+      // The event was queued before the active gate added its live marker.
+      eventPullRequest: pullRequest({ labels: [] }),
+      pulls: [pullRequest({ labels: [REQUESTED_LABEL] })],
+      existingComments: [{
+        id: 99,
+        body: reviewCommandBody(HEAD),
+        created_at: new Date().toISOString(),
+        user: { login: 'github-actions[bot]' },
+      }],
+      ...failureOptions,
+    });
+
+    const failedReconciliation = await execute(harness);
+    assert.equal(failedReconciliation.status, 'blocked');
+    assert.equal(harness.liveLabels.has(READY_LABEL), false);
+    assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+    assert.equal(harness.comments.length, 1);
+    assert.match(harness.failures[0], /requested marker was preserved/);
+
+    await harness.github.rest.issues.addLabels({ labels: [READY_LABEL] });
+    harness.context.payload.action = 'labeled';
+    harness.context.payload.label = { name: READY_LABEL };
+    const retry = await execute(harness);
+
+    assert.equal(retry.status, 'duplicate');
+    assert.equal(harness.liveLabels.has(READY_LABEL), false);
+    assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+    assert.equal(harness.comments.length, 1);
+  });
+}
+
 test('missing, pending, or failed checks block the paid review request', async () => {
   const harness = makeHarness({
     checkRuns: [
