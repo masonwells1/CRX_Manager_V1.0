@@ -22,6 +22,8 @@
   workflow state clears so an old exact-head command cannot suppress review of a different candidate diff.
 - Treated an edited event's label payload as potentially older than an in-flight marker write, preserving
   live dedupe state through pull-snapshot or command-lookup failures so a retry cannot post a second command.
+- Resolved workflow provenance for optional GitHub Actions checks as well as required checks, preventing a
+  later passing same-name job from another workflow from hiding a failed containment or security check.
 - Required `ready-for-coderabbit` to remain attached at every live pull-request recheck, allowing a
   maintainer to cancel a queued request during the quiet period.
 - Added marker and raced-command cleanup when final or post-comment GitHub API snapshots fail.

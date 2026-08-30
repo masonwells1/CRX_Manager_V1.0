@@ -76,6 +76,7 @@ function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [
   const ignored = new Set(ignoredChecks.map(normalize));
   const checksByIdentity = newestByIdentity(checkRuns, (check) => (
     `${check.name}|app:${check.app?.id || 'unknown'}`
+    + `${check.workflow_id || check.workflow_path ? `|workflow:${check.workflow_id || 'unknown'}|path:${check.workflow_path || 'unknown'}` : ''}`
   ), [
     'started_at',
     'completed_at',
@@ -90,6 +91,10 @@ function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [
 
   for (const check of checksByIdentity.values()) {
     if (ignored.has(normalize(check.name))) continue;
+    if (check.workflow_provenance_error) {
+      blockers.push(`${check.name}: workflow provenance could not be verified (${check.workflow_provenance_error})`);
+      continue;
+    }
     if (check.status !== 'completed' || !ACCEPTABLE_CHECK_CONCLUSIONS.has(check.conclusion)) {
       blockers.push(`${check.name}: ${check.status}/${check.conclusion || 'no conclusion'}`);
     }
@@ -201,16 +206,22 @@ function actionRunId(detailsUrl) {
 async function attachRequiredWorkflowProvenance({
   github, owner, repo, checkRuns, requiredChecks, core,
 }) {
-  const workflowRequirements = requiredChecks.filter((required) => required?.source === 'check_run');
-  const candidates = checkRuns.filter((check) => workflowRequirements.some((required) => (
-    normalize(required.name) === normalize(check.name)
-    && Number(required.appId) === Number(check.app?.id)
-  )));
+  const workflowAppIds = new Set(requiredChecks
+    .filter((required) => required?.source === 'check_run' && required.appId)
+    .map((required) => Number(required.appId)));
+  // Every check from the GitHub Actions app needs workflow provenance, not
+  // only required checks. Otherwise a passing job in another workflow can
+  // collapse a same-name failed optional security check.
+  const candidates = checkRuns.filter((check) => workflowAppIds.has(Number(check.app?.id)));
 
   await Promise.all(candidates.map(async (check) => {
-    if (check.workflow_path) return;
+    if (check.workflow_id && check.workflow_path) return;
     const runId = actionRunId(check.details_url);
-    if (!runId) return;
+    if (!runId) {
+      check.workflow_provenance_error = 'check details did not identify a GitHub Actions run';
+      core.warning(`Could not resolve workflow provenance for ${check.name}: ${check.workflow_provenance_error}`);
+      return;
+    }
     try {
       const response = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: runId });
       check.workflow_id = response.data.workflow_id;

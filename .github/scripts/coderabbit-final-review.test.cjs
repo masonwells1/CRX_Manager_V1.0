@@ -80,6 +80,7 @@ function makeHarness({
   checkRunsSequence = null,
   statusesSequence = null,
   resolvedWorkflowPath = '.github/workflows/ci.yml',
+  resolvedWorkflowByRunId = null,
   liveLabelSequence = null,
   pullFailuresAt = [],
   checkRunFailuresAt = [],
@@ -119,8 +120,11 @@ function makeHarness({
   const github = {
     rest: {
       actions: {
-        getWorkflowRun: async () => {
+        getWorkflowRun: async ({ run_id: runId }) => {
           if (workflowRunFailure) throw new Error('workflow lookup failed');
+          if (resolvedWorkflowByRunId?.[runId]) {
+            return { data: resolvedWorkflowByRunId[runId] };
+          }
           return { data: { workflow_id: 4242, path: resolvedWorkflowPath } };
         },
       },
@@ -916,6 +920,37 @@ test('a same-app check from another workflow cannot satisfy a required check', (
 
   assert.match(blockers.join('\n'), /duplicate or untrusted same-name check provenance/);
   assert.match(blockers.join('\n'), /trusted required check is missing or not successful/);
+});
+
+test('a passing same-name job from another workflow cannot hide a failed optional check', async () => {
+  const harness = makeHarness({
+    checkRuns: [
+      completedCheck('foundation'),
+      {
+        ...completedCheck('Phase 3C Containment (Windows)', 'failure'),
+        id: 200,
+        workflow_id: undefined,
+        workflow_path: undefined,
+        details_url: 'https://github.com/example/repo/actions/runs/500/job/1',
+      },
+      {
+        ...completedCheck('Phase 3C Containment (Windows)', 'success'),
+        id: 201,
+        workflow_id: undefined,
+        workflow_path: undefined,
+        details_url: 'https://github.com/example/repo/actions/runs/501/job/2',
+      },
+    ],
+    resolvedWorkflowByRunId: {
+      500: { workflow_id: 4242, path: '.github/workflows/ci.yml' },
+      501: { workflow_id: 9001, path: '.github/workflows/untrusted.yml' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.match(harness.failures[0], /Phase 3C Containment \(Windows\): completed\/failure/);
+  assert.deepEqual(harness.comments, []);
 });
 
 test('the live gate resolves a required GitHub Actions check to its workflow before requesting review', async () => {
