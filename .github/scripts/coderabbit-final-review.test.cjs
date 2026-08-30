@@ -711,6 +711,225 @@ test('an old-head CodeRabbit review that replaces a queued synchronize reset cle
   assert.match(harness.failures[0], /review commit does not match the live PR head/);
 });
 
+test('a late old-head review preserves a confirmed current-head request and cannot cause a duplicate', async () => {
+  const currentCommand = {
+    id: 99,
+    body: reviewCommandBody(NEXT_HEAD),
+    user: { login: 'github-actions[bot]' },
+  };
+  const reviewHarness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [pullRequest({
+      head: NEXT_HEAD,
+      labels: [READY_LABEL, REQUESTED_LABEL],
+    })],
+    eventPullRequest: pullRequest(),
+    existingComments: [currentCommand],
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const reviewResult = await execute(reviewHarness);
+
+  assert.equal(reviewResult.status, 'blocked');
+  assert.equal(reviewHarness.liveLabels.has(READY_LABEL), false);
+  assert.equal(reviewHarness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.deepEqual(
+    reviewHarness.comments.map((comment) => comment.body),
+    [reviewCommandBody(NEXT_HEAD)],
+  );
+
+  const retryHarness = makeHarness({
+    pulls: [pullRequest({
+      head: NEXT_HEAD,
+      labels: [READY_LABEL, REQUESTED_LABEL],
+    })],
+    eventPullRequest: pullRequest({
+      head: NEXT_HEAD,
+      labels: [READY_LABEL, REQUESTED_LABEL],
+    }),
+    existingComments: reviewHarness.comments,
+  });
+  const retryResult = await execute(retryHarness);
+
+  assert.equal(retryResult.status, 'duplicate');
+  assert.deepEqual(
+    retryHarness.comments.map((comment) => comment.body),
+    [reviewCommandBody(NEXT_HEAD)],
+  );
+});
+
+test('a late old-head review cannot erase a confirmed current request during transient or invalid live state', async () => {
+  const currentStates = [
+    pullRequest({
+      head: NEXT_HEAD,
+      labels: [READY_LABEL, REQUESTED_LABEL],
+      mergeable: null,
+      mergeableState: 'unknown',
+    }),
+    pullRequest({
+      head: NEXT_HEAD,
+      labels: [READY_LABEL, REQUESTED_LABEL],
+      mergeableState: 'behind',
+    }),
+    pullRequest({
+      head: NEXT_HEAD,
+      labels: [READY_LABEL, REQUESTED_LABEL],
+      draft: true,
+    }),
+  ];
+
+  for (const current of currentStates) {
+    const harness = makeHarness({
+      eventName: 'pull_request_review',
+      action: 'submitted',
+      pulls: [current],
+      eventPullRequest: pullRequest(),
+      existingComments: [{
+        id: 99,
+        body: reviewCommandBody(NEXT_HEAD),
+        user: { login: 'github-actions[bot]' },
+      }],
+      review: {
+        state: 'approved',
+        commit_id: HEAD,
+        user: { login: 'coderabbitai[bot]' },
+      },
+    });
+    const result = await execute(harness);
+
+    assert.equal(result.status, 'blocked');
+    assert.equal(harness.liveLabels.has(READY_LABEL), false);
+    assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+    assert.deepEqual(
+      harness.comments.map((comment) => comment.body),
+      [reviewCommandBody(NEXT_HEAD)],
+    );
+  }
+});
+
+test('a current-head approval reconciles stray ready state without causing a duplicate', async () => {
+  const currentCommand = {
+    id: 99,
+    body: reviewCommandBody(HEAD),
+    user: { login: 'github-actions[bot]' },
+  };
+  const reviewHarness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+    eventPullRequest: pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] }),
+    existingComments: [currentCommand],
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const reviewResult = await execute(reviewHarness);
+
+  assert.equal(reviewResult.status, 'authorized');
+  assert.equal(reviewHarness.liveLabels.has(READY_LABEL), false);
+  assert.equal(reviewHarness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.deepEqual(
+    reviewHarness.comments.map((comment) => comment.body),
+    [reviewCommandBody(HEAD)],
+  );
+
+  const retryHarness = makeHarness({
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+    eventPullRequest: pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] }),
+    existingComments: reviewHarness.comments,
+  });
+  const retryResult = await execute(retryHarness);
+
+  assert.equal(retryResult.status, 'duplicate');
+  assert.deepEqual(
+    retryHarness.comments.map((comment) => comment.body),
+    [reviewCommandBody(HEAD)],
+  );
+});
+
+test('an uncertain current-head marker read preserves dedupe state for a late old-head review', async () => {
+  const current = pullRequest({
+    head: NEXT_HEAD,
+    labels: [READY_LABEL, REQUESTED_LABEL],
+  });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [current],
+    eventPullRequest: pullRequest(),
+    commentListFailuresAt: [1],
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /marker was preserved to prevent a duplicate paid review/);
+});
+
+test('a failed live confirmation preserves dedupe state for a late old-head review', async () => {
+  const current = pullRequest({
+    head: NEXT_HEAD,
+    labels: [READY_LABEL, REQUESTED_LABEL],
+  });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [current],
+    eventPullRequest: pullRequest(),
+    pullFailuresAt: [2],
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(NEXT_HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /marker was preserved to prevent a duplicate paid review/);
+});
+
+test('an uncertain current-head marker read preserves dedupe state when ready is still attached', async () => {
+  const current = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [current],
+    eventPullRequest: current,
+    commentListFailuresAt: [1],
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /could not verify the gate-recorded command/);
+});
+
 test('a head change during CodeRabbit authorization clears the overtaken gate state', async () => {
   const current = pullRequest({ labels: [REQUESTED_LABEL] });
   const changed = pullRequest({ head: NEXT_HEAD, labels: [REQUESTED_LABEL] });

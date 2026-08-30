@@ -952,6 +952,64 @@ async function blockCodeRabbitAuthorizationAndReset({
   return { status: 'blocked', headSha, reason };
 }
 
+async function blockCodeRabbitAuthorizationAndReconcile({
+  github, owner, repo, pullNumber, core, pullRequest, reason,
+}) {
+  const headSha = pullRequest.head.sha;
+  const labels = pullRequestLabelNames(pullRequest);
+
+  if (!labels.has(REQUESTED_LABEL)) {
+    return blockCodeRabbitAuthorizationAndReset({
+      github, owner, repo, pullNumber, core, headSha, reason,
+    });
+  }
+
+  let markerConfirmed;
+  try {
+    markerConfirmed = await requestedMarkerHasCommand({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      headSha,
+    });
+  } catch (error) {
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    core.setFailed(`CodeRabbit final review evidence is not acceptable: ${reason}; the current-head request could not be verified (${error.message}), so its marker was preserved to prevent a duplicate paid review.`);
+    return { status: 'blocked', headSha, reason };
+  }
+
+  let confirmationPullRequest;
+  try {
+    confirmationPullRequest = (await github.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: pullNumber,
+    })).data;
+  } catch (error) {
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    core.setFailed(`CodeRabbit final review evidence is not acceptable: ${reason}; the current-head request could not be confirmed (${error.message}), so its marker was preserved to prevent a duplicate paid review.`);
+    return { status: 'blocked', headSha, reason };
+  }
+
+  const confirmationLabels = pullRequestLabelNames(confirmationPullRequest);
+  if (confirmationPullRequest.head.sha !== headSha) {
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    core.setFailed(`CodeRabbit final review evidence is not acceptable: ${reason}; the PR head changed again while current-head request state was reconciled, so the requested marker was preserved to prevent a duplicate paid review.`);
+    return { status: 'blocked', headSha: confirmationPullRequest.head.sha, reason };
+  }
+
+  if (markerConfirmed && confirmationLabels.has(REQUESTED_LABEL)) {
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    core.setFailed(`CodeRabbit final review evidence is not acceptable: ${reason}; the confirmed current-head request marker was preserved to prevent a duplicate paid review.`);
+    return { status: 'blocked', headSha, reason };
+  }
+
+  return blockCodeRabbitAuthorizationAndReset({
+    github, owner, repo, pullNumber, core, headSha, reason,
+  });
+}
+
 async function runReviewAuthorization({ github, context, core, config }) {
   const { owner, repo } = context.repo;
   const pullNumber = context.payload.pull_request.number;
@@ -1063,13 +1121,13 @@ async function runReviewAuthorization({ github, context, core, config }) {
   const reasons = [];
 
   if (review.commit_id !== headSha) {
-    return blockCodeRabbitAuthorizationAndReset({
+    return blockCodeRabbitAuthorizationAndReconcile({
       github,
       owner,
       repo,
       pullNumber,
       core,
-      headSha,
+      pullRequest,
       reason: 'CodeRabbit review commit does not match the live PR head',
     });
   }
@@ -1078,9 +1136,6 @@ async function runReviewAuthorization({ github, context, core, config }) {
     pullRequest,
     context.payload.repository.default_branch,
   );
-  if (labels.has(READY_LABEL)) {
-    liveStateReasons.push(`${READY_LABEL} is still attached`);
-  }
   if (liveStateReasons.length > 0) {
     return blockCodeRabbitAuthorizationAndReset({
       github,
@@ -1125,6 +1180,21 @@ async function runReviewAuthorization({ github, context, core, config }) {
     });
   }
 
+  if (labels.has(READY_LABEL) && !commandVerificationFailed) {
+    if (!commandRecorded || !labels.has(REQUESTED_LABEL)) {
+      return blockCodeRabbitAuthorizationAndReset({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        headSha,
+        reason: `${READY_LABEL} is still attached without a confirmed current-head request`,
+      });
+    }
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+  }
+
   try {
     reasons.push(...await collectCheckBlockers({
       github,
@@ -1145,20 +1215,11 @@ async function runReviewAuthorization({ github, context, core, config }) {
       pull_number: pullNumber,
     })).data;
     const confirmationLabels = pullRequestLabelNames(confirmationPullRequest);
-    const confirmationReasons = validateAuthorizationState(
+    const confirmationStateReasons = validateAuthorizationState(
       confirmationPullRequest,
       context.payload.repository.default_branch,
     );
-    if (confirmationPullRequest.head.sha !== headSha) {
-      confirmationReasons.push('pull request head changed during CodeRabbit review authorization');
-    }
-    if (!confirmationLabels.has(REQUESTED_LABEL)) {
-      confirmationReasons.push(`${REQUESTED_LABEL} is no longer attached`);
-    }
-    if (confirmationLabels.has(READY_LABEL)) {
-      confirmationReasons.push(`${READY_LABEL} is attached`);
-    }
-    if (confirmationReasons.length > 0) {
+    if (confirmationStateReasons.length > 0) {
       return blockCodeRabbitAuthorizationAndReset({
         github,
         owner,
@@ -1166,7 +1227,40 @@ async function runReviewAuthorization({ github, context, core, config }) {
         pullNumber,
         core,
         headSha: confirmationPullRequest.head.sha,
-        reason: confirmationReasons.join('; '),
+        reason: confirmationStateReasons.join('; '),
+      });
+    }
+    if (confirmationPullRequest.head.sha !== headSha) {
+      return blockCodeRabbitAuthorizationAndReconcile({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        pullRequest: confirmationPullRequest,
+        reason: 'pull request head changed during CodeRabbit review authorization',
+      });
+    }
+    if (!confirmationLabels.has(REQUESTED_LABEL)) {
+      return blockCodeRabbitAuthorizationAndReset({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        headSha,
+        reason: `${REQUESTED_LABEL} is no longer attached`,
+      });
+    }
+    if (confirmationLabels.has(READY_LABEL)) {
+      return blockCodeRabbitAuthorizationAndReconcile({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        pullRequest: confirmationPullRequest,
+        reason: `${READY_LABEL} was attached during CodeRabbit review authorization`,
       });
     }
   } catch (error) {
