@@ -191,16 +191,19 @@ Notes:
 
 `/codex-review` NEVER pushes, merges, or deploys — it is a read gate. When the verdict is
 clean, hand back to the landing flow in `AGENTS.md`: **push a branch → open a PR → finish checks →
-freeze the candidate commit → trigger and resolve one CodeRabbit review → merge with
+freeze the candidate commit → apply `ready-for-coderabbit` → resolve one CodeRabbit review → merge with
 `--match-head-commit <reviewed-head-sha>`**. Direct pushes to
 `main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
 
-**CodeRabbit (standing policy, timing updated 2026-08-28):** automatic reviews are disabled. Finish
-the Codex review first, bring the branch current and green, freeze the release-candidate commit,
-record its head SHA, then post exactly `@coderabbitai review` on the PR. Read that review and fix any
-real issue before merging; nitpicks may be dismissed with a one-line reason. A fix or base update
-that changes the commit requires restarted checks, a refreshed exact-HEAD Codex proof when the
-corrected diff is Codex-worthy, a newly frozen and recorded SHA, and one follow-up review. Never use
+**CodeRabbit (standing policy, automation updated 2026-08-30):** automatic reviews are disabled.
+Finish the Codex review first, bring the branch current and green, freeze the release-candidate
+commit, record its head SHA, then apply `ready-for-coderabbit`. The trusted default-branch workflow
+rechecks the exact head and PR/check state, records `coderabbit-review-requested`, and posts exactly
+`@coderabbitai review` once. If it fails, it removes the ready label and posts nothing; correct the
+named blocker and relabel. Read the review and fix any real issue before merging; nitpicks may be
+dismissed with a one-line reason. A fix or base update that changes the commit clears the workflow
+labels and requires restarted checks, a refreshed exact-HEAD Codex proof when the corrected diff is
+Codex-worthy, a newly frozen and recorded SHA, and one follow-up ready-label trigger. Never use
 `@coderabbitai resume`, and reserve `@coderabbitai full review` for a deliberately justified
 complete reread. GitHub requires one current formal approval, dismisses stale approvals after a
 new commit, and requires approval from someone other than the last pusher. Immediately before

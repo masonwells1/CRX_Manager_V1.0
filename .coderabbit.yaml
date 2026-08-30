@@ -75,9 +75,10 @@ reviews:
   # enforces this rule, are parked in PR #441.
 
   auto_review:
-    # Do not spend a review on PR creation or work-in-progress pushes. Post
-    # `@coderabbitai review` once the candidate is frozen, checks are green, and
-    # the separate Codex review is clean.
+    # Do not spend a review on PR creation or work-in-progress pushes. Once the
+    # candidate is frozen, checks are green, and the separate Codex review is
+    # clean, apply `ready-for-coderabbit`. The trusted GitHub workflow validates
+    # that exact head and posts `@coderabbitai review` once.
     enabled: false
     auto_incremental_review: false
     drafts: false

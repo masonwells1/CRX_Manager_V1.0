@@ -313,9 +313,11 @@ gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews,comments
 Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means no
 CodeRabbit review was submitted. Say so rather than treating green as clean. Since 2026-08-28,
 GitHub requires a current formal approval, so a misleading green CodeRabbit status cannot unlock
-the merge by itself: the missing approval keeps the PR blocked. Keep the candidate frozen and
-green, then re-request the failed final review with exactly `@coderabbitai review`; on #411 that
-turned the failure into a real 6-finding review. Never merge from the check row alone — confirm an
+the merge by itself: the missing approval keeps the PR blocked. Since 2026-08-30 the normal trigger
+is the `ready-for-coderabbit` label, and `coderabbit-review-requested` deliberately prevents an
+accidental duplicate. If CodeRabbit itself confirms a delivery failure or rate limit on the same
+frozen head, deliberately remove `coderabbit-review-requested` and reapply `ready-for-coderabbit`;
+that is a paid retry, not the normal path. Never merge from the check row alone — confirm an
 `APPROVED` CodeRabbit review whose commit matches the PR head.
 
 ---
