@@ -119,6 +119,17 @@ test('the workflow enforces the trusted script after it exists on the default br
   assert.match(result.gateOutput, /^available=true$/m);
 });
 
+test('the workflow runs every subscribed label event through the trusted gate', () => {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
+    'utf8',
+  );
+  const job = workflow.slice(workflow.indexOf('  final-review-gate:'));
+
+  assert.doesNotMatch(job, /github\.event\.action\s*!=\s*'labeled'/);
+  assert.doesNotMatch(job, /github\.event\.label\.name\s*==\s*'ready-for-coderabbit'/);
+});
+
 function completedCheck(name, conclusion = 'success') {
   return {
     id: 1,
@@ -767,6 +778,95 @@ test('a non-CodeRabbit review preserves a confirmed current-head request', async
   const result = await execute(harness);
 
   assert.equal(result.status, 'duplicate');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.comments.length, 1);
+});
+
+test('an unrelated label event that displaces a queued synchronize reset clears stale gate state', async () => {
+  const changed = pullRequest({ head: NEXT_HEAD, labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    action: 'labeled',
+    eventLabel: 'unrelated-label',
+    pulls: [changed],
+    eventPullRequest: pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] }),
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'reset');
+  assert.equal(harness.liveLabels.size, 0);
+  assert.match(result.reason, /labeled\.unrelated-label\.stale_state/);
+});
+
+test('an unrelated label event preserves a confirmed current-head request', async () => {
+  const current = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    action: 'labeled',
+    eventLabel: 'unrelated-label',
+    pulls: [current, current],
+    eventPullRequest: current,
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'duplicate');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.comments.length, 1);
+});
+
+test('an ordinary unrelated label event with no gate state is ignored', async () => {
+  const current = pullRequest({ labels: [] });
+  const harness = makeHarness({
+    action: 'unlabeled',
+    eventLabel: 'unrelated-label',
+    pulls: [current],
+    eventPullRequest: current,
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'ignored');
+  assert.equal(result.reason, 'pull_request_target.unlabeled.unrelated-label.no_gate_state');
+});
+
+test('a stale unrelated-label payload cannot lose dedupe state after the first live read fails', async () => {
+  const current = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    action: 'labeled',
+    eventLabel: 'unrelated-label',
+    // The event queued before the active gate recorded its live marker.
+    eventPullRequest: pullRequest({ labels: [] }),
+    pulls: [current],
+    pullFailuresAt: [1],
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      created_at: new Date().toISOString(),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+
+  const failedReconciliation = await execute(harness);
+  assert.equal(failedReconciliation.status, 'blocked');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.comments.length, 1);
+  assert.match(harness.failures[0], /requested marker was preserved/);
+
+  await harness.github.rest.issues.addLabels({ labels: [READY_LABEL] });
+  harness.context.payload.label = { name: READY_LABEL };
+  const retry = await execute(harness);
+
+  assert.equal(retry.status, 'duplicate');
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.equal(harness.comments.length, 1);

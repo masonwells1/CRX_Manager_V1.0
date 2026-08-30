@@ -23,9 +23,6 @@ concurrency:
 
 jobs:
   final-review-gate:
-    if: >-
-      github.event.action != 'labeled' ||
-      github.event.label.name == 'ready-for-coderabbit'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

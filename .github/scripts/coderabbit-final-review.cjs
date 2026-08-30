@@ -309,6 +309,101 @@ async function requestedMarkerHasCommand({ github, owner, repo, pullNumber, head
   return comments.some((comment) => isActionsReviewComment(comment, headSha));
 }
 
+async function reconcileLabelEvent({
+  github, owner, repo, pullNumber, core, defaultBranch, action, label,
+}) {
+  const reasonPrefix = `pull_request_target.${action}.${normalize(label) || 'unknown_label'}`;
+  const pullRequest = (await github.rest.pulls.get({
+    owner,
+    repo,
+    pull_number: pullNumber,
+  })).data;
+  const headSha = pullRequest.head.sha;
+  const labels = pullRequestLabelNames(pullRequest);
+
+  if (labels.has(REQUESTED_LABEL)) {
+    const stateReasons = validateAuthorizationState(pullRequest, defaultBranch);
+    if (stateReasons.length > 0) {
+      return resetCandidate({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        reason: `${reasonPrefix}.invalid_live_state: ${stateReasons.join('; ')}`,
+      });
+    }
+
+    let markerConfirmed = false;
+    try {
+      markerConfirmed = await requestedMarkerHasCommand({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        headSha,
+      });
+      const confirmationPullRequest = (await github.rest.pulls.get({
+        owner,
+        repo,
+        pull_number: pullNumber,
+      })).data;
+      const confirmationLabels = pullRequestLabelNames(confirmationPullRequest);
+      const confirmationReasons = validateAuthorizationState(
+        confirmationPullRequest,
+        defaultBranch,
+      );
+      if (confirmationPullRequest.head.sha !== headSha) {
+        confirmationReasons.push('pull request head changed during label-event reconciliation');
+      }
+      if (!confirmationLabels.has(REQUESTED_LABEL)) {
+        confirmationReasons.push(`${REQUESTED_LABEL} is no longer attached`);
+      }
+      if (confirmationReasons.length > 0) {
+        return resetCandidate({
+          github,
+          owner,
+          repo,
+          pullNumber,
+          core,
+          reason: `${reasonPrefix}.changed_live_state: ${confirmationReasons.join('; ')}`,
+        });
+      }
+    } catch (error) {
+      await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+      core.setFailed(`Could not reconcile requested state after a label event (${error.message}); merge authorization was invalidated and the requested marker was preserved for deduplication.`);
+      return { status: 'blocked', headSha, reason: error.message };
+    }
+
+    if (markerConfirmed) {
+      await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+      core.notice(`Preserved the confirmed CodeRabbit request for ${headSha} after a label event.`);
+      return { status: 'duplicate', headSha };
+    }
+    return resetCandidate({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      reason: `${reasonPrefix}.stale_state`,
+    });
+  }
+
+  if (labels.has(READY_LABEL)) {
+    return resetCandidate({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      reason: `${reasonPrefix}.unconfirmed_ready_state`,
+    });
+  }
+
+  return { status: 'ignored', reason: `${reasonPrefix}.no_gate_state` };
+}
+
 async function collectCheckBlockers({ github, owner, repo, headSha, config, core }) {
   const [checkRuns, statuses] = await Promise.all([
     github.paginate(
@@ -438,7 +533,26 @@ async function runGate({ github, context, core, config, attemptState }) {
     return { status: 'ignored', reason: 'pull_request_target.edited.no_gate_state' };
   }
 
-  if (action !== 'labeled' || normalize(context.payload.label?.name) !== READY_LABEL) {
+  const eventLabel = normalize(context.payload.label?.name);
+  const isReadyLabelEvent = action === 'labeled' && eventLabel === READY_LABEL;
+  if ((action === 'labeled' || action === 'unlabeled') && !isReadyLabelEvent) {
+    // This event may have queued before an in-flight gate recorded its marker.
+    // Preserve live dedupe state if the first reconciliation read fails rather
+    // than trusting the older event payload and enabling a second paid command.
+    attemptState.requestedMarkerPreexisted = true;
+    return reconcileLabelEvent({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      defaultBranch: context.payload.repository.default_branch,
+      action,
+      label: eventLabel,
+    });
+  }
+
+  if (!isReadyLabelEvent) {
     return { status: 'ignored', reason: `pull_request_target.${action}` };
   }
 
