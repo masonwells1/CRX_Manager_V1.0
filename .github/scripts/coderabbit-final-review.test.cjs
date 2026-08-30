@@ -17,9 +17,11 @@ const REQUIRED_CHECKS = ['foundation', 'Vercel'];
 
 function completedCheck(name, conclusion = 'success') {
   return {
+    id: 1,
     name,
     status: 'completed',
     conclusion,
+    created_at: '2026-08-30T11:59:00Z',
     completed_at: '2026-08-30T12:00:00Z',
   };
 }
@@ -50,6 +52,7 @@ function makeHarness({
   checkRuns = [completedCheck('foundation')],
   statuses = [commitStatus('Vercel'), commitStatus('CodeRabbit', 'pending')],
   commentFailure = null,
+  requestedLabelFailure = null,
   existingComments = [],
   checkRunsSequence = null,
   statusesSequence = null,
@@ -81,15 +84,23 @@ function makeHarness({
         },
       },
       issues: {
-        addLabels: async ({ labels }) => labels.forEach((label) => {
-          liveLabels.add(label);
-          timeline.push({
-            event: 'labeled',
-            label: { name: label },
-            actor: { login: 'github-actions[bot]' },
-            created_at: new Date().toISOString(),
+        addLabels: async ({ labels }) => {
+          if (labels.includes(REQUESTED_LABEL) && requestedLabelFailure === 'definite') {
+            throw new Error('label rejected');
+          }
+          labels.forEach((label) => {
+            liveLabels.add(label);
+            timeline.push({
+              event: 'labeled',
+              label: { name: label },
+              actor: { login: 'github-actions[bot]' },
+              created_at: new Date().toISOString(),
+            });
           });
-        }),
+          if (labels.includes(REQUESTED_LABEL) && requestedLabelFailure === 'ambiguous') {
+            throw new Error('connection closed after label write');
+          }
+        },
         createComment: async ({ body }) => {
           if (commentFailure === 'ambiguous') {
             comments.push({
@@ -292,6 +303,50 @@ test('a check rerun that starts during the quiet confirmation blocks the request
   assert.deepEqual(harness.comments, []);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
   assert.match(harness.failures[0], /foundation/);
+});
+
+test('a newer overlapping rerun wins even if an older run completes later', () => {
+  const blockers = evaluateChecks({
+    checkRuns: [
+      {
+        id: 100,
+        name: 'foundation',
+        status: 'completed',
+        conclusion: 'success',
+        created_at: '2026-08-30T12:00:00Z',
+        started_at: '2026-08-30T12:00:01Z',
+        completed_at: '2026-08-30T12:10:00Z',
+      },
+      {
+        id: 101,
+        name: 'foundation',
+        status: 'in_progress',
+        conclusion: null,
+        created_at: '2026-08-30T12:05:00Z',
+        started_at: '2026-08-30T12:05:01Z',
+        completed_at: null,
+      },
+    ],
+    statuses: [commitStatus('Vercel')],
+    requiredChecks: REQUIRED_CHECKS,
+  });
+
+  assert.match(blockers.join('\n'), /foundation: in_progress\/no conclusion/);
+});
+
+test('a failed requested-marker write clears both workflow labels and posts no command', async (t) => {
+  for (const failureMode of ['definite', 'ambiguous']) {
+    await t.test(failureMode, async () => {
+      const harness = makeHarness({ requestedLabelFailure: failureMode });
+      const result = await execute(harness);
+
+      assert.equal(result.status, 'blocked');
+      assert.deepEqual(harness.comments, []);
+      assert.equal(harness.liveLabels.has(READY_LABEL), false);
+      assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+      assert.match(harness.failures[0], /could not record the review-request marker/);
+    });
+  }
 });
 
 test('drafts, auto-merge, branch state, stale heads, and low-permission actors fail closed', async (t) => {

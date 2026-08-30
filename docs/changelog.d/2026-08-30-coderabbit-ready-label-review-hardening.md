@@ -7,6 +7,10 @@
 - Added regression cases that prove the default settling wait is invoked and that temporary unknown
   mergeability recovers before the gate evaluates the candidate.
 - Updated the canonical landing sentence to name the exact `ready-for-coderabbit` label.
+- Ordered overlapping same-name check reruns by creation time so a newer in-progress rerun cannot
+  be hidden by an older run that finishes later.
+- Cleared both workflow labels when recording the requested marker fails, including ambiguous
+  failures after GitHub may have accepted the label.
 
-Verification: all 24 focused final-review gate cases, lint, typecheck, production build, workflow
+Verification: all 28 focused final-review gate cases, lint, typecheck, production build, workflow
 parity, and documentation checks passed after the review fixes.

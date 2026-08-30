@@ -29,9 +29,14 @@ function newestByName(items, nameKey, dateKeys) {
     const timestamp = dateKeys
       .map((key) => item[key])
       .find(Boolean) || '';
+    const id = Number(item.id || 0);
     const existing = newest.get(name);
-    if (!existing || timestamp > existing.timestamp) {
-      newest.set(name, { item, timestamp });
+    if (
+      !existing
+      || timestamp > existing.timestamp
+      || (timestamp === existing.timestamp && id > existing.id)
+    ) {
+      newest.set(name, { item, timestamp, id });
     }
   }
 
@@ -41,13 +46,12 @@ function newestByName(items, nameKey, dateKeys) {
 function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [] }) {
   const ignored = new Set(ignoredChecks.map(normalize));
   const checksByName = newestByName(checkRuns, 'name', [
-    'completed_at',
-    'started_at',
     'created_at',
+    'started_at',
   ]);
   const statusesByName = newestByName(statuses, 'context', [
-    'updated_at',
     'created_at',
+    'updated_at',
   ]);
   const blockers = [];
 
@@ -366,12 +370,29 @@ async function run({ github, context, core, config }) {
     });
   }
   const preexistingCommentIds = new Set(commentsBeforeAttempt.map((comment) => comment.id));
-  await github.rest.issues.addLabels({
-    owner,
-    repo,
-    issue_number: pullNumber,
-    labels: [REQUESTED_LABEL],
-  });
+  try {
+    await github.rest.issues.addLabels({
+      owner,
+      repo,
+      issue_number: pullNumber,
+      labels: [REQUESTED_LABEL],
+    });
+  } catch (markerError) {
+    let cleanupNote = '';
+    try {
+      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+    } catch (cleanupError) {
+      cleanupNote = `; requested-marker cleanup also failed (${cleanupError.message})`;
+    }
+    return blockCandidate({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      reason: `could not record the review-request marker (${markerError.message})${cleanupNote}`,
+    });
+  }
 
   const [finalPullRequest, finalCheckBlockers] = await Promise.all([
     getPullRequestWithResolvedMergeability({
