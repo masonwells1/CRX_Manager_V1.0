@@ -937,6 +937,21 @@ async function runGate({ github, context, core, config, attemptState }) {
   return { status: 'requested', headSha: expectedHeadSha };
 }
 
+async function blockCodeRabbitAuthorizationAndReset({
+  github, owner, repo, pullNumber, core, headSha, reason,
+}) {
+  await resetCandidate({
+    github,
+    owner,
+    repo,
+    pullNumber,
+    core,
+    reason: `pull_request_review.coderabbit.stale_state: ${reason}`,
+  });
+  core.setFailed(`CodeRabbit final review evidence is not acceptable: ${reason}; stale gate state was reset.`);
+  return { status: 'blocked', headSha, reason };
+}
+
 async function runReviewAuthorization({ github, context, core, config }) {
   const { owner, repo } = context.repo;
   const pullNumber = context.payload.pull_request.number;
@@ -1047,18 +1062,44 @@ async function runReviewAuthorization({ github, context, core, config }) {
   const labels = pullRequestLabelNames(pullRequest);
   const reasons = [];
 
+  if (review.commit_id !== headSha) {
+    return blockCodeRabbitAuthorizationAndReset({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      headSha,
+      reason: 'CodeRabbit review commit does not match the live PR head',
+    });
+  }
+
+  const liveStateReasons = validateAuthorizationState(
+    pullRequest,
+    context.payload.repository.default_branch,
+  );
+  if (labels.has(READY_LABEL)) {
+    liveStateReasons.push(`${READY_LABEL} is still attached`);
+  }
+  if (liveStateReasons.length > 0) {
+    return blockCodeRabbitAuthorizationAndReset({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      headSha,
+      reason: liveStateReasons.join('; '),
+    });
+  }
+
   if (context.payload.action !== 'submitted' || normalize(review.state) !== 'approved') {
     reasons.push(`CodeRabbit review is ${normalize(review.state) || context.payload.action}`);
   }
-  if (review.commit_id !== headSha) reasons.push('CodeRabbit approval does not match the live PR head');
-  reasons.push(...validateAuthorizationState(
-    pullRequest,
-    context.payload.repository.default_branch,
-  ));
   if (!labels.has(REQUESTED_LABEL)) reasons.push(`${REQUESTED_LABEL} is not attached`);
-  if (labels.has(READY_LABEL)) reasons.push(`${READY_LABEL} is still attached`);
 
   let commandRecorded = false;
+  let commandVerificationFailed = false;
   try {
     commandRecorded = await requestedMarkerHasCommand({
       github,
@@ -1068,10 +1109,20 @@ async function runReviewAuthorization({ github, context, core, config }) {
       headSha,
     });
   } catch (error) {
+    commandVerificationFailed = true;
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
     reasons.push(`could not verify the gate-recorded command (${error.message})`);
   }
-  if (!commandRecorded && !reasons.some((reason) => reason.startsWith('could not verify'))) {
-    reasons.push('no gate command marker records the live PR head');
+  if (!commandRecorded && !commandVerificationFailed) {
+    return blockCodeRabbitAuthorizationAndReset({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      headSha,
+      reason: 'no gate command marker records the live PR head',
+    });
   }
 
   try {
@@ -1085,6 +1136,42 @@ async function runReviewAuthorization({ github, context, core, config }) {
     }));
   } catch (error) {
     reasons.push(`could not revalidate reported checks (${error.message})`);
+  }
+
+  try {
+    const confirmationPullRequest = (await github.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: pullNumber,
+    })).data;
+    const confirmationLabels = pullRequestLabelNames(confirmationPullRequest);
+    const confirmationReasons = validateAuthorizationState(
+      confirmationPullRequest,
+      context.payload.repository.default_branch,
+    );
+    if (confirmationPullRequest.head.sha !== headSha) {
+      confirmationReasons.push('pull request head changed during CodeRabbit review authorization');
+    }
+    if (!confirmationLabels.has(REQUESTED_LABEL)) {
+      confirmationReasons.push(`${REQUESTED_LABEL} is no longer attached`);
+    }
+    if (confirmationLabels.has(READY_LABEL)) {
+      confirmationReasons.push(`${READY_LABEL} is attached`);
+    }
+    if (confirmationReasons.length > 0) {
+      return blockCodeRabbitAuthorizationAndReset({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        headSha: confirmationPullRequest.head.sha,
+        reason: confirmationReasons.join('; '),
+      });
+    }
+  } catch (error) {
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    reasons.push(`could not confirm the final live PR state (${error.message})`);
   }
 
   if (reasons.length > 0) {

@@ -682,7 +682,81 @@ test('a commit after the final snapshot cannot inherit the old gate authorizatio
   const result = await execute(harness);
 
   assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.size, 0);
   assert.match(harness.failures[0], /no gate command marker records the live PR head/);
+});
+
+test('an old-head CodeRabbit review that replaces a queued synchronize reset clears stale gate state', async () => {
+  const changed = pullRequest({ head: NEXT_HEAD, labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [changed],
+    eventPullRequest: pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] }),
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.size, 0);
+  assert.match(harness.failures[0], /review commit does not match the live PR head/);
+});
+
+test('a head change during CodeRabbit authorization clears the overtaken gate state', async () => {
+  const current = pullRequest({ labels: [REQUESTED_LABEL] });
+  const changed = pullRequest({ head: NEXT_HEAD, labels: [REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [current, changed],
+    eventPullRequest: current,
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.size, 0);
+  assert.match(harness.failures[0], /head changed during CodeRabbit review authorization/);
+});
+
+test('an uncertain CodeRabbit marker read preserves requested dedupe state', async () => {
+  const current = pullRequest({ labels: [REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [current],
+    eventPullRequest: current,
+    commentListFailuresAt: [1],
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /could not verify the gate-recorded command/);
 });
 
 test('an ordinary non-CodeRabbit review with no gate state is ignored', async () => {
