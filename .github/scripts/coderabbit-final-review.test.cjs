@@ -1,6 +1,10 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 const {
   READY_LABEL,
@@ -27,6 +31,93 @@ const REQUIRED_CHECKS = [
     creator: 'vercel[bot]',
   },
 ];
+
+function trustedGateDetectionScript() {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
+    'utf8',
+  );
+  const marker = '      - name: Detect the trusted default-branch gate implementation';
+  const start = workflow.indexOf(marker);
+  assert.notEqual(start, -1);
+  const nextStep = workflow.indexOf('\n      - name:', start + marker.length);
+  const section = workflow.slice(start, nextStep === -1 ? undefined : nextStep);
+  const runBlock = section.match(/\n        run: \|\r?\n([\s\S]+)$/);
+  assert.ok(runBlock);
+  return runBlock[1]
+    .split(/\r?\n/)
+    .map((line) => line.startsWith('          ') ? line.slice(10) : line)
+    .join('\n');
+}
+
+function executeTrustedGateDetection({ pullNumber, baseSha, scriptExists }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'coderabbit-final-bootstrap-'));
+  const output = path.join(root, 'github-output.txt');
+  if (scriptExists) {
+    const scriptDirectory = path.join(root, '.github', 'scripts');
+    fs.mkdirSync(scriptDirectory, { recursive: true });
+    fs.writeFileSync(path.join(scriptDirectory, 'coderabbit-final-review.cjs'), 'module.exports = {};\n');
+  }
+
+  try {
+    const windowsGitBash = 'C:\\Program Files\\Git\\bin\\bash.exe';
+    const bash = process.platform === 'win32' && fs.existsSync(windowsGitBash)
+      ? windowsGitBash
+      : 'bash';
+    const result = spawnSync(bash, ['-c', trustedGateDetectionScript()], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        BOOTSTRAP_PR_NUMBER: String(pullNumber),
+        BOOTSTRAP_BASE_SHA: baseSha,
+        GITHUB_OUTPUT: output,
+      },
+    });
+    return {
+      ...result,
+      gateOutput: fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : '',
+    };
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('the workflow no-ops only for the immutable introducing-PR bootstrap', () => {
+  const result = executeTrustedGateDetection({
+    pullNumber: 516,
+    baseSha: '9c9d6d96ec3586eada89e6ab7fd3eba71109712d',
+    scriptExists: false,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.gateOutput, /^available=false$/m);
+});
+
+test('the workflow fails closed if the trusted script is later absent', () => {
+  const mismatchedIdentities = [
+    { pullNumber: 517, baseSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+    { pullNumber: 516, baseSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+    { pullNumber: 517, baseSha: '9c9d6d96ec3586eada89e6ab7fd3eba71109712d' },
+  ];
+
+  for (const identity of mismatchedIdentities) {
+    const result = executeTrustedGateDetection({ ...identity, scriptExists: false });
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.gateOutput, /^available=false$/m);
+  }
+});
+
+test('the workflow enforces the trusted script after it exists on the default branch', () => {
+  const result = executeTrustedGateDetection({
+    pullNumber: 517,
+    baseSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    scriptExists: true,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.gateOutput, /^available=true$/m);
+});
 
 function completedCheck(name, conclusion = 'success') {
   return {

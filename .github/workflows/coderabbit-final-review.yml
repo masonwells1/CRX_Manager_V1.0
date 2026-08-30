@@ -35,7 +35,24 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
+      - name: Detect the trusted default-branch gate implementation
+        id: trusted-gate
+        shell: bash
+        env:
+          BOOTSTRAP_PR_NUMBER: ${{ github.event.pull_request.number }}
+          BOOTSTRAP_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ -f .github/scripts/coderabbit-final-review.cjs ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$BOOTSTRAP_PR_NUMBER" == "516" && "$BOOTSTRAP_BASE_SHA" == "9c9d6d96ec3586eada89e6ab7fd3eba71109712d" ]]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Trusted gate script is absent only for the immutable PR #516 bootstrap; event is a no-op."
+          else
+            echo "::error::Trusted default-branch gate script is missing outside the authorized bootstrap identity."
+            exit 1
+          fi
       - name: Reset, request, or validate the one-shot final review
+        if: steps.trusted-gate.outputs.available == 'true'
         uses: actions/github-script@v8
         with:
           script: |
