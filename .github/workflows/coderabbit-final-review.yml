@@ -14,9 +14,9 @@ permissions:
 
 concurrency:
   group: coderabbit-final-review-${{ github.repository_id }}-${{ github.event.pull_request.number }}
-  # A new commit cancels an in-flight ready-label run before it can spend a
-  # review on a candidate that is no longer frozen.
-  cancel-in-progress: true
+  # Let an in-flight run finish its post-comment stale-head cleanup before a
+  # queued synchronize reset removes the workflow labels.
+  cancel-in-progress: false
 
 jobs:
   final-review-gate:

@@ -168,9 +168,11 @@ async function blockCandidate({ github, owner, repo, pullNumber, core, reason })
 
 function validatePullRequest(pullRequest, defaultBranch, expectedHeadSha) {
   const reasons = [];
+  const labels = pullRequestLabelNames(pullRequest);
 
   if (pullRequest.state !== 'open') reasons.push('pull request is not open');
   if (pullRequest.draft) reasons.push('pull request is still a draft');
+  if (!labels.has(READY_LABEL)) reasons.push(`${READY_LABEL} is no longer attached`);
   if (pullRequest.base.ref !== defaultBranch) {
     reasons.push(`base branch is ${pullRequest.base.ref}, not ${defaultBranch}`);
   }
@@ -287,7 +289,7 @@ async function collectCheckBlockers({ github, owner, repo, headSha, config }) {
   });
 }
 
-async function run({ github, context, core, config }) {
+async function runGate({ github, context, core, config }) {
   const { owner, repo } = context.repo;
   const action = context.payload.action;
   const pullNumber = context.payload.pull_request.number;
@@ -480,24 +482,43 @@ async function run({ github, context, core, config }) {
     });
   }
 
-  const [finalPullRequest, finalCheckBlockers] = await Promise.all([
-    getPullRequestWithResolvedMergeability({
+  let finalPullRequest;
+  let finalCheckBlockers;
+  try {
+    [finalPullRequest, finalCheckBlockers] = await Promise.all([
+      getPullRequestWithResolvedMergeability({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        attempts: mergeabilityPollAttempts,
+        pollMs: mergeabilityPollMs,
+        settle,
+      }),
+      collectCheckBlockers({
+        github,
+        owner,
+        repo,
+        headSha: expectedHeadSha,
+        config,
+      }),
+    ]);
+  } catch (finalSnapshotError) {
+    let cleanupNote = '';
+    try {
+      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+    } catch (cleanupError) {
+      cleanupNote = `; requested-marker cleanup also failed (${cleanupError.message})`;
+    }
+    return blockCandidate({
       github,
       owner,
       repo,
       pullNumber,
-      attempts: mergeabilityPollAttempts,
-      pollMs: mergeabilityPollMs,
-      settle,
-    }),
-    collectCheckBlockers({
-      github,
-      owner,
-      repo,
-      headSha: expectedHeadSha,
-      config,
-    }),
-  ]);
+      core,
+      reason: `could not complete the final candidate snapshot (${finalSnapshotError.message})${cleanupNote}`,
+    });
+  }
   const finalReasons = validatePullRequest(
     finalPullRequest,
     context.payload.repository.default_branch,
@@ -557,24 +578,48 @@ async function run({ github, context, core, config }) {
     });
   }
 
-  const [postCommentPullRequest, postCommentCheckBlockers] = await Promise.all([
-    getPullRequestWithResolvedMergeability({
+  let postCommentPullRequest;
+  let postCommentCheckBlockers;
+  try {
+    [postCommentPullRequest, postCommentCheckBlockers] = await Promise.all([
+      getPullRequestWithResolvedMergeability({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        attempts: mergeabilityPollAttempts,
+        pollMs: mergeabilityPollMs,
+        settle,
+      }),
+      collectCheckBlockers({
+        github,
+        owner,
+        repo,
+        headSha: expectedHeadSha,
+        config,
+      }),
+    ]);
+  } catch (postCommentSnapshotError) {
+    let cleanupNote = '';
+    try {
+      await github.rest.issues.deleteComment({
+        owner,
+        repo,
+        comment_id: createdComment.id,
+      });
+      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+    } catch (cleanupError) {
+      cleanupNote = `; raced-command cleanup also failed (${cleanupError.message})`;
+    }
+    return blockCandidate({
       github,
       owner,
       repo,
       pullNumber,
-      attempts: mergeabilityPollAttempts,
-      pollMs: mergeabilityPollMs,
-      settle,
-    }),
-    collectCheckBlockers({
-      github,
-      owner,
-      repo,
-      headSha: expectedHeadSha,
-      config,
-    }),
-  ]);
+      core,
+      reason: `could not complete the post-comment candidate snapshot (${postCommentSnapshotError.message})${cleanupNote}`,
+    });
+  }
   const postCommentReasons = validatePullRequest(
     postCommentPullRequest,
     context.payload.repository.default_branch,
@@ -604,6 +649,52 @@ async function run({ github, context, core, config }) {
   await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
   core.notice(`Requested one CodeRabbit review for frozen head ${expectedHeadSha}.`);
   return { status: 'requested', headSha: expectedHeadSha };
+}
+
+async function run(args) {
+  try {
+    return await runGate(args);
+  } catch (unexpectedError) {
+    const {
+      github, context, core,
+    } = args;
+    const { owner, repo } = context.repo;
+    const pullNumber = context.payload.pull_request.number;
+    const headSha = context.payload.pull_request.head.sha;
+    let verificationSucceeded = false;
+    let commandCommentExists = false;
+
+    try {
+      commandCommentExists = await requestedMarkerHasCommand({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        headSha,
+      });
+      verificationSucceeded = true;
+    } catch (verificationError) {
+      core.warning(`Could not verify recovery after an unexpected gate failure: ${verificationError.message}`);
+    }
+
+    if (commandCommentExists) {
+      await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+      core.warning(`Recovered an exact review command after an unexpected gate failure: ${unexpectedError.message}`);
+      return {
+        status: 'requested', headSha, recovered: true,
+      };
+    }
+
+    if (verificationSucceeded) {
+      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+    }
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    const markerNote = verificationSucceeded
+      ? 'workflow labels were cleared for a deliberate retry'
+      : 'the requested marker was preserved until a retry can verify whether a command landed';
+    core.setFailed(`CodeRabbit final review gate failed unexpectedly (${unexpectedError.message}); ${markerNote}`);
+    return { status: 'blocked', reason: unexpectedError.message };
+  }
 }
 
 module.exports = {

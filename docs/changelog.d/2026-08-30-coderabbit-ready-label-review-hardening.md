@@ -15,8 +15,13 @@
   same-name results with duplicate or untrusted provenance.
 - Required exact success for the CI, SQL, and Vercel gates while retaining neutral/skipped support
   only for optional reported checks.
-- Made new-commit reset events cancel an in-flight final-review run before it can post its command;
-  the post-comment head check remains as recovery for the service boundary after GitHub accepts it.
+- Queued new-commit reset events behind an in-flight gate so its post-comment stale-head cleanup can
+  finish before the reset removes workflow labels.
+- Required `ready-for-coderabbit` to remain attached at every live pull-request recheck, allowing a
+  maintainer to cancel a queued request during the quiet period.
+- Added marker and raced-command cleanup when final or post-comment GitHub API snapshots fail.
+- Added a top-level recovery boundary so any other unexpected API failure either preserves a
+  confirmed exact command for deduplication or clears the ready state for a deliberate retry.
 
 Verification: all focused final-review gate cases, lint, typecheck, production build, workflow
 parity, and documentation checks passed after the review fixes.

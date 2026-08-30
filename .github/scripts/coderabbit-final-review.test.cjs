@@ -79,6 +79,8 @@ function makeHarness({
   checkRunsSequence = null,
   statusesSequence = null,
   resolvedWorkflowPath = '.github/workflows/ci.yml',
+  liveLabelSequence = null,
+  pullFailuresAt = [],
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -90,7 +92,18 @@ function makeHarness({
   let statusesIndex = 0;
 
   function currentPull() {
-    const source = pulls[Math.min(pullIndex++, pulls.length - 1)];
+    const callNumber = pullIndex + 1;
+    if (pullFailuresAt.includes(callNumber)) {
+      pullIndex += 1;
+      throw new Error(`pull snapshot ${callNumber} failed`);
+    }
+    const source = pulls[Math.min(pullIndex, pulls.length - 1)];
+    if (liveLabelSequence) {
+      const snapshot = liveLabelSequence[Math.min(pullIndex, liveLabelSequence.length - 1)];
+      liveLabels.clear();
+      snapshot.forEach((label) => liveLabels.add(label));
+    }
+    pullIndex += 1;
     return {
       ...source,
       labels: [...liveLabels].map((name) => ({ name })),
@@ -394,6 +407,52 @@ test('a failed requested-marker write clears both workflow labels and posts no c
       assert.match(harness.failures[0], /could not record the review-request marker/);
     });
   }
+});
+
+test('removing the ready label during the quiet period cancels the review request', async () => {
+  const harness = makeHarness({
+    liveLabelSequence: [[READY_LABEL], []],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.failures[0], /ready-for-coderabbit is no longer attached/);
+});
+
+test('a final snapshot API failure clears both workflow labels and posts no command', async () => {
+  const harness = makeHarness({ pullFailuresAt: [3] });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.failures[0], /could not complete the final candidate snapshot/);
+});
+
+test('a post-comment snapshot API failure deletes the command and clears both labels', async () => {
+  const harness = makeHarness({ pullFailuresAt: [4] });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.failures[0], /could not complete the post-comment candidate snapshot/);
+});
+
+test('an unexpected initial API failure clears the ready label for a deliberate retry', async () => {
+  const harness = makeHarness({ pullFailuresAt: [1] });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.failures[0], /gate failed unexpectedly/);
 });
 
 test('drafts, auto-merge, branch state, stale heads, and low-permission actors fail closed', async (t) => {
