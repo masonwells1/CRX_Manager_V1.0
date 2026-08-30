@@ -317,8 +317,9 @@ the merge by itself: the missing approval keeps the PR blocked. Since 2026-08-30
 is the `ready-for-coderabbit` label, and `coderabbit-review-requested` deliberately prevents an
 accidental duplicate. If CodeRabbit itself confirms a delivery failure or rate limit on the same
 frozen head, deliberately remove `coderabbit-review-requested` and reapply `ready-for-coderabbit`;
-that is a paid retry, not the normal path. Never merge from the check row alone — confirm an
-`APPROVED` CodeRabbit review whose commit matches the PR head.
+that is a paid retry, not the normal path. Never merge from the ordinary check row alone — require
+the hidden marker SHA, authenticated `APPROVED` CodeRabbit review `commit_id`, and live PR head to
+match. The generic Actions-authored marker is dedupe evidence, not an independent trust identity.
 
 ---
 

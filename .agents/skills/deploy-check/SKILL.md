@@ -13,7 +13,7 @@ environment safety, and production readiness.
 Codex, and Mason alike. The landing path is:
 
 **push a branch → open a PR → finish required checks → freeze the candidate →
-apply `ready-for-coderabbit` → let the trusted workflow post `@coderabbitai review` once →
+apply `ready-for-coderabbit` → let the default-branch workflow post `@coderabbitai review` once →
 read and resolve that final review → merge with
 `--match-head-commit <reviewed-head-sha>`.** The **merge** is what deploys production via Vercel's
 git integration; Vercel's one-click rollback is the accepted safety net.
@@ -129,9 +129,10 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 3. Finish implementation, bring the branch up to date, and wait for required checks;
    **Vercel is a required check**.
 4. Freeze the candidate after the separate Codex review is clean, record its head SHA, then apply
-   **`ready-for-coderabbit`**. The trusted default-branch workflow rechecks the exact head,
+   **`ready-for-coderabbit`**. The default-branch workflow rechecks the exact head,
    draft/conflict/auto-merge state, actor permission, required checks, and every reported
-   non-CodeRabbit check before posting exactly `@coderabbitai review` once. If it fails, it removes
+   non-CodeRabbit check before posting exactly `@coderabbitai review` once with a hidden SHA marker.
+   The generic Actions-authored marker is dedupe evidence, not merge authorization. If it fails, it removes
    the ready label and posts nothing; correct the named blocker and relabel. Read the resulting
    review and fix every real issue; nitpicks may be dismissed with a one-line reason. If a fix or
    base update creates a new commit, the workflow clears both state labels; restart required checks,
@@ -139,9 +140,10 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    new SHA, and apply the ready label for one follow-up review. Never use `@coderabbitai resume`, and reserve
    `@coderabbitai full review` for a deliberately justified complete reread. GitHub requires one
    current formal approval and dismisses it after a new commit. Before merge, verify live `main`
-   protection still requires current approval with stale-review dismissal and confirm an
-   `APPROVED` CodeRabbit review has `commit_id` equal to the final `headRefOid`; a green status row
-   is insufficient. A separate exact-SHA
+   protection still requires a current branch, current approval with stale-review dismissal,
+   last-push approval, and administrators. Require the marker SHA, authenticated CodeRabbit approval
+   `commit_id`, and final `headRefOid` to match; recheck every reported check and auto-merge OFF.
+   Ordinary green CodeRabbit or generic Actions status rows are insufficient. A separate exact-SHA
    `gpt-5.6-sol` high-effort proof remains the additional hard gate for risky money/RLS/migration
    diffs — both run, neither replaces the other.
 5. Merge. **The merge is the deploy.**

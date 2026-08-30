@@ -52,21 +52,31 @@ function commitStatus(context, state = 'success') {
   };
 }
 
-function pullRequest({ head = HEAD, labels = [READY_LABEL], draft = false, autoMerge = null } = {}) {
+function pullRequest({
+  head = HEAD,
+  labels = [READY_LABEL],
+  draft = false,
+  autoMerge = null,
+  state = 'open',
+  base = 'main',
+  mergeable = true,
+  mergeableState = 'blocked',
+} = {}) {
   return {
     number: 42,
-    state: 'open',
+    state,
     draft,
-    base: { ref: 'main' },
+    base: { ref: base },
     head: { sha: head },
     labels: labels.map((name) => ({ name })),
     auto_merge: autoMerge,
-    mergeable: true,
-    mergeable_state: 'blocked',
+    mergeable,
+    mergeable_state: mergeableState,
   };
 }
 
 function makeHarness({
+  eventName = 'pull_request_target',
   action = 'labeled',
   changes = undefined,
   eventLabel = READY_LABEL,
@@ -87,6 +97,7 @@ function makeHarness({
   commentListFailuresAt = [],
   eventPullRequest = pullRequest(),
   workflowRunFailure = false,
+  review = undefined,
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -227,12 +238,14 @@ function makeHarness({
   };
   const context = {
     actor: 'masonwells1',
+    eventName,
     repo: { owner: 'masonwells1', repo: 'FarmRx' },
     payload: {
       action,
       changes,
       label: eventLabel ? { name: eventLabel } : undefined,
       pull_request: eventPullRequest,
+      review,
       repository: { default_branch: 'main' },
     },
   };
@@ -355,6 +368,7 @@ test('a new commit resets both workflow labels', async () => {
     action: 'synchronize',
     eventLabel: null,
     pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+    eventPullRequest: pullRequest({ head: NEXT_HEAD, labels: [READY_LABEL, REQUESTED_LABEL] }),
   });
   const result = await execute(harness);
 
@@ -376,6 +390,21 @@ test('changing the pull request base resets both workflow labels', async () => {
   assert.equal(result.reason, 'pull_request_target.edited.base');
   assert.equal(harness.liveLabels.size, 0);
   assert.deepEqual(harness.comments, []);
+});
+
+test('enabling or disabling auto-merge resets both workflow labels', async () => {
+  for (const action of ['auto_merge_enabled', 'auto_merge_disabled']) {
+    const harness = makeHarness({
+      action,
+      eventLabel: null,
+      pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+      eventPullRequest: pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] }),
+    });
+    const result = await execute(harness);
+
+    assert.equal(result.status, 'reset');
+    assert.equal(harness.liveLabels.size, 0);
+  }
 });
 
 test('a metadata edit clears stale requested state after replacing a queued synchronize reset', async () => {
@@ -435,6 +464,159 @@ test('a metadata edit with no workflow state is ignored', async () => {
   assert.equal(result.reason, 'pull_request_target.edited.no_gate_state');
   assert.equal(harness.liveLabels.size, 0);
   assert.deepEqual(harness.comments, []);
+});
+
+test('an exact CodeRabbit approval authorizes only the gate-recorded live head', async () => {
+  const current = pullRequest({ labels: [REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [current],
+    eventPullRequest: current,
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'authorized');
+  assert.deepEqual(harness.failures, []);
+});
+
+test('an exact CodeRabbit approval cannot authorize a branch behind the base tip', async () => {
+  const behind = pullRequest({ labels: [REQUESTED_LABEL], mergeableState: 'behind' });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [behind],
+    eventPullRequest: behind,
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.match(harness.failures[0], /behind the base branch/);
+});
+
+test('CodeRabbit approval rechecks every reported check before authorization', async () => {
+  const current = pullRequest({ labels: [REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [current],
+    eventPullRequest: current,
+    checkRuns: [completedCheck('foundation'), completedCheck('optional-security', 'failure')],
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.match(harness.failures[0], /optional-security: completed\/failure/);
+});
+
+test('a commit after the final snapshot cannot inherit the old gate authorization', async () => {
+  const changed = pullRequest({ head: NEXT_HEAD, labels: [REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [changed],
+    eventPullRequest: changed,
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+    review: {
+      state: 'approved',
+      commit_id: NEXT_HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.match(harness.failures[0], /no gate command marker records the live PR head/);
+});
+
+test('a non-CodeRabbit approval is ignored by final authorization', async () => {
+  const current = pullRequest({ labels: [REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [current],
+    eventPullRequest: current,
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'outside-reviewer' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'ignored');
+});
+
+test('a metadata edit that displaces a draft reset clears the old gate labels', async () => {
+  const draft = pullRequest({ labels: [REQUESTED_LABEL], draft: true });
+  const harness = makeHarness({
+    action: 'edited',
+    changes: { title: { from: 'Old title' } },
+    eventLabel: null,
+    pulls: [draft],
+    eventPullRequest: pullRequest({ labels: [REQUESTED_LABEL] }),
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'reset');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(result.reason, /still a draft/);
+});
+
+test('ready-for-review and requested-marker removal both invalidate prior authorization', async () => {
+  for (const event of [
+    { action: 'ready_for_review', eventLabel: null },
+    { action: 'unlabeled', eventLabel: REQUESTED_LABEL },
+  ]) {
+    const harness = makeHarness({
+      ...event,
+      pulls: [pullRequest({ labels: [REQUESTED_LABEL] })],
+      eventPullRequest: pullRequest({ labels: [REQUESTED_LABEL] }),
+    });
+    const result = await execute(harness);
+
+    assert.equal(result.status, 'reset');
+    assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  }
 });
 
 for (const [failureName, failureOptions] of [

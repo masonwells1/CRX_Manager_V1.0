@@ -4,7 +4,16 @@ const READY_LABEL = 'ready-for-coderabbit';
 const REQUESTED_LABEL = 'coderabbit-review-requested';
 const REVIEW_COMMAND = '@coderabbitai review';
 const ACTIONS_BOT_LOGIN = 'github-actions[bot]';
-const RESET_ACTIONS = new Set(['synchronize', 'reopened', 'converted_to_draft']);
+const CODERABBIT_BOT_LOGIN = 'coderabbitai[bot]';
+const RESET_ACTIONS = new Set([
+  'synchronize',
+  'closed',
+  'reopened',
+  'converted_to_draft',
+  'ready_for_review',
+  'auto_merge_enabled',
+  'auto_merge_disabled',
+]);
 const ALLOWED_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
 const ACCEPTABLE_CHECK_CONCLUSIONS = new Set(['success', 'neutral', 'skipped']);
 const DEFAULT_QUIET_PERIOD_MS = 30_000;
@@ -165,6 +174,12 @@ async function resetLabels({ github, owner, repo, pullNumber, core, reason }) {
   return { status: 'reset', reason };
 }
 
+async function resetCandidate({
+  github, owner, repo, pullNumber, core, reason,
+}) {
+  return resetLabels({ github, owner, repo, pullNumber, core, reason });
+}
+
 async function blockCandidate({ github, owner, repo, pullNumber, core, reason }) {
   await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
   core.setFailed(`CodeRabbit final review was not requested: ${reason}`);
@@ -194,6 +209,24 @@ function validatePullRequest(pullRequest, defaultBranch, expectedHeadSha) {
   if (pullRequest.head.sha !== expectedHeadSha) {
     reasons.push('pull request head changed after the ready label was applied');
   }
+
+  return reasons;
+}
+
+function validateAuthorizationState(pullRequest, defaultBranch) {
+  const reasons = [];
+
+  if (pullRequest.state !== 'open') reasons.push('pull request is not open');
+  if (pullRequest.draft) reasons.push('pull request is still a draft');
+  if (pullRequest.base.ref !== defaultBranch) {
+    reasons.push(`base branch is ${pullRequest.base.ref}, not ${defaultBranch}`);
+  }
+  if (pullRequest.auto_merge) reasons.push('auto-merge is enabled');
+  if (pullRequest.mergeable !== true || pullRequest.mergeable_state === 'unknown') {
+    reasons.push('GitHub has not confirmed that the pull request is mergeable');
+  }
+  if (pullRequest.mergeable_state === 'dirty') reasons.push('pull request has merge conflicts');
+  if (pullRequest.mergeable_state === 'behind') reasons.push('pull request branch is behind the base branch');
 
   return reasons;
 }
@@ -316,8 +349,10 @@ async function runGate({ github, context, core, config, attemptState }) {
     || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
 
   const baseBranchChanged = action === 'edited' && Boolean(context.payload.changes?.base);
-  if (RESET_ACTIONS.has(action) || baseBranchChanged) {
-    return resetLabels({
+  const requestedLabelRemoved = action === 'unlabeled'
+    && normalize(context.payload.label?.name) === REQUESTED_LABEL;
+  if (RESET_ACTIONS.has(action) || baseBranchChanged || requestedLabelRemoved) {
+    return resetCandidate({
       github,
       owner,
       repo,
@@ -325,7 +360,9 @@ async function runGate({ github, context, core, config, attemptState }) {
       core,
       reason: baseBranchChanged
         ? 'pull_request_target.edited.base'
-        : `pull_request_target.${action}`,
+        : requestedLabelRemoved
+          ? 'pull_request_target.unlabeled.requested_marker'
+          : `pull_request_target.${action}`,
     });
   }
 
@@ -340,22 +377,44 @@ async function runGate({ github, context, core, config, attemptState }) {
       repo,
       pull_number: pullNumber,
     })).data;
+    const editedHeadSha = editedPullRequest.head.sha;
     const editedLabels = pullRequestLabelNames(editedPullRequest);
 
     if (editedLabels.has(REQUESTED_LABEL)) {
-      const editedHeadSha = editedPullRequest.head.sha;
-      if (await requestedMarkerHasCommand({
-        github,
-        owner,
-        repo,
-        pullNumber,
-        headSha: editedHeadSha,
-      })) {
+      const editedStateReasons = validateAuthorizationState(
+        editedPullRequest,
+        context.payload.repository.default_branch,
+      );
+      if (editedStateReasons.length > 0) {
+        return resetCandidate({
+          github,
+          owner,
+          repo,
+          pullNumber,
+          core,
+          reason: `pull_request_target.edited.invalid_live_state: ${editedStateReasons.join('; ')}`,
+        });
+      }
+      let markerConfirmed = false;
+      try {
+        markerConfirmed = await requestedMarkerHasCommand({
+          github,
+          owner,
+          repo,
+          pullNumber,
+          headSha: editedHeadSha,
+        });
+      } catch (error) {
+        await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+        core.setFailed(`Could not revalidate the requested marker after a PR edit (${error.message}); merge authorization was invalidated and the requested marker was preserved for deduplication.`);
+        return { status: 'blocked', headSha: editedHeadSha, reason: error.message };
+      }
+      if (markerConfirmed) {
         await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
         core.notice(`Preserved the confirmed CodeRabbit request for ${editedHeadSha} after a metadata edit.`);
         return { status: 'duplicate', headSha: editedHeadSha };
       }
-      return resetLabels({
+      return resetCandidate({
         github,
         owner,
         repo,
@@ -366,7 +425,7 @@ async function runGate({ github, context, core, config, attemptState }) {
     }
 
     if (editedLabels.has(READY_LABEL)) {
-      return resetLabels({
+      return resetCandidate({
         github,
         owner,
         repo,
@@ -723,7 +782,83 @@ async function runGate({ github, context, core, config, attemptState }) {
   return { status: 'requested', headSha: expectedHeadSha };
 }
 
+async function runReviewAuthorization({ github, context, core, config }) {
+  const { owner, repo } = context.repo;
+  const pullNumber = context.payload.pull_request.number;
+  const review = context.payload.review || {};
+  const reviewer = normalize(review.user?.login);
+
+  if (reviewer !== normalize(CODERABBIT_BOT_LOGIN)) {
+    return { status: 'ignored', reason: 'review was not submitted by CodeRabbit' };
+  }
+
+  const pullRequest = (await github.rest.pulls.get({
+    owner,
+    repo,
+    pull_number: pullNumber,
+  })).data;
+  const headSha = pullRequest.head.sha;
+  const labels = pullRequestLabelNames(pullRequest);
+  const reasons = [];
+
+  if (context.payload.action !== 'submitted' || normalize(review.state) !== 'approved') {
+    reasons.push(`CodeRabbit review is ${normalize(review.state) || context.payload.action}`);
+  }
+  if (review.commit_id !== headSha) reasons.push('CodeRabbit approval does not match the live PR head');
+  reasons.push(...validateAuthorizationState(
+    pullRequest,
+    context.payload.repository.default_branch,
+  ));
+  if (!labels.has(REQUESTED_LABEL)) reasons.push(`${REQUESTED_LABEL} is not attached`);
+  if (labels.has(READY_LABEL)) reasons.push(`${READY_LABEL} is still attached`);
+
+  let commandRecorded = false;
+  try {
+    commandRecorded = await requestedMarkerHasCommand({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      headSha,
+    });
+  } catch (error) {
+    reasons.push(`could not verify the gate-recorded command (${error.message})`);
+  }
+  if (!commandRecorded && !reasons.some((reason) => reason.startsWith('could not verify'))) {
+    reasons.push('no gate command marker records the live PR head');
+  }
+
+  try {
+    reasons.push(...await collectCheckBlockers({
+      github,
+      owner,
+      repo,
+      headSha,
+      config,
+      core,
+    }));
+  } catch (error) {
+    reasons.push(`could not revalidate reported checks (${error.message})`);
+  }
+
+  if (reasons.length > 0) {
+    core.setFailed(`CodeRabbit final review evidence is not acceptable: ${reasons.join('; ')}`);
+    return { status: 'blocked', headSha, reason: reasons.join('; ') };
+  }
+
+  core.notice(`CodeRabbit final review evidence accepted for exact head ${headSha}.`);
+  return { status: 'authorized', headSha };
+}
+
 async function run(args) {
+  if (args.context.eventName === 'pull_request_review') {
+    try {
+      return await runReviewAuthorization(args);
+    } catch (error) {
+      args.core.setFailed(`CodeRabbit final-candidate authorization failed closed (${error.message}).`);
+      return { status: 'blocked', reason: error.message };
+    }
+  }
   const attemptState = {
     preexistingCommentIds: null,
     requestedMarkerPreexisted: pullRequestLabelNames(args.context.payload.pull_request)
@@ -788,5 +923,6 @@ module.exports = {
   evaluateChecks,
   reviewCommandBody,
   run,
+  runReviewAuthorization,
   validatePullRequest,
 };

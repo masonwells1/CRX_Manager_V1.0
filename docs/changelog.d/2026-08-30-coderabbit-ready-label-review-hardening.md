@@ -24,6 +24,14 @@
   live dedupe state through pull-snapshot or command-lookup failures so a retry cannot post a second command.
 - Resolved workflow provenance for optional GitHub Actions checks as well as required checks, preventing a
   later passing same-name job from another workflow from hiding a failed containment or security check.
+- Required the landing operator to verify three identical SHAs: the gate marker, CodeRabbit's
+  authenticated formal approval, and the live PR head. A post-snapshot commit cannot pass that check.
+- Revalidated mergeability at approval time, rejecting behind, conflicting, or unresolved branch
+  state before accepting the review event, and rechecked every reported check at that boundary.
+- Reset both gate labels on close/reopen, draft transitions, base changes, auto-merge changes, and
+  requested-marker removal. Metadata reconciliation preserves an exact marker only for dedupe.
+- Documented that generic Actions-authored comments/statuses are not workflow-specific security
+  identities; live branch protection and the authenticated CodeRabbit review remain the merge boundary.
 - Required `ready-for-coderabbit` to remain attached at every live pull-request recheck, allowing a
   maintainer to cancel a queued request during the quiet period.
 - Added marker and raced-command cleanup when final or post-comment GitHub API snapshots fail.
