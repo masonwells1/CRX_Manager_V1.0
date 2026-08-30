@@ -654,8 +654,8 @@ test('a commit after the final snapshot cannot inherit the old gate authorizatio
   assert.match(harness.failures[0], /no gate command marker records the live PR head/);
 });
 
-test('a non-CodeRabbit approval is ignored by final authorization', async () => {
-  const current = pullRequest({ labels: [REQUESTED_LABEL] });
+test('an ordinary non-CodeRabbit review with no gate state is ignored', async () => {
+  const current = pullRequest({ labels: [] });
   const harness = makeHarness({
     eventName: 'pull_request_review',
     action: 'submitted',
@@ -670,6 +670,106 @@ test('a non-CodeRabbit approval is ignored by final authorization', async () => 
   const result = await execute(harness);
 
   assert.equal(result.status, 'ignored');
+  assert.equal(result.reason, 'pull_request_review.non_coderabbit.no_gate_state');
+});
+
+test('an initial review snapshot failure clears ready state but preserves requested dedupe state', async () => {
+  const current = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [current],
+    pullFailuresAt: [1],
+    eventPullRequest: current,
+    review: {
+      state: 'commented',
+      commit_id: HEAD,
+      user: { login: 'outside-reviewer' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /pull snapshot 1 failed/);
+});
+
+test('a non-CodeRabbit review that replaces a queued synchronize reset clears stale state', async () => {
+  const changed = pullRequest({ head: NEXT_HEAD, labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [changed],
+    eventPullRequest: pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] }),
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+    review: {
+      state: 'commented',
+      commit_id: HEAD,
+      user: { login: 'outside-reviewer' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'reset');
+  assert.equal(harness.liveLabels.size, 0);
+  assert.match(result.reason, /non_coderabbit\.stale_state/);
+});
+
+test('a head change during non-CodeRabbit review reconciliation clears requested state', async () => {
+  const current = pullRequest({ labels: [REQUESTED_LABEL] });
+  const changed = pullRequest({ head: NEXT_HEAD, labels: [REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [current, changed],
+    eventPullRequest: current,
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+    review: {
+      state: 'commented',
+      commit_id: HEAD,
+      user: { login: 'outside-reviewer' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'reset');
+  assert.equal(harness.liveLabels.size, 0);
+  assert.match(result.reason, /head changed during non-CodeRabbit review reconciliation/);
+});
+
+test('a non-CodeRabbit review preserves a confirmed current-head request', async () => {
+  const current = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [current, current],
+    eventPullRequest: current,
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+    review: {
+      state: 'commented',
+      commit_id: HEAD,
+      user: { login: 'outside-reviewer' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'duplicate');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.comments.length, 1);
 });
 
 test('a metadata edit that displaces a draft reset clears the old gate labels', async () => {

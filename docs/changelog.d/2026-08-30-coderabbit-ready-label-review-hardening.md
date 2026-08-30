@@ -39,6 +39,8 @@
   confirmed exact command for deduplication or clears the ready state for a deliberate retry.
 - Bound the introducing-PR no-op to PR #516 and its immutable base SHA only; every later missing
   trusted-script state fails closed, while a present trusted script remains mandatory.
+- Reconciled live head, labels, and exact-marker state on non-CodeRabbit review events so they cannot
+  replace a queued synchronize reset and preserve authorization for a stale candidate.
 
 Verification: all focused final-review gate cases, lint, typecheck, production build, workflow
 parity, and documentation checks passed after the review fixes.

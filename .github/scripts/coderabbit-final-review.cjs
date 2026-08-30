@@ -789,7 +789,98 @@ async function runReviewAuthorization({ github, context, core, config }) {
   const reviewer = normalize(review.user?.login);
 
   if (reviewer !== normalize(CODERABBIT_BOT_LOGIN)) {
-    return { status: 'ignored', reason: 'review was not submitted by CodeRabbit' };
+    const pullRequest = (await github.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: pullNumber,
+    })).data;
+    const headSha = pullRequest.head.sha;
+    const labels = pullRequestLabelNames(pullRequest);
+
+    if (labels.has(REQUESTED_LABEL)) {
+      const stateReasons = validateAuthorizationState(
+        pullRequest,
+        context.payload.repository.default_branch,
+      );
+      if (stateReasons.length > 0) {
+        return resetCandidate({
+          github,
+          owner,
+          repo,
+          pullNumber,
+          core,
+          reason: `pull_request_review.non_coderabbit.invalid_live_state: ${stateReasons.join('; ')}`,
+        });
+      }
+
+      let markerConfirmed = false;
+      try {
+        markerConfirmed = await requestedMarkerHasCommand({
+          github,
+          owner,
+          repo,
+          pullNumber,
+          headSha,
+        });
+        const confirmationPullRequest = (await github.rest.pulls.get({
+          owner,
+          repo,
+          pull_number: pullNumber,
+        })).data;
+        const confirmationLabels = pullRequestLabelNames(confirmationPullRequest);
+        const confirmationReasons = validateAuthorizationState(
+          confirmationPullRequest,
+          context.payload.repository.default_branch,
+        );
+        if (confirmationPullRequest.head.sha !== headSha) {
+          confirmationReasons.push('pull request head changed during non-CodeRabbit review reconciliation');
+        }
+        if (!confirmationLabels.has(REQUESTED_LABEL)) {
+          confirmationReasons.push(`${REQUESTED_LABEL} is no longer attached`);
+        }
+        if (confirmationReasons.length > 0) {
+          return resetCandidate({
+            github,
+            owner,
+            repo,
+            pullNumber,
+            core,
+            reason: `pull_request_review.non_coderabbit.changed_live_state: ${confirmationReasons.join('; ')}`,
+          });
+        }
+      } catch (error) {
+        await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+        core.setFailed(`Could not reconcile requested state after a non-CodeRabbit review (${error.message}); merge authorization was invalidated and the requested marker was preserved for deduplication.`);
+        return { status: 'blocked', headSha, reason: error.message };
+      }
+
+      if (markerConfirmed) {
+        await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+        core.notice(`Preserved the confirmed CodeRabbit request for ${headSha} after a non-CodeRabbit review.`);
+        return { status: 'duplicate', headSha };
+      }
+      return resetCandidate({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        reason: 'pull_request_review.non_coderabbit.stale_state',
+      });
+    }
+
+    if (labels.has(READY_LABEL)) {
+      return resetCandidate({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        reason: 'pull_request_review.non_coderabbit.unconfirmed_ready_state',
+      });
+    }
+
+    return { status: 'ignored', reason: 'pull_request_review.non_coderabbit.no_gate_state' };
   }
 
   const pullRequest = (await github.rest.pulls.get({
@@ -855,6 +946,13 @@ async function run(args) {
     try {
       return await runReviewAuthorization(args);
     } catch (error) {
+      const { owner, repo } = args.context.repo;
+      const pullNumber = args.context.payload.pull_request.number;
+      try {
+        await removeLabelIfPresent(args.github, owner, repo, pullNumber, READY_LABEL);
+      } catch (cleanupError) {
+        args.core.warning(`Could not clear ready state after review reconciliation failed (${cleanupError.message}).`);
+      }
       args.core.setFailed(`CodeRabbit final-candidate authorization failed closed (${error.message}).`);
       return { status: 'blocked', reason: error.message };
     }
