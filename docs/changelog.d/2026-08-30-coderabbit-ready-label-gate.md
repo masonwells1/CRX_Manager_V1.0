@@ -13,7 +13,7 @@
 - Updated the active CRX shipping guidance to apply the ready label instead of posting the normal
   CodeRabbit command by hand.
 
-Verification after rebuilding on the merged PR #514 head: all 22 focused gate cases, 343 application
+Verification after rebuilding on the merged PR #514 head: all 24 focused gate cases, 343 application
 test files with 4,825 passing tests, lint, typecheck, the production build, workflow parity, and
 documentation checks passed. Exact-head adversarial review, pull-request checks, and the live label
 path remain delivery gates for the frozen branch.

@@ -182,9 +182,33 @@ async function execute(harness) {
     github: harness.github,
     context: harness.context,
     core: harness.core,
-    config: { requiredChecks: REQUIRED_CHECKS, ignoredChecks: ['CodeRabbit'] },
+    config: {
+      requiredChecks: REQUIRED_CHECKS,
+      ignoredChecks: ['CodeRabbit'],
+      quietPeriodMs: 0,
+      mergeabilityPollMs: 0,
+    },
   });
 }
+
+test('omitting the quiet-period option invokes the production 30-second confirmation wait', async () => {
+  const harness = makeHarness();
+  const waits = [];
+  const result = await run({
+    github: harness.github,
+    context: harness.context,
+    core: harness.core,
+    config: {
+      requiredChecks: REQUIRED_CHECKS,
+      ignoredChecks: ['CodeRabbit'],
+      mergeabilityPollMs: 0,
+      settle: async (milliseconds) => waits.push(milliseconds),
+    },
+  });
+
+  assert.equal(result.status, 'requested');
+  assert.deepEqual(waits, [30_000]);
+});
 
 test('green frozen candidate posts exactly one review command and records the request', async () => {
   const harness = makeHarness();
@@ -304,6 +328,32 @@ test('drafts, auto-merge, branch state, stale heads, and low-permission actors f
     assert.equal(result.status, 'blocked');
     assert.deepEqual(harness.comments, []);
   });
+});
+
+test('temporarily unknown mergeability is polled before the candidate is rejected', async () => {
+  const unknown = pullRequest();
+  unknown.mergeable = null;
+  unknown.mergeable_state = 'unknown';
+  const harness = makeHarness({
+    pulls: [unknown, pullRequest(), pullRequest(), pullRequest()],
+  });
+  const waits = [];
+  const result = await run({
+    github: harness.github,
+    context: harness.context,
+    core: harness.core,
+    config: {
+      requiredChecks: REQUIRED_CHECKS,
+      ignoredChecks: ['CodeRabbit'],
+      quietPeriodMs: 0,
+      mergeabilityPollMs: 17,
+      settle: async (milliseconds) => waits.push(milliseconds),
+    },
+  });
+
+  assert.equal(result.status, 'requested');
+  assert.deepEqual(waits, [17]);
+  assert.deepEqual(harness.failures, []);
 });
 
 test('a head change during the gate removes the request marker and posts no comment', async () => {

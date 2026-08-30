@@ -7,6 +7,9 @@ const ACTIONS_BOT_LOGIN = 'github-actions[bot]';
 const RESET_ACTIONS = new Set(['synchronize', 'reopened', 'converted_to_draft']);
 const ALLOWED_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
 const ACCEPTABLE_CHECK_CONCLUSIONS = new Set(['success', 'neutral', 'skipped']);
+const DEFAULT_QUIET_PERIOD_MS = 30_000;
+const DEFAULT_MERGEABILITY_POLL_ATTEMPTS = 4;
+const DEFAULT_MERGEABILITY_POLL_MS = 2_000;
 
 function normalize(value) {
   return String(value || '').trim().toLowerCase();
@@ -131,6 +134,32 @@ function validatePullRequest(pullRequest, defaultBranch, expectedHeadSha) {
   return reasons;
 }
 
+function mergeabilityIsPending(pullRequest) {
+  return pullRequest.mergeable === null || pullRequest.mergeable_state === 'unknown';
+}
+
+async function getPullRequestWithResolvedMergeability({
+  github,
+  owner,
+  repo,
+  pullNumber,
+  attempts,
+  pollMs,
+  settle,
+}) {
+  const boundedAttempts = Math.max(1, attempts);
+
+  for (let attempt = 1; attempt <= boundedAttempts; attempt += 1) {
+    const response = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
+    if (!mergeabilityIsPending(response.data) || attempt === boundedAttempts) {
+      return response.data;
+    }
+    if (pollMs > 0) await settle(pollMs);
+  }
+
+  throw new Error('mergeability polling exhausted without a pull-request response');
+}
+
 function reviewCommandBody(headSha) {
   return `${REVIEW_COMMAND}\n<!-- coderabbit-final-review-head:${headSha} -->`;
 }
@@ -172,6 +201,12 @@ async function run({ github, context, core, config }) {
   const { owner, repo } = context.repo;
   const action = context.payload.action;
   const pullNumber = context.payload.pull_request.number;
+  const quietPeriodMs = config.quietPeriodMs ?? DEFAULT_QUIET_PERIOD_MS;
+  const mergeabilityPollAttempts = config.mergeabilityPollAttempts
+    ?? DEFAULT_MERGEABILITY_POLL_ATTEMPTS;
+  const mergeabilityPollMs = config.mergeabilityPollMs ?? DEFAULT_MERGEABILITY_POLL_MS;
+  const settle = config.settle
+    || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
 
   if (RESET_ACTIONS.has(action)) {
     return resetLabels({
@@ -206,8 +241,15 @@ async function run({ github, context, core, config }) {
   }
 
   const expectedHeadSha = context.payload.pull_request.head.sha;
-  const initialResponse = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
-  const initialPullRequest = initialResponse.data;
+  const initialPullRequest = await getPullRequestWithResolvedMergeability({
+    github,
+    owner,
+    repo,
+    pullNumber,
+    attempts: mergeabilityPollAttempts,
+    pollMs: mergeabilityPollMs,
+    settle,
+  });
   const initialReasons = validatePullRequest(
     initialPullRequest,
     context.payload.repository.default_branch,
@@ -271,11 +313,17 @@ async function run({ github, context, core, config }) {
     });
   }
 
-  if (config.quietPeriodMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, config.quietPeriodMs));
-  }
-  const [confirmationResponse, confirmationCheckBlockers] = await Promise.all([
-    github.rest.pulls.get({ owner, repo, pull_number: pullNumber }),
+  if (quietPeriodMs > 0) await settle(quietPeriodMs);
+  const [confirmationPullRequest, confirmationCheckBlockers] = await Promise.all([
+    getPullRequestWithResolvedMergeability({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      attempts: mergeabilityPollAttempts,
+      pollMs: mergeabilityPollMs,
+      settle,
+    }),
     collectCheckBlockers({
       github,
       owner,
@@ -285,7 +333,7 @@ async function run({ github, context, core, config }) {
     }),
   ]);
   const confirmationReasons = validatePullRequest(
-    confirmationResponse.data,
+    confirmationPullRequest,
     context.payload.repository.default_branch,
     expectedHeadSha,
   );
@@ -325,8 +373,16 @@ async function run({ github, context, core, config }) {
     labels: [REQUESTED_LABEL],
   });
 
-  const [finalResponse, finalCheckBlockers] = await Promise.all([
-    github.rest.pulls.get({ owner, repo, pull_number: pullNumber }),
+  const [finalPullRequest, finalCheckBlockers] = await Promise.all([
+    getPullRequestWithResolvedMergeability({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      attempts: mergeabilityPollAttempts,
+      pollMs: mergeabilityPollMs,
+      settle,
+    }),
     collectCheckBlockers({
       github,
       owner,
@@ -336,7 +392,7 @@ async function run({ github, context, core, config }) {
     }),
   ]);
   const finalReasons = validatePullRequest(
-    finalResponse.data,
+    finalPullRequest,
     context.payload.repository.default_branch,
     expectedHeadSha,
   );
@@ -394,8 +450,16 @@ async function run({ github, context, core, config }) {
     });
   }
 
-  const [postCommentResponse, postCommentCheckBlockers] = await Promise.all([
-    github.rest.pulls.get({ owner, repo, pull_number: pullNumber }),
+  const [postCommentPullRequest, postCommentCheckBlockers] = await Promise.all([
+    getPullRequestWithResolvedMergeability({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      attempts: mergeabilityPollAttempts,
+      pollMs: mergeabilityPollMs,
+      settle,
+    }),
     collectCheckBlockers({
       github,
       owner,
@@ -405,7 +469,7 @@ async function run({ github, context, core, config }) {
     }),
   ]);
   const postCommentReasons = validatePullRequest(
-    postCommentResponse.data,
+    postCommentPullRequest,
     context.payload.repository.default_branch,
     expectedHeadSha,
   );
