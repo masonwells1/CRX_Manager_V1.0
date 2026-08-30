@@ -7,7 +7,6 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
-
 ## 2026-08-28 — CodeRabbit reviews only frozen release candidates
 
 **Source:** Mason's in-chat decision on 2026-08-28 after the shared CodeRabbit budget was consumed
@@ -32,6 +31,41 @@ and request one follow-up incremental review of that corrected candidate. Do not
 when a complete reread is deliberately justified. This decision supersedes the automatic-review
 and two-commit throttle portions of the 2026-07-17 and 2026-08-24 entries; their review-quality,
 path-selection, and final-head safety rules remain active.
+
+
+## 2026-08-27 — Codex live migrations use a protected GitHub approval environment
+
+**Source:** Mason's in-chat request to build a safe Codex migration approval gate on 2026-08-27.
+
+**Decision.** Codex prepares one exact main-branch migration for Mason to dispatch through the
+GitHub `production-database` environment. GitHub, not the local agent shell, holds the Supabase credential.
+The environment requires Mason's account, disallows administrator bypass, and binds current main,
+the exact reviewed PR head plus CodeRabbit's authenticated exact-commit approval, filename, and SQL SHA-256. The local Codex GitHub
+credential is a fine-grained token with Actions and Deployments read-only; only Mason's website
+session can dispatch the reviewed artifact and approve release.
+
+**Why.** Codex hooks cannot safely return an approval prompt from PreToolUse: the current runtime
+does not support that decision and continues the tool call after reporting the hook failure.
+UserPromptSubmit exposes prompt text but no positive proof that it was authored by Mason, and local
+hooks or command matching are not a credential boundary. If the local bridge can reach Supabase,
+the same agent shell can reach it by another spelling. A protected CI environment keeps production
+credentials outside the agent's local capability set.
+
+**Operative rule.** The workflow remains unusable unless its GitHub environment requires only Mason,
+prevents administrator bypass, accepts protected branches only, and carries its two production
+database secrets plus the environment-only branch-freeze credential. Codex may read a pending run
+but its machine token must not have Actions write, Deployments write, or Administration write.
+After Mason's approval, the workflow creates a no-bypass ruleset that freezes `main` at the verified
+commit through the database transaction; the separate freeze token has Contents read only and is
+available only to the in-repository acquire, verify, and cleanup helper steps. Codex cannot retrieve
+that environment secret. A failed cleanup leaves `main` frozen for manual inspection rather than
+reopening the cross-system merge race. Mason's manual dispatch is the human release attestation;
+the workflow independently reads
+the latest exact-head `coderabbitai[bot]` review and requires `APPROVED`. Caller-supplied review text,
+hashes, or artifacts are never accepted. The local Sol/high proof remains the separate pre-push gate. The workflow locks
+the live ledger inside the same transaction, applies only transaction-compatible SQL, refuses stale timestamp aliases and exact-content replay, writes and verifies the
+content-bound ledger row, then commits. Credential-bearing actions use full commit pins and the
+installed Supabase CLI version is verified. No prompt-text approval token is part of this gate.
 
 
 ## 2026-08-27 — preserve CRX safety rules while collapsing harness machinery

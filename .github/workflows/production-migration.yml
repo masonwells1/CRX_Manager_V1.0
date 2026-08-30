@@ -1,0 +1,253 @@
+name: Approved production migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Exact 40-character main commit containing the reviewed migration
+        required: true
+        type: string
+      migration_name:
+        description: Exact timestamped migration filename stem (no path or .sql)
+        required: true
+        type: string
+      query_sha256:
+        description: Lowercase SHA-256 of the exact migration file
+        required: true
+        type: string
+      reviewed_commit:
+        description: Exact PR head commit reviewed by the migration gate
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  deployments: read
+  pull-requests: read
+
+concurrency:
+  group: production-database-migration
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Verify exact reviewed migration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the workflow definition from protected main
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind dispatch to protected main before repository scripts
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
+          [[ "$EXPECTED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$REVIEWED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$MIGRATION_NAME" =~ ^[0-9]{14}_[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
+          if [[ "${MIGRATION_NAME:15}" =~ [0-9]{14} ]]; then
+            echo "migration name must contain exactly one leading 14-digit timestamp" >&2
+            exit 1
+          fi
+          [[ "$QUERY_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Require Mason's protected one-account approval boundary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/assert-production-environment-protection.mjs
+
+      - name: Bind dispatch to the current main commit
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$REVIEWED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$MIGRATION_NAME" =~ ^[0-9]{14}_[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
+          if [[ "${MIGRATION_NAME:15}" =~ [0-9]{14} ]]; then
+            echo "migration name must contain exactly one leading 14-digit timestamp" >&2
+            exit 1
+          fi
+          [[ "$QUERY_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
+
+      - name: Verify human-dispatched exact-commit migration review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
+        run: node scripts/verify-production-migration-review.mjs
+
+      - name: Prove deny paths and build the exact atomic batch
+        env:
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
+          PROJECT_ID: rhyzpcqhnizqbxphqdkr
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          BATCH_FILE: ${{ runner.temp }}/reviewed-production-migration.sql
+        run: |
+          set -euo pipefail
+          node scripts/build-reviewed-migration-batch.test.mjs
+          node scripts/build-reviewed-migration-batch.mjs \
+            --project-id "$PROJECT_ID" \
+            --expected-commit "$EXPECTED_COMMIT" \
+            --migration "$MIGRATION_NAME" \
+            --query-sha256 "$QUERY_SHA256" \
+            --output "$BATCH_FILE"
+
+  apply:
+    name: Apply after Mason approval
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production-database
+    permissions:
+      actions: read # Read the protected environment after Mason's approval.
+      contents: read
+      deployments: read # Read the protected environment again after Mason's approval.
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind approved run to protected main before repository scripts
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
+          [[ "$EXPECTED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$REVIEWED_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$MIGRATION_NAME" =~ ^[0-9]{14}_[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
+          if [[ "${MIGRATION_NAME:15}" =~ [0-9]{14} ]]; then
+            echo "migration name must contain exactly one leading 14-digit timestamp" >&2
+            exit 1
+          fi
+          [[ "$QUERY_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+
+      - name: Revalidate production approval boundary after Mason approval
+        run: node scripts/assert-production-environment-protection.mjs
+
+      - name: Reconfirm current main
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
+
+      - name: Revalidate authenticated CodeRabbit approval after Mason approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
+        run: node scripts/verify-production-migration-review.mjs
+
+      - id: supabase-cli
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520 # v3.0.0
+        with:
+          version: 2.109.1
+
+      - name: Verify exact Supabase CLI artifact version
+        env:
+          INSTALLED_VERSION: ${{ steps.supabase-cli.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$INSTALLED_VERSION" = "2.109.1"
+          test "$(supabase --version)" = "2.109.1"
+
+      - name: Rebuild the content-bound batch after approval
+        env:
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
+          PROJECT_ID: rhyzpcqhnizqbxphqdkr
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          BATCH_FILE: ${{ runner.temp }}/reviewed-production-migration.sql
+        run: |
+          set -euo pipefail
+          node scripts/build-reviewed-migration-batch.mjs \
+            --project-id "$PROJECT_ID" \
+            --expected-commit "$EXPECTED_COMMIT" \
+            --migration "$MIGRATION_NAME" \
+            --query-sha256 "$QUERY_SHA256" \
+            --output "$BATCH_FILE"
+
+      - name: Freeze main against concurrent migration merges
+        timeout-minutes: 2
+        env:
+          PRODUCTION_BRANCH_FREEZE_TOKEN: ${{ secrets.PRODUCTION_BRANCH_FREEZE_TOKEN }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          FREEZE_STATE_FILE: ${{ runner.temp }}/production-main-freeze.json
+        run: node scripts/production-main-freeze.mjs acquire
+
+      - name: Verify the exact main freeze before database access
+        env:
+          PRODUCTION_BRANCH_FREEZE_TOKEN: ${{ secrets.PRODUCTION_BRANCH_FREEZE_TOKEN }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: node scripts/production-main-freeze.mjs verify
+
+      - name: Apply one locked migration and ledger row
+        timeout-minutes: 10
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PRODUCTION_DB_PASSWORD: ${{ secrets.PRODUCTION_DB_PASSWORD }}
+          PROJECT_ID: rhyzpcqhnizqbxphqdkr
+          BATCH_FILE: ${{ runner.temp }}/reviewed-production-migration.sql
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          MIGRATION_NAME: ${{ inputs.migration_name }}
+          QUERY_SHA256: ${{ inputs.query_sha256 }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$PRODUCTION_DB_PASSWORD"
+          supabase link --project-ref "$PROJECT_ID" --password "$PRODUCTION_DB_PASSWORD"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_COMMIT"
+          test "$(git cat-file blob "$EXPECTED_COMMIT:supabase/migrations/$MIGRATION_NAME.sql" | sha256sum | cut -d' ' -f1)" = "$QUERY_SHA256"
+          supabase db query --linked --agent yes --file "$BATCH_FILE"
+
+      - name: Release this run's exact main freeze
+        if: always()
+        env:
+          PRODUCTION_BRANCH_FREEZE_TOKEN: ${{ secrets.PRODUCTION_BRANCH_FREEZE_TOKEN }}
+          FREEZE_STATE_FILE: ${{ runner.temp }}/production-main-freeze.json
+        run: node scripts/production-main-freeze.mjs release

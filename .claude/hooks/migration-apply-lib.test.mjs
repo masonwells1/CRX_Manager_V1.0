@@ -146,6 +146,28 @@ denies(
     }),
     { query: DESTRUCTIVE }),
   "destructive statement", "armed run refuses a destructive migration even with a perfect proof");
+const ESCAPED_DESTRUCTIVE = "COMMENT ON TABLE public.customers IS E'escaped\\' quote /*'; DELETE FROM public.customers;";
+const escapedDestructiveHash = createHash("sha256").update(ESCAPED_DESTRUCTIVE).digest("hex");
+denies(
+  evaluate(
+    fixture({
+      autopilot: armed(),
+      proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: escapedDestructiveHash },
+      codexProof: { ...goodCodex, queryHash: escapedDestructiveHash },
+    }),
+    { query: ESCAPED_DESTRUCTIVE }),
+  "destructive statement", "armed run refuses DELETE after an escaped E-string even with perfect proof");
+const ESCAPED_DOLLAR_QUOTE_DESTRUCTIVE = "COMMENT ON TABLE public.customers IS E'foo\\' AS $x$ junk'; DELETE FROM public.customers; -- $x$\nSELECT 1;";
+const escapedDollarQuoteDestructiveHash = createHash("sha256").update(ESCAPED_DOLLAR_QUOTE_DESTRUCTIVE).digest("hex");
+denies(
+  evaluate(
+    fixture({
+      autopilot: armed(),
+      proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: escapedDollarQuoteDestructiveHash },
+      codexProof: { ...goodCodex, queryHash: escapedDollarQuoteDestructiveHash },
+    }),
+    { query: ESCAPED_DOLLAR_QUOTE_DESTRUCTIVE }),
+  "destructive statement", "armed run refuses DELETE after a dollar-quote marker inside an escaped E-string");
 
 // ── CHECK 4: reviewer proof ─────────────────────────────────────────────────
 denies(evaluate(fixture({ proof: null })), "without subagent review proof",
@@ -171,6 +193,14 @@ denies(
     codexProof: goodCodex,
   })),
   "not content-bound", "armed run refuses a reviewer proof with no queryHash");
+
+denies(
+  evaluate(fixture({
+    autopilot: armed(),
+    proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: "0".repeat(64) },
+    codexProof: goodCodex,
+  })),
+  "not content-bound", "armed run identifies a reviewer proof bound to different SQL");
 
 denies(
   evaluate(fixture({
@@ -428,6 +458,12 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   notWrappable("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;\nCREATE TABLE public.t (id bigint);\n",
     "SET TRANSACTION", "SET TRANSACTION is refused");
   notWrappable("COMMIT TRANSACTION;\n", "COMMIT", "COMMIT TRANSACTION is refused");
+  notWrappable("COMMIT AND CHAIN;\n", "COMMIT", "COMMIT AND CHAIN is refused");
+  notWrappable("COMMIT WORK AND NO CHAIN;\n", "COMMIT", "COMMIT WORK AND NO CHAIN is refused");
+  notWrappable("ROLLBACK AND CHAIN;\n", "ROLLBACK", "ROLLBACK AND CHAIN is refused");
+  notWrappable("ABORT TRANSACTION AND NO CHAIN;\n", "ROLLBACK", "ABORT transaction syntax is refused");
+  notWrappable("END AND CHAIN;\n", "END", "END AND CHAIN is refused");
+  notWrappable("END WORK AND NO CHAIN;\n", "END", "END WORK AND NO CHAIN is refused");
   notWrappable("ROLLBACK TO SAVEPOINT s1;\n", "ROLLBACK", "ROLLBACK TO SAVEPOINT is refused");
   notWrappable("BEGIN TRANSACTION;\nCREATE TABLE public.t (id bigint);\n", "BEGIN", "BEGIN TRANSACTION is refused");
   notWrappable("RELEASE SAVEPOINT s1;\n", "SAVEPOINT", "RELEASE SAVEPOINT is refused");
@@ -471,6 +507,13 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   wrappable(
     "INSERT INTO public.audit (note) VALUES ('COMMIT was requested');\n",
     "a string literal naming COMMIT is not transaction control");
+  wrappable(
+    "INSERT INTO public.audit (note) VALUES (E'escaped\\' quote; COMMIT is text');\nSELECT 1;\n",
+    "an escape-string literal cannot desynchronize transaction-control scanning");
+  notWrappable(
+    "INSERT INTO public.audit (note) VALUES (E'escaped\\' quote');\nCOMMIT AND CHAIN;\n",
+    "COMMIT",
+    "a real COMMIT after an escape-string literal is still refused");
   wrappable(
     "CREATE TABLE public.commit_log (id bigint, rollback_reason text);\n",
     "identifiers containing commit/rollback are not transaction control");
