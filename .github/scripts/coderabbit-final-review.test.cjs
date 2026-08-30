@@ -31,6 +31,13 @@ const REQUIRED_CHECKS = [
     creator: 'vercel[bot]',
   },
 ];
+const IGNORED_CHECKS = [
+  {
+    name: 'CodeRabbit',
+    source: 'status',
+    creator: 'coderabbitai[bot]',
+  },
+];
 
 function trustedGateDetectionScript() {
   const workflow = fs.readFileSync(
@@ -128,6 +135,19 @@ test('the workflow runs every subscribed label event through the trusted gate', 
 
   assert.doesNotMatch(job, /github\.event\.action\s*!=\s*'labeled'/);
   assert.doesNotMatch(job, /github\.event\.label\.name\s*==\s*'ready-for-coderabbit'/);
+});
+
+test('the workflow binds the CodeRabbit exclusion to the trusted status creator', () => {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
+    'utf8',
+  );
+
+  assert.match(
+    workflow,
+    /ignoredChecks:\s*\[\s*\{\s*name: 'CodeRabbit',\s*source: 'status',\s*creator: 'coderabbitai\[bot\]'/,
+  );
+  assert.doesNotMatch(workflow, /ignoredChecks:\s*\[\s*['"]CodeRabbit['"]\s*\]/);
 });
 
 function completedCheck(name, conclusion = 'success') {
@@ -375,7 +395,7 @@ async function execute(harness) {
     core: harness.core,
     config: {
       requiredChecks: REQUIRED_CHECKS,
-      ignoredChecks: ['CodeRabbit'],
+      ignoredChecks: IGNORED_CHECKS,
       quietPeriodMs: 0,
       mergeabilityPollMs: 0,
     },
@@ -391,7 +411,7 @@ test('omitting the quiet-period option invokes the production 30-second confirma
     core: harness.core,
     config: {
       requiredChecks: REQUIRED_CHECKS,
-      ignoredChecks: ['CodeRabbit'],
+      ignoredChecks: IGNORED_CHECKS,
       mergeabilityPollMs: 0,
       settle: async (milliseconds) => waits.push(milliseconds),
     },
@@ -1193,7 +1213,7 @@ test('temporarily unknown mergeability is polled before the candidate is rejecte
     core: harness.core,
     config: {
       requiredChecks: REQUIRED_CHECKS,
-      ignoredChecks: ['CodeRabbit'],
+      ignoredChecks: IGNORED_CHECKS,
       quietPeriodMs: 0,
       mergeabilityPollMs: 17,
       settle: async (milliseconds) => waits.push(milliseconds),
@@ -1213,7 +1233,7 @@ test('a non-finite mergeability-attempt value still performs one pull-request re
     core: harness.core,
     config: {
       requiredChecks: REQUIRED_CHECKS,
-      ignoredChecks: ['CodeRabbit'],
+      ignoredChecks: IGNORED_CHECKS,
       quietPeriodMs: 0,
       mergeabilityPollAttempts: Number.NaN,
       mergeabilityPollMs: 0,
@@ -1333,7 +1353,7 @@ test('an old-head marker and command cannot suppress the current-head request', 
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
 });
 
-test('check evaluation accepts neutral/skipped results and ignores CodeRabbit pending state', () => {
+test('check evaluation accepts neutral/skipped results and ignores trusted CodeRabbit pending state', () => {
   const blockers = evaluateChecks({
     checkRuns: [
       completedCheck('foundation'),
@@ -1342,10 +1362,121 @@ test('check evaluation accepts neutral/skipped results and ignores CodeRabbit pe
     ],
     statuses: [commitStatus('Vercel'), commitStatus('CodeRabbit', 'pending')],
     requiredChecks: REQUIRED_CHECKS,
-    ignoredChecks: ['CodeRabbit'],
+    ignoredChecks: IGNORED_CHECKS,
   });
 
   assert.deepEqual(blockers, []);
+});
+
+test('a foreign failed status named CodeRabbit is not ignored', () => {
+  const foreignStatus = {
+    ...commitStatus('CodeRabbit', 'failure'),
+    creator: { login: 'not-coderabbit[bot]' },
+  };
+  const blockers = evaluateChecks({
+    checkRuns: [completedCheck('foundation')],
+    statuses: [commitStatus('Vercel'), foreignStatus],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: IGNORED_CHECKS,
+  });
+
+  assert.match(blockers.join('\n'), /CodeRabbit: failure/);
+});
+
+test('a foreign failed check run named CodeRabbit is not ignored', () => {
+  const foreignCheck = {
+    ...completedCheck('CodeRabbit', 'failure'),
+    app: { id: 15368 },
+  };
+  const blockers = evaluateChecks({
+    checkRuns: [completedCheck('foundation'), foreignCheck],
+    statuses: [commitStatus('Vercel'), commitStatus('CodeRabbit', 'pending')],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: IGNORED_CHECKS,
+  });
+
+  assert.match(blockers.join('\n'), /CodeRabbit: completed\/failure/);
+});
+
+test('a name-only ignored-check policy fails closed', () => {
+  const blockers = evaluateChecks({
+    checkRuns: [completedCheck('foundation')],
+    statuses: [commitStatus('Vercel'), commitStatus('CodeRabbit', 'pending')],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: ['CodeRabbit'],
+  });
+
+  assert.match(
+    blockers.join('\n'),
+    /ignored-check configuration is missing a named provenance policy/,
+  );
+  assert.match(blockers.join('\n'), /CodeRabbit: pending/);
+});
+
+test('a whitespace-only trusted creator cannot ignore a creator-less CodeRabbit status', () => {
+  const creatorlessStatus = {
+    ...commitStatus('CodeRabbit', 'pending'),
+    creator: undefined,
+  };
+  const blockers = evaluateChecks({
+    checkRuns: [completedCheck('foundation')],
+    statuses: [commitStatus('Vercel'), creatorlessStatus],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: [{ name: 'CodeRabbit', source: 'status', creator: '   ' }],
+  });
+
+  assert.match(blockers.join('\n'), /ignored-check configuration is not provenance-bound/);
+  assert.match(blockers.join('\n'), /CodeRabbit: pending/);
+});
+
+test('malformed structured ignored-check identities all fail closed', () => {
+  const malformedPolicies = [
+    { name: '', source: 'status', creator: 'coderabbitai[bot]' },
+    { name: '   ', source: 'status', creator: 'coderabbitai[bot]' },
+    { name: { value: 'CodeRabbit' }, source: 'status', creator: 'coderabbitai[bot]' },
+    { name: 'CodeRabbit', source: 'status', creator: null },
+    { name: 'CodeRabbit', source: 'status', creator: { login: 'coderabbitai[bot]' } },
+    { name: 'CodeRabbit', source: 'check_run', appId: 'not-a-number' },
+    { name: 'CodeRabbit', source: 'check_run', appId: '347564' },
+    { name: 'CodeRabbit', source: 'check_run', appId: 0 },
+    { name: 'CodeRabbit', source: 'check_run', appId: -347564 },
+    { name: 'CodeRabbit', source: 'check_run', appId: 347564.5 },
+    { name: 'CodeRabbit', source: 'check_run', appId: Number.NaN },
+  ];
+
+  for (const policy of malformedPolicies) {
+    const blockers = evaluateChecks({
+      checkRuns: [completedCheck('foundation')],
+      statuses: [commitStatus('Vercel')],
+      requiredChecks: REQUIRED_CHECKS,
+      ignoredChecks: [policy],
+    });
+
+    assert.match(blockers.join('\n'), /ignored-check configuration/);
+  }
+});
+
+test('malformed required-check identity strings and app IDs fail closed', () => {
+  const malformedRequiredChecks = [
+    { ...REQUIRED_CHECKS[0], name: '   ' },
+    { ...REQUIRED_CHECKS[0], workflowPath: '   ' },
+    { ...REQUIRED_CHECKS[0], appId: '15368' },
+    { ...REQUIRED_CHECKS[0], appId: -1 },
+    { ...REQUIRED_CHECKS[0], appId: 15368.5 },
+    { name: 'Vercel', source: 'status', creator: '   ' },
+    { name: 'Vercel', source: 'status', creator: { login: 'vercel[bot]' } },
+  ];
+
+  for (const requiredCheck of malformedRequiredChecks) {
+    const blockers = evaluateChecks({
+      checkRuns: [completedCheck('foundation')],
+      statuses: [commitStatus('Vercel')],
+      requiredChecks: [requiredCheck],
+      ignoredChecks: IGNORED_CHECKS,
+    });
+
+    assert.match(blockers.join('\n'), /required-check configuration/);
+  }
 });
 
 test('required checks demand exact success while optional neutral/skipped checks remain acceptable', () => {

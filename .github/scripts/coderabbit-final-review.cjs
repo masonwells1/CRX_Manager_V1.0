@@ -24,6 +24,14 @@ function normalize(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function isNonBlankString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isPositiveSafeInteger(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
 function pullRequestLabelNames(pullRequest) {
   return new Set((pullRequest.labels || []).map((label) => normalize(label.name)));
 }
@@ -58,16 +66,16 @@ function newestByName(items, nameKey, dateKeys) {
 }
 
 function requiredCheckConfigBlocker(required) {
-  if (!required || typeof required !== 'object' || !required.name) {
+  if (!required || typeof required !== 'object' || !isNonBlankString(required.name)) {
     return 'required-check configuration is missing a named provenance policy';
   }
   if (
     required.source === 'check_run'
-    && required.appId
-    && required.workflowId
-    && required.workflowPath
+    && isPositiveSafeInteger(required.appId)
+    && isPositiveSafeInteger(required.workflowId)
+    && isNonBlankString(required.workflowPath)
   ) return null;
-  if (required.source === 'status' && required.creator) return null;
+  if (required.source === 'status' && isNonBlankString(required.creator)) return null;
   return `${required.name}: required-check configuration is not provenance-bound`;
 }
 
@@ -81,8 +89,37 @@ function statusMatchesProvenance(status, required) {
   return normalize(status.creator?.login) === normalize(required.creator);
 }
 
+function ignoredCheckConfigBlocker(ignored) {
+  if (!ignored || typeof ignored !== 'object' || !isNonBlankString(ignored.name)) {
+    return 'ignored-check configuration is missing a named provenance policy';
+  }
+  if (
+    ignored.source === 'check_run'
+    && isPositiveSafeInteger(ignored.appId)
+  ) return null;
+  if (ignored.source === 'status' && isNonBlankString(ignored.creator)) return null;
+  return `${ignored.name}: ignored-check configuration is not provenance-bound`;
+}
+
+function checkRunMatchesIgnoredPolicy(check, ignored) {
+  return ignored.source === 'check_run'
+    && normalize(check.name) === normalize(ignored.name)
+    && Number(check.app?.id) === Number(ignored.appId);
+}
+
+function statusMatchesIgnoredPolicy(status, ignored) {
+  return ignored.source === 'status'
+    && normalize(status.context) === normalize(ignored.name)
+    && normalize(status.creator?.login) === normalize(ignored.creator);
+}
+
 function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [] }) {
-  const ignored = new Set(ignoredChecks.map(normalize));
+  const ignoredConfigBlockers = ignoredChecks
+    .map(ignoredCheckConfigBlocker)
+    .filter(Boolean);
+  const trustedIgnoredChecks = ignoredChecks.filter(
+    (ignored) => !ignoredCheckConfigBlocker(ignored),
+  );
   const checksByIdentity = newestByIdentity(checkRuns, (check) => (
     `${check.name}|app:${check.app?.id || 'unknown'}`
     + `${check.workflow_id || check.workflow_path ? `|workflow:${check.workflow_id || 'unknown'}|path:${check.workflow_path || 'unknown'}` : ''}`
@@ -96,10 +133,12 @@ function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [
     'created_at',
     'updated_at',
   ]);
-  const blockers = [];
+  const blockers = [...ignoredConfigBlockers];
 
   for (const check of checksByIdentity.values()) {
-    if (ignored.has(normalize(check.name))) continue;
+    if (trustedIgnoredChecks.some((ignored) => checkRunMatchesIgnoredPolicy(check, ignored))) {
+      continue;
+    }
     if (check.workflow_provenance_error) {
       blockers.push(`${check.name}: workflow provenance could not be verified (${check.workflow_provenance_error})`);
       continue;
@@ -110,7 +149,9 @@ function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [
   }
 
   for (const status of statusesByIdentity.values()) {
-    if (ignored.has(normalize(status.context))) continue;
+    if (trustedIgnoredChecks.some((ignored) => statusMatchesIgnoredPolicy(status, ignored))) {
+      continue;
+    }
     if (status.state !== 'success') {
       blockers.push(`${status.context}: ${status.state}`);
     }

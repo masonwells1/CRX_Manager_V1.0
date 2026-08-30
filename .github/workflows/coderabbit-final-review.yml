@@ -81,6 +81,12 @@ jobs:
                     creator: 'vercel[bot]',
                   },
                 ],
-                ignoredChecks: ['CodeRabbit'],
+                ignoredChecks: [
+                  {
+                    name: 'CodeRabbit',
+                    source: 'status',
+                    creator: 'coderabbitai[bot]',
+                  },
+                ],
               },
             });
