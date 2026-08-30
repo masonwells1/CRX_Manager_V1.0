@@ -652,7 +652,11 @@ async function runGate({ github, context, core, config, attemptState }) {
 }
 
 async function run(args) {
-  const attemptState = { preexistingCommentIds: null };
+  const attemptState = {
+    preexistingCommentIds: null,
+    requestedMarkerPreexisted: pullRequestLabelNames(args.context.payload.pull_request)
+      .has(REQUESTED_LABEL),
+  };
   try {
     return await runGate({ ...args, attemptState });
   } catch (unexpectedError) {
@@ -667,7 +671,7 @@ async function run(args) {
 
     if (attemptState.preexistingCommentIds === null) {
       // The current attempt cannot have posted a command before its comment snapshot.
-      verificationSucceeded = true;
+      verificationSucceeded = !attemptState.requestedMarkerPreexisted;
     } else {
       try {
         const comments = await github.paginate(

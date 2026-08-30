@@ -83,6 +83,7 @@ function makeHarness({
   pullFailuresAt = [],
   checkRunFailuresAt = [],
   commentListFailuresAt = [],
+  eventPullRequest = pullRequest(),
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -223,7 +224,7 @@ function makeHarness({
     payload: {
       action,
       label: eventLabel ? { name: eventLabel } : undefined,
-      pull_request: pullRequest(),
+      pull_request: eventPullRequest,
       repository: { default_branch: 'main' },
     },
   };
@@ -514,6 +515,35 @@ test('unexpected recovery never mistakes a pre-existing exact-head command for t
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
   assert.match(harness.failures[0], /gate failed unexpectedly/);
+});
+
+test('an early API failure preserves a pre-existing marker and prevents a duplicate retry', async () => {
+  const markedPullRequest = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    pulls: [markedPullRequest],
+    eventPullRequest: markedPullRequest,
+    pullFailuresAt: [1],
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      created_at: new Date().toISOString(),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+
+  const failedVerification = await execute(harness);
+  assert.equal(failedVerification.status, 'blocked');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.comments.length, 1);
+  assert.match(harness.failures[0], /requested marker was preserved/);
+
+  await harness.github.rest.issues.addLabels({ labels: [READY_LABEL] });
+  const retry = await execute(harness);
+  assert.equal(retry.status, 'duplicate');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.comments.length, 1);
 });
 
 test('drafts, auto-merge, branch state, stale heads, and low-permission actors fail closed', async (t) => {
