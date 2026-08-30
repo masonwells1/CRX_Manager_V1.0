@@ -304,14 +304,17 @@ async function runGate({ github, context, core, config, attemptState }) {
   const settle = config.settle
     || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
 
-  if (RESET_ACTIONS.has(action)) {
+  const baseBranchChanged = action === 'edited' && Boolean(context.payload.changes?.base);
+  if (RESET_ACTIONS.has(action) || baseBranchChanged) {
     return resetLabels({
       github,
       owner,
       repo,
       pullNumber,
       core,
-      reason: `pull_request_target.${action}`,
+      reason: baseBranchChanged
+        ? 'pull_request_target.edited.base'
+        : `pull_request_target.${action}`,
     });
   }
 

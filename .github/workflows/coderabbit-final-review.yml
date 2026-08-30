@@ -2,7 +2,7 @@ name: CodeRabbit final review gate
 
 on:
   pull_request_target:
-    types: [labeled, synchronize, reopened, converted_to_draft]
+    types: [labeled, synchronize, reopened, converted_to_draft, edited]
 
 permissions:
   # Required by actions.getWorkflowRun to bind required checks to their trusted workflow.

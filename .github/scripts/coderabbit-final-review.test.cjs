@@ -68,6 +68,7 @@ function pullRequest({ head = HEAD, labels = [READY_LABEL], draft = false, autoM
 
 function makeHarness({
   action = 'labeled',
+  changes = undefined,
   eventLabel = READY_LABEL,
   permission = 'write',
   pulls = [pullRequest(), pullRequest(), pullRequest()],
@@ -225,6 +226,7 @@ function makeHarness({
     repo: { owner: 'masonwells1', repo: 'FarmRx' },
     payload: {
       action,
+      changes,
       label: eventLabel ? { name: eventLabel } : undefined,
       pull_request: eventPullRequest,
       repository: { default_branch: 'main' },
@@ -354,6 +356,36 @@ test('a new commit resets both workflow labels', async () => {
 
   assert.equal(result.status, 'reset');
   assert.equal(harness.liveLabels.size, 0);
+  assert.deepEqual(harness.comments, []);
+});
+
+test('changing the pull request base resets both workflow labels', async () => {
+  const harness = makeHarness({
+    action: 'edited',
+    changes: { base: { from: { ref: 'release' } } },
+    eventLabel: null,
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'reset');
+  assert.equal(result.reason, 'pull_request_target.edited.base');
+  assert.equal(harness.liveLabels.size, 0);
+  assert.deepEqual(harness.comments, []);
+});
+
+test('editing pull request metadata without changing the base does not reset labels', async () => {
+  const harness = makeHarness({
+    action: 'edited',
+    changes: { title: { from: 'Old title' } },
+    eventLabel: null,
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'ignored');
+  assert.equal(result.reason, 'pull_request_target.edited');
+  assert.deepEqual([...harness.liveLabels].sort(), [READY_LABEL, REQUESTED_LABEL].sort());
   assert.deepEqual(harness.comments, []);
 });
 

@@ -17,6 +17,8 @@
   only for optional reported checks.
 - Queued new-commit reset events behind an in-flight gate so its post-comment stale-head cleanup can
   finish before the reset removes workflow labels.
+- Cleared both workflow labels when the pull request's base branch changes, while ignoring unrelated
+  title or body edits, so an old exact-head command cannot suppress review of a different candidate diff.
 - Required `ready-for-coderabbit` to remain attached at every live pull-request recheck, allowing a
   maintainer to cancel a queued request during the quiet period.
 - Added marker and raced-command cleanup when final or post-comment GitHub API snapshots fail.
