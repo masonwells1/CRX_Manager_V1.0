@@ -84,6 +84,7 @@ function makeHarness({
   checkRunFailuresAt = [],
   commentListFailuresAt = [],
   eventPullRequest = pullRequest(),
+  workflowRunFailure = false,
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -117,9 +118,10 @@ function makeHarness({
   const github = {
     rest: {
       actions: {
-        getWorkflowRun: async () => ({
-          data: { workflow_id: 4242, path: resolvedWorkflowPath },
-        }),
+        getWorkflowRun: async () => {
+          if (workflowRunFailure) throw new Error('workflow lookup failed');
+          return { data: { workflow_id: 4242, path: resolvedWorkflowPath } };
+        },
       },
       checks: {
         listForRef: async () => {
@@ -416,6 +418,7 @@ test('a newer overlapping rerun wins even if an older run completes later', () =
         created_at: '2026-08-30T12:00:00Z',
         started_at: '2026-08-30T12:00:01Z',
         completed_at: '2026-08-30T12:10:00Z',
+        workflow_id: 4242,
         workflow_path: '.github/workflows/ci.yml',
       },
       {
@@ -427,6 +430,7 @@ test('a newer overlapping rerun wins even if an older run completes later', () =
         created_at: '2026-08-30T12:05:00Z',
         started_at: '2026-08-30T12:05:01Z',
         completed_at: null,
+        workflow_id: 4242,
         workflow_path: '.github/workflows/ci.yml',
       },
     ],
@@ -606,6 +610,38 @@ test('temporarily unknown mergeability is polled before the candidate is rejecte
   assert.equal(result.status, 'requested');
   assert.deepEqual(waits, [17]);
   assert.deepEqual(harness.failures, []);
+});
+
+test('a non-finite mergeability-attempt value still performs one pull-request read', async () => {
+  const harness = makeHarness();
+  const result = await run({
+    github: harness.github,
+    context: harness.context,
+    core: harness.core,
+    config: {
+      requiredChecks: REQUIRED_CHECKS,
+      ignoredChecks: ['CodeRabbit'],
+      quietPeriodMs: 0,
+      mergeabilityPollAttempts: Number.NaN,
+      mergeabilityPollMs: 0,
+    },
+  });
+
+  assert.equal(result.status, 'requested');
+  assert.deepEqual(harness.failures, []);
+});
+
+test('a workflow-provenance lookup failure warns with the API error and blocks closed', async () => {
+  const check = completedCheck('foundation');
+  check.workflow_id = undefined;
+  check.workflow_path = undefined;
+  check.details_url = 'https://github.com/masonwells1/FarmRx/actions/runs/123456/job/789';
+  const harness = makeHarness({ checkRuns: [check], workflowRunFailure: true });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.match(harness.notices.join('\n'), /workflow lookup failed/);
+  assert.match(harness.failures[0], /trusted required check is missing or not successful/);
 });
 
 test('a head change during the gate removes the request marker and posts no comment', async () => {

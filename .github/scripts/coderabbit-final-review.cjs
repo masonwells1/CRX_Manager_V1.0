@@ -198,7 +198,9 @@ function actionRunId(detailsUrl) {
   return match ? Number(match[1]) : null;
 }
 
-async function attachRequiredWorkflowProvenance({ github, owner, repo, checkRuns, requiredChecks }) {
+async function attachRequiredWorkflowProvenance({
+  github, owner, repo, checkRuns, requiredChecks, core,
+}) {
   const workflowRequirements = requiredChecks.filter((required) => required?.source === 'check_run');
   const candidates = checkRuns.filter((check) => workflowRequirements.some((required) => (
     normalize(required.name) === normalize(check.name)
@@ -215,6 +217,7 @@ async function attachRequiredWorkflowProvenance({ github, owner, repo, checkRuns
       check.workflow_path = response.data.path;
     } catch (error) {
       check.workflow_provenance_error = error.message;
+      core.warning(`Could not resolve workflow provenance for ${check.name}: ${error.message}`);
     }
   }));
 }
@@ -232,7 +235,7 @@ async function getPullRequestWithResolvedMergeability({
   pollMs,
   settle,
 }) {
-  const boundedAttempts = Math.max(1, attempts);
+  const boundedAttempts = Number.isFinite(attempts) ? Math.max(1, Math.trunc(attempts)) : 1;
 
   for (let attempt = 1; attempt <= boundedAttempts; attempt += 1) {
     const response = await github.rest.pulls.get({ owner, repo, pull_number: pullNumber });
@@ -262,7 +265,7 @@ async function requestedMarkerHasCommand({ github, owner, repo, pullNumber, head
   return comments.some((comment) => isActionsReviewComment(comment, headSha));
 }
 
-async function collectCheckBlockers({ github, owner, repo, headSha, config }) {
+async function collectCheckBlockers({ github, owner, repo, headSha, config, core }) {
   const [checkRuns, statuses] = await Promise.all([
     github.paginate(
       github.rest.checks.listForRef,
@@ -280,6 +283,7 @@ async function collectCheckBlockers({ github, owner, repo, headSha, config }) {
     repo,
     checkRuns,
     requiredChecks: config.requiredChecks,
+    core,
   });
   return evaluateChecks({
     checkRuns,
@@ -392,6 +396,7 @@ async function runGate({ github, context, core, config, attemptState }) {
     repo,
     headSha: expectedHeadSha,
     config,
+    core,
   });
   if (blockers.length > 0) {
     return blockCandidate({
@@ -421,6 +426,7 @@ async function runGate({ github, context, core, config, attemptState }) {
       repo,
       headSha: expectedHeadSha,
       config,
+      core,
     }),
   ]);
   const confirmationReasons = validatePullRequest(
@@ -501,6 +507,7 @@ async function runGate({ github, context, core, config, attemptState }) {
         repo,
         headSha: expectedHeadSha,
         config,
+        core,
       }),
     ]);
   } catch (finalSnapshotError) {
@@ -597,6 +604,7 @@ async function runGate({ github, context, core, config, attemptState }) {
         repo,
         headSha: expectedHeadSha,
         config,
+        core,
       }),
     ]);
   } catch (postCommentSnapshotError) {

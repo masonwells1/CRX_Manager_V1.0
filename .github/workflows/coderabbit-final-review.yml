@@ -5,6 +5,7 @@ on:
     types: [labeled, synchronize, reopened, converted_to_draft]
 
 permissions:
+  # Required by actions.getWorkflowRun to bind required checks to their trusted workflow.
   actions: read
   checks: read
   contents: read
