@@ -289,7 +289,7 @@ async function collectCheckBlockers({ github, owner, repo, headSha, config }) {
   });
 }
 
-async function runGate({ github, context, core, config }) {
+async function runGate({ github, context, core, config, attemptState }) {
   const { owner, repo } = context.repo;
   const action = context.payload.action;
   const pullNumber = context.payload.pull_request.number;
@@ -458,6 +458,7 @@ async function runGate({ github, context, core, config }) {
     });
   }
   const preexistingCommentIds = new Set(commentsBeforeAttempt.map((comment) => comment.id));
+  attemptState.preexistingCommentIds = preexistingCommentIds;
   try {
     await github.rest.issues.addLabels({
       owner,
@@ -652,8 +653,9 @@ async function runGate({ github, context, core, config }) {
 }
 
 async function run(args) {
+  const attemptState = { preexistingCommentIds: null };
   try {
-    return await runGate(args);
+    return await runGate({ ...args, attemptState });
   } catch (unexpectedError) {
     const {
       github, context, core,
@@ -664,17 +666,23 @@ async function run(args) {
     let verificationSucceeded = false;
     let commandCommentExists = false;
 
-    try {
-      commandCommentExists = await requestedMarkerHasCommand({
-        github,
-        owner,
-        repo,
-        pullNumber,
-        headSha,
-      });
+    if (attemptState.preexistingCommentIds === null) {
+      // The current attempt cannot have posted a command before its comment snapshot.
       verificationSucceeded = true;
-    } catch (verificationError) {
-      core.warning(`Could not verify recovery after an unexpected gate failure: ${verificationError.message}`);
+    } else {
+      try {
+        const comments = await github.paginate(
+          github.rest.issues.listComments,
+          { owner, repo, issue_number: pullNumber, per_page: 100 },
+        );
+        commandCommentExists = comments.some((comment) => (
+          !attemptState.preexistingCommentIds.has(comment.id)
+          && isActionsReviewComment(comment, headSha)
+        ));
+        verificationSucceeded = true;
+      } catch (verificationError) {
+        core.warning(`Could not verify recovery after an unexpected gate failure: ${verificationError.message}`);
+      }
     }
 
     if (commandCommentExists) {

@@ -81,6 +81,7 @@ function makeHarness({
   resolvedWorkflowPath = '.github/workflows/ci.yml',
   liveLabelSequence = null,
   pullFailuresAt = [],
+  checkRunFailuresAt = [],
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -119,6 +120,11 @@ function makeHarness({
       },
       checks: {
         listForRef: async () => {
+          const callNumber = checkRunsIndex + 1;
+          if (checkRunFailuresAt.includes(callNumber)) {
+            checkRunsIndex += 1;
+            throw new Error(`check-run snapshot ${callNumber} failed`);
+          }
           const sequence = checkRunsSequence || [checkRuns];
           const current = sequence[Math.min(checkRunsIndex++, sequence.length - 1)];
           return { data: { check_runs: current } };
@@ -450,6 +456,25 @@ test('an unexpected initial API failure clears the ready label for a deliberate 
 
   assert.equal(result.status, 'blocked');
   assert.deepEqual(harness.comments, []);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.failures[0], /gate failed unexpectedly/);
+});
+
+test('unexpected recovery never mistakes a pre-existing exact-head command for this attempt', async () => {
+  const harness = makeHarness({
+    checkRunFailuresAt: [2],
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      created_at: new Date().toISOString(),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.comments.length, 1);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
   assert.match(harness.failures[0], /gate failed unexpectedly/);
