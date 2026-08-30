@@ -375,14 +375,13 @@ async function runGate({ github, context, core, config, attemptState }) {
       await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
       core.warning('Cleared a requested marker that had no matching GitHub Actions review command; retrying the gate.');
     } catch (verificationError) {
-      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
       return blockCandidate({
         github,
         owner,
         repo,
         pullNumber,
         core,
-        reason: `could not verify the requested marker (${verificationError.message}); the marker was cleared for a deliberate retry`,
+        reason: `could not verify the requested marker (${verificationError.message}); the marker was preserved to prevent a duplicate review`,
       });
     }
   }

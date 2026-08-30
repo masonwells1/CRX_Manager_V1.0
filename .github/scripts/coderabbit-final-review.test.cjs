@@ -82,6 +82,7 @@ function makeHarness({
   liveLabelSequence = null,
   pullFailuresAt = [],
   checkRunFailuresAt = [],
+  commentListFailuresAt = [],
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -91,6 +92,7 @@ function makeHarness({
   let pullIndex = 0;
   let checkRunsIndex = 0;
   let statusesIndex = 0;
+  let commentListIndex = 0;
 
   function currentPull() {
     const callNumber = pullIndex + 1;
@@ -181,7 +183,14 @@ function makeHarness({
           const index = comments.findIndex((comment) => comment.id === commentId);
           if (index >= 0) comments.splice(index, 1);
         },
-        listComments: async () => ({ data: comments }),
+        listComments: async () => {
+          const callNumber = commentListIndex + 1;
+          commentListIndex += 1;
+          if (commentListFailuresAt.includes(callNumber)) {
+            throw new Error(`comment snapshot ${callNumber} failed`);
+          }
+          return { data: comments };
+        },
         listEventsForTimeline: async () => ({ data: timeline }),
         removeLabel: async ({ name }) => {
           if (!liveLabels.delete(name)) {
@@ -303,6 +312,33 @@ test('a stranded requested marker without a matching Actions comment self-heals 
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.match(harness.notices.join('\n'), /no matching GitHub Actions review command/);
+});
+
+test('an unverifiable requested marker stays attached and cannot cause a duplicate paid review', async () => {
+  const harness = makeHarness({
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+    commentListFailuresAt: [1],
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      created_at: new Date().toISOString(),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+
+  const failedVerification = await execute(harness);
+  assert.equal(failedVerification.status, 'blocked');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.comments.length, 1);
+  assert.match(harness.failures[0], /marker was preserved to prevent a duplicate review/);
+
+  await harness.github.rest.issues.addLabels({ labels: [READY_LABEL] });
+  const retry = await execute(harness);
+  assert.equal(retry.status, 'duplicate');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.comments.length, 1);
 });
 
 test('a new commit resets both workflow labels', async () => {
