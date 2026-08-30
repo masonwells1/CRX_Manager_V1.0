@@ -355,7 +355,14 @@ ALTER TABLE public.invoice_items
   ADD CONSTRAINT invoice_items_return_credit_source_shape_chk
   CHECK (
     return_credit_source_item_id IS NULL
-    OR (quantity < 0 AND cost_cents > 0 AND return_credit_cogs_cents IS NOT NULL)
+    OR (
+      quantity < 0
+      AND return_credit_cogs_cents IS NOT NULL
+      AND (
+        cost_cents > 0
+        OR (cost_cents = 0 AND return_credit_cogs_cents = 0)
+      )
+    )
   );
 
 -- Credit-memo lines are accounting reversals, not proof that product was sold
@@ -692,9 +699,11 @@ BEGIN
     IF (v_leaves_recognized OR v_source_basis_changes) AND EXISTS (
        SELECT 1
        FROM public.invoice_items source_line
+       -- RETURN_CREDIT_EXACT_SOURCE_RECOGNITION_GUARD_BEGIN
        JOIN public.invoice_items credit_line
         ON credit_line.return_credit_source_item_id = source_line.id
         AND credit_line.quantity < 0
+       -- RETURN_CREDIT_EXACT_SOURCE_RECOGNITION_GUARD_END
        JOIN public.invoices credit_invoice ON credit_invoice.id = credit_line.invoice_id
        WHERE source_line.invoice_id = OLD.id
          AND source_line.order_item_id IS NOT NULL
@@ -962,9 +971,28 @@ BEGIN
     IF v_invoice_type = 'credit_memo'
        AND v_invoice_status IN ('posted','overdue','paid')
        AND v_invoice_deleted_at IS NULL
-       AND EXISTS (SELECT 1 FROM public.returns r WHERE r.credit_invoice_id = NEW.invoice_id)
-       AND current_setting('app.crx_return_credit_lineage', true) IS DISTINCT FROM '1' THEN
-      RAISE EXCEPTION 'RETURN_CREDIT_LEDGER_IMMUTABLE';
+       AND EXISTS (SELECT 1 FROM public.returns r WHERE r.credit_invoice_id = NEW.invoice_id) THEN
+      IF current_setting('app.crx_return_credit_lineage', true) IS DISTINCT FROM '1' THEN
+        RAISE EXCEPTION 'RETURN_CREDIT_LEDGER_IMMUTABLE';
+      END IF;
+      IF NEW.return_credit_source_item_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1
+        FROM public.invoice_items source_line
+        JOIN public.invoices source_invoice ON source_invoice.id = source_line.invoice_id
+        JOIN public.invoices credit_invoice ON credit_invoice.id = NEW.invoice_id
+        WHERE source_line.id = NEW.return_credit_source_item_id
+          AND source_line.order_item_id = NEW.order_item_id
+          AND source_line.product_id = NEW.product_id
+          AND source_line.unit_size IS NOT DISTINCT FROM NEW.unit_size
+          AND source_line.quantity > 0
+          AND source_line.cost_cents >= 0
+          AND source_invoice.customer_id = credit_invoice.customer_id
+          AND source_invoice.invoice_type <> 'credit_memo'
+          AND source_invoice.status IN ('posted','overdue','paid')
+          AND source_invoice.deleted_at IS NULL
+      ) THEN
+        RAISE EXCEPTION 'RETURN_CREDIT_SOURCE_LINEAGE_INVALID';
+      END IF;
     END IF;
     RETURN NEW;
   END IF;
@@ -998,9 +1026,7 @@ BEGIN
          SELECT 1
          FROM public.invoice_items credit_line
          JOIN public.invoices credit_invoice ON credit_invoice.id = credit_line.invoice_id
-         WHERE credit_line.order_item_id = OLD.order_item_id
-           AND credit_line.product_id = OLD.product_id
-           AND credit_line.unit_size IS NOT DISTINCT FROM OLD.unit_size
+         WHERE credit_line.return_credit_source_item_id = OLD.id
            AND credit_line.quantity < 0
            AND credit_invoice.invoice_type = 'credit_memo'
            AND credit_invoice.status IN ('posted','overdue','paid')
@@ -1103,18 +1129,28 @@ BEGIN
   PERFORM set_config('app.crx_return_credit_lineage', '1', true);
 
   WITH return_src AS (
-    SELECT ri.id, ri.order_item_id, ri.product_id, ri.product_name, ri.quantity, ri.unit_price_cents, ri.extended_cents, ri.unit, ri.sort_order, ri.restocked
-    FROM public.return_items ri WHERE ri.return_id = p_return_id
+    SELECT ri.id, ri.order_item_id, ri.product_id, ri.product_name, ri.quantity, ri.unit_price_cents, ri.extended_cents, ri.unit, ri.sort_order, ri.restocked, r.customer_id
+    FROM public.return_items ri
+    JOIN public.returns r ON r.id = ri.return_id
+    WHERE ri.return_id = p_return_id
   ), source_lots AS (
     SELECT rs.*, ii.id AS source_item_id, ii.cost_cents AS line_cost_cents, ii.quantity AS posted_qty, i.invoice_date, ii.created_at
-    FROM return_src rs JOIN public.invoice_items ii ON ii.order_item_id = rs.order_item_id AND ii.product_id = rs.product_id AND ii.quantity > 0 AND ii.cost_cents > 0 AND ii.unit_size IS NOT DISTINCT FROM rs.unit
-    JOIN public.invoices i ON i.id = ii.invoice_id AND i.invoice_type <> 'credit_memo' AND i.deleted_at IS NULL AND i.status IN ('posted','overdue','paid')
-  ), prior_lots AS (
+    FROM return_src rs JOIN public.invoice_items ii ON ii.order_item_id = rs.order_item_id AND ii.product_id = rs.product_id AND ii.quantity > 0 AND ii.cost_cents >= 0 AND ii.unit_size IS NOT DISTINCT FROM rs.unit
+    JOIN public.invoices i ON i.id = ii.invoice_id AND i.customer_id = rs.customer_id AND i.invoice_type <> 'credit_memo' AND i.deleted_at IS NULL AND i.status IN ('posted','overdue','paid')
+  ), prior_returned_lots AS (
     SELECT rs.id AS return_item_id,
            ii.return_credit_source_item_id AS source_item_id,
-           SUM(-ii.quantity) AS reversed_qty
+           SUM(-ii.quantity) AS returned_qty
+    FROM return_src rs JOIN public.invoice_items ii ON ii.order_item_id = rs.order_item_id AND ii.product_id = rs.product_id AND ii.quantity < 0 AND ii.unit_size IS NOT DISTINCT FROM rs.unit
+    JOIN public.invoices i ON i.id = ii.invoice_id AND i.customer_id = rs.customer_id AND i.invoice_type = 'credit_memo' AND i.deleted_at IS NULL AND i.status IN ('posted','overdue','paid')
+    WHERE ii.return_credit_source_item_id IS NOT NULL
+    GROUP BY rs.id, ii.return_credit_source_item_id
+  ), prior_cogs_lots AS (
+    SELECT rs.id AS return_item_id,
+           ii.return_credit_source_item_id AS source_item_id,
+           SUM(-ii.quantity) AS cogs_reversed_qty
     FROM return_src rs JOIN public.invoice_items ii ON ii.order_item_id = rs.order_item_id AND ii.product_id = rs.product_id AND ii.quantity < 0 AND ii.cost_cents > 0 AND ii.unit_size IS NOT DISTINCT FROM rs.unit
-    JOIN public.invoices i ON i.id = ii.invoice_id AND i.invoice_type = 'credit_memo' AND i.deleted_at IS NULL AND i.status IN ('posted','overdue','paid')
+    JOIN public.invoices i ON i.id = ii.invoice_id AND i.customer_id = rs.customer_id AND i.invoice_type = 'credit_memo' AND i.deleted_at IS NULL AND i.status IN ('posted','overdue','paid')
     WHERE ii.return_credit_source_item_id IS NOT NULL
     GROUP BY rs.id, ii.return_credit_source_item_id
   ), available_lots AS (
@@ -1123,37 +1159,80 @@ BEGIN
     -- is the explicit immutable tiebreaker. Prior consumption is joined to its
     -- exact source_item_id below, so later source rows cannot shift an earlier
     -- allocation. Invoice dates are backdateable and cannot anchor this order.
-    SELECT sl.*, GREATEST(sl.posted_qty - COALESCE(pl.reversed_qty, 0), 0) AS available_qty
-    FROM source_lots sl LEFT JOIN prior_lots pl
-      ON pl.return_item_id = sl.id AND pl.source_item_id = sl.source_item_id
-  ), cost_parts AS (
+    SELECT sl.*,
+      GREATEST(sl.posted_qty - COALESCE(prl.returned_qty, 0), 0) AS available_qty,
+      COALESCE(pcl.cogs_reversed_qty, 0) AS prior_cogs_qty
+    FROM source_lots sl
+    LEFT JOIN prior_returned_lots prl
+      ON prl.return_item_id = sl.id AND prl.source_item_id = sl.source_item_id
+    LEFT JOIN prior_cogs_lots pcl
+      ON pcl.return_item_id = sl.id AND pcl.source_item_id = sl.source_item_id
+  ), source_parts AS (
     SELECT al.*, ROW_NUMBER() OVER (PARTITION BY al.id ORDER BY al.created_at, al.source_item_id, al.line_cost_cents) AS part_order,
       GREATEST(LEAST(al.quantity - COALESCE(SUM(al.available_qty) OVER (PARTITION BY al.id ORDER BY al.created_at, al.source_item_id, al.line_cost_cents ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0), al.available_qty),0) AS part_qty
-    FROM available_lots al WHERE al.available_qty > 0 AND al.restocked
-  ), cost_allocated_parts AS (
-    SELECT cp.*,
-      (ROUND(cp.line_cost_cents * (cp.posted_qty - cp.available_qty + cp.part_qty))
-       - ROUND(cp.line_cost_cents * (cp.posted_qty - cp.available_qty)))::bigint AS part_cost_cents
-    FROM cost_parts cp WHERE cp.part_qty > 0
+    FROM available_lots al WHERE al.available_qty > 0
+  ), allocated_parts AS (
+    SELECT sp.*,
+      CASE WHEN sp.restocked THEN
+        (ROUND(sp.line_cost_cents * (sp.prior_cogs_qty + sp.part_qty))
+         - ROUND(sp.line_cost_cents * sp.prior_cogs_qty))::bigint
+      ELSE 0::bigint END AS part_cost_cents,
+      CASE WHEN sp.restocked THEN sp.line_cost_cents ELSE 0::bigint END AS credit_line_cost_cents
+    FROM source_parts sp WHERE sp.part_qty > 0
   ), all_parts AS (
-    SELECT id, order_item_id, product_id, product_name, quantity, unit_price_cents, extended_cents, unit, sort_order, part_order, part_qty, line_cost_cents, part_cost_cents, source_item_id FROM cost_allocated_parts
+    SELECT id, order_item_id, product_id, product_name, quantity, unit_price_cents, extended_cents, unit, sort_order, part_order, part_qty, credit_line_cost_cents, part_cost_cents, source_item_id, restocked
+    FROM allocated_parts
     UNION ALL
-    SELECT rs.id, rs.order_item_id, rs.product_id, rs.product_name, rs.quantity, rs.unit_price_cents, rs.extended_cents, rs.unit, rs.sort_order, 2147483647::bigint,
-      rs.quantity - COALESCE((SELECT SUM(cp.part_qty) FROM cost_allocated_parts cp WHERE cp.id = rs.id),0), 0::bigint, 0::bigint, NULL::uuid
-    FROM return_src rs WHERE rs.quantity > COALESCE((SELECT SUM(cp.part_qty) FROM cost_allocated_parts cp WHERE cp.id = rs.id),0)
+    SELECT rs.id, rs.order_item_id, rs.product_id, rs.product_name, rs.quantity,
+      rs.unit_price_cents, rs.extended_cents, rs.unit, rs.sort_order,
+      2147483647::bigint,
+      rs.quantity - COALESCE((SELECT SUM(ap.part_qty) FROM allocated_parts ap WHERE ap.id = rs.id), 0),
+      0::bigint, 0::bigint, NULL::uuid, rs.restocked
+    FROM return_src rs
+    WHERE rs.quantity > COALESCE((SELECT SUM(ap.part_qty) FROM allocated_parts ap WHERE ap.id = rs.id), 0)
   ), sequenced AS (
-    SELECT ap.*, SUM(ap.part_qty) OVER (PARTITION BY ap.id ORDER BY ap.part_order, ap.line_cost_cents ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_qty,
-      COALESCE(SUM(ap.part_qty) OVER (PARTITION BY ap.id ORDER BY ap.part_order, ap.line_cost_cents ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) AS prior_qty
+    SELECT ap.*, SUM(ap.part_qty) OVER (PARTITION BY ap.id ORDER BY ap.part_order, ap.credit_line_cost_cents ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_qty,
+      COALESCE(SUM(ap.part_qty) OVER (PARTITION BY ap.id ORDER BY ap.part_order, ap.credit_line_cost_cents ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) AS prior_qty
     FROM all_parts ap
   ), inserted AS (
     INSERT INTO public.invoice_items (invoice_id, order_item_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents, return_credit_cogs_cents, return_credit_source_item_id, unit_size, sort_order)
     SELECT v_invoice_id, s.order_item_id, s.product_id, 'Return credit - ' || s.product_name, -s.part_qty, s.unit_price_cents,
       -(ROUND(s.extended_cents * s.cum_qty / NULLIF(s.quantity,0)) - ROUND(s.extended_cents * s.prior_qty / NULLIF(s.quantity,0))),
-      s.line_cost_cents, -s.part_cost_cents, s.source_item_id, s.unit, s.sort_order
+      s.credit_line_cost_cents, -s.part_cost_cents,
+      -- RETURN_CREDIT_ZERO_COGS_SOURCE_LINEAGE_BEGIN
+      s.source_item_id,
+      -- RETURN_CREDIT_ZERO_COGS_SOURCE_LINEAGE_END
+      s.unit, s.sort_order
     FROM sequenced s
     RETURNING id
   )
   SELECT COALESCE(SUM(s.part_cost_cents),0)::bigint INTO v_cogs FROM sequenced s;
+
+  -- One return header can credit only its own customer. A quantity with no
+  -- recognized sale line remains an explicit unlinked zero-COGS remainder,
+  -- preserving the existing delivered-but-unbilled return path. But if that
+  -- order line was recognized to another split-billing customer, refuse to
+  -- move the other customer's AR into the order customer's credit memo.
+  IF EXISTS (
+    SELECT 1
+    FROM public.return_items ri
+    JOIN public.returns r ON r.id = ri.return_id
+    JOIN public.invoice_items source_line
+      ON source_line.order_item_id = ri.order_item_id
+     AND source_line.product_id = ri.product_id
+     AND source_line.unit_size IS NOT DISTINCT FROM ri.unit
+     AND source_line.quantity > 0
+     AND source_line.cost_cents >= 0
+    JOIN public.invoices source_invoice
+      ON source_invoice.id = source_line.invoice_id
+     AND source_invoice.customer_id <> r.customer_id
+     AND source_invoice.invoice_type <> 'credit_memo'
+     AND source_invoice.status IN ('posted','overdue','paid')
+     AND source_invoice.deleted_at IS NULL
+    WHERE ri.return_id = p_return_id
+  ) THEN
+    RAISE EXCEPTION 'RETURN_CREDIT_SPLIT_CUSTOMER_SOURCE_REQUIRES_LINEAGE';
+  END IF;
 
   -- A new, backdated same-cost source lot can change the quantity allocator's
   -- FIFO anchors after an earlier fractional return. Cap against the exact
@@ -1274,7 +1353,7 @@ DO $postflight$
 DECLARE
   v_expected jsonb := jsonb_build_object(
     '_issue_return_credit_header_only_impl_20260825', '9c12163485bab6917cf884ed043157e34af8ba0e532a8a443081bd262626ff06',
-    '_issue_return_credit_impl', 'b3b6e765b01bf6832a571e8ce5e3c57cc348509fac9126dd906e86173e371a55',
+    '_issue_return_credit_impl', 'bc8bffe35a79c3a15c54409984d134e4953e50ab0e05a72cf069f2bc9d115467',
     '_receive_return_impl_before_inventory_seed_20260825', '9fc0e677df01af0afab1c4469cda14bdb4eebb9b0c55ef6f1512ef39bdb22062',
     '_receive_return_impl_20260714', '150b7ad4f001929baecc73078c181de092477ced7b3a4b3f85bfb2d9438dd789',
     'issue_return_credit', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314',
@@ -1636,7 +1715,7 @@ BEGIN
   FROM pg_proc p
   WHERE p.oid = to_regprocedure('public.guard_return_credit_source_recognition()');
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
-         '0a5b569800bea5a0acbfaf55020ae4a9bde462a937e8db24597a586e477811b7'
+         '21ce8c23f0fc3236a46116ac45e1965b7a5e211cd9826f43654aa1ecc6d9f3cf'
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'guard_return_credit_source_recognition') <> 1
      OR NOT EXISTS (
@@ -1666,7 +1745,7 @@ BEGIN
   FROM pg_proc p
   WHERE p.oid = to_regprocedure('public.guard_return_credit_lineage()');
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') IS DISTINCT FROM
-        'c598d6afa59082e540b7d38c2f413bf204c5b93f938ab570cb82978c9c84a86d'
+        '575d1fc7fc7d67b0cc6e488bfeafa0870fa7b48bc2f98dc10d6cac914fe9a02f'
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = 'guard_return_credit_lineage') <> 1
      OR NOT EXISTS (

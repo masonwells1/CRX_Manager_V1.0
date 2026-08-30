@@ -150,9 +150,9 @@ BEGIN
     salesman_id, created_by, total_amount_cents, invoice_date
   ) VALUES (
     p_order_id, v_order.customer_id, p_invoice_type, 'draft',
-    COALESCE(v_order.season, compute_season((now() AT TIME ZONE 'America/Chicago')::date)),
+    COALESCE(v_order.season, (SELECT current_season())),
     COALESCE(p_salesman_id, v_order.salesman_id),
-    v_actor, 0, (now() AT TIME ZONE 'America/Chicago')::date
+    v_actor, 0, CURRENT_DATE
   )
   RETURNING id INTO v_invoice_id;
 
@@ -415,9 +415,8 @@ BEGIN
     INSERT INTO invoices (order_id, customer_id, invoice_type, status, season, salesman_id,
       created_by, total_amount_cents, invoice_date, invoice_group_id, header_notes)
     VALUES (p_order_id, v_cust.customer_id, p_invoice_type, 'draft',
-      COALESCE(v_order.season, compute_season((now() AT TIME ZONE 'America/Chicago')::date)),
-      COALESCE(p_salesman_id, v_order.salesman_id), auth.uid(), 0,
-      (now() AT TIME ZONE 'America/Chicago')::date, v_group_id,
+      COALESCE(v_order.season, current_season()),
+      COALESCE(p_salesman_id, v_order.salesman_id), auth.uid(), 0, CURRENT_DATE, v_group_id,
       'Split invoice (by field/acre) from order ' || v_order.order_number)
     RETURNING id INTO v_invoice_id;
 
@@ -494,7 +493,13 @@ DECLARE
   v_split regprocedure := 'public._create_split_invoices_from_order_provenance_impl_20260719(uuid,uuid,text,text)'::regprocedure;
   v_order_new text := E'SELECT COUNT(*) INTO v_existing_count\n    FROM invoices\n   WHERE order_id = p_order_id\n     AND status NOT IN (''voided'', ''cancelled'')\n     AND invoice_type <> ''credit_memo''\n     AND deleted_at IS NULL;';
   v_split_new text := E'SELECT COUNT(*) INTO v_existing_count FROM invoices\n    WHERE order_id = p_order_id AND status NOT IN (''voided'', ''cancelled'')\n     AND invoice_type <> ''credit_memo''\n     AND deleted_at IS NULL;';
+  v_order_hash text;
+  v_split_hash text;
 BEGIN
+  SELECT encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex')
+    INTO v_order_hash FROM pg_proc p WHERE p.oid = v_order;
+  SELECT encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex')
+    INTO v_split_hash FROM pg_proc p WHERE p.oid = v_split;
   IF NOT EXISTS (
        SELECT 1 FROM pg_proc p
        WHERE p.oid = v_order
@@ -504,7 +509,7 @@ BEGIN
          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
          AND pg_get_userbyid(p.proowner) = 'postgres'
          AND encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') =
-             '67e0077287a535c49adb0ad31e8b686194c35f04ae923f1b56212cc38f0b67c9'
+             'c8b12fc25025e598846b6b2fbdfe4e0fd0e30078086b17194807f1428b9d0d7e'
          AND (length(p.prosrc) - length(replace(p.prosrc, v_order_new, ''))) / length(v_order_new) = 1
      )
      OR NOT EXISTS (
@@ -516,7 +521,7 @@ BEGIN
          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
          AND pg_get_userbyid(p.proowner) = 'postgres'
          AND encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') =
-             'bb9740b494da3d5ea8495158b8bf9830cc2bb8f679ca10764d3de1a52ab692fa'
+             '9d3de61eb30e9b9435556da45fe17c15a1b83285c917e3a5e7c2893cb4428104'
          AND (length(p.prosrc) - length(replace(p.prosrc, v_split_new, ''))) / length(v_split_new) = 1
      )
      OR EXISTS (
@@ -525,7 +530,8 @@ BEGIN
          AND (has_function_privilege(r.oid, v_order, 'EXECUTE')
               OR has_function_privilege(r.oid, v_split, 'EXECUTE'))
      ) THEN
-    RAISE EXCEPTION 'RETURN_CREDIT_ORDER_GATE_POSTFLIGHT_CONTRACT_DRIFT';
+    RAISE EXCEPTION 'RETURN_CREDIT_ORDER_GATE_POSTFLIGHT_CONTRACT_DRIFT: order %, split %',
+      v_order_hash, v_split_hash;
   END IF;
 END;
 $postflight$;
