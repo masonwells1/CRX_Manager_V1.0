@@ -374,18 +374,62 @@ test('changing the pull request base resets both workflow labels', async () => {
   assert.deepEqual(harness.comments, []);
 });
 
-test('editing pull request metadata without changing the base does not reset labels', async () => {
+test('a metadata edit clears stale requested state after replacing a queued synchronize reset', async () => {
   const harness = makeHarness({
     action: 'edited',
     changes: { title: { from: 'Old title' } },
     eventLabel: null,
+    eventPullRequest: pullRequest({ head: NEXT_HEAD, labels: [READY_LABEL, REQUESTED_LABEL] }),
+    pulls: [pullRequest({ head: NEXT_HEAD, labels: [READY_LABEL, REQUESTED_LABEL] })],
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      created_at: new Date().toISOString(),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'reset');
+  assert.equal(result.reason, 'pull_request_target.edited.stale_state');
+  assert.equal(harness.liveLabels.size, 0);
+  assert.equal(harness.comments.length, 1);
+});
+
+test('a metadata edit preserves a confirmed current-head request and removes stray ready state', async () => {
+  const harness = makeHarness({
+    action: 'edited',
+    changes: { body: { from: 'Old body' } },
+    eventLabel: null,
     pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      created_at: new Date().toISOString(),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'duplicate');
+  assert.equal(result.headSha, HEAD);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.comments.length, 1);
+});
+
+test('a metadata edit with no workflow state is ignored', async () => {
+  const harness = makeHarness({
+    action: 'edited',
+    changes: { title: { from: 'Old title' } },
+    eventLabel: null,
+    pulls: [pullRequest({ labels: [] })],
   });
   const result = await execute(harness);
 
   assert.equal(result.status, 'ignored');
-  assert.equal(result.reason, 'pull_request_target.edited');
-  assert.deepEqual([...harness.liveLabels].sort(), [READY_LABEL, REQUESTED_LABEL].sort());
+  assert.equal(result.reason, 'pull_request_target.edited.no_gate_state');
+  assert.equal(harness.liveLabels.size, 0);
   assert.deepEqual(harness.comments, []);
 });
 

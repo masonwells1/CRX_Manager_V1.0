@@ -318,6 +318,51 @@ async function runGate({ github, context, core, config, attemptState }) {
     });
   }
 
+  if (action === 'edited') {
+    const editedPullRequest = (await github.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: pullNumber,
+    })).data;
+    const editedLabels = pullRequestLabelNames(editedPullRequest);
+
+    if (editedLabels.has(REQUESTED_LABEL)) {
+      const editedHeadSha = editedPullRequest.head.sha;
+      if (await requestedMarkerHasCommand({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        headSha: editedHeadSha,
+      })) {
+        await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+        core.notice(`Preserved the confirmed CodeRabbit request for ${editedHeadSha} after a metadata edit.`);
+        return { status: 'duplicate', headSha: editedHeadSha };
+      }
+      return resetLabels({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        reason: 'pull_request_target.edited.stale_state',
+      });
+    }
+
+    if (editedLabels.has(READY_LABEL)) {
+      return resetLabels({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        reason: 'pull_request_target.edited.unconfirmed_ready_state',
+      });
+    }
+
+    return { status: 'ignored', reason: 'pull_request_target.edited.no_gate_state' };
+  }
+
   if (action !== 'labeled' || normalize(context.payload.label?.name) !== READY_LABEL) {
     return { status: 'ignored', reason: `pull_request_target.${action}` };
   }
