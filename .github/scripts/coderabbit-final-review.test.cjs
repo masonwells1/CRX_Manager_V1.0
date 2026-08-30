@@ -13,21 +13,43 @@ const {
 
 const HEAD = '1111111111111111111111111111111111111111';
 const NEXT_HEAD = '2222222222222222222222222222222222222222';
-const REQUIRED_CHECKS = ['foundation', 'Vercel'];
+const REQUIRED_CHECKS = [
+  {
+    name: 'foundation',
+    source: 'check_run',
+    appId: 15368,
+    workflowId: 4242,
+    workflowPath: '.github/workflows/ci.yml',
+  },
+  {
+    name: 'Vercel',
+    source: 'status',
+    creator: 'vercel[bot]',
+  },
+];
 
 function completedCheck(name, conclusion = 'success') {
   return {
     id: 1,
+    app: { id: 15368 },
     name,
     status: 'completed',
     conclusion,
     created_at: '2026-08-30T11:59:00Z',
     completed_at: '2026-08-30T12:00:00Z',
+    workflow_id: 4242,
+    workflow_path: '.github/workflows/ci.yml',
   };
 }
 
 function commitStatus(context, state = 'success') {
-  return { context, state, updated_at: '2026-08-30T12:00:00Z' };
+  return {
+    id: 1,
+    context,
+    state,
+    created_at: '2026-08-30T12:00:00Z',
+    creator: { login: context === 'Vercel' ? 'vercel[bot]' : 'coderabbitai[bot]' },
+  };
 }
 
 function pullRequest({ head = HEAD, labels = [READY_LABEL], draft = false, autoMerge = null } = {}) {
@@ -56,6 +78,7 @@ function makeHarness({
   existingComments = [],
   checkRunsSequence = null,
   statusesSequence = null,
+  resolvedWorkflowPath = '.github/workflows/ci.yml',
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -76,6 +99,11 @@ function makeHarness({
 
   const github = {
     rest: {
+      actions: {
+        getWorkflowRun: async () => ({
+          data: { workflow_id: 4242, path: resolvedWorkflowPath },
+        }),
+      },
       checks: {
         listForRef: async () => {
           const sequence = checkRunsSequence || [checkRuns];
@@ -274,7 +302,15 @@ test('a new commit resets both workflow labels', async () => {
 test('missing, pending, or failed checks block the paid review request', async () => {
   const harness = makeHarness({
     checkRuns: [
-      { name: 'foundation', status: 'in_progress', conclusion: null, started_at: '2026-08-30T12:00:00Z' },
+      {
+        id: 2,
+        app: { id: 15368 },
+        name: 'foundation',
+        status: 'in_progress',
+        conclusion: null,
+        started_at: '2026-08-30T12:00:00Z',
+        workflow_path: '.github/workflows/ci.yml',
+      },
       completedCheck('security-scan', 'failure'),
     ],
     statuses: [commitStatus('CodeRabbit', 'pending')],
@@ -294,7 +330,14 @@ test('a check rerun that starts during the quiet confirmation blocks the request
   const harness = makeHarness({
     checkRunsSequence: [
       [completedCheck('foundation')],
-      [{ name: 'foundation', status: 'in_progress', conclusion: null }],
+      [{
+        id: 2,
+        app: { id: 15368 },
+        name: 'foundation',
+        status: 'in_progress',
+        conclusion: null,
+        workflow_path: '.github/workflows/ci.yml',
+      }],
     ],
   });
   const result = await execute(harness);
@@ -310,21 +353,25 @@ test('a newer overlapping rerun wins even if an older run completes later', () =
     checkRuns: [
       {
         id: 100,
+        app: { id: 15368 },
         name: 'foundation',
         status: 'completed',
         conclusion: 'success',
         created_at: '2026-08-30T12:00:00Z',
         started_at: '2026-08-30T12:00:01Z',
         completed_at: '2026-08-30T12:10:00Z',
+        workflow_path: '.github/workflows/ci.yml',
       },
       {
         id: 101,
+        app: { id: 15368 },
         name: 'foundation',
         status: 'in_progress',
         conclusion: null,
         created_at: '2026-08-30T12:05:00Z',
         started_at: '2026-08-30T12:05:01Z',
         completed_at: null,
+        workflow_path: '.github/workflows/ci.yml',
       },
     ],
     statuses: [commitStatus('Vercel')],
@@ -520,4 +567,80 @@ test('check evaluation accepts neutral/skipped results and ignores CodeRabbit pe
   });
 
   assert.deepEqual(blockers, []);
+});
+
+test('required checks demand exact success while optional neutral/skipped checks remain acceptable', () => {
+  const blockers = evaluateChecks({
+    checkRuns: [completedCheck('foundation', 'skipped')],
+    statuses: [commitStatus('Vercel')],
+    requiredChecks: REQUIRED_CHECKS,
+  });
+
+  assert.match(blockers.join('\n'), /foundation: trusted required check is missing or not successful/);
+});
+
+test('a same-name check from another app cannot mask a failed trusted required check', () => {
+  const trustedFailure = {
+    ...completedCheck('foundation', 'failure'),
+    id: 100,
+  };
+  const spoofedSuccess = {
+    ...completedCheck('foundation'),
+    id: 101,
+    app: { id: 99999 },
+    workflow_path: '.github/workflows/fake.yml',
+  };
+  const blockers = evaluateChecks({
+    checkRuns: [trustedFailure, spoofedSuccess],
+    statuses: [commitStatus('Vercel')],
+    requiredChecks: REQUIRED_CHECKS,
+  });
+
+  assert.match(blockers.join('\n'), /duplicate or untrusted same-name check provenance/);
+  assert.match(blockers.join('\n'), /trusted required check is missing or not successful/);
+});
+
+test('a same-app check from another workflow cannot satisfy a required check', () => {
+  const wrongWorkflow = {
+    ...completedCheck('foundation'),
+    id: 101,
+    workflow_path: '.github/workflows/not-ci.yml',
+  };
+  const blockers = evaluateChecks({
+    checkRuns: [wrongWorkflow],
+    statuses: [commitStatus('Vercel')],
+    requiredChecks: REQUIRED_CHECKS,
+  });
+
+  assert.match(blockers.join('\n'), /duplicate or untrusted same-name check provenance/);
+  assert.match(blockers.join('\n'), /trusted required check is missing or not successful/);
+});
+
+test('the live gate resolves a required GitHub Actions check to its workflow before requesting review', async () => {
+  const unresolvedCheck = {
+    ...completedCheck('foundation'),
+    workflow_path: undefined,
+    details_url: 'https://github.com/masonwells1/FarmRx/actions/runs/123456/job/789',
+  };
+  const harness = makeHarness({ checkRuns: [unresolvedCheck] });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'requested');
+  assert.deepEqual(harness.failures, []);
+});
+
+test('the live gate rejects a required GitHub Actions check resolved to another workflow', async () => {
+  const unresolvedCheck = {
+    ...completedCheck('foundation'),
+    workflow_path: undefined,
+    details_url: 'https://github.com/masonwells1/FarmRx/actions/runs/123456/job/789',
+  };
+  const harness = makeHarness({
+    checkRuns: [unresolvedCheck],
+    resolvedWorkflowPath: '.github/workflows/untrusted.yml',
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.match(harness.failures.join('\n'), /duplicate or untrusted same-name check provenance/);
 });

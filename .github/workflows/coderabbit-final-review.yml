@@ -5,6 +5,7 @@ on:
     types: [labeled, synchronize, reopened, converted_to_draft]
 
 permissions:
+  actions: read
   checks: read
   contents: read
   issues: write
@@ -13,7 +14,9 @@ permissions:
 
 concurrency:
   group: coderabbit-final-review-${{ github.repository_id }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
+  # A new commit cancels an in-flight ready-label run before it can spend a
+  # review on a candidate that is no longer frozen.
+  cancel-in-progress: true
 
 jobs:
   final-review-gate:
@@ -41,9 +44,25 @@ jobs:
               config: {
                 quietPeriodMs: 30_000,
                 requiredChecks: [
-                  'Lint, Type Check, Test, Build',
-                  'SQL Migration Validation',
-                  'Vercel',
+                  {
+                    name: 'Lint, Type Check, Test, Build',
+                    source: 'check_run',
+                    appId: 15368,
+                    workflowId: 237414414,
+                    workflowPath: '.github/workflows/ci.yml',
+                  },
+                  {
+                    name: 'SQL Migration Validation',
+                    source: 'check_run',
+                    appId: 15368,
+                    workflowId: 237414414,
+                    workflowPath: '.github/workflows/ci.yml',
+                  },
+                  {
+                    name: 'Vercel',
+                    source: 'status',
+                    creator: 'vercel[bot]',
+                  },
                 ],
                 ignoredChecks: ['CodeRabbit'],
               },

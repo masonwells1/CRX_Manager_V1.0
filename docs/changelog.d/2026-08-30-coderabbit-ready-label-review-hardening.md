@@ -11,6 +11,12 @@
   be hidden by an older run that finishes later.
 - Cleared both workflow labels when recording the requested marker fails, including ambiguous
   failures after GitHub may have accepted the label.
+- Bound required checks to their trusted GitHub App and workflow or status creator, and rejected
+  same-name results with duplicate or untrusted provenance.
+- Required exact success for the CI, SQL, and Vercel gates while retaining neutral/skipped support
+  only for optional reported checks.
+- Made new-commit reset events cancel an in-flight final-review run before it can post its command;
+  the post-comment head check remains as recovery for the service boundary after GitHub accepts it.
 
-Verification: all 28 focused final-review gate cases, lint, typecheck, production build, workflow
+Verification: all focused final-review gate cases, lint, typecheck, production build, workflow
 parity, and documentation checks passed after the review fixes.

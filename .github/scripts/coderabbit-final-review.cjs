@@ -19,67 +19,120 @@ function pullRequestLabelNames(pullRequest) {
   return new Set((pullRequest.labels || []).map((label) => normalize(label.name)));
 }
 
-function newestByName(items, nameKey, dateKeys) {
+function newestByIdentity(items, identityFor, dateKeys) {
   const newest = new Map();
 
   for (const item of items) {
-    const name = normalize(item[nameKey]);
-    if (!name) continue;
+    const identity = normalize(identityFor(item));
+    if (!identity) continue;
 
     const timestamp = dateKeys
       .map((key) => item[key])
       .find(Boolean) || '';
     const id = Number(item.id || 0);
-    const existing = newest.get(name);
-    if (
-      !existing
-      || timestamp > existing.timestamp
-      || (timestamp === existing.timestamp && id > existing.id)
-    ) {
-      newest.set(name, { item, timestamp, id });
+    const existing = newest.get(identity);
+    const newer = !existing || (
+      id > 0 && existing.id > 0
+        ? id > existing.id
+        : timestamp > existing.timestamp
+    );
+    if (newer) {
+      newest.set(identity, { item, timestamp, id });
     }
   }
 
   return new Map([...newest].map(([name, entry]) => [name, entry.item]));
 }
 
+function newestByName(items, nameKey, dateKeys) {
+  return newestByIdentity(items, (item) => item[nameKey], dateKeys);
+}
+
+function requiredCheckConfigBlocker(required) {
+  if (!required || typeof required !== 'object' || !required.name) {
+    return 'required-check configuration is missing a named provenance policy';
+  }
+  if (
+    required.source === 'check_run'
+    && required.appId
+    && required.workflowId
+    && required.workflowPath
+  ) return null;
+  if (required.source === 'status' && required.creator) return null;
+  return `${required.name}: required-check configuration is not provenance-bound`;
+}
+
+function checkRunMatchesProvenance(check, required) {
+  return Number(check.app?.id) === Number(required.appId)
+    && Number(check.workflow_id) === Number(required.workflowId)
+    && String(check.workflow_path || '') === String(required.workflowPath);
+}
+
+function statusMatchesProvenance(status, required) {
+  return normalize(status.creator?.login) === normalize(required.creator);
+}
+
 function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [] }) {
   const ignored = new Set(ignoredChecks.map(normalize));
-  const checksByName = newestByName(checkRuns, 'name', [
-    'created_at',
+  const checksByIdentity = newestByIdentity(checkRuns, (check) => (
+    `${check.name}|app:${check.app?.id || 'unknown'}`
+  ), [
     'started_at',
+    'completed_at',
   ]);
-  const statusesByName = newestByName(statuses, 'context', [
+  const statusesByIdentity = newestByIdentity(statuses, (status) => (
+    `${status.context}|creator:${status.creator?.login || 'unknown'}`
+  ), [
     'created_at',
     'updated_at',
   ]);
   const blockers = [];
 
-  for (const [name, check] of checksByName) {
-    if (ignored.has(name)) continue;
+  for (const check of checksByIdentity.values()) {
+    if (ignored.has(normalize(check.name))) continue;
     if (check.status !== 'completed' || !ACCEPTABLE_CHECK_CONCLUSIONS.has(check.conclusion)) {
       blockers.push(`${check.name}: ${check.status}/${check.conclusion || 'no conclusion'}`);
     }
   }
 
-  for (const [name, status] of statusesByName) {
-    if (ignored.has(name)) continue;
+  for (const status of statusesByIdentity.values()) {
+    if (ignored.has(normalize(status.context))) continue;
     if (status.state !== 'success') {
       blockers.push(`${status.context}: ${status.state}`);
     }
   }
 
-  for (const requiredName of requiredChecks) {
-    const name = normalize(requiredName);
-    const check = checksByName.get(name);
-    const status = statusesByName.get(name);
-    const checkPassed = check
-      && check.status === 'completed'
-      && ACCEPTABLE_CHECK_CONCLUSIONS.has(check.conclusion);
-    const statusPassed = status && status.state === 'success';
+  for (const required of requiredChecks) {
+    const configBlocker = requiredCheckConfigBlocker(required);
+    if (configBlocker) {
+      blockers.push(configBlocker);
+      continue;
+    }
 
-    if (!checkPassed && !statusPassed) {
-      blockers.push(`${requiredName}: required check is missing or not successful`);
+    const name = normalize(required.name);
+    const sameNameChecks = checkRuns.filter((check) => normalize(check.name) === name);
+    const sameNameStatuses = statuses.filter((status) => normalize(status.context) === name);
+
+    if (required.source === 'check_run') {
+      const trusted = sameNameChecks.filter((check) => checkRunMatchesProvenance(check, required));
+      const untrusted = sameNameChecks.filter((check) => !checkRunMatchesProvenance(check, required));
+      if (sameNameStatuses.length > 0 || untrusted.length > 0) {
+        blockers.push(`${required.name}: duplicate or untrusted same-name check provenance`);
+      }
+      const latest = newestByName(trusted, 'name', ['started_at', 'completed_at']).get(name);
+      if (!latest || latest.status !== 'completed' || latest.conclusion !== 'success') {
+        blockers.push(`${required.name}: trusted required check is missing or not successful`);
+      }
+    } else {
+      const trusted = sameNameStatuses.filter((status) => statusMatchesProvenance(status, required));
+      const untrusted = sameNameStatuses.filter((status) => !statusMatchesProvenance(status, required));
+      if (sameNameChecks.length > 0 || untrusted.length > 0) {
+        blockers.push(`${required.name}: duplicate or untrusted same-name status provenance`);
+      }
+      const latest = newestByName(trusted, 'context', ['created_at', 'updated_at']).get(name);
+      if (!latest || latest.state !== 'success') {
+        blockers.push(`${required.name}: trusted required status is missing or not successful`);
+      }
     }
   }
 
@@ -138,6 +191,32 @@ function validatePullRequest(pullRequest, defaultBranch, expectedHeadSha) {
   return reasons;
 }
 
+function actionRunId(detailsUrl) {
+  const match = String(detailsUrl || '').match(/\/actions\/runs\/(\d+)(?:\/|$)/);
+  return match ? Number(match[1]) : null;
+}
+
+async function attachRequiredWorkflowProvenance({ github, owner, repo, checkRuns, requiredChecks }) {
+  const workflowRequirements = requiredChecks.filter((required) => required?.source === 'check_run');
+  const candidates = checkRuns.filter((check) => workflowRequirements.some((required) => (
+    normalize(required.name) === normalize(check.name)
+    && Number(required.appId) === Number(check.app?.id)
+  )));
+
+  await Promise.all(candidates.map(async (check) => {
+    if (check.workflow_path) return;
+    const runId = actionRunId(check.details_url);
+    if (!runId) return;
+    try {
+      const response = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: runId });
+      check.workflow_id = response.data.workflow_id;
+      check.workflow_path = response.data.path;
+    } catch (error) {
+      check.workflow_provenance_error = error.message;
+    }
+  }));
+}
+
 function mergeabilityIsPending(pullRequest) {
   return pullRequest.mergeable === null || pullRequest.mergeable_state === 'unknown';
 }
@@ -193,6 +272,13 @@ async function collectCheckBlockers({ github, owner, repo, headSha, config }) {
       { owner, repo, ref: headSha, per_page: 100 },
     ),
   ]);
+  await attachRequiredWorkflowProvenance({
+    github,
+    owner,
+    repo,
+    checkRuns,
+    requiredChecks: config.requiredChecks,
+  });
   return evaluateChecks({
     checkRuns,
     statuses,
