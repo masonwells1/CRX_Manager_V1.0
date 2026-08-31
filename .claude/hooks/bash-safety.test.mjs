@@ -32,6 +32,75 @@ ok(checkDangerousCommand("git push -f origin main"), "force push -f blocked");
 ok(checkDangerousCommand("git reset --hard HEAD~1"), "hard reset blocked");
 ok(checkDangerousCommand("git checkout ."), "discard-all checkout blocked");
 ok(checkDangerousCommand("git clean -fd"), "git clean -f blocked");
+
+// `git clean` dry-run exemption (2026-08-31). The old flat cluster pattern
+// denied `git clean -nd` — a dry run that deletes NOTHING — with a message
+// telling the reader to run a dry run first. These pin both directions.
+// Destructive spellings MUST stay blocked:
+ok(checkDangerousCommand("git clean -f"), "git clean -f blocked");
+ok(checkDangerousCommand("git clean -fdx"), "git clean -fdx blocked");
+ok(checkDangerousCommand("git clean --force"), "git clean --force blocked");
+ok(checkDangerousCommand("git clean -d"), "git clean -d without a dry run blocked");
+ok(checkDangerousCommand("git clean -x"), "git clean -x without a dry run blocked");
+ok(checkDangerousCommand("git -C /repo clean -fd"), "git clean -fd blocked through -C");
+// Force wins over a dry-run flag in the same cluster — deliberately conservative
+// rather than relying on git's -n/-f precedence inside a destructive guard.
+ok(checkDangerousCommand("git clean -fn"), "git clean -fn blocked (force wins)");
+ok(checkDangerousCommand("git clean --dry-run --force"), "git clean --dry-run --force blocked (force wins)");
+// A dry run must NOT excuse a destructive sibling invocation (gpt-5.6-sol HIGH).
+ok(checkDangerousCommand("git clean -n && git clean -fd"), "dry run does not excuse a later destructive git clean");
+ok(checkDangerousCommand("git clean -nd; git clean -fdx"), "dry run does not excuse a destructive git clean after ';'");
+// An operand after `--` is a pathspec, never a flag (gpt-5.6-sol HIGH).
+ok(checkDangerousCommand("git clean -f -- -n"), "`-n` after `--` is a pathspec, not a dry-run flag");
+ok(checkDangerousCommand("git clean -fd -- -n -d"), "pathspecs after `--` never exempt a destructive git clean");
+// Attached `-e <pattern>` inside a cluster. Git parses `-fde*.tmp` as
+// `-f -d -e '*.tmp'` — a real force-delete. An earlier version of this fix
+// required the whole token to be letters, skipped these tokens entirely, and
+// permitted them; the flat pattern it replaced had caught them, so that was a
+// regression (gpt-5.6-sol exact-HEAD review, 2026-08-31, HIGH).
+ok(checkDangerousCommand("git clean -fde*.tmp"), "clustered force with attached exclude pattern blocked");
+ok(checkDangerousCommand("git clean -fefoo/bar"), "clustered force with attached exclude path blocked");
+ok(checkDangerousCommand("git clean -fdx -e *.tmp"), "force with a separate exclude flag blocked");
+ok(checkDangerousCommand("git clean -de*.tmp"), "cluster pruning with attached exclude and no dry run blocked");
+// FAIL-CLOSED BY DESIGN: a dry run carrying an exclude is not in the allowlist
+// grammar, so it keeps the original blocked behaviour. Over-blocking an exotic
+// spelling is the intended cost of a carve-out that cannot open a bypass.
+ok(checkDangerousCommand("git clean -nde*.tmp"), "dry run with attached exclude is outside the allowlist and stays blocked");
+eq(checkDangerousCommand("git clean -e *.tmp"), null, "exclude alone is not destructive");
+// Git's OWN global options precede the subcommand and some consume the next
+// token, so they must never be read as clean flags. In the first case below the
+// `-n` is the directory argument to `-C`, not a dry run; in the second the `-n`
+// is the exclude pattern for a standalone `-e`. An earlier version of this fix
+// scanned every dash token in the segment, set dryRun from those, and permitted
+// a destructive `clean -dx` (gpt-5.6-sol exact-HEAD review, 2026-08-31, HIGH).
+ok(checkDangerousCommand("git -C -n -c clean.requireForce=false clean -dx"), "`-n` as a -C directory argument is not a dry run");
+ok(checkDangerousCommand("git clean -e -n -dx"), "`-n` as a standalone -e pattern is not a dry run");
+ok(checkDangerousCommand("git clean --exclude -n -dx"), "`-n` as a --exclude pattern is not a dry run");
+ok(checkDangerousCommand("git -c core.pager=n clean -fd"), "global -c does not mask a destructive clean");
+// Also fail-closed: only a bare `-C <path>` prefix is in the grammar. Other
+// global options are not recognised, so the segment keeps the original blocked
+// behaviour rather than being guessed at.
+ok(checkDangerousCommand("git -C /repo -c core.pager=less clean -nd"), "unrecognised global options are outside the allowlist and stay blocked");
+// Genuine dry runs MUST be allowed — this is the bug being fixed:
+eq(checkDangerousCommand("git clean -nd"), null, "git clean -nd is a dry run and is allowed");
+eq(checkDangerousCommand("git clean -n"), null, "git clean -n is allowed");
+eq(checkDangerousCommand("git clean -ndx"), null, "git clean -ndx is a dry run and is allowed");
+eq(checkDangerousCommand("git clean --dry-run"), null, "git clean --dry-run is allowed");
+eq(checkDangerousCommand("git clean --dry-run -d"), null, "git clean --dry-run -d is allowed");
+// Fail-closed: split dry-run spellings are outside the allowlist grammar.
+ok(checkDangerousCommand("git clean -d -n"), "split `-d -n` spelling is outside the allowlist and stays blocked");
+// The allowlist grammar has NO free-text slot. An earlier version permitted an
+// optional `-C <path>` with `<path>` as any non-whitespace text, which was a
+// fail-open: the shell processes a redirect or command substitution in that
+// operand BEFORE git runs (gpt-5.6-sol exact-HEAD review, 2026-08-31, HIGH).
+ok(checkDangerousCommand("git -C >src/App.tsx clean -nd"), "redirect in a -C operand truncates a file before git runs and stays blocked");
+ok(checkDangerousCommand("git -C $(cat /tmp/x) clean -nd"), "command substitution in a -C operand stays blocked");
+ok(checkDangerousCommand("git -C `cat /tmp/x` clean -nd"), "backtick substitution in a -C operand stays blocked");
+ok(checkDangerousCommand("git -C /repo clean -nd"), "`-C` is outside the allowlist entirely; run the dry run from the directory itself");
+// Fail-closed: anything trailing the option group leaves the grammar, including
+// a harmless redirect. Over-blocking here is the intended cost of a slot-free
+// allowlist — pipe the output of a plain `git clean -n` instead.
+ok(checkDangerousCommand("git clean -nd > out.txt"), "trailing redirect leaves the allowlist and stays blocked");
 ok(checkDangerousCommand("npm test -- --no-verify"), "--no-verify blocked");
 ok(checkDangerousCommand("rm -rf src"), "rm -rf src blocked");
 ok(checkDangerousCommand("rm -rf supabase"), "rm -rf supabase blocked");

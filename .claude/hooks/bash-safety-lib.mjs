@@ -400,7 +400,11 @@ export const DANGEROUS_CMD_CHECKS = [
   // subcommand (Codex P1 round 5, PR #352). `switch -c <branch>` stays allowed.
   [/\bgit\b[^\r\n;&|]*\bswitch\b[^\r\n;&|]*\s(?:--discard-changes\b|--force\b|-[A-Za-z]*f[A-Za-z]*\b)/, "Blocked force switch. It throws away local modifications. Use `git stash` first, then a plain `git switch <branch>`."],
   [/\bgit\b[^\r\n;&|]*\brestore\b[^\r\n;&|]*\s(?:--\s+)?\.\s*(?:$|[;&|<>]|2>)/, "Blocked discard-all. Use targeted `git restore <file>`."],
-  [/\bgit\b[^\r\n;&|]*\bclean\b[^\r\n;&|]*\s(?:--force\b|-[A-Za-z]*[fdx][A-Za-z]*\b)/, "Blocked `git clean -f`. Permanently deletes untracked files. Review with `git clean -n` first."],
+  // `git clean` is handled by checkGitClean() below, not by a flat pattern: the
+  // old `-[A-Za-z]*[fdx][A-Za-z]*` cluster denied `git clean -nd` — a DRY RUN,
+  // which deletes nothing — with a message telling the reader to run a dry run
+  // first. A flat regex cannot fix that safely (`--dry-run` itself matches a
+  // naive `[dx]` cluster), so the decision moved to a per-invocation parse.
   [/--no-verify\b/, "Blocked `--no-verify`. Pre-commit hooks prevent bugs — fix the underlying issue."],
   [/\brm\s+-[A-Za-z]*r[A-Za-z]*f?[A-Za-z]*\s+(?:\.\.?\s*(?:$|;|&|\|)|\.\.?\/(?:src|supabase|docs)(?:\b|\/)|\/?(?:src|supabase|docs)(?:\b|\/))/, "Blocked recursive deletion of project source/migrations/docs."],
   // Long/split option spellings of the same recursive delete — `rm --recursive
@@ -473,6 +477,56 @@ export function checkDestructiveSql(cmd) {
 // Run raw text against the ordered pattern table + the destructive-SQL rule.
 // Returns the FIRST matching reason, or null. This is the literal-command check
 // only — no npm-script resolution (see checkCommandDeep for that).
+const GIT_CLEAN_REASON = "Blocked `git clean -f`. Permanently deletes untracked files. Review with `git clean -n` (or `git clean -nd`) first.";
+
+// `git clean` blocks unless the invocation is an unmistakable DRY RUN. A dry run
+// deletes nothing, so denying it with a message that says "review with
+// `git clean -n` first" blocked the very command it recommended: the original
+// flat pattern matched any option cluster containing `f`, `d`, or `x`, and `-nd`
+// — the standard "what would this show, including directories" probe — has `d`.
+//
+// DESIGN: strict allowlist, deliberately NOT a parser. The original destructive
+// pattern is kept verbatim and still decides; the ONLY change is that a segment
+// matching a tiny, boring dry-run grammar is exempted from it. Anything that
+// grammar does not recognise keeps the original behaviour, so an unanticipated
+// spelling stays BLOCKED. A survivor is a false positive, never a hole.
+//
+// This replaced two successive hand-written option parsers, each of which the
+// exact-HEAD gpt-5.6-sol review caught opening a real destructive bypass that
+// the flat pattern had blocked (2026-08-31, two HIGH findings):
+//   * `git clean -fde*.tmp` — git allows the `-e` exclude pattern to be ATTACHED,
+//     so this is `-f -d -e '*.tmp'`; a letters-only token test skipped it whole.
+//   * `git -C -n -c clean.requireForce=false clean -dx` — the `-n` there is the
+//     DIRECTORY argument to git's global `-C`, not a dry-run flag.
+// Both stay blocked here because neither matches the allowlist, and this code
+// never has to understand either construction. That is the point of the shape.
+//
+// Segmentation matches the sibling git rules above (`[^\r\n;&|]*`), so a dry run
+// never excuses a destructive sibling: `git clean -n && git clean -fd` blocks.
+const GIT_CLEAN_DESTRUCTIVE_RE = /\bgit\b[^\r\n;&|]*\bclean\b[^\r\n;&|]*\s(?:--force\b|-[A-Za-z]*[fdx][A-Za-z]*\b)/;
+// The whole segment must be exactly `git clean` plus one dry-run option group,
+// and NOTHING else. The grammar deliberately contains NO free-text slot.
+//
+// An earlier version allowed an optional `-C <path>` prefix with `<path>` as
+// `[^\s]+`. That one slot was a fail-open: `git -C >src/App.tsx clean -nd`
+// matched, and the SHELL truncates App.tsx before git ever runs — command
+// substitution in the same operand hides arbitrary commands the same way
+// (gpt-5.6-sol exact-HEAD review, 2026-08-31, HIGH; the base pattern denied it).
+// Sanitising an operand is the same losing game as parsing one, so the slot is
+// gone instead. `git -C <path> clean -nd` is therefore blocked, which is the
+// fail-closed cost: run the dry run from the directory itself.
+const GIT_CLEAN_DRY_RUN_ONLY_RE = /^\s*git\s+clean\s+(?:-n[dx]{0,2}|--dry-run(?:\s+-[dx]{1,2})?)\s*$/;
+export function checkGitClean(cmd) {
+  const text = String(cmd || "");
+  if (!text) return null;
+  for (const segment of text.split(/[\r\n;&|]+/)) {
+    if (!GIT_CLEAN_DESTRUCTIVE_RE.test(segment)) continue;
+    if (GIT_CLEAN_DRY_RUN_ONLY_RE.test(segment)) continue;
+    return GIT_CLEAN_REASON;
+  }
+  return null;
+}
+
 export function checkDangerousCommand(cmd) {
   const text = String(cmd || "");
   if (!text) return null;
@@ -481,6 +535,8 @@ export function checkDangerousCommand(cmd) {
   for (const [re, reason] of DANGEROUS_CMD_CHECKS) {
     if (re.test(text)) return reason;
   }
+  const gitCleanReason = checkGitClean(text);
+  if (gitCleanReason) return gitCleanReason;
   return checkDestructiveSql(text);
 }
 
