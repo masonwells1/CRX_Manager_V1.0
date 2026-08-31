@@ -18,11 +18,12 @@ Read-only inventory of every remote branch on `masonwells1/CRX_Manager_V1.0`.
 
 ## The baseline this is measured against
 
-Every figure below is relative to **`origin/main` at `4436aded119d1437e43499ee90f394e5092be03f`**.
+Every figure below is relative to **`origin/main` at `67e6da9d9ab409b65d5bbfd319de69b8783322e8`**.
 
 This matters as much as the branch tip OIDs. `main` moves, and when it does the comparison
-changes underneath a branch that never moved at all. **`main` moved twice while this report was
-in review, and both times the numbers changed.**
+changes underneath a branch that never moved at all. **`main` moved three times in the few hours
+this report was in review, and each move changed something in it.** That rate is the real
+finding: this table is a photograph, and the thing it photographs is moving.
 
 The first move, to `ec90015d`, deleted `.github/workflows/production-migration.yml` and
 `production-approval-canary.yml`. Seven branches changed their unique-content figures without a
@@ -39,8 +40,17 @@ have protected a branch that no longer needed protecting — and, had the change
 way, could have deleted one that did.** Nothing was pushed to that branch; only the baseline
 moved.
 
-Across both moves no branch's *migration* classification changed. That is luck, not a property
-of the measure.
+The third move merged PR `#526`, flipping `claude/crx-manager-cleanup-5da404` from open to
+merged. It still holds unique content, so it is not newly safe — but the row that said "leave
+it alone, it has an open PR" no longer says why.
+
+Across all three moves no branch's *migration* classification changed. That is luck, not a
+property of the measure.
+
+**Do not read this as a reason to distrust the table — read it as the reason for the two
+re-checks it asks for.** The classifications were correct at each stated baseline. What moves is
+the world, and the report cannot chase it. Re-run the tip check and the PR lookup at the moment
+you delete, and the staleness stops mattering.
 
 Before acting on this report, confirm the server's `main` still points at the OID above with
 `git ls-remote origin refs/heads/main` — **not** a bare `git rev-parse origin/main`, which reads
@@ -90,7 +100,7 @@ still reports unmerged commits.
 | **Modifying an existing migration file** | 4 |
 | — of which appear in **both** rows above | 2 |
 | Distinct branches touching migrations | **14** |
-| Attached to an open PR | 15 |
+| Attached to an open PR | 14 |
 | No PR in the scanned window | 22 |
 
 ## Read this first: branches that modify an existing migration
@@ -339,69 +349,69 @@ Tip OIDs are abbreviated here; the 3 mechanically-safe branches carry their full
 
 | Branch | Tip at scan | Unique files | new | modified | New migs | Mod migs | Behind | PR status |
 |---|---|---|---|---|---|---|---|---|
-| `codex/section1-security-hardening-20260725` | `53f6177eb6af` | 16 | 4 | 12 | 1 |  | 603 | no PR in scanned window |
-| `chore/migration-ledger-reconcile-20260729` | `65716b1c2d91` | 6 | 0 | 6 |  |  | 558 | PR #275 closed unmerged |
-| `codex/idempotency-reset-order-hardening-20260802` | `9049efc80e3e` | 26 | 2 | 24 |  |  | 489 | no PR in scanned window |
-| `codex/section4-lifecycle-20260805` | `99cfcff5825e` | 11 | 0 | 11 |  |  | 442 | PR #321 closed unmerged |
-| `claude/log-session-attribution-fix` | `f9f5e5642b30` | 1 | 1 | 0 |  |  | 438 | PR #317 merged |
-| `claude/push-guard-fix-rescue-e3320d` | `300206b9c113` | 4 | 0 | 4 |  |  | 435 | no PR in scanned window |
-| `claude/rescue-unique-docs-20260807` | `bad8c8dbe4de` | 10 | 9 | 1 |  |  | 435 | no PR in scanned window |
-| `claude/ordering-cycle-review-t41vat-local-20260831` | `8fc8d81460e3` | 2 | 0 | 2 |  |  | 355 | no PR in scanned window |
-| `claude/return-credit-cogs-reversal` | `c4e83dea632b` | 4 | 1 | 3 | 1 |  | 357 | **open PR #361** |
-| `claude/ordering-cycle-review-t41vat` | `992ee0888176` | 2 | 0 | 2 |  |  | 353 | PR #356 merged; PR #363 closed unmerged |
-| `claude/pricing-audit-strategy-jym8rr` | `f4eaa8259834` | 31 | 8 | 23 | 2 |  | 357 | PR #350 closed unmerged |
-| `claude/wave-a-migrations-857dcd` | `3bfd6271caae` | 8 | 4 | 4 | 4 |  | 292 | no PR in scanned window |
-| `codex/harden-actor-binding-sql-reader` | `e652f7232da2` | 7 | 4 | 3 | 3 |  | 292 | PR #373 closed unmerged |
-| `claude/recover-applied-migrations-20260812` | `27817c2a5329` | 28 | 6 | 22 | 5 | 2 | 289 | PR #395 closed unmerged |
-| `claude/restrict-draw-down-owner` | `13e4c7b14f38` | 14 | 4 | 10 | 1 |  | 286 | no PR in scanned window |
-| `codex/pr389-coderabbit-fixes` | `203a4742a9c2` | 96 | 37 | 59 | 7 | 1 | 282 | PR #397 closed unmerged |
-| `codex/sol-gate-recovery-exception` | `9817fb9e058a` | 13 | 1 | 12 |  |  | 282 | PR #403 closed unmerged |
-| `claude/blend-unit-rebuild-step1` | `91051d74ecb3` | 7 | 0 | 7 |  |  | 207 | no PR in scanned window |
-| `claude/draw-down-price-tier-lines` | `b4c80b37c2a4` | 16 | 0 | 16 |  | 1 | 216 | PR #404 merged |
-| `claude/zealous-agnesi-aa7423` | `4347e4566435` | 12 | 2 | 10 |  |  | 214 | no PR in scanned window |
-| `claude/zen-easley-7d771d` | `23343e15409c` | 5 | 0 | 5 |  |  | 209 | no PR in scanned window |
-| `codex/fleet-scan-parked-state` | `6f766135fddb` | 5 | 0 | 5 |  |  | 180 | no PR in scanned window |
-| `pr435-work` | `0f095b81efe5` | 0 | 0 | 0 |  |  | 164 | no PR in scanned window |
-| `claude/coderabbit-setup-optimize-0f308d` | `5b58e3524aa4` | 13 | 3 | 10 |  |  | 106 | PR #441 closed unmerged |
-| `claude/codex-guard-single-ampersand` | `dddc6d74820a` | 4 | 0 | 4 |  |  | 91 | PR #464 closed unmerged |
-| `claude/codex-recursion-hard-guard` | `47820dff7ed6` | 15 | 10 | 5 |  |  | 106 | PR #452 closed unmerged |
-| `claude/push-guard-git-resolution` | `62d22b6e9de2` | 8 | 0 | 8 |  |  | 102 | PR #445 closed unmerged |
-| `codex/proof-wrapper-trusted-git-bootstrap` | `a2e1d0a18369` | 3 | 0 | 3 |  |  | 106 | PR #454 closed unmerged |
-| `fix/quote-fixture-stale-date` | `be5df11c5daf` | 1 | 0 | 1 |  |  | 89 | PR #468 closed unmerged |
-| `claude/codex-claude-cogs-handoff-7bde15` | `e3c4a3fc47df` | 4 | 2 | 2 |  |  | 81 | no PR in scanned window |
-| `claude/control-file-coverage-a41c` | `b985e919bef5` | 2 | 0 | 2 |  |  | 75 | no PR in scanned window |
-| `claude/guard-content-scan-and-savegate-flake` | `480dc106ef7b` | 7 | 0 | 7 |  |  | 75 | no PR in scanned window |
-| `claude/pr401-proof` | `9b2d86a5401a` | 14 | 1 | 13 | 1 |  | 81 | no PR in scanned window |
-| `claude/session-orchestration-setup-d73e6c` | `238d242ea87f` | 42 | 19 | 23 |  |  | 81 | **open PR #364** |
-| `codex/bootstrap-raw-patch-guard-20260825` | `fe73022380ed` | 2 | 0 | 2 |  |  | 82 | no PR in scanned window |
-| `codex/pr402-review-gaps-20260819` | `8811927fff8d` | 25 | 7 | 18 |  |  | 84 | PR #432 closed unmerged |
-| `claude/changelog-docs-honesty` | `cc8eed92c508` | 3 | 1 | 2 |  |  | 61 | PR #505 closed unmerged |
-| `claude/comment-fix-applied-closeout` | `01660702bca6` | 4 | 0 | 4 |  |  | 60 | PR #501 closed unmerged |
-| `claude/hold-latch-cross-session-envelope` | `c903bda704a5` | 7 | 0 | 7 |  |  | 63 | no PR in scanned window |
-| `claude/jobdetail-savegate-flake` | `60700533eb38` | 0 | 0 | 0 |  |  | 69 | PR #485 merged |
-| `claude/offline-review-stale-snapshot` | `5c2c129d431c` | 1 | 0 | 1 |  |  | 67 | no PR in scanned window |
-| `claude/pr364-guard-commits-local-20260831` | `57d27e79105b` | 45 | 19 | 26 |  |  | 72 | no PR in scanned window |
-| `claude/pr401-quote-version-trust-8e3db6` | `510a16121e6c` | 18 | 1 | 17 | 1 |  | 65 | no PR in scanned window |
-| `claude/remove-guard-hooks-f23691` | `0ac235d0e50e` | 4 | 1 | 3 |  |  | 60 | PR #503 closed unmerged |
-| `claude/xenodochial-dubinsky-b55362` | `b7e847d98ccd` | 11 | 0 | 11 |  |  | 67 | PR #493 merged |
-| `codex/actor-binding-mixed-notation-repair-20260810` | `5cd3d379da4f` | 12 | 3 | 9 |  |  | 72 | **open PR #449** |
-| `codex/section9-ap-safety-remediation` | `0f8bf3aad7f0` | 27 | 6 | 21 | 2 |  | 67 | PR #491 closed unmerged |
-| `claude/product-plan-rev12-followup` | `74ccba0f7888` | 3 | 1 | 2 |  |  | 57 | PR #507 closed unmerged |
-| `codex/section9-ap-safety-remediation-v2` | `4148f335e682` | 45 | 14 | 31 | 2 |  | 57 | **open PR #500** |
-| `codex/autonomy-with-hard-boundaries-20260827` | `3accebbef6ab` | 31 | 3 | 28 |  |  | 6 | PR #513 closed unmerged |
-| `codex/coderabbit-ready-label-20260830` | `7e87e0231601` | 16 | 5 | 11 |  |  | 5 | **open PR #516** |
-| `claude/bash-safety-opacity-cleanup` | `3d1690428695` | 3 | 1 | 2 |  |  | 4 | **open PR #527** |
-| `claude/crx-manager-cleanup-5da404` | `738d311a1e65` | 2 | 2 | 0 |  |  | 4 | **open PR #526** |
-| `claude/document-cleanup-review-r2nbhj` | `370c73b952f8` | 24 | 16 | 7 |  |  | 0 | no PR in scanned window |
-| `claude/harness-guardrail-review-bee189` | `2198e43db6e3` | 2 | 0 | 2 |  |  | 4 | **open PR #525** |
-| `claude/optimize-claude-md-79f8ad` | `86229bb0e361` | 1 | 0 | 1 |  |  | 4 | **open PR #528** |
-| `claude/pending-set-apply-guard` | `b141e84d56b1` | 11 | 4 | 7 |  |  | 57 | **open PR #502** |
-| `codex/pr509-source-recognition-fix-v2-20260830` | `259856da608f` | 6 | 1 | 5 |  | 2 | 4 | **open PR #517** |
-| `dependabot/github_actions/actions/checkout-7.0.1` | `cbf14d3e2af8` | 4 | 2 | 2 |  |  | 5 | **open PR #518** |
-| `dependabot/github_actions/actions/setup-node-7.0.0` | `bc8183c9e963` | 3 | 2 | 1 |  |  | 5 | **open PR #519** |
-| `dependabot/npm_and_yarn/eslint-10.4.1` | `66103fdbb6ae` | 2 | 0 | 2 |  |  | 5 | **open PR #522** |
-| `dependabot/npm_and_yarn/minor-and-patch-7fe11a6bea` | `949a1c5bec62` | 0 | 0 | 0 |  |  | 5 | PR #520 merged |
-| `dependabot/npm_and_yarn/react-major-cbee5c902d` | `2da0ec8cbd56` | 2 | 0 | 2 |  |  | 5 | **open PR #521** |
+| `codex/section1-security-hardening-20260725` | `53f6177eb6af` | 16 | 4 | 12 | 1 |  | 604 | no PR in scanned window |
+| `chore/migration-ledger-reconcile-20260729` | `65716b1c2d91` | 6 | 0 | 6 |  |  | 559 | PR #275 closed unmerged |
+| `codex/idempotency-reset-order-hardening-20260802` | `9049efc80e3e` | 26 | 2 | 24 |  |  | 490 | no PR in scanned window |
+| `codex/section4-lifecycle-20260805` | `99cfcff5825e` | 11 | 0 | 11 |  |  | 443 | PR #321 closed unmerged |
+| `claude/log-session-attribution-fix` | `f9f5e5642b30` | 1 | 1 | 0 |  |  | 439 | PR #317 merged |
+| `claude/push-guard-fix-rescue-e3320d` | `300206b9c113` | 4 | 0 | 4 |  |  | 436 | no PR in scanned window |
+| `claude/rescue-unique-docs-20260807` | `bad8c8dbe4de` | 10 | 9 | 1 |  |  | 436 | no PR in scanned window |
+| `claude/ordering-cycle-review-t41vat-local-20260831` | `8fc8d81460e3` | 2 | 0 | 2 |  |  | 356 | no PR in scanned window |
+| `claude/return-credit-cogs-reversal` | `c4e83dea632b` | 4 | 1 | 3 | 1 |  | 358 | **open PR #361** |
+| `claude/ordering-cycle-review-t41vat` | `992ee0888176` | 2 | 0 | 2 |  |  | 354 | PR #356 merged; PR #363 closed unmerged |
+| `claude/pricing-audit-strategy-jym8rr` | `f4eaa8259834` | 31 | 8 | 23 | 2 |  | 358 | PR #350 closed unmerged |
+| `claude/wave-a-migrations-857dcd` | `3bfd6271caae` | 8 | 4 | 4 | 4 |  | 293 | no PR in scanned window |
+| `codex/harden-actor-binding-sql-reader` | `e652f7232da2` | 7 | 4 | 3 | 3 |  | 293 | PR #373 closed unmerged |
+| `claude/recover-applied-migrations-20260812` | `27817c2a5329` | 28 | 6 | 22 | 5 | 2 | 290 | PR #395 closed unmerged |
+| `claude/restrict-draw-down-owner` | `13e4c7b14f38` | 14 | 4 | 10 | 1 |  | 287 | no PR in scanned window |
+| `codex/pr389-coderabbit-fixes` | `203a4742a9c2` | 96 | 37 | 59 | 7 | 1 | 283 | PR #397 closed unmerged |
+| `codex/sol-gate-recovery-exception` | `9817fb9e058a` | 13 | 1 | 12 |  |  | 283 | PR #403 closed unmerged |
+| `claude/blend-unit-rebuild-step1` | `91051d74ecb3` | 7 | 0 | 7 |  |  | 208 | no PR in scanned window |
+| `claude/draw-down-price-tier-lines` | `b4c80b37c2a4` | 16 | 0 | 16 |  | 1 | 217 | PR #404 merged |
+| `claude/zealous-agnesi-aa7423` | `4347e4566435` | 12 | 2 | 10 |  |  | 215 | no PR in scanned window |
+| `claude/zen-easley-7d771d` | `23343e15409c` | 5 | 0 | 5 |  |  | 210 | no PR in scanned window |
+| `codex/fleet-scan-parked-state` | `6f766135fddb` | 5 | 0 | 5 |  |  | 181 | no PR in scanned window |
+| `pr435-work` | `0f095b81efe5` | 0 | 0 | 0 |  |  | 165 | no PR in scanned window |
+| `claude/coderabbit-setup-optimize-0f308d` | `5b58e3524aa4` | 13 | 3 | 10 |  |  | 107 | PR #441 closed unmerged |
+| `claude/codex-guard-single-ampersand` | `dddc6d74820a` | 4 | 0 | 4 |  |  | 92 | PR #464 closed unmerged |
+| `claude/codex-recursion-hard-guard` | `47820dff7ed6` | 15 | 10 | 5 |  |  | 107 | PR #452 closed unmerged |
+| `claude/push-guard-git-resolution` | `62d22b6e9de2` | 8 | 0 | 8 |  |  | 103 | PR #445 closed unmerged |
+| `codex/proof-wrapper-trusted-git-bootstrap` | `a2e1d0a18369` | 3 | 0 | 3 |  |  | 107 | PR #454 closed unmerged |
+| `fix/quote-fixture-stale-date` | `be5df11c5daf` | 1 | 0 | 1 |  |  | 90 | PR #468 closed unmerged |
+| `claude/codex-claude-cogs-handoff-7bde15` | `e3c4a3fc47df` | 4 | 2 | 2 |  |  | 82 | no PR in scanned window |
+| `claude/control-file-coverage-a41c` | `b985e919bef5` | 2 | 0 | 2 |  |  | 76 | no PR in scanned window |
+| `claude/guard-content-scan-and-savegate-flake` | `480dc106ef7b` | 7 | 0 | 7 |  |  | 76 | no PR in scanned window |
+| `claude/pr401-proof` | `9b2d86a5401a` | 14 | 1 | 13 | 1 |  | 82 | no PR in scanned window |
+| `claude/session-orchestration-setup-d73e6c` | `238d242ea87f` | 42 | 19 | 23 |  |  | 82 | **open PR #364** |
+| `codex/bootstrap-raw-patch-guard-20260825` | `fe73022380ed` | 2 | 0 | 2 |  |  | 83 | no PR in scanned window |
+| `codex/pr402-review-gaps-20260819` | `8811927fff8d` | 25 | 7 | 18 |  |  | 85 | PR #432 closed unmerged |
+| `claude/changelog-docs-honesty` | `cc8eed92c508` | 3 | 1 | 2 |  |  | 62 | PR #505 closed unmerged |
+| `claude/comment-fix-applied-closeout` | `01660702bca6` | 4 | 0 | 4 |  |  | 61 | PR #501 closed unmerged |
+| `claude/hold-latch-cross-session-envelope` | `c903bda704a5` | 7 | 0 | 7 |  |  | 64 | no PR in scanned window |
+| `claude/jobdetail-savegate-flake` | `60700533eb38` | 0 | 0 | 0 |  |  | 70 | PR #485 merged |
+| `claude/offline-review-stale-snapshot` | `5c2c129d431c` | 1 | 0 | 1 |  |  | 68 | no PR in scanned window |
+| `claude/pr364-guard-commits-local-20260831` | `57d27e79105b` | 45 | 19 | 26 |  |  | 73 | no PR in scanned window |
+| `claude/pr401-quote-version-trust-8e3db6` | `510a16121e6c` | 18 | 1 | 17 | 1 |  | 66 | no PR in scanned window |
+| `claude/remove-guard-hooks-f23691` | `0ac235d0e50e` | 4 | 1 | 3 |  |  | 61 | PR #503 closed unmerged |
+| `claude/xenodochial-dubinsky-b55362` | `b7e847d98ccd` | 11 | 0 | 11 |  |  | 68 | PR #493 merged |
+| `codex/actor-binding-mixed-notation-repair-20260810` | `5cd3d379da4f` | 12 | 3 | 9 |  |  | 73 | **open PR #449** |
+| `codex/section9-ap-safety-remediation` | `0f8bf3aad7f0` | 27 | 6 | 21 | 2 |  | 68 | PR #491 closed unmerged |
+| `claude/product-plan-rev12-followup` | `74ccba0f7888` | 3 | 1 | 2 |  |  | 58 | PR #507 closed unmerged |
+| `codex/section9-ap-safety-remediation-v2` | `4148f335e682` | 45 | 14 | 31 | 2 |  | 58 | **open PR #500** |
+| `codex/autonomy-with-hard-boundaries-20260827` | `3accebbef6ab` | 31 | 3 | 28 |  |  | 7 | PR #513 closed unmerged |
+| `codex/coderabbit-ready-label-20260830` | `7e87e0231601` | 16 | 5 | 11 |  |  | 6 | **open PR #516** |
+| `claude/bash-safety-opacity-cleanup` | `3d1690428695` | 3 | 1 | 2 |  |  | 5 | **open PR #527** |
+| `claude/crx-manager-cleanup-5da404` | `738d311a1e65` | 2 | 0 | 2 |  |  | 5 | PR #526 merged |
+| `claude/document-cleanup-review-r2nbhj` | `167e6b20a790` | 25 | 17 | 7 |  |  | 0 | no PR in scanned window |
+| `claude/harness-guardrail-review-bee189` | `2198e43db6e3` | 2 | 0 | 2 |  |  | 5 | **open PR #525** |
+| `claude/optimize-claude-md-79f8ad` | `86229bb0e361` | 1 | 0 | 1 |  |  | 5 | **open PR #528** |
+| `claude/pending-set-apply-guard` | `b141e84d56b1` | 11 | 4 | 7 |  |  | 58 | **open PR #502** |
+| `codex/pr509-source-recognition-fix-v2-20260830` | `259856da608f` | 6 | 1 | 5 |  | 2 | 5 | **open PR #517** |
+| `dependabot/github_actions/actions/checkout-7.0.1` | `cbf14d3e2af8` | 4 | 2 | 2 |  |  | 6 | **open PR #518** |
+| `dependabot/github_actions/actions/setup-node-7.0.0` | `bc8183c9e963` | 3 | 2 | 1 |  |  | 6 | **open PR #519** |
+| `dependabot/npm_and_yarn/eslint-10.4.1` | `66103fdbb6ae` | 2 | 0 | 2 |  |  | 6 | **open PR #522** |
+| `dependabot/npm_and_yarn/minor-and-patch-7fe11a6bea` | `949a1c5bec62` | 0 | 0 | 0 |  |  | 6 | PR #520 merged |
+| `dependabot/npm_and_yarn/react-major-cbee5c902d` | `2da0ec8cbd56` | 2 | 0 | 2 |  |  | 6 | **open PR #521** |
 
 ## Suggested review order
 
