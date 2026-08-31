@@ -26,8 +26,8 @@ branch being touched.
 That is not hypothetical; it happened immediately. Re-measuring against `ec90015d` moved every
 branch's *Behind* count and changed the unique-content figures for seven branches that received no
 pushes at all. The clearest case: both `dependabot/github_actions/*` branches bump an action
-version inside the two deleted workflow files, so what was a modification of a file `main` has
-became the addition of a file `main` lacks.
+version inside the two deleted workflow files, so what was a modification of a file `main` had has
+become the addition of a file that `main` lacks.
 
 The report now states the baseline OID in its own section and tells the reader to confirm
 `git rev-parse origin/main` before acting on any count. The migration classifications and the two

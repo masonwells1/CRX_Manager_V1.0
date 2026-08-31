@@ -11,7 +11,8 @@ Read-only inventory of every remote branch on `masonwells1/CRX_Manager_V1.0`.
 >
 > *Round 2* switched to a whole-tree comparison but then called any branch with no new file
 > paths "safe to delete, loses no content". That was unsound: a branch can hold unique work in a
-> file that also exists on `main`. It labelled 15 branches safe when only **2** are — including
+> file that also exists on `main`. It labelled 15 branches safe when only 2 were at the time
+> (3 now, after a Dependabot PR merged mid-review) — including
 > all five Dependabot branches, which have open PRs. It also could not see a branch that
 > **modifies an existing migration**, of which there are four.
 
@@ -67,7 +68,7 @@ Three trees per branch: the branch, `origin/main`, and their merge base.
 > have reported `unique = 0` and been declared mechanically safe — precisely the false
 > all-clear this report exists to prevent.
 >
-> Re-measured with deletions counted, **the two mechanically-safe branches below are
+> Re-measured with deletions counted, **the mechanically-safe branches below are
 > unchanged**: neither authors any deletion, so neither all-clear was wrong. The only branch
 > the omission actually affected was this cleanup's own, which deletes and moves records.
 > The bug was real and the exposure was luck, not design.
@@ -328,13 +329,13 @@ make an out-of-date classification correct.
 **Re-check the PR state too, and separately.** A matching tip OID does **not** mean the PR column
 below is still right: a branch can acquire an open pull request without a single commit being
 pushed to it, so the content check and the PR check can disagree. This report's PR scan stops at
-#528, and #529 — the pull request carrying this very report — is already past it, which is
-the demonstration rather than a hypothetical. Before deleting any branch, run a fresh PR lookup
+PR `#528`, and PR `#529` — the pull request carrying this very report — is already past it, which
+is the demonstration rather than a hypothetical. Before deleting any branch, run a fresh PR lookup
 for it *in addition to* `git ls-remote`, and leave it alone if it now has an open PR.
 
 ## Every branch
 
-Tip OIDs are abbreviated here; the two mechanically-safe branches carry their full OID above.
+Tip OIDs are abbreviated here; the 3 mechanically-safe branches carry their full OID above.
 
 | Branch | Tip at scan | Unique files | new | modified | New migs | Mod migs | Behind | PR status |
 |---|---|---|---|---|---|---|---|---|

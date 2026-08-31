@@ -19,8 +19,10 @@ lands on `main` it is no longer branch-only work.
 
 **Re-measured, the two mechanically-safe branches are unchanged.** Neither `pr435-work` nor
 `claude/jobdetail-savegate-flake` authors any deletion, so neither all-clear was wrong. Across all
-63 branches exactly one was affected: this cleanup's own branch, which deletes one duplicate and
-moves 22 records. So the bug was real and the exposure was luck rather than design — which is
+63 branches exactly one was affected: this cleanup's own branch, which deletes one duplicate. (It
+also moved 22 records when this round ran; that archiving was withdrawn in a later round, so the
+branch moves no records at its final tip.) So the bug was real and the exposure was luck rather
+than design — which is
 precisely why it is worth fixing before this report is used to delete anything.
 
 This is the third correction to the measure (three-dot diff → whole-tree → authored-content →
