@@ -13,7 +13,7 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import ReasonModal from '../components/ui/ReasonModal';
 import { useToast } from '../components/ui/Toast';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
@@ -139,31 +139,6 @@ export default function NewVendorBill() {
         return;
       }
 
-      if (purchaseOrderId && !confirmPoOverage) {
-        const selectedPO = purchaseOrders.find((po) => po.id === purchaseOrderId);
-        const { data: activeBills, error: activeBillsError } = await supabase
-          .from('vendor_bills')
-          .select('total_cents')
-          .eq('purchase_order_id', purchaseOrderId)
-          .is('deleted_at', null)
-          .neq('status', 'voided');
-        if (activeBillsError) throw activeBillsError;
-
-        const alreadyBilledCents = (activeBills || []).reduce(
-          (sum, bill) => sum + bill.total_cents,
-          0,
-        );
-        const poTotalCents = selectedPO?.total_cost_cents || 0;
-        const cumulativeCents = alreadyBilledCents + totalCents;
-        if (poTotalCents > 0 && cumulativeCents * 100 > poTotalCents * 105) {
-          setOverageMessage(
-            `This bill would bring active billing to ${fmt(cumulativeCents)} against a ${fmt(poTotalCents)} purchase order. Enter a reason to confirm billing above 105%.`,
-          );
-          setSaving(false);
-          return;
-        }
-      }
-
       const idemKey = createBillIdem.getKey();
       // Compute due_date from bill_date + paymentTermsDays
       const dueDateObj = parseLocalDate(billDate);
@@ -185,6 +160,13 @@ export default function NewVendorBill() {
         p_po_overage_reason: poOverageReason || undefined,
       });
 
+      if (hasRpcCode(error, RpcErrorCodes.PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED)) {
+        setOverageMessage(
+          'The exact server total shows this bill would raise active billing above 105% of the purchase order. Enter a reason to confirm the overage.',
+        );
+        setSaving(false);
+        return;
+      }
       if (error) throw error;
       createBillIdem.resetKey();
       assertRpcResult(data, 'create_vendor_bill');

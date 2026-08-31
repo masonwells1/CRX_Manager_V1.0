@@ -29,6 +29,11 @@ type CountItemRow = CycleCountItem & {
   product_name: string;
 };
 
+type CompletionSnapshot = {
+  items: CountItemRow[];
+  itemRevision: number;
+};
+
 interface CycleCountDbRow {
   id: string;
   initiator?: { full_name: string } | null;
@@ -53,6 +58,7 @@ export default function CycleCounts() {
   const { profile, role } = useAuth();
   const { toast } = useToast();
   const completeCycleCountIdem = useIdempotencyKey('complete_cycle_count', profile?.id || '');
+  const updateCycleCountItemIdem = useIdempotencyKey('update_cycle_count_item', profile?.id || '');
   const reverseCycleCountIdem = useIdempotencyKey('reverse_cycle_count', profile?.id || '');
   const cancelCycleCountIdem = useIdempotencyKey('cancel_cycle_count', profile?.id || '');
   const [counts, setCounts] = useState<CountRow[]>([]);
@@ -273,6 +279,11 @@ export default function CycleCounts() {
     const variancePct = countedQty !== null && item.expected_qty !== 0
       ? Math.round(((variance || 0) / item.expected_qty) * 100 * 100) / 100
       : null;
+    // Retain one key for this exact item+quantity intent until the server
+    // confirms success. A timeout retry reuses it; an edited quantity gets a
+    // different scope and cannot replay the prior save.
+    const intentScope = JSON.stringify([itemId, countedQty, null]);
+    const idempotencyKey = updateCycleCountItemIdem.getKeyFor(intentScope);
 
     const previous = itemWriteQueuesRef.current.get(itemId) ?? Promise.resolve();
     const write = previous.catch(() => undefined).then(async () => {
@@ -280,6 +291,7 @@ export default function CycleCounts() {
         p_item_id: itemId,
         p_counted_qty: countedQty ?? undefined,
         p_performed_by: profile.id,
+        p_idempotency_key: idempotencyKey,
       });
 
       if (error) {
@@ -288,8 +300,14 @@ export default function CycleCounts() {
         toast('error', error.message || 'Failed to update count');
         return;
       }
-      assertRpcResult(data, 'update_cycle_count_item');
+      const result = assertRpcResult<{ item_revision: number }>(data, 'update_cycle_count_item');
+      updateCycleCountItemIdem.resetKeyFor(intentScope);
       failedItemWritesRef.current.delete(itemId);
+      setActiveCount((previousCount) =>
+        previousCount && previousCount.id === item.cycle_count_id
+          ? { ...previousCount, item_revision: result.item_revision }
+          : previousCount
+      );
 
       setCountItems((prev) =>
         prev.map((i) =>
@@ -318,13 +336,39 @@ export default function CycleCounts() {
   };
 
   // Complete the cycle count
-  const waitForAuthoritativeCountItems = async (): Promise<CountItemRow[] | null> => {
+  const waitForAuthoritativeCountItems = async (): Promise<CompletionSnapshot | null> => {
     await Promise.all([...pendingItemWritesRef.current]);
     if (failedItemWritesRef.current.size > 0) {
       toast('error', 'Fix the failed count update before completing this cycle count.');
       return null;
     }
-    return activeCount ? refreshCountItems(activeCount.id) : null;
+    if (!activeCount) return null;
+    // Read the revision first. If any item changes while the item snapshot is
+    // loading, its trigger advances this revision and completion fails closed.
+    const { data: countState, error: countStateError } = await supabase
+      .from('cycle_counts')
+      .select('item_revision, status')
+      .eq('id', activeCount.id)
+      .single();
+    if (countStateError) {
+      Sentry.captureException(countStateError);
+      toast('error', 'Failed to refresh the cycle count revision before completion');
+      return null;
+    }
+    if (countState.status !== 'in_progress') {
+      toast('error', 'This cycle count is no longer in progress. Refresh before continuing.');
+      return null;
+    }
+
+    const items = await refreshCountItems(activeCount.id);
+    if (!items) return null;
+
+    setActiveCount((previousCount) =>
+      previousCount && previousCount.id === activeCount.id
+        ? { ...previousCount, item_revision: countState.item_revision }
+        : previousCount
+    );
+    return { items, itemRevision: countState.item_revision };
   };
 
   const handleComplete = async () => {
@@ -334,34 +378,34 @@ export default function CycleCounts() {
     setPreparingCompletion(true);
 
     try {
-      const latestItems = await waitForAuthoritativeCountItems();
-      if (!latestItems) return;
+      const snapshot = await waitForAuthoritativeCountItems();
+      if (!snapshot) return;
 
-      const uncounted = latestItems.filter((i) => !i.is_counted);
+      const uncounted = snapshot.items.filter((i) => !i.is_counted);
       if (uncounted.length > 0) {
         setCompleteConfirmMsg(`${uncounted.length} products have not been counted yet. Complete anyway?`);
         setCompleteConfirmOpen(true);
         return;
       }
 
-      await executeComplete(latestItems);
+      await executeComplete(snapshot);
     } finally {
       completionInFlightRef.current = false;
       setPreparingCompletion(false);
     }
   };
 
-  const executeComplete = async (authoritativeItems?: CountItemRow[]) => {
+  const executeComplete = async (snapshot?: CompletionSnapshot) => {
     setCompleteConfirmOpen(false);
     if (!activeCount || !profile) return;
 
-    if (!authoritativeItems) {
+    if (!snapshot) {
       if (completionInFlightRef.current) return;
       completionInFlightRef.current = true;
       setPreparingCompletion(true);
       try {
-        const latestItems = await waitForAuthoritativeCountItems();
-        if (latestItems) await executeComplete(latestItems);
+        const refreshedSnapshot = await waitForAuthoritativeCountItems();
+        if (refreshedSnapshot) await executeComplete(refreshedSnapshot);
       } finally {
         completionInFlightRef.current = false;
         setPreparingCompletion(false);
@@ -377,10 +421,11 @@ export default function CycleCounts() {
           p_cycle_count_id: activeCount.id,
           p_completed_by: profile.id,
           p_idempotency_key: key,
+          p_expected_item_revision: snapshot.itemRevision,
         }).throwOnError();
         completeCycleCountIdem.resetKey();
 
-        const varianceItems = authoritativeItems.filter((i) => i.variance && i.variance !== 0);
+        const varianceItems = snapshot.items.filter((i) => i.variance && i.variance !== 0);
 
         await logActivity({ event: 'cycle_count_completed', description: `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
       },

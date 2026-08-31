@@ -13,6 +13,7 @@ BEGIN
   IF to_regprocedure('public.complete_cycle_count(uuid,uuid,text)') IS NULL
      OR to_regprocedure('public.update_cycle_count_item(uuid,numeric,text,uuid,text)') IS NULL
      OR to_regprocedure('public._complete_cycle_count_impl(uuid,uuid,text)') IS NULL
+     OR to_regprocedure('public.check_idempotency_intent(text,text,uuid,text)') IS NULL
      OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'complete_cycle_count') <> 1
      OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'update_cycle_count_item') <> 1 THEN
     RAISE EXCEPTION 'PRECOND: expected one current cycle-count completion and item-update RPC';
@@ -84,7 +85,8 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_actor         uuid := auth.uid();
-  v_existing      jsonb;
+  v_replay        jsonb;
+  v_fingerprint   text;
   v_item          public.cycle_count_items%ROWTYPE;
   v_count         public.cycle_counts%ROWTYPE;
   v_variance      numeric;
@@ -97,10 +99,24 @@ BEGIN
     RAISE EXCEPTION 'ACTOR_MISMATCH';
   END IF;
   IF NOT public.is_admin() THEN RAISE EXCEPTION 'ADMIN_REQUIRED'; END IF;
+  IF p_idempotency_key IS NULL OR btrim(p_idempotency_key) = '' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: update_cycle_count_item requires p_idempotency_key';
+  END IF;
 
-  IF p_idempotency_key IS NOT NULL THEN
-    v_existing := public.check_idempotency(p_idempotency_key, 'update_cycle_count_item');
-    IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;
+  v_fingerprint := encode(extensions.digest(convert_to(jsonb_build_object(
+    'actor_id', v_actor,
+    'item_id', p_item_id,
+    'counted_qty', p_counted_qty,
+    'notes', p_notes
+  )::text, 'UTF8'), 'sha256'), 'hex');
+  v_replay := public.check_idempotency_intent(
+    p_idempotency_key, 'update_cycle_count_item', v_actor, v_fingerprint
+  );
+  IF v_replay IS NOT NULL THEN
+    IF v_replay -> 'result' IS NULL OR jsonb_typeof(v_replay -> 'result') = 'null' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+    END IF;
+    RETURN v_replay -> 'result';
   END IF;
 
   SELECT * INTO v_item
@@ -147,9 +163,13 @@ BEGIN
     'is_counted', (p_counted_qty IS NOT NULL),
     'item_revision', v_item_revision
   );
-  IF p_idempotency_key IS NOT NULL THEN
-    PERFORM public.save_idempotency(p_idempotency_key, 'update_cycle_count_item', v_result);
-  END IF;
+  PERFORM public.save_idempotency(p_idempotency_key, 'update_cycle_count_item', v_result);
+  UPDATE public.idempotency_keys
+     SET request_actor_id = v_actor,
+         request_fingerprint = v_fingerprint
+   WHERE idempotency_key = p_idempotency_key
+     AND operation = 'update_cycle_count_item';
+  IF NOT FOUND THEN RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING'; END IF;
   RETURN v_result;
 END;
 $function$;
@@ -221,6 +241,17 @@ BEGIN
     RAISE EXCEPTION 'CYCLE_COUNT_STALE_REVISION';
   END IF;
 
+  -- Preserve the pre-existing inventory serialization contract after the new
+  -- item and parent locks. The private implementation reads current on-hand
+  -- values before writing inventory and its ledger, so these rows must remain
+  -- locked in stable order across that entire operation.
+  PERFORM 1
+    FROM public.inventory i
+    JOIN public.cycle_count_items cci ON cci.inventory_id = i.id
+   WHERE cci.cycle_count_id = p_cycle_count_id
+   ORDER BY i.id
+   FOR UPDATE OF i;
+
   PERFORM public._complete_cycle_count_impl(p_cycle_count_id, v_actor, p_idempotency_key);
 
   IF p_idempotency_key IS NOT NULL THEN
@@ -274,8 +305,17 @@ BEGIN
         OR NOT EXISTS (SELECT 1 FROM unnest(coalesce(proconfig, ARRAY[]::text[])) c(value)
                        WHERE replace(c.value, ' ', '') = 'search_path=public,pg_temp')
         OR prosrc NOT LIKE '%CYCLE_COUNT_STALE_REVISION%'
-        OR prosrc NOT LIKE '%ORDER BY id%')
+        OR prosrc NOT LIKE '%ORDER BY id%'
+        OR prosrc NOT LIKE '%FOR UPDATE OF i%')
   ) THEN RAISE EXCEPTION 'POSTCOND: completion revision or lock contract drifted'; END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_proc
+    WHERE oid = 'public.update_cycle_count_item(uuid,numeric,text,uuid,text)'::regprocedure
+      AND (prosrc NOT LIKE '%IDEMPOTENCY_KEY_REQUIRED%'
+        OR prosrc NOT LIKE '%check_idempotency_intent%'
+        OR prosrc NOT LIKE '%request_fingerprint%'
+        OR prosrc NOT LIKE '%request_actor_id%')
+  ) THEN RAISE EXCEPTION 'POSTCOND: item-update replay binding drifted'; END IF;
   IF has_function_privilege('anon', 'public.complete_cycle_count(uuid,uuid,text,bigint)', 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.complete_cycle_count(uuid,uuid,text,bigint)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.update_cycle_count_item(uuid,numeric,text,uuid,text)', 'EXECUTE')
