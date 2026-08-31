@@ -16,7 +16,8 @@ Codex PR #528 review finding that this log still scoped the tuning decision to O
 whole Claude 5 family — Opus 5 and Fable 5 — not only Opus 5. The 2026-07-25 calibration
 (`<tone_preference>`, deliverable-length rule, subagent budget, self-verification carve-out,
 uncapped review prompts with the settled overnight-sweep exception, and the effort ladder) carries
-over to Fable 5 unchanged until a newer harness review supersedes it.
+over to Fable 5 unchanged. The carry-over is provisional — the 2026-07-25 review measured Opus 5
+only — but binding until a newer harness review supersedes it.
 
 **Operative rule.** A Fable 5 session follows the Model Tuning rules exactly as an Opus 5 session
 would; do not treat the section as Opus-only or relitigate its scope. Every settled exception and

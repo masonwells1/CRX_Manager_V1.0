@@ -41,7 +41,7 @@ Direct reviews are read-only. PR comments default to dry-run. None of these work
 
 ## Model Tuning (Claude 5 Family — Opus 5 / Fable 5)
 
-Calibrated to Anthropic's Opus 5 prompting guidance; rationale in `docs/research/2026-07-25-opus5-harness-review.md`. It carries over to Fable 5 (the Claude 5 tier above Opus) until a newer harness review supersedes it — a Fable 5 session must not treat this section as Opus-only and skip it.
+Calibrated to Anthropic's Opus 5 prompting guidance; rationale in `docs/research/2026-07-25-opus5-harness-review.md` (measured on Opus 5 only). The carry-over to Fable 5 (the Claude 5 tier above Opus) is provisional — declared, not measured — but binding until a newer harness review supersedes it; a Fable 5 session must not treat this section as Opus-only and skip it.
 
 <tone_preference>
 Keep responses focused and concise. Lead with the outcome — the first sentence answers "what happened" or "what did you find" — then supporting detail. Keep caveats short, and give a high-level summary unless Mason asks for depth. Before your first tool call, say in one sentence what you're about to do; while working, update only on an important finding or a change of direction.
