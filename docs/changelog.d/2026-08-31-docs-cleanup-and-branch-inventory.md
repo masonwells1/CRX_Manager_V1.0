@@ -1,6 +1,6 @@
 ## 2026-08-31 — Documentation cleanup and a branch inventory for Codex
 
-Full pass over the repository's documentation, plus a read-only inventory of all 63 remote
+Full pass over the repository's documentation, plus a read-only inventory of the 62 measurable remote
 branches. No branch was created, deleted, force-pushed, or modified.
 
 ### Corrected documentation that was actively wrong
@@ -99,7 +99,7 @@ outright:
 
 ### Added
 
-`docs/audits/2026-08-31-branch-inventory-for-codex-review.md` — all 63 remote branches with the
+`docs/audits/2026-08-31-branch-inventory-for-codex-review.md` — 62 remote branches with the
 files each holds that `main` does not, its unmerged-migration count, and its PR state.
 
 **12 branches hold `supabase/migrations/*.sql` files absent from `main`**, and **4 modify a

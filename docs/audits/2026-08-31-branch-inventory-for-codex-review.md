@@ -1,6 +1,14 @@
 # Branch inventory for Codex review — 2026-08-31
 
-Read-only inventory of every remote branch on `masonwells1/CRX_Manager_V1.0`.
+Read-only inventory of every remote branch on `masonwells1/CRX_Manager_V1.0`, except the one
+carrying this report.
+
+> **`claude/document-cleanup-review-r2nbhj` is deliberately excluded from the tables and totals.**
+> Its row is self-referential: this report lives on that branch, so every commit that would
+> correct the row also changes it. The figure is stale the moment it is written, and no amount of
+> re-measuring fixes that. Excluding it is the only stable option; it is named here so the
+> omission is explicit rather than a gap. Its disposition is trivial anyway — it is the branch of
+> the pull request you are reading, and it goes away when that merges.
 **Nothing was deleted.** This list exists so Codex can review it before any branch is removed.
 
 > **Revised twice after Codex review of PR #529.** Both earlier measurements were wrong and
@@ -94,14 +102,14 @@ still reports unmerged commits.
 
 | | Count |
 |---|---|
-| Remote branches besides `main` | 63 |
+| Remote branches measured (excludes `main` and this report's own branch) | 62 |
 | Holding **nothing** unique (mechanically safe) | 3 |
 | Carrying migrations `main` does not have | 12 |
 | **Modifying an existing migration file** | 4 |
 | — of which appear in **both** rows above | 2 |
 | Distinct branches touching migrations | **14** |
 | Attached to an open PR | 14 |
-| No PR in the scanned window | 22 |
+| No PR in the scanned window | 21 |
 
 ## Read this first: branches that modify an existing migration
 
@@ -402,7 +410,6 @@ Tip OIDs are abbreviated here; the 3 mechanically-safe branches carry their full
 | `codex/coderabbit-ready-label-20260830` | `7e87e0231601` | 16 | 5 | 11 |  |  | 6 | **open PR #516** |
 | `claude/bash-safety-opacity-cleanup` | `3d1690428695` | 3 | 1 | 2 |  |  | 5 | **open PR #527** |
 | `claude/crx-manager-cleanup-5da404` | `738d311a1e65` | 2 | 0 | 2 |  |  | 5 | PR #526 merged |
-| `claude/document-cleanup-review-r2nbhj` | `167e6b20a790` | 25 | 17 | 7 |  |  | 0 | no PR in scanned window |
 | `claude/harness-guardrail-review-bee189` | `2198e43db6e3` | 2 | 0 | 2 |  |  | 5 | **open PR #525** |
 | `claude/optimize-claude-md-79f8ad` | `86229bb0e361` | 1 | 0 | 1 |  |  | 5 | **open PR #528** |
 | `claude/pending-set-apply-guard` | `b141e84d56b1` | 11 | 4 | 7 |  |  | 58 | **open PR #502** |
