@@ -1,4 +1,25 @@
-# Production Migration Approval Gate
+# Production Migration Approval Gate — RETIRED 2026-08-31
+
+> **RETIRED. DO NOT FOLLOW THIS PROCEDURE — THE MACHINERY NO LONGER EXISTS.**
+>
+> The workflows, the batch builder, the review verifier, the environment assertion, and the
+> `main`-freeze helper described below were deleted on 2026-08-31. This file is kept as a record of
+> the design, not as a usable runbook. The implementation is recoverable from Git history at
+> commit `9c9d6d96e` (PR #514).
+>
+> **Why it was retired.** The gate was never usable: its required `production-database` GitHub
+> environment was never created, both workflows recorded zero runs, its mandatory pre-use boundary
+> canary was never performed, and its SQL admission rule accepted only `COMMENT ON` statements — so
+> it could never carry a real schema, RLS, or money migration. It also depended on a ledger-order
+> trigger that was never installed live. ~1,900 lines of machinery that could apply nothing but
+> comments.
+>
+> **What to use instead.** Live migrations continue through the existing reviewed manual apply path
+> (`scripts/apply-migration-file.mjs` plus the migration-apply-guard proof and Codex gates). That
+> path is unchanged by this retirement, as is #514's general migration-apply content binding and SQL
+> parser hardening, which have consumers outside the deleted automation and were deliberately kept.
+>
+> Canonical decision: `docs/manual/DECISION_LOG.md`, 2026-08-31 entry.
 
 This gate lets one GitHub account serve two different capabilities safely:
 
