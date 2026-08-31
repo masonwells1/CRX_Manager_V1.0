@@ -141,11 +141,16 @@ reachable from a branch/tag/remote ref, not only from the stash:
 Method: build the reachable set with `git rev-list --objects --all` (which does **not**
 include `refs/stash`) and again with `--all --reflog`, then test each blob for membership.
 
-So dropping `stash@{26}` frees **nothing** — a later `gc` could not prune those objects
+So the ~1.18 GB of video — the only part of the stash measured here — is **not**
+reclaimable: a later `gc` could not prune those blobs
 while another ref still reaches them. The external copies in
 `C:\Users\mason\Videos\Screen Recordings` remain useful for a different reason: they show the
 videos are recoverable if the stash is ever discarded. They are not evidence of reclaimable
 space.
+
+Reachability was verified for those four video blobs only, not for every object in the
+stash, so the stash-exclusive remainder is unmeasured. Measuring it would require
+excluding `refs/stash` from the reachable set and sizing what is left; that was not done.
 
 **Net: no part of this cleanup reclaims meaningful disk.** If space is ever genuinely
 needed, the target is the separate Git database at `C:\CRX_CodexClones\codex-split-389-c2-gitdb`
