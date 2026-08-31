@@ -2,8 +2,10 @@
 
 Codex's review of `3032d276` returned two P2 findings, both in
 `docs/changelog.d/2026-08-31-docs-cleanup-and-branch-inventory.md`, and both instances of the same
-failure this PR has now committed three times: correcting a claim in the file where it was reported
-while an identical claim survives elsewhere in the same change.
+failure this PR had committed three times **as of this round** — it went on to happen again, and
+`2026-08-31-the-same-defect-in-the-other-file.md` records the sixth occurrence and the rule that
+finally stopped it. The failure is: correcting a claim in the file where it was reported while an
+identical claim survives elsewhere in the same change.
 
 ### The two findings
 

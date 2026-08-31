@@ -34,9 +34,15 @@ carrying this report.
 Every figure below is relative to **`origin/main` at `67e6da9d9ab409b65d5bbfd319de69b8783322e8`**.
 
 This matters as much as the branch tip OIDs. `main` moves, and when it does the comparison
-changes underneath a branch that never moved at all. **`main` moved three times in the few hours
-this report was in review, and each move changed something in it.** That rate is the real
-finding: this table is a photograph, and the thing it photographs is moving.
+changes underneath a branch that never moved at all. **`main` moved at least four times in the
+few hours this report was in review, and by the time you read this it will very likely have
+moved again — that is the finding, not the number.** This table is a photograph, and the thing
+it photographs is moving.
+
+The count is deliberately written as a floor rather than an exact figure. An exact one would be
+wrong within the hour, and a report whose own honesty depends on a number that decays is worse
+than one that says plainly which way it decays. Four moves are described below because those are
+the four whose effects were observed; assume there have been more since.
 
 The first move, to `ec90015d`, deleted `.github/workflows/production-migration.yml` and
 `production-approval-canary.yml`. Seven branches changed their unique-content figures without a
@@ -57,7 +63,13 @@ The third move merged PR `#526`, flipping `claude/crx-manager-cleanup-5da404` fr
 merged. It still holds unique content, so it is not newly safe — but the row that said "leave
 it alone, it has an open PR" no longer says why.
 
-Across all three moves no branch's *migration* classification changed. That is luck, not a
+The fourth move merged PR `#534`, which restored the git commit and push guards across every
+worktree and rewrote the branch-protection paragraph in `AGENTS.md`. It changed nothing in the
+tables here, but it is the clearest illustration of the point: it landed while this report was
+being finalised, after the baseline above was already pinned, and the branch carrying the report
+had to merge `main` again to stay mergeable.
+
+Across all four moves no branch's *migration* classification changed. That is luck, not a
 property of the measure.
 
 **Do not read this as a reason to distrust the table — read it as the reason for the two

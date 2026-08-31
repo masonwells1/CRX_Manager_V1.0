@@ -15,7 +15,10 @@ row's stated *reason* for protecting it no longer applies.
 
 ### The rate is the point
 
-`main` moved **three times in the few hours** this report was in review:
+`main` moved **three times in the few hours** this report was in review — and a fourth followed,
+after this entry was written, which is exactly the behaviour this entry predicts. The report's
+own baseline section now states the count as a floor rather than an exact figure, for that
+reason. As of this round:
 
 | Baseline | What it changed in the report |
 |---|---|
