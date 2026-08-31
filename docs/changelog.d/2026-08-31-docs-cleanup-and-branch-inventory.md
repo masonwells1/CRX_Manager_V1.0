@@ -9,13 +9,19 @@ Each of these sent a reader to a file that does not exist.
 
 - `DEPLOYMENT.md` told the reader that GitHub Actions was "optional" and to create
   `.github/workflows/test.yml`, followed by a toy `actions/checkout@v3` workflow. CI has in fact
-  been required for some time: four workflows exist, and `ci.yml` alone runs containment,
-  CI-scope classification, SQL validation, and lint/typecheck/test/build. It also *defines* an
-  `e2e-smoke` job, but that job is pinned `if: false` and never runs, so CI provides no browser
-  coverage — see `2026-08-31-ci-claims-no-browser-coverage.md`.
-  Replaced the invented snippet with what the repository actually runs.
-- `docs/reference/code-patterns.md` placed `fuzzyMatchProduct()` in `src/lib/ocrParser.ts`, which
-  does not exist. It lives in `src/components/purchase-orders/BulkPOImport.tsx`.
+  been required for some time: `ci.yml` alone runs containment, CI-scope classification, SQL
+  validation, the docs check, and lint/typecheck/test/build. It also *defines* an `e2e-smoke` job,
+  but that job is pinned `if: false` and never runs, so CI provides no browser coverage — see
+  `2026-08-31-ci-claims-no-browser-coverage.md`. Replaced the invented snippet with what the
+  repository actually runs. **Two** workflows exist as of `ec90015d`, not the four this entry
+  originally claimed; `production-migration.yml` and `production-approval-canary.yml` were deleted
+  while this PR was in review — see `2026-08-31-pin-the-main-baseline.md`.
+- `docs/reference/code-patterns.md` placed `fuzzyMatchProduct()` in `src/lib/ocrParser.ts`. Neither
+  the file nor that function name exists. `fuzzyMatchProductWithScore()` is defined in
+  `src/components/purchase-orders/BulkPOImport.tsx` and delegates to
+  `resolveFuzzyProductIdentity()` in `src/lib/productIdentityResolver.ts`, which is where the
+  matching and the `0.7` threshold actually live — see
+  `2026-08-31-fuzzy-matcher-name-and-stale-counts.md`.
 - `docs/workflows/INVENTORY_RULES.md` cited `src/pages/QuickReceive.tsx`; the real file is
   `src/components/receiving/QuickReceivePanel.tsx`.
 - `docs/reference/sql-canonical-patterns.md` linked `src/lib/db.ts` at the wrong relative depth,
