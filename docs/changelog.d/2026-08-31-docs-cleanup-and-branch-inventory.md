@@ -73,19 +73,27 @@ not finished and stay in place:
 `docs/audits/2026-08-31-branch-inventory-for-codex-review.md` — all 63 remote branches with the
 files each holds that `main` does not, its unmerged-migration count, and its PR state.
 
-**16 branches hold `supabase/migrations/*.sql` files absent from `main`**; 15 hold no file `main`
-lacks and are safe to delete on content alone.
+**12 branches hold `supabase/migrations/*.sql` files absent from `main`**, and a further **4 modify
+a migration file that already exists on `main`** — which the CRX Hard Rules forbid. Only **2**
+branches hold nothing `main` lacks and are mechanically safe to delete.
 
 ### Proof observed
 
 - `npm run check:docs` passes.
-- Branch content is measured by comparing the full `git ls-tree -r` path-to-blob map of each branch
-  against `origin/main`. An earlier revision used `git diff origin/main...<branch>`, which compares
-  the merge base with the branch rather than main's current tree, so squash-merged files were
-  re-reported as branch-only work. Codex's falsifier: that version claimed three unmerged
-  migrations on `claude/draw-down-price-tier-lines` while all three are in `main`; it now reports 0.
-  Recomputing changed both the counts and the membership of the migration-carrying set, and raised
-  the count of branches holding nothing new from 3 to 15.
+- Branch content is measured against three trees per branch — the branch, `origin/main`, and their
+  merge base. A path is *authored by the branch* when its blob differs from the merge base, and
+  *unique* when `main` does not hold that identical blob. Unique is not the same as lost: content
+  can be absent byte-identically because it was superseded, so only `unique = 0` is a mechanical
+  all-clear.
+
+  This measure took two corrections, both raised by Codex on this PR and both recorded in their own
+  entries. The first revision used `git diff origin/main...<branch>`, which compares the merge base
+  with the branch rather than main's current tree, so squash-merged files were re-reported as
+  branch-only work. The second compared whole trees but then called any branch with no *new file
+  paths* safe to delete — unsound, because a branch can hold unique work in a file `main` also has.
+  See `2026-08-31-branch-inventory-measurement-correction.md` and
+  `2026-08-31-branch-inventory-authored-content-measure.md` for the full detail and the numbers each
+  round changed.
 - Commit ahead/behind counts are not used anywhere: this repository squash-merges, so a merged
   branch still reports unmerged commits. The first shallow checkout reported ~2,500 such commits on
   branches that had merged.

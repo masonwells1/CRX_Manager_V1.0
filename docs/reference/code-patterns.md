@@ -37,7 +37,7 @@
 - PDF text extraction uses `pdfjs-dist` (already installed), see `BulkOrderImport.tsx` for reference
 
 ## OCR & Matching
-- Product fuzzy matching via `fuzzyMatchProduct()` in `src/components/purchase-orders/BulkPOImport.tsx` (0.7 threshold)
+- Product fuzzy matching via `fuzzyMatchProductWithScore()` in `src/components/purchase-orders/BulkPOImport.tsx`, which delegates to the exported `resolveFuzzyProductIdentity()` in `src/lib/productIdentityResolver.ts` (default `minimumScore = 0.7`)
 - Blend math validator: `src/lib/blendMathValidator.ts`
 - Manual ticket creation: `src/components/blendtickets/ManualTicketCreate.tsx`
 
