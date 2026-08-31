@@ -31,8 +31,10 @@ Corollary: `git count-objects` measures logical Git garbage. To claim disk savin
 ### 2. "The temp files are all abandoned, 6+ weeks old" — FALSE
 
 Six are from 2026-07-14/15. The seventh, `.git/objects/09/tmp_obj_jODshA`, is 538 bytes and
-was created **2026-08-31 08:18** — the same day as this investigation. A wildcard delete
-would have taken a live file.
+was created **2026-08-31 08:18** — the same day as this investigation. Whether it belonged
+to a still-running operation was never established (process visibility was denied under the
+inspection identity), so a wildcard delete would have removed a freshly created file of
+unknown ownership. That is reason enough not to wildcard `.git/objects`.
 
 Their producer is also unproven. `count-objects` only classifies a path as neither a valid
 loose object nor a valid pack; it does not attest that `gc`/repack created it. The matching
@@ -109,7 +111,17 @@ untouched deliberately — flag it to that session.
 
 ## If space is ever genuinely wanted
 
-Dropping `stash@{26}` alone would release roughly **1.18 GB** of real object-store space,
-and its videos are provably duplicated in `C:\Users\mason\Videos\Screen Recordings`. But it
-still requires the maintenance window in §2 plus a `gc`, so it belongs to a deliberate
-quiet-period cleanup — never to an ad-hoc session.
+Two different things get conflated here, so state them separately:
+
+- **"Frees no disk" applies to the temp-object cleanup only** (§1) — those paths are
+  hard-linked, so unlinking our names reclaims nothing while the other links live.
+- **Dropping a stash is not itself a reclaim.** `git stash drop` only makes that entry's
+  objects *unreachable*; the space comes back later, when a `git gc`/`git prune` actually
+  removes them. Archiving a stash to a ref instead keeps its objects reachable, so an
+  archive-then-drop sequence reclaims nothing by design.
+
+With that distinction: dropping `stash@{26}` **and** letting a subsequent `gc` prune it
+would release roughly **1.18 GB**, and its videos are provably duplicated in
+`C:\Users\mason\Videos\Screen Recordings`. But that needs the maintenance window in §2 plus
+the `gc` this document otherwise warns against running while the fleet is active — so it
+belongs to a deliberate quiet-period cleanup, never to an ad-hoc session.

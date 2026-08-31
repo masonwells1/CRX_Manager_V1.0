@@ -15,14 +15,21 @@ Three claims that made the cleanup look worthwhile, each disproved:
   `C:\CRX_CodexClones\codex-split-389-c2-gitdb`. Deleting the `C:\CRX_Manager` names would
   lower Git's reported figure and free approximately zero physical bytes.
 - Not all the temp files are stale: `.git/objects/09/tmp_obj_jODshA` was created the same
-  morning (08:18), so a wildcard delete would have taken a live file.
+  morning (08:18). Whether it belonged to a still-running operation was never established,
+  so a wildcard delete would have removed a freshly created file of unknown ownership.
 - Stashes here are not small text diffs. `stash@{26}` (`063c7010d`) holds ~1.18 GB of
   walkthrough video.
 
-Rejected because it frees no disk, because `git stash drop` is positional and a concurrent
-session can shift indices between the SHA check and the drop (a time-of-check/time-of-use
-race a recheck narrows but cannot close), and because its only real benefit duplicates the
-existing prohibition on unqualified `git stash pop` in a shared checkout.
+Rejected because `git stash drop` is positional and a concurrent session can shift indices
+between the SHA check and the drop (a time-of-check/time-of-use race a recheck narrows but
+cannot close), and because its only real benefit duplicates the existing prohibition on
+unqualified `git stash pop` in a shared checkout.
+
+On disk savings, two claims are distinct: **"frees no disk" applies to the temp-object
+cleanup**, whose paths are hard-linked. Separately, `git stash drop` is not itself a
+reclaim — it only makes an entry's objects unreachable, and the space returns when a later
+`git gc`/`git prune` removes them; archiving a stash to a ref keeps its objects reachable,
+so archive-then-drop reclaims nothing by design.
 
 **Proof observed.** Hard-link target directory confirmed present on disk. `tmp_obj_jODshA`
 size and timestamp read directly. `stash@{26}` contents enumerated via
