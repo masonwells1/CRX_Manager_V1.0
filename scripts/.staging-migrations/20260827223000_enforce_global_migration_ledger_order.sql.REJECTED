@@ -1,3 +1,35 @@
+-- ============================================================================
+-- DESIGN REJECTED 2026-08-31 — DO NOT APPLY. NEVER APPLIED LIVE.
+--
+-- Mason's in-chat decision, 2026-08-31. Canonical record: docs/manual/DECISION_LOG.md
+-- (2026-08-31 entry) and docs/reference/migration-history.md row 900.
+--
+-- This file is PARKED, not pending. It is deliberately outside supabase/migrations/
+-- and carries a .REJECTED suffix so no runner, ordering guard, or apply path can
+-- pick it up. Its standalone prover (scripts/smoke/prove-global-migration-ledger-
+-- order-guard.mjs) was deleted in the same change.
+--
+-- WHY REJECTED:
+--   1. The trigger is ENABLE ALWAYS and fires on every BEFORE INSERT. The live
+--      ledger holds 89 rows whose effective stamp is at or below the running max
+--      of earlier-versioned rows, so a COPY-based disaster-recovery restore would
+--      abort partway through — a failure that would surface only when a restore
+--      is actually needed.
+--   2. It has no equivalent of the `-- ordering-guard: intentional-replay <reason>`
+--      escape hatch honoured by .claude/hooks/migration-ordering-lib.mjs, so a
+--      legitimate reviewed replay would require dropping the trigger.
+--   3. It rejects any ledger name without a 14-digit prefix, which is all 626
+--      legacy slug-only rows and any Supabase CLI / dashboard write.
+--
+-- The client-side ordering preflight already enforces forward-only ordering, has
+-- an escape hatch, and cannot brick a restore.
+--
+-- RECONSIDER ONLY WITH: a tested replay/restore escape hatch; a successful
+-- disposable-restore proof with the trigger installed over the historical
+-- non-monotonic rows; and evidence of a real cross-client ordering failure the
+-- existing preflight cannot prevent.
+-- ============================================================================
+
 -- Global forward-only ledger guard for every production migration channel.
 -- Source-only in this change: apply separately through the existing reviewed manual path.
 

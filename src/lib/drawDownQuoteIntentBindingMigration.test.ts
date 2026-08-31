@@ -36,7 +36,10 @@ const migrationSql = readFileSync(MIGRATION_PATH, 'utf8');
 const cutoverSql = readFileSync(CUTOVER_PATH, 'utf8');
 const intentHelperSql = readFileSync(INTENT_HELPER_PATH, 'utf8');
 const tierSplitSql = readFileSync(TIER_SPLIT_PATH, 'utf8');
-const allocatedCentsSql = readFileSync(ALLOCATED_CENTS_PATH, 'utf8');
+// Git's `eol=lf` rule controls the canonical blob, but an older Windows checkout
+// can retain CRLF until the file is rematerialized. Normalize that ordinary
+// checkout representation while still rejecting any stray carriage returns.
+const allocatedCentsSql = readFileSync(ALLOCATED_CENTS_PATH, 'utf8').replace(/\r\n/g, '\n');
 const smokeSql = readFileSync(SMOKE_PATH, 'utf8');
 const proverSource = readFileSync(PROVER_PATH, 'utf8');
 const idlessDuplicateCommitProof = readFileSync(IDLESS_DUPLICATE_COMMIT_PROOF_PATH, 'utf8');

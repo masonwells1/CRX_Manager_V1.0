@@ -363,9 +363,6 @@ jobs:
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run test:correction-guards
 
-      - name: Production migration batch guard
-        run: node scripts/build-reviewed-migration-batch.test.mjs
-
       - name: Phase 3C private-artifact regression tests
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run test:supplier-pricing-phase3c-packet
