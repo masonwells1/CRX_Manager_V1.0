@@ -133,7 +133,7 @@ Archived **with the later disposition cited**, which is what the standard requir
 |---|---|
 | `handoffs/2026-08-12-live-sql-guard-maintenance-build-to-review.md` (`## NOT STARTED`) | `docs/changelog.d/2026-08-28-escape-string-scanner-maintenance-complete.md` |
 | `handoffs/2026-08-12-field-mode-reliability-gauntlet.md` (`## NOT DONE BY THIS OVERNIGHT CYCLE`) | `609968d6`, "fix: harden field mode async recovery (#391)", 2026-08-13 — the same commit that added this record. Its `NOT DONE` list scopes one overnight cycle, not the work. |
-| `audits/2026-07-13-agent-pair-review-offline-stage1b-receipts.md` (`## Remaining approval gates`) | The record's own `## Implementation follow-up — 2026-07-14` section, which states Mason approved the implementation pass. |
+| `audits/2026-07-13-agent-pair-review-offline-stage1b-receipts.md` (`## Remaining approval gates`) | `docs/CHANGELOG.md`, 2026-07-14 entry: all three offline-receipt migrations applied live in order (Supabase stamps `20260714171331`, `20260714171800`, `20260714172135`), plus corrective `20260714203709`, each verified post-apply. The applied file `supabase/migrations/20260714171331_offline_action_receipts.sql` is on disk. **Not** the record's own `## Implementation follow-up — 2026-07-14` section: that section ends "The migration remains queued and unapplied live", so it closes nothing. |
 
 The remaining archived records carried only **incidental** matches — `BLOCKED` inside a
 verdict vocabulary (`COMPLETE`/`READY FOR APPROVAL`/`BLOCKED`/`PARTIAL`), a "BLOCKED AS

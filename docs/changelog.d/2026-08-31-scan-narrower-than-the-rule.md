@@ -37,7 +37,15 @@ from the previous round plus:
 via `2026-08-28-escape-string-scanner-maintenance-complete.md`; the field-mode gauntlet via
 `609968d6` ("fix: harden field mode async recovery (#391)", 2026-08-13 — the same commit that added
 the record, so its `NOT DONE` list scopes one overnight cycle rather than the work); and the offline
-stage1b receipts review via its own `## Implementation follow-up — 2026-07-14` section.
+stage1b receipts review via the 2026-07-14 `docs/CHANGELOG.md` entry recording all three
+offline-receipt migrations applied live.
+
+That third citation took a second attempt. It first pointed at the record's own
+`## Implementation follow-up — 2026-07-14` section — which ends "The migration remains queued and
+unapplied live. A fresh exact-HEAD Claude review is required", and therefore closes nothing. Citing
+a follow-up that leaves the gates open is not evidence of closure; it only looks like it because the
+heading says "follow-up". The real disposition is the changelog entry and the applied migration
+chain (`20260714171331`, `20260714171800`, `20260714172135`, plus corrective `20260714203709`).
 
 Final counts: **16 archived, 14 kept live.** The README carries the per-record accounting so the
 classification is reproducible rather than asserted.
