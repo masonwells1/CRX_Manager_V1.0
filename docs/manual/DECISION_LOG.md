@@ -39,6 +39,19 @@ manifest. Both hooks are now committed `100755`, and `agent-health-check.test.mj
 git records for the repository's own hooks — the fixtures chmod theirs, which is precisely what hid
 the real condition.
 
+**Round 3, and the reason the check is an allowlist.** CodeRabbit's second pass showed containment
+was the wrong shape entirely: linked worktrees live UNDER the main checkout
+(`.claude/worktrees/<name>`), so an absolute `core.hooksPath` into another worktree's `.husky` is
+*contained* by the root and passed — while git ran that other branch's guards. Any in-worktree
+directory holding two executable files passed for the same reason. The check now requires the
+configured path to resolve to **exactly this worktree's own `.husky`**; everything else fails closed,
+so an unanticipated spelling is a false alarm rather than a hole — the
+`pin-the-region-don't-enumerate-the-cheats` shape. The expected path canonicalizes the root but keeps
+`.husky` literal, because canonicalizing both sides would make a `.husky` that is *itself* a link
+into another checkout compare equal to itself. Also: `install-git-hooks.mjs` no longer swallows every
+error from clearing the worktree override — only "nothing to clear" (exit 5) and "no worktree scope
+exists" are silent; a real failure warns, because a surviving override outranks the shared value.
+
 **Two more found by CodeRabbit, both real.** (1) A per-worktree `core.hooksPath` **outranks** the
 shared local value, so a `prepare` that only wrote the shared value left a stale foreign override
 effective — `npm install` would report success while repairing nothing. `prepare` is now

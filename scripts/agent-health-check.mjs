@@ -214,11 +214,17 @@ export function checkGitHooksInstalled(root, platform = process.platform) {
   // git runs hooks from the top of the working tree, so a relative hooksPath
   // resolves per-worktree. That is what makes one shared value correct everywhere.
   //
-  // Containment is checked on CANONICAL paths, not lexical ones: git executes the
-  // target of a symlink, so a `.husky` (or a single hook) linked into another
-  // checkout would pass a purely textual in-worktree test while running that other
-  // checkout's code. That is the same wrong-repository hook trust this check exists
-  // to catch, wearing a different hat.
+  // This is an ALLOWLIST of exactly one directory, not a containment test. A
+  // containment test is not enough here for two independent reasons:
+  //   * linked worktrees live UNDER the main checkout (.claude/worktrees/<name>),
+  //     so an absolute path into another worktree's .husky is "contained" while
+  //     still running that other branch's guards; and
+  //   * any other in-worktree directory holding two executable files would pass
+  //     while git bypassed the tracked .husky entirely.
+  // Comparison is on CANONICAL paths because git executes the target of a symlink,
+  // so a linked .husky would satisfy a purely textual test. Anything that is not
+  // this worktree's own tracked .husky fails closed — an unanticipated spelling is
+  // then a false alarm, never a hole.
   const canonical = (target) => {
     try {
       return realpathSync(target);
@@ -226,22 +232,26 @@ export function checkGitHooksInstalled(root, platform = process.platform) {
       return path.resolve(target);
     }
   };
-  const canonicalRoot = canonical(root);
-  const escapes = (target) => {
-    const relative = path.relative(canonicalRoot, canonical(target));
-    return relative.startsWith("..") || path.isAbsolute(relative);
-  };
-
-  const resolved = path.resolve(root, hooksPath);
-  if (escapes(resolved)) {
-    return check("FAIL", "Git hooks installed", `core.hooksPath resolves outside this worktree (${hooksPath}) — guards would run another checkout's code`);
+  // The expected path canonicalizes the ROOT but keeps `.husky` literal, while the
+  // configured path is canonicalized whole. Canonicalizing both sides would defeat
+  // the test: if `.husky` were itself a link into another checkout, both sides would
+  // resolve to that same foreign directory and compare equal.
+  const expected = path.join(canonical(root), ".husky");
+  const resolved = canonical(path.resolve(root, hooksPath));
+  // path.relative is case-insensitive on win32, which is what we want for a
+  // same-directory test on this repository's primary platform.
+  if (path.relative(expected, resolved) !== "") {
+    return check("FAIL", "Git hooks installed", `core.hooksPath is ${hooksPath}, which resolves to ${resolved} rather than this worktree's tracked .husky (${expected}) — git would run another checkout's guards or none at all; set core.hooksPath to .husky`);
   }
   const required = ["pre-commit", "pre-push"];
   const missing = required.filter((hook) => !existsSync(path.join(resolved, hook)));
   if (missing.length > 0) {
     return check("FAIL", "Git hooks installed", `${hooksPath} is missing ${missing.join(", ")} — those guards silently do not run; set core.hooksPath to .husky`);
   }
-  const escaping = required.filter((hook) => escapes(path.join(resolved, hook)));
+  const escaping = required.filter((hook) => {
+    const relative = path.relative(expected, canonical(path.join(resolved, hook)));
+    return relative.startsWith("..") || path.isAbsolute(relative);
+  });
   if (escaping.length > 0) {
     return check("FAIL", "Git hooks installed", `${hooksPath} links ${escaping.join(", ")} outside this worktree — git runs the symlink target, so another checkout's guard would run`);
   }
