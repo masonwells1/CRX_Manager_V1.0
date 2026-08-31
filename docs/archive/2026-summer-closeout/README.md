@@ -81,25 +81,51 @@ Deliberately **kept live** in this sweep, with the reason:
 
 ## Third batch — moved 2026-08-31
 
-22 one-off audit and handoff records from `docs/audits/` and `docs/handoffs/`, dated
-late July through August, moved during a full documentation cleanup. Contents were not
-altered — only the paths changed.
+18 one-off audit and handoff records from `docs/audits/` and `docs/handoffs/`, dated late
+July through August, moved during a full documentation cleanup. Contents were not altered
+— only the paths changed.
 
 ⚠️ **This batch has a weaker verification basis than the two above, and the difference
 matters.** The 2026-07-16 batch re-verified every "done" claim against code on disk *and
-the live database*. This batch did not: each file was classified by **reading its own
-status line and searching the repository for inbound references**. No live-database
-check was performed, and none of these records' claims were re-proven. Do not attribute
-this batch to the 2026-07-16 live-verified pass.
+the live database*. This batch did not: each file was classified by reading its own text
+and searching the repository for inbound references. No live-database check was performed
+and none of these records' claims were re-proven. Do not attribute this batch to the
+2026-07-16 live-verified pass.
 
-The rule applied was "read what the file says about itself." An earlier revision of that
-same cleanup used "dated and orphaned, therefore closed" and deleted 30 records; Codex
-review showed the rule never read the files' statuses, and all 30 were restored and
-re-classified. **8 of them stayed in the live folders** because their own text says the
-work is unfinished — a `NEEDS MASON` negative-inventory worksheet, an `OPEN P1` accounting-period
-race, a `PARKED` pricing review, and the previous branch-cleanup restore ledger among
-them. That history is why this section states its verification basis instead of implying
-the earlier one.
+**A record's own status line does not establish that it is closed, and this batch proves
+it.** The rule started as "read what the file says about itself", which is better than the
+revision before it — that one used "dated and orphaned, therefore closed", deleted 30
+records, and was caught by Codex review; all 30 were restored and re-classified, and 8
+stayed live because their own text says the work is unfinished.
+
+But status-line reading is still not sufficient. A record can be *written* as open and
+*closed later by other work*, and nothing in the file itself says so. Codex review of this
+cleanup found `handoffs/2026-08-12-live-sql-guard-maintenance-build-to-review.md` archived
+with a live `## NOT STARTED` section; its work was in fact completed later, evidenced only
+by subsequent commits and
+`docs/changelog.d/2026-08-28-escape-string-scanner-maintenance-complete.md`. It is archived
+here **because that later disposition was found and cited**, not because its own status
+said so.
+
+Re-auditing all 22 originally-moved records against that stricter test, 10 carried
+open-work markers. Six were incidental — `BLOCKED` inside a verdict vocabulary, a
+"BLOCKED AS EXPECTED" dry-run note, or text already annotated as historical and
+superseded. **Four had genuinely open sections with no citable later closure, and were
+moved back to the live folders:**
+
+- `docs/audits/2026-07-18-codex-to-claude-phase1b-golive-blockers-handoff.md` — a `NOT
+  LIVE` state row, two parks, and an open owner decision ("Mason must name the intended
+  recipient").
+- `docs/audits/2026-07-31-codex-to-claude-factory-publication-review-handoff.md` — a
+  `## Not Started` section; publication is to remain blocked until proof passes.
+- `docs/handoffs/2026-08-05-section2-historical-report-remediation.md` — a `## NOT DONE`
+  section.
+- `docs/handoffs/2026-08-09-codex-migrations-and-merge.md` — `## Two open questions for
+  Mason` and `## Open blockers`.
+
+**The standard for a future batch:** where a record's own text says work is open, archiving
+it requires citing the later evidence that closed it. Absent that citation, it stays in the
+live folder.
 
 Full detail: `docs/changelog.d/2026-08-31-docs-cleanup-and-branch-inventory.md` and the
 companion `2026-08-31-*` entries.

@@ -41,10 +41,17 @@ that nothing referenced. This is the only file deleted.
 
 ### Archived rather than deleted
 
-22 closed one-off handoff and audit records moved from `docs/audits/` and `docs/handoffs/` into
+18 closed one-off handoff and audit records moved from `docs/audits/` and `docs/handoffs/` into
 `docs/archive/2026-summer-closeout/`. The live folders now show current work; nothing was lost.
 That archive is explicitly for work that is fully shipped, merged and live, or reviews that are
 fully dispositioned, so a record still listing unfinished items does not belong in it.
+
+The figure was 22 until a later Codex round showed that reading a record's own status line does
+not establish closure — a record can be written as open and closed later by other work, with
+nothing in the file saying so. Re-auditing all 22 against that stricter test found 10 carrying
+open-work markers; six were incidental, one was archived only after its later closure evidence was
+found and cited, and **four had genuinely open sections with no citable closure and were moved
+back**. See `2026-08-31-status-line-is-not-closure.md`.
 
 An earlier revision of this change **deleted** 30 such records on the rule "dated, orphaned, and
 therefore closed." Codex review of PR #529 showed the rule was unsound: it never read the files'
@@ -54,8 +61,12 @@ own status. `2026-06-15-H2-negative-inventory-worksheet.md` states
 awaiting physical-count reconciliation. Deleting it would have destroyed the row-level worksheet
 and gated repair procedure for unfinished production-data work.
 
-All 30 were restored and re-classified by reading each file's status. Eight describe work that is
-not finished and stay in place:
+All 30 were restored and re-classified by reading each file's status. Twelve describe work that is
+not finished and stay in place — the eight below, plus the four the later re-audit moved back
+(`2026-07-18-codex-to-claude-phase1b-golive-blockers-handoff.md`,
+`2026-07-31-codex-to-claude-factory-publication-review-handoff.md`,
+`2026-08-05-section2-historical-report-remediation.md`, and
+`2026-08-09-codex-migrations-and-merge.md`):
 
 - `docs/audits/2026-06-15-H2-negative-inventory-worksheet.md` — NEEDS MASON; matches an open
   `KNOWN_ISSUES.md` item.
