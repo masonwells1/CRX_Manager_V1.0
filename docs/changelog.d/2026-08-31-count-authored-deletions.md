@@ -1,4 +1,4 @@
-## 2026-08-31 — Count authored deletions; state the archive batch's real verification basis
+## 2026-08-31 — Count authored deletions in the branch measure
 
 Two P2 findings from Codex's review of `f9426347`. Both are correct and both are fixed.
 
@@ -27,23 +27,17 @@ This is the third correction to the measure (three-dot diff → whole-tree → a
 deletions), and the pattern in all three is the same: a definition that looked complete until
 someone asked what it does with a case outside the shape it was written for.
 
-### The archive README made this batch's provenance false
+### A second finding in this round is no longer applicable
 
-`docs/archive/2026-summer-closeout/README.md` is headed "moved 2026-07-16" and states that every
-"done" claim was re-verified against code on disk **and the live database** before the move. Its
-latest documented batch was 2026-07-26 and its category descriptions cover June and early-July
-records.
+The other finding in this round concerned the archive README's provenance: this PR was moving 22
+records into a folder whose header claims every "done" claim was re-verified against code **and the
+live database**, without saying that this batch had no live-database check behind it.
 
-This PR moved 22 late-July/August records into that folder and said nothing there. A reader would
-reasonably attribute them to the live-verified July pass. They should not: these were classified by
-reading each file's own status line and searching for inbound references. **No live-database check
-was performed and none of their claims were re-proven.**
-
-Added a "Third batch — moved 2026-08-31" section that states the weaker basis explicitly, and
-records why: an earlier revision of this cleanup deleted 30 records on a rule that never read their
-statuses, and 8 of the restored files stayed in the live folders because their own text says the
-work is unfinished. A batch with that history should declare how it was verified rather than
-inherit a stronger claim by silence.
+That was correct at the time and is now moot — the archiving was withdrawn entirely in a later
+round, and `docs/archive/` ships byte-identical to `main`. The reasoning is preserved in
+`2026-08-31-archiving-withdrawn-from-this-change.md`, since the underlying point stands for any
+future batch: a weaker verification basis has to be stated, not inherited by silence from a
+stronger earlier pass.
 
 ### Proof observed
 
@@ -51,6 +45,4 @@ inherit a stronger claim by silence.
   branch has unique authored deletions, and neither mechanically-safe branch is affected.
 - Post-fix scan totals unchanged: 12 branches carrying migrations absent from `main`, 4 modifying
   an existing migration, 14 distinct, 2 safe.
-- `git diff --name-status origin/main...HEAD -- docs/archive/2026-summer-closeout/` reports 22
-  added paths, matching the count written into the README.
 - `npm run check:docs` passes.
