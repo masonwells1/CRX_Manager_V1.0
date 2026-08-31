@@ -35,7 +35,7 @@ jobs:
     # dependencies are processed before containment.
     steps:
       - name: Checkout exact event history
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -129,7 +129,7 @@ jobs:
           }
 
       - name: Checkout exact event history
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -256,7 +256,7 @@ jobs:
           }
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -300,7 +300,7 @@ jobs:
           test "$SQL_VALIDATION_RESULT" = "success" || { echo "SQL validation did not pass: $SQL_VALIDATION_RESULT" >&2; exit 1; }
 
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -460,7 +460,7 @@ jobs:
     # `npm ci` -- keeping the extra Windows leg to roughly a minute.
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
@@ -502,7 +502,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 

@@ -25,7 +25,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout the exact current trusted workflow commit
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.sha }}
           # The workflow and checker both come from current trusted main. The
