@@ -123,5 +123,8 @@ branches hold nothing `main` lacks and are mechanically safe to delete.
 
 ### Not verified
 
-The schema registry is behind 6 migrations on disk. Refreshing it needs live database
-introspection, which was out of scope here and is unaffected by this change.
+When this pass ran, the schema registry was behind 6 migrations on disk, and refreshing it needs
+live database introspection that was out of scope here. That gap has since been closed on `main`
+by `5258b0f2` (#531), which refreshed the registry to high-water `20260827113443`; no migration on
+disk is now newer. Recorded here because the finding was real when made, not because it is still
+outstanding.

@@ -256,15 +256,19 @@ git push origin main              # Push the revert
 ### GitHub Actions (already configured)
 
 CI is **not** optional and does not need to be created — it already runs on every
-pull request into `main` and on every push to `main`. Four workflows live in
+pull request into `main` and on every push to `main`. Two workflows live in
 `.github/workflows/`:
 
 | Workflow | What it does |
 |---|---|
-| `ci.yml` | The main gate. Lint, type check, unit tests, build, SQL migration validation, and the Phase 3C private-artifact containment check. **No browser test runs** — see the note below. |
-| `production-migration.yml` | Guards the live-migration path. |
-| `production-approval-canary.yml` | Watches that the production approval gate still refuses what it is supposed to refuse. |
+| `ci.yml` | The main gate. Lint, type check, unit tests, build, SQL migration validation, the documentation check, and the Phase 3C private-artifact containment check. **No browser test runs** — see the note below. |
 | `phase3-private-artifact-containment.yml` | Standalone containment check for candidate artifacts. |
+
+Two further workflows, `production-migration.yml` and
+`production-approval-canary.yml`, were **removed** on 2026-08-31 when the
+production migration approval gate was retired — see
+`docs/changelog.d/2026-08-31-retire-production-migration-approval-gate.md`. Do not
+expect them to exist.
 
 The jobs inside `ci.yml` are `phase3-private-artifact-containment`, `ci-scope`,
 `sql-validation`, `lint-typecheck-test`, `phase3c-containment-windows`, and
