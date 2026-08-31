@@ -27,7 +27,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
-import { sessionProofDirs } from "./codex-push-lib.mjs";
+import { sessionProofDirs, resolveSessionWorktree } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
 
@@ -361,8 +361,22 @@ export function evaluateMigrationApply({
     // (2) is invisible by construction, main's freshness is CHECKED rather than
     // hoped for: an unfetched ref refuses, with the command to fix it.
     try {
+      // WHICH CHECKOUT HOLDS THE QUEUE (Codex P1 round 3, PR #502).
+      //
+      // The harness pins CLAUDE_PROJECT_DIR to the PRIMARY checkout even when the
+      // session runs in a linked worktree — the same trap that once made this file
+      // look for reviewer proofs in the wrong place. Reading HEAD and the working
+      // tree from `projectDir` therefore reads the PRIMARY branch, so a migration
+      // authored in the active worktree stayed invisible and the union added in the
+      // previous round fixed nothing for worktree sessions. Mason runs dozens of
+      // them, so this is the normal case, not the edge.
+      //
+      // Resolution reuses codex-push-lib's validated lookup rather than a second
+      // copy: an unrecognised cwd yields null and falls back to projectDir, which is
+      // the old behaviour and fails closed.
+      const queueRoot = resolveSessionWorktree(projectDir, hookCwd, listWorktrees) || projectDir;
       const gitOut = (args) => execFileSync("git", args, {
-        cwd: projectDir,
+        cwd: queueRoot,
         encoding: "utf8",
         // Well inside the tightest harness budget (Codex hooks allow 5s, Claude
         // 15s). A hook killed mid-flight emits NOTHING, and a PreToolUse hook that
@@ -406,7 +420,7 @@ export function evaluateMigrationApply({
         }
       }
       try {
-        const migDir = path.join(projectDir, "supabase", "migrations");
+        const migDir = path.join(queueRoot, "supabase", "migrations");
         if (existsSync(migDir)) {
           for (const entry of readdirSync(migDir)) {
             if (/\.sql$/i.test(entry)) trackedFiles.push(`supabase/migrations/${entry}`);
@@ -425,8 +439,8 @@ export function evaluateMigrationApply({
       } catch { /* reported as unknown; the listing above already refused if broken */ }
 
       const fetchAgeMs = originFetchAge
-        ? originFetchAge(projectDir, now)
-        : originFetchAgeMs(projectDir, now);
+        ? originFetchAge(queueRoot, now)
+        : originFetchAgeMs(queueRoot, now);
       if (fetchAgeMs === null) {
         return block(
           `MIGRATION PENDING-SET GUARD: cannot establish when this checkout last fetched from ` +
@@ -448,7 +462,7 @@ export function evaluateMigrationApply({
       let baselineHighWater = null;
       try {
         const manifest = JSON.parse(
-          readFileSync(path.join(projectDir, "supabase", "baselines", "manifest.json"), "utf8"));
+          readFileSync(path.join(queueRoot, "supabase", "baselines", "manifest.json"), "utf8"));
         baselineHighWater = manifest?.migrations_high_water ?? null;
       } catch (err) {
         return block(
