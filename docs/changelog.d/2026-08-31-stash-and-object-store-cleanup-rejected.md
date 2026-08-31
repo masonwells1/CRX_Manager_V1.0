@@ -25,7 +25,7 @@ between the SHA check and the drop (a time-of-check/time-of-use race a recheck n
 cannot close), and because its only real benefit duplicates the existing prohibition on
 unqualified `git stash pop` in a shared checkout.
 
-On disk savings, two claims are distinct: **"frees no disk" applies to the temp-object
+Two claims about disk savings are distinct: **"frees no disk" applies to the temp-object
 cleanup**, whose paths are hard-linked. Separately, `git stash drop` is not itself a
 reclaim — it only makes an entry's objects unreachable, and the space returns when a later
 `git gc`/`git prune` removes them; archiving a stash to a ref keeps its objects reachable,
