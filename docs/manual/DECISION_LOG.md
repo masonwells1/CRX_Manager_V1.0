@@ -1,11 +1,28 @@
 # Decision Log
 
-Last verified: 2026-08-28
+Last verified: 2026-08-31
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-08-31 — Model Tuning guidance covers the whole Claude 5 family
+
+**Source:** Mason's in-chat request on 2026-08-31 to tune both CLAUDE.md files for effectiveness;
+Codex PR #528 review finding that this log still scoped the tuning decision to Opus 5.
+
+**Decision.** The `CLAUDE.md` Model Tuning section added by the 2026-07-25 entry applies to the
+whole Claude 5 family — Opus 5 and Fable 5 — not only Opus 5. The 2026-07-25 calibration
+(`<tone_preference>`, deliverable-length rule, subagent budget, self-verification carve-out,
+uncapped review prompts with the settled overnight-sweep exception, and the effort ladder) carries
+over to Fable 5 unchanged. The carry-over is provisional — the 2026-07-25 review measured Opus 5
+only — but binding until a newer harness review supersedes it.
+
+**Operative rule.** A Fable 5 session follows the Model Tuning rules exactly as an Opus 5 session
+would; do not treat the section as Opus-only or relitigate its scope. Every settled exception and
+the pending effort sweep from the 2026-07-25 entry remain in force. This supersedes only the
+model-scope wording of the 2026-07-25 entry; its substance is unchanged.
 
 ## 2026-08-31 — retire the production migration approval gate; the worktree guard carve-out stays closed
 
@@ -60,7 +77,6 @@ pipes, `node -e`, `bash -c`, `python3 -c`, heredocs, and `node -v`, all reportin
 ineffective — it blocks *reading* the file it protects while `node runner.mjs` / `npm run x` / `make x`
 execute it freely. It is coupled to the blob-pinned maintenance producer, so it is the next
 harness-focused task after this one, not a backlog item.
-
 
 ## 2026-08-28 — CodeRabbit reviews only frozen release candidates
 
