@@ -35,7 +35,12 @@ branches bump an action version *inside* those files, so what was a modification
 baseline did. No branch's migration classification moved, and the two mechanically-safe
 branches stayed safe.
 
-Before acting on this report, confirm `git rev-parse origin/main` still returns the OID above.
+Before acting on this report, confirm the server's `main` still points at the OID above with
+`git ls-remote origin refs/heads/main` — **not** a bare `git rev-parse origin/main`, which reads
+the local remote-tracking ref and happily returns a stale OID in a checkout that has not fetched.
+A stale read here is the worst possible failure mode: it says the baseline is current when `main`
+has moved, which is exactly the condition under which these classifications are wrong. Fetch, or
+ask the server.
 If it does not, re-run the measurement rather than trusting these counts.
 
 ## How this is measured
@@ -102,10 +107,11 @@ the fact that `main` differs:
 - **An abandoned edit.** A real change that was never applied and never landed. Confirm the
   superseding work exists, then delete once the tip is tagged.
 - **Applied live in the modified form.** The branch holds the only exact source of SQL running
-  in production. **The recovery rule below applies to this section too** — land the
-  byte-identical SQL in `supabase/migrations/` before the branch goes. Do not assume a modified
-  file is safe merely because a file of that name already exists on `main`; what matters is
-  which bytes production is running.
+  in production. Use **"A modified migration needs a forward reconciliation"** below — *not* the
+  byte-identical recovery rule written for absent files, which is unsafe here: restoring to the
+  original path edits an applied migration, and re-stamping under a new timestamp runs it again.
+  Do not assume a modified file is safe merely because a file of that name already exists on
+  `main`; what matters is which bytes production is running.
 
 A branch on an **open PR** is pending: leave it alone regardless of which case it looks like.
 `codex/pr509-source-recognition-fix-v2-20260830` is in exactly that position on PR #517.
@@ -155,8 +161,9 @@ never from the absence of a live apply.
 
 ### If a migration is applied live, recover the SQL before deleting the branch
 
-**This rule governs both migration sections** — branches holding a migration absent from `main`,
-and branches modifying one `main` already has.
+**This rule governs only the *absent-file* case** — a branch holding a migration `main` does not
+have. Branches that **modify** a migration `main` already has need a different procedure, below;
+applying this one to them is unsafe.
 
 **A prose entry in `docs/reference/migration-history.md` is necessary but NOT sufficient.** Where a
 branch holds the only exact source of SQL that is running in production, deleting the branch on the
@@ -172,6 +179,39 @@ md5-comparing extracted function bodies against live `pg_proc.prosrc`.
 
 So, per branch in this section: confirm live status, and if it is live, land the byte-identical SQL
 into `supabase/migrations/` **first**. Only then is the branch free to delete.
+
+### A modified migration needs a forward reconciliation, never a re-stamp
+
+For the four branches that modify a migration `main` already has, the recovery rule above does not
+apply, and following it would be unsafe. Both of its obvious readings are wrong:
+
+- **Restore the branch's version to the original path.** That edits an applied migration, which the
+  CRX Hard Rules forbid outright.
+- **Re-stamp the payload under a new timestamp.** That makes it *execute again*. These are not
+  abstractly replayable scripts.
+
+`20260812115238_repair_historical_order_line_cents.sql`, carried by
+`claude/recover-applied-migrations-20260812`, is the concrete case. It is a one-time historical
+money repair that binds an approved preimage — 35 mapped rows, 16 orders, 151 order lines, and a
+content digest — and raises `APPROVED_SET_DRIFTED` when the database no longer matches. Re-stamped
+after the repair has landed, it does not silently corrupt anything, but it *does* abort, so the
+attempt fails a deploy rather than recovering anything.
+
+The procedure for these is therefore:
+
+1. **Leave the file on `main` exactly as it is.** It is applied; it is immutable.
+2. **Recover the branch's version as evidence, not as a migration** — extract it to an audit note
+   or attach it to the branch's disposition record, so the difference is readable without the
+   branch.
+3. **Diff the two and decide whether the difference ever reached the database.** Read-only live
+   introspection answers this; the branch file alone does not.
+4. **If, and only if, a real difference must reach production**, write a *new* migration that is
+   deliberately replay-safe — guarded so that running it against an already-reconciled database is
+   a no-op rather than an error. That is a forward reconciliation, and it is a separate reviewed
+   change, not part of a branch cleanup.
+
+Nothing in step 4 belongs in a deletion sweep. If a modified migration turns out to hold a real
+difference, the branch stays until that reconciliation has shipped.
 
 <details><summary>Migration filenames per branch</summary>
 
