@@ -103,6 +103,11 @@ DECLARE
   v_existing       jsonb;
   v_existing_count int;
   v_delivery_count int;
+  -- CURRENT_DATE follows the UTC database date, so during the Chicago evening
+  -- window this path stamped tomorrow's invoice_date and derived the wrong
+  -- season, which moves due dates, aging, overdue classification, and period
+  -- boundaries. Resolve one explicit business date and use it for both.
+  v_business_date  date := (now() AT TIME ZONE 'America/Chicago')::date;
 BEGIN
   IF v_actor IS NULL THEN RAISE EXCEPTION 'Not authenticated'; END IF;
   IF NOT (is_admin() OR is_sales_rep()) THEN
@@ -150,9 +155,9 @@ BEGIN
     salesman_id, created_by, total_amount_cents, invoice_date
   ) VALUES (
     p_order_id, v_order.customer_id, p_invoice_type, 'draft',
-    COALESCE(v_order.season, (SELECT current_season())),
+    COALESCE(v_order.season, compute_season(v_business_date)),
     COALESCE(p_salesman_id, v_order.salesman_id),
-    v_actor, 0, CURRENT_DATE
+    v_actor, 0, v_business_date
   )
   RETURNING id INTO v_invoice_id;
 
@@ -244,6 +249,10 @@ DECLARE
   v_total_cents bigint;
   -- per-(customer, line) contribution accumulator; aggregated in pass 2.
   v_rows jsonb := '[]'::jsonb;
+  -- Same Chicago business-date resolution as the single-invoice path above:
+  -- every invoice minted by this call shares one explicit business date for
+  -- both invoice_date and season, instead of the UTC CURRENT_DATE.
+  v_business_date date := (now() AT TIME ZONE 'America/Chicago')::date;
 BEGIN
   -- Authorization (mirror create_invoice_from_order): creating invoices is admin/sales_rep only.
   -- The old split path was unreachable (quote_sections.field_id was never persisted), so it had
@@ -415,8 +424,8 @@ BEGIN
     INSERT INTO invoices (order_id, customer_id, invoice_type, status, season, salesman_id,
       created_by, total_amount_cents, invoice_date, invoice_group_id, header_notes)
     VALUES (p_order_id, v_cust.customer_id, p_invoice_type, 'draft',
-      COALESCE(v_order.season, current_season()),
-      COALESCE(p_salesman_id, v_order.salesman_id), auth.uid(), 0, CURRENT_DATE, v_group_id,
+      COALESCE(v_order.season, compute_season(v_business_date)),
+      COALESCE(p_salesman_id, v_order.salesman_id), auth.uid(), 0, v_business_date, v_group_id,
       'Split invoice (by field/acre) from order ' || v_order.order_number)
     RETURNING id INTO v_invoice_id;
 
@@ -509,7 +518,7 @@ BEGIN
          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
          AND pg_get_userbyid(p.proowner) = 'postgres'
          AND encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') =
-             'c8b12fc25025e598846b6b2fbdfe4e0fd0e30078086b17194807f1428b9d0d7e'
+             '0d6ef022779bd6bc8ef694dab4ce9255053339eeb7d5e79e288d60eba15a6d28'
          AND (length(p.prosrc) - length(replace(p.prosrc, v_order_new, ''))) / length(v_order_new) = 1
      )
      OR NOT EXISTS (
@@ -521,7 +530,7 @@ BEGIN
          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
          AND pg_get_userbyid(p.proowner) = 'postgres'
          AND encode(sha256(convert_to(replace(p.prosrc, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex') =
-             '9d3de61eb30e9b9435556da45fe17c15a1b83285c917e3a5e7c2893cb4428104'
+             'ef8ed2b1e60554722eda863c953d997fd992c771f48ad9254f9e95155898df70'
          AND (length(p.prosrc) - length(replace(p.prosrc, v_split_new, ''))) / length(v_split_new) = 1
      )
      OR EXISTS (
