@@ -156,6 +156,20 @@ describe('return-credit COGS migration', () => {
     expect(migration).toContain('RETURN_CREDIT_SPLIT_CUSTOMER_SOURCE_REQUIRES_LINEAGE');
     expect(migration).toContain('explicit unlinked zero-COGS remainder');
     expect(migration).toContain('COALESCE(pcl.cogs_reversed_qty, 0) AS prior_cogs_qty');
+    // Lineage-less prior credits must keep consuming source quantity, or an
+    // already-credited quantity reads as available and the same posted quantity
+    // can be credited twice. Pin both halves: the unlinked total is gathered,
+    // and it is retired against the FIFO queue before allocation.
+    expect(migration).toContain('COALESCE(puc.unlinked_qty, 0) AS unlinked_qty');
+    expect(migration).toContain('AS net_available_qty');
+    // The lineage-less fallback in both recognition guards is customer-scoped,
+    // so a split-billed sibling's credit can never freeze another customer's
+    // invoice. Dropping either scope silently widens the guard.
+    expect(migration).toContain('credit_invoice.customer_id = OLD.customer_id');
+    expect(migration).toContain('credit_invoice.customer_id = v_invoice_customer_id');
+    // The cross-customer refusal fires only on the unallocated remainder, which
+    // is what keeps ordinary split-billed returns creditable.
+    expect(migration).toContain('remainder.return_credit_source_item_id IS NULL');
     expect(migration).toContain('SUM(ri.quantity)');
     expect(migration).toContain('RETURN_CREDIT_PARENT_IMMUTABLE');
     expect(migration).toContain('RETURN_CREDIT_LINE_TOTAL_MISMATCH');
