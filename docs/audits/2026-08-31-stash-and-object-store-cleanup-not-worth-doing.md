@@ -103,25 +103,53 @@ Cost and disruption exceed the benefit. Leave the 34-entry stack alone.
 
 ## Open item found in passing, not acted on
 
-A stale zero-byte `index.lock` dated 2026-08-31 08:15 sits at
+A zero-byte `index.lock` dated 2026-08-31 08:15 sits at
 `.git/worktrees/CRX_Manager26/index.lock`, belonging to
-`C:\Users\mason\.codex\worktrees\f624\CRX_Manager`. That is a Codex-owned tree; a stale lock
-usually means a Git command died partway and can wedge further Git operations there. Left
-untouched deliberately — flag it to that session.
+`C:\Users\mason\.codex\worktrees\f624\CRX_Manager`. **Whether it is stale was not verified**
+— no owning process was identified (process visibility was denied under the inspection
+identity), so it may equally belong to a Git operation still running in that tree. A lock
+that *is* stale usually means a Git command died partway and can wedge further Git
+operations there. That is a Codex-owned tree, so it was left untouched deliberately — flag
+it to that session rather than removing it on this evidence.
 
-## If space is ever genuinely wanted
+## There is no disk to reclaim here — including from `stash@{26}`
 
-Two different things get conflated here, so state them separately:
+Three separate things get conflated, so state them separately:
 
-- **"Frees no disk" applies to the temp-object cleanup only** (§1) — those paths are
-  hard-linked, so unlinking our names reclaims nothing while the other links live.
+- **"Frees no disk" applies to the temp-object cleanup** (§1) — those paths are hard-linked,
+  so unlinking our names reclaims nothing while the other links live.
 - **Dropping a stash is not itself a reclaim.** `git stash drop` only makes that entry's
-  objects *unreachable*; the space comes back later, when a `git gc`/`git prune` actually
-  removes them. Archiving a stash to a ref instead keeps its objects reachable, so an
-  archive-then-drop sequence reclaims nothing by design.
+  objects *unreachable*; space returns later, when a `git gc`/`git prune` actually removes
+  them. Archiving a stash to a ref keeps its objects reachable, so archive-then-drop
+  reclaims nothing by design.
+- **Objects are only prunable if NO ref reaches them.** External duplicates of a file prove
+  the *content is recoverable*; they say nothing about whether Git can drop its copy.
 
-With that distinction: dropping `stash@{26}` **and** letting a subsequent `gc` prune it
-would release roughly **1.18 GB**, and its videos are provably duplicated in
-`C:\Users\mason\Videos\Screen Recordings`. But that needs the maintenance window in §2 plus
-the `gc` this document otherwise warns against running while the fleet is active — so it
-belongs to a deliberate quiet-period cleanup, never to an ad-hoc session.
+An earlier draft of this document claimed dropping `stash@{26}` would release ~1.18 GB.
+**That was wrong, and it was checked rather than softened.** All four video blobs are
+reachable from a branch/tag/remote ref, not only from the stash:
+
+| blob | reachable from a branch/tag/remote | in a reflog |
+|---|---|---|
+| `75931d66…` Job Application Scheduling Layout.mp4 | yes | yes |
+| `76b9e8b1…` Field Mapping.mp4 | yes | yes |
+| `cc866de5…` Mixer_Loader Sheet setup.mp4 | yes | yes |
+| `2868a2e2…` Job Printing for sprayer applicator.mp4 | yes | yes |
+
+Method: build the reachable set with `git rev-list --objects --all` (which does **not**
+include `refs/stash`) and again with `--all --reflog`, then test each blob for membership.
+
+So dropping `stash@{26}` frees **nothing** — a later `gc` could not prune those objects
+while another ref still reaches them. The external copies in
+`C:\Users\mason\Videos\Screen Recordings` remain useful for a different reason: they show the
+videos are recoverable if the stash is ever discarded. They are not evidence of reclaimable
+space.
+
+**Net: no part of this cleanup reclaims meaningful disk.** If space is ever genuinely
+needed, the target is the separate Git database at `C:\CRX_CodexClones\codex-split-389-c2-gitdb`
+(§1), which is separately owned and needs its own review and authorization.
+
+If some future entry *is* ever dropped, address it by object ID, never by position: record
+its full OID, re-resolve the current `stash@{n}` immediately before removal, and abort
+unless the OID still matches — and even then the positional race in §2 means it belongs in
+an exclusive maintenance window.

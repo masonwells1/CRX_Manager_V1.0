@@ -18,7 +18,9 @@ Three claims that made the cleanup look worthwhile, each disproved:
   morning (08:18). Whether it belonged to a still-running operation was never established,
   so a wildcard delete would have removed a freshly created file of unknown ownership.
 - Stashes here are not small text diffs. `stash@{26}` (`063c7010d`) holds ~1.18 GB of
-  walkthrough video.
+  walkthrough video. Dropping it would still reclaim nothing: all four video blobs were
+  verified reachable from a branch/tag/remote ref, not only from the stash, so a later
+  `gc` could not prune them.
 
 Rejected because `git stash drop` is positional and a concurrent session can shift indices
 between the SHA check and the drop (a time-of-check/time-of-use race a recheck narrows but
@@ -48,5 +50,6 @@ checkout (60 tracked changes in the tree, 56 untracked files only in `^3`).
 classifies a path as neither a valid loose object nor a valid pack; it does not attest that
 `gc`/repack created them. Remote-branch status for the stash inventory came from cached
 `origin/*` refs, not a live `git ls-remote`. Process ownership of the same-morning temp file
-and of a stale zero-byte `index.lock` in the Codex-owned `f624` worktree could not be
-established under this identity; both were left untouched.
+and of a zero-byte `index.lock` in the Codex-owned `f624` worktree could not be established
+under this identity — that lock was **not** confirmed stale and may belong to a running
+operation; both were left untouched.
