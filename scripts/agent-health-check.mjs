@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { accessSync, constants as fsConstants, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizeEol } from "./normalize-eol.mjs";
@@ -213,15 +213,37 @@ export function checkGitHooksInstalled(root, platform = process.platform) {
   }
   // git runs hooks from the top of the working tree, so a relative hooksPath
   // resolves per-worktree. That is what makes one shared value correct everywhere.
+  //
+  // Containment is checked on CANONICAL paths, not lexical ones: git executes the
+  // target of a symlink, so a `.husky` (or a single hook) linked into another
+  // checkout would pass a purely textual in-worktree test while running that other
+  // checkout's code. That is the same wrong-repository hook trust this check exists
+  // to catch, wearing a different hat.
+  const canonical = (target) => {
+    try {
+      return realpathSync(target);
+    } catch {
+      return path.resolve(target);
+    }
+  };
+  const canonicalRoot = canonical(root);
+  const escapes = (target) => {
+    const relative = path.relative(canonicalRoot, canonical(target));
+    return relative.startsWith("..") || path.isAbsolute(relative);
+  };
+
   const resolved = path.resolve(root, hooksPath);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return check("FAIL", "Git hooks installed", `core.hooksPath points outside this worktree (${hooksPath}) — guards would run another checkout's code`);
+  if (escapes(resolved)) {
+    return check("FAIL", "Git hooks installed", `core.hooksPath resolves outside this worktree (${hooksPath}) — guards would run another checkout's code`);
   }
   const required = ["pre-commit", "pre-push"];
   const missing = required.filter((hook) => !existsSync(path.join(resolved, hook)));
   if (missing.length > 0) {
     return check("FAIL", "Git hooks installed", `${hooksPath} is missing ${missing.join(", ")} — those guards silently do not run; set core.hooksPath to .husky`);
+  }
+  const escaping = required.filter((hook) => escapes(path.join(resolved, hook)));
+  if (escaping.length > 0) {
+    return check("FAIL", "Git hooks installed", `${hooksPath} links ${escaping.join(", ")} outside this worktree — git runs the symlink target, so another checkout's guard would run`);
   }
   // Same silent skip, different spelling: on POSIX git ignores a hook that is not
   // executable. Windows has no executable bit, and Git for Windows does not consult

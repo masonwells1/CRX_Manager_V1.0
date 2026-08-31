@@ -39,6 +39,15 @@ manifest. Both hooks are now committed `100755`, and `agent-health-check.test.mj
 git records for the repository's own hooks — the fixtures chmod theirs, which is precisely what hid
 the real condition.
 
+**Two more found by CodeRabbit, both real.** (1) A per-worktree `core.hooksPath` **outranks** the
+shared local value, so a `prepare` that only wrote the shared value left a stale foreign override
+effective — `npm install` would report success while repairing nothing. `prepare` is now
+`scripts/install-git-hooks.mjs`, which clears the worktree scope first, then sets the shared value;
+proven by pointing this worktree at the abandoned PR #432 checkout and watching `npm run prepare`
+clear it. (2) Containment was checked lexically, but git executes the **target** of a symlink, so a
+`.husky` linked into another checkout passed as in-worktree. Paths are now canonicalized with
+`realpathSync` before the containment test, and both the directory and each hook are checked.
+
 **Operative rule.** Any file under `.husky/` that git is meant to execute is committed `100755`
 (`git update-index --chmod=+x`), never `100644`. Never point `core.hooksPath` at a generated or
 ignored directory, and never set it per-worktree. `npm run agent-health` reports `Git hooks installed` and fails when the path is

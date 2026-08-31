@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -240,6 +240,24 @@ try {
       const outside = checkGitHooksInstalled(hooksRepo);
       assert.equal(outside.status, "FAIL");
       assert.match(outside.note, /outside this worktree/);
+
+      // Git executes the TARGET of a symlink, so a lexical containment test passes a
+      // .husky that is merely linked into another checkout. Junctions need no
+      // privilege on Windows; if the link cannot be made at all, skip rather than
+      // assert a false pass.
+      let linked = true;
+      const linkPath = path.join(hooksRepo, ".linked-husky");
+      try {
+        symlinkSync(path.join(foreign, ".husky"), linkPath, "junction");
+      } catch {
+        linked = false;
+      }
+      if (linked) {
+        git("config", "core.hooksPath", ".linked-husky");
+        const viaLink = checkGitHooksInstalled(hooksRepo);
+        assert.equal(viaLink.status, "FAIL", "a symlinked hook directory escapes the worktree");
+        assert.match(viaLink.note, /outside this worktree/);
+      }
     } finally {
       rmSync(foreign, { recursive: true, force: true });
     }
@@ -265,6 +283,55 @@ try {
   assert.equal(trackedLines.length, 3, `expected three tracked hooks, got: ${trackedHooks}`);
   for (const line of trackedLines) {
     assert.match(line, /^100755 /, `tracked hook is not executable in the index — git skips it on POSIX: ${line}`);
+  }
+
+  // scripts/install-git-hooks.mjs — the `prepare` script. A per-worktree
+  // core.hooksPath OUTRANKS the shared local value, so writing the shared value
+  // alone leaves a stale foreign override effective and `npm install` reports
+  // success while repairing nothing. Exercised against a real repository with a
+  // real linked worktree, because that precedence is the whole point.
+  const installRepo = mkdtempSync(path.join(os.tmpdir(), "crx-install-hooks-"));
+  const installWorktree = mkdtempSync(path.join(os.tmpdir(), "crx-install-wt-"));
+  try {
+    const g = (dir, ...args) => execFileSync("git", ["-C", dir, ...args], { stdio: "ignore" });
+    const effective = (dir) =>
+      execFileSync("git", ["-C", dir, "config", "--get", "core.hooksPath"], { encoding: "utf8" }).trim();
+
+    g(installRepo, "init");
+    g(installRepo, "config", "user.email", "hooks-test@example.invalid");
+    g(installRepo, "config", "user.name", "Hooks Test");
+    mkdirSync(path.join(installRepo, ".husky"), { recursive: true });
+    for (const hook of ["pre-commit", "pre-push"]) {
+      const file = path.join(installRepo, ".husky", hook);
+      writeFileSync(file, "#!/usr/bin/env sh\n");
+      chmodSync(file, 0o755);
+    }
+    g(installRepo, "add", "-A");
+    g(installRepo, "commit", "-m", "init");
+    // rmdir first: git worktree add refuses an existing non-empty path, and mkdtemp
+    // has already created it.
+    rmSync(installWorktree, { recursive: true, force: true });
+    g(installRepo, "worktree", "add", "--detach", installWorktree);
+
+    // The exact state CodeRabbit reproduced: worktree-scoped override winning.
+    g(installWorktree, "config", "extensions.worktreeConfig", "true");
+    g(installWorktree, "config", "--worktree", "core.hooksPath", path.join(installRepo, "..", "elsewhere"));
+    assert.notEqual(effective(installWorktree), ".husky", "precondition: the override is in effect");
+
+    execFileSync(process.execPath, [path.join(repoRoot, "scripts", "install-git-hooks.mjs")], {
+      cwd: installWorktree,
+      stdio: "ignore",
+    });
+    assert.equal(effective(installWorktree), ".husky", "prepare must clear the worktree override, not just set the shared value");
+    assert.equal(checkGitHooksInstalled(installWorktree).status, "PASS");
+  } finally {
+    try {
+      execFileSync("git", ["-C", installRepo, "worktree", "remove", "--force", installWorktree], { stdio: "ignore" });
+    } catch {
+      /* best effort — the directory removal below is what matters */
+    }
+    rmSync(installWorktree, { recursive: true, force: true });
+    rmSync(installRepo, { recursive: true, force: true });
   }
 } finally {
   rmSync(root, { recursive: true, force: true });
