@@ -33,8 +33,10 @@ that nothing referenced. This is the only file deleted.
 
 ### Archived rather than deleted
 
-24 closed one-off handoff and audit records moved from `docs/audits/` and `docs/handoffs/` into
+23 closed one-off handoff and audit records moved from `docs/audits/` and `docs/handoffs/` into
 `docs/archive/2026-summer-closeout/`. The live folders now show current work; nothing was lost.
+That archive is explicitly for work that is fully shipped, merged and live, or reviews that are
+fully dispositioned, so a record still listing unfinished items does not belong in it.
 
 An earlier revision of this change **deleted** 30 such records on the rule "dated, orphaned, and
 therefore closed." Codex review of PR #529 showed the rule was unsound: it never read the files'
@@ -44,7 +46,7 @@ own status. `2026-06-15-H2-negative-inventory-worksheet.md` states
 awaiting physical-count reconciliation. Deleting it would have destroyed the row-level worksheet
 and gated repair procedure for unfinished production-data work.
 
-All 30 were restored and re-classified by reading each file's status. Six describe work that is
+All 30 were restored and re-classified by reading each file's status. Seven describe work that is
 not finished and stay in place:
 
 - `docs/audits/2026-06-15-H2-negative-inventory-worksheet.md` — NEEDS MASON; matches an open
@@ -59,6 +61,14 @@ not finished and stay in place:
 - `docs/audits/2026-08-08-permissions-overhaul-handoff.md` — an explicit list of follow-ups
   deliberately left for later.
 - `docs/handoffs/2026-08-08-foundation-ultra-review-remediation.md` — a remediation task list.
+- `docs/audits/2026-08-20-codex-verdict-dryoz-guard.md` — carries a `## Still open` section listing
+  F06, F07/F08, F15/F16 and further deferred chemical-entry defects. It was archived in an earlier
+  revision of this change and restored after Codex caught it. `src/pages/JobDetail.tsx` states in
+  the code itself that F06 is still open — a reloaded rate line goes stale on an acreage change,
+  so a saved 1.5 pt/ac line over 100 acres still reads 150 pt at 200 acres — and needs the driver
+  persisted on `job_chemicals`. This file is the only record of those items: **F06 appears nowhere
+  in `TODO.md`, `docs/manual/KNOWN_ISSUES.md`, or `docs/manual/CURRENT_STATE.md`.** That synthesis
+  gap is pre-existing and is flagged, not fixed, here.
 
 ### Deliberately not touched
 
