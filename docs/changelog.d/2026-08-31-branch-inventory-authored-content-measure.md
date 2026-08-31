@@ -44,8 +44,16 @@ supports.
   Editing an applied migration is forbidden by the CRX Hard Rules, so each is a rebase artifact, an
   abandoned edit, or a real violation that never landed. Counting only *new* migration paths hid
   this completely. The report now leads with it.
-- Branches carrying migrations absent from `main`: 16 → 12, with the other 4 reclassified into the
-  modified-migration group above.
+- Branches carrying migrations absent from `main`: 16 → 12. Those 4 were **not** reclassified into
+  the modified-migration group — that transition did not happen. They are
+  `claude/ordering-cycle-review-t41vat`, `claude/ordering-cycle-review-t41vat-local-20260831`,
+  `claude/changelog-docs-honesty` and `claude/hold-latch-cross-session-envelope`, and they left the
+  absent list because the authored-content filter found their migration differences were never
+  authored by the branch — `main` had simply moved ahead.
+
+**The two migration groups overlap and must not be added together.**
+`claude/recover-applied-migrations-20260812` and `codex/pr389-coderabbit-fixes` appear in both, so
+the 12 and the 4 cover **14 distinct branches**, not 16.
 
 ### Proof observed
 

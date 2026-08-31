@@ -40,6 +40,8 @@ still reports unmerged commits.
 | Holding **nothing** unique (mechanically safe) | 2 |
 | Carrying migrations `main` does not have | 12 |
 | **Modifying an existing migration file** | 4 |
+| — of which appear in **both** rows above | 2 |
+| Distinct branches touching migrations | **14** |
 | Attached to an open PR | 16 |
 | No PR in the scanned window | 22 |
 
@@ -49,6 +51,10 @@ still reports unmerged commits.
 content `main` does not have.** Editing an applied migration is forbidden by the CRX Hard Rules,
 so each of these is either a rebase artifact, an abandoned edit, or a real rule violation that
 never landed. Resolve these before anything else — and note one is on an open PR.
+
+> **These two migration sections overlap — do not add their counts.** 2 branches appear in
+> both (`claude/recover-applied-migrations-20260812`, `codex/pr389-coderabbit-fixes`), so the two
+> sections cover **14 distinct branches**, not 16.
 
 | Branch | Last commit | Modified migrations | PR status |
 |---|---|---|---|
@@ -247,7 +253,8 @@ Only these 2 branches hold nothing `main` lacks — every blob they authored is 
 ## Suggested review order
 
 1. **The 4 branches modifying an existing migration.** Hard-rule territory; one is on an open PR.
-2. **The 12 branches holding migrations absent from `main`.** Establish whether each is live. If it is,
+2. **The 12 branches holding migrations absent from `main`** (2 of which are also in step 1, so
+   steps 1 and 2 are 14 branches in total). Establish whether each is live. If it is,
    the branch can go once recorded in `docs/reference/migration-history.md`; if not, keep-and-finish
    or abandon.
 3. **The 2 mechanically-safe branches.** Confirm and delete.
