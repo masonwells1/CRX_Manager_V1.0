@@ -12,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection } from '../lib/idempotency';
 import {
   purchaseOrderCentsToDollars,
   purchaseOrderLineTotalCents,
@@ -287,6 +288,7 @@ export default function PurchaseOrderDetail() {
 
     await runCriticalAction({
       action: async () => {
+        try {
         const idemKey = receiveIdem.getKey();
         const { data, error } = await supabase.rpc('receive_po_items', {
           p_items: finalPayload,
@@ -367,6 +369,10 @@ export default function PurchaseOrderDetail() {
         setReceiveOpen(false);
         fetchPO();
         fetchReceivingHistory();
+        } catch (error) {
+          if (getIdempotencyBindingRejection(error)) receiveIdem.resetKey();
+          throw error;
+        }
       },
       toast,
       successMessage: 'Items received and inventory updated',

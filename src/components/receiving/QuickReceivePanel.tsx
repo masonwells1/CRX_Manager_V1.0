@@ -20,6 +20,7 @@ import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection } from '../../lib/idempotency';
 import { Sentry } from '../../lib/sentry';
 import HelpTip from '../ui/HelpTip';
 import { notifyDamagedReceiving } from '../../lib/notificationTriggers';
@@ -384,6 +385,7 @@ export default function QuickReceivePanel() {
       receiveIdem.resetKey();
       toast('success', `Successfully received ${itemsPayload.length} item(s)`);
     } catch (err: unknown) {
+      if (getIdempotencyBindingRejection(err)) receiveIdem.resetKey();
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'confirm_quick_receive' } });
       toast('error', err instanceof Error ? err.message : 'Failed to receive items');
     }

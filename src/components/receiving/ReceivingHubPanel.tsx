@@ -12,6 +12,7 @@ import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection } from '../../lib/idempotency';
 import type { InventoryPositionRow } from '../../types';
 
 // F5 — Receiving Hub: "To-Ship for inbound". Search a product and see every open
@@ -182,14 +183,19 @@ export default function ReceivingHubPanel() {
     const idemKey = receiveIdem.getKey();
     await runCriticalAction({
       action: async () => {
-        const { data, error } = await supabase.rpc('receive_po_items', {
-          p_items: [{ po_item_id: line.po_item_id, quantity: qty, condition: 'good' }],
-          p_performed_by: profile.id,
-          p_idempotency_key: idemKey,
-          p_allow_over_receive: false,
-        });
-        if (error) throw error;
-        assertRpcResult(data, 'receive_po_items');
+        try {
+          const { data, error } = await supabase.rpc('receive_po_items', {
+            p_items: [{ po_item_id: line.po_item_id, quantity: qty, condition: 'good' }],
+            p_performed_by: profile.id,
+            p_idempotency_key: idemKey,
+            p_allow_over_receive: false,
+          });
+          if (error) throw error;
+          assertRpcResult(data, 'receive_po_items');
+        } catch (error) {
+          if (getIdempotencyBindingRejection(error)) receiveIdem.resetKey();
+          throw error;
+        }
       },
       toast,
       setLoading: setReceiving,

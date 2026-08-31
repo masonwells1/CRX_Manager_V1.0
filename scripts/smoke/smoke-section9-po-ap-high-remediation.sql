@@ -177,6 +177,31 @@ BEGIN
   );
   v_receipt := ((v_result->'receiving_record_ids')->>0)::uuid;
 
+  -- HIGH 4 regression: the same retained key must never report this first
+  -- receipt as success for a changed receiving batch. The wrapper compares the
+  -- canonical jsonb request before delegating, so the second call performs no
+  -- inventory or PO mutation.
+  BEGIN
+    PERFORM public.receive_po_items(
+      jsonb_build_array(jsonb_build_object(
+        'po_item_id', v_po_item,
+        'quantity', 4,
+        'storage_location', 'Secondary Warehouse',
+        'condition', 'good'
+      )),
+      v_admin,
+      'smk-s9-receive-alt-' || v_suffix,
+      false
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed receive batch replayed a prior success';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'IDEMPOTENCY_INTENT_MISMATCH' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong changed receive replay error: %', v_err;
+    END IF;
+  END;
+
   SELECT quantity_on_order INTO v_actual
   FROM public.inventory
   WHERE product_id = v_product AND location = 'Main Warehouse';
@@ -323,6 +348,42 @@ BEGIN
     p_subtotal_cents := 100,
     p_idempotency_key := 'smk-s9-bill-create-' || v_suffix
   );
+
+  BEGIN
+    PERFORM public.update_vendor_bill(
+      v_bill, 100, 0, v_old_date, v_old_date - 1,
+      'invalid date range', 'smk-s9-update-bad-date-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: update accepted due date before bill date';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'INVALID_DATE_RANGE: due_date cannot precede bill_date' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong update date-range error: %', v_err;
+    END IF;
+  END;
+
+  -- HIGH 2 regression: a changed bill edit using the first request's retained
+  -- key must fail before touching this bill. Keep the successful request's
+  -- amounts/date so the later accounting-period proof continues to exercise
+  -- the same historical fixture.
+  PERFORM public.update_vendor_bill(
+    v_bill, 100, 0, v_old_date, v_old_date + 30,
+    'Section 9 intent-bound edit', 'smk-s9-intent-update-' || v_suffix
+  );
+  BEGIN
+    PERFORM public.update_vendor_bill(
+      v_bill, 100, 0, v_old_date, v_old_date + 30,
+      'changed edit must not replay', 'smk-s9-intent-update-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed vendor-bill edit replayed a prior success';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'IDEMPOTENCY_INTENT_MISMATCH' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong changed vendor-bill replay error: %', v_err;
+    END IF;
+  END;
 
   BEGIN
     PERFORM public.cancel_purchase_order(
@@ -564,6 +625,34 @@ BEGIN
      ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected closed-period bill void leaked a change';
   END IF;
+
+  -- Soft-deleted bills are historical records, not payable/voidable targets.
+  UPDATE public.vendor_bills SET deleted_at = now() WHERE id = v_void_bill;
+  BEGIN
+    PERFORM public.record_vendor_payment(
+      v_void_bill, 1, v_old_date, 'check', 'SMK-S9-DELETED-PAY-' || v_suffix,
+      'must reject soft-deleted bill', 'smk-s9-deleted-pay-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: paid a soft-deleted vendor bill';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'BILL_NOT_FOUND:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong soft-deleted payment error: %', v_err;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.void_vendor_bill(
+      v_void_bill, 'must reject soft-deleted bill', 'smk-s9-deleted-void-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: voided a soft-deleted vendor bill';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'BILL_NOT_FOUND:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong soft-deleted void error: %', v_err;
+    END IF;
+  END;
 
   -- The authenticated browser role can still read the closed row but cannot
   -- bypass the RPC boundary to reopen it directly.

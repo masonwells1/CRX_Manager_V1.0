@@ -24,6 +24,7 @@ import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection } from '../lib/idempotency';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
@@ -168,7 +169,12 @@ export default function VendorBillDetail() {
       setPayNotes('');
       fetchBill();
     } catch (err) {
-      toast('error', sanitizeError(err));
+      if (getIdempotencyBindingRejection(err)) {
+        paymentIdem.resetKey();
+        toast('warning', 'That retry belongs to a different payment request. Your current payment was not recorded; retry to submit it with a fresh key.');
+      } else {
+        toast('error', sanitizeError(err));
+      }
     }
     setPaying(false);
   };
@@ -224,7 +230,12 @@ export default function VendorBillDetail() {
       setEditModalOpen(false);
       fetchBill();
     } catch (err) {
-      toast('error', sanitizeError(err));
+      if (getIdempotencyBindingRejection(err)) {
+        editIdem.resetKey();
+        toast('warning', 'That retry belongs to a different bill edit. Your current changes were not saved; retry to submit them with a fresh key.');
+      } else {
+        toast('error', sanitizeError(err));
+      }
     }
     setEditing(false);
   };
@@ -280,7 +291,12 @@ export default function VendorBillDetail() {
       setVoidModalOpen(false);
       fetchBill();
     } catch (err) {
-      toast('error', sanitizeError(err));
+      if (getIdempotencyBindingRejection(err)) {
+        voidIdem.resetKey();
+        toast('warning', 'That retry belongs to a different bill void. This bill was not changed; retry to submit this void with a fresh key.');
+      } else {
+        toast('error', sanitizeError(err));
+      }
     }
     setVoiding(false);
   };
