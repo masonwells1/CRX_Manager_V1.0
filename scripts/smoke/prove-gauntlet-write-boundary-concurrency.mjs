@@ -1,0 +1,515 @@
+#!/usr/bin/env node
+/**
+ * Network-isolated PostgreSQL 17 two-session proof for the final gauntlet
+ * serialization boundaries. It exercises both winning orders for:
+ *   - receiving reversal vs. PO-linked bill creation;
+ *   - receiving reversal vs. accounting-period close;
+ *   - cycle-count completion vs. item insertion.
+ *
+ * The disposable functions contain only the reviewed locking/status slice.
+ * Source assertions bind that slice to the checked-in forward migration.
+ */
+
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const PREFIX = 'crx-gauntlet-write-boundary-proof-';
+const CONTAINER = `${PREFIX}${process.pid}-${Date.now().toString(36)}`.toLowerCase();
+const IMAGE = 'postgres:17-alpine';
+const PASSWORD = 'gauntlet-disposable-only';
+const MIGRATION = path.join(
+  ROOT,
+  'supabase',
+  'migrations',
+  '20260831235900_serialize_gauntlet_write_boundaries.sql',
+);
+
+function fail(message, detail = '') {
+  throw new Error(`${message}${detail ? `\n${detail}` : ''}`);
+}
+
+function docker(args, { input, allowFailure = false } = {}) {
+  const result = spawnSync('docker', args, {
+    cwd: ROOT,
+    encoding: 'utf8',
+    input,
+    maxBuffer: 10 * 1024 * 1024,
+    timeout: 180_000,
+  });
+  if (result.error) fail(`docker could not start: ${result.error.message}`);
+  if (!allowFailure && result.status !== 0) {
+    fail(
+      `docker ${args.join(' ')} failed with exit ${result.status}`,
+      `${result.stdout || ''}${result.stderr || ''}`.trim(),
+    );
+  }
+  return result;
+}
+
+function psqlArgs() {
+  return [
+    'exec', '-i', CONTAINER,
+    'psql', '-U', 'postgres', '-d', 'postgres',
+    '-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1',
+  ];
+}
+
+function sql(statement, { allowFailure = false } = {}) {
+  return docker(psqlArgs(), { input: statement, allowFailure });
+}
+
+function scalar(statement) {
+  return sql(statement).stdout.trim().split(/\r?\n/).filter(Boolean).at(-1) || '';
+}
+
+function session(statement, marker) {
+  const child = spawn('docker', psqlArgs(), {
+    cwd: ROOT,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  let readyResolve;
+  let readyReject;
+  let readySettled = false;
+  const ready = new Promise((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  const timeout = setTimeout(() => {
+    if (!readySettled) {
+      readySettled = true;
+      readyReject(new Error(`timed out waiting for marker ${marker}`));
+    }
+  }, 10_000);
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk;
+    if (!readySettled && stdout.includes(marker)) {
+      readySettled = true;
+      clearTimeout(timeout);
+      readyResolve();
+    }
+  });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.stdin.end(statement);
+  const done = new Promise((resolve, reject) => {
+    child.once('error', (error) => {
+      clearTimeout(timeout);
+      if (!readySettled) {
+        readySettled = true;
+        readyReject(error);
+      }
+      reject(error);
+    });
+    child.once('close', (code, signal) => {
+      clearTimeout(timeout);
+      if (!readySettled) {
+        readySettled = true;
+        readyReject(new Error(`SQL exited before marker ${marker}: ${stderr || stdout}`));
+      }
+      resolve({ code, signal, stdout, stderr });
+    });
+  });
+  return { ready, done };
+}
+
+function expectFailure(result, pattern, label) {
+  assert.notEqual(result.code, 0, `${label} unexpectedly committed`);
+  assert.match(`${result.stdout}\n${result.stderr}`, pattern, `${label} failed for the wrong reason`);
+}
+
+function assertCheckedInMarkers() {
+  const migration = readFileSync(MIGRATION, 'utf8').replace(/\r\n/g, '\n');
+  const po = migration.indexOf('FROM public.purchase_orders po');
+  const month = migration.indexOf(
+    'public._lock_accounting_months(ARRAY[v_receiving_date], false)',
+    po,
+  );
+  const period = migration.indexOf('public.check_period_open(v_receiving_date)', month);
+  const implementation = migration.indexOf(
+    'public._section9_reverse_receiving_record_serialized',
+    period,
+  );
+  assert.ok(po >= 0 && month > po && period > month && implementation > period);
+  assert.match(
+    migration.slice(po, month),
+    /FOR UPDATE;/,
+    'receiving wrapper does not lock the PO before the month',
+  );
+  assert.match(
+    migration,
+    /CREATE TRIGGER trg_bump_cycle_count_item_revision\s+BEFORE INSERT OR UPDATE OR DELETE ON public\.cycle_count_items/,
+  );
+  const triggerStart = migration.indexOf(
+    'CREATE OR REPLACE FUNCTION public.bump_cycle_count_item_revision',
+  );
+  const triggerEnd = migration.indexOf(
+    'REVOKE ALL ON FUNCTION public.bump_cycle_count_item_revision',
+    triggerStart,
+  );
+  const triggerBody = migration.slice(triggerStart, triggerEnd);
+  assert.ok(triggerBody.indexOf('FOR UPDATE;') < triggerBody.indexOf('SET item_revision = item_revision + 1'));
+  assert.match(triggerBody, /CYCLE_COUNT_NOT_IN_PROGRESS/);
+}
+
+function prepareContainer() {
+  if (!CONTAINER.startsWith(PREFIX) || !/^[a-z0-9][a-z0-9_.-]+$/.test(CONTAINER)) {
+    fail(`refusing unsafe container name: ${CONTAINER}`);
+  }
+  if (docker(['container', 'inspect', CONTAINER], { allowFailure: true }).status === 0) {
+    fail(`refusing to reuse existing container ${CONTAINER}`);
+  }
+  docker([
+    'run', '--detach', '--name', CONTAINER,
+    '--network', 'none',
+    '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=128m',
+    '--env', `POSTGRES_PASSWORD=${PASSWORD}`,
+    IMAGE,
+  ]);
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (docker(
+      ['exec', CONTAINER, 'pg_isready', '-U', 'postgres', '-d', 'postgres'],
+      { allowFailure: true },
+    ).status === 0) return;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+  }
+  fail('disposable PostgreSQL container did not become ready');
+}
+
+function installSchema() {
+  sql(`
+CREATE ROLE anon;
+CREATE ROLE authenticated;
+CREATE ROLE service_role;
+CREATE SCHEMA auth;
+CREATE SCHEMA extensions;
+CREATE EXTENSION pgcrypto WITH SCHEMA extensions;
+CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
+AS $$ SELECT '11111111-1111-1111-1111-111111111111'::uuid $$;
+
+CREATE TABLE public.purchase_orders (id uuid PRIMARY KEY);
+CREATE TABLE public.receiving_records (
+  id uuid PRIMARY KEY,
+  purchase_order_id uuid NOT NULL REFERENCES public.purchase_orders(id),
+  received_at timestamptz NOT NULL
+);
+CREATE TABLE public.vendor_bills (
+  id uuid PRIMARY KEY,
+  purchase_order_id uuid NOT NULL REFERENCES public.purchase_orders(id),
+  status text NOT NULL DEFAULT 'unpaid',
+  deleted_at timestamptz
+);
+CREATE TABLE public.accounting_periods (
+  period_start date NOT NULL,
+  period_end date NOT NULL,
+  status text NOT NULL
+);
+CREATE TABLE public.idempotency_keys (
+  idempotency_key text NOT NULL,
+  operation text NOT NULL,
+  result jsonb,
+  request_actor_id uuid,
+  request_fingerprint text,
+  PRIMARY KEY (idempotency_key, operation)
+);
+
+CREATE FUNCTION public.is_admin() RETURNS boolean
+LANGUAGE sql STABLE AS $$ SELECT true $$;
+CREATE FUNCTION public.check_idempotency_intent(text, text, uuid, text)
+RETURNS jsonb LANGUAGE sql AS $$ SELECT NULL::jsonb $$;
+
+CREATE FUNCTION public._lock_accounting_months(p_dates date[], p_exclusive boolean)
+RETURNS void LANGUAGE plpgsql AS $function$
+DECLARE v_month_key integer;
+BEGIN
+  FOR v_month_key IN
+    SELECT DISTINCT (EXTRACT(YEAR FROM d)::integer * 12) + EXTRACT(MONTH FROM d)::integer - 1
+    FROM unnest(p_dates) dates(d) WHERE d IS NOT NULL ORDER BY 1
+  LOOP
+    IF p_exclusive THEN
+      PERFORM pg_advisory_xact_lock(73492010, v_month_key);
+    ELSE
+      PERFORM pg_advisory_xact_lock_shared(73492010, v_month_key);
+    END IF;
+  END LOOP;
+END;
+$function$;
+
+CREATE FUNCTION public.check_period_open(p_date date)
+RETURNS void LANGUAGE plpgsql AS $function$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.accounting_periods
+    WHERE status = 'closed' AND p_date BETWEEN period_start AND period_end
+  ) THEN RAISE EXCEPTION 'CLOSED_PERIOD'; END IF;
+END;
+$function$;
+
+CREATE FUNCTION public._section9_reverse_receiving_record_serialized(
+  p_record_id uuid,
+  p_reason text DEFAULT 'Manually reversed',
+  p_performed_by uuid DEFAULT NULL,
+  p_idempotency_key text DEFAULT NULL
+)
+RETURNS jsonb LANGUAGE plpgsql AS $function$
+DECLARE v_po uuid; v_date date; v_result jsonb;
+BEGIN
+  SELECT purchase_order_id, (received_at AT TIME ZONE 'America/Chicago')::date
+    INTO v_po, v_date
+    FROM public.receiving_records
+   WHERE id = p_record_id
+   FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'RECEIPT_NOT_FOUND'; END IF;
+  PERFORM public.check_period_open(v_date);
+  IF EXISTS (
+    SELECT 1 FROM public.vendor_bills
+    WHERE purchase_order_id = v_po AND deleted_at IS NULL AND status <> 'voided'
+  ) THEN RAISE EXCEPTION 'ACTIVE_VENDOR_BILL'; END IF;
+  DELETE FROM public.receiving_records WHERE id = p_record_id;
+  v_result := jsonb_build_object('success', true, 'record_id', p_record_id);
+  INSERT INTO public.idempotency_keys(idempotency_key, operation, result)
+  VALUES (p_idempotency_key, 'reverse_receiving_record', v_result);
+  RETURN v_result;
+END;
+$function$;
+
+CREATE FUNCTION public.reverse_receiving_record(
+  uuid, text DEFAULT 'Manually reversed', uuid DEFAULT NULL, text DEFAULT NULL
+)
+RETURNS jsonb LANGUAGE sql AS $$ SELECT '{}'::jsonb $$;
+
+CREATE FUNCTION public.proof_create_bill(p_bill_id uuid, p_po_id uuid)
+RETURNS void LANGUAGE plpgsql AS $function$
+BEGIN
+  PERFORM 1 FROM public.purchase_orders WHERE id = p_po_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'PO_NOT_FOUND'; END IF;
+  INSERT INTO public.vendor_bills(id, purchase_order_id) VALUES (p_bill_id, p_po_id);
+END;
+$function$;
+
+CREATE TABLE public.cycle_counts (
+  id uuid PRIMARY KEY,
+  status text NOT NULL DEFAULT 'in_progress',
+  item_revision bigint NOT NULL DEFAULT 0
+);
+CREATE TABLE public.cycle_count_items (
+  id uuid PRIMARY KEY,
+  cycle_count_id uuid NOT NULL REFERENCES public.cycle_counts(id)
+);
+
+CREATE FUNCTION public.bump_cycle_count_item_revision()
+RETURNS trigger LANGUAGE plpgsql AS $function$
+BEGIN
+  RETURN COALESCE(NEW, OLD);
+END;
+$function$;
+CREATE TRIGGER trg_bump_cycle_count_item_revision
+AFTER INSERT OR UPDATE OR DELETE ON public.cycle_count_items
+FOR EACH ROW EXECUTE FUNCTION public.bump_cycle_count_item_revision();
+
+CREATE FUNCTION public.complete_cycle_count(uuid, uuid DEFAULT NULL, text DEFAULT NULL, bigint DEFAULT NULL)
+RETURNS void LANGUAGE sql AS $$ SELECT $$;
+
+CREATE FUNCTION public.proof_complete_cycle_count(p_count_id uuid, p_expected_revision bigint)
+RETURNS void LANGUAGE plpgsql AS $function$
+DECLARE v_revision bigint; v_status text;
+BEGIN
+  PERFORM 1 FROM public.cycle_count_items
+   WHERE cycle_count_id = p_count_id ORDER BY id FOR UPDATE;
+  SELECT item_revision, status INTO v_revision, v_status
+    FROM public.cycle_counts WHERE id = p_count_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'CYCLE_COUNT_NOT_FOUND'; END IF;
+  IF v_status IS DISTINCT FROM 'in_progress' THEN
+    RAISE EXCEPTION 'CYCLE_COUNT_NOT_IN_PROGRESS';
+  END IF;
+  IF v_revision IS DISTINCT FROM p_expected_revision THEN
+    RAISE EXCEPTION 'CYCLE_COUNT_STALE_REVISION';
+  END IF;
+  UPDATE public.cycle_counts SET status = 'completed' WHERE id = p_count_id;
+END;
+$function$;
+`);
+  sql(readFileSync(MIGRATION, 'utf8'));
+}
+
+function seedReceiving(po, receipt) {
+  sql(`
+INSERT INTO public.purchase_orders(id) VALUES ('${po}');
+INSERT INTO public.receiving_records(id, purchase_order_id, received_at)
+VALUES ('${receipt}', '${po}', '2025-01-15 12:00:00-06');
+`);
+}
+
+async function proveBillFirstBlocksReversal() {
+  const po = '00000000-0000-0000-0000-000000000101';
+  const receipt = '00000000-0000-0000-0000-000000000201';
+  const bill = '00000000-0000-0000-0000-000000000301';
+  seedReceiving(po, receipt);
+  const writer = session(`
+BEGIN;
+SELECT id FROM public.purchase_orders WHERE id='${po}' FOR UPDATE;
+SELECT 'BILL_PO_LOCKED';
+SELECT pg_sleep(2);
+INSERT INTO public.vendor_bills(id, purchase_order_id) VALUES ('${bill}', '${po}');
+COMMIT;
+`, 'BILL_PO_LOCKED');
+  await writer.ready;
+  const reversal = session(`
+SELECT 'REVERSAL_STARTED';
+SELECT public.reverse_receiving_record('${receipt}', 'proof', '11111111-1111-1111-1111-111111111111', 'bill-first-${receipt}');
+`, 'REVERSAL_STARTED');
+  const [writerResult, reversalResult] = await Promise.all([writer.done, reversal.done]);
+  assert.equal(writerResult.code, 0, writerResult.stderr);
+  expectFailure(reversalResult, /ACTIVE_VENDOR_BILL/, 'bill-first reversal');
+  assert.equal(scalar(`SELECT count(*) FROM public.receiving_records WHERE id='${receipt}'`), '1');
+}
+
+async function proveReversalFirstSerializesBill() {
+  const po = '00000000-0000-0000-0000-000000000102';
+  const receipt = '00000000-0000-0000-0000-000000000202';
+  const bill = '00000000-0000-0000-0000-000000000302';
+  seedReceiving(po, receipt);
+  const reversal = session(`
+BEGIN;
+SELECT id FROM public.purchase_orders WHERE id='${po}' FOR UPDATE;
+SELECT public._lock_accounting_months(ARRAY[DATE '2025-01-15'], false);
+SELECT 'REVERSAL_BOUNDARIES_LOCKED';
+SELECT pg_sleep(2);
+SELECT public.reverse_receiving_record('${receipt}', 'proof', '11111111-1111-1111-1111-111111111111', 'reversal-first-bill-${receipt}');
+COMMIT;
+`, 'REVERSAL_BOUNDARIES_LOCKED');
+  await reversal.ready;
+  const writer = session(`
+SELECT 'BILL_STARTED';
+SELECT public.proof_create_bill('${bill}', '${po}');
+`, 'BILL_STARTED');
+  const [reversalResult, writerResult] = await Promise.all([reversal.done, writer.done]);
+  assert.equal(reversalResult.code, 0, reversalResult.stderr);
+  assert.equal(writerResult.code, 0, writerResult.stderr);
+  assert.equal(scalar(`SELECT count(*) FROM public.receiving_records WHERE id='${receipt}'`), '0');
+  assert.equal(scalar(`SELECT count(*) FROM public.vendor_bills WHERE id='${bill}'`), '1');
+}
+
+async function proveCloseFirstBlocksReversal() {
+  const po = '00000000-0000-0000-0000-000000000103';
+  const receipt = '00000000-0000-0000-0000-000000000203';
+  seedReceiving(po, receipt);
+  const closer = session(`
+BEGIN;
+SELECT public._lock_accounting_months(ARRAY[DATE '2025-01-01'], true);
+SELECT 'CLOSE_MONTH_LOCKED';
+SELECT pg_sleep(2);
+INSERT INTO public.accounting_periods(period_start, period_end, status)
+VALUES ('2025-01-01', '2025-01-31', 'closed');
+COMMIT;
+`, 'CLOSE_MONTH_LOCKED');
+  await closer.ready;
+  const reversal = session(`
+SELECT 'CLOSE_FIRST_REVERSAL_STARTED';
+SELECT public.reverse_receiving_record('${receipt}', 'proof', '11111111-1111-1111-1111-111111111111', 'close-first-${receipt}');
+`, 'CLOSE_FIRST_REVERSAL_STARTED');
+  const [closeResult, reversalResult] = await Promise.all([closer.done, reversal.done]);
+  assert.equal(closeResult.code, 0, closeResult.stderr);
+  expectFailure(reversalResult, /CLOSED_PERIOD/, 'close-first reversal');
+  assert.equal(scalar(`SELECT count(*) FROM public.receiving_records WHERE id='${receipt}'`), '1');
+  sql(`DELETE FROM public.accounting_periods WHERE period_start='2025-01-01';`);
+}
+
+async function proveReversalFirstSerializesClose() {
+  const po = '00000000-0000-0000-0000-000000000104';
+  const receipt = '00000000-0000-0000-0000-000000000204';
+  seedReceiving(po, receipt);
+  const reversal = session(`
+BEGIN;
+SELECT id FROM public.purchase_orders WHERE id='${po}' FOR UPDATE;
+SELECT public._lock_accounting_months(ARRAY[DATE '2025-01-15'], false);
+SELECT 'REVERSAL_MONTH_LOCKED';
+SELECT pg_sleep(2);
+SELECT public.reverse_receiving_record('${receipt}', 'proof', '11111111-1111-1111-1111-111111111111', 'reversal-first-close-${receipt}');
+COMMIT;
+`, 'REVERSAL_MONTH_LOCKED');
+  await reversal.ready;
+  const closer = session(`
+SELECT 'CLOSE_STARTED';
+BEGIN;
+SELECT public._lock_accounting_months(ARRAY[DATE '2025-01-01'], true);
+INSERT INTO public.accounting_periods(period_start, period_end, status)
+VALUES ('2025-01-01', '2025-01-31', 'closed');
+COMMIT;
+`, 'CLOSE_STARTED');
+  const [reversalResult, closeResult] = await Promise.all([reversal.done, closer.done]);
+  assert.equal(reversalResult.code, 0, reversalResult.stderr);
+  assert.equal(closeResult.code, 0, closeResult.stderr);
+  assert.equal(scalar(`SELECT count(*) FROM public.receiving_records WHERE id='${receipt}'`), '0');
+}
+
+async function proveInsertFirstMakesCompletionStale() {
+  const count = '00000000-0000-0000-0000-000000000401';
+  const item = '00000000-0000-0000-0000-000000000501';
+  sql(`INSERT INTO public.cycle_counts(id) VALUES ('${count}');`);
+  const insertion = session(`
+BEGIN;
+INSERT INTO public.cycle_count_items(id, cycle_count_id) VALUES ('${item}', '${count}');
+SELECT 'ITEM_PARENT_LOCKED';
+SELECT pg_sleep(2);
+COMMIT;
+`, 'ITEM_PARENT_LOCKED');
+  await insertion.ready;
+  const completion = session(`
+SELECT 'STALE_COMPLETION_STARTED';
+SELECT public.proof_complete_cycle_count('${count}', 0);
+`, 'STALE_COMPLETION_STARTED');
+  const [insertResult, completionResult] = await Promise.all([insertion.done, completion.done]);
+  assert.equal(insertResult.code, 0, insertResult.stderr);
+  expectFailure(completionResult, /CYCLE_COUNT_STALE_REVISION/, 'insert-first completion');
+  assert.equal(scalar(`SELECT status FROM public.cycle_counts WHERE id='${count}'`), 'in_progress');
+  assert.equal(scalar(`SELECT item_revision FROM public.cycle_counts WHERE id='${count}'`), '1');
+}
+
+async function proveCompletionFirstRejectsLateInsert() {
+  const count = '00000000-0000-0000-0000-000000000402';
+  const item = '00000000-0000-0000-0000-000000000502';
+  sql(`INSERT INTO public.cycle_counts(id) VALUES ('${count}');`);
+  const completion = session(`
+BEGIN;
+SELECT id FROM public.cycle_counts WHERE id='${count}' FOR UPDATE;
+SELECT 'COMPLETION_PARENT_LOCKED';
+SELECT pg_sleep(2);
+SELECT public.proof_complete_cycle_count('${count}', 0);
+COMMIT;
+`, 'COMPLETION_PARENT_LOCKED');
+  await completion.ready;
+  const insertion = session(`
+SELECT 'LATE_INSERT_STARTED';
+INSERT INTO public.cycle_count_items(id, cycle_count_id) VALUES ('${item}', '${count}');
+`, 'LATE_INSERT_STARTED');
+  const [completionResult, insertResult] = await Promise.all([completion.done, insertion.done]);
+  assert.equal(completionResult.code, 0, completionResult.stderr);
+  expectFailure(insertResult, /CYCLE_COUNT_NOT_IN_PROGRESS/, 'completion-first late insert');
+  assert.equal(scalar(`SELECT status FROM public.cycle_counts WHERE id='${count}'`), 'completed');
+  assert.equal(scalar(`SELECT count(*) FROM public.cycle_count_items WHERE id='${item}'`), '0');
+}
+
+try {
+  assertCheckedInMarkers();
+  prepareContainer();
+  installSchema();
+  await proveBillFirstBlocksReversal();
+  await proveReversalFirstSerializesBill();
+  await proveCloseFirstBlocksReversal();
+  await proveReversalFirstSerializesClose();
+  await proveInsertFirstMakesCompletionStale();
+  await proveCompletionFirstRejectsLateInsert();
+  console.log('GAUNTLET_WRITE_BOUNDARY_CONCURRENCY_PASS');
+} finally {
+  if (CONTAINER.startsWith(PREFIX)) {
+    docker(['rm', '--force', CONTAINER], { allowFailure: true });
+  }
+}

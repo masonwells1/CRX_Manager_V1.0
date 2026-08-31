@@ -2,8 +2,8 @@
 
 **Last verified: 2026-08-31 for the repository's written-but-unapplied migration inventory; the
 live-ledger facts below remain from the 2026-08-27 11:43:53 UTC read.** The current gauntlet repair
-candidate adds five ordered, unapplied migrations (`20260831160000`, `20260831161000`,
-`20260831162000`, `20260831212415`, and `20260831233000`). They must not be described as live until
+candidate adds six ordered, unapplied migrations (`20260831160000`, `20260831161000`,
+`20260831162000`, `20260831212415`, `20260831233000`, and `20260831235900`). They must not be described as live until
 the governed apply and postflight complete. The durable 2026-08-27 read-only capture records
 **978 ledger rows**. The matching live-introspection registry records
 `migrations_high_water` **`20260827113443`**, with
@@ -11,7 +11,7 @@ the governed apply and postflight complete. The durable 2026-08-27 read-only cap
 current effective ordering name high-water is therefore **`20260826220000`**. The same registry
 records `quote_versions.restore_trusted_at`, so the quote-version trust migration is **applied
 live** and its schema marker exists. This evidence does not include a fresh post-apply read of the
-five routine bodies or their grants; the 2026-08-26 pre-apply fingerprint paragraph is superseded,
+six routine bodies or their grants; the 2026-08-26 pre-apply fingerprint paragraph is superseded,
 not promoted into post-apply proof.
 
 The prior header readings are retained as provenance: 977 rows / `20260826205935` / authored
@@ -39,7 +39,7 @@ it. This document states only the ledger fact and defers to those.
 **The tracked registry is current through the last applied authored migration, not through local
 candidates.** `.claude/schema-registry.json` was generated 2026-08-31 from the live-introspection
 snapshot, records ledger high-water `20260827113443`, and includes authored migration
-`20260826220000_quote_version_restore_trust_boundary`. It deliberately excludes the five gauntlet
+`20260826220000_quote_version_restore_trust_boundary`. It deliberately excludes the six gauntlet
 candidates above because they are not applied; regenerate it only after the governed rollout.
 
 **Booking draws are RESUMED** — Mason released the pause in chat on 2026-08-25. The decision, the
