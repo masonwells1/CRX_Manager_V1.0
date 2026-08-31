@@ -330,7 +330,8 @@ export default function QuickReceivePanel() {
       });
       if (error) throw error;
       assertRpcResult(data, 'receive_po_items');
-      receiveIdem.resetKey();
+      const receivingRecordIds = (data as Record<string, unknown> | null)?.receiving_record_ids as string[] | undefined;
+      const damagedReceiptIntentIds = receivingRecordIds && receivingRecordIds.length > 0 ? receivingRecordIds : [key];
 
       // Notify if damaged
       const damagedItems = itemsPayload.filter((ip) => ip.condition !== 'good');
@@ -347,11 +348,10 @@ export default function QuickReceivePanel() {
         });
         const firstPO = matchResults?.[0]?.allocations?.[0]?.po_number || 'Quick Receive';
         const firstPOId = matchResults?.[0]?.allocations?.[0]?.purchase_order_id || '';
-        notifyDamagedReceiving(firstPO, damagedInfo, firstPOId);
+        await notifyDamagedReceiving(firstPO, damagedInfo, firstPOId, damagedReceiptIntentIds);
       }
 
       // Auto-download PDF receipt
-      const receivingRecordIds = (data as Record<string, unknown> | null)?.receiving_record_ids as string[] | undefined;
       if (receivingRecordIds && receivingRecordIds.length > 0) {
         try {
           const { downloadReceivingPdf } = await import('../../lib/receivingPdf');
@@ -381,6 +381,7 @@ export default function QuickReceivePanel() {
 
       setReceiveCount(itemsPayload.length);
       setStep('success');
+      receiveIdem.resetKey();
       toast('success', `Successfully received ${itemsPayload.length} item(s)`);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'confirm_quick_receive' } });

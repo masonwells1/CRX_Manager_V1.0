@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { ShieldAlert, RefreshCw, AlertTriangle, FileText, Wrench, PackageCheck, Activity } from 'lucide-react';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
@@ -7,6 +7,7 @@ import Button from '../ui/Button';
 import ConfirmModal from '../ui/ConfirmModal';
 import { Sentry } from '../../lib/sentry';
 import { activeInvoiceCoversDelivery, fetchActiveInvoiceCoveragePages } from '../../lib/deliveryInvoiceCoverage';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 
 interface NegativeInvRow {
   id: string;
@@ -102,11 +103,7 @@ function describeAlert(a: IntegrityAlertRow): { title: string; detail: string } 
 export default function IntegrityCleanupPanel() {
   const { profile } = useAuth();
   const { toast } = useToast();
-  // F2 fix: idempotency keys are generated per-click (not via useIdempotencyKey)
-  // because the hook caches one key per mount, so rapid clicks across DIFFERENT
-  // rows would all reuse the first row's key — server returns the cached
-  // result for the wrong row and the UI shows a misleading success toast.
-  // Each handler below calls crypto.randomUUID() inline.
+  const reconcileIdem = useIdempotencyKey('reconcile_negative_inventory', profile?.id || '');
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -123,6 +120,7 @@ export default function IntegrityCleanupPanel() {
   const [backfillBusy, setBackfillBusy] = useState<Record<string, boolean>>({});
   const [verifyBusy, setVerifyBusy] = useState<Record<string, boolean>>({});
   const [verifyConfirmId, setVerifyConfirmId] = useState<string | null>(null);
+  const reconcileInFlightRef = useRef(new Set<string>());
 
   const fetchAll = useCallback(async () => {
     setRefreshing(true);
@@ -335,26 +333,31 @@ export default function IntegrityCleanupPanel() {
       toast('error', 'Reason is required');
       return;
     }
+    // Bind retries to this row and its exact operator-entered correction. A
+    // changed quantity or reason is new intent; a lost response is the same
+    // intent and must replay safely.
+    const scope = `reconcile:${row.id}:${input.qty}:${input.reason.trim()}`;
+    if (reconcileInFlightRef.current.has(scope)) return;
+    reconcileInFlightRef.current.add(scope);
     setReconcileInputs((prev) => ({ ...prev, [row.id]: { ...prev[row.id], busy: true } }));
     try {
-      // F2 fix: per-click UUID, not a hook-cached key (which would collide across rows)
-      const idemKey = crypto.randomUUID();
       const { data, error } = await supabase.rpc('reconcile_negative_inventory', {
         p_inventory_id: row.id,
         p_new_quantity: parseFloat(input.qty),
         p_reason: input.reason.trim(),
         p_performed_by: profile.id,
-        // eslint-disable-next-line local-rules/idempotency-key-from-hook -- deliberate per-row key; see F2 comment above
-        p_idempotency_key: idemKey,
+        p_idempotency_key: reconcileIdem.getKeyFor(scope),
       });
       if (error) throw error;
       assertRpcResult(data, 'reconcile_negative_inventory');
+      reconcileIdem.resetKeyFor(scope);
       toast('success', `${row.product_name} reconciled to ${input.qty}`);
       await fetchAll();
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
       toast('error', err instanceof Error ? err.message : 'Reconcile failed');
     } finally {
+      reconcileInFlightRef.current.delete(scope);
       setReconcileInputs((prev) => ({ ...prev, [row.id]: { ...prev[row.id], busy: false } }));
     }
   };

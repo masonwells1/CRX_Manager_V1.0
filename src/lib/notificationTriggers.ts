@@ -404,9 +404,11 @@ export async function notifyOrderNeedsPricing(
 export async function notifyDamagedReceiving(
   poNumber: string,
   damagedItems: Array<{ productName: string; quantity: number; condition: string }>,
-  poId: string
+  poId: string,
+  receiptIntentIds: string[],
 ) {
   if (!damagedItems || damagedItems.length === 0) return;
+  if (receiptIntentIds.length === 0) return;
 
   try {
     const summary = damagedItems
@@ -420,7 +422,10 @@ export async function notifyDamagedReceiving(
       p_po_number: poNumber,
       p_items_summary: summary,
       p_po_id: poId,
-      p_idempotency_key: crypto.randomUUID(),
+      // The receive RPC returns immutable receiving-record IDs. Binding the
+      // notification to that set makes a lost-response retry replay safely
+      // instead of emitting a second damaged-receipt alert.
+      p_idempotency_key: `damaged-receiving:${poId}:${[...receiptIntentIds].sort().join(':')}`,
     }).throwOnError();
   } catch (err) {
     await logNotificationFailure('damaged_receiving', err, 'purchase_order', poId, {

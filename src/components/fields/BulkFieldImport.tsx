@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Upload,
   CheckCircle,
@@ -42,6 +42,7 @@ import {
   type AssignableField,
 } from '../../lib/fieldImportCustomers';
 import type { Customer, ParsedImportField } from '../../types';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 
 
 interface BulkFieldImportProps {
@@ -69,6 +70,9 @@ const MAX_SIZE = 25 * 1024 * 1024; // 25MB
 export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldImportProps) {
   const { toast } = useToast();
   const { profile } = useAuth();
+  const saveFieldIdem = useIdempotencyKey('save_field', profile?.id || '');
+  const setBoundaryIdem = useIdempotencyKey('set_field_boundary', profile?.id || '');
+  const setOverrideAcresIdem = useIdempotencyKey('set_field_override_acres', profile?.id || '');
 
   // Step tracking
   const [step, setStep] = useState<Step>(1);
@@ -97,6 +101,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   // Step 6: Upload progress
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
+  const uploadInFlightRef = useRef(false);
 
   // Step 7: Results
   const [results, setResults] = useState<{ success: number; failed: number; errors: string[]; warnings: string[] } | null>(null);
@@ -394,9 +399,11 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   // ─── Step 6: Upload ─────────────────────────────────────────────────
 
   const handleUpload = async () => {
+    if (!profile || uploadInFlightRef.current) return;
     const validFields = parsedFields.filter((f) => f.isValid);
     if (validFields.length === 0) return;
 
+    uploadInFlightRef.current = true;
     setUploading(true);
     setUploadProgress({ current: 0, total: validFields.length });
 
@@ -405,8 +412,12 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    for (const pf of validFields) {
+    for (const [fieldIndex, pf] of validFields.entries()) {
       try {
+        // The ordered import row is stable throughout this modal session. Use
+        // it to keep every retry on the same server-side intent, while a
+        // neighboring row always gets a distinct key.
+        const intentScope = `import:${fieldIndex}:${pf.customer_id}:${pf.field_name}`;
         // Pre-validate the FULL multi-part acreage against the server's 0.1–5000 band BEFORE
         // creating the field. Otherwise an out-of-band import creates a field that
         // set_field_boundary then rejects, leaving an orphan a sales_rep cannot delete
@@ -439,8 +450,8 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           p_field_id: (null as string | null) as string,
           p_field_payload: fieldPayload,
           p_billing_defaults: [],
-          p_performed_by: profile!.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_performed_by: profile.id,
+          p_idempotency_key: saveFieldIdem.getKeyFor(intentScope),
         });
 
         if (saveError) {
@@ -455,8 +466,8 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             const { data: bData, error: bErr } = await supabase.rpc('set_field_boundary', {
               p_field_id: fieldId,
               p_boundary_geojson: JSON.stringify(pf.full_boundary_geojson),
-              p_performed_by: profile!.id,
-              p_idempotency_key: crypto.randomUUID(),
+              p_performed_by: profile.id,
+              p_idempotency_key: setBoundaryIdem.getKeyFor(intentScope),
             });
             if (bErr) throw bErr;
             assertRpcResult(bData, 'set_field_boundary');
@@ -487,8 +498,8 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                   const { data: ovData, error: ovErr } = await supabase.rpc('set_field_override_acres', {
                     p_field_id: fieldId,
                     p_override_acres: pf.stated_acres,
-                    p_performed_by: profile!.id,
-                    p_idempotency_key: crypto.randomUUID(),
+                    p_performed_by: profile.id,
+                    p_idempotency_key: setOverrideAcresIdem.getKeyFor(intentScope),
                   });
                   if (ovErr) throw ovErr;
                   assertRpcResult(ovData, 'set_field_override_acres');
@@ -499,6 +510,12 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               }
             }
             success++;
+            // The full row pipeline completed, so a later import attempt is
+            // new intent. Do not rotate keys before the boundary/override
+            // steps finish or a lost response could create a duplicate field.
+            saveFieldIdem.resetKeyFor(intentScope);
+            setBoundaryIdem.resetKeyFor(intentScope);
+            setOverrideAcresIdem.resetKeyFor(intentScope);
           }
         }
       } catch (err: unknown) {
@@ -512,6 +529,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     setResults({ success, failed, errors, warnings });
     setStep(7);
     setUploading(false);
+    uploadInFlightRef.current = false;
 
     if (success > 0) {
       onSuccess();

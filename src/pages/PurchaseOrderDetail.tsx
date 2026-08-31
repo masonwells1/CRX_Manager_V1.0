@@ -296,7 +296,8 @@ export default function PurchaseOrderDetail() {
         });
         if (error) throw error;
         assertRpcResult(data, 'receive_po_items');
-        receiveIdem.resetKey();
+        const receivingRecordIds = (data as { receiving_record_ids?: string[] } | null)?.receiving_record_ids || [];
+        const damagedReceiptIntentIds = receivingRecordIds.length > 0 ? receivingRecordIds : [idemKey];
 
         // AUDIT 3.2: Notify admins about damaged/non-good items
         if (po) {
@@ -311,7 +312,7 @@ export default function PurchaseOrderDetail() {
               };
             });
           if (damagedItems.length > 0) {
-            notifyDamagedReceiving(po.po_number, damagedItems, po.id);
+            await notifyDamagedReceiving(po.po_number, damagedItems, po.id, damagedReceiptIntentIds);
           }
 
           // AUDIT: Notify admins about over-received items
@@ -336,7 +337,6 @@ export default function PurchaseOrderDetail() {
         }
 
         // Offer PDF download
-        const receivingRecordIds = (data as { receiving_record_ids?: string[] } | null)?.receiving_record_ids;
         if (receivingRecordIds && receivingRecordIds.length > 0 && po) {
           try {
             const { downloadReceivingPdf } = await import('../lib/receivingPdf');
@@ -362,6 +362,7 @@ export default function PurchaseOrderDetail() {
             // PDF download is non-critical
           }
         }
+        receiveIdem.resetKey();
 
         setReceiveOpen(false);
         fetchPO();

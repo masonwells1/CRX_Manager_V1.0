@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Plus, CheckCircle, XCircle } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -77,6 +77,11 @@ export default function CycleCounts() {
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [reversing, setReversing] = useState(false);
   const [reverseConfirmOpen, setReverseConfirmOpen] = useState(false);
+  const [preparingCompletion, setPreparingCompletion] = useState(false);
+  const itemWriteQueuesRef = useRef(new Map<string, Promise<void>>());
+  const pendingItemWritesRef = useRef(new Set<Promise<void>>());
+  const failedItemWritesRef = useRef(new Set<string>());
+  const completionInFlightRef = useRef(false);
 
   const isAdmin = role === 'admin';
 
@@ -239,64 +244,130 @@ export default function CycleCounts() {
     setLoadingItems(false);
   };
 
-  // Update a single item's counted quantity (via RPC — server validates parent.status='in_progress')
+  const refreshCountItems = async (cycleCountId: string): Promise<CountItemRow[] | null> => {
+    const { data, error } = await supabase
+      .from('cycle_count_items')
+      .select('*, product:products(product_name)')
+      .eq('cycle_count_id', cycleCountId)
+      .order('created_at');
+    if (error) {
+      Sentry.captureException(error);
+      toast('error', 'Failed to refresh count items before completion');
+      return null;
+    }
+    const rows = ((data || []) as CountItemDbRow[]).map((item) => ({
+      ...item,
+      product_name: item.product?.product_name || 'Unknown',
+    })) as CountItemRow[];
+    setCountItems(rows);
+    return rows;
+  };
+
+  // Update a single item's counted quantity (via RPC — server validates parent.status='in_progress').
+  // Queue writes per item so a slow earlier keystroke cannot arrive after a newer value and overwrite it.
   const updateCountedQty = async (itemId: string, countedQty: number | null) => {
     const item = countItems.find((i) => i.id === itemId);
-    if (!item || !profile) return;
+    if (!item || !profile || completionInFlightRef.current) return;
 
     const variance = countedQty !== null ? countedQty - item.expected_qty : null;
     const variancePct = countedQty !== null && item.expected_qty !== 0
       ? Math.round(((variance || 0) / item.expected_qty) * 100 * 100) / 100
       : null;
 
-    const { data, error } = await supabase.rpc('update_cycle_count_item', {
-      p_item_id: itemId,
-      p_counted_qty: countedQty ?? undefined,
-      p_performed_by: profile.id,
+    const previous = itemWriteQueuesRef.current.get(itemId) ?? Promise.resolve();
+    const write = previous.catch(() => undefined).then(async () => {
+      const { data, error } = await supabase.rpc('update_cycle_count_item', {
+        p_item_id: itemId,
+        p_counted_qty: countedQty ?? undefined,
+        p_performed_by: profile.id,
+      });
+
+      if (error) {
+        failedItemWritesRef.current.add(itemId);
+        Sentry.captureException(error);
+        toast('error', error.message || 'Failed to update count');
+        return;
+      }
+      assertRpcResult(data, 'update_cycle_count_item');
+      failedItemWritesRef.current.delete(itemId);
+
+      setCountItems((prev) =>
+        prev.map((i) =>
+          i.id === itemId
+            ? {
+                ...i,
+                counted_qty: countedQty,
+                variance,
+                variance_pct: variancePct !== null ? Math.round(variancePct * 100) / 100 : null,
+                is_counted: countedQty !== null,
+                counted_by: profile.id,
+                counted_at: new Date().toISOString(),
+              }
+            : i
+        )
+      );
     });
-
-    if (error) {
-      Sentry.captureException(error);
-      toast('error', error.message || 'Failed to update count');
-      return;
+    itemWriteQueuesRef.current.set(itemId, write);
+    pendingItemWritesRef.current.add(write);
+    try {
+      await write;
+    } finally {
+      pendingItemWritesRef.current.delete(write);
+      if (itemWriteQueuesRef.current.get(itemId) === write) itemWriteQueuesRef.current.delete(itemId);
     }
-    assertRpcResult(data, 'update_cycle_count_item');
-
-    // Update local state
-    setCountItems((prev) =>
-      prev.map((i) =>
-        i.id === itemId
-          ? {
-              ...i,
-              counted_qty: countedQty,
-              variance,
-              variance_pct: variancePct !== null ? Math.round(variancePct * 100) / 100 : null,
-              is_counted: countedQty !== null,
-              counted_by: profile.id,
-              counted_at: new Date().toISOString(),
-            }
-          : i
-      )
-    );
   };
 
   // Complete the cycle count
-  const handleComplete = () => {
-    if (!activeCount || !profile) return;
-
-    const uncounted = countItems.filter((i) => !i.is_counted);
-    if (uncounted.length > 0) {
-      setCompleteConfirmMsg(`${uncounted.length} products have not been counted yet. Complete anyway?`);
-      setCompleteConfirmOpen(true);
-      return;
+  const waitForAuthoritativeCountItems = async (): Promise<CountItemRow[] | null> => {
+    await Promise.all([...pendingItemWritesRef.current]);
+    if (failedItemWritesRef.current.size > 0) {
+      toast('error', 'Fix the failed count update before completing this cycle count.');
+      return null;
     }
-
-    executeComplete();
+    return activeCount ? refreshCountItems(activeCount.id) : null;
   };
 
-  const executeComplete = async () => {
+  const handleComplete = async () => {
+    if (!activeCount || !profile) return;
+    if (completionInFlightRef.current) return;
+    completionInFlightRef.current = true;
+    setPreparingCompletion(true);
+
+    try {
+      const latestItems = await waitForAuthoritativeCountItems();
+      if (!latestItems) return;
+
+      const uncounted = latestItems.filter((i) => !i.is_counted);
+      if (uncounted.length > 0) {
+        setCompleteConfirmMsg(`${uncounted.length} products have not been counted yet. Complete anyway?`);
+        setCompleteConfirmOpen(true);
+        return;
+      }
+
+      await executeComplete(latestItems);
+    } finally {
+      completionInFlightRef.current = false;
+      setPreparingCompletion(false);
+    }
+  };
+
+  const executeComplete = async (authoritativeItems?: CountItemRow[]) => {
     setCompleteConfirmOpen(false);
     if (!activeCount || !profile) return;
+
+    if (!authoritativeItems) {
+      if (completionInFlightRef.current) return;
+      completionInFlightRef.current = true;
+      setPreparingCompletion(true);
+      try {
+        const latestItems = await waitForAuthoritativeCountItems();
+        if (latestItems) await executeComplete(latestItems);
+      } finally {
+        completionInFlightRef.current = false;
+        setPreparingCompletion(false);
+      }
+      return;
+    }
 
     await runCriticalAction({
       action: async () => {
@@ -309,7 +380,7 @@ export default function CycleCounts() {
         }).throwOnError();
         completeCycleCountIdem.resetKey();
 
-        const varianceItems = countItems.filter((i) => i.variance && i.variance !== 0);
+        const varianceItems = authoritativeItems.filter((i) => i.variance && i.variance !== 0);
 
         await logActivity({ event: 'cycle_count_completed', description: `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
       },
@@ -548,7 +619,7 @@ export default function CycleCounts() {
         message={completeConfirmMsg || `Some products have not been counted yet. Complete anyway?`}
         confirmLabel="Complete Anyway"
         variant="warning"
-        loading={completing}
+        loading={completing || preparingCompletion}
       />
       <ConfirmModal
         open={cancelConfirmOpen}
@@ -622,6 +693,7 @@ export default function CycleCounts() {
                               type="number"
                               step="0.01"
                               value={item.counted_qty ?? ''}
+                              disabled={preparingCompletion || completing}
                               onChange={(e) => {
                                 const val = e.target.value === '' ? null : parseFloat(e.target.value);
                                 updateCountedQty(item.id, val);
@@ -700,7 +772,7 @@ export default function CycleCounts() {
                 </Button>
                 <Button
                   onClick={handleComplete}
-                  loading={completing}
+                  loading={completing || preparingCompletion}
                   icon={<CheckCircle className="w-4 h-4" />}
                 >
                   Complete &amp; Apply Adjustments

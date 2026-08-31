@@ -420,25 +420,25 @@ describe('notifyDamagedReceiving', () => {
       { productName: 'Atrazine', quantity: 5, condition: 'damaged' },
       { productName: 'Glyphosate', quantity: 2, condition: 'wrong_item' },
     ];
-    await notifyDamagedReceiving('PO-001', items, 'po-uuid');
+    await notifyDamagedReceiving('PO-001', items, 'po-uuid', ['receipt-b', 'receipt-a']);
 
     expect(mockRpc).toHaveBeenCalledWith('notify_damaged_receiving', {
       p_po_number: 'PO-001',
       p_items_summary: expect.stringContaining('Atrazine'),
       p_po_id: 'po-uuid',
-      p_idempotency_key: expect.any(String),
+      p_idempotency_key: 'damaged-receiving:po-uuid:receipt-a:receipt-b',
     });
   });
 
   it('does nothing when no damaged items', async () => {
-    await notifyDamagedReceiving('PO-001', [], 'po-uuid');
+    await notifyDamagedReceiving('PO-001', [], 'po-uuid', ['receipt-a']);
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
   it('does not throw on error', async () => {
     mockRpc.mockRejectedValueOnce(new Error('fail'));
     await expect(
-      notifyDamagedReceiving('PO-001', [{ productName: 'X', quantity: 1, condition: 'damaged' }], 'po-uuid')
+      notifyDamagedReceiving('PO-001', [{ productName: 'X', quantity: 1, condition: 'damaged' }], 'po-uuid', ['receipt-a'])
     ).resolves.toBeUndefined();
   });
 });
