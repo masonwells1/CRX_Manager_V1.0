@@ -9,3 +9,8 @@ so a broad Supabase migration push cannot apply the deferred chain accidentally.
 real-schema verifier and focused migration contract test now read the staged sources.
 
 The rejected `20260827223000` global ledger-order trigger is not part of the deferred queue.
+
+Final review also hardened the staged sources before parking: soft-deleted invoices no longer
+count as delivery billing coverage, and cancel-return rejects a blank reason before returning an
+idempotent replay. Exact body and file hashes, the disposable verifier, and mutation tests were
+updated with those corrections. These safety fixes do not authorize or perform a live apply.

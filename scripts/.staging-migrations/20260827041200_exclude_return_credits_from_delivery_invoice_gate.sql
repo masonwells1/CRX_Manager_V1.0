@@ -410,6 +410,7 @@ BEGIN
     WHERE order_id = v_delivery.order_id
       AND status NOT IN ('voided', 'cancelled')
       AND invoice_type <> 'credit_memo'
+      AND deleted_at IS NULL
       AND (delivery_id = p_delivery_id OR delivery_id IS NULL);
 
     IF v_existing_active_invoice_count = 0 THEN
@@ -750,8 +751,9 @@ BEGIN
   );
 
   IF encode(sha256(convert_to(replace(v_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex')
-       IS DISTINCT FROM '15c5a7ddf836f402d52544a69b8628061b4e9042444362262c1d76d26916ee69'
+       IS DISTINCT FROM '0ae6ccf49632e4871ea0d016d52e6f6f049299311175563cbcfcdc063fd3ac4e'
      OR position('AND invoice_type <> ''credit_memo''' IN v_src) = 0
+     OR position('AND deleted_at IS NULL' IN v_src) = 0
      OR (SELECT count(*)
          FROM pg_proc p
          JOIN pg_namespace n ON n.oid = p.pronamespace

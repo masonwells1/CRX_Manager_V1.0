@@ -248,7 +248,7 @@ describe('return-credit COGS migration', () => {
     expect(functionBodySha256(allocatedDeliveryMigration, '_allocated_delivery_cents')).toBe('1df1d230c19e5d129038b1e5dfbca30db0b369ea5a91a22f19dd98cc53129142');
     expect(functionBodySha256(allocatedDeliveryMigration, '_complete_delivery_authorized_impl')).toBe('0e889bb6e0bc998d2833081e8e6f8e801e032595e7360e09d4f594e13ed7ad24');
     expect(functionBodySha256(allocatedDeliveryMigration, '_create_invoice_for_unbilled_delivery_impl_20260718')).toBe('6543165d2c7cb6acbffd222adb28fee9b66278338ec401f6b2f19537c8aebcaa');
-    expect(functionBodySha256(deliveryCreditGateMigration, '_complete_delivery_authorized_impl')).toBe('15c5a7ddf836f402d52544a69b8628061b4e9042444362262c1d76d26916ee69');
+    expect(functionBodySha256(deliveryCreditGateMigration, '_complete_delivery_authorized_impl')).toBe('0ae6ccf49632e4871ea0d016d52e6f6f049299311175563cbcfcdc063fd3ac4e');
     expect(functionBodySha256(deliveryCreditGateMigration, '_create_invoice_for_unbilled_delivery_impl_20260718')).toBe('89149c4596b68c8f98c52118433b21afc515f8af2e10d2ffa7ccb11cd87002e8');
     expect(deliveryCreditGateMigration.match(/AND invoice_type <> 'credit_memo'/g)).toHaveLength(2);
     expect(deliveryCreditGateMigration).toContain('UNBILLED_DELIVERY_RETURN_CREDIT_GATE_PREFLIGHT_CONTRACT_DRIFT');
@@ -305,7 +305,7 @@ describe('return-credit COGS migration', () => {
     expect(functionBodySha256(invoiceLineageMigration, '_save_invoice_scoped_impl'))
       .toBe('cab2bde1aa6bf26d918639cfb8d328ac579d0b7f5429123aa24710a1a835866e');
     expect(functionBodySha256(invoiceLineageMigration, '_cancel_return_intent_impl_20260812'))
-      .toBe('31d4fef2a8303aa3351b842cdd814ca38109fae8cc255df01929ffc745dc0618');
+      .toBe('68a39088d3615585a39df4dd4d15a2ecec6daf118a00ee4aaabbf71b051254e9');
     expect(invoiceLineageMigration).toContain('RETURN_RESTOCKED_QUANTITY_MISSING');
     expect(invoiceLineageMigration).toContain('sum(ri.restocked_quantity) AS restocked_quantity');
     expect(invoiceLineageMigration).toContain('GROUP BY ri.product_id, inv.id, inv.location, inv.quantity_available');
@@ -322,6 +322,57 @@ describe('return-credit COGS migration', () => {
     expect(returnCreditSmoke).toContain('MISSING_INVENTORY_CANCEL_GUARD_PROVEN');
     expect(returnCreditSmoke).toContain('RETURN_RESTOCK_INVENTORY_MISSING:%');
     expect(returnCreditSmoke).toContain('same-product cancel accepted 12 returned units with only 10 available');
+  });
+
+  it('fails if deleted invoices can count as active delivery billing coverage', () => {
+    const start = deliveryCreditGateMigration.indexOf(
+      'CREATE OR REPLACE FUNCTION public._complete_delivery_authorized_impl(',
+    );
+    const end = deliveryCreditGateMigration.indexOf(
+      'REVOKE ALL ON FUNCTION public._complete_delivery_authorized_impl(',
+      start,
+    );
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const completionBody = deliveryCreditGateMigration.slice(start, end);
+    const assertDeletedCoverageExcluded = (source: string) => {
+      if (!/AND invoice_type <> 'credit_memo'\r?\n\s+AND deleted_at IS NULL\r?\n\s+AND \(delivery_id = p_delivery_id OR delivery_id IS NULL\);/.test(source)) {
+        throw new Error('DELETED_DELIVERY_INVOICE_COUNTED_AS_COVERAGE');
+      }
+    };
+    expect(() => assertDeletedCoverageExcluded(completionBody)).not.toThrow();
+    const mutant = completionBody.replace(/\r?\n\s+AND deleted_at IS NULL(?=\r?\n\s+AND \(delivery_id = p_delivery_id)/, '');
+    expect(mutant).not.toBe(completionBody);
+    expect(() => assertDeletedCoverageExcluded(mutant)).toThrow('DELETED_DELIVERY_INVOICE_COUNTED_AS_COVERAGE');
+  });
+
+  it('fails if cancel-return reason validation moves behind replay lookup', () => {
+    const start = invoiceLineageMigration.indexOf(
+      'CREATE OR REPLACE FUNCTION public._cancel_return_intent_impl_20260812(',
+    );
+    const end = invoiceLineageMigration.indexOf(
+      'REVOKE ALL ON FUNCTION public._cancel_return_intent_impl_20260812(',
+      start,
+    );
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const cancelBody = invoiceLineageMigration.slice(start, end);
+    const assertReasonValidationFirst = (source: string) => {
+      const reasonGate = source.indexOf("IF p_reason IS NULL OR btrim(p_reason) = '' THEN");
+      const replayLookup = source.indexOf(
+        "v_cached := public.check_idempotency(p_idempotency_key, 'cancel_return');",
+      );
+      if (reasonGate < 0 || replayLookup < 0 || reasonGate >= replayLookup) {
+        throw new Error('CANCEL_RETURN_REASON_VALIDATION_NOT_FIRST');
+      }
+    };
+    expect(() => assertReasonValidationFirst(cancelBody)).not.toThrow();
+    const mutant = cancelBody.replace(
+      / {2}IF p_reason IS NULL OR btrim\(p_reason\) = '' THEN\r?\n {4}RAISE EXCEPTION 'Reason is required to cancel a return';\r?\n {2}END IF;\r?\n/,
+      '',
+    );
+    expect(mutant).not.toBe(cancelBody);
+    expect(() => assertReasonValidationFirst(mutant)).toThrow('CANCEL_RETURN_REASON_VALIDATION_NOT_FIRST');
   });
 
   it('keeps report status alignment in the separate report-only migration', () => {
@@ -465,10 +516,15 @@ describe('return-credit COGS migration', () => {
       .digest('hex');
     expect(orderInvoiceGateSha256).toBe('91a338e9b7802302d5eac2ef97f33cfd065e5b1f82bc3176d01c99de4019d816');
     expect(migrationHistory).toContain(`SQL sha256: \`${orderInvoiceGateSha256}\` (LF-normalized bytes)`);
+    const deliveryCreditGateSha256 = createHash('sha256')
+      .update(deliveryCreditGateMigration.replace(/\r\n/g, '\n'), 'utf8')
+      .digest('hex');
+    expect(deliveryCreditGateSha256).toBe('95bab8009f680c70c2a56a5dce8406bb651610228353fee88211df7cd389d5de');
+    expect(migrationHistory).toContain(`SQL sha256: \`${deliveryCreditGateSha256}\` (LF-normalized bytes)`);
     const invoiceLineageSha256 = createHash('sha256')
       .update(invoiceLineageMigration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(invoiceLineageSha256).toBe('720f82c80671fab9099d0d28a5e6eee658d8af4138ab3f5c0304ed00613ac779');
+    expect(invoiceLineageSha256).toBe('f56ebb6843c94c77968319fdf9c6e658eadd7a9387143a315499bcb7e2cf9437');
     expect(migrationHistory).toContain(`SQL sha256: \`${invoiceLineageSha256}\` (LF-normalized bytes)`);
   });
 

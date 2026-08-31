@@ -136,12 +136,12 @@ BEGIN
     WHERE id = v_actor AND is_active = true AND role IN ('admin', 'sales_rep')
   ) THEN RAISE EXCEPTION 'INSUFFICIENT_ROLE'; END IF;
 
+  IF p_reason IS NULL OR btrim(p_reason) = '' THEN
+    RAISE EXCEPTION 'Reason is required to cancel a return';
+  END IF;
   IF p_idempotency_key IS NOT NULL THEN
     v_cached := public.check_idempotency(p_idempotency_key, 'cancel_return');
     IF v_cached IS NOT NULL THEN RETURN v_cached; END IF;
-  END IF;
-  IF p_reason IS NULL OR btrim(p_reason) = '' THEN
-    RAISE EXCEPTION 'Reason is required to cancel a return';
   END IF;
 
   SELECT id, return_number, status, customer_id
@@ -529,7 +529,11 @@ BEGIN
          AND pg_get_userbyid(p.proowner) = 'postgres'
      )
      OR encode(sha256(convert_to(replace(v_cancel_src, chr(13) || chr(10), chr(10)), 'UTF8')), 'hex')
-        <> '31d4fef2a8303aa3351b842cdd814ca38109fae8cc255df01929ffc745dc0618'
+        <> '68a39088d3615585a39df4dd4d15a2ecec6daf118a00ee4aaabbf71b051254e9'
+     OR position('IF p_reason IS NULL OR btrim(p_reason) = '''' THEN' IN v_cancel_src) = 0
+     OR position('v_cached := public.check_idempotency(p_idempotency_key, ''cancel_return'');' IN v_cancel_src) = 0
+     OR position('IF p_reason IS NULL OR btrim(p_reason) = '''' THEN' IN v_cancel_src)
+        > position('v_cached := public.check_idempotency(p_idempotency_key, ''cancel_return'');' IN v_cancel_src)
      OR position('RETURN_RESTOCKED_QUANTITY_MISSING' IN v_cancel_src) = 0
      OR position('RETURN_RESTOCK_INVENTORY_INSUFFICIENT' IN v_cancel_src) = 0
      OR position('sum(ri.restocked_quantity) AS restocked_quantity' IN v_cancel_src) = 0

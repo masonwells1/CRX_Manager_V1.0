@@ -1972,7 +1972,7 @@ try {
   assert.match(cancelExactQuantityOutput, /SMOKE_FAIL: legacy cancel left 22\.50* gallons, expected 0/, `cancel-return exact-quantity mutant did not reach the phantom-inventory oracle:\n${cancelExactQuantityOutput}`);
   completedProofs.add('LEGACY_CANCEL_EXACT_QUANTITY_MUTATION_DETECTED');
   psql(canonicalCancelReturn);
-  assertInstalledFunctionHash('public._cancel_return_intent_impl_20260812(uuid,text,uuid,text)', '31d4fef2a8303aa3351b842cdd814ca38109fae8cc255df01929ffc745dc0618');
+  assertInstalledFunctionHash('public._cancel_return_intent_impl_20260812(uuid,text,uuid,text)', '68a39088d3615585a39df4dd4d15a2ecec6daf118a00ee4aaabbf71b051254e9');
 
   const cancelSameProductAggregateMutant = canonicalCancelReturn.replace(
     /      SELECT ri\.product_id,[\s\S]*?      ORDER BY ri\.product_id\r?\n/,
@@ -2010,7 +2010,7 @@ try {
   );
   completedProofs.add('SAME_PRODUCT_CANCEL_AGGREGATION_MUTATION_DETECTED');
   psql(canonicalCancelReturn);
-  assertInstalledFunctionHash('public._cancel_return_intent_impl_20260812(uuid,text,uuid,text)', '31d4fef2a8303aa3351b842cdd814ca38109fae8cc255df01929ffc745dc0618');
+  assertInstalledFunctionHash('public._cancel_return_intent_impl_20260812(uuid,text,uuid,text)', '68a39088d3615585a39df4dd4d15a2ecec6daf118a00ee4aaabbf71b051254e9');
 
   const dashboardStart = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."get_dashboard_action_items"(');
   const dashboardEnd = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION "public"."void_delivery"(', dashboardStart);
