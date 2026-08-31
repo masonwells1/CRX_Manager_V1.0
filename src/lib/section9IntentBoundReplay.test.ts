@@ -98,6 +98,7 @@ describe('Section 9 actor-and-intent replay binding', () => {
       expect(page).toContain('getIdempotencyBindingRejection');
     }
     expect(purchaseOrder).toContain('receiveIdem.resetKey()');
+    expect(purchaseOrder).toContain('reverseIdem.resetKey()');
     expect(quickReceive).toContain('receiveIdem.resetKey()');
     expect(receivingHub).toContain('receiveIdem.resetKey()');
     expect(vendorBill).toContain('paymentIdem.resetKey();');

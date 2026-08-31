@@ -1,10 +1,11 @@
 -- Gauntlet exact-head follow-up: close the two remaining write races.
 --
--- 1. reverse_receiving_record now takes the linked purchase-order row lock and
---    the accounting-month shared lock before its existing period/bill checks.
---    create_vendor_bill uses the same PO row lock, while period close uses the
---    matching exclusive month lock, so either writer commits first and the
---    loser revalidates authoritative state.
+-- 1. reverse_receiving_record now takes the linked PO-item row lock, then the
+--    purchase-order row lock, then the accounting-month shared lock before its
+--    existing period/bill checks. This matches the established supplier-cost
+--    item -> PO order; bill creation uses vendor -> PO, while period close uses
+--    the matching exclusive month lock. Either writer commits first and the
+--    loser revalidates authoritative state without a lock-order inversion.
 -- 2. cycle-count item mutations now lock and revalidate the parent count in a
 --    BEFORE trigger. A late insert therefore either advances the revision
 --    before completion reads it or waits for completion and fails because the
@@ -60,6 +61,7 @@ DECLARE
   v_replay jsonb;
   v_result jsonb;
   v_purchase_order_id uuid;
+  v_po_item_id uuid;
   v_receiving_date date;
 BEGIN
   PERFORM pg_advisory_xact_lock(73492009);
@@ -103,16 +105,26 @@ BEGIN
   END IF;
 
   SELECT rr.purchase_order_id,
+         rr.po_item_id,
          (rr.received_at AT TIME ZONE 'America/Chicago')::date
-    INTO v_purchase_order_id, v_receiving_date
+    INTO v_purchase_order_id, v_po_item_id, v_receiving_date
     FROM public.receiving_records rr
    WHERE rr.id = p_record_id
    FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Receiving record not found: %', p_record_id; END IF;
 
-  -- Canonical financial lock order: PO row, then accounting month. Bill
-  -- creation takes this PO lock before inserting; period close takes the
-  -- corresponding exclusive month lock before closing.
+  -- Canonical supplier-cost/receiving lock order: PO item, then PO. The
+  -- delegated reversal later updates both rows, so acquiring them here in the
+  -- shared order serializes with supplier-cost application without deadlocks.
+  PERFORM 1
+    FROM public.purchase_order_items poi
+   WHERE poi.id = v_po_item_id
+     AND poi.purchase_order_id = v_purchase_order_id
+   FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PURCHASE_ORDER_ITEM_NOT_FOUND: %', v_po_item_id;
+  END IF;
+
   PERFORM 1
     FROM public.purchase_orders po
    WHERE po.id = v_purchase_order_id
@@ -207,10 +219,13 @@ BEGIN
   SELECT prosrc INTO v_reverse_source
   FROM pg_proc
   WHERE oid = 'public.reverse_receiving_record(uuid,text,uuid,text)'::regprocedure;
-  IF v_reverse_source NOT LIKE '%FROM public.purchase_orders po%'
+  IF v_reverse_source NOT LIKE '%FROM public.purchase_order_items poi%'
+     OR v_reverse_source NOT LIKE '%FROM public.purchase_orders po%'
      OR v_reverse_source NOT LIKE '%FOR UPDATE%'
      OR v_reverse_source NOT LIKE '%_lock_accounting_months(ARRAY[v_receiving_date], false)%'
      OR v_reverse_source NOT LIKE '%check_period_open(v_receiving_date)%'
+     OR strpos(v_reverse_source, 'FROM public.purchase_order_items poi')
+        > strpos(v_reverse_source, 'FROM public.purchase_orders po')
      OR strpos(v_reverse_source, 'FROM public.purchase_orders po')
         > strpos(v_reverse_source, '_lock_accounting_months(ARRAY[v_receiving_date], false)')
      OR strpos(v_reverse_source, '_lock_accounting_months(ARRAY[v_receiving_date], false)')

@@ -33,12 +33,10 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
 
     const panel = source('src', 'components', 'receiving', 'ReceivingLogPanel.tsx');
     expect(panel).toContain('getKeyFor(intentScope)');
-    expect(panel).toContain('resetKeyFor(scope)');
+    expect(panel).toContain('resetKeyFor(intentScope)');
+    expect(panel).toContain('getIdempotencyBindingRejection(error)');
     expect(panel).toContain('JSON.stringify({ recordId: id, reason })');
     expect(panel).not.toContain('const idemKey = reverseRecIdem.getKey();');
-    expect(panel.indexOf('completedScopes.forEach')).toBeGreaterThan(
-      panel.indexOf('for (const id of ids)'),
-    );
   });
 
   it('fails the entire reversal when inventory or PO item mutation misses', () => {
@@ -78,6 +76,11 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
   });
 
   it('requires a logged reason above 105% cumulative PO billing', () => {
+    const vendorLock = cumulativeBillMigration.indexOf('FROM public.vendors v');
+    const poLock = cumulativeBillMigration.indexOf('FROM public.purchase_orders po');
+    expect(vendorLock).toBeGreaterThan(-1);
+    expect(poLock).toBeGreaterThan(vendorLock);
+    expect(cumulativeBillMigration.slice(vendorLock, poLock)).toContain('FOR UPDATE');
     expect(cumulativeBillMigration).toContain(
       "vb.deleted_at IS NULL\n      AND vb.status <> 'voided'",
     );

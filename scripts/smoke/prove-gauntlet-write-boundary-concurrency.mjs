@@ -4,6 +4,8 @@
  * serialization boundaries. It exercises both winning orders for:
  *   - receiving reversal vs. PO-linked bill creation;
  *   - receiving reversal vs. accounting-period close;
+ *   - receiving reversal vs. supplier-cost application;
+ *   - vendor-bill creation vs. supplier-cost application;
  *   - cycle-count completion vs. item insertion.
  *
  * The disposable functions contain only the reviewed locking/status slice.
@@ -26,6 +28,12 @@ const MIGRATION = path.join(
   'supabase',
   'migrations',
   '20260831235900_serialize_gauntlet_write_boundaries.sql',
+);
+const BILL_MIGRATION = path.join(
+  ROOT,
+  'supabase',
+  'migrations',
+  '20260831161000_require_cumulative_po_bill_confirmation.sql',
 );
 
 function fail(message, detail = '') {
@@ -126,6 +134,7 @@ function expectFailure(result, pattern, label) {
 
 function assertCheckedInMarkers() {
   const migration = readFileSync(MIGRATION, 'utf8').replace(/\r\n/g, '\n');
+  const poItem = migration.indexOf('FROM public.purchase_order_items poi');
   const po = migration.indexOf('FROM public.purchase_orders po');
   const month = migration.indexOf(
     'public._lock_accounting_months(ARRAY[v_receiving_date], false)',
@@ -136,7 +145,12 @@ function assertCheckedInMarkers() {
     'public._section9_reverse_receiving_record_serialized',
     period,
   );
-  assert.ok(po >= 0 && month > po && period > month && implementation > period);
+  assert.ok(poItem >= 0 && po > poItem && month > po && period > month && implementation > period);
+  assert.match(
+    migration.slice(poItem, po),
+    /FOR UPDATE;/,
+    'receiving wrapper does not lock the PO item before the PO',
+  );
   assert.match(
     migration.slice(po, month),
     /FOR UPDATE;/,
@@ -156,6 +170,16 @@ function assertCheckedInMarkers() {
   const triggerBody = migration.slice(triggerStart, triggerEnd);
   assert.ok(triggerBody.indexOf('FOR UPDATE;') < triggerBody.indexOf('SET item_revision = item_revision + 1'));
   assert.match(triggerBody, /CYCLE_COUNT_NOT_IN_PROGRESS/);
+
+  const billMigration = readFileSync(BILL_MIGRATION, 'utf8').replace(/\r\n/g, '\n');
+  const vendor = billMigration.indexOf('FROM public.vendors v');
+  const billPo = billMigration.indexOf('FROM public.purchase_orders po', vendor);
+  assert.ok(vendor >= 0 && billPo > vendor, 'bill wrapper does not preserve vendor -> PO order');
+  assert.match(
+    billMigration.slice(vendor, billPo),
+    /FOR UPDATE;/,
+    'bill wrapper does not lock the vendor before the PO',
+  );
 }
 
 function prepareContainer() {
@@ -194,17 +218,39 @@ CREATE EXTENSION pgcrypto WITH SCHEMA extensions;
 CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
 AS $$ SELECT '11111111-1111-1111-1111-111111111111'::uuid $$;
 
-CREATE TABLE public.purchase_orders (id uuid PRIMARY KEY);
+CREATE TABLE public.vendors (
+  id uuid PRIMARY KEY,
+  name text NOT NULL,
+  deleted_at timestamptz
+);
+CREATE TABLE public.purchase_orders (
+  id uuid PRIMARY KEY,
+  total_cost_cents bigint NOT NULL DEFAULT 10000
+);
+CREATE TABLE public.purchase_order_items (
+  id uuid PRIMARY KEY,
+  purchase_order_id uuid NOT NULL REFERENCES public.purchase_orders(id)
+);
 CREATE TABLE public.receiving_records (
   id uuid PRIMARY KEY,
   purchase_order_id uuid NOT NULL REFERENCES public.purchase_orders(id),
+  po_item_id uuid NOT NULL REFERENCES public.purchase_order_items(id),
   received_at timestamptz NOT NULL
 );
 CREATE TABLE public.vendor_bills (
-  id uuid PRIMARY KEY,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  vendor_id uuid NOT NULL REFERENCES public.vendors(id),
   purchase_order_id uuid NOT NULL REFERENCES public.purchase_orders(id),
   status text NOT NULL DEFAULT 'unpaid',
-  deleted_at timestamptz
+  deleted_at timestamptz,
+  total_cents bigint NOT NULL DEFAULT 10000
+);
+CREATE TABLE public.activity_feed (
+  event_type text,
+  description text,
+  performed_by uuid,
+  related_entity_type text,
+  related_entity_id uuid
 );
 CREATE TABLE public.accounting_periods (
   period_start date NOT NULL,
@@ -224,6 +270,38 @@ CREATE FUNCTION public.is_admin() RETURNS boolean
 LANGUAGE sql STABLE AS $$ SELECT true $$;
 CREATE FUNCTION public.check_idempotency_intent(text, text, uuid, text)
 RETURNS jsonb LANGUAGE sql AS $$ SELECT NULL::jsonb $$;
+
+CREATE FUNCTION public.create_vendor_bill(
+  p_vendor_id uuid,
+  p_purchase_order_id uuid DEFAULT NULL,
+  p_bill_number text DEFAULT '',
+  p_bill_date date DEFAULT CURRENT_DATE,
+  p_due_date date DEFAULT NULL,
+  p_payment_terms text DEFAULT NULL,
+  p_subtotal_cents bigint DEFAULT 0,
+  p_adjustment_cents bigint DEFAULT 0,
+  p_notes text DEFAULT NULL,
+  p_idempotency_key text DEFAULT NULL
+)
+RETURNS uuid LANGUAGE plpgsql AS $function$
+DECLARE v_bill_id uuid;
+BEGIN
+  PERFORM 1 FROM public.vendors
+   WHERE id = p_vendor_id AND deleted_at IS NULL FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'VENDOR_NOT_FOUND'; END IF;
+  IF p_purchase_order_id IS NOT NULL THEN
+    PERFORM 1 FROM public.purchase_orders
+     WHERE id = p_purchase_order_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'PO_NOT_FOUND'; END IF;
+  END IF;
+  INSERT INTO public.vendor_bills(vendor_id, purchase_order_id, total_cents)
+  VALUES (p_vendor_id, p_purchase_order_id, p_subtotal_cents + COALESCE(p_adjustment_cents, 0))
+  RETURNING id INTO v_bill_id;
+  INSERT INTO public.idempotency_keys(idempotency_key, operation, result)
+  VALUES (p_idempotency_key, 'create_vendor_bill', jsonb_build_object('bill_id', v_bill_id));
+  RETURN v_bill_id;
+END;
+$function$;
 
 CREATE FUNCTION public._lock_accounting_months(p_dates date[], p_exclusive boolean)
 RETURNS void LANGUAGE plpgsql AS $function$
@@ -285,15 +363,6 @@ CREATE FUNCTION public.reverse_receiving_record(
 )
 RETURNS jsonb LANGUAGE sql AS $$ SELECT '{}'::jsonb $$;
 
-CREATE FUNCTION public.proof_create_bill(p_bill_id uuid, p_po_id uuid)
-RETURNS void LANGUAGE plpgsql AS $function$
-BEGIN
-  PERFORM 1 FROM public.purchase_orders WHERE id = p_po_id FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'PO_NOT_FOUND'; END IF;
-  INSERT INTO public.vendor_bills(id, purchase_order_id) VALUES (p_bill_id, p_po_id);
-END;
-$function$;
-
 CREATE TABLE public.cycle_counts (
   id uuid PRIMARY KEY,
   status text NOT NULL DEFAULT 'in_progress',
@@ -336,30 +405,36 @@ BEGIN
 END;
 $function$;
 `);
+  sql(readFileSync(BILL_MIGRATION, 'utf8'));
   sql(readFileSync(MIGRATION, 'utf8'));
 }
 
-function seedReceiving(po, receipt) {
+function seedReceiving(po, poItem, receipt, vendor) {
   sql(`
+INSERT INTO public.vendors(id, name) VALUES ('${vendor}', 'Proof Vendor');
 INSERT INTO public.purchase_orders(id) VALUES ('${po}');
-INSERT INTO public.receiving_records(id, purchase_order_id, received_at)
-VALUES ('${receipt}', '${po}', '2025-01-15 12:00:00-06');
+INSERT INTO public.purchase_order_items(id, purchase_order_id) VALUES ('${poItem}', '${po}');
+INSERT INTO public.receiving_records(id, purchase_order_id, po_item_id, received_at)
+VALUES ('${receipt}', '${po}', '${poItem}', '2025-01-15 12:00:00-06');
 `);
 }
 
 async function proveBillFirstBlocksReversal() {
   const po = '00000000-0000-0000-0000-000000000101';
+  const poItem = '00000000-0000-0000-0000-000000000111';
   const receipt = '00000000-0000-0000-0000-000000000201';
-  const bill = '00000000-0000-0000-0000-000000000301';
-  seedReceiving(po, receipt);
+  const vendor = '00000000-0000-0000-0000-000000000301';
+  seedReceiving(po, poItem, receipt, vendor);
   const writer = session(`
 BEGIN;
-SELECT id FROM public.purchase_orders WHERE id='${po}' FOR UPDATE;
-SELECT 'BILL_PO_LOCKED';
+SELECT public.create_vendor_bill(
+  '${vendor}', '${po}', 'BILL-101', DATE '2025-01-15', DATE '2025-02-14',
+  'Net 30', 10000, 0, NULL, 'bill-first-${po}', false, NULL
+);
+SELECT 'BILL_LOCKS_HELD';
 SELECT pg_sleep(2);
-INSERT INTO public.vendor_bills(id, purchase_order_id) VALUES ('${bill}', '${po}');
 COMMIT;
-`, 'BILL_PO_LOCKED');
+`, 'BILL_LOCKS_HELD');
   await writer.ready;
   const reversal = session(`
 SELECT 'REVERSAL_STARTED';
@@ -373,11 +448,13 @@ SELECT public.reverse_receiving_record('${receipt}', 'proof', '11111111-1111-111
 
 async function proveReversalFirstSerializesBill() {
   const po = '00000000-0000-0000-0000-000000000102';
+  const poItem = '00000000-0000-0000-0000-000000000112';
   const receipt = '00000000-0000-0000-0000-000000000202';
-  const bill = '00000000-0000-0000-0000-000000000302';
-  seedReceiving(po, receipt);
+  const vendor = '00000000-0000-0000-0000-000000000302';
+  seedReceiving(po, poItem, receipt, vendor);
   const reversal = session(`
 BEGIN;
+SELECT id FROM public.purchase_order_items WHERE id='${poItem}' FOR UPDATE;
 SELECT id FROM public.purchase_orders WHERE id='${po}' FOR UPDATE;
 SELECT public._lock_accounting_months(ARRAY[DATE '2025-01-15'], false);
 SELECT 'REVERSAL_BOUNDARIES_LOCKED';
@@ -388,19 +465,24 @@ COMMIT;
   await reversal.ready;
   const writer = session(`
 SELECT 'BILL_STARTED';
-SELECT public.proof_create_bill('${bill}', '${po}');
+SELECT public.create_vendor_bill(
+  '${vendor}', '${po}', 'BILL-102', DATE '2025-01-15', DATE '2025-02-14',
+  'Net 30', 10000, 0, NULL, 'reversal-first-${po}', false, NULL
+);
 `, 'BILL_STARTED');
   const [reversalResult, writerResult] = await Promise.all([reversal.done, writer.done]);
   assert.equal(reversalResult.code, 0, reversalResult.stderr);
   assert.equal(writerResult.code, 0, writerResult.stderr);
   assert.equal(scalar(`SELECT count(*) FROM public.receiving_records WHERE id='${receipt}'`), '0');
-  assert.equal(scalar(`SELECT count(*) FROM public.vendor_bills WHERE id='${bill}'`), '1');
+  assert.equal(scalar(`SELECT count(*) FROM public.vendor_bills WHERE purchase_order_id='${po}'`), '1');
 }
 
 async function proveCloseFirstBlocksReversal() {
   const po = '00000000-0000-0000-0000-000000000103';
+  const poItem = '00000000-0000-0000-0000-000000000113';
   const receipt = '00000000-0000-0000-0000-000000000203';
-  seedReceiving(po, receipt);
+  const vendor = '00000000-0000-0000-0000-000000000303';
+  seedReceiving(po, poItem, receipt, vendor);
   const closer = session(`
 BEGIN;
 SELECT public._lock_accounting_months(ARRAY[DATE '2025-01-01'], true);
@@ -424,10 +506,13 @@ SELECT public.reverse_receiving_record('${receipt}', 'proof', '11111111-1111-111
 
 async function proveReversalFirstSerializesClose() {
   const po = '00000000-0000-0000-0000-000000000104';
+  const poItem = '00000000-0000-0000-0000-000000000114';
   const receipt = '00000000-0000-0000-0000-000000000204';
-  seedReceiving(po, receipt);
+  const vendor = '00000000-0000-0000-0000-000000000304';
+  seedReceiving(po, poItem, receipt, vendor);
   const reversal = session(`
 BEGIN;
+SELECT id FROM public.purchase_order_items WHERE id='${poItem}' FOR UPDATE;
 SELECT id FROM public.purchase_orders WHERE id='${po}' FOR UPDATE;
 SELECT public._lock_accounting_months(ARRAY[DATE '2025-01-15'], false);
 SELECT 'REVERSAL_MONTH_LOCKED';
@@ -448,6 +533,135 @@ COMMIT;
   assert.equal(reversalResult.code, 0, reversalResult.stderr);
   assert.equal(closeResult.code, 0, closeResult.stderr);
   assert.equal(scalar(`SELECT count(*) FROM public.receiving_records WHERE id='${receipt}'`), '0');
+  sql(`DELETE FROM public.accounting_periods WHERE period_start='2025-01-01';`);
+}
+
+async function proveCostBasisFirstSerializesReversal() {
+  const po = '00000000-0000-0000-0000-000000000105';
+  const poItem = '00000000-0000-0000-0000-000000000115';
+  const receipt = '00000000-0000-0000-0000-000000000205';
+  const vendor = '00000000-0000-0000-0000-000000000305';
+  seedReceiving(po, poItem, receipt, vendor);
+
+  const costBasis = session(`
+BEGIN;
+SELECT id FROM public.vendors WHERE id='${vendor}' FOR UPDATE;
+SELECT id FROM public.purchase_order_items WHERE id='${poItem}' FOR UPDATE;
+SELECT 'COST_BASIS_ITEM_LOCKED';
+SELECT pg_sleep(2);
+SELECT id FROM public.purchase_orders WHERE id='${po}' FOR UPDATE;
+COMMIT;
+`, 'COST_BASIS_ITEM_LOCKED');
+  await costBasis.ready;
+  const reversal = session(`
+SELECT 'COST_FIRST_REVERSAL_STARTED';
+SELECT public.reverse_receiving_record(
+  '${receipt}', 'proof', '11111111-1111-1111-1111-111111111111', 'cost-first-${receipt}'
+);
+`, 'COST_FIRST_REVERSAL_STARTED');
+
+  const [costResult, reversalResult] = await Promise.all([costBasis.done, reversal.done]);
+  assert.equal(costResult.code, 0, costResult.stderr);
+  assert.equal(reversalResult.code, 0, reversalResult.stderr);
+  assert.equal(scalar(`SELECT count(*) FROM public.receiving_records WHERE id='${receipt}'`), '0');
+}
+
+async function proveReversalFirstSerializesCostBasis() {
+  const po = '00000000-0000-0000-0000-000000000106';
+  const poItem = '00000000-0000-0000-0000-000000000116';
+  const receipt = '00000000-0000-0000-0000-000000000206';
+  const vendor = '00000000-0000-0000-0000-000000000306';
+  seedReceiving(po, poItem, receipt, vendor);
+
+  const reversal = session(`
+BEGIN;
+SELECT id FROM public.receiving_records WHERE id='${receipt}' FOR UPDATE;
+SELECT id FROM public.purchase_order_items WHERE id='${poItem}' FOR UPDATE;
+SELECT 'REVERSAL_ITEM_LOCKED';
+SELECT pg_sleep(2);
+SELECT public.reverse_receiving_record(
+  '${receipt}', 'proof', '11111111-1111-1111-1111-111111111111', 'reversal-first-cost-${receipt}'
+);
+COMMIT;
+`, 'REVERSAL_ITEM_LOCKED');
+  await reversal.ready;
+  const costBasis = session(`
+BEGIN;
+SELECT 'REVERSAL_FIRST_COST_STARTED';
+SELECT id FROM public.vendors WHERE id='${vendor}' FOR UPDATE;
+SELECT id FROM public.purchase_order_items WHERE id='${poItem}' FOR UPDATE;
+SELECT id FROM public.purchase_orders WHERE id='${po}' FOR UPDATE;
+COMMIT;
+`, 'REVERSAL_FIRST_COST_STARTED');
+
+  const [reversalResult, costResult] = await Promise.all([reversal.done, costBasis.done]);
+  assert.equal(reversalResult.code, 0, reversalResult.stderr);
+  assert.equal(costResult.code, 0, costResult.stderr);
+  assert.equal(scalar(`SELECT count(*) FROM public.receiving_records WHERE id='${receipt}'`), '0');
+}
+
+async function proveCostBasisFirstSerializesBill() {
+  const po = '00000000-0000-0000-0000-000000000107';
+  const poItem = '00000000-0000-0000-0000-000000000117';
+  const receipt = '00000000-0000-0000-0000-000000000207';
+  const vendor = '00000000-0000-0000-0000-000000000307';
+  seedReceiving(po, poItem, receipt, vendor);
+
+  const costBasis = session(`
+BEGIN;
+SELECT id FROM public.vendors WHERE id='${vendor}' FOR UPDATE;
+SELECT 'COST_BASIS_VENDOR_LOCKED';
+SELECT pg_sleep(2);
+SELECT id FROM public.purchase_order_items WHERE id='${poItem}' FOR UPDATE;
+SELECT id FROM public.purchase_orders WHERE id='${po}' FOR UPDATE;
+COMMIT;
+`, 'COST_BASIS_VENDOR_LOCKED');
+  await costBasis.ready;
+  const bill = session(`
+SELECT 'COST_FIRST_BILL_STARTED';
+SELECT public.create_vendor_bill(
+  '${vendor}', '${po}', 'BILL-107', DATE '2025-01-15', DATE '2025-02-14',
+  'Net 30', 10000, 0, NULL, 'cost-first-bill-${po}', false, NULL
+);
+`, 'COST_FIRST_BILL_STARTED');
+
+  const [costResult, billResult] = await Promise.all([costBasis.done, bill.done]);
+  assert.equal(costResult.code, 0, costResult.stderr);
+  assert.equal(billResult.code, 0, billResult.stderr);
+  assert.equal(scalar(`SELECT count(*) FROM public.vendor_bills WHERE purchase_order_id='${po}'`), '1');
+}
+
+async function proveBillFirstSerializesCostBasis() {
+  const po = '00000000-0000-0000-0000-000000000108';
+  const poItem = '00000000-0000-0000-0000-000000000118';
+  const receipt = '00000000-0000-0000-0000-000000000208';
+  const vendor = '00000000-0000-0000-0000-000000000308';
+  seedReceiving(po, poItem, receipt, vendor);
+
+  const bill = session(`
+BEGIN;
+SELECT public.create_vendor_bill(
+  '${vendor}', '${po}', 'BILL-108', DATE '2025-01-15', DATE '2025-02-14',
+  'Net 30', 10000, 0, NULL, 'bill-first-cost-${po}', false, NULL
+);
+SELECT 'BILL_VENDOR_PO_LOCKED';
+SELECT pg_sleep(2);
+COMMIT;
+`, 'BILL_VENDOR_PO_LOCKED');
+  await bill.ready;
+  const costBasis = session(`
+BEGIN;
+SELECT 'BILL_FIRST_COST_STARTED';
+SELECT id FROM public.vendors WHERE id='${vendor}' FOR UPDATE;
+SELECT id FROM public.purchase_order_items WHERE id='${poItem}' FOR UPDATE;
+SELECT id FROM public.purchase_orders WHERE id='${po}' FOR UPDATE;
+COMMIT;
+`, 'BILL_FIRST_COST_STARTED');
+
+  const [billResult, costResult] = await Promise.all([bill.done, costBasis.done]);
+  assert.equal(billResult.code, 0, billResult.stderr);
+  assert.equal(costResult.code, 0, costResult.stderr);
+  assert.equal(scalar(`SELECT count(*) FROM public.vendor_bills WHERE purchase_order_id='${po}'`), '1');
 }
 
 async function proveInsertFirstMakesCompletionStale() {
@@ -505,6 +719,10 @@ try {
   await proveReversalFirstSerializesBill();
   await proveCloseFirstBlocksReversal();
   await proveReversalFirstSerializesClose();
+  await proveCostBasisFirstSerializesReversal();
+  await proveReversalFirstSerializesCostBasis();
+  await proveCostBasisFirstSerializesBill();
+  await proveBillFirstSerializesCostBasis();
   await proveInsertFirstMakesCompletionStale();
   await proveCompletionFirstRejectsLateInsert();
   console.log('GAUNTLET_WRITE_BOUNDARY_CONCURRENCY_PASS');

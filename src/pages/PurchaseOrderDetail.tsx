@@ -440,6 +440,9 @@ export default function PurchaseOrderDetail() {
       fetchPO();
       fetchReceivingHistory();
     } catch (err: unknown) {
+      if (getIdempotencyBindingRejection(err)) {
+        reverseIdem.resetKey();
+      }
       toast('error', sanitizeError(err));
     }
     setReversing(false);

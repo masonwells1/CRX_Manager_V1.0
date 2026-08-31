@@ -21,6 +21,7 @@ import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { supabase, sanitizeError, assertRpcResult } from '../../lib/db';
+import { getIdempotencyBindingRejection } from '../../lib/idempotency';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { Sentry } from '../../lib/sentry';
 import HelpTip from '../ui/HelpTip';
@@ -185,7 +186,6 @@ export default function ReceivingLogPanel() {
     await runCriticalAction({
       action: async () => {
         const ids = selectedRows.map((r) => r.id);
-        const completedScopes: string[] = [];
         // C5 fix: must call reverse_receiving_record() per item to undo inventory changes.
         // Direct .delete() bypasses the inventory rollback and leaves phantom stock.
         for (const id of ids) {
@@ -197,11 +197,15 @@ export default function ReceivingLogPanel() {
             p_reason: reason,
             p_idempotency_key: idemKey,
           });
-          if (error) throw new Error(`Failed to reverse record ${id}: ${error.message}`);
+          if (error) {
+            if (getIdempotencyBindingRejection(error)) {
+              reverseRecIdem.resetKeyFor(intentScope);
+            }
+            throw new Error(`Failed to reverse record ${id}: ${error.message}`);
+          }
           assertRpcResult(data, 'reverse_receiving_record');
-          completedScopes.push(intentScope);
+          reverseRecIdem.resetKeyFor(intentScope);
         }
-        completedScopes.forEach((scope) => reverseRecIdem.resetKeyFor(scope));
       },
       toast,
       setLoading: setDeleting,

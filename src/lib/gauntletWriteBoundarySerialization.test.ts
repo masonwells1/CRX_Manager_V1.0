@@ -23,6 +23,7 @@ function assertReceivingBoundary(candidate: string): void {
     start,
   );
   const body = candidate.slice(start, end);
+  const poItemLock = body.indexOf('FROM public.purchase_order_items poi');
   const poLock = body.indexOf('FROM public.purchase_orders po');
   const monthLock = body.indexOf(
     'public._lock_accounting_months(ARRAY[v_receiving_date], false)',
@@ -34,8 +35,11 @@ function assertReceivingBoundary(candidate: string): void {
 
   if (
     start < 0
+    || poItemLock < 0
     || poLock < 0
+    || !body.slice(poItemLock, poLock).includes('FOR UPDATE')
     || !body.slice(poLock, monthLock).includes('FOR UPDATE')
+    || poLock < poItemLock
     || monthLock < poLock
     || periodCheck < monthLock
     || implementation < periodCheck
@@ -88,6 +92,7 @@ describe('gauntlet write-boundary serialization follow-up', () => {
   it('detects removal or reordering of each load-bearing guard', () => {
     for (const mutant of [
       code.replace('FROM public.purchase_orders po', 'FROM public.purchase_orders_unlocked po'),
+      code.replace('FROM public.purchase_order_items poi', 'FROM public.purchase_order_items_unlocked poi'),
       code.replace(
         'public._lock_accounting_months(ARRAY[v_receiving_date], false)',
         'public.check_period_open(v_receiving_date)',

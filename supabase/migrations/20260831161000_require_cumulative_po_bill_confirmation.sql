@@ -87,6 +87,19 @@ BEGIN
   END IF;
 
   v_candidate_total := p_subtotal_cents + COALESCE(p_adjustment_cents, 0);
+
+  -- Preserve the established financial lock order used by the delegated bill
+  -- implementation and supplier-cost application: vendor before optional PO.
+  -- Taking the PO first here would deadlock with vendor -> PO writers.
+  PERFORM 1
+  FROM public.vendors v
+  WHERE v.id = p_vendor_id
+    AND v.deleted_at IS NULL
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'VENDOR_NOT_FOUND: vendor % does not exist or is soft-deleted', p_vendor_id;
+  END IF;
+
   IF p_purchase_order_id IS NOT NULL THEN
     SELECT po.total_cost_cents
     INTO v_po_total

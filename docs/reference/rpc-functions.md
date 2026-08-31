@@ -139,7 +139,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `match_quick_receive_items()` — auto-allocate products to oldest open POs for Quick Receive
 - `validate_product_units()` — trigger function that validates product unit consistency
 - `convert_to_gl_lb()` — convert quantity from any unit to gallons or pounds for standardized reporting
-- `reverse_receiving_record(p_record_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor. Reverses a receiving event, subtracting the received quantity (ledger ≡ snapshot — no zero-clamp since `20260610131048`) and recomputing the PO header (skips cancelled POs). The local `20260831235900` candidate serializes reversal with PO-linked bill creation and accounting-period close before rechecking both safeguards.
+- `reverse_receiving_record(p_record_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor. Reverses a receiving event, subtracting the received quantity (ledger ≡ snapshot — no zero-clamp since `20260610131048`) and recomputing the PO header (skips cancelled POs). The local `20260831235900` candidate preserves PO-item → PO ordering, then serializes reversal with PO-linked bill creation and accounting-period close before rechecking both safeguards.
 - `get_expiring_planned_holds(p_days_ahead int, p_idempotency_key)` → jsonb — lists planned-quote inventory holds expiring within N days (powers the expiring-holds Dashboard alert).
 
 ## Job Scheduling
