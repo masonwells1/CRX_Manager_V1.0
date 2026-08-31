@@ -201,10 +201,19 @@ export function resolveMigrationSource({
     } catch { continue; }
     const expectedDir = path.resolve(realRoot, MIGRATION_SOURCE_SUBDIR);
     if (pathKey(realDir) !== pathKey(expectedDir)) { escaped = true; continue; }
-    // The file must also sit directly inside that directory — this still refuses a
-    // per-file symlink pointing out, which is the case the directory check does not
-    // cover.
-    if (!withinDir(realDir, realFile)) { escaped = true; continue; }
+    // The file must sit DIRECTLY inside that directory — this refuses a per-file
+    // symlink pointing out, which the directory check above does not cover.
+    //
+    // Parent-equality, not containment. Codex (minor, exact-SHA review of a8efe218)
+    // observed that `withinDir` also admitted a symlink whose target was a
+    // DESCENDANT of the permitted directory, while this comment claimed "directly
+    // inside". That was not a bypass — the target stayed inside the allowlisted tree
+    // and the content binding still held — but a check that is looser than the
+    // sentence describing it is how the next reader inherits a wrong mental model,
+    // and this file has already been reopened twice on exactly that pattern.
+    // Every candidate is built as path.join(dir, `${stem}.sql`), so a real migration
+    // is always a direct child and nothing legitimate is lost by saying so in code.
+    if (pathKey(path.dirname(realFile)) !== pathKey(realDir)) { escaped = true; continue; }
     let content;
     try { content = readFileSync(realFile, "utf8"); } catch { continue; }
     if (lfNormalize(content) === want) return { ok: true, file, dirs };

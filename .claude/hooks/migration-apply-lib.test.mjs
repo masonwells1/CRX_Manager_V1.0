@@ -755,6 +755,32 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     }
   }
 
+  // A DESCENDANT of the permitted directory is not "directly inside" it. Codex
+  // (minor, review of a8efe218) found the containment check admitted a symlink whose
+  // target sat in a SUBDIRECTORY while the comment claimed direct containment. Not a
+  // bypass — the target stayed in the allowlisted tree and content binding held — but
+  // the check now matches its own sentence. Uses a junction, so it runs on Windows.
+  {
+    const root = fixture({ migrationFile: null });
+    mkdirSync(path.join(root, "supabase", "migrations", "nested"), { recursive: true });
+    const nestedDir = path.join(root, "supabase", "migrations", "nested");
+    writeFileSync(path.join(nestedDir, `${MIG}.sql`), SQL, "utf8");
+    const linkPath = path.join(root, "supabase", "migrations", `${MIG}.sql`);
+    let linked = false;
+    try { symlinkSync(nestedDir, path.join(root, "supabase", "migrations", "lnk"), "junction"); linked = true; } catch { linked = false; }
+    if (linked) {
+      // Reach the nested file through the junction, so the resolved target is a
+      // descendant of the permitted directory rather than a direct child.
+      try { symlinkSync(path.join(root, "supabase", "migrations", "lnk", `${MIG}.sql`), linkPath, "file"); } catch { linked = false; }
+    }
+    if (linked && existsSync(linkPath)) {
+      denies(evaluate(root), "MIGRATION SOURCE GUARD",
+        "a link resolving to a DESCENDANT of the permitted directory is not 'directly inside' it");
+    } else {
+      console.log("  SKIP descendant-target case — this platform/account cannot create the link");
+    }
+  }
+
   // A DIRECTORY at the permitted path is not a file. Fails closed rather than
   // throwing out of the read.
   {
