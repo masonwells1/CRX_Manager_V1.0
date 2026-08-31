@@ -208,6 +208,37 @@ describe('OfflineWorkReview', () => {
     expect(screen.queryByRole('heading', { name: 'Record this permanent resolution?' })).not.toBeInTheDocument();
   });
 
+  it('invalidates a selected resolution before a refreshed queue response arrives', async () => {
+    render(
+      <MemoryRouter>
+        <OfflineWorkReview />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resolve safely' }));
+    fireEvent.change(screen.getByPlaceholderText(/Explain what you checked/), {
+      target: { value: 'Verified against the signed paper ticket.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Review final confirmation' }));
+    expect(screen.getByRole('heading', { name: 'Record this permanent resolution?' })).toBeInTheDocument();
+
+    const refreshedQueue = deferred<QueueRpcResponse>();
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_offline_action_review_queue') return refreshedQueue.promise;
+      return Promise.resolve({ data: null, error: null });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(screen.queryByRole('heading', { name: 'Resolve Offline Work' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Record this permanent resolution?' })).not.toBeInTheDocument();
+    expect(mockRpc.mock.calls.some(([name]) => name === 'resolve_offline_action')).toBe(false);
+
+    refreshedQueue.resolve({ data: { success: true, items: [], total: 0 }, error: null });
+    expect(await screen.findByText('No offline work needs office review.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Resolve Offline Work' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Record this permanent resolution?' })).not.toBeInTheDocument();
+  });
+
   it('keeps the newest queue response when an older filter request finishes last', async () => {
     render(
       <MemoryRouter>
