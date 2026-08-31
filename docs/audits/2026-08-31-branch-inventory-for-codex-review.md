@@ -11,8 +11,8 @@ carrying this report.
 > the pull request you are reading, and it goes away when that merges.
 **Nothing was deleted.** This list exists so Codex can review it before any branch is removed.
 
-> **Revised twice after Codex review of PR #529.** Both earlier measurements were wrong and
-> both were caught here, not by me.
+> **Revised three times after Codex review of PR #529.** All three earlier measurements were
+> wrong and all three were caught here, not by me.
 >
 > *Round 1* used `git diff origin/main...<branch>`. Three-dot diff compares the merge base with
 > the branch, so squash-merged files were re-reported as branch-only work.
@@ -23,6 +23,11 @@ carrying this report.
 > (3 now, after a Dependabot PR merged mid-review) — including
 > every Dependabot branch, all of which had open PRs at the time. It also could not see a branch that
 > **modifies an existing migration**, of which there are four.
+>
+> *Round 3* compared whole trees correctly but walked only the paths present in the *branch*
+> tree, so it never counted a deletion at all. A branch whose only unique work was deleting a
+> file would report `unique = 0` and be called safe — the exact false all-clear this measure
+> exists to prevent.
 
 ## The baseline this is measured against
 
@@ -37,7 +42,7 @@ The first move, to `ec90015d`, deleted `.github/workflows/production-migration.y
 `production-approval-canary.yml`. Seven branches changed their unique-content figures without a
 single commit being pushed to any of them; both `dependabot/github_actions/*` branches bump an
 action version *inside* those deleted files, so what was a modification of a file `main` has
-became the addition of a file `main` lacks.
+become the addition of a file that `main` lacks.
 
 The second move is the sharper one, because it changed a **deletion verdict**. `main` advanced
 to the commit above, which merged Dependabot PR #520. That branch,
