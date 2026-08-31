@@ -10,7 +10,9 @@ Each of these sent a reader to a file that does not exist.
 - `DEPLOYMENT.md` told the reader that GitHub Actions was "optional" and to create
   `.github/workflows/test.yml`, followed by a toy `actions/checkout@v3` workflow. CI has in fact
   been required for some time: four workflows exist, and `ci.yml` alone runs containment,
-  CI-scope classification, SQL validation, lint/typecheck/test/build, and an E2E smoke job.
+  CI-scope classification, SQL validation, and lint/typecheck/test/build. It also *defines* an
+  `e2e-smoke` job, but that job is pinned `if: false` and never runs, so CI provides no browser
+  coverage — see `2026-08-31-ci-claims-no-browser-coverage.md`.
   Replaced the invented snippet with what the repository actually runs.
 - `docs/reference/code-patterns.md` placed `fuzzyMatchProduct()` in `src/lib/ocrParser.ts`, which
   does not exist. It lives in `src/components/purchase-orders/BulkPOImport.tsx`.

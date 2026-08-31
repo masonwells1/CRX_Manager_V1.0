@@ -287,7 +287,11 @@ npm run typecheck
 npm run lint
 npm run test
 npm run build
+npm run check:docs
 ```
+
+`check:docs` is the documentation gate CI runs in `ci.yml`; it verifies that reference-doc claims
+still match the repository.
 
 Edit the workflow files directly if CI needs to change; do not add a parallel
 `test.yml`.

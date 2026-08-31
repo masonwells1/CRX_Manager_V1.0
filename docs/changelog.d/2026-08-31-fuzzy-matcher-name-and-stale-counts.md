@@ -7,7 +7,8 @@ the measurement itself.
 
 `docs/reference/code-patterns.md` originally pointed at `fuzzyMatchProduct()` in
 `src/lib/ocrParser.ts`. The earlier fix in this PR corrected the *file* but kept the *function
-name*, which does not exist — a repository-wide search for `fuzzyMatchProduct` returns nothing. A
+name*, which does not exist — an exact-identifier search (`fuzzyMatchProduct\b`) returns nothing,
+`fuzzyMatchProductWithScore()` being a different identifier that merely shares the prefix. A
 reader following the "corrected" reference still could not find the API.
 
 What actually exists:
@@ -36,6 +37,8 @@ rather than restating a method that no longer applies.
 
 ### Proof observed
 
-- `grep -rn "fuzzyMatchProduct\b" src/` returns nothing; `fuzzyMatchProductWithScore` and
+- `grep -rn "fuzzyMatchProduct\b" src/` returns nothing — the word boundary is what makes this
+  exact, since a bare substring search would match `fuzzyMatchProductWithScore`.
+  `fuzzyMatchProductWithScore` and
   `resolveFuzzyProductIdentity` were read at their cited locations, as was `minimumScore = 0.7`.
 - `npm run check:docs` passes.
