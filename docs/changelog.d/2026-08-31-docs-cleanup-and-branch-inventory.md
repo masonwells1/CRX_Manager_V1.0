@@ -112,16 +112,24 @@ branches hold nothing `main` lacks and are mechanically safe to delete.
 
 - `npm run check:docs` passes.
 - Branch content is measured against three trees per branch — the branch, `origin/main`, and their
-  merge base. A path is *authored by the branch* when its blob differs from the merge base, and
-  *unique* when `main` does not hold that identical blob. Unique is not the same as lost: content
-  can be absent byte-identically because it was superseded, so only `unique = 0` is a mechanical
-  all-clear.
+  merge base. A path is *authored by the branch* when its blob differs from the merge base, **or
+  when it exists at the merge base and not on the branch, i.e. the branch deleted it**. It is
+  *unique* when `main` does not hold that identical blob, and an authored deletion is unique while
+  `main` still carries the path. Unique is not the same as lost: content can be absent
+  byte-identically because it was superseded, so only `unique = 0` is a mechanical all-clear.
 
-  This measure took two corrections, both raised by Codex on this PR and both recorded in their own
-  entries. The first revision used `git diff origin/main...<branch>`, which compares the merge base
+  The deletion half of that definition is load-bearing and is easy to drop, because it is the one
+  case with no branch-side blob to look at. Omit it and a branch whose only unique work is a
+  deletion reports `unique = 0` and is called safe — the exact false all-clear this measure exists
+  to prevent.
+
+  This measure took three corrections, all raised by Codex on this PR and each recorded in its own
+  entry. The first revision used `git diff origin/main...<branch>`, which compares the merge base
   with the branch rather than main's current tree, so squash-merged files were re-reported as
   branch-only work. The second compared whole trees but then called any branch with no *new file
   paths* safe to delete — unsound, because a branch can hold unique work in a file `main` also has.
+  The third walked only paths present in the branch tree, and so never counted a deletion at all;
+  see `2026-08-31-count-authored-deletions.md`.
   See `2026-08-31-branch-inventory-measurement-correction.md` and
   `2026-08-31-branch-inventory-authored-content-measure.md` for the full detail and the numbers each
   round changed.

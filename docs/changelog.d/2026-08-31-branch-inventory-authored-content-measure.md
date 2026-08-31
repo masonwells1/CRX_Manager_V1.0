@@ -23,6 +23,12 @@ Three trees per branch — the branch, `origin/main`, and their merge base:
    `main` moving ahead. That is staleness, and it is no longer counted as branch content.
 2. **Unique** — of those authored paths, the ones where `main` does not hold the identical blob.
 
+> **This definition was still incomplete, and a later round fixed it.** As written above it walks
+> only paths *present in the branch tree*, so a path the branch **deleted** is invisible to it. The
+> current measure also counts paths present at the merge base and absent from the branch, unique
+> while `main` still carries the path. Kept here as written because this entry records what round
+> two established; see `2026-08-31-count-authored-deletions.md` for the correction.
+
 The report now also states plainly that **unique is not the same as lost**: content can be absent
 byte-identically because it was superseded or reworked. Only `unique = 0` is a mechanical all-clear;
 everything else needs a judgement. The earlier wording promised more certainty than the data
