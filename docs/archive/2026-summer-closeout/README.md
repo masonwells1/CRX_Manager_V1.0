@@ -78,3 +78,28 @@ Deliberately **kept live** in this sweep, with the reason:
   is still the stated source of truth for future-project direction.
 - `docs/plans/CRX-*label-data*.csv` — the label-data load is still an open owner
   data-entry job.
+
+## Third batch — moved 2026-08-31
+
+22 one-off audit and handoff records from `docs/audits/` and `docs/handoffs/`, dated
+late July through August, moved during a full documentation cleanup. Contents were not
+altered — only the paths changed.
+
+⚠️ **This batch has a weaker verification basis than the two above, and the difference
+matters.** The 2026-07-16 batch re-verified every "done" claim against code on disk *and
+the live database*. This batch did not: each file was classified by **reading its own
+status line and searching the repository for inbound references**. No live-database
+check was performed, and none of these records' claims were re-proven. Do not attribute
+this batch to the 2026-07-16 live-verified pass.
+
+The rule applied was "read what the file says about itself." An earlier revision of that
+same cleanup used "dated and orphaned, therefore closed" and deleted 30 records; Codex
+review showed the rule never read the files' statuses, and all 30 were restored and
+re-classified. **8 of them stayed in the live folders** because their own text says the
+work is unfinished — a `NEEDS MASON` negative-inventory worksheet, an `OPEN P1` accounting-period
+race, a `PARKED` pricing review, and the previous branch-cleanup restore ledger among
+them. That history is why this section states its verification basis instead of implying
+the earlier one.
+
+Full detail: `docs/changelog.d/2026-08-31-docs-cleanup-and-branch-inventory.md` and the
+companion `2026-08-31-*` entries.

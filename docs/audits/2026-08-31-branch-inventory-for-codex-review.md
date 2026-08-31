@@ -42,11 +42,24 @@ If it does not, re-run the measurement rather than trusting these counts.
 
 Three trees per branch: the branch, `origin/main`, and their merge base.
 
-1. **Authored by the branch** — paths whose blob differs from the *merge base*. A path still
-   matching the merge base was never touched by the branch; any difference from `main` there is
-   `main` moving ahead, i.e. staleness, and is not counted.
-2. **Unique** — of those, the paths where `main` does not hold the identical blob. This is the
-   content that is not byte-for-byte present on `main` today.
+1. **Authored by the branch** — paths whose blob differs from the *merge base*, **plus paths
+   present at the merge base and absent from the branch, which the branch deleted**. A path
+   still matching the merge base was never touched by the branch; any difference from `main`
+   there is `main` moving ahead, i.e. staleness, and is not counted.
+2. **Unique** — of those, the paths where `main` does not hold the identical blob, plus the
+   authored deletions of paths `main` still carries. This is the change that is not present
+   on `main` today.
+
+> **Deletions were added to this measure in round 5, after Codex found them missing.** The
+> comparison walked only paths *present in the branch tree*, so a path the branch removed
+> appeared nowhere and was never counted. A branch whose only unique work was a deletion would
+> have reported `unique = 0` and been declared mechanically safe — precisely the false
+> all-clear this report exists to prevent.
+>
+> Re-measured with deletions counted, **the two mechanically-safe branches below are
+> unchanged**: neither authors any deletion, so neither all-clear was wrong. The only branch
+> the omission actually affected was this cleanup's own, which deletes and moves records.
+> The bug was real and the exposure was luck, not design.
 
 **Unique is not the same as lost.** A change can be absent byte-identically because it was
 superseded, reworked, or landed in a different shape. Unique means *needs a human or Codex
@@ -323,7 +336,7 @@ Tip OIDs are abbreviated here; the two mechanically-safe branches carry their fu
 | `codex/coderabbit-ready-label-20260830` | `7e87e0231601` | 16 | 5 | 11 |  |  | 3 | **open PR #516** |
 | `claude/bash-safety-opacity-cleanup` | `3d1690428695` | 3 | 1 | 2 |  |  | 2 | **open PR #527** |
 | `claude/crx-manager-cleanup-5da404` | `738d311a1e65` | 2 | 2 | 0 |  |  | 2 | **open PR #526** |
-| `claude/document-cleanup-review-r2nbhj` | `56408c0f2192` | 40 | 34 | 6 |  |  | 2 | no PR in scanned window |
+| `claude/document-cleanup-review-r2nbhj` | `f9426347a4e2` | 66 | 36 | 7 |  |  | 0 | no PR in scanned window |
 | `claude/harness-guardrail-review-bee189` | `2198e43db6e3` | 1 | 0 | 1 |  |  | 2 | **open PR #525** |
 | `claude/optimize-claude-md-79f8ad` | `86229bb0e361` | 2 | 1 | 1 |  |  | 2 | **open PR #528** |
 | `claude/pending-set-apply-guard` | `b141e84d56b1` | 11 | 4 | 7 |  |  | 55 | **open PR #502** |
