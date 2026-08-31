@@ -1922,16 +1922,21 @@ export function proofSearchDirs(root, listWorktrees) {
 // which is the pre-2026-07-29 behaviour: strictly safe, never laxer.
 //
 // `listWorktrees` is injected so this is testable without a real repo.
-export function sessionProofDirs(root, hookCwd, listWorktrees) {
-  const stateDir = (dir) => path.resolve(dir, ".claude", "session-state");
-  const dirs = [stateDir(root)];
+//
+// It resolves the CHECKOUT ROOTS; sessionProofDirs() below maps them to
+// .claude/session-state. The split exists because the migration apply gate now
+// needs the roots themselves — to locate the repository migration file the
+// transmitted SQL must come from — and a second copy of this resolution would
+// drift, with the looser copy becoming the way in.
+export function sessionCheckoutRoots(root, hookCwd, listWorktrees) {
+  const roots = [path.resolve(root)];
   const cwd = String(hookCwd || "").trim();
-  if (!cwd) return dirs;
+  if (!cwd) return roots;
   let porcelain;
   try {
     porcelain = listWorktrees();
   } catch {
-    return dirs;
+    return roots;
   }
   // Windows paths differ in case between `git worktree list` and process.cwd(),
   // so compare on a normalised key; keep the ORIGINAL path for the return value.
@@ -1949,8 +1954,13 @@ export function sessionProofDirs(root, hookCwd, listWorktrees) {
     const wt = path.resolve(match[1]);
     if (contains(key(wt), cwdKey) && (!best || wt.length > best.length)) best = wt;
   }
-  if (best) dirs.push(stateDir(best));
-  return [...new Set(dirs)];
+  if (best) roots.push(best);
+  return [...new Set(roots)];
+}
+
+export function sessionProofDirs(root, hookCwd, listWorktrees) {
+  return sessionCheckoutRoots(root, hookCwd, listWorktrees)
+    .map((dir) => path.resolve(dir, ".claude", "session-state"));
 }
 
 // ── PR-merge request detection (2026-07-16 scaffolding review Theme 1) ───────

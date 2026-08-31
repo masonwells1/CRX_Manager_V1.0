@@ -54,6 +54,8 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   evaluateMigrationApply,
+  resolveMigrationSource,
+  MIGRATION_SOURCE_SUBDIR,
   CRX_PRODUCTION_REF,
 } from "../.claude/hooks/migration-apply-lib.mjs";
 import { assertWrappable } from "../.claude/hooks/migration-wrappability-lib.mjs";
@@ -180,6 +182,45 @@ if (!CANONICAL_MIGRATION_NAME.test(migName) || stampCount !== 1) {
     `matched by substring) while presenting its own leading timestamp to the ordering gate — which is how ` +
     `stale SQL gets replayed as the newest migration. Apply the migration under its real filename.`);
 }
+// ── SOURCE PROVENANCE ──────────────────────────────────────────────────────
+// The canonical-name rule above constrains what the file is CALLED. It says
+// nothing about WHERE it lives, so this door would happily read a parked or
+// REJECTED draft out of scripts/.staging-migrations/ — or anywhere else on disk —
+// as long as its filename looked right.
+//
+// The gate below refuses that on its own (the rule lives in the shared rule book,
+// so both doors inherit it and neither can drift laxer). This check is the same
+// rule asked EARLY, through the SAME exported function, purely so the operator
+// gets a refusal that names the file they passed instead of one that talks about
+// a name lookup. It is not a second implementation.
+{
+  const source = resolveMigrationSource({
+    name: migName,
+    query: sql,
+    projectDir,
+    cwd: process.cwd(),
+  });
+  if (!source.ok) {
+    die(2,
+      `NOT A PERMITTED MIGRATION SOURCE: ${absFile}\n\n` +
+      `A live apply may only transmit the content of a migration this repository holds at\n` +
+      (source.searched.length
+        ? source.searched.map((f) => `  ${f}\n`).join("")
+        : `  <checkout>/${MIGRATION_SOURCE_SUBDIR}/${migName}.sql\n`) +
+      `\nThis is an allowlist: one permitted directory, one filename inside it derived from the ` +
+      `migration name.\nParked, superseded and REJECTED drafts under scripts/.staging-migrations/ are ` +
+      `deliberately outside it — that is what parking a migration means — and so is anything in a temp or ` +
+      `scratch directory.\n\n` +
+      (source.code === "content-differs"
+        ? `A file with this name exists in the permitted directory, but its content differs from the file ` +
+          `you passed. Apply the repository file, not a copy.\n`
+        : source.code === "escapes-dir"
+        ? `The permitted path resolves outside the permitted directory (a link pointing elsewhere).\n`
+        : `To ship this migration, move it into supabase/migrations/ as a tracked change and take it ` +
+          `through review.\n`));
+  }
+}
+
 const queryHash = createHash("sha256").update(sql).digest("hex");
 
 console.log(`migration : ${migName}`);

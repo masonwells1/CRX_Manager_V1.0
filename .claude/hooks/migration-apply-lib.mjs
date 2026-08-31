@@ -21,13 +21,13 @@
 // `return block(reason)` / `return allow()`. Block message text is preserved
 // verbatim; migration-apply-guard.test.mjs asserts on it.
 
-import { readFileSync, existsSync, readdirSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, mkdirSync, statSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
-import { sessionProofDirs } from "./codex-push-lib.mjs";
+import { sessionProofDirs, sessionCheckoutRoots } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 
 export const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
@@ -74,6 +74,124 @@ export function normalizeMigName(v) {
     .pop()
     .replace(/\.sql$/i, "")
     .trim();
+}
+
+// ── SOURCE PROVENANCE ───────────────────────────────────────────────────────
+// Every check above this point reasons about caller-supplied values: `name`,
+// `query`, and proof files keyed off them. None of them ever asked the question
+// underneath all of it — IS THIS SQL A MIGRATION THIS REPOSITORY ACTUALLY HOLDS?
+// A caller could paste the body of a parked, superseded or REJECTED draft under
+// a canonical-looking name, mint matching proofs against that same text, and every
+// binding would agree with itself. The bindings were sound; they were binding to
+// nothing anchored on disk. (CodeRabbit Major, PR #525 — ruled out of scope there,
+// real and pre-existing.)
+//
+// THIS IS AN ALLOWLIST, DELIBERATELY. The obvious shape — reject
+// scripts/.staging-migrations/, reject a `.REJECTED` suffix — is a blocklist, and
+// this repo has paid for blocklists repeatedly: the PR #401 guard region reopened
+// on a new PL/pgSQL assignment form every round until it was pinned as a closed
+// region (DECISION_LOG 2026-08-25), and three successive hand-written parsers in
+// bash-safety-lib each left a real destructive bypass before an allowlist held
+// (KNOWN_ISSUES, 2026-08-31: eight holes across five rounds). A suffix rule closes
+// `.REJECTED` and leaves `.rejected`, `.REJECTED.sql`, a copy in the scratchpad,
+// a temp directory, and text that was never a file at all.
+//
+// So the rule states the permitted case instead: the transmitted SQL must be the
+// exact content of `<checkout>/supabase/migrations/<name>.sql`. One directory, and
+// one filename inside it derived from the ledger name the apply itself declares.
+// Everything else fails by construction, including sources nobody has enumerated.
+//
+// The name→file→content chain is what makes it worth having. It binds the ordering
+// gate's input (`name`) to the bytes being transmitted (`query`) through an artifact
+// that is tracked, reviewable, and diffable — so "which migration is this?" and
+// "what will actually run?" can no longer disagree.
+//
+// SCOPE, matching the proof lookup exactly: this session's own checkout and the
+// primary one, never a sibling worktree. Same reasoning as the proof directories
+// above — a file sitting in a DIFFERENT concurrent session's worktree is not this
+// session's reviewed work, and Mason runs dozens of worktrees at once.
+export const MIGRATION_SOURCE_SUBDIR = path.join("supabase", "migrations");
+
+// CRLF→LF on BOTH sides. write-apply-proofs.mjs hashes the file LF-normalized and
+// scripts/apply-migration-file.mjs transmits it LF-normalized, but a worktree
+// checked out before the .gitattributes eol=lf pin still holds CRLF on disk
+// (KNOWN_ISSUES: stale-worktree CRLF). Comparing raw bytes would refuse a
+// legitimate apply for a line-ending difference. This cannot loosen anything: the
+// reviewer proof's queryHash is still computed over the RAW transmitted query, so
+// a CRLF-transmitted body passes provenance and then fails content binding.
+const lfNormalize = (s) => String(s ?? "").replace(/\r\n/g, "\n");
+
+// The stem must be a plain filename. normalizeMigName() already reduces to a
+// basename, so `../` cannot survive it — this is the second lock on the same door,
+// and it also refuses `.`/`..`, an empty stem, and a leading dot.
+const PLAIN_FILENAME_STEM = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+
+const pathKey = (p) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
+const withinDir = (dir, file) => {
+  const d = pathKey(dir);
+  const f = pathKey(file);
+  return f === d || f.startsWith(d + path.sep);
+};
+
+/**
+ * Locate the repository migration file whose content is exactly `query`.
+ *
+ * Read-only. Never contacts the database and never writes.
+ *
+ * @returns {{ok: true, file: string, dirs: string[]}
+ *          |{ok: false, code: "bad-name"|"not-found"|"content-differs"|"escapes-dir",
+ *            stem: string, dirs: string[], searched: string[]}}
+ */
+export function resolveMigrationSource({
+  name,
+  query,
+  projectDir,
+  cwd,
+  gitWorktreeList,
+} = {}) {
+  const stem = normalizeMigName(name);
+  const listWorktrees = gitWorktreeList || (() => execFileSync(
+    "git",
+    ["worktree", "list", "--porcelain"],
+    { cwd: projectDir, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] },
+  ));
+  const dirs = sessionCheckoutRoots(projectDir, cwd || process.cwd(), listWorktrees)
+    .map((root) => path.resolve(root, MIGRATION_SOURCE_SUBDIR));
+
+  if (!stem || stem === "." || stem === ".." || !PLAIN_FILENAME_STEM.test(stem)) {
+    return { ok: false, code: "bad-name", stem, dirs, searched: [] };
+  }
+
+  const want = lfNormalize(query);
+  const searched = [];
+  let sawName = false;
+  let escaped = false;
+  for (const dir of dirs) {
+    const file = path.join(dir, `${stem}.sql`);
+    searched.push(file);
+    let st;
+    try { st = statSync(file); } catch { continue; }
+    if (!st.isFile()) continue;
+    sawName = true;
+    // A symlink planted at the permitted path would import content from outside
+    // the permitted directory while looking like it lives inside it. Resolve BOTH
+    // sides — resolving only the file would false-refuse every worktree reached
+    // through a junction, which is how this machine is actually laid out.
+    let realDir;
+    let realFile;
+    try { realDir = realpathSync(dir); realFile = realpathSync(file); } catch { continue; }
+    if (!withinDir(realDir, realFile)) { escaped = true; continue; }
+    let content;
+    try { content = readFileSync(realFile, "utf8"); } catch { continue; }
+    if (lfNormalize(content) === want) return { ok: true, file, dirs };
+  }
+  return {
+    ok: false,
+    code: escaped ? "escapes-dir" : sawName ? "content-differs" : "not-found",
+    stem,
+    dirs,
+    searched,
+  };
 }
 
 export function evaluateMigrationApply({
@@ -148,6 +266,59 @@ export function evaluateMigrationApply({
     { cwd: projectDir, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] },
   ));
   const proofDirs = sessionProofDirs(projectDir, hookCwd, listWorktrees);
+
+  // SOURCE PROVENANCE PREFLIGHT. Runs before ordering, autopilot, destructive
+  // classification and the proof scan, because it answers the question those all
+  // presuppose: this SQL is a migration this repository holds, under the name the
+  // apply is declaring. See the block comment above resolveMigrationSource().
+  //
+  // A throw is a refusal, never a pass — the same rule the ordering and Codex
+  // gates already follow. An unknown provenance state is exactly when not to
+  // transmit.
+  {
+    let source;
+    try {
+      source = resolveMigrationSource({
+        name: migName,
+        query: migQuery,
+        projectDir,
+        cwd: hookCwd,
+        gitWorktreeList: listWorktrees,
+      });
+    } catch (err) {
+      return block(
+        `MIGRATION SOURCE GUARD failed to evaluate the provenance of "${safeName}": ` +
+        `${err?.message || err}. Refusing the apply rather than transmitting SQL of unknown origin.`);
+    }
+    if (!source?.ok) {
+      const permitted = (source?.dirs || []).map((d) => `  ${path.join(d, `${source?.stem || migName}.sql`)}\n`).join("");
+      const why =
+        source?.code === "bad-name"
+          ? `the migration name "${migName}" does not reduce to a plain migration filename, so it cannot ` +
+            `identify a file in the permitted directory`
+          : source?.code === "content-differs"
+          ? `a file with that name EXISTS in the permitted directory, but its content is not the SQL being ` +
+            `transmitted. The apply is presenting one migration's name with another migration's body`
+          : source?.code === "escapes-dir"
+          ? `the file at that path resolves OUTSIDE the permitted directory (a link pointing elsewhere), so ` +
+            `its content is not governed by the repository's migration review`
+          : `no such file exists in the permitted directory`;
+      return block(
+        `MIGRATION SOURCE GUARD: refusing to apply "${migName || "(unnamed)"}" — ${why}.\n\n` +
+        `A live apply may only transmit the exact content of a migration file that this repository ` +
+        `actually holds. The permitted source is the ONE directory below (this session's checkout and ` +
+        `the primary one, never a sibling worktree):\n` +
+        (permitted || `  ${path.join(MIGRATION_SOURCE_SUBDIR, `${migName}.sql`)}\n`) +
+        `\nThis is an allowlist, not a list of banned locations. Parked, superseded and REJECTED drafts ` +
+        `under scripts/.staging-migrations/ are deliberately outside it and can never be applied from ` +
+        `there — that is what parking a migration means. Scratch copies, temp directories and pasted SQL ` +
+        `that was never a file fail for the same reason.\n\n` +
+        `If this migration is genuinely meant to ship, MOVE THE FILE into supabase/migrations/ as a ` +
+        `tracked, reviewable change and take it through review — do not route around this by pasting the ` +
+        `body under a canonical-looking name. If it is parked or rejected, it is not meant to ship: check ` +
+        `docs/manual/DECISION_LOG.md and docs/manual/KNOWN_ISSUES.md before doing anything else.`);
+    }
+  }
 
   // ORDERING PREFLIGHT (2026-08-08). Refuse a migration that is OLDER than one
   // already applied — the mechanism that silently reverted the

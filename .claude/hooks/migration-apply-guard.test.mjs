@@ -136,6 +136,15 @@ function writeAppliedSnapshot(stateDir, { applied = ["20260808150400_round_money
     applied,
   }));
 }
+// The source-provenance rule refuses SQL that is not the content of a file under
+// <checkout>/supabase/migrations/. Every real apply has that file, so a fixture
+// that means to exercise a LATER check must supply it — otherwise provenance
+// short-circuits first and the assertion passes for the wrong reason.
+function writeMigrationFile(root, name, sql) {
+  const dir = path.join(root, "supabase", "migrations");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, `${name}.sql`), sql);
+}
 function armAutopilot(stateDir, hoursFromNow) {
   writeFileSync(path.join(stateDir, "AUTOPILOT.on"), JSON.stringify({
     expires: new Date(Date.now() + hoursFromNow * 3600_000).toISOString(),
@@ -146,6 +155,7 @@ function armAutopilot(stateDir, hoursFromNow) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-"));
   const stateDir = path.join(tmp, ".claude", "session-state");
   mkdirSync(stateDir, { recursive: true });
+  writeMigrationFile(tmp, MIG, BENIGN_SQL);
   try {
     const call = (query, projectId = CRX_PROJECT) => ({
       tool_name: "mcp__supabase__apply_migration",
@@ -224,8 +234,17 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeProof(stateDir, BENIGN_SQL);
 
     // 3. Proof whose queryHash doesn't match the transmitted SQL → deny.
-    r = runHook(call(BENIGN_SQL + " -- edited after review"), tmp);
+    //    The migration FILE is edited too, which is what really happens: someone
+    //    changes the migration after review and re-applies without re-minting.
+    //    Writing the edit to disk keeps source provenance satisfied, so the deny
+    //    has to come from content binding — the check this case is about.
+    const EDITED_SQL = BENIGN_SQL + " -- edited after review";
+    writeMigrationFile(tmp, MIG, EDITED_SQL);
+    r = runHook(call(EDITED_SQL), tmp);
     ok(isDeny(r), "edited-after-review SQL (hash mismatch) → denied");
+    ok(!/MIGRATION SOURCE GUARD/.test(r.stdout),
+      "the edited-after-review deny is content binding, not source provenance short-circuiting it");
+    writeMigrationFile(tmp, MIG, BENIGN_SQL);
 
     // 3b. FUTURE-dated reviewer proof → deny (Codex R5 P2: a negative age
     //     must not count as fresh — it would stay "valid" for years).
@@ -236,6 +255,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 4. No flag file at all + destructive + valid proof → allowed (Mason is
     //    present; his in-chat OK is the gate — prose, the hook doesn't block).
     writeProof(stateDir, DESTRUCTIVE_SQL);
+    writeMigrationFile(tmp, MIG, DESTRUCTIVE_SQL);
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
     ok(!isDeny(r), "interactive session (no autopilot flag): destructive migration with proof is not hook-blocked");
 
@@ -249,6 +269,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 6. ARMED + benign + reviewer proof but NO Codex proof file → DENIED
     //    (the second-model gate must prove it actually ran).
     writeProof(stateDir, BENIGN_SQL);
+    writeMigrationFile(tmp, MIG, BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "ARMED run: no Codex proof file → denied — the Codex gate is enforced");
     ok(/codex/i.test(r.stdout), "deny message names the Codex gate");
@@ -353,12 +374,63 @@ function armAutopilot(stateDir, hoursFromNow) {
     //     interactive rules return.
     rmSync(path.join(stateDir, "AUTOPILOT.on"));
     writeProof(stateDir, DESTRUCTIVE_SQL);
+    writeMigrationFile(tmp, MIG, DESTRUCTIVE_SQL);
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
     ok(!isDeny(r), "flag deleted by explicit disarm → interactive rules apply again");
+    writeMigrationFile(tmp, MIG, BENIGN_SQL);
 
     // 8. Non-apply_migration tool → instant allow, no interference.
     r = runHook({ tool_name: "mcp__supabase__execute_sql", tool_input: { query: "DROP TABLE customers;" } }, tmp);
     ok(!isDeny(r), "other tools pass through untouched");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── EVERY MCP apply spelling routes through the same gate ───────────────────
+// .claude/settings.json permits apply_migration under three distinct MCP server
+// names, and the hook is registered once against matcher "mcp__.*", filtering
+// in-script on a tool name CONTAINING "apply_migration". That is what makes the
+// three spellings equivalent — so it is asserted, not assumed. A per-spelling
+// registration would be the thing that lets one door drift open; if a fourth
+// server name is ever added to settings.json, it is covered automatically and
+// this case is what proves the mechanism still holds.
+{
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-aliases-"));
+  const stateDir = path.join(tmp, ".claude", "session-state");
+  mkdirSync(stateDir, { recursive: true });
+  try {
+    writeAppliedSnapshot(stateDir);
+    // Deliberately NO migration file on disk: source provenance is the check
+    // being exercised through each spelling.
+    const PARKED = "CREATE TABLE public.parked_thing (id bigint primary key);";
+    writeProof(stateDir, PARKED);
+
+    const SPELLINGS = [
+      "mcp__supabase__apply_migration",
+      "mcp__claude_ai_Supabase__apply_migration",
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__apply_migration",
+    ];
+    for (const tool_name of SPELLINGS) {
+      const r = runHook({
+        tool_name,
+        tool_input: { project_id: CRX_PROJECT, name: MIG, query: PARKED },
+      }, tmp);
+      ok(isDeny(r), `${tool_name}: SQL with no repository migration file is denied`);
+      ok(/MIGRATION SOURCE GUARD/.test(r.stdout),
+        `${tool_name}: the denial is the source-provenance rule, identically to every other spelling`);
+    }
+
+    // The mirror: with the file present, every spelling reaches allow. Without
+    // this, a hook that denied everything would satisfy the loop above.
+    writeMigrationFile(tmp, MIG, PARKED);
+    for (const tool_name of SPELLINGS) {
+      const r = runHook({
+        tool_name,
+        tool_input: { project_id: CRX_PROJECT, name: MIG, query: PARKED },
+      }, tmp);
+      ok(!isDeny(r), `${tool_name}: a genuine repository migration is allowed through the same gate`);
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -412,6 +484,13 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeAppliedSnapshot(path.join(primary, ".claude", "session-state"));
     // Proof exists ONLY in the linked worktree; the primary has none.
     writeProof(linkedState, BENIGN_SQL);
+    // The migration file exists in BOTH checkouts on purpose. Source provenance is
+    // satisfied either way, so the ONLY thing that can differ between the calls
+    // below is where the PROOF was minted — which is the behaviour under test.
+    // Seeding it in just one checkout would make a proof-scoping assertion pass on
+    // a provenance refusal instead.
+    writeMigrationFile(primary, MIG, BENIGN_SQL);
+    writeMigrationFile(linked, MIG, BENIGN_SQL);
     // CLAUDE_PROJECT_DIR stays pinned to `primary` in every call below — that is
     // what the real harness does. Only the session's reported cwd varies, which
     // is the whole behaviour under test.
@@ -500,6 +579,11 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeAppliedSnapshot(stateDir, { applied: ["20990101000000_already_applied"] });
 
     const attempt = (name) => {
+      // A real repository migration file under this exact name, so source
+      // provenance is satisfied and cannot mask the check under test. This is also
+      // the honest version of the attack: renaming the FILE is what a caller would
+      // actually do to defeat the ordering comparison.
+      writeMigrationFile(tmp, name, BENIGN_SQL);
       // A full, valid, hash-matching review proof for this exact name — so the
       // ONLY thing that can stop the apply is the ordering guard.
       writeFileSync(path.join(stateDir, `migration-review-${name}.json`), JSON.stringify({

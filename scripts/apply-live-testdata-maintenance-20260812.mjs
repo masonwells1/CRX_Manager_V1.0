@@ -96,12 +96,23 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // keeps this branch's blob. Inputs verified against the merged working tree
   // with `git hash-object`; outputs taken from the producer test's printed
   // candidate, not hand-computed.
+  // pushLib re-pinned 2026-08-31 (migration source-provenance guard): the
+  // worktree-resolution half of sessionProofDirs was extracted into a new
+  // sessionCheckoutRoots export, and sessionProofDirs now maps its result onto
+  // .claude/session-state. The migration apply gate needs the checkout ROOTS to
+  // locate the repository migration file its SQL must come from, and a second
+  // copy of that resolution would drift — the looser copy becoming the way in.
+  // Behaviour is unchanged (codex-push-lib.test.mjs green; sessionProofDirs
+  // returns the identical set), and RISKY_PATH_RES, RISKY_CONTENT_RE and
+  // contentIsRisky are byte-for-byte untouched. The risky producer-path anchor
+  // this transform verifies is still present exactly once, so the transform is
+  // identity and input == output.
   codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
-  pushLib: "d0f68482d54e9b0381f760f44b094f290b8599e4",
+  pushLib: "0ab5abbe7a52c7a46d9a1416b1a22c6195e50ba8",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
-  pushLib: "d0f68482d54e9b0381f760f44b094f290b8599e4",
+  pushLib: "0ab5abbe7a52c7a46d9a1416b1a22c6195e50ba8",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
