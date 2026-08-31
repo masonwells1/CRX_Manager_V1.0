@@ -56,7 +56,7 @@
     "test:contracts": "vitest run src/lib/rpcContracts.test.ts src/lib/rpcIdempotencyScope.test.ts src/lib/rpcFixtureLiveDiff.test.ts",
     "test:schema-live": "vitest run src/lib/schemaIntegrityLive.test.ts",
     "test:schema-baseline": "node scripts/verify-schema-baseline.mjs && node scripts/list-post-baseline-migrations.test.mjs",
-    "prepare": "husky"
+    "prepare": "git config core.hooksPath .husky || exit 0"
   },
   "dependencies": {
     "@fullcalendar/daygrid": "^6.1.21",

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,7 @@ import {
   checkBranchStaleness,
   checkCodexHookPortability,
   checkFilesPresent,
+  checkGitHooksInstalled,
   compareSyncedFiles,
   summarizeChecks,
 } from "./agent-health-check.mjs";
@@ -171,6 +173,60 @@ try {
   assert.equal(checkClaudeAuth(() => ({ ok: true, stdout: JSON.stringify({ loggedIn: false, claudeAiOauth: {} }), stderr: "" })).status, "WARN");
   assert.equal(checkClaudeAuth(() => ({ ok: true, stdout: "not json", stderr: "" })).status, "WARN");
   assert.equal(checkClaudeAuth(() => ({ ok: false, stdout: "", stderr: "unknown command 'auth'" })).status, "WARN");
+
+  // checkGitHooksInstalled — exercised against a real throwaway repo, because the
+  // whole failure mode is that git silently runs nothing when core.hooksPath
+  // resolves to a directory that is not there. Each FAIL branch is asserted, not
+  // just the happy path: on 2026-08-31 fourteen live worktrees were in one of
+  // these states, all reporting perfectly normal `git commit` output.
+  const hooksRepo = mkdtempSync(path.join(os.tmpdir(), "crx-hooks-"));
+  try {
+    const git = (...args) => execFileSync("git", ["-C", hooksRepo, ...args], { stdio: "ignore" });
+    git("init");
+    // Unset → git falls back to .git/hooks, where this repo installs nothing.
+    assert.equal(checkGitHooksInstalled(hooksRepo).status, "FAIL");
+
+    // The exact regression: husky's generated, gitignored .husky/_ is absent in
+    // any worktree that never ran `npm install`.
+    mkdirSync(path.join(hooksRepo, ".husky"), { recursive: true });
+    writeFileSync(path.join(hooksRepo, ".husky/pre-commit"), "#!/usr/bin/env sh\n");
+    writeFileSync(path.join(hooksRepo, ".husky/pre-push"), "#!/usr/bin/env sh\n");
+    git("config", "core.hooksPath", ".husky/_");
+    const missingUnderscore = checkGitHooksInstalled(hooksRepo);
+    assert.equal(missingUnderscore.status, "FAIL");
+    assert.match(missingUnderscore.note, /pre-commit/);
+
+    // The tracked directory is the correct target and needs no husky runtime.
+    git("config", "core.hooksPath", ".husky");
+    assert.equal(checkGitHooksInstalled(hooksRepo).status, "PASS");
+
+    // Partial installs still FAIL — pre-push carries typecheck/build.
+    rmSync(path.join(hooksRepo, ".husky/pre-push"));
+    const partial = checkGitHooksInstalled(hooksRepo);
+    assert.equal(partial.status, "FAIL");
+    assert.match(partial.note, /pre-push/);
+    writeFileSync(path.join(hooksRepo, ".husky/pre-push"), "#!/usr/bin/env sh\n");
+
+    // An absolute path into another checkout resolves to real hook files, so an
+    // existence-only check would PASS it while the guards that ran belonged to a
+    // different branch. Six live worktrees pointed at an abandoned Codex checkout.
+    git("config", "core.hooksPath", path.join(hooksRepo, ".husky"));
+    assert.equal(checkGitHooksInstalled(hooksRepo).status, "PASS", "own worktree by absolute path is still this worktree");
+    const foreign = mkdtempSync(path.join(os.tmpdir(), "crx-foreign-hooks-"));
+    try {
+      mkdirSync(path.join(foreign, ".husky"), { recursive: true });
+      writeFileSync(path.join(foreign, ".husky/pre-commit"), "#!/usr/bin/env sh\n");
+      writeFileSync(path.join(foreign, ".husky/pre-push"), "#!/usr/bin/env sh\n");
+      git("config", "core.hooksPath", path.join(foreign, ".husky"));
+      const outside = checkGitHooksInstalled(hooksRepo);
+      assert.equal(outside.status, "FAIL");
+      assert.match(outside.note, /outside this worktree/);
+    } finally {
+      rmSync(foreign, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(hooksRepo, { recursive: true, force: true });
+  }
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

@@ -191,6 +191,40 @@ export function checkClaudeAuth(runner) {
   }
 }
 
+// A checkout whose core.hooksPath resolves to a missing or foreign directory runs
+// NO pre-commit/pre-push guard, and git says nothing when it skips them — the
+// guards are simply absent. husky's generated .husky/_ is gitignored, so before
+// 2026-08-31 every worktree created without `npm install` landed in exactly that
+// state, and hand-set absolute overrides pointed several at other checkouts.
+// The tracked .husky/ hooks are plain shell and need no husky runtime.
+export function checkGitHooksInstalled(root) {
+  let hooksPath = "";
+  try {
+    hooksPath = execFileSync("git", ["-C", root, "config", "--get", "core.hooksPath"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    hooksPath = "";
+  }
+  if (!hooksPath) {
+    return check("FAIL", "Git hooks installed", "core.hooksPath is unset — commit/push guards do not run; set it to .husky");
+  }
+  // git runs hooks from the top of the working tree, so a relative hooksPath
+  // resolves per-worktree. That is what makes one shared value correct everywhere.
+  const resolved = path.resolve(root, hooksPath);
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return check("FAIL", "Git hooks installed", `core.hooksPath points outside this worktree (${hooksPath}) — guards would run another checkout's code`);
+  }
+  const missing = ["pre-commit", "pre-push"].filter((hook) => !existsSync(path.join(resolved, hook)));
+  if (missing.length > 0) {
+    return check("FAIL", "Git hooks installed", `${hooksPath} is missing ${missing.join(", ")} — those guards silently do not run; set core.hooksPath to .husky`);
+  }
+  return check("PASS", "Git hooks installed", `${hooksPath} (pre-commit, pre-push)`);
+}
+
 function checkSessionStaleness() {
   try {
     const output = execFileSync(process.execPath, [path.join(ROOT, ".claude", "hooks", "session-staleness.mjs")], {
@@ -261,6 +295,7 @@ function buildHealthChecks(root = ROOT) {
   ];
 
   checks.push(checkCodexHookPortability(readJsonIfPresent(path.join(root, ".codex", "hooks.json"))));
+  checks.push(checkGitHooksInstalled(root));
   checks.push(runCommand("Agent workflow sync", process.execPath, [path.join(ROOT, "scripts", "sync-agent-workflows.mjs"), "--check"], { shell: false }));
   checks.push(runCommand("Agent guidance", process.execPath, [path.join(ROOT, "scripts", "check-agent-guidance.mjs")], { shell: false }));
   checks.push(checkBranchStaleness());
