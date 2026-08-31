@@ -1,254 +1,284 @@
 # Branch inventory for Codex review — 2026-08-31
 
 Read-only inventory of every remote branch on `masonwells1/CRX_Manager_V1.0`.
-**Nothing was deleted.** Mason asked for this list so Codex can review it before any branch
-is removed or any surviving work is condensed.
+**Nothing was deleted.** This list exists so Codex can review it before any branch is removed.
 
-## How to read this
+> **Corrected 2026-08-31 after Codex review of PR #529.** The first version of this file measured
+> branch content with `git diff origin/main...<branch>`. Three-dot diff compares the *merge base*
+> with the branch, not main's current tree, so every file a squash-merge had already landed was
+> re-reported as branch-only work. Codex's falsifier: the file claimed three unmerged migrations on
+> `claude/draw-down-price-tier-lines`, and all three are in `main`. That branch now correctly shows
+> **0**. Every number below was recomputed by comparing whole trees, and the migration-carrying set
+> changed in both counts and membership.
 
-The decisive column is **Still adds**: the number of files the branch would still change if it
-were merged into `main` today (`git diff --name-only origin/main...<branch>`). A branch with
-`0` contains nothing `main` does not already have, so deleting it loses nothing.
+## How this is measured
 
-Ahead/behind commit counts are deliberately **not** used here. This repository squash-merges
-its pull requests, so a fully-merged branch still reports dozens of "unmerged" commits.
-Comparing file content is the only reading that survives that.
+For each branch, `git ls-tree -r` produces the full path-to-blob map of the branch and of
+`origin/main`. Two figures come out of comparing those maps directly:
+
+- **New files** — paths the branch has that `main` does not have at all. This is the number that
+  matters for deletion: it is content that disappears with the branch.
+- **Modified files** — paths both contain with different bytes. Nearly every branch here is far
+  behind `main`, so this is usually *staleness* (the branch holds an older copy), not new work.
+  It is reported for context and should not be read as unmerged content.
+
+Commit ahead/behind counts are not used at all. This repository squash-merges, so a fully merged
+branch still reports dozens of "unmerged" commits. Only tree comparison survives that.
 
 ## Totals
 
 | | Count |
 |---|---|
 | Remote branches besides `main` | 63 |
-| Fully contained in `main` (add nothing) | 3 |
-| Carrying migration files not in `main` | 16 |
+| Holding **no** file absent from `main` | 15 |
+| Carrying migrations absent from `main` | 16 |
 | Attached to an open PR | 16 |
-| Left behind by an already-merged PR | 5 |
 | No pull request in the scanned window | 22 |
 
-## The part that actually matters: unmerged migrations
+## Unmerged migrations — the part that matters
 
-**16 branches carry `supabase/migrations/*.sql` files that never reached `main`.**
-A migration outside the shipped history is either already applied to the live database (in which
-case the file is the only record of what was applied) or was abandoned. Codex should decide which,
-per branch, before any of these is deleted.
+**16 branches hold `supabase/migrations/*.sql` files that do not exist in `main`.**
+Each is either already applied to the live database — in which case the branch holds the only
+record of what was applied — or was abandoned. Decide which, per branch, before deleting.
 
-| Branch | Last commit | Migrations | Still adds | PR status |
+| Branch | Last commit | New migrations | New files | PR status |
 |---|---|---|---|---|
-| `claude/recover-applied-migrations-20260812` | 2026-08-13 | **12** | 35 files | PR #395 closed unmerged |
-| `codex/pr389-coderabbit-fixes` | 2026-08-14 | **10** | 99 files | PR #397 closed unmerged |
-| `claude/wave-a-migrations-857dcd` | 2026-08-12 | **4** | 8 files | no PR in the scanned window |
-| `chore/migration-ledger-reconcile-20260729` | 2026-07-29 | **3** | 9 files | PR #275 closed unmerged |
-| `codex/section4-lifecycle-20260805` | 2026-08-05 | **3** | 14 files | PR #321 closed unmerged |
-| `codex/harden-actor-binding-sql-reader` | 2026-08-12 | **3** | 7 files | PR #373 closed unmerged |
-| `claude/draw-down-price-tier-lines` | 2026-08-19 | **3** | 28 files | PR #404 merged |
-| `claude/pricing-audit-strategy-jym8rr` | 2026-08-10 | **2** | 31 files | PR #350 closed unmerged |
-| `codex/section9-ap-safety-remediation` | 2026-08-26 | **2** | 27 files | PR #491 closed unmerged |
-| `codex/section9-ap-safety-remediation-v2` | 2026-08-27 | **2** | 45 files | **open PR #500** |
-| `codex/pr509-source-recognition-fix-v2-20260830` | 2026-08-31 | **2** | 7 files | **open PR #517** |
-| `codex/section1-security-hardening-20260725` | 2026-07-25 | **1** | 16 files | no PR in the scanned window |
-| `claude/return-credit-cogs-reversal` | 2026-08-09 | **1** | 4 files | **open PR #361** |
-| `claude/restrict-draw-down-owner` | 2026-08-14 | **1** | 14 files | no PR in the scanned window |
-| `claude/pr401-proof` | 2026-08-25 | **1** | 16 files | no PR in the scanned window |
-| `claude/pr401-quote-version-trust-8e3db6` | 2026-08-26 | **1** | 21 files | no PR in the scanned window |
+| `claude/recover-applied-migrations-20260812` | 2026-08-13 | **7** | 8 | PR #395 closed unmerged |
+| `codex/pr389-coderabbit-fixes` | 2026-08-14 | **7** | 37 | PR #397 closed unmerged |
+| `claude/pricing-audit-strategy-jym8rr` | 2026-08-10 | **6** | 12 | PR #350 closed unmerged |
+| `claude/wave-a-migrations-857dcd` | 2026-08-12 | **6** | 6 | no PR in the scanned window |
+| `codex/harden-actor-binding-sql-reader` | 2026-08-12 | **6** | 7 | PR #373 closed unmerged |
+| `claude/return-credit-cogs-reversal` | 2026-08-09 | **5** | 5 | **open PR #361** |
+| `claude/ordering-cycle-review-t41vat-local-20260831` | 2026-08-09 | **4** | 4 | no PR in the scanned window |
+| `claude/ordering-cycle-review-t41vat` | 2026-08-10 | **4** | 4 | PR #356 merged; PR #363 closed unmerged |
+| `codex/section1-security-hardening-20260725` | 2026-07-25 | **2** | 25 | no PR in the scanned window |
+| `codex/section9-ap-safety-remediation` | 2026-08-26 | **2** | 20 | PR #491 closed unmerged |
+| `codex/section9-ap-safety-remediation-v2` | 2026-08-27 | **2** | 28 | **open PR #500** |
+| `claude/restrict-draw-down-owner` | 2026-08-14 | **1** | 4 | no PR in the scanned window |
+| `claude/pr401-proof` | 2026-08-25 | **1** | 15 | no PR in the scanned window |
+| `claude/changelog-docs-honesty` | 2026-08-26 | **1** | 16 | PR #505 closed unmerged |
+| `claude/hold-latch-cross-session-envelope` | 2026-08-26 | **1** | 15 | no PR in the scanned window |
+| `claude/pr401-quote-version-trust-8e3db6` | 2026-08-26 | **1** | 15 | no PR in the scanned window |
 
-<details><summary>The migration filenames on each branch</summary>
+<details><summary>Migration filenames per branch</summary>
 
 **`claude/recover-applied-migrations-20260812`**
 
-- `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
-- `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
-- `supabase/migrations/20260812115235_snapshot_cost_reporting.sql`
-- `supabase/migrations/20260812115236_quote_items_cost_at_quote_snapshot.sql`
-- `supabase/migrations/20260812115237_enforce_below_cost_admin_approval.sql`
-- `supabase/migrations/20260812115238_repair_historical_order_line_cents.sql`
-- `supabase/migrations/20260813010000_wave_a_order_cost_authority_and_finiteness.sql`
-- `supabase/migrations/20260813020000_round_order_header_money.sql`
-- `supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql`
-- `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
-- `supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql`
-- `supabase/migrations/20260813180000_quote_version_restore_trust_boundary.sql`
+- `20260813010000_wave_a_order_cost_authority_and_finiteness.sql`
+- `20260813020000_round_order_header_money.sql`
+- `20260813030000_reject_non_finite_money_and_quantities.sql`
+- `20260813040000_clamp_negative_commission_remainder.sql`
+- `20260813050000_guard_job_commission_split_immutable.sql`
+- `20260813060000_require_completed_delivery_before_invoice_post.sql`
+- `20260813180000_quote_version_restore_trust_boundary.sql`
 
 **`codex/pr389-coderabbit-fixes`**
 
-- `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
-- `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
-- `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
-- `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
-- `supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql`
-- `supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql`
-- `supabase/migrations/20260813090000_restrict_restore_quote_owner_impl.sql`
-- `supabase/migrations/20260813161614_restrict_draw_down_quote_owner.sql`
-- `supabase/migrations/20260814041419_fresh_below_cost_reason.sql`
-- `supabase/migrations/20260814063000_quote_sections_rpc_owned.sql`
-
-**`claude/wave-a-migrations-857dcd`**
-
-- `supabase/migrations/20260813010000_wave_a_order_cost_authority_and_finiteness.sql`
-- `supabase/migrations/20260813020000_round_order_header_money.sql`
-- `supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql`
-- `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
-
-**`chore/migration-ledger-reconcile-20260729`**
-
-- `supabase/migrations/20260729125227_secure_profile_public_directory.sql`
-- `supabase/migrations/20260729125251_pin_contact_sync_search_path.sql`
-- `supabase/migrations/20260729125314_application_service_cost_exact_text.sql`
-
-**`codex/section4-lifecycle-20260805`**
-
-- `supabase/migrations/20260805211951_harden_bulk_order_import_lifecycle.sql`
-- `supabase/migrations/20260805220757_reject_nonfinite_bulk_import_values.sql`
-- `supabase/migrations/20260805224819_snapshot_bulk_import_product_cost.sql`
-
-**`codex/harden-actor-binding-sql-reader`**
-
-- `supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql`
-- `supabase/migrations/20260813050000_guard_job_commission_split_immutable.sql`
-- `supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql`
-
-**`claude/draw-down-price-tier-lines`**
-
-- `supabase/migrations/20260816110000_draw_down_cutover_barrier.sql`
-- `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
-- `supabase/migrations/20260817120000_carry_allocated_line_cents_through_lifecycle.sql`
+- `20260812145628_snapshot_cost_reporting.sql`
+- `20260812151606_quote_items_cost_at_quote_snapshot.sql`
+- `20260812154028_enforce_below_cost_admin_approval.sql`
+- `20260813090000_restrict_restore_quote_owner_impl.sql`
+- `20260813161614_restrict_draw_down_quote_owner.sql`
+- `20260814041419_fresh_below_cost_reason.sql`
+- `20260814063000_quote_sections_rpc_owned.sql`
 
 **`claude/pricing-audit-strategy-jym8rr`**
 
-- `supabase/migrations/20260808170100_snapshot_cost_reporting.sql`
-- `supabase/migrations/20260808170200_quote_items_cost_at_quote_snapshot.sql`
+- `20260808150100_restore_batch_apply_prepayments_actor_guard.sql`
+- `20260808150200_cancel_order_zeroes_quantity_remaining.sql`
+- `20260808150300_revoke_inventory_truncate_and_mark_payments_dead.sql`
+- `20260808150400_round_money_to_whole_cents.sql`
+- `20260808170100_snapshot_cost_reporting.sql`
+- `20260808170200_quote_items_cost_at_quote_snapshot.sql`
 
-**`codex/section9-ap-safety-remediation`**
+**`claude/wave-a-migrations-857dcd`**
 
-- `supabase/migrations/20260826125456_bind_section9_ap_receiving_intent_and_month_dashboard.sql`
-- `supabase/migrations/20260826140333_correct_ap_aging_due_date_buckets.sql`
+- `20260813010000_wave_a_order_cost_authority_and_finiteness.sql`
+- `20260813020000_round_order_header_money.sql`
+- `20260813030000_reject_non_finite_money_and_quantities.sql`
+- `20260813040000_clamp_negative_commission_remainder.sql`
+- `20260813050000_guard_job_commission_split_immutable.sql`
+- `20260813060000_require_completed_delivery_before_invoice_post.sql`
 
-**`codex/section9-ap-safety-remediation-v2`**
+**`codex/harden-actor-binding-sql-reader`**
 
-- `supabase/migrations/20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard.sql`
-- `supabase/migrations/20260826222000_correct_ap_aging_due_date_buckets.sql`
-
-**`codex/pr509-source-recognition-fix-v2-20260830`**
-
-- `supabase/migrations/20260827041100_rebuild_return_credit_cogs_reversal.sql`
-- `supabase/migrations/20260827041400_align_return_credit_order_invoice_gates.sql`
-
-**`codex/section1-security-hardening-20260725`**
-
-- `supabase/migrations/20260725234503_harden_section1_number_and_field_actor.sql`
+- `20260813010000_wave_a_order_cost_authority_and_finiteness.sql`
+- `20260813020000_round_order_header_money.sql`
+- `20260813030000_reject_non_finite_money_and_quantities.sql`
+- `20260813040000_clamp_negative_commission_remainder.sql`
+- `20260813050000_guard_job_commission_split_immutable.sql`
+- `20260813060000_require_completed_delivery_before_invoice_post.sql`
 
 **`claude/return-credit-cogs-reversal`**
 
-- `supabase/migrations/20260808170000_return_credit_cogs_reversal.sql`
+- `20260808150100_restore_batch_apply_prepayments_actor_guard.sql`
+- `20260808150200_cancel_order_zeroes_quantity_remaining.sql`
+- `20260808150300_revoke_inventory_truncate_and_mark_payments_dead.sql`
+- `20260808150400_round_money_to_whole_cents.sql`
+- `20260808170000_return_credit_cogs_reversal.sql`
+
+**`claude/ordering-cycle-review-t41vat-local-20260831`**
+
+- `20260808150100_restore_batch_apply_prepayments_actor_guard.sql`
+- `20260808150200_cancel_order_zeroes_quantity_remaining.sql`
+- `20260808150300_revoke_inventory_truncate_and_mark_payments_dead.sql`
+- `20260808150400_round_money_to_whole_cents.sql`
+
+**`claude/ordering-cycle-review-t41vat`**
+
+- `20260808150100_restore_batch_apply_prepayments_actor_guard.sql`
+- `20260808150200_cancel_order_zeroes_quantity_remaining.sql`
+- `20260808150300_revoke_inventory_truncate_and_mark_payments_dead.sql`
+- `20260808150400_round_money_to_whole_cents.sql`
+
+**`codex/section1-security-hardening-20260725`**
+
+- `20260722222742_section9_po_ap_high_remediation.sql`
+- `20260725234503_harden_section1_number_and_field_actor.sql`
+
+**`codex/section9-ap-safety-remediation`**
+
+- `20260826125456_bind_section9_ap_receiving_intent_and_month_dashboard.sql`
+- `20260826140333_correct_ap_aging_due_date_buckets.sql`
+
+**`codex/section9-ap-safety-remediation-v2`**
+
+- `20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard.sql`
+- `20260826222000_correct_ap_aging_due_date_buckets.sql`
 
 **`claude/restrict-draw-down-owner`**
 
-- `supabase/migrations/20260813161614_restrict_draw_down_quote_owner.sql`
+- `20260813161614_restrict_draw_down_quote_owner.sql`
 
 **`claude/pr401-proof`**
 
-- `supabase/migrations/20260825190000_quote_version_restore_trust_boundary.sql`
+- `20260825190000_quote_version_restore_trust_boundary.sql`
+
+**`claude/changelog-docs-honesty`**
+
+- `20260825190000_quote_version_restore_trust_boundary.sql`
+
+**`claude/hold-latch-cross-session-envelope`**
+
+- `20260825190000_quote_version_restore_trust_boundary.sql`
 
 **`claude/pr401-quote-version-trust-8e3db6`**
 
-- `supabase/migrations/20260825190000_quote_version_restore_trust_boundary.sql`
+- `20260825190000_quote_version_restore_trust_boundary.sql`
 
 </details>
 
 ## Safe to delete on content alone
 
-These add nothing to `main`. Still Codex's call, but there is no content to lose.
+These 15 branches hold no file that `main` lacks. Deleting them loses no content.
 
-| Branch | Last commit | PR status |
-|---|---|---|
-| `pr435-work` | 2026-08-20 | no PR in the scanned window |
-| `claude/jobdetail-savegate-flake` | 2026-08-26 | PR #485 merged |
-| `claude/document-cleanup-review-r2nbhj` | 2026-08-31 | no PR in the scanned window |
+| Branch | Last commit | Modified-but-stale files | PR status |
+|---|---|---|---|
+| `claude/blend-unit-rebuild-step1` | 2026-08-19 | 166 | no PR in the scanned window |
+| `claude/draw-down-price-tier-lines` | 2026-08-19 | 162 | PR #404 merged |
+| `claude/zen-easley-7d771d` | 2026-08-20 | 166 | no PR in the scanned window |
+| `codex/fleet-scan-parked-state` | 2026-08-20 | 165 | no PR in the scanned window |
+| `pr435-work` | 2026-08-20 | 160 | no PR in the scanned window |
+| `claude/codex-guard-single-ampersand` | 2026-08-24 | 124 | PR #464 closed unmerged |
+| `claude/push-guard-git-resolution` | 2026-08-24 | 128 | PR #445 closed unmerged |
+| `codex/proof-wrapper-trusted-git-bootstrap` | 2026-08-24 | 131 | PR #454 closed unmerged |
+| `fix/quote-fixture-stale-date` | 2026-08-24 | 123 | PR #468 closed unmerged |
+| `codex/bootstrap-raw-patch-guard-20260825` | 2026-08-25 | 120 | no PR in the scanned window |
+| `dependabot/github_actions/actions/checkout-7.0.1` | 2026-08-31 | 6 | **open PR #518** |
+| `dependabot/github_actions/actions/setup-node-7.0.0` | 2026-08-31 | 5 | **open PR #519** |
+| `dependabot/npm_and_yarn/eslint-10.4.1` | 2026-08-31 | 4 | **open PR #522** |
+| `dependabot/npm_and_yarn/minor-and-patch-7fe11a6bea` | 2026-08-31 | 4 | **open PR #520** |
+| `dependabot/npm_and_yarn/react-major-cbee5c902d` | 2026-08-31 | 4 | **open PR #521** |
 
 ## Every branch
 
-| Branch | Last commit | Kind | Still adds | Migrations | PR status |
-|---|---|---|---|---|---|
-| `codex/section1-security-hardening-20260725` | 2026-07-25 | MIGRATIONS | 16 | 1 | no PR in the scanned window |
-| `chore/migration-ledger-reconcile-20260729` | 2026-07-29 | MIGRATIONS | 9 | 3 | PR #275 closed unmerged |
-| `codex/idempotency-reset-order-hardening-20260802` | 2026-08-02 | CODE | 26 |  | no PR in the scanned window |
-| `codex/section4-lifecycle-20260805` | 2026-08-05 | MIGRATIONS | 14 | 3 | PR #321 closed unmerged |
-| `claude/log-session-attribution-fix` | 2026-08-06 | DOCS-ONLY | 1 |  | PR #317 merged |
-| `claude/push-guard-fix-rescue-e3320d` | 2026-08-07 | CODE | 4 |  | no PR in the scanned window |
-| `claude/rescue-unique-docs-20260807` | 2026-08-07 | DOCS-ONLY | 10 |  | no PR in the scanned window |
-| `claude/ordering-cycle-review-t41vat-local-20260831` | 2026-08-09 | CODE | 11 |  | no PR in the scanned window |
-| `claude/return-credit-cogs-reversal` | 2026-08-09 | MIGRATIONS | 4 | 1 | **open PR #361** |
-| `claude/ordering-cycle-review-t41vat` | 2026-08-10 | DOCS-ONLY | 2 |  | PR #356 merged; PR #363 closed unmerged |
-| `claude/pricing-audit-strategy-jym8rr` | 2026-08-10 | MIGRATIONS | 31 | 2 | PR #350 closed unmerged |
-| `claude/wave-a-migrations-857dcd` | 2026-08-12 | MIGRATIONS | 8 | 4 | no PR in the scanned window |
-| `codex/harden-actor-binding-sql-reader` | 2026-08-12 | MIGRATIONS | 7 | 3 | PR #373 closed unmerged |
-| `claude/recover-applied-migrations-20260812` | 2026-08-13 | MIGRATIONS | 35 | 12 | PR #395 closed unmerged |
-| `claude/restrict-draw-down-owner` | 2026-08-14 | MIGRATIONS | 14 | 1 | no PR in the scanned window |
-| `codex/pr389-coderabbit-fixes` | 2026-08-14 | MIGRATIONS | 99 | 10 | PR #397 closed unmerged |
-| `codex/sol-gate-recovery-exception` | 2026-08-14 | CODE | 13 |  | PR #403 closed unmerged |
-| `claude/blend-unit-rebuild-step1` | 2026-08-19 | CODE | 7 |  | no PR in the scanned window |
-| `claude/draw-down-price-tier-lines` | 2026-08-19 | MIGRATIONS | 28 | 3 | PR #404 merged |
-| `claude/zealous-agnesi-aa7423` | 2026-08-20 | CODE | 12 |  | no PR in the scanned window |
-| `claude/zen-easley-7d771d` | 2026-08-20 | CODE | 5 |  | no PR in the scanned window |
-| `codex/fleet-scan-parked-state` | 2026-08-20 | CODE | 5 |  | no PR in the scanned window |
-| `pr435-work` | 2026-08-20 | CONTAINED | 0 |  | no PR in the scanned window |
-| `claude/coderabbit-setup-optimize-0f308d` | 2026-08-24 | CODE | 13 |  | PR #441 closed unmerged |
-| `claude/codex-guard-single-ampersand` | 2026-08-24 | CODE | 4 |  | PR #464 closed unmerged |
-| `claude/codex-recursion-hard-guard` | 2026-08-24 | CODE | 15 |  | PR #452 closed unmerged |
-| `claude/push-guard-git-resolution` | 2026-08-24 | CODE | 8 |  | PR #445 closed unmerged |
-| `codex/proof-wrapper-trusted-git-bootstrap` | 2026-08-24 | CODE | 3 |  | PR #454 closed unmerged |
-| `fix/quote-fixture-stale-date` | 2026-08-24 | CODE | 1 |  | PR #468 closed unmerged |
-| `claude/codex-claude-cogs-handoff-7bde15` | 2026-08-25 | CODE | 4 |  | no PR in the scanned window |
-| `claude/control-file-coverage-a41c` | 2026-08-25 | CODE | 2 |  | no PR in the scanned window |
-| `claude/guard-content-scan-and-savegate-flake` | 2026-08-25 | CODE | 7 |  | no PR in the scanned window |
-| `claude/pr401-proof` | 2026-08-25 | MIGRATIONS | 16 | 1 | no PR in the scanned window |
-| `claude/session-orchestration-setup-d73e6c` | 2026-08-25 | CODE | 42 |  | **open PR #364** |
-| `codex/bootstrap-raw-patch-guard-20260825` | 2026-08-25 | CODE | 2 |  | no PR in the scanned window |
-| `codex/pr402-review-gaps-20260819` | 2026-08-25 | CODE | 25 |  | PR #432 closed unmerged |
-| `claude/changelog-docs-honesty` | 2026-08-26 | DOCS-ONLY | 3 |  | PR #505 closed unmerged |
-| `claude/comment-fix-applied-closeout` | 2026-08-26 | DOCS-ONLY | 4 |  | PR #501 closed unmerged |
-| `claude/hold-latch-cross-session-envelope` | 2026-08-26 | CODE | 7 |  | no PR in the scanned window |
-| `claude/jobdetail-savegate-flake` | 2026-08-26 | CONTAINED | 0 |  | PR #485 merged |
-| `claude/offline-review-stale-snapshot` | 2026-08-26 | CODE | 3 |  | no PR in the scanned window |
-| `claude/pr364-guard-commits-local-20260831` | 2026-08-26 | CODE | 45 |  | no PR in the scanned window |
-| `claude/pr401-quote-version-trust-8e3db6` | 2026-08-26 | MIGRATIONS | 21 | 1 | no PR in the scanned window |
-| `claude/remove-guard-hooks-f23691` | 2026-08-26 | CODE | 4 |  | PR #503 closed unmerged |
-| `claude/xenodochial-dubinsky-b55362` | 2026-08-26 | CODE | 13 |  | PR #493 merged |
-| `codex/actor-binding-mixed-notation-repair-20260810` | 2026-08-26 | CODE | 14 |  | **open PR #449** |
-| `codex/section9-ap-safety-remediation` | 2026-08-26 | MIGRATIONS | 27 | 2 | PR #491 closed unmerged |
-| `claude/product-plan-rev12-followup` | 2026-08-27 | DOCS-ONLY | 3 |  | PR #507 closed unmerged |
-| `codex/section9-ap-safety-remediation-v2` | 2026-08-27 | MIGRATIONS | 45 | 2 | **open PR #500** |
-| `codex/autonomy-with-hard-boundaries-20260827` | 2026-08-28 | CODE | 31 |  | PR #513 closed unmerged |
-| `codex/coderabbit-ready-label-20260830` | 2026-08-30 | CODE | 16 |  | **open PR #516** |
-| `claude/bash-safety-opacity-cleanup` | 2026-08-31 | CODE | 3 |  | **open PR #527** |
-| `claude/crx-manager-cleanup-5da404` | 2026-08-31 | DOCS-ONLY | 3 |  | **open PR #526** |
-| `claude/document-cleanup-review-r2nbhj` | 2026-08-31 | CONTAINED | 0 |  | no PR in the scanned window |
-| `claude/harness-guardrail-review-bee189` | 2026-08-31 | CODE | 16 |  | **open PR #525** |
-| `claude/optimize-claude-md-79f8ad` | 2026-08-31 | DOCS-ONLY | 3 |  | **open PR #528** |
-| `claude/pending-set-apply-guard` | 2026-08-31 | CODE | 11 |  | **open PR #502** |
-| `codex/pr509-source-recognition-fix-v2-20260830` | 2026-08-31 | MIGRATIONS | 7 | 2 | **open PR #517** |
-| `dependabot/github_actions/actions/checkout-7.0.1` | 2026-08-31 | CODE | 4 |  | **open PR #518** |
-| `dependabot/github_actions/actions/setup-node-7.0.0` | 2026-08-31 | CODE | 3 |  | **open PR #519** |
-| `dependabot/npm_and_yarn/eslint-10.4.1` | 2026-08-31 | CODE | 2 |  | **open PR #522** |
-| `dependabot/npm_and_yarn/minor-and-patch-7fe11a6bea` | 2026-08-31 | CODE | 2 |  | **open PR #520** |
-| `dependabot/npm_and_yarn/react-major-cbee5c902d` | 2026-08-31 | CODE | 2 |  | **open PR #521** |
+| Branch | Last commit | New files | New migrations | Modified | Behind main | PR status |
+|---|---|---|---|---|---|---|
+| `codex/section1-security-hardening-20260725` | 2026-07-25 | 25 | 2 | 361 | 599 | no PR in the scanned window |
+| `chore/migration-ledger-reconcile-20260729` | 2026-07-29 | 1 |  | 323 | 554 | PR #275 closed unmerged |
+| `codex/idempotency-reset-order-hardening-20260802` | 2026-08-02 | 14 |  | 311 | 485 | no PR in the scanned window |
+| `codex/section4-lifecycle-20260805` | 2026-08-05 | 13 |  | 299 | 438 | PR #321 closed unmerged |
+| `claude/log-session-attribution-fix` | 2026-08-06 | 17 |  | 295 | 434 | PR #317 merged |
+| `claude/push-guard-fix-rescue-e3320d` | 2026-08-07 | 17 |  | 295 | 431 | no PR in the scanned window |
+| `claude/rescue-unique-docs-20260807` | 2026-08-07 | 26 |  | 295 | 431 | no PR in the scanned window |
+| `claude/ordering-cycle-review-t41vat-local-20260831` | 2026-08-09 | 4 | 4 | 285 | 351 | no PR in the scanned window |
+| `claude/return-credit-cogs-reversal` | 2026-08-09 | 5 | 5 | 286 | 353 | **open PR #361** |
+| `claude/ordering-cycle-review-t41vat` | 2026-08-10 | 4 | 4 | 285 | 349 | PR #356 merged; PR #363 closed unmerged |
+| `claude/pricing-audit-strategy-jym8rr` | 2026-08-10 | 12 | 6 | 291 | 353 | PR #350 closed unmerged |
+| `claude/wave-a-migrations-857dcd` | 2026-08-12 | 6 | 6 | 239 | 288 | no PR in the scanned window |
+| `codex/harden-actor-binding-sql-reader` | 2026-08-12 | 7 | 6 | 241 | 288 | PR #373 closed unmerged |
+| `claude/recover-applied-migrations-20260812` | 2026-08-13 | 8 | 7 | 238 | 285 | PR #395 closed unmerged |
+| `claude/restrict-draw-down-owner` | 2026-08-14 | 4 | 1 | 221 | 282 | no PR in the scanned window |
+| `codex/pr389-coderabbit-fixes` | 2026-08-14 | 37 | 7 | 245 | 278 | PR #397 closed unmerged |
+| `codex/sol-gate-recovery-exception` | 2026-08-14 | 1 |  | 220 | 278 | PR #403 closed unmerged |
+| `claude/blend-unit-rebuild-step1` | 2026-08-19 | 0 |  | 166 | 203 | no PR in the scanned window |
+| `claude/draw-down-price-tier-lines` | 2026-08-19 | 0 |  | 162 | 212 | PR #404 merged |
+| `claude/zealous-agnesi-aa7423` | 2026-08-20 | 2 |  | 170 | 210 | no PR in the scanned window |
+| `claude/zen-easley-7d771d` | 2026-08-20 | 0 |  | 166 | 205 | no PR in the scanned window |
+| `codex/fleet-scan-parked-state` | 2026-08-20 | 0 |  | 165 | 176 | no PR in the scanned window |
+| `pr435-work` | 2026-08-20 | 0 |  | 160 | 160 | no PR in the scanned window |
+| `claude/coderabbit-setup-optimize-0f308d` | 2026-08-24 | 3 |  | 131 | 102 | PR #441 closed unmerged |
+| `claude/codex-guard-single-ampersand` | 2026-08-24 | 0 |  | 124 | 87 | PR #464 closed unmerged |
+| `claude/codex-recursion-hard-guard` | 2026-08-24 | 10 |  | 131 | 102 | PR #452 closed unmerged |
+| `claude/push-guard-git-resolution` | 2026-08-24 | 0 |  | 128 | 98 | PR #445 closed unmerged |
+| `codex/proof-wrapper-trusted-git-bootstrap` | 2026-08-24 | 0 |  | 131 | 102 | PR #454 closed unmerged |
+| `fix/quote-fixture-stale-date` | 2026-08-24 | 0 |  | 123 | 85 | PR #468 closed unmerged |
+| `claude/codex-claude-cogs-handoff-7bde15` | 2026-08-25 | 16 |  | 121 | 77 | no PR in the scanned window |
+| `claude/control-file-coverage-a41c` | 2026-08-25 | 14 |  | 114 | 71 | no PR in the scanned window |
+| `claude/guard-content-scan-and-savegate-flake` | 2026-08-25 | 14 |  | 114 | 71 | no PR in the scanned window |
+| `claude/pr401-proof` | 2026-08-25 | 15 | 1 | 121 | 77 | no PR in the scanned window |
+| `claude/session-orchestration-setup-d73e6c` | 2026-08-25 | 33 |  | 126 | 77 | **open PR #364** |
+| `codex/bootstrap-raw-patch-guard-20260825` | 2026-08-25 | 0 |  | 120 | 78 | no PR in the scanned window |
+| `codex/pr402-review-gaps-20260819` | 2026-08-25 | 7 |  | 126 | 80 | PR #432 closed unmerged |
+| `claude/changelog-docs-honesty` | 2026-08-26 | 16 | 1 | 88 | 57 | PR #505 closed unmerged |
+| `claude/comment-fix-applied-closeout` | 2026-08-26 | 14 |  | 81 | 56 | PR #501 closed unmerged |
+| `claude/hold-latch-cross-session-envelope` | 2026-08-26 | 15 | 1 | 92 | 59 | no PR in the scanned window |
+| `claude/jobdetail-savegate-flake` | 2026-08-26 | 14 |  | 99 | 65 | PR #485 merged |
+| `claude/offline-review-stale-snapshot` | 2026-08-26 | 14 |  | 96 | 63 | no PR in the scanned window |
+| `claude/pr364-guard-commits-local-20260831` | 2026-08-26 | 33 |  | 110 | 68 | no PR in the scanned window |
+| `claude/pr401-quote-version-trust-8e3db6` | 2026-08-26 | 15 | 1 | 98 | 61 | no PR in the scanned window |
+| `claude/remove-guard-hooks-f23691` | 2026-08-26 | 15 |  | 83 | 56 | PR #503 closed unmerged |
+| `claude/xenodochial-dubinsky-b55362` | 2026-08-26 | 14 |  | 100 | 63 | PR #493 merged |
+| `codex/actor-binding-mixed-notation-repair-20260810` | 2026-08-26 | 17 |  | 107 | 68 | **open PR #449** |
+| `codex/section9-ap-safety-remediation` | 2026-08-26 | 20 | 2 | 111 | 63 | PR #491 closed unmerged |
+| `claude/product-plan-rev12-followup` | 2026-08-27 | 15 |  | 84 | 53 | PR #507 closed unmerged |
+| `codex/section9-ap-safety-remediation-v2` | 2026-08-27 | 28 | 2 | 105 | 53 | **open PR #500** |
+| `codex/autonomy-with-hard-boundaries-20260827` | 2026-08-28 | 3 |  | 41 | 2 | PR #513 closed unmerged |
+| `codex/coderabbit-ready-label-20260830` | 2026-08-30 | 5 |  | 13 | 1 | **open PR #516** |
+| `claude/bash-safety-opacity-cleanup` | 2026-08-31 | 1 |  | 2 | 0 | **open PR #527** |
+| `claude/crx-manager-cleanup-5da404` | 2026-08-31 | 2 |  | 1 | 0 | **open PR #526** |
+| `claude/document-cleanup-review-r2nbhj` | 2026-08-31 | 2 |  | 6 | 0 | no PR in the scanned window |
+| `claude/harness-guardrail-review-bee189` | 2026-08-31 | 2 |  | 5 | 0 | **open PR #525** |
+| `claude/optimize-claude-md-79f8ad` | 2026-08-31 | 1 |  | 2 | 0 | **open PR #528** |
+| `claude/pending-set-apply-guard` | 2026-08-31 | 18 |  | 83 | 53 | **open PR #502** |
+| `codex/pr509-source-recognition-fix-v2-20260830` | 2026-08-31 | 1 |  | 6 | 0 | **open PR #517** |
+| `dependabot/github_actions/actions/checkout-7.0.1` | 2026-08-31 | 0 |  | 6 | 1 | **open PR #518** |
+| `dependabot/github_actions/actions/setup-node-7.0.0` | 2026-08-31 | 0 |  | 5 | 1 | **open PR #519** |
+| `dependabot/npm_and_yarn/eslint-10.4.1` | 2026-08-31 | 0 |  | 4 | 1 | **open PR #522** |
+| `dependabot/npm_and_yarn/minor-and-patch-7fe11a6bea` | 2026-08-31 | 0 |  | 4 | 1 | **open PR #520** |
+| `dependabot/npm_and_yarn/react-major-cbee5c902d` | 2026-08-31 | 0 |  | 4 | 1 | **open PR #521** |
 
-## Suggested review order for Codex
+## Suggested review order
 
-1. **The 16 migration-carrying branches.** For each, establish whether its SQL is already
-   live. If it is, the branch can go once the migration is recorded in
-   `docs/reference/migration-history.md`; if it is not, decide keep-and-finish or abandon.
-2. **The 3 contained branches.** Confirm the empty diff, then delete.
-3. **Branches with no PR in the scanned window (22).** These never entered review. Most are
-   local rescue or scratch branches pushed for safekeeping. Check for anything unique before deleting.
-4. **Closed-unmerged PR branches.** The PR was closed without merging, so the work was rejected or
-   superseded. Confirm the superseding change landed, then delete.
+1. **The 16 migration-carrying branches.** For each, establish whether its SQL is already live.
+   If it is, the branch can go once the migration is recorded in `docs/reference/migration-history.md`;
+   if not, decide keep-and-finish or abandon.
+2. **The 15 branches holding nothing new.** Confirm and delete.
+3. **Branches with no PR in the scanned window (22).** These never entered review — mostly local
+   rescue or scratch branches. Check for anything unique before deleting.
+4. **Closed-unmerged PR branches.** Confirm the superseding change landed, then delete.
 5. **Leave every open-PR branch alone.**
+
+Before deleting anything, read `docs/audits/2026-07-27-branch-worktree-cleanup-restore-ledger.md`.
+The previous branch cleanup preserved each deleted tip with a real tag on `origin`, because a SHA
+written in a Markdown file keeps nothing alive once the last ref is gone. Use the same approach.
 
 ## Method
 
 - Branch list and PR states: GitHub API, 2026-08-31. The PR scan covered #210 (2026-07-22)
-  through #528, which spans every branch listed here — the oldest branch dates to 2026-07-25.
-- Content comparison: local clone fetched with full history (`git fetch --unshallow`) — the
-  original checkout was shallow, which made ancestry unreliable.
-- Merged-ness is taken from a PR's `merged_at` timestamp, not the `merged` boolean.
+  through #528, which spans every branch here — the oldest branch dates to 2026-07-25.
+- Merged-ness is read from each PR's `merged_at` timestamp, not the `merged` boolean, which the
+  API returned as `false` for PRs that had plainly merged.
+- Tree comparison ran on a clone fetched with `git fetch --unshallow`; the original checkout was
+  shallow, which made ancestry unusable.
 - No branch was created, deleted, force-pushed, or modified in producing this report.
