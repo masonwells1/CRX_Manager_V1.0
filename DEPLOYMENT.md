@@ -253,51 +253,36 @@ git push origin main              # Push the revert
 
 ## Continuous Integration (CI)
 
-### GitHub Actions (Optional)
+### GitHub Actions (already configured)
 
-Create `.github/workflows/test.yml`:
+CI is **not** optional and does not need to be created — it already runs on every
+pull request into `main` and on every push to `main`. Four workflows live in
+`.github/workflows/`:
 
-```yaml
-name: Test
+| Workflow | What it does |
+|---|---|
+| `ci.yml` | The main gate. Lint, type check, unit tests, build, SQL migration validation, an E2E smoke run, and the Phase 3C private-artifact containment check. |
+| `production-migration.yml` | Guards the live-migration path. |
+| `production-approval-canary.yml` | Watches that the production approval gate still refuses what it is supposed to refuse. |
+| `phase3-private-artifact-containment.yml` | Standalone containment check for candidate artifacts. |
 
-on:
-  push:
-    branches: [ main, staging ]
-  pull_request:
-    branches: [ main, staging ]
+The jobs inside `ci.yml` are `phase3-private-artifact-containment`, `ci-scope`,
+`sql-validation`, `lint-typecheck-test`, `phase3c-containment-windows`, and
+`e2e-smoke`. `ci-scope` classifies each change fail-closed, so a docs-only pull
+request can skip the expensive proof steps while anything touching code, SQL, or
+the agent surface gets the full run.
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
+To reproduce the important parts of CI locally before pushing:
 
-    steps:
-    - uses: actions/checkout@v3
-
-    - name: Setup Node
-      uses: actions/setup-node@v3
-      with:
-        node-version: '18'
-
-    - name: Install dependencies
-      run: npm install
-
-    - name: Run TypeScript check
-      run: npm run typecheck
-
-    - name: Run linter
-      run: npm run lint
-
-    - name: Build
-      run: npm run build
-
-    - name: Run E2E tests
-      run: npm run test:e2e
-      env:
-        VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-        VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+```bash
+npm run typecheck
+npm run lint
+npm run test
+npm run build
 ```
 
-This automatically runs tests on every commit.
+Edit the workflow files directly if CI needs to change; do not add a parallel
+`test.yml`.
 
 ---
 

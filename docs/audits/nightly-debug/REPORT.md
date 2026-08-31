@@ -85,7 +85,7 @@ defects in my own audit artifacts**, and I agreed with and fixed all four:
    your prod project). Net: the runtime-crawl pillar needs a staging/disposable DB to be usable; it can't run against
    your live database safely.
 
-Full disposition: [`docs/audits/2026-06-16-claude-disposition-of-codex-nightly-debug.md`](../2026-06-16-claude-disposition-of-codex-nightly-debug.md).
+Full disposition: [`docs/archive/2026-summer-closeout/audits/2026-06-16-claude-disposition-of-codex-nightly-debug.md`](../../archive/2026-summer-closeout/audits/2026-06-16-claude-disposition-of-codex-nightly-debug.md).
 **The 7 parked fixes are now cross-reviewed and ready** — say the word and I'll ship them one at a time through the
 normal review + deploy gate.
 
@@ -123,7 +123,7 @@ corrections — the operation throws *"Invalid invoice status transition"* and A
 uncorrectable for that invoice. It hasn't fired yet only because you have 0 paid invoices live.
 - **Fix drafted + validated** (compiles against live, rolled back): adds the three legitimate
   `paid → {voided, posted, overdue}` transitions. Strict superset — removes nothing.
-- **Parked at:** [`parked-migrations/PARKED-01-invoice-paid-status-transitions.sql`](parked-migrations/PARKED-01-invoice-paid-status-transitions.sql) — approve and I'll ship it through `/migration-review` + `/ship`.
+- **Parked at:** `parked-migrations/PARKED-01-invoice-paid-status-transitions.sql` — since applied live and the draft file removed in `1effc0b0`, so this path no longer exists.
 
 #### 🟠 Two HIGHs (verified real; fixes drafted in cycle 2)
 1. **`allocate_payment` can over-allocate a payment.** It checks each allocation against its own
@@ -157,7 +157,8 @@ fixes/drafts the confirmed ones.
 ### Cycle 2 — both HIGHs drafted/parked + backlog verification (2026-06-15 ~23:35)
 
 - 🟡 **`allocate_payment` over-allocation (HIGH) — drafted + validated + parked** as
-  [`PARKED-02`](parked-migrations/PARKED-02-allocate-payment-over-allocation-guard.sql). Rather than
+  `PARKED-02` (`parked-migrations/PARKED-02-allocate-payment-over-allocation-guard.sql`, since
+  applied live and the draft file removed in `1effc0b0`). Rather than
   risk a byte-imperfect reproduction of the 6 KB function, the fix is an **additive guard trigger**
   on `allocation_sets` that rejects `total_allocated_cents > total_payment_cents`
   (error `ALLOCATIONS_EXCEED_PAYMENT`) — and it protects *every* writer, including the offline-sync
