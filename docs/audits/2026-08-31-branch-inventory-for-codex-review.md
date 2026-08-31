@@ -56,6 +56,28 @@ never landed. Resolve these before anything else — and note one is on an open 
 > both (`claude/recover-applied-migrations-20260812`, `codex/pr389-coderabbit-fixes`), so the two
 > sections cover **14 distinct branches**, not 16.
 
+### What to do with one of these before deleting it
+
+Establish which of three cases it is, from the PR, the ledger and the file itself — never from
+the fact that `main` differs:
+
+- **A rebase or merge artifact.** The branch's copy is an older or re-stamped version of a file
+  `main` already carries. Nothing to preserve; delete once the tip is tagged.
+- **An abandoned edit.** A real change that was never applied and never landed. Confirm the
+  superseding work exists, then delete once the tip is tagged.
+- **Applied live in the modified form.** The branch holds the only exact source of SQL running
+  in production. **The recovery rule below applies to this section too** — land the
+  byte-identical SQL in `supabase/migrations/` before the branch goes. Do not assume a modified
+  file is safe merely because a file of that name already exists on `main`; what matters is
+  which bytes production is running.
+
+A branch on an **open PR** is pending: leave it alone regardless of which case it looks like.
+`codex/pr509-source-recognition-fix-v2-20260830` is in exactly that position on PR #517.
+
+Editing an applied migration is forbidden by the CRX Hard Rules, so if any of these turns out to
+be case three, the violation already reached production and the ledger needs correcting as well
+as the branch preserving.
+
 | Branch | Last commit | Modified migrations | PR status |
 |---|---|---|---|
 | `claude/recover-applied-migrations-20260812` | 2026-08-13 | `20260812115238_repair_historical_order_line_cents.sql`<br>`20260813080000_lock_quote_versions_writes_to_rpc.sql` | PR #395 closed unmerged |
@@ -95,7 +117,10 @@ never from the absence of a live apply.
 | `claude/pr401-proof` | 2026-08-25 | **1** | 14 | no PR in scanned window |
 | `claude/pr401-quote-version-trust-8e3db6` | 2026-08-26 | **1** | 18 | no PR in scanned window |
 
-### If a migration here is applied live, recover the SQL before deleting the branch
+### If a migration is applied live, recover the SQL before deleting the branch
+
+**This rule governs both migration sections** — branches holding a migration absent from `main`,
+and branches modifying one `main` already has.
 
 **A prose entry in `docs/reference/migration-history.md` is necessary but NOT sufficient.** Where a
 branch holds the only exact source of SQL that is running in production, deleting the branch on the
@@ -281,6 +306,10 @@ Only these 2 branches hold nothing `main` lacks — every blob they authored is 
 ## Suggested review order
 
 1. **The 4 branches modifying an existing migration.** Hard-rule territory; one is on an open PR.
+   Establish rebase artifact / abandoned edit / applied-live from the PR and the ledger, per
+   "What to do with one of these before deleting it" above. If applied live, the recovery rule
+   applies here too — a file of that name existing on `main` is not evidence the branch's bytes
+   are preserved.
 2. **The 12 branches holding migrations absent from `main`** (2 of which are also in step 1, so
    steps 1 and 2 are 14 branches in total). Establish each migration's disposition —
    **applied live**, **pending**, or **abandoned** — from its PR and the ledger, never from the
