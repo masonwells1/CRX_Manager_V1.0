@@ -1682,7 +1682,9 @@ Keys in THIS repo the proposed list would flag:
 => every push from this repo would DENY
 ```
 
-That collision is why this is parked rather than patched. The setting cannot be refused by name the way `core.sshCommand` can: the repo's own tooling sets it, so the guard needs to tell the committed `.husky/_` path from an inherited or absolute attacker path — which is the **same approved-value notion** the two rewrite instances above need, in a third place. Fix all three together.
+That collision is why this is parked rather than patched. The setting cannot be refused by name the way `core.sshCommand` can: the repo's own tooling sets it, so the guard needs to tell the repository's own hook path from an inherited or absolute attacker path — which is the **same approved-value notion** the two rewrite instances above need, in a third place. Fix all three together.
+
+**Value changed 2026-08-31 — still parked, but the approved value is now cleaner.** The repository-wide setting is `core.hooksPath=.husky` (the *tracked* directory), not `.husky/_`. The quoted reproduction above predates that change; the classifier gap it describes is unaffected, because `core.hooksPath` is still absent from `EXECUTABLE_TRANSPORT_KEYS` and still allows. What improves is the fix's shape: the legitimate value is now a single committed path that is present in every checkout, rather than a generated, gitignored one that is absent from any worktree that never ran `npm install`. See `DECISION_LOG.md` (2026-08-31, `core.hooksPath` entry) for why the old value was silently disabling the guards it was supposed to install.
 
 Failure direction differs from the other two and is worth stating plainly: these **allow** rather than refuse, so this instance is a genuine hole rather than an over-refusal. It is bounded by the fact that setting the config at all requires the ability to run commands in the session already.
 

@@ -7,6 +7,73 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-08-31 — `core.hooksPath` points at the tracked `.husky`, never husky's generated `.husky/_`
+
+**Source:** Mason's in-chat approval on 2026-08-31 ("ok fix it") after the harness review found the
+commit and push guards were not running in fourteen of forty-four registered worktrees.
+
+**Decision.** The repository-wide `core.hooksPath` is the tracked `.husky` directory. Per-worktree
+overrides are not used. `package.json`'s `prepare` script sets that value instead of invoking
+`husky`, which re-set the broken one on every `npm install`.
+
+**Why.** husky writes `core.hooksPath=.husky/_`, and `.husky/_` is generated during `npm install`
+and gitignored. A worktree created without an install in it therefore resolved the setting to a
+directory that was not there — and **git skips a missing hook silently**, so `git commit` and
+`git push` looked entirely normal while running no guard. Eight worktrees were in that state and
+six more carried hand-set absolute overrides aimed at other checkouts, including an abandoned one,
+so those ran a different branch's guard code. A relative value resolves against each worktree's own
+root, which is also the correct semantics: a branch that edits a guard is tested by the guard it
+edited. The tracked hooks are plain shell and never sourced husky, so no husky runtime is needed.
+
+**Proof.** Reproduced in a throwaway worktree created the ordinary way: `git hook run pre-commit`
+reported `cannot find a hook named pre-commit` before the change and ran the ledger and containment
+guards over 2,892 paths after it. Fleet re-scanned: 44 of 44 worktrees resolve to a real
+`pre-commit`. `npm run prepare` verified to repair a deliberately broken value.
+
+**Caught by the gate, not by the author.** The first candidate pointed `core.hooksPath` at `.husky`
+while `.husky/pre-commit` and `.husky/pre-push` were committed `100644` — only `commit-msg` carried
+`100755`. Git silently ignores a non-executable hook on POSIX, so that change would have removed
+every commit and push guard on Linux and macOS: the exact bug it set out to fix, inverted, and
+invisible from Windows where there is no executable bit. `gpt-5.6-sol` found it from the tree
+manifest. Both hooks are now committed `100755`, and `agent-health-check.test.mjs` asserts the mode
+git records for the repository's own hooks — the fixtures chmod theirs, which is precisely what hid
+the real condition.
+
+**Round 3, and the reason the check is an allowlist.** CodeRabbit's second pass showed containment
+was the wrong shape entirely: linked worktrees live UNDER the main checkout
+(`.claude/worktrees/<name>`), so an absolute `core.hooksPath` into another worktree's `.husky` is
+*contained* by the root and passed — while git ran that other branch's guards. Any in-worktree
+directory holding two executable files passed for the same reason. The check now requires the
+configured path to resolve to **exactly this worktree's own `.husky`**; everything else fails closed,
+so an unanticipated spelling is a false alarm rather than a hole — the
+`pin-the-region-don't-enumerate-the-cheats` shape. The expected path canonicalizes the root but keeps
+`.husky` literal, because canonicalizing both sides would make a `.husky` that is *itself* a link
+into another checkout compare equal to itself. Also: `install-git-hooks.mjs` no longer swallows every
+error from clearing the worktree override — only "nothing to clear" (exit 5) and "no worktree scope
+exists" are silent; a real failure warns, because a surviving override outranks the shared value.
+
+**Two more found by CodeRabbit, both real.** (1) A per-worktree `core.hooksPath` **outranks** the
+shared local value, so a `prepare` that only wrote the shared value left a stale foreign override
+effective — `npm install` would report success while repairing nothing. `prepare` is now
+`scripts/install-git-hooks.mjs`, which clears the worktree scope first, then sets the shared value;
+proven by pointing this worktree at the abandoned PR #432 checkout and watching `npm run prepare`
+clear it. (2) Containment was checked lexically, but git executes the **target** of a symlink, so a
+`.husky` linked into another checkout passed as in-worktree. Paths are now canonicalized with
+`realpathSync` before the containment test, and both the directory and each hook are checked.
+
+**Operative rule.** Any file under `.husky/` that git is meant to execute is committed `100755`
+(`git update-index --chmod=+x`), never `100644`. Never point `core.hooksPath` at a generated or
+ignored directory, and never set it per-worktree. `npm run agent-health` reports `Git hooks installed` and fails when the path is
+unset, missing `pre-commit`/`pre-push`, resolving outside the worktree, or — on POSIX — holding a
+hook without the executable bit, which git skips just as silently. That check is the tripwire, not
+this entry. This supersedes the 2026-08-25 incident entry below, which repointed one
+worktree to `.husky/_` — the right target, wrongly identified.
+
+**Knock-on.** The parked `core.hooksPath` hole in `EXECUTABLE_TRANSPORT_KEYS`
+(`KNOWN_ISSUES.md`, "Third instance") gets easier, not harder: the legitimate value is now a
+committed, tracked path rather than a gitignored generated one, which is a cleaner approved value
+for the closed-allowlist shape that entry needs. Still parked; nothing was changed there.
+
 ## 2026-08-31 — Model Tuning guidance covers the whole Claude 5 family
 
 **Source:** Mason's in-chat request on 2026-08-31 to tune both CLAUDE.md files for effectiveness;
@@ -516,7 +583,10 @@ local state, both invisible to every file-watching guard because neither is a fi
 - `core.hooksPath` in one worktree's config pointed at a **separate checkout outside this
   repository** (`<other-repo-root>/.husky`), so a commit there would have run that repository's
   pre-commit hooks instead of this one's. One worktree of ~37 was affected. **Repointed to
-  `<repo-root>/.husky/_`.**
+  `<repo-root>/.husky/_`.** *(Superseded 2026-08-31 — see below. `.husky/_` was the wrong target:
+  it is generated by `npm install` and gitignored, so in a worktree that never ran an install it
+  does not exist and git runs no hook at all, silently. The repository-wide value is now the
+  tracked `.husky`.)*
 
 This is the PR #432 threat class — hook trust bound to the wrong repository, and a subvertible
 certifying gate — arriving live through a route none of its five splits covered. It reinforces
@@ -530,7 +600,10 @@ is required, because a repository or user setting `status.showUntrackedFiles=no`
 enumerate every configured hook path with
 `git config --show-origin --show-scope --get-all core.hooksPath` and confirm the effective value
 from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
-stop-and-report. Checking `config.worktree` alone is insufficient — `core.hooksPath` also takes
+stop-and-report, **and any value that resolves to a directory without `pre-commit` and `pre-push`
+in it as the same class of finding** — a missing hook is skipped in silence, so absent guards and
+foreign guards look identical from the command line. `npm run agent-health` now reports this as
+`Git hooks installed`. Checking `config.worktree` alone is insufficient — `core.hooksPath` also takes
 system, global and local scope, and precedence decides which one wins. (Verified 2026-08-25: a
 single worktree carried two configured values, at `local` and `worktree` scope, so a
 worktree-only inspection sees one of them.)
