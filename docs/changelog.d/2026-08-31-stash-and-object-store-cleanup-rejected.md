@@ -17,7 +17,9 @@ Three claims that made the cleanup look worthwhile, each disproved:
 - Not all the temp files are stale: `.git/objects/09/tmp_obj_jODshA` was created the same
   morning (08:18). Whether it belonged to a still-running operation was never established,
   so a wildcard delete would have removed a freshly created file of unknown ownership.
-- Stashes here are not small text diffs. `stash@{26}` (`063c7010d`) holds ~1.18 GB of
+- Stashes here are not small text diffs. `stash@{26}` (full object ID
+  `063c7010d3143d7052fc05d0e2364210874510a1`; the `@{26}` slot is a moving reflog position,
+  so resolve the object ID and re-check it immediately before any drop) holds at most ~1.18 GB of
   walkthrough video. Dropping it would still reclaim nothing: all four video blobs were
   verified reachable from a branch/tag/remote ref, not only from the stash, so a later
   `gc` could not prune them.

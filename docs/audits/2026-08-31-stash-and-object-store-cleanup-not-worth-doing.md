@@ -42,8 +42,10 @@ names in the second database suggest a clone or object-copy operation may be inv
 
 ### 3. "Stashes are small text diffs, so dropping them is low-stakes" — FALSE
 
-`stash@{26}` (`063c7010d`, 2026-07-15, "pre-main-sync preserve-local-audit-state") carries
-**329 files including ~1.18 GB of video**:
+`stash@{26}` (full object ID `063c7010d3143d7052fc05d0e2364210874510a1`, 2026-07-15,
+"pre-main-sync preserve-local-audit-state") carries
+**329 files including an upper bound of ~1.18 GB of video** (the figure is the sum of the
+blob sizes below, not a stash-exclusive measurement):
 
 | bytes | path in the stash |
 |---|---|
