@@ -66,8 +66,19 @@ never landed. Resolve these before anything else — and note one is on an open 
 ## Migrations absent from `main`
 
 **12 branches hold `supabase/migrations/*.sql` files that do not exist on `main` at all.**
-Each is either already applied live — in which case the branch holds the only record of what was
-applied — or was abandoned.
+
+Each has one of **three** dispositions, and the third is easy to miss:
+
+- **Applied live** — the branch may hold the only exact source of SQL running in production.
+  See the recovery rule below before deleting anything.
+- **Pending** — a candidate still under review or awaiting its rollout. `main` not having it is
+  the normal state, not evidence of abandonment. The repository's own ledger uses this state
+  explicitly (`LOCAL CANDIDATE — NOT APPLIED`, `SOURCE ONLY — NOT APPLIED LIVE`), and the
+  branches below on **open PRs are pending by default** — leave them alone.
+- **Abandoned** — superseded or dropped. Safe to delete once the tip is preserved.
+
+**"Not applied live" does not mean abandoned.** Establish disposition from the PR and the ledger,
+never from the absence of a live apply.
 
 | Branch | Last commit | New migrations | Unique files | PR status |
 |---|---|---|---|---|
@@ -271,9 +282,10 @@ Only these 2 branches hold nothing `main` lacks — every blob they authored is 
 
 1. **The 4 branches modifying an existing migration.** Hard-rule territory; one is on an open PR.
 2. **The 12 branches holding migrations absent from `main`** (2 of which are also in step 1, so
-   steps 1 and 2 are 14 branches in total). Establish whether each migration is applied
-   live. If it is **not**, decide keep-and-finish or abandon. If it **is**, the recovery rule below
-   applies — a ledger entry alone does not make the branch safe to delete.
+   steps 1 and 2 are 14 branches in total). Establish each migration's disposition —
+   **applied live**, **pending**, or **abandoned** — from its PR and the ledger, never from the
+   absence of a live apply. Applied live: the recovery rule above applies before the branch goes.
+   Pending: leave it alone. Abandoned: delete once the tip is preserved.
 3. **The 2 mechanically-safe branches.** Confirm and delete.
 4. **Everything else.** Each holds unique blobs that need a judgement on whether the work was
    superseded. Start with branches whose PR closed unmerged.
