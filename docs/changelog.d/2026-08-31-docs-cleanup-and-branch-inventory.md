@@ -33,7 +33,7 @@ that nothing referenced. This is the only file deleted.
 
 ### Archived rather than deleted
 
-23 closed one-off handoff and audit records moved from `docs/audits/` and `docs/handoffs/` into
+22 closed one-off handoff and audit records moved from `docs/audits/` and `docs/handoffs/` into
 `docs/archive/2026-summer-closeout/`. The live folders now show current work; nothing was lost.
 That archive is explicitly for work that is fully shipped, merged and live, or reviews that are
 fully dispositioned, so a record still listing unfinished items does not belong in it.
@@ -46,7 +46,7 @@ own status. `2026-06-15-H2-negative-inventory-worksheet.md` states
 awaiting physical-count reconciliation. Deleting it would have destroyed the row-level worksheet
 and gated repair procedure for unfinished production-data work.
 
-All 30 were restored and re-classified by reading each file's status. Seven describe work that is
+All 30 were restored and re-classified by reading each file's status. Eight describe work that is
 not finished and stay in place:
 
 - `docs/audits/2026-06-15-H2-negative-inventory-worksheet.md` — NEEDS MASON; matches an open
@@ -69,6 +69,13 @@ not finished and stay in place:
   persisted on `job_chemicals`. This file is the only record of those items: **F06 appears nowhere
   in `TODO.md`, `docs/manual/KNOWN_ISSUES.md`, or `docs/manual/CURRENT_STATE.md`.** That synthesis
   gap is pre-existing and is flagged, not fixed, here.
+- `docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md` — headed "completed/superseded", but carries
+  unfinished UX follow-ups H3, H4 and H5. H5 is verifiable in current source:
+  `src/components/integrity/IntegrityCleanupPanel.tsx` renders "Create draft invoice"
+  unconditionally for every unbilled row, so an admin backfilling an invoice on a split-billing
+  order still gets a raw `ORDER_NEEDS_SPLIT_BILLING` error. Neither that code nor
+  `ORDER_RESTORE_NOT_SUPPORTED` appears in `TODO.md` or `KNOWN_ISSUES.md`. Also archived in an
+  earlier revision and restored after Codex caught it.
 
 ### Deliberately not touched
 

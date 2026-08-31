@@ -261,7 +261,7 @@ pull request into `main` and on every push to `main`. Four workflows live in
 
 | Workflow | What it does |
 |---|---|
-| `ci.yml` | The main gate. Lint, type check, unit tests, build, SQL migration validation, an E2E smoke run, and the Phase 3C private-artifact containment check. |
+| `ci.yml` | The main gate. Lint, type check, unit tests, build, SQL migration validation, and the Phase 3C private-artifact containment check. **No browser test runs** — see the note below. |
 | `production-migration.yml` | Guards the live-migration path. |
 | `production-approval-canary.yml` | Watches that the production approval gate still refuses what it is supposed to refuse. |
 | `phase3-private-artifact-containment.yml` | Standalone containment check for candidate artifacts. |
@@ -271,6 +271,14 @@ The jobs inside `ci.yml` are `phase3-private-artifact-containment`, `ci-scope`,
 `e2e-smoke`. `ci-scope` classifies each change fail-closed, so a docs-only pull
 request can skip the expensive proof steps while anything touching code, SQL, or
 the agent surface gets the full run.
+
+> **`e2e-smoke` is disabled and never runs.** The job is pinned `if: false` in
+> `ci.yml`, so it is skipped on every pull request and every push. **CI currently
+> provides no browser coverage** — do not read a green CI as evidence that a UI
+> flow was exercised. The job's own comment carries the checklist for re-enabling
+> it, ending in "change `if: false` back to `if: github.event_name == 'push'`";
+> the blocker is that the E2E suite still points at production endpoints and the
+> safety guard in `tests/e2e/utils/safety-guards.ts` refuses to run against them.
 
 To reproduce the important parts of CI locally before pushing:
 
