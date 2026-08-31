@@ -1,11 +1,20 @@
 # Decision Log
 
-Last verified: 2026-08-28
+Last verified: 2026-08-31
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-08-31 — defer the six-file return-credit migration rollout
+
+**Decision:** Keep migrations `20260827041000` through `20260827041500` unapplied for now. They remain
+one ordered production rollout, but Mason is not authorizing or requesting that rollout in this session.
+**Why:** The repair is documented and parked safely; there is no need to take the live database risk today.
+**What this forbids/implies:** Do not apply any file in the chain until Mason explicitly reopens the rollout
+in a future conversation and the repository's then-current migration review, replay, and live verification
+gates pass. The rejected `20260827223000` ledger-order trigger is not part of this deferred queue.
 
 ## 2026-08-31 — retire the production migration approval gate; the worktree guard carve-out stays closed
 

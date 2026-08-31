@@ -58,6 +58,11 @@ parked, written-but-not-applied, or awaiting approval is **superseded by the led
 it applied live on 2026-08-25. Those older lines are left in place as provenance and were not
 individually rewritten in this pass.
 
+**OWNER DECISION 2026-08-31 — DEFERRED, DO NOT APPLY NOW.** Keep the six-file return-credit chain
+unapplied until Mason explicitly reopens its production rollout in a future conversation. A request to
+work on unrelated code, push a branch, or merge another PR is not approval to apply any file in this
+chain. The rejected `20260827223000` ledger-order trigger is not part of this deferred queue.
+
 **PR #361 return-credit candidate — not applied.** The candidate migrations
 `20260827041000_align_recognized_invoice_report_statuses` and
 `20260827041100_rebuild_return_credit_cogs_reversal`, plus the follow-up
