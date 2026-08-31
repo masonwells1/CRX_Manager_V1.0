@@ -17,7 +17,9 @@ Fixed by adding authored deletions — paths present at the merge base and absen
 to the unique set, counted as unique only while `main` still carries the path. Once the deletion
 lands on `main` it is no longer branch-only work.
 
-**Re-measured, the two mechanically-safe branches are unchanged.** Neither `pr435-work` nor
+**Re-measured, the mechanically-safe branches are unchanged** — the two as of this round; a third,
+`dependabot/npm_and_yarn/minor-and-patch-7fe11a6bea`, joined them later when its PR merged into
+`main`. Neither `pr435-work` nor
 `claude/jobdetail-savegate-flake` authors any deletion, so neither all-clear was wrong. Across all
 63 branches exactly one was affected: this cleanup's own branch, which deletes one duplicate. (It
 also moved 22 records when this round ran; that archiving was withdrawn in a later round, so the

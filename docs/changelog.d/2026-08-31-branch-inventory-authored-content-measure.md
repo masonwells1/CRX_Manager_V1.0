@@ -16,6 +16,11 @@ PRs**. The report listed them as safe to delete.
 
 ### The measure now used
 
+> **Counts in this entry are as of this round.** `main` moved twice afterwards; one Dependabot PR
+> merged and its branch became mechanically safe. `docs/audits/2026-08-31-branch-inventory-for-codex-review.md`
+> is the authoritative current figure — this entry records what round two established, not today's
+> state.
+
 Three trees per branch — the branch, `origin/main`, and their merge base:
 
 1. **Authored by the branch** — paths whose blob differs from the *merge base*. A path still

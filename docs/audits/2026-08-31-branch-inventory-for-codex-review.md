@@ -13,7 +13,7 @@ Read-only inventory of every remote branch on `masonwells1/CRX_Manager_V1.0`.
 > paths "safe to delete, loses no content". That was unsound: a branch can hold unique work in a
 > file that also exists on `main`. It labelled 15 branches safe when only 2 were at the time
 > (3 now, after a Dependabot PR merged mid-review) — including
-> all five Dependabot branches, which have open PRs. It also could not see a branch that
+> every Dependabot branch, all of which had open PRs at the time. It also could not see a branch that
 > **modifies an existing migration**, of which there are four.
 
 ## The baseline this is measured against
@@ -422,7 +422,10 @@ Tip OIDs are abbreviated here; the 3 mechanically-safe branches carry their full
 3. **The 3 mechanically-safe branches.** Confirm and delete.
 4. **Everything else.** Each holds unique blobs that need a judgement on whether the work was
    superseded. Start with branches whose PR closed unmerged.
-5. **Leave every open-PR branch alone** — all five Dependabot branches are live dependency PRs.
+5. **Leave every open-PR branch alone** — 4 Dependabot branches are live dependency
+   PRs. Note the Dependabot set is **not** uniform: 1 of them (`dependabot/npm_and_yarn/minor-and-patch-7fe11a6bea`) merged
+   mid-review and is now mechanically safe, so do not treat "dependabot/" as a blanket
+   leave-alone rule. Check each one's current PR state.
 
 Before deleting anything, read `docs/audits/2026-07-27-branch-worktree-cleanup-restore-ledger.md`.
 The previous cleanup preserved each deleted tip with a real tag on `origin`, because a SHA written

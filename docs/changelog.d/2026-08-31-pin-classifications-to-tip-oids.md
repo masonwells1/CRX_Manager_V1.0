@@ -8,7 +8,8 @@ are declined, with reasoning below.
 
 **The inventory identified branches by name only.** A name is not a fixed reference: a branch can be
 pushed to after a scan, and every classification in the report is a snapshot. The report now records
-each branch's **tip OID** — in full for the two mechanically-safe branches, abbreviated in the
+each branch's **tip OID** — in full for the mechanically-safe branches (two as of this round, three
+after a later baseline move), abbreviated in the
 all-branches table — and instructs the reader to confirm via `git ls-remote origin <branch>` that
 the tip still matches before deleting. If it moved, the authored/unique comparison must be rerun.
 
