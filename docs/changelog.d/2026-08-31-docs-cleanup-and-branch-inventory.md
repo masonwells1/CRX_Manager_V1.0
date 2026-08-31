@@ -103,7 +103,9 @@ outright:
 files each holds that `main` does not, its unmerged-migration count, and its PR state.
 
 **12 branches hold `supabase/migrations/*.sql` files absent from `main`**, and **4 modify a
-migration file that already exists on `main`** — which the CRX Hard Rules forbid. Those two groups
+migration file that already exists on `main`** — three of them a file that is applied live, which
+the CRX Hard Rules forbid editing; the fourth revises two unapplied candidates, which is ordinary
+pending work (see `2026-08-31-modified-but-never-applied.md`). Those two groups
 **overlap and must not be added together**: `claude/recover-applied-migrations-20260812` and
 `codex/pr389-coderabbit-fixes` are in both, so they cover 14 distinct branches, not 16. Only **3**
 branches hold nothing `main` lacks and are mechanically safe to delete — 2 when this pass first ran,

@@ -111,6 +111,8 @@ still reports unmerged commits.
 | Holding **nothing** unique (mechanically safe) | 3 |
 | Carrying migrations `main` does not have | 12 |
 | **Modifying an existing migration file** | 4 |
+| — of those, modifying a file that is **applied live** | 3 |
+| — of those, revising an **unapplied candidate** (no rule engaged) | 1 |
 | — of which appear in **both** rows above | 2 |
 | Distinct branches touching migrations | **14** |
 | Attached to an open PR | 14 |
@@ -119,18 +121,48 @@ still reports unmerged commits.
 ## Read this first: branches that modify an existing migration
 
 **4 branches change a `supabase/migrations/*.sql` file that already exists on `main`, to
-content `main` does not have.** Editing an applied migration is forbidden by the CRX Hard Rules,
-so each of these is either a rebase artifact, an abandoned edit, or a real rule violation that
-never landed. Resolve these before anything else — and note one is on an open PR.
+content `main` does not have.** Three of those files are applied live; the fourth branch revises
+two files that exist on `main` but have **never been applied**, which is ordinary pending work
+and not a rule violation. Editing an *applied* migration is what the CRX Hard Rules forbid, so
+each of the first three is a rebase artifact, an abandoned edit, or a real violation that never
+landed. Resolve these before anything else — and note one is on an open PR.
 
 > **These two migration sections overlap — do not add their counts.** 2 branches appear in
 > both (`claude/recover-applied-migrations-20260812`, `codex/pr389-coderabbit-fixes`), so the two
 > sections cover **14 distinct branches**, not 16.
 
+### First: is the file it modifies actually applied?
+
+**Do this before anything else, and before reading the four cases below.** The Hard Rule forbids
+editing an **applied** migration. A migration file can exist on `main` and never have been
+applied live — the repository holds reviewed candidates that are deliberately staged and not yet
+run — and modifying one of those is ordinary in-progress work, not a violation and not something
+a forward reconciliation applies to.
+
+Look the file up by its timestamp in `docs/reference/migration-history.md` and read its row:
+`APPLIED LIVE <date>` versus `LOCAL CANDIDATE — NOT APPLIED`. That ledger is documentation, so
+confirm it against the live `supabase_migrations.schema_migrations` table (a read-only query)
+before acting on any branch this decides the fate of.
+
+**Of the four branches here, three modify an applied migration and one does not:**
+
+| Migration | Ledger row | Status |
+|---|---|---|
+| `20260812115238_repair_historical_order_line_cents.sql` | 885 | APPLIED LIVE 2026-08-12 |
+| `20260813080000_lock_quote_versions_writes_to_rpc.sql` | 886 | APPLIED LIVE (ledger version `20260816174353`) |
+| `20260816120000_draw_down_split_order_lines_by_price_tier.sql` | 887 | APPLIED LIVE 2026-08-24 |
+| `20260827041100_rebuild_return_credit_cogs_reversal.sql` | 895 | **LOCAL CANDIDATE — NOT APPLIED** |
+| `20260827041400_align_return_credit_order_invoice_gates.sql` | 898 | **LOCAL CANDIDATE — NOT APPLIED** |
+
+The last two are both on `codex/pr509-source-recognition-fix-v2-20260830`, so that branch is
+**case four below** — a pending revision of unapplied candidate SQL. It is not a Hard Rule
+violation, and putting it through the forward-reconciliation procedure would be wrong work on a
+money/inventory path.
+
 ### What to do with one of these before deleting it
 
-Establish which of three cases it is, from the PR, the ledger and the file itself — never from
-the fact that `main` differs:
+Establish which of four cases it is, from the applied-status check above, the PR, the ledger and
+the file itself — never from the fact that `main` differs:
 
 - **A rebase or merge artifact.** The branch's copy is an older or re-stamped version of a file
   `main` already carries. Nothing to preserve; delete once the tip is tagged.
@@ -142,9 +174,16 @@ the fact that `main` differs:
   original path edits an applied migration, and re-stamping under a new timestamp runs it again.
   Do not assume a modified file is safe merely because a file of that name already exists on
   `main`; what matters is which bytes production is running.
+- **A pending revision of an unapplied candidate.** The file exists on `main` but has never run
+  live, so the branch's copy is simply the newer draft of SQL still working its way to an apply.
+  Treat it exactly as the absent-migration case: it is unlanded work, so preserve it and leave
+  the branch alone until its own rollout concludes. **No Hard Rule is engaged and no forward
+  reconciliation is owed** — there is no live definition to reconcile against.
 
 A branch on an **open PR** is pending: leave it alone regardless of which case it looks like.
-`codex/pr509-source-recognition-fix-v2-20260830` is in exactly that position on PR #517.
+`codex/pr509-source-recognition-fix-v2-20260830` is in exactly that position on PR #517 — but do
+not lean on that, because a PR can close while the underlying candidate is still queued to
+apply. Its protection is case four, not its PR state.
 
 Editing an applied migration is forbidden by the CRX Hard Rules, so if any of these turns out to
 be case three, the violation already reached production and the ledger needs correcting as well
@@ -153,7 +192,7 @@ as the branch preserving.
 | Branch | Last commit | Modified migrations | PR status |
 |---|---|---|---|
 | `claude/recover-applied-migrations-20260812` | 2026-08-13 | `20260812115238_repair_historical_order_line_cents.sql`<br>`20260813080000_lock_quote_versions_writes_to_rpc.sql` | PR #395 closed unmerged |
-| `codex/pr509-source-recognition-fix-v2-20260830` | 2026-08-31 | `20260827041100_rebuild_return_credit_cogs_reversal.sql`<br>`20260827041400_align_return_credit_order_invoice_gates.sql` | **open PR #517** |
+| `codex/pr509-source-recognition-fix-v2-20260830` | 2026-08-31 | `20260827041100_rebuild_return_credit_cogs_reversal.sql`<br>`20260827041400_align_return_credit_order_invoice_gates.sql`<br>**both unapplied — case four, no violation** | **open PR #517** |
 | `codex/pr389-coderabbit-fixes` | 2026-08-14 | `20260813080000_lock_quote_versions_writes_to_rpc.sql` | PR #397 closed unmerged |
 | `claude/draw-down-price-tier-lines` | 2026-08-19 | `20260816120000_draw_down_split_order_lines_by_price_tier.sql` | PR #404 merged |
 
@@ -213,8 +252,9 @@ into `supabase/migrations/` **first**. Only then is the branch free to delete.
 
 ### A modified migration needs a forward reconciliation, never a re-stamp
 
-For the four branches that modify a migration `main` already has, the recovery rule above does not
-apply, and following it would be unsafe. Both of its obvious readings are wrong:
+For the **three** branches that modify a migration `main` already has **and has applied live**,
+the recovery rule above does not apply, and following it would be unsafe. Both of its obvious
+readings are wrong:
 
 - **Restore the branch's version to the original path.** That edits an applied migration, which the
   CRX Hard Rules forbid outright.
@@ -317,7 +357,9 @@ difference, the branch stays until that reconciliation has shipped.
 - `20260812115238_repair_historical_order_line_cents.sql`
 - `20260813080000_lock_quote_versions_writes_to_rpc.sql`
 
-**`codex/pr509-source-recognition-fix-v2-20260830`** — modifies an existing migration:
+**`codex/pr509-source-recognition-fix-v2-20260830`** — modifies an existing migration, but both
+files are **unapplied candidates** (ledger rows 895 and 898), so this is a pending revision, not
+a Hard Rule violation:
 
 - `20260827041100_rebuild_return_credit_cogs_reversal.sql`
 - `20260827041400_align_return_credit_order_invoice_gates.sql`
@@ -427,12 +469,15 @@ Tip OIDs are abbreviated here; the 3 mechanically-safe branches carry their full
 
 ## Suggested review order
 
-1. **The 4 branches modifying an existing migration.** Hard-rule territory; one is on an open PR.
-   Establish rebase artifact / abandoned edit / applied-live from the PR and the ledger, per
-   "What to do with one of these before deleting it" above. If applied live, follow **"A
-   modified migration needs a forward reconciliation, never a re-stamp"** — *not* the
-   byte-identical recovery rule, which is written for absent files and is unsafe here. A file of
-   that name existing on `main` is not evidence the branch's bytes are preserved.
+1. **The 4 branches modifying an existing migration.** Start with **"First: is the file it
+   modifies actually applied?"** above — 3 of the 4 modify applied SQL and are hard-rule
+   territory; the fourth revises unapplied candidates and is ordinary pending work. One is on an
+   open PR. For the applied three, establish rebase artifact / abandoned edit / applied-live from
+   the PR and the ledger, per "What to do with one of these before deleting it" above. If applied
+   live, follow **"A modified migration needs a forward reconciliation, never a re-stamp"** —
+   *not* the byte-identical recovery rule, which is written for absent files and is unsafe here.
+   A file of that name existing on `main` is not evidence the branch's bytes are preserved, and
+   equally is not evidence that production ever ran it.
 2. **The 12 branches holding migrations absent from `main`** (2 of which are also in step 1, so
    steps 1 and 2 are 14 branches in total). Establish each migration's disposition —
    **applied live**, **pending**, or **abandoned** — from its PR and the ledger, never from the

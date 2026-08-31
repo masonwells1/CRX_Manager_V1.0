@@ -6,8 +6,9 @@ Two P2 findings from Codex's review of `53f2aa1f`, both on the branch inventory.
 
 The report told the reader to preserve a live migration by landing the **byte-identical SQL** into
 `supabase/migrations/` before deleting the branch, and said explicitly that this "applies to both
-migration sections". It should not have. For the four branches that *modify* a migration `main`
-already has, both readings of that instruction are wrong:
+migration sections". It should not have. For a branch that *modifies* a migration `main` already
+has **and has applied live** — three of the four, as a later round established — both readings of
+that instruction are wrong:
 
 - **Restore the branch's version to the original path** — edits an applied migration, which the CRX
   Hard Rules forbid outright.
