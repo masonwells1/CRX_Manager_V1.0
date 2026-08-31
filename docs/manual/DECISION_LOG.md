@@ -32,8 +32,9 @@ guards over 2,892 paths after it. Fleet re-scanned: 44 of 44 worktrees resolve t
 
 **Operative rule.** Never point `core.hooksPath` at a generated or ignored directory, and never set
 it per-worktree. `npm run agent-health` reports `Git hooks installed` and fails when the path is
-unset, missing `pre-commit`/`pre-push`, or resolving outside the worktree; that check is the
-tripwire, not this entry. This supersedes the 2026-08-25 incident entry below, which repointed one
+unset, missing `pre-commit`/`pre-push`, resolving outside the worktree, or — on POSIX — holding a
+hook without the executable bit, which git skips just as silently. That check is the tripwire, not
+this entry. This supersedes the 2026-08-25 incident entry below, which repointed one
 worktree to `.husky/_` — the right target, wrongly identified.
 
 **Knock-on.** The parked `core.hooksPath` hole in `EXECUTABLE_TRANSPORT_KEYS`

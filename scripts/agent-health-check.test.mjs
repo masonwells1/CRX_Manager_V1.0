@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -188,9 +188,17 @@ try {
 
     // The exact regression: husky's generated, gitignored .husky/_ is absent in
     // any worktree that never ran `npm install`.
+    // writeFileSync creates 0644, which is itself a FAIL on POSIX — the hooks have
+    // to be made executable or every assertion below would be measuring the wrong
+    // branch on Linux CI while passing on Windows.
+    const writeHook = (dir, name) => {
+      const file = path.join(dir, name);
+      writeFileSync(file, "#!/usr/bin/env sh\n");
+      chmodSync(file, 0o755);
+    };
     mkdirSync(path.join(hooksRepo, ".husky"), { recursive: true });
-    writeFileSync(path.join(hooksRepo, ".husky/pre-commit"), "#!/usr/bin/env sh\n");
-    writeFileSync(path.join(hooksRepo, ".husky/pre-push"), "#!/usr/bin/env sh\n");
+    writeHook(path.join(hooksRepo, ".husky"), "pre-commit");
+    writeHook(path.join(hooksRepo, ".husky"), "pre-push");
     git("config", "core.hooksPath", ".husky/_");
     const missingUnderscore = checkGitHooksInstalled(hooksRepo);
     assert.equal(missingUnderscore.status, "FAIL");
@@ -205,7 +213,18 @@ try {
     const partial = checkGitHooksInstalled(hooksRepo);
     assert.equal(partial.status, "FAIL");
     assert.match(partial.note, /pre-push/);
-    writeFileSync(path.join(hooksRepo, ".husky/pre-push"), "#!/usr/bin/env sh\n");
+    writeHook(path.join(hooksRepo, ".husky"), "pre-push");
+
+    // Present but not executable is skipped by git just as silently on POSIX.
+    // Windows has no executable bit, so that platform must never report it.
+    assert.equal(checkGitHooksInstalled(hooksRepo, "win32").status, "PASS", "win32 does not inspect the executable bit");
+    if (process.platform !== "win32") {
+      chmodSync(path.join(hooksRepo, ".husky/pre-commit"), 0o644);
+      const notExecutable = checkGitHooksInstalled(hooksRepo, "linux");
+      assert.equal(notExecutable.status, "FAIL");
+      assert.match(notExecutable.note, /non-executable/);
+      chmodSync(path.join(hooksRepo, ".husky/pre-commit"), 0o755);
+    }
 
     // An absolute path into another checkout resolves to real hook files, so an
     // existence-only check would PASS it while the guards that ran belonged to a
@@ -215,8 +234,8 @@ try {
     const foreign = mkdtempSync(path.join(os.tmpdir(), "crx-foreign-hooks-"));
     try {
       mkdirSync(path.join(foreign, ".husky"), { recursive: true });
-      writeFileSync(path.join(foreign, ".husky/pre-commit"), "#!/usr/bin/env sh\n");
-      writeFileSync(path.join(foreign, ".husky/pre-push"), "#!/usr/bin/env sh\n");
+      writeHook(path.join(foreign, ".husky"), "pre-commit");
+      writeHook(path.join(foreign, ".husky"), "pre-push");
       git("config", "core.hooksPath", path.join(foreign, ".husky"));
       const outside = checkGitHooksInstalled(hooksRepo);
       assert.equal(outside.status, "FAIL");

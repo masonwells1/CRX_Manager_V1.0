@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizeEol } from "./normalize-eol.mjs";
@@ -197,7 +197,7 @@ export function checkClaudeAuth(runner) {
 // 2026-08-31 every worktree created without `npm install` landed in exactly that
 // state, and hand-set absolute overrides pointed several at other checkouts.
 // The tracked .husky/ hooks are plain shell and need no husky runtime.
-export function checkGitHooksInstalled(root) {
+export function checkGitHooksInstalled(root, platform = process.platform) {
   let hooksPath = "";
   try {
     hooksPath = execFileSync("git", ["-C", root, "config", "--get", "core.hooksPath"], {
@@ -218,9 +218,26 @@ export function checkGitHooksInstalled(root) {
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     return check("FAIL", "Git hooks installed", `core.hooksPath points outside this worktree (${hooksPath}) — guards would run another checkout's code`);
   }
-  const missing = ["pre-commit", "pre-push"].filter((hook) => !existsSync(path.join(resolved, hook)));
+  const required = ["pre-commit", "pre-push"];
+  const missing = required.filter((hook) => !existsSync(path.join(resolved, hook)));
   if (missing.length > 0) {
     return check("FAIL", "Git hooks installed", `${hooksPath} is missing ${missing.join(", ")} — those guards silently do not run; set core.hooksPath to .husky`);
+  }
+  // Same silent skip, different spelling: on POSIX git ignores a hook that is not
+  // executable. Windows has no executable bit, and Git for Windows does not consult
+  // one, so the question is only meaningful off win32 — CI is where it can bite.
+  if (platform !== "win32") {
+    const notExecutable = required.filter((hook) => {
+      try {
+        accessSync(path.join(resolved, hook), fsConstants.X_OK);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    if (notExecutable.length > 0) {
+      return check("FAIL", "Git hooks installed", `${hooksPath} has non-executable ${notExecutable.join(", ")} — git skips a non-executable hook in silence; restore the mode with git update-index --chmod=+x`);
+    }
   }
   return check("PASS", "Git hooks installed", `${hooksPath} (pre-commit, pre-push)`);
 }
