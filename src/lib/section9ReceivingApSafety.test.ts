@@ -91,6 +91,9 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
       'PO_CUMULATIVE_BILLING_REASON_REQUIRED',
     );
     expect(cumulativeBillMigration).toContain(
+      'COALESCE(p_confirm_po_overage, false) IS NOT TRUE',
+    );
+    expect(cumulativeBillMigration).toContain(
       "'po_cumulative_billing_overage_confirmed'",
     );
 

@@ -205,21 +205,22 @@ BEGIN
     RAISE EXCEPTION 'ACTOR_MISMATCH';
   END IF;
   IF NOT public.is_admin() THEN RAISE EXCEPTION 'ADMIN_REQUIRED'; END IF;
+  IF p_idempotency_key IS NULL OR btrim(p_idempotency_key) = '' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: complete_cycle_count requires p_idempotency_key';
+  END IF;
   IF p_expected_item_revision IS NOT NULL AND p_expected_item_revision < 0 THEN
     RAISE EXCEPTION 'CYCLE_COUNT_STALE_REVISION';
   END IF;
 
-  IF p_idempotency_key IS NOT NULL THEN
-    v_existing := public.check_idempotency(p_idempotency_key, 'complete_cycle_count');
-    IF v_existing IS NOT NULL THEN
-      IF jsonb_typeof(v_existing) IS DISTINCT FROM 'object'
-         OR v_existing->>'_cycle_count_id' IS DISTINCT FROM p_cycle_count_id::text
-         OR v_existing->>'_actor_id' IS DISTINCT FROM v_actor::text
-         OR (v_existing->>'_expected_item_revision') IS DISTINCT FROM p_expected_item_revision::text THEN
-        RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
-      END IF;
-      RETURN;
+  v_existing := public.check_idempotency(p_idempotency_key, 'complete_cycle_count');
+  IF v_existing IS NOT NULL THEN
+    IF jsonb_typeof(v_existing) IS DISTINCT FROM 'object'
+       OR v_existing->>'_cycle_count_id' IS DISTINCT FROM p_cycle_count_id::text
+       OR v_existing->>'_actor_id' IS DISTINCT FROM v_actor::text
+       OR (v_existing->>'_expected_item_revision') IS DISTINCT FROM p_expected_item_revision::text THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
     END IF;
+    RETURN;
   END IF;
 
   -- Lock item rows first, in a stable order. Item writers take one of these
@@ -254,19 +255,17 @@ BEGIN
 
   PERFORM public._complete_cycle_count_impl(p_cycle_count_id, v_actor, p_idempotency_key);
 
-  IF p_idempotency_key IS NOT NULL THEN
-    UPDATE public.idempotency_keys
-       SET result = jsonb_build_object(
-         '_cycle_count_id', p_cycle_count_id,
-         '_actor_id', v_actor,
-         '_expected_item_revision', p_expected_item_revision,
-         '_completed_item_revision', v_current_item_revision
-       )
-     WHERE idempotency_key = p_idempotency_key
-       AND operation = 'complete_cycle_count';
-    GET DIAGNOSTICS v_cache_rows = ROW_COUNT;
-    IF v_cache_rows <> 1 THEN RAISE EXCEPTION 'IDEMPOTENCY_CACHE_WRITE_FAILED'; END IF;
-  END IF;
+  UPDATE public.idempotency_keys
+     SET result = jsonb_build_object(
+       '_cycle_count_id', p_cycle_count_id,
+       '_actor_id', v_actor,
+       '_expected_item_revision', p_expected_item_revision,
+       '_completed_item_revision', v_current_item_revision
+     )
+   WHERE idempotency_key = p_idempotency_key
+     AND operation = 'complete_cycle_count';
+  GET DIAGNOSTICS v_cache_rows = ROW_COUNT;
+  IF v_cache_rows <> 1 THEN RAISE EXCEPTION 'IDEMPOTENCY_CACHE_WRITE_FAILED'; END IF;
 END;
 $function$;
 

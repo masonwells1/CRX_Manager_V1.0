@@ -6,7 +6,9 @@
 -- cannot report a prior success for a changed batch, amount, date, note, or
 -- void reason.  The existing check_idempotency_intent() helper serializes the
 -- key, rejects cross-actor/cross-intent reuse, and fails closed for legacy
--- unbound receipts.
+-- unbound receipts. Vendor-bill edits also enforce the same cumulative PO
+-- overage confirmation as creation so the threshold cannot be bypassed after
+-- a compliant bill is first saved.
 
 -- The public functions must be exactly the live signatures inspected before
 -- this migration.  A transactionally-applied migration cannot leave a rename
@@ -17,8 +19,9 @@ BEGIN
   IF to_regprocedure('public._section9_receive_po_items_intent_impl_20260831(jsonb,uuid,text,boolean)') IS NOT NULL THEN
     RAISE EXCEPTION 'SECTION9_INTENT_PRECONDITION: private receive_po_items implementation already exists';
   END IF;
-  IF to_regprocedure('public.receive_po_items(jsonb,uuid,text,boolean)') IS NULL THEN
-    RAISE EXCEPTION 'SECTION9_INTENT_PRECONDITION: receive_po_items signature missing';
+  IF to_regprocedure('public.receive_po_items(jsonb,uuid,text,boolean)') IS NULL
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'receive_po_items') <> 1 THEN
+    RAISE EXCEPTION 'SECTION9_INTENT_PRECONDITION: receive_po_items signature/overload drift';
   END IF;
   ALTER FUNCTION public.receive_po_items(jsonb, uuid, text, boolean)
     RENAME TO _section9_receive_po_items_intent_impl_20260831;
@@ -30,8 +33,9 @@ BEGIN
   IF to_regprocedure('public._section9_update_vendor_bill_intent_impl_20260831(uuid,bigint,bigint,date,date,text,text)') IS NOT NULL THEN
     RAISE EXCEPTION 'SECTION9_INTENT_PRECONDITION: private update_vendor_bill implementation already exists';
   END IF;
-  IF to_regprocedure('public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text)') IS NULL THEN
-    RAISE EXCEPTION 'SECTION9_INTENT_PRECONDITION: update_vendor_bill signature missing';
+  IF to_regprocedure('public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text)') IS NULL
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'update_vendor_bill') <> 1 THEN
+    RAISE EXCEPTION 'SECTION9_INTENT_PRECONDITION: update_vendor_bill signature/overload drift';
   END IF;
   ALTER FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text)
     RENAME TO _section9_update_vendor_bill_intent_impl_20260831;
@@ -43,8 +47,9 @@ BEGIN
   IF to_regprocedure('public._section9_record_vendor_payment_intent_impl_20260831(uuid,bigint,date,text,text,text,text)') IS NOT NULL THEN
     RAISE EXCEPTION 'SECTION9_INTENT_PRECONDITION: private record_vendor_payment implementation already exists';
   END IF;
-  IF to_regprocedure('public.record_vendor_payment(uuid,bigint,date,text,text,text,text)') IS NULL THEN
-    RAISE EXCEPTION 'SECTION9_INTENT_PRECONDITION: record_vendor_payment signature missing';
+  IF to_regprocedure('public.record_vendor_payment(uuid,bigint,date,text,text,text,text)') IS NULL
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'record_vendor_payment') <> 1 THEN
+    RAISE EXCEPTION 'SECTION9_INTENT_PRECONDITION: record_vendor_payment signature/overload drift';
   END IF;
   ALTER FUNCTION public.record_vendor_payment(uuid, bigint, date, text, text, text, text)
     RENAME TO _section9_record_vendor_payment_intent_impl_20260831;
@@ -56,8 +61,9 @@ BEGIN
   IF to_regprocedure('public._section9_void_vendor_bill_intent_impl_20260831(uuid,text,text)') IS NOT NULL THEN
     RAISE EXCEPTION 'SECTION9_INTENT_PRECONDITION: private void_vendor_bill implementation already exists';
   END IF;
-  IF to_regprocedure('public.void_vendor_bill(uuid,text,text)') IS NULL THEN
-    RAISE EXCEPTION 'SECTION9_INTENT_PRECONDITION: void_vendor_bill signature missing';
+  IF to_regprocedure('public.void_vendor_bill(uuid,text,text)') IS NULL
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'void_vendor_bill') <> 1 THEN
+    RAISE EXCEPTION 'SECTION9_INTENT_PRECONDITION: void_vendor_bill signature/overload drift';
   END IF;
   ALTER FUNCTION public.void_vendor_bill(uuid, text, text)
     RENAME TO _section9_void_vendor_bill_intent_impl_20260831;
@@ -129,7 +135,9 @@ $function$;
 CREATE FUNCTION public.update_vendor_bill(
   p_bill_id uuid, p_subtotal_cents bigint, p_adjustment_cents bigint,
   p_bill_date date, p_due_date date, p_notes text,
-  p_idempotency_key text DEFAULT NULL
+  p_idempotency_key text DEFAULT NULL,
+  p_confirm_po_overage boolean DEFAULT false,
+  p_po_overage_reason text DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -143,6 +151,10 @@ DECLARE
   v_po_total_cents bigint;
   v_vendor_name text;
   v_new_total_cents bigint;
+  v_other_active_billed_cents bigint;
+  v_cumulative_total_cents bigint;
+  v_overage_confirmed boolean := false;
+  v_overage_reason text := btrim(COALESCE(p_po_overage_reason, ''));
   v_amount_drift_pct numeric;
   v_fingerprint text;
   v_replay jsonb;
@@ -159,7 +171,9 @@ BEGIN
   v_fingerprint := encode(extensions.digest(convert_to(jsonb_build_object(
     'actor_id', v_actor, 'bill_id', p_bill_id,
     'subtotal_cents', p_subtotal_cents, 'adjustment_cents', p_adjustment_cents,
-    'bill_date', p_bill_date, 'due_date', p_due_date, 'notes', p_notes
+    'bill_date', p_bill_date, 'due_date', p_due_date, 'notes', p_notes,
+    'confirm_po_overage', COALESCE(p_confirm_po_overage, false),
+    'po_overage_reason', v_overage_reason
   )::text, 'UTF8'), 'sha256'), 'hex');
   v_replay := public.check_idempotency_intent(p_idempotency_key, 'update_vendor_bill', v_actor, v_fingerprint);
   IF v_replay IS NOT NULL THEN
@@ -181,12 +195,44 @@ BEGIN
   IF v_new_total_cents <= 0 THEN
     RAISE EXCEPTION 'INVALID_AMOUNT: bill total must be positive (got %)', v_new_total_cents;
   END IF;
-  -- Same warning-only PO drift contract used by create_vendor_bill. It is
-  -- deliberately not a cumulative-billing cap and does not change PO totals.
+  -- Serialize with PO lifecycle changes, then enforce the same cumulative
+  -- active-billing threshold as create_vendor_bill. Exclude this bill's old
+  -- total so the candidate replacement is counted exactly once.
   IF v_bill.purchase_order_id IS NOT NULL THEN
     SELECT total_cost_cents INTO v_po_total_cents
       FROM public.purchase_orders WHERE id = v_bill.purchase_order_id FOR UPDATE;
-    IF FOUND AND v_po_total_cents > 0 THEN
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'PO_NOT_FOUND: purchase order % does not exist', v_bill.purchase_order_id;
+    END IF;
+
+    SELECT COALESCE(SUM(vb.total_cents), 0)::bigint
+    INTO v_other_active_billed_cents
+    FROM public.vendor_bills vb
+    WHERE vb.purchase_order_id = v_bill.purchase_order_id
+      AND vb.id <> p_bill_id
+      AND vb.deleted_at IS NULL
+      AND vb.status <> 'voided';
+
+    v_cumulative_total_cents := v_other_active_billed_cents + v_new_total_cents;
+    IF v_po_total_cents > 0
+       AND v_cumulative_total_cents * 100 > v_po_total_cents * 105 THEN
+      IF COALESCE(p_confirm_po_overage, false) IS NOT TRUE THEN
+        RAISE EXCEPTION 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED'
+          USING ERRCODE = '22023',
+                DETAIL = jsonb_build_object(
+                  'po_total_cents', v_po_total_cents,
+                  'other_active_billed_cents', v_other_active_billed_cents,
+                  'candidate_bill_cents', v_new_total_cents,
+                  'cumulative_bill_cents', v_cumulative_total_cents
+                )::text;
+      END IF;
+      IF v_overage_reason = '' THEN
+        RAISE EXCEPTION 'PO_CUMULATIVE_BILLING_REASON_REQUIRED';
+      END IF;
+      v_overage_confirmed := true;
+    END IF;
+
+    IF v_po_total_cents > 0 THEN
       SELECT name INTO v_vendor_name FROM public.vendors WHERE id = v_bill.vendor_id;
       v_amount_drift_pct := ABS(v_new_total_cents - v_po_total_cents)::numeric / v_po_total_cents::numeric;
       IF v_amount_drift_pct > 0.05 THEN
@@ -206,6 +252,17 @@ BEGIN
   UPDATE public.idempotency_keys SET request_fingerprint = v_fingerprint, request_actor_id = v_actor
    WHERE idempotency_key = p_idempotency_key AND operation = 'update_vendor_bill';
   IF NOT FOUND THEN RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING'; END IF;
+  IF v_overage_confirmed THEN
+    INSERT INTO public.activity_feed (
+      event_type, description, performed_by, related_entity_type, related_entity_id
+    ) VALUES (
+      'po_cumulative_billing_overage_confirmed',
+      'Vendor bill ' || p_bill_id::text || ' edit raised cumulative active billing above 105%: ' || v_overage_reason,
+      v_actor,
+      'purchase_order',
+      v_bill.purchase_order_id
+    );
+  END IF;
   RETURN v_result;
 END;
 $function$;
@@ -311,10 +368,26 @@ END;
 $function$;
 
 REVOKE ALL ON FUNCTION public.receive_po_items(jsonb, uuid, text, boolean) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text, boolean, text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.record_vendor_payment(uuid, bigint, date, text, text, text, text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.void_vendor_bill(uuid, text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.receive_po_items(jsonb, uuid, text, boolean) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text, boolean, text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.record_vendor_payment(uuid, bigint, date, text, text, text, text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.void_vendor_bill(uuid, text, text) TO authenticated, service_role;
+
+DO $section9_intent_postcond$
+BEGIN
+  IF (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'receive_po_items') <> 1
+     OR to_regprocedure('public.receive_po_items(jsonb,uuid,text,boolean)') IS NULL
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'update_vendor_bill') <> 1
+     OR to_regprocedure('public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text,boolean,text)') IS NULL
+     OR to_regprocedure('public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text)') IS NOT NULL
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'record_vendor_payment') <> 1
+     OR to_regprocedure('public.record_vendor_payment(uuid,bigint,date,text,text,text,text)') IS NULL
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'void_vendor_bill') <> 1
+     OR to_regprocedure('public.void_vendor_bill(uuid,text,text)') IS NULL THEN
+    RAISE EXCEPTION 'SECTION9_INTENT_POSTCONDITION: public RPC overload/signature drift';
+  END IF;
+END;
+$section9_intent_postcond$;

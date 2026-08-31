@@ -19,9 +19,10 @@ import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import ReasonModal from '../components/ui/ReasonModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getIdempotencyBindingRejection } from '../lib/idempotency';
@@ -80,6 +81,7 @@ export default function VendorBillDetail() {
   const [editDueDate, setEditDueDate] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [editing, setEditing] = useState(false);
+  const [editOverageMessage, setEditOverageMessage] = useState<string | null>(null);
 
   const today = localToday();
 
@@ -194,7 +196,7 @@ export default function VendorBillDetail() {
     setEditModalOpen(true);
   };
 
-  const handleEditBill = async () => {
+  const handleEditBill = async (confirmPoOverage = false, poOverageReason = '') => {
     if (!bill) return;
     const subtotalCents = parseDollarsToCents(editSubtotal);
     if (subtotalCents <= 0) {
@@ -222,6 +224,8 @@ export default function VendorBillDetail() {
         p_due_date: editDueDate,
         p_notes: editNotes || '',
         p_idempotency_key: key,
+        p_confirm_po_overage: confirmPoOverage,
+        p_po_overage_reason: poOverageReason || undefined,
       });
       if (error) throw error;
       assertRpcResult<{ success: boolean; bill_id: string; old_total_cents: number; new_total_cents: number }>(data, 'update_vendor_bill');
@@ -230,7 +234,11 @@ export default function VendorBillDetail() {
       setEditModalOpen(false);
       fetchBill();
     } catch (err) {
-      if (getIdempotencyBindingRejection(err)) {
+      if (hasRpcCode(err, RpcErrorCodes.PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED)) {
+        setEditOverageMessage(
+          'The exact server total shows this edit would raise active billing above 105% of the purchase order. Enter a reason to confirm the overage.',
+        );
+      } else if (getIdempotencyBindingRejection(err)) {
         editIdem.resetKey();
         toast('warning', 'That retry belongs to a different bill edit. Your current changes were not saved; retry to submit them with a fresh key.');
       } else {
@@ -632,10 +640,26 @@ export default function VendorBillDetail() {
           />
           <div className="flex justify-end gap-3 pt-2">
             <Button variant="ghost" onClick={() => setEditModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleEditBill} loading={editing}>Save Changes</Button>
+            <Button onClick={() => void handleEditBill()} loading={editing}>Save Changes</Button>
           </div>
         </div>
       </Modal>
+
+      <ReasonModal
+        open={editOverageMessage !== null}
+        onClose={() => setEditOverageMessage(null)}
+        onConfirm={(reason) => {
+          setEditOverageMessage(null);
+          void handleEditBill(true, reason);
+        }}
+        title="Confirm PO billing overage"
+        message={editOverageMessage || ''}
+        confirmLabel="Save Changes"
+        variant="warning"
+        loading={editing}
+        placeholder="Why should cumulative billing exceed the PO total?"
+        minLength={5}
+      />
 
       {/* Void Payment Modal (PR-13, 2026-05-10) */}
       <Modal

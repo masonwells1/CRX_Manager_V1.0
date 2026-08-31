@@ -27,6 +27,9 @@ function assertCriticalCycleGuards(candidate: string): void {
   if (!candidate.includes('v_current_item_revision IS DISTINCT FROM p_expected_item_revision')) {
     throw new Error('stale-revision rejection missing');
   }
+  if (!candidate.includes('IDEMPOTENCY_KEY_REQUIRED: complete_cycle_count requires p_idempotency_key')) {
+    throw new Error('completion idempotency requirement missing');
+  }
 }
 
 describe('cycle count completion revision contract', () => {
@@ -68,6 +71,7 @@ describe('cycle count completion revision contract', () => {
   });
 
   it('rejects an authoritative snapshot that changed before completion', () => {
+    expect(code).toContain('IDEMPOTENCY_KEY_REQUIRED: complete_cycle_count requires p_idempotency_key');
     expect(code).toContain('p_expected_item_revision bigint DEFAULT NULL');
     expect(code).toContain('v_current_item_revision IS DISTINCT FROM p_expected_item_revision');
     expect(code).toContain("RAISE EXCEPTION 'CYCLE_COUNT_STALE_REVISION'");
@@ -95,6 +99,10 @@ describe('cycle count completion revision contract', () => {
       code.replace(
         'v_current_item_revision IS DISTINCT FROM p_expected_item_revision',
         'false',
+      ),
+      code.replace(
+        'IDEMPOTENCY_KEY_REQUIRED: complete_cycle_count requires p_idempotency_key',
+        'keyless completion allowed',
       ),
     ]) {
       expect(() => assertCriticalCycleGuards(mutant)).toThrow();

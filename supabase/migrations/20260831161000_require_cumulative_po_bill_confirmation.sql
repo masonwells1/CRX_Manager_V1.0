@@ -66,7 +66,7 @@ BEGIN
         'subtotal_cents', p_subtotal_cents,
         'adjustment_cents', COALESCE(p_adjustment_cents, 0),
         'notes', btrim(COALESCE(p_notes, '')),
-        'confirm_po_overage', p_confirm_po_overage,
+        'confirm_po_overage', COALESCE(p_confirm_po_overage, false),
         'po_overage_reason', v_reason
       )::text, 'UTF8'),
       'sha256'
@@ -106,7 +106,7 @@ BEGIN
 
     v_cumulative_total := v_active_billed_total + v_candidate_total;
     IF v_po_total > 0 AND v_cumulative_total * 100 > v_po_total * 105 THEN
-      IF NOT p_confirm_po_overage THEN
+      IF COALESCE(p_confirm_po_overage, false) IS NOT TRUE THEN
         RAISE EXCEPTION 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED'
           USING ERRCODE = '22023',
                 DETAIL = jsonb_build_object(

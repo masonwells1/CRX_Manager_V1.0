@@ -25,7 +25,7 @@ describe('Section 9 actor-and-intent replay binding', () => {
       name: 'update_vendor_bill',
       signature: 'uuid, bigint, bigint, date, date, text, text',
       impl: '_section9_update_vendor_bill_intent_impl_20260831',
-      fields: ["'bill_id', p_bill_id", "'subtotal_cents', p_subtotal_cents", "'notes', p_notes"],
+      fields: ["'bill_id', p_bill_id", "'subtotal_cents', p_subtotal_cents", "'notes', p_notes", "'confirm_po_overage', COALESCE(p_confirm_po_overage, false)", "'po_overage_reason', v_overage_reason"],
     },
     {
       name: 'record_vendor_payment',
@@ -68,6 +68,24 @@ describe('Section 9 actor-and-intent replay binding', () => {
       expect(migration).toContain(`GRANT EXECUTE ON FUNCTION public.${rpc.name}(`);
     }
     expect(migration).toContain('SET search_path = public, pg_temp');
+    expect(migration).toContain("to_regprocedure('public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text,boolean,text)')");
+    for (const rpc of rpcs) {
+      expect(migration).toContain(`proname = '${rpc.name}') <> 1`);
+    }
+  });
+
+  it('enforces and audits cumulative PO billing on bill edits', () => {
+    expect(migration).toContain('vb.id <> p_bill_id');
+    expect(migration).toContain('v_cumulative_total_cents * 100 > v_po_total_cents * 105');
+    expect(migration).toContain('COALESCE(p_confirm_po_overage, false) IS NOT TRUE');
+    expect(migration).toContain('PO_CUMULATIVE_BILLING_REASON_REQUIRED');
+    expect(migration).toContain("'po_cumulative_billing_overage_confirmed'");
+
+    const page = source('src', 'pages', 'VendorBillDetail.tsx');
+    expect(page).toContain('p_confirm_po_overage: confirmPoOverage');
+    expect(page).toContain('p_po_overage_reason: poOverageReason');
+    expect(page).toContain('RpcErrorCodes.PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED');
+    expect(page).toContain('Confirm PO billing overage');
   });
 
   it('retires a proven-stale client key so the current request can be retried safely', () => {
