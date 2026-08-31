@@ -185,19 +185,23 @@ export default function ReceivingLogPanel() {
     await runCriticalAction({
       action: async () => {
         const ids = selectedRows.map((r) => r.id);
+        const completedScopes: string[] = [];
         // C5 fix: must call reverse_receiving_record() per item to undo inventory changes.
         // Direct .delete() bypasses the inventory rollback and leaves phantom stock.
         for (const id of ids) {
-          const idemKey = reverseRecIdem.getKey();
+          const reason = 'Bulk deleted from receiving log';
+          const intentScope = JSON.stringify({ recordId: id, reason });
+          const idemKey = reverseRecIdem.getKeyFor(intentScope);
           const { data, error } = await supabase.rpc('reverse_receiving_record', {
             p_record_id: id,
-            p_reason: 'Bulk deleted from receiving log',
+            p_reason: reason,
             p_idempotency_key: idemKey,
           });
           if (error) throw new Error(`Failed to reverse record ${id}: ${error.message}`);
           assertRpcResult(data, 'reverse_receiving_record');
-          reverseRecIdem.resetKey();
+          completedScopes.push(intentScope);
         }
+        completedScopes.forEach((scope) => reverseRecIdem.resetKeyFor(scope));
       },
       toast,
       setLoading: setDeleting,

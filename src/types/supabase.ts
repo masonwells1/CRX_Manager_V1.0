@@ -12029,10 +12029,12 @@ export type Database = {
           p_adjustment_cents?: number
           p_bill_date?: string
           p_bill_number?: string
+          p_confirm_po_overage?: boolean
           p_due_date?: string
           p_idempotency_key?: string
           p_notes?: string
           p_payment_terms?: string
+          p_po_overage_reason?: string
           p_purchase_order_id?: string
           p_subtotal_cents?: number
           p_vendor_id: string
@@ -12184,6 +12186,7 @@ export type Database = {
         Returns: {
           bill_count: number
           current_amount: number
+          days_1_30: number
           days_31_60: number
           days_61_90: number
           over_90: number

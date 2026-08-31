@@ -11,6 +11,7 @@ import { ArrowLeft } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import ReasonModal from '../components/ui/ReasonModal';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
@@ -27,6 +28,7 @@ export default function NewVendorBill() {
   const { profile } = useAuth();
   const createBillIdem = useIdempotencyKey('create_vendor_bill', profile?.id || '');
   const [saving, setSaving] = useState(false);
+  const [overageMessage, setOverageMessage] = useState<string | null>(null);
 
   // Lookups
   const [vendors, setVendors] = useState<Vendor[]>([]);
@@ -114,7 +116,7 @@ export default function NewVendorBill() {
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (confirmPoOverage = false, poOverageReason = '') => {
     if (!vendorId) { toast('error', 'Select a vendor'); return; }
     if (!billNumber.trim()) { toast('error', 'Enter a bill number'); return; }
     if (!subtotalDollars || Number(subtotalDollars) <= 0) { toast('error', 'Enter a valid amount'); return; }
@@ -137,6 +139,31 @@ export default function NewVendorBill() {
         return;
       }
 
+      if (purchaseOrderId && !confirmPoOverage) {
+        const selectedPO = purchaseOrders.find((po) => po.id === purchaseOrderId);
+        const { data: activeBills, error: activeBillsError } = await supabase
+          .from('vendor_bills')
+          .select('total_cents')
+          .eq('purchase_order_id', purchaseOrderId)
+          .is('deleted_at', null)
+          .neq('status', 'voided');
+        if (activeBillsError) throw activeBillsError;
+
+        const alreadyBilledCents = (activeBills || []).reduce(
+          (sum, bill) => sum + bill.total_cents,
+          0,
+        );
+        const poTotalCents = selectedPO?.total_cost_cents || 0;
+        const cumulativeCents = alreadyBilledCents + totalCents;
+        if (poTotalCents > 0 && cumulativeCents * 100 > poTotalCents * 105) {
+          setOverageMessage(
+            `This bill would bring active billing to ${fmt(cumulativeCents)} against a ${fmt(poTotalCents)} purchase order. Enter a reason to confirm billing above 105%.`,
+          );
+          setSaving(false);
+          return;
+        }
+      }
+
       const idemKey = createBillIdem.getKey();
       // Compute due_date from bill_date + paymentTermsDays
       const dueDateObj = parseLocalDate(billDate);
@@ -154,6 +181,8 @@ export default function NewVendorBill() {
         p_adjustment_cents: adjustmentCents,
         p_notes: notes || undefined,
         p_idempotency_key: idemKey,
+        p_confirm_po_overage: confirmPoOverage,
+        p_po_overage_reason: poOverageReason || undefined,
       });
 
       if (error) throw error;
@@ -335,10 +364,26 @@ export default function NewVendorBill() {
         <Button variant="ghost" onClick={() => navigate('/accounts-payable/bills')}>
           Cancel
         </Button>
-        <Button onClick={handleSave} loading={saving}>
+        <Button onClick={() => handleSave()} loading={saving}>
           Create Bill
         </Button>
       </div>
+
+      <ReasonModal
+        open={overageMessage !== null}
+        onClose={() => setOverageMessage(null)}
+        onConfirm={(reason) => {
+          setOverageMessage(null);
+          void handleSave(true, reason);
+        }}
+        title="Confirm PO billing overage"
+        message={overageMessage || ''}
+        confirmLabel="Create Bill"
+        variant="warning"
+        loading={saving}
+        placeholder="Why should cumulative billing exceed the PO total?"
+        minLength={5}
+      />
     </div>
   );
 }

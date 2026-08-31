@@ -1,0 +1,117 @@
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const source = (...parts: string[]) =>
+  readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
+
+const migration = source(
+  'supabase',
+  'migrations',
+  '20260831160000_harden_receiving_reversal_and_ap_reporting.sql',
+);
+const cumulativeBillMigration = source(
+  'supabase',
+  'migrations',
+  '20260831161000_require_cumulative_po_bill_confirmation.sql',
+);
+const commissionBalanceMigration = source(
+  'supabase',
+  'migrations',
+  '20260831162000_fail_closed_historical_commission_balance.sql',
+);
+
+describe('Section 9 receiving reversal and AP reporting safety', () => {
+  it('binds each reversal receipt to the authenticated actor and exact target', () => {
+    expect(migration).toContain('check_idempotency_intent(');
+    expect(migration).toContain("'record_id', p_record_id");
+    expect(migration).toContain("'reason', v_reason");
+    expect(migration).toContain('request_fingerprint = v_fingerprint');
+    expect(migration).toContain('request_actor_id = v_actor');
+
+    const panel = source('src', 'components', 'receiving', 'ReceivingLogPanel.tsx');
+    expect(panel).toContain('getKeyFor(intentScope)');
+    expect(panel).toContain('resetKeyFor(scope)');
+    expect(panel).toContain('JSON.stringify({ recordId: id, reason })');
+    expect(panel).not.toContain('const idemKey = reverseRecIdem.getKey();');
+    expect(panel.indexOf('completedScopes.forEach')).toBeGreaterThan(
+      panel.indexOf('for (const id of ids)'),
+    );
+  });
+
+  it('fails the entire reversal when inventory or PO item mutation misses', () => {
+    expect(migration).toContain('GET DIAGNOSTICS v_inventory_rows = ROW_COUNT');
+    expect(migration).toContain('RECEIVING_REVERSAL_INVENTORY_MISMATCH');
+    expect(migration).toContain('GET DIAGNOSTICS v_po_item_rows = ROW_COUNT');
+    expect(migration).toContain('RECEIVING_REVERSAL_PO_ITEM_MISMATCH');
+  });
+
+  it('blocks reversal across closed periods and active vendor bills', () => {
+    expect(migration).toContain('check_period_open(');
+    expect(migration).toContain('RECEIVING_REVERSAL_BLOCKED_BY_VENDOR_BILL');
+    expect(migration).toContain("vb.status <> 'voided'");
+  });
+
+  it('preserves receipt and photo evidence before deleting source rows', () => {
+    const audit = migration.indexOf('INSERT INTO public.financial_audit_log');
+    const deletePhotos = migration.indexOf('DELETE FROM public.receiving_photos');
+    const deleteRecord = migration.indexOf('DELETE FROM public.receiving_records');
+
+    expect(audit).toBeGreaterThan(-1);
+    expect(deletePhotos).toBeGreaterThan(audit);
+    expect(deleteRecord).toBeGreaterThan(deletePhotos);
+    expect(migration).toContain("'receiving_record', to_jsonb(v_rec), 'photos', v_photos");
+    expect(migration).toContain('REVOKE TRUNCATE ON TABLE public.receiving_photos FROM authenticated');
+  });
+
+  it('ages AP from due date with a separate 1-30 bucket and calendar month', () => {
+    expect(migration).toContain('days_1_30 bigint');
+    expect(migration).toContain('(p_as_of_date - vb.due_date) BETWEEN 1 AND 30');
+    expect(migration).toContain('due_date BETWEEN v_today AND v_month_end');
+    expect(migration).toContain('vp.payment_date BETWEEN date_trunc');
+
+    const page = source('src', 'pages', 'AccountsPayable.tsx');
+    expect(page).toContain("key: 'days_1_30'");
+    expect(page).toContain("header: '1-30 Days'");
+  });
+
+  it('requires a logged reason above 105% cumulative PO billing', () => {
+    expect(cumulativeBillMigration).toContain(
+      "vb.deleted_at IS NULL\n      AND vb.status <> 'voided'",
+    );
+    expect(cumulativeBillMigration).toContain(
+      'v_cumulative_total * 100 > v_po_total * 105',
+    );
+    expect(cumulativeBillMigration).toContain(
+      'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED',
+    );
+    expect(cumulativeBillMigration).toContain(
+      'PO_CUMULATIVE_BILLING_REASON_REQUIRED',
+    );
+    expect(cumulativeBillMigration).toContain(
+      "'po_cumulative_billing_overage_confirmed'",
+    );
+
+    const page = source('src', 'pages', 'NewVendorBill.tsx');
+    expect(page).toContain('Confirm PO billing overage');
+    expect(page).toContain('p_confirm_po_overage: confirmPoOverage');
+    expect(page).toContain('p_po_overage_reason: poOverageReason');
+  });
+
+  it('refuses unsupported historical commission balance cutoffs', () => {
+    expect(commissionBalanceMigration).toContain(
+      'HISTORICAL_COMMISSION_BALANCE_UNAVAILABLE',
+    );
+    expect(commissionBalanceMigration).toContain(
+      "transaction_timestamp() AT TIME ZONE 'America/Chicago'",
+    );
+
+    const reports = source('src', 'pages', 'Reports.tsx');
+    expect(reports).toContain(
+      "get_commission_balance_report', { p_as_of_date: todayInBusinessTz() }",
+    );
+    expect(reports).toContain('Commission Balance is current-state only.');
+  });
+});
