@@ -155,8 +155,8 @@ export function resolveMigrationSource({
     ["worktree", "list", "--porcelain"],
     { cwd: projectDir, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] },
   ));
-  const dirs = sessionCheckoutRoots(projectDir, cwd || process.cwd(), listWorktrees)
-    .map((root) => path.resolve(root, MIGRATION_SOURCE_SUBDIR));
+  const roots = sessionCheckoutRoots(projectDir, cwd || process.cwd(), listWorktrees);
+  const dirs = roots.map((root) => path.resolve(root, MIGRATION_SOURCE_SUBDIR));
 
   if (!stem || stem === "." || stem === ".." || !PLAIN_FILENAME_STEM.test(stem)) {
     return { ok: false, code: "bad-name", stem, dirs, searched: [] };
@@ -166,20 +166,44 @@ export function resolveMigrationSource({
   const searched = [];
   let sawName = false;
   let escaped = false;
-  for (const dir of dirs) {
+  for (const root of roots) {
+    const dir = path.resolve(root, MIGRATION_SOURCE_SUBDIR);
     const file = path.join(dir, `${stem}.sql`);
     searched.push(file);
     let st;
     try { st = statSync(file); } catch { continue; }
     if (!st.isFile()) continue;
     sawName = true;
-    // A symlink planted at the permitted path would import content from outside
-    // the permitted directory while looking like it lives inside it. Resolve BOTH
-    // sides — resolving only the file would false-refuse every worktree reached
-    // through a junction, which is how this machine is actually laid out.
+    // ANCHOR THE BOUNDARY AT THE CHECKOUT ROOT, NOT AT THE DIRECTORY.
+    //
+    // The first version resolved the directory AND the file and asked whether the
+    // file sat inside the directory. Codex found the hole (High, exact-SHA review
+    // of 6be98280): make `supabase/migrations` ITSELF a symlink or junction to an
+    // outside directory and both sides resolve outside *together*, so containment
+    // holds and the check passes. The comment that used to sit here defended
+    // resolving both sides as junction-tolerance — and that tolerance was the hole.
+    // It is the DECISION_LOG 2026-08-26 lesson exactly: a closed allowlist is only
+    // as good as its boundaries, and the first question is not what the region
+    // contains but where the trusted chain actually begins.
+    //
+    // It begins at the CHECKOUT ROOT. Resolve that (which is what genuinely absorbs
+    // a junctioned worktree — the layout on this machine), then require the real
+    // migration directory to be exactly <real-root>/supabase/migrations. A
+    // redirected migrations directory now fails, while a junctioned checkout still
+    // passes, because the junction is resolved on the root where it actually is.
+    let realRoot;
     let realDir;
     let realFile;
-    try { realDir = realpathSync(dir); realFile = realpathSync(file); } catch { continue; }
+    try {
+      realRoot = realpathSync(root);
+      realDir = realpathSync(dir);
+      realFile = realpathSync(file);
+    } catch { continue; }
+    const expectedDir = path.resolve(realRoot, MIGRATION_SOURCE_SUBDIR);
+    if (pathKey(realDir) !== pathKey(expectedDir)) { escaped = true; continue; }
+    // The file must also sit directly inside that directory — this still refuses a
+    // per-file symlink pointing out, which is the case the directory check does not
+    // cover.
     if (!withinDir(realDir, realFile)) { escaped = true; continue; }
     let content;
     try { content = readFileSync(realFile, "utf8"); } catch { continue; }

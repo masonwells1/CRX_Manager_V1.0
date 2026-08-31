@@ -672,6 +672,56 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     }
   }
 
+  // REDIRECTED MIGRATIONS DIRECTORY — the hole Codex found (High, exact-SHA review
+  // of 6be98280). The first version resolved the directory AND the file and asked
+  // whether the file was inside the directory; make the DIRECTORY itself a
+  // junction/symlink to somewhere else and both resolve outside together, so
+  // containment holds and parked SQL is admitted. The boundary is now anchored at
+  // the checkout ROOT instead.
+  //
+  // A Windows JUNCTION needs no elevation, unlike a file symlink, so unlike the
+  // case above this one really executes on this machine.
+  {
+    const root = fixture({ migrationFile: null });
+    const outside = mkdtempSync(path.join(os.tmpdir(), "crx-outside-"));
+    roots.push(outside);
+    writeFileSync(path.join(outside, `${MIG}.sql`), SQL, "utf8");
+    mkdirSync(path.join(root, "supabase"), { recursive: true });
+    const dirLink = path.join(root, "supabase", "migrations");
+    let linked = false;
+    try { symlinkSync(outside, dirLink, "junction"); linked = true; } catch { linked = false; }
+    if (linked) {
+      denies(evaluate(root), "MIGRATION SOURCE GUARD",
+        "a migrations DIRECTORY redirected outside the checkout does not satisfy provenance");
+      denies(evaluate(root), "resolves OUTSIDE the permitted directory",
+        "the refusal names the redirection, not a missing file");
+    } else {
+      console.log("  SKIP redirected-directory case — this platform cannot create a junction");
+    }
+  }
+
+  // …and the mirror that keeps the fix honest: a checkout reached THROUGH a
+  // junction must still pass. Anchoring at the root is what absorbs that, and
+  // without this case a rule that simply refused every resolved path would satisfy
+  // the deny above while breaking the layout this machine actually uses.
+  {
+    const real = fixture({ migrationFile: SQL });
+    const viaJunction = path.join(mkdtempSync(path.join(os.tmpdir(), "crx-jctparent-")), "checkout");
+    roots.push(path.dirname(viaJunction));
+    let linked = false;
+    try { symlinkSync(real, viaJunction, "junction"); linked = true; } catch { linked = false; }
+    if (linked) {
+      allows(
+        evaluateMigrationApply({
+          name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
+          projectDir: viaJunction, cwd: viaJunction, gitWorktreeList: noWorktrees,
+        }),
+        "a checkout reached through a junction still satisfies provenance");
+    } else {
+      console.log("  SKIP junctioned-checkout case — this platform cannot create a junction");
+    }
+  }
+
   // A DIRECTORY at the permitted path is not a file. Fails closed rather than
   // throwing out of the read.
   {
