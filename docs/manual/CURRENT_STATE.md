@@ -61,7 +61,10 @@ individually rewritten in this pass.
 **OWNER DECISION 2026-08-31 — DEFERRED, DO NOT APPLY NOW.** Keep the six-file return-credit chain
 unapplied until Mason explicitly reopens its production rollout in a future conversation. A request to
 work on unrelated code, push a branch, or merge another PR is not approval to apply any file in this
-chain. The rejected `20260827223000` ledger-order trigger is not part of this deferred queue.
+chain. The six unchanged SQL sources are parked under `scripts/.staging-migrations/`, outside the active
+Supabase migration directory, so a broad migration push cannot include them accidentally. A future rollout
+must deliberately restore the six files and rerun the then-current safety gates. The rejected
+`20260827223000` ledger-order trigger is not part of this deferred queue.
 
 **PR #361 return-credit candidate — not applied.** The candidate migrations
 `20260827041000_align_recognized_invoice_report_statuses` and

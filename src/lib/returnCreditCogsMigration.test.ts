@@ -3,11 +3,11 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 const migration = readFileSync(
-  'supabase/migrations/20260827041100_rebuild_return_credit_cogs_reversal.sql',
+  'scripts/.staging-migrations/20260827041100_rebuild_return_credit_cogs_reversal.sql',
   'utf8',
 );
 const reportMigration = readFileSync(
-  'supabase/migrations/20260827041000_align_recognized_invoice_report_statuses.sql',
+  'scripts/.staging-migrations/20260827041000_align_recognized_invoice_report_statuses.sql',
   'utf8',
 );
 const allocatedDeliveryMigration = readFileSync(
@@ -15,19 +15,19 @@ const allocatedDeliveryMigration = readFileSync(
   'utf8',
 );
 const deliveryCreditGateMigration = readFileSync(
-  'supabase/migrations/20260827041200_exclude_return_credits_from_delivery_invoice_gate.sql',
+  'scripts/.staging-migrations/20260827041200_exclude_return_credits_from_delivery_invoice_gate.sql',
   'utf8',
 );
 const deliverySurfaceMigration = readFileSync(
-  'supabase/migrations/20260827041300_align_return_credit_delivery_surfaces.sql',
+  'scripts/.staging-migrations/20260827041300_align_return_credit_delivery_surfaces.sql',
   'utf8',
 );
 const orderInvoiceGateMigration = readFileSync(
-  'supabase/migrations/20260827041400_align_return_credit_order_invoice_gates.sql',
+  'scripts/.staging-migrations/20260827041400_align_return_credit_order_invoice_gates.sql',
   'utf8',
 );
 const invoiceLineageMigration = readFileSync(
-  'supabase/migrations/20260827041500_preserve_generated_invoice_lineage_and_finish_cutover.sql',
+  'scripts/.staging-migrations/20260827041500_preserve_generated_invoice_lineage_and_finish_cutover.sql',
   'utf8',
 );
 const migrationHistory = readFileSync('docs/reference/migration-history.md', 'utf8');

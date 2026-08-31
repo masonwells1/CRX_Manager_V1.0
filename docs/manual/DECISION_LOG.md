@@ -9,12 +9,15 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-08-31 — defer the six-file return-credit migration rollout
 
-**Decision:** Keep migrations `20260827041000` through `20260827041500` unapplied for now. They remain
-one ordered production rollout, but Mason is not authorizing or requesting that rollout in this session.
-**Why:** The repair is documented and parked safely; there is no need to take the live database risk today.
-**What this forbids/implies:** Do not apply any file in the chain until Mason explicitly reopens the rollout
-in a future conversation and the repository's then-current migration review, replay, and live verification
-gates pass. The rejected `20260827223000` ledger-order trigger is not part of this deferred queue.
+**Decision:** Keep migrations `20260827041000` through `20260827041500` unapplied for now. Their unchanged
+SQL sources are parked under `scripts/.staging-migrations/`, outside the active Supabase migration directory.
+They remain one ordered production rollout, but Mason is not authorizing or requesting that rollout in this
+session.
+**Why:** The repair is documented and parked without leaving the chain armed for an accidental broad migration
+push; there is no need to take the live database risk today.
+**What this forbids/implies:** Do not restore or apply any file in the chain until Mason explicitly reopens the
+rollout in a future conversation and the repository's then-current migration review, replay, and live
+verification gates pass. The rejected `20260827223000` ledger-order trigger is not part of this deferred queue.
 
 ## 2026-08-31 — retire the production migration approval gate; the worktree guard carve-out stays closed
 
