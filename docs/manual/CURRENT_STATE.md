@@ -1,7 +1,11 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-08-27 11:43:53 UTC for the migration ledger and schema shape.** A durable
-read-only capture records **978 ledger rows**. The matching live-introspection registry records
+**Last verified: 2026-08-31 for the repository's written-but-unapplied migration inventory; the
+live-ledger facts below remain from the 2026-08-27 11:43:53 UTC read.** The current gauntlet repair
+candidate adds five ordered, unapplied migrations (`20260831160000`, `20260831161000`,
+`20260831162000`, `20260831212415`, and `20260831233000`). They must not be described as live until
+the governed apply and postflight complete. The durable 2026-08-27 read-only capture records
+**978 ledger rows**. The matching live-introspection registry records
 `migrations_high_water` **`20260827113443`**, with
 `20260826220000_quote_version_restore_trust_boundary` as the latest applied authored name; the
 current effective ordering name high-water is therefore **`20260826220000`**. The same registry
@@ -32,10 +36,11 @@ draw-down rollout closed. Its full apply record — approval, proofs, postflight
 history row 891 and the `KNOWN_ISSUES.md` entry, both landed by PR #475 from the session that ran
 it. This document states only the ledger fact and defers to those.
 
-**Live schema evidence is newer than this branch's tracked registry.** The live-introspection
-registry generated 2026-08-27 records `migrations_high_water` `20260827113443` and the trust-marker
-column. This branch's `.claude/schema-registry.json` remains at `20260825142708`; its refresh belongs
-to a separate active product-data worktree and is intentionally not copied into this change.
+**The tracked registry is current through the last applied authored migration, not through local
+candidates.** `.claude/schema-registry.json` was generated 2026-08-31 from the live-introspection
+snapshot, records ledger high-water `20260827113443`, and includes authored migration
+`20260826220000_quote_version_restore_trust_boundary`. It deliberately excludes the five gauntlet
+candidates above because they are not applied; regenerate it only after the governed rollout.
 
 **Booking draws are RESUMED** — Mason released the pause in chat on 2026-08-25. The decision, the
 evidence it rests on, and what was explicitly *not* proven are recorded in

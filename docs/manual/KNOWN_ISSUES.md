@@ -1,8 +1,10 @@
 # Known Issues — Consolidated
 
 
-**Last verified: 2026-08-27 11:43:53 UTC for migration-ledger and schema facts only.** A durable
-read-only capture records **978 ledger rows**. The matching live-introspection registry records
+**Last verified: 2026-08-31 for this file's gauntlet candidate status; the live-ledger facts below
+remain from the 2026-08-27 11:43:53 UTC read.** The five gauntlet migrations dated 20260831 are
+written, reviewed candidates and are not claimed live. A durable 2026-08-27 read-only capture
+records **978 ledger rows**. The matching live-introspection registry records
 `migrations_high_water` **`20260827113443`**, latest applied authored name
 `20260826220000_quote_version_restore_trust_boundary`, and effective ordering high-water
 **`20260826220000`**. It also records `quote_versions.restore_trusted_at`. The earlier 976- and
