@@ -134,7 +134,8 @@ as the branch preserving.
 Each has one of **three** dispositions, and the third is easy to miss:
 
 - **Applied live** — the branch may hold the only exact source of SQL running in production.
-  See the recovery rule below before deleting anything.
+  See the byte-identical recovery rule below before deleting anything. It is the right rule for
+  *these* branches, because the file is absent from `main` entirely.
 - **Pending** — a candidate still under review or awaiting its rollout. `main` not having it is
   the normal state, not evidence of abandonment. The repository's own ledger uses this state
   explicitly (`LOCAL CANDIDATE — NOT APPLIED`, `SOURCE ONLY — NOT APPLIED LIVE`), and the
@@ -398,13 +399,17 @@ Tip OIDs are abbreviated here; the two mechanically-safe branches carry their fu
 
 1. **The 4 branches modifying an existing migration.** Hard-rule territory; one is on an open PR.
    Establish rebase artifact / abandoned edit / applied-live from the PR and the ledger, per
-   "What to do with one of these before deleting it" above. If applied live, the recovery rule
-   applies here too — a file of that name existing on `main` is not evidence the branch's bytes
-   are preserved.
+   "What to do with one of these before deleting it" above. If applied live, follow **"A
+   modified migration needs a forward reconciliation, never a re-stamp"** — *not* the
+   byte-identical recovery rule, which is written for absent files and is unsafe here. A file of
+   that name existing on `main` is not evidence the branch's bytes are preserved.
 2. **The 12 branches holding migrations absent from `main`** (2 of which are also in step 1, so
    steps 1 and 2 are 14 branches in total). Establish each migration's disposition —
    **applied live**, **pending**, or **abandoned** — from its PR and the ledger, never from the
-   absence of a live apply. Applied live: the recovery rule above applies before the branch goes.
+   absence of a live apply. Applied live: land the byte-identical SQL before the branch goes —
+   that rule is correct here because the file is absent from `main`. **For the 2 branches that
+   are also in step 1, the file they *modify* takes the forward-reconciliation route instead;
+   only their genuinely absent migrations take this one.**
    Pending: leave it alone. Abandoned: delete once the tip is preserved.
 3. **The 2 mechanically-safe branches.** Confirm and delete.
 4. **Everything else.** Each holds unique blobs that need a judgement on whether the work was

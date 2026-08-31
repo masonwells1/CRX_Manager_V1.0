@@ -40,10 +40,32 @@ Changed to `git ls-remote origin refs/heads/main`, which asks the server. This i
 error that produced the first wrong measurement in this PR: a shallow, unfetched checkout reported
 ~2,500 unmerged commits on branches that had merged.
 
+### The same routing survived in a third place
+
+Codex's review of `cf0b2466` found the "Suggested review order" section still sending an
+applied-live *modified* migration to the generic byte-identical rule, after the two sections above
+had been corrected. A reviewer working from that summary could still have overwritten an applied
+path or re-stamped one-time SQL.
+
+Fixed by routing every mention rather than the one reported. There are four places the report
+decides which rule applies, and they now each name it:
+
+- the modified-migration disposition list — forward reconciliation;
+- the absent-from-`main` disposition list — byte-identical recovery, *and it says why that is the
+  right rule there*;
+- review-order step 1 — forward reconciliation;
+- review-order step 2 — byte-identical recovery, with an explicit note that the 2 branches also in
+  step 1 take the forward route for the file they modify and this route only for their genuinely
+  absent migrations.
+
+Naming the rule at each decision point, instead of writing "the rule above", is what stops the
+next reader inheriting the wrong one.
+
 ### Proof observed
 
 - `supabase/migrations/20260812115238_repair_historical_order_line_cents.sql` exists on `main` and
   contains `APPROVED_SET_DRIFTED` at two guard sites, including the populated-database check and the
   bound-preimage assertion naming 35 rows / 16 orders / 151 lines and the digest.
-- Report regenerated; both sections re-read after generation.
+- Report regenerated, then swept for every occurrence of "recovery rule" and "forward
+  reconciliation": four routing points, each now naming its rule explicitly.
 - `npm run check:docs` passes.
