@@ -2277,6 +2277,7 @@ export type Database = {
           count_number: string
           created_at: string
           id: string
+          item_revision: number
           initiated_by: string
           notes: string | null
           started_at: string
@@ -2289,6 +2290,7 @@ export type Database = {
           count_number: string
           created_at?: string
           id?: string
+          item_revision?: number
           initiated_by?: string
           notes?: string | null
           started_at?: string
@@ -2301,6 +2303,7 @@ export type Database = {
           count_number?: string
           created_at?: string
           id?: string
+          item_revision?: number
           initiated_by?: string
           notes?: string | null
           started_at?: string
@@ -11671,6 +11674,7 @@ export type Database = {
         Args: {
           p_completed_by?: string
           p_cycle_count_id: string
+          p_expected_item_revision?: number
           p_idempotency_key?: string
         }
         Returns: undefined
