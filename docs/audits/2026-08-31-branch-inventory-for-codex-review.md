@@ -277,6 +277,13 @@ OID, the branch moved after the scan and its classification is stale — rerun t
 tree comparison before acting. A cleanup tag preserves whatever commit it points at; it does not
 make an out-of-date classification correct.
 
+**Re-check the PR state too, and separately.** A matching tip OID does **not** mean the PR column
+below is still right: a branch can acquire an open pull request without a single commit being
+pushed to it, so the content check and the PR check can disagree. This report's PR scan stops at
+#528, and #529 — the pull request carrying this very report — is already past it, which is
+the demonstration rather than a hypothetical. Before deleting any branch, run a fresh PR lookup
+for it *in addition to* `git ls-remote`, and leave it alone if it now has an open PR.
+
 ## Every branch
 
 Tip OIDs are abbreviated here; the two mechanically-safe branches carry their full OID above.

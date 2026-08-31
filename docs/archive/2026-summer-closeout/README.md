@@ -81,7 +81,7 @@ Deliberately **kept live** in this sweep, with the reason:
 
 ## Third batch — moved 2026-08-31
 
-18 one-off audit and handoff records from `docs/audits/` and `docs/handoffs/`, dated late
+16 one-off audit and handoff records from `docs/audits/` and `docs/handoffs/`, dated late
 July through August, moved during a full documentation cleanup. Contents were not altered
 — only the paths changed.
 
@@ -107,25 +107,46 @@ by subsequent commits and
 here **because that later disposition was found and cited**, not because its own status
 said so.
 
-Re-auditing all 22 originally-moved records against that stricter test, 10 carried
-open-work markers. Six were incidental — `BLOCKED` inside a verdict vocabulary, a
-"BLOCKED AS EXPECTED" dry-run note, or text already annotated as historical and
-superseded. **Four had genuinely open sections with no citable later closure, and were
-moved back to the live folders:**
+### Full accounting of the 22 records originally moved
 
-- `docs/audits/2026-07-18-codex-to-claude-phase1b-golive-blockers-handoff.md` — a `NOT
-  LIVE` state row, two parks, and an open owner decision ("Mason must name the intended
-  recipient").
-- `docs/audits/2026-07-31-codex-to-claude-factory-publication-review-handoff.md` — a
-  `## Not Started` section; publication is to remain blocked until proof passes.
-- `docs/handoffs/2026-08-05-section2-historical-report-remediation.md` — a `## NOT DONE`
-  section.
-- `docs/handoffs/2026-08-09-codex-migrations-and-merge.md` — `## Two open questions for
-  Mason` and `## Open blockers`.
+This took **two** audit passes, because the first one's pattern set was incomplete — it
+omitted `NOT DONE`, `## Remaining`, `## Activation follow-ups`, and `## Also outstanding`,
+and so missed four records. Codex review caught that. The numbers below are from the
+corrected pass and are reproducible from the marker list at the end of this section.
+
+**16 archived. 6 moved back to the live folders.**
+
+Moved back — the record's open section states an obligation or decision that **still binds**:
+
+| Record, now live at | Why |
+|---|---|
+| `docs/audits/2026-07-18-codex-to-claude-phase1b-golive-blockers-handoff.md` | `NOT LIVE` state row, two parks, and an open owner decision: "Mason must name the intended recipient." |
+| `docs/audits/2026-07-31-codex-to-claude-factory-publication-review-handoff.md` | `## Not Started`; publication stays blocked until proof passes after rebasing. |
+| `docs/audits/2026-07-14-offline-receipt-concurrency-interruption-proof.md` | The queued server contract must not be wired to driver phones until its stated conditions hold — a live activation gate. |
+| `docs/handoffs/2026-08-05-section2-historical-report-remediation.md` | `## NOT DONE`. |
+| `docs/handoffs/2026-08-09-codex-migrations-and-merge.md` | `## Two open questions for Mason` and `## Open blockers` added after an exact-SHA review returned BLOCKED. |
+| `docs/handoffs/2026-07-30-push-guard-round23-codex-closeout.md` | `## Also outstanding` — a standing `--verify-remote` obligation after any `CRX_Backups` push. |
+
+Archived **with the later disposition cited**, which is what the standard requires:
+
+| Archived record | Closure evidence |
+|---|---|
+| `handoffs/2026-08-12-live-sql-guard-maintenance-build-to-review.md` (`## NOT STARTED`) | `docs/changelog.d/2026-08-28-escape-string-scanner-maintenance-complete.md` |
+| `handoffs/2026-08-12-field-mode-reliability-gauntlet.md` (`## NOT DONE BY THIS OVERNIGHT CYCLE`) | `609968d6`, "fix: harden field mode async recovery (#391)", 2026-08-13 — the same commit that added this record. Its `NOT DONE` list scopes one overnight cycle, not the work. |
+| `audits/2026-07-13-agent-pair-review-offline-stage1b-receipts.md` (`## Remaining approval gates`) | The record's own `## Implementation follow-up — 2026-07-14` section, which states Mason approved the implementation pass. |
+
+The remaining archived records carried only **incidental** matches — `BLOCKED` inside a
+verdict vocabulary (`COMPLETE`/`READY FOR APPROVAL`/`BLOCKED`/`PARTIAL`), a "BLOCKED AS
+EXPECTED" note on a dry run that stopped where it should, or text already annotated inline
+as historical and superseded with the closing PRs named.
 
 **The standard for a future batch:** where a record's own text says work is open, archiving
 it requires citing the later evidence that closed it. Absent that citation, it stays in the
-live folder.
+live folder. Scan for at least these markers, as headings and inline: `NOT DONE`,
+`NOT STARTED`, `NOT APPLIED`, `NOT LIVE`, `NEEDS MASON`, `OPEN P<n>`, `Still open`,
+`Open blockers`, `Open questions`, `Remaining`, `Outstanding`, `Follow-ups`, `Awaiting`,
+`Pending`. That list is written down because two passes here used narrower ones and both
+missed records.
 
 Full detail: `docs/changelog.d/2026-08-31-docs-cleanup-and-branch-inventory.md` and the
 companion `2026-08-31-*` entries.
