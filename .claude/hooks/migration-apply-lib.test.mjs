@@ -437,6 +437,39 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   // The derived name still works — the removal must not break the normal path.
   ok(dry.stdout.includes(`migration : ${MIG}`), "the ledger name is derived from the filename");
 
+  // AN OUT-OF-TREE COPY WITH IDENTICAL BYTES IS NOT THE APPROVED FILE.
+  // (CodeRabbit, PR #533.) Content binding already refuses a copy whose content
+  // DIFFERS, so this is hardening rather than a demonstrated bypass — the bytes
+  // that would run were identical either way. It is closed anyway so that
+  // "apply this file" and "apply the reviewed migration" cannot be two different
+  // statements that merely happen to agree.
+  {
+    const okRoot2 = fixture();
+    mkdirSync(path.join(okRoot2, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(okRoot2, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
+    const outside = mkdtempSync(path.join(os.tmpdir(), "crx-copy-"));
+    roots.push(outside);
+    const copy = path.join(outside, `${MIG}.sql`);
+    writeFileSync(copy, SQL, "utf8");
+    const res = spawnSync(process.execPath, [scriptPath, copy, "--confirm"], {
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: okRoot2, SUPABASE_ACCESS_TOKEN: "" },
+    });
+    ok(res.status === 2, `an identical-content copy outside the checkout is refused (got ${res.status})`);
+    ok(res.stderr.includes("it is not that file"),
+      "the refusal says the passed file is not the approved artifact");
+    ok(!res.stdout.includes("Transmitting"), "an out-of-tree copy never transmits");
+    // Load-bearing pair: the repository file itself still applies, so the rule is
+    // about identity and not about refusing everything.
+    const realFile = path.join(okRoot2, "supabase", "migrations", `${MIG}.sql`);
+    const viaRepo = spawnSync(process.execPath, [scriptPath, realFile], {
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: okRoot2, SUPABASE_ACCESS_TOKEN: "" },
+    });
+    ok(viaRepo.status === 0, `the repository file itself still passes (got ${viaRepo.status}: ${viaRepo.stderr})`);
+    ok(viaRepo.stdout.includes("APPLY GATE PASSED"), "the repository file reaches and passes the gate");
+  }
+
   // SOURCE PROVENANCE THROUGH THE FILE-BYTES DOOR. This script takes a PATH, and
   // the canonical-name rule above only constrains what the file is CALLED — so it
   // would read a parked or REJECTED draft out of scripts/.staging-migrations/ as
@@ -741,7 +774,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       "resolveMigrationSource returns the permitted path it matched");
     const missing = resolveMigrationSource({ name: MIG, query: "SELECT 1;", projectDir: root, cwd: root, gitWorktreeList: noWorktrees });
     ok(missing.ok === false && missing.code === "content-differs",
-      "resolveMigrationSource distinguishes a name that exists from one that does not");
+      "resolveMigrationSource reports content-differs when the name exists but the content does not match");
   }
 }
 

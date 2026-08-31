@@ -64,9 +64,15 @@ passed; it is not a second implementation.
   exact-SHA review of `f498c473`. The test is now written, and it *skips* on this machine
   because Windows needs Developer Mode or elevation to create a symlink — it prints
   `SKIP symlink-escape case` rather than passing silently, so a case that cannot run is
-  never counted as one that succeeded. The containment logic it targets
-  (`realpathSync` on both the directory and the file) is implementation-level and
-  unverified by execution here; it will run wherever symlink creation is permitted.
+  never counted as one that succeeded. It will run wherever symlink creation is permitted.
+
+  **Superseded description, corrected 2026-08-31 (CodeRabbit, PR #533):** this paragraph
+  originally described the containment logic as "`realpathSync` on both the directory and the
+  file". That was the *first* implementation, and it was the bypass Codex found in round 2 —
+  a redirected migrations directory made both sides resolve outside together. The shipped rule
+  resolves the **checkout root**, requires the real migrations directory to equal
+  `<real-root>/supabase/migrations`, and then requires the real migration file to sit inside
+  that directory. See `2026-08-31-provenance-anchor-boundary-at-checkout-root.md`.
 
 **What the exact-SHA Codex review caught** (`gpt-5.6-sol`, high effort, head `f498c473`,
 verdict CLEAN, no blockers or high-severity — both findings below are fixed in the follow-up

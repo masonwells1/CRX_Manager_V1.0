@@ -30,9 +30,17 @@ The previous changelog entry asserted a symlink-escape regression test that did 
 Codex checked the claim against the tree and found nothing behind it. The test now exists —
 and it **skips on this machine**, because Windows requires Developer Mode or elevation to
 create a symlink. It prints `SKIP symlink-escape case` rather than passing silently, so a
-case that cannot run is never counted as one that succeeded, and the `realpathSync`
-containment logic it targets is recorded as **unverified by execution here**. It will run
-wherever symlink creation is permitted.
+case that cannot run is never counted as one that succeeded, and the containment logic it
+targets is recorded as **unverified by execution here**. It will run wherever symlink creation
+is permitted.
+
+**Superseded description, corrected 2026-08-31 (CodeRabbit, PR #533):** this entry originally
+called that logic "`realpathSync` on both the directory and the file". That was the *first*
+implementation and it was the bypass Codex found in the next round — a redirected migrations
+directory made both sides resolve outside together. The shipped rule resolves the **checkout
+root**, requires the real migrations directory to equal `<real-root>/supabase/migrations`, and
+then requires the real migration file to sit inside it. See
+`2026-08-31-provenance-anchor-boundary-at-checkout-root.md`.
 
 **Proof observed.**
 

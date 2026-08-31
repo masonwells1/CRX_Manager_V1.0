@@ -48,7 +48,7 @@
 //   the per-migration ask (settled 2026-07-13), and destructive migrations never
 //   apply autonomously at all. That policy is enforced inside the rule book.
 
-import { readFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, rmSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -218,6 +218,37 @@ if (!CANONICAL_MIGRATION_NAME.test(migName) || stampCount !== 1) {
         ? `The permitted path resolves outside the permitted directory (a link pointing elsewhere).\n`
         : `To ship this migration, move it into supabase/migrations/ as a tracked change and take it ` +
           `through review.\n`));
+  }
+
+  // THE FILE YOU PASSED MUST BE THE FILE THAT WAS APPROVED — not merely a file
+  // with the same bytes. (CodeRabbit, PR #533.)
+  //
+  // resolveMigrationSource() answers "does the repository hold this content under
+  // this name", which is content-bound and therefore cannot transmit anything the
+  // repository has not approved: an out-of-tree copy whose content DIFFERS is
+  // already refused. So this is hardening, not a demonstrated bypass — the bytes
+  // that would run were identical either way.
+  //
+  // It is still worth closing. Accepting any path on disk means the operator's
+  // intent ("apply THIS file") and the guarantee ("the repository's file with this
+  // content") are two different statements that happen to coincide, and a rule
+  // whose safety depends on a coincidence is the kind this file keeps having to
+  // re-close. The allowlist story is "one permitted directory"; the argument
+  // should have to be in it.
+  const realPassed = (() => { try { return realpathSync(absFile); } catch { return absFile; } })();
+  const realApproved = (() => { try { return realpathSync(source.file); } catch { return source.file; } })();
+  const samePath = process.platform === "win32"
+    ? realPassed.toLowerCase() === realApproved.toLowerCase()
+    : realPassed === realApproved;
+  if (!samePath) {
+    die(2,
+      `NOT A PERMITTED MIGRATION SOURCE: ${absFile}\n\n` +
+      `Its content matches a migration this repository holds, but it is not that file:\n` +
+      `  you passed : ${realPassed}\n` +
+      `  approved   : ${realApproved}\n\n` +
+      `Apply the repository file itself. A copy with identical bytes is not the approved artifact, ` +
+      `and accepting one would make "apply this file" and "apply the reviewed migration" two different ` +
+      `statements that only happen to agree.\n`);
   }
 }
 
