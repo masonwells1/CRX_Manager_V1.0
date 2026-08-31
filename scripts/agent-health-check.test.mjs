@@ -246,6 +246,26 @@ try {
   } finally {
     rmSync(hooksRepo, { recursive: true, force: true });
   }
+
+  // Regression check against THIS repository's own tracked hooks, not a fixture.
+  // The fixtures above chmod their hooks to 0755, which is exactly what masked the
+  // real condition: .husky/pre-commit and .husky/pre-push were committed 100644
+  // while .husky/commit-msg was 100755, so pointing core.hooksPath at the tracked
+  // directory would have made POSIX skip both silently — the bug this work exists
+  // to remove, reintroduced. Windows cannot observe it; the index mode can, on any
+  // platform, which is why this asserts the mode git records rather than the mode
+  // the filesystem reports.
+  const repoRoot = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
+  const trackedHooks = execFileSync(
+    "git",
+    ["-C", repoRoot, "ls-files", "--stage", ".husky/pre-commit", ".husky/pre-push", ".husky/commit-msg"],
+    { encoding: "utf8" },
+  ).trim();
+  const trackedLines = trackedHooks.split(/\r?\n/).filter(Boolean);
+  assert.equal(trackedLines.length, 3, `expected three tracked hooks, got: ${trackedHooks}`);
+  for (const line of trackedLines) {
+    assert.match(line, /^100755 /, `tracked hook is not executable in the index — git skips it on POSIX: ${line}`);
+  }
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

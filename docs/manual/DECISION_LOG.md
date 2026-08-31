@@ -30,8 +30,18 @@ reported `cannot find a hook named pre-commit` before the change and ran the led
 guards over 2,892 paths after it. Fleet re-scanned: 44 of 44 worktrees resolve to a real
 `pre-commit`. `npm run prepare` verified to repair a deliberately broken value.
 
-**Operative rule.** Never point `core.hooksPath` at a generated or ignored directory, and never set
-it per-worktree. `npm run agent-health` reports `Git hooks installed` and fails when the path is
+**Caught by the gate, not by the author.** The first candidate pointed `core.hooksPath` at `.husky`
+while `.husky/pre-commit` and `.husky/pre-push` were committed `100644` — only `commit-msg` carried
+`100755`. Git silently ignores a non-executable hook on POSIX, so that change would have removed
+every commit and push guard on Linux and macOS: the exact bug it set out to fix, inverted, and
+invisible from Windows where there is no executable bit. `gpt-5.6-sol` found it from the tree
+manifest. Both hooks are now committed `100755`, and `agent-health-check.test.mjs` asserts the mode
+git records for the repository's own hooks — the fixtures chmod theirs, which is precisely what hid
+the real condition.
+
+**Operative rule.** Any file under `.husky/` that git is meant to execute is committed `100755`
+(`git update-index --chmod=+x`), never `100644`. Never point `core.hooksPath` at a generated or
+ignored directory, and never set it per-worktree. `npm run agent-health` reports `Git hooks installed` and fails when the path is
 unset, missing `pre-commit`/`pre-push`, resolving outside the worktree, or — on POSIX — holding a
 hook without the executable bit, which git skips just as silently. That check is the tripwire, not
 this entry. This supersedes the 2026-08-25 incident entry below, which repointed one
