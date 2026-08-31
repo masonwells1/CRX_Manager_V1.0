@@ -66,7 +66,16 @@ ok(checkDangerousCommand("git clean -de*.tmp"), "cluster pruning with attached e
 // grammar, so it keeps the original blocked behaviour. Over-blocking an exotic
 // spelling is the intended cost of a carve-out that cannot open a bypass.
 ok(checkDangerousCommand("git clean -nde*.tmp"), "dry run with attached exclude is outside the allowlist and stays blocked");
-eq(checkDangerousCommand("git clean -e *.tmp"), null, "exclude alone is not destructive");
+// An exclude-only invocation matches the base pattern's behaviour (unchanged
+// here), but it is NOT inherently safe: `git clean` refuses without `-f`/`-n`
+// only because of `clean.requireForce`, so overriding that setting on the
+// command line deletes without ever naming `-f` (CodeRabbit, PR #527, Major).
+eq(checkDangerousCommand("git clean -e *.tmp"), null, "exclude-only invocation keeps the base pattern's allow behaviour");
+ok(checkDangerousCommand("git -c clean.requireForce=false clean -e *.tmp"), "requireForce override makes an exclude-only clean destructive");
+ok(checkDangerousCommand("git -c clean.requireForce=false clean"), "requireForce override makes a bare clean destructive");
+ok(checkDangerousCommand("git -c clean.requireForce = false clean -e *.tmp"), "spaced requireForce override is still detected");
+ok(checkDangerousCommand("git -c CLEAN.REQUIREFORCE=FALSE clean"), "requireForce override is case-insensitive");
+ok(checkDangerousCommand("git -c clean.requireForce=false clean -nd"), "override plus a dry run is outside the allowlist and stays blocked");
 // Git's OWN global options precede the subcommand and some consume the next
 // token, so they must never be read as clean flags. In the first case below the
 // `-n` is the directory argument to `-C`, not a dry run; in the second the `-n`

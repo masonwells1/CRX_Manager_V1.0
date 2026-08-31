@@ -10,7 +10,7 @@ reader to run.
 The original destructive pattern is **kept verbatim** and still decides. The only change is that a
 segment matching a tiny, boring dry-run grammar is exempted from it:
 
-```
+```text
 ^\s*git\s+clean\s+(?:-n[dx]{0,2}|--dry-run(?:\s+-[dx]{1,2})?)\s*$
 ```
 
@@ -23,10 +23,11 @@ metacharacter to hide in.
 
 ### Why this shape, and not a parser
 
-Two successive hand-written option parsers were written first, and the exact-HEAD `gpt-5.6-sol`
-review caught each one opening a real destructive bypass that the flat pattern had blocked. Both were
-regressions introduced by the fix, not pre-existing gaps, and **both were caught before the branch
-was pushed** — the broken states were never published:
+Two successive hand-written option parsers, and then a first allowlist with one free-text slot, were
+written before this shape. The exact-HEAD `gpt-5.6-sol` review caught each of the three opening a
+real destructive bypass that the flat pattern had blocked. All three were regressions introduced by
+the fix, not pre-existing gaps, and **all three were caught before the branch was pushed** — the
+broken states were never published:
 
 1. **`git clean -fde*.tmp`** — git allows the `-e` exclude pattern to be **attached**, so this is
    `-f -d -e '*.tmp'`, a real force-delete. A letters-only token test skipped the token whole and
@@ -34,17 +35,16 @@ was pushed** — the broken states were never published:
 2. **`git -C -n -c clean.requireForce=false clean -dx`** — the `-n` is the **directory argument to
    git's global `-C`**, not a dry-run flag. Scanning every dash token in the segment read it as a dry
    run and permitted a destructive `clean -dx`.
-
-Both stay blocked under the allowlist because neither matches it, and the code never has to
-understand either construction. Each parser attempt also had a green self-written test suite at the
-time it was found broken; the cases were written by the same author who missed the constructions.
-
 3. **The first allowlist still had one free-text slot** — an optional `-C <path>` prefix with
    `<path>` as `[^\s]+`. That was itself a fail-open: `git -C >src/App.tsx clean -nd` matched the
    grammar, and the **shell** truncates `App.tsx` before git ever runs; command substitution in the
    same operand hides arbitrary commands the same way. Sanitising an operand is the same losing game
    as parsing one, so the slot was removed rather than tightened. `git -C <path> clean -nd` is now
    blocked; run the dry run from the directory itself.
+
+All three stay blocked under the allowlist because none of them matches it, and the code never has to
+understand any of the constructions. Each attempt also had a green self-written test suite at the
+time it was found broken; the cases were written by the same author who missed the constructions.
 
 ### Behaviour
 
@@ -60,10 +60,24 @@ Deliberately **still blocked** as fail-closed cost: `-nde*.tmp` (dry run carryin
 as `git clean -nd > out.txt`. Over-blocking an exotic spelling is the intended price of a carve-out
 that cannot open a bypass.
 
+### `clean.requireForce` — an exclude-only invocation is not inherently safe
+
+`git clean` refuses to delete without `-f` or `-n` **because of** `clean.requireForce`, so overriding
+that setting deletes without the command ever naming `-f`:
+`git -c clean.requireForce=false clean -e '*.tmp'`. The destructive pattern now also matches a
+command-line `clean.requireForce=false` (case-insensitive, whitespace-tolerant), so such invocations
+are blocked unless they match the dry-run allowlist — which they cannot, since the grammar admits no
+global-option prefix.
+
+The same setting placed in a user's `.gitconfig` is invisible to a guard reading command text. That
+gap is unchanged from the base pattern and is not closable at this layer. Raised by CodeRabbit on
+PR #527 (Major); an earlier draft of this record and its test wrongly described an exclude-only
+invocation as "not destructive".
+
 ### Verification
 
 `git clean -nd` executes through the live hook stack (it was denied before this change);
-`git clean -fd` is still refused. `bash-safety` suite 411 → 441 assertions, pinning both directions
+`git clean -fd` is still refused. `bash-safety` suite 411 → 450 assertions, pinning both directions
 including every case above.
 
 Note for future guard work: a live refusal of `git clean -fd` also comes from `permissions.deny`, so

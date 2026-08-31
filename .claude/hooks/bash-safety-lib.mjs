@@ -503,7 +503,14 @@ const GIT_CLEAN_REASON = "Blocked `git clean -f`. Permanently deletes untracked 
 //
 // Segmentation matches the sibling git rules above (`[^\r\n;&|]*`), so a dry run
 // never excuses a destructive sibling: `git clean -n && git clean -fd` blocks.
-const GIT_CLEAN_DESTRUCTIVE_RE = /\bgit\b[^\r\n;&|]*\bclean\b[^\r\n;&|]*\s(?:--force\b|-[A-Za-z]*[fdx][A-Za-z]*\b)/;
+// Also treats a command-line `clean.requireForce=false` override as destructive.
+// `git clean` normally refuses without `-f` or `-n`, which is why a bare or
+// exclude-only invocation reads as harmless — but that refusal IS
+// `clean.requireForce`, so `git -c clean.requireForce=false clean -e '*.tmp'`
+// deletes without ever naming `-f` (CodeRabbit, PR #527, Major). Detectable only
+// in its command-line spelling; the same setting in a user's `.gitconfig` cannot
+// be seen from command text, and that gap is unchanged from the base pattern.
+const GIT_CLEAN_DESTRUCTIVE_RE = /\bgit\b[^\r\n;&|]*\bclean\b[^\r\n;&|]*\s(?:--force\b|-[A-Za-z]*[fdx][A-Za-z]*\b)|\bclean\.requireForce\s*=\s*false\b/i;
 // The whole segment must be exactly `git clean` plus one dry-run option group,
 // and NOTHING else. The grammar deliberately contains NO free-text slot.
 //
