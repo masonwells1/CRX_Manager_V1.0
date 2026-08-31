@@ -84,6 +84,23 @@ applied — or was abandoned.
 | `claude/pr401-proof` | 2026-08-25 | **1** | 14 | no PR in scanned window |
 | `claude/pr401-quote-version-trust-8e3db6` | 2026-08-26 | **1** | 18 | no PR in scanned window |
 
+### If a migration here is applied live, recover the SQL before deleting the branch
+
+**A prose entry in `docs/reference/migration-history.md` is necessary but NOT sufficient.** Where a
+branch holds the only exact source of SQL that is running in production, deleting the branch on the
+strength of a ledger note leaves production behaviour absent from the repository — a cleanup tag
+preserves the commit object, but `main` still would not describe the live database.
+
+The established remedy is in this repository already. The recovery note for rows 880–885 of
+`docs/reference/migration-history.md` covers six migrations applied to production on 2026-08-12 by
+sessions that never landed their files. It records that for part of a day `main` did not describe
+production, and that the fix was to publish the exact `apply_migration` payload **byte-identical**
+under `supabase/migrations/` — explicitly *not* reconstructions — with fidelity then proven by
+md5-comparing extracted function bodies against live `pg_proc.prosrc`.
+
+So, per branch in this section: confirm live status, and if it is live, land the byte-identical SQL
+into `supabase/migrations/` **first**. Only then is the branch free to delete.
+
 <details><summary>Migration filenames per branch</summary>
 
 **`codex/pr389-coderabbit-fixes`** — absent from `main`:
@@ -254,9 +271,9 @@ Only these 2 branches hold nothing `main` lacks — every blob they authored is 
 
 1. **The 4 branches modifying an existing migration.** Hard-rule territory; one is on an open PR.
 2. **The 12 branches holding migrations absent from `main`** (2 of which are also in step 1, so
-   steps 1 and 2 are 14 branches in total). Establish whether each is live. If it is,
-   the branch can go once recorded in `docs/reference/migration-history.md`; if not, keep-and-finish
-   or abandon.
+   steps 1 and 2 are 14 branches in total). Establish whether each migration is applied
+   live. If it is **not**, decide keep-and-finish or abandon. If it **is**, the recovery rule below
+   applies — a ledger entry alone does not make the branch safe to delete.
 3. **The 2 mechanically-safe branches.** Confirm and delete.
 4. **Everything else.** Each holds unique blobs that need a judgement on whether the work was
    superseded. Start with branches whose PR closed unmerged.
