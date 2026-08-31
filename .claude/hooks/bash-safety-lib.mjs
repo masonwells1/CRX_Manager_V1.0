@@ -503,14 +503,27 @@ const GIT_CLEAN_REASON = "Blocked `git clean -f`. Permanently deletes untracked 
 //
 // Segmentation matches the sibling git rules above (`[^\r\n;&|]*`), so a dry run
 // never excuses a destructive sibling: `git clean -n && git clean -fd` blocks.
-// Also treats a command-line `clean.requireForce=false` override as destructive.
+// Also treats a command-line `clean.requireForce` override as destructive.
 // `git clean` normally refuses without `-f` or `-n`, which is why a bare or
 // exclude-only invocation reads as harmless — but that refusal IS
 // `clean.requireForce`, so `git -c clean.requireForce=false clean -e '*.tmp'`
-// deletes without ever naming `-f` (CodeRabbit, PR #527, Major). Detectable only
-// in its command-line spelling; the same setting in a user's `.gitconfig` cannot
-// be seen from command text, and that gap is unchanged from the base pattern.
-const GIT_CLEAN_DESTRUCTIVE_RE = /\bgit\b[^\r\n;&|]*\bclean\b[^\r\n;&|]*\s(?:--force\b|-[A-Za-z]*[fdx][A-Za-z]*\b)|\bclean\.requireForce\s*=\s*false\b/i;
+// deletes without ever naming `-f` (CodeRabbit, PR #527, Major).
+//
+// Two corrections from the follow-up review of that fix (CodeRabbit, PR #527):
+//   * Git's false booleans are `false`, `no`, `off`, `0`, AND an empty value —
+//     matching only the literal `false` left `…requireForce=0` walking through.
+//     `=true` and any other value must NOT match, hence the boundary lookahead.
+//   * The override alternative must be anchored to an actual `git … clean`
+//     invocation. Unanchored, it denied read-only commands that merely contain
+//     the text, e.g. `rg -n "clean.requireForce=false" .` — a new false positive
+//     introduced while fixing false positives. The trailing `\bclean\b` is
+//     matched AFTER the value, so `git -c clean.requireForce=false status` (no
+//     clean subcommand) stays allowed.
+//
+// Detectable only in the command-line spelling; the same setting in a user's
+// `.gitconfig` cannot be seen from command text, and that gap is unchanged from
+// the base pattern.
+const GIT_CLEAN_DESTRUCTIVE_RE = /\bgit\b[^\r\n;&|]*\bclean\b[^\r\n;&|]*\s(?:--force\b|-[A-Za-z]*[fdx][A-Za-z]*\b)|\bgit\b[^\r\n;&|]*\bclean\.requireForce\s*=\s*(?:false|no|off|0)?(?=[\s"';&|]|$)[^\r\n;&|]*\bclean\b/i;
 // The whole segment must be exactly `git clean` plus one dry-run option group,
 // and NOTHING else. The grammar deliberately contains NO free-text slot.
 //

@@ -76,6 +76,22 @@ ok(checkDangerousCommand("git -c clean.requireForce=false clean"), "requireForce
 ok(checkDangerousCommand("git -c clean.requireForce = false clean -e *.tmp"), "spaced requireForce override is still detected");
 ok(checkDangerousCommand("git -c CLEAN.REQUIREFORCE=FALSE clean"), "requireForce override is case-insensitive");
 ok(checkDangerousCommand("git -c clean.requireForce=false clean -nd"), "override plus a dry run is outside the allowlist and stays blocked");
+// Git's false booleans are false/no/off/0 AND an empty value — matching only the
+// literal `false` let `=0` through (CodeRabbit, PR #527 follow-up, P1).
+ok(checkDangerousCommand("git -c clean.requireForce=0 clean -e *.tmp"), "requireForce=0 is a false boolean and blocks");
+ok(checkDangerousCommand("git -c clean.requireForce=no clean"), "requireForce=no blocks");
+ok(checkDangerousCommand("git -c clean.requireForce=off clean"), "requireForce=off blocks");
+ok(checkDangerousCommand("git -c clean.requireForce= clean"), "empty requireForce value is falsey and blocks");
+ok(checkDangerousCommand("git -c CLEAN.REQUIREFORCE=OFF clean"), "false booleans are case-insensitive");
+// A truthy value leaves requireForce in effect, so the clean still refuses on its
+// own; it must not be treated as an override.
+eq(checkDangerousCommand("git -c clean.requireForce=true clean -e *.tmp"), null, "requireForce=true is not an override");
+// The override alternative must be anchored to a real `git ... clean`: an earlier
+// draft denied read-only commands that merely contained the text (same review, P2).
+eq(checkDangerousCommand('rg -n "clean.requireForce=false" .'), null, "searching for the config text is not a destructive clean");
+eq(checkDangerousCommand("grep -rn clean.requireForce=false docs"), null, "grepping the config text is not a destructive clean");
+eq(checkDangerousCommand("git config --get clean.requireForce"), null, "reading the config value is not a destructive clean");
+eq(checkDangerousCommand("git -c clean.requireForce=false status"), null, "override without a clean subcommand is not a destructive clean");
 // Git's OWN global options precede the subcommand and some consume the next
 // token, so they must never be read as clean flags. In the first case below the
 // `-n` is the directory argument to `-C`, not a dry run; in the second the `-n`
