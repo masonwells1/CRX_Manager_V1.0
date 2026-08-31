@@ -16,7 +16,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
@@ -639,6 +639,38 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     evaluate(fixture({ migrationFile: SQL.replace(/\n/g, "\r\n") + "DROP TABLE public.customers;\n" })),
     "its content is not the SQL being transmitted",
     "CRLF tolerance does not extend to content that differs by more than line endings");
+
+  // SYMLINK ESCAPE. A link planted at the permitted path would import content
+  // from outside the permitted directory while looking like it lives inside it.
+  // The changelog claimed this case was covered before it was — Codex caught the
+  // overclaim on the exact-SHA review of f498c473, which is exactly the kind of
+  // unearned confidence a guard's evidence must not carry.
+  //
+  // Windows needs Developer Mode or elevation to create a symlink, so a failure
+  // to create one SKIPS rather than silently passing: a case that cannot run must
+  // not be counted as a case that succeeded.
+  {
+    const root = fixture({ migrationFile: null });
+    mkdirSync(path.join(root, "scripts", ".staging-migrations"), { recursive: true });
+    const parked = path.join(root, "scripts", ".staging-migrations", `${MIG}.sql`);
+    writeFileSync(parked, SQL, "utf8");
+    mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
+    const linkPath = path.join(root, "supabase", "migrations", `${MIG}.sql`);
+    let linked = false;
+    try { symlinkSync(parked, linkPath, "file"); linked = true; } catch { linked = false; }
+    if (linked) {
+      denies(evaluate(root), "MIGRATION SOURCE GUARD",
+        "a symlink in the permitted directory pointing at parked SQL does not satisfy provenance");
+      // Load-bearing pair: the SAME bytes as a REAL file in that directory are
+      // allowed, so the refusal above is about the link escaping the directory
+      // and not about the content being rejected for some other reason.
+      rmSync(linkPath);
+      writeFileSync(linkPath, SQL, "utf8");
+      allows(evaluate(root), "the same bytes as a real file in the permitted directory are allowed");
+    } else {
+      console.log("  SKIP symlink-escape case — this platform/account cannot create symlinks");
+    }
+  }
 
   // A DIRECTORY at the permitted path is not a file. Fails closed rather than
   // throwing out of the read.

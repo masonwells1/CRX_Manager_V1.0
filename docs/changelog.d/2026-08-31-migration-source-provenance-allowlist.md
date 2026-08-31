@@ -43,7 +43,7 @@ passed; it is not a second implementation.
 
 **Proof observed.**
 
-- `migration-apply-lib.test.mjs` 163 assertions, `migration-apply-guard.test.mjs` 105,
+- `migration-apply-lib.test.mjs` 163 assertions, `migration-apply-guard.test.mjs` 107,
   `guards.test.mjs` 168, `codex-push-lib.test.mjs`, `production-action-guard.test.mjs`,
   `npm run test:agent-workflows`, `npm run agent-health`, `npm run typecheck` — all green.
 - **Mutation-tested**, per the standing rule that a guard only ever observed passing has
@@ -58,8 +58,30 @@ passed; it is not a second implementation.
   is refused by name. Nothing was transmitted; no migration was applied.
 - Attack cases are seeded from the pinned alias cases in the existing suite, including
   path traversal through the caller-supplied name, five suffix spellings the rule never
-  mentions, a symlink escaping the permitted directory, and a directory sitting where the
-  file should be.
+  mentions, and a directory sitting where the file should be.
+- **The symlink-escape case is present but did NOT run here.** An earlier draft of this
+  entry claimed it as covered before the test existed; Codex caught the overclaim on the
+  exact-SHA review of `f498c473`. The test is now written, and it *skips* on this machine
+  because Windows needs Developer Mode or elevation to create a symlink — it prints
+  `SKIP symlink-escape case` rather than passing silently, so a case that cannot run is
+  never counted as one that succeeded. The containment logic it targets
+  (`realpathSync` on both the directory and the file) is implementation-level and
+  unverified by execution here; it will run wherever symlink creation is permitted.
+
+**What the exact-SHA Codex review caught** (`gpt-5.6-sol`, high effort, head `f498c473`,
+verdict CLEAN, no blockers or high-severity — both findings below are fixed in the follow-up
+commit):
+
+1. **A new gate can make an old test pass for the wrong reason.** The expired- and
+   malformed-autopilot cases sent destructive SQL while the fixture's migration file still
+   held benign SQL, so source provenance refused on content-mismatch *before* the autopilot
+   rule was reached. Both cases stayed green and would have gone on being green through an
+   autopilot regression. This is the general hazard of inserting a check early in a chain:
+   every downstream test that does not supply the new precondition silently stops testing
+   what it names. The fixtures now supply it, and both cases assert the `LAPSED` reason
+   rather than merely asserting a refusal.
+2. **The evidence claim outran the evidence.** This entry asserted a symlink-escape test
+   that did not exist. Corrected above, and the test now exists.
 
 **Not verified / limits.**
 

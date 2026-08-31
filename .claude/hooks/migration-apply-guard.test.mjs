@@ -353,15 +353,27 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 7. EXPIRED arm flag + destructive + proof → STILL DENIED (Codex R2 P1:
     //    a run that outlives its arming window fails CLOSED — the flag file
     //    existing at all means hands-free context until explicitly disarmed).
+    //    The migration FILE must hold the destructive SQL too. Codex caught this
+    //    (2026-08-31, exact-SHA review of f498c473): with the file still holding
+    //    BENIGN_SQL, source provenance refused on content-mismatch BEFORE the
+    //    autopilot rule was ever reached — so both cases below passed for the
+    //    wrong reason and would have stayed green through an autopilot
+    //    regression. The deny reason is now asserted, not just the deny.
     armAutopilot(stateDir, -1);
+    writeMigrationFile(tmp, MIG, DESTRUCTIVE_SQL);
     writeProof(stateDir, DESTRUCTIVE_SQL, { codexVerdict: "clean" });
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
     ok(isDeny(r), "EXPIRED autopilot flag: destructive apply still denied (fail closed)");
+    ok(/LAPSED/i.test(r.stdout),
+      "the EXPIRED-flag deny is the lapsed-authorization rule, not provenance short-circuiting it");
 
     // 7b. MALFORMED flag file → same fail-closed treatment.
     writeFileSync(path.join(stateDir, "AUTOPILOT.on"), "not json at all");
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
     ok(isDeny(r), "malformed autopilot flag: destructive apply denied (fail closed)");
+    ok(/LAPSED/i.test(r.stdout),
+      "the malformed-flag deny is also the lapsed-authorization rule");
+    writeMigrationFile(tmp, MIG, BENIGN_SQL);
 
     // 7b2. STALE flag blocks BENIGN applies too, even with a fully-bound proof
     //      (Codex R3 P1: a lapsed authorization must not keep authorizing).
