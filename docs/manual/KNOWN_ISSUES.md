@@ -249,22 +249,26 @@ job save. The operator changed the acreage, did nothing else wrong, and cannot s
 message is good and names the remedy, but the UI let them reach a state the database will not
 accept.
 
-**The margin exposure is narrow, and this entry took three tries to state it.** The exact scope is
-in the migration; do not re-derive it from prose, including this entry's. The shapes that matter:
+**Does anything slip through? Read the migration, not this entry.** Every line the guard *accepts*
+is one it has judged financially harmless — `customer_supplied`, no cost and no price, no usable
+rate or acreage, and the zero-quantity variants of those. The one shape worth naming, because it is
+the only accepted case where a *number* is understated: a **cost-only line saved while acreage was
+zero** persists quantity 0, keeps that 0 through the driverless reload, and is then exempted — so
+its derived cost stays zero and margin is understated.
 
-| Reloaded line | On save |
-|---|---|
-| **Non-zero** stale quantity, usable rate, acreage > 0 | **Refused**, priced or not. The price exemption at line 760 sits *inside* `IF v_qty = 0 THEN` (line 758), so a non-zero quantity never reaches it. |
-| **Zero** quantity on a cost-only line — saved while acreage was 0, reloaded after acreage rose | **Saved**, and derived cost stays zero. The driverless recompute leaves the 0, the row enters `IF v_qty = 0`, and the zero-price `CONTINUE` exempts it. **This understates margin.** |
+> **Deliberate omission.** Earlier revisions of this entry tried to enumerate the full
+> accept/refuse taxonomy in prose. Four consecutive Codex findings on PR #538 corrected that
+> enumeration in four different directions — a broad cost-only hole, then no hole at all, then a
+> zero-quantity-only rule, then blank-unit exemptions that are not zero-quantity at all. Each
+> correction was right. **The lesson is that this taxonomy does not survive restatement**, so this
+> entry no longer attempts it. The authoritative accept/refuse set is the body of
+> `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql` — its control flow,
+> not its header comments, which are thorough enough to feel authoritative without being exhaustive.
+> Anyone acting on the exact scope must read the function.
 
-The second row is a real residual and the drafting history is worth keeping: this entry first
-claimed a broad cost-only margin hole, then over-corrected to "no residual at all" on the reasoning
-that a stale quantity is non-zero *by definition* — which is false precisely when the job had no
-acreage at save time. Both errors came from restating the guard's control flow in prose instead of
-citing it. Codex caught each in turn on PR #538.
-
-The migration's other deliberately accepted exemptions — `customer_supplied`, a line with neither
-cost nor price, no usable rate or acreage — are recorded in its own header and are not F06.
+None of this changes what F06 *is*. The defect is the lost provenance and the blocked save; the
+exemption boundary matters only to someone auditing what the guard lets past, and that person should
+be reading the guard.
 
 **The fix is UI-side, not a migration.** Reconcile the line on load or on acreage change so the
 operator never reaches the refused state — or, at minimum, surface the refusal early on screen the

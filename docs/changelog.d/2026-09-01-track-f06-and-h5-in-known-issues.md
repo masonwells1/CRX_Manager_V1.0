@@ -40,10 +40,20 @@ reasoning that a stale quantity is non-zero *by definition*. That is false exact
 leaves the 0 after acreage rises, and the zero-price exemption lets it save with zero derived cost.
 That understates margin, and it is the one genuine residual.
 
-The entry now carries a two-row table for the two shapes and, more usefully, tells the reader **not
-to re-derive the scope from prose — including its own**. Every error in this sequence came from
-restating the guard's control flow in English instead of citing it and letting the migration be
-authoritative. That is the durable lesson, not the specific scope.
+A **seventh** finding then corrected the fix to the correction: "zero quantity" is not the dividing
+line either, because the `customer_supplied` and no-cost-no-price exemptions sit under a *blank
+unit* branch (lines 784-787) and accept non-zero rows too.
+
+**So the entry stopped enumerating the taxonomy.** Four consecutive findings corrected the same
+paragraph in four different directions, each correction right. That is evidence the enumeration does
+not survive restatement, not an invitation to a fifth attempt. The entry now names the single
+accepted case where a number is understated — a cost-only line saved at zero acreage — states that
+every other accepted shape is financially harmless by the guard's own design, and directs anyone who
+needs the exact boundary to read the function's control flow rather than any prose summary,
+**including the entry's own**.
+
+The durable lesson is not the scope. It is that a 1,700-line guard's accept/refuse set does not
+belong in a bug entry: cite it, don't paraphrase it.
 
 **This changes the remediation, which is why the correction mattered.** The first draft prescribed a
 migration to persist `driver`. The server-side guard already exists, so the fix is UI-side:
