@@ -16,11 +16,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
-import { evaluateMigrationApply, normalizeMigName, originFetchAgeMs } from "./migration-apply-lib.mjs";
+import { evaluateMigrationApply, normalizeMigName, resolveMigrationSource, originFetchAgeMs } from "./migration-apply-lib.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -64,6 +64,14 @@ function fixture({
   },
   codexProof = null,
   autopilot = null,
+  // The repository migration file the SQL must come from. Every real apply has
+  // one — the source-provenance rule refuses SQL that is not the content of a
+  // file under supabase/migrations/ — so the fixture writes it by default.
+  // A case that means to break provenance passes `migrationFile: null`; a case
+  // that applies DIFFERENT sql passes it here so the deny it asserts is still
+  // its own check firing rather than provenance short-circuiting ahead of it.
+  migrationFile = SQL,
+  migrationName = MIG,
   // Floor for the pending-set scan. The real value from supabase/baselines/manifest.json;
   // pass null to test the missing-manifest refusal.
   baseline = { format_version: 3, migrations_high_water: "20260727174805" },
@@ -72,6 +80,10 @@ function fixture({
   roots.push(root);
   const stateDir = path.join(root, ".claude", "session-state");
   mkdirSync(stateDir, { recursive: true });
+  if (migrationFile !== null) {
+    mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(root, "supabase", "migrations", `${migrationName}.sql`), migrationFile, "utf8");
+  }
   // A string snapshot is written VERBATIM so a case can supply genuinely
   // unparseable content; JSON.stringify would have turned "not json" into the
   // perfectly valid JSON document "\"not json\"" and tested the wrong branch.
@@ -177,8 +189,10 @@ denies(
   "MIGRATION ORDERING GUARD", "out-of-order replay behind the applied high-water");
 // An untimestamped (caller-controlled) name must not buy a skip.
 denies(
-  evaluate(fixture({ proof: { migration: "add_widgets", timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: HASH } }),
-    { name: "add_widgets" }),
+  evaluate(fixture({
+    migrationName: "add_widgets",
+    proof: { migration: "add_widgets", timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: HASH },
+  }), { name: "add_widgets" }),
   "MIGRATION ORDERING GUARD", "untimestamped migration name is refused, not abstained");
 
 // ── CHECK 1b: pending-set preflight (2026-08-26) ────────────────────────────
@@ -224,10 +238,18 @@ denies(
 
   // The override is a DIFFERENT marker from intentional-replay, and the replay
   // marker must not unlock this guard — the two decisions are not the same.
+  // Both marker cases below transmit MODIFIED SQL, so the fixture must hold that
+  // exact text as the repository migration file. Source provenance (PR #533) runs
+  // ahead of the pending-set check and refuses SQL that is not the content of a file
+  // under supabase/migrations/ — so without `migrationFile` these two would be
+  // refused by provenance and would assert nothing about markers at all.
   const replaySql = `${SQL}-- ordering-guard: intentional-replay deliberate replay of an older file\n`;
   denies(
     evaluate(
-      fixture({ proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: createHash("sha256").update(replaySql).digest("hex") } }),
+      fixture({
+        migrationFile: replaySql,
+        proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: createHash("sha256").update(replaySql).digest("hex") },
+      }),
       { query: replaySql, gitTrackedMigrations: withQueue }),
     "MIGRATION PENDING-SET GUARD",
     "the intentional-replay marker does NOT unlock the pending-set guard");
@@ -235,7 +257,10 @@ denies(
   const aheadSql = `${SQL}-- ordering-guard: ahead-of-pending the security fix is parked pending Mason's OK\n`;
   allows(
     evaluate(
-      fixture({ proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: createHash("sha256").update(aheadSql).digest("hex") } }),
+      fixture({
+        migrationFile: aheadSql,
+        proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: createHash("sha256").update(aheadSql).digest("hex") },
+      }),
       { query: aheadSql, gitTrackedMigrations: withQueue }),
     "a stated ahead-of-pending reason unlocks the guard");
 
@@ -244,8 +269,21 @@ denies(
     evaluate(fixture(), { gitTrackedMigrations: () => { throw new Error("fatal: not a git repository"); } }),
     "could not list the migrations tracked on origin/main",
     "an unreadable origin/main refuses, it does not skip the check");
-  denies(evaluate(fixture(), { gitTrackedMigrations: () => "" }),
-    "reached no verdict", "an empty tracked set refuses, it does not pass");
+  // AN EMPTY GIT LISTING NO LONGER YIELDS AN EMPTY TRACKED SET, and that is a real
+  // interaction between two guards that landed the same day rather than a weakened
+  // assertion. The pending check unions git's listing with a scan of the checkout's
+  // own supabase/migrations directory; source provenance (PR #533) refuses any apply
+  // whose migration file is absent from that directory. So for a legitimate apply the
+  // union always contains at least the migration being applied, and a truly empty set
+  // is unreachable through this path.
+  //
+  // The fail-closed property the original case protected is preserved elsewhere and
+  // by construction: a git listing that ERRORS still refuses (see the case above), and
+  // a migration older than the candidate can only be invisible to the union if it
+  // exists in neither git nor the working tree — i.e. not in this checkout at all,
+  // which is the same conclusion the guard would legitimately draw.
+  allows(evaluate(fixture(), { gitTrackedMigrations: () => "" }),
+    "an empty git listing still sees the applied migration's own file, so nothing older is pending");
   denies(evaluate(fixture({ baseline: null })),
     "schema-baseline manifest", "a missing baseline manifest refuses");
   denies(evaluate(fixture({ baseline: { format_version: 3 } })),
@@ -392,6 +430,7 @@ denies(
   evaluate(
     fixture({
       autopilot: armed(),
+      migrationFile: DESTRUCTIVE,
       proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: destructiveHash },
       codexProof: { ...goodCodex, queryHash: destructiveHash },
     }),
@@ -403,6 +442,7 @@ denies(
   evaluate(
     fixture({
       autopilot: armed(),
+      migrationFile: ESCAPED_DESTRUCTIVE,
       proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: escapedDestructiveHash },
       codexProof: { ...goodCodex, queryHash: escapedDestructiveHash },
     }),
@@ -414,6 +454,7 @@ denies(
   evaluate(
     fixture({
       autopilot: armed(),
+      migrationFile: ESCAPED_DOLLAR_QUOTE_DESTRUCTIVE,
       proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: escapedDollarQuoteDestructiveHash },
       codexProof: { ...goodCodex, queryHash: escapedDollarQuoteDestructiveHash },
     }),
@@ -623,6 +664,14 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     // A genuine, fresh, clean proof for the LEGACY migration — nothing forged.
     writeFileSync(path.join(stateDir, `migration-review-${legacy}.json`),
       JSON.stringify({ migration: legacy, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: legacyHash }), "utf8");
+    // The alias file is written to the PERMITTED directory on purpose. That is
+    // literally what the PR #470 attack did — `cp <reviewed>.sql <alias>.sql` — so
+    // source provenance alone does NOT stop it, and these cases must keep proving
+    // that exact proof-name matching is the thing doing the work. Without the file
+    // here, every assertion below would pass for the wrong reason.
+    mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(root, "supabase", "migrations", `${alias}.sql`), legacySql, "utf8");
+    writeFileSync(path.join(root, "supabase", "migrations", `${legacy}.sql`), legacySql, "utf8");
 
     // FIXED (PR: exact proof-name on the MCP path). requireExactProofName now
     // DEFAULTS to true, so the hook — which passes no such flag — refuses the alias.
@@ -679,6 +728,465 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   }
   // The derived name still works — the removal must not break the normal path.
   ok(dry.stdout.includes(`migration : ${MIG}`), "the ledger name is derived from the filename");
+
+  // AN OUT-OF-TREE COPY WITH IDENTICAL BYTES IS NOT THE APPROVED FILE.
+  // (CodeRabbit, PR #533.) Content binding already refuses a copy whose content
+  // DIFFERS, so this is hardening rather than a demonstrated bypass — the bytes
+  // that would run were identical either way. It is closed anyway so that
+  // "apply this file" and "apply the reviewed migration" cannot be two different
+  // statements that merely happen to agree.
+  {
+    const okRoot2 = fixture();
+    mkdirSync(path.join(okRoot2, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(okRoot2, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
+    // The merged gate also runs the pending-set preflight, which needs a real
+    // origin/main and a FETCH_HEAD in the fixture. Without it the mirror assertion
+    // below fails for that reason instead of the identity rule it is testing.
+    makeOriginMain(okRoot2);
+    const outside = mkdtempSync(path.join(os.tmpdir(), "crx-copy-"));
+    roots.push(outside);
+    const copy = path.join(outside, `${MIG}.sql`);
+    writeFileSync(copy, SQL, "utf8");
+    const res = spawnSync(process.execPath, [scriptPath, copy, "--confirm"], {
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: okRoot2, SUPABASE_ACCESS_TOKEN: "" },
+    });
+    ok(res.status === 2, `an identical-content copy outside the checkout is refused (got ${res.status})`);
+    ok(res.stderr.includes("it is not that file"),
+      "the refusal says the passed file is not the approved artifact");
+    ok(!res.stdout.includes("Transmitting"), "an out-of-tree copy never transmits");
+    // Load-bearing pair: the repository file itself still applies, so the rule is
+    // about identity and not about refusing everything.
+    const realFile = path.join(okRoot2, "supabase", "migrations", `${MIG}.sql`);
+    const viaRepo = spawnSync(process.execPath, [scriptPath, realFile], {
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: okRoot2, SUPABASE_ACCESS_TOKEN: "" },
+    });
+    ok(viaRepo.status === 0, `the repository file itself still passes (got ${viaRepo.status}: ${viaRepo.stderr})`);
+    ok(viaRepo.stdout.includes("APPLY GATE PASSED"), "the repository file reaches and passes the gate");
+  }
+
+  // SOURCE PROVENANCE THROUGH THE FILE-BYTES DOOR. This script takes a PATH, and
+  // the canonical-name rule above only constrains what the file is CALLED — so it
+  // would read a parked or REJECTED draft out of scripts/.staging-migrations/ as
+  // long as the filename looked right. The name is canonical and the proof matches
+  // the bytes; only the location is wrong.
+  {
+    const parkedRoot = fixture({ migrationFile: null });
+    const parkedDir = path.join(parkedRoot, "scripts", ".staging-migrations");
+    mkdirSync(parkedDir, { recursive: true });
+    const parkedFile = path.join(parkedDir, `${MIG}.sql`);
+    writeFileSync(parkedFile, SQL, "utf8");
+    const res = spawnSync(process.execPath, [scriptPath, parkedFile, "--confirm"], {
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: parkedRoot, SUPABASE_ACCESS_TOKEN: "" },
+    });
+    ok(res.status === 2, `a parked migration file is refused (got ${res.status})`);
+    ok(res.stderr.includes("NOT A PERMITTED MIGRATION SOURCE"),
+      "the refusal names the source rule, not a proof or ordering problem");
+    ok(!res.stdout.includes("Transmitting"), "a parked migration file never transmits");
+    ok(!res.stdout.includes("APPLY GATE PASSED"), "a parked file does not reach the gate's pass message");
+
+    // The same bytes under the same name, moved into the permitted directory,
+    // apply normally — the rule is about location, and it must not be refusing
+    // everything. This is the honest way to ship a parked migration.
+    mkdirSync(path.join(parkedRoot, "supabase", "migrations"), { recursive: true });
+    const permittedFile = path.join(parkedRoot, "supabase", "migrations", `${MIG}.sql`);
+    writeFileSync(permittedFile, SQL, "utf8");
+    makeOriginMain(parkedRoot); // merged gate also runs the pending-set preflight
+    const moved = spawnSync(process.execPath, [scriptPath, permittedFile], {
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: parkedRoot, SUPABASE_ACCESS_TOKEN: "" },
+    });
+    ok(moved.status === 0, `the same migration under supabase/migrations/ passes (got ${moved.status}: ${moved.stderr})`);
+    ok(moved.stdout.includes("APPLY GATE PASSED"), "the moved migration reaches the gate and passes it");
+  }
+}
+
+// ── SOURCE PROVENANCE ───────────────────────────────────────────────────────
+// The gap CodeRabbit flagged on PR #525: every other check reasons about
+// caller-supplied values, so nothing ever asked whether the SQL is a migration
+// this repository actually holds. Parked/rejected SQL submitted under a
+// canonical-looking name, with proofs minted against that same text, satisfied
+// every binding — because the bindings all agreed with each other and none of
+// them was anchored to disk.
+//
+// Attack cases are seeded from the pinned alias cases above, per the 2026-08-31
+// bash-safety lesson: three hand-written parsers each opened a real bypass before
+// an allowlist held, and each round's suite was green over the next round's hole.
+{
+  const PARKED_SQL = "CREATE OR REPLACE FUNCTION public.enforce_global_ledger_order() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;\n";
+  const parkedHash = createHash("sha256").update(PARKED_SQL).digest("hex");
+  // A perfect, self-consistent proof set for the parked body under a canonical
+  // name. Nothing here is forged or malformed — that is the whole point.
+  const parkedProof = {
+    migration: MIG,
+    timestamp: iso(0),
+    reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
+    findings: "clean",
+    queryHash: parkedHash,
+  };
+
+  // THE HEADLINE CASE. The body is parked; the name is canonical; the proofs are
+  // internally consistent. Before this rule every check passed.
+  denies(
+    evaluate(fixture({ migrationFile: null, proof: parkedProof }), { query: PARKED_SQL }),
+    "MIGRATION SOURCE GUARD",
+    "parked SQL under a canonical name with matching proofs is refused — the pre-existing PR #525 gap");
+  denies(
+    evaluate(fixture({ migrationFile: null, proof: parkedProof }), { query: PARKED_SQL }),
+    "no such file exists in the permitted directory",
+    "the refusal says the SQL is not a migration this repository holds");
+
+  // Same, ARMED and fully proved — a complete hands-free evidence set must not
+  // buy provenance. This is the state an unattended run would actually be in.
+  denies(
+    evaluate(fixture({
+      migrationFile: null,
+      autopilot: armed(),
+      proof: parkedProof,
+      codexProof: { ...goodCodex, queryHash: parkedHash },
+    }), { query: PARKED_SQL }),
+    "MIGRATION SOURCE GUARD",
+    "an armed run with reviewer AND Codex proofs still cannot apply SQL that is not in the repository");
+
+  // NAME/BODY DISAGREEMENT. The file exists under this name, but holds different
+  // SQL — the apply is presenting one migration's identity with another's body.
+  // Content binding would also refuse this; provenance refuses it earlier and says
+  // why, and the two are independent.
+  denies(
+    evaluate(fixture({ proof: parkedProof }), { query: PARKED_SQL }),
+    "its content is not the SQL being transmitted",
+    "a real repository filename cannot lend its identity to a different body");
+
+  // THE PARKED DIRECTORY IS NOT A SOURCE. Written where parked migrations really
+  // live, under its real name, with a matching proof. scripts/.staging-migrations/
+  // is never named by the rule — it fails because it is not the permitted
+  // directory, which is what makes this an allowlist rather than a blocklist.
+  {
+    const parkedName = "20260827223000_enforce_global_migration_ledger_order";
+    const root = fixture({
+      migrationFile: null,
+      proof: { ...parkedProof, migration: parkedName },
+    });
+    mkdirSync(path.join(root, "scripts", ".staging-migrations"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", ".staging-migrations", `${parkedName}.sql`), PARKED_SQL, "utf8");
+    denies(
+      evaluateMigrationApply({
+        name: parkedName, query: PARKED_SQL, projectId: "rhyzpcqhnizqbxphqdkr",
+        projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+      }),
+      "MIGRATION SOURCE GUARD",
+      "a migration parked in scripts/.staging-migrations/ cannot be applied from there");
+
+    // And the suffix spellings a blocklist would have had to enumerate one at a
+    // time. None of these is special-cased anywhere in the rule.
+    for (const suffix of [".REJECTED", ".rejected", ".REJECTED.sql", ".bak", ".sql.REJECTED"]) {
+      writeFileSync(path.join(root, "scripts", ".staging-migrations", `${parkedName}.sql${suffix}`), PARKED_SQL, "utf8");
+      denies(
+        evaluateMigrationApply({
+          name: `${parkedName}.sql${suffix}`, query: PARKED_SQL, projectId: "rhyzpcqhnizqbxphqdkr",
+          projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+        }),
+        "MIGRATION SOURCE GUARD",
+        `a "${suffix}" draft is refused without the rule ever naming that suffix`);
+    }
+  }
+
+  // PATH TRAVERSAL through the caller-supplied name. normalizeMigName() reduces to
+  // a basename, so the traversal cannot survive; asserted directly because the
+  // 2026-08-31 lesson is that path text has unbounded ways to spell one location.
+  {
+    const root = fixture({ migrationFile: null, proof: parkedProof });
+    mkdirSync(path.join(root, "scripts", ".staging-migrations"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", ".staging-migrations", "evil.sql"), PARKED_SQL, "utf8");
+    for (const name of [
+      "../scripts/.staging-migrations/evil",
+      "../../scripts/.staging-migrations/evil",
+      "..\\scripts\\.staging-migrations\\evil",
+      "supabase/migrations/../../scripts/.staging-migrations/evil",
+      "/etc/passwd",
+      "..",
+      ".",
+      "",
+    ]) {
+      denies(
+        evaluateMigrationApply({
+          name, query: PARKED_SQL, projectId: "rhyzpcqhnizqbxphqdkr",
+          projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+        }),
+        "MIGRATION SOURCE GUARD",
+        `a name spelled ${JSON.stringify(name)} cannot reach outside the permitted directory`);
+    }
+  }
+
+  // A SIBLING WORKTREE IS NOT A SOURCE — same scoping the proof lookup uses. A
+  // file sitting in a different concurrent session's checkout is not this
+  // session's reviewed work, and Mason runs dozens of worktrees at once.
+  {
+    const mine = fixture({ migrationFile: null });
+    const sibling = mkdtempSync(path.join(os.tmpdir(), "crx-sibling-"));
+    roots.push(sibling);
+    mkdirSync(path.join(sibling, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(sibling, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
+    denies(
+      evaluateMigrationApply({
+        name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
+        projectDir: mine, cwd: mine,
+        gitWorktreeList: () => `worktree ${mine}\n\nworktree ${sibling}\n`,
+      }),
+      "MIGRATION SOURCE GUARD",
+      "a migration file in a sibling worktree does not satisfy provenance for this session");
+  }
+
+  // THE SESSION'S OWN WORKTREE DOES satisfy it. The mirror of the case above, and
+  // load-bearing: without it a rule that refused every worktree would pass every
+  // deny case here and quietly break the way migrations are actually built.
+  {
+    const primary = fixture({ migrationFile: null });
+    const linked = mkdtempSync(path.join(os.tmpdir(), "crx-linked-"));
+    roots.push(linked);
+    mkdirSync(path.join(linked, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(linked, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
+    // The pending scan reads its floor from the QUEUE root, which for this case is
+    // the linked worktree — not the primary the fixture() helper set up.
+    mkdirSync(path.join(linked, "supabase", "baselines"), { recursive: true });
+    writeFileSync(
+      path.join(linked, "supabase", "baselines", "manifest.json"),
+      JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }), "utf8");
+    allows(
+      evaluateMigrationApply({
+        name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
+        projectDir: primary, cwd: linked,
+        gitWorktreeList: () => `worktree ${primary}\n\nworktree ${linked}\n`,
+        // Same injections evaluate() supplies: these cases are about PROVENANCE, and
+        // without them the merged pending-set preflight refuses first on a fixture
+        // that has no real origin/main — a denial for the wrong reason.
+        gitTrackedMigrations: onlyThisMigration,
+        originFetchAge: () => 0,
+      }),
+      "a migration built in the worktree the session is working in satisfies provenance");
+  }
+
+  // CRLF ON DISK must not refuse a legitimate apply. A worktree checked out before
+  // the .gitattributes eol=lf pin holds CRLF; write-apply-proofs.mjs and
+  // apply-migration-file.mjs both normalize to LF, so the transmitted body is LF.
+  allows(
+    evaluate(fixture({ migrationFile: SQL.replace(/\n/g, "\r\n") })),
+    "a CRLF working copy of the same migration still satisfies provenance");
+
+  // …and normalizing line endings must not become a way to smuggle other changes.
+  denies(
+    evaluate(fixture({ migrationFile: SQL.replace(/\n/g, "\r\n") + "DROP TABLE public.customers;\n" })),
+    "its content is not the SQL being transmitted",
+    "CRLF tolerance does not extend to content that differs by more than line endings");
+
+  // SYMLINK ESCAPE. A link planted at the permitted path would import content
+  // from outside the permitted directory while looking like it lives inside it.
+  // The changelog claimed this case was covered before it was — Codex caught the
+  // overclaim on the exact-SHA review of f498c473, which is exactly the kind of
+  // unearned confidence a guard's evidence must not carry.
+  //
+  // Windows needs Developer Mode or elevation to create a symlink, so a failure
+  // to create one SKIPS rather than silently passing: a case that cannot run must
+  // not be counted as a case that succeeded.
+  {
+    const root = fixture({ migrationFile: null });
+    mkdirSync(path.join(root, "scripts", ".staging-migrations"), { recursive: true });
+    const parked = path.join(root, "scripts", ".staging-migrations", `${MIG}.sql`);
+    writeFileSync(parked, SQL, "utf8");
+    mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
+    const linkPath = path.join(root, "supabase", "migrations", `${MIG}.sql`);
+    let linked = false;
+    try { symlinkSync(parked, linkPath, "file"); linked = true; } catch { linked = false; }
+    if (linked) {
+      denies(evaluate(root), "MIGRATION SOURCE GUARD",
+        "a symlink in the permitted directory pointing at parked SQL does not satisfy provenance");
+      // Load-bearing pair: the SAME bytes as a REAL file in that directory are
+      // allowed, so the refusal above is about the link escaping the directory
+      // and not about the content being rejected for some other reason.
+      rmSync(linkPath);
+      writeFileSync(linkPath, SQL, "utf8");
+      allows(evaluate(root), "the same bytes as a real file in the permitted directory are allowed");
+    } else {
+      console.log("  SKIP symlink-escape case — this platform/account cannot create symlinks");
+    }
+  }
+
+  // REDIRECTED MIGRATIONS DIRECTORY — the hole Codex found (High, exact-SHA review
+  // of 6be98280). The first version resolved the directory AND the file and asked
+  // whether the file was inside the directory; make the DIRECTORY itself a
+  // junction/symlink to somewhere else and both resolve outside together, so
+  // containment holds and parked SQL is admitted. The boundary is now anchored at
+  // the checkout ROOT instead.
+  //
+  // A Windows JUNCTION needs no elevation, unlike a file symlink, so unlike the
+  // case above this one really executes on this machine.
+  {
+    const root = fixture({ migrationFile: null });
+    const outside = mkdtempSync(path.join(os.tmpdir(), "crx-outside-"));
+    roots.push(outside);
+    writeFileSync(path.join(outside, `${MIG}.sql`), SQL, "utf8");
+    mkdirSync(path.join(root, "supabase"), { recursive: true });
+    const dirLink = path.join(root, "supabase", "migrations");
+    let linked = false;
+    try { symlinkSync(outside, dirLink, "junction"); linked = true; } catch { linked = false; }
+    if (linked) {
+      denies(evaluate(root), "MIGRATION SOURCE GUARD",
+        "a migrations DIRECTORY redirected outside the checkout does not satisfy provenance");
+      denies(evaluate(root), "resolves OUTSIDE the permitted directory",
+        "the refusal names the redirection, not a missing file");
+    } else {
+      console.log("  SKIP redirected-directory case — this platform cannot create a junction");
+    }
+  }
+
+  // THE VALIDATED LIST IS THE AUTHORIZED SET. resolveMigrationSource() must return
+  // every file that passed root-anchor + direct-child + content, and NOTHING else —
+  // callers must never re-derive candidates from `dirs`.
+  //
+  // Codex and CodeRabbit each found one direction of this on the same line: too
+  // STRICT (the primary's copy shadowed the worktree's own valid file) and too LOOSE
+  // (a re-derived candidate list admitted a root the resolver rejects as
+  // escapes-dir). Both cases are asserted here, because fixing either direction
+  // alone silently reopens the other.
+  {
+    // Two permitted checkouts, same migration name. The first holds the real file;
+    // the second holds a link to an OUTSIDE file with identical bytes — the resolver
+    // must return only the first.
+    const primary = fixture({ migrationFile: SQL });
+    const second = fixture({ migrationFile: null });
+    mkdirSync(path.join(second, "supabase", "migrations"), { recursive: true });
+    const outside = mkdtempSync(path.join(os.tmpdir(), "crx-ext-"));
+    roots.push(outside);
+    const external = path.join(outside, `${MIG}.sql`);
+    writeFileSync(external, SQL, "utf8"); // IDENTICAL content — content binding cannot catch this
+    const escapePath = path.join(second, "supabase", "migrations", `${MIG}.sql`);
+    let linked = false;
+    try { symlinkSync(external, escapePath, "file"); linked = true; } catch { linked = false; }
+
+    const bothRoots = () => `worktree ${primary}\n\nworktree ${second}\n`;
+    const res = resolveMigrationSource({
+      name: MIG, query: SQL, projectDir: primary, cwd: second, gitWorktreeList: bothRoots,
+    });
+    ok(res.ok === true, "the real file in a permitted checkout still resolves");
+    ok(Array.isArray(res.files), "resolveMigrationSource returns a validated file list");
+    ok(res.files.every((f) => f !== escapePath),
+      "the validated list never contains a path the resolver itself rejects as escapes-dir");
+    if (linked) {
+      ok(res.files.length === 1,
+        `only the validated file is authorized (got ${res.files.length}: ${res.files.join(", ")})`);
+    } else {
+      console.log("  SKIP escape-link half of the validated-list case — cannot create a file symlink here");
+    }
+  }
+
+  // The same invariant WITHOUT needing a symlink, so it actually runs on Windows:
+  // a candidate that EXISTS at the permitted path but fails validation (here, on
+  // content) must not appear in the authorized set. A caller that re-derived
+  // candidates from `dirs` would authorize it; one that uses the validated list
+  // cannot. This is the platform-independent guard on the loose direction, since the
+  // escape-link half above skips without elevation.
+  {
+    const primary = fixture({ migrationFile: SQL });
+    const second = fixture({ migrationFile: null });
+    mkdirSync(path.join(second, "supabase", "migrations"), { recursive: true });
+    const decoy = path.join(second, "supabase", "migrations", `${MIG}.sql`);
+    writeFileSync(decoy, "SELECT 'not the reviewed migration';\n", "utf8");
+    const bothRoots = () => `worktree ${primary}\n\nworktree ${second}\n`;
+    const res = resolveMigrationSource({
+      name: MIG, query: SQL, projectDir: primary, cwd: second, gitWorktreeList: bothRoots,
+    });
+    ok(res.ok === true, "the validated file still resolves when a decoy shares its name elsewhere");
+    ok(res.files.length === 1 && res.files[0] !== decoy,
+      `a same-named file that fails content validation is NOT authorized (got ${res.files.join(", ") || "none"})`);
+  }
+
+  // …and both permitted copies ARE authorized when both genuinely validate. This is
+  // the too-strict direction Codex found: the primary's copy must not shadow the
+  // session worktree's own identical file.
+  {
+    const primary = fixture({ migrationFile: SQL });
+    const second = fixture({ migrationFile: SQL });
+    const bothRoots = () => `worktree ${primary}\n\nworktree ${second}\n`;
+    const res = resolveMigrationSource({
+      name: MIG, query: SQL, projectDir: primary, cwd: second, gitWorktreeList: bothRoots,
+    });
+    ok(res.files.length === 2,
+      `both validated copies are authorized, so neither checkout shadows the other (got ${res.files.length})`);
+  }
+
+  // …and the mirror that keeps the fix honest: a checkout reached THROUGH a
+  // junction must still pass. Anchoring at the root is what absorbs that, and
+  // without this case a rule that simply refused every resolved path would satisfy
+  // the deny above while breaking the layout this machine actually uses.
+  {
+    const real = fixture({ migrationFile: SQL });
+    const viaJunction = path.join(mkdtempSync(path.join(os.tmpdir(), "crx-jctparent-")), "checkout");
+    roots.push(path.dirname(viaJunction));
+    let linked = false;
+    try { symlinkSync(real, viaJunction, "junction"); linked = true; } catch { linked = false; }
+    if (linked) {
+      allows(
+        evaluateMigrationApply({
+          name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
+          projectDir: viaJunction, cwd: viaJunction, gitWorktreeList: noWorktrees,
+          gitTrackedMigrations: onlyThisMigration,
+          originFetchAge: () => 0,
+        }),
+        "a checkout reached through a junction still satisfies provenance");
+    } else {
+      console.log("  SKIP junctioned-checkout case — this platform cannot create a junction");
+    }
+  }
+
+  // A DESCENDANT of the permitted directory is not "directly inside" it. Codex
+  // (minor, review of a8efe218) found the containment check admitted a symlink whose
+  // target sat in a SUBDIRECTORY while the comment claimed direct containment. Not a
+  // bypass — the target stayed in the allowlisted tree and content binding held — but
+  // the check now matches its own sentence. Uses a junction, so it runs on Windows.
+  {
+    const root = fixture({ migrationFile: null });
+    mkdirSync(path.join(root, "supabase", "migrations", "nested"), { recursive: true });
+    const nestedDir = path.join(root, "supabase", "migrations", "nested");
+    writeFileSync(path.join(nestedDir, `${MIG}.sql`), SQL, "utf8");
+    const linkPath = path.join(root, "supabase", "migrations", `${MIG}.sql`);
+    let linked = false;
+    try { symlinkSync(nestedDir, path.join(root, "supabase", "migrations", "lnk"), "junction"); linked = true; } catch { linked = false; }
+    if (linked) {
+      // Reach the nested file through the junction, so the resolved target is a
+      // descendant of the permitted directory rather than a direct child.
+      try { symlinkSync(path.join(root, "supabase", "migrations", "lnk", `${MIG}.sql`), linkPath, "file"); } catch { linked = false; }
+    }
+    if (linked && existsSync(linkPath)) {
+      denies(evaluate(root), "MIGRATION SOURCE GUARD",
+        "a link resolving to a DESCENDANT of the permitted directory is not 'directly inside' it");
+    } else {
+      console.log("  SKIP descendant-target case — this platform/account cannot create the link");
+    }
+  }
+
+  // A DIRECTORY at the permitted path is not a file. Fails closed rather than
+  // throwing out of the read.
+  {
+    const root = fixture({ migrationFile: null });
+    mkdirSync(path.join(root, "supabase", "migrations", `${MIG}.sql`), { recursive: true });
+    denies(evaluate(root), "MIGRATION SOURCE GUARD",
+      "a directory sitting at the permitted path does not satisfy provenance");
+  }
+
+  // The resolver is exported and used by BOTH doors; assert its verdicts directly
+  // so a future refactor cannot quietly change what the script and the hook share.
+  {
+    const root = fixture();
+    const found = resolveMigrationSource({ name: MIG, query: SQL, projectDir: root, cwd: root, gitWorktreeList: noWorktrees });
+    ok(found.ok === true, "resolveMigrationSource finds the repository migration");
+    ok(found.file === path.join(root, "supabase", "migrations", `${MIG}.sql`),
+      "resolveMigrationSource returns the permitted path it matched");
+    const missing = resolveMigrationSource({ name: MIG, query: "SELECT 1;", projectDir: root, cwd: root, gitWorktreeList: noWorktrees });
+    ok(missing.ok === false && missing.code === "content-differs",
+      "resolveMigrationSource reports content-differs when the name exists but the content does not match");
+  }
 }
 
 // ── WRAPPABILITY: the precondition the atomicity promise depends on ─────────
