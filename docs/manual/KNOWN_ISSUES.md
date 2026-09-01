@@ -247,29 +247,32 @@ real acreage change opens. **A stale priced quantity cannot reach an invoice thr
 **So the usual harm is a blocked save — but not the only one.** Refusing one line rolls back the
 *entire* job save. The operator changed the acreage, did nothing else wrong, and cannot save. The
 server message is good and names the remedy, but the UI let them reach a state the database will not
-accept. **One shape does not get refused and does misstate a number** — see the next paragraph.
+accept. **Unpriced cost-bearing lines can instead be saved with a stale number** — see below.
 
-**Does anything slip through? Read the migration, not this entry.** Every line the guard *accepts*
-is one it has judged financially harmless — `customer_supplied`, no cost and no price, no usable
-rate or acreage, and the zero-quantity variants of those. The one shape worth naming, because it is
-the only accepted case where a *number* is understated: a **cost-only line saved while acreage was
-zero** persists quantity 0, keeps that 0 through the driverless reload, and is then exempted — so
-its derived cost stays zero and margin is understated.
+**Some lines the guard accepts can still carry a stale number, and this entry does not enumerate
+them.** The money refusals key on PRICE, so an **unpriced, cost-bearing** line has several accepted
+paths — the migration's own comments call these accepted residuals and note that such a line's
+"cost can still misstate margin". A stale reloaded quantity on such a line can therefore be saved,
+understating margin rather than being refused. Billing is not affected: nothing unpriced can
+over-charge.
 
-> **Deliberate omission.** Earlier revisions of this entry tried to enumerate the full
-> accept/refuse taxonomy in prose. Four consecutive Codex findings on PR #538 corrected that
-> enumeration in four different directions — a broad cost-only hole, then no hole at all, then a
-> zero-quantity-only rule, then blank-unit exemptions that are not zero-quantity at all. Each
-> correction was right. **The lesson is that this taxonomy does not survive restatement**, so this
-> entry no longer attempts it. The authoritative accept/refuse set is the body of
-> `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql` — its control flow,
-> not its header comments, which are thorough enough to feel authoritative without being exhaustive.
-> Anyone acting on the exact scope must read the function.
+> **Deliberate omission — read the function, not this paragraph.** Earlier revisions tried to
+> enumerate the exact accept/refuse partition. **Five consecutive Codex findings on PR #538
+> corrected that enumeration in five different directions**, each correction right: a broad
+> cost-only hole → no hole at all → zero-quantity only → blank-unit exemptions that are not
+> zero-quantity → an unverifiable-quantity branch that is not either. Five right corrections to one
+> paragraph is proof the partition does not survive restatement, so this entry stops asserting it
+> and makes no claim about which accepted shapes are harmless.
+>
+> The authoritative set is the **control flow** of
+> `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql` — not its header
+> comments, which are thorough enough to feel authoritative without being exhaustive, and not this
+> entry. Anyone auditing what the guard lets past must read the function.
 
-None of this changes what F06 *is*. The defect is the lost provenance; its usual symptom is the
-blocked save, and its one financial symptom is the zero-acreage cost-only case above. The rest of
-the exemption boundary matters only to someone auditing what the guard lets past, and that person
-should be reading the guard.
+None of this changes what F06 *is*. The defect is the lost provenance; its common symptom is the
+blocked save, and on unpriced cost-bearing lines it can instead be saved with a stale number that
+understates margin. The exemption boundary matters only to someone auditing what the guard lets
+past, and that person should be reading the guard.
 
 **The fix is UI-side, not a migration.** Reconcile the line on load or on acreage change so the
 operator never reaches the refused state — or, at minimum, surface the refusal early on screen the
