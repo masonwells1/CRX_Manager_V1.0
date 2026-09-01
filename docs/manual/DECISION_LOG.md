@@ -43,10 +43,12 @@ compensating controls, and conflating them would overstate the defence:
    hook only. Because such a routine carries no binding check at all, its source contains no `ACTOR_MISMATCH`
    token, so the post-apply sweep predicates do still consider it — and they fire when the actor parameter is
    COALESCEd, compared against `auth.uid()`, mentioned near role text, or written into `financial_audit_log`
-   within the same statement. For a bypass of that shape, exploiting it also requires clearing the Codex
-   proof, the CodeRabbit review, **and** the sweep; the guard was the fourth line of defence, and capping it
-   does not remove the first three. State the limit with it: the predicates key on those specific sinks, so a
-   lexical bypass that routes the parameter to some other write target is outside them too.
+   within the same statement. The controls that ALWAYS apply here are the Codex proof and the CodeRabbit
+   review; the sweep is a **partial, conditional** third — it fires only on those specific sinks, so a
+   lexical bypass that routes the parameter to any other write target clears it without trying. Capping the
+   hook does not remove the Codex proof or the CodeRabbit review, but do not state the residual as
+   "an attacker must clear all three" — that is true only for the subset of shapes the predicates' sinks
+   happen to cover, and asserting it flatly is the same overclaim this entry exists to remove.
 2. **Re-binding and laundering bypasses** — `p_performed_by := p_target_id;` after a passing check,
    `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips. **The post-apply sweeps do NOT
    cover these, and it is not a near miss.** Both predicates select only rows where

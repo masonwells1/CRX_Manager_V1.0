@@ -285,13 +285,19 @@ three careful passes.
 **What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
 
 - **For the incremental-Edit, novel-lexical and non-`Write`/`Edit` tool-path gaps** (rows 3, 5 and 6
-  above): the post-apply sweep predicates against the live catalog, the exact-SHA `gpt-5.6-sol` proof on
-  migration diffs, and the CodeRabbit final review. The sweeps read the live catalog, so they are
-  indifferent to which tool wrote the file — row 6 evades the hook, not them. Such a routine has no binding check, so it carries no `ACTOR_MISMATCH` token and
-  the predicates do consider it — exploiting one means writing deliberately obfuscated SQL into a migration
-  and clearing all three. The limit worth stating: the predicates fire on their own sinks (COALESCE/`auth.uid()`/role
-  proximity, or a same-statement `financial_audit_log` write), so a bypass routing the parameter to some
-  other write target is outside them as well.
+  above): the exact-SHA `gpt-5.6-sol` proof on migration diffs and the CodeRabbit final review are the
+  controls that always apply. The post-apply sweep predicates are a **partial, conditional** control here,
+  not a third guaranteed one, and the condition must be stated rather than implied. They consider such a
+  routine at all only because it carries no `ACTOR_MISMATCH` token — but they then fire only on their own
+  sinks: the actor parameter near COALESCE/`auth.uid()`/role text, or a `financial_audit_log` write in the
+  same statement. **A bypass that writes the forgeable actor to any other target, with none of those cues,
+  clears both predicates without trying.** Do not describe any row here as requiring an attacker to clear
+  all three controls.
+
+  Two of these three rows need no cleverness at all, which is the point of the cap: an ordinary incremental
+  `Edit` (row 3) and an ordinary shell-written migration (row 6) each bypass the *hook* with completely
+  unremarkable SQL. "Deliberately obfuscated SQL" describes the novel-lexical row only, and even there it
+  describes what defeats the hook, not what defeats the sweeps.
 - **For cross-routine / cross-migration helpers** (row 4): **only the Codex proof and the CodeRabbit
   review.** Neither predicate can see this path. `actor-forgery.sql` needs actor/`auth.uid`/role proximity
   inside the *wrapper's own* `prosrc`, and `-fin-audit.sql` needs both the parameter and the
