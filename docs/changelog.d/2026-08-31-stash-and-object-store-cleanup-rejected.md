@@ -22,12 +22,12 @@ Three claims that made the cleanup look worthwhile, each disproved:
   so resolve the object ID and re-check it immediately before any drop) holds at most ~1.18 GB of
   walkthrough video. **Corrected 2026-09-01** (see
   `docs/changelog.d/2026-09-01-stash-reachability-correction.md`): this entry originally said
-  those blobs were reachable from a branch/tag/remote and so could not be reclaimed. That was
-  wrong — the check used `git rev-list --all`, which reaches `refs/stash`. Measured with
-  `--branches --tags --remotes`, the four blobs are not reachable from any branch, tag, or
-  remote. **No reclaim figure is claimed:** that set is not root-complete either (it omits
-  reflogs, other worktrees' `HEAD`s, the index, and namespaces like `refs/archive/*`), and
-  only four of the stash's 329 files were examined. How much dropping this entry would free,
+  those blobs were reachable from a branch/tag/remote and so could not be reclaimed. **That
+  claim is withdrawn, and no replacement figure is offered** — three drafts each asserted a
+  different confident answer and all were wrong. Neither `rev-list` set used is a complete
+  list of GC roots (both omit reflogs, other worktrees' `HEAD`s, and the index), and a stash
+  entry is not a ref: `refs/stash` names only the current tip, while `stash@{26}` lives in
+  that ref's reflog. Only four of the stash's 329 files were examined. How much dropping this entry would free,
   if anything, remains unestablished.
 
 Rejected because `git stash drop` is positional and a concurrent session can shift indices
