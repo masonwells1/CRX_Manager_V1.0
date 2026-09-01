@@ -58,16 +58,34 @@ parked, written-but-not-applied, or awaiting approval is **superseded by the led
 it applied live on 2026-08-25. Those older lines are left in place as provenance and were not
 individually rewritten in this pass.
 
-**OWNER DECISION 2026-08-31 — DEFERRED, DO NOT APPLY NOW.** Keep the six-file return-credit chain
-`20260827041000` through `20260827041500` unapplied until Mason explicitly reopens its production
-rollout in a future conversation. The source files remain unchanged under `supabase/migrations/`;
-their presence in the repository is not authorization to apply them. A future rollout must rerun
-the then-current safety gates. If a newer migration has overtaken these timestamps, restamp all six
-above the current high-water, update every pinned chain reference/hash, and re-review the restamped
-artifacts before pushing/applying them in order. The rejected `20260827223000` ledger-order trigger
-is not part of this deferred queue.
+**SUPERSEDED 2026-09-01 — the chain is APPLIED. Kept for provenance only; do not act on it.** The
+2026-08-31 deferral below was reopened by Mason in-chat on 2026-09-01 and all six migrations were
+applied live in order. See the next paragraph for the current state.
 
-**PR #361 return-credit candidate — not applied.** The candidate migrations
+> **OWNER DECISION 2026-08-31 — DEFERRED, DO NOT APPLY NOW.** Keep the six-file return-credit chain
+> `20260827041000` through `20260827041500` unapplied until Mason explicitly reopens its production
+> rollout in a future conversation. The source files remain unchanged under `supabase/migrations/`;
+> their presence in the repository is not authorization to apply them. A future rollout must rerun
+> the then-current safety gates. If a newer migration has overtaken these timestamps, restamp all six
+> above the current high-water, update every pinned chain reference/hash, and re-review the restamped
+> artifacts before pushing/applying them in order. The rejected `20260827223000` ledger-order trigger
+> is not part of this deferred queue.
+
+**PR #361 return-credit chain — APPLIED LIVE 2026-09-01.** All six migrations
+(`20260827041000` through `20260827041500`) are in the live ledger on `rhyzpcqhnizqbxphqdkr`,
+applied in order with Mason's in-chat approval. Each passed a full migration-apply-guard proof (both
+reviewer charters CLEAN from `gpt-5.6-sol`/high) and was verified afterwards by read-only live query,
+not by the apply exit code. The `aa_crx_block_return_credit_during_cogs_cutover` barrier installed by
+the first migration was removed by the last (verified: trigger `0`, function `0`), so return-credit
+issuance is open again. `20260826220000_quote_version_restore_trust_boundary` was already applied
+(ledger `version` `20260827113443`) before the chain, so nothing was wedged. Live ledger: 986 rows,
+`max(version)` `20260901184530`. Per-migration versions and the B7 reconciliation (no rename needed —
+every live `name` matches its authored basename) are in `docs/reference/migration-history.md`.
+The rejected `20260827223000` ledger-order trigger was never part of this chain and remains unapplied.
+Production still has zero credited returns and zero credit memos, so the previously latent defect was
+repaired before it could produce a wrong number.
+
+**Superseded pre-apply description, kept for provenance.** The candidate migrations
 `20260827041000_align_recognized_invoice_report_statuses` and
 `20260827041100_rebuild_return_credit_cogs_reversal`, plus the follow-up
 `20260827041200_exclude_return_credits_from_delivery_invoice_gate` and the delivery-surface alignment

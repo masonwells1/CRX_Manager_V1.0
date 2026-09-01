@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-08-31",
+    "generated_at": "2026-09-01",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260827113443",
+    "migrations_high_water": "20260901183717",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -360,6 +360,13 @@
       "20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals",
       "20260826150000_fix_save_job_comment_refusal_count",
       "20260826220000_quote_version_restore_trust_boundary",
+      "20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard",
+      "20260826222000_correct_ap_aging_due_date_buckets",
+      "20260827041000_align_recognized_invoice_report_statuses",
+      "20260827041100_rebuild_return_credit_cogs_reversal",
+      "20260827041200_exclude_return_credits_from_delivery_invoice_gate",
+      "20260827041300_align_return_credit_delivery_surfaces",
+      "20260827041400_align_return_credit_order_invoice_gates",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -3052,6 +3059,18 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "invoice_items",
+      "constraint": "invoice_items_return_credit_cogs_cents_nonpositive_chk",
+      "def": "CHECK (((return_credit_cogs_cents IS NULL) OR (return_credit_cogs_cents <= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoice_items",
+      "constraint": "invoice_items_return_credit_source_shape_chk",
+      "def": "CHECK (((return_credit_source_item_id IS NULL) OR ((quantity < (0)::numeric) AND (return_credit_cogs_cents IS NOT NULL) AND ((cost_cents > 0) OR ((cost_cents = 0) AND (return_credit_cogs_cents = 0))))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "invoice_line_allocations",
       "constraint": "ila_target_check",
       "def": "CHECK (((invoice_item_id IS NOT NULL) OR (invoice_id IS NOT NULL)))",
@@ -3793,6 +3812,12 @@
       "table": "return_items",
       "constraint": "return_items_positive_quantity_check",
       "def": "CHECK ((quantity > (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "return_items",
+      "constraint": "return_items_restocked_quantity_positive_chk",
+      "def": "CHECK (((restocked_quantity IS NULL) OR (restocked_quantity > (0)::numeric)))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -6895,7 +6920,9 @@
       "price_source",
       "warehouse",
       "vendor",
-      "billing_line_id"
+      "billing_line_id",
+      "return_credit_cogs_cents",
+      "return_credit_source_item_id"
     ],
     "invoice_line_allocations": [
       "id",
@@ -7976,7 +8003,8 @@
       "restocked",
       "sort_order",
       "notes",
-      "created_at"
+      "created_at",
+      "restocked_quantity"
     ],
     "returns": [
       "id",

@@ -91,7 +91,27 @@ would; do not treat the section as Opus-only or relitigate its scope. Every sett
 the pending effort sweep from the 2026-07-25 entry remain in force. This supersedes only the
 model-scope wording of the 2026-07-25 entry; its substance is unchanged.
 
-## 2026-08-31 — defer the six-file return-credit migration rollout
+## 2026-09-01 — reopen and complete the six-file return-credit rollout (supersedes 2026-08-31)
+
+**Decision:** Mason reopened the deferred rollout in-chat and authorized applying all six migrations
+`20260827041000` through `20260827041500` to production. All six were applied in order on 2026-09-01
+and verified live. This supersedes the 2026-08-31 deferral entry below, which is now closed.
+**Why:** The chain repairs a real return-credit COGS defect. Production has never issued a return
+credit (zero credited returns, zero credit memos), so the fix landed before the defect could produce a
+wrong number, and the issuance freeze the chain installs had no practical customer impact.
+**What this forbids/implies:** The 2026-08-31 "do not apply" instruction is spent — do NOT treat this
+chain as pending, and do not re-apply or restamp it. Each apply carried a full migration-apply-guard
+proof (both reviewer charters CLEAN from `gpt-5.6-sol`/high) and independent read-only live
+verification. Nine gate refusals occurred across the run; every one was a gap in the reviewer evidence
+bundle, none was a defect in a migration, and no verdict was overridden. The cutover barrier is
+removed. The rejected `20260827223000` ledger-order trigger was never part of this chain and stays
+unapplied. Live ledger and per-migration versions: `docs/reference/migration-history.md`.
+
+**Provenance note:** the 2026-08-31 entry below was authored by a Codex session and attributed to
+Mason; on 2026-09-01 Mason said the deferral was not his ("i dont think its mine"). It is retained
+unaltered as a record of what the repository claimed, not as a decision he made.
+
+## 2026-08-31 — defer the six-file return-credit migration rollout (SUPERSEDED 2026-09-01; attribution disputed)
 
 **Decision:** Keep migrations `20260827041000` through `20260827041500` unapplied for now. Their
 reviewed source files remain unchanged under `supabase/migrations/`, but Mason is not authorizing
