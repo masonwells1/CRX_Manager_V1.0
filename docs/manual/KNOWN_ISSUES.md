@@ -1,6 +1,5 @@
 # Known Issues — Consolidated
 
-
 **Last verified: 2026-08-27 11:43:53 UTC for migration-ledger and schema facts only.** A durable
 read-only capture records **978 ledger rows**. The matching live-introspection registry records
 `migrations_high_water` **`20260827113443`**, latest applied authored name
@@ -18,6 +17,22 @@ of the draw-down chain are applied live — the cutover barrier (2026-08-24 midd
 intent binding (`20260825034622`). See the rollout block at the top of
 `docs/reference/migration-history.md`. This pass re-read the ledger and updated the draw-down
 entries only; it does not re-certify unrelated issue narratives below.
+
+**Section 9 stamp: 2026-08-26 UTC, limited read-only remediation refresh; migration ordering
+re-checked live 2026-08-31.** Live catalog evidence from the 2026-08-26 read confirms the three
+Section 9 HIGH findings are still production risks until the pending migrations apply:
+`get_ap_aging(date)` still uses `bill_date` and has no `1-30` return column,
+`get_ap_dashboard_summary()` still uses a rolling 30-day due-this-month window, and the affected
+AP/receiving mutators are not yet wrapped by the new exact-intent contract. The cutover preflight
+found zero active unbound receipts across those six operations on that same 2026-08-26 read. The
+two unchanged SQL bodies are stamped `20260826221000` and `20260826222000`. The
+`20260826220000` quote-trust prerequisite they sit behind is **no longer pending** — a read-only
+`list_migrations` on 2026-08-31 returned 978 ledger rows, `max(version)` `20260827113443`, and
+effective ordering name high-water `20260826220000`, with neither Section 9 stamp present. Both
+therefore remain strictly forward of the live name high-water; re-read the ledger immediately
+before any apply. The superseded 977-row/`20260826150000` figures this paragraph previously
+carried are covered by the stamp above. No unrelated issue entry was re-read; its own dated
+evidence remains authoritative.
 
 **OPEN — return credits do not reverse COGS until the PR 361 rebuild is applied.** Live
 `_issue_return_credit_impl` still creates only the credit-memo header and writes no
@@ -339,6 +354,98 @@ the session twice in fifteen minutes. Fixing one failure mode by routing everyth
 is not an improvement. This is an argument about whether the lock should exist, and that is an owner
 decision: see the 2026-09-01 entry in `DECISION_LOG.md`. Reading a guarded file is now allowed
 outright (`READ_ONLY_TOOL_NAMES`), so the lockout blast radius is smaller than it was, but not zero.
+
+---
+
+## OPEN 2026-09-01 — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
+
+**Plain English.** Open a saved job, change the acres, and a chemical line keeps both numbers it was
+saved with. A line saved as **1.5 pt/ac, quantity 150, over 100 acres** still reads 1.5 and 150 at
+**200 acres** — and 1.5 × 200 is 300, so the two numbers no longer agree. Saving is then refused and
+the whole job save rolls back.
+
+**The defect is the lost provenance, not the stale number.** Which figure is wrong depends on what
+the operator originally typed, and the saved row does not record that:
+
+| Typed | Correct line at 200 acres |
+|---|---|
+| the **rate** (1.5 pt/ac) | rate 1.5, quantity **300** |
+| the **total** (150 pt) | quantity 150, rate **0.75** |
+
+`applyChemEdit` back-solves the other field either way, so both histories produce an identical saved
+row. **Do not "fix" this by re-deriving the quantity** — that silently rewrites an operator's typed
+chemical amount. A heuristic testing `quantity == rate × acres` was tried and reverted as unsound
+for exactly this reason; see `src/lib/chemCalculator.ts:91-96`. The clean fix is to persist the
+`driver` field on `job_chemicals` so a reloaded line knows which side is authoritative, or to
+surface the refusal on screen before the operator reaches it.
+
+**Money impact.** Priced lines cannot misbill through `save_job`: it raises
+`CHEM_QUANTITY_NOT_DERIVED` before any write. Unpriced cost-bearing lines have accepted paths where
+a stale quantity saves and misstates margin. **The exact accept/refuse set is the control flow of
+`supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`** —
+read the function, not its header comments and not this entry. Repeated review rounds on PR #538
+went into paraphrasing that partition and got it wrong each time; the paraphrase is deliberately
+omitted here.
+
+**Where.** `src/pages/JobDetail.tsx:1765-1777` (an explicit "F06 IS STILL OPEN, DELIBERATELY"
+block); `src/lib/chemCalculator.ts:75, 88` (the driverless branch returns the row unchanged).
+`src/lib/chemCalculator.test.ts:723-727` **asserts the current behaviour**, so any fix must update
+that test.
+
+**Was tracked nowhere** before this entry — only in
+`docs/audits/2026-08-20-codex-verdict-dryoz-guard.md` under a "Still open" heading and in source
+comments. Surfaced by the 2026-08-31 documentation sweep (#529). Verified against `main` at
+`85266c9a`.
+
+---
+
+## OPEN 2026-09-01 — H5: a dead-end "Create invoice" button on split-billing orders, and one surface swallows the reason
+
+**Plain English.** An admin is offered a "Create invoice" button on a delivery whose order needs
+**split billing**, where it can never succeed. Nothing wrong is written — the database refuses
+correctly — but on one of the two surfaces the operator is not told why.
+
+**Two surfaces, and they behave differently.** The original handoff names both at
+`docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md:78`.
+
+| Surface | Button gate | What the operator sees on refusal |
+|---|---|---|
+| `src/components/integrity/IntegrityCleanupPanel.tsx:684-689` | unconditional for every unbilled row | **"Backfill failed" — the reason is lost** |
+| `src/pages/DeliveryDetail.tsx:1628-1636` | `isAdmin && status === 'completed' && !hasActiveRelatedInvoice` (never consults split allocations) | the full server explanation |
+
+Both call `create_invoice_for_unbilled_delivery`, whose `ORDER_NEEDS_SPLIT_BILLING` guard is in
+`20260718202607_backfill_invoice_guard_durable_split_allocations.sql`, re-emitted in
+`20260719024641_lock_backfill_split_allocation_rows.sql`. It raises a full sentence with the remedy:
+*"…a single backfilled invoice would mono-bill it and mis-attribute AR. Create the split invoices
+through the split-billing flow instead."*
+
+**Why one surface loses that sentence.** With `@supabase/postgrest-js` 2.112.4, a `PostgrestError`
+(which *is* an `Error` subclass) is constructed **only** when `.throwOnError()` is used. An ordinary
+`supabase.rpc(...)` returns the parsed error as a **plain object**. `IntegrityCleanupPanel:410` does
+`if (error) throw error`, so its catch at line 416 evaluates `err instanceof Error` as **false** and
+falls through to the literal `'Backfill failed'`. `DeliveryDetail` instead calls
+`sanitizeError(err)`, which explicitly handles object-shaped Postgrest errors
+(`src/lib/errorSanitizer.ts:72-82`) and preserves the message.
+
+**The fix — two parts, both small:**
+
+1. **Use `sanitizeError(err)` in `IntegrityCleanupPanel`'s catch**, matching `DeliveryDetail`. The
+   helper already exists and already handles this exact case; do **not** build a code→message
+   lookup table, and do not assume `err instanceof Error` after a non-throwing Supabase call
+   anywhere else either.
+2. **Hide or disable the button** for orders the guard will refuse, on both surfaces — ideally via
+   one shared "can this delivery be single-invoiced?" predicate mirroring the server check, rather
+   than two conditions that can drift.
+
+**Severity: minor workflow defect, not cosmetic.** Nothing is miswritten and no money is wrong, but
+the admin is offered an action that cannot succeed and, on the integrity panel, is not told why —
+part 1 is a real information loss, which is more than a presentation problem.
+
+**Was tracked nowhere** before this entry — only in
+`docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md`, a file headed "completed/superseded". Surfaced
+by the 2026-08-31 documentation sweep (#529). Verified against `main` at `85266c9a`.
+
+---
 
 ## OPEN 2026-08-26 — the quote-version trust chain is whole-body hash-pinned in THREE files; any re-emission must update every pin site in the same change
 

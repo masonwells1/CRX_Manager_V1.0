@@ -11,10 +11,6 @@ vi.mock('../ui/Toast', () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
-vi.mock('../../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({ getKey: () => 'idem-1', resetKey: vi.fn() }),
-}));
-
 vi.mock('../../lib/db', () => {
   const builder = {
     select: vi.fn(),

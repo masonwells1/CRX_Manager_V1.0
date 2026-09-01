@@ -20,7 +20,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
-import { evaluateMigrationApply, normalizeMigName } from "./migration-apply-lib.mjs";
+import { evaluateMigrationApply, normalizeMigName, originFetchAgeMs } from "./migration-apply-lib.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -64,6 +64,9 @@ function fixture({
   },
   codexProof = null,
   autopilot = null,
+  // Floor for the pending-set scan. The real value from supabase/baselines/manifest.json;
+  // pass null to test the missing-manifest refusal.
+  baseline = { format_version: 3, migrations_high_water: "20260727174805" },
 } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "crx-applylib-"));
   roots.push(root);
@@ -81,7 +84,57 @@ function fixture({
   if (proof !== null) writeFileSync(path.join(stateDir, `migration-review-${SAFE}.json`), JSON.stringify(proof), "utf8");
   if (codexProof !== null) writeFileSync(path.join(stateDir, `codex-review-mig-${SAFE}.json`), JSON.stringify(codexProof), "utf8");
   if (autopilot !== null) writeFileSync(path.join(stateDir, "AUTOPILOT.on"), autopilot, "utf8");
+  if (baseline !== null) {
+    const baselineDir = path.join(root, "supabase", "baselines");
+    mkdirSync(baselineDir, { recursive: true });
+    writeFileSync(
+      path.join(baselineDir, "manifest.json"),
+      typeof baseline === "string" ? baseline : JSON.stringify(baseline),
+      "utf8");
+  }
   return root;
+}
+
+// The pending-set preflight (2026-08-26) reads origin/main. Stubbed to the
+// candidate migration alone so the default fixture has nothing older waiting;
+// cases that need a queue override it. Left unstubbed it would shell out to git
+// inside a bare temp dir, fail, and fail closed — which is correct behaviour but
+// tests nothing.
+const onlyThisMigration = () => `supabase/migrations/${MIG}.sql\n`;
+
+// GIT_* must not leak from this process into a fixture repo. An inherited GIT_DIR
+// points `git init`/`git commit` at the REAL repository — the failure mode that
+// once flipped the shared checkout to core.bare and blocked every commit. Every
+// git call below, and every subprocess, gets a scrubbed env.
+const GIT_ENV_KEYS = Object.keys(process.env).filter((k) => k.startsWith("GIT_"));
+const cleanEnv = (extra = {}) => {
+  const env = { ...process.env, ...extra };
+  for (const key of GIT_ENV_KEYS) delete env[key];
+  return env;
+};
+
+// The pending-set preflight (2026-08-26) reads origin/main, and the second door is
+// a real subprocess with no injection point: those fixtures need an actual ref.
+// Stubbing it out would leave the guard's own second door untested — which is how
+// the oversized-migration path became a hole in the first place.
+function makeOriginMain(root) {
+  const git = (...args) => spawnSync("git", [
+    "-c", "user.name=fixture",
+    "-c", "user.email=fixture@example.invalid",
+    "-c", "commit.gpgsign=false",
+    "-c", "core.hooksPath=",
+    "-C", root, ...args,
+  ], { encoding: "utf8", env: cleanEnv() });
+  git("init", "-q");
+  git("add", "-A");
+  git("commit", "-q", "-m", "fixture");
+  const ref = git("update-ref", "refs/remotes/origin/main", "HEAD");
+  ok(ref.status === 0, `fixture origin/main is created (git said: ${ref.stderr})`);
+  // The freshness gate reads FETCH_HEAD's mtime to answer "when did this checkout
+  // last talk to origin?". `git init` never writes one, so without this the
+  // fixture looks like a checkout that has never fetched — which the guard
+  // correctly refuses. Writing it now stands in for a just-completed fetch.
+  writeFileSync(path.join(root, ".git", "FETCH_HEAD"), "fixture\n", "utf8");
 }
 
 const evaluate = (root, over = {}) => evaluateMigrationApply({
@@ -91,6 +144,8 @@ const evaluate = (root, over = {}) => evaluateMigrationApply({
   projectDir: root,
   cwd: root,
   gitWorktreeList: noWorktrees,
+  gitTrackedMigrations: onlyThisMigration,
+  originFetchAge: () => 0,
   ...over,
 });
 
@@ -125,6 +180,202 @@ denies(
   evaluate(fixture({ proof: { migration: "add_widgets", timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: HASH } }),
     { name: "add_widgets" }),
   "MIGRATION ORDERING GUARD", "untimestamped migration name is refused, not abstained");
+
+// ── CHECK 1b: pending-set preflight (2026-08-26) ────────────────────────────
+// The ordering cases above all ask "is something NEWER already applied?". This
+// asks the question that was missing: "is something OLDER still WAITING?".
+// Reproduces the incident shape end-to-end through the real gate — an older
+// tracked-but-unapplied migration, a newer one being applied.
+{
+  const PENDING = "20260810120000_pending_security_fix";
+  const withQueue = () =>
+    `supabase/migrations/${PENDING}.sql\nsupabase/migrations/${MIG}.sql\n`;
+
+  denies(evaluate(fixture(), { gitTrackedMigrations: withQueue }),
+    "MIGRATION PENDING-SET GUARD",
+    "applying over an older tracked-but-unapplied migration is refused");
+  denies(evaluate(fixture(), { gitTrackedMigrations: withQueue }),
+    PENDING, "the refusal names the migration it would strand");
+  denies(evaluate(fixture(), { gitTrackedMigrations: withQueue }),
+    "Apply the older migration(s) FIRST", "the refusal says what to do instead");
+
+  // Once that migration IS applied, the newer one goes in clean. Without this the
+  // check could be refusing unconditionally and every deny above would be hollow.
+  allows(
+    evaluate(
+      fixture({ snapshot: { captured_at: iso(0), applied: [
+        { version: "20260101000000", name: "20260101000000_baseline" },
+        { version: "20260810120000", name: PENDING },
+      ] } }),
+      { gitTrackedMigrations: withQueue }),
+    "with the pending migration applied, the newer one passes");
+
+  // A renumbered ledger row keeps the ORIGINAL stamp in its name, so stamps can
+  // never agree — the slug is what matches. Measured against the real ledger:
+  // without this, 448 applied migrations read as pending and nothing could apply.
+  allows(
+    evaluate(
+      fixture({ snapshot: { captured_at: iso(0), applied: [
+        { version: "20260101000000", name: "20260101000000_baseline" },
+        { version: "20260810120000", name: "20260808090000_pending_security_fix" },
+      ] } }),
+      { gitTrackedMigrations: withQueue }),
+    "a renumbered-but-applied migration is not reported as pending");
+
+  // The override is a DIFFERENT marker from intentional-replay, and the replay
+  // marker must not unlock this guard — the two decisions are not the same.
+  const replaySql = `${SQL}-- ordering-guard: intentional-replay deliberate replay of an older file\n`;
+  denies(
+    evaluate(
+      fixture({ proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: createHash("sha256").update(replaySql).digest("hex") } }),
+      { query: replaySql, gitTrackedMigrations: withQueue }),
+    "MIGRATION PENDING-SET GUARD",
+    "the intentional-replay marker does NOT unlock the pending-set guard");
+
+  const aheadSql = `${SQL}-- ordering-guard: ahead-of-pending the security fix is parked pending Mason's OK\n`;
+  allows(
+    evaluate(
+      fixture({ proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: createHash("sha256").update(aheadSql).digest("hex") } }),
+      { query: aheadSql, gitTrackedMigrations: withQueue }),
+    "a stated ahead-of-pending reason unlocks the guard");
+
+  // Fail closed on every unknown.
+  denies(
+    evaluate(fixture(), { gitTrackedMigrations: () => { throw new Error("fatal: not a git repository"); } }),
+    "could not list the migrations tracked on origin/main",
+    "an unreadable origin/main refuses, it does not skip the check");
+  denies(evaluate(fixture(), { gitTrackedMigrations: () => "" }),
+    "reached no verdict", "an empty tracked set refuses, it does not pass");
+  denies(evaluate(fixture({ baseline: null })),
+    "schema-baseline manifest", "a missing baseline manifest refuses");
+  denies(evaluate(fixture({ baseline: { format_version: 3 } })),
+    "reached no verdict", "a manifest with no high-water refuses");
+  denies(evaluate(fixture({ baseline: "{ not json" })),
+    "schema-baseline manifest", "an unparseable baseline manifest refuses");
+
+  // ── FRESHNESS OF origin/main (Codex P1, PR #502) ──────────────────────────
+  // The ship flow applies at Step 5 and does not fetch until Step 6, so a
+  // remote-tracking ref can be arbitrarily behind. A migration merged since the
+  // last fetch is invisible, and applying over it strands it — the 2026-08-26
+  // shape exactly. Judging the queue from a stale ref must refuse, not proceed.
+  denies(evaluate(fixture(), { originFetchAge: () => 31 * 60 * 1000 }),
+    "last fetched from origin",
+    "a fetch older than the freshness window refuses");
+  denies(evaluate(fixture(), { originFetchAge: () => 31 * 60 * 1000 }),
+    "git fetch origin", "the stale-fetch refusal says exactly what to run");
+  denies(evaluate(fixture(), { originFetchAge: () => null }),
+    "cannot establish when this checkout last fetched",
+    "an unknowable fetch time refuses — unknown is not a pass");
+  // The boundary itself must still pass, or the gate is just 'always refuse'.
+  allows(evaluate(fixture(), { originFetchAge: () => 29 * 60 * 1000 }),
+    "a fetch inside the freshness window passes");
+
+  // The refusal must name the directory the guard actually MEASURED (CodeRabbit,
+  // PR #502). Freshness is read from queueRoot — the session's linked worktree
+  // when one resolves — and `git fetch` inside a linked worktree writes THAT
+  // worktree's own FETCH_HEAD, which originFetchAgeMs prefers over the common
+  // dir. Naming the primary checkout instead sends the operator to fetch in a
+  // directory whose FETCH_HEAD this guard never reads: they fetch, retry, and
+  // get the identical refusal forever, with nothing in the message to explain
+  // why. A guard whose remedy does not work is worse than one that stays quiet.
+  // Every other case above has queueRoot === projectDir, which is exactly why
+  // this went unnoticed — the two are only distinguishable in a linked worktree.
+  {
+    const primary = fixture();
+    const linked = path.join(primary, "wt-session");
+    mkdirSync(linked, { recursive: true });
+    const listsLinked = () => `worktree ${primary}\nworktree ${linked}\n`;
+    for (const [age, label] of [[31 * 60 * 1000, "stale"], [null, "unknowable"]]) {
+      const verdict = evaluate(primary, {
+        cwd: linked,
+        gitWorktreeList: listsLinked,
+        originFetchAge: () => age,
+      });
+      denies(verdict, linked,
+        `the ${label}-fetch refusal names the worktree whose FETCH_HEAD it measured`);
+      ok(!String(verdict.reason || "").includes(`in ${primary},`),
+        `the ${label}-fetch refusal does not send the operator to the primary checkout`);
+    }
+  }
+
+  // A FAILED worktree lookup must REFUSE, not fall back (Codex P1, PR #502).
+  // resolveSessionWorktree() returns null both when the listing failed and when
+  // it succeeded with no match, and only the second makes projectDir correct.
+  // `git worktree list` used to be invoked twice — once for the proof dirs, once
+  // for the queue root — so the FIRST call could succeed (accepting the reviewer
+  // proof from the active worktree) while the SECOND transiently failed, silently
+  // scanning the primary checkout for the queue. An older migration living only
+  // in the session worktree was then invisible and the apply returned `allow`,
+  // stranding it. Codex reproduced that sequence; the comment above the fallback
+  // had claimed it "fails closed".
+  {
+    const root = fixture();
+    const boom = () => { throw new Error("git worktree list timed out"); };
+    denies(evaluate(root, { cwd: root, gitWorktreeList: boom }),
+      "could not determine which checkout holds the migration queue",
+      "a failed worktree listing refuses instead of scanning the primary checkout");
+
+    // The listing is now memoised, so the two consumers cannot disagree: the
+    // first-succeeds/second-fails sequence is unreachable because there is only
+    // ever one call. Counting proves the race is closed structurally rather than
+    // patched at one call site.
+    let calls = 0;
+    const countingList = () => { calls += 1; return ""; };
+    evaluate(root, { cwd: root, gitWorktreeList: countingList });
+    ok(calls === 1,
+      `git worktree list is invoked exactly once per evaluation (was ${calls}) — the two consumers share one result`);
+  }
+
+  // ── THE ACTIVE CHECKOUT IS PART OF THE QUEUE (Codex P1, PR #502) ──────────
+  // ship.md Step 5 applies a migration while it is still uncommitted and
+  // unmerged. An origin/main-only listing cannot see an older SIBLING authored in
+  // the same checkout, so the newer one applied clean and stranded it — the
+  // defect this guard exists to prevent, in the guard's own normal workflow.
+  {
+    const root = fixture();
+    mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
+    // Never committed, never merged, invisible to origin/main — and older.
+    writeFileSync(
+      path.join(root, "supabase", "migrations", "20260810120000_uncommitted_sibling.sql"),
+      "select 1;\n", "utf8");
+    denies(evaluate(root), "20260810120000_uncommitted_sibling",
+      "an UNCOMMITTED older sibling in the working tree is part of the queue");
+  }
+}
+
+// ── originFetchAgeMs resolves both checkout shapes ──────────────────────────
+// A linked worktree's .git is a FILE pointing at .git/worktrees/<name>, and
+// FETCH_HEAD lives in the COMMON dir two levels up. Getting this wrong returns
+// null, which fails closed — safe, but it would refuse every apply from a
+// worktree, and Mason runs dozens of them.
+{
+  const root = mkdtempSync(path.join(os.tmpdir(), "crx-fetchage-"));
+  roots.push(root);
+
+  // Plain checkout: .git is a directory.
+  const plain = path.join(root, "plain");
+  mkdirSync(path.join(plain, ".git"), { recursive: true });
+  writeFileSync(path.join(plain, ".git", "FETCH_HEAD"), "x\n", "utf8");
+  const plainAge = originFetchAgeMs(plain, Date.now());
+  ok(typeof plainAge === "number" && plainAge >= 0, "a plain checkout resolves FETCH_HEAD");
+
+  // Linked worktree: .git is a file, FETCH_HEAD is in the common dir.
+  const common = path.join(root, "common", ".git");
+  mkdirSync(path.join(common, "worktrees", "wt"), { recursive: true });
+  writeFileSync(path.join(common, "FETCH_HEAD"), "x\n", "utf8");
+  const linked = path.join(root, "linked");
+  mkdirSync(linked, { recursive: true });
+  writeFileSync(path.join(linked, ".git"), `gitdir: ${path.join(common, "worktrees", "wt")}\n`, "utf8");
+  const linkedAge = originFetchAgeMs(linked, Date.now());
+  ok(typeof linkedAge === "number" && linkedAge >= 0, "a linked worktree resolves the COMMON FETCH_HEAD");
+
+  // Never fetched → null, which the caller turns into a refusal.
+  const bare = path.join(root, "never-fetched");
+  mkdirSync(path.join(bare, ".git"), { recursive: true });
+  ok(originFetchAgeMs(bare, Date.now()) === null, "a checkout that never fetched returns null");
+  ok(originFetchAgeMs(path.join(root, "not-a-checkout"), Date.now()) === null,
+    "a non-checkout returns null rather than throwing");
+}
 
 // ── CHECK 2: autopilot flag state ───────────────────────────────────────────
 denies(evaluate(fixture({ autopilot: JSON.stringify({ expires: iso(-60 * 60 * 1000) }) })),
@@ -235,6 +486,8 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   const viaScriptShape = evaluateMigrationApply({
     name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
     projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+    gitTrackedMigrations: onlyThisMigration,
+    originFetchAge: () => 0,
   });
   ok(viaHookShape.decision === viaScriptShape.decision, "both doors reach the identical verdict");
 }
@@ -252,7 +505,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     const migFile = path.join(root, "supabase", "migrations", `${MIG}.sql`);
     return spawnSync(process.execPath, [scriptPath, migFile, ...args], {
       encoding: "utf8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: root, SUPABASE_ACCESS_TOKEN: "" },
+      env: cleanEnv({ CLAUDE_PROJECT_DIR: root, SUPABASE_ACCESS_TOKEN: "" }),
     });
   };
 
@@ -260,6 +513,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   const okRoot = fixture();
   mkdirSync(path.join(okRoot, "supabase", "migrations"), { recursive: true });
   writeFileSync(path.join(okRoot, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
+  makeOriginMain(okRoot);
   const dry = runScript(okRoot);
   ok(dry.status === 0, `dry run on a passing gate exits 0 (got ${dry.status}: ${dry.stderr})`);
   ok(dry.stdout.includes("APPLY GATE PASSED"), "dry run reports the gate passed");
@@ -271,6 +525,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   const badRoot = fixture({ proof: null });
   mkdirSync(path.join(badRoot, "supabase", "migrations"), { recursive: true });
   writeFileSync(path.join(badRoot, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
+  makeOriginMain(badRoot);
   const refused = runScript(badRoot);
   ok(refused.status === 2, `refused apply exits 2 (got ${refused.status})`);
   ok(refused.stderr.includes("APPLY GATE REFUSED"), "refusal is reported as a gate refusal");
@@ -360,6 +615,11 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(path.join(stateDir, "applied-migrations.json"),
       JSON.stringify({ captured_at: iso(0), applied: [{ version: "20270101000000", name: "20270101000000_much_newer" }] }), "utf8");
+    mkdirSync(path.join(root, "supabase", "baselines"), { recursive: true });
+    writeFileSync(path.join(root, "supabase", "baselines", "manifest.json"),
+      JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }), "utf8");
+    // Nothing older is waiting here; this block is about proof-name matching.
+    const aliasTracked = () => `supabase/migrations/${alias}.sql\n`;
     // A genuine, fresh, clean proof for the LEGACY migration — nothing forged.
     writeFileSync(path.join(stateDir, `migration-review-${legacy}.json`),
       JSON.stringify({ migration: legacy, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: legacyHash }), "utf8");
@@ -371,6 +631,8 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     const byDefault = evaluateMigrationApply({
       name: alias, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+      gitTrackedMigrations: aliasTracked,
+      originFetchAge: () => 0,
     });
     denies(byDefault, "without subagent review proof", "the DEFAULT now refuses the aliased legacy name (was the bug)");
 
@@ -380,6 +642,8 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     const lenient = evaluateMigrationApply({
       name: alias, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+      gitTrackedMigrations: aliasTracked,
+      originFetchAge: () => 0,
       requireExactProofName: false,
     });
     ok(lenient.decision === "allow", "opt-in substring matching is still the vulnerable behaviour (no longer the default)");
@@ -388,6 +652,8 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     const strict = evaluateMigrationApply({
       name: alias, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+      gitTrackedMigrations: aliasTracked,
+      originFetchAge: () => 0,
       requireExactProofName: true,
     });
     denies(strict, "without subagent review proof", "exact proof-name matching refuses the aliased legacy name");
@@ -399,6 +665,8 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     const honest = evaluateMigrationApply({
       name: legacy, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+      gitTrackedMigrations: aliasTracked,
+      originFetchAge: () => 0,
       requireExactProofName: true,
     });
     denies(honest, "MIGRATION ORDERING GUARD",
@@ -547,6 +815,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   const root = fixture();
   mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
   writeFileSync(path.join(root, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
+  makeOriginMain(root);
   const snapshot = path.join(root, ".claude", "session-state", "applied-migrations.json");
   ok(existsSync(snapshot), "fixture starts with a snapshot present");
 
@@ -559,8 +828,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     "--confirm",
   ], {
     encoding: "utf8",
-    env: {
-      ...process.env,
+    env: cleanEnv({
       CLAUDE_PROJECT_DIR: root,
       SUPABASE_ACCESS_TOKEN: "not-a-real-token-transmission-must-fail",
       // Force the request through a dead local proxy so this test NEVER touches
@@ -573,7 +841,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       HTTPS_PROXY: "http://127.0.0.1:1",
       NO_PROXY: "",
       no_proxy: "",
-    },
+    }),
   });
   ok(res.stdout.includes("Invalidated the applied-migration snapshot"),
     "the snapshot is invalidated before transmission");

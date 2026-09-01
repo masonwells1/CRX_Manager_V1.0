@@ -63,12 +63,13 @@ export default function AccountsPayable() {
   const agingTotals = agingData.reduce(
     (acc, r) => ({
       current: acc.current + r.current_amount,
+      d1_30: acc.d1_30 + r.days_1_30,
       d31_60: acc.d31_60 + r.days_31_60,
       d61_90: acc.d61_90 + r.days_61_90,
       over90: acc.over90 + r.over_90,
       total: acc.total + r.total_outstanding,
     }),
-    { current: 0, d31_60: 0, d61_90: 0, over90: 0, total: 0 }
+    { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, over90: 0, total: 0 }
   );
 
   const agingColumns: Column<APAgingRow>[] = [
@@ -80,13 +81,23 @@ export default function AccountsPayable() {
     },
     {
       key: 'current_amount',
-      header: 'Current',
+      header: 'Current (Not Due)',
       sortable: true,
       render: (r) => <span className="font-mono">{fmt(r.current_amount)}</span>,
     },
     {
+      key: 'days_1_30',
+      header: '1-30 Days Past Due',
+      sortable: true,
+      render: (r) => (
+        <span className={`font-mono ${r.days_1_30 > 0 ? 'text-yellow-600' : ''}`}>
+          {fmt(r.days_1_30)}
+        </span>
+      ),
+    },
+    {
       key: 'days_31_60',
-      header: '31-60 Days',
+      header: '31-60 Days Past Due',
       sortable: true,
       render: (r) => (
         <span className={`font-mono ${r.days_31_60 > 0 ? 'text-yellow-600' : ''}`}>
@@ -96,7 +107,7 @@ export default function AccountsPayable() {
     },
     {
       key: 'days_61_90',
-      header: '61-90 Days',
+      header: '61-90 Days Past Due',
       sortable: true,
       render: (r) => (
         <span className={`font-mono ${r.days_61_90 > 0 ? 'text-orange-600' : ''}`}>
@@ -106,7 +117,7 @@ export default function AccountsPayable() {
     },
     {
       key: 'over_90',
-      header: '90+ Days',
+      header: '90+ Days Past Due',
       sortable: true,
       render: (r) => (
         <span className={`font-mono ${r.over_90 > 0 ? 'text-red-600 font-semibold' : ''}`}>
@@ -221,10 +232,11 @@ export default function AccountsPayable() {
                     agingData as unknown as Record<string, unknown>[],
                     [
                       { key: 'vendor_name', header: 'Vendor' },
-                      { key: 'current_amount', header: 'Current', format: (v) => fmtCSV((v as number) / 100) },
-                      { key: 'days_31_60', header: '31-60 Days', format: (v) => fmtCSV((v as number) / 100) },
-                      { key: 'days_61_90', header: '61-90 Days', format: (v) => fmtCSV((v as number) / 100) },
-                      { key: 'over_90', header: '90+ Days', format: (v) => fmtCSV((v as number) / 100) },
+                      { key: 'current_amount', header: 'Current (Not Due)', format: (v) => fmtCSV((v as number) / 100) },
+                      { key: 'days_1_30', header: '1-30 Days Past Due', format: (v) => fmtCSV((v as number) / 100) },
+                      { key: 'days_31_60', header: '31-60 Days Past Due', format: (v) => fmtCSV((v as number) / 100) },
+                      { key: 'days_61_90', header: '61-90 Days Past Due', format: (v) => fmtCSV((v as number) / 100) },
+                      { key: 'over_90', header: '90+ Days Past Due', format: (v) => fmtCSV((v as number) / 100) },
                       { key: 'total_outstanding', header: 'Total', format: (v) => fmtCSV((v as number) / 100) },
                       { key: 'bill_count', header: 'Bills' },
                     ],
@@ -253,9 +265,10 @@ export default function AccountsPayable() {
       {/* Aging Totals */}
       {agingData.length > 0 && (
         <Card>
-          <div className="grid grid-cols-6 gap-2 text-sm">
+          <div className="grid grid-cols-7 gap-2 text-sm">
             <span className="font-semibold">Totals</span>
             <span className="font-mono font-semibold">{fmt(agingTotals.current)}</span>
+            <span className="font-mono font-semibold text-yellow-600">{fmt(agingTotals.d1_30)}</span>
             <span className="font-mono font-semibold text-yellow-600">{fmt(agingTotals.d31_60)}</span>
             <span className="font-mono font-semibold text-orange-600">{fmt(agingTotals.d61_90)}</span>
             <span className="font-mono font-semibold text-red-600">{fmt(agingTotals.over90)}</span>

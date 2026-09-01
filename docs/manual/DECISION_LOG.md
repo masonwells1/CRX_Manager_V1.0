@@ -967,6 +967,25 @@ implementing session: `.claude/handoffs/SCOPE-ap-aging-days-past-due.md`. Full f
 
 ---
 
+## 2026-08-26 — AP aging uses five due-date buckets; Current means not yet due
+
+**Source:** Mason's in-chat decision in the Section 9 remediation task, replying `ai approve` to
+the recommended fifth-bucket proposal.
+
+**The decision.** `Current` means not overdue: bills due on or after the Chicago report date. A
+separate `1-30 Days` bucket holds bills one through 30 days past due, followed by `31-60`, `61-90`,
+and `Over 90`. The UI labels the first bucket `Current (Not Due)` and the CSV states the same basis.
+
+**Boundary contract.** Due today is current. Days 1 and 30 are `1-30`; days 31 and 60 are `31-60`;
+days 61 and 90 are `61-90`; day 91 and later are `Over 90`. Age is always calculated from
+`vendor_bills.due_date`, never `bill_date`.
+
+**Why.** This keeps a bill inside its agreed payment terms out of overdue totals without combining
+it with a bill that is already late. It supersedes only the still-open bucket-mapping portion of
+the 2026-08-24 entry above; the days-past-due basis remains unchanged.
+
+---
+
 ## 2026-08-24 — CodeRabbit config: stop spending the review budget on half-finished commits
 
 **Source:** Mason's in-chat decisions, 2026-08-20 through 2026-08-24. Supersedes nothing; refines

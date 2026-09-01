@@ -1922,6 +1922,47 @@ export function proofSearchDirs(root, listWorktrees) {
 // which is the pre-2026-07-29 behaviour: strictly safe, never laxer.
 //
 // `listWorktrees` is injected so this is testable without a real repo.
+/**
+ * The checkout the session is actually working in, or null when that cannot be
+ * established from `git worktree list`.
+ *
+ * Extracted from sessionProofDirs (2026-08-27) because the migration pending-set
+ * preflight needs the same answer for a different question — which checkout's
+ * HEAD and working tree hold the migration queue. The harness pins
+ * CLAUDE_PROJECT_DIR to the PRIMARY checkout even when the session runs in a
+ * linked worktree, so anything that reads `projectDir` reads the wrong branch;
+ * that is the bug this resolution exists to avoid, and a second copy of it would
+ * drift. (Codex P1, PR #502.)
+ */
+export function resolveSessionWorktree(root, hookCwd, listWorktrees) {
+  const cwd = String(hookCwd || "").trim();
+  if (!cwd) return null;
+  let porcelain;
+  try {
+    porcelain = listWorktrees();
+  } catch {
+    return null;
+  }
+  // Windows paths differ in case between `git worktree list` and process.cwd(),
+  // so compare on a normalised key; keep the ORIGINAL path for the return value.
+  const key = (p) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
+  const cwdKey = key(cwd);
+  const contains = (parent, child) => child === parent || child.startsWith(parent + path.sep);
+  // Worktrees nest in this repo (C:/CRX_Manager/.claude/worktrees/*), and the
+  // primary checkout is listed FIRST — so "first match wins" would resolve a
+  // nested worktree's cwd to the primary and reintroduce the original bug. Take
+  // the LONGEST containing path: the most specific checkout is the real one.
+  let best = null;
+  for (const line of String(porcelain ?? "").split(/\r?\n/)) {
+    const match = /^worktree\s+(.+)$/.exec(line.trim());
+    if (!match) continue;
+    const wt = path.resolve(match[1]);
+    if (contains(key(wt), cwdKey) && (!best || wt.length > best.length)) best = wt;
+  }
+  void root;
+  return best;
+}
+
 export function sessionProofDirs(root, hookCwd, listWorktrees) {
   const stateDir = (dir) => path.resolve(dir, ".claude", "session-state");
   const dirs = [stateDir(root)];
