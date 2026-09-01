@@ -623,9 +623,23 @@ if (shellTool) {
   // that ALSO name a protected path, so ordinary shell functions are unaffected.
   const REDEFINES_COMMANDS_RE =
     /(?:^|[\s;&|(){}])(?:function\s+[\w.-]+|[\w.-]+\s*\(\s*\)|alias\s|eval\s|source\s|\.\s+\/)/;
+  // NESTED EXECUTION. Sixth gpt-5.6-sol round, HIGH: only the OUTER head was
+  // inspected, so `echo $(rm -f .husky/pre-push)` was ALLOW — `echo` is
+  // allowlisted and the real command hid inside the substitution. Command
+  // substitution, process substitution, and backticks all run a program the head
+  // check never sees.
+  const NESTED_EXECUTION_RE = /\$\(|`|<\(|>\(/;
+  // COMMAND RESOLUTION. Same round: `PATH=/tmp:$PATH; cat .husky/pre-push` was
+  // ALLOW — the name `cat` stayed allowlisted while pointing at an attacker-placed
+  // binary. Anything that changes which program a name resolves to invalidates the
+  // allowlist itself, so it is refused alongside the loader variables that achieve
+  // the same thing indirectly.
+  const COMMAND_RESOLUTION_RE =
+    /(?:^|[\s;&|(])(?:export\s+)?(?:PATH|BASH_ENV|ENV|SHELL|IFS|LD_PRELOAD|LD_LIBRARY_PATH|NODE_OPTIONS|PATHEXT)\s*=/i;
   if (destructiveViews.some((v) =>
     redirectTargetsEnforcementSurface(v) ||
-    (REDEFINES_COMMANDS_RE.test(v) && namesEnforcementSurface(v)) ||
+    ((REDEFINES_COMMANDS_RE.test(v) || NESTED_EXECUTION_RE.test(v) || COMMAND_RESOLUTION_RE.test(v)) &&
+      namesEnforcementSurface(v)) ||
     enforcementSegments(v).some((seg) =>
       namesEnforcementSurface(seg) && !enforcementSegmentIsReadOnly(seg)))) {
     deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write, which the `ask` tier in .claude/settings.json gates.");

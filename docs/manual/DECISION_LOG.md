@@ -7,6 +7,37 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-01 (end of day) — SIX adversarial rounds on the enforcement-surface rule, then a deliberate stop
+
+**Mason's decision, 2026-09-01, after the sixth round: fix what that round found, then stop — no
+seventh review.** Do not reopen this by running more rounds at it; the remaining gaps are recorded
+in `KNOWN_ISSUES.md` and in the round-6 changelog entry, and closing them is not what a command-text
+rule can do.
+
+Each of six independent exact-SHA `gpt-5.6-sol` reviews found a REAL bypass in the rule that replaced
+the deleted lock. In order: a destructive-verb blocklist that `cp`/`tee`/`sed -i` walked past; `..`
+traversal (a bypass the deleted lock had already closed once, lost in the port); read-only heads that
+write a named file (`node -e`, `sed 'w'`, `sort -o`, `find -fprintf`, `awk '>p'`); command wrappers
+and output-operand utilities (`command cp`, `uniq in out`, `yq -i`, `npx rimraf`); a protected path
+as a flag's VALUE (`git diff --output=`); a forged command name (`scripts/cat`, and a shell function
+shadowing `cat`); and finally nested execution (`echo $(rm …)`, `PATH=/tmp:$PATH`).
+
+**The lesson is the pattern, not any single finding.** A guard that inspects shell command text can
+always be fooled by a shell that rewrites its own commands, so this class of rule converges slowly
+and never finishes. Three of the seven defects were things the DELETED lock had already solved and
+this rewrite dropped — porting a guard is where its hard-won cases get lost, and a diff of what the
+old one handled would have caught all three cheaper than review did.
+
+**Operative rules:**
+
+- This rule is a speed bump. The boundary is GitHub branch protection, required checks, and review.
+  Do not describe it otherwise, and do not remove an `ask` entry on its strength.
+- Adding a verb, flag, or head to it is almost always the wrong instinct. Ask instead whether the
+  SHAPE is wrong — positional-versus-flag-value, bare-versus-path-qualified head, and outer-versus-
+  nested execution each closed a whole class where an enumeration would have closed one case.
+- Six rounds is the recorded ceiling for adversarial iteration on a guard of this kind. If a future
+  guard needs more than that, the design is wrong, not the implementation.
+
 ## 2026-09-01 (later the same day) — the guarded-surface lock is DELETED; `review-proof-guard` absorbs its real coverage
 
 **Closes the open question in the two entries below, and supersedes both.** `guarded-surface-lock.mjs`,
