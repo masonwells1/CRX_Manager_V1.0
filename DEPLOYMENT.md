@@ -253,51 +253,52 @@ git push origin main              # Push the revert
 
 ## Continuous Integration (CI)
 
-### GitHub Actions (Optional)
+### GitHub Actions (already configured)
 
-Create `.github/workflows/test.yml`:
+CI is **not** optional and does not need to be created — it already runs on every
+pull request into `main` and on every push to `main`. Two workflows live in
+`.github/workflows/`:
 
-```yaml
-name: Test
+| Workflow | What it does |
+|---|---|
+| `ci.yml` | The main gate. Lint, type check, unit tests, build, SQL migration validation, the documentation check, and the Phase 3C private-artifact containment check. **No browser test runs** — see the note below. |
+| `phase3-private-artifact-containment.yml` | Standalone containment check for candidate artifacts. |
 
-on:
-  push:
-    branches: [ main, staging ]
-  pull_request:
-    branches: [ main, staging ]
+Two further workflows, `production-migration.yml` and
+`production-approval-canary.yml`, were **removed** on 2026-08-31 when the
+production migration approval gate was retired — see
+`docs/changelog.d/2026-08-31-retire-production-migration-approval-gate.md`. Do not
+expect them to exist.
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
+The jobs inside `ci.yml` are `phase3-private-artifact-containment`, `ci-scope`,
+`sql-validation`, `lint-typecheck-test`, `phase3c-containment-windows`, and
+`e2e-smoke`. `ci-scope` classifies each change fail-closed, so a docs-only pull
+request can skip the expensive proof steps while anything touching code, SQL, or
+the agent surface gets the full run.
 
-    steps:
-    - uses: actions/checkout@v3
+> **`e2e-smoke` is disabled and never runs.** The job is pinned `if: false` in
+> `ci.yml`, so it is skipped on every pull request and every push. **CI currently
+> provides no browser coverage** — do not read a green CI as evidence that a UI
+> flow was exercised. The job's own comment carries the checklist for re-enabling
+> it, ending in "change `if: false` back to `if: github.event_name == 'push'`";
+> the blocker is that the E2E suite still points at production endpoints and the
+> safety guard in `tests/e2e/utils/safety-guards.ts` refuses to run against them.
 
-    - name: Setup Node
-      uses: actions/setup-node@v3
-      with:
-        node-version: '18'
+To reproduce the important parts of CI locally before pushing:
 
-    - name: Install dependencies
-      run: npm install
-
-    - name: Run TypeScript check
-      run: npm run typecheck
-
-    - name: Run linter
-      run: npm run lint
-
-    - name: Build
-      run: npm run build
-
-    - name: Run E2E tests
-      run: npm run test:e2e
-      env:
-        VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-        VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+```bash
+npm run typecheck
+npm run lint
+npm run test
+npm run build
+npm run check:docs
 ```
 
-This automatically runs tests on every commit.
+`check:docs` is the documentation gate CI runs in `ci.yml`; it verifies that reference-doc claims
+still match the repository.
+
+Edit the workflow files directly if CI needs to change; do not add a parallel
+`test.yml`.
 
 ---
 
