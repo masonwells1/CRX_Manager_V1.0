@@ -22,12 +22,19 @@ answer.
 | `--all` | 54,293 | yes — via `refs/stash` |
 | `--branches --tags --remotes` | 52,149 | no |
 
-The four blobs are reachable **only** from `stash@{26}`, so dropping that entry and letting a
-later `gc` prune it could reclaim up to ~1.18 GB.
+This establishes exactly one thing: the four blobs are **not reachable from any branch, tag,
+or remote.** It does not establish that the stash is their only holder.
 
-**Bounds kept explicit.** Only those four blobs were measured, so the rest of the stash's 329
-files is unsized, and ~1.18 GB is the sum of blob sizes rather than a post-`gc` measurement.
-It is not a promised saving.
+**No reclaim figure is claimed, and none should be.** `--branches --tags --remotes` is not a
+complete set of GC roots either — it omits reflogs, other worktrees' `HEAD`s, the index, and
+non-standard namespaces such as `refs/archive/*` and `refs/notes/*`, all of which `gc`
+honours. Proving "only the stash holds this" needs every root except `refs/stash` enumerated;
+that was not done, and only four of the stash's 329 files were examined at all.
+
+Two drafts of the audit each stated a confident reclaim figure, in opposite directions, and
+both were wrong. The durable lesson: treat any "dropping X frees N bytes" claim on this repo
+as unproven until a root-complete reachability test plus a before/after measurement of volume
+free bytes backs it. Blob-size sums and partial reachability sets do not.
 
 **What did not change.** The verdict stands: the cleanup is still rejected. The 316 MB of
 `.git/objects` garbage remains hard-linked to `C:\CRX_CodexClones\codex-split-389-c2-gitdb`

@@ -7,9 +7,10 @@ Nothing was executed — no stash dropped, no `gc`/`prune` run, no object file d
 
 **Read this before proposing a stash or `.git/objects` cleanup again.** The obvious version
 of this idea looks like it reclaims ~316 MB from `.git/objects`. That part reclaims
-approximately zero — those files are hard-linked to a second Git database. Separately, up to
-~1.18 GB inside `stash@{26}` may be genuinely reclaimable, but only behind an exclusive
-maintenance window and a `gc` this document argues against running here.
+approximately zero — those files are hard-linked to a second Git database. **How much, if
+anything, the stash stack would reclaim was never established** — two drafts of this document
+claimed opposite figures and both were wrong; see the reachability section below before
+trusting any number.
 
 ---
 
@@ -150,13 +151,20 @@ Measured that way, in this repo:
 | `--all` | 54,293 | yes — via `refs/stash` |
 | `--branches --tags --remotes` | 52,149 | **no** |
 
-So the four videos are reachable **only** from `stash@{26}`. Dropping that entry and letting
-a later `gc` prune it therefore *could* reclaim up to ~1.18 GB.
+That establishes exactly one thing: **the four video blobs are not reachable from any branch,
+tag, or remote.** It does *not* establish that the stash is their only holder.
 
-Two limits on that number, both real: only those four blobs were measured, so the rest of the
-stash's 329 files is unsized; and the figure is the sum of blob sizes, not a post-`gc`
-measurement. **Do not treat ~1.18 GB as a promised saving** — treat it as the only part of
-this cleanup where reclaimable space plausibly exists at all.
+**No reclaim figure is claimed here, and none should be.** `--branches --tags --remotes` is
+not a complete set of GC roots either — it omits reflogs, `HEAD`s of other worktrees, the
+index, and non-standard namespaces such as `refs/archive/*` and `refs/notes/*`. `gc` protects
+objects reachable from any of those, reflogs very much included. Proving "only the stash holds
+this" would require enumerating every root except `refs/stash`, which was not done.
+
+Two earlier drafts of this document each stated a confident reclaim figure, in opposite
+directions, and both were wrong. That is the actual lesson: **on this repo, treat any
+"dropping X frees N bytes" claim as unproven until a root-complete reachability test plus a
+before/after measurement of volume free bytes backs it.** Blob-size sums and partial
+reachability sets do not.
 
 The external copies in `C:\Users\mason\Videos\Screen Recordings` prove the videos are
 *recoverable* if the stash is discarded. That is a separate question from whether Git can

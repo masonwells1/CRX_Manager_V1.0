@@ -24,9 +24,11 @@ Three claims that made the cleanup look worthwhile, each disproved:
   `docs/changelog.d/2026-09-01-stash-reachability-correction.md`): this entry originally said
   those blobs were reachable from a branch/tag/remote and so could not be reclaimed. That was
   wrong — the check used `git rev-list --all`, which reaches `refs/stash`. Measured with
-  `--branches --tags --remotes`, the four blobs are stash-only, so dropping the entry plus a
-  later `gc` could reclaim up to ~1.18 GB. Only those four blobs were measured, so the
-  stash-exclusive remainder is unsized.
+  `--branches --tags --remotes`, the four blobs are not reachable from any branch, tag, or
+  remote. **No reclaim figure is claimed:** that set is not root-complete either (it omits
+  reflogs, other worktrees' `HEAD`s, the index, and namespaces like `refs/archive/*`), and
+  only four of the stash's 329 files were examined. How much dropping this entry would free,
+  if anything, remains unestablished.
 
 Rejected because `git stash drop` is positional and a concurrent session can shift indices
 between the SHA check and the drop (a time-of-check/time-of-use race a recheck narrows but
