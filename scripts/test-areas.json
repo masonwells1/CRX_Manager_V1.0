@@ -27,6 +27,7 @@
         "src/lib/commissionSplit.test.ts",
         "src/lib/commissionPayoutGuards.test.ts",
         "src/lib/section9PoApRemediation.test.ts",
+        "src/lib/section9ApIntentBinding.test.ts",
         "src/lib/vendorBillPeriodCloseLock.test.ts",
         "src/lib/reconciliation.test.ts",
         "src/lib/returnWriteBoundary.test.ts",
@@ -59,6 +60,7 @@
         "src/lib/openBookings.test.ts",
         "src/lib/receivingPdf.test.ts",
         "src/lib/section9PoApRemediation.test.ts",
+        "src/lib/section9ApIntentBinding.test.ts",
         "src/components/inventory",
         "src/components/deliveries",
         "src/components/receiving",
@@ -78,6 +80,7 @@
         "src/lib/jobSaveHelpers.test.ts",
         "src/lib/deliveryLifecycle.test.ts",
         "src/lib/section9PoApRemediation.test.ts",
+        "src/lib/section9ApIntentBinding.test.ts",
         "src/lib/businessLogicEnhancements.test.ts",
         "src/lib/routeOrder.test.ts",
         "src/components/jobs",
@@ -121,6 +124,7 @@
         "src/lib/logActivitySignature.test.ts",
         "src/lib/sentryImportEnforcement.test.ts",
         "src/lib/section9PoApRemediation.test.ts",
+        "src/lib/section9ApIntentBinding.test.ts",
         "src/components/auth"
       ],
       "sweeps": [
@@ -141,7 +145,8 @@
       "vitest": [
         "src/lib/idempotency.test.ts",
         "src/lib/rpcIdempotencyScope.test.ts",
-        "src/lib/assertRpcCoverage.test.ts"
+        "src/lib/assertRpcCoverage.test.ts",
+        "src/lib/section9ApIntentBinding.test.ts"
       ],
       "sweeps": []
     },
@@ -156,6 +161,7 @@
         "src/lib/statementPdf.test.ts",
         "src/lib/statementPdf.render.test.ts",
         "src/lib/sqlRoleGateNullFailOpen.test.ts",
+        "src/lib/section9ApIntentBinding.test.ts",
         "src/lib/splitVectorMath.test.ts",
         "src/__tests__/predicate-product-name-vs-return-policy.test.ts"
       ],

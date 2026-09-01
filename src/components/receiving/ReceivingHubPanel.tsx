@@ -11,7 +11,12 @@ import { runCriticalAction } from '../../lib/criticalAction';
 import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import {
+  UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
+  UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
+  useUncertainMutationIntent,
+} from '../../hooks/useUncertainMutationIntent';
+import { getIdempotencyMismatchResult } from '../../lib/idempotency';
 import type { InventoryPositionRow } from '../../types';
 
 // F5 — Receiving Hub: "To-Ship for inbound". Search a product and see every open
@@ -74,10 +79,31 @@ export default function ReceivingHubPanel() {
   const [search, setSearch] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   // F5 inline receive (confirm-popup write, reuses receive_po_items).
-  const receiveIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
+  const receiveIntent = useUncertainMutationIntent<{
+    items: Array<{ po_item_id: string; quantity: number; condition: 'good' }>;
+    performedBy: string;
+    productName: string;
+    target: { line: POLine; product_name: string };
+  }>({
+    operation: 'receive_po_items',
+    userId: profile?.id || '',
+    surface: 'receiving-hub',
+    getIntentIdentity: (intent) => ({
+      p_items: intent.items,
+      p_performed_by: intent.performedBy,
+      p_allow_over_receive: false,
+    }),
+  });
   const [receiveTarget, setReceiveTarget] = useState<{ line: POLine; product_name: string } | null>(null);
   const [receiveQty, setReceiveQty] = useState('');
   const [receiving, setReceiving] = useState(false);
+
+  useEffect(() => {
+    const recovered = receiveIntent.unresolvedIntent;
+    if (!recovered) return;
+    setReceiveTarget(recovered.target);
+    setReceiveQty(String(recovered.items[0]?.quantity || ''));
+  }, [receiveIntent.unresolvedIntent]);
 
   useEffect(() => {
     let cancelled = false;
@@ -163,6 +189,14 @@ export default function ReceivingHubPanel() {
   }, [toast, refreshKey]);
 
   const handleReceiveConfirm = async () => {
+    if (receiveIntent.isForeignIntentLocked) {
+      toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+      return;
+    }
+    if (receiveIntent.isRetryExpired) {
+      toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
+      return;
+    }
     if (!receiveTarget || !profile) return;
     const qty = Number(receiveQty);
     if (!qty || qty <= 0) {
@@ -177,26 +211,60 @@ export default function ReceivingHubPanel() {
       toast('error', `Quick receive records the full ${fmtUnits(receiveTarget.line.remaining)} remaining. For a partial or damaged receipt, open the PO.`);
       return;
     }
-    const line = receiveTarget.line;
-    const name = receiveTarget.product_name;
-    const idemKey = receiveIdem.getKey();
+    let request: NonNullable<typeof receiveIntent.unresolvedIntent>;
+    let idemKey: string;
+    try {
+      request = await receiveIntent.beginIntent({
+        items: [{ po_item_id: receiveTarget.line.po_item_id, quantity: qty, condition: 'good' }],
+        performedBy: profile.id,
+        productName: receiveTarget.product_name,
+        target: receiveTarget,
+      });
+      idemKey = receiveIntent.getIdempotencyKey();
+    } catch (error) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { tags: { source: 'durable-intent', page: 'receiving-hub' } });
+      toast('error', 'Receiving could not be safely prepared. Nothing was received; refresh and try again.');
+      return;
+    }
     await runCriticalAction({
       action: async () => {
+        let completedElsewhere = false;
         const { data, error } = await supabase.rpc('receive_po_items', {
-          p_items: [{ po_item_id: line.po_item_id, quantity: qty, condition: 'good' }],
-          p_performed_by: profile.id,
+          p_items: request.items,
+          p_performed_by: request.performedBy,
           p_idempotency_key: idemKey,
           p_allow_over_receive: false,
         });
-        if (error) throw error;
-        assertRpcResult(data, 'receive_po_items');
+        if (error) {
+          const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
+          const recordIds = receipt?.receiving_record_ids;
+          if (Array.isArray(recordIds) && recordIds.length > 0 && recordIds.every((id) => typeof id === 'string')) {
+            completedElsewhere = true;
+            toast('warning', 'The earlier receipt already completed. Refreshing the receiving board instead of receiving it twice.');
+          } else {
+            const disposition = await receiveIntent.classifyFailure(error);
+            if (disposition === 'resolved') {
+              completedElsewhere = true;
+              toast('warning', 'This receipt completed in another tab. Refreshing the receiving board instead of receiving it twice.');
+            } else if (disposition === 'definitive') {
+              throw error;
+            } else {
+              throw new Error('The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');
+            }
+          }
+        } else {
+          assertRpcResult(data, 'receive_po_items');
+        }
+        await receiveIntent.resolveIntent();
+        return completedElsewhere;
       },
       toast,
       setLoading: setReceiving,
-      successMessage: `Received ${fmtUnits(qty)} of ${name}`,
       sentryTag: 'receive_po_items',
-      onSuccess: () => {
-        receiveIdem.resetKey();
+      onSuccess: (completedElsewhere) => {
+        if (!completedElsewhere) {
+          toast('success', `Received ${fmtUnits(request.items[0].quantity)} of ${request.productName}`);
+        }
         setReceiveTarget(null);
         setReceiveQty('');
         setRefreshKey((k) => k + 1);
@@ -305,7 +373,6 @@ export default function ReceivingHubPanel() {
                     lines={g.lines}
                     productName={g.product_name}
                     onReceive={(line) => {
-                      receiveIdem.resetKey();
                       setReceiveTarget({ line, product_name: g.product_name });
                       setReceiveQty(String(line.remaining));
                     }}
@@ -338,7 +405,7 @@ export default function ReceivingHubPanel() {
                             <td className="px-2 py-1.5 text-right font-mono font-semibold text-amber-600">{fmtUnits(l.remaining)}</td>
                             <td className="px-2 py-1.5 text-right whitespace-nowrap">
                               <button
-                                onClick={() => { receiveIdem.resetKey(); setReceiveTarget({ line: l, product_name: g.product_name }); setReceiveQty(String(l.remaining)); }}
+                                onClick={() => { setReceiveTarget({ line: l, product_name: g.product_name }); setReceiveQty(String(l.remaining)); }}
                                 className="inline-flex items-center gap-1 px-2 py-1 mr-2 rounded-lg bg-crx-green text-white text-xs font-medium hover:bg-crx-green/90 transition-colors"
                                 title="Receive this line"
                               >
@@ -373,10 +440,23 @@ export default function ReceivingHubPanel() {
 
       <Modal
         open={!!receiveTarget}
-        onClose={() => { setReceiveTarget(null); setReceiveQty(''); }}
+        onClose={() => {
+          if (receiveIntent.isIntentLocked) return;
+          setReceiveTarget(null);
+          setReceiveQty('');
+        }}
         title="Receive Stock"
       >
         <div className="space-y-4">
+          {receiveIntent.isIntentLocked && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              {receiveIntent.isForeignIntentLocked
+                ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
+                : receiveIntent.isRetryExpired
+                ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                : 'The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.'}
+            </div>
+          )}
           <p className="text-sm text-secondary">
             Receive <span className="font-medium text-nav-dark">{receiveTarget?.product_name}</span> on PO{' '}
             <span className="font-medium text-nav-dark">{receiveTarget?.line.po_number}</span> from{' '}
@@ -398,14 +478,14 @@ export default function ReceivingHubPanel() {
             <p className="text-[11px] text-secondary mt-1">Receives the full remaining quantity to Main Warehouse in good condition. For a partial/damaged receipt or a printed receipt, open the PO.</p>
           </div>
           <div className="flex justify-end gap-3 pt-2">
-            <Button variant="ghost" onClick={() => { setReceiveTarget(null); setReceiveQty(''); }}>Cancel</Button>
+            <Button variant="ghost" disabled={receiveIntent.isIntentLocked} onClick={() => { setReceiveTarget(null); setReceiveQty(''); }}>Cancel</Button>
             <Button
               icon={<PackagePlus className="w-4 h-4" />}
               onClick={handleReceiveConfirm}
               loading={receiving}
-              disabled={!receiveQty || Number(receiveQty) <= 0}
+              disabled={receiveIntent.isForeignIntentLocked || receiveIntent.isRetryExpired || !receiveQty || Number(receiveQty) <= 0}
             >
-              Receive
+              {receiveIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Receive'}
             </Button>
           </div>
         </div>

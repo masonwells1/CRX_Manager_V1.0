@@ -91,6 +91,18 @@ would; do not treat the section as Opus-only or relitigate its scope. Every sett
 the pending effort sweep from the 2026-07-25 entry remain in force. This supersedes only the
 model-scope wording of the 2026-07-25 entry; its substance is unchanged.
 
+## 2026-08-31 — defer the six-file return-credit migration rollout
+
+**Decision:** Keep migrations `20260827041000` through `20260827041500` unapplied for now. Their
+reviewed source files remain unchanged under `supabase/migrations/`, but Mason is not authorizing
+or requesting a production rollout in this session.
+**Why:** Preserve the reviewed repository artifacts while making the production boundary explicit.
+**What this forbids/implies:** Repository merge is not a database apply. A future rollout requires
+fresh authorization and the migration safety gates in force at that time. If a newer migration has
+overtaken this chain's timestamps, restamp all six above the current high-water, update every pinned
+chain reference/hash, and re-review the restamped artifacts before a governed push/apply in order.
+The rejected `20260827223000` ledger-order trigger is not part of this queue.
+
 ## 2026-08-31 — retire the production migration approval gate; the worktree guard carve-out stays closed
 
 **Source:** Mason's in-chat decision on 2026-08-31 after a harness review he requested ("we were
@@ -825,6 +837,25 @@ put to him: *should `Current` mean "not yet due" only, with a new `1-30 Days` co
 **Status.** Recorded only; **no code, SQL, or migration has been written.** Scope note for the
 implementing session: `.claude/handoffs/SCOPE-ap-aging-days-past-due.md`. Full finding: HIGH 1 in
 `docs/audits/gauntlet/2026-08-23-section-09-purchase-orders-receiving-vendor-bills-ap-refresh.md`.
+
+---
+
+## 2026-08-26 — AP aging uses five due-date buckets; Current means not yet due
+
+**Source:** Mason's in-chat decision in the Section 9 remediation task, replying `ai approve` to
+the recommended fifth-bucket proposal.
+
+**The decision.** `Current` means not overdue: bills due on or after the Chicago report date. A
+separate `1-30 Days` bucket holds bills one through 30 days past due, followed by `31-60`, `61-90`,
+and `Over 90`. The UI labels the first bucket `Current (Not Due)` and the CSV states the same basis.
+
+**Boundary contract.** Due today is current. Days 1 and 30 are `1-30`; days 31 and 60 are `31-60`;
+days 61 and 90 are `61-90`; day 91 and later are `Over 90`. Age is always calculated from
+`vendor_bills.due_date`, never `bill_date`.
+
+**Why.** This keeps a bill inside its agreed payment terms out of overdue totals without combining
+it with a bill that is already late. It supersedes only the still-open bucket-mapping portion of
+the 2026-08-24 entry above; the days-past-due basis remains unchanged.
 
 ---
 
