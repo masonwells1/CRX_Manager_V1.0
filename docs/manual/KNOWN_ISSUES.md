@@ -244,10 +244,10 @@ correct the quantity."* The guard is in the applied migration
 write**, with a tolerance of `GREATEST(0.0001, LEAST(0.00005 × acres, 0.1))` — far below the gap a
 real acreage change opens. **A stale priced quantity cannot reach an invoice through `save_job`.**
 
-**So the real harm is a blocked save, and nothing else.** Refusing one line rolls back the *entire*
-job save. The operator changed the acreage, did nothing else wrong, and cannot save. The server
-message is good and names the remedy, but the UI let them reach a state the database will not
-accept.
+**So the usual harm is a blocked save — but not the only one.** Refusing one line rolls back the
+*entire* job save. The operator changed the acreage, did nothing else wrong, and cannot save. The
+server message is good and names the remedy, but the UI let them reach a state the database will not
+accept. **One shape does not get refused and does misstate a number** — see the next paragraph.
 
 **Does anything slip through? Read the migration, not this entry.** Every line the guard *accepts*
 is one it has judged financially harmless — `customer_supplied`, no cost and no price, no usable
@@ -266,9 +266,10 @@ its derived cost stays zero and margin is understated.
 > not its header comments, which are thorough enough to feel authoritative without being exhaustive.
 > Anyone acting on the exact scope must read the function.
 
-None of this changes what F06 *is*. The defect is the lost provenance and the blocked save; the
-exemption boundary matters only to someone auditing what the guard lets past, and that person should
-be reading the guard.
+None of this changes what F06 *is*. The defect is the lost provenance; its usual symptom is the
+blocked save, and its one financial symptom is the zero-acreage cost-only case above. The rest of
+the exemption boundary matters only to someone auditing what the guard lets past, and that person
+should be reading the guard.
 
 **The fix is UI-side, not a migration.** Reconcile the line on load or on acreage change so the
 operator never reaches the refused state — or, at minimum, surface the refusal early on screen the
