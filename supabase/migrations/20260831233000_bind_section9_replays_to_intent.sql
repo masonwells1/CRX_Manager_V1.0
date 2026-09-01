@@ -11,8 +11,6 @@
 -- overage confirmation as creation so the threshold cannot be bypassed after
 -- a compliant bill is first saved.
 
-BEGIN;
-
 -- Keep legacy receipt writers out for the whole atomic function cutover. If
 -- any unexpired receipt lacks actor or fingerprint binding, its original
 -- request cannot be reconstructed and a browser fresh-key retry could repeat
@@ -494,5 +492,3 @@ BEGIN
   END IF;
 END;
 $section9_intent_postcond$;
-
-COMMIT;

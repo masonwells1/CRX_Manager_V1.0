@@ -120,7 +120,6 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
       [migration, 'reverse_receiving_record'],
       [cumulativeBillMigration, 'create_vendor_bill'],
     ] as const) {
-      expect(candidate).toContain('BEGIN;');
       expect(candidate).toContain(
         'LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE',
       );
@@ -132,7 +131,8 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
         '(request_actor_id IS NULL OR request_fingerprint IS NULL)',
       );
       expect(candidate).toContain('SECTION9_INTENT_CUTOVER_BLOCKED');
-      expect(candidate.trimEnd()).toMatch(/COMMIT;$/);
+      expect(candidate).not.toMatch(/^BEGIN;|\nBEGIN;\s*$/m);
+      expect(candidate.trimEnd()).not.toMatch(/COMMIT;$/);
     }
   });
 

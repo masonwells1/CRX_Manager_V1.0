@@ -3,8 +3,8 @@
 The final exact-SHA review identified a deployment cutover where an uncertain
 success written by an older key-only RPC could be rejected after migration and
 then repeated under a fresh browser key. Each affected gauntlet migration now
-runs in an explicit transaction, locks the shared receipt table across function
-replacement, and refuses to apply while an unexpired legacy receipt exists for
+runs inside the governed apply transaction, locks the shared receipt table
+across function replacement, and refuses to apply while an unexpired legacy receipt exists for
 receiving, reversal, vendor billing/payment, damaged-receipt alerts, or Cycle
 Count item/completion operations.
 

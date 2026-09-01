@@ -71,7 +71,6 @@ describe('cycle count completion revision contract', () => {
   });
 
   it('blocks cutover while a live legacy item-save or completion receipt exists', () => {
-    expect(code).toContain('BEGIN;');
     expect(code).toContain(
       'LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE',
     );
@@ -81,7 +80,8 @@ describe('cycle count completion revision contract', () => {
     expect(code).toContain("result->>'_actor_id' IS NULL");
     expect(code).toContain("NOT (result ? '_expected_item_revision')");
     expect(code).toContain('CYCLE_COUNT_INTENT_CUTOVER_BLOCKED');
-    expect(code.trimEnd()).toMatch(/COMMIT;$/);
+    expect(code).not.toMatch(/^BEGIN;|\nBEGIN;\s*$/m);
+    expect(code.trimEnd()).not.toMatch(/COMMIT;$/);
   });
 
   it('rejects an authoritative snapshot that changed before completion', () => {

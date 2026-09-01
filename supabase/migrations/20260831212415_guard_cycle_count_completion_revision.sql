@@ -6,8 +6,6 @@
 -- caller-supplied revision then rejects a completion whose authoritative
 -- snapshot has changed in another tab/client.
 
-BEGIN;
-
 SET LOCAL statement_timeout = '60s';
 SET LOCAL lock_timeout = '10s';
 
@@ -358,5 +356,3 @@ BEGIN
   END IF;
 END;
 $postcond$;
-
-COMMIT;

@@ -7,8 +7,6 @@
 -- period closes, proves that one inventory row was decremented, and snapshots
 -- the deleted receipt/photo evidence in the immutable financial audit log.
 
-BEGIN;
-
 -- Freeze receipt writes across the catalog cutover. A pre-migration receipt
 -- cannot be safely rebound because its record/reason intent is unknowable.
 LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE;
@@ -416,5 +414,3 @@ BEGIN
   END IF;
 END;
 $verify$;
-
-COMMIT;

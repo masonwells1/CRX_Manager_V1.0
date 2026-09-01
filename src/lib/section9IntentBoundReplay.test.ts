@@ -75,7 +75,6 @@ describe('Section 9 actor-and-intent replay binding', () => {
   });
 
   it('fails the migration before replacing RPCs when any live legacy receipt exists', () => {
-    expect(migration).toContain('BEGIN;');
     expect(migration).toContain(
       'LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE',
     );
@@ -95,7 +94,8 @@ describe('Section 9 actor-and-intent replay binding', () => {
     expect(migration).toContain(
       'SECTION9_INTENT_CUTOVER_BLOCKED: unexpired unbound PO/AP receipt exists',
     );
-    expect(migration.trimEnd()).toMatch(/COMMIT;$/);
+    expect(migration).not.toMatch(/^BEGIN;|\nBEGIN;\s*$/m);
+    expect(migration.trimEnd()).not.toMatch(/COMMIT;$/);
   });
 
   it('enforces and audits cumulative PO billing on bill edits', () => {

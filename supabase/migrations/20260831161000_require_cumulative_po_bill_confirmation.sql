@@ -2,8 +2,6 @@
 -- Gauntlet Section 9: prevent cumulative PO-linked bills from silently
 -- exceeding 105% of the purchase-order total.
 
-BEGIN;
-
 -- Hold receipt writers until the public function has been replaced. An
 -- unexpired legacy success has no recoverable request intent, so deploying the
 -- actor-bound wrapper over it could turn an uncertain retry into a second bill.
@@ -226,5 +224,3 @@ BEGIN
   ) THEN RAISE EXCEPTION 'unguarded create_vendor_bill implementation is browser-executable'; END IF;
 END;
 $verify$;
-
-COMMIT;

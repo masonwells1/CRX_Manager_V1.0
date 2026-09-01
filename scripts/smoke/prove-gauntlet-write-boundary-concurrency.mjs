@@ -175,7 +175,6 @@ function cutoverGuard({ file, tag }) {
   );
   const end = migration.indexOf(endToken, doStart);
   assert.ok(lockStart >= 0 && doStart > lockStart && end > doStart, `${tag} guard missing`);
-  assert.match(migration, /\bBEGIN;[\s\S]*\bCOMMIT;\s*$/);
   return `BEGIN;\n${migration.slice(lockStart, end + endToken.length)}\nROLLBACK;`;
 }
 
@@ -454,8 +453,11 @@ BEGIN
 END;
 $function$;
 `);
-  sql(readFileSync(BILL_MIGRATION, 'utf8'));
-  sql(readFileSync(MIGRATION, 'utf8'));
+  // The governed CRX apply path supplies one outer transaction per migration.
+  // Mirror that contract here so table locks last across the whole file without
+  // putting a dangerous runner-committing COMMIT inside the migration itself.
+  sql(`BEGIN;\n${readFileSync(BILL_MIGRATION, 'utf8')}\nCOMMIT;`);
+  sql(`BEGIN;\n${readFileSync(MIGRATION, 'utf8')}\nCOMMIT;`);
 }
 
 function proveIntentCutoverGuards() {
