@@ -61,10 +61,19 @@ It also records that **a passing test asserts the stale behaviour**
 (`src/lib/chemCalculator.test.ts:723-727`), so any fix must update that test rather than be
 surprised by it.
 
-### H5 — the integrity panel offers an invoice action it cannot complete
+### H5 — TWO surfaces offer an invoice action they cannot complete
 
 `IntegrityCleanupPanel.tsx` renders "Create draft invoice" unconditionally for every unbilled
 delivery. On a split-billing order the RPC guard correctly refuses. No wrong data is written.
+
+**A fifth Codex finding widened this one.** The entry named one surface; there are two.
+`src/pages/DeliveryDetail.tsx:1628` renders its own "Create Invoice" button gated only by
+`isAdmin && status === 'completed' && !hasActiveRelatedInvoice` — **no split-allocation check** — and
+calls the same RPC at line 1119. The original handoff listed **both** callers at
+`2026-07-18-gauntlet-2-6-leftover.md:78`; #529's summary named one, and I carried the summary forward
+instead of re-reading the source. Fixing only the panel would have left the second dead end live.
+The entry now names both and recommends a shared "can this delivery be single-invoiced?" predicate
+rather than two conditions that can drift apart.
 
 **A second Codex finding narrowed this one too.** The first draft claimed the operator is handed a
 raw error code instead of a reason. The guard actually raises a full sentence — *"delivery N's order
@@ -72,7 +81,8 @@ uses split billing — a single backfilled invoice would mono-bill it and mis-at
 split invoices through the split-billing flow instead."* — and `PostgrestError` extends `Error`, so
 `toast('error', err.message)` shows all of it. The entry now says so explicitly and warns **against**
 the fix the first draft recommended: mapping codes to plain-English messages would replace better
-text with worse. Only the unusable button remains, and the fix is to hide or disable it.
+text with worse. Only the unusable buttons remain, and the fix is to hide or disable them on both
+surfaces.
 
 ### A third finding, fixed here
 

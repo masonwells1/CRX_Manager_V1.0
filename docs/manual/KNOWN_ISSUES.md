@@ -314,9 +314,19 @@ wrong** — the message is already plain English. Only the unusable button is a 
 "Create draft invoice" button. On an order that needs **split billing**, the button cannot work —
 but it is offered anyway.
 
-**Where.** `src/components/integrity/IntegrityCleanupPanel.tsx:684-689` renders the button
-unconditionally for every row in `unbilled`. The handler at line 398 calls
-`create_invoice_for_unbilled_delivery`; its `ORDER_NEEDS_SPLIT_BILLING` guard lives in
+**Where — TWO surfaces, not one.** An earlier draft of this entry named only the first; the original
+handoff names both at `docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md:78`. Fixing one and not the
+other leaves the dead end reachable. Caught by Codex on PR #538.
+
+1. **`src/components/integrity/IntegrityCleanupPanel.tsx:684-689`** — renders the button
+   unconditionally for every row in `unbilled`; handler at line 398.
+2. **`src/pages/DeliveryDetail.tsx:1628-1636`** — renders "Create Invoice" whenever
+   `canCreateInvoice` is true, and that flag (lines 201-202) is
+   `isAdmin && delivery?.status === 'completed' && !hasActiveRelatedInvoice`. **It never consults
+   split allocations**, so an admin opening any completed split-billing delivery with no active
+   invoice is offered the same dead end; the RPC call is at line 1119.
+
+Both call `create_invoice_for_unbilled_delivery`, whose `ORDER_NEEDS_SPLIT_BILLING` guard lives in
 `20260718202607_backfill_invoice_guard_durable_split_allocations.sql` and is re-emitted in
 `20260719024641_lock_backfill_split_allocation_rows.sql`.
 
@@ -334,8 +344,10 @@ exist and are better than a lookup table would be.
 **Severity: cosmetic.** No wrong data is written; the guard refuses correctly and tells the operator
 what to do instead. The defect is being invited into an action that can never succeed.
 
-**The fix:** hide or disable the button for orders the guard will refuse, so the operator is not
-offered a dead end. Optionally strip the leading `CODE:` prefix when presenting these messages.
+**The fix:** hide or disable the button for orders the guard will refuse — **in both places**. A
+shared "can this delivery be single-invoiced?" predicate mirroring the server's split-allocation
+check is preferable to two independent conditions that can drift apart. Optionally strip the leading
+`CODE:` prefix when presenting these messages.
 
 **Verified 2026-09-01 against `main` at `85266c9a`. Was tracked nowhere** — H5 lived only in
 `docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md`, a file headed "completed/superseded". Surfaced
