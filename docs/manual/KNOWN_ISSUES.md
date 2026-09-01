@@ -8,10 +8,13 @@ and effective ordering high-water **`20260826222000`** (authored name
 in-chat approval, through the full apply gate (ordering, destructive-content, reviewer proof and Codex
 gate) — verified post-apply against the live catalog: exactly one `get_ap_aging` overload, `days_1_30`
 present, buckets keyed on `due_date`, `SECURITY DEFINER` with `search_path=public, pg_temp` intact.
-The earlier 976-, 977- and 978-row readings are superseded; the 978-row capture also recorded
-`quote_versions.restore_trusted_at` and `migrations_high_water` `20260827113443`, which remains the
-`max(version)` (the ordering high-water is read from the authored NAME, not the version). This pass does not re-certify every issue narrative below or
-claim a fresh post-apply read of function bodies, grants, or operational counts.
+The earlier 976-, 977- and 978-row readings are superseded, and so is the `max(version)` that came with
+them: the 978-row capture recorded `migrations_high_water` `20260827113443`, but after the two 2026-09-01
+applies the live `max(version)` is **`20260901045346`**. `20260827113443` is history, not the current
+maximum. The 978-row capture also recorded `quote_versions.restore_trusted_at`. Read ordering from the
+authored NAME, never from `version` — the two diverge, which is why searching the ledger by version stamp
+finds neither Section 9 migration even though both are applied. This pass does not re-certify every issue
+narrative below or claim a fresh post-apply read of function bodies, grants, or operational counts.
 The PR #361 function/schema surface was separately refreshed from a live schema dump on 2026-08-27;
 that evidence supports the six pending return-credit candidates without superseding the newer ledger
 capture above.
@@ -23,21 +26,25 @@ intent binding (`20260825034622`). See the rollout block at the top of
 `docs/reference/migration-history.md`. This pass re-read the ledger and updated the draw-down
 entries only; it does not re-certify unrelated issue narratives below.
 
-**Section 9 stamp: 2026-08-26 UTC, limited read-only remediation refresh; migration ordering
-re-checked live 2026-08-31.** Live catalog evidence from the 2026-08-26 read confirms the three
-Section 9 HIGH findings are still production risks until the pending migrations apply:
-`get_ap_aging(date)` still uses `bill_date` and has no `1-30` return column,
-`get_ap_dashboard_summary()` still uses a rolling 30-day due-this-month window, and the affected
-AP/receiving mutators are not yet wrapped by the new exact-intent contract. The cutover preflight
-found zero active unbound receipts across those six operations on that same 2026-08-26 read. The
-two unchanged SQL bodies are stamped `20260826221000` and `20260826222000`. The
-`20260826220000` quote-trust prerequisite they sit behind is **no longer pending** — a read-only
-`list_migrations` on 2026-08-31 returned 978 ledger rows, `max(version)` `20260827113443`, and
-effective ordering name high-water `20260826220000`, with neither Section 9 stamp present. Both
-therefore remain strictly forward of the live name high-water; re-read the ledger immediately
-before any apply. The superseded 977-row/`20260826150000` figures this paragraph previously
-carried are covered by the stamp above. No unrelated issue entry was re-read; its own dated
-evidence remains authoritative.
+**Section 9: RESOLVED — both migrations applied live 2026-09-01. Do not plan a rollout from this
+entry.** The pre-apply narrative that stood here is superseded in full and is summarised below only so
+the change of state is legible; nothing in it describes production any more.
+
+Post-apply catalog read, 2026-09-01: `get_ap_aging` has exactly **one** overload taking `p_as_of_date`
+and returns the five-bucket due-date contract (`current_amount`, `days_1_30`, `days_31_60`,
+`days_61_90`, `over_90`, plus `total_outstanding`/`bill_count`), `SECURITY DEFINER` with
+`search_path=public, pg_temp` intact; `get_ap_dashboard_summary` takes `p_idempotency_key` and its body
+keys on `due_date` rather than a rolling 30-day window. The ledger shows **980 rows** with
+`20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
+`20260826222000_correct_ap_aging_due_date_buckets` as the two newest entries.
+
+**Superseded (2026-08-26/08-31 state, retained for history only):** the three Section 9 HIGH findings
+were then live production risks — `get_ap_aging(date)` used `bill_date` with no `1-30` column,
+`get_ap_dashboard_summary()` used a rolling 30-day window, and the AP/receiving mutators were not yet
+wrapped by the exact-intent contract. That read also found zero active unbound receipts across those six
+operations, and recorded 978 ledger rows with ordering high-water `20260826220000`. **Those figures and
+the "re-read the ledger before any apply" instruction no longer apply — the apply has happened.** No
+unrelated issue entry was re-read; its own dated evidence remains authoritative.
 
 **OPEN — return credits do not reverse COGS until the PR 361 rebuild is applied.** Live
 `_issue_return_credit_impl` still creates only the credit-memo header and writes no
@@ -262,7 +269,7 @@ is not covered at all (row 3 below), so "catches every ordinary spelling" would 
 | Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit — and **the live sweep predicates use the SAME name pattern, so this gap is shared, not compensated.** The post-apply sweep does NOT catch this one. Closing it needs real dataflow over write targets, and would have to change the hook and both predicates together. |
 | Re-binding after a passing check (`p_performed_by := p_target_id;`), `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | **Not covered at write time, and not covered by the sweeps either.** The incidental `hasMutation` trigger that would catch `EXECUTE`/`INSERT` lives in **parked PR #449, not in the running hook** (213 lines, no such logic) — do not credit the active guard with it. The sweeps miss them for their own reasons: both predicates select only where `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that passes a binding check and *then* re-assigns the parameter is excluded outright; and a temp-table round trip matches neither the `coalesce`/`auth.uid`/role proximity test in `actor-forgery.sql` nor the same-statement `financial_audit_log … <param>` test in `-fin-audit.sql`. |
 | An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function | The hook analyses `tool_input.content \|\| tool_input.new_string` — the fragment alone. It does **not** reconstruct the full post-edit file the way `sql-safety.mjs`, `idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. With no function header, parameter list or `SECURITY DEFINER` attribute in the analysed text, the guard finds no candidate and allows. This is the *normal* editing path; the hook's own Edit-coverage test passes a whole function as `new_string`, so it does not exercise it. The sweeps do still see the applied routine. |
-| Cross-routine / cross-migration helpers | The analysis is intra-routine and single-file; helpers are handled by the fail-closed callable rule, not by understanding. This is also why the false-positive rate on read-only routines is what it is. |
+| Cross-routine / cross-migration helpers | **Not covered — and there is no "fail-closed callable rule" in the running hook.** The analysis is intra-routine and single-file, and the active guard only considers a routine whose own body contains a literal `INSERT INTO` / `UPDATE ` / `DELETE FROM`. A `SECURITY DEFINER` wrapper that accepts `p_performed_by` and delegates the write to a helper therefore has no literal DML in its body and is allowed — confirmed by running the real hook, which returned `allow`. Neither sweep predicate follows the helper call either. Any fail-closed callable handling belongs to **parked PR #449**; do not rely on it. |
 | Novel lexical spellings | The known-unknown. Three rounds each found a *new category*; the tool pattern-matches text, and PostgreSQL's grammar has more spellings than anyone will enumerate. |
 
 **The finding that settled the cap.** PostgreSQL needs no whitespace before a quoted identifier, so

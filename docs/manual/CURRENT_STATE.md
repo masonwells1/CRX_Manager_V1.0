@@ -1,14 +1,17 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-08-27 11:43:53 UTC for the migration ledger and schema shape.** A durable
-read-only capture records **978 ledger rows**. The matching live-introspection registry records
-`migrations_high_water` **`20260827113443`**, with
-`20260826220000_quote_version_restore_trust_boundary` as the latest applied authored name; the
-current effective ordering name high-water is therefore **`20260826220000`**. The same registry
-records `quote_versions.restore_trusted_at`, so the quote-version trust migration is **applied
-live** and its schema marker exists. This evidence does not include a fresh post-apply read of the
-five routine bodies or their grants; the 2026-08-26 pre-apply fingerprint paragraph is superseded,
-not promoted into post-apply proof.
+**Last verified: 2026-09-01 for the migration ledger; 2026-08-27 11:43:53 UTC for schema shape.** A
+read-only `list_migrations` on 2026-09-01 records **980 ledger rows**, with
+`20260826222000_correct_ap_aging_due_date_buckets` as the latest applied authored name; the current
+effective ordering name high-water is therefore **`20260826222000`**, and live `max(version)` is
+**`20260901045346`**. Read ordering from the authored NAME, not from `version` — the two diverge.
+The earlier 978-row / `20260826220000` / `migrations_high_water` `20260827113443` reading is
+superseded (see the Section 9 paragraph below for the two applies that moved it). The
+live-introspection registry records `quote_versions.restore_trusted_at`, so the quote-version trust
+migration is **applied live** and its schema marker exists. The schema-shape evidence is still the
+2026-08-27 capture and does not include a fresh post-apply read of the five routine bodies or their
+grants; the 2026-08-26 pre-apply fingerprint paragraph is superseded, not promoted into post-apply
+proof.
 
 The prior header readings are retained as provenance: 977 rows / `20260826205935` / authored
 high-water `20260826150000` after the COMMENT-only apply, and before that 976 rows /
@@ -17,7 +20,7 @@ as the current ordering boundary.
 
 The PR #361 return-credit function/schema surface was also re-read from a fresh live schema dump on
 2026-08-27. That separate read supports its candidate preconditions; it does not replace the newer
-978-row ledger/schema capture above.
+980-row ledger capture above.
 
 All four migrations of the draw-down chain are applied live: the cutover barrier (ledger version
 `20260824185408`) and, later on 2026-08-24 with Mason's explicit in-chat approval, the tier split

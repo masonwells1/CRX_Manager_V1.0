@@ -13,11 +13,13 @@ than detected after it ships.
 
 **What changed.** Nothing in the hook, on this branch. What changed is the claim made about it. It is now
 documented as a **speed bump, not a boundary**, with its gaps enumerated and the load-bearing protections
-named — but **not uniformly**, because they differ by residual. For the lexical and re-binding gaps the
-compensating controls are the post-apply sweep predicates against the live catalog, the exact-SHA
-`gpt-5.6-sol` proof, and the CodeRabbit review. For the **naming-scope gap** (`p_target_id`-shaped
-parameters) the sweep predicates key on the SAME name pattern, so they share the blind spot rather than
-covering it — only the Codex proof and the CodeRabbit review stand there.
+named — but **not uniformly**, because they differ by residual. For the **lexical** gaps the compensating
+controls are the post-apply sweep predicates against the live catalog, the exact-SHA `gpt-5.6-sol` proof,
+and the CodeRabbit review. For the **re-binding and laundering** gaps and the **naming-scope gap**
+(`p_target_id`-shaped parameters) the sweeps are **not** a compensating control — they are gated on
+`prosrc !~* 'ACTOR_MISMATCH'` and key on the same actor-name pattern, so they share those blind spots
+rather than covering them; only the Codex proof and the CodeRabbit review stand there. See the review
+round below, which is where that correction came from.
 
 That distinction was itself a CodeRabbit finding on the first draft of this entry: the draft claimed the
 residual required clearing the sweep, which is false for the naming-scope path. Worth recording, because it

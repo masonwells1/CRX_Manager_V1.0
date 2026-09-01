@@ -4,13 +4,21 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
-**Live-ledger/schema capture — 2026-08-27 11:43:53 UTC, after the quote-version trust apply.**
-The durable read-only capture from project `rhyzpcqhnizqbxphqdkr` records **978 ledger rows**.
-The matching live-introspection registry records `migrations_high_water` **`20260827113443`**,
-with `20260826220000_quote_version_restore_trust_boundary` as the latest applied authored name;
-the current effective ordering high-water is therefore **`20260826220000`**. The same registry
-records `quote_versions.restore_trusted_at`, proving the schema addition is present. This update
-does not claim a fresh re-read of function bodies or grants.
+**Live-ledger capture — 2026-09-01, after the two Section 9 AP applies.** A read-only
+`list_migrations` on project `rhyzpcqhnizqbxphqdkr` records **980 ledger rows**, with
+`20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
+`20260826222000_correct_ap_aging_due_date_buckets` as the two newest entries; the current effective
+ordering high-water is therefore **`20260826222000`**, and live `max(version)` is
+**`20260901045346`**. Read ordering from the authored NAME, not from `version` — the two diverge, so
+searching the ledger by version stamp finds neither Section 9 migration even though both are applied.
+This update does not claim a fresh re-read of function bodies or grants beyond the two AP routines
+recorded in rows 901–902.
+
+**Superseded 2026-08-27 11:43:53 UTC header, kept for provenance** — its **978-row** /
+`20260826220000` / `migrations_high_water` `20260827113443` figures are two applies behind live and
+must not be used as the current ordering boundary. That capture recorded
+`20260826220000_quote_version_restore_trust_boundary` as the latest applied authored name and
+`quote_versions.restore_trusted_at`, proving that schema addition is present.
 
 **Status override for history row 892:** its embedded `MERGED TO MAIN — NOT APPLIED` candidate
 label is superseded by this newer live capture. The migration is applied as ledger version
