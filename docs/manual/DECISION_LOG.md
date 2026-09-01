@@ -7,6 +7,66 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-01 — the write-time actor-binding guard is CAPPED as best-effort; do not fund another hardening round
+
+**Source:** Mason's in-chat decision on 2026-09-01 ("cap it"), after he asked for at least two more
+adversarial rounds on PR #449 and both rounds found real bypasses.
+
+**The decision.** `.claude/hooks/actor-binding-check.mjs` is a **speed bump, not a boundary**. It stays
+in place and stays maintained for ordinary spellings, but it is no longer treated as a control that
+can be driven to zero findings. Do not open a round 4 of pattern-by-pattern hardening. The load-bearing
+protections against actor forgery are, in order: the **post-apply sweep predicates**
+(`scripts/db-invariant-sweeps/predicates/actor-forgery.sql` and `-fin-audit.sql`, which run against the
+live catalog), the **exact-SHA Codex proof** on migration diffs, and the **CodeRabbit final review**.
+
+**Why — the evidence, not a preference.** Two independent agents ran two rounds on 2026-08-31/09-01 and
+closed **19 laundering channels**, each reproduced by running the real hook and each fix mutation-tested.
+Round 1 closed 12, then probed its own repair and found 4 more — one it had introduced with its own
+fix. Round 2 probed round 1's repair with 87 payloads and found 7 more across 4 previously-unseen root
+causes. The finding-count on the PR went from 10 open, through two rounds of genuine work, to **23 open**
+(16 of them dated 2026-09-01, i.e. new objections to the fixes themselves). It goes backwards while
+genuinely improving.
+
+**The root cause is a tool mismatch, and one finding proves it.** PostgreSQL needs no whitespace before a
+quoted identifier, so `CREATE OR REPLACE FUNCTION"public"."f"(` is valid SQL — and the guard never matched
+it, meaning a ~3,000-line security check **never ran on that routine at all**. That single lexical fact
+punched holes in **eight independent regexes written across three careful passes**. Nobody missed it eight
+times through inattention; a regex encodes a guess about tokenization, and when the guess is wrong in one
+place it is wrong everywhere. A second root cause is structural rather than lexical: the guard proves a
+**name**, and a PL/pgSQL parameter is an ordinary local, so `p_performed_by := p_target_id;` after a
+passing check re-forges the actor. Nine spellings of that were found.
+
+**Residual risk, stated plainly.** To exploit what remains, a coding agent would have to write deliberately
+obfuscated SQL into a migration AND clear the Codex proof, the CodeRabbit review, and the post-apply sweep.
+The guard was always the fourth line of defence; capping it does not remove the first three. Explicitly out
+of scope by design: actor-shaped parameters that do not match the name pattern
+(`^p_\w*by$|^p_actor|^p_user`) — e.g. `p_target_id` — which the live sweep predicates share, and
+`EXECUTE … USING` / `INSERT … RETURNING … INTO` / temp-table round trips, which are currently covered only
+*incidentally* because `EXECUTE`/`INSERT` unconditionally set `hasMutation`. If that mutation trigger is
+ever narrowed, those three open immediately.
+
+**If this is ever revisited, rebuild rather than re-harden.** The only approach that removes the whole
+category is parsing with PostgreSQL's own grammar (`libpg_query`), which eliminates "spellings" entirely and
+turns the re-binding hole into a real assignment-target check. That is a scoped project with a dependency
+and a rewrite — not another round. It does **not** solve the naming-scope limit, which needs real dataflow.
+
+**Operative rules.**
+- Do not open another pattern-hardening round on this guard; cite this entry and close the request.
+- Do not describe this guard as preventing actor forgery. It reduces it. Say so in any doc that mentions it.
+- Before starting related work, check for stranded parallel attempts — a third, unpushed regex attempt
+  (`codex/actor-binding-guard-recut-20260831`, local only, no PR) duplicated one of PR #449's fixes.
+- PR #449 itself is **parked, not abandoned**: it holds the 19 closed bypasses and is worth landing after
+  one clean review round on a fresh review budget. Landing it is an improvement to a capped control, not a
+  resumption of the hardening programme.
+
+**A generalisable lesson recorded here because it recurred seven times in ~24 hours.** Every one of those
+seven guard comments asserted a safety property its code did not have, and **every one overclaimed** — none
+understated. Three were in this file alone, including *"Non-mutating functions are never flagged"*, which a
+test in the same file already disproved. The ratchet worth building: **for each guard, assert that its
+refusal text and header comments do not claim a property the test suite has not demonstrated.** When the
+author of a guard cannot correctly state what it does, that is the system reporting that it exceeded the
+complexity a reader can hold.
+
 ## 2026-08-31 — `core.hooksPath` points at the tracked `.husky`, never husky's generated `.husky/_`
 
 **Source:** Mason's in-chat approval on 2026-08-31 ("ok fix it") after the harness review found the

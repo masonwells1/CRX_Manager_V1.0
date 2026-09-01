@@ -1,11 +1,16 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-27 11:43:53 UTC for migration-ledger and schema facts only.** A durable
-read-only capture records **978 ledger rows**. The matching live-introspection registry records
-`migrations_high_water` **`20260827113443`**, latest applied authored name
-`20260826220000_quote_version_restore_trust_boundary`, and effective ordering high-water
-**`20260826220000`**. It also records `quote_versions.restore_trusted_at`. The earlier 976- and
-977-row readings are superseded. This pass does not re-certify every issue narrative below or
+**Last verified: 2026-09-01 for migration-ledger facts.** A read-only capture records **980 ledger rows**
+and effective ordering high-water **`20260826222000`** (authored name
+`20260826222000_correct_ap_aging_due_date_buckets`). The two Section 9 AP migrations
+`20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
+`20260826222000_correct_ap_aging_due_date_buckets` were applied live on 2026-09-01 under Mason's explicit
+in-chat approval, through the full apply gate (ordering, destructive-content, reviewer proof and Codex
+gate) — verified post-apply against the live catalog: exactly one `get_ap_aging` overload, `days_1_30`
+present, buckets keyed on `due_date`, `SECURITY DEFINER` with `search_path=public, pg_temp` intact.
+The earlier 976-, 977- and 978-row readings are superseded; the 978-row capture also recorded
+`quote_versions.restore_trusted_at` and `migrations_high_water` `20260827113443`, which remains the
+`max(version)` (the ordering high-water is read from the authored NAME, not the version). This pass does not re-certify every issue narrative below or
 claim a fresh post-apply read of function bodies, grants, or operational counts.
 The PR #361 function/schema surface was separately refreshed from a live schema dump on 2026-08-27;
 that evidence supports the six pending return-credit candidates without superseding the newer ledger
@@ -227,6 +232,55 @@ The remaining fractional historical rows described below are still tracked data 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
+
+## OPEN (CAPPED — WONTFIX by decision) 2026-09-01 — the write-time actor-binding guard is bypassable by design limits, not by defect
+
+**Plain English.** CRX records **who did what** — who received inventory, who recorded a vendor payment —
+and some of those entries land in the immutable financial audit log. A database routine running with
+elevated privileges that accepts a caller-supplied "who did this" value and writes it down unchecked lets
+any signed-in user attribute an action to somebody else. That is not hypothetical: it happened on
+2026-06-17, when `link_blend_ticket_to_order` / `unlink_blend_ticket_from_order` stamped `p_performed_by`
+straight into `financial_audit_log` with no binding check (Gauntlet Section 1 HIGH, fixed in migration
+`20260617171500`).
+
+`.claude/hooks/actor-binding-check.mjs` is the **write-time** half of that defence — it inspects a migration
+before it is written, so a forgery is refused rather than detected after it ships. The sweep predicates
+(`predicates/actor-forgery.sql`, `-fin-audit.sql`) are the **post-apply** half and run against the live
+catalog.
+
+**Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. It catches
+every ordinary spelling and is materially stronger after PR #449's two rounds (19 laundering channels
+closed, each reproduced by running the hook and each fix mutation-tested). It is **not** a boundary, and no
+document should describe it as preventing actor forgery.
+
+**What it does NOT catch, stated so nobody re-derives it:**
+
+| Gap | Why it is open |
+|---|---|
+| Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit, shared with the live sweep predicates. Closing it needs real dataflow over write targets, not another pattern. |
+| `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | Covered only *incidentally* — `EXECUTE`/`INSERT` unconditionally set `hasMutation`, so taint is never modelled. **If that trigger is ever narrowed, all three open immediately.** |
+| Cross-routine / cross-migration helpers | The analysis is intra-routine and single-file; helpers are handled by the fail-closed callable rule, not by understanding. This is also why the false-positive rate on read-only routines is what it is. |
+| Novel lexical spellings | The known-unknown. Three rounds each found a *new category*; the tool pattern-matches text, and PostgreSQL's grammar has more spellings than anyone will enumerate. |
+
+**The finding that settled the cap.** PostgreSQL needs no whitespace before a quoted identifier, so
+`CREATE OR REPLACE FUNCTION"public"."f"(` is valid SQL that the guard **never matched** — the security check
+did not run on that routine at all. That one lexical fact defeated eight independent regexes written across
+three careful passes.
+
+**What actually protects this path** (do not treat the hook as load-bearing): the post-apply sweep
+predicates against the live catalog, the exact-SHA `gpt-5.6-sol` proof on migration diffs, and the
+CodeRabbit final review. To exploit the residual, a coding agent would have to write deliberately obfuscated
+SQL into a migration and clear all three.
+
+**Do not.** Do not open another pattern-hardening round (cite the DECISION_LOG entry and close the request).
+Do not remove or weaken the hook — it is cheap and it catches the ordinary cases. If it is ever rebuilt, use
+PostgreSQL's own parser (`libpg_query`) rather than more regexes; that removes the lexical category entirely
+but still does not solve the naming-scope limit.
+
+**Related open work.** PR #449 is parked with the 19 closed bypasses and 23 open review findings; it is worth
+landing after one clean review round, as an improvement to a capped control rather than a resumed programme.
+A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-recut-20260831` (no PR) and
+duplicates one of #449's fixes — delete it rather than continuing it.
 
 ## OPEN 2026-09-01 — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
 
