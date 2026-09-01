@@ -293,8 +293,9 @@ falls through to the literal `'Backfill failed'`. `DeliveryDetail` instead calls
    one shared "can this delivery be single-invoiced?" predicate mirroring the server check, rather
    than two conditions that can drift.
 
-**Severity: cosmetic, but part 1 is a real information loss** — the admin is given a dead end and,
-on the integrity panel, no reason for it.
+**Severity: minor workflow defect, not cosmetic.** Nothing is miswritten and no money is wrong, but
+the admin is offered an action that cannot succeed and, on the integrity panel, is not told why —
+part 1 is a real information loss, which is more than a presentation problem.
 
 **Was tracked nowhere** before this entry — only in
 `docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md`, a file headed "completed/superseded". Surfaced
