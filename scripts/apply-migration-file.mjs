@@ -235,11 +235,27 @@ if (!CANONICAL_MIGRATION_NAME.test(migName) || stampCount !== 1) {
   // whose safety depends on a coincidence is the kind this file keeps having to
   // re-close. The allowlist story is "one permitted directory"; the argument
   // should have to be in it.
-  const realPassed = (() => { try { return realpathSync(absFile); } catch { return absFile; } })();
-  const realApproved = (() => { try { return realpathSync(source.file); } catch { return source.file; } })();
-  const samePath = process.platform === "win32"
-    ? realPassed.toLowerCase() === realApproved.toLowerCase()
-    : realPassed === realApproved;
+  // Compare against EVERY permitted location, not just the first match.
+  //
+  // Codex (low, fail-closed, exact-SHA review of 5eaa78e8) found that comparing to
+  // `source.file` alone blocks a legitimate apply: when the primary checkout and the
+  // session's worktree both hold the migration, the resolver returns the PRIMARY
+  // one, and passing the worktree's own file — the normal thing to do — was then
+  // refused for "not being the approved artifact". It could never authorize unsafe
+  // SQL, but it would block real work in the layout this repo actually uses, where
+  // dozens of worktrees run at once.
+  //
+  // The rule was always meant to be "the argument must BE one of the permitted
+  // files", and every permitted location is equally approved: `ok: true` already
+  // guarantees the content matched a permitted file, and each candidate lives in a
+  // session-scoped checkout the proof lookup already trusts.
+  const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+  const key = (p) => (process.platform === "win32" ? real(p).toLowerCase() : real(p));
+  const realPassed = real(absFile);
+  const candidates = (source.dirs || []).map((d) => path.join(d, `${migName}.sql`));
+  const approved = candidates.length ? candidates : [source.file];
+  const samePath = approved.some((c) => key(c) === key(absFile));
+  const realApproved = real(source.file);
   if (!samePath) {
     die(2,
       `NOT A PERMITTED MIGRATION SOURCE: ${absFile}\n\n` +
