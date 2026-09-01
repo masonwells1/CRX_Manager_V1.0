@@ -13,10 +13,24 @@ So the assertion at line 213 — "the tracked directory is the correct target" �
 test never configured and got `FAIL`.
 
 **Why it hid.** Standalone runs and CI have no `GIT_DIR`, so both stayed green. The bug existed only
-on the git-hook path, which CI does not exercise. Meanwhile `git commit` failed in **every worktree
-on the machine, in every session**, with an assertion that reads like genuine Claude/Codex workflow
-drift and sends you hunting the wrong subsystem. Two sessions lost time to it independently on this
-date.
+on the git-hook path, which CI does not exercise.
+
+**Who it actually blocked — scoped precisely, because the first draft of this entry overstated it.**
+Not every worktree. `main`'s own `.husky/pre-commit` never invokes this test: it runs
+`node scripts/check-agent-workflows.mjs` conditionally, and its staged-path condition matches
+`scripts/agent-health-check.mjs` but not `…test.mjs`. The blocked worktrees are the ones whose
+`core.hooksPath` pointed at the abandoned PR #432 Codex checkout, whose older `pre-commit` runs
+`npm run test:agent-workflows` **unconditionally** (line 97). Husky ran that foreign script with cwd
+in the local checkout, so it executed the *local* copy of the test and produced a stack trace into
+it — which is why this looked like a local-branch failure. Two sessions hit it independently on this
+date; two further worktrees still carry the override.
+
+**Therefore this fix does not close the remaining exposure.** Worktrees still pointing at the foreign
+checkout keep running that checkout's gate. Those need
+`git config --worktree --unset core.hooksPath` per worktree — `--worktree` is load-bearing, since the
+bare `--unset` form deletes the correct repo-wide `.husky` value and leaves the foreign override
+winning, which is strictly worse. Verify with `git config --show-origin --get-all core.hooksPath`,
+which must print exactly one line: `file:C:/CRX_Manager/.git/config  .husky`.
 
 **Collateral damage, which is the worse half.** Because the fixture's `git init` / `git config` land
 on the real git dir, each blocked commit also flipped `core.bare = true` on the shared
@@ -45,6 +59,12 @@ changed.
   the mechanism: `core.bare` went `true` and the identity was replaced. Both were repaired and
   verified — `core.bare=false`, identity restored to the value observed before the run
   (`Mason Wells <masonwells1@users.noreply.github.com>`).
+- **Withdrawn claim.** An earlier draft said this was "proven on the real hook path" because the
+  commit of this change passed the gate with `core.bare` left clean. That proof does not exist: the
+  successful commit ran `test:agent-workflows` **zero** times, because `main`'s `pre-commit` does not
+  invoke it — verified by grepping both commit transcripts (failed attempt under the foreign gate: 1
+  occurrence; successful commit: 0). The repo stayed clean because the test never ran, not because it
+  ran and behaved. The mutation test above is the actual evidence, and it stands.
 - **Blast radius checked:** `git log --all --author="hooks-test@example.invalid"` returns **0**
   commits. Nothing was misattributed. The 8 `Ledger Test <ledger-test@example.invalid>` commits are
   the separate, already-documented 2026-08-26 incident and are branch-only.
