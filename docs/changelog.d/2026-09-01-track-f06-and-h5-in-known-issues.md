@@ -12,7 +12,16 @@ copied forward from the earlier PR's description.
 
 ### F06 — a reloaded chemical line goes stale on an acreage change, and the save is then REFUSED
 
-A line saved as 1.5 pt/ac over 100 acres still reads 150 pt at 200 acres.
+A line saved as 1.5 pt/ac, quantity 150, over 100 acres still reads 1.5 and 150 at 200 acres — and
+1.5 × 200 is 300, so the two numbers no longer agree.
+
+**A fourth Codex finding fixed the framing.** The entry originally said the quantity "should read
+300". That is true only if the operator typed the *rate*. If they typed the *total*, the correct
+line at 200 acres is quantity 150 with the rate becoming 0.75 — and `applyChemEdit` back-solves the
+other field either way, so both histories produce an identical saved row. Asserting 300 silently
+assumes one case and would steer a fixer toward overwriting an operator's typed total: precisely the
+harm the rest of the entry warns about. The entry was internally inconsistent, and now presents both
+readings in a table.
 
 **The first draft of this entry called that a silent billing gap. Codex's review of PR #538 showed
 it is not, and the correction landed before the entry ever merged.** For a priced line the applied

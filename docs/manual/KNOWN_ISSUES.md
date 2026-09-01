@@ -217,9 +217,23 @@ first draft of this entry called it a silent billing gap. **It is not** — the 
 save. The corrected characterisation is below; the mistake is recorded because prescribing a
 migration for an already-guarded path would have misdirected the fix.
 
-**Plain English:** open a saved job, change the acres, and a chemical line keeps the quantity it
-was saved with. A line saved as **1.5 pt/ac over 100 acres** (quantity 150) still reads **150 pt at
-200 acres** when it should read 300. The rate on screen and the quantity on screen no longer agree.
+**Plain English:** open a saved job, change the acres, and a chemical line keeps both numbers it was
+saved with. A line saved as **1.5 pt/ac, quantity 150, over 100 acres** still reads 1.5 and 150 at
+**200 acres** — and 1.5 × 200 is 300, so the two numbers on screen no longer agree with each other.
+
+**Which number is wrong depends on what the operator originally typed, and the saved row does not
+record that.** Both readings are legitimate:
+
+| The operator typed… | At 200 acres the correct line is | Because |
+|---|---|---|
+| the **rate** (1.5 pt/ac) | rate 1.5, quantity **300** | the rate is authoritative; the total follows it |
+| the **total** (150 pt) | quantity 150, rate **0.75** | the typed total is authoritative; the rate follows it |
+
+`applyChemEdit` back-solves the other field either way, so a saved row of `(1.5, 150, 100 ac)` is
+produced *identically* by both. **This is the whole of F06** — not that the line is stale, but that
+nothing on the row says which field to trust. An earlier draft of this entry asserted the quantity
+"should read 300", which silently assumes the rate-driven case and would push a fixer toward
+overwriting an operator's typed total. Caught by Codex on PR #538.
 
 **What actually happens when you save.** For a **priced** line, `save_job` refuses the whole job
 save with `CHEM_QUANTITY_NOT_DERIVED` and a plain-English message: *"…is quoted at 1.5 per acre over
