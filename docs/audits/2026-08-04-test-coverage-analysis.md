@@ -116,6 +116,15 @@ Never gated on: `math-invoice-verification`, `math-commission-verification`,
 all nine `golive/stream*` suites. The behavioral money coverage that would catch a
 cents/allocation regression exists and is not enforced.
 
+> **Correction, 2026-08-31.** The sentence above is wrong in a way that *understates* this
+> finding. CI does not run `npm run test:e2e:smoke`: the `e2e-smoke` job in `ci.yml` has been
+> pinned `if: false` since `0474fa47` (2026-05-18, "disable E2E smoke job until staging Supabase
+> exists"), which is two and a half months *before* this audit was written. The claim was
+> therefore false when made, not merely overtaken by events. The real figure is not 99.4% — it is
+> **100%**, including the 6 `@smoke` tests this finding treats as covered. CI provides no browser
+> coverage at all. Original text left intact; see
+> `docs/changelog.d/2026-08-31-ci-claims-no-browser-coverage.md`.
+
 The cause is structural, not neglect: `playwright.config.ts` points at
 `http://localhost:5173` backed by `VITE_SUPABASE_URL` — the **production** Supabase
 project. Running 1,075 mutating tests against production is not an option, so the suite
