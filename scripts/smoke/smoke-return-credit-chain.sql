@@ -131,6 +131,11 @@ BEGIN
   -- --------------------------------------------------------------------
   -- 0. Preconditions + auth as a real active admin
   -- --------------------------------------------------------------------
+  -- The disposable PostgreSQL image defaults to UTC. Pin the same business
+  -- timezone used by CRX before the first CURRENT_DATE baseline or fixture so
+  -- an evening US run cannot cross from tomorrow-in-UTC back to today locally.
+  PERFORM set_config('TimeZone', 'America/Chicago', true);
+
   IF EXISTS (
     SELECT 1 FROM accounting_periods
     WHERE status = 'closed' AND CURRENT_DATE BETWEEN period_start AND period_end
@@ -1072,6 +1077,9 @@ BEGIN
       v_status, v_cents, v_stmt_sum, v_cogs, v_n, v_uuid, v_by;
   END IF;
   RAISE NOTICE 'CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN';
+  IF NOT EXISTS (SELECT 1 FROM invoices WHERE id = v_source_posted_id) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: posted source invoice disappeared during credit issuance';
+  END IF;
 
   -- A posted return credit is order-linked and deliberately has no delivery_id.
   -- It must not count as an order-level sales invoice and suppress either the
@@ -1131,6 +1139,9 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: follow-up delivery produced % active invoices', v_n;
   END IF;
   RAISE NOTICE 'RETURN_CREDIT_FOLLOWUP_AUTO_INVOICE_PROVEN';
+  IF NOT EXISTS (SELECT 1 FROM invoices WHERE id = v_source_posted_id) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: posted source invoice disappeared during follow-up completion';
+  END IF;
 
   SET LOCAL session_replication_role = replica;
   INSERT INTO deliveries (
@@ -1183,6 +1194,9 @@ BEGIN
       v_backfill_invoice_id, v_status, v_cents, v_cogs;
   END IF;
   RAISE NOTICE 'RETURN_CREDIT_UNBILLED_BACKFILL_PROVEN';
+  IF NOT EXISTS (SELECT 1 FROM invoices WHERE id = v_source_posted_id) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: posted source invoice disappeared during unbilled backfill';
+  END IF;
 
   BEGIN
     UPDATE invoices
@@ -1220,6 +1234,15 @@ BEGIN
     END IF;
   END;
   RAISE NOTICE 'RETURN_CREDIT_HEADER_DELETE_GUARD_PROVEN';
+  IF NOT EXISTS (
+    SELECT 1 FROM invoices
+    WHERE id = v_source_posted_id AND customer_id = v_customer_id
+      AND invoice_type = 'chemical_sale' AND status = 'posted'
+      AND invoice_date = CURRENT_DATE AND deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: posted source recognition changed during header/parent guards: %',
+      (SELECT row_to_json(i) FROM invoices i WHERE i.id = v_source_posted_id);
+  END IF;
 
   BEGIN
     DELETE FROM returns WHERE id = v_return_id;
@@ -1274,6 +1297,15 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: source hard-delete guard raised %', v_reason;
     END IF;
   END;
+  IF NOT EXISTS (
+    SELECT 1 FROM invoices
+    WHERE id = v_source_posted_id AND customer_id = v_customer_id
+      AND invoice_type = 'chemical_sale' AND status = 'posted'
+      AND invoice_date = CURRENT_DATE AND deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: posted source recognition changed during source guards: %',
+      (SELECT row_to_json(i) FROM invoices i WHERE i.id = v_source_posted_id);
+  END IF;
 
   BEGIN
     -- Simulate the narrow internal context that bypasses the sale-only
@@ -1375,6 +1407,15 @@ BEGIN
      OR v_qty <> -15 OR v_cents <> -15000 OR v_cogs <> -6700 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: COGS lines rows=% cost_rows=% zero_rows=% qty=% revenue=% cogs=%',
       v_total_rows, v_credit_rows, v_n, v_qty, v_cents, v_cogs;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM invoices
+    WHERE id = v_source_posted_id AND customer_id = v_customer_id
+      AND invoice_type = 'chemical_sale' AND status = 'posted'
+      AND invoice_date = CURRENT_DATE AND deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: posted source recognition changed during lineage guards: %',
+      (SELECT row_to_json(i) FROM invoices i WHERE i.id = v_source_posted_id);
   END IF;
   SELECT count(*) INTO v_n FROM pg_constraint
   WHERE conrelid = 'public.return_items'::regclass
@@ -1532,6 +1573,16 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: detailed statement unexpectedly rendered % credit_memo items', v_n;
   END IF;
 
+  IF NOT EXISTS (
+    SELECT 1 FROM invoices
+    WHERE id = v_source_posted_id AND customer_id = v_customer_id
+      AND invoice_type = 'chemical_sale' AND status = 'posted'
+      AND invoice_date = CURRENT_DATE AND deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: posted source recognition changed during report checks: %',
+      (SELECT row_to_json(i) FROM invoices i WHERE i.id = v_source_posted_id);
+  END IF;
+
   -- 7. Two fractional returns consume the final 501-cent source unit without
   -- double-rounding it. The first half receives 251 cents and the second gets
   -- the remaining 250 cents; together every recognized source cent is reversed
@@ -1565,8 +1616,29 @@ BEGIN
   FROM get_bottom_line_pnl(CURRENT_DATE - 2, CURRENT_DATE)
   WHERE line_item = 'Cost of Goods Sold';
   IF v_qty - v_pnl_cogs_before <> 250::numeric THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: fractional credit A PNL COGS delta=% (expected 250 whole cents)',
-      v_qty - v_pnl_cogs_before;
+    SELECT jsonb_agg(jsonb_build_object(
+      'invoice_number', i.invoice_number,
+      'invoice_type', i.invoice_type,
+      'status', i.status,
+      'invoice_date', i.invoice_date,
+      'deleted_at', i.deleted_at,
+      'header_cost_cents', i.total_cost_cents,
+      'line_cost_cents', (SELECT COALESCE(SUM(ROUND(ii.cost_cents * ii.quantity)::bigint), 0)
+                          FROM invoice_items ii WHERE ii.invoice_id = i.id),
+      'report_cost_cents', CASE
+        WHEN i.invoice_type = 'credit_memo'
+         AND EXISTS (SELECT 1 FROM returns r WHERE r.credit_invoice_id = i.id)
+          THEN i.total_cost_cents
+        ELSE (SELECT COALESCE(SUM(ROUND(ii.cost_cents * ii.quantity)::bigint), 0)
+              FROM invoice_items ii WHERE ii.invoice_id = i.id)
+      END
+    ) ORDER BY i.invoice_number)
+    INTO v_res2
+    FROM invoices i
+    WHERE i.customer_id = v_customer_id
+      AND i.invoice_date BETWEEN CURRENT_DATE - 2 AND CURRENT_DATE;
+    RAISE EXCEPTION 'SMOKE_FAIL: fractional credit A PNL COGS delta=% (expected 250 whole cents); invoices=%',
+      v_qty - v_pnl_cogs_before, v_res2;
   END IF;
   v_res2 := get_monthly_summary(CURRENT_DATE - 2, CURRENT_DATE);
   IF (v_res2 #>> '{invoices,total_cost_cents}')::numeric - v_monthly_cost_before <> 250::numeric THEN

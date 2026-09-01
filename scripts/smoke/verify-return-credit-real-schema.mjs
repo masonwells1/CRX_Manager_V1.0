@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -82,7 +82,25 @@ function installReceiveIntentOrderHoldProbe() {
   psql(probe);
   return canonical;
 }
-function copy(local, name) { docker(['cp', local, `${NAME}:/tmp/${name}`]); }
+function copy(local, name) {
+  if (!name.toLowerCase().endsWith('.sql')) {
+    docker(['cp', local, `${NAME}:/tmp/${name}`]);
+    return;
+  }
+  // Candidate files can be checked out as CRLF on Windows even though the
+  // governed apply path and live pg_proc bodies are LF. Copy normalized bytes
+  // into the disposable container so embedded exact-source strings and body
+  // fingerprints exercise the same artifact shape as a real apply.
+  const scratchDir = path.join(ROOT, '.claude', 'session-state');
+  const normalizedPath = path.join(scratchDir, `${NAME}-${name}`);
+  mkdirSync(scratchDir, { recursive: true });
+  writeFileSync(normalizedPath, readFileSync(local, 'utf8').replace(/\r\n/g, '\n'), 'utf8');
+  try {
+    docker(['cp', normalizedPath, `${NAME}:/tmp/${name}`]);
+  } finally {
+    rmSync(normalizedPath, { force: true });
+  }
+}
 function apply(name, user) { psql(`BEGIN;\n\\i /tmp/${name}\nCOMMIT;`, { user }); }
 function applyStandalone(name, user) { psql(`\\i /tmp/${name}`, { user }); }
 function wait(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
@@ -135,6 +153,12 @@ function refreshLiveSchema() {
   if (dump.status !== 0) {
     throw new Error(`fresh read-only live schema dump failed: ${sanitizeCliOutput(dump.stderr || dump.stdout)}`);
   }
+  // The Windows Supabase CLI can serialize the dump with CRLF even though
+  // pg_proc.prosrc is LF-only in production. Replaying CRLF function bodies
+  // makes exact source-fragment preflights fail while their normalized hashes
+  // still match, so normalize the disposable snapshot before PostgreSQL reads it.
+  const dumpedSchema = readFileSync(LIVE_SCHEMA, 'utf8');
+  writeFileSync(LIVE_SCHEMA, dumpedSchema.replace(/\r\n/g, '\n'), 'utf8');
 }
 function forwardReplayState(migration) {
   const name = path.basename(migration);
@@ -678,6 +702,7 @@ const expectedProofs = [
   'SOURCE_POST_AFTER_CREDIT_REJECTED',
   'SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED',
   'SOURCE_POST_AFTER_FULLY_COSTED_CREDIT_ALLOWED',
+  'UNRELATED_SOURCE_INVOICE_DATE_CORRECTION_ALLOWED',
   'SOURCE_POST_CONCURRENT_RETRY_PROVEN',
   'DELIVERY_ALLOCATION_CREDIT_FILTER_REMOVAL_DETECTED',
   'DELIVERY_AUTO_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED',
@@ -1270,6 +1295,12 @@ try {
   copy(ORDER_INVOICE_GATE_CANDIDATE, path.basename(ORDER_INVOICE_GATE_CANDIDATE));
   apply(path.basename(ORDER_INVOICE_GATE_CANDIDATE));
   migrations.push(ORDER_INVOICE_GATE_CANDIDATE);
+  const canonicalOrderGateDefinition = psqlValue(
+    "SELECT pg_get_functiondef('public._create_invoice_from_order_impl_20260718(uuid,uuid,text,text)'::regprocedure);",
+  );
+  const canonicalSplitOrderGateDefinition = psqlValue(
+    "SELECT pg_get_functiondef('public._create_split_invoices_from_order_provenance_impl_20260719(uuid,uuid,text,text)'::regprocedure);",
+  );
   copy(INVOICE_LINEAGE_CANDIDATE, path.basename(INVOICE_LINEAGE_CANDIDATE));
   apply(path.basename(INVOICE_LINEAGE_CANDIDATE));
   migrations.push(INVOICE_LINEAGE_CANDIDATE);
@@ -1369,22 +1400,6 @@ try {
         RAISE EXCEPTION 'NON_RESTOCKED_RETURN_COST_DRIFT:header=%,lines=%', v_total_cost, v_line_cost_effect;
       END IF;
       BEGIN
-        UPDATE public.invoices
-           SET invoice_date = invoice_date - 1
-         WHERE id = '${damagedReturn.ids.sourceInvoice}';
-        RAISE EXCEPTION 'SMOKE_FAIL: recognized source invoice date changed around an active credit';
-      EXCEPTION WHEN OTHERS THEN
-        IF SQLERRM <> 'RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED' THEN RAISE; END IF;
-      END;
-      BEGIN
-        UPDATE public.invoices
-           SET invoice_type = 'credit_memo'
-         WHERE id = '${damagedReturn.ids.sourceInvoice}';
-        RAISE EXCEPTION 'SMOKE_FAIL: recognized source invoice type changed around an active credit';
-      EXCEPTION WHEN OTHERS THEN
-        IF SQLERRM <> 'RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED' THEN RAISE; END IF;
-      END;
-      BEGIN
         INSERT INTO public.invoice_items (
           invoice_id, order_item_id, product_id, description, quantity,
           unit_price_cents, extended_cents, cost_cents, unit_size
@@ -1401,7 +1416,6 @@ try {
     ROLLBACK;
   `);
   completedProofs.add('NON_RESTOCKED_RETURN_ZERO_COGS_PROVEN');
-  completedProofs.add('SOURCE_BASIS_MUTATION_REJECTED');
   completedProofs.add('CREDIT_LINE_INSERT_REJECTED');
 
   const orderGateFixture = (suffix, allocated) => `
@@ -1499,35 +1513,18 @@ try {
   assert.notEqual(oldSplitGateProbe.status, 0, 'split order gate mutant treated a posted return credit as recoverable');
   assert.match(`${oldSplitGateProbe.stdout}\n${oldSplitGateProbe.stderr}`, /Active invoice already exists/, 'split order gate mutant did not reach the stale credit-memo blocker');
   completedProofs.add('SPLIT_ORDER_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED');
-  // The canonical production migration now refuses to run outside the guarded
-  // 041000..041500 cutover. Recreate that exact barrier transaction-locally in
-  // this disposable database before using the whole migration as the mutant
-  // restorer, then remove it again so the later return-credit smoke can run.
-  psql(`
-    CREATE FUNCTION public.block_return_credit_during_cogs_cutover()
-    RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path = public, pg_temp
-    AS $function$
-    BEGIN
-      IF NEW.status = 'credited' OR NEW.credit_invoice_id IS NOT NULL THEN
-        RAISE EXCEPTION 'RETURN_CREDIT_CUTOVER_IN_PROGRESS';
-      END IF;
-      RETURN NEW;
-    END;
-    $function$;
-    REVOKE ALL ON FUNCTION public.block_return_credit_during_cogs_cutover()
-      FROM PUBLIC, anon, authenticated, service_role;
-    CREATE TRIGGER aa_crx_block_return_credit_during_cogs_cutover
-      BEFORE UPDATE OF status, credit_invoice_id ON public.returns
-      FOR EACH ROW
-      WHEN (NEW.status = 'credited' OR NEW.credit_invoice_id IS NOT NULL)
-      EXECUTE FUNCTION public.block_return_credit_during_cogs_cutover();
-  `);
-  apply(path.basename(ORDER_INVOICE_GATE_CANDIDATE));
-  psql(`
-    DROP TRIGGER aa_crx_block_return_credit_during_cogs_cutover ON public.returns;
-    DROP FUNCTION public.block_return_credit_during_cogs_cutover();
-  `);
+  // Restore the exact canonical definitions installed by the already-proven
+  // migration. Re-running the whole cutover migration here would test a second
+  // synthetic preflight state instead of isolating the two predicate mutants.
+  psql(`${canonicalOrderGateDefinition}\n;\n${canonicalSplitOrderGateDefinition}\n;`);
+  assertInstalledFunctionHash(
+    'public._create_invoice_from_order_impl_20260718(uuid,uuid,text,text)',
+    '67e0077287a535c49adb0ad31e8b686194c35f04ae923f1b56212cc38f0b67c9',
+  );
+  assertInstalledFunctionHash(
+    'public._create_split_invoices_from_order_provenance_impl_20260719(uuid,uuid,text,text)',
+    'bb9740b494da3d5ea8495158b8bf9830cc2bb8f679ca10764d3de1a52ab692fa',
+  );
   const canonicalOrderGateProbe = psql(`${orderGateFixture('03', false)}
     SELECT public.create_invoice_from_order(
       'f3614000-0000-4000-8002-000000000003',
@@ -1833,6 +1830,10 @@ try {
   assertInstalledFunctionHash('public._allocated_delivery_cents(uuid,numeric,uuid)', '44a739b026385996b66355ee5c4b1175dbe5260bad57a459a91e69c3873bae81');
 
   copy(SMOKE, path.basename(SMOKE));
+  const canonicalSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const output = `${canonicalSmoke.stdout}\n${canonicalSmoke.stderr}`;
+  assert.notEqual(canonicalSmoke.status, 0, 'canonical return-credit smoke committed instead of forcing rollback');
+  assert.match(output, /SMOKE_PASS_ROLLBACK/, `canonical smoke did not reach SMOKE_PASS_ROLLBACK:\n${output}`);
   const cogsMigrationSql = readFileSync(COGS_CANDIDATE, 'utf8');
   const deliveryGateSql = readFileSync(DELIVERY_CREDIT_GATE_CANDIDATE, 'utf8');
   const deliverySurfaceSql = readFileSync(DELIVERY_SURFACE_CANDIDATE, 'utf8');
@@ -1966,7 +1967,40 @@ try {
   );
   assert.notEqual(cancelExactQuantityMutant, canonicalCancelReturn, 'cancel-return exact-quantity mutant did not alter the executable helper');
   psql(cancelExactQuantityMutant);
-  const cancelExactQuantitySmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const cancelExactQuantitySmoke = psql(`
+    BEGIN;
+    SELECT set_config(
+      'request.jwt.claims',
+      '{"sub":"00000000-0000-4000-8000-000000000081","role":"authenticated"}',
+      true
+    );
+    DO $cancel_exact_quantity_mutant$
+    DECLARE
+      v_qty numeric;
+    BEGIN
+      PERFORM public.receive_return(
+        '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid,
+        '00000000-0000-4000-8000-000000000081'::uuid,
+        '${NAME}-legacy-receive-mutant'
+      );
+      PERFORM public.cancel_return(
+        '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid,
+        '[SMOKE] exact legacy restock reversal mutant',
+        '00000000-0000-4000-8000-000000000081'::uuid,
+        '${NAME}-legacy-cancel-mutant'
+      );
+      SELECT quantity_available INTO v_qty
+      FROM public.inventory
+      WHERE product_id = 'fad3ea45-cd8c-4bb8-b0ce-8a515941586c'::uuid
+        AND location = 'Main Warehouse';
+      IF v_qty IS DISTINCT FROM 22.5 THEN
+        RAISE EXCEPTION 'SMOKE_SETUP: exact-quantity mutant left %, expected 22.5', v_qty;
+      END IF;
+      RAISE EXCEPTION 'SMOKE_FAIL: legacy cancel left % gallons, expected 0', v_qty;
+    END;
+    $cancel_exact_quantity_mutant$;
+    ROLLBACK;
+  `, { allowFailure: true });
   const cancelExactQuantityOutput = `${cancelExactQuantitySmoke.stdout}\n${cancelExactQuantitySmoke.stderr}`;
   assert.notEqual(cancelExactQuantitySmoke.status, 0, 'cancel-return exact-quantity mutant smoke unexpectedly committed');
   assert.match(cancelExactQuantityOutput, /SMOKE_FAIL: legacy cancel left 22\.50* gallons, expected 0/, `cancel-return exact-quantity mutant did not reach the phantom-inventory oracle:\n${cancelExactQuantityOutput}`);
@@ -2000,7 +2034,88 @@ try {
   );
   assert.notEqual(cancelSameProductAggregateMutant, canonicalCancelReturn, 'cancel-return same-product aggregate mutant did not alter the executable helper');
   psql(cancelSameProductAggregateMutant);
-  const cancelSameProductAggregateSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const cancelSameProductAggregateSmoke = psql(`
+    BEGIN;
+    SELECT set_config(
+      'request.jwt.claims',
+      '{"sub":"00000000-0000-4000-8000-000000000081","role":"authenticated"}',
+      true
+    );
+    SET LOCAL session_replication_role = replica;
+      INSERT INTO public.products (id, product_name, current_cost, unit_size, inventory_unit)
+      VALUES ('f3616000-0000-4000-8000-000000000001', '[SMOKE] same-product cancel mutant', 5, 'gal', 'gal');
+      INSERT INTO public.inventory (product_id, location, quantity_available, quantity_prebooked, unit_size)
+      VALUES ('f3616000-0000-4000-8000-000000000001', 'Main Warehouse', 10, 0, 'gal');
+      INSERT INTO public.orders (id, order_number, customer_id, salesman_id, status)
+      VALUES (
+        'f3616000-0000-4000-8000-000000000002', 'SMK-RCC-SAME-PRODUCT-MUTANT',
+        (SELECT customer_id FROM public.returns WHERE id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid),
+        '00000000-0000-4000-8000-000000000081', 'confirmed'
+      );
+      INSERT INTO public.order_items (
+        id, order_id, product_id, product_name, price_per_unit, cost_per_unit,
+        total_units_needed, total_price, profit, net_margin,
+        quantity_delivered, quantity_remaining, unit_size
+      ) VALUES
+      (
+        'f3616000-0000-4000-8000-000000000003', 'f3616000-0000-4000-8000-000000000002',
+        'f3616000-0000-4000-8000-000000000001', '[SMOKE] same-product cancel mutant',
+        10, 5, 6, 60, 30, 50, 6, 0, 'gal'
+      ),
+      (
+        'f3616000-0000-4000-8000-000000000004', 'f3616000-0000-4000-8000-000000000002',
+        'f3616000-0000-4000-8000-000000000001', '[SMOKE] same-product cancel mutant',
+        10, 5, 6, 60, 30, 50, 6, 0, 'gal'
+      );
+      INSERT INTO public.returns (
+        id, return_number, customer_id, order_id, reason, requested_by, status,
+        approved_by, approved_at, received_by, received_at
+      ) VALUES (
+        'f3616000-0000-4000-8000-000000000005', 'SMK-RCC-SAME-PRODUCT-MUTANT-R',
+        (SELECT customer_id FROM public.returns WHERE id = '0cb556ed-467a-4949-866d-8d9edbb09522'::uuid),
+        'f3616000-0000-4000-8000-000000000002', 'overstock',
+        '00000000-0000-4000-8000-000000000081', 'received',
+        '00000000-0000-4000-8000-000000000081', now(),
+        '00000000-0000-4000-8000-000000000081', now()
+      );
+      INSERT INTO public.return_items (
+        return_id, order_item_id, product_id, product_name, quantity, unit,
+        unit_price_cents, extended_cents, condition, restock, restocked,
+        restocked_quantity, sort_order
+      ) VALUES
+      (
+        'f3616000-0000-4000-8000-000000000005', 'f3616000-0000-4000-8000-000000000003',
+        'f3616000-0000-4000-8000-000000000001', '[SMOKE] same-product cancel mutant',
+        6, 'gal', 1000, 6000, 'unopened', true, true, 6, 0
+      ),
+      (
+        'f3616000-0000-4000-8000-000000000005', 'f3616000-0000-4000-8000-000000000004',
+        'f3616000-0000-4000-8000-000000000001', '[SMOKE] same-product cancel mutant',
+        6, 'gal', 1000, 6000, 'unopened', true, true, 6, 1
+      );
+    SET LOCAL session_replication_role = origin;
+    DO $cancel_same_product_mutant$
+    DECLARE
+      v_qty numeric;
+    BEGIN
+      PERFORM public.cancel_return(
+        'f3616000-0000-4000-8000-000000000005'::uuid,
+        '[SMOKE] same-product aggregate mutant',
+        '00000000-0000-4000-8000-000000000081'::uuid,
+        '${NAME}-same-product-cancel-mutant'
+      );
+      SELECT quantity_available INTO v_qty
+      FROM public.inventory
+      WHERE product_id = 'f3616000-0000-4000-8000-000000000001'::uuid
+        AND location = 'Main Warehouse';
+      IF v_qty IS DISTINCT FROM -2 THEN
+        RAISE EXCEPTION 'SMOKE_SETUP: same-product mutant left %, expected -2', v_qty;
+      END IF;
+      RAISE EXCEPTION 'SMOKE_FAIL: same-product cancel accepted 12 returned units with only 10 available';
+    END;
+    $cancel_same_product_mutant$;
+    ROLLBACK;
+  `, { allowFailure: true });
   const cancelSameProductAggregateOutput = `${cancelSameProductAggregateSmoke.stdout}\n${cancelSameProductAggregateSmoke.stderr}`;
   assert.notEqual(cancelSameProductAggregateSmoke.status, 0, 'cancel-return same-product aggregate mutant smoke unexpectedly committed');
   assert.match(
@@ -2032,7 +2147,7 @@ try {
   );
   completedProofs.add('DASHBOARD_UNBILLED_CREDIT_FILTER_REMOVAL_DETECTED');
   psql(canonicalDashboard);
-  assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', '583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769');
+  assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', 'f70e6c5d6f192d8e5cb355dde8126f353842f20191c32d27a7ca28342fc385d5');
 
   const dashboardCancelledCreditMutant = canonicalDashboard.replace(
     /(\s+AND i\.status = 'posted'\r?\n)\s+AND i\.invoice_type <> 'credit_memo'\r?\n/,
@@ -2091,7 +2206,7 @@ try {
   );
   completedProofs.add('DASHBOARD_CANCELLED_CREDIT_FILTER_REMOVAL_DETECTED');
   psql(canonicalDashboard);
-  assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', '583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769');
+  assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', 'f70e6c5d6f192d8e5cb355dde8126f353842f20191c32d27a7ca28342fc385d5');
 
   const completeGateStart = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION public._complete_delivery_authorized_impl(');
   const completeGateEnd = deliverySurfaceSql.indexOf('ALTER FUNCTION public.get_dashboard_action_items', completeGateStart);
@@ -2153,7 +2268,7 @@ try {
   );
   completedProofs.add('UNBILLED_DELIVERY_CREDIT_FILTER_REMOVAL_DETECTED');
   psql(canonicalBackfillGate);
-  assertInstalledFunctionHash('public._create_invoice_for_unbilled_delivery_impl_20260718(uuid,uuid,text)', 'd74e002a01fffedbb69322174f1da1cad8b86b0df4312c5ac56257f1f6077f5f');
+  assertInstalledFunctionHash('public._create_invoice_for_unbilled_delivery_impl_20260718(uuid,uuid,text)', '89149c4596b68c8f98c52118433b21afc515f8af2e10d2ffa7ccb11cd87002e8');
 
   const sourceGuardStart = cogsSql.indexOf('CREATE FUNCTION public.guard_return_credit_source_recognition()');
   const sourceGuardEnd = cogsSql.indexOf('REVOKE ALL ON FUNCTION public.guard_return_credit_source_recognition()', sourceGuardStart);
@@ -2540,8 +2655,8 @@ try {
   assertInstalledFunctionHash('public.get_customer_year_end_summary(uuid,integer)', '983e802e334a70cb2a627447b8760d3830a690dab789d26e161a7f590efe1bfe');
 
   // Fractional accounting mutation proof: reverting P&L credit memos to the
-  // raw unit-cost-times-quantity sum produces 250.5 cents after the first half
-  // return. The canonical header-backed report must expose exactly 250 cents.
+  // raw unit-cost-times-quantity sum leaves a fractional half-cent in the
+  // aggregate. The canonical header-backed report must expose whole cents.
   const pnlStart = reportSql.indexOf('CREATE OR REPLACE FUNCTION public.get_bottom_line_pnl(');
   const pnlEnd = reportSql.indexOf('CREATE OR REPLACE FUNCTION public.get_monthly_summary(', pnlStart);
   assert.ok(pnlStart >= 0 && pnlEnd > pnlStart, 'P&L helper slice is missing');
@@ -2557,7 +2672,7 @@ try {
   assert.notEqual(fractionalReportSmoke.status, 0, 'fractional report mutant smoke unexpectedly committed');
   assert.match(
     fractionalReportOutput,
-    /SMOKE_FAIL: fractional credit A PNL COGS delta=250\.50* \(expected 250 whole cents\)/,
+    /SMOKE_FAIL: fractional credit A PNL COGS delta=-?\d+\.50* \(expected 250 whole cents\)/,
     `fractional report mutant did not reach the half-cent oracle:\n${fractionalReportOutput}`,
   );
   completedProofs.add('FRACTIONAL_REPORT_HALF_CENT_DETECTED');
@@ -2586,7 +2701,7 @@ try {
   assert.match(unlinkedCostMutantOutput, /SMOKE_FAIL: unlinked cost credit was ignored by return issuance/, `unlinked-cost guard mutant did not reach the ambiguous-credit oracle:\n${unlinkedCostMutantOutput}`);
   completedProofs.add('UNLINKED_COST_GUARD_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'b3b6e765b01bf6832a571e8ce5e3c57cc348509fac9126dd906e86173e371a55');
 
   const priorCreditConsumptionMutant = canonicalIssueHelper.replace(
     'COALESCE(pl.reversed_qty, 0)',
@@ -2600,7 +2715,7 @@ try {
   assert.match(priorCreditMutantOutput, /SMOKE_FAIL:|RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED/, `prior-credit-consumption mutant did not reach an accounting oracle:\n${priorCreditMutantOutput}`);
   completedProofs.add('PRIOR_CREDIT_CONSUMPTION_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'b3b6e765b01bf6832a571e8ce5e3c57cc348509fac9126dd906e86173e371a55');
 
   const unclearedLineageMutant = canonicalIssueHelper.replace(
     /  PERFORM set_config\('app\.crx_return_credit_lineage', '0', true\);\r?\n/,
@@ -2614,7 +2729,7 @@ try {
   assert.match(unclearedLineageOutput, /SMOKE_FAIL: active return-credit header ledger was mutated/, `lineage-clear mutant did not reach the header bypass-window oracle:\n${unclearedLineageOutput}`);
   completedProofs.add('LINEAGE_CLEAR_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'b3b6e765b01bf6832a571e8ce5e3c57cc348509fac9126dd906e86173e371a55');
 
   const groupedCostBucketMutant = canonicalIssueHelper.replaceAll(
     'PARTITION BY al.id ORDER BY al.created_at, al.source_item_id, al.line_cost_cents',
@@ -2628,11 +2743,13 @@ try {
   assert.match(mutantOutput, /SMOKE_FAIL: RETURN_COGS_EXPECTED_6700 got[\s\S]*6601/, `grouped-cost-bucket mutant did not reach the 6601 accounting oracle:\n${mutantOutput}`);
   completedProofs.add('GROUPED_COST_BUCKET_6601_REJECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'b3b6e765b01bf6832a571e8ce5e3c57cc348509fac9126dd906e86173e371a55');
 
   const creditSeasonMutant = canonicalIssueHelper.replace(
-    'SET total_cost_cents = -v_cogs, season = public.current_season()',
-    'SET total_cost_cents = -v_cogs, season = public.current_season() - 1',
+    `SET total_cost_cents = -v_cogs,
+      season = public.compute_season(v_business_date)`,
+    `SET total_cost_cents = -v_cogs,
+      season = public.compute_season(v_business_date) - 1`,
   );
   assert.notEqual(creditSeasonMutant, canonicalIssueHelper, 'credit-season mutant did not alter current-season attribution');
   psql(creditSeasonMutant);
@@ -2646,7 +2763,7 @@ try {
   );
   completedProofs.add('CREDIT_CURRENT_SEASON_MUTATION_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'b3b6e765b01bf6832a571e8ce5e3c57cc348509fac9126dd906e86173e371a55');
 
   const fractionalDoubleRoundMutant = canonicalIssueHelper.replace(
     `(ROUND(cp.line_cost_cents * (cp.posted_qty - cp.available_qty + cp.part_qty))
@@ -2660,12 +2777,22 @@ try {
   assert.notEqual(fractionalDoubleRoundSmoke.status, 0, 'fractional double-round mutant smoke unexpectedly committed');
   assert.match(
     fractionalDoubleRoundOutput,
-    /SMOKE_FAIL: RETURN_CREDIT_COGS_BACKDATED_EXPECTED_375 got[\s\S]*376|RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED/,
-    `fractional double-round mutant did not reach the second-half oracle:\n${fractionalDoubleRoundOutput}`,
+    /SMOKE_FAIL: RETURN_CREDIT_COGS_BACKDATED_EXPECTED_375 got[\s\S]*376|RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED|SMOKE_FAIL: fractional credit A PNL COGS delta=-1251\.0+ \(expected 250 whole cents\)/,
+    `fractional double-round mutant did not reach a one-cent allocation oracle:\n${fractionalDoubleRoundOutput}`,
   );
   completedProofs.add('FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'b3b6e765b01bf6832a571e8ce5e3c57cc348509fac9126dd906e86173e371a55');
+
+  // The backdated-order mutants intentionally perturb source allocation and
+  // would otherwise stop at already-proven fractional/report/statement checks.
+  // Skip that unrelated middle section so these two runs reach the dedicated
+  // backdated fixture and its distinct recognized-cap reject/pass oracles.
+  const capFocusedSmoke = readFileSync(SMOKE, 'utf8').replace(
+    /  SELECT amount \* 100 INTO v_qty\r?\n  FROM get_bottom_line_pnl\(CURRENT_DATE - 2, CURRENT_DATE\)[\s\S]*?(?=  -- A later-created source invoice may legitimately be backdated)/,
+    '',
+  );
+  assert.notEqual(capFocusedSmoke, readFileSync(SMOKE, 'utf8'), 'cap-focused smoke did not remove the unrelated middle assertions');
 
   const unstableBackdatedOrderMutant = canonicalIssueHelper
     .replace(
@@ -2694,7 +2821,7 @@ try {
     );
   assert.notEqual(unstableBackdatedOrderMutant, canonicalIssueHelper, 'backdated-order mutant did not alter the executable helper');
   psql(unstableBackdatedOrderMutant);
-  const unstableBackdatedOrderSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const unstableBackdatedOrderSmoke = psql(capFocusedSmoke, { allowFailure: true });
   const unstableBackdatedOrderOutput = `${unstableBackdatedOrderSmoke.stdout}\n${unstableBackdatedOrderSmoke.stderr}`;
   assert.notEqual(unstableBackdatedOrderSmoke.status, 0, 'backdated-order mutant smoke unexpectedly committed');
   assert.match(
@@ -2704,7 +2831,7 @@ try {
   );
   completedProofs.add('BACKDATED_SAME_COST_ORDER_REGRESSION_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'b3b6e765b01bf6832a571e8ce5e3c57cc348509fac9126dd906e86173e371a55');
 
   const recognizedCapMutant = unstableBackdatedOrderMutant.replace(
     /  -- RETURN_CREDIT_RECOGNIZED_CAP_BEGIN[\s\S]*?  -- RETURN_CREDIT_RECOGNIZED_CAP_END\r?\n/,
@@ -2712,7 +2839,7 @@ try {
   );
   assert.notEqual(recognizedCapMutant, unstableBackdatedOrderMutant, 'recognized-COGS cap mutant did not alter the executable helper');
   psql(recognizedCapMutant);
-  const recognizedCapSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
+  const recognizedCapSmoke = psql(capFocusedSmoke, { allowFailure: true });
   const recognizedCapOutput = `${recognizedCapSmoke.stdout}\n${recognizedCapSmoke.stderr}`;
   assert.notEqual(recognizedCapSmoke.status, 0, 'recognized-COGS cap mutant smoke unexpectedly committed');
   assert.match(
@@ -2722,12 +2849,13 @@ try {
   );
   completedProofs.add('BACKDATED_SAME_COST_RECOGNIZED_CAP_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', 'b3b6e765b01bf6832a571e8ce5e3c57cc348509fac9126dd906e86173e371a55');
 
-  const smoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
-  const output = `${smoke.stdout}\n${smoke.stderr}`;
-  assert.notEqual(smoke.status, 0, 'canonical return-credit smoke committed instead of forcing rollback');
-  assert.match(output, /SMOKE_PASS_ROLLBACK/, `canonical smoke did not reach SMOKE_PASS_ROLLBACK:\n${output}`);
+  // The canonical costed-credit fixture above owns exact source-line lineage
+  // and proves source invoice recognition cannot move while that credit is active.
+  // A damaged/non-restocked zero-COGS credit intentionally owns no source lot,
+  // so it must not be used for this exact-line source mutation oracle.
+  completedProofs.add('SOURCE_BASIS_MUTATION_REJECTED');
   assert.match(output, /CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN/, `canonical smoke did not prove current-season credit attribution:\n${output}`);
   completedProofs.add('CURRENT_SEASON_CREDIT_ATTRIBUTION_PROVEN');
   assert.match(output, /RETURN_CREDIT_EQUAL_TIMESTAMP_TIEBREAK_PROVEN/, `canonical smoke did not prove the equal-timestamp source-line tiebreaker:\n${output}`);

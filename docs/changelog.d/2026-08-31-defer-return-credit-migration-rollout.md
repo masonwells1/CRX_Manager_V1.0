@@ -13,4 +13,18 @@ The rejected `20260827223000` global ledger-order trigger is not part of the def
 Final review also hardened the staged sources before parking: soft-deleted invoices no longer
 count as delivery billing coverage, and cancel-return rejects a blank reason before returning an
 idempotent replay. Exact body and file hashes, the disposable verifier, and mutation tests were
-updated with those corrections. These safety fixes do not authorize or perform a live apply.
+updated with those corrections, including the next migration's fail-closed incoming-body pin.
+The disposable verifier now attributes its source-basis mutation proof to the canonical costed
+credit fixture that owns exact source-line lineage, rather than to a damaged zero-COGS credit
+that intentionally owns no source lot. It also normalizes the temporary Windows Supabase schema
+dump to LF before replay so exact source-fragment preflights reproduce production instead of
+failing on CRLF-only test artifacts. These safety fixes do not authorize or perform a live apply.
+Candidate SQL copied into that disposable database is LF-normalized for the same reason, matching
+the governed apply artifact instead of the Windows working-tree representation.
+The replay now pins `America/Chicago` before its first date baseline, preventing an evening run
+from creating fixtures on tomorrow's UTC date and then reporting them outside today's CRX business
+window. It proves the canonical chain before installing any deliberate mutants, restores exact
+migration-installed function definitions, isolates inventory mutations from unrelated reporting
+assertions, and keeps the recognized-COGS cap removal proof focused on its dedicated backdated
+fixture. The corrected full replay completed every proof, reached `SMOKE_PASS_ROLLBACK`, and left
+zero fixture residue; production remained read-only throughout.

@@ -38,6 +38,7 @@ const invoiceSource = readFileSync('src/pages/InvoiceDetail.tsx', 'utf8');
 const recognizedInvoiceCustomers = readFileSync('src/lib/recognizedInvoiceCustomers.ts', 'utf8');
 const customerDetailPage = readFileSync('src/pages/CustomerDetail.tsx', 'utf8');
 const returnCreditSmoke = readFileSync('scripts/smoke/smoke-return-credit-chain.sql', 'utf8');
+const realSchemaVerifier = readFileSync('scripts/smoke/verify-return-credit-real-schema.mjs', 'utf8');
 
 describe('return-credit COGS migration', () => {
   const functionBodySha256 = (sql: string, name: string) => {
@@ -453,6 +454,7 @@ describe('return-credit COGS migration', () => {
   });
 
   it('measures report behavior as a fixture delta instead of company-wide absolutes', () => {
+    expect(returnCreditSmoke).toContain("PERFORM set_config('TimeZone', 'America/Chicago', true)");
     expect(returnCreditSmoke).toContain('v_pnl_revenue_before');
     expect(returnCreditSmoke).toContain('v_cents - v_pnl_revenue_before <> -1000');
     expect(returnCreditSmoke).toContain("(v_res #>> '{invoices,posted_count}')::bigint - v_monthly_posted_before <> 4");
@@ -509,7 +511,7 @@ describe('return-credit COGS migration', () => {
     const deliverySurfaceSha256 = createHash('sha256')
       .update(deliverySurfaceMigration.replace(/\r\n/g, '\n'), 'utf8')
       .digest('hex');
-    expect(deliverySurfaceSha256).toBe('6a82256d2e252641469bba409e96a98fd8f10750e413eb869fbd0f70cfe1f3ea');
+    expect(deliverySurfaceSha256).toBe('4e6749254e18982e8cfcd985940083a6a63bd9ef76a8df17273e77a1bd215fe1');
     expect(migrationHistory).toContain(`SQL sha256: \`${deliverySurfaceSha256}\` (LF-normalized bytes)`);
     const orderInvoiceGateSha256 = createHash('sha256')
       .update(orderInvoiceGateMigration.replace(/\r\n/g, '\n'), 'utf8')
@@ -526,6 +528,8 @@ describe('return-credit COGS migration', () => {
       .digest('hex');
     expect(invoiceLineageSha256).toBe('f56ebb6843c94c77968319fdf9c6e658eadd7a9387143a315499bcb7e2cf9437');
     expect(migrationHistory).toContain(`SQL sha256: \`${invoiceLineageSha256}\` (LF-normalized bytes)`);
+    expect(realSchemaVerifier).toContain("dumpedSchema.replace(/\\r\\n/g, '\\n')");
+    expect(realSchemaVerifier).toContain("readFileSync(local, 'utf8').replace(/\\r\\n/g, '\\n')");
   });
 
   it('does not claim field profitability consumes the credit-memo COGS reversal', () => {
