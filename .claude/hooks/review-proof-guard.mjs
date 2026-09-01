@@ -378,6 +378,52 @@ if (shellTool) {
   if (destructiveViews.some((v) => (hitsDestructiveVerb(v) && namesStateDir(v)) || redirectTargetsStateDir(v))) {
     deny("REVIEW PROOF GUARD: destructive or overwriting shell commands touching the .claude review state directory (or its parent) are blocked — it holds wrapper-owned proofs and the applied-source ledger. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
   }
+
+  // The enforcement surfaces that live OUTSIDE `.claude`. Added 2026-09-01, when
+  // `guarded-surface-lock` was removed (Mason's decision; see DECISION_LOG). That
+  // lock was an entire second hook — its own rule book, an unlock ceremony, and a
+  // module-load defect that silently disabled it — all for coverage this guard
+  // already provided everywhere under `.claude`. Everything below
+  // `.claude/hooks/**` was ALREADY blocked by the check above, so the lock's
+  // genuinely unique reach was only these four paths. Reuse the proven machinery
+  // instead of standing up a second rule book. @speed-bump — this is a
+  // command-text guard like the rest of the file: it raises the cost of a silent
+  // gate rewrite, it is not a boundary. The honest-scope paragraph at the top of
+  // this file governs it too.
+  //
+  // Same read/write split as above: this fires on a DESTRUCTIVE VERB aimed at one
+  // of these paths, or a redirect that writes INTO one. Reading them — `cat
+  // .husky/pre-push`, `grep -rn on: .github/workflows/` — is untouched, which is
+  // what routine work actually does.
+  //
+  // Both separators are accepted: the raw view carries Windows `\` paths, and the
+  // quote-stripped / backslash-dropped views carry the `/` forms.
+  // `.claude/hooks` is listed too, even though the state-dir rule above already
+  // names `.claude`. That rule fires on rm/mv-class verbs; the git verbs below
+  // are NOT in it, and the removed lock DID catch them. Without this line,
+  // deleting the lock would quietly drop `git checkout <rev> -- .claude/hooks/x`
+  // — a silent guard rewrite — from the protected set.
+  const ENFORCEMENT_SURFACE_RE =
+    /(?:^|[\s"'=:/\\(])(?:\.husky|\.github[/\\]workflows|\.codex[/\\]hooks|\.claude[/\\]hooks|\.coderabbit\.ya?ml)(?![\w-])/i;
+  // Overwrite verbs that carry their content from git history or a patch file
+  // rather than from the command text, so no redirect and no rm/mv appears.
+  // `git apply` / `patch` name their destinations INSIDE a file this scan cannot
+  // read — the documented "git subcommands bypass destination guards" class.
+  // The leading `\s` matters: it keeps `git commit -am "…"` from matching `am`.
+  const GIT_OVERWRITE_RE = /\bgit\b[^;&|\r\n]*\s(?:checkout|restore|apply|am|rm|mv)\b/i;
+  const PATCH_RE = /(?:^|[\s;&|(])patch(?![\w.-])/i;
+  const redirectTargetsEnforcementSurface = (v) => {
+    for (const m of v.matchAll(/>>?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
+      if (ENFORCEMENT_SURFACE_RE.test(m[1].replace(/["']/g, ""))) return true;
+    }
+    return false;
+  };
+  const overwritesEnforcementSurface = (v) =>
+    hitsDestructiveVerb(v) || GIT_OVERWRITE_RE.test(v) || PATCH_RE.test(v);
+  if (destructiveViews.some((v) =>
+    (overwritesEnforcementSurface(v) && ENFORCEMENT_SURFACE_RE.test(v)) || redirectTargetsEnforcementSurface(v))) {
+    deny("REVIEW PROOF GUARD: destructive or overwriting shell commands touching .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is allowed. Changing one is a deliberate edit through Edit/Write, which the `ask` tier in .claude/settings.json gates.");
+  }
 }
 if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {
   deny("REVIEW PROOF GUARD: shell commands from the wrapper-owned review state directory are blocked. Return to the repository root and run the real review wrapper.");

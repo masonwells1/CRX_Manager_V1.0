@@ -359,4 +359,90 @@ for (const payload of [
   assert.equal(result.stdout, "");
 }
 
+// ---------------------------------------------------------------------------
+// Enforcement surfaces outside `.claude`, absorbed here 2026-09-01 when
+// guarded-surface-lock was removed. These are the ONLY paths that lock covered
+// and this guard did not, so they are the whole replacement — if these stop
+// denying, the removal was a net loss of coverage and this suite must say so.
+// ---------------------------------------------------------------------------
+for (const command of [
+  "rm -f .husky/pre-push",
+  "rm -rf .husky",
+  "mv .husky/pre-commit /tmp/x",
+  "echo x > .husky/pre-push",
+  "printf 'exit 0' >> .husky/pre-commit",
+  "rm .github/workflows/ci.yml",
+  "echo broken > .github/workflows/ci.yml",
+  "rm -rf .codex/hooks",
+  "echo {} > .codex/hooks.json",
+  "rm .coderabbit.yaml",
+  "echo '' > .coderabbit.yml",
+  // Quote/backslash obfuscation must not help: the shell resolves these to the
+  // real path, and the guard tests every normalized view.
+  'r"m" -f .husky/pre-push',
+  "rm -f .hus\\ky/pre-push",
+  // Windows separators travel in the raw view.
+  "rm -f .github\\workflows\\ci.yml",
+  // Overwrite verbs whose CONTENT comes from git history or a patch file, so no
+  // redirect and no rm/mv ever appears in the command text. The removed lock
+  // caught these; dropping them would have been a silent loss of coverage.
+  "git checkout main -- .husky/pre-push",
+  "git restore --source=HEAD~5 .husky/",
+  "git checkout main -- .claude/hooks/sql-safety.mjs",
+  "git apply /tmp/disable-guards.patch .codex/hooks.json",
+  "patch -p1 .husky/pre-commit < /tmp/x.diff",
+  "git rm .github/workflows/ci.yml",
+  "git -C /repo checkout main -- .husky/pre-push",
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny: ${command}`);
+}
+
+// Reading them stays allowed — that is the whole reason this is a destructive-verb
+// rule and not a deny-every-mention rule. Routine work reads these constantly.
+for (const command of [
+  "cat .husky/pre-push",
+  "grep -rn typecheck .husky/",
+  "ls -la .github/workflows",
+  "head -20 .coderabbit.yaml",
+  "git diff .codex/hooks.json",
+  "git log --oneline .husky/",
+  "git show HEAD:.husky/pre-push",
+  // `-am` must not read as the `am` subcommand — this is why GIT_OVERWRITE_RE
+  // requires whitespace immediately before the verb.
+  "git commit -am wired .husky/pre-push",
+  // A redirect that READS one of these and writes somewhere harmless is not a
+  // write INTO the surface; the old lock got this wrong and blocked diagnostics.
+  "cat .husky/pre-push > /tmp/out.txt",
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  assert.equal(result.stdout, "", `must allow: ${command}`);
+}
+
+// Near-misses must NOT be swept up: the path components are whole words.
+for (const command of [
+  "rm -rf .husky-backup",
+  "rm -rf my.husky",
+  "rm -rf .github/ISSUE_TEMPLATE",
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  assert.equal(result.stdout, "", `must allow near-miss: ${command}`);
+}
+
+// KNOWN OVER-BLOCK, pinned deliberately rather than papered over. A dotted
+// SUFFIX on the review config (`.coderabbit.yaml.bak`) is refused, because the
+// boundary after the path group is `(?![\w-])` and `.` is neither. Widening it to
+// `(?![\w.-])` would fix this and simultaneously stop `.codex/hooks.json` from
+// matching at all — trading a harmless refusal of a backup file for a real hole
+// in the hook-registration coverage. Refusing more is the correct side to err on;
+// this test exists so the behavior is a recorded choice, not a latent surprise.
+{
+  const result = run({ tool_name: "Bash", tool_input: { command: "rm -f .coderabbit.yaml.bak" } });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /"permissionDecision":"deny"/);
+}
+
 console.log("OK - review proof guard checks passed.");

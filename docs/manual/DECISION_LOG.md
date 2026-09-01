@@ -7,7 +7,63 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-01 (later the same day) — the guarded-surface lock is DELETED; `review-proof-guard` absorbs its real coverage
+
+**Closes the open question in the two entries below, and supersedes both.** `guarded-surface-lock.mjs`,
+`guarded-surface-lib.mjs`, its test, and `scripts/guard-unlock.mjs` are removed. There is no unlock
+protocol any more; do not reintroduce one. The 2026-08-25 `ask` tier stays exactly as it is — it was
+always the real gate, and nothing here weakens it.
+
+**Mason's decision, 2026-09-01, after being shown the evidence below.**
+
+**Why.** Three independent lines of evidence pointed the same way.
+
+1. **It was never a boundary.** Proven 2026-08-31 by direct reproduction: with the surface LOCKED, a
+   five-line script writing through node's `fs` created a file inside `.claude/hooks/` and the hook
+   never fired. It inspects the arguments of tool calls; code an agent writes and then runs does its
+   writing inside its own process, where no tool call exists to inspect.
+2. **It failed OPEN exactly when it mattered.** A `SyntaxError` in its rule book killed the hook
+   process before `deny()` existed, so it emitted nothing — and a PreToolUse hook that emits no
+   decision is not a denial. Reproduced in isolation (exit 1, empty stdout). Its disabled state was
+   indistinguishable, from the agent's side, from its working state.
+3. **It failed CLOSED catastrophically the rest of the time.** Registered under `matcher: "*"`, a
+   runtime error in the rule book denied EVERY tool call in the session, including the ones needed to
+   repair it. That happened twice in fifteen minutes during ordinary two-step edits, and each recovery
+   required Mason to run a shell command outside the agent. A safety control whose normal failure mode
+   is a total outage costs more than the speed bump it buys.
+
+An exact-SHA `gpt-5.6-sol` review of the narrowed lock returned BLOCKERS with three HIGH findings —
+the read-only allowlist permitting `node -e` writes, uninspected process-input channels, and the
+module-load fail-open — and recommended, unprompted, that "command-text filtering can remain only as
+defense in depth." It reached the same conclusion from a cold read.
+
+**What replaced it, so this is not a net loss of coverage.** `review-proof-guard.mjs` already blocked
+destructive shell writes everywhere under `.claude/` — verified live: `echo test > .claude/hooks/x`
+was refused by the *proof guard*, not by the lock. So the lock's genuinely unique reach was four
+paths, now denied by the same proven machinery: `.husky/**`, `.github/workflows/**`, `.codex/hooks*`,
+`.coderabbit.yaml`. `.claude/hooks` is listed with them as well, because the lock also caught the
+overwrite verbs that carry content from history or a patch file — `git checkout|restore|apply|am|rm|mv`
+and `patch` — which the older `.claude` state-dir rule does not. Missing that would have been a silent
+loss; it is covered and mutation-tested.
+
+**Operative rules:**
+
+- Enforcement files are gated by TWO things and no third: the `ask` tier for native `Edit`/`Write`,
+  and `review-proof-guard.mjs` for destructive/overwriting shell and MCP routes. Reads are always
+  allowed on both.
+- Do not build another self-protecting hook over these files. The pattern was tried, hardened across
+  five adversarial rounds, and removed. If a gap needs closing, extend `review-proof-guard.mjs`.
+- **A `matcher: "*"` hook is a session-wide single point of failure.** Any hook registered that
+  broadly must be trivially simple, or a bug in it takes down every tool call. That is the general
+  lesson, independent of this lock.
+- The durable boundary is unchanged and is not in this repository: GitHub `protect-main` branch
+  protection, required checks, and formal review. Repository hooks are defense in depth.
+
 ## 2026-09-01 — the guarded surface is NARROWED to hook/registration files; whether the lock survives at all is an open owner decision
+
+**SUPERSEDED the same day by the entry above — the lock was deleted rather than kept narrowed.**
+Retained because the narrowing rationale explains what is and is not worth guarding.
+
 
 **Amends the 2026-08-31 entry below.** That entry's "operative rules" list a guarded set including
 `package.json`, `package-lock.json`, `scripts/(check|validate|verify)-*`, and the proof/review

@@ -116,12 +116,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/guarded-surface-lock.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/guarded-surface-lock.mjs'\"",
-            "timeout": 5
-          },
-          {
-            "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/review-proof-guard.mjs\"",
             "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/review-proof-guard.mjs'\"",
             "timeout": 5

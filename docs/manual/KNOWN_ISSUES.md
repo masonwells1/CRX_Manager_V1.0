@@ -321,7 +321,16 @@ feedback loop, not the enforcement boundary — and should be described that way
 (a CI assertion that `core.hooksPath` resolves to the tracked `.husky` on the runner), not another
 command-text rule. Tracked as a finding, deliberately unfixed, needs an owner decision.
 
-## OPEN 2026-09-01 — `guarded-surface-lock` fails OPEN on a syntax error in its own rule book, and its header claims the opposite
+## RESOLVED 2026-09-01 (by removal) — `guarded-surface-lock` failed OPEN on a syntax error in its own rule book, and its header claimed the opposite
+
+**Closed the same day it was found: the hook was deleted, not patched.** Mason's decision, recorded in
+`DECISION_LOG.md` (2026-09-01, "the guarded-surface lock is DELETED"). `review-proof-guard.mjs`
+absorbed the four enforcement paths the lock uniquely covered, plus the git/patch overwrite verbs it
+caught, so this is not a loss of coverage. Nothing below is live any more — it is kept because the
+failure *shape* generalizes to any future `matcher: "*"` hook: fail-open on module-load error,
+fail-closed-everything on runtime error, and no way to tell the two apart from inside the session.
+The original finding follows.
+
 
 `.claude/hooks/guarded-surface-lock.mjs` opens with "FAIL-CLOSED POSTURE: if the rule book throws,
 this hook denies rather than falling open." That is true for a **runtime** error and false for a

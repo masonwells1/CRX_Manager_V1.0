@@ -181,9 +181,7 @@
       "Edit(scripts/write-codex-push-proof.mjs)",
       "Write(scripts/write-codex-push-proof.mjs)",
       "Edit(scripts/run-claude-review.mjs)",
-      "Write(scripts/run-claude-review.mjs)",
-      "Edit(scripts/guard-unlock.mjs)",
-      "Write(scripts/guard-unlock.mjs)"
+      "Write(scripts/run-claude-review.mjs)"
     ],
     "deny": [
       "Bash(git push --force:*)",
@@ -311,11 +309,6 @@
       {
         "matcher": "*",
         "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guarded-surface-lock.mjs\"",
-            "timeout": 15
-          },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/review-proof-guard.mjs\"",
