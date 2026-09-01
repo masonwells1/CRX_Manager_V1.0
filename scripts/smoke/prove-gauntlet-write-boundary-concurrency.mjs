@@ -6,7 +6,8 @@
  *   - receiving reversal vs. accounting-period close;
  *   - receiving reversal vs. supplier-cost application;
  *   - vendor-bill creation vs. supplier-cost application;
- *   - cycle-count completion vs. item insertion.
+ *   - cycle-count completion vs. item insertion;
+ *   - cycle-count completion vs. attempted item re-parenting.
  *
  * The disposable functions contain only the reviewed locking/status slice.
  * Source assertions bind that slice to the checked-in forward migration.
@@ -170,6 +171,7 @@ function assertCheckedInMarkers() {
   const triggerBody = migration.slice(triggerStart, triggerEnd);
   assert.ok(triggerBody.indexOf('FOR UPDATE;') < triggerBody.indexOf('SET item_revision = item_revision + 1'));
   assert.match(triggerBody, /CYCLE_COUNT_NOT_IN_PROGRESS/);
+  assert.match(triggerBody, /CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN/);
 
   const billMigration = readFileSync(BILL_MIGRATION, 'utf8').replace(/\r\n/g, '\n');
   const vendor = billMigration.indexOf('FROM public.vendors v');
@@ -711,6 +713,45 @@ INSERT INTO public.cycle_count_items(id, cycle_count_id) VALUES ('${item}', '${c
   assert.equal(scalar(`SELECT count(*) FROM public.cycle_count_items WHERE id='${item}'`), '0');
 }
 
+async function proveCompletionCannotMissReparentedItem() {
+  const sourceCount = '00000000-0000-0000-0000-000000000403';
+  const destinationCount = '00000000-0000-0000-0000-000000000404';
+  const item = '00000000-0000-0000-0000-000000000503';
+  sql(`
+INSERT INTO public.cycle_counts(id) VALUES ('${sourceCount}'), ('${destinationCount}');
+INSERT INTO public.cycle_count_items(id, cycle_count_id) VALUES ('${item}', '${sourceCount}');
+`);
+
+  const completion = session(`
+BEGIN;
+SELECT id FROM public.cycle_counts WHERE id='${sourceCount}' FOR UPDATE;
+SELECT 'REPARENT_COMPLETION_LOCKED';
+SELECT pg_sleep(2);
+SELECT public.proof_complete_cycle_count('${sourceCount}', 1);
+COMMIT;
+`, 'REPARENT_COMPLETION_LOCKED');
+  await completion.ready;
+  const reparent = session(`
+SELECT 'REPARENT_STARTED';
+UPDATE public.cycle_count_items
+   SET cycle_count_id='${destinationCount}'
+ WHERE id='${item}';
+`, 'REPARENT_STARTED');
+  const [completionResult, reparentResult] = await Promise.all([completion.done, reparent.done]);
+  assert.equal(completionResult.code, 0, completionResult.stderr);
+  expectFailure(
+    reparentResult,
+    /CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN/,
+    'completion-first item reparent',
+  );
+  assert.equal(scalar(`SELECT status FROM public.cycle_counts WHERE id='${sourceCount}'`), 'completed');
+  assert.equal(
+    scalar(`SELECT cycle_count_id FROM public.cycle_count_items WHERE id='${item}'`),
+    sourceCount,
+  );
+  assert.equal(scalar(`SELECT item_revision FROM public.cycle_counts WHERE id='${destinationCount}'`), '0');
+}
+
 try {
   assertCheckedInMarkers();
   prepareContainer();
@@ -725,6 +766,7 @@ try {
   await proveBillFirstSerializesCostBasis();
   await proveInsertFirstMakesCompletionStale();
   await proveCompletionFirstRejectsLateInsert();
+  await proveCompletionCannotMissReparentedItem();
   console.log('GAUNTLET_WRITE_BOUNDARY_CONCURRENCY_PASS');
 } finally {
   if (CONTAINER.startsWith(PREFIX)) {

@@ -18,6 +18,8 @@ DECLARE
   v_void_bill uuid;
   v_period uuid;
   v_period_count integer;
+  v_notification_count integer;
+  v_notification_replay_count integer;
   v_receipt uuid;
   v_result jsonb;
   v_items jsonb;
@@ -348,6 +350,78 @@ BEGIN
     p_subtotal_cents := 100,
     p_idempotency_key := 'smk-s9-bill-create-' || v_suffix
   );
+
+  -- NULL and empty payment terms have different implementation semantics.
+  -- Reusing one key across those requests must fail before a second bill can
+  -- be created or a prior success can be reported for the changed intent.
+  PERFORM public.create_vendor_bill(
+    p_vendor_id := v_vendor,
+    p_bill_number := 'SMK-S9-NULL-TERMS-' || v_suffix,
+    p_bill_date := CURRENT_DATE,
+    p_payment_terms := NULL,
+    p_subtotal_cents := 100,
+    p_idempotency_key := 'smk-s9-null-terms-' || v_suffix
+  );
+  BEGIN
+    PERFORM public.create_vendor_bill(
+      p_vendor_id := v_vendor,
+      p_bill_number := 'SMK-S9-NULL-TERMS-' || v_suffix,
+      p_bill_date := CURRENT_DATE,
+      p_payment_terms := '',
+      p_subtotal_cents := 100,
+      p_idempotency_key := 'smk-s9-null-terms-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: NULL and empty payment terms shared an intent fingerprint';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'IDEMPOTENCY_INTENT_MISMATCH' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong NULL/empty terms replay error: %', v_err;
+    END IF;
+  END;
+
+  -- The browser key is derived from public receipt IDs, so server-side actor
+  -- and payload binding must reject a guessed key pre-seeded with other text.
+  PERFORM public.notify_damaged_receiving(
+    'SMK-S9-PO-' || v_suffix,
+    'damaged payload A',
+    v_po,
+    'smk-s9-damaged-notify-' || v_suffix
+  );
+  SELECT count(*) INTO v_notification_count
+  FROM public.notifications
+  WHERE notification_type = 'po_damaged_received'
+    AND related_entity_id = v_po
+    AND message LIKE '%damaged payload A%';
+  PERFORM public.notify_damaged_receiving(
+    'SMK-S9-PO-' || v_suffix,
+    'damaged payload A',
+    v_po,
+    'smk-s9-damaged-notify-' || v_suffix
+  );
+  SELECT count(*) INTO v_notification_replay_count
+  FROM public.notifications
+  WHERE notification_type = 'po_damaged_received'
+    AND related_entity_id = v_po
+    AND message LIKE '%damaged payload A%';
+  IF v_notification_count IS DISTINCT FROM v_notification_replay_count THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact damaged notification replay duplicated alerts';
+  END IF;
+  BEGIN
+    PERFORM public.notify_damaged_receiving(
+      'SMK-S9-PO-' || v_suffix,
+      'damaged payload B',
+      v_po,
+      'smk-s9-damaged-notify-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed damaged notification replayed a prior success';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'IDEMPOTENCY_INTENT_MISMATCH' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong changed damaged notification replay error: %', v_err;
+    END IF;
+  END;
 
   BEGIN
     PERFORM public.update_vendor_bill(

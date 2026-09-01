@@ -106,6 +106,15 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
     expect(page).toContain('p_po_overage_reason: poOverageReason');
   });
 
+  it('fingerprints the exact nullable bill text values passed to the implementation', () => {
+    expect(cumulativeBillMigration).toContain("'bill_number', p_bill_number");
+    expect(cumulativeBillMigration).toContain("'payment_terms', p_payment_terms");
+    expect(cumulativeBillMigration).toContain("'notes', p_notes");
+    expect(cumulativeBillMigration).not.toContain(
+      "'payment_terms', btrim(COALESCE(p_payment_terms, ''))",
+    );
+  });
+
   it('refuses unsupported historical commission balance cutoffs', () => {
     expect(commissionBalanceMigration).toContain(
       'HISTORICAL_COMMISSION_BALANCE_UNAVAILABLE',

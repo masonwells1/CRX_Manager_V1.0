@@ -167,6 +167,15 @@ DECLARE
   v_cycle_count_id uuid;
   v_status text;
 BEGIN
+  -- A move has two authoritative parents. Updating only the destination's
+  -- revision lets completion of the source count race past the removal. Keep
+  -- parent identity immutable; callers must delete then insert, which advances
+  -- both parent revisions through this same serialized trigger.
+  IF TG_OP = 'UPDATE'
+     AND NEW.cycle_count_id IS DISTINCT FROM OLD.cycle_count_id THEN
+    RAISE EXCEPTION 'CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN';
+  END IF;
+
   v_cycle_count_id := COALESCE(NEW.cycle_count_id, OLD.cycle_count_id);
 
   -- BEFORE timing is load-bearing for INSERT: it makes the not-yet-visible
@@ -251,6 +260,7 @@ BEGIN
      OR v_trigger_source NOT LIKE '%FROM public.cycle_counts cc%'
      OR v_trigger_source NOT LIKE '%FOR UPDATE%'
      OR v_trigger_source NOT LIKE '%CYCLE_COUNT_NOT_IN_PROGRESS%'
+     OR v_trigger_source NOT LIKE '%CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN%'
      OR strpos(v_trigger_source, 'FOR UPDATE')
         > strpos(v_trigger_source, 'SET item_revision = item_revision + 1') THEN
     RAISE EXCEPTION 'POSTCOND: cycle-count item serialization contract drifted';

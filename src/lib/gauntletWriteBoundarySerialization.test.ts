@@ -71,6 +71,10 @@ function assertCycleItemBoundary(candidate: string): void {
     || revision < parentLock
     || !body.includes("v_status IS DISTINCT FROM 'in_progress'")
     || !body.includes("RAISE EXCEPTION 'CYCLE_COUNT_NOT_IN_PROGRESS'")
+    || !body.includes(
+      'NEW.cycle_count_id IS DISTINCT FROM OLD.cycle_count_id',
+    )
+    || !body.includes("RAISE EXCEPTION 'CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN'")
   ) {
     throw new Error('cycle-count item serialization boundary missing');
   }
@@ -102,6 +106,10 @@ describe('gauntlet write-boundary serialization follow-up', () => {
         'AFTER INSERT OR UPDATE OR DELETE ON public.cycle_count_items',
       ),
       code.replace("v_status IS DISTINCT FROM 'in_progress'", 'false'),
+      code.replace(
+        "NEW.cycle_count_id IS DISTINCT FROM OLD.cycle_count_id",
+        'false',
+      ),
     ]) {
       const receivingStillValid = () => assertReceivingBoundary(mutant);
       const cycleStillValid = () => assertCycleItemBoundary(mutant);

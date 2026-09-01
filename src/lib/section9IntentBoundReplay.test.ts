@@ -89,6 +89,7 @@ describe('Section 9 actor-and-intent replay binding', () => {
   });
 
   it('retires a proven-stale client key so the current request can be retried safely', () => {
+    const newVendorBill = source('src', 'pages', 'NewVendorBill.tsx');
     const vendorBill = source('src', 'pages', 'VendorBillDetail.tsx');
     const purchaseOrder = source('src', 'pages', 'PurchaseOrderDetail.tsx');
     const quickReceive = source('src', 'components', 'receiving', 'QuickReceivePanel.tsx');
@@ -104,12 +105,40 @@ describe('Section 9 actor-and-intent replay binding', () => {
     expect(vendorBill).toContain('paymentIdem.resetKey();');
     expect(vendorBill).toContain('editIdem.resetKey();');
     expect(vendorBill).toContain('voidIdem.resetKey();');
+    expect(newVendorBill).toContain('getIdempotencyBindingRejection(err)');
+    expect(newVendorBill).toContain('createBillIdem.resetKey();');
+    expect(newVendorBill).toContain('this bill was not submitted');
+  });
+
+  it('binds damaged-receipt notification replay to actor and exact message intent', () => {
+    const start = migration.indexOf(
+      'CREATE OR REPLACE FUNCTION public.notify_damaged_receiving(',
+    );
+    expect(start).toBeGreaterThan(-1);
+    const body = migration.slice(start, migration.indexOf('$function$;', start));
+    for (const field of [
+      "'actor_id', v_actor",
+      "'po_number', p_po_number",
+      "'items_summary', p_items_summary",
+      "'po_id', p_po_id",
+    ]) expect(body).toContain(field);
+    expect(body).toContain(
+      "p_idempotency_key, 'notify_damaged_receiving', v_actor, v_fingerprint",
+    );
+    expect(body).toContain('request_fingerprint = v_fingerprint');
+    expect(body).toContain('request_actor_id = v_actor');
+    expect(body).not.toContain(
+      "check_idempotency(p_idempotency_key, 'notify_damaged_receiving')",
+    );
   });
 
   it('extends the rollback-only Section 9 smoke with changed-batch and changed-edit proofs', () => {
     const smoke = source('scripts', 'smoke', 'smoke-section9-po-ap-high-remediation.sql');
     expect(smoke).toContain('changed receive batch replayed a prior success');
     expect(smoke).toContain('changed vendor-bill edit replayed a prior success');
+    expect(smoke).toContain('NULL and empty payment terms shared an intent fingerprint');
+    expect(smoke).toContain('changed damaged notification replayed a prior success');
+    expect(smoke).toContain('exact damaged notification replay duplicated alerts');
     expect(smoke.match(/IDEMPOTENCY_INTENT_MISMATCH/g)?.length).toBeGreaterThanOrEqual(2);
     expect(smoke).toContain('SMOKE_PASS_ROLLBACK');
   });

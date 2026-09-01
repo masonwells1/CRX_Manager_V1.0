@@ -368,14 +368,87 @@ BEGIN
 END;
 $function$;
 
+-- A deterministic receipt-derived browser key is safe only when the database
+-- binds it to both the authenticated actor and the exact notification intent.
+-- The prior helper used key-only replay, so another permitted caller could
+-- pre-seed a guessed key and suppress a different damaged-receipt alert.
+CREATE OR REPLACE FUNCTION public.notify_damaged_receiving(
+  p_po_number text,
+  p_items_summary text,
+  p_po_id uuid,
+  p_idempotency_key text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  -- service_role has no auth.uid(); keep its trusted system calls in one
+  -- explicit actor namespace while browser calls remain user-bound.
+  v_actor uuid := COALESCE(auth.uid(), '00000000-0000-0000-0000-000000000000'::uuid);
+  v_fingerprint text;
+  v_replay jsonb;
+  v_admin record;
+BEGIN
+  IF auth.uid() IS NOT NULL AND NOT (public.is_admin() OR public.is_sales_rep()) THEN
+    RAISE EXCEPTION 'INSUFFICIENT_ROLE';
+  END IF;
+  IF p_idempotency_key IS NULL OR btrim(p_idempotency_key) = '' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: notify_damaged_receiving requires p_idempotency_key';
+  END IF;
+
+  v_fingerprint := encode(extensions.digest(convert_to(jsonb_build_object(
+    'actor_id', v_actor,
+    'po_number', p_po_number,
+    'items_summary', p_items_summary,
+    'po_id', p_po_id
+  )::text, 'UTF8'), 'sha256'), 'hex');
+  v_replay := public.check_idempotency_intent(
+    p_idempotency_key, 'notify_damaged_receiving', v_actor, v_fingerprint
+  );
+  IF v_replay IS NOT NULL THEN
+    IF v_replay -> 'result' IS NULL OR jsonb_typeof(v_replay -> 'result') = 'null' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+    END IF;
+    RETURN;
+  END IF;
+
+  FOR v_admin IN
+    SELECT id FROM public.profiles WHERE role = 'admin' AND is_active = true
+  LOOP
+    INSERT INTO public.notifications (
+      user_id, title, message, notification_type, related_entity_type, related_entity_id
+    ) VALUES (
+      v_admin.id,
+      'Damaged Items Received on ' || p_po_number,
+      'Items received in non-good condition on ' || p_po_number || ': ' || p_items_summary,
+      'po_damaged_received', 'purchase_order', p_po_id
+    );
+  END LOOP;
+
+  PERFORM public.save_idempotency(
+    p_idempotency_key, 'notify_damaged_receiving', '{}'::jsonb
+  );
+  UPDATE public.idempotency_keys
+     SET request_fingerprint = v_fingerprint,
+         request_actor_id = v_actor
+   WHERE idempotency_key = p_idempotency_key
+     AND operation = 'notify_damaged_receiving';
+  IF NOT FOUND THEN RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING'; END IF;
+END;
+$function$;
+
 REVOKE ALL ON FUNCTION public.receive_po_items(jsonb, uuid, text, boolean) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text, boolean, text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.record_vendor_payment(uuid, bigint, date, text, text, text, text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.void_vendor_bill(uuid, text, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.notify_damaged_receiving(text, text, uuid, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.receive_po_items(jsonb, uuid, text, boolean) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text, boolean, text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.record_vendor_payment(uuid, bigint, date, text, text, text, text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.void_vendor_bill(uuid, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.notify_damaged_receiving(text, text, uuid, text) TO authenticated, service_role;
 
 DO $section9_intent_postcond$
 BEGIN
@@ -387,7 +460,9 @@ BEGIN
      OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'record_vendor_payment') <> 1
      OR to_regprocedure('public.record_vendor_payment(uuid,bigint,date,text,text,text,text)') IS NULL
      OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'void_vendor_bill') <> 1
-     OR to_regprocedure('public.void_vendor_bill(uuid,text,text)') IS NULL THEN
+     OR to_regprocedure('public.void_vendor_bill(uuid,text,text)') IS NULL
+     OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'notify_damaged_receiving') <> 1
+     OR to_regprocedure('public.notify_damaged_receiving(text,text,uuid,text)') IS NULL THEN
     RAISE EXCEPTION 'SECTION9_INTENT_POSTCONDITION: public RPC overload/signature drift';
   END IF;
 END;

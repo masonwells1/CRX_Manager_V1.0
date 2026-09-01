@@ -16,6 +16,7 @@ import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection } from '../lib/idempotency';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
@@ -174,7 +175,23 @@ export default function NewVendorBill() {
       toast('success', 'Vendor bill created');
       navigate(`/accounts-payable/bills/${data}`);
     } catch (err) {
-      toast('error', sanitizeError(err));
+      const rejection = getIdempotencyBindingRejection(err);
+      if (rejection) {
+        // A bound key refusal proves this exact attempt did not run, and the
+        // refused key can never become usable. Retire it so the operator is not
+        // trapped, while acknowledging that an earlier attempt may exist.
+        createBillIdem.resetKey();
+        toast(
+          'warning',
+          rejection === 'actor'
+            ? 'That saved retry belongs to another user, so this bill was not submitted. Review the vendor bill list, then try again.'
+            : rejection === 'receipt'
+              ? 'The saved retry receipt could not be verified, so this bill was not submitted. Review the vendor bill list before trying again.'
+              : 'This form no longer matches the saved retry, so this bill was not submitted. Review the vendor bill list before trying again.',
+        );
+      } else {
+        toast('error', sanitizeError(err));
+      }
     }
     setSaving(false);
   };

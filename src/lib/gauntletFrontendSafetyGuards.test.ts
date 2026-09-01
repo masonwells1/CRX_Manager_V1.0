@@ -40,11 +40,14 @@ describe('gauntlet caller-side safety guards', () => {
     expect(integrity).toContain('p_idempotency_key: reconcileIdem.getKeyFor(scope)');
   });
 
-  it('deduplicates damaged-receipt alerts by the receiving records created by the receive RPC', () => {
+  it('deduplicates damaged-receipt alerts by receipt IDs with server-side intent binding', () => {
     const triggers = source('src/lib/notificationTriggers.ts');
     const detail = source('src/pages/PurchaseOrderDetail.tsx');
     const quickReceive = source('src/components/receiving/QuickReceivePanel.tsx');
     expect(triggers).toContain('damaged-receiving:${poId}:${[...receiptIntentIds].sort().join(\':\')}');
+    const migration = source('supabase/migrations/20260831233000_bind_section9_replays_to_intent.sql');
+    expect(migration).toContain("'items_summary', p_items_summary");
+    expect(migration).toContain("'actor_id', v_actor");
     expect(detail).toContain('await notifyDamagedReceiving(po.po_number, damagedItems, po.id, damagedReceiptIntentIds)');
     expect(quickReceive).toContain('await notifyDamagedReceiving(firstPO, damagedInfo, firstPOId, damagedReceiptIntentIds)');
   });

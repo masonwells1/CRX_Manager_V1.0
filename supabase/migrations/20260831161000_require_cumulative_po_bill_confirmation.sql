@@ -60,13 +60,17 @@ BEGIN
         'actor_id', v_actor,
         'vendor_id', p_vendor_id,
         'purchase_order_id', p_purchase_order_id,
-        'bill_number', btrim(COALESCE(p_bill_number, '')),
+        -- These nullable text inputs are passed to the mature implementation
+        -- unchanged. Keep their exact SQL values in the fingerprint too:
+        -- notably, NULL payment terms invoke vendor defaults while '' means an
+        -- explicit empty term with the implementation's fallback due interval.
+        'bill_number', p_bill_number,
         'bill_date', p_bill_date,
         'due_date', p_due_date,
-        'payment_terms', btrim(COALESCE(p_payment_terms, '')),
+        'payment_terms', p_payment_terms,
         'subtotal_cents', p_subtotal_cents,
         'adjustment_cents', COALESCE(p_adjustment_cents, 0),
-        'notes', btrim(COALESCE(p_notes, '')),
+        'notes', p_notes,
         'confirm_po_overage', COALESCE(p_confirm_po_overage, false),
         'po_overage_reason', v_reason
       )::text, 'UTF8'),
