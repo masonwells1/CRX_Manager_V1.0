@@ -32,16 +32,18 @@ invoice through `save_job`.
 
 The real harm is a **blocked save** — refusing one line rolls back the whole job.
 
-**A third Codex finding then corrected the correction.** The second draft claimed a margin residual
-on cost-only lines, reading line 760's price gate as a general exemption. It is not: that `CONTINUE`
-sits inside `IF v_qty = 0 THEN` at line 758, so it exempts only zero-quantity lines. A stale
-reloaded quantity is non-zero by definition and is refused whether or not the line is priced. The
-only skip open to a non-zero line requires both cost and price to be zero. **F06 has no margin
-residual at all** — it is purely a blocked save.
+**Two further Codex findings then corrected the correction, twice.** The second draft claimed a
+broad margin residual on cost-only lines, misreading line 760's price gate as a general exemption —
+it sits inside `IF v_qty = 0 THEN`. The third draft over-corrected to "no residual at all", on the
+reasoning that a stale quantity is non-zero *by definition*. That is false exactly when the job had
+**no acreage at save time**: a cost-only line then persists quantity 0, the driverless recompute
+leaves the 0 after acreage rises, and the zero-price exemption lets it save with zero derived cost.
+That understates margin, and it is the one genuine residual.
 
-That is three rounds on the same entry, each narrowing it. Worth stating plainly: the first draft
-would have sent someone to write a migration for a hole the server already closes, and the second
-would have left a phantom margin exposure in the canonical issues file.
+The entry now carries a two-row table for the two shapes and, more usefully, tells the reader **not
+to re-derive the scope from prose — including its own**. Every error in this sequence came from
+restating the guard's control flow in English instead of citing it and letting the migration be
+authoritative. That is the durable lesson, not the specific scope.
 
 **This changes the remediation, which is why the correction mattered.** The first draft prescribed a
 migration to persist `driver`. The server-side guard already exists, so the fix is UI-side:

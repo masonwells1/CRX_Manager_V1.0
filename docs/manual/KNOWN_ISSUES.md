@@ -249,18 +249,22 @@ job save. The operator changed the acreage, did nothing else wrong, and cannot s
 message is good and names the remedy, but the UI let them reach a state the database will not
 accept.
 
-**There is no margin residual in this shape, and an earlier draft of this entry wrongly claimed
-there was.** The price gate
-(`CONTINUE WHEN COALESCE(NULLIF(v_chem->>'price_per_unit_cents',''), 0) = 0`, line 760) sits
-**inside `IF v_qty = 0 THEN`** at line 758, so it exempts only zero-quantity lines. A stale reloaded
-quantity is non-zero by definition, so it falls through to the unconditional comparison and is
-refused **whether or not the line is priced**. The only skip available to a non-zero line requires
-both `cost_per_unit_cents` and `price_per_unit_cents` to be zero — a line with nothing at stake at
-all. Caught by Codex on PR #538, correcting a correction.
+**The margin exposure is narrow, and this entry took three tries to state it.** The exact scope is
+in the migration; do not re-derive it from prose, including this entry's. The shapes that matter:
 
-The migration's separate, deliberately accepted residuals — `customer_supplied`, a line with neither
-cost nor price, and no usable rate or acreage — all describe **zero-quantity** shapes and do not
-cover F06.
+| Reloaded line | On save |
+|---|---|
+| **Non-zero** stale quantity, usable rate, acreage > 0 | **Refused**, priced or not. The price exemption at line 760 sits *inside* `IF v_qty = 0 THEN` (line 758), so a non-zero quantity never reaches it. |
+| **Zero** quantity on a cost-only line — saved while acreage was 0, reloaded after acreage rose | **Saved**, and derived cost stays zero. The driverless recompute leaves the 0, the row enters `IF v_qty = 0`, and the zero-price `CONTINUE` exempts it. **This understates margin.** |
+
+The second row is a real residual and the drafting history is worth keeping: this entry first
+claimed a broad cost-only margin hole, then over-corrected to "no residual at all" on the reasoning
+that a stale quantity is non-zero *by definition* — which is false precisely when the job had no
+acreage at save time. Both errors came from restating the guard's control flow in prose instead of
+citing it. Codex caught each in turn on PR #538.
+
+The migration's other deliberately accepted exemptions — `customer_supplied`, a line with neither
+cost nor price, no usable rate or acreage — are recorded in its own header and are not F06.
 
 **The fix is UI-side, not a migration.** Reconcile the line on load or on acreage change so the
 operator never reaches the refused state — or, at minimum, surface the refusal early on screen the
