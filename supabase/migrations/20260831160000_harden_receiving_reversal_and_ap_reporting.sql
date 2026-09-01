@@ -7,6 +7,25 @@
 -- period closes, proves that one inventory row was decremented, and snapshots
 -- the deleted receipt/photo evidence in the immutable financial audit log.
 
+BEGIN;
+
+-- Freeze receipt writes across the catalog cutover. A pre-migration receipt
+-- cannot be safely rebound because its record/reason intent is unknowable.
+LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE;
+DO $section9_reversal_cutover$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM public.idempotency_keys
+    WHERE operation = 'reverse_receiving_record'
+      AND (expires_at IS NULL OR expires_at >= transaction_timestamp())
+      AND (request_actor_id IS NULL OR request_fingerprint IS NULL)
+  ) THEN
+    RAISE EXCEPTION 'SECTION9_INTENT_CUTOVER_BLOCKED: unexpired unbound reverse_receiving_record receipt exists';
+  END IF;
+END;
+$section9_reversal_cutover$;
+
 ALTER TABLE public.financial_audit_log
   DROP CONSTRAINT financial_audit_log_entity_type_check;
 ALTER TABLE public.financial_audit_log
@@ -397,3 +416,5 @@ BEGIN
   END IF;
 END;
 $verify$;
+
+COMMIT;

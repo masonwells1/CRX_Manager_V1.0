@@ -70,6 +70,20 @@ describe('cycle count completion revision contract', () => {
     expect(page).toContain('p_idempotency_key: idempotencyKey');
   });
 
+  it('blocks cutover while a live legacy item-save or completion receipt exists', () => {
+    expect(code).toContain('BEGIN;');
+    expect(code).toContain(
+      'LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE',
+    );
+    expect(code).toContain("operation = 'update_cycle_count_item'");
+    expect(code).toContain("operation = 'complete_cycle_count'");
+    expect(code).toContain("result->>'_cycle_count_id' IS NULL");
+    expect(code).toContain("result->>'_actor_id' IS NULL");
+    expect(code).toContain("NOT (result ? '_expected_item_revision')");
+    expect(code).toContain('CYCLE_COUNT_INTENT_CUTOVER_BLOCKED');
+    expect(code.trimEnd()).toMatch(/COMMIT;$/);
+  });
+
   it('rejects an authoritative snapshot that changed before completion', () => {
     expect(code).toContain('IDEMPOTENCY_KEY_REQUIRED: complete_cycle_count requires p_idempotency_key');
     expect(code).toContain('p_expected_item_revision bigint DEFAULT NULL');

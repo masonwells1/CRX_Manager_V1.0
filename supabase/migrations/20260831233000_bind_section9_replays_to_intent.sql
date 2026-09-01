@@ -11,6 +11,33 @@
 -- overage confirmation as creation so the threshold cannot be bypassed after
 -- a compliant bill is first saved.
 
+BEGIN;
+
+-- Keep legacy receipt writers out for the whole atomic function cutover. If
+-- any unexpired receipt lacks actor or fingerprint binding, its original
+-- request cannot be reconstructed and a browser fresh-key retry could repeat
+-- a committed payment, bill edit, receipt, void, or notification.
+LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE;
+DO $section9_intent_cutover$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM public.idempotency_keys
+    WHERE operation IN (
+      'receive_po_items',
+      'update_vendor_bill',
+      'record_vendor_payment',
+      'void_vendor_bill',
+      'notify_damaged_receiving'
+    )
+      AND (expires_at IS NULL OR expires_at >= transaction_timestamp())
+      AND (request_actor_id IS NULL OR request_fingerprint IS NULL)
+  ) THEN
+    RAISE EXCEPTION 'SECTION9_INTENT_CUTOVER_BLOCKED: unexpired unbound PO/AP receipt exists';
+  END IF;
+END;
+$section9_intent_cutover$;
+
 -- The public functions must be exactly the live signatures inspected before
 -- this migration.  A transactionally-applied migration cannot leave a rename
 -- half complete; refuse unexpected catalog state rather than adopting a body
@@ -467,3 +494,5 @@ BEGIN
   END IF;
 END;
 $section9_intent_postcond$;
+
+COMMIT;

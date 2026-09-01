@@ -74,6 +74,30 @@ describe('Section 9 actor-and-intent replay binding', () => {
     }
   });
 
+  it('fails the migration before replacing RPCs when any live legacy receipt exists', () => {
+    expect(migration).toContain('BEGIN;');
+    expect(migration).toContain(
+      'LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE',
+    );
+    for (const operation of [
+      'receive_po_items',
+      'update_vendor_bill',
+      'record_vendor_payment',
+      'void_vendor_bill',
+      'notify_damaged_receiving',
+    ]) expect(migration).toContain(`'${operation}'`);
+    expect(migration).toContain(
+      '(expires_at IS NULL OR expires_at >= transaction_timestamp())',
+    );
+    expect(migration).toContain(
+      '(request_actor_id IS NULL OR request_fingerprint IS NULL)',
+    );
+    expect(migration).toContain(
+      'SECTION9_INTENT_CUTOVER_BLOCKED: unexpired unbound PO/AP receipt exists',
+    );
+    expect(migration.trimEnd()).toMatch(/COMMIT;$/);
+  });
+
   it('enforces and audits cumulative PO billing on bill edits', () => {
     expect(migration).toContain('vb.id <> p_bill_id');
     expect(migration).toContain('v_cumulative_total_cents * 100 > v_po_total_cents * 105');

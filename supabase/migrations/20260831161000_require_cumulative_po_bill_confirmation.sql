@@ -2,6 +2,26 @@
 -- Gauntlet Section 9: prevent cumulative PO-linked bills from silently
 -- exceeding 105% of the purchase-order total.
 
+BEGIN;
+
+-- Hold receipt writers until the public function has been replaced. An
+-- unexpired legacy success has no recoverable request intent, so deploying the
+-- actor-bound wrapper over it could turn an uncertain retry into a second bill.
+LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE;
+DO $section9_bill_create_cutover$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM public.idempotency_keys
+    WHERE operation = 'create_vendor_bill'
+      AND (expires_at IS NULL OR expires_at >= transaction_timestamp())
+      AND (request_actor_id IS NULL OR request_fingerprint IS NULL)
+  ) THEN
+    RAISE EXCEPTION 'SECTION9_INTENT_CUTOVER_BLOCKED: unexpired unbound create_vendor_bill receipt exists';
+  END IF;
+END;
+$section9_bill_create_cutover$;
+
 ALTER FUNCTION public.create_vendor_bill(uuid, uuid, text, date, date, text, bigint, bigint, text, text)
   RENAME TO _section9_create_vendor_bill_cumulative_impl;
 
@@ -206,3 +226,5 @@ BEGIN
   ) THEN RAISE EXCEPTION 'unguarded create_vendor_bill implementation is browser-executable'; END IF;
 END;
 $verify$;
+
+COMMIT;

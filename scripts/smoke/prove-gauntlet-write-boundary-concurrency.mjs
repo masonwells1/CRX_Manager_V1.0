@@ -36,6 +36,38 @@ const BILL_MIGRATION = path.join(
   'migrations',
   '20260831161000_require_cumulative_po_bill_confirmation.sql',
 );
+const CUTOVER_MIGRATIONS = [
+  {
+    file: path.join(ROOT, 'supabase', 'migrations', '20260831160000_harden_receiving_reversal_and_ap_reporting.sql'),
+    tag: 'section9_reversal_cutover',
+    operations: ['reverse_receiving_record'],
+    error: /SECTION9_INTENT_CUTOVER_BLOCKED/,
+  },
+  {
+    file: BILL_MIGRATION,
+    tag: 'section9_bill_create_cutover',
+    operations: ['create_vendor_bill'],
+    error: /SECTION9_INTENT_CUTOVER_BLOCKED/,
+  },
+  {
+    file: path.join(ROOT, 'supabase', 'migrations', '20260831212415_guard_cycle_count_completion_revision.sql'),
+    tag: 'cycle_count_intent_cutover',
+    operations: ['update_cycle_count_item', 'complete_cycle_count'],
+    error: /CYCLE_COUNT_INTENT_CUTOVER_BLOCKED/,
+  },
+  {
+    file: path.join(ROOT, 'supabase', 'migrations', '20260831233000_bind_section9_replays_to_intent.sql'),
+    tag: 'section9_intent_cutover',
+    operations: [
+      'receive_po_items',
+      'update_vendor_bill',
+      'record_vendor_payment',
+      'void_vendor_bill',
+      'notify_damaged_receiving',
+    ],
+    error: /SECTION9_INTENT_CUTOVER_BLOCKED/,
+  },
+];
 
 function fail(message, detail = '') {
   throw new Error(`${message}${detail ? `\n${detail}` : ''}`);
@@ -131,6 +163,20 @@ function session(statement, marker) {
 function expectFailure(result, pattern, label) {
   assert.notEqual(result.code, 0, `${label} unexpectedly committed`);
   assert.match(`${result.stdout}\n${result.stderr}`, pattern, `${label} failed for the wrong reason`);
+}
+
+function cutoverGuard({ file, tag }) {
+  const migration = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+  const endToken = `$${tag}$;`;
+  const doStart = migration.indexOf(`DO $${tag}$`);
+  const lockStart = migration.lastIndexOf(
+    'LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE;',
+    doStart,
+  );
+  const end = migration.indexOf(endToken, doStart);
+  assert.ok(lockStart >= 0 && doStart > lockStart && end > doStart, `${tag} guard missing`);
+  assert.match(migration, /\bBEGIN;[\s\S]*\bCOMMIT;\s*$/);
+  return `BEGIN;\n${migration.slice(lockStart, end + endToken.length)}\nROLLBACK;`;
 }
 
 function assertCheckedInMarkers() {
@@ -265,6 +311,7 @@ CREATE TABLE public.idempotency_keys (
   result jsonb,
   request_actor_id uuid,
   request_fingerprint text,
+  expires_at timestamptz DEFAULT now() + interval '24 hours',
   PRIMARY KEY (idempotency_key, operation)
 );
 
@@ -409,6 +456,51 @@ $function$;
 `);
   sql(readFileSync(BILL_MIGRATION, 'utf8'));
   sql(readFileSync(MIGRATION, 'utf8'));
+}
+
+function proveIntentCutoverGuards() {
+  const actor = '11111111-1111-1111-1111-111111111111';
+  for (const guardSpec of CUTOVER_MIGRATIONS) {
+    const guard = cutoverGuard(guardSpec);
+    for (const operation of guardSpec.operations) {
+      const result = operation === 'complete_cycle_count' ? '{}' : '{}';
+      sql(`
+TRUNCATE public.idempotency_keys;
+INSERT INTO public.idempotency_keys (
+  idempotency_key, operation, result, expires_at,
+  request_actor_id, request_fingerprint
+) VALUES ('legacy-${operation}', '${operation}', '${result}'::jsonb, now() + interval '1 hour', NULL, NULL);
+`);
+      const blocked = sql(guard, { allowFailure: true });
+      expectFailure(blocked, guardSpec.error, `${operation} legacy-receipt cutover`);
+    }
+
+    const representative = guardSpec.operations[0];
+    sql(`
+TRUNCATE public.idempotency_keys;
+INSERT INTO public.idempotency_keys (
+  idempotency_key, operation, result, expires_at,
+  request_actor_id, request_fingerprint
+) VALUES ('expired-${representative}', '${representative}', '{}'::jsonb, now() - interval '1 second', NULL, NULL);
+`);
+    assert.equal(sql(guard).status, 0, `${representative} expired receipt blocked cutover`);
+
+    sql(`
+TRUNCATE public.idempotency_keys;
+INSERT INTO public.idempotency_keys (
+  idempotency_key, operation, result, expires_at,
+  request_actor_id, request_fingerprint
+) VALUES (
+  'bound-${representative}', '${representative}',
+  ${representative === 'complete_cycle_count'
+    ? `'${JSON.stringify({ _cycle_count_id: actor, _actor_id: actor, _expected_item_revision: null })}'::jsonb`
+    : "'{}'::jsonb"},
+  now() + interval '1 hour', '${actor}', 'bound-fingerprint'
+);
+`);
+    assert.equal(sql(guard).status, 0, `${representative} bound receipt blocked cutover`);
+  }
+  sql('TRUNCATE public.idempotency_keys;');
 }
 
 function seedReceiving(po, poItem, receipt, vendor) {
@@ -756,6 +848,7 @@ try {
   assertCheckedInMarkers();
   prepareContainer();
   installSchema();
+  proveIntentCutoverGuards();
   await proveBillFirstBlocksReversal();
   await proveReversalFirstSerializesBill();
   await proveCloseFirstBlocksReversal();

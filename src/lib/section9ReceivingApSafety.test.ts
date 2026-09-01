@@ -115,6 +115,27 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
     );
   });
 
+  it('blocks cutover while a live legacy reversal or bill-creation receipt exists', () => {
+    for (const [candidate, operation] of [
+      [migration, 'reverse_receiving_record'],
+      [cumulativeBillMigration, 'create_vendor_bill'],
+    ] as const) {
+      expect(candidate).toContain('BEGIN;');
+      expect(candidate).toContain(
+        'LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE',
+      );
+      expect(candidate).toContain(`operation = '${operation}'`);
+      expect(candidate).toContain(
+        '(expires_at IS NULL OR expires_at >= transaction_timestamp())',
+      );
+      expect(candidate).toContain(
+        '(request_actor_id IS NULL OR request_fingerprint IS NULL)',
+      );
+      expect(candidate).toContain('SECTION9_INTENT_CUTOVER_BLOCKED');
+      expect(candidate.trimEnd()).toMatch(/COMMIT;$/);
+    }
+  });
+
   it('refuses unsupported historical commission balance cutoffs', () => {
     expect(commissionBalanceMigration).toContain(
       'HISTORICAL_COMMISSION_BALANCE_UNAVAILABLE',

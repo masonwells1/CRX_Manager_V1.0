@@ -6,6 +6,8 @@
 -- caller-supplied revision then rejects a completion whose authoritative
 -- snapshot has changed in another tab/client.
 
+BEGIN;
+
 SET LOCAL statement_timeout = '60s';
 SET LOCAL lock_timeout = '10s';
 
@@ -27,8 +29,39 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'PRECOND: cycle_counts.item_revision already exists; reconcile drift before applying';
   END IF;
+
 END;
 $precond$;
+
+-- Serialize the replay-receipt cutover with every legacy writer. The old item
+-- RPC stored no actor/fingerprint, while the old completion receipt did not
+-- carry the parent/actor fields that the new wrapper validates.
+LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE;
+DO $cycle_count_intent_cutover$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM public.idempotency_keys
+    WHERE (expires_at IS NULL OR expires_at >= transaction_timestamp())
+      AND (
+        (
+          operation = 'update_cycle_count_item'
+          AND (request_actor_id IS NULL OR request_fingerprint IS NULL)
+        )
+        OR (
+          operation = 'complete_cycle_count'
+          AND (
+            result->>'_cycle_count_id' IS NULL
+            OR result->>'_actor_id' IS NULL
+            OR NOT (result ? '_expected_item_revision')
+          )
+        )
+      )
+  ) THEN
+    RAISE EXCEPTION 'CYCLE_COUNT_INTENT_CUTOVER_BLOCKED: unexpired legacy item/completion receipt exists';
+  END IF;
+END;
+$cycle_count_intent_cutover$;
 
 ALTER TABLE public.cycle_counts
   ADD COLUMN item_revision bigint NOT NULL DEFAULT 0
@@ -325,3 +358,5 @@ BEGIN
   END IF;
 END;
 $postcond$;
+
+COMMIT;
