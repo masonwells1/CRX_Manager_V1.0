@@ -7,6 +7,60 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-01 — Mason gets a manual review override on `main`; agents are locked out of it
+
+**Source:** Mason's in-chat request on 2026-09-01 ("add manual override as option in my github
+account to get around the has to have a review"), and his choice of the "override + agent lockout"
+option when the trade-off was put to him.
+
+**Decision.** Classic branch protection on `main` no longer enforces its rules for administrators
+(`enforce_admins: false`). Mason can therefore merge a pull request whose review is stuck, by hand,
+using GitHub's "Merge without waiting for requirements to be met (administrators only)" control on
+the PR page. The `protect-main` ruleset is unchanged and its bypass list stays empty, so the
+required `Vercel`, `Lint, Type Check, Test, Build`, and `SQL Migration Validation` checks still
+bind everyone. **The override skips the review, never the tests.** No other protection setting
+changed: one approval, stale approvals dismissed on every push, approval from someone other than
+the last pusher, branch up to date, no force-push, no deletion.
+
+**Why.** The review requirement lived entirely in classic protection — the ruleset requires zero
+approvals — so this was the one setting that could be relaxed to reach the review without touching
+the automated checks. Mason authors the PRs, and GitHub does not let an author approve their own,
+so when CodeRabbit is down, rate-limited, or wedged, nothing could approve and `main` became
+unmergeable with no manual escape.
+
+**The lockout is the load-bearing half.** The bypass is granted by admin rights on Mason's account,
+and every Claude and Codex session runs on that same token — so opening it for him opened it for
+them, which would have quietly reduced the whole CodeRabbit gate to advice. Both merge gates
+therefore hard-deny `gh pr merge --admin` (before the PR is even resolved) and verify
+`reviewDecision === "APPROVED"` directly, instead of inferring an approval from a CLEAN
+`mergeStateStatus` the way they safely could while nothing could bypass. **Operative rule: an agent
+may never use the override, for any diff or any deadline — a stuck review is handed to Mason with
+the reason.**
+
+**Caveat that must not be lost.** `reviewDecision === "APPROVED"` is bound to the current head only
+because stale-review dismissal and require-last-push-approval are on. If either is ever turned off,
+both gates must additionally verify that an APPROVED review's `commit_id` equals `headRefOid`.
+
+**What the lockout is, honestly.** It is an honest-mistake net, not a boundary. Because agents
+authenticate as Mason, the guards can only refuse the *commands* that would use the override — they
+cannot withhold the capability. Codex's exact-SHA proof on this PR made that concrete by finding the
+lockout bypassable through raw REST and GraphQL merge transports (denied by destination now, on both
+guards). Codex's third pass then demonstrated a bypass no command guard can reach at all: a command
+that builds the merge URL from separate strings.
+
+**Mason declined the durable fix (2026-09-01).** Giving agents a separate non-admin GitHub
+credential was put to him twice — at design time and again after that demonstration — and he chose
+both times to keep the setup simple and accept the residual. **Settled: do not re-open or implement
+the separate credential unless Mason asks.** The accepted mitigations are the guards, the required
+Vercel/CI/SQL checks the ruleset still enforces on everyone, and Vercel's one-click rollback.
+Detail in `docs/manual/KNOWN_ISSUES.md`.
+
+**Proof.** Live protection and ruleset state read with `gh api` before and after. Guard behavior
+covered by `.claude/hooks/pr-merge-guard.test.mjs` (66 assertions) and
+`.codex/hooks/production-action-guard.test.mjs`, mutation-tested where the blob pin allows;
+`npm run test:agent-workflows` green. Detail:
+`docs/changelog.d/2026-09-01-github-manual-review-override.md`.
+
 ## 2026-08-31 — `core.hooksPath` points at the tracked `.husky`, never husky's generated `.husky/_`
 
 **Source:** Mason's in-chat approval on 2026-08-31 ("ok fix it") after the harness review found the
