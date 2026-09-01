@@ -250,6 +250,25 @@ stash `bcaa4527` (`stash@{1}`, "crx-main-checkout-cleanup-20260831"), captured a
 `main` at **10:26:25 the same morning** — nine hours earlier. So the migrator has run at least
 twice, and a cleanup session already swept one batch into a stash.
 
+**Where it comes from (machine-wide sweep, 2026-09-01).** 94 artifact files were found and **not a
+single generator** — no script anywhere on the machine contains the `source-command-` prefix or the
+"Migrated source command" description. So the migrator is a **CLI/tool feature, not repo code**, and
+`sync-agent-workflows.mjs` is exonerated twice over.
+
+The distribution says which tool. Every hit sits in a Codex-run tree:
+
+```
+C:/Users/mason/.codex/worktrees/gauntlet-section9-takeover-20260830/…      (2026-08-30)
+C:/Users/mason/.codex/worktrees/gauntlet-section9-opus-gate-20260830/…     (2026-08-30)
+C:/Users/mason/.codex/rescue/cleanup-20260831-105800/…/dirty/…             (rescued 2026-08-31 10:58)
+C:/CRX_Manager/.claude/worktrees/codex-claude-migrations-2-4-33493c/…      (a Claude↔Codex migration worktree)
+```
+
+So this is **not a one-off**: it has been running since at least 2026-08-30, the rescue snapshot
+corresponds to the same morning as the stash, and it reproduces wherever the Codex CLI operates on
+this repo. Expect it to recur until whatever invokes it is identified — deleting the copies without
+finding the trigger will just defer it.
+
 **Status:** quarantined (NOT deleted) out of
 `.claude/worktrees/permission-grants-claude-codex-9f7108` to the session scratchpad; still present
 in the other five worktrees. **Do not run `sync-agent-workflows.mjs --write` as a cleanup** — it
