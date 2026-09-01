@@ -252,43 +252,50 @@ comments. Surfaced by the 2026-08-31 documentation sweep (#529). Verified agains
 
 ---
 
-## OPEN 2026-09-01 — H5: the integrity panel offers "Create draft invoice" on orders it cannot invoice
+## OPEN 2026-09-01 — H5: a dead-end "Create invoice" button on split-billing orders, and one surface swallows the reason
 
 **Plain English.** An admin is offered a "Create invoice" button on a delivery whose order needs
-**split billing**, where it can never succeed. Pressing it produces a clear refusal from the
-database; nothing wrong is written.
+**split billing**, where it can never succeed. Nothing wrong is written — the database refuses
+correctly — but on one of the two surfaces the operator is not told why.
 
-**Where — TWO surfaces.** Fixing one and not the other leaves the dead end reachable; the original
-handoff names both at `docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md:78`.
+**Two surfaces, and they behave differently.** The original handoff names both at
+`docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md:78`.
 
-1. **`src/components/integrity/IntegrityCleanupPanel.tsx:684-689`** — renders the button
-   unconditionally for every row in `unbilled`; handler at line 398.
-2. **`src/pages/DeliveryDetail.tsx:1628-1636`** — renders "Create Invoice" whenever
-   `canCreateInvoice` is true, and that flag (lines 201-202) is
-   `isAdmin && delivery?.status === 'completed' && !hasActiveRelatedInvoice`. **It never consults
-   split allocations**, so an admin opening any completed split-billing delivery with no active
-   invoice is offered the same dead end; the RPC call is at line 1119.
+| Surface | Button gate | What the operator sees on refusal |
+|---|---|---|
+| `src/components/integrity/IntegrityCleanupPanel.tsx:684-689` | unconditional for every unbilled row | **"Backfill failed" — the reason is lost** |
+| `src/pages/DeliveryDetail.tsx:1628-1636` | `isAdmin && status === 'completed' && !hasActiveRelatedInvoice` (never consults split allocations) | the full server explanation |
 
-Both call `create_invoice_for_unbilled_delivery`, whose `ORDER_NEEDS_SPLIT_BILLING` guard lives in
-`20260718202607_backfill_invoice_guard_durable_split_allocations.sql` and is re-emitted in
-`20260719024641_lock_backfill_split_allocation_rows.sql`.
+Both call `create_invoice_for_unbilled_delivery`, whose `ORDER_NEEDS_SPLIT_BILLING` guard is in
+`20260718202607_backfill_invoice_guard_durable_split_allocations.sql`, re-emitted in
+`20260719024641_lock_backfill_split_allocation_rows.sql`. It raises a full sentence with the remedy:
+*"…a single backfilled invoice would mono-bill it and mis-attribute AR. Create the split invoices
+through the split-billing flow instead."*
 
-**The message is already fine — do not "fix" it.** The guard raises a full sentence naming the
-reason *and* the remedy ("…a single backfilled invoice would mono-bill it and mis-attribute AR.
-Create the split invoices through the split-billing flow instead."), and `PostgrestError` extends
-`Error`, so `toast('error', err.message)` surfaces all of it. Mapping these codes to generic
-messages would replace better text with worse. The only wart is the `CODE:` prefix.
+**Why one surface loses that sentence.** With `@supabase/postgrest-js` 2.112.4, a `PostgrestError`
+(which *is* an `Error` subclass) is constructed **only** when `.throwOnError()` is used. An ordinary
+`supabase.rpc(...)` returns the parsed error as a **plain object**. `IntegrityCleanupPanel:410` does
+`if (error) throw error`, so its catch at line 416 evaluates `err instanceof Error` as **false** and
+falls through to the literal `'Backfill failed'`. `DeliveryDetail` instead calls
+`sanitizeError(err)`, which explicitly handles object-shaped Postgrest errors
+(`src/lib/errorSanitizer.ts:72-82`) and preserves the message.
 
-**Severity: cosmetic.** The defect is being invited into an action that can never succeed.
+**The fix — two parts, both small:**
 
-**The fix:** hide or disable the button for orders the guard will refuse — **in both places**. A
-shared "can this delivery be single-invoiced?" predicate mirroring the server's split-allocation
-check is preferable to two independent conditions that can drift apart. Optionally strip the leading
-`CODE:` prefix when presenting these messages.
+1. **Use `sanitizeError(err)` in `IntegrityCleanupPanel`'s catch**, matching `DeliveryDetail`. The
+   helper already exists and already handles this exact case; do **not** build a code→message
+   lookup table, and do not assume `err instanceof Error` after a non-throwing Supabase call
+   anywhere else either.
+2. **Hide or disable the button** for orders the guard will refuse, on both surfaces — ideally via
+   one shared "can this delivery be single-invoiced?" predicate mirroring the server check, rather
+   than two conditions that can drift.
 
-**Verified 2026-09-01 against `main` at `85266c9a`. Was tracked nowhere** — H5 lived only in
+**Severity: cosmetic, but part 1 is a real information loss** — the admin is given a dead end and,
+on the integrity panel, no reason for it.
+
+**Was tracked nowhere** before this entry — only in
 `docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md`, a file headed "completed/superseded". Surfaced
-by the 2026-08-31 documentation sweep (#529).
+by the 2026-08-31 documentation sweep (#529). Verified against `main` at `85266c9a`.
 
 ---
 

@@ -25,9 +25,21 @@ did so was already tried and reverted (`chemCalculator.ts:91-96`).
 
 An admin is offered "Create invoice" on split-billing orders where it cannot succeed. #529 named one
 surface; there are two — `IntegrityCleanupPanel.tsx` and `DeliveryDetail.tsx`, whose
-`canCreateInvoice` never consults split allocations. The original handoff listed both. #529 also
-claimed the operator sees a raw error code; the guard actually raises a full sentence with the
-remedy, so the entry now warns **against** mapping these codes to generic messages.
+`canCreateInvoice` never consults split allocations. The original handoff listed both.
+
+**The two surfaces do not behave the same, which took three rounds to pin down.** #529 said the
+operator sees a raw error code. A review round showed the guard raises a full sentence with the
+remedy — true — so the entry was corrected to say the message is fine. A later round then showed
+that correction is wrong for one surface: with `@supabase/postgrest-js` 2.112.4 a `PostgrestError`
+is constructed **only** under `.throwOnError()`, so an ordinary `supabase.rpc(...)` returns a plain
+object. `IntegrityCleanupPanel` throws that object and its catch tests `err instanceof Error`, which
+is false — the operator gets the literal `'Backfill failed'` and the reason is lost. `DeliveryDetail`
+calls `sanitizeError`, which already handles object-shaped Postgrest errors, and keeps the message.
+
+So H5 is two fixes: use `sanitizeError` in the integrity panel's catch (the helper exists and
+handles this exact case — not a code→message lookup table), and gate the button on both surfaces.
+The wider lesson is worth carrying: **`err instanceof Error` is unsafe after any non-throwing
+Supabase call.**
 
 ### One source fix
 
