@@ -70,6 +70,13 @@ that is running**. The active `.claude/hooks/actor-binding-check.mjs` is 213 lin
 trigger (PR #449's hardened rewrite is the ~3,000-line version referenced above), so today these forms are
 not caught at write time at all. Do not credit the running guard with them until #449 lands.
 
+Note on cross-routine delegation: a `SECURITY DEFINER` wrapper that accepts an actor parameter and
+delegates the write to a helper is allowed at write time — the guard only proceeds when the routine's own
+body holds a literal `INSERT INTO` / `UPDATE ` / `DELETE FROM` — and it is **not** covered by the sweeps
+either, because the wrapper carries neither predicate's cue in its own `prosrc` and a private helper fails
+the `has_function_privilege('authenticated', ...)` candidacy test. There is no fail-closed callable rule in
+the running hook; that belongs to parked PR #449.
+
 Note on the write path itself: the hook reads `tool_input.content || tool_input.new_string` and analyses that
 fragment alone — it does **not** reconstruct the full post-edit file the way `sql-safety.mjs`,
 `idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. An ordinary

@@ -255,12 +255,14 @@ before it is written, so a forgery is refused rather than detected after it ship
 (`predicates/actor-forgery.sql`, `-fin-audit.sql`) are the **post-apply** half and run against the live
 catalog.
 
-**Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. It catches
-ordinary spellings *of a whole-function write*, and is materially stronger after PR #449's two rounds (19
-laundering channels closed, each reproduced by running the hook and each fix mutation-tested) — though those
-rounds are parked with that PR and are **not** in the running hook. It is **not** a boundary, and no document
-should describe it as preventing actor forgery. Note in particular that the ordinary *incremental* edit path
-is not covered at all (row 3 below), so "catches every ordinary spelling" would overstate it.
+**Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. The
+**active** hook is the unchanged 213-line guard: it catches ordinary spellings *of a whole-function write*
+and nothing more. The **parked PR #449 rewrite** is materially stronger — 19 laundering channels closed over
+two rounds, each reproduced by running the hook and each fix mutation-tested — but **none of that is in the
+running hook**, and this PR does not change it. Do not credit the active guard with #449's fixes. It is
+**not** a boundary, and no document should describe it as preventing actor forgery. Note in particular that
+the ordinary *incremental* edit path is not covered at all (row 3 below), so "catches every ordinary
+spelling" would overstate even the active guard.
 
 **What it does NOT catch, stated so nobody re-derives it:**
 
@@ -279,13 +281,19 @@ three careful passes.
 
 **What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
 
-- **For the incremental-Edit, cross-routine and novel-lexical gaps** (rows 3, 4 and 5 above): the post-apply sweep
+- **For the incremental-Edit and novel-lexical gaps** (rows 3 and 5 above): the post-apply sweep
   predicates against the live catalog, the exact-SHA `gpt-5.6-sol` proof on migration diffs, and the
   CodeRabbit final review. Such a routine has no binding check, so it carries no `ACTOR_MISMATCH` token and
   the predicates do consider it — exploiting one means writing deliberately obfuscated SQL into a migration
   and clearing all three. The limit worth stating: the predicates fire on their own sinks (COALESCE/`auth.uid()`/role
   proximity, or a same-statement `financial_audit_log` write), so a bypass routing the parameter to some
   other write target is outside them as well.
+- **For cross-routine / cross-migration helpers** (row 4): **only the Codex proof and the CodeRabbit
+  review.** Neither predicate can see this path. `actor-forgery.sql` needs actor/`auth.uid`/role proximity
+  inside the *wrapper's own* `prosrc`, and `-fin-audit.sql` needs both the parameter and the
+  `financial_audit_log` sink in that same source — but the wrapper only hands the parameter to a helper, and
+  a private helper is not even a candidate, since both predicates require
+  `has_function_privilege('authenticated', ...)`. Do not count the sweep here.
 - **For the re-binding and laundering gaps** (row 2): **only the Codex proof and the CodeRabbit review.**
   Both predicates are gated on `prosrc !~* 'ACTOR_MISMATCH'`, so a re-binding that follows a passing check is
   excluded from the sweep by the presence of the check it defeated; and a temp-table round trip matches

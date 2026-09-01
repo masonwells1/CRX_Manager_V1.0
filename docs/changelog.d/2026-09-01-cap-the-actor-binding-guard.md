@@ -94,6 +94,38 @@ against `scripts/db-invariant-sweeps/predicates/actor-forgery.sql`, `-fin-audit.
 The residual list is now three items rather than two — lexical, re-binding/laundering, naming-scope — with
 the compensating controls stated per item instead of collectively.
 
+### Second review round — the same partial-fix pattern, twice more
+
+Codex and CodeRabbit independently reported the SAME defect, which is the strongest signal available that
+it was real: the gap table's cross-routine row had been corrected to say neither sweep predicate follows a
+helper call, while the control-mapping bullet directly below it still grouped that row with the
+sweep-covered ones. The row and the mapping that cites the row disagreed inside one section.
+
+That is the third instance in this PR of one pattern: **the cited line gets fixed and its siblings do not.**
+It is worth naming as the operative lesson, because partial compliance reads as compliance — a reader who
+stops at the summary, the header, or the mapping takes away a protection that the detail below explicitly
+denies. The fix discipline is to sweep the CLAIM across every document, not to patch the line the reviewer
+pointed at.
+
+Corrected in this round:
+
+- **Cross-routine / cross-migration helpers moved out of the sweep-covered category entirely.** Verified
+  rather than assumed: `actor-forgery.sql` needs actor/`auth.uid`/role proximity inside the *wrapper's own*
+  `prosrc` and `-fin-audit.sql` needs the parameter and the `financial_audit_log` sink in that same source,
+  but the wrapper only passes the parameter onward — and a private helper is not even a candidate, because
+  both predicates require `has_function_privilege('authenticated', ...)`. Only the Codex proof and the
+  CodeRabbit review cover this path.
+- **The status paragraph no longer credits the ACTIVE hook with PR #449's strength.** It read as though the
+  running guard were "materially stronger after PR #449's two rounds" and then said those rounds are parked.
+  Now: the active 213-line guard is unchanged; the parked #449 rewrite is the stronger one.
+- Swept the two sibling documents for the same claim and closed the gap in both — `agent-guardrails.md` had
+  left cross-routine unmapped to any control, and `DECISION_LOG.md` had no cross-routine note at all.
+
+Three findings from the previous round were re-listed against this head by line-anchor drift
+(`CURRENT_STATE.md` header, `migration-history.md` rows 901–902, the Section 9 narrative). All three were
+verified as already fixed in the current head before being set aside — the anchors moved, the claims did not
+survive.
+
 ### Reconciled the applied-live state everywhere, not just here
 
 Recording the two Section 9 migrations as applied left `docs/manual/CURRENT_STATE.md` and
