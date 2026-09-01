@@ -456,6 +456,15 @@ for (const command of [
   "npx rimraf .husky",
   "npm exec rimraf .husky/pre-push",
   "yarn rimraf .claude/hooks/sql-safety.mjs",
+  // FOURTH gpt-5.6-sol round. The git SUBCOMMAND was validated but its FLAGS were
+  // not, so read-only subcommands wrote the very files this rule protects. Both
+  // probe-confirmed ALLOW before this fix.
+  "git diff --output=.husky/pre-push HEAD~1 HEAD",
+  "git show --output=.github/workflows/ci.yml HEAD:package.json",
+  "git diff --output .husky/pre-push HEAD~1 HEAD",
+  // The rule is on the SHAPE — a protected path as a flag's value — so it holds
+  // for heads and flags beyond git.
+  "grep --output=.husky/pre-push x /tmp/in",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.equal(result.status, 0, `hook should exit 0: ${command}`);
@@ -481,6 +490,13 @@ for (const command of [
   "git -C /repo add .claude/hooks/review-proof-guard.mjs",
   "git -c core.pager=cat log .husky/pre-push",
   "git --git-dir /repo/.git diff .husky/pre-push",
+  // A VALUELESS flag followed by a positional path is a read, not a write. The
+  // flag-value rule must not swallow these — `git diff --stat <hook>` is used
+  // constantly, and an earlier draft of that rule denied it.
+  "git diff --stat .claude/hooks/review-proof-guard.mjs",
+  "git log --oneline -5 .husky/pre-push",
+  "grep -o typecheck .husky/pre-push",
+  "grep -rn --color .github/workflows",
   // `node <script>` stays allowed — it is how these very suites run. Only the
   // inline-code flags are refused (asserted in the deny block above).
   "node .claude/hooks/review-proof-guard.test.mjs",

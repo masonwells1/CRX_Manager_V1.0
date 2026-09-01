@@ -518,7 +518,46 @@ if (shellTool) {
       const sub = gitSubcommandOf(segment);
       if (!sub || !ENFORCEMENT_READ_ONLY_GIT.has(sub)) return false;
     }
+    // A protected path supplied as the VALUE OF A FLAG is an output target, no
+    // matter what the flag is called. Fourth gpt-5.6-sol round, HIGH: the git
+    // subcommand list was enforced but its flags were not, so
+    // `git diff --output=.husky/pre-push HEAD~1 HEAD` and
+    // `git show --output=.github/workflows/ci.yml HEAD:package.json` were ALLOW —
+    // read-only subcommands overwriting the very files this rule protects.
+    //
+    // This is a SHAPE rule on purpose, not a list of output flags. Enumerating
+    // `-o`/`--output`/`--out-file`/… is the same blocklist mistake made twice
+    // already in this file's history, and a blanket `-o` ban would wrongly refuse
+    // `grep -o pattern .husky/pre-push`, where the path is a positional operand
+    // and nothing is written. The distinction that matters is positional (read)
+    // versus flag-value (write), and that holds for flags nobody has invented yet.
+    if (flagValueNamesEnforcementSurface(segment)) return false;
     return true;
+  };
+  const flagValueNamesEnforcementSurface = (segment) => {
+    const tokens = String(segment).match(/(?:"[^"]*"|'[^']*'|\S)+/g) || [];
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i].replace(/["']/g, "");
+      if (!token.startsWith("-")) continue;
+      const inlineValue = token.match(/^--?[\w-]+=(.*)$/);
+      if (inlineValue) {
+        if (namesEnforcementSurface(inlineValue[1])) return true;
+        continue;
+      }
+      // Space-separated form. Restricted to flags that actually TAKE an output
+      // path, because a valueless flag is routinely followed by a positional
+      // operand: `git diff --stat .claude/hooks/x.mjs` reads and must stay
+      // allowed. This narrow list is a second restriction ON TOP of the
+      // fail-closed head allowlist, not the primary defense — an unlisted output
+      // flag on an unlisted head is already refused by the head check.
+      // @proven-by review-proof-guard.test.mjs (the "git diff --output" deny cases
+      // and the "git diff --stat"/"grep -o" allow cases pin both directions).
+      if (/^(?:-o|-O|--output|--output-file|--out-file|--out|--dest|--destination|--to|--write-to)$/i.test(token)) {
+        const next = tokens[i + 1];
+        if (next && namesEnforcementSurface(next.replace(/["']/g, ""))) return true;
+      }
+    }
+    return false;
   };
   // `..` TRAVERSAL. Second review round, HIGH: separators were normalized but dot
   // segments never resolved, so `.claude/commands/../hooks/review-proof-guard.mjs`
