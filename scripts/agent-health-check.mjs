@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizeEol } from "./normalize-eol.mjs";
@@ -191,6 +191,89 @@ export function checkClaudeAuth(runner) {
   }
 }
 
+// A checkout whose core.hooksPath resolves to a missing or foreign directory runs
+// NO pre-commit/pre-push guard, and git says nothing when it skips them — the
+// guards are simply absent. husky's generated .husky/_ is gitignored, so before
+// 2026-08-31 every worktree created without `npm install` landed in exactly that
+// state, and hand-set absolute overrides pointed several at other checkouts.
+// The tracked .husky/ hooks are plain shell and need no husky runtime.
+export function checkGitHooksInstalled(root, platform = process.platform) {
+  let hooksPath = "";
+  try {
+    hooksPath = execFileSync("git", ["-C", root, "config", "--get", "core.hooksPath"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    hooksPath = "";
+  }
+  if (!hooksPath) {
+    return check("FAIL", "Git hooks installed", "core.hooksPath is unset — commit/push guards do not run; set it to .husky");
+  }
+  // git runs hooks from the top of the working tree, so a relative hooksPath
+  // resolves per-worktree. That is what makes one shared value correct everywhere.
+  //
+  // This is an ALLOWLIST of exactly one directory, not a containment test. A
+  // containment test is not enough here for two independent reasons:
+  //   * linked worktrees live UNDER the main checkout (.claude/worktrees/<name>),
+  //     so an absolute path into another worktree's .husky is "contained" while
+  //     still running that other branch's guards; and
+  //   * any other in-worktree directory holding two executable files would pass
+  //     while git bypassed the tracked .husky entirely.
+  // Comparison is on CANONICAL paths because git executes the target of a symlink,
+  // so a linked .husky would satisfy a purely textual test. Anything that is not
+  // this worktree's own tracked .husky fails closed — an unanticipated spelling is
+  // then a false alarm, never a hole.
+  const canonical = (target) => {
+    try {
+      return realpathSync(target);
+    } catch {
+      return path.resolve(target);
+    }
+  };
+  // The expected path canonicalizes the ROOT but keeps `.husky` literal, while the
+  // configured path is canonicalized whole. Canonicalizing both sides would defeat
+  // the test: if `.husky` were itself a link into another checkout, both sides would
+  // resolve to that same foreign directory and compare equal.
+  const expected = path.join(canonical(root), ".husky");
+  const resolved = canonical(path.resolve(root, hooksPath));
+  // path.relative is case-insensitive on win32, which is what we want for a
+  // same-directory test on this repository's primary platform.
+  if (path.relative(expected, resolved) !== "") {
+    return check("FAIL", "Git hooks installed", `core.hooksPath is ${hooksPath}, which resolves to ${resolved} rather than this worktree's tracked .husky (${expected}) — git would run another checkout's guards or none at all; set core.hooksPath to .husky`);
+  }
+  const required = ["pre-commit", "pre-push"];
+  const missing = required.filter((hook) => !existsSync(path.join(resolved, hook)));
+  if (missing.length > 0) {
+    return check("FAIL", "Git hooks installed", `${hooksPath} is missing ${missing.join(", ")} — those guards silently do not run; set core.hooksPath to .husky`);
+  }
+  const escaping = required.filter((hook) => {
+    const relative = path.relative(expected, canonical(path.join(resolved, hook)));
+    return relative.startsWith("..") || path.isAbsolute(relative);
+  });
+  if (escaping.length > 0) {
+    return check("FAIL", "Git hooks installed", `${hooksPath} links ${escaping.join(", ")} outside this worktree — git runs the symlink target, so another checkout's guard would run`);
+  }
+  // Same silent skip, different spelling: on POSIX git ignores a hook that is not
+  // executable. Windows has no executable bit, and Git for Windows does not consult
+  // one, so the question is only meaningful off win32 — CI is where it can bite.
+  if (platform !== "win32") {
+    const notExecutable = required.filter((hook) => {
+      try {
+        accessSync(path.join(resolved, hook), fsConstants.X_OK);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    if (notExecutable.length > 0) {
+      return check("FAIL", "Git hooks installed", `${hooksPath} has non-executable ${notExecutable.join(", ")} — git skips a non-executable hook in silence; restore the mode with git update-index --chmod=+x`);
+    }
+  }
+  return check("PASS", "Git hooks installed", `${hooksPath} (pre-commit, pre-push)`);
+}
+
 function checkSessionStaleness() {
   try {
     const output = execFileSync(process.execPath, [path.join(ROOT, ".claude", "hooks", "session-staleness.mjs")], {
@@ -261,6 +344,7 @@ function buildHealthChecks(root = ROOT) {
   ];
 
   checks.push(checkCodexHookPortability(readJsonIfPresent(path.join(root, ".codex", "hooks.json"))));
+  checks.push(checkGitHooksInstalled(root));
   checks.push(runCommand("Agent workflow sync", process.execPath, [path.join(ROOT, "scripts", "sync-agent-workflows.mjs"), "--check"], { shell: false }));
   checks.push(runCommand("Agent guidance", process.execPath, [path.join(ROOT, "scripts", "check-agent-guidance.mjs")], { shell: false }));
   checks.push(checkBranchStaleness());

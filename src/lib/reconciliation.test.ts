@@ -26,6 +26,9 @@ import {
   type ReturnCheckRow,
   type CustomerARInvoiceRow,
 } from './reconciliation';
+import {
+  checkDeliveryInvoiceQuantityParity as checkGoLiveDeliveryInvoiceQuantityParity,
+} from '../../tests/e2e/golive/utils/reconciliation-checks';
 
 // ── Check 1: Order Totals ───────────────────────────────────────
 
@@ -641,9 +644,23 @@ describe('checkDeliveryInvoiceQuantityParity', () => {
       { order_id: 'o1', product_id: 'p1', quantity_delivered: 10 },
     ];
     const invoiceItems: InvoiceItemCheckRow[] = [
-      { order_id: 'o1', product_id: 'p1', quantity: 10 },
+      { order_id: 'o1', product_id: 'p1', quantity: 10, invoice_type: 'chemical_sale' },
     ];
     expect(checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems)).toEqual([]);
+    expect(checkGoLiveDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems)).toEqual([]);
+  });
+
+  it('ignores negative return-credit lines when comparing delivered to billed quantity', () => {
+    const deliveryItems: DeliveryItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 10 },
+    ];
+    const invoiceItems: InvoiceItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity: 10, invoice_type: 'chemical_sale' },
+      { order_id: 'o1', product_id: 'p1', quantity: -5, invoice_type: 'credit_memo' },
+    ];
+
+    expect(checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems)).toEqual([]);
+    expect(checkGoLiveDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems)).toEqual([]);
   });
 
   it('flags mismatch between delivered and invoiced quantities', () => {
@@ -651,7 +668,7 @@ describe('checkDeliveryInvoiceQuantityParity', () => {
       { order_id: 'o1', product_id: 'p1', quantity_delivered: 20 },
     ];
     const invoiceItems: InvoiceItemCheckRow[] = [
-      { order_id: 'o1', product_id: 'p1', quantity: 10 },
+      { order_id: 'o1', product_id: 'p1', quantity: 10, invoice_type: 'chemical_sale' },
     ];
     const result = checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems);
     expect(result).toHaveLength(1);
@@ -667,7 +684,7 @@ describe('checkDeliveryInvoiceQuantityParity', () => {
       { order_id: 'o1', product_id: 'p1', quantity_delivered: 5 },
     ];
     const invoiceItems: InvoiceItemCheckRow[] = [
-      { order_id: 'o1', product_id: 'p1', quantity: 10 },
+      { order_id: 'o1', product_id: 'p1', quantity: 10, invoice_type: 'chemical_sale' },
     ];
     // 5 + 5 delivered = 10 invoiced → match
     expect(checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems)).toEqual([]);
@@ -679,8 +696,8 @@ describe('checkDeliveryInvoiceQuantityParity', () => {
       { order_id: 'o1', product_id: 'p2', quantity_delivered: 20 },
     ];
     const invoiceItems: InvoiceItemCheckRow[] = [
-      { order_id: 'o1', product_id: 'p1', quantity: 10 }, // match
-      { order_id: 'o1', product_id: 'p2', quantity: 5 },  // mismatch
+      { order_id: 'o1', product_id: 'p1', quantity: 10, invoice_type: 'chemical_sale' }, // match
+      { order_id: 'o1', product_id: 'p2', quantity: 5, invoice_type: 'chemical_sale' },  // mismatch
     ];
     const result = checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems);
     expect(result).toHaveLength(1);
@@ -692,7 +709,7 @@ describe('checkDeliveryInvoiceQuantityParity', () => {
       { order_id: 'o1', product_id: 'p1', quantity_delivered: 10.005 },
     ];
     const invoiceItems: InvoiceItemCheckRow[] = [
-      { order_id: 'o1', product_id: 'p1', quantity: 10 },
+      { order_id: 'o1', product_id: 'p1', quantity: 10, invoice_type: 'chemical_sale' },
     ];
     // diff = 0.005 < 0.01 tolerance
     expect(checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems)).toEqual([]);

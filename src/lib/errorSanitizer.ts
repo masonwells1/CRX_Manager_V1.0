@@ -5,6 +5,50 @@
  */
 
 const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
+  [/^CUSTOMER_SCOPE_DENIED\b/i,
+   'You can only work with customers assigned to you'],
+  [/^RETURN_NOT_FOUND\b/i,
+   'This return could not be found'],
+  [/^RETURN_CREDIT_UNIT_MISMATCH\b/i,
+   'The returned item unit does not match its original sale. Review the return before retrying'],
+  [/^RETURN_CREDIT_INVENTORY_UNIT_MISMATCH\b/i,
+   "This return's stock unit does not match the warehouse inventory unit. Review the product and return units before retrying"],
+  [/^RETURN_CREDIT_UNLINKED_COST_LINE\b/i,
+   'An existing credit cannot be matched safely to this return. Review the credit memo before retrying'],
+  [/^RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED\b/i,
+   'Void or unapply the related return credit before moving this sale invoice out of a recognized status or deleting it'],
+  [/^RETURN_CREDIT_SOURCE_POST_REQUIRES_REISSUE\b/i,
+   'This invoice cannot be posted because an earlier return credit was issued before enough product was invoiced. Void or unapply that credit, post this invoice, then reissue the credit'],
+  [/^RETURN_CREDIT_HEADER_IMMUTABLE\b/i,
+   'Use Void on the return credit memo before changing or deleting it'],
+  [/^RETURN_CREDIT_PARENT_IMMUTABLE\b/i,
+   'Void or unapply the return credit before deleting its return record'],
+  [/^RETURN_CREDIT_LINE_TOTAL_MISMATCH\b/i,
+   'The return credit lines did not match the credit total, so no changes were saved'],
+  [/^RETURN_CREDIT_CUTOVER_IN_PROGRESS\b/i,
+   'Return credits are briefly paused while an accounting update finishes. Retry in a moment'],
+  [/^ORDER_INVOICE_TERMINAL\b/i,
+   'This order invoice is already final and cannot be changed'],
+  [/^ORDER_LIFECYCLE_BUSY_RETRY\b/i,
+   'This order is being updated elsewhere. Wait a moment and retry'],
+  [/^RETURN_CREDIT_LEDGER_IMMUTABLE\b/i,
+   'Void or unapply the return credit before changing its source or cost lines'],
+  [/^RETURN_CREDIT_ISOLATION_UNSUPPORTED\b/i,
+   'This return credit could not be serialized safely. Retry the operation'],
+  [/^RETURN_CREDIT_HEADER_RESULT_INVALID\b/i,
+   'The return credit could not be completed safely. Retry the operation'],
+  [/^RETURN_CREDIT_SOURCE_CONCURRENT\b/i,
+   'A related invoice or return credit is being changed elsewhere. Wait a moment and try again'],
+  [/^RETURN_CREDIT_VOID_RELEASE_FAILED\b/i,
+   'The return credit could not be voided safely, so no changes were saved. Refresh and try again; contact support if it repeats'],
+  [/^RETURN_CREDIT_UNAPPLY_RELEASE_FAILED\b/i,
+   'The return credit could not be unapplied safely, so no changes were saved. Refresh and try again; contact support if it repeats'],
+  [/^RETURN_CREDIT_COGS_LEDGER_MISSING\b/i,
+   'An existing return credit is missing its protected cost source. Void or unapply it and contact support before retrying'],
+  [/^RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED\b/i,
+   'This return would reverse more product cost than the related sales invoices recorded. No changes were saved; review the source invoices and earlier return credits'],
+  [/invoice_items_return_credit_source_item_fk/i,
+   'This source invoice line is retained as return-credit accounting history and cannot be deleted or re-saved. Keep the source invoice unchanged, or permanently delete the already-voided credit memo before editing it'],
   [/duplicate key value violates unique constraint "[^"]+"/i,
    'A record with this information already exists'],
   [/violates foreign key constraint "[^"]+"/i,
@@ -36,6 +80,19 @@ export function sanitizeError(error: unknown): string {
       : typeof error === 'object' && error !== null && 'message' in error && typeof (error as Record<string, unknown>).message === 'string'
         ? (error as Record<string, unknown>).message as string
         : 'An unexpected error occurred';
+
+  const returnStatus = message.match(/^RETURN_NOT_APPROVED:([a-z_]+)$/i)?.[1];
+  if (returnStatus) {
+    const statusLabel = returnStatus.replace(/_/g, ' ');
+    if (returnStatus === 'requested') {
+      return `This return must be approved before it can be received (current status: ${statusLabel})`;
+    }
+    if (returnStatus === 'received') return 'This return is already received';
+    return `This return is ${statusLabel} and cannot be received`;
+  }
+  if (/^RETURN_NOT_APPROVED\b/i.test(message)) {
+    return 'This return must be approved before it can be received';
+  }
 
   for (const [pattern, replacement] of CONSTRAINT_PATTERNS) {
     if (pattern.test(message)) {

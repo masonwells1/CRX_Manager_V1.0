@@ -17,7 +17,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
-import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
+import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, mapInvoicePdfItem, type InvoicePdfData } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { withBelowCostReason } from '../lib/belowCostApproval';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../lib/emailService';
@@ -38,6 +38,7 @@ import { ProductSearchResultRow } from '../components/products/ProductSearchResu
 
 interface LineItem {
   id?: string;
+  order_item_id?: string | null;
   product_id: string | null;
   product_name: string;
   description: string;
@@ -57,6 +58,8 @@ interface LineItem {
    *  Undefined until the split-billing migration lands; when set, its quantity/price
    *  are server-allocated and must not be edited (would clobber the split amount). */
   billing_line_id?: string | null;
+  return_credit_cogs_cents?: number | null;
+  return_credit_source_item_id?: string | null;
   // Field-application detail — preserved through edits so the machine-fee flag,
   // applied amounts and EPA/form survive a "bill actual" edit (#3 edit-path).
   is_application_fee: boolean;
@@ -539,6 +542,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       setItems(
         (itemData as Array<Record<string, unknown> & { id: string; product_id: string; product?: { product_name: string }; description: string; quantity: number; unit_price_cents: number; extended_cents: number; cost_cents: number; rate_per_acre?: number | null; acres?: number | null; unit_size?: string; rate_unit?: string; total_applied?: number; sort_order?: number }>).map((it) => ({
           id: it.id,
+          order_item_id: (it.order_item_id as string) ?? null,
           product_id: it.product_id,
           product_name: it.product?.product_name || it.description || '',
           description: it.description,
@@ -554,6 +558,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           tote_number: (it.tote_number as string) ?? null,
           price_source: (it.price_source as LineItem['price_source']) ?? null,
           quoted_price_cents: it.quoted_price_cents != null ? Number(it.quoted_price_cents) : null,
+          return_credit_cogs_cents: it.return_credit_cogs_cents != null ? Number(it.return_credit_cogs_cents) : null,
+          return_credit_source_item_id: (it.return_credit_source_item_id as string) ?? null,
           is_application_fee: Boolean((it as Record<string, unknown>).is_application_fee),
           rate_unit: ((it as Record<string, unknown>).rate_unit as string) ?? null,
           total_applied: (it as Record<string, unknown>).total_applied != null ? Number((it as Record<string, unknown>).total_applied) : null,
@@ -750,6 +756,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         };
 
         const itemsPayload = items.map((it, idx) => ({
+          // Existing generated lines carry their server identity back to the
+          // writer so it can preserve immutable order-line and historical-cost
+          // lineage while rebuilding a draft invoice. New manual lines omit id.
+          id: it.id,
+          order_item_id: it.order_item_id,
           product_id: it.product_id,
           description: it.description || it.product_name,
           quantity: it.quantity,
@@ -1251,25 +1262,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         acres: s.acres,
         amount_cents: s.amount_cents,
       })) : undefined,
-      items: (enrichedItems || []).map((it) => ({
-        description: it.description,
-        product_name: it.product?.product_name || it.description,
-        quantity: Number(it.quantity),
-        unit_size: it.unit_size || undefined,
-        unit_price_cents: it.unit_price_cents,
-        extended_cents: it.extended_cents,
-        cost_cents: it.cost_cents,
-        rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
-        rate_unit: it.rate_unit || null,
-        acres: it.acres ? Number(it.acres) : null,
-        total_applied: it.total_applied ? Number(it.total_applied) : null,
-        total_applied_unit: it.total_applied_unit || null,
-        total_applied_gl_lb: it.total_applied_gl_lb ? Number(it.total_applied_gl_lb) : null,
-        gl_lb_unit: it.gl_lb_unit || null,
-        epa_registration: it.epa_registration || it.product?.epa_registration || null,
-        is_application_fee: it.is_application_fee || false,
-        product_form: it.product_form || it.product?.product_form || null,
-      })) as InvoicePdfItem[],
+      items: groupReturnCreditDisplayItems(invoice.invoice_type, (enrichedItems || []).map(mapInvoicePdfItem)),
       total_amount_cents: invoice.total_amount_cents ?? items.reduce((s, i) => s + i.extended_cents, 0),
       total_cost_cents: invoice.total_cost_cents ?? items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : Math.round(i.cost_cents * i.quantity)), 0),
       paid_amount_cents: invoice.paid_amount_cents ?? 0,
@@ -1363,19 +1356,30 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // generic page strictly read-only for them so a save can't cascade away their line
   // shares (Codex P1 #6). Paired with the hard guard in handleSave.
   const isSplitInvoice = !!(invoice as { field_app_billing_set_id?: string | null }).field_app_billing_set_id;
+  const canEdit = isAdminOrRep;
+  const editable = canEdit && !isSplitInvoice && (isNew || ['draft', 'unposted'].includes(invoice.status || ''));
+  const storedTotalCostCents = (invoice as { total_cost_cents?: number | null }).total_cost_cents;
   // Total Cost / Margin:
   // - Split invoice (Codex r5 P2): chemical items store PER-UNIT cost, but the header
   //   total_cost_cents holds the penny-exact largest-remainder-allocated COGS — recomputing
   //   cost_cents*quantity here would mis-display it (1¢ cost split 50/50 shows 1¢+1¢ vs the
   //   authoritative 1¢+0¢). Use the header total.
+  // - Protected return credits also use the stored header because their grouped fractional lines
+  //   telescope to the original penny-exact COGS. Recomputing each line can differ by one cent.
   // - Otherwise mirror save_invoice DELTA-E: a machine-fee line stores its EXACT extended cost
   //   (its quantity is acres, not a multiplier), so add it as-is; product lines store a per-unit
   //   cost -> x quantity. Using x quantity for the fee line would inflate Total Cost by acres.
+  const isProtectedReturnCredit = invoice.invoice_type === 'credit_memo'
+    && !editable
+    && items.some((item) => item.return_credit_source_item_id != null || item.return_credit_cogs_cents != null);
   const totalCostCents = isSplitInvoice
-    ? Number((invoice as { total_cost_cents?: number | null }).total_cost_cents ?? 0)
-    : items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
-  const canEdit = isAdminOrRep;
-  const editable = canEdit && !isSplitInvoice && (isNew || ['draft', 'unposted'].includes(invoice.status || ''));
+    ? Number(storedTotalCostCents ?? 0)
+    : isProtectedReturnCredit && storedTotalCostCents != null
+      ? Number(storedTotalCostCents)
+      : items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
+  const displayItems = editable
+    ? items
+    : groupReturnCreditDisplayItems(invoice.invoice_type, items);
 
   // Customer filtered list
   const filteredCustomers = customerSearch.length >= 1
@@ -1821,7 +1825,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           )}
         </div>
 
-        {items.length === 0 ? (
+        {displayItems.length === 0 ? (
           <div className="text-center py-8 text-secondary">
             <FileText className="w-8 h-8 mx-auto mb-2 opacity-40" />
             <p className="text-sm">No line items yet. Add products to this invoice.</p>
@@ -1835,14 +1839,14 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                   <th className="pb-2 pr-4 w-24">Qty</th>
                   <th className="pb-2 pr-4 w-28">Unit Price</th>
                   <th className="pb-2 pr-4 w-28">Extended</th>
-                  {items.some((i) => i.tote_number) && (
+                  {displayItems.some((i) => i.tote_number) && (
                     <th className="pb-2 pr-4">Tote #</th>
                   )}
                   <th className="pb-2 w-10"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {items.map((item, idx) => (
+                {displayItems.map((item, idx) => (
                   <tr key={idx} className="group">
                     <td className="py-2 pr-4">
                       <div className="font-medium text-nav-dark">{item.product_name || item.description}</div>
@@ -1886,7 +1890,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                       )}
                     </td>
                     <td className="py-2 pr-4 font-medium">{fmt(item.extended_cents)}</td>
-                    {items.some((i) => i.tote_number) && (
+                    {displayItems.some((i) => i.tote_number) && (
                       <td className="py-2 pr-4 text-secondary">{item.tote_number || '-'}</td>
                     )}
                     <td className="py-2">
@@ -1904,7 +1908,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               </tbody>
               <tfoot>
                 <tr className="border-t border-gray-200 font-semibold">
-                  <td className="pt-3" colSpan={items.some((i) => i.tote_number) ? 4 : 3}>
+                  <td className="pt-3" colSpan={displayItems.some((i) => i.tote_number) ? 4 : 3}>
                     Total
                   </td>
                   <td className="pt-3">{fmt(totalCents)}</td>

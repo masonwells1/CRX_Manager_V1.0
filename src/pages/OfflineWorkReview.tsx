@@ -52,6 +52,13 @@ export default function OfflineWorkReview() {
     const requestSequence = ++loadRequestSequence.current;
     setLoading(true);
     setLoadError(null);
+    // A permanent resolution is only safe against the queue snapshot it was opened from.
+    // Invalidate it before every refresh, rather than leaving it actionable while a newer
+    // authoritative response is pending.
+    setSelected(null);
+    setConfirmOpen(false);
+    setNote('');
+    setIdempotencyKey(null);
     try {
       const { data, error } = await supabase.rpc('get_offline_action_review_queue', {
         p_include_resolved: includeResolved,
@@ -100,7 +107,7 @@ export default function OfflineWorkReview() {
   );
 
   const openResolution = (item: OfflineActionReviewQueueItem) => {
-    if (!profile) return;
+    if (!profile || loading || loadError) return;
     setSelected(item);
     setResolution('already_completed');
     setNote('');
@@ -121,7 +128,7 @@ export default function OfflineWorkReview() {
   };
 
   const handleResolve = async () => {
-    if (!selected || !idempotencyKey || note.trim().length < 10) return;
+    if (loading || loadError || !selected || !idempotencyKey || note.trim().length < 10) return;
     setSaving(true);
     try {
       const { data, error } = await supabase.rpc('resolve_offline_action', {
@@ -263,7 +270,11 @@ export default function OfflineWorkReview() {
                     Open record <ExternalLink className="h-4 w-4" />
                   </Link>
                   {!resolved && (
-                    <Button onClick={() => openResolution(item)} className="min-h-11">
+                    <Button
+                      onClick={() => openResolution(item)}
+                      disabled={loading || Boolean(loadError)}
+                      className="min-h-11"
+                    >
                       Resolve safely
                     </Button>
                   )}
@@ -280,10 +291,10 @@ export default function OfflineWorkReview() {
         title="Resolve Offline Work"
         footer={
           <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <Button variant="ghost" onClick={closeResolution}>Cancel</Button>
+            <Button variant="ghost" onClick={closeResolution} disabled={loading}>Cancel</Button>
             <Button
               onClick={() => setConfirmOpen(true)}
-              disabled={note.trim().length < 10}
+              disabled={loading || Boolean(loadError) || note.trim().length < 10}
             >
               Review final confirmation
             </Button>
@@ -298,6 +309,7 @@ export default function OfflineWorkReview() {
             <span className="text-sm font-medium text-primary">Resolution</span>
             <select
               value={resolution}
+              disabled={loading || Boolean(loadError)}
               onChange={(event) => {
                 setResolution(event.target.value as OfflineActionReviewResolution);
                 renewResolutionKey();
@@ -312,6 +324,7 @@ export default function OfflineWorkReview() {
             <span className="text-sm font-medium text-primary">Required explanation</span>
             <textarea
               value={note}
+              disabled={loading || Boolean(loadError)}
               onChange={(event) => {
                 setNote(event.target.value);
                 renewResolutionKey();
@@ -334,7 +347,7 @@ export default function OfflineWorkReview() {
         message={confirmMessage}
         confirmLabel={resolution === 'already_completed' ? 'Record as already handled' : 'Record as do not run'}
         variant="warning"
-        loading={saving}
+        loading={saving || loading}
       />
     </div>
   );

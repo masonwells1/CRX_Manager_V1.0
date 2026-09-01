@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-08-25",
+    "generated_at": "2026-08-31",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260825142708",
+    "migrations_high_water": "20260827113443",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -358,6 +358,8 @@
       "20260817120000_carry_allocated_line_cents_through_lifecycle",
       "20260819232000_bind_draw_down_receipts_to_intent",
       "20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals",
+      "20260826150000_fix_save_job_comment_refusal_count",
+      "20260826220000_quote_version_restore_trust_boundary",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -7846,7 +7848,8 @@
       "sent_method",
       "snapshot_data",
       "pdf_url",
-      "notes"
+      "notes",
+      "restore_trusted_at"
     ],
     "quotes": [
       "id",
