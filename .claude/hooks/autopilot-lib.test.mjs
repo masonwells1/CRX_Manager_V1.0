@@ -55,7 +55,21 @@ eq(overnightGateDecision("Bash", { command: "git add -A && git commit -m x" }), 
 eq(overnightGateDecision("mcp__supabase__execute_sql", { query: "SELECT 1" }), "allow-through", "sql passes even before arm (Mason 2026-07-10)");
 eq(overnightGateDecision("mcp__x__deploy_edge_function", {}), "deny-until-armed", "deploy still blocked until armed");
 eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }), "allow-through", "arm command passes");
-eq(overnightGateDecision("Bash", { command: "rm .claude/session-state/OVERNIGHT-INTENT.flag" }), "allow-through", "clearing intent flag passes");
+// The `rm` form is NOT the escape hatch and must not be advertised as one: this
+// gate is only one of seven PreToolUse hooks, and review-proof-guard (matcher "*")
+// refuses it outright. This assertion used to say "allow-through" and passed for
+// months while the real stack denied the command — false assurance of exactly the
+// class this project calls a silently-no-op mutation test. The end-to-end proof
+// that the sanctioned command survives EVERY registered hook lives in
+// overnight-intent-clear.test.mjs; keep that one honest, not this one.
+eq(overnightGateDecision("Bash", { command: "rm .claude/session-state/OVERNIGHT-INTENT.flag" }), "deny-until-armed", "rm form is NOT the escape hatch (review-proof-guard denies it downstream)");
+eq(overnightGateDecision("Bash", { command: "node scripts/clear-overnight-intent.mjs --not-a-hands-free-run" }), "allow-through", "sanctioned clear script passes");
+eq(overnightGateDecision("Bash", { command: "node scripts/clear-overnight-intent.mjs" }), "allow-through", "clear script without the flag still reaches the script (which then refuses)");
+// Anchored, so the allowance cannot ride as a prefix/suffix on a chained command.
+eq(overnightGateDecision("Bash", { command: "node scripts/clear-overnight-intent.mjs && npm run build" }), "deny-until-armed", "chained build after the clear script is still gated");
+eq(overnightGateDecision("Bash", { command: "npm run build && node scripts/clear-overnight-intent.mjs" }), "deny-until-armed", "clear script as a suffix does not unlock the prefix");
+eq(overnightGateDecision("Bash", { command: "echo clear-overnight-intent.mjs > x.txt" }), "deny-until-armed", "merely naming the script does not unlock");
+eq(overnightGateDecision("Bash", { command: "node scripts/clear-overnight-intent.mjs --hours 9" }), "deny-until-armed", "unknown argument is not covered by the allowance");
 eq(overnightGateDecision("Bash", { command: "git status" }), "allow-through", "git status passes");
 // Codex 2026-07-05 P2: read-only leading token + write redirect must NOT pass
 eq(overnightGateDecision("Bash", { command: "cat src/a.ts > src/b.ts" }), "deny-until-armed", "cat with redirect blocked until armed");

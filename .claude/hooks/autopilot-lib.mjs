@@ -92,12 +92,31 @@ export function intentFresh(content, nowMs) {
 const INTENT_ALLOW_TOOL_RE = /^(Read|Glob|Grep|TaskList|TaskGet|TaskCreate|TaskUpdate|WebFetch|WebSearch|AskUserQuestion|Skill)$/i;
 const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|worktree\s+list)|ls|dir|cat|head|tail|grep|rg|find|echo|node\s+--version)\b/;
 
+// The ONLY sanctioned way out of a false-positive latch: scripts/clear-overnight-intent.mjs.
+//
+// The escape this hook's own deny message used to advertise — deleting the flag
+// from the shell — never worked: review-proof-guard.mjs (matcher "*") refuses every
+// destructive shell command touching .claude/session-state, and this gate blocks
+// Write/Edit, so a session latched by mistake had no unblocked path left except
+// arming autopilot — the exact failure the handshake exists to prevent. The old
+// `/OVERNIGHT-INTENT\.flag/` substring allowance below was pure false assurance: it
+// returned allow-through here while the real stack denied (proven live 2026-09-01,
+// and asserted green by autopilot-lib.test.mjs the whole time).
+//
+// ANCHORED to a WHOLE command, unlike the arm allowance beside it: a bare substring
+// test would let the allowance ride as a prefix/suffix on a chained command
+// (`node scripts/clear-overnight-intent.mjs && npm run build`) and defeat the pause
+// it is carved out of. Optional-quoted node/script paths are accepted; a trailing
+// --not-a-hands-free-run is accepted (the script itself requires it); nothing else is.
+const CLEAR_INTENT_CMD_RE =
+  /^\s*(?:"[^"]*node(?:\.exe)?"|'[^']*node(?:\.exe)?'|[^\s;&|<>()]*\bnode(?:\.exe)?)\s+(?:"[^"]*clear-overnight-intent\.mjs"|'[^']*clear-overnight-intent\.mjs'|[^\s;&|<>()"']*clear-overnight-intent\.mjs)(?:\s+--not-a-hands-free-run)?\s*$/i;
+
 export function overnightGateDecision(toolName, toolInput) {
   const name = String(toolName || "");
   if (INTENT_ALLOW_TOOL_RE.test(name)) return "allow-through";
   const input = toolInput || {};
   const cmd = typeof input.command === "string" ? input.command : "";
-  if (cmd && (/autopilot-arm\.mjs/.test(cmd) || /OVERNIGHT-INTENT\.flag/.test(cmd))) return "allow-through";
+  if (cmd && (/autopilot-arm\.mjs/.test(cmd) || CLEAR_INTENT_CMD_RE.test(cmd))) return "allow-through";
   if (/^(Bash|PowerShell)$/i.test(name)) {
     // Read-only leading token AND no write redirect: `cat > file` / `echo .. >> f`
     // / `... | tee f` still mutate files (Codex 2026-07-05) — those wait for the arm.
@@ -127,4 +146,4 @@ export function flagActive(content, nowMs) {
   return { active: true, expires: data.expires };
 }
 
-export { DENY_TOOLNAME_RE, DENY_BASH_RES, DENY_PATH_RE };
+export { DENY_TOOLNAME_RE, DENY_BASH_RES, DENY_PATH_RE, CLEAR_INTENT_CMD_RE };

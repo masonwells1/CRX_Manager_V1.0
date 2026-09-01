@@ -35,7 +35,7 @@ function deny(name) {
 }
 
 function denyUnarmed(name) {
-  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `OVERNIGHT HANDSHAKE: Mason asked for a hands-free run but autopilot is NOT armed, so "${name}" is paused. Arm it FIRST (node .claude/hooks/autopilot-arm.mjs --hours N), confirm to Mason in one plain-English line, then continue. If this is NOT actually a hands-free run, delete .claude/session-state/OVERNIGHT-INTENT.flag and continue normally. Reassurance without arming is the exact repeated failure this blocks.` } }));
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `OVERNIGHT HANDSHAKE: Mason asked for a hands-free run but autopilot is NOT armed, so "${name}" is paused. Arm it FIRST (node .claude/hooks/autopilot-arm.mjs --hours N), confirm to Mason in one plain-English line, then continue. If this is NOT actually a hands-free run (the latch also fires on a prompt that merely DISCUSSES autopilot), clear it with: node scripts/clear-overnight-intent.mjs --not-a-hands-free-run — that grants nothing, it just returns the session to the normal permission flow. Do NOT arm autopilot to get unblocked. Reassurance without arming is the exact repeated failure this blocks.` } }));
   process.exit(0);
 }
 
