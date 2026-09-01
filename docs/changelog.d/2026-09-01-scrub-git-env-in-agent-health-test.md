@@ -1,4 +1,4 @@
-## 2026-09-01 — the agent-health test ran against the real repository, and blocked every commit on the machine
+## 2026-09-01 — the agent-health test ran against the real repository, and blocked commits in worktrees using a foreign hook path
 
 `scripts/agent-health-check.test.mjs` builds throwaway git repositories and asserts on
 `checkGitHooksInstalled()`. Git exports `GIT_DIR` (and the rest of `git rev-parse --local-env-vars`)
