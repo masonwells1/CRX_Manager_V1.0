@@ -13,6 +13,11 @@ import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import {
+  UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
+  UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
+  useUncertainMutationIntent,
+} from '../hooks/useUncertainMutationIntent';
+import {
   purchaseOrderCentsToDollars,
   purchaseOrderLineTotalCents,
 } from '../lib/purchaseOrderMoney';
@@ -27,6 +32,7 @@ import RelatedNotes from '../components/team/RelatedNotes';
 import HelpTip from '../components/ui/HelpTip';
 import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition, LinkedEntityType } from '../types';
 import { Sentry } from '../lib/sentry';
+import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import { ProductOptionDetails, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
 
@@ -52,12 +58,45 @@ interface ReceiveItemState {
   notes: string;
 }
 
+interface ReceivePoIntent {
+  performedBy: string;
+  itemsPayload: Array<{
+    po_item_id: string;
+    quantity: number;
+    condition: ReceivingCondition;
+    lot_number: string | null;
+    notes: string | null;
+    storage_location: string;
+  }>;
+  finalPayload: Array<{
+    po_item_id: string;
+    quantity: number;
+    condition: ReceivingCondition;
+    lot_number: string | null;
+    notes: string | null;
+    storage_location: string;
+    over_receive_reason?: string;
+  }>;
+  allowOverReceive: boolean;
+  storageLocation: string;
+}
+
 export default function PurchaseOrderDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { role, profile } = useAuth();
   const { toast } = useToast();
-  const receiveIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
+  const receiveIntent = useUncertainMutationIntent<ReceivePoIntent>({
+    operation: 'receive_po_items',
+    userId: profile?.id || '',
+    surface: 'purchase-order-detail',
+    scope: id || '',
+    getIntentIdentity: (intent) => ({
+      p_items: intent.finalPayload,
+      p_performed_by: intent.performedBy,
+      p_allow_over_receive: intent.allowOverReceive,
+    }),
+  });
   const savePOIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
   const {
     getKey: getSubmitPOKey,
@@ -83,10 +122,31 @@ export default function PurchaseOrderDetail() {
   const [overReceiveReason, setOverReceiveReason] = useState('');
 
   // React Router can reuse this component when only the route parameter changes.
-  // Never let a lost-response retry key from one PO replay a different PO's result.
+  // The durable receiving record is PO-scoped; the submit key still rotates here.
   useEffect(() => {
     resetSubmitPOKey();
+    setReceiveOpen(false);
   }, [id, resetSubmitPOKey]);
+
+  useEffect(() => {
+    const recovered = receiveIntent.unresolvedIntent;
+    if (!recovered) return;
+    const restoredItems: Record<string, ReceiveItemState> = {};
+    recovered.finalPayload.forEach((item) => {
+      restoredItems[item.po_item_id] = {
+        qty: String(item.quantity),
+        condition: item.condition,
+        lot_number: item.lot_number || '',
+        notes: item.notes || '',
+      };
+    });
+    setReceiveItems(restoredItems);
+    setStorageLocation(recovered.storageLocation);
+    setAllowOverReceive(recovered.allowOverReceive);
+    setOverReceiveReason(recovered.finalPayload.find((item) => item.over_receive_reason)?.over_receive_reason || '');
+    setReceiveStep('review');
+    setReceiveOpen(true);
+  }, [receiveIntent.unresolvedIntent]);
 
   /* Edit modal state */
   const [editOpen, setEditOpen] = useState(false);
@@ -204,8 +264,11 @@ export default function PurchaseOrderDetail() {
 
   /* ─── Open receive modal ─── */
   const openReceiveModal = () => {
-    // Codex P2 fix: reset key per receive intent (variable per-item qty/notes).
-    receiveIdem.resetKey();
+    if (receiveIntent.isIntentLocked) {
+      setReceiveStep('review');
+      setReceiveOpen(true);
+      return;
+    }
     const initial: Record<string, ReceiveItemState> = {};
     items.forEach((item) => {
       initial[item.id] = {
@@ -232,75 +295,133 @@ export default function PurchaseOrderDetail() {
 
   /* ─── Submit receive ─── */
   const handleReceive = async () => {
+    if (receiveIntent.isForeignIntentLocked) {
+      toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+      return;
+    }
+    if (receiveIntent.isRetryExpired) {
+      toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
+      return;
+    }
     if (!profile) return;
 
-    const itemsPayload = items
-      .filter((item) => parseFloat(receiveItems[item.id]?.qty || '0') > 0)
-      .map((item) => {
-        const ri = receiveItems[item.id];
-        return {
-          po_item_id: item.id,
-          quantity: parseFloat(ri.qty || '0'),
-          condition: ri.condition,
-          lot_number: ri.lot_number || null,
-          notes: ri.notes || null,
-          storage_location: storageLocation,
-        };
-      });
+    let request: ReceivePoIntent;
+    let idemKey: string;
+    try {
+      const lockedRequest = receiveIntent.unresolvedIntent;
+      if (lockedRequest) {
+        // A committed receipt reduces the live remaining quantity. Revalidating
+        // against that refreshed state would deadlock the exact replay that must
+        // reconcile a lost response, so locked retries use the frozen request.
+        request = await receiveIntent.beginIntent(lockedRequest);
+      } else {
+        const itemsPayload = items
+          .filter((item) => parseFloat(receiveItems[item.id]?.qty || '0') > 0)
+          .map((item) => {
+            const ri = receiveItems[item.id];
+            return {
+              po_item_id: item.id,
+              quantity: parseFloat(ri.qty || '0'),
+              condition: ri.condition,
+              lot_number: ri.lot_number || null,
+              notes: ri.notes || null,
+              storage_location: storageLocation,
+            };
+          });
 
-    if (itemsPayload.length === 0) {
-      toast('error', 'Enter a quantity for at least one item');
+        if (itemsPayload.length === 0) {
+          toast('error', 'Enter a quantity for at least one item');
+          return;
+        }
+
+        // Compute whether any line would over-receive based on remaining-to-receive
+        const wouldOverReceive = itemsPayload.some((ip) => {
+          const poItem = items.find((i) => i.id === ip.po_item_id);
+          if (!poItem) return false;
+          const remaining = (poItem.quantity_ordered || 0) - (poItem.quantity_received || 0);
+          return ip.quantity > remaining;
+        });
+
+        if (wouldOverReceive) {
+          if (role !== 'admin') {
+            toast('error', 'Over-receive requires admin role. Reduce the quantity to remaining-to-receive or fewer.');
+            return;
+          }
+          if (!allowOverReceive) {
+            toast('error', 'Quantity exceeds remaining-to-receive. Check the over-receive override and provide a reason.');
+            return;
+          }
+          if (!overReceiveReason.trim()) {
+            toast('error', 'Reason is required when over-receiving.');
+            return;
+          }
+        }
+
+        // Send the reason as a dedicated field. The RPC decides which locked line
+        // is actually over-received and appends the audit marker server-side.
+        const finalPayload = wouldOverReceive
+          ? itemsPayload.map((ip) => ({
+              ...ip,
+              over_receive_reason: overReceiveReason.trim(),
+            }))
+          : itemsPayload;
+
+        request = await receiveIntent.beginIntent({
+          performedBy: profile.id,
+          itemsPayload,
+          finalPayload,
+          allowOverReceive: wouldOverReceive && allowOverReceive,
+          storageLocation,
+        });
+      }
+      idemKey = receiveIntent.getIdempotencyKey();
+    } catch (error) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { tags: { source: 'durable-intent', page: 'purchase-order-detail' } });
+      toast('error', 'Receiving could not be safely prepared. Nothing was received; refresh and try again.');
       return;
     }
 
-    // Compute whether any line would over-receive based on remaining-to-receive
-    const wouldOverReceive = itemsPayload.some((ip) => {
-      const poItem = items.find((i) => i.id === ip.po_item_id);
-      if (!poItem) return false;
-      const remaining = (poItem.quantity_ordered || 0) - (poItem.quantity_received || 0);
-      return ip.quantity > remaining;
-    });
-
-    if (wouldOverReceive) {
-      if (role !== 'admin') {
-        toast('error', 'Over-receive requires admin role. Reduce the quantity to remaining-to-receive or fewer.');
-        return;
-      }
-      if (!allowOverReceive) {
-        toast('error', 'Quantity exceeds remaining-to-receive. Check the over-receive override and provide a reason.');
-        return;
-      }
-      if (!overReceiveReason.trim()) {
-        toast('error', 'Reason is required when over-receiving.');
-        return;
-      }
-    }
-
-    // Send the reason as a dedicated field. The RPC decides which locked line
-    // is actually over-received and appends the audit marker server-side.
-    const finalPayload = wouldOverReceive
-      ? itemsPayload.map((ip) => ({
-          ...ip,
-          over_receive_reason: overReceiveReason.trim(),
-        }))
-      : itemsPayload;
-
     await runCriticalAction({
       action: async () => {
-        const idemKey = receiveIdem.getKey();
         const { data, error } = await supabase.rpc('receive_po_items', {
-          p_items: finalPayload,
-          p_performed_by: profile.id,
+          p_items: request.finalPayload,
+          p_performed_by: request.performedBy,
           p_idempotency_key: idemKey,
-          p_allow_over_receive: wouldOverReceive && allowOverReceive,
+          p_allow_over_receive: request.allowOverReceive,
         });
-        if (error) throw error;
-        assertRpcResult(data, 'receive_po_items');
-        receiveIdem.resetKey();
+        let responseData: unknown;
+        let completedElsewhere = false;
+        if (error) {
+          const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
+          const committedRecordIds = receipt?.receiving_record_ids;
+          if (
+            Array.isArray(committedRecordIds)
+            && committedRecordIds.length > 0
+            && committedRecordIds.every((recordId) => typeof recordId === 'string')
+          ) {
+            responseData = receipt;
+            completedElsewhere = true;
+            toast('warning', 'The earlier receiving update already completed. The PO has been refreshed instead of receiving it twice.');
+          } else {
+            const disposition = await receiveIntent.classifyFailure(error);
+            if (disposition === 'resolved') {
+              responseData = receipt;
+              completedElsewhere = true;
+              toast('warning', 'This receiving update completed in another tab. The PO has been refreshed instead of receiving it twice.');
+            } else if (disposition === 'definitive') {
+              throw error;
+            } else {
+              throw new Error('The receiving update may already be recorded. Retry the locked request unchanged to reconcile it.');
+            }
+          }
+        } else {
+          responseData = assertRpcResult(data, 'receive_po_items');
+        }
+        await receiveIntent.resolveIntent();
 
         // AUDIT 3.2: Notify admins about damaged/non-good items
-        if (po) {
-          const damagedItems = itemsPayload
+        if (po && !completedElsewhere) {
+          const damagedItems = request.itemsPayload
             .filter((ip) => ip.condition && ip.condition !== 'good')
             .map((ip) => {
               const poItem = items.find((i) => i.id === ip.po_item_id);
@@ -315,7 +436,7 @@ export default function PurchaseOrderDetail() {
           }
 
           // AUDIT: Notify admins about over-received items
-          const overItems = itemsPayload
+          const overItems = request.itemsPayload
             .filter((ip) => {
               const poItem = items.find((i) => i.id === ip.po_item_id);
               if (!poItem) return false;
@@ -336,7 +457,7 @@ export default function PurchaseOrderDetail() {
         }
 
         // Offer PDF download
-        const receivingRecordIds = (data as { receiving_record_ids?: string[] } | null)?.receiving_record_ids;
+        const receivingRecordIds = (responseData as { receiving_record_ids?: string[] } | null)?.receiving_record_ids;
         if (receivingRecordIds && receivingRecordIds.length > 0 && po) {
           try {
             const { downloadReceivingPdf } = await import('../lib/receivingPdf');
@@ -345,8 +466,8 @@ export default function PurchaseOrderDetail() {
               vendor: po.vendor,
               received_at: new Date().toISOString(),
               received_by_name: profile.full_name || 'Unknown',
-              storage_location: storageLocation,
-              items: itemsPayload.map((ip) => {
+              storage_location: request.storageLocation,
+              items: request.itemsPayload.map((ip) => {
                 const poItem = items.find((i) => i.id === ip.po_item_id);
                 return {
                   product_name: (poItem?.product as unknown as { product_name: string } | undefined)?.product_name || 'Unknown',
@@ -366,11 +487,14 @@ export default function PurchaseOrderDetail() {
         setReceiveOpen(false);
         fetchPO();
         fetchReceivingHistory();
+        return completedElsewhere;
       },
       toast,
-      successMessage: 'Items received and inventory updated',
       setLoading: setSaving,
       sentryTag: 'receive_po_items',
+      onSuccess: (completedElsewhere) => {
+        if (!completedElsewhere) toast('success', 'Items received and inventory updated');
+      },
     });
   };
 
@@ -846,7 +970,9 @@ export default function PurchaseOrderDetail() {
       {/* Enhanced Receive Modal */}
       <Modal
         open={receiveOpen}
-        onClose={() => setReceiveOpen(false)}
+        onClose={() => {
+          if (!receiveIntent.isIntentLocked) setReceiveOpen(false);
+        }}
         title="Receive"
         accent="Items"
         size="large"
@@ -965,6 +1091,15 @@ export default function PurchaseOrderDetail() {
         ) : (
           /* Review Step */
           <div className="space-y-4">
+            {receiveIntent.isIntentLocked && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                {receiveIntent.isForeignIntentLocked
+                  ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
+                  : receiveIntent.isRetryExpired
+                  ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                  : 'The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice. Retry it unchanged to reconcile the result.'}
+              </div>
+            )}
             <div className="bg-gray-50 rounded-xl p-4">
               <p className="text-xs text-secondary mb-2">STORAGE LOCATION</p>
               <p className="text-sm font-medium text-nav-dark">{storageLocation}</p>
@@ -1035,6 +1170,7 @@ export default function PurchaseOrderDetail() {
                       type="checkbox"
                       checked={allowOverReceive}
                       onChange={(e) => setAllowOverReceive(e.target.checked)}
+                      disabled={receiveIntent.isIntentLocked}
                       className="rounded border-amber-400"
                     />
                     Confirm over-receive (admin override)
@@ -1048,6 +1184,7 @@ export default function PurchaseOrderDetail() {
                       onChange={(e) => setOverReceiveReason(e.target.value)}
                       placeholder="Reason (e.g. vendor over-shipped and we are keeping the extra)"
                       rows={2}
+                      disabled={receiveIntent.isIntentLocked}
                       className="ml-6 w-[calc(100%-1.5rem)] rounded border border-amber-400 px-2 py-1 text-sm"
                     />
                   )}
@@ -1056,14 +1193,14 @@ export default function PurchaseOrderDetail() {
             })()}
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => setReceiveStep('fill')}>
+              <Button variant="ghost" onClick={() => setReceiveStep('fill')} disabled={receiveIntent.isIntentLocked}>
                 Back
               </Button>
-              <Button variant="secondary" onClick={() => setReceiveOpen(false)}>
+              <Button variant="secondary" onClick={() => setReceiveOpen(false)} disabled={receiveIntent.isIntentLocked}>
                 Cancel
               </Button>
-              <Button onClick={handleReceive} loading={saving}>
-                Confirm & Receive
+              <Button onClick={handleReceive} loading={saving} disabled={receiveIntent.isForeignIntentLocked || receiveIntent.isRetryExpired}>
+                {receiveIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Confirm & Receive'}
               </Button>
             </div>
           </div>

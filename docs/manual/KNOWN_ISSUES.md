@@ -1,6 +1,5 @@
 # Known Issues — Consolidated
 
-
 **Last verified: 2026-08-27 11:43:53 UTC for migration-ledger and schema facts only.** A durable
 read-only capture records **978 ledger rows**. The matching live-introspection registry records
 `migrations_high_water` **`20260827113443`**, latest applied authored name
@@ -18,6 +17,22 @@ of the draw-down chain are applied live — the cutover barrier (2026-08-24 midd
 intent binding (`20260825034622`). See the rollout block at the top of
 `docs/reference/migration-history.md`. This pass re-read the ledger and updated the draw-down
 entries only; it does not re-certify unrelated issue narratives below.
+
+**Section 9 stamp: 2026-08-26 UTC, limited read-only remediation refresh; migration ordering
+re-checked live 2026-08-31.** Live catalog evidence from the 2026-08-26 read confirms the three
+Section 9 HIGH findings are still production risks until the pending migrations apply:
+`get_ap_aging(date)` still uses `bill_date` and has no `1-30` return column,
+`get_ap_dashboard_summary()` still uses a rolling 30-day due-this-month window, and the affected
+AP/receiving mutators are not yet wrapped by the new exact-intent contract. The cutover preflight
+found zero active unbound receipts across those six operations on that same 2026-08-26 read. The
+two unchanged SQL bodies are stamped `20260826221000` and `20260826222000`. The
+`20260826220000` quote-trust prerequisite they sit behind is **no longer pending** — a read-only
+`list_migrations` on 2026-08-31 returned 978 ledger rows, `max(version)` `20260827113443`, and
+effective ordering name high-water `20260826220000`, with neither Section 9 stamp present. Both
+therefore remain strictly forward of the live name high-water; re-read the ledger immediately
+before any apply. The superseded 977-row/`20260826150000` figures this paragraph previously
+carried are covered by the stamp above. No unrelated issue entry was re-read; its own dated
+evidence remains authoritative.
 
 **OPEN — return credits do not reverse COGS until the PR 361 rebuild is applied.** Live
 `_issue_return_credit_impl` still creates only the credit-memo header and writes no
