@@ -81,7 +81,8 @@ Mutation-tested, not merely observed passing: removing the slug fallback, lettin
 marker unlock the guard, and turning an abstention into a silent pass each turn the suite red,
 and the incident sequence is reproduced end-to-end through the real gate in both
 `migration-pending-lib.test.mjs` (41 assertions) and `migration-apply-lib.test.mjs`
-(123 → 144). The two subprocess fixtures now build a real `origin/main` with a GIT_*-scrubbed
+(123 → 144 from this change alone; the suite totals 155 after merging `main`, which added
+its own cases). The two subprocess fixtures now build a real `origin/main` with a GIT_*-scrubbed
 env rather than stubbing the lookup, so the second door's git path is genuinely exercised.
 Separately: `migration-ordering-lib.test.mjs` existed but was wired into no npm script and had
 never run in CI — both it and the new suite are now in `test:correction-guards`.
