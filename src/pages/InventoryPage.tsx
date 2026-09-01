@@ -16,7 +16,12 @@ import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { getIdempotencyBindingRejection } from '../lib/idempotency';
+import {
+  UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
+  UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
+  useUncertainMutationIntent,
+} from '../hooks/useUncertainMutationIntent';
+import { getIdempotencyBindingRejection, getIdempotencyMismatchResult } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
 import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
@@ -62,7 +67,31 @@ interface HoldWithRelations extends InventoryHold {
 export default function InventoryPage() {
   const navigate = useNavigate();
   const { role, profile } = useAuth();
-  const receivePoIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
+  const receivePoIntent = useUncertainMutationIntent<{
+    items: Array<{ po_item_id: string; quantity: number }>;
+    performedBy: string;
+    quantity: number;
+    inventoryId: string;
+    selectedPO: {
+      id: string;
+      po_number: string;
+      ordered: number;
+      received: number;
+      unit_cost: number;
+      purchase_order_id: string;
+      product_id: string;
+      unit_size: string | null;
+    };
+  }>({
+    operation: 'receive_po_items',
+    userId: profile?.id || '',
+    surface: 'inventory-page',
+    getIntentIdentity: (intent) => ({
+      p_items: intent.items,
+      p_performed_by: intent.performedBy,
+      p_allow_over_receive: false,
+    }),
+  });
   const adjustIdem = useIdempotencyKey('adjust_inventory', profile?.id || '');
   const retireIdem = useIdempotencyKey('retire_inventory_item', profile?.id || '');
   const createHoldIdem = useIdempotencyKey('create_inventory_hold', profile?.id || '');
@@ -268,6 +297,16 @@ export default function InventoryPage() {
   }, []);
 
   useEffect(() => {
+    const recovered = receivePoIntent.unresolvedIntent;
+    if (!recovered) return;
+    setSelectedId(recovered.inventoryId);
+    setReceiveQty(String(recovered.quantity));
+    setReceivePOItemId(recovered.selectedPO.id);
+    setAvailablePOs([recovered.selectedPO]);
+    setReceiveOpen(true);
+  }, [receivePoIntent.unresolvedIntent]);
+
+  useEffect(() => {
     fetchInventory();
     fetchHolds();
   }, [fetchInventory, fetchHolds]);
@@ -329,9 +368,7 @@ export default function InventoryPage() {
   };
 
   const openHoldModal = () => {
-    // Codex P2 fix (PR #59, 2026-05-16): reset page-scoped key on each open
-    // so different products/customers can't share an idempotency intent.
-    createHoldIdem.resetKey();
+    // Retain the key across modal reopen until success or a proven binding rejection.
     fetchProducts();
     fetchCustomers();
     setHoldProductId('');
@@ -422,7 +459,12 @@ export default function InventoryPage() {
           toast('error', sanitizeError(err));
         }
       } else {
-        toast('error', sanitizeError(err));
+        if (getIdempotencyBindingRejection(err)) {
+          createHoldIdem.resetKey();
+          toast('warning', 'That retry belongs to a different inventory hold. No hold was created; retry with a fresh key.');
+        } else {
+          toast('error', sanitizeError(err));
+        }
       }
     } finally {
       setCreatingHold(false);
@@ -439,7 +481,12 @@ export default function InventoryPage() {
       fetchInventory();
       fetchHolds();
     } catch (err: unknown) {
-      toast('error', sanitizeError(err));
+      if (getIdempotencyBindingRejection(err)) {
+        createHoldIdem.resetKey();
+        toast('warning', 'That retry belongs to a different inventory hold. No hold was created; retry with a fresh key.');
+      } else {
+        toast('error', sanitizeError(err));
+      }
     } finally {
       setCreatingHold(false);
     }
@@ -508,8 +555,12 @@ export default function InventoryPage() {
   };
 
   const openReceiveModal = async (inventoryId: string) => {
-    // Codex P2 fix (PR #59, 2026-05-16): reset key per inventory target.
-    receivePoIdem.resetKey();
+    // Do not rotate the key here. A prior receive may have committed before a
+    // lost response; reopening must retain that key so edited input fails closed.
+    if (receivePoIntent.isIntentLocked) {
+      setReceiveOpen(true);
+      return;
+    }
     const target = inventory.find((i) => i.id === inventoryId);
     if (!target) return;
 
@@ -549,6 +600,14 @@ export default function InventoryPage() {
   };
 
   const handleReceive = async () => {
+    if (receivePoIntent.isForeignIntentLocked) {
+      toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+      return;
+    }
+    if (receivePoIntent.isRetryExpired) {
+      toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
+      return;
+    }
     const qty = parseFloat(receiveQty);
     if (!qty || qty <= 0) {
       toast('error', 'Please enter a valid quantity');
@@ -576,25 +635,47 @@ export default function InventoryPage() {
 
     await runCriticalAction({
       action: async () => {
-        try {
-          const idemKey = receivePoIdem.getKey();
-          const { data, error } = await supabase.rpc('receive_po_items', {
-            p_items: [{ po_item_id: receivePOItemId, quantity: qty }],
-            p_performed_by: profile.id,
-            p_idempotency_key: idemKey,
-          });
-          if (error) throw error;
+        const request = await receivePoIntent.beginIntent({
+          items: [{ po_item_id: receivePOItemId, quantity: qty }],
+          performedBy: profile.id,
+          quantity: qty,
+          inventoryId: selectedId,
+          selectedPO,
+        });
+        const idemKey = receivePoIntent.getIdempotencyKey();
+        const { data, error } = await supabase.rpc('receive_po_items', {
+          p_items: request.items,
+          p_performed_by: request.performedBy,
+          p_idempotency_key: idemKey,
+        });
+        let completedElsewhere = false;
+        if (error) {
+          const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
+          const recordIds = receipt?.receiving_record_ids;
+          if (Array.isArray(recordIds) && recordIds.length > 0 && recordIds.every((id) => typeof id === 'string')) {
+            completedElsewhere = true;
+            toast('warning', 'The earlier receipt already completed. Refreshing inventory instead of receiving it twice.');
+          } else {
+            const disposition = await receivePoIntent.classifyFailure(error);
+            if (disposition === 'resolved') {
+              completedElsewhere = true;
+              toast('warning', 'This receipt completed in another tab. Refreshing inventory instead of receiving it twice.');
+            } else if (disposition === 'definitive') {
+              throw error;
+            } else {
+              throw new Error('The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');
+            }
+          }
+        } else {
           assertRpcResult(data, 'receive_po_items');
-          receivePoIdem.resetKey();
-        } catch (error) {
-          if (getIdempotencyBindingRejection(error)) receivePoIdem.resetKey();
-          throw error;
         }
+        await receivePoIntent.resolveIntent();
+        return { quantity: request.quantity, completedElsewhere };
       },
       toast,
-      successMessage: `Received ${qty} units`,
       sentryTag: 'receive_po_items',
-      onSuccess: () => {
+      onSuccess: ({ quantity: receivedQuantity, completedElsewhere }) => {
+        if (!completedElsewhere) toast('success', `Received ${receivedQuantity} units`);
         setReceiveOpen(false);
         setReceiveQty('');
         setReceivePOItemId('');
@@ -621,7 +702,10 @@ export default function InventoryPage() {
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
         });
-        if (error) throw error;
+        if (error) {
+          if (getIdempotencyBindingRejection(error)) adjustIdem.resetKey();
+          throw error;
+        }
         assertRpcResult(data, 'adjust_inventory');
         adjustIdem.resetKey();
       },
@@ -643,8 +727,7 @@ export default function InventoryPage() {
   // order/delivery between validation and delete. retire_inventory_item RPC
   // does it all in one transaction with FOR UPDATE on the inventory row.
   const handleDelete = (inventoryId: string) => {
-    // Codex P2 fix (PR #59, 2026-05-16): reset retire key per inventory target.
-    retireIdem.resetKey();
+    // Retain the key across confirmation reopen until success or a proven binding rejection.
     setDeleteConfirmId(inventoryId);
   };
 
@@ -659,7 +742,10 @@ export default function InventoryPage() {
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
         });
-        if (error) throw error;
+        if (error) {
+          if (getIdempotencyBindingRejection(error)) retireIdem.resetKey();
+          throw error;
+        }
         assertRpcResult(data, 'retire_inventory_item');
         retireIdem.resetKey();
       },
@@ -905,7 +991,7 @@ export default function InventoryPage() {
                   <ArrowDownToLine className="w-4 h-4" />
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); adjustIdem.resetKey(); setSelectedId(row.id); setAdjustOpen(true); }}
+                  onClick={(e) => { e.stopPropagation(); setSelectedId(row.id); setAdjustOpen(true); }}
                   className="p-1.5 rounded hover:bg-gray-100 text-secondary"
                   title="Manual Adjustment"
                   aria-label="Manual Adjustment"
@@ -1146,7 +1232,6 @@ export default function InventoryPage() {
           }}
           onReceive={openReceiveModal}
           onAdjust={(id) => {
-            adjustIdem.resetKey();
             setSelectedId(id);
             setAdjustOpen(true);
           }}
@@ -1568,8 +1653,17 @@ export default function InventoryPage() {
       </Modal>
 
       {/* Receive Modal */}
-      <Modal open={receiveOpen} onClose={() => setReceiveOpen(false)} title="Receive" accent="Shipment">
+      <Modal open={receiveOpen} onClose={() => { if (!receivePoIntent.isIntentLocked) setReceiveOpen(false); }} title="Receive" accent="Shipment">
         <div className="space-y-4">
+          {receivePoIntent.isIntentLocked && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              {receivePoIntent.isForeignIntentLocked
+                ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
+                : receivePoIntent.isRetryExpired
+                ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                : 'The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.'}
+            </div>
+          )}
           {availablePOs.length === 0 ? (
             <div className="text-amber-600 text-sm bg-amber-50 p-3 rounded">
               No open purchase orders found for this product. Create a purchase order first.
@@ -1580,6 +1674,7 @@ export default function InventoryPage() {
                 label="Purchase Order"
                 value={receivePOItemId}
                 onChange={(e) => setReceivePOItemId(e.target.value)}
+                disabled={receivePoIntent.isIntentLocked}
                 required
                 placeholder="Select a PO..."
                 options={availablePOs.map((po) => ({
@@ -1594,13 +1689,16 @@ export default function InventoryPage() {
                 step="any"
                 value={receiveQty}
                 onChange={(e) => setReceiveQty(e.target.value)}
+                disabled={receivePoIntent.isIntentLocked}
               />
             </>
           )}
           <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setReceiveOpen(false)}>Cancel</Button>
+            <Button variant="secondary" disabled={receivePoIntent.isIntentLocked} onClick={() => setReceiveOpen(false)}>Cancel</Button>
             {availablePOs.length > 0 && (
-              <Button onClick={handleReceive}>Receive</Button>
+              <Button onClick={handleReceive} disabled={receivePoIntent.isForeignIntentLocked || receivePoIntent.isRetryExpired}>
+                {receivePoIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Receive'}
+              </Button>
             )}
           </div>
         </div>

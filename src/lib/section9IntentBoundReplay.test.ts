@@ -124,7 +124,7 @@ describe('Section 9 actor-and-intent replay binding', () => {
     expect(page).toContain('Confirm PO billing overage');
   });
 
-  it('retires a proven-stale client key so the current request can be retried safely', () => {
+  it('retires proven-stale scoped keys and durably reconciles uncertain requests', () => {
     const newVendorBill = source('src', 'pages', 'NewVendorBill.tsx');
     const vendorBill = source('src', 'pages', 'VendorBillDetail.tsx');
     const purchaseOrder = source('src', 'pages', 'PurchaseOrderDetail.tsx');
@@ -132,26 +132,26 @@ describe('Section 9 actor-and-intent replay binding', () => {
     const receivingHub = source('src', 'components', 'receiving', 'ReceivingHubPanel.tsx');
     const inventoryPage = source('src', 'pages', 'InventoryPage.tsx');
 
-    for (const page of [vendorBill, purchaseOrder, quickReceive, receivingHub, inventoryPage]) {
+    for (const page of [vendorBill, purchaseOrder, inventoryPage]) {
       expect(page).toContain('getIdempotencyBindingRejection');
     }
-    expect(purchaseOrder).toContain('receiveIdem.resetKey()');
+
+    for (const page of [quickReceive, receivingHub, purchaseOrder]) {
+      expect(page).toContain('receiveIntent.classifyFailure(error)');
+      expect(page).toContain('receiveIntent.resolveIntent()');
+    }
+    expect(inventoryPage).toContain('receivePoIntent.classifyFailure(error)');
+    expect(inventoryPage).toContain('receivePoIntent.resolveIntent()');
+    expect(newVendorBill).toContain('createBillIntent.classifyFailure(error)');
+    expect(newVendorBill).toContain('createBillIntent.resolveIntent()');
+    expect(vendorBill).toContain('paymentIntent.classifyFailure(err)');
+    expect(vendorBill).toContain('paymentIntent.resolveIntent()');
+
     expect(purchaseOrder).toContain('reverseIdem.resetKey()');
-    expect(quickReceive).toContain('receiveIdem.resetKey()');
-    expect(receivingHub).toContain('receiveIdem.resetKey()');
-    expect(inventoryPage).toContain(
-      'if (getIdempotencyBindingRejection(error)) receivePoIdem.resetKey();',
-    );
-    expect(vendorBill).toContain('paymentIdem.resetKey();');
+    expect(inventoryPage).toContain('if (getIdempotencyBindingRejection(error)) adjustIdem.resetKey();');
+    expect(inventoryPage).toContain('if (getIdempotencyBindingRejection(error)) retireIdem.resetKey();');
     expect(vendorBill).toContain('editIdem.resetKey();');
-    expect(vendorBill).toContain('voidIdem.resetKey();');
-    expect(newVendorBill).toContain('getIdempotencyBindingRejection(err)');
-    expect(newVendorBill).toContain('createBillIdem.resetKey();');
-    expect(newVendorBill).toContain('this bill was not submitted');
-    const assertedCreate = newVendorBill.indexOf("assertRpcResult(data, 'create_vendor_bill')");
-    const retiredCreate = newVendorBill.indexOf('createBillIdem.resetKey();', assertedCreate);
-    expect(assertedCreate).toBeGreaterThan(-1);
-    expect(retiredCreate).toBeGreaterThan(assertedCreate);
+    expect(vendorBill).toContain('voidIdem.resetKeyFor(voidBillScope);');
   });
 
   it('binds damaged-receipt notification replay to actor and exact message intent', () => {

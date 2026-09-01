@@ -94,7 +94,7 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
 
     const page = source('src', 'pages', 'AccountsPayable.tsx');
     expect(page).toContain("key: 'days_1_30'");
-    expect(page).toContain("header: '1-30 Days'");
+    expect(page).toContain("header: '1-30 Days Past Due'");
   });
 
   it('requires a logged reason above the cumulative PO billing threshold', () => {

@@ -217,6 +217,13 @@ BEGIN
   SELECT * INTO v_bill FROM public.vendor_bills
    WHERE id = p_bill_id AND deleted_at IS NULL FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'BILL_NOT_FOUND'; END IF;
+  -- The public wrapper must preserve the mature implementation's accounting
+  -- period boundary before evaluating PO overage. Otherwise an edit to a
+  -- closed-period bill can surface an overage-confirmation path even though
+  -- that edit is categorically forbidden. The bill lock above serializes both
+  -- checks with concurrent edits and period-close activity.
+  PERFORM public.check_period_open(v_bill.bill_date);
+  PERFORM public.check_period_open(p_bill_date);
   v_new_total_cents := p_subtotal_cents + COALESCE(p_adjustment_cents, 0);
   IF v_new_total_cents <= 0 THEN
     RAISE EXCEPTION 'INVALID_AMOUNT: bill total must be positive (got %)', v_new_total_cents;

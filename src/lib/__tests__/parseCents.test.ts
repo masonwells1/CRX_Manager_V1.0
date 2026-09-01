@@ -1,5 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { parseDollarsToCents, parseDollarsToCentsSigned } from '../parseCents';
+import {
+  isWholeCentDollarInput,
+  parseDollarsToCents,
+  parseDollarsToCentsSigned,
+} from '../parseCents';
+
+describe('isWholeCentDollarInput', () => {
+  it.each(['25', '25.5', '25.50', '25.', '.50', '0'])('accepts exact-cent input %s', (value) => {
+    expect(isWholeCentDollarInput(value)).toBe(true);
+  });
+
+  it.each(['1.999', '1e5', '1.2.3', '$1.00', '', '-1.00'])('rejects unsafe positive input %s', (value) => {
+    expect(isWholeCentDollarInput(value)).toBe(false);
+  });
+
+  it('accepts a leading minus only when the field allows negative amounts', () => {
+    expect(isWholeCentDollarInput('-10.25', { allowNegative: true })).toBe(true);
+    expect(isWholeCentDollarInput('10-25', { allowNegative: true })).toBe(false);
+  });
+});
 
 describe('parseDollarsToCents (positive-only default)', () => {
   it('parses whole dollars', () => expect(parseDollarsToCents('25')).toBe(2500));

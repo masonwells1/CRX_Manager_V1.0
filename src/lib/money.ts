@@ -34,6 +34,17 @@ export function formatUSD(dollars: number): string {
   return usdFormatter.format(dollars);
 }
 
+/** Format integer CENTS for a decimal money input without floating-point math. */
+export function centsToDollarInput(cents: number): string {
+  if (!Number.isSafeInteger(cents)) return '0.00';
+  const value = BigInt(cents);
+  const negative = value < 0n;
+  const absolute = negative ? -value : value;
+  const dollars = absolute / 100n;
+  const remainder = (absolute % 100n).toString().padStart(2, '0');
+  return `${negative ? '-' : ''}${dollars}.${remainder}`;
+}
+
 // ── Exact cents × quantity ────────────────────────────────────────────────────
 //
 // THE SERVER IS AUTHORITATIVE. Every extended amount is computed by the SQL helper

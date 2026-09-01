@@ -142,6 +142,12 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
       'public._section9_update_vendor_bill_intent_impl_20260831(uuid,bigint,bigint,date,date,text,text)',
     );
     expect(sweep).toContain(
+      'public._section9_create_vendor_bill_intent_impl_20260826(uuid,uuid,text,date,date,text,bigint,bigint,text,text)',
+    );
+    expect(sweep).toContain(
+      'public._section9_update_vendor_bill_intent_impl_20260826(uuid,bigint,bigint,date,date,text,text)',
+    );
+    expect(sweep).toContain(
       "transaction_timestamp() AT TIME ZONE ''America/Chicago''",
     );
     expect(sweep).toMatch(

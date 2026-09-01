@@ -27,6 +27,28 @@ export function parseDollarsToCents(input: string): number {
 }
 
 /**
+ * Validate a form-entered dollar amount before parsing it into cents.
+ *
+ * The legacy parsers intentionally tolerate formatted input and truncate extra
+ * fractional digits. Mutation forms must use this guard first so an operator
+ * cannot submit a value such as `1.999` and silently store `1.99`.
+ */
+export function isWholeCentDollarInput(
+  input: string,
+  options: { allowNegative?: boolean } = {},
+): boolean {
+  if (typeof input !== 'string') return false;
+  const value = input.trim();
+  if (!value) return false;
+
+  const unsignedDollars = String.raw`(?:\d+(?:\.\d{0,2})?|\.\d{1,2})`;
+  const pattern = options.allowNegative
+    ? new RegExp(`^-?${unsignedDollars}$`)
+    : new RegExp(`^${unsignedDollars}$`);
+  return pattern.test(value);
+}
+
+/**
  * Parse a dollar string into cents (integer), preserving leading minus signs
  * so negative inputs like "-50" parse to -5000.
  *

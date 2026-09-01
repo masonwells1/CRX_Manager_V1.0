@@ -25,9 +25,11 @@ ap_functions AS (
     AND p.oid IN (
       to_regprocedure('public.create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text,boolean,text)'),
       to_regprocedure('public._section9_create_vendor_bill_cumulative_impl(uuid,uuid,text,date,date,text,bigint,bigint,text,text)'),
+      to_regprocedure('public._section9_create_vendor_bill_intent_impl_20260826(uuid,uuid,text,date,date,text,bigint,bigint,text,text)'),
       to_regprocedure('public.get_ap_aging(date)'),
       to_regprocedure('public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text,boolean,text)'),
-      to_regprocedure('public._section9_update_vendor_bill_intent_impl_20260831(uuid,bigint,bigint,date,date,text,text)')
+      to_regprocedure('public._section9_update_vendor_bill_intent_impl_20260831(uuid,bigint,bigint,date,date,text,text)'),
+      to_regprocedure('public._section9_update_vendor_bill_intent_impl_20260826(uuid,bigint,bigint,date,date,text,text)')
     )
 ),
 ap_controls AS (
@@ -37,6 +39,9 @@ ap_controls AS (
     ) AS create_wrapper,
     MAX(prosrc) FILTER (
       WHERE oid = to_regprocedure('public._section9_create_vendor_bill_cumulative_impl(uuid,uuid,text,date,date,text,bigint,bigint,text,text)')
+    ) AS create_intent_wrapper,
+    MAX(prosrc) FILTER (
+      WHERE oid = to_regprocedure('public._section9_create_vendor_bill_intent_impl_20260826(uuid,uuid,text,date,date,text,bigint,bigint,text,text)')
     ) AS create_impl,
     MAX(prosrc) FILTER (
       WHERE oid = to_regprocedure('public.get_ap_aging(date)')
@@ -46,6 +51,9 @@ ap_controls AS (
     ) AS update_wrapper,
     MAX(prosrc) FILTER (
       WHERE oid = to_regprocedure('public._section9_update_vendor_bill_intent_impl_20260831(uuid,bigint,bigint,date,date,text,text)')
+    ) AS update_intent_wrapper,
+    MAX(prosrc) FILTER (
+      WHERE oid = to_regprocedure('public._section9_update_vendor_bill_intent_impl_20260826(uuid,bigint,bigint,date,date,text,text)')
     ) AS update_impl
   FROM ap_functions
 )
@@ -129,16 +137,29 @@ UNION ALL
 SELECT
   'create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text,boolean,text)'
     AS violation_key,
-  'create_vendor_bill public wrapper/private implementation chain lacks vendor/PO lock and status serialization' AS reason
+  'create_vendor_bill wrapper chain lacks cumulative guard, intent binding, or vendor/PO status serialization' AS reason
 FROM ap_controls
 WHERE create_wrapper IS NULL
-   OR create_impl IS NULL
+   OR create_intent_wrapper IS NULL
    OR create_wrapper NOT LIKE '%_section9_create_vendor_bill_cumulative_impl%'
    OR create_wrapper !~
       'FROM public\.vendors v[[:space:]]+WHERE v\.id = p_vendor_id[[:space:]]+AND v\.deleted_at IS NULL[[:space:]]+FOR UPDATE'
    OR create_wrapper NOT LIKE '%FROM public.purchase_orders po%FOR UPDATE%'
-   OR create_impl NOT LIKE '%PO_NOT_BILLABLE%'
-   OR create_impl NOT LIKE '%submitted%partially_received%fully_received%'
+   OR (
+     create_impl IS NULL
+     AND (
+       create_intent_wrapper NOT LIKE '%PO_NOT_BILLABLE%'
+       OR create_intent_wrapper NOT LIKE '%submitted%partially_received%fully_received%'
+     )
+   )
+   OR (
+     create_impl IS NOT NULL
+     AND (
+       create_intent_wrapper NOT LIKE '%_section9_create_vendor_bill_intent_impl_20260826%'
+       OR create_impl NOT LIKE '%PO_NOT_BILLABLE%'
+       OR create_impl NOT LIKE '%submitted%partially_received%fully_received%'
+     )
+   )
 
 UNION ALL
 
@@ -157,14 +178,34 @@ UNION ALL
 SELECT
   'update_vendor_bill(uuid,bigint,bigint,date,date,text,text,boolean,text)'
     AS violation_key,
-  'update_vendor_bill public wrapper/private implementation chain does not lock before checking old and new periods' AS reason
+  'update_vendor_bill wrapper chain does not preserve intent binding and lock before checking old and new periods' AS reason
 FROM ap_controls
 WHERE update_wrapper IS NULL
-   OR update_impl IS NULL
+   OR update_intent_wrapper IS NULL
    OR update_wrapper NOT LIKE '%_section9_update_vendor_bill_intent_impl_20260831%'
    OR strpos(update_wrapper, 'FOR UPDATE') = 0
-   OR strpos(update_impl, 'FOR UPDATE') = 0
-   OR strpos(update_impl, 'check_period_open(v_bill.bill_date)')
-        <= strpos(update_impl, 'FOR UPDATE')
-   OR strpos(update_impl, 'check_period_open(p_bill_date)')
-        <= strpos(update_impl, 'FOR UPDATE');
+   OR strpos(update_wrapper, 'check_period_open(v_bill.bill_date)')
+        <= strpos(update_wrapper, 'FOR UPDATE')
+   OR strpos(update_wrapper, 'check_period_open(p_bill_date)')
+        <= strpos(update_wrapper, 'FOR UPDATE')
+   OR (
+     update_impl IS NULL
+     AND (
+       strpos(update_intent_wrapper, 'FOR UPDATE') = 0
+       OR strpos(update_intent_wrapper, 'check_period_open(v_bill.bill_date)')
+            <= strpos(update_intent_wrapper, 'FOR UPDATE')
+       OR strpos(update_intent_wrapper, 'check_period_open(p_bill_date)')
+            <= strpos(update_intent_wrapper, 'FOR UPDATE')
+     )
+   )
+   OR (
+     update_impl IS NOT NULL
+     AND (
+       update_intent_wrapper NOT LIKE '%_section9_update_vendor_bill_intent_impl_20260826%'
+       OR strpos(update_impl, 'FOR UPDATE') = 0
+       OR strpos(update_impl, 'check_period_open(v_bill.bill_date)')
+            <= strpos(update_impl, 'FOR UPDATE')
+       OR strpos(update_impl, 'check_period_open(p_bill_date)')
+            <= strpos(update_impl, 'FOR UPDATE')
+     )
+   );
