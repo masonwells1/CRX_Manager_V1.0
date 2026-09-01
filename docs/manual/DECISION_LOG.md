@@ -7,6 +7,62 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-08-31 — control files are LOCKED by a hook, superseding the 2026-08-25 `ask` tier
+
+**Supersedes item 3 of the 2026-08-25 entry below** ("Control-file edits move to the `ask` tier").
+That entry's protected set and its `Edit`/`Write` `ask` rules are replaced by a deterministic
+PreToolUse lock; do not restore them.
+
+Mason asked to stop being prompted for approval on file edits. Investigating that produced three
+findings, in order, and the third is the one that mattered:
+
+1. **The `ask` tier only ever covered `Edit` and `Write`.** `.claude/settings.json` also grants a
+   blanket `"Bash"`, so `sed -i` on a hook file, a `>` redirect over a manifest, or
+   `git checkout <rev> -- .claude/hooks/…` was never gated at all. CodeRabbit raised this as a
+   Major Security finding on PR #530 ("Gate Bash writes to enforcement paths"), and it is a real
+   PRE-EXISTING gap that PR #530 surfaced rather than introduced.
+2. **Removing the `ask` entries opened a two-step silent path.** Live `execute_sql`, live
+   `apply_migration`, and pushes are auto-allowed, so the hooks are their only protection — and
+   `review-proof-guard.mjs` deliberately permits ordinary hook/settings edits. An exact-SHA
+   `gpt-5.6-sol` review blocked PR #530's first commit HIGH for exactly this: weaken a guard, then
+   run the operation it gated, with no approval at either step. Keeping approval on the final
+   deploy/merge tools does not close it, because the guard can be weakened first.
+3. **`ask` semantics are mode-dependent, and one mode ignored them entirely.** As the 2026-08-25
+   entry records, under `defaultMode: "dontAsk"` an `ask` rule is an auto-DENY. But a session
+   running in bypass-permissions mode honours neither — during PR #530 the authoring agent edited
+   `.claude/settings.json` freely. A protection that evaporates in one mode is not a boundary.
+
+**Mason's decision, 2026-08-31: lock these files with a hook rather than describe them with a
+permission tier.** `.claude/hooks/guarded-surface-lock.mjs` (rule book in `guarded-surface-lib.mjs`)
+denies WRITES on every channel — Bash, native `Write`/`Edit`, MCP path fields, `apply_patch`
+destinations — and behaves identically in every permission mode, including bypass mode (verified:
+it blocked the authoring agent mid-task from editing `.claude/settings.json`, which is the
+self-protection property that makes it worth having). **Reads stay allowed**, which is why this is
+a lock and not a `review-proof-guard`-style deny-every-mention: agents inspect hooks constantly.
+
+**Operative rules:**
+
+- The guarded set is everything that can stop a guard running or change what it concludes — the
+  2026-08-25 list minus `AGENTS.md` and `CLAUDE.md` (prose advises, it does not enforce), plus
+  `package-lock.json`, `scripts/agent-manifest-parity.mjs`, `scripts/sync-agent-workflows.mjs`, and
+  the lock's own `guarded-surface-lib.mjs` and `scripts/guard-unlock.mjs` — without which the lock
+  would be decorative.
+- Changing any of them requires `node scripts/guard-unlock.mjs --minutes N`, which needs an
+  interactive TTY **and** a typed phrase, so no agent shell can run it. It auto-expires (4h cap),
+  reports `--status`, and closes early with `--lock`.
+- Shell read/write is split by a fail-closed allowlist of read-only command heads. An unlisted head
+  is a writer, so new verbs are denied without being enumerated — a blocklist reopens every time
+  someone learns one.
+- **This did not solve the complaint that prompted it.** The `ask` entries were never the source of
+  Mason's prompts (in his normal `dontAsk` sessions they were silent denials), so what is actually
+  prompting him remains unidentified — most likely individual hooks returning `ask`. Tracked as
+  open; do not assume PR #530 addressed it.
+- Known cost, accepted: changing a guard, a CI workflow, or a dependency now needs a deliberate
+  unlock first.
+
+Source: PR #530, `docs/changelog.d/2026-08-31-guarded-surface-lock.md`, and the two superseded
+entries in `docs/changelog.d/` from the same day.
+
 ## 2026-08-28 — CodeRabbit reviews only frozen release candidates
 
 **Source:** Mason's in-chat decision on 2026-08-28 after the shared CodeRabbit budget was consumed
