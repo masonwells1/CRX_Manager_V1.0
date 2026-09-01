@@ -68,7 +68,8 @@ export function isDefinitiveRpcRejection(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const candidate = error as { code?: unknown; message?: unknown };
   if (
-    candidate.message === 'IDEMPOTENCY_RESULT_INVALID'
+    candidate.message === 'IDEMPOTENCY_INTENT_MISMATCH'
+    || candidate.message === 'IDEMPOTENCY_RESULT_INVALID'
     || candidate.message === 'IDEMPOTENCY_RECEIPT_MISSING'
   ) return false;
   if (typeof candidate.code !== 'string') return false;
