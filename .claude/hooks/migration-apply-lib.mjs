@@ -410,7 +410,7 @@ export function evaluateMigrationApply({
           `MIGRATION PENDING-SET GUARD: could not list the migrations tracked on origin/main ` +
           `(${err?.message || err}), so whether an OLDER migration is still waiting to be applied ` +
           `is UNKNOWN. Refusing the apply rather than stepping over a queue this guard cannot see.\n\n` +
-          `Run \`git fetch origin\` in ${projectDir} so origin/main resolves, then retry.`);
+          `Run \`git fetch origin\` in ${queueRoot} so origin/main resolves, then retry.`);
       }
 
       // The active branch's committed migrations. Skipped when the caller injected
@@ -456,7 +456,7 @@ export function evaluateMigrationApply({
           `origin, so whether origin/main is current is UNKNOWN. A stale ref cannot see a migration ` +
           `merged since the last fetch, which is precisely how a waiting migration gets stranded. ` +
           `An unknown verdict is not a pass.\n\n` +
-          `Run \`git fetch origin\` in ${projectDir}, then retry.`);
+          `Run \`git fetch origin\` in ${queueRoot}, then retry.`);
       }
       if (fetchAgeMs > MAIN_REF_MAX_AGE_MS) {
         return block(
@@ -465,7 +465,7 @@ export function evaluateMigrationApply({
           `A migration merged since then is invisible to this check, and applying over it strands ` +
           `it permanently — the 2026-08-26 defect exactly. Refusing rather than judging the queue ` +
           `from a stale ref.\n\n` +
-          `Run \`git fetch origin\` in ${projectDir}, then retry.`);
+          `Run \`git fetch origin\` in ${queueRoot}, then retry.`);
       }
 
       let baselineHighWater = null;

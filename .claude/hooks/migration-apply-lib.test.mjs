@@ -270,6 +270,34 @@ denies(
   allows(evaluate(fixture(), { originFetchAge: () => 29 * 60 * 1000 }),
     "a fetch inside the freshness window passes");
 
+  // The refusal must name the directory the guard actually MEASURED (CodeRabbit,
+  // PR #502). Freshness is read from queueRoot — the session's linked worktree
+  // when one resolves — and `git fetch` inside a linked worktree writes THAT
+  // worktree's own FETCH_HEAD, which originFetchAgeMs prefers over the common
+  // dir. Naming the primary checkout instead sends the operator to fetch in a
+  // directory whose FETCH_HEAD this guard never reads: they fetch, retry, and
+  // get the identical refusal forever, with nothing in the message to explain
+  // why. A guard whose remedy does not work is worse than one that stays quiet.
+  // Every other case above has queueRoot === projectDir, which is exactly why
+  // this went unnoticed — the two are only distinguishable in a linked worktree.
+  {
+    const primary = fixture();
+    const linked = path.join(primary, "wt-session");
+    mkdirSync(linked, { recursive: true });
+    const listsLinked = () => `worktree ${primary}\nworktree ${linked}\n`;
+    for (const [age, label] of [[31 * 60 * 1000, "stale"], [null, "unknowable"]]) {
+      const verdict = evaluate(primary, {
+        cwd: linked,
+        gitWorktreeList: listsLinked,
+        originFetchAge: () => age,
+      });
+      denies(verdict, linked,
+        `the ${label}-fetch refusal names the worktree whose FETCH_HEAD it measured`);
+      ok(!String(verdict.reason || "").includes(`in ${primary},`),
+        `the ${label}-fetch refusal does not send the operator to the primary checkout`);
+    }
+  }
+
   // ── THE ACTIVE CHECKOUT IS PART OF THE QUEUE (Codex P1, PR #502) ──────────
   // ship.md Step 5 applies a migration while it is still uncommitted and
   // unmerged. An origin/main-only listing cannot see an older SIBLING authored in

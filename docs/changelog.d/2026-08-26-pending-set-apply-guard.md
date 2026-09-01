@@ -81,8 +81,22 @@ Mutation-tested, not merely observed passing: removing the slug fallback, lettin
 marker unlock the guard, and turning an abstention into a silent pass each turn the suite red,
 and the incident sequence is reproduced end-to-end through the real gate in both
 `migration-pending-lib.test.mjs` (41 assertions) and `migration-apply-lib.test.mjs`
-(123 → 144 from this change alone; the suite totals 155 after merging `main`, which added
-its own cases). The two subprocess fixtures now build a real `origin/main` with a GIT_*-scrubbed
-env rather than stubbing the lookup, so the second door's git path is genuinely exercised.
+(123 → 144 from this change alone; the suite totals 159 — 155 after merging `main`, which
+added its own cases, plus 4 for the fetch-instruction directory below). The two subprocess
+fixtures now build a real `origin/main` with a GIT_*-scrubbed env rather than stubbing the
+lookup, so the second door's git path is genuinely exercised.
+
+**The refusal must name the directory it measured** (CodeRabbit). Freshness is read from
+`queueRoot` — the session's linked worktree when one resolves — but both fetch-age refusals,
+and the origin/main listing failure, told the operator to run `git fetch origin` in
+`projectDir`. `git fetch` inside a linked worktree writes THAT worktree's own `FETCH_HEAD`,
+and `originFetchAgeMs()` prefers it over the common-dir copy. So an operator in a linked
+worktree would fetch in the primary checkout, the measured `FETCH_HEAD` would stay old, and
+the retry would return the identical refusal — forever, with nothing in the message to
+explain why. A guard whose stated remedy does not work is worse than one that says nothing,
+because it burns the operator's trust on the way to burning their time. All three messages
+now name `queueRoot`. This was invisible to every existing test because they stub
+`gitWorktreeList` to empty, which makes `queueRoot === projectDir`; the new cases build a
+linked worktree so the two differ, and they fail against the old message.
 Separately: `migration-ordering-lib.test.mjs` existed but was wired into no npm script and had
 never run in CI — both it and the new suite are now in `test:correction-guards`.
