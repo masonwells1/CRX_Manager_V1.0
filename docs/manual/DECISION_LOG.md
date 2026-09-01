@@ -45,8 +45,15 @@ both gates must additionally verify that an APPROVED review's `commit_id` equals
 authenticate as Mason, the guards can only refuse the *commands* that would use the override — they
 cannot withhold the capability. Codex's exact-SHA proof on this PR made that concrete by finding the
 lockout bypassable through raw REST and GraphQL merge transports (denied by destination now, on both
-guards). The durable fix — a separate non-admin credential for agents — is an owner decision and is
-tracked as open in `docs/manual/KNOWN_ISSUES.md`.
+guards). Codex's third pass then demonstrated a bypass no command guard can reach at all: a command
+that builds the merge URL from separate strings.
+
+**Mason declined the durable fix (2026-09-01).** Giving agents a separate non-admin GitHub
+credential was put to him twice — at design time and again after that demonstration — and he chose
+both times to keep the setup simple and accept the residual. **Settled: do not re-open or implement
+the separate credential unless Mason asks.** The accepted mitigations are the guards, the required
+Vercel/CI/SQL checks the ruleset still enforces on everyone, and Vercel's one-click rollback.
+Detail in `docs/manual/KNOWN_ISSUES.md`.
 
 **Proof.** Live protection and ruleset state read with `gh api` before and after. Guard behavior
 covered by `.claude/hooks/pr-merge-guard.test.mjs` (66 assertions) and

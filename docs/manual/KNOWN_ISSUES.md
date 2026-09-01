@@ -248,10 +248,20 @@ spells the destination in the command text, is outside what a command-text guard
 same honest residual is already documented for the interpreter-argument rule in
 `.codex/hooks/production-action-guard.mjs`.
 
-**The durable fix, not yet decided.** Give agents a separate, non-admin GitHub credential (a
-machine account or a fine-grained token without admin bypass), so the override is withheld by
-GitHub rather than by string matching. This is an owner decision — it affects how every agent
-authenticates, and it is not something to change unasked. Raised with Mason 2026-09-01; open.
+**The durable fix, DECLINED by Mason on 2026-09-01.** Giving agents a separate, non-admin GitHub
+credential (a machine account or a fine-grained token without admin bypass) would let GitHub
+withhold the override from agents instead of a guard trying to. It was put to Mason twice — once
+when the override was designed, and again after the exact-SHA proof demonstrated a working bypass —
+and he declined both times, explicitly choosing to keep the setup simple and accept the residual
+risk. **This is a settled owner decision: do not re-open it or implement the separate credential
+unless Mason asks.** Record it here rather than re-litigating.
+
+**What that means in practice.** The merge guards are the only thing standing between an agent and
+an unreviewed merge to `main`, and they are a command-text net: they catch every route found so far
+(and six were found in one day), but a command that constructs the merge URL from separate strings
+is invisible to them — Codex demonstrated exactly that. The accepted mitigations are the guards
+themselves, the required Vercel/CI/SQL checks (which the ruleset still enforces on everyone), and
+Vercel's one-click rollback if something unreviewed does land.
 
 ## OPEN 2026-09-01 — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
 
