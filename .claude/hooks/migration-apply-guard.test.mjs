@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
+import { destructiveMigrationCheck, stripCommentsQuoteAware } from "./live-testdata-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
@@ -36,6 +36,15 @@ eq(destructiveMigrationCheck("DROP POLICY p ON customers; DROP INDEX idx_x; DROP
 eq(destructiveMigrationCheck("CREATE TABLE new_thing (id bigint); ALTER TABLE new_thing ENABLE ROW LEVEL SECURITY;").destructive, false, "ordinary additive migration is not destructive");
 ok(destructiveMigrationCheck("DELETE FROM migration_scratch_map WHERE 1=1;").destructive, "ANY top-level DELETE is destructive — no table allowlist (Codex R2: hard-coded lists missed live tables)");
 ok(destructiveMigrationCheck("DELETE FROM invoice_shares;").destructive, "DELETE FROM invoice_shares (was missed by the old table list) is destructive");
+const bareCrExploit = "CREATE DOMAIN public.crx_probe AS text; -- review-only comment\rDELETE FROM public.customers;";
+ok(destructiveMigrationCheck(bareCrExploit).destructive, "a lone carriage return ends a PostgreSQL line comment and exposes DELETE");
+ok(/DELETE FROM public\.customers/i.test(stripCommentsQuoteAware(bareCrExploit)), "the destructive scanner terminates line comments on lone carriage returns");
+const escapeStringExploit = "COMMENT ON TABLE public.customers IS E'escaped\\' quote /*'; DELETE FROM public.customers;";
+ok(destructiveMigrationCheck(escapeStringExploit).destructive,
+  "an escaped E-string quote cannot hide a following destructive statement");
+const escapeStringDollarQuoteExploit = "COMMENT ON TABLE public.customers IS E'foo\\' AS $x$ junk'; DELETE FROM public.customers; -- $x$\nSELECT 1;";
+ok(destructiveMigrationCheck(escapeStringDollarQuoteExploit).destructive,
+  "a dollar-quote marker inside an escaped E-string cannot hide a following destructive statement");
 eq(
   destructiveMigrationCheck("CREATE OR REPLACE FUNCTION cleanup() RETURNS void AS $$ BEGIN DELETE FROM invoices WHERE is_active = false; END $$ LANGUAGE plpgsql;").destructive,
   false,
@@ -103,6 +112,7 @@ const sha = (s) => createHash("sha256").update(s).digest("hex");
 const BENIGN_SQL = "CREATE TABLE widgets (id bigint primary key); ALTER TABLE widgets ENABLE ROW LEVEL SECURITY;";
 const DESTRUCTIVE_SQL = "DROP TABLE customers;";
 const MIG = "20990101000000_test_mig";
+const CRX_PROJECT = "rhyzpcqhnizqbxphqdkr";
 
 function writeProof(stateDir, query, extra = {}) {
   writeFileSync(path.join(stateDir, `migration-review-${MIG}.json`), JSON.stringify({
@@ -126,6 +136,36 @@ function writeAppliedSnapshot(stateDir, { applied = ["20260808150400_round_money
     applied,
   }));
 }
+// The pending-set preflight (2026-08-26) asks the question the ordering check
+// never did: is an OLDER tracked migration still waiting? It reads the schema
+// baseline for its floor and origin/main for the tracked set, and refuses when it
+// cannot read either. Both are real files/refs — the hook is a subprocess, so
+// there is nothing to inject — and every fixture that expects to reach the proof
+// gate has to supply them. hermeticEnv() keeps `git init` off the real repository.
+function makePendingSetInputs(root) {
+  mkdirSync(path.join(root, "supabase", "baselines"), { recursive: true });
+  writeFileSync(
+    path.join(root, "supabase", "baselines", "manifest.json"),
+    JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }));
+  mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
+  writeFileSync(path.join(root, "supabase", "migrations", `${MIG}.sql`), BENIGN_SQL);
+  const git = (...args) => spawnSync("git", [
+    "-c", "user.name=fixture",
+    "-c", "user.email=fixture@example.invalid",
+    "-c", "commit.gpgsign=false",
+    "-c", "core.hooksPath=",
+    "-C", root, ...args,
+  ], { encoding: "utf8", env: hermeticEnv() });
+  git("init", "-q");
+  git("add", "-A");
+  git("commit", "-q", "-m", "fixture");
+  const ref = git("update-ref", "refs/remotes/origin/main", "HEAD");
+  ok(ref.status === 0, `fixture origin/main is created (git said: ${ref.stderr})`);
+  // The freshness gate reads FETCH_HEAD's mtime. `git init` never writes one, so
+  // without this the fixture looks like a checkout that has never fetched — which
+  // the guard correctly refuses. This stands in for a just-completed fetch.
+  writeFileSync(path.join(root, ".git", "FETCH_HEAD"), "fixture\n");
+}
 function armAutopilot(stateDir, hoursFromNow) {
   writeFileSync(path.join(stateDir, "AUTOPILOT.on"), JSON.stringify({
     expires: new Date(Date.now() + hoursFromNow * 3600_000).toISOString(),
@@ -136,12 +176,24 @@ function armAutopilot(stateDir, hoursFromNow) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-"));
   const stateDir = path.join(tmp, ".claude", "session-state");
   mkdirSync(stateDir, { recursive: true });
+  makePendingSetInputs(tmp);
   try {
-    const call = (query) => ({ tool_name: "mcp__supabase__apply_migration", tool_input: { project_id: "x", name: MIG, query } });
+    const call = (query, projectId = CRX_PROJECT) => ({
+      tool_name: "mcp__supabase__apply_migration",
+      tool_input: { project_id: projectId, name: MIG, query },
+    });
+
+    let r = runHook(call(BENIGN_SQL, "other-project"), tmp);
+    ok(isDeny(r), "wrong project_id is denied before any migration evidence is consulted");
+    ok(r.stdout.includes(CRX_PROJECT), "wrong-project denial names the fixed CRX target");
+    r = runHook({ tool_name: "mcp__supabase__apply_migration", tool_input: { name: MIG, query: BENIGN_SQL } }, tmp);
+    ok(isDeny(r), "missing project_id is denied");
+    r = runHook(call(""), tmp);
+    ok(isDeny(r), "missing transmitted SQL is denied before proof lookup");
 
     // 0. Ordering evidence is required BEFORE anything else is considered.
     //    Missing evidence must not be read as "ordering is fine".
-    let r = runHook(call(BENIGN_SQL), tmp);
+    r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "no applied-migration snapshot → apply denied");
     ok(r.stdout.includes("MIGRATION ORDERING GUARD"), "missing-snapshot deny names the ordering guard");
     // The recapture instructions must name the project THIS apply targets.
@@ -149,7 +201,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // normal hook run, and a stray env value could aim the operator at another
     // project's ledger. (Codex P2, PR #354.)
     ok(
-      r.stdout.includes("execute_sql on x"),
+      r.stdout.includes(`execute_sql on ${CRX_PROJECT}`),
       "recapture instructions name the apply's own project_id",
     );
     ok(
@@ -196,6 +248,11 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeProof(stateDir, BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
     ok(!isDeny(r), "valid proof + benign migration → allowed");
+
+    writeProof(stateDir, BENIGN_SQL, { queryHash: undefined });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "interactive proof without queryHash is denied");
+    writeProof(stateDir, BENIGN_SQL);
 
     // 3. Proof whose queryHash doesn't match the transmitted SQL → deny.
     r = runHook(call(BENIGN_SQL + " -- edited after review"), tmp);
@@ -348,8 +405,8 @@ function armAutopilot(stateDir, hoursFromNow) {
 //
 // The merge guard's fix — scan EVERY sibling checkout — was tried here first and
 // Codex blocked it: bound to exact head/base SHAs a sibling's merge proof is
-// harmless, but an apply proof is weaker (interactive queryHash is optional,
-// names match by substring), so any-worktree scanning would let one of Mason's
+// harmless, but migration evidence is session-owned and must not be borrowed
+// from another checkout, so any-worktree scanning would let one of Mason's
 // dozens of concurrent sessions unlock a live apply another never reviewed. The
 // lookup follows the session's reported cwd instead. Both halves are asserted:
 // the session's OWN worktree counts, a SIBLING's does not.
@@ -364,8 +421,21 @@ function armAutopilot(stateDir, hoursFromNow) {
     git(["config", "user.email", "test@example.com"], primary);
     git(["config", "user.name", "test"], primary);
     writeFileSync(path.join(primary, "seed.txt"), "seed\n");
-    git(["add", "seed.txt"], primary);
+    // The pending-set preflight reads the schema baseline and origin/main from
+    // CLAUDE_PROJECT_DIR, which stays pinned to `primary` throughout. Seed both
+    // there, or it blocks before the proof-scoping behaviour under test is reached.
+    mkdirSync(path.join(primary, "supabase", "baselines"), { recursive: true });
+    writeFileSync(
+      path.join(primary, "supabase", "baselines", "manifest.json"),
+      JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }));
+    mkdirSync(path.join(primary, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(primary, "supabase", "migrations", `${MIG}.sql`), BENIGN_SQL);
+    git(["add", "-A"], primary);
     git(["commit", "-qm", "seed"], primary);
+    const originRef = git(["update-ref", "refs/remotes/origin/main", "HEAD"], primary);
+    ok(originRef.status === 0, `fixture origin/main is created (git said: ${originRef.stderr})`);
+    // Stands in for a just-completed fetch; see makePendingSetInputs.
+    writeFileSync(path.join(primary, ".git", "FETCH_HEAD"), "fixture\n");
     const added = git(["worktree", "add", "-q", "-b", "wt", linked], primary);
     // Asserted, never skipped. An `if (added.status === 0)` guard here would let
     // the whole worktree regression disappear silently the day `git worktree add`
@@ -390,7 +460,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // what the real harness does. Only the session's reported cwd varies, which
     // is the whole behaviour under test.
     const callFrom = (cwd, query, name = MIG) =>
-      ({ tool_name: "mcp__supabase__apply_migration", cwd, tool_input: { name, query } });
+      ({ tool_name: "mcp__supabase__apply_migration", cwd, tool_input: { project_id: CRX_PROJECT, name, query } });
 
     let r = runHook(callFrom(linked, BENIGN_SQL), primary);
     ok(!isDeny(r), "a proof minted in the worktree the session is working in satisfies the gate");
@@ -485,7 +555,7 @@ function armAutopilot(stateDir, hoursFromNow) {
       }));
       return runHook({
         tool_name: "mcp__supabase__apply_migration",
-        tool_input: { project_id: "x", name, query: BENIGN_SQL },
+        tool_input: { project_id: CRX_PROJECT, name, query: BENIGN_SQL },
       }, tmp);
     };
 

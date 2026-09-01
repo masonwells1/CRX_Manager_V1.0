@@ -127,7 +127,7 @@
     },
     "section9_po_ap_high_remediation": {
       "chain": "smoke-section9-po-ap-high-remediation.sql",
-      "description": "Section 9 PO/AP HIGH closeout: real save/submit/edit/alternate-location receive/reverse/cancel paths keep Main Warehouse on-order equal to authoritative open remainder; vendor and accounting-period browser mutation grants/policies are absent; cancelled-PO bill creation and billed-PO cancellation fail in the shared PO-first lock contract; AP aging serves current truth but fails closed for unsupported dates; a real close_accounting_period call makes update_vendor_bill, record_vendor_payment, void_vendor_payment, and void_vendor_bill reject closed-period history without side effects. Self-contained fixtures and terminal rollback. Companion isolated-PostgreSQL provers cover PO/AP and accounting-period concurrency in both winning orders.",
+      "description": "Section 9 PO/AP HIGH closeout: real save/submit/edit/alternate-location receive/reverse/cancel paths keep Main Warehouse on-order equal to authoritative open remainder; vendor and accounting-period browser mutation grants/policies are absent; cancelled-PO bill creation and billed-PO cancellation fail in the shared PO-first lock contract; AP and receiving mutations replay only the same actor plus exact payload; AP aging uses due-date Current/1-30/31-60/61-90/over-90 boundaries and fails closed for unsupported dates; Due This Month ends at Chicago calendar month-end; a real close_accounting_period call makes update_vendor_bill, record_vendor_payment, void_vendor_payment, and void_vendor_bill reject closed-period history without side effects. Self-contained fixtures and terminal rollback. Companion isolated-PostgreSQL provers cover PO/AP and accounting-period concurrency in both winning orders.",
       "covers": [
         "save_purchase_order",
         "submit_purchase_order",
@@ -136,6 +136,7 @@
         "cancel_purchase_order",
         "create_vendor_bill",
         "get_ap_aging",
+        "get_ap_dashboard_summary",
         "update_vendor_bill",
         "record_vendor_payment",
         "void_vendor_payment",
@@ -151,7 +152,9 @@
         "billing",
         "inventory",
         "lifecycle",
-        "security"
+        "security",
+        "idempotency",
+        "regression"
       ]
     },
     "money_lifecycle_idempotency_required": {
@@ -524,7 +527,8 @@
     "issue_return_credit": {
       "chain": "smoke-return-credit-chain.sql",
       "container_prover": "verify-return-credit-real-schema.mjs",
-      "description": "THE canonical return->credit chain: direct return writes are denied; all six return RPC receipts bind actor plus exact return/create payload with exact replay and changed-actor/target/payload refusal; source-derived create -> approve/reject/cancel/receive -> issue credit -> statement single-count -> unapply/re-issue; Apply Credit lost-response retry creates one application; explicit reversal and memo unapply immediately restore a past-due target to overdue; only the exact verified production source-free RMA remains finishable.",
+      "container_only": true,
+      "description": "THE canonical return->credit chain: direct return writes are denied; all six return RPC receipts bind actor plus exact return/create payload with exact replay and changed-actor/target/payload refusal; source-derived create -> approve/reject/cancel/receive -> issue credit -> statement single-count -> unapply/re-issue; paid, overdue, and posted source invoices all fund COGS reversal, noncontiguous repeated-cost source lots remain chronological instead of collapsing by cost, and uninvoiced returned quantity stays zero-cost; invoice-basis PNL and monthly summary retain all three recognized statuses; Apply Credit lost-response retry creates one application; explicit reversal and memo unapply immediately restore a past-due target to overdue; only the exact verified production source-free RMA remains finishable.",
       "covers": [
         "create_return",
         "approve_return",
@@ -537,6 +541,21 @@
         "void_order",
         "cancel_order",
         "get_customer_statement",
+        "get_bottom_line_pnl",
+        "get_monthly_summary",
+        "get_customer_year_end_summary",
+        "get_batch_year_end_summaries",
+        "get_detailed_statement_data",
+        "complete_delivery",
+        "create_invoice_for_unbilled_delivery",
+        "get_dashboard_action_items",
+        "void_invoice",
+        "batch_void_invoices",
+        "void_delivery",
+        "cancel_delivery",
+        "save_invoice",
+        "preview_product_pricing_changes",
+        "apply_product_pricing_change_set",
         "unapply_credit_memo"
       ],
       "area": [
@@ -913,6 +932,20 @@
         "idempotency",
         "security",
         "billing"
+      ]
+    },
+    "restore_quote_version_trust_boundary": {
+      "chain": "smoke-quote-version-restore-trust.sql",
+      "psql_only": true,
+      "description": "Rollback-only runtime proof for 20260826220000: an owner-created unmarked legacy version must raise the exact QUOTE_VERSION_LEGACY_UNTRUSTED error and leave quote/header/section/item state unchanged, while a newly RPC-created marked version restores successfully with the authoritative N+1 row-version token. The standing quote-versions-rpc-owned predicate separately pins that rejection before the sole owner-side restore call. EXPECT SMOKE_PREREQ until the trust-boundary migration is deployed.",
+      "covers": [
+        "create_quote_version",
+        "restore_quote_version"
+      ],
+      "area": [
+        "security",
+        "regression",
+        "lifecycle"
       ]
     },
     "allocated_line_cents": {

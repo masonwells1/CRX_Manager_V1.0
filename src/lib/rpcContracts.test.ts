@@ -857,6 +857,7 @@ interface IssueReturnCreditResult {
   credit_invoice_id: string;
   credit_invoice_number: string;
   credit_amount_cents: number;
+  cogs_reversed_cents: number;
   customer_id: string;
   credited_at: string;          // ISO timestamp
 }
@@ -996,10 +997,12 @@ describe('RPC contract: issue_return_credit', () => {
       credit_invoice_id: 'inv-uuid',
       credit_invoice_number: 'CM-2026-0001',
       credit_amount_cents: 25000,
+      cogs_reversed_cents: 12500,
       customer_id: 'cust-uuid',
       credited_at: '2026-05-07T01:00:00Z',
     };
     expect(result.credit_amount_cents).toBeGreaterThan(0);
+    expect(result.cogs_reversed_cents).toBe(12500);
     expect(result.credit_invoice_number).toMatch(/^CM-/);
   });
 });
@@ -1498,6 +1501,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'resolve_offline_action',
   'restore_cancelled_delivery',
   'restore_cancelled_order',
+  'restore_quote_version',
   'retire_inventory_item',
   'reverse_blend_ticket_approval',
   'reverse_completed_cycle_count',
@@ -1644,6 +1648,17 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // directly non-executable implementation that owns the canonical replay
   // lookup/save. A dedicated test below pins that indirection and both grants.
   complete_delivery: 'delegated',
+  // The live public wrapper records the below-cost money-write intent, then
+  // delegates to the directly non-executable
+  // _restore_quote_version_below_cost_impl_20260810, which owns the canonical
+  // check_idempotency('restore_quote_version') lookup and the idempotency_keys
+  // cache write. Verified against live prosrc on 2026-08-25: the wrapper's
+  // entire body is PERFORM public._begin_below_cost_money_write(...) followed
+  // by RETURN of the impl, forwarding p_idempotency_key unchanged. It needs an
+  // entry only now because 20260826220000 is the first on-disk CREATE of that
+  // impl under its post-rename name, so the transitive-mutation walker could
+  // not previously see through the wrapper to classify it at all.
+  restore_quote_version: 'delegated',
   // The private-provenance wrapper owns a bound replay claim, adds stable
   // order-item serialization and an owner-only creation claim, then invokes
   // the canonical private implementation without a second legacy key.
@@ -2762,6 +2777,13 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // - correct_job_commission_split (20260813050000)
   // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
 
+  // Private implementation behind the public cancel_return RPC. Direct
+  // EXECUTE is revoked, it declares p_idempotency_key, and it deliberately
+  // enforces the public 'cancel_return' cache namespace. Migration
+  // 20260827041500 re-emits it for exact inventory reversal, placing it in the
+  // pending-migration inventory while it remains absent from generated types.
+  '_cancel_return_intent_impl_20260812',
+
   // Private implementation behind the public draw_down_quote RPC, so it is
   // absent from the generated types by design. It declares p_idempotency_key
   // text and owns the canonical check_idempotency/save_idempotency pair for the
@@ -2775,6 +2797,21 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // transitive-mutation walker could not see it until now. Move this to
   // MUTATING_RPCS_WITH_IDEMPOTENCY only if the function ever becomes public.
   '_draw_down_quote_below_cost_impl_20260810',
+
+  // Private implementation behind the public restore_quote_version RPC, so it
+  // is absent from the generated types by design. It declares
+  // p_idempotency_key text and owns the canonical
+  // check_idempotency('restore_quote_version') lookup plus the idempotency_keys
+  // cache write, asserting a single affected row.
+  // Pre-apply-window entry, exactly like the draw-down impl above: it enters
+  // the inventory because migration 20260826220000 is the FIRST on-disk CREATE
+  // of this function under its post-rename name. 20260812115237 renamed the
+  // original public body with ALTER FUNCTION ... RENAME TO and defined no body
+  // on disk, so the transitive-mutation walker could not see it until now.
+  // Move this to MUTATING_RPCS_WITH_IDEMPOTENCY only if the function ever
+  // becomes public — live grants on 2026-08-25 show no EXECUTE for anon,
+  // authenticated or service_role, and 20260826220000 re-asserts that shape.
+  '_restore_quote_version_below_cost_impl_20260810',
 ]);
 
 /**

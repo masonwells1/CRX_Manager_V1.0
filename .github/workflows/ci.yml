@@ -11,10 +11,13 @@ on:
     types: [opened, reopened, synchronize, ready_for_review, edited]
 
 # Supersede stale runs only for the same pull request. Every listed PR event,
-# including edits, runs full proof so a skipped required job cannot satisfy branch
-# protection. Pushes to main receive a run-id group and are never cancelled.
+# including edits, executes both required jobs; only an exact trusted-base
+# classification may shorten their expensive steps. Pushes to main receive a
+# run-id group and are never cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  # Metadata edits must not cancel an in-flight code-proof run. Base edits are
+  # still classified fail-closed below and receive complete proof.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.action == 'edited' && 'edited' || 'code' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # CI only reads repository content and artifacts. It never needs a writable
@@ -102,10 +105,134 @@ jobs:
           node --version
           node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --github-event --root "$GITHUB_WORKSPACE"
 
+  ci-scope:
+    name: Classify CI scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: phase3-private-artifact-containment
+    if: ${{ always() }}
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      full_ci: ${{ steps.scope.outputs.full_ci }}
+      reason: ${{ steps.scope.outputs.reason }}
+      changed_count: ${{ steps.scope.outputs.changed_count }}
+      event_route: ${{ steps.scope.outputs.event_route }}
+      prior_full_proof: ${{ steps.scope.outputs.prior_full_proof }}
+    steps:
+      - name: Bind containment result before classifying candidate paths
+        env:
+          CONTAINMENT_RESULT: ${{ needs.phase3-private-artifact-containment.result }}
+        run: |
+          test "$CONTAINMENT_RESULT" = "success" || {
+            echo "Private-artifact containment did not pass: $CONTAINMENT_RESULT" >&2
+            exit 1
+          }
+
+      - name: Checkout exact event history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Classify with the exact trusted comparison-base implementation
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          classifier_rel='scripts/classify-ci-scope.mjs'
+          mapfile -t event_values < <(node --input-type=commonjs -e '
+            const fs = require("node:fs");
+            const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+            const sha = value => typeof value === "string" && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
+            if (process.env.EVENT_NAME === "pull_request") {
+              const base = sha(event?.pull_request?.base?.sha);
+              const head = sha(event?.pull_request?.head?.sha);
+              if (!base || !head) process.exit(2);
+              process.stdout.write(`pull_request\n${base}\n${head}\n`);
+            } else if (process.env.EVENT_NAME === "push") {
+              const base = sha(event?.before);
+              const head = sha(event?.after);
+              if (!base || !head) process.exit(2);
+              process.stdout.write(`push\n${base}\n${head}\n`);
+            } else {
+              process.exit(2);
+            }
+          ')
+          test "${#event_values[@]}" -eq 3
+          event_mode="${event_values[0]}"
+          compare_base="${event_values[1]}"
+          compare_head="${event_values[2]}"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" = "$compare_head"
+          git -C "$GITHUB_WORKSPACE" cat-file -e "${compare_head}^{commit}"
+
+          emit_full_bootstrap() {
+            {
+              echo 'docs_only=false'
+              echo 'full_ci=true'
+              echo 'reason=trusted-classifier-unavailable'
+              echo 'changed_count=0'
+              echo 'event_route=force-full'
+              echo 'prior_full_proof=false'
+            } >> "$GITHUB_OUTPUT"
+            echo 'Trusted comparison base has no CI-scope classifier; forcing complete CI.'
+          }
+
+          case "$compare_base" in
+            0000000000000000000000000000000000000000)
+              emit_full_bootstrap
+              exit 0
+              ;;
+          esac
+          if ! git -C "$GITHUB_WORKSPACE" cat-file -e "${compare_base}^{commit}" 2>/dev/null; then
+            emit_full_bootstrap
+            exit 0
+          fi
+
+          if ! git -C "$GITHUB_WORKSPACE" cat-file -e "${compare_base}:${classifier_rel}" 2>/dev/null; then
+            emit_full_bootstrap
+            exit 0
+          fi
+
+          classifier_entry="$(git -C "$GITHUB_WORKSPACE" ls-tree "$compare_base" -- "$classifier_rel")"
+          classifier_oid="$(git -C "$GITHUB_WORKSPACE" rev-parse "${compare_base}:${classifier_rel}")"
+          case "$classifier_entry" in
+            "100644 blob ${classifier_oid}"$'\t'"${classifier_rel}"|"100755 blob ${classifier_oid}"$'\t'"${classifier_rel}") ;;
+            *) echo 'Trusted CI-scope classifier is not an exact regular blob; refusing fast routing.' >&2; exit 1 ;;
+          esac
+
+          trusted_root="$RUNNER_TEMP/ci-scope-trusted-${compare_base}"
+          git -C "$GITHUB_WORKSPACE" worktree add --detach "$trusted_root" "$compare_base"
+          trusted_classifier="$trusted_root/$classifier_rel"
+          test -f "$trusted_classifier"
+          test "$(git -C "$trusted_root" hash-object -- "$classifier_rel")" = "$classifier_oid"
+          classifier_output="$RUNNER_TEMP/ci-scope-output-${compare_head}"
+          {
+            # Bootstrap compatibility: the first introducing PR executes the
+            # older trusted-base classifier, which does not emit these keys.
+            echo 'event_route=code'
+            echo 'prior_full_proof=false'
+          } > "$classifier_output"
+          if ! node "$trusted_classifier" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --event-name "$event_mode" \
+            --base "$compare_base" \
+            --head "$compare_head" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --repository "$GITHUB_REPOSITORY" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --github-output "$classifier_output"; then
+            emit_full_bootstrap
+            exit 0
+          fi
+          cat "$classifier_output" >> "$GITHUB_OUTPUT"
+
   sql-validation:
     name: SQL Migration Validation
     runs-on: ubuntu-latest
-    needs: phase3-private-artifact-containment
+    needs: [phase3-private-artifact-containment, ci-scope]
     # SQL Validation is a required branch-protection context; containment is not.
     # Always start this job so a failed/cancelled containment dependency becomes
     # a required red result instead of a skipped result that GitHub may accept.
@@ -114,12 +241,17 @@ jobs:
     # bypassed husky locally (e.g. via --no-verify or a non-husky environment)
     # by re-running the full migration audit at the PR/push gate.
     steps:
-      - name: Bind containment result into this required check
+      - name: Bind containment and trusted routing into this required check
         env:
           CONTAINMENT_RESULT: ${{ needs.phase3-private-artifact-containment.result }}
+          CI_SCOPE_RESULT: ${{ needs.ci-scope.result }}
         run: |
           test "$CONTAINMENT_RESULT" = "success" || {
             echo "Private-artifact containment did not pass: $CONTAINMENT_RESULT" >&2
+            exit 1
+          }
+          test "$CI_SCOPE_RESULT" = "success" || {
+            echo "Trusted CI-scope classification did not pass: $CI_SCOPE_RESULT" >&2
             exit 1
           }
 
@@ -151,9 +283,22 @@ jobs:
   lint-typecheck-test:
     name: Lint, Type Check, Test, Build
     runs-on: ubuntu-latest
-    needs: [phase3-private-artifact-containment, sql-validation]
+    needs: [phase3-private-artifact-containment, ci-scope, sql-validation]
+    # This is a required branch-protection context. It must execute and turn a
+    # failed prerequisite red; a conditionally skipped job reports success.
+    if: ${{ always() }}
 
     steps:
+      - name: Bind all prerequisite results into this required check
+        env:
+          CONTAINMENT_RESULT: ${{ needs.phase3-private-artifact-containment.result }}
+          CI_SCOPE_RESULT: ${{ needs.ci-scope.result }}
+          SQL_VALIDATION_RESULT: ${{ needs.sql-validation.result }}
+        run: |
+          test "$CONTAINMENT_RESULT" = "success" || { echo "Private-artifact containment did not pass: $CONTAINMENT_RESULT" >&2; exit 1; }
+          test "$CI_SCOPE_RESULT" = "success" || { echo "Trusted CI-scope classification did not pass: $CI_SCOPE_RESULT" >&2; exit 1; }
+          test "$SQL_VALIDATION_RESULT" = "success" || { echo "SQL validation did not pass: $SQL_VALIDATION_RESULT" >&2; exit 1; }
+
       - name: Checkout code
         uses: actions/checkout@v7
         with:
@@ -165,7 +310,27 @@ jobs:
         with:
           node-version-file: '.nvmrc'
 
+      - name: Report trusted CI route
+        env:
+          DOCS_ONLY: ${{ needs.ci-scope.outputs.docs_only }}
+          FULL_CI: ${{ needs.ci-scope.outputs.full_ci }}
+          ROUTE_REASON: ${{ needs.ci-scope.outputs.reason }}
+          CHANGED_COUNT: ${{ needs.ci-scope.outputs.changed_count }}
+          EVENT_ROUTE: ${{ needs.ci-scope.outputs.event_route }}
+          PRIOR_FULL_PROOF: ${{ needs.ci-scope.outputs.prior_full_proof }}
+        run: |
+          case "$DOCS_ONLY:$FULL_CI" in
+            true:false|false:true) ;;
+            *) echo "Trusted CI route is not a valid mutually-exclusive result: docs_only=$DOCS_ONLY full_ci=$FULL_CI" >&2; exit 1 ;;
+          esac
+          case "$EVENT_ROUTE:$PRIOR_FULL_PROOF" in
+            code:false|force-full:false|error:false|metadata:false|metadata:true) ;;
+            *) echo "Trusted event route is invalid: event_route=$EVENT_ROUTE prior_full_proof=$PRIOR_FULL_PROOF" >&2; exit 1 ;;
+          esac
+          echo "CI route: docs_only=$DOCS_ONLY full_ci=$FULL_CI reason=$ROUTE_REASON changed_count=$CHANGED_COUNT event_route=$EVENT_ROUTE prior_full_proof=$PRIOR_FULL_PROOF"
+
       - name: Cache node_modules
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         uses: actions/cache@v6
         id: cache-node-modules
         with:
@@ -175,28 +340,39 @@ jobs:
             node-modules-${{ runner.os }}-
 
       - name: Install dependencies
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' && steps.cache-node-modules.outputs.cache-hit != 'true' }}
         run: npm ci
 
       - name: Check for vulnerable dependencies
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm audit --audit-level=critical
 
+      - name: CI scope routing regression tests
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
+        run: npm run test:ci-scope
+
       - name: Run ESLint
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run lint
 
       - name: Run TypeScript type check
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run typecheck
 
       - name: Guard-hook regression tests (safety net must not regress)
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run test:correction-guards
 
       - name: Phase 3C private-artifact regression tests
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run test:supplier-pricing-phase3c-packet
 
       - name: Phase 2 live-smoke static guard
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run check:pricing-phase2-live-smoke
 
       - name: Agent workflow truth-state and sync tests
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run test:agent-workflows
 
       - name: Documentation consistency
@@ -214,33 +390,64 @@ jobs:
           diff -u "$before" "$after"
 
       - name: RPC contract and idempotency inventory tests
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run test:contracts
 
       - name: Run Vitest unit tests + coverage (ratchet thresholds)
         # Unit/coverage tests deliberately use the mock Supabase values from
         # vite.config.ts. Live schema verification stays a trusted opt-in run
         # until a least-privilege CI credential or disposable database exists.
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run test:coverage
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' && !cancelled() }}
         with:
           name: coverage-report
           path: coverage/
           retention-days: 14
 
       - name: Build (Vite)
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
         run: npm run build
 
+      - name: Write exact full-CI proof
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' && github.event_name == 'pull_request' }}
+        shell: bash
+        env:
+          PROOF_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PROOF_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PROOF_PATH: ${{ runner.temp }}/crx-full-ci-proof.json
+        run: |
+          set -euo pipefail
+          node --input-type=commonjs -e '
+            const fs = require("node:fs");
+            const sha = value => typeof value === "string" && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
+            const base = sha(process.env.PROOF_BASE_SHA);
+            const head = sha(process.env.PROOF_HEAD_SHA);
+            if (!base || !head || !process.env.PROOF_PATH) process.exit(2);
+            fs.writeFileSync(process.env.PROOF_PATH, `${JSON.stringify({ schema: 1, kind: "crx-full-ci-proof", base, head, run_id: process.env.GITHUB_RUN_ID, run_attempt: process.env.GITHUB_RUN_ATTEMPT })}\n`, { encoding: "utf8", flag: "wx" });
+          '
+
+      - name: Publish exact full-CI proof
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: crx-full-ci-proof-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/crx-full-ci-proof.json
+          if-no-files-found: error
+          retention-days: 14
+
   phase3c-containment-windows:
     name: Phase 3C Containment (Windows)
     runs-on: windows-latest
-    needs: phase3-private-artifact-containment
+    needs: [phase3-private-artifact-containment, ci-scope]
+    if: ${{ needs.phase3-private-artifact-containment.result == 'success' && needs.ci-scope.result == 'success' && needs.ci-scope.outputs.full_ci == 'true' }}
     timeout-minutes: 15
     # The containment checker folds path case on win32 only, because that is the
     # platform whose filesystem compares paths case-insensitively. Every other

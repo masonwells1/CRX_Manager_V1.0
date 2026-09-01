@@ -1,11 +1,38 @@
 # Codex to Claude Handoff - Draw-Down Live Rollout
 
-> **SUPERSEDED — DO NOT APPLY. HISTORICAL RECORD ONLY.** This handoff was fully executed on
-> 2026-08-24: migrations 2, 3, and 4 named below are ALL APPLIED LIVE (ledger versions
-> `20260825025241`, `20260825033106`, `20260825034622`) under Mason's explicit continuation-session
-> approval. No instruction in this document remains actionable. Current status lives in
-> `docs/reference/migration-history.md` (top rollout block) and `docs/CHANGELOG.md`. It is
-> committed as the durable provenance record the rollout documentation cites.
+> **SUPERSEDED — DO NOT APPLY, DO NOT REPAIR, DO NOT RERUN. THE ROLLOUT IS CLOSED, WITH ONE
+> RECORDED VERIFICATION GAP (no end-to-end production draw was observed). NOTHING BELOW IS
+> ACTIONABLE — every "keep draws paused" line in the body is HISTORY, not a standing instruction.**
+>
+> **Executed on 2026-08-24 (steps 1–7 of "Not Started" below):** migrations 2, 3, and 4 named below
+> are ALL APPLIED LIVE (ledger versions `20260825025241`, `20260825033106`, `20260825034622`) under
+> Mason's explicit continuation-session approval, followed by the schema-registry and
+> migration-history refresh, which landed through reviewed green PRs #472 and #471. Nothing in the
+> "What I Need Claude To Do", "Scope", "Not Started" items 1–7, or "Gates And Blockers" sections
+> remains actionable. The authoritative apply record is the top rollout block of
+> `docs/reference/migration-history.md`, with `docs/CHANGELOG.md` carrying the dated summary.
+>
+> **Items 8 and 9 — closed 2026-08-25, with a stated gap.** Step 8's practical application
+> verification is only **partly** met; step 9 was settled by Mason's decision, not by an
+> end-to-end proof. What was actually observed on 2026-08-25:
+> a read-only live postflight finding 975 ledger rows, zero unexpired and zero unbound
+> `draw_down_quote` receipts, and the expected draw-down function ACL/search-path posture;
+> production root returning HTTP 200; and Mason opening the production Quote Builder initial screen
+> (`Q-2026-2062`), which rendered normally with no visible error and with no customer, item,
+> preview, save, or submission made. **That screen observation is reachability and UI-render
+> evidence only — it is not a booking-draw transaction and not an end-to-end draw allocation
+> proof.** No such end-to-end proof exists, and none may be manufactured by creating, updating, or
+> submitting a real quote or order.
+>
+> **BOOKING DRAWS ARE RESUMED.** Mason released the pause in chat on 2026-08-25, on the evidence
+> above and knowing that no end-to-end production draw was observed. Line 22 and "Not Started"
+> item 9 below are therefore **discharged** — read them as history, not as a standing instruction to
+> keep draws paused. The decision, the evidence, and the accepted residual risk are recorded in
+> `docs/manual/DECISION_LOG.md` (2026-08-25 entry), which is canonical; this banner only points at
+> it. Do not re-impose the pause because no end-to-end draw was observed — that gap was known and
+> accepted. Re-impose only on new evidence of an actual defect.
+>
+> This file is committed as the durable provenance record the rollout documentation cites.
 
 **Date:** 2026-08-24
 **Requested by:** Mason (CRX Manager)

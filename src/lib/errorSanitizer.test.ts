@@ -2,6 +2,37 @@ import { describe, it, expect } from 'vitest';
 import { sanitizeError } from './errorSanitizer';
 
 describe('sanitizeError', () => {
+  it('maps return-credit and customer-scope tokens to operator guidance', () => {
+    expect(sanitizeError('CUSTOMER_SCOPE_DENIED')).toBe('You can only work with customers assigned to you');
+    expect(sanitizeError('RETURN_CREDIT_UNIT_MISMATCH')).toContain('original sale');
+    expect(sanitizeError('RETURN_CREDIT_INVENTORY_UNIT_MISMATCH')).toContain('warehouse inventory unit');
+    expect(sanitizeError('RETURN_CREDIT_UNLINKED_COST_LINE')).toContain('Review the credit memo');
+    expect(sanitizeError('RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED')).toBe(
+      'Void or unapply the related return credit before moving this sale invoice out of a recognized status or deleting it'
+    );
+    expect(sanitizeError('RETURN_CREDIT_SOURCE_POST_REQUIRES_REISSUE')).toContain('cannot be posted');
+    expect(sanitizeError('RETURN_CREDIT_HEADER_IMMUTABLE')).toContain('Use Void');
+    expect(sanitizeError('RETURN_CREDIT_PARENT_IMMUTABLE')).toContain('Void or unapply');
+    expect(sanitizeError('RETURN_CREDIT_LINE_TOTAL_MISMATCH')).toContain('no changes were saved');
+    expect(sanitizeError('RETURN_CREDIT_CUTOVER_IN_PROGRESS')).toContain('briefly paused');
+    expect(sanitizeError('ORDER_INVOICE_TERMINAL')).toContain('already final');
+    expect(sanitizeError('ORDER_LIFECYCLE_BUSY_RETRY')).toContain('Wait a moment');
+    expect(sanitizeError('RETURN_CREDIT_LEDGER_IMMUTABLE')).toContain('source or cost lines');
+    expect(sanitizeError('RETURN_CREDIT_HEADER_RESULT_INVALID')).toContain('could not be completed safely');
+    expect(sanitizeError('RETURN_CREDIT_SOURCE_CONCURRENT')).toBe(
+      'A related invoice or return credit is being changed elsewhere. Wait a moment and try again'
+    );
+    expect(sanitizeError('RETURN_CREDIT_VOID_RELEASE_FAILED')).toContain('no changes were saved');
+    expect(sanitizeError('RETURN_CREDIT_UNAPPLY_RELEASE_FAILED')).toContain('no changes were saved');
+    expect(sanitizeError('RETURN_CREDIT_COGS_LEDGER_MISSING')).toContain('protected cost source');
+    expect(sanitizeError('RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED')).toContain('No changes were saved');
+    expect(sanitizeError('RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED:RMA-2026-0007:[{"product_id":"secret"}]'))
+      .not.toContain('secret');
+    expect(sanitizeError('RETURN_NOT_APPROVED:requested')).toContain('must be approved');
+    expect(sanitizeError('RETURN_NOT_APPROVED:received')).toBe('This return is already received');
+    expect(sanitizeError('RETURN_NOT_APPROVED:credited')).toBe('This return is credited and cannot be received');
+  });
+
   it('returns generic message for null/undefined', () => {
     expect(sanitizeError(null)).toBe('An unexpected error occurred');
     expect(sanitizeError(undefined)).toBe('An unexpected error occurred');
@@ -25,6 +56,10 @@ describe('sanitizeError', () => {
     expect(sanitizeError(
       'insert or update on table "invoices" violates foreign key constraint "invoices_customer_id_fkey"'
     )).toBe('This record references data that does not exist or has been removed');
+
+    expect(sanitizeError(
+      'update or delete on table "invoice_items" violates foreign key constraint "invoice_items_return_credit_source_item_fk" on table "invoice_items"'
+    )).toBe('This source invoice line is retained as return-credit accounting history and cannot be deleted or re-saved. Keep the source invoice unchanged, or permanently delete the already-voided credit memo before editing it');
   });
 
   it('sanitizes check constraint violations', () => {

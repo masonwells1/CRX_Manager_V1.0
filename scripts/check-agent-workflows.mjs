@@ -80,9 +80,8 @@ try {
 }
 
 for (const reminder of [
-  "codex-to-claude-handoff-reminder.mjs",
-  "agent-pair-review-reminder.mjs",
-  "codex-gauntlet-reminder.mjs",
+  "prompt-router.mjs",
+  "posttool-router.mjs",
 ]) {
   requireIncludes(".claude/settings.json", claudeSettingsText, reminder);
   requireIncludes(".codex/hooks.json", codexHooksText, reminder);

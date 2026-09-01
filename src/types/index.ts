@@ -1899,6 +1899,10 @@ export interface InvoiceItem {
   // recompute qty x price for a split line). Optional (?) — additive column, not
   // selected by today's queries; nullable in the DB once live.
   billing_line_id?: string | null;
+  // Forward PR #361 ledger fields. Optional until the reviewed migration is
+  // applied live and the generated schema artifacts are refreshed.
+  return_credit_cogs_cents?: number | null;
+  return_credit_source_item_id?: string | null;
   created_at: string;
   updated_at: string;
   product?: Product;
@@ -3676,6 +3680,7 @@ export interface APAgingRow {
   vendor_id: string;
   vendor_name: string;
   current_amount: number;
+  days_1_30: number;
   days_31_60: number;
   days_61_90: number;
   over_90: number;

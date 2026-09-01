@@ -1,11 +1,504 @@
 # Decision Log
 
-Last verified: 2026-08-25
+Last verified: 2026-08-31
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-08-31 — `core.hooksPath` points at the tracked `.husky`, never husky's generated `.husky/_`
+
+**Source:** Mason's in-chat approval on 2026-08-31 ("ok fix it") after the harness review found the
+commit and push guards were not running in fourteen of forty-four registered worktrees.
+
+**Decision.** The repository-wide `core.hooksPath` is the tracked `.husky` directory. Per-worktree
+overrides are not used. `package.json`'s `prepare` script sets that value instead of invoking
+`husky`, which re-set the broken one on every `npm install`.
+
+**Why.** husky writes `core.hooksPath=.husky/_`, and `.husky/_` is generated during `npm install`
+and gitignored. A worktree created without an install in it therefore resolved the setting to a
+directory that was not there — and **git skips a missing hook silently**, so `git commit` and
+`git push` looked entirely normal while running no guard. Eight worktrees were in that state and
+six more carried hand-set absolute overrides aimed at other checkouts, including an abandoned one,
+so those ran a different branch's guard code. A relative value resolves against each worktree's own
+root, which is also the correct semantics: a branch that edits a guard is tested by the guard it
+edited. The tracked hooks are plain shell and never sourced husky, so no husky runtime is needed.
+
+**Proof.** Reproduced in a throwaway worktree created the ordinary way: `git hook run pre-commit`
+reported `cannot find a hook named pre-commit` before the change and ran the ledger and containment
+guards over 2,892 paths after it. Fleet re-scanned: 44 of 44 worktrees resolve to a real
+`pre-commit`. `npm run prepare` verified to repair a deliberately broken value.
+
+**Caught by the gate, not by the author.** The first candidate pointed `core.hooksPath` at `.husky`
+while `.husky/pre-commit` and `.husky/pre-push` were committed `100644` — only `commit-msg` carried
+`100755`. Git silently ignores a non-executable hook on POSIX, so that change would have removed
+every commit and push guard on Linux and macOS: the exact bug it set out to fix, inverted, and
+invisible from Windows where there is no executable bit. `gpt-5.6-sol` found it from the tree
+manifest. Both hooks are now committed `100755`, and `agent-health-check.test.mjs` asserts the mode
+git records for the repository's own hooks — the fixtures chmod theirs, which is precisely what hid
+the real condition.
+
+**Round 3, and the reason the check is an allowlist.** CodeRabbit's second pass showed containment
+was the wrong shape entirely: linked worktrees live UNDER the main checkout
+(`.claude/worktrees/<name>`), so an absolute `core.hooksPath` into another worktree's `.husky` is
+*contained* by the root and passed — while git ran that other branch's guards. Any in-worktree
+directory holding two executable files passed for the same reason. The check now requires the
+configured path to resolve to **exactly this worktree's own `.husky`**; everything else fails closed,
+so an unanticipated spelling is a false alarm rather than a hole — the
+`pin-the-region-don't-enumerate-the-cheats` shape. The expected path canonicalizes the root but keeps
+`.husky` literal, because canonicalizing both sides would make a `.husky` that is *itself* a link
+into another checkout compare equal to itself. Also: `install-git-hooks.mjs` no longer swallows every
+error from clearing the worktree override — only "nothing to clear" (exit 5) and "no worktree scope
+exists" are silent; a real failure warns, because a surviving override outranks the shared value.
+
+**Two more found by CodeRabbit, both real.** (1) A per-worktree `core.hooksPath` **outranks** the
+shared local value, so a `prepare` that only wrote the shared value left a stale foreign override
+effective — `npm install` would report success while repairing nothing. `prepare` is now
+`scripts/install-git-hooks.mjs`, which clears the worktree scope first, then sets the shared value;
+proven by pointing this worktree at the abandoned PR #432 checkout and watching `npm run prepare`
+clear it. (2) Containment was checked lexically, but git executes the **target** of a symlink, so a
+`.husky` linked into another checkout passed as in-worktree. Paths are now canonicalized with
+`realpathSync` before the containment test, and both the directory and each hook are checked.
+
+**Operative rule.** Any file under `.husky/` that git is meant to execute is committed `100755`
+(`git update-index --chmod=+x`), never `100644`. Never point `core.hooksPath` at a generated or
+ignored directory, and never set it per-worktree. `npm run agent-health` reports `Git hooks installed` and fails when the path is
+unset, missing `pre-commit`/`pre-push`, resolving outside the worktree, or — on POSIX — holding a
+hook without the executable bit, which git skips just as silently. That check is the tripwire, not
+this entry. This supersedes the 2026-08-25 incident entry below, which repointed one
+worktree to `.husky/_` — the right target, wrongly identified.
+
+**Knock-on.** The parked `core.hooksPath` hole in `EXECUTABLE_TRANSPORT_KEYS`
+(`KNOWN_ISSUES.md`, "Third instance") gets easier, not harder: the legitimate value is now a
+committed, tracked path rather than a gitignored generated one, which is a cleaner approved value
+for the closed-allowlist shape that entry needs. Still parked; nothing was changed there.
+
+## 2026-08-31 — Model Tuning guidance covers the whole Claude 5 family
+
+**Source:** Mason's in-chat request on 2026-08-31 to tune both CLAUDE.md files for effectiveness;
+Codex PR #528 review finding that this log still scoped the tuning decision to Opus 5.
+
+**Decision.** The `CLAUDE.md` Model Tuning section added by the 2026-07-25 entry applies to the
+whole Claude 5 family — Opus 5 and Fable 5 — not only Opus 5. The 2026-07-25 calibration
+(`<tone_preference>`, deliverable-length rule, subagent budget, self-verification carve-out,
+uncapped review prompts with the settled overnight-sweep exception, and the effort ladder) carries
+over to Fable 5 unchanged. The carry-over is provisional — the 2026-07-25 review measured Opus 5
+only — but binding until a newer harness review supersedes it.
+
+**Operative rule.** A Fable 5 session follows the Model Tuning rules exactly as an Opus 5 session
+would; do not treat the section as Opus-only or relitigate its scope. Every settled exception and
+the pending effort sweep from the 2026-07-25 entry remain in force. This supersedes only the
+model-scope wording of the 2026-07-25 entry; its substance is unchanged.
+
+## 2026-08-31 — defer the six-file return-credit migration rollout
+
+**Decision:** Keep migrations `20260827041000` through `20260827041500` unapplied for now. Their
+reviewed source files remain unchanged under `supabase/migrations/`, but Mason is not authorizing
+or requesting a production rollout in this session.
+**Why:** Preserve the reviewed repository artifacts while making the production boundary explicit.
+**What this forbids/implies:** Repository merge is not a database apply. A future rollout requires
+fresh authorization and the migration safety gates in force at that time. If a newer migration has
+overtaken this chain's timestamps, restamp all six above the current high-water, update every pinned
+chain reference/hash, and re-review the restamped artifacts before a governed push/apply in order.
+The rejected `20260827223000` ledger-order trigger is not part of this queue.
+
+## 2026-08-31 — retire the production migration approval gate; the worktree guard carve-out stays closed
+
+**Source:** Mason's in-chat decision on 2026-08-31 after a harness review he requested ("we were
+overbuilt and it killed productivity"), cross-checked by two adversarial Opus passes and a
+`gpt-5.6-sol` high-effort plan review (verdict PROCEED WITH CHANGES).
+
+**Decision.** Delete PR #514's production-migration automation — both workflows, the batch builder and
+its test, the review verifier, the review lib, the environment assertion, and `production-main-freeze.mjs`
+— plus the unconditional `ci.yml` step that invoked the deleted test. Keep the runbook with a RETIRED
+banner, and keep #514's general migration-apply content binding and SQL parser hardening.
+
+**Also decided (same conversation): the global ledger-order trigger is REJECTED, not deferred.**
+`20260827223000_enforce_global_migration_ledger_order.sql` was never applied and is now parked at
+`scripts/.staging-migrations/…​.sql.REJECTED`, outside `supabase/migrations/`, with its standalone
+prover deleted. It is `ENABLE ALWAYS` on every `BEFORE INSERT`, and the live ledger holds **89 rows**
+whose effective stamp is at or below the running maximum of earlier-versioned rows — so a `COPY`-based
+disaster-recovery restore would abort partway through, discovered only when a restore is actually
+needed. It also drops the `-- ordering-guard: intentional-replay <reason>` escape hatch that
+`.claude/hooks/migration-ordering-lib.mjs` honours, and rejects all 626 legacy slug-only ledger names.
+The client-side preflight already enforces forward-only ordering, keeps an escape hatch, and cannot
+brick a restore. Reconsider only with a tested replay/restore escape hatch, a successful
+disposable-restore proof with the trigger installed, and evidence of a real cross-client ordering
+failure the preflight cannot prevent.
+
+**Why.** The gate could never run: the `production-database` environment was never created, both
+workflows had zero runs, the mandatory boundary canary was never performed, and `auditedDdlAdmission()`
+admitted only `COMMENT ON`. Measured, PR #512 removed ~2,788 lines and PR #514 added ~2,696 back three
+days later, so the "simplification" netted about 92 lines. #514 also did not satisfy the 2026-08-27
+rule below (no named reproducible recurrence, no measured false-positive budget, nothing removed);
+the review found it had been read as applying only to hooks, not to a GitHub workflow.
+
+**What this forbids/implies.** The 2026-08-27 consolidation rule binds regardless of *where* a new
+control lives — hook, workflow, script, or migration. "It is not a hook" is not an exemption. A control
+that has never executed is not a safe first increment; it is abandoned scaffolding, and keeping unused
+executable code because it was expensive to write is the overbuild pattern itself.
+
+**Explicitly NOT changed, and still settled: do not attempt the `.claude/worktrees` guard carve-out.**
+`review-proof-guard.mjs` denies most ordinary commands run inside a `.claude/worktrees/*` worktree
+(measured 2026-08-31: 0 of 10 ordinary commands allowed). Claude Code hardcodes that worktree location,
+so relocation is not available for tool-created worktrees. The text-stripping fix remains DO-NOT-ATTEMPT
+per `KNOWN_ISSUES.md` — re-derived independently on 2026-08-31 and tested against the pinned cases
+before implementation: **it opened 10 of 17**, including `rm -rf .claude/worktrees/wt-a/` → `rm -rf` and
+`find .claude/worktrees/wt-a/. -delete` → `find . -delete`. A purpose-built 32/32-green attack suite did
+not contain the pinned cases and would have shown green — the documented failure mode exactly. Seed any
+future guard work from the guard's own `.test.mjs` pinned cases. **Workaround, use this:** never name the
+worktree path in a destructive shell command; rely on the session cwd and relative paths.
+
+**Deferred, not abandoned.** `bash-safety-lib.mjs`'s interpreter/stdin opacity block (denies `xargs`
+pipes, `node -e`, `bash -c`, `python3 -c`, heredocs, and `node -v`, all reporting a misleading
+"maintenance producer" message) is the larger remaining productivity cost. Evidence says it is
+ineffective — it blocks *reading* the file it protects while `node runner.mjs` / `npm run x` / `make x`
+execute it freely. It is coupled to the blob-pinned maintenance producer, so it is the next
+harness-focused task after this one, not a backlog item.
+
+## 2026-08-28 — CodeRabbit reviews only frozen release candidates
+
+**Source:** Mason's in-chat decision on 2026-08-28 after the shared CodeRabbit budget was consumed
+by automatic reviews during active Codex/Claude implementation.
+
+**Decision.** Disable automatic and automatic-incremental CodeRabbit reviews in both CRX Manager
+and FarmRx. Opening a PR and pushing work-in-progress commits must not spend a review. Once the
+implementation is usable and deployable, the branch is current, required checks are green, the
+candidate commit is frozen, and the separate Codex review is clean, the landing owner records the
+head SHA and posts exactly `@coderabbitai review`. CodeRabbit documents that this manual incremental
+command remains available when automatic review is disabled.
+
+**Operative rule.** CodeRabbit is the last broad outside review, not a concurrent implementation
+reviewer. Read and resolve its findings, then merge with
+`--match-head-commit <reviewed-head-sha>`. Mason explicitly approved the corresponding GitHub
+protection change for both repositories: require one approval, dismiss stale approvals after a new
+commit, require approval from someone other than the last pusher, and enforce the rule for
+administrators. CodeRabbit's formal approval is the normal merge-unlock path; existing build and
+deployment checks remain separate. If a finding or base update creates a new commit, restart checks
+and request one follow-up incremental review of that corrected candidate. Do not use
+`@coderabbitai resume`, which restarts automatic review, and use `@coderabbitai full review` only
+when a complete reread is deliberately justified. This decision supersedes the automatic-review
+and two-commit throttle portions of the 2026-07-17 and 2026-08-24 entries; their review-quality,
+path-selection, and final-head safety rules remain active.
+
+
+## 2026-08-27 — Codex live migrations use a protected GitHub approval environment
+
+**Source:** Mason's in-chat request to build a safe Codex migration approval gate on 2026-08-27.
+
+**Decision.** Codex prepares one exact main-branch migration for Mason to dispatch through the
+GitHub `production-database` environment. GitHub, not the local agent shell, holds the Supabase credential.
+The environment requires Mason's account, disallows administrator bypass, and binds current main,
+the exact reviewed PR head plus CodeRabbit's authenticated exact-commit approval, filename, and SQL SHA-256. The local Codex GitHub
+credential is a fine-grained token with Actions and Deployments read-only; only Mason's website
+session can dispatch the reviewed artifact and approve release.
+
+**Why.** Codex hooks cannot safely return an approval prompt from PreToolUse: the current runtime
+does not support that decision and continues the tool call after reporting the hook failure.
+UserPromptSubmit exposes prompt text but no positive proof that it was authored by Mason, and local
+hooks or command matching are not a credential boundary. If the local bridge can reach Supabase,
+the same agent shell can reach it by another spelling. A protected CI environment keeps production
+credentials outside the agent's local capability set.
+
+**Operative rule.** The workflow remains unusable unless its GitHub environment requires only Mason,
+prevents administrator bypass, accepts protected branches only, and carries its two production
+database secrets plus the environment-only branch-freeze credential. Codex may read a pending run
+but its machine token must not have Actions write, Deployments write, or Administration write.
+After Mason's approval, the workflow creates a no-bypass ruleset that freezes `main` at the verified
+commit through the database transaction; the separate freeze token has Contents read only and is
+available only to the in-repository acquire, verify, and cleanup helper steps. Codex cannot retrieve
+that environment secret. A failed cleanup leaves `main` frozen for manual inspection rather than
+reopening the cross-system merge race. Mason's manual dispatch is the human release attestation;
+the workflow independently reads
+the latest exact-head `coderabbitai[bot]` review and requires `APPROVED`. Caller-supplied review text,
+hashes, or artifacts are never accepted. The local Sol/high proof remains the separate pre-push gate. The workflow locks
+the live ledger inside the same transaction, applies only transaction-compatible SQL, refuses stale timestamp aliases and exact-content replay, writes and verifies the
+content-bound ledger row, then commits. Credential-bearing actions use full commit pins and the
+installed Supabase CLI version is verified. No prompt-text approval token is part of this gate.
+
+
+## 2026-08-27 — preserve CRX safety rules while collapsing harness machinery
+
+**Decision:** Pause the recurring gauntlet, retune it to monthly/on-demand read-only review, retire
+Patrol, and consolidate prompt/post hook process launches plus Codex matcher scope without changing
+business safety rules or GitHub branch protection.
+**Why:** The audit found necessary safety invariants were being reimplemented and rerun through too
+many independent processes, while the audit policy itself rewarded creating more maintenance work.
+**What this forbids/implies:** A new hook needs a named reproducible BLOCKER/HIGH recurrence, a
+measured false-positive budget, and removal or consolidation of an existing mechanism; keep the
+underlying business invariant and prefer an owning regression test or existing static check.
+
+
+## 2026-08-26 — ordinary documentation gets a trusted fast CI lane; uncertainty still runs everything
+
+**Source:** Mason's in-chat approval on 2026-08-26 after the containment scanner performance pass
+showed that a documentation-only merge still consumed about nine minutes of full CI.
+
+**Decision.** Add a narrow documentation-only route inside the existing required CI workflow. The
+workflow itself still runs, Phase 3C containment still runs first, SQL Migration Validation still
+runs its complete audit, and both required contexts still execute. Only the expensive application
+steps (dependency audit, lint, typecheck, guard/application tests, coverage, and build) plus the
+separate Windows containment regression job may be omitted after an exact trusted-base classifier
+proves every changed path is an ordinary Markdown record.
+
+The allowlist is intentionally small: only root `README.md`, `docs/CHANGELOG.md`, and correctly
+named and valid new records below `docs/changelog.d/`. Changelog records are validated from the candidate blob with the trusted
+base's shared entry rules; the folder README, malformed names, impossible dates, or invalid content
+do not earn the fast route. There is no directory-wide documentation prefix. In particular,
+`docs/archive/`, `docs/audits/`, `docs/build-loops/`, `docs/handoffs/`, `docs/loops/`, and
+`docs/plans/` always run complete CI because the repository already records that those locations
+contain or feed agent instructions. Agent-consumed manual synthesis such as
+`docs/manual/KNOWN_ISSUES.md` also remains full CI. Everything else runs complete CI. This is stricter than the
+exclusion floor recorded in the 2026-08-25 harness decision: agent instructions,
+manual workflow/reference sources, generated maps, hidden control directories, workflow files,
+hooks, configuration, dependencies, scripts, tests, source, migrations, unknown paths, mixed diffs,
+non-regular Git entries, malformed history, and empty ranges all resolve to complete CI.
+Reserved agent-instruction basename families (`AGENTS.md` / `AGENTS.*.md`, `CLAUDE.md` /
+`CLAUDE.*.md`, `GEMINI.md`, `SKILL.md`, and `copilot-instructions.md`)
+and control-directory segments (`.agents`, `.claude`, `.codex`, `.github`, and `.husky`) are rejected
+case-insensitively at every depth, including below an otherwise ordinary documentation folder.
+
+**Trust boundary.** For a pull request or push whose comparison base already contains the
+classifier, CI executes that exact base blob from a detached trusted worktree against the candidate
+history. A candidate that edits the classifier cannot use its edited bytes to classify itself. The
+introducing PR, first merge push, missing classifier, malformed event, or classifier failure forces
+the full lane. Required dependent jobs use `always()` and explicitly turn a failed containment,
+classifier, or SQL prerequisite into red; they are never conditionally skipped into an accepted
+success.
+
+**Event rule retained.** `pull_request.edited` remains enabled because a base-branch retarget must
+rerun proof. Same-PR concurrency still cancels only superseded in-progress PR work, while `main`
+pushes retain unique groups. This pass reduces repeated documentation work through the fast route;
+it does not create a metadata-only success that could overwrite a failed exact-SHA code check.
+
+**Operative rule.** Additions to the fast allowlist require a new decision, a real timing benefit,
+both-direction path tests, and proof that the path cannot affect runtime, build inputs, agent/harness
+behavior, generated truth, deployment, or database state. Ambiguity runs everything.
+
+
+## 2026-08-26 — CORRECTION: a closed allowlist only closes what is inside it
+
+**This amends the 2026-08-25 entry immediately below**, which claimed pinning the guarded region
+"closes every form at once, including ones nobody has thought of." That was overstated and CodeRabbit
+round 5 disproved it on live PostgreSQL.
+
+**What was wrong.** The allowlist began at the `v_version_id := nullif(v_result->>'version_id', ...)`
+assignment. The interval *between* `_create_quote_version_owner_impl` returning and that assignment
+was not covered by anything. A re-emission could put
+
+```text
+v_result := jsonb_build_object('status','created','version_id', <legacy id>);
+```
+
+in that gap, and the sole-owner-call check, the ordering check, the region fingerprint and the exact
+marker-`UPDATE` check **all still passed** — the wrapper would stamp an arbitrary pre-boundary
+snapshot as trusted. Verified: that body passed the round-4 guard.
+
+**The fix.** The region now starts at the owner call itself, leaving no unguarded interval between
+the writer and the marker. It also pins the owner call's **arguments**, which nothing had checked —
+a re-emission passing `NULL` for `p_idempotency_key` is now rejected too.
+
+**Operative rule, restated correctly.** A closed allowlist is only as good as its boundaries.
+"Nothing unexpected can appear here" is worth nothing if the interesting statement can sit just
+outside the region. When pinning a region, the first question is not *what does it contain* but
+*where does the trusted chain actually begin* — and the answer is the first statement whose result
+the rest of the region depends on, not the first statement that mentions the variable you care about.
+
+**Process note.** This was the third consecutive round in which a fix to this predicate was itself
+found defective (round 3's arity bug, round 4's blocklist, round 5's mis-anchored allowlist). Each
+fix was verified against live PostgreSQL and each verification tested the thing that had just been
+changed rather than the property the guard is supposed to have. A both-ways proof is necessary and
+was not sufficient; the missing step each time was asking which inputs the proof did **not** cover.
+
+## 2026-08-25 — Guard regions are closed allowlists, not blocklists of spellings
+
+**Decision.** When a SQL invariant sweep needs to prove that nothing unexpected happens between two
+points in a function body, pin the whole region to its exact reviewed text (whitespace-normalized)
+rather than counting the ways it could be subverted.
+
+**Why.** PR #401's `quote-versions-rpc-owned.sql` predicate reached four review rounds on the same
+few lines. Round 3 found that the region between the anchor assignment and the trust-marker `UPDATE`
+could be subverted by reassigning `v_version_id` or `v_result`, and was fixed by counting
+`v_version_id :=` and `v_result :=` inside the region. Round 4 then found `SELECT ... INTO
+v_version_id`, which that count does not see. PL/pgSQL has at least five assignment forms
+(`:=`, `SELECT ... INTO`, `EXECUTE ... INTO`, `... RETURNING ... INTO`, `GET DIAGNOSTICS ... =`), so
+a blocklist closes one spelling per review round and never terminates. A closed allowlist —
+"this region must be exactly this text" — closes every form at once, including forms nobody has
+enumerated, and it cannot be defeated by a spelling the reviewer did not think of.
+
+**Cost, accepted deliberately.** The pin is brittle by design: any legitimate re-emission that
+changes the region must update the literal. That is the review trigger the sweep exists to create,
+and the restore-side contract in the same file already uses the same technique (a prefix length plus
+an md5 digest).
+
+**Operative rule.** A guard that enumerates forbidden forms is a guard that will be reopened. Where
+the protected region is small and fixed, pin the region. Where it is not, say so explicitly rather
+than shipping a blocklist that reads like a proof.
+
+**Two mechanics worth keeping.** Collapse whitespace *before* trimming — `btrim()` first leaves the
+region's trailing newline to collapse into a single space, and the real body then fails its own
+guard; this was caught only by executing the expression against live PostgreSQL 17.6, not by review.
+And the test must tie the migration to the predicate: assert that the shipped function body
+normalizes to the pinned literal, not merely that the predicate contains it. A `toContain()` on the
+predicate alone pins a string while the function drifts away from it.
+---
+
+## 2026-08-25 — `regexp_count(text, text, 'i')` does not exist; it crashes the sweep it guards
+
+**Found:** 2026-08-25, while closing CodeRabbit's round-3 findings on PR #401.
+
+**The bug.** Every `regexp_count` call added to
+`scripts/db-invariant-sweeps/predicates/quote-versions-rpc-owned.sql` passed the case-insensitive
+flag as the **third** argument: `regexp_count(p.prosrc, '<pattern>', 'i')`. PostgreSQL's third
+parameter is a **start position (integer)**, and the flags string is the **fourth**. The three-argument
+form with a text flag has no matching overload, so every one of those calls raises
+
+```text
+ERROR: 22P02: invalid input syntax for type integer: "i"
+```
+
+Confirmed by executing the file's own expression against live PostgreSQL 17.6. Ten call sites were
+affected. The correct form is `regexp_count(src, pattern, 1, 'i')`.
+
+**Why it matters more than a typo.** This predicate is a standing security sweep: it is what
+detects a second authoritative writer to `quote_versions`, whose `snapshot_data` is an authoritative
+cost basis. A crashing predicate does not report "clean" — it reports nothing at all, and whether
+that is treated as a pass depends entirely on how the sweep runner handles a failing statement. The
+guard that was supposed to protect the trust marker could not execute.
+
+**How it got in, and why neither reviewer caught it.**
+- `origin/main`'s copy of this predicate contains **zero** `regexp_count` calls. Every one was
+  introduced by PR #401 itself.
+- The exact-SHA `gpt-5.6-sol` gate reviewed the diff and found a genuine concurrency defect, but it
+  reasons about the code as text — it did not execute the SQL.
+- CodeRabbit reviewed the same lines three times and its round-3 remediation **proposed adding
+  another** `regexp_count(..., 'i')` call, reproducing the bug.
+- `src/lib/quoteVersionWriteBoundary.test.ts` asserted `toContain(...)` on the literal broken
+  string, so the test suite actively **pinned the defect in place** and went green on it.
+
+**Operative lesson.** A static assertion that a SQL file *contains* a given string proves only that
+the string is present, never that the SQL runs. Any predicate or guard expressed as SQL must be
+**executed** against a real PostgreSQL — a `toContain` test is not a substitute, and a
+diff-reading reviewer will not catch an argument-type error. Where a guard is meant to reject
+something, prove it both ways: run it against the real body (expect pass) and against a mutated
+body (expect reject). Both directions were verified here after the fix.
+
+**Related open risk, unchanged by this entry:** the accepted cutover race recorded in the entry immediately below.
+
+---
+
+## 2026-08-25 — ACCEPTED RISK: the quote-version trust-marker cutover race stays open
+
+**Source:** Mason's explicit in-chat decision, 2026-08-25, chosen from a plain-English trade-off
+after both adversarial reviewers independently flagged the same defect on PR #401 head `9b2d86a5`.
+
+**The finding, stated accurately.** Migration `20260826220000_quote_version_restore_trust_boundary`
+adds `quote_versions.restore_trusted_at` (taking an ACCESS EXCLUSIVE lock) and re-emits the
+create/restore functions **inside one transaction**. An invocation that has already entered an old
+function body blocks on that lock and then resumes on its OLD body after the migration commits.
+Both reviewers found this, from opposite ends:
+
+- **Sol (exact-SHA gate, `CODEX_PROOF_VERDICT: BLOCKERS`, base `43e141a` head `9b2d86a`)** — the
+  restore side. An in-flight restore finishes without `QUOTE_VERSION_LEGACY_UNTRUSTED` and can
+  restore an untrusted legacy cost snapshot. This is the security-relevant direction.
+- **CodeRabbit (CHANGES_REQUESTED, P2, same head commit)** — the create side. An in-flight creation
+  finishes without the marker update, so a legitimately created version is written with
+  `restore_trusted_at` NULL and is thereafter rejected as legacy-untrusted. This direction fails
+  **closed** — it is a usability defect, not an exposure.
+
+Sol's asked-for remediation was a drainable two-phase cutover.
+
+**Decision.** The race is **accepted and recorded, not fixed.** The migration lands and applies as
+a single transaction.
+
+**Basis, measured live on 2026-08-25 immediately before the decision:**
+
+| Fact | Value |
+|---|---|
+| Rows in `quote_versions` | 3, across 2 quotes |
+| `restore_quote_version` invocations, ever | 0 |
+| `create_quote_version` invocations, ever | 1 |
+
+Exploiting or tripping this race requires a user to be mid-create or mid-restore at the instant the
+migration commits. Restore has never been called in production. The remediation — a two-phase
+cutover with a drain barrier — is new machinery on the money path, and guard changes in this
+repository have historically needed 4–8 review rounds (#423 took 8; #432 stalled at 4 and was
+closed). Mason judged that cost disproportionate to a race that needs a user who does not exist.
+
+**Operative rule.** This acceptance is scoped to **this migration's apply window only**. It is not
+a precedent for single-transaction cutovers generally, and it does not apply if the facts change.
+**If `restore_quote_version` or `create_quote_version` ever comes into regular use, a re-emission of
+either function must use a two-phase drainable cutover** — re-read the two counts above before
+assuming this entry still holds. The one-time mitigation available at apply time is to apply during
+a period of no user activity, which costs nothing and removes the window in practice.
+
+**Not accepted, and fixed in the same PR.** The two lower-severity findings were real and cheap, so
+they were corrected rather than accepted:
+
+- `scripts/db-invariant-sweeps/predicates/quote-versions-rpc-owned.sql` proved the trust-marker
+  `UPDATE` existed with the reviewed spelling but never that it ran **after** the owner-side writer.
+  A re-emission could have selected an arbitrary legacy row into `v_version_id`, run that exact
+  `UPDATE` first, and left the standing sweep green while blessing an untrusted snapshot. Now pinned
+  positionally (owner impl call → `v_version_id` derived from its result → marker `UPDATE`), the
+  same technique the restore-side contract already used. **Mutation-tested against live PostgreSQL
+  17.6:** the real body returns true; the reordered attack body returns false.
+- `scripts/smoke/smoke-quote-version-restore-trust.sql` selected its fixture on
+  `quote_product_draws.quantity_drawn > 0`, which is not the predicate the restore path enforces.
+  `_restore_quote_version_owner_impl` raises `QUOTE_RESTORE_BLOCKED_BY_DRAW` from an unfiltered
+  `order_items → quote_items` join, so a quote whose draws were later cancelled or voided would be
+  admitted by the fixture and then rejected by the guard, reporting `SMOKE_FAIL` on a correct
+  migration. The fixture now mirrors the guard's own predicate.
+
+**Why this entry exists rather than a clean gate verdict.** The Sol gate cannot return CLEAN on a
+defect the owner has chosen to accept — no amount of re-running converges, because the finding is
+correct and the code deliberately still contains it. Per the standing pattern for owner decisions
+the adversarial gate cannot resolve, the decision is recorded here and the BLOCKERS verdict stands
+on the record alongside it. Do not re-run the gate expecting a different answer, and do not edit the
+migration to silence it.
+
+---
+
+## 2026-08-26 — Return credits belong to the current crop season
+
+**Source:** Mason's in-chat decision while rebuilding PR #361.
+**Decision:** A return credit uses the current Crop RX business season when it is issued; it does not
+restate the customer year-end summary for the original sale season. The business date is explicitly
+derived in `America/Chicago`, rather than inheriting the database session's UTC date at the season
+boundary.
+**Why:** Keeping the credit in the current season is simpler to explain and preserves previously
+generated customer summaries.
+**What this forbids/implies:** A late return can create negative product usage in the current
+season even when the original purchase was in a prior season. That is an accepted reporting
+tradeoff; company P&L and monthly reports likewise recognize the credit in its current period.
+
+---
+
+## 2026-08-26 — Ignored tool output is outside the local content-scan boundary until Git-visible
+
+**Source:** Mason's requested narrow harness-efficiency pass, measured against the remaining
+pre-push containment bottleneck after PR #484.
+
+**Decision.** Descendants of the existing explicit top-level `TOOL_OWNED_IGNORED_PREFIXES` are
+excluded from `git ls-files --others --ignored` enumeration. This is a source-boundary decision,
+not a scanner exemption: no content bytes are opened for a file that is both ignored and confined
+to one of those exact generated/dependency roots. If the same file becomes tracked, staged, or
+force-added, the index and outgoing-history paths inspect it normally and block private markers or
+uninspectable archives. Nested lookalikes such as `packages/worker/node_modules/` remain scanned,
+as do exact root endpoint files such as a file literally named `dist`. Candidate scanning,
+double-read change detection, missing-entry recovery, untrusted-remote fallback, and commit-range
+coverage are unchanged.
+
+**Why.** The installed-worktree baseline spent 405,535 of 434,901 ms rereading 48,006 ignored
+paths, predominantly 47,989 dependency files; Git enumeration alone was under one second. The
+same benchmark after the boundary change took 37,468 ms total and 220 ms in the worktree scan,
+with 2,815 candidates instead of 50,802. The local disk scan is advisory; the durable push
+boundary is Git-visible content plus the protected GitHub review/CI path. Reading hundreds of
+megabytes that Git will not export consumed minutes without strengthening that boundary.
+
+**Operative rule:** do not broaden these excludes by path segment, pattern inference, or dynamic
+ignore rules. New roots require an explicit list change, a nested-lookalike test, proof that
+force-add is denied, red/green mutation proof, and a retained same-worktree benchmark.
 
 ---
 
@@ -102,7 +595,10 @@ local state, both invisible to every file-watching guard because neither is a fi
 - `core.hooksPath` in one worktree's config pointed at a **separate checkout outside this
   repository** (`<other-repo-root>/.husky`), so a commit there would have run that repository's
   pre-commit hooks instead of this one's. One worktree of ~37 was affected. **Repointed to
-  `<repo-root>/.husky/_`.**
+  `<repo-root>/.husky/_`.** *(Superseded 2026-08-31 — see below. `.husky/_` was the wrong target:
+  it is generated by `npm install` and gitignored, so in a worktree that never ran an install it
+  does not exist and git runs no hook at all, silently. The repository-wide value is now the
+  tracked `.husky`.)*
 
 This is the PR #432 threat class — hook trust bound to the wrong repository, and a subvertible
 certifying gate — arriving live through a route none of its five splits covered. It reinforces
@@ -116,10 +612,25 @@ is required, because a repository or user setting `status.showUntrackedFiles=no`
 enumerate every configured hook path with
 `git config --show-origin --show-scope --get-all core.hooksPath` and confirm the effective value
 from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
-stop-and-report. Checking `config.worktree` alone is insufficient — `core.hooksPath` also takes
+stop-and-report, **and any value that resolves to a directory without `pre-commit` and `pre-push`
+in it as the same class of finding** — a missing hook is skipped in silence, so absent guards and
+foreign guards look identical from the command line. `npm run agent-health` now reports this as
+`Git hooks installed`. Checking `config.worktree` alone is insufficient — `core.hooksPath` also takes
 system, global and local scope, and precedence decides which one wins. (Verified 2026-08-25: a
 single worktree carried two configured values, at `local` and `worktree` scope, so a
 worktree-only inspection sees one of them.)
+
+---
+
+## 2026-08-25 — The verified PR 361 E2E credit-demo rows were disposable test data
+
+**Decision:** Mason directed permanent deletion of two verified E2E invoices plus their related credit
+application, identified in the owner-approved maintenance instruction; their customer must remain.
+Exact production record identifiers are intentionally withheld from this public repository.
+**Why:** all three rows were explicitly marked `[E2E]`, distorted recognized-invoice reporting,
+and were backed up and dependency-checked before the exact-row purge.
+**What this forbids/implies:** this is not general deletion authority; only these three IDs were
+approved. The 2026-08-25 purge left both invoice/application counts at zero and the customer at one.
 
 ---
 
@@ -151,6 +662,34 @@ draws paused" describe the rollout window and are superseded by this entry.
 
 ---
 
+## 2026-08-25 — PR #403 closed: the live-ledger recovery exception is NOT in force
+
+**Source:** Mason's explicit approval to close, 2026-08-25, after a triage review against `main` at
+`43e141ab`. Evidence:
+<https://github.com/masonwells1/CRX_Manager_V1.0/pull/403#issuecomment-5416488045>
+
+**Decision.** PR #403 ("narrow wrapper-verified recovery attestation for ledger-proven migrations")
+is closed and will not merge. The narrow live-ledger recovery exception it existed to establish —
+letting an already-applied migration be recovered to Git without its already-live SQL blocking the
+push proof — is therefore **not in force**, and no entry approving it exists on `main`. Reasons: the
+one recovery it was built for was already done by hand on 2026-08-14 (commit `3a2a0ca0`, via
+PR #392) without loosening the push-proof gate; the need did not recur across the 188 commits since;
+and the attestation machinery needed five Sol adversarial rounds before it was no longer forgeable,
+where repo precedent treats 3+ rounds as a size signal (#423 took 8, #432 stalled at 4).
+
+**Operative rule.** A future byte-verbatim recovery uses the manual path proven on 2026-08-14, or
+requires a fresh owner decision. Do not cite the exception as approved policy, and do not treat #403
+as unfinished work to resurrect. `scripts/write-recovery-attestation.mjs` is absent from `main` by
+decision, not by oversight.
+
+**Supersedes.** The forward-reference inside the 2026-08-14 entry "One-time override:
+`20260812115238`'s order-line map is published in full", which described the exception as settled
+but pending #403's merge. That paragraph was corrected in place on 2026-08-25 (PR #478); this entry
+records the reversal in date order per this file's own append-a-new-entry convention. The
+publication override itself stands unchanged and never depended on #403.
+
+---
+
 ## 2026-08-24 — CodeRabbit reviews assertively and enforces the Hard Rules, without a hard merge block
 
 **Source:** Mason's in-chat decisions, 2026-08-24, after a live audit of the CodeRabbit dashboard,
@@ -176,13 +715,10 @@ the entry below.
    `override_requested_reviewers_only` stays **false** on purpose: false lets the PR *author*
    override a failing check, and Mason authors every PR here.
 
-**The limit, stated so nobody oversells it later.** These produce a red X and a withheld approval.
-They do **not** disable the merge button. `protect-main` requires exactly `Vercel`,
-`Lint, Type Check, Test, Build`, and `SQL Migration Validation`, with
-`required_approving_review_count: 0` and CodeRabbit absent from the required list. The status
-context name is confirmed to be `CodeRabbit`, so promoting it is now only a decision, not a
-discovery — deferred deliberately until the error-mode checks have run long enough to show their
-false-positive rate, and it needs Mason's explicit OK when that time comes.
+**Historical enforcement limit (superseded 2026-08-28).** At this decision's date these produced a
+red X and withheld approval but did not disable the merge button because GitHub required zero
+approvals. Mason's 2026-08-28 decision above replaced that posture with one required current
+approval, stale-review dismissal, last-pusher separation, and administrator enforcement.
 
 **Also settled: the dashboard is inert and must not be used.** CodeRabbit config sources do not
 merge. The repo `.coderabbit.yaml` outranks the repository and organization UI settings, and any
@@ -301,6 +837,25 @@ put to him: *should `Current` mean "not yet due" only, with a new `1-30 Days` co
 **Status.** Recorded only; **no code, SQL, or migration has been written.** Scope note for the
 implementing session: `.claude/handoffs/SCOPE-ap-aging-days-past-due.md`. Full finding: HIGH 1 in
 `docs/audits/gauntlet/2026-08-23-section-09-purchase-orders-receiving-vendor-bills-ap-refresh.md`.
+
+---
+
+## 2026-08-26 — AP aging uses five due-date buckets; Current means not yet due
+
+**Source:** Mason's in-chat decision in the Section 9 remediation task, replying `ai approve` to
+the recommended fifth-bucket proposal.
+
+**The decision.** `Current` means not overdue: bills due on or after the Chicago report date. A
+separate `1-30 Days` bucket holds bills one through 30 days past due, followed by `31-60`, `61-90`,
+and `Over 90`. The UI labels the first bucket `Current (Not Due)` and the CSV states the same basis.
+
+**Boundary contract.** Due today is current. Days 1 and 30 are `1-30`; days 31 and 60 are `31-60`;
+days 61 and 90 are `61-90`; day 91 and later are `Over 90`. Age is always calculated from
+`vendor_bills.due_date`, never `bill_date`.
+
+**Why.** This keeps a bill inside its agreed payment terms out of overdue totals without combining
+it with a bill that is already late. It supersedes only the still-open bucket-mapping portion of
+the 2026-08-24 entry above; the days-past-due basis remains unchanged.
 
 ---
 

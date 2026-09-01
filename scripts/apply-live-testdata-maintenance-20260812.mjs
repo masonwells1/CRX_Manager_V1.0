@@ -19,8 +19,8 @@ const SNIPPETS = {
   classify: "docs/maintenance/2026-08-12-live-testdata-classify.snippet.txt",
 };
 
-const EXPECTED_INPUT_BLOB = "c8bec70830c643e474831985f5e6c3bd16630386";
-const EXPECTED_OUTPUT_BLOB = "7bca8dce4fe2f58afabdbd09d1b31ecef61ce520";
+const EXPECTED_INPUT_BLOB = "419f4e8fc0b08566c6ebd139dde312d7553eb3f7";
+const EXPECTED_OUTPUT_BLOB = "bf5aded1d1445ae76d3fff4780ace71ffb11dee0";
 const EXPECTED_SNIPPET_SHA256 = {
   constants: "53c658d7eb8aab2a60b4314f533f61b7472f8d686f4b81d483d57b20950022a9",
   helpers: "8fa108c52b4423b7d269d94d19b91726fe880b6d2ea403c5c9665c686b532398",
@@ -96,12 +96,21 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // keeps this branch's blob. Inputs verified against the merged working tree
   // with `git hash-object`; outputs taken from the producer test's printed
   // candidate, not hand-computed.
+  // pushLib re-pinned 2026-09-01 (PR #502, merge of origin/main): the
+  // pending-set apply guard taught codex-push-lib.mjs to resolve the session's
+  // own checkout before the preflight, so the file's blob moved. main had not
+  // touched codex-push-lib.mjs since this branch forked, so the merge produced
+  // this branch's blob rather than a third one; verified with `git hash-object`
+  // against the merged working tree. codexGuard is untouched by this PR and
+  // keeps main's blob. The risky producer-path anchor this transform verifies is
+  // unchanged, so the transform is still identity and input == output. Output
+  // taken from the producer test's printed candidate, not hand-computed.
   codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
-  pushLib: "d0f68482d54e9b0381f760f44b094f290b8599e4",
+  pushLib: "ccc813f3241750f5feee81e3e03a7a91e10055fb",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
-  pushLib: "d0f68482d54e9b0381f760f44b094f290b8599e4",
+  pushLib: "ccc813f3241750f5feee81e3e03a7a91e10055fb",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

@@ -25,7 +25,9 @@ ap_functions AS (
     AND p.proname IN (
       'create_vendor_bill',
       'get_ap_aging',
-      'update_vendor_bill'
+      'update_vendor_bill',
+      '_section9_create_vendor_bill_intent_impl_20260826',
+      '_section9_update_vendor_bill_intent_impl_20260826'
     )
 )
 SELECT
@@ -97,13 +99,25 @@ SELECT
   'create_vendor_bill lacks PO lock/status serialization' AS reason
 WHERE NOT EXISTS (
   SELECT 1
-  FROM ap_functions
-  WHERE proname = 'create_vendor_bill'
-    AND prosrc ~
+  FROM ap_functions implementation
+  WHERE implementation.proname IN (
+      'create_vendor_bill',
+      '_section9_create_vendor_bill_intent_impl_20260826'
+    )
+    AND implementation.prosrc ~
       'FROM public\.vendors[[:space:]]+WHERE id = p_vendor_id[[:space:]]+AND deleted_at IS NULL[[:space:]]+FOR UPDATE'
-    AND prosrc LIKE '%FROM public.purchase_orders%FOR UPDATE%'
-    AND prosrc LIKE '%PO_NOT_BILLABLE%'
-    AND prosrc LIKE '%submitted%partially_received%fully_received%'
+    AND implementation.prosrc LIKE '%FROM public.purchase_orders%FOR UPDATE%'
+    AND implementation.prosrc LIKE '%PO_NOT_BILLABLE%'
+    AND implementation.prosrc LIKE '%submitted%partially_received%fully_received%'
+    AND (
+      implementation.proname = 'create_vendor_bill'
+      OR EXISTS (
+        SELECT 1
+        FROM ap_functions wrapper
+        WHERE wrapper.proname = 'create_vendor_bill'
+          AND wrapper.prosrc LIKE '%public._section9_create_vendor_bill_intent_impl_20260826(%'
+      )
+    )
 )
 
 UNION ALL
@@ -129,11 +143,23 @@ SELECT
   'update_vendor_bill does not lock before checking old and new periods' AS reason
 WHERE NOT EXISTS (
   SELECT 1
-  FROM ap_functions
-  WHERE proname = 'update_vendor_bill'
-    AND strpos(prosrc, 'FOR UPDATE') > 0
-    AND strpos(prosrc, 'check_period_open(v_bill.bill_date)')
-        > strpos(prosrc, 'FOR UPDATE')
-    AND strpos(prosrc, 'check_period_open(p_bill_date)')
-        > strpos(prosrc, 'FOR UPDATE')
+  FROM ap_functions implementation
+  WHERE implementation.proname IN (
+      'update_vendor_bill',
+      '_section9_update_vendor_bill_intent_impl_20260826'
+    )
+    AND strpos(implementation.prosrc, 'FOR UPDATE') > 0
+    AND strpos(implementation.prosrc, 'check_period_open(v_bill.bill_date)')
+        > strpos(implementation.prosrc, 'FOR UPDATE')
+    AND strpos(implementation.prosrc, 'check_period_open(p_bill_date)')
+        > strpos(implementation.prosrc, 'FOR UPDATE')
+    AND (
+      implementation.proname = 'update_vendor_bill'
+      OR EXISTS (
+        SELECT 1
+        FROM ap_functions wrapper
+        WHERE wrapper.proname = 'update_vendor_bill'
+          AND wrapper.prosrc LIKE '%public._section9_update_vendor_bill_intent_impl_20260826(%'
+      )
+    )
 );

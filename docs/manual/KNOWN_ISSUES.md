@@ -1,15 +1,15 @@
 # Known Issues — Consolidated
 
-
-**Last verified: 2026-08-25 UTC, read-only live re-read after the save_job chem-unit apply.**
-**Live ledger is 976 rows, `max(version)` `20260825142708`, effective ordering high-water
-`20260820120000`** (name `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
-That migration applied live on 2026-08-25 on Mason's explicit in-chat approval; because its ledger
-`name` carries a `20260820120000` prefix, the effective ordering high-water advances past the
-draw-down chain's `20260819232000` even though the assigned `version` is later. History row 891
-and the header of `docs/reference/migration-history.md` carry the full apply record.
-(Superseded reading, kept for provenance: 975 rows / `max(version)` `20260825034622` /
-high-water `20260819232000` — correct until the save_job apply, one migration behind live.)
+**Last verified: 2026-08-27 11:43:53 UTC for migration-ledger and schema facts only.** A durable
+read-only capture records **978 ledger rows**. The matching live-introspection registry records
+`migrations_high_water` **`20260827113443`**, latest applied authored name
+`20260826220000_quote_version_restore_trust_boundary`, and effective ordering high-water
+**`20260826220000`**. It also records `quote_versions.restore_trusted_at`. The earlier 976- and
+977-row readings are superseded. This pass does not re-certify every issue narrative below or
+claim a fresh post-apply read of function bodies, grants, or operational counts.
+The PR #361 function/schema surface was separately refreshed from a live schema dump on 2026-08-27;
+that evidence supports the six pending return-credit candidates without superseding the newer ledger
+capture above.
 All four migrations
 of the draw-down chain are applied live — the cutover barrier (2026-08-24 midday, version
 `20260824185408`) and, later that day with Mason's explicit in-chat approval, the tier split
@@ -17,6 +17,117 @@ of the draw-down chain are applied live — the cutover barrier (2026-08-24 midd
 intent binding (`20260825034622`). See the rollout block at the top of
 `docs/reference/migration-history.md`. This pass re-read the ledger and updated the draw-down
 entries only; it does not re-certify unrelated issue narratives below.
+
+**Section 9 stamp: 2026-08-26 UTC, limited read-only remediation refresh; migration ordering
+re-checked live 2026-08-31.** Live catalog evidence from the 2026-08-26 read confirms the three
+Section 9 HIGH findings are still production risks until the pending migrations apply:
+`get_ap_aging(date)` still uses `bill_date` and has no `1-30` return column,
+`get_ap_dashboard_summary()` still uses a rolling 30-day due-this-month window, and the affected
+AP/receiving mutators are not yet wrapped by the new exact-intent contract. The cutover preflight
+found zero active unbound receipts across those six operations on that same 2026-08-26 read. The
+two unchanged SQL bodies are stamped `20260826221000` and `20260826222000`. The
+`20260826220000` quote-trust prerequisite they sit behind is **no longer pending** — a read-only
+`list_migrations` on 2026-08-31 returned 978 ledger rows, `max(version)` `20260827113443`, and
+effective ordering name high-water `20260826220000`, with neither Section 9 stamp present. Both
+therefore remain strictly forward of the live name high-water; re-read the ledger immediately
+before any apply. The superseded 977-row/`20260826150000` figures this paragraph previously
+carried are covered by the stamp above. No unrelated issue entry was re-read; its own dated
+evidence remains authoritative.
+
+**OPEN — return credits do not reverse COGS until the PR 361 rebuild is applied.** Live
+`_issue_return_credit_impl` still creates only the credit-memo header and writes no
+`invoice_items.cost_cents`; live PNL still recognizes only `posted`, and monthly reporting still
+omits `paid`. Production currently has zero credited returns, so the defect is real but latent rather
+than an existing wrong report. A 2026-08-27 read-only check found one open restock row: it is exactly
+the pinned legacy `15 ea` RMA with the authoritative `2.5 Gal` conversion, leaving zero unhandled
+warehouse-unit mismatches. Pre-apply candidates `20260827041000`, `20260827041100`,
+`20260827041200`, `20260827041300`, `20260827041400`, and `20260827041500` contain the durable
+repair and fail closed if the zero-credit/zero-legacy-restock assumptions or either delivery-invoice
+implementation contract stop being true. Do not call this resolved: all six migrations remain
+unapplied and have not been verified live. Mason deferred their production rollout on 2026-08-31: the
+source files remain unchanged under `supabase/migrations/`, but they still need a separately
+authorized future push/apply. Rerun the then-current safety gates; if newer migrations have overtaken
+their timestamps, restamp and re-review the full pinned chain before applying all six files in order
+through the repository's guarded migration runner or the Supabase migration operation, never through
+the ad-hoc SQL channel.
+The first migration blocks new return-credit issuance until the second migration's postflight succeeds,
+closing the otherwise unsafe commit gap between the two files. They must be applied back-to-back. If the
+second fails, leave the barrier active, repair the drift it reports, and rerun it; an emergency removal
+needs its own reviewed forward migration and would knowingly reopen the zero-COGS defect.
+Both files bound their table-lock wait at five seconds so a stuck reader causes a clean apply failure
+instead of leaving Returns queued indefinitely. The new validated `invoice_items` constraints hold
+that table lock for the validating scan itself; schedule the back-to-back apply in the maintenance
+window even though waiting to acquire the lock is bounded. The second blocks a draft source invoice only when
+recognizing it would expose an uncosted, restocked return quantity; a fully costed prior return does not
+block a later delivery invoice. Posting uses the same ordered advisory-lock protocol as credit issuance
+and fails fast on contention. The migration also excludes new credit-memo lines from delivery billing
+allocation so a return cannot reopen customer billing headroom.
+The third migration also excludes the order-linked credit memo from both delivery invoice coverage
+checks, so it cannot suppress a later delivery's automatic invoice or block manual recovery of an
+already-completed unbilled delivery.
+The fourth applies that same rule to the main dashboard action queue and to void/cancel invoice-review
+warnings, and makes the automatic completion path ignore soft-deleted invoices. It preserves the
+ordinary hard-delete path for unrelated invoices; the disposable proof executes that branch with a
+real draft header and cascaded line item.
+The fifth aligns both order-level invoice creators with the same active, non-deleted, non-credit
+predicate, so the server cannot refuse the billing-recovery action the UI correctly exposes.
+Immediately before the maintenance-window apply, rerun the open-restock inventory-unit predicate and
+all 29 read-only PR #361 invariant predicates. If any new unhandled mismatch exists, stop before row
+894; do not intentionally raise the cutover barrier until the row is repaired and the predicates are
+clean in that same window.
+Because every recognized-status transition must coordinate with a return credit that could start at
+the same instant, two people posting invoices for the same order line concurrently can make one post
+fail cleanly with a wait-and-retry message even when no return credit exists yet. No data is at risk;
+retry the refused post after the other finishes.
+
+The source-line foreign key is intentionally retained after a credit is voided or unapplied. It is an
+accounting audit link, so a source invoice that has ever funded a return credit cannot be hard-deleted
+or re-saved: the general invoice writer rebuilds its line items, and the retained credit history refuses
+that delete-and-reinsert cycle. Keep the source invoice unchanged. If an edit is genuinely required,
+first void the return credit and then permanently delete that voided credit memo so its line-item link is
+removed; only then re-save the source invoice. Clearing the link while keeping the credit memo would
+make later reapply/reissue allocation ambiguous. The operator error sanitizer explains both the delete
+and re-save refusal. This restriction also applies to a zero-COGS damaged/non-restocked return credit:
+the source link is retained as customer-credit audit history even though no inventory value was reversed.
+
+**CLOSED IN THE SIX-FILE CANDIDATE; LIVE REMAINS OLD UNTIL APPLY — general Invoice Detail can strip return-cost lineage.** The live
+`_save_invoice_scoped_impl` rebuilds `invoice_items` without `order_item_id` and re-derives cost from
+the product's current cost. Editing a delivery/order-generated draft through the general Invoice
+Detail page can therefore erase the historical source line that the PR #361 allocator needs; a later
+return would refund revenue but conservatively reverse zero COGS, understating profit with no runtime
+error. Migration `20260827041500_preserve_generated_invoice_lineage_and_finish_cutover.sql` now
+implements the approved durable fix: the client returns existing line ids, the server verifies every
+order-linked line and forbids product/unit/order-line substitution or deletion, then restores the
+server-held line id, `order_item_id`, historical `cost_cents`, `created_at`, tote, vendor, and warehouse
+after the legacy rewrite. The rollback-only chain proves edit -> post -> overdue -> return -> credit
+retains the exact 600-cent unit cost. Merging the candidate does not change live behavior; the fix
+becomes active only when all six reviewed migrations are applied in one guarded maintenance window.
+
+After the approved live apply, regenerate the live schema registry and Supabase-derived type artifacts,
+and confirm both nullable ledger columns (`invoice_items.return_credit_cogs_cents bigint` and
+`invoice_items.return_credit_source_item_id uuid`) are present before declaring the rollout closed.
+
+**ACCEPTED POLICY — late return credits stay in the current crop season.** Mason chose this on
+2026-08-26 to keep prior customer year-end summaries stable and the rule simple. Consequently, a
+current-season summary can show negative product usage when the original purchase occurred in a
+prior season. Do not "correct" that by moving the credit backward; changing the policy requires a
+new owner decision.
+
+**EXPECTED REPRINT CHANGE — paid/overdue invoice repair.** The PR 361 report repair also makes old
+year-end reports include all recognized `posted`, `overdue`, and `paid` invoices. Regenerating a
+prior-season report can therefore differ from an older printed copy that incorrectly omitted paid
+or overdue invoices. That correction is separate from credit attribution: a 2026 return credit stays
+in 2026 and does not move the credit into the original sale season. The same migration also changes
+invoice-basis P&L and monthly COGS to round each invoice line to exact whole cents before summing; this
+is required so a return can never reverse more COGS than those reports recognized, but it means a
+reprinted P&L or monthly summary containing fractional-quantity lines can differ by a cent from an
+older copy.
+**RETIRED 2026-08-27 — Patrol is no longer an active CRX workflow.** Its command, generated
+skill adapter, runtime, monitor, classifier, renderer, trusted-exec layer, and dedicated tests
+were removed as part of the first harness-simplification tranche. The Patrol discussion below is
+preserved only as historical evidence; its file paths and operating instructions no longer exist.
+Use the smaller existing status/workspace tools for targeted read-only checks instead of rebuilding
+an always-on owner queue monitor.
 
 
 **RESOLVED 2026-08-25 — the two `/patrol` findings first deferred at the round-3 review cap
@@ -117,6 +228,40 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-26 — the quote-version trust chain is whole-body hash-pinned in THREE files; any re-emission must update every pin site in the same change
+
+**Apply-order dependency with the PR #361 successor:** the merged-but-unapplied
+`20260826220000_quote_version_restore_trust_boundary.sql` must apply before the six pending
+`20260827041000`–`20260827041500` return-credit migrations. Reversing that order would move the
+high-water past the quote security migration and wedge it again. If the quote migration cannot apply
+first, it must be renumbered above the new high-water before either chain is released.
+
+**Non-restocked return policy:** damaged or otherwise non-restocked returns still refund the customer,
+but intentionally reverse zero COGS because no saleable inventory value returned to Crop RX. This is
+the conservative direction: revenue falls while profit is not inflated by an inventory-value reversal.
+The disposable PR #361 proof executes this branch and pins the credit to `-1000` revenue and `0` cost.
+
+PR #401 rounds 8-10 pinned the ENTIRE normalized bodies (length + md5, normalization
+`md5(btrim(regexp_replace(prosrc, '\s+', ' ', 'g')))`) of all five chain routines —
+`create_quote_version`, `_restore_quote_version_below_cost_impl_20260810`,
+`_create_quote_version_owner_impl`, `_restore_quote_version_owner_impl`, and the public
+`restore_quote_version` wrapper. This is deliberate: a prefix/region pin left the tail open to
+an appended `EXCEPTION` handler that could catch `QUOTE_VERSION_LEGACY_UNTRUSTED` and restore
+legacy snapshots, and the wrappers trusted deeper links nothing pinned (all proven live
+2026-08-26, both ways). **Consequence:** any future legitimate re-emission of ANY of the five
+makes the standing sweep report a violation until its pin constants are recomputed against live
+and updated in **all three pin locations in the SAME change**:
+1. `scripts/db-invariant-sweeps/predicates/quote-versions-rpc-owned.sql` (the standing sweep —
+   its violation reasons print expected vs measured values, so an operator can tell an expected
+   pin update from a real bypass);
+2. the immutable applied migration
+   `supabase/migrations/20260826220000_quote_version_restore_trust_boundary.sql` as the historical
+   pin source; future re-emissions must place the new precondition/postcondition pins in a new
+   migration because applied migration files are never edited;
+3. `src/lib/quoteVersionWriteBoundary.test.ts` (the mirror test, which binds each pin to its
+   own predicate branch).
+That forced review is the guard working, not a false positive.
+
 ## OPEN 2026-08-23 — `codex review <scope>` self-recurses, kills its own process, and exits 0
 
 **Severity: HIGH. Not a crash — a silent false "gate passed".** `codex review --base origin/main`
@@ -169,7 +314,7 @@ kill attempts was stopped only incidentally, by the maintenance-producer guard r
 command's shape rather than its target. Wiring that guard touches both hook manifests and needs
 Mason's approval.
 
-## OPEN 2026-08-20 — the Phase 3C containment scanner walks `dist/`, so a concurrent rebuild refuses the push
+## RESOLVED 2026-08-26 — Phase 3C no longer walks top-level ignored tool bulk
 
 **Severity: MEDIUM. Not a containment hole — a false refusal.** The pre-push hook
 (`.husky/pre-push:7`) runs `scripts/check-supplier-pricing-phase3-private-artifacts.mjs`, which
@@ -192,20 +337,25 @@ session in the same checkout — the scanner throws and the push is refused with
 "containment failed"**, which reads as "a private packet leaked" when nothing leaked. Phase 3C's
 containment scan is ~98 seconds on its own, so the window is wide.
 
-**Verified from source 2026-08-20** (the call chain and the missing exclusion, cited above); the
-crash itself was **observed directly in an earlier session** and was not reproduced here. Nothing
-about this weakens containment: `dist/` files still get the structural-signature scan, and a
-force-added file becomes tracked and gets the full scan regardless.
+**Historical verification from source 2026-08-20** (the call chain and the missing exclusion,
+cited above); the crash itself was **observed directly in an earlier session** and was not
+reproduced here. At that time `dist/` files still received the structural-signature scan. The
+resolution below deliberately changes that boundary for ordinary ignored descendants while
+retaining the full scan once a file becomes Git-visible.
 
-**Likely fix, not yet written and deliberately not bundled with the 2026-08-20 fleet-scan repair:**
-tolerate `ENOENT` across the **whole** pre-open sequence above — not just the `stat`/`open`
-boundary — for `source === 'ignored'` tool-owned paths, **and re-check that the path is still
-absent from the index before skipping it**. That re-check is the load-bearing half: the candidate
-list is collected before scanning, so "it vanished" and "it was force-added and is now tracked"
-are indistinguishable at scan time. Without it, "a file that vanished mid-scan cannot be a staged
-private packet" is an overclaim, not a guarantee. The alternative — widening the exclude pathspec —
-would stop scanning `dist/` altogether and is a real loss of coverage. Whoever picks this up should
-confirm which the containment charter actually wants before choosing.
+**Resolution and chosen boundary:** ignored-file enumeration now excludes descendants of the
+guard's existing explicit top-level dependency/build/test-output roots. This deliberately gives up
+structural scanning of ordinary ignored descendants under those roots. It does **not** exclude a
+root endpoint, a nested lookalike, or anything Git can see: tracked, staged, force-added, index,
+outgoing-commit, and history content remains scanned. The existing candidate double-read and
+vanish/recreation checks are unchanged. The owning suite mutation-fails when this pathspec boundary
+is removed and proves that a force-added private packet under every excluded root is still denied.
+
+Measured on the same installed worktree, the real containment path fell from 434,901 ms to 37,468
+ms overall (a 91.4% reduction in elapsed time), while worktree scanning fell from 405,535 ms to 220 ms.
+These timings cover the real scanner path, not the separate exhaustive cross-platform regression suite.
+Reopen this issue only if a Git-visible artifact under an excluded root escapes scanning, or if an
+excluded root is widened without equivalent tracked/index/history and boundary regression proof.
 ## OPEN (WONTFIX for now) 2026-08-20 — `review-proof-guard` denies destructive shell commands that NAME a worktree path
 
 **Severity: LOW — cosmetic, with a zero-cost workaround. Mason chose "document, don't fix"
@@ -1548,7 +1698,9 @@ Keys in THIS repo the proposed list would flag:
 => every push from this repo would DENY
 ```
 
-That collision is why this is parked rather than patched. The setting cannot be refused by name the way `core.sshCommand` can: the repo's own tooling sets it, so the guard needs to tell the committed `.husky/_` path from an inherited or absolute attacker path — which is the **same approved-value notion** the two rewrite instances above need, in a third place. Fix all three together.
+That collision is why this is parked rather than patched. The setting cannot be refused by name the way `core.sshCommand` can: the repo's own tooling sets it, so the guard needs to tell the repository's own hook path from an inherited or absolute attacker path — which is the **same approved-value notion** the two rewrite instances above need, in a third place. Fix all three together.
+
+**Value changed 2026-08-31 — still parked, but the approved value is now cleaner.** The repository-wide setting is `core.hooksPath=.husky` (the *tracked* directory), not `.husky/_`. The quoted reproduction above predates that change; the classifier gap it describes is unaffected, because `core.hooksPath` is still absent from `EXECUTABLE_TRANSPORT_KEYS` and still allows. What improves is the fix's shape: the legitimate value is now a single committed path that is present in every checkout, rather than a generated, gitignored one that is absent from any worktree that never ran `npm install`. See `DECISION_LOG.md` (2026-08-31, `core.hooksPath` entry) for why the old value was silently disabling the guards it was supposed to install.
 
 Failure direction differs from the other two and is worth stating plainly: these **allow** rather than refuse, so this instance is a genuine hole rather than an over-refusal. It is bounded by the fact that setting the config at all requires the ability to run commands in the session already.
 
@@ -2635,6 +2787,7 @@ The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). The
 - **Offline work recovery database foundation and browser rollout are live; phone/device E2E remains pending** — all four receipt migrations, including the corrective target-row lock, were applied and verified on 2026-07-14, and PR #124's browser rollout landed on `main` before the 2026-07-15 offline verification pass. Browser retention until proven success, distinct cap/backlog handling, a safe device review panel, audited office `already_completed` / `abandoned` resolution, and cross-tab replay protection are now in code. A saved action that lacks an original queue-time target snapshot is intentionally sent to office review rather than deriving a new baseline after reconnect; therefore snapshot conflict coverage is complete only for actions that captured the snapshot when queued. Still deferred: signature/photo persistence, idempotent email/notification replay, operation-specific conflict preconditions, automatic device discovery of an office resolution, and a general duplicate-action policy. Browser storage remains device-local until the phone reconnects and stages its permanent server receipt, so destroying or clearing that storage before reconnection can still lose work. Source: `docs/audits/2026-07-15-offline-stage1b-rollout-verification.md`, `docs/audits/2026-07-14-offline-receipt-browser-office-resolution-proof.md`, and `docs/roadmap/offline-work-stage1b-receipt-design-2026-07-13.md`.
 - **Live `schema_migrations` having more entries than files on disk is OLD, pre-existing drift** — do not treat it as a new problem. Only reconcile migrations newer than the point where the current branch diverged from `origin/main`. (Session memory: `project_migration-disk-vs-live-drift`.)
 - **Page-render tests pass in isolation but flake in the full `vitest` suite** — fix with `waitFor`/`findAllBy`, not synchronous `getBy`. See `docs/reference/gotchas.md` and session memory `project_page-test-fullsuite-flake`.
+- **A test that clicks Save on `JobDetail` must RETRY the click, not just wait longer** — a *third* root cause, distinct from both flake classes around it. `handleSave` fails closed while the label-rate policy is still loading: it toasts "Checking the label-rate policy — try Save again in a moment." and returns. Those lookups (`guardrailModeLoaded`, `jobLabelsLoaded`) are separate queries from the job/products fetch that renders the page, so awaiting on-screen content does **not** mean the save gate is open. A single `fireEvent.click` landing in that window emits a non-matching toast and returns — and nothing re-fires the save, so a `waitFor` on the expected toast spins until it times out, surfacing as `AssertionError: expected false to be true`. Neither a longer timeout nor `waitFor` can fix this; only a retry can. `JobDetail.billingHazard.test.tsx` routes all nine save clicks through a `clickSave()` helper that re-clicks while the gate is still closed (safe: while closed the save never proceeds, so it cannot double-save), and its mock deliberately holds the by-id products query open so every save-clicking test exercises the fail-closed branch instead of racing past it. Hold it with a **deferred promise, not a timer**: a fixed delay silently stops testing anything once a machine is slow enough that the query resolves before the first click, and `clickSave()` therefore also *asserts* the blocked attempt happened rather than assuming it. Verified 2026-08-25: with that harness and a single un-retried click, 5 tests fail with the production symptom; with the helper, all 14 pass. If you add a save-clicking test to a page with a load-gated `handleSave`, use the same helper shape.
 - **ExcelJS workbook tests can exceed the 5s default timeout on a cold cache** — a *different* root cause from the page-render flake above, so the `waitFor` fix does not apply. The first ExcelJS load inside a worker is multi-second (7.0s measured 2026-08-25 on the first `vitest` run after a fresh `npm ci` in a new worktree) versus ~350ms once warm, so whichever test triggers that load sits right on the 5s cap and swings by an order of magnitude. Because `.husky/pre-commit` runs the full suite, a cold-cache miss hard-blocks an unrelated commit — the exact pressure toward the forbidden `--no-verify`. Fix: an explicit generous per-test timeout as the third argument to `it(...)`, never a higher global `testTimeout` (that would relax the 5s contract for the whole suite). All three ExcelJS test files now carry one — `productPricingWorkbook.test.ts` (20s/45s), `supplierPricingWorkbook.test.ts` (20s), and `productPricingSupplierEvidenceWorkbook.test.ts` (30s, added 2026-08-25 after it flaked in PR #476). Every ExcelJS load in these files happens inside a test body (no `beforeAll`/module-scope load), and tests run in file order, so the first test in each file absorbs the cold cost — that is why covering the first test per file is sufficient for the pre-commit gate. Residual: a manually filtered run (`vitest -t "…"`) that selects a *later* test in a file makes that test pay the cold load under the 5s cap; filtered runs do not gate commits, so this is accepted rather than blanket-timed-out.
 - **PWA (installed app) needs two reloads after a production deploy** to pick up a new service-worker chunk — expected behavior, not a bug to chase.
 - **Prepay bulk-apply (`apply_remaining_prepayments` / `batch_apply_all_prepayments`) is hard-disabled in production** (`RAISE 'PREPAY_BULK_APPLY_DISABLED'`, migration `20260620200000`) rather than properly fixed — the real fix needs the shelved reserved-pool redesign (§2/§4). Per-invoice `apply_prepay_to_invoice` is unaffected.

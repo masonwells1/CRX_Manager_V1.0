@@ -1,6 +1,481 @@
 # CRX Manager V1.0 — Development Changelog
 
+## 2026-08-26 — the hold latch matches only what Mason typed
+
+Two sessions could not talk to each other. A coordinator session sent a peer a
+`<cross-session-message>` about a PR escalation path — "stand down … no need to stop the
+other lane" — and the PEER's hold latched as though Mason had ordered a halt. The peer quoted
+the phrasing back; the COORDINATOR's hold latched on the same words. It then escalated to the
+point where naming the guard was enough, because `stop-wrap.mjs` contains "stop" between word
+boundaries. Net cost: multiple round-trips spent inventing substitute vocabulary ("the brake",
+"frozen/released") just to discuss the hook, and one session sitting idle with finished work
+because no message could reach it safely.
+
+Root cause: trigger-word matching read the ENTIRE inbound prompt. Envelope blocks are DATA —
+another agent's words — and a quoted span is Mason REPORTING a phrase, not issuing it. This is
+the 2026-07-04 / 2026-08-16 false-positive class again, but it could not be fixed by adding
+`cross-session-message` to `MACHINE_TAG_NAMES`: that gate is all-or-nothing, so a message where
+Mason typed "pause" AND carried a peer block would have stopped latching — the one direction
+that must never weaken.
+
+`prompt-source-lib.mjs` gains `authoredByMason(prompt)`, which removes the not-Mason spans —
+`<cross-session-message>` blocks (closed or truncated), every `MACHINE_TAG_NAMES` envelope,
+fenced code blocks, inline code spans, and markdown blockquote lines — and `hold-latch-prompt.mjs`
+matches on the remainder instead of the raw prompt. A prompt with nothing left neither latches
+NOR clears: a sibling session must not be able to release a hold Mason set, so the latch is
+his in both directions. `HOLD_RE` also stops counting stop/pause that sits inside an identifier
+(`stop-wrap.mjs`, `stop-verify.mjs`, "non-stop"); "/" is deliberately excluded from that rule so
+"does stop/pause still work?" keeps matching, and a trailing "." only reads as an extension when
+a letter or digit follows, so "please stop." is untouched.
+
+**No trigger vocabulary was removed and no latch behavior softened** — the change narrows the
+INPUT the matcher reads. `prompt-hooks.test.mjs` pins all five cases both as predicate
+assertions and as end-to-end runs of the real hook process against the verbatim incident
+payloads, checking `hold.json` on disk: Mason typing "stop" latches; a peer block does not; a
+blockquoted report does not; naming `stop-wrap.mjs` does not; and Mason's "pause" in the same
+message as a peer block still latches. A peer message is also proven not to clear a latched
+hold while Mason's own next message still does, and a source assertion pins that the hook keeps
+calling `authoredByMason(payload?.prompt)` so a future edit can't silently revert it to the raw
+prompt. Mutation-tested in both directions: restoring the raw-prompt match fails the peer-block
+case, and deleting the identifier lookarounds fails the filename case.
+
+Both hold-latch hooks were already wired on the Codex side through the portable adapter and
+still are — `scripts/agent-manifest-parity.mjs` passes, no asymmetry declared. `stop-wrap.mjs`
+was inspected and is NOT involved: it is the Stop hook that lists uncommitted work and does no
+prompt phrase matching.
+
+## 2026-08-26 — sql-safety and status-enum-check also judge the real post-edit file
+
+Follow-up closing the gap the "Migration guards judge the real post-edit file on CRLF
+worktrees" entry below left tracked: `sql-safety.mjs` and `status-enum-check.mjs` still judged
+only the Edit fragment (`tool_input.new_string`). Both have file-level exempt markers
+(`-- sql-safety: exempt-registry`; `-- status-enum-check: exempt` / `// status-enum-check:
+exempt`) that they searched for in that same fragment, so a marker already on disk was
+invisible to any Edit that didn't happen to include it — the guard (or sql-safety's
+registry-stale gate) denied the very file its marker exempts, the same deadlock class fixed
+for `grant-change-guard.mjs` and `idempotency-body-check.mjs`. A MultiEdit `edits` array also
+produced empty content and a silent allow.
+
+Both hooks now simulate Edit/MultiEdit payloads against the on-disk file via the shared
+line-ending-safe `applyEditsForAnalysis()` (`.claude/hooks/edit-splice-lib.mjs`) and judge the
+full post-edit content, exactly as `idempotency-body-check.mjs` does. `status-enum-check`'s
+file-type gating is unchanged — it still covers both SQL migrations and TS under `src/`.
+New regression tests (`sql-safety.test.mjs`, `status-enum-check.test.mjs`, wired into
+`test:correction-guards`) run isolated copies of the real hooks against crafted registries and
+CRLF fixtures in both directions — a marker-less edit to a marker-bearing file is allowed
+(deadlock fixed, including the registry-stale-gate variant), and a multi-line LF edit that
+introduces a violation into a CRLF file is still denied. Both were mutation-tested: disabling
+the full-file view fails the allow-direction tests, and swapping the normalized splice for an
+exact one fails the deny-direction tests, in both hooks. The CodeRabbit findings from the
+sibling PR #489 fix are carried over pre-emptively: a pure-deletion Edit that removes the
+exempt marker is a pinned deny (an emptiness early-exit above the reconstruction would have
+bypassed the guard — mutation-verified), and allow-side test assertions are affirmative, so
+a crashed hook's empty stdout cannot read as an allow. Round-2 parity: as in the sibling
+fix below, empty content is trusted only when it IS the real post-edit file (a Write, or a
+reconstruction that emptied a readable file) — a deletion Edit whose on-disk read failed is
+denied with retry/full-file-Write instructions instead of passing unanalyzed; the
+unreadable-file deny and the empties-a-readable-file allow boundary are pinned and
+mutation-verified in both hooks.
+
+Of the remaining fragment-only PreToolUse content guards: `rls-on-new-tables.mjs`,
+`generated-column-check.mjs`, and `actor-binding-check.mjs` have the same file-level markers
+and the same deadlock exposure — tracked as a follow-up. `money-safety.mjs` and
+`env-guard.mjs` have no file-level markers, so fragment judging can only miss cross-fragment
+context (false negatives), never deadlock.
+
+## 2026-08-25 — the routine migration door now refuses a stolen reviewer proof
+
+PR #470 closed a proof-replay hole in `scripts/apply-migration-file.mjs` by adding
+`requireExactProofName`, but wired it only there. `.claude/hooks/migration-apply-guard.mjs`
+— the PreToolUse hook covering MCP `apply_migration`, the door used for ROUTINE
+migrations — passed no such flag and kept matching proof-to-migration by substring.
+So the fix hardened the rarely-used oversized-file door and left the common one open.
+Codex reported this on #470 and it was deliberately deferred there rather than bundled;
+this is that follow-up.
+
+The attack: copy reviewed bytes to `99999999999999_alias_<old-name>.sql`. The proof for
+`<old-name>` still matched by substring, the queryHash still matched (identical SQL), and
+the ordering check read the alias's leading stamp as newest. Codex reproduced
+`APPLY GATE PASSED` on an actual dry run, including a legacy 8-digit variant
+(`20260210_fix_rls_critical_issues`) that defeated an earlier stamp-count rule outright.
+
+- `requireExactProofName` now **defaults to `true`**, so a caller that forgets it inherits
+  the safe behaviour. Both known callers want exact; the flag stays available for tests.
+- Names are compared **normalized** (basename, `.sql` stripped, slashes unified), not as
+  raw strings. This matters: `write-apply-proofs.mjs` records a bare name while an apply
+  call may carry `<name>.sql` or a repo-relative path, and substring matching had been
+  quietly absorbing that difference. Naive equality would have refused legitimate applies.
+  An alias differs in its STEM, which survives normalization, so it is still refused.
+- The refusal now distinguishes "a fresh clean proof exists but names a DIFFERENT
+  migration" from "no proof found", printing both names. Previously an operator hitting
+  this saw a missing-proof message with a proof sitting right there, and the natural next
+  move — re-mint — would not have helped.
+
+Proof: 114 assertions in `migration-apply-lib.test.mjs` and the full
+`npm run test:correction-guards` suite pass, including the hook's own 86 assertions. The
+existing characterization test that asserted *"substring matching DOES let the alias
+inherit the proof (the bug)"* now asserts the default REFUSES it; the lenient path is
+retained behind an explicit opt-in so it fails loudly if anyone reinstates it as default.
+
+**Correction — the first version of this entry overstated the safety property.** It claimed
+the change "can only refuse an apply that previously succeeded, never permit one". That is
+FALSE, and CodeRabbit was right to challenge it. An exhaustive comparison over 2,500 name
+pairs found **255** where the old substring rule REFUSED and normalized matching ACCEPTS —
+for example a proof recorded as `<name>.SQL` against an apply of `<name>.sql`, which
+substring matching missed because neither string contains the other once the case differs.
+
+So the accurate statement is narrower, in two parts:
+
+- **Against the alias attack the change is strictly tightening.** Every aliased name the
+  old rule accepted is now refused; that is the security property, and it holds.
+- **On spelling variants it is deliberately WIDENING.** Case, path prefix, and surrounding
+  whitespace differences that named the same migration but happened to defeat substring
+  matching are now accepted. Those applies were being refused for no good reason. The
+  widening is bounded by everything else the gate still demands: the proof must be under
+  30 minutes old, carry clean findings, and its `queryHash` must match the SQL actually
+  being transmitted — so a widened name match cannot authorise different content.
+
+Not verified: no live migration was applied for end-to-end verification.
+
 All significant development milestones, in reverse chronological order.
+
+## 2026-08-26 — save_job's function comment corrected: TWELVE refusals, not eleven
+
+New COMMENT-only migration `20260826150000_fix_save_job_comment_refusal_count.sql` (history row
+893, NOT yet applied). The live `save_job` body raises twelve distinct refusal families, but its
+function comment — the text operators and reviewers enumerate refusals from — says "ELEVEN" and
+omits `JOB_ACRES_NOT_FINITE`, which was added late in review. The applied migration is never
+edited, so the correction is a new file containing exactly one dollar-quoted
+`COMMENT ON FUNCTION` statement; verified against the live catalog (12 distinct refusal tokens in
+`pg_proc.prosrc`) before writing. The apply itself still needs reviewer proofs and Mason's
+explicit OK.
+## 2026-08-26 — Migration guards judge the real post-edit file on CRLF worktrees
+
+`grant-change-guard.mjs` simulated an Edit against the on-disk migration with an exact
+`split(old_string).join(new_string)`. On a Windows worktree with `core.autocrlf` the file on disk is
+CRLF while the harness hands hooks LF-normalized fragments, so any fragment spanning a line boundary
+silently failed to match — the guard judged the **unedited** file. That cut both ways: it denied the
+very Edit that added the `-- caller-analysis:` marker it was demanding (the PR #401 deadlock,
+escapable only via a full-file Write), and it would have **allowed** an Edit that introduced a
+marker-less risky REVOKE, because the unedited file looked benign.
+
+Both sides of the splice are now LF-normalized in a shared helper, `.claude/hooks/edit-splice-lib.mjs`.
+`idempotency-body-check.mjs` had the sibling defect — it never looked at the file at all, judging only
+the Edit fragment — so an on-disk `-- idempotency-body-check: exempt` marker was invisible to edits
+(same deadlock), and a MultiEdit `edits` array produced empty content and was silently allowed. It now
+judges the full post-edit file through the same helper. Regression tests run the real hooks against
+CRLF fixtures with LF fragments in both directions (marker-adding edit allowed; risky marker-less edit
+denied), and both fixes were mutation-tested: reverting the normalization or the full-file view makes
+the new tests fail in each direction. `sql-safety.mjs` and `status-enum-check.mjs` had the same visibility gap on
+their exempt markers — closed the same day (see the entry above).
+
+CodeRabbit's review of this change surfaced two more real holes in `grant-change-guard.mjs`, both
+around marker REMOVAL: the marker scan concatenated the pre-edit disk content, so an Edit that
+deleted a `-- caller-analysis:` line still saw the old marker and allowed the now-unjustified
+REVOKE; and worse, a pure-deletion Edit has an empty `new_string`, which tripped the guard's
+emptiness early-exit before any analysis ran — deletion edits bypassed the guard entirely. The scan
+now reads only the reconstructed post-edit file (the disk+fragment union survives solely for the
+unreadable-file fallback, where markers elsewhere in the file must still count), the emptiness check
+moved below reconstruction, and a marker-removal regression test pins both (each fix
+mutation-verified). Allow-side test assertions are now affirmative — `!isDeny` had treated a crashed
+hook's empty stdout as an allow. Round 2 closed the last variant: empty content is only trusted when
+it IS the real post-edit file (a Write, or a reconstruction that emptied the file) — a deletion Edit
+whose file read FAILED (readFileSync threw after existsSync passed) had still slipped through the
+emptiness exit unanalyzed, and now fails closed with instructions to use a full-file Write
+(regression test forces the read failure with a directory named `*.sql`; mutation-verified).
+CodeRabbit's full review extended the sweep with two more real findings: `idempotency-body-check.mjs`
+got the same fail-closed rule (its unreadable-file deletion path had still allowed unanalyzed), and
+`status-enum-check.mjs`'s TypeScript scanner now stops each `.from()` window at the NEXT `.from()`
+call — judging the full post-edit file had exposed its fixed 800-character window to unrelated query
+chains, so a later table's valid status was denied under the preceding table's constraint set on a
+benign edit to an existing page. Both mutation-verified with regression tests in each direction.
+
+
+## 2026-08-26 — a guard self-test was re-initializing the real repository as bare
+
+`scripts/check-ledger-update.test.mjs` builds a throwaway git repo in a temp directory to prove the
+ledger guard still blocks a protected file renamed to an unprotected path. It spawned `git` with
+`cwd` pointed at that fixture but **inherited the ambient environment**.
+
+Git hooks export `GIT_DIR` (and `GIT_INDEX_FILE`, `GIT_WORK_TREE`) pointing at the *real*
+repository. So when this test ran from `pre-commit`, `git init --quiet` did not initialize the
+fixture — it re-initialized **CRX_Manager itself**, with a cwd that had no work tree attached, which
+set `core.bare = true` on the shared checkout. Every linked worktree on the machine then failed with
+`fatal: this operation must be run in a work tree`, and the test's next command died with status
+128 because `.claude/hooks/protected.mjs` does not exist in the real tree.
+
+**Why it went unnoticed:** the test passes standalone and passes in CI, because neither sets
+`GIT_DIR`. It only causes damage when run from inside a git hook — which is precisely where the
+pre-commit gate runs it. This is the cause of the previously-recorded incident where a failing
+pre-commit left the repository bare; the recovery (`git -C <repo> config core.bare false`) treated
+the symptom.
+
+Fixed by stripping `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`,
+`GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_PREFIX` from the environment
+handed to both the fixture `git` helper and the spawned CLI, so the fixture repo is the only
+repository those commands can reach.
+
+Verified: 44 assertions pass standalone, and pass again with `GIT_DIR` set to a real worktree
+gitdir — with `core.bare` still `false` afterward. Before the fix that same invocation is what
+broke the checkout.
+
+**General rule:** any test that shells out to `git` against a fixture repo must sanitize the
+environment. `cwd` alone does not isolate it — `GIT_DIR` outranks `cwd`.
+
+## 2026-08-26 — Pre-push containment skips top-level ignored tool bulk
+
+The private-artifact pre-push guard now excludes descendants of its existing explicit top-level
+dependency/build roots (`node_modules/`, `dist/`, coverage/browser output, Graphify output, and
+the named test-output roots) from **ignored-file enumeration only**. Tracked, staged,
+force-added, index, outgoing-commit, and history content under those paths remains fully scanned;
+nested lookalikes such as `packages/worker/node_modules/` and files literally named after a root
+remain in scope. Candidate scanning and the double-read race closure are unchanged.
+
+On the same installed worktree, the containment benchmark fell from 434,901 ms to 37,468 ms
+(91.4% faster); the worktree scan fell from 405,535 ms to 220 ms, candidates from 50,802 to
+2,815, logical bytes from 661,279,697 to 92,649,224, and ignored paths from 48,006 to 17. The
+owning suite mutation-fails when the new exclusion is removed, and explicitly proves that a
+force-added private packet under every excluded root is still rejected.
+
+## 2026-08-26 — the JobDetail save-gate flake: retry the click, don't wait longer
+
+`src/pages/JobDetail.billingHazard.test.tsx` failed CI intermittently with
+`AssertionError: expected false to be true` on a correct, unchanged page. The obvious remedy
+was already in the file — `waitFor`/`findBy` with 15s internal timeouts and a 30s per-test
+timeout — which is exactly why it kept coming back.
+
+Root cause is a race the test could not wait out. `handleSave` fails closed while the
+label-rate policy is still loading: it toasts "Checking the label-rate policy — try Save again
+in a moment." and returns. Those lookups (`guardrailModeLoaded`, `jobLabelsLoaded`) are
+SEPARATE queries from the job/products fetch that renders the hazard banner, so awaiting the
+banner does not mean the save gate is open. Nine tests clicked Save exactly once. A click
+landing in that window emitted a non-matching toast and returned — and nothing re-fires the
+save, so the test's `waitFor` spun until it timed out. No timeout could ever fix that; only a
+retry can.
+
+All nine clicks now go through a `clickSave()` helper that re-clicks while the gate is still
+closed — exactly what the app instructs the operator to do, and it cannot double-save, because
+while the gate is closed the save never proceeds. The fix is test-only: `JobDetail.tsx` is
+unchanged, and the guard's real behaviour is what gets proven.
+
+The race is now forced deterministically rather than left to CI load: the mock holds the by-id
+products query open so every save-clicking test goes through the fail-closed branch first.
+Without that, the window is microseconds wide, the retry path is never exercised locally, and a
+reverted fix would look green until CI load widened it again.
+
+The gate is a **deferred promise, not a timer**. The first draft held the by-id query for a fixed
+800ms, which CodeRabbit correctly refused: on a slow enough machine the query resolves before the
+first click, no fail-closed toast is emitted, and `clickSave()` returns on its first attempt
+having exercised no retry at all — a green test proving nothing. With an explicit gate the
+ordering holds at any speed, and `clickSave()` now **asserts** the blocked attempt happened (and
+that `save_job` did not run) in all 11 tests that mount through the harness. If the gate ever
+stops closing, those fail loudly instead of passing silently.
+
+Proof: with that harness and a single un-retried click, 5 tests fail with the exact production
+symptom, including the "Checking the label-rate policy" toast; with `clickSave()`, all 14 pass.
+Dropping the timer also made the file *faster* — 3.29s versus 8.20s before. Full suite green:
+339 files, 4770 passed | 123 skipped.
+
+
+## 2026-08-26 — Ledger-guard test no longer operates on the real repository
+
+**Merge note (2026-08-26):** PR #486 landed this fix on `main` while this branch carried its own
+version of the same fix (the entry above). The merge keeps the branch's shared-helper
+implementation (`scratchHookEnvironment`), whose scrub is a superset of the `GIT_*`-prefix filter
+described below; both entries stay for provenance.
+
+`scripts/check-ledger-update.test.mjs` builds a throwaway Git repository to prove that renaming a
+protected file out of the protected surface is still blocked. Its Git calls passed only `cwd`, never
+a scrubbed environment. Git exports `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_WORK_TREE` and `GIT_PREFIX` to
+hook child processes, and `cwd` does **not** override an absolute `GIT_DIR` — so whenever this test
+ran from a Git hook it operated on the real repository instead of its fixture, aborting with
+`Command failed: git add .claude/hooks/protected.mjs` (status 128) and blocking the commit outright.
+
+Both child processes now inherit a `GIT_*`-scrubbed environment: the fixture's `git` helper and the
+`spawnSync` that executes the guard. The second one matters independently — with `GIT_DIR` inherited,
+the spawned guard inspected the real repository, so the rename assertion could pass or fail for
+reasons having nothing to do with the fixture it was meant to exercise.
+
+CI never caught this because CI runs the test directly with no `GIT_*` set; the defect existed only
+on the Git-hook path, where a green CI is not evidence the gate works. Verified in both directions —
+a bare run and a full hook-style environment both report 44 assertions passed, where the latter
+previously aborted with status 128.
+
+## 2026-08-25 — Draw-down rollout closeout: two canonical documents reconciled to live
+
+Documentation-only follow-up to the 2026-08-24 rollout below, closing the last two open review
+findings from PR #472. It stops two canonical documents from contradicting live state, and records
+the post-rollout verification that was actually performed.
+
+**The booking-draw release is NOT recorded here.** That decision has its own canonical entry in
+`docs/manual/DECISION_LOG.md` and its own changelog entry below, both landed by PR #480 from the
+session Mason gave the decision to. This entry deliberately does not restate it — one decision, one
+record. Note the distinction that entry draws and this one relies on: the pause was **procedural**,
+a team agreement during the rollout, never a code flag or RPC guard.
+
+**Observed on 2026-08-25 (read-only, no writes):** **zero unexpired and zero unbound
+`draw_down_quote` receipts**; the draw-down function ACL and `search_path` posture as recorded in
+the rollout block; production root returning **HTTP 200**; and Mason opening the production Quote
+Builder initial screen (`Q-2026-2062`), which rendered normally with no visible error and with no
+customer, item, preview, save, or submission made.
+
+**Ledger reading at the time this entry was written:** **976 rows**, `max(version)`
+`20260825142708`, effective ordering high-water `20260820120000`. The draw-down rollout itself
+closed the ledger at 975 rows / `20260825034622`; the 976th row is
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` (history row 891), applied
+live later on 2026-08-25 and unrelated to the draw-down chain. Only the ledger fact is recorded here;
+its full apply record — approval, proofs, postflight — landed separately in PR #475, from the session
+that ran it, and `.claude/schema-registry.json` was refreshed to `20260825142708` in that same PR.
+
+**Stated precisely:** that screen observation is reachability and UI-render evidence only. It is
+**not** a booking-draw transaction and **not** an end-to-end draw allocation proof. No end-to-end
+production draw has been observed, and none was manufactured — creating, updating, or submitting a
+real quote or order purely to produce evidence was ruled out.
+
+Documents corrected in this pass:
+
+- `docs/manual/CURRENT_STATE.md` — its header still reported 971 ledger rows at high-water
+  `20260816174353` with a registry matching that older boundary, contradicting `KNOWN_ISSUES.md`
+  and `migration-history.md`. Restamped to the current live reading; the old figures are kept only
+  inside an explicitly superseded provenance block.
+- `docs/audits/2026-08-24-codex-to-claude-draw-down-live-rollout-handoff.md` — its banner called
+  the handoff "fully executed" with "no instruction … actionable", which retired the two closeout
+  steps that had not happened. The banner now supersedes only the apply/reconciliation steps (1–7)
+  and points at PR #480's decision record for step 9 instead of asserting a standing pause.
+
+Not changed here: `docs/manual/DECISION_LOG.md`. An earlier revision of this branch added its own
+booking-draw entry; PR #480 landed the canonical one first, sourced from the session Mason gave the
+decision to and carrying release preconditions this branch had not read. That entry is better
+sourced, so this branch's duplicate was dropped rather than merged alongside it — two entries for
+one decision on one date is the same defect this pass exists to remove. Same disposition as the
+`save_job` record, which deferred to PR #475.
+
+No code, schema, live data, or migration was changed by this entry.
+
+## 2026-08-25 — the routine migration door now refuses a stolen reviewer proof
+
+PR #470 closed a proof-replay hole in `scripts/apply-migration-file.mjs` by adding
+`requireExactProofName`, but wired it only there. `.claude/hooks/migration-apply-guard.mjs`
+— the PreToolUse hook covering MCP `apply_migration`, the door used for ROUTINE
+migrations — passed no such flag and kept matching proof-to-migration by substring.
+So the fix hardened the rarely-used oversized-file door and left the common one open.
+Codex reported this on #470 and it was deliberately deferred there rather than bundled;
+this is that follow-up.
+
+The attack: copy reviewed bytes to `99999999999999_alias_<old-name>.sql`. The proof for
+`<old-name>` still matched by substring, the queryHash still matched (identical SQL), and
+the ordering check read the alias's leading stamp as newest. Codex reproduced
+`APPLY GATE PASSED` on an actual dry run, including a legacy 8-digit variant
+(`20260210_fix_rls_critical_issues`) that defeated an earlier stamp-count rule outright.
+
+- `requireExactProofName` now **defaults to `true`**, so a caller that forgets it inherits
+  the safe behaviour. Both known callers want exact; the flag stays available for tests.
+- Names are compared **normalized** (basename, `.sql` stripped, slashes unified), not as
+  raw strings. This matters: `write-apply-proofs.mjs` records a bare name while an apply
+  call may carry `<name>.sql` or a repo-relative path, and substring matching had been
+  quietly absorbing that difference. Naive equality would have refused legitimate applies.
+  An alias differs in its STEM, which survives normalization, so it is still refused.
+- The refusal now distinguishes "a fresh clean proof exists but names a DIFFERENT
+  migration" from "no proof found", printing both names. Previously an operator hitting
+  this saw a missing-proof message with a proof sitting right there, and the natural next
+  move — re-mint — would not have helped.
+
+Proof: 114 assertions in `migration-apply-lib.test.mjs` and the full
+`npm run test:correction-guards` suite pass, including the hook's own 86 assertions. The
+existing characterization test that asserted *"substring matching DOES let the alias
+inherit the proof (the bug)"* now asserts the default REFUSES it; the lenient path is
+retained behind an explicit opt-in so it fails loudly if anyone reinstates it as default.
+
+**Correction — the first version of this entry overstated the safety property.** It claimed
+the change "can only refuse an apply that previously succeeded, never permit one". That is
+FALSE, and CodeRabbit was right to challenge it. An exhaustive comparison over 2,500 name
+pairs found **255** where the old substring rule REFUSED and normalized matching ACCEPTS —
+for example a proof recorded as `<name>.SQL` against an apply of `<name>.sql`, which
+substring matching missed because neither string contains the other once the case differs.
+
+So the accurate statement is narrower, in two parts:
+
+- **Against the alias attack the change is strictly tightening.** Every aliased name the
+  old rule accepted is now refused; that is the security property, and it holds.
+- **On spelling variants it is deliberately WIDENING.** Case, path prefix, and surrounding
+  whitespace differences that named the same migration but happened to defeat substring
+  matching are now accepted. Those applies were being refused for no good reason. The
+  widening is bounded by everything else the gate still demands: the proof must be under
+  30 minutes old, carry clean findings, and its `queryHash` must match the SQL actually
+  being transmitted — so a widened name match cannot authorise different content.
+
+Not verified: no live migration was applied for end-to-end verification.
+
+
+## 2026-08-25 — Quote-version restore trust boundary (PR #401): rebased, renumbered, verified against live
+
+Landing the long-stale PR #401. `20260813080000` closed the browser write path to
+`quote_versions` and applied live on 2026-08-16, but the rows written *before* that
+boundary are still there and nothing distinguishes them from RPC-created ones. Restoring
+a version rebuilds `quote_items.cost_at_quote_cents`, so an unprovable legacy row must not
+become a trusted cost source merely because the door is now shut.
+
+- **New nullable `quote_versions.restore_trusted_at timestamptz`.** `create_quote_version`
+  stamps it on its own first successful insert, after the owner-side writer has built the
+  snapshot from typed database rows; a cached idempotent replay returns before that point
+  and so cannot bless a pre-boundary row with a reused key. The private
+  `_restore_quote_version_below_cost_impl_20260810` raises
+  `QUOTE_VERSION_LEGACY_UNTRUSTED` when the marker is NULL, before any quote, section or
+  item row is touched.
+- **No backfill, deliberately.** Backfilling would convert an unprovable assertion into
+  trust. Pre-boundary snapshots stay fully readable; they just stop being restorable.
+  Measured live on 2026-08-25 before landing: 3 quote versions across 2 quotes, and
+  `restore_quote_version` has been invoked zero times in production — the behavioral
+  change lands on a path no one has used.
+- **Renumbered `20260813180000` → `20260825190000`.** The original stamp had fallen below
+  the live high-water name `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`,
+  so `.claude/hooks/migration-ordering-lib.mjs` would have refused the apply outright —
+  correctly, since replaying a stale file is how the `batch_apply_prepayments` actor guard
+  was silently reverted on 2026-07-15. All seven in-repo references were moved with it.
+- **Re-emission verified non-regressive.** The migration re-emits
+  `create_quote_version` with `CREATE OR REPLACE`, so its proposed body was diffed against
+  the live `prosrc` on 2026-08-25 rather than trusted. Every existing guard survives:
+  actor identity, active-role membership, quote ownership both before and after the
+  `FOR UPDATE` lock, row-version staleness, the full idempotency payload check including
+  `_method` and version-id existence, and the cache-write row-count assertion. The only
+  additions are the trust-mark `UPDATE` and its `QUOTE_VERSION_TRUST_MARK_FAILED` guard.
+- **Round 8 (2026-08-26): the standing sweep now pins both re-emitted function bodies
+  whole, not just a prefix or region.** The Codex reviewer showed that everything after
+  the `QUOTE_VERSION_LEGACY_UNTRUSTED` raise was unpinned: a future re-emission could
+  keep the fingerprinted prefix byte-identical, move the sole owner call into an appended
+  `EXCEPTION` handler, and deliberately raise into it — catching the rejection restores
+  legacy snapshots while the prefix pin, exact-IF count, sole-owner-call count and
+  ordering check all still pass. Proven against live PostgreSQL 17.6 both ways: the
+  handler body passes every pre-round-8 check and only a whole-normalized-body
+  length+md5 pin refuses it. That pin is now in the predicate (both create branches and
+  the restore contract), the migration postcondition, and the mirror test's mutation
+  proofs. Same boundary lesson as round 5, terminal form: leave NO unpinned interval on
+  either side of the guard.
+- **Rounds 9-10 (2026-08-26): the pins now cover the whole trust chain, plus apply-time
+  preimage verification.** The Codex reviewer extended round 8's lesson one level deeper on
+  three fronts, all confirmed real: the pinned wrappers TRUST results from owner impls whose
+  bodies nothing pinned (a re-emitted `_create_quote_version_owner_impl` returning a legacy
+  version_id would get its lie stamped trusted by the byte-perfect wrapper; a re-emitted
+  `_restore_quote_version_owner_impl` could restore a different version than the one whose
+  marker was checked), and the public `restore_quote_version` wrapper passed its precondition
+  by merely CONTAINING the guarded impl's name. All three live bodies are now pinned in the
+  standing predicate (measured read-only from live 2026-08-26, verified green against live),
+  the wrapper route pin is asserted in the migration's precondition and postcondition, and
+  the precondition now also pins the PRE-images of the two functions being replaced — if live
+  drifts between this review and the apply, the apply fails closed instead of silently
+  overwriting newer behavior. The pinned set is closed deliberately at these five routines:
+  they are exactly the chain whose results become an authoritative cost source.
+- **Rebase decisions.** Merging current `main` produced eight conflicts. `main` won every
+  documentation conflict — the branch's headers still claimed `20260813080000` was
+  unapplied, which stopped being true on 2026-08-16. In `rpcContracts.test.ts` `main` also
+  won outright: the private restore implementation holds no `authenticated`, `anon` or
+  `service_role` EXECUTE grant live, so it never reaches the generated client types and
+  needs no exemption, and the two Wave A guard entries the branch carried are still parked.
+  `smoke-specs.json` kept both sides — each added a different new spec.
+
+Migration is written and reviewed but **NOT APPLIED**; it is entry 892 in
+`docs/reference/migration-history.md`.
+
 
 ## 2026-08-25 — PR #432 closed; control-file edits bounded; local/CI proof de-duplicated
 
@@ -140,6 +615,24 @@ one `draw_down_quote` overload, intent-bound body installed, zero retry receipts
 24 hours, function-surface sweeps clean. No test draw was fabricated; the first real draw is the
 final end-to-end proof and should be read back read-only when it happens. Canonical record:
 `docs/manual/DECISION_LOG.md` (2026-08-25 entry).
+
+## 2026-08-25 — Decision Log: the #403 closure now has its own dated entry
+
+Follow-up on PR #478, closing the convention gap that both Codex and the reviewer flagged there.
+That PR corrected the stale forward-reference to PR #403 in place, inside the 2026-08-14 override
+entry. But `DECISION_LOG.md`'s own footer says never to rewrite a past entry — a reversal gets a
+**new** dated entry instead. Correcting in place was right (the old text made a false claim about
+current policy, so leaving it would have kept the exact trap #478 removed), but it left the
+reversal invisible to anyone scanning the log by date. Mason approved adding the entry.
+
+- New dated entry, `2026-08-25 — PR #403 closed: the live-ledger recovery exception is NOT in force`,
+  recording the owner decision, the evidence link, why it was closed (recovery already done by hand
+  on 2026-08-14 via `3a2a0ca0`/PR #392; no recurrence in 188 commits; five Sol rounds on the
+  attestation itself), and the operative rule for a future verbatim recovery.
+- Its **Supersedes** block names the specific forward-reference inside the 2026-08-14 entry that it
+  reverses — not that entry as a whole — and states plainly that the publication override stands
+  unchanged and never depended on #403.
+- Pure addition: 28 lines added to `DECISION_LOG.md`, nothing removed or reworded.
 
 ## 2026-08-25 — Decision Log: the dangling PR #403 reference now records a closure
 

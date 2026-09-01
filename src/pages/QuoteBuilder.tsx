@@ -2275,6 +2275,8 @@ export default function QuoteBuilder() {
           || (typeof error.message === 'string' ? error.message : null)
           || 'This version books less than what has already been drawn down to orders.';
         toast('error', errMsg);
+      } else if (hasRpcCode(error, RpcErrorCodes.QUOTE_VERSION_LEGACY_UNTRUSTED)) {
+        toast('error', 'This older saved version cannot be restored because its cost snapshot was not created through the protected version workflow. Create a new version from the current quote instead.');
       } else if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
         || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
         resetRestoreVersionAfterReloadRef.current = true;
