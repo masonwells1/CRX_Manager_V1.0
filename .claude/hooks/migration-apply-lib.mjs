@@ -127,11 +127,12 @@ const lfNormalize = (s) => String(s ?? "").replace(/\r\n/g, "\n");
 const PLAIN_FILENAME_STEM = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
 const pathKey = (p) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
-const withinDir = (dir, file) => {
-  const d = pathKey(dir);
-  const f = pathKey(file);
-  return f === d || f.startsWith(d + path.sep);
-};
+// A `withinDir` containment helper lived here until the direct-child rule replaced
+// it. It is deliberately NOT kept "in case it is useful": an unused containment
+// predicate in a security file is an invitation for a later edit to reach for the
+// looser of two rules, and its looseness is precisely what this PR spent a round
+// removing (Codex, exact-SHA review of b7ac7a8f). Parent-equality is inline at the
+// one place that needs it.
 
 /**
  * Locate the repository migration file whose content is exactly `query`.

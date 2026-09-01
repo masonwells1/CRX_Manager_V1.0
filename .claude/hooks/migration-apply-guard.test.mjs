@@ -538,11 +538,25 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(!isDeny(r), "a worktree nested inside the primary checkout resolves to itself, not to its parent");
     git(["worktree", "remove", "--force", nested], primary);
 
-    r = runHook(callFrom(linked, BENIGN_SQL + " -- edited after review"), primary);
+    // Both cases below must SEED THE MIGRATION FILE, or source provenance refuses
+    // first and neither test exercises the check it names. Codex caught this
+    // (minor, exact-SHA review of b7ac7a8f) — the second time in this PR that a
+    // newly-inserted early gate quietly disarmed downstream tests, which is why
+    // each one now asserts its intended denial REASON rather than just a denial.
+    const EDITED = BENIGN_SQL + " -- edited after review";
+    writeMigrationFile(linked, MIG, EDITED);
+    r = runHook(callFrom(linked, EDITED), primary);
     ok(isDeny(r), "the session's own worktree proof does NOT excuse a queryHash mismatch — content binding survives");
+    ok(r.stdout.includes("without subagent review proof"),
+      "the queryHash mismatch is refused by the proof gate, not by provenance short-circuiting it");
+    writeMigrationFile(linked, MIG, BENIGN_SQL);
 
-    r = runHook(callFrom(linked, BENIGN_SQL, "20990101000001_other_mig"), primary);
+    const OTHER = "20990101000001_other_mig";
+    writeMigrationFile(linked, OTHER, BENIGN_SQL);
+    r = runHook(callFrom(linked, BENIGN_SQL, OTHER), primary);
     ok(isDeny(r), "the session's own worktree proof does NOT cover a different migration name");
+    ok(r.stdout.includes("without subagent review proof"),
+      "the wrong-name case is refused by the proof gate, not by provenance short-circuiting it");
 
     // AUTOPILOT.on is narrower still — pinned to the primary checkout even when
     // the session's proofs are read from its worktree. It is authorization state
