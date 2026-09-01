@@ -6,7 +6,10 @@ reviewed by Codex `gpt-5.6-sol` at high effort (verdict: NEEDS-CHANGES, 19 findi
 Nothing was executed — no stash dropped, no `gc`/`prune` run, no object file deleted.
 
 **Read this before proposing a stash or `.git/objects` cleanup again.** The obvious version
-of this idea looks like it reclaims ~316 MB. It reclaims approximately zero.
+of this idea looks like it reclaims ~316 MB from `.git/objects`. That part reclaims
+approximately zero — those files are hard-linked to a second Git database. Separately, up to
+~1.18 GB inside `stash@{26}` may be genuinely reclaimable, but only behind an exclusive
+maintenance window and a `gc` this document argues against running here.
 
 ---
 
@@ -114,7 +117,7 @@ that *is* stale usually means a Git command died partway and can wedge further G
 operations there. That is a Codex-owned tree, so it was left untouched deliberately — flag
 it to that session rather than removing it on this evidence.
 
-## There is no disk to reclaim here — including from `stash@{26}`
+## What is and is not reclaimable
 
 Three separate things get conflated, so state them separately:
 
@@ -127,34 +130,42 @@ Three separate things get conflated, so state them separately:
 - **Objects are only prunable if NO ref reaches them.** External duplicates of a file prove
   the *content is recoverable*; they say nothing about whether Git can drop its copy.
 
-An earlier draft of this document claimed dropping `stash@{26}` would release ~1.18 GB.
-**That was wrong, and it was checked rather than softened.** All four video blobs are
-reachable from a branch/tag/remote ref, not only from the stash:
+### `git rev-list --all` REACHES `refs/stash` — this got the answer backwards twice
 
-| blob | reachable from a branch/tag/remote | in a reflog |
+This is the trap worth carrying forward, because it produced a confidently wrong answer.
+
+`--all` is documented as "all refs in `refs/`", and that **includes `refs/stash`**. So asking
+`git rev-list --objects --all` whether a stashed blob is "reachable" always answers yes — it
+is reachable *from the stash itself*. Read as "something other than the stash holds this,"
+that is a false negative for reclaimable space.
+
+**Use `--branches --tags --remotes`**, which excludes `refs/stash` by construction:
+
+    git rev-list --objects --branches --tags --remotes
+
+Measured that way, in this repo:
+
+| set | objects | four video blobs present? |
 |---|---|---|
-| `75931d66…` Job Application Scheduling Layout.mp4 | yes | yes |
-| `76b9e8b1…` Field Mapping.mp4 | yes | yes |
-| `cc866de5…` Mixer_Loader Sheet setup.mp4 | yes | yes |
-| `2868a2e2…` Job Printing for sprayer applicator.mp4 | yes | yes |
+| `--all` | 54,293 | yes — via `refs/stash` |
+| `--branches --tags --remotes` | 52,149 | **no** |
 
-Method: build the reachable set with `git rev-list --objects --all` (which does **not**
-include `refs/stash`) and again with `--all --reflog`, then test each blob for membership.
+So the four videos are reachable **only** from `stash@{26}`. Dropping that entry and letting
+a later `gc` prune it therefore *could* reclaim up to ~1.18 GB.
 
-So the ~1.18 GB of video — the only part of the stash measured here — is **not**
-reclaimable: a later `gc` could not prune those blobs
-while another ref still reaches them. The external copies in
-`C:\Users\mason\Videos\Screen Recordings` remain useful for a different reason: they show the
-videos are recoverable if the stash is ever discarded. They are not evidence of reclaimable
-space.
+Two limits on that number, both real: only those four blobs were measured, so the rest of the
+stash's 329 files is unsized; and the figure is the sum of blob sizes, not a post-`gc`
+measurement. **Do not treat ~1.18 GB as a promised saving** — treat it as the only part of
+this cleanup where reclaimable space plausibly exists at all.
 
-Reachability was verified for those four video blobs only, not for every object in the
-stash, so the stash-exclusive remainder is unmeasured. Measuring it would require
-excluding `refs/stash` from the reachable set and sizing what is left; that was not done.
+The external copies in `C:\Users\mason\Videos\Screen Recordings` prove the videos are
+*recoverable* if the stash is discarded. That is a separate question from whether Git can
+free the space, and conflating the two is what produced the wrong answer the first time.
 
-**Net: no part of this cleanup reclaims meaningful disk.** If space is ever genuinely
-needed, the target is the separate Git database at `C:\CRX_CodexClones\codex-split-389-c2-gitdb`
-(§1), which is separately owned and needs its own review and authorization.
+**None of this changes the verdict.** The cleanup is still rejected on §1 (the 316 MB is
+hard-linked and frees nothing) and the reasons above: the positional-drop race, and the
+refusal to run `gc` while the fleet is active. Reclaiming the video space would require an
+exclusive maintenance window and a `gc` this document otherwise warns against.
 
 If some future entry *is* ever dropped, address it by object ID, never by position: record
 its full OID, re-resolve the current `stash@{n}` immediately before removal, and abort

@@ -20,10 +20,13 @@ Three claims that made the cleanup look worthwhile, each disproved:
 - Stashes here are not small text diffs. `stash@{26}` (full object ID
   `063c7010d3143d7052fc05d0e2364210874510a1`; the `@{26}` slot is a moving reflog position,
   so resolve the object ID and re-check it immediately before any drop) holds at most ~1.18 GB of
-  walkthrough video. Dropping it would not reclaim that video: all four video blobs were
-  verified reachable from a branch/tag/remote ref, not only from the stash, so a later
-  `gc` could not prune them. Reachability was checked for those four blobs only, so the
-  stash-exclusive remainder is unmeasured rather than proven to be zero.
+  walkthrough video. **Corrected 2026-09-01** (see
+  `docs/changelog.d/2026-09-01-stash-reachability-correction.md`): this entry originally said
+  those blobs were reachable from a branch/tag/remote and so could not be reclaimed. That was
+  wrong — the check used `git rev-list --all`, which reaches `refs/stash`. Measured with
+  `--branches --tags --remotes`, the four blobs are stash-only, so dropping the entry plus a
+  later `gc` could reclaim up to ~1.18 GB. Only those four blobs were measured, so the
+  stash-exclusive remainder is unsized.
 
 Rejected because `git stash drop` is positional and a concurrent session can shift indices
 between the SHA check and the drop (a time-of-check/time-of-use race a recheck narrows but
