@@ -47,9 +47,15 @@ surprised by it.
 ### H5 — the integrity panel offers an invoice action it cannot complete
 
 `IntegrityCleanupPanel.tsx` renders "Create draft invoice" unconditionally for every unbilled
-delivery. On a split-billing order the RPC guard correctly refuses, and the catch block surfaces the
-raw `ORDER_NEEDS_SPLIT_BILLING` code to the operator. No wrong data is written — the harm is being
-invited into an impossible action and handed an error code instead of a reason.
+delivery. On a split-billing order the RPC guard correctly refuses. No wrong data is written.
+
+**A second Codex finding narrowed this one too.** The first draft claimed the operator is handed a
+raw error code instead of a reason. The guard actually raises a full sentence — *"delivery N's order
+uses split billing — a single backfilled invoice would mono-bill it and mis-attribute AR. Create the
+split invoices through the split-billing flow instead."* — and `PostgrestError` extends `Error`, so
+`toast('error', err.message)` shows all of it. The entry now says so explicitly and warns **against**
+the fix the first draft recommended: mapping codes to plain-English messages would replace better
+text with worse. Only the unusable button remains, and the fix is to hide or disable it.
 
 ### A third finding, fixed here
 

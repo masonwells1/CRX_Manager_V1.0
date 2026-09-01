@@ -283,28 +283,38 @@ comments. Surfaced by the 2026-08-31 documentation sweep (#529).
 
 ---
 
-## OPEN 2026-09-01 — H5: the integrity panel offers "Create draft invoice" on orders it cannot invoice, then shows a raw error code
+## OPEN 2026-09-01 — H5: the integrity panel offers "Create draft invoice" on orders it cannot invoice
+
+**Severity corrected on 2026-09-01 by Codex review of PR #538, before this entry landed.** The first
+draft also claimed the operator is shown "a raw error code rather than an explanation". **That is
+wrong** — the message is already plain English. Only the unusable button is a real defect.
 
 **Plain English:** in the admin integrity cleanup panel, every unbilled completed delivery gets a
 "Create draft invoice" button. On an order that needs **split billing**, the button cannot work —
-but it is offered anyway, and pressing it shows the operator a raw database error code rather than
-an explanation.
+but it is offered anyway.
 
 **Where.** `src/components/integrity/IntegrityCleanupPanel.tsx:684-689` renders the button
 unconditionally for every row in `unbilled`. The handler at line 398 calls
-`create_invoice_for_unbilled_delivery`, and its catch block at line 416 surfaces the raw message:
-`toast('error', err instanceof Error ? err.message : 'Backfill failed')`. The RPC and its
-`ORDER_NEEDS_SPLIT_BILLING` guard are both defined in
-`supabase/migrations/20260718202607_backfill_invoice_guard_durable_split_allocations.sql`.
+`create_invoice_for_unbilled_delivery`; its `ORDER_NEEDS_SPLIT_BILLING` guard lives in
+`20260718202607_backfill_invoice_guard_durable_split_allocations.sql` and is re-emitted in
+`20260719024641_lock_backfill_split_allocation_rows.sql`.
 
-**Severity is cosmetic-plus.** No wrong data is written — the guard does its job and the operation
-is correctly refused. The harm is that an admin is invited into an action that cannot succeed and is
-then given a code instead of a reason. `ORDER_RESTORE_NOT_SUPPORTED` reaches the operator the same
-way.
+**The message is fine.** The guard raises:
 
-**Two candidate fixes:** hide or disable the button for orders the guard will refuse, or map the
-known error codes to plain-English messages in the catch block. The second is smaller and helps
-every other refusal path too.
+> `ORDER_NEEDS_SPLIT_BILLING: delivery <n>'s order uses split billing — a single backfilled invoice
+> would mono-bill it and mis-attribute AR. Create the split invoices through the split-billing flow
+> instead.`
+
+Supabase's `PostgrestError` extends `Error`, so `toast('error', err.message)` at line 416 surfaces
+that entire sentence — reason **and** remedy. The only cosmetic wart is the `ORDER_NEEDS_SPLIT_BILLING:`
+prefix in front of it. **Do not "fix" this by mapping codes to messages**: the messages already
+exist and are better than a lookup table would be.
+
+**Severity: cosmetic.** No wrong data is written; the guard refuses correctly and tells the operator
+what to do instead. The defect is being invited into an action that can never succeed.
+
+**The fix:** hide or disable the button for orders the guard will refuse, so the operator is not
+offered a dead end. Optionally strip the leading `CODE:` prefix when presenting these messages.
 
 **Verified 2026-09-01 against `main` at `85266c9a`. Was tracked nowhere** — H5 lived only in
 `docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md`, a file headed "completed/superseded". Surfaced
