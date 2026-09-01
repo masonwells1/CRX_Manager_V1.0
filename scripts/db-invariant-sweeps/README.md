@@ -51,7 +51,13 @@ strict-actor `IF ... RAISE EXCEPTION 'ACTOR_MISMATCH'` statement. Any routine
 containing an exception handler stays fail-closed because that handler may catch
 the refusal. A helper, operator, or financial-audit write before a valid refusal
 therefore remains a finding, while ordinary forwarding after a proven early,
-uncaught refusal does not. A `v_actor := auth.uid()` binding is required before
+uncaught refusal does not. That refusal must also be **unconditional**: every
+`IF`/`LOOP`/`CASE` opened before it has to be closed before it, and the refusal
+statement itself may open none, so a guard buried under `IF false THEN` no
+longer ends the scan. The reader counts block keywords rather than parsing
+PL/pgSQL, so a `CASE` *expression* ahead of the refusal reads as an unclosed
+block and costs an extra finding — it cannot hide one.
+A `v_actor := auth.uid()` binding is required before
 a local-actor refusal, but the scanned prefix ends at the refusal's `IF`, not at
 the binding, so intervening forwarding remains visible. Positional `$n` aliases
 use full PL/pgSQL declaration order, including preceding `OUT` parameters. A
@@ -59,7 +65,15 @@ refusal is trusted only when the catalog proves the actor argument is
 `pg_catalog.uuid` and any local identity binding is declared `uuid`; custom
 types can overload equality. Before refusal analysis, a length-preserving lexer
 masks comments and ordinary, escape, Unicode, and dollar-quoted data strings.
-Unreadable or nested-comment residue fails closed.
+Backslash escapes are honoured only inside `E'...'`, and only when the `E` is
+not word-adjacent — in every other string a trailing backslash is data, so
+`'ends with \'` closes at its own quote. Getting that wrong did not fail closed:
+the lexer swallowed the closing quote, ran to the next one, and masked the
+executable statements in between, silently clearing the routine. That is the
+`actor_backslash_guard_forward` / `actor_word_adjacent_escape_forward` pair in
+`actor-forgery-predicates.test.mjs`; both fail against the pre-fix regex.
+An unterminated string, an unterminated dollar quote, and nested-comment residue
+do fail closed — the routine is emitted as a finding rather than skipped.
 
 The `save_field` predicate also has a disposable mutation proof that deliberately installs unsafe,
 late-guard, comment-only, and altered bodies and requires the predicate to fail closed. Run both

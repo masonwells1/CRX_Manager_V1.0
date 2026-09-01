@@ -3155,4 +3155,65 @@ r = spawnSync(process.execPath, [path.join(__dirname, "actor-binding-check.mjs")
 eq(r.status, 0, "malformed stdin exits 0 (fail-open)");
 ok(!isDeny(r), "malformed stdin is allowed, never denied");
 
+// ── PROPAGATION direction: an actor laundered into a local before forwarding ─
+// The stableAuthUidBindings() probes elsewhere in this file assert the opposite
+// INVALIDATION direction (a loop/FETCH/diagnostics write destroys a trusted
+// auth.uid() local). They passed the whole time these laundering channels were
+// open, so they are not coverage for this direction. Each case below forwards
+// the laundered local to a helper and nothing else, so the ONLY thing that can
+// make the hook deny is that the taint reached the helper argument.
+const LAUNDER_CASES = [
+  ["a pre-list SELECT INTO target",
+   "DECLARE v_id uuid;\nBEGIN\n  SELECT INTO v_id p_performed_by;\n  PERFORM public.record_actor(v_id);\nEND;"],
+  ["a FOREACH loop variable",
+   "DECLARE v_id uuid;\nBEGIN\n  FOREACH v_id IN ARRAY ARRAY[p_performed_by] LOOP\n    PERFORM public.record_actor(v_id);\n  END LOOP;\nEND;"],
+  ["a FOR ... IN SELECT loop variable",
+   "DECLARE v_row record;\nBEGIN\n  FOR v_row IN SELECT p_performed_by AS a LOOP\n    PERFORM public.record_actor(v_row);\n  END LOOP;\nEND;"],
+  ["a cursor FETCH INTO target",
+   "DECLARE c refcursor; v_id uuid;\nBEGIN\n  OPEN c FOR SELECT p_performed_by;\n  FETCH c INTO v_id;\n  PERFORM public.record_actor(v_id);\nEND;"],
+  ["the correlated target of a multi-column INTO",
+   "DECLARE v_dummy int; v_id uuid;\nBEGIN\n  SELECT 1, p_performed_by INTO v_dummy, v_id;\n  PERFORM public.record_actor(v_id);\nEND;"],
+  ["a GET STACKED DIAGNOSTICS target",
+   "DECLARE v_id text;\nBEGIN\n  BEGIN\n    RAISE EXCEPTION '%', p_performed_by;\n  EXCEPTION WHEN OTHERS THEN\n    GET STACKED DIAGNOSTICS v_id = MESSAGE_TEXT;\n  END;\n  PERFORM public.record_actor(v_id);\nEND;"],
+  ["a SELECT INTO STRICT target",
+   "DECLARE v_id uuid;\nBEGIN\n  SELECT p_performed_by INTO STRICT v_id;\n  PERFORM public.record_actor(v_id);\nEND;"],
+  // The field is never named again -- only the composite that now contains it.
+  ["a record FIELD written by SELECT INTO, then forwarded as the whole record",
+   "DECLARE v_rec public.audit_row;\nBEGIN\n  SELECT p_performed_by INTO v_rec.actor;\n  PERFORM public.record_actor(v_rec);\nEND;"],
+  // The assigned expression runs to the ';', not to the end of the line.
+  ["an assignment whose expression continues onto later lines",
+   "DECLARE v_id uuid;\nBEGIN\n  v_id := CASE\n    WHEN true THEN p_performed_by\n    ELSE NULL\n  END;\n  PERFORM public.record_actor(v_id);\nEND;"],
+];
+for (const [label, body] of LAUNDER_CASES) {
+  r = runHook(fn(body));
+  ok(isDeny(r), `an unbound actor forwarded through ${label} is BLOCKED`);
+}
+
+// A laundered local must not be able to launder a second time.
+r = runHook(fn(
+  "DECLARE v_a uuid; v_b uuid;\nBEGIN\n  SELECT INTO v_a p_performed_by;\n" +
+  "  SELECT 0, v_a INTO v_b, v_b;\n  PERFORM public.record_actor(v_b);\nEND;"
+));
+ok(isDeny(r), "taint propagates transitively through a second laundering hop");
+
+// Correlation must be positional: an uncorrelated sibling target is NOT tainted
+// on its own, so this stays allowed and proves the fix is not a blanket deny.
+r = runHook(fn(
+  "DECLARE v_dummy int; v_id uuid;\nBEGIN\n  SELECT 1, p_performed_by INTO v_dummy, v_id;\n" +
+  "  PERFORM public.record_count(v_dummy);\nEND;"
+));
+ok(!isDeny(r), "a multi-column INTO taints only the positionally matching target");
+
+// ── casts are callable boundaries when the target type is user-defined ──────
+r = runHook(fn("BEGIN\n  RETURN CAST(p_performed_by AS public.actor_token);\nEND;"));
+ok(isDeny(r), "CAST(actor AS <user type>) runs a user cast function and is BLOCKED");
+r = runHook(fn("BEGIN\n  RETURN p_performed_by::public.actor_token;\nEND;"));
+ok(isDeny(r), "actor::<user type> is the same user cast function and is BLOCKED");
+r = runHook(fn("BEGIN\n  RETURN CAST(p_performed_by AS text);\nEND;"));
+ok(!isDeny(r), "CAST(actor AS text) is a pg_catalog conversion, not a callable boundary");
+r = runHook(fn("BEGIN\n  RETURN p_performed_by::pg_catalog.text;\nEND;"));
+ok(!isDeny(r), "actor::pg_catalog.text is a pg_catalog conversion, not a callable boundary");
+r = runHook(fn("BEGIN\n  RETURN to_jsonb(p_performed_by::uuid[]);\nEND;"));
+ok(isDeny(r), "a built-in cast does not excuse the surrounding helper call");
+
 console.log(`actor-binding-check: ${pass} assertions passed`);

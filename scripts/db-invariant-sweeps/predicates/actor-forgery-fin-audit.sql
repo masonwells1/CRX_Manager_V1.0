@@ -51,18 +51,19 @@ WITH RECURSIVE cand AS (
     AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
     AND coalesce(p.proargmodes[a.ordinality], 'i'::"char") IN ('i', 'b', 'v')
     AND a.argname ~* '^p_\w*by$|^p_actor|^p_user'
-), lexer (
-  oid, proname, args, prosrc, argname, argname_pattern,
-  argument_position, actor_is_uuid, scan_pos, executable_src, lex_error
-) AS (
-  SELECT cand.*, 1, ''::text COLLATE "C", false
-  FROM cand
+), src_rows AS (
+  -- Lex each routine ONCE. A routine with two actor-shaped parameters used to
+  -- be lexed once per parameter, and the whole prosrc rode along in recursive
+  -- state; both are dropped here.
+  SELECT DISTINCT oid, prosrc FROM cand
+), lexer (oid, src_len, scan_pos, executable_src, lex_error) AS (
+  SELECT oid, char_length(prosrc), 1, ''::text COLLATE "C", false
+  FROM src_rows
 
   UNION ALL
 
-  SELECT l.oid, l.proname, l.args, l.prosrc, l.argname, l.argname_pattern,
-         l.argument_position, l.actor_is_uuid,
-         CASE WHEN step.lex_error THEN char_length(l.prosrc) + 1
+  SELECT l.oid, l.src_len,
+         CASE WHEN step.lex_error THEN l.src_len + 1
               ELSE l.scan_pos + step.consume END,
          l.executable_src || CASE WHEN step.mask_token
            THEN repeat(' ', step.consume)
@@ -70,14 +71,31 @@ WITH RECURSIVE cand AS (
          END,
          step.lex_error
   FROM lexer l
+  JOIN src_rows s ON s.oid = l.oid
   CROSS JOIN LATERAL (
-    SELECT substr(l.prosrc, l.scan_pos) AS rest
+    SELECT substr(s.prosrc, l.scan_pos) AS rest
   ) src
+  CROSS JOIN LATERAL (
+    -- A string's escape rules are decided by the token BEFORE its opening
+    -- quote, not by re-reading a prefix at the quote. `RAISE NOTICE'x'` ends
+    -- in E only because NOTICE does, so the prefix must not be word-adjacent.
+    SELECT l.executable_src ~ '(?:^|[^[:alnum:]_$"])[eE]$' AS escape_prefix
+  ) ctx
   CROSS JOIN LATERAL (
     SELECT substring(src.rest FROM '^(--[^\r\n]*(?:\r\n|\r|\n|$))') AS line_token,
            (regexp_match(src.rest, '^(/\*.*?\*/)', 's'))[1] AS block_token,
-           substring(src.rest FROM '^((?:[eE]|[uU]&)?''(?:[^''\\]|''''|\\.)*'')') AS string_token,
-           substring(src.rest FROM '^(\$\$|\$[^0-9$[:space:]][^$[:space:]]*\$)') AS dollar_tag
+           -- Only E'...' honours backslash escapes. In an ordinary or U&
+           -- string a trailing backslash is DATA, so `'ends with \'` closes at
+           -- its own quote; applying the escape branch there swallowed the
+           -- closing quote and masked every statement up to the next quote.
+           CASE WHEN ctx.escape_prefix
+                THEN substring(src.rest FROM '^(''(?:[^''\\]|''''|\\.)*'')')
+                ELSE substring(src.rest FROM '^(''(?:[^'']|'''')*'')')
+           END AS string_token,
+           substring(src.rest FROM '^(\$\$|\$[^0-9$[:space:]][^$[:space:]]*\$)') AS dollar_tag,
+           -- Maximal run of characters that cannot begin any token, so the
+           -- recursion advances by words instead of one character at a time.
+           substring(src.rest FROM '^[^''$/*-]+') AS plain_run
   ) token
   CROSS JOIN LATERAL (
     SELECT CASE WHEN token.dollar_tag IS NULL THEN 0 ELSE
@@ -91,6 +109,7 @@ WITH RECURSIVE cand AS (
              WHEN token.string_token IS NOT NULL THEN length(token.string_token)
              WHEN token.dollar_tag IS NOT NULL AND closing.dollar_close > 0
                THEN (2 * length(token.dollar_tag)) + closing.dollar_close - 1
+             WHEN token.plain_run IS NOT NULL THEN length(token.plain_run)
              ELSE 1
            END AS consume,
            token.line_token IS NOT NULL OR token.block_token IS NOT NULL OR
@@ -101,16 +120,17 @@ WITH RECURSIVE cand AS (
              (token.dollar_tag IS NOT NULL AND closing.dollar_close > 0) AS mask_token,
            src.rest LIKE '*/%' OR
              (src.rest LIKE '/*%' AND token.block_token IS NULL) OR
-             (src.rest ~ '^(?:[eE]|[uU]&)?''' AND token.string_token IS NULL) OR
+             (src.rest LIKE '''%' AND token.string_token IS NULL) OR
              (token.dollar_tag IS NOT NULL AND closing.dollar_close = 0) AS lex_error
   ) step
-  WHERE l.scan_pos <= char_length(l.prosrc)
+  WHERE l.scan_pos <= l.src_len
     AND NOT l.lex_error
 ), lexed AS (
-  SELECT oid, proname, args, prosrc, argname, argname_pattern,
-         argument_position, actor_is_uuid, executable_src, lex_error
-  FROM lexer
-  WHERE lex_error OR scan_pos > char_length(prosrc)
+  SELECT cand.oid, cand.proname, cand.args, cand.argname, cand.argname_pattern,
+         cand.argument_position, cand.actor_is_uuid, l.executable_src, l.lex_error
+  FROM lexer l
+  JOIN cand ON cand.oid = l.oid
+  WHERE l.lex_error OR l.scan_pos > l.src_len
 ), guarded AS (
   SELECT lexed.*,
          actor_is_uuid
@@ -130,7 +150,30 @@ WITH RECURSIVE cand AS (
          CASE
            WHEN lex_error OR NOT actor_is_uuid OR executable_src ~* '\mEXCEPTION\s+WHEN\M'
              THEN executable_src
-           ELSE regexp_replace(
+           -- The refusal is credited only when it is UNCONDITIONAL. Two ways it
+           -- can fail to be, and both used to truncate the whole scanned body:
+           --   * a block opened before it and still open at it -- checked by
+           --     balancing IF/LOOP/CASE over the text preceding the match;
+           --   * a block opened INSIDE the match. `[^;]*` reaches across any
+           --     semicolon-free header, so `IF false THEN <refusal>` matches
+           --     from the OUTER IF and leaves a balanced-looking prefix --
+           --     checked by requiring the matched refusal statement to contain
+           --     exactly one IF and no loop or CASE opener.
+           -- A CASE *expression* before the refusal also reads as unclosed,
+           -- which costs an extra finding and never hides one.
+           WHEN stripped.prefix IS DISTINCT FROM executable_src
+                AND NOT (blocks.if_tokens = 2 * blocks.end_if
+                         AND blocks.loop_tokens = 2 * blocks.end_loop
+                         AND blocks.case_tokens = 2 * blocks.end_case
+                         AND blocks.stmt_if = 1
+                         AND blocks.stmt_loop = 0
+                         AND blocks.stmt_case = 0)
+             THEN executable_src
+           ELSE stripped.prefix
+         END AS pre_refusal_src
+  FROM guarded
+  CROSS JOIN LATERAL (
+    SELECT regexp_replace(
              executable_src,
              '('
                || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
@@ -144,9 +187,27 @@ WITH RECURSIVE cand AS (
              || ').*$',
              '',
              'is'
-           )
-         END AS pre_refusal_src
-  FROM guarded
+           ) AS prefix
+  ) stripped
+  CROSS JOIN LATERAL (
+    -- The matched refusal statement: from where the strip began through the
+    -- semicolon that ends it. The match itself is semicolon-free until then.
+    SELECT coalesce(
+             substring(substr(executable_src, char_length(stripped.prefix) + 1) FROM '^[^;]*;'),
+             ''
+           ) AS stmt
+  ) refusal
+  CROSS JOIN LATERAL (
+    SELECT array_length(regexp_split_to_array(upper(stripped.prefix), '\mIF\M'), 1) - 1 AS if_tokens,
+           array_length(regexp_split_to_array(upper(stripped.prefix), '\mEND\s+IF\M'), 1) - 1 AS end_if,
+           array_length(regexp_split_to_array(upper(stripped.prefix), '\mLOOP\M'), 1) - 1 AS loop_tokens,
+           array_length(regexp_split_to_array(upper(stripped.prefix), '\mEND\s+LOOP\M'), 1) - 1 AS end_loop,
+           array_length(regexp_split_to_array(upper(stripped.prefix), '\mCASE\M'), 1) - 1 AS case_tokens,
+           array_length(regexp_split_to_array(upper(stripped.prefix), '\mEND\s+CASE\M'), 1) - 1 AS end_case,
+           array_length(regexp_split_to_array(upper(refusal.stmt), '\mIF\M'), 1) - 1 AS stmt_if,
+           array_length(regexp_split_to_array(upper(refusal.stmt), '\mLOOP\M'), 1) - 1 AS stmt_loop,
+           array_length(regexp_split_to_array(upper(refusal.stmt), '\mCASE\M'), 1) - 1 AS stmt_case
+  ) blocks
 )
 SELECT DISTINCT proname || '(' || args || ')' AS violation_key,
        argname AS suspect_param

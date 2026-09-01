@@ -42,9 +42,17 @@
 // migration's header comment.
 //
 // Conservative by design, in both directions:
-//   * Non-mutating functions are never flagged (a reporting function taking
-//     p_user_id as a filter is not an attribution risk).
 //   * SECURITY INVOKER functions are never flagged (RLS still applies to them).
+//   * A routine with NO reachable use of the actor is never flagged. "Mutates"
+//     is deliberately wider than INSERT/UPDATE/DELETE/MERGE, though: it also
+//     covers EXECUTE and any hand-off of the actor across a boundary this
+//     reader cannot see through — a call, an OPERATOR(...) or infix symbolic
+//     operator, or a cast to a user-defined type, since all of those can run
+//     caller-influenced code. So a read-only reporting function that merely
+//     compares the parameter (`WHERE created_by = p_user_id`) IS flagged: `=`
+//     is overloadable, and the reader cannot prove which operator resolves.
+//     That is the accepted false-positive cost; clear it with the exempt
+//     marker below, not by narrowing the operator rule.
 //   * The canonical ACTOR_MISMATCH token remains the preferred guard. Legacy-main
 //     refusals using `<actual actor parameter> does not match authenticated user`
 //     count only when a real RAISE EXCEPTION is controlled by that parameter's
@@ -203,6 +211,12 @@ const SQL_IDENTIFIER_PATTERN =
   `(?:${SQL_UNICODE_IDENTIFIER_PATTERN}|"(?:[^"]|"")*"|[A-Za-z_][\\w$]*)`;
 const SQL_QUALIFIED_IDENTIFIER_PATTERN =
   `${SQL_IDENTIFIER_PATTERN}(?:\\s*\\.\\s*${SQL_IDENTIFIER_PATTERN})*`;
+// INTO / FOR / FOREACH accept a comma-separated list of assignment targets, and
+// each target may be qualified by its block label. Reading the whole list (not
+// just the first name) is what lets the reader correlate output expressions
+// with the local that actually receives them.
+const SQL_ASSIGNMENT_TARGET_LIST_PATTERN =
+  `${SQL_QUALIFIED_IDENTIFIER_PATTERN}(?:\\s*,\\s*${SQL_QUALIFIED_IDENTIFIER_PATTERN})*`;
 const routineHeadRe = new RegExp(
   `CREATE\\s+(?:OR\\s+REPLACE\\s+)?(FUNCTION|PROCEDURE)\\s+` +
     `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\(`,
@@ -1879,6 +1893,74 @@ const SQL_SYMBOLIC_OPERATOR_PATTERN = '[-+*/\\\\<>=~!@#%^&|`?]+';
 const SQL_CAST_TYPE_PATTERN =
   `${SQL_QUALIFIED_IDENTIFIER_PATTERN}(?:\\s*\\([^;()]*\\))?(?:\\s*\\[\\s*\\])*`;
 
+/** pg_catalog's own conversions are the only casts a caller cannot redefine.
+ * Multi-word spellings (`double precision`, `character varying`, `timestamp
+ * with time zone`) are captured by their first word, so the leading word is
+ * listed here rather than the full type name. Anything not on this list —
+ * including every schema-qualified name outside pg_catalog — is read as
+ * user-defined and therefore callable. */
+const BUILT_IN_SQL_CAST_TYPE_NAMES = new Set([
+  "bigint", "bigserial", "bit", "bool", "boolean", "box", "bpchar", "bytea",
+  "char", "character", "cid", "cidr", "circle", "date", "daterange", "decimal",
+  "double", "float4", "float8", "inet", "int", "int2", "int4", "int4range",
+  "int8", "int8range", "integer", "interval", "json", "jsonb", "jsonpath",
+  "line", "lseg", "macaddr", "macaddr8", "money", "name", "numeric",
+  "numrange", "oid", "path", "point", "polygon", "real", "record", "regclass",
+  "regconfig", "regdictionary", "regnamespace", "regoper", "regoperator",
+  "regproc", "regprocedure", "regrole", "regtype", "serial", "smallint",
+  "smallserial", "text", "tid", "time", "timestamp", "timestamptz", "timetz",
+  "tsquery", "tsrange", "tstzrange", "tsvector", "uuid", "varbit", "varchar",
+  "void", "xid", "xml",
+]);
+
+function isBuiltInSqlCastTypeName(rawType) {
+  const normalized = normalizedQualifiedIdentifier(
+    String(rawType || "").replace(/\s*\([^)]*\)/g, "").replace(/(?:\s*\[\s*\])+\s*$/, "")
+  );
+  if (normalized === null) return false;
+  const parts = normalized.split(".");
+  if (parts.length > 2) return false;
+  if (parts.length === 2 && parts[0] !== "pg_catalog") return false;
+  return BUILT_IN_SQL_CAST_TYPE_NAMES.has(parts.at(-1) || "");
+}
+
+/** A cast to a user-defined type runs that type's cast function, or its input
+ * function, with the caller-supplied actor as the argument — the same callable
+ * boundary as helper(p_actor), just spelled as a conversion. Both PostgreSQL
+ * spellings are covered: CAST(actor AS t) and actor::t, including chains and
+ * the grouping/field/subscript syntax that can sit between them. */
+function hasActorUserDefinedCastForwarding(structuralBody, actorParams) {
+  for (const actorParam of actorParams) {
+    const reference = new RegExp(actorReferencePattern(actorParam), "gi");
+    let match;
+    while ((match = reference.exec(structuralBody)) !== null) {
+      const prefix = structuralBody.slice(0, match.index);
+      for (const open of unmatchedOpenParens(prefix)) {
+        if (!/\bCAST\s*$/i.test(prefix.slice(0, open))) continue;
+        const parsed = readBalancedParens(structuralBody, open);
+        if (!parsed) return true;
+        const asType = new RegExp(`\\bAS\\s+(${SQL_CAST_TYPE_PATTERN})\\s*$`, "i")
+          .exec(parsed.params);
+        if (!asType || !isBuiltInSqlCastTypeName(asType[1])) return true;
+      }
+      let rest = structuralBody.slice(match.index + match[0].length);
+      while (true) {
+        const cast = new RegExp(`^\\s*::\\s*(${SQL_CAST_TYPE_PATTERN})`, "i").exec(rest);
+        if (cast) {
+          if (!isBuiltInSqlCastTypeName(cast[1])) return true;
+          rest = rest.slice(cast[0].length);
+          continue;
+        }
+        const transparent = new RegExp(`^\\s*\\.\\s*${SQL_IDENTIFIER_PATTERN}`, "i").exec(rest) ||
+          /^\s*\[[^;\]]*\]/.exec(rest) || /^\s*\)/.exec(rest);
+        if (!transparent) break;
+        rest = rest.slice(transparent[0].length);
+      }
+    }
+  }
+  return false;
+}
+
 function hasOpenCastContext(prefix) {
   return unmatchedOpenParens(prefix).some((open) =>
     /\bCAST\s*$/i.test(prefix.slice(0, open))
@@ -1930,30 +2012,156 @@ function hasActorSymbolicOperatorForwarding(structuralBody, actorParams) {
   return false;
 }
 
+/** Split a comma-separated PL/pgSQL list at top level. Grouping parens and
+ * subscripts survive structural masking, so a bare `.split(",")` would tear
+ * `coalesce(a, b)` into two operands and mis-correlate the assignment. Returns
+ * null when the brackets do not balance, which makes the caller fail closed. */
+function splitTopLevelCommaList(text) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") { depth--; if (depth < 0) return null; }
+    else if (ch === "," && depth === 0) { parts.push(text.slice(start, i)); start = i + 1; }
+  }
+  if (depth !== 0) return null;
+  parts.push(text.slice(start));
+  return parts;
+}
+
+function assignmentTargetList(rawList) {
+  const parts = splitTopLevelCommaList(rawList);
+  if (parts === null) return [];
+  return parts.map((part) => normalizedQualifiedIdentifier(part)).filter((t) => t !== null);
+}
+
+/** Record a laundering target. A qualified target also taints its ROOT: writing
+ * `v_rec.actor` makes the whole `v_rec` composite carry the actor, and a later
+ * `helper(v_rec)` forwards it without ever naming the field again. A block-label
+ * qualifier (`blk.v_id`) taints the label too, which is over-broad and safe. */
+function addForwardingTarget(references, target) {
+  if (target === null) return false;
+  let changed = false;
+  for (const candidate of [target, target.split(".")[0]]) {
+    if (references.has(candidate)) continue;
+    references.add(candidate);
+    changed = true;
+  }
+  return changed;
+}
+
+/** Enumerate every PL/pgSQL construct that copies query, cursor, loop, or
+ * diagnostics output into locals, paired with the expressions that produce it.
+ *
+ * `sources === null` marks a producer whose value is NOT readable from the
+ * statement itself — a cursor FETCH (the cursor was opened elsewhere) and
+ * GET STACKED DIAGNOSTICS (the value arrives through a raised exception, which
+ * a caller-supplied actor can reach via RAISE ... USING or a helper). Those
+ * targets are tainted unconditionally, which is the fail-closed reading.
+ *
+ * `correlated` is true only when the output list and the target list have the
+ * same length, so `SELECT 1, p_actor INTO v_dummy, v_id` taints v_id and not
+ * v_dummy. When the lists cannot be lined up, ANY actor-bearing output taints
+ * EVERY target. */
+function intoAssignmentSites(structuralBody) {
+  const sites = [];
+  const push = (rawTargets, sources) => {
+    const targets = assignmentTargetList(rawTargets);
+    if (targets.length === 0) return;
+    sites.push({
+      targets,
+      sources,
+      correlated: sources !== null && sources.length === targets.length,
+    });
+  };
+  const readSources = (rawSources) => {
+    const parts = splitTopLevelCommaList(rawSources);
+    return parts === null ? [rawSources] : parts;
+  };
+
+  // `SELECT <exprs> INTO [STRICT] <targets>` and the RETURNING form. INSERT's
+  // own `INTO <table>` cannot match: this requires SELECT/RETURNING first and
+  // never crosses a statement terminator.
+  const postList = new RegExp(
+    `\\b(?:SELECT|RETURNING)\\b([^;]*?)\\bINTO\\s+(?:STRICT\\s+)?` +
+      `(${SQL_ASSIGNMENT_TARGET_LIST_PATTERN})`,
+    "gi"
+  );
+  // `SELECT INTO [STRICT] <targets> <exprs>` — PostgreSQL's older spelling,
+  // where the target list precedes the output expressions.
+  const preList = new RegExp(
+    `\\bSELECT\\s+INTO\\s+(?:STRICT\\s+)?(${SQL_ASSIGNMENT_TARGET_LIST_PATTERN})\\s+([^;]*)`,
+    "gi"
+  );
+  const fetchInto = new RegExp(
+    `\\bFETCH\\b[^;]*?\\bINTO\\s+(?:STRICT\\s+)?(${SQL_ASSIGNMENT_TARGET_LIST_PATTERN})`,
+    "gi"
+  );
+  // FOR/FOREACH bind their loop variables from the iterator expression. The
+  // row is not positionally correlatable with the target list, so any
+  // actor-bearing iterator taints every loop variable.
+  const loopTargets = new RegExp(
+    `\\b(?:FOR|FOREACH)\\s+(${SQL_ASSIGNMENT_TARGET_LIST_PATTERN})\\s+` +
+      `(?:SLICE\\s+\\d+\\s+)?\\bIN\\b([^;]*?)\\bLOOP\\b`,
+    "gi"
+  );
+  const stackedDiagnostics = /\bGET\s+STACKED\s+DIAGNOSTICS\b([^;]*)/gi;
+
+  let match;
+  while ((match = postList.exec(structuralBody)) !== null) {
+    push(match[2], readSources(match[1]));
+  }
+  while ((match = preList.exec(structuralBody)) !== null) {
+    push(match[1], readSources(match[2]));
+  }
+  while ((match = fetchInto.exec(structuralBody)) !== null) {
+    push(match[1], null);
+  }
+  while ((match = loopTargets.exec(structuralBody)) !== null) {
+    const targets = assignmentTargetList(match[1]);
+    if (targets.length > 0) sites.push({ targets, sources: [match[2]], correlated: false });
+  }
+  while ((match = stackedDiagnostics.exec(structuralBody)) !== null) {
+    const items = new RegExp(
+      `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*(?::=|=(?!=))`,
+      "gi"
+    );
+    let item;
+    while ((item = items.exec(match[1])) !== null) push(item[1], null);
+  }
+  return sites;
+}
+
 /** Carry direct actor taint through the ordinary PL/pgSQL local-binding forms
  * that wrappers use before invoking helpers. The analysis is deliberately
  * monotonic: once a local receives an unbound actor in the routine, a later
  * overwrite does not make it trusted for this static guard. */
 function actorForwardingReferences(structuralBody, actorParams) {
   const references = new Set(actorParams);
+  const sites = intoAssignmentSites(structuralBody);
+  for (const site of sites) {
+    if (site.sources !== null) continue;
+    for (const target of site.targets) addForwardingTarget(references, target);
+  }
   let changed = true;
   while (changed) {
     changed = false;
     for (const source of [...references]) {
       const sourceRef = actorReferencePattern(source);
       const patterns = [
+        // The assigned expression runs to the statement terminator, NOT to the
+        // end of the line: `v_id := CASE\n WHEN true THEN p_actor\n END;` is
+        // one assignment, and stopping at the newline missed it entirely.
         new RegExp(
           `(?:^|[;\\n]|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b)\\s*(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*` +
-            `(?::=|=(?!=))\\s*[^;\\n]*(?:${sourceRef})`,
+            `(?::=|=(?!=))\\s*[^;]*(?:${sourceRef})`,
           "gi"
         ),
         new RegExp(
           `(?:^|[;\\n])\\s*(${SQL_IDENTIFIER_PATTERN})\\s+(?:CONSTANT\\s+)?[^;\\n:=]+?` +
-            `(?::=|DEFAULT)\\s*[^;\\n]*(?:${sourceRef})`,
-          "gi"
-        ),
-        new RegExp(
-          `\\bSELECT\\b[^;]*(?:${sourceRef})[^;]*\\bINTO\\s+(${SQL_IDENTIFIER_PATTERN})`,
+            `(?::=|DEFAULT)\\s*[^;]*(?:${sourceRef})`,
           "gi"
         ),
         new RegExp(
@@ -1964,10 +2172,22 @@ function actorForwardingReferences(structuralBody, actorParams) {
       for (const pattern of patterns) {
         let match;
         while ((match = pattern.exec(structuralBody)) !== null) {
-          const target = normalizedQualifiedIdentifier(match[1]);
-          if (target !== null && !references.has(target)) {
-            references.add(target);
+          if (addForwardingTarget(references, normalizedQualifiedIdentifier(match[1]))) {
             changed = true;
+          }
+        }
+      }
+      const sourceRe = new RegExp(sourceRef, "i");
+      for (const site of sites) {
+        if (site.sources === null) continue;
+        if (site.correlated) {
+          site.targets.forEach((target, index) => {
+            if (sourceRe.test(site.sources[index] || "") &&
+                addForwardingTarget(references, target)) changed = true;
+          });
+        } else if (site.sources.some((expr) => sourceRe.test(expr))) {
+          for (const target of site.targets) {
+            if (addForwardingTarget(references, target)) changed = true;
           }
         }
       }
@@ -2685,6 +2905,13 @@ try {
       commentBlankedBody,
       commentBlankedForwardingReferences
     );
+    const actorForwardedUserCast = hasActorUserDefinedCastForwarding(
+      maskedBody,
+      maskedForwardingReferences
+    ) || hasActorUserDefinedCastForwarding(
+      commentBlankedBody,
+      commentBlankedForwardingReferences
+    );
     const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(maskedBody) ||
       /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(commentBlankedBody) ||
       /\bEXECUTE\b/i.test(maskedBody) ||
@@ -2692,7 +2919,8 @@ try {
       actorForwardedInvocation.test(commentBlankedBody) ||
       actorForwardedCallable ||
       actorForwardedOperator ||
-      actorForwardedSymbolicOperator;
+      actorForwardedSymbolicOperator ||
+      actorForwardedUserCast;
     if (!hasMutation) continue;
 
     // IS DISTINCT FROM resolves its equality operator through the routine's

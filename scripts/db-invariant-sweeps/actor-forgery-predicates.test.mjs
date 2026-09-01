@@ -342,6 +342,72 @@ BEGIN
   p_result := $2;
 END;
 $body$;
+
+-- A trailing backslash is DATA in an ordinary SQL string. Applying the E'...'
+-- escape branch to it swallowed the closing quote, so the lexer ran on to the
+-- next quote and masked the executable statements in between -- the routine
+-- read as clean.
+--
+-- The run-on consumes an ODD number of quotes (its own, the one it ate, and
+-- the one it stopped at), so it can only end balanced -- fail OPEN instead of
+-- tripping lex_error -- when the routine contains an odd total. The lone quote
+-- inside the line comment supplies it, and is also where the run-on stops.
+CREATE FUNCTION public.actor_backslash_guard_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  RAISE NOTICE 'ends with backslash \\';
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+  -- an apostrophe in prose: '
+  RAISE NOTICE 'done';
+END;
+$body$;
+
+-- Same run-on, reached the other way: the E of LIKE is not an escape-string
+-- prefix, so the string after it must be lexed with ordinary rules.
+CREATE FUNCTION public.actor_word_adjacent_escape_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_flag boolean;
+BEGIN
+  v_flag := 'sample' LIKE'ends with backslash \\';
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+  -- an apostrophe in prose: '
+  RAISE NOTICE 'done';
+END;
+$body$;
+
+-- The refusal is real, canonical, and never executes. Nothing required it to be
+-- reachable, so matching it truncated the whole scanned body.
+CREATE FUNCTION public.actor_unreachable_refusal_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF false THEN
+    IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'ACTOR_MISMATCH';
+    END IF;
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- Control for the reachability rule: a CLOSED block before a top-level refusal
+-- must still let the refusal end the scan, or the rule degenerates into
+-- flagging every routine.
+CREATE FUNCTION public.actor_closed_block_then_refusal(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source IS NULL THEN
+    RAISE NOTICE 'null actor';
+  END IF;
+  IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
 `);
 
   const forgedActor = '00000000-0000-0000-0000-000000000001';
@@ -390,6 +456,9 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     'actor_custom_local_refusal_forward',
     'actor_custom_refusal_forward',
     'actor_dollar_guard_forward',
+    'actor_backslash_guard_forward',
+    'actor_word_adjacent_escape_forward',
+    'actor_unreachable_refusal_forward',
   ]) {
     assert.ok(
       generalRows.some((row) => row.startsWith(`${routine}(`) && row.endsWith('|p_actor_source')),
@@ -400,7 +469,11 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
       `financial predicate must ignore non-refusing ACTOR_MISMATCH text in ${routine}: ${financialRows.join(', ')}`,
     );
   }
-  for (const routine of ['actor_safe_refusal_forward', 'actor_safe_local_refusal_forward']) {
+  for (const routine of [
+    'actor_safe_refusal_forward',
+    'actor_safe_local_refusal_forward',
+    'actor_closed_block_then_refusal',
+  ]) {
     assert.ok(
       !generalRows.some((row) => row.startsWith(`${routine}(`)),
       `general predicate must stop at the executable uncaught refusal in ${routine}: ${generalRows.join(', ')}`,
