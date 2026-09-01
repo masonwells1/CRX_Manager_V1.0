@@ -436,6 +436,26 @@ for (const command of [
   "cp /tmp/evil .claude/commands/../hooks/review-proof-guard.mjs",
   "tee .claude/commands/../hooks/sql-safety.mjs",
   "cp /tmp/evil .github/ISSUE_TEMPLATE/../workflows/ci.yml",
+  // THIRD gpt-5.6-sol round. A WRAPPER hides the real program from a head-only
+  // check: bare `cp` denied while `command cp` was ALLOW. Wrappers are refused by
+  // never being listed, so this block also pins the ones nobody has tried yet.
+  "command cp /tmp/evil .husky/pre-push",
+  "env cp /tmp/evil .husky/pre-push",
+  "exec cp /tmp/evil .husky/pre-push",
+  "timeout 5 cp /tmp/evil .husky/pre-push",
+  "sudo cp /tmp/evil .husky/pre-push",
+  "xargs cp .husky/pre-push",
+  // Utilities that take an OUTPUT operand or an in-place flag, all probe-confirmed
+  // ALLOW before removal from the allowlist.
+  "uniq /tmp/in .husky/pre-push",
+  "diff --output=.husky/pre-push a b",
+  "yq -i .a=1 .codex/hooks.json",
+  "xxd -r /tmp/x .husky/pre-push",
+  // A package runner executes an arbitrary program with the protected path as its
+  // argument. `node <script>` stays allowed; these do not.
+  "npx rimraf .husky",
+  "npm exec rimraf .husky/pre-push",
+  "yarn rimraf .claude/hooks/sql-safety.mjs",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.equal(result.status, 0, `hook should exit 0: ${command}`);

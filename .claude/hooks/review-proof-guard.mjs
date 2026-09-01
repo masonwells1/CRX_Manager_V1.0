@@ -424,20 +424,33 @@ if (shellTool) {
   // The `.claude/session-state` rule above keeps its own verb list unchanged —
   // rewriting that one is a separate, riskier change than this addition.
   const ENFORCEMENT_READ_ONLY_HEADS = new Set([
-    "cat", "head", "tail", "less", "more", "bat", "nl", "od", "xxd", "strings",
+    "cat", "head", "tail", "less", "more", "bat", "nl", "od", "strings",
     "grep", "egrep", "fgrep", "rg", "ag", "ack",
     "wc", "ls", "dir", "stat", "file", "du", "tree", "realpath", "readlink", "basename", "dirname",
-    "diff", "cmp", "comm", "uniq", "cut", "tr", "jq", "yq", "column",
+    "cmp", "comm", "cut", "tr", "jq", "column",
     "md5sum", "sha1sum", "sha256sum", "cksum",
-    "which", "type", "command", "pwd", "test", "true", "false", "echo", "printf", "date",
-    // ABSENT ON PURPOSE — a second gpt-5.6-sol round proved each of these writes a
-    // named file while wearing a read-only head, with hook probes returning ALLOW:
+    "which", "type", "pwd", "test", "true", "false", "echo", "printf", "date",
+    // ABSENT ON PURPOSE — successive gpt-5.6-sol rounds proved each of these
+    // writes a NAMED file while wearing a read-only head, every one probe-confirmed
+    // ALLOW before removal:
     //   sed  → `sed -n 'w .husky/pre-push' /dev/null`   (the `w` command writes)
     //   awk  → `awk -v p=.husky/pre-push '… > p'`       (redirect inside the script)
     //   sort → `sort -o .husky/pre-push /dev/null`      (`-o` writes in place)
-    // Reading these files never needs them; cat/head/grep/git show all work, and
-    // over-refusing an exotic read is the correct side to err on.
-    "node", "npm", "npx", "pnpm", "yarn", "gh",
+    //   uniq → `uniq in .husky/pre-push`                (second operand is output)
+    //   diff → `diff --output=.husky/pre-push a b`
+    //   yq   → `yq -i … .codex/hooks.json`              (`-i` edits in place)
+    //   xxd  → `xxd -r` reconstructs binary into a file
+    // And the WRAPPERS, which hide the real program from a head-only check:
+    //   command → `command cp /tmp/evil .husky/pre-push` was ALLOW while bare `cp`
+    //             was denied. `env`, `exec`, `nice`, `timeout`, `xargs`, `sudo`,
+    //             `stdbuf`, and any future wrapper are refused by simply never
+    //             being listed — that is the allowlist doing its job.
+    //   npx/npm/pnpm/yarn → `npx rimraf .husky/…` runs an arbitrary program with
+    //             the protected path as its argument. `node <script>` stays,
+    //             because that is how these suites run.
+    // Reading these files never needs any of the above: cat/head/grep/git show
+    // cover it, and over-refusing an exotic read is the correct side to err on.
+    "node", "gh",
     "git", "find",
     // PowerShell read verbs. Its WRITE verbs (Set-Content, Copy-Item, Out-File,
     // Add-Content, Move-Item, Remove-Item) are absent on purpose.
@@ -468,9 +481,11 @@ if (shellTool) {
     String(cmd ?? "").split(/(?:\|\||&&|[;\r\n|&])+/).map((s) => s.trim()).filter(Boolean);
   // Resolve git's real subcommand past the global flags THAT TAKE A SEPARATE
   // VALUE. A naive `git(?:\s+-\S+)*\s+(\w+)` reads `git -C <dir> add …` as
-  // subcommand `<dir>`, finds it unknown, and fails closed on an ordinary
-  // `git add` — which is exactly how this rule first broke a real command. Skip
-  // the flag AND its value, then take the first bare token.
+  // subcommand `<dir>`, finds it unknown, and refuses an ordinary `git add` —
+  // which is exactly how this rule first broke a real command. @proven-by
+  // review-proof-guard.test.mjs ("git -C /repo add …" and the -c/--git-dir cases
+  // in the allow block). Skip the flag AND its value, then take the first bare
+  // token.
   const GIT_VALUE_FLAGS = /^(?:-[cC]|--git-dir|--work-tree|--namespace|--exec-path|--config-env|--super-prefix)$/;
   const gitSubcommandOf = (segment) => {
     const tokens = String(segment).match(/(?:"[^"]*"|'[^']*'|\S)+/g) || [];
@@ -495,8 +510,7 @@ if (shellTool) {
     // flags keeps `node .claude/hooks/x.test.mjs` — how this suite is actually
     // run — working. A script FILE that writes is the documented residual: no
     // command-text rule can see inside it.
-    if (["node", "npm", "npx", "pnpm", "yarn"].includes(head) &&
-        /(?:^|\s)(?:-e|-p|--eval|--print|--input-type)\b/i.test(segment)) return false;
+    if (head === "node" && /(?:^|\s)(?:-e|-p|--eval|--print|--input-type)\b/i.test(segment)) return false;
     // `-fprintf` writes a named file; the old `fprint\b` missed it because the
     // trailing `f` is a word character.
     if (head === "find" && /(?:^|\s)-(?:delete|exec|execdir|ok|okdir|fls|fprint\w*)\b/i.test(segment)) return false;
