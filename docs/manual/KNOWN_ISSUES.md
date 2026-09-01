@@ -210,125 +210,56 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-09-01 — F06: a reloaded chemical line goes stale when the acreage changes, and the SAVE IS THEN REFUSED
+## OPEN 2026-09-01 — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
 
-**Severity corrected on 2026-09-01 by Codex review of PR #538, before this entry ever landed.** The
-first draft of this entry called it a silent billing gap. **It is not** — the database refuses the
-save. The corrected characterisation is below; the mistake is recorded because prescribing a
-migration for an already-guarded path would have misdirected the fix.
-
-**Plain English:** open a saved job, change the acres, and a chemical line keeps both numbers it was
+**Plain English.** Open a saved job, change the acres, and a chemical line keeps both numbers it was
 saved with. A line saved as **1.5 pt/ac, quantity 150, over 100 acres** still reads 1.5 and 150 at
-**200 acres** — and 1.5 × 200 is 300, so the two numbers on screen no longer agree with each other.
+**200 acres** — and 1.5 × 200 is 300, so the two numbers no longer agree. Saving is then refused and
+the whole job save rolls back.
 
-**Which number is wrong depends on what the operator originally typed, and the saved row does not
-record that.** Both readings are legitimate:
+**The defect is the lost provenance, not the stale number.** Which figure is wrong depends on what
+the operator originally typed, and the saved row does not record that:
 
-| The operator typed… | At 200 acres the correct line is | Because |
-|---|---|---|
-| the **rate** (1.5 pt/ac) | rate 1.5, quantity **300** | the rate is authoritative; the total follows it |
-| the **total** (150 pt) | quantity 150, rate **0.75** | the typed total is authoritative; the rate follows it |
+| Typed | Correct line at 200 acres |
+|---|---|
+| the **rate** (1.5 pt/ac) | rate 1.5, quantity **300** |
+| the **total** (150 pt) | quantity 150, rate **0.75** |
 
-`applyChemEdit` back-solves the other field either way, so a saved row of `(1.5, 150, 100 ac)` is
-produced *identically* by both. **This is the whole of F06** — not that the line is stale, but that
-nothing on the row says which field to trust. An earlier draft of this entry asserted the quantity
-"should read 300", which silently assumes the rate-driven case and would push a fixer toward
-overwriting an operator's typed total. Caught by Codex on PR #538.
+`applyChemEdit` back-solves the other field either way, so both histories produce an identical saved
+row. **Do not "fix" this by re-deriving the quantity** — that silently rewrites an operator's typed
+chemical amount. A heuristic testing `quantity == rate × acres` was tried and reverted as unsound
+for exactly this reason; see `src/lib/chemCalculator.ts:91-96`. The clean fix is to persist the
+`driver` field on `job_chemicals` so a reloaded line knows which side is authoritative, or to
+surface the refusal on screen before the operator reaches it.
 
-**What actually happens when you save.** For a **priced** line, `save_job` refuses the whole job
-save with `CHEM_QUANTITY_NOT_DERIVED` and a plain-English message: *"…is quoted at 1.5 per acre over
-200 acres, which is 300, but the line carries a quantity of 150. The amount billed comes from the
-quantity, so these must agree. Re-enter the rate per acre and let the total fill itself in, or
-correct the quantity."* The guard is in the applied migration
-`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`, raised **before any
-write**, with a tolerance of `GREATEST(0.0001, LEAST(0.00005 × acres, 0.1))` — far below the gap a
-real acreage change opens. **A stale priced quantity cannot reach an invoice through `save_job`.**
+**Money impact.** Priced lines cannot misbill through `save_job`: it raises
+`CHEM_QUANTITY_NOT_DERIVED` before any write. Unpriced cost-bearing lines have accepted paths where
+a stale quantity saves and misstates margin. **The exact accept/refuse set is the control flow of
+`supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`** —
+read the function, not its header comments and not this entry. Eleven review rounds on PR #538 went
+into paraphrasing that partition and got it wrong repeatedly; the paraphrase is deliberately omitted
+here.
 
-**So the usual harm is a blocked save — but not the only one.** Refusing one line rolls back the
-*entire* job save. The operator changed the acreage, did nothing else wrong, and cannot save. The
-server message is good and names the remedy, but the UI let them reach a state the database will not
-accept. **Unpriced cost-bearing lines can instead be saved with a stale number** — see below.
+**Where.** `src/pages/JobDetail.tsx:1765-1777` (an explicit "F06 IS STILL OPEN, DELIBERATELY"
+block); `src/lib/chemCalculator.ts:75, 88` (the driverless branch returns the row unchanged).
+`src/lib/chemCalculator.test.ts:723-727` **asserts the current behaviour**, so any fix must update
+that test.
 
-**Some lines the guard accepts can still carry a stale number, and this entry does not enumerate
-them.** The money refusals key on PRICE, so an **unpriced, cost-bearing** line has several accepted
-paths — the migration's own comments call these accepted residuals and note that such a line's
-"cost can still misstate margin". A stale reloaded quantity on such a line can therefore be saved,
-misstating margin rather than being refused — in which direction depends on whether the acreage
-rose or fell. Billing is not affected: nothing unpriced can over-charge.
-
-> **Deliberate omission — read the function, not this paragraph.** Earlier revisions tried to
-> enumerate the exact accept/refuse partition. **Five consecutive Codex findings on PR #538
-> corrected that enumeration in five different directions**, each correction right: a broad
-> cost-only hole → no hole at all → zero-quantity only → blank-unit exemptions that are not
-> zero-quantity → an unverifiable-quantity branch that is not either. Five right corrections to one
-> paragraph is proof the partition does not survive restatement, so this entry stops asserting it
-> and makes no claim about which accepted shapes are harmless.
->
-> The authoritative set is the **control flow** of
-> `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql` — not its header
-> comments, which are thorough enough to feel authoritative without being exhaustive, and not this
-> entry. Anyone auditing what the guard lets past must read the function.
-
-None of this changes what F06 *is*. The defect is the lost provenance; its common symptom is the
-blocked save, and on unpriced cost-bearing lines it can instead be saved with a stale number that
-misstates margin. The exemption boundary matters only to someone auditing what the guard lets
-past, and that person should be reading the guard.
-
-**The fix is UI-side, not a migration.** Reconcile the line on load or on acreage change so the
-operator never reaches the refused state — or, at minimum, surface the refusal early on screen the
-way `chemRowDefects` already does for the unit refusals. Persisting `driver` on `job_chemicals`
-would still be the cleanest way to know which field is authoritative, but it is **not** required to
-close a billing hole, because the server already closes it.
-
-**Why it happens.** `JobDetail.tsx` tracks which field the operator last typed in — the rate or the
-total — in a UI-only field called `driver`. It is **never written to the database**. A line loaded
-from `job_chemicals` therefore comes back with no driver, and `recomputeChemRowForAcres`
-(`src/lib/chemCalculator.ts:75`) deliberately leaves a driverless row exactly as saved.
-
-**This is deliberate, not an oversight, and the reasoning is sound.** An earlier pass tried to
-recover the lost provenance by testing whether `quantity == rate × acres`. That test cannot work:
-`applyChemEdit` back-solves the rate whenever the operator types a quantity, so a hand-entered total
-satisfies the same equality by construction. Acting on it would silently rewrite an operator's typed
-chemical amount every time the acreage changed. **Silently rewriting an operator's typed chemical
-quantity is worse than leaving a line the server will refuse**, so the code takes the safe side. Do
-not reintroduce a heuristic here — `chemCalculator.ts:91-96` records this as reverted-and-unsound.
-
-**Note the source comment overstates the stake.** `JobDetail.tsx:1773-1774` justifies the choice
-with "Under-billing is bad; silently rewriting an operator's typed chemical amount is worse."
-Given `CHEM_QUANTITY_NOT_DERIVED`, the priced line does not under-bill — it fails to save. The
-*decision* still stands on its own merits; only its stated stake is out of date, and that comment
-predates the 2026-08-20 guard.
-
-**Evidence (verified 2026-09-01 against `main` at `85266c9a`):**
-- `src/pages/JobDetail.tsx:1765-1777` — an explicit "F06 IS STILL OPEN, DELIBERATELY" block stating
-  the same 1.5 pt/ac → 150 pt at 200 acres example verbatim.
-- `src/lib/chemCalculator.ts:71-72, 88` — the driverless branch returns the row unchanged.
-- `src/lib/chemCalculator.test.ts:723-727` — a **passing test asserts the stale behaviour**:
-  `recomputeChemRowForAcres(reloaded, 200).quantity` is `'150'`. Any fix must update that test.
-- **Documentation defect found alongside it:** `src/pages/JobDetail.tsx:252` claims
-  "undefined = untouched (a loaded line follows its rate if it has one)". That is **wrong** and
-  contradicts both the code and the F06 block 1,500 lines below in the same file. Corrected in the
-  same change as this entry.
-
-**Was tracked nowhere.** Before this entry F06 lived only in
-`docs/audits/2026-08-20-codex-verdict-dryoz-guard.md` under a "Still open" heading, and in source
-comments. Surfaced by the 2026-08-31 documentation sweep (#529).
+**Was tracked nowhere** before this entry — only in
+`docs/audits/2026-08-20-codex-verdict-dryoz-guard.md` under a "Still open" heading and in source
+comments. Surfaced by the 2026-08-31 documentation sweep (#529). Verified against `main` at
+`85266c9a`.
 
 ---
 
 ## OPEN 2026-09-01 — H5: the integrity panel offers "Create draft invoice" on orders it cannot invoice
 
-**Severity corrected on 2026-09-01 by Codex review of PR #538, before this entry landed.** The first
-draft also claimed the operator is shown "a raw error code rather than an explanation". **That is
-wrong** — the message is already plain English. Only the unusable button is a real defect.
+**Plain English.** An admin is offered a "Create invoice" button on a delivery whose order needs
+**split billing**, where it can never succeed. Pressing it produces a clear refusal from the
+database; nothing wrong is written.
 
-**Plain English:** in the admin integrity cleanup panel, every unbilled completed delivery gets a
-"Create draft invoice" button. On an order that needs **split billing**, the button cannot work —
-but it is offered anyway.
-
-**Where — TWO surfaces, not one.** An earlier draft of this entry named only the first; the original
-handoff names both at `docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md:78`. Fixing one and not the
-other leaves the dead end reachable. Caught by Codex on PR #538.
+**Where — TWO surfaces.** Fixing one and not the other leaves the dead end reachable; the original
+handoff names both at `docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md:78`.
 
 1. **`src/components/integrity/IntegrityCleanupPanel.tsx:684-689`** — renders the button
    unconditionally for every row in `unbilled`; handler at line 398.
@@ -342,19 +273,13 @@ Both call `create_invoice_for_unbilled_delivery`, whose `ORDER_NEEDS_SPLIT_BILLI
 `20260718202607_backfill_invoice_guard_durable_split_allocations.sql` and is re-emitted in
 `20260719024641_lock_backfill_split_allocation_rows.sql`.
 
-**The message is fine.** The guard raises:
+**The message is already fine — do not "fix" it.** The guard raises a full sentence naming the
+reason *and* the remedy ("…a single backfilled invoice would mono-bill it and mis-attribute AR.
+Create the split invoices through the split-billing flow instead."), and `PostgrestError` extends
+`Error`, so `toast('error', err.message)` surfaces all of it. Mapping these codes to generic
+messages would replace better text with worse. The only wart is the `CODE:` prefix.
 
-> `ORDER_NEEDS_SPLIT_BILLING: delivery <n>'s order uses split billing — a single backfilled invoice
-> would mono-bill it and mis-attribute AR. Create the split invoices through the split-billing flow
-> instead.`
-
-Supabase's `PostgrestError` extends `Error`, so `toast('error', err.message)` at line 416 surfaces
-that entire sentence — reason **and** remedy. The only cosmetic wart is the `ORDER_NEEDS_SPLIT_BILLING:`
-prefix in front of it. **Do not "fix" this by mapping codes to messages**: the messages already
-exist and are better than a lookup table would be.
-
-**Severity: cosmetic.** No wrong data is written; the guard refuses correctly and tells the operator
-what to do instead. The defect is being invited into an action that can never succeed.
+**Severity: cosmetic.** The defect is being invited into an action that can never succeed.
 
 **The fix:** hide or disable the button for orders the guard will refuse — **in both places**. A
 shared "can this delivery be single-invoiced?" predicate mirroring the server's split-allocation
