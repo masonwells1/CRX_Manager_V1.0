@@ -96,28 +96,38 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // keeps this branch's blob. Inputs verified against the merged working tree
   // with `git hash-object`; outputs taken from the producer test's printed
   // candidate, not hand-computed.
-  // pushLib re-pinned 2026-09-01 (PR #502, merge of origin/main): the
-  // pending-set apply guard taught codex-push-lib.mjs to resolve the session's
-  // own checkout before the preflight, so the file's blob moved. main had not
-  // touched codex-push-lib.mjs since this branch forked, so the merge produced
-  // this branch's blob rather than a third one; verified with `git hash-object`
-  // against the merged working tree. codexGuard is untouched by this PR and
-  // keeps main's blob. The risky producer-path anchor this transform verifies is
-  // unchanged, so the transform is still identity and input == output. Output
-  // taken from the producer test's printed candidate, not hand-computed.
-  // Both re-pinned 2026-09-01 (manual review override): Mason turned "Include
-  // administrators" OFF on main's branch protection, so both merge gates gained
-  // an `--admin` refusal and an explicit reviewDecision===APPROVED requirement.
-  // Neither guard's risky-producer-path anchor nor its protected-harness list
-  // changed, so both transforms behave exactly as before. Inputs verified with
-  // `tr -d '\r' | git hash-object --stdin` against this working tree; outputs
-  // taken from the producer test's printed candidate, not hand-computed.
+  // pushLib re-pinned 2026-09-01 (merge of origin/main into PR #533). BOTH sides
+  // moved this file independently and neither pin survives: main's PR #502 extracted
+  // resolveSessionWorktree for the pending-queue root, while this branch extracted
+  // sessionCheckoutRoots for source provenance. The merge is neither blob — the
+  // reconciliation expresses BOTH helpers in terms of the single resolveSessionWorktree
+  // traversal, which is what each side's own comment demanded (a second copy would
+  // drift, and the looser copy becomes the way in).
+  //
+  // codexGuard is untouched by this PR and keeps main's blob. RISKY_PATH_RES,
+  // RISKY_CONTENT_RE and contentIsRisky are byte-for-byte untouched, and the risky
+  // producer-path anchor this transform verifies is still present exactly once, so
+  // the transform remains identity and input == output.
+  //
+  // Both pushLib values below are taken from the producer test's printed candidate,
+  // never hand-computed — that is the sanctioned re-pin procedure.
+  //
+  // Both re-pinned again 2026-09-01 (manual review override, merge of origin/main):
+  // Mason turned "Include administrators" OFF on main's branch protection, so both
+  // merge gates gained an `--admin` refusal and an explicit reviewDecision===APPROVED
+  // requirement. codexGuard moves because this branch edits it; pushLib moves because
+  // this branch's `--admin` parsing and pullRequestApproved() land on top of the
+  // reconciled resolveSessionWorktree above. Neither guard's risky-producer-path
+  // anchor nor its protected-harness list changed, so both transforms still behave
+  // exactly as before. Inputs verified with `tr -d '\r' | git hash-object --stdin`
+  // against the merged working tree; outputs taken from the producer test's printed
+  // candidate, not hand-computed.
   codexGuard: "8094452dad2c5135ba71c5054ee66a03d12d127b",
-  pushLib: "d67f8ebcf7503e8022b56cb17f42aafa1eb19a0c",
+  pushLib: "f87e232491487d7223b3e8f4453243a69b9120e7",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "b04ea7419f391c8a424bbe9b26fee9fa6cb60c48",
-  pushLib: "d67f8ebcf7503e8022b56cb17f42aafa1eb19a0c",
+  pushLib: "f87e232491487d7223b3e8f4453243a69b9120e7",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
