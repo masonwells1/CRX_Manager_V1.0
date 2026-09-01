@@ -49,9 +49,9 @@ source change and it is a comment.
 
 ### The review history, kept because the lesson is reusable
 
-Codex raised **eleven** findings on PR #538. All were correct. Two were substantive — the second
-affected surface in H5, and a summary sentence that contradicted the paragraph beneath it. **The
-other nine were all the same failure**: restating the accept/refuse control flow of a 1,700-line
+Codex raised **twelve** findings on PR #538. All were correct. Three were substantive — the second
+affected surface in H5, that same surface swallowing the refusal reason, and a summary sentence that
+contradicted the paragraph beneath it. **The other nine were all the same failure**: restating the accept/refuse control flow of a 1,700-line
 migration in prose, and getting the boundary wrong in a new direction each time.
 
 Both entries were therefore **trimmed at Mason's direction** to the defect, the call sites, and a

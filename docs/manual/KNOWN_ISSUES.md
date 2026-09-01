@@ -236,9 +236,9 @@ surface the refusal on screen before the operator reaches it.
 `CHEM_QUANTITY_NOT_DERIVED` before any write. Unpriced cost-bearing lines have accepted paths where
 a stale quantity saves and misstates margin. **The exact accept/refuse set is the control flow of
 `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`** —
-read the function, not its header comments and not this entry. Eleven review rounds on PR #538 went
-into paraphrasing that partition and got it wrong repeatedly; the paraphrase is deliberately omitted
-here.
+read the function, not its header comments and not this entry. Repeated review rounds on PR #538
+went into paraphrasing that partition and got it wrong each time; the paraphrase is deliberately
+omitted here.
 
 **Where.** `src/pages/JobDetail.tsx:1765-1777` (an explicit "F06 IS STILL OPEN, DELIBERATELY"
 block); `src/lib/chemCalculator.ts:75, 88` (the driverless branch returns the row unchanged).
