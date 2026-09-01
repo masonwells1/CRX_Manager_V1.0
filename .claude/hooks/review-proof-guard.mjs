@@ -477,6 +477,14 @@ if (shellTool) {
     // Staging/committing record content; they do not alter it.
     "add", "commit", "push", "worktree",
   ]);
+  // KNOWN OVER-BLOCK, pinned in the tests rather than papered over: this splits on
+  // `|` even inside quotes, so `grep -E "(a|b)" .husky/pre-push` becomes two
+  // segments and the second one's head is `b)"`, which is not allowlisted, so an
+  // ordinary read is refused. The workaround is two greps or a bracket class.
+  // Deliberately NOT fixed with a quote-aware splitter: that changes which text
+  // counts as a segment, and every mistake in that direction turns a denial into
+  // an ALLOW. Five review rounds on this file have each found a real bypass, so a
+  // false refusal is the acceptable failure and a speculative rewrite is not.
   const enforcementSegments = (cmd) =>
     String(cmd ?? "").split(/(?:\|\||&&|[;\r\n|&])+/).map((s) => s.trim()).filter(Boolean);
   // Resolve git's real subcommand past the global flags THAT TAKE A SEPARATE
@@ -502,7 +510,13 @@ if (shellTool) {
   const enforcementSegmentIsReadOnly = (segment) => {
     const raw = (String(segment).trim().match(/^([\w.:\\/-]+)/) || [])[1];
     if (!raw) return false;
-    const head = raw.replace(/^.*[/\\]/, "").toLowerCase();
+    // A PATH-QUALIFIED head is not the program the allowlist vouched for. Fifth
+    // gpt-5.6-sol round, HIGH: the basename was trusted, so `scripts/cat
+    // .husky/pre-push` and `/tmp/git diff .github/workflows/ci.yml` were ALLOW —
+    // any file the agent can create, named `cat` or `git`, inherited the
+    // allowlist. Only a bare command name may be vouched for.
+    if (/[/\\]/.test(raw)) return false;
+    const head = raw.toLowerCase();
     if (!ENFORCEMENT_READ_ONLY_HEADS.has(head)) return false;
     // A runner EXECUTES a script; an INLINE-CODE runner is an arbitrary writer
     // wearing the runner's name. `node -e "…writeFileSync('.husky/pre-push'…)"`
@@ -599,8 +613,19 @@ if (shellTool) {
     }
     return false;
   };
+  // A command that REDEFINES commands cannot be judged by command name at all.
+  // Fifth gpt-5.6-sol round, HIGH: `cat(){ cp /tmp/evil "$1"; }; cat .husky/pre-push`
+  // was ALLOW — segments are judged independently, so the second segment's head
+  // read as the allowlisted `cat` while the first had already redefined it. The
+  // same hole is open to `alias`, and to `eval` assembling the verb at run time.
+  // Judged over the WHOLE command, not per segment, because the definition and
+  // the call are deliberately in different segments. This denies only commands
+  // that ALSO name a protected path, so ordinary shell functions are unaffected.
+  const REDEFINES_COMMANDS_RE =
+    /(?:^|[\s;&|(){}])(?:function\s+[\w.-]+|[\w.-]+\s*\(\s*\)|alias\s|eval\s|source\s|\.\s+\/)/;
   if (destructiveViews.some((v) =>
     redirectTargetsEnforcementSurface(v) ||
+    (REDEFINES_COMMANDS_RE.test(v) && namesEnforcementSurface(v)) ||
     enforcementSegments(v).some((seg) =>
       namesEnforcementSurface(seg) && !enforcementSegmentIsReadOnly(seg)))) {
     deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write, which the `ask` tier in .claude/settings.json gates.");
@@ -618,7 +643,16 @@ if (shellTool) {
 // bypass-permissions mode honours neither it nor any allow/deny rule, so native
 // writes to these paths are ungated there. Recorded, not hidden; closing it needs
 // a boundary outside this repository, which is branch protection.
-if (!/^(?:write|edit|notebookedit|multiedit)$/i.test(toolName)) {
+// Read-only built-ins are exempt as well as the native editors. Fifth
+// gpt-5.6-sol round, MEDIUM: this rule applied to EVERY tool except the native
+// writers, and the hook is registered under `matcher: "*"`, so `Read`, `Grep`,
+// and `Glob` against a protected path were all DENIED — flatly contradicting
+// this guard's own message that reading these files is always allowed. The
+// deleted lock carried the same exemption and it was not ported; that is the
+// third thing lost in that port, so the list is spelled out here rather than
+// inferred. Name-matched, never shape-matched: a tool that both reads and writes
+// must not appear below.
+if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todowrite)$/i.test(toolName)) {
   // Dot segments are resolved here too. Second review round, HIGH: an MCP write to
   // `.claude/commands/../hooks/review-proof-guard.mjs` was probe-confirmed ALLOW —
   // the intermediate directory exists, so the filesystem lands on the real hook.

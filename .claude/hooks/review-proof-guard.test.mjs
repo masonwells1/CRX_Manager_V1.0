@@ -465,6 +465,19 @@ for (const command of [
   // The rule is on the SHAPE — a protected path as a flag's value — so it holds
   // for heads and flags beyond git.
   "grep --output=.husky/pre-push x /tmp/in",
+  // FIFTH gpt-5.6-sol round. A PATH-QUALIFIED head is not the program the
+  // allowlist vouched for — any file the agent can create, named `cat` or `git`,
+  // inherited the allowance. Both probe-confirmed ALLOW.
+  "scripts/cat .husky/pre-push",
+  "/tmp/git diff .github/workflows/ci.yml",
+  "./cat .husky/pre-push",
+  // Redefinition: the definition and the call sit in DIFFERENT segments, so a
+  // per-segment head check saw only the allowlisted name. Judged over the whole
+  // command instead.
+  'cat(){ cp /tmp/evil "$1"; }; cat .husky/pre-push',
+  "function cat { cp /tmp/evil .husky/pre-push; }; cat .husky/pre-push",
+  "alias cat=cp; cat /tmp/evil .husky/pre-push",
+  "eval cp /tmp/evil .husky/pre-push",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.equal(result.status, 0, `hook should exit 0: ${command}`);
@@ -541,6 +554,19 @@ for (const payload of [
   assert.match(result.stdout, /"permissionDecision":"deny"/, `path-field writer must deny: ${payload.tool_name}`);
 }
 
+// Read-only built-ins must be allowed on protected paths — this guard's own
+// message promises reading is always fine, and it was denying Read/Grep/Glob.
+for (const payload of [
+  { tool_name: "Read", tool_input: { file_path: ".husky/pre-push" } },
+  { tool_name: "Grep", tool_input: { path: ".claude/hooks" } },
+  { tool_name: "Glob", tool_input: { path: ".github/workflows" } },
+  { tool_name: "NotebookRead", tool_input: { notebook_path: ".claude/hooks/x.ipynb" } },
+]) {
+  const result = run(payload);
+  assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
+  assert.equal(result.stdout, "", `read-only tool must be allowed: ${payload.tool_name}`);
+}
+
 // Native Write/Edit are deliberately NOT denied here — there is no unlock any
 // more, so denying them would permanently strand hook maintenance. The `ask` tier
 // gates them instead. Pinned so the exemption stays a recorded choice.
@@ -565,5 +591,21 @@ for (const payload of [
   assert.equal(result.status, 0);
   assert.match(result.stdout, /"permissionDecision":"deny"/);
 }
+
+// SECOND KNOWN OVER-BLOCK, also pinned. Segment splitting is not quote-aware, so
+// a `|` inside a quoted regex splits the command and the fragment after it is
+// read as an unallowlisted command head. `grep -E "(a|b)" <protected>` is a plain
+// read and is refused. Left unfixed on purpose: a quote-aware splitter changes
+// what counts as a segment, and a mistake there converts denials into ALLOWs —
+// which is exactly how five review rounds' worth of bypasses got in. A false
+// refusal with a one-line workaround is the acceptable failure here.
+{
+  const result = run({ tool_name: "Bash", tool_input: { command: 'grep -E "(typecheck|build)" .husky/pre-push' } });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /"permissionDecision":"deny"/);
+}
+// …while the bracket-class form of the same read is allowed, which is the
+// documented workaround.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "grep -E typecheck .husky/pre-push" } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");
