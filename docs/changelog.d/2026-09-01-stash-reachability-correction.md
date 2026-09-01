@@ -16,11 +16,15 @@ document keeps only the raw observation — the four blobs appear in the output 
 
 **Why no conclusion follows.** Two independent reasons, both from review:
 
-- Neither command produces a complete set of GC roots. `gc` also honours reflogs, other
-  worktrees' `HEAD`s, the index, and namespaces such as `refs/archive/*` and `refs/notes/*`.
+- Neither command produces a complete set of GC roots, and they fall short differently. Git
+  defines `--all` as every ref under `refs/` plus `HEAD`, across all working trees by default,
+  so it *does* include `refs/notes/*`, `refs/archive/*`, and the `refs/stash` tip; what it
+  misses are reflog entries and the index, which `gc` honours. `--branches --tags --remotes` is
+  narrower still, omitting `HEAD` and every namespace outside those three.
 - **A stash entry is not a ref.** `refs/stash` names only the current stash tip; older entries
-  such as `stash@{26}` live in that ref's *reflog*. Earlier drafts reasoned about `stash@{26}`
-  as though it were an ordinary ref, which is unsound.
+  such as `stash@{26}` live in that ref's *reflog* — exactly the root class `--all` does not
+  cover. Earlier drafts reasoned about `stash@{26}` as though it were an ordinary ref, which is
+  unsound.
 
 Settling the question would need a genuinely root-complete reachability test plus a
 before/after measurement of volume free bytes — not a blob-size sum, and not the difference

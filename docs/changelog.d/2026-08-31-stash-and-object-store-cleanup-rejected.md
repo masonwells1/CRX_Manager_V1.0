@@ -25,9 +25,10 @@ Three claims that made the cleanup look worthwhile, each disproved:
   those blobs were reachable from a branch/tag/remote and so could not be reclaimed. **That
   claim is withdrawn, and no replacement figure is offered** — three drafts each asserted a
   different confident answer and all were wrong. Neither `rev-list` set used is a complete
-  list of GC roots (both omit reflogs, other worktrees' `HEAD`s, and the index), and a stash
-  entry is not a ref: `refs/stash` names only the current tip, while `stash@{26}` lives in
-  that ref's reflog. Only four of the stash's 329 files were examined. How much dropping this entry would free,
+  list of GC roots — `--all` covers every ref under `refs/` plus `HEAD` (including the
+  `refs/stash` tip) but not reflog entries or the index, and `--branches --tags --remotes` is
+  narrower still — and a stash entry is not a ref: `refs/stash` names only the current tip,
+  while `stash@{26}` lives in that ref's reflog. Only four of the stash's 329 files were examined. How much dropping this entry would free,
   if anything, remains unestablished.
 
 Rejected because `git stash drop` is positional and a concurrent session can shift indices

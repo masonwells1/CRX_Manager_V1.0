@@ -144,11 +144,16 @@ command outputs. It was repeatedly over-read into conclusions it does not suppor
 
 Why no conclusion is drawn from it:
 
-- **Neither set is a complete list of GC roots.** `gc` also honours reflogs, other worktrees'
-  `HEAD`s, the index, and namespaces such as `refs/archive/*` and `refs/notes/*`.
+- **Neither set is a complete list of GC roots, and they fall short differently.** Git's own
+  documentation defines `--all` as every ref under `refs/` plus `HEAD`, examined across **all**
+  working trees by default — so it *does* cover `refs/notes/*`, `refs/archive/*`, and the
+  `refs/stash` tip. What `--all` still misses are reflog entries (`--reflog`) and the index
+  (`--indexed-objects`), both of which `gc` honours. `--branches --tags --remotes` is narrower
+  again: it omits `HEAD` and every namespace outside those three. So the difference between the
+  two outputs does not isolate "unreachable".
 - **A stash entry is not a ref.** `refs/stash` names only the current tip; older entries like
-  `stash@{26}` live in that ref's *reflog*. Reasoning that treats `stash@{26}` as an ordinary
-  ref — as earlier drafts did — is unsound.
+  `stash@{26}` live in that ref's *reflog* — precisely the root class `--all` does not cover.
+  Reasoning that treats `stash@{26}` as an ordinary ref — as earlier drafts did — is unsound.
 
 So: **whether dropping any stash entry would free disk here is unestablished.** Settling it
 needs a genuinely root-complete reachability test plus a before/after measurement of volume
