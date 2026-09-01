@@ -222,40 +222,6 @@ broke the checkout.
 **General rule:** any test that shells out to `git` against a fixture repo must sanitize the
 environment. `cwd` alone does not isolate it — `GIT_DIR` outranks `cwd`.
 
-## 2026-08-26 — Section 9 AP safety remediation closes the cutover race locally
-
-The pending Section 9 remediation now binds all six AP/receiving mutation receipts to the signed-in actor and exact request payload, corrects AP aging to five due-date buckets, and changes the dashboard's `Due This Month` amount from a rolling 30 days to Chicago calendar month-end. A first exact-commit Sol-high review found a real release race: an RPC that resolved the old body before migration cutover could resume after the legacy-receipt preflight, commit an unbound receipt, and cause the payment/receiving callers to unlock a new request after a mismatch.
-
-The candidate migration now takes an exclusive receipt-table cutover lock, installs an insert-time binding trigger, and supplies actor/fingerprint context from each new wrapper before calling the private mature implementation. Pre-cutover writers drain before validation; callers queued behind cutover either use the new wrapper or have their late old-body receipt rejected, which rolls back the whole money/inventory statement. The payment and PO receiving screens also inspect mismatch receipts and refresh the committed result instead of enabling a duplicate submission.
-
-The final migration-security pass found that the new `receive_po_items` wrapper enforced the actor comparison but raised a descriptive sentence instead of the canonical `ACTOR_MISMATCH` code. It now raises the canonical refusal, and the Section 9 mutation guard fails if that token is removed or renamed. The focused guard and the full 64-migration disposable PostgreSQL replay passed after the correction.
-
-A subsequent exact-commit review found that both migrations assumed no stale function overload existed. The preflights now require exactly one expected public signature, PostgreSQL ownership, PL/pgSQL, `SECURITY DEFINER`, the fixed search path, and the SHA-256 hash of the reviewed live body before changing anything; postflights require exactly one expected public overload after creation. Disposable decoy overloads for `create_vendor_bill(text)` and `get_ap_aging(text)` now make the corresponding migration fail closed before the reviewed signature is changed, and the full replay proves both refusals before applying the clean candidates.
-
-Network-isolated PostgreSQL 17 proof replayed all 64 post-baseline migrations, observed cutover waiting on a concurrent legacy writer, caught its committed unbound receipt in preflight, then proved a late old payment body leaves zero payment, bill-balance, or receipt residue. All three sibling rollback smokes and every period-close concurrency schedule passed through `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`. These migrations remain local candidates; no live schema or data was changed, and fresh exact-commit review plus the governed apply/PR gates still remain.
-
-PR #500's latest-commit review then found two additional lost-response defects and several prevention gaps. Inventory receiving now preserves its locked payload when the modal is reopened; vendor-payment and vendor-bill void keys are scoped to the exact target plus normalized reason; and PO receiving state is scoped and cleared when React Router reuses the page for another PO. The UI now explains every locked state. The standing Section 9 invariant follows each public wrapper into its private implementation, the dashboard smoke proves both sides of month-end, the AP return-contract proof includes `days_1_30`, decoy cleanup is exception-safe, and source guards no longer pass on missing slice markers or fixed-size regex windows. The full 64-migration replay passed again. The broader supplier-pricing proof now restores its baseline migration ledger, but a pre-existing `notify_team_note_assignment` preimage mismatch stops that harness before the Section 9 assertion; the focused guard pins the corrected return signature until that unrelated baseline drift is repaired.
-
-Reading the latest CodeRabbit review text rather than trusting its green status exposed two more Major
-findings: the create-bill, vendor-payment, Inventory, Receiving Hub, and PO-detail receiving flows
-still kept their frozen payload and idempotency key only in component memory. A reload or unmount
-after PostgreSQL committed but before the response arrived could therefore mint a new key and post a
-second bill, payment, or receipt. `useUncertainMutationIntent` now stores the frozen payload and its
-matching key as one versioned `sessionStorage` record, isolated by actor, operation, UI surface, and
-record/route scope. Each affected form restores the exact locked fields and reopens the retry UI; a
-storage failure stops before the RPC can run. The focused Section 9 contracts pass 48/48, the hook's
-reload/unmount and fail-closed tests pass 8/8, and the full suite passes 4,806 with 123 skipped.
-
-The next exact-head Sol review caught a route-reuse financial hazard in the durable fix itself:
-navigating from vendor bill A to bill B could leave A's payment modal fields visible after the hook
-correctly switched to B's empty storage scope, allowing those stale values to be submitted as a new
-payment on B. Vendor Bill Detail now clears every visible bill-specific modal and field on route
-changes without deleting A's durable retry record, binds payment/edit/void actions to the bill that
-opened them, refuses any route mismatch, and ignores stale bill reads that finish after navigation.
-The scope-switch test proves A's unresolved payload/key disappears on B and restores unchanged when
-returning to A; the focused durable/Section 9 contracts pass 50/50 after the correction.
-The full suite then passes 4,807 with 123 skipped, and the production build remains green.
-
 ## 2026-08-26 — Pre-push containment skips top-level ignored tool bulk
 
 The private-artifact pre-push guard now excludes descendants of its existing explicit top-level
@@ -510,24 +476,7 @@ become a trusted cost source merely because the door is now shut.
 Migration is written and reviewed but **NOT APPLIED**; it is entry 892 in
 `docs/reference/migration-history.md`.
 
-## 2026-08-26 — Section 9 AP safety remediation proven locally (pending live apply)
 
-The three HIGH findings from the Live Foundation Gauntlet Section 9 refresh now have a complete
-candidate fix and executable prevention coverage. AP and receiving mutation receipts bind the
-authenticated actor and exact payload, and the payment/receiving forms retain an uncertain intent
-until an exact retry reconciles it. `Due This Month` now means the Chicago calendar month, rather
-than the next 30 days. AP aging now measures `due_date`: `Current (Not Due)`, `1-30`, `31-60`,
-`61-90`, and `Over 90` days past due. Mason explicitly approved this five-bucket scheme in this
-task; `Over 90` is the fifth displayed bucket.
-
-Two pending migrations implement the database contract:
-`20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard.sql` and
-`20260826222000_correct_ap_aging_due_date_buckets.sql`. A disposable PostgreSQL 17 replay applied
-all 64 post-baseline migrations, ran the complete Section 9 PO/AP rollback chain (including every
-aging boundary), and passed every two-session accounting-period race schedule with terminal marker
-`VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`. Static mutation guards also prove the intent binding,
-private implementation ACLs, legacy-receipt cutover barrier, Chicago month boundary, and due-date
-bucket predicates. No live migration has been applied and no production behavior changed yet.
 ## 2026-08-25 — PR #432 closed; control-file edits bounded; local/CI proof de-duplicated
 
 Mason ended the PR #432 repair loop (130 commits, +7,329 lines, four adversarial review rounds,

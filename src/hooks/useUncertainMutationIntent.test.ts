@@ -729,4 +729,166 @@ describe('useUncertainMutationIntent', () => {
       .rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
     expect(window.localStorage.getItem(storageKey)).toContain('admin-corrupt:blocked');
   });
+
+  // A live claim is a renewable lease, not a permanent marker. Release only runs
+  // from `pagehide` and effect cleanup, and neither survives a crash or a force
+  // kill. These three cases pin the whole contract: an abandoned lease must age
+  // out, a mounted one must not, and an unreadable one must fail closed.
+  const LIVE_CLAIM_PREFIX = 'crx:durable-mutation:live-claim:';
+
+  it('expires an abandoned live claim so a crashed tab cannot lock the operation forever', async () => {
+    const options = {
+      operation: 'record_vendor_payment',
+      userId: 'admin-abandoned-claim',
+      surface: 'vendor-bill-detail',
+      scope: 'bill-abandoned-claim',
+    };
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([
+      options.operation,
+      options.userId,
+    ])}`;
+    const realNow = Date.now.bind(Date);
+    let offsetMs = 0;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offsetMs);
+    try {
+      window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'crashed-tab');
+      const crashedTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+      window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'surviving-tab');
+      const survivingTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+
+      await act(async () => crashedTab.result.current.beginIntent({ amount: 42_000 }));
+      await act(async () => survivingTab.result.current.beginIntent({ amount: 42_000 }));
+      const pending = JSON.parse(window.localStorage.getItem(storageKey)!);
+      expect(pending.claimTabIds).toHaveLength(2);
+      expect(pending.claimTabIds.some((claim: string) => claim.startsWith('crashed-tab:'))).toBe(true);
+
+      // The crashed tab is deliberately never unmounted and never fires
+      // `pagehide`, so its lease is left behind exactly as a force kill leaves
+      // it. Only the TTL can retire it. 16 minutes is past the 15-minute lease
+      // TTL and far inside the 23-hour safe-retry window, so nothing else in the
+      // record has expired.
+      offsetMs = 16 * 60 * 1000;
+
+      await act(async () => {
+        expect(await survivingTab.result.current.classifyFailure({
+          code: '23514',
+          message: 'server rejected the payment',
+        })).toBe('definitive');
+      });
+
+      expect(survivingTab.result.current.isIntentLocked).toBe(false);
+      expect(window.localStorage.getItem(storageKey)).toBeNull();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('keeps a mounted claimant live past the lease TTL because its heartbeat renews it', async () => {
+    const options = {
+      operation: 'record_vendor_payment',
+      userId: 'admin-renewed-claim',
+      surface: 'vendor-bill-detail',
+      scope: 'bill-renewed-claim',
+    };
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([
+      options.operation,
+      options.userId,
+    ])}`;
+    const realNow = Date.now.bind(Date);
+    let offsetMs = 0;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offsetMs);
+    // Only the interval is faked. React's scheduler and fake-indexeddb both rely
+    // on setTimeout/microtasks and must keep running for real.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'live-peer-tab');
+      const livePeerTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+      window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'rejecting-tab');
+      const rejectingTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+
+      await act(async () => livePeerTab.result.current.beginIntent({ amount: 51_000 }));
+      await act(async () => rejectingTab.result.current.beginIntent({ amount: 51_000 }));
+      const lockedKey = rejectingTab.result.current.getIdempotencyKey();
+
+      offsetMs = 16 * 60 * 1000;
+      // The peer is still mounted, so its heartbeat re-stamps the lease at the
+      // advanced clock. Without that renewal the lease would already be stale.
+      act(() => { vi.advanceTimersByTime(60 * 1000); });
+
+      await act(async () => {
+        expect(await rejectingTab.result.current.classifyFailure({
+          code: '23514',
+          message: 'server rejected this tab',
+        })).toBe('definitive');
+      });
+
+      // A live peer means the record survives the definitive rejection.
+      expect(window.localStorage.getItem(storageKey)).not.toBeNull();
+      const stillPending = JSON.parse(window.localStorage.getItem(storageKey)!);
+      expect(stillPending.status).toBe('pending');
+      expect(stillPending.idempotencyKey).toBe(lockedKey);
+      expect(stillPending.claimTabIds).toHaveLength(1);
+      expect(stillPending.claimTabIds[0]).toMatch(/^live-peer-tab:/);
+      expect(rejectingTab.result.current.isIntentLocked).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      now.mockRestore();
+    }
+  });
+
+  it('treats an unreadable live-claim lease as live so a storage fault cannot free a locked key', async () => {
+    const options = {
+      operation: 'record_vendor_payment',
+      userId: 'admin-unreadable-claim',
+      surface: 'vendor-bill-detail',
+      scope: 'bill-unreadable-claim',
+    };
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([
+      options.operation,
+      options.userId,
+    ])}`;
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'peer-tab');
+    const peerTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'faulting-tab');
+    const faultingTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+
+    await act(async () => peerTab.result.current.beginIntent({ amount: 33_000 }));
+    await act(async () => faultingTab.result.current.beginIntent({ amount: 33_000 }));
+    const lockedKey = faultingTab.result.current.getIdempotencyKey();
+
+    // Delete every lease first, so a lease that could be READ would report the
+    // peer as gone. Then make lease reads throw. Only a fail-closed read keeps
+    // the peer's claim, and with it the frozen idempotency key.
+    for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith(LIVE_CLAIM_PREFIX)) window.localStorage.removeItem(key);
+    }
+    const realGetItem = Storage.prototype.getItem;
+    const getItem = vi.spyOn(Storage.prototype, 'getItem')
+      .mockImplementation(function mockGetItem(this: Storage, key: string) {
+        if (key.startsWith(LIVE_CLAIM_PREFIX)) {
+          throw new DOMException('storage read blocked', 'SecurityError');
+        }
+        return realGetItem.call(this, key);
+      });
+    try {
+      await act(async () => {
+        expect(await faultingTab.result.current.classifyFailure({
+          code: '23514',
+          message: 'server rejected this tab',
+        })).toBe('definitive');
+      });
+    } finally {
+      getItem.mockRestore();
+    }
+
+    // An unreadable lease must not be read as "the peer is gone".
+    expect(window.localStorage.getItem(storageKey)).not.toBeNull();
+    const stillPending = JSON.parse(window.localStorage.getItem(storageKey)!);
+    expect(stillPending.status).toBe('pending');
+    expect(stillPending.idempotencyKey).toBe(lockedKey);
+    expect(stillPending.claimTabIds).toHaveLength(1);
+    expect(stillPending.claimTabIds[0]).toMatch(/^peer-tab:/);
+    expect(faultingTab.result.current.isIntentLocked).toBe(true);
+  });
 });

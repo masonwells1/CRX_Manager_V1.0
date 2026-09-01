@@ -196,7 +196,7 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(vendorBillDetail).toContain('paymentIntent.beginIntent({');
     expect(vendorBillDetail).toContain("getIdempotencyMismatchResult(err, 'record_vendor_payment')");
     expect(vendorBillDetail).toContain("typeof receipt?.payment_id === 'string'");
-    expect(vendorBillDetail).toContain('const disposition = await paymentIntent.classifyFailure(err)');
+    expect(vendorBillDetail).toContain('disposition = await paymentIntent.classifyFailure(err)');
     expect(vendorBillDetail).toContain("disposition === 'definitive'");
     expect(vendorBillDetail).toContain('Retry Exact Payment');
     expect(vendorBillDetail).toContain('disabled={paymentIntent.isIntentLocked}');

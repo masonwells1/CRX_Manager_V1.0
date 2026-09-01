@@ -271,9 +271,24 @@ export default function VendorBillDetail() {
       setPayNotes('');
       fetchBill();
     } catch (err) {
+      // Durable-intent bookkeeping runs against IndexedDB and can reject on its
+      // own (openDurableIntentDb throws DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE
+      // in a private window, under a storage-quota failure, or when the
+      // connection is blocked). It must never be able to swallow the outcome of
+      // a payment that already committed: an unguarded await here left the
+      // modal spinning with no refresh and no toast. Each bookkeeping call is
+      // isolated, and setPaying(false) moved into finally so no path can strand
+      // the button.
       const receipt = getIdempotencyMismatchResult(err, 'record_vendor_payment');
       if (typeof receipt?.payment_id === 'string') {
-        await paymentIntent.resolveIntent();
+        try {
+          await paymentIntent.resolveIntent();
+        } catch (resolveError) {
+          Sentry.captureException(
+            resolveError instanceof Error ? resolveError : new Error(String(resolveError)),
+            { tags: { source: 'durable-intent-resolve', page: 'vendor-bill-detail' } },
+          );
+        }
         toast('warning', 'The earlier payment already completed. The bill has been refreshed instead of recording a duplicate.');
         setPayModalOpen(false);
         setPayModalBillId(null);
@@ -281,10 +296,21 @@ export default function VendorBillDetail() {
         setPayRef('');
         setPayNotes('');
         fetchBill();
-        setPaying(false);
         return;
       }
-      const disposition = await paymentIntent.classifyFailure(err);
+      let disposition: Awaited<ReturnType<typeof paymentIntent.classifyFailure>>;
+      try {
+        disposition = await paymentIntent.classifyFailure(err);
+      } catch (classifyError) {
+        // classifyFailure already absorbs coordination failures internally; this
+        // guard only stops an unexpected rejection from bypassing the toast.
+        // 'uncertain' is the fail-closed answer: the payload stays locked.
+        Sentry.captureException(
+          classifyError instanceof Error ? classifyError : new Error(String(classifyError)),
+          { tags: { source: 'durable-intent-classify', page: 'vendor-bill-detail' } },
+        );
+        disposition = 'uncertain';
+      }
       if (disposition === 'resolved') {
         toast('warning', 'This payment completed in another tab. The bill has been refreshed.');
         setPayModalOpen(false);
@@ -293,7 +319,6 @@ export default function VendorBillDetail() {
         setPayRef('');
         setPayNotes('');
         fetchBill();
-        setPaying(false);
         return;
       }
       if (disposition === 'definitive') {
@@ -301,8 +326,9 @@ export default function VendorBillDetail() {
       } else {
         toast('warning', 'The payment may already be recorded. The exact payment is locked; retry it unchanged to reconcile the result.');
       }
+    } finally {
+      setPaying(false);
     }
-    setPaying(false);
   };
 
   const openEditModal = () => {

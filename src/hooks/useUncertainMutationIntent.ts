@@ -47,6 +47,20 @@ const DURABLE_INTENT_LIVE_CLAIM_PREFIX = 'crx:durable-mutation:live-claim:';
 const DURABLE_INTENT_DB = 'crx_durable_mutation_intents';
 const DURABLE_INTENT_STORE = 'intents';
 const SAFE_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;
+// A live claim is a renewable lease, not a permanent marker. Release runs from
+// `pagehide` and effect cleanup, and neither survives a browser crash, a force
+// quit, or an OS kill. A marker with no expiry would then keep a dead claimant
+// in claimTabIds forever, deleteCoordinatedRecord could never delete the
+// record, and once SAFE_RETRY_WINDOW_MS passed getIdempotencyKey() would throw
+// UNCERTAIN_MUTATION_RETRY_EXPIRED on every attempt. Because storage is keyed
+// by [operation, userId] only, one crash would lock that user out of every
+// vendor payment or receiving attempt for that operation permanently. The TTL
+// caps that outage instead of eliminating it: long enough that a mounted page
+// keeps renewing through background-tab timer throttling (Chrome's intensive
+// throttling still fires roughly once a minute), short enough that a crash
+// self-heals in minutes rather than never.
+const DURABLE_INTENT_LIVE_CLAIM_TTL_MS = 15 * 60 * 1000;
+const DURABLE_INTENT_LIVE_CLAIM_HEARTBEAT_MS = 60 * 1000;
 export const UNCERTAIN_MUTATION_RETRY_EXPIRED = 'DURABLE_MUTATION_INTENT_RETRY_EXPIRED';
 export const UNCERTAIN_MUTATION_INTENT_CONFLICT = 'DURABLE_MUTATION_INTENT_CONFLICT';
 export const UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE =
@@ -101,11 +115,32 @@ function currentPageClaimId(): string {
   return `${currentTabId()}:${crypto.randomUUID()}`;
 }
 
+function writeClaimLease(claimId: string): void {
+  window.localStorage.setItem(
+    `${DURABLE_INTENT_LIVE_CLAIM_PREFIX}${claimId}`,
+    String(Date.now()),
+  );
+}
+
 function markClaimLive(claimId: string): void {
   try {
-    window.localStorage.setItem(`${DURABLE_INTENT_LIVE_CLAIM_PREFIX}${claimId}`, 'active');
+    writeClaimLease(claimId);
   } catch {
     throw new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE');
+  }
+}
+
+function renewLiveClaim(claimId: string): void {
+  // Heartbeat. Only an existing lease is refreshed: a page that never started a
+  // mutation must not mint a claim, and a released claim must stay released.
+  try {
+    if (window.localStorage.getItem(`${DURABLE_INTENT_LIVE_CLAIM_PREFIX}${claimId}`) === null) {
+      return;
+    }
+    writeClaimLease(claimId);
+  } catch {
+    // A missed heartbeat only ages the lease. Peers keep treating the claim as
+    // live until the TTL passes, which is the safe direction.
   }
 }
 
@@ -113,21 +148,38 @@ function releaseLiveClaim(claimId: string): void {
   try {
     window.localStorage.removeItem(`${DURABLE_INTENT_LIVE_CLAIM_PREFIX}${claimId}`);
   } catch {
-    // A failed release must preserve the peer claim and keep reconciliation
-    // fail-closed rather than pretending the claimant is gone.
+    // A failed release leaves the lease in place, so peers keep treating this
+    // claimant as live rather than pretending it is gone. The lease still
+    // expires on its own, so a release failure delays reconciliation by at most
+    // DURABLE_INTENT_LIVE_CLAIM_TTL_MS instead of stranding the record.
   }
 }
 
 function isClaimLive(claimId: string): boolean {
+  let raw: string | null;
   try {
-    return window.localStorage.getItem(
-      `${DURABLE_INTENT_LIVE_CLAIM_PREFIX}${claimId}`,
-    ) === 'active';
+    raw = window.localStorage.getItem(`${DURABLE_INTENT_LIVE_CLAIM_PREFIX}${claimId}`);
   } catch {
-    // If liveness cannot be read, preserve the claim. A later definitive
-    // response can retry cleanup after durable storage recovers.
+    // Liveness could not be READ. Treat the claim as live: reporting a
+    // peer as dead on a storage error would let a second request delete the
+    // record and mint a new idempotency key while the first is still in flight.
     return true;
   }
+  // An absent lease means the claimant released it, or never held one.
+  if (raw === null) return false;
+  const renewedAtMs = Number(raw);
+  if (!Number.isFinite(renewedAtMs)) {
+    // A lease of unknown age (corrupt, or written by an older build that stored
+    // a static marker). Treat it as live now, and stamp it so it acquires a
+    // bounded expiry instead of surviving forever.
+    try {
+      writeClaimLease(claimId);
+    } catch {
+      // Best effort. The claim stays live either way.
+    }
+    return true;
+  }
+  return Date.now() - renewedAtMs < DURABLE_INTENT_LIVE_CLAIM_TTL_MS;
 }
 
 function retainLiveClaims(claimIds: string[], currentClaimId: string): string[] {
@@ -580,8 +632,16 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     const claimId = tabIdRef.current;
     if (!claimId) return;
     const release = () => releaseLiveClaim(claimId);
+    // Renew this page's lease for as long as it is mounted. Without the
+    // heartbeat the lease would expire under a page that is still running and a
+    // peer could delete a record whose request is genuinely in flight.
+    const heartbeat = window.setInterval(
+      () => renewLiveClaim(claimId),
+      DURABLE_INTENT_LIVE_CLAIM_HEARTBEAT_MS,
+    );
     window.addEventListener('pagehide', release);
     return () => {
+      window.clearInterval(heartbeat);
       window.removeEventListener('pagehide', release);
       release();
     };
