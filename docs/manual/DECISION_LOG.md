@@ -91,6 +91,16 @@ would; do not treat the section as Opus-only or relitigate its scope. Every sett
 the pending effort sweep from the 2026-07-25 entry remain in force. This supersedes only the
 model-scope wording of the 2026-07-25 entry; its substance is unchanged.
 
+## 2026-08-31 — defer the six-file return-credit migration rollout
+
+**Decision:** Keep migrations `20260827041000` through `20260827041500` unapplied for now. Their
+reviewed source files remain unchanged under `supabase/migrations/`, but Mason is not authorizing
+or requesting a production rollout in this session.
+**Why:** Preserve the reviewed repository artifacts while making the production boundary explicit.
+**What this forbids/implies:** Repository merge is not a database apply. A future rollout requires
+fresh authorization, the migration safety gates in force at that time, and a governed push/apply of
+all six files in order. The rejected `20260827223000` ledger-order trigger is not part of this queue.
+
 ## 2026-08-31 — retire the production migration approval gate; the worktree guard carve-out stays closed
 
 **Source:** Mason's in-chat decision on 2026-08-31 after a harness review he requested ("we were

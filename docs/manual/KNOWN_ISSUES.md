@@ -29,7 +29,9 @@ warehouse-unit mismatches. Pre-apply candidates `20260827041000`, `2026082704110
 `20260827041200`, `20260827041300`, `20260827041400`, and `20260827041500` contain the durable
 repair and fail closed if the zero-credit/zero-legacy-restock assumptions or either delivery-invoice
 implementation contract stop being true. Do not call this resolved until all six migrations are
-reviewed, applied, and verified live. Apply the six files in order
+reviewed, applied, and verified live. Mason deferred their production rollout on 2026-08-31: the
+source files remain unchanged under `supabase/migrations/`, but they still need a separately
+authorized future push/apply. Rerun the then-current safety gates and apply the six files in order
 through the repository's guarded migration runner or the Supabase migration operation, never through
 the ad-hoc SQL channel.
 The first migration blocks new return-credit issuance until the second migration's postflight succeeds,
