@@ -81,3 +81,39 @@ and not a production prebooking correction.
 
 **Review the 3 flagged checks (168 raw discrepancies) and resolve any confirmed
 closing-period issues before closing.**
+
+---
+
+## 2026-09-01 Run
+
+> Run date: 2026-09-01. Automated scheduled task (monthly, before month-end close).
+
+**Verdict: DATABASE UNREACHABLE — manual rerun required before closing.**
+
+The scheduled task cannot reach the Supabase database from this remote execution
+environment: `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are not injected
+into the remote container. No data was read, no checks were executed, no production
+data was touched.
+
+| # | Check | Result | Entities | Discrepancies |
+|---|---|---|---|---|
+| 1 | Order Totals | ⚠️ SKIPPED | — | — |
+| 2 | Inventory Ledger | ⚠️ SKIPPED | — | — |
+| 3 | Invoice Payments | ⚠️ SKIPPED | — | — |
+| 4 | Invoice Balance Formula | ⚠️ SKIPPED | — | — |
+| 5 | Commission Splits | ⚠️ SKIPPED | — | — |
+| 6 | Quote-Hold Parity | ⚠️ SKIPPED | — | — |
+| 7 | Delivery-Invoice Qty Parity | ⚠️ SKIPPED | — | — |
+| 8 | Pre-booked Inventory | ⚠️ SKIPPED | — | — |
+| 9 | Return-Credit Linkage | ⚠️ SKIPPED | — | — |
+| 10 | Customer AR Consistency | ⚠️ SKIPPED | — | — |
+
+**To rerun manually:** open the `/integrity-report` admin page in the live app
+(https://croprxsolutions.app) and click "Run Checks." That page uses the browser
+session's credentials and can reach the database directly.
+
+**To fix the scheduled task:** add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`
+as environment variables in the Claude Code remote execution environment configuration
+so future monthly runs can connect.
+
+---**
