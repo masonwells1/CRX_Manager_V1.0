@@ -57,6 +57,36 @@ guard's strength** — that swap was attempted and reverted for exactly this rea
 assertions and had been observed blocking its own author when finding 3 was found. Self-written
 tests encode the author's model of the threat.
 
+## Round 4, and why patching STOPPED here
+
+A fourth exact-SHA round returned BLOCKED with three more HIGH findings, bringing the total to
+**eleven**. They are recorded, deliberately unfixed:
+
+9. **Channel coverage again.** Codex's `write_stdin` carries its payload in a `chars` field the
+   evaluator never reads, and PowerShell backtick escaping (`` .clau`de/hooks/… ``) is not
+   normalized. Both payloads passed the complete candidate hook chain.
+10. **`git config core.hooksPath NUL` disables every husky gate** without touching `.husky/**`.
+    Promoted to its own entry in `docs/manual/KNOWN_ISSUES.md` because it is a live weakness on
+    `main` today, independent of this PR.
+11. **The unlock is not owner-only**, restating finding 8 with a mechanism: `node` is allowlisted as
+    read-only, so the lock permits executing `guard-unlock.mjs`, and a PTY-capable agent can then
+    satisfy the TTY check and type a phrase that is a literal in the source.
+
+**The decision is to stop, not to patch.** Each round found a NEW channel — `input`/`stdin`, then
+`write_stdin.chars`, then PowerShell escapes, then `git config`. That is the signature of a
+blocklist, and this repo already learned it: *pin the region, don't enumerate the cheats — blocklists
+reopen*. A fifth round would find a fifth channel. The honest conclusion is that a command-text
+guard over an agent's own tool surface cannot be made airtight by adding cases, and continuing to
+try would produce something that LOOKS stronger with every commit while remaining bypassable — the
+exact overclaiming failure this PR already documented three times.
+
+**What this means for the merge decision.** The lock's value is unchanged and modest: it stops
+named and accidental writes to enforcement files through ordinary channels, which is a real
+improvement over nothing. It is not a boundary and must never be described as one, and the `ask`
+tier stays because it is enforced at a layer the agent does not control. If Mason wants a real
+boundary here, it has to live where the agent cannot reach — CI assertions on the runner, or branch
+protection — not in a hook the agent can read, reason about, and route around.
+
 ## Lessons-to-checks disposition
 
 Findings 1–7 each have an executable check: 206 assertions in

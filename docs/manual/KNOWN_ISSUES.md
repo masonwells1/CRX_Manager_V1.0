@@ -213,6 +213,36 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-31 — `git config core.hooksPath` disables EVERY husky gate in one allowlisted command
+
+Found by exact-SHA `gpt-5.6-sol` review during PR #530 (round 4, HIGH). **This is independent of
+that PR — it is a live weakness on `main` today, and PR #530 neither caused it nor closes it.**
+
+`git config core.hooksPath NUL` (or any other path) turns off the pre-commit and pre-push hooks
+wholesale — the ledger guard, private-artifact containment, SQL/frontend validation, ESLint,
+typecheck, build, the hook unit tests, doc-drift, and `verify-deps` — **without modifying
+`.husky/**` at all**, so every guard that watches those files sees nothing. Codex confirmed the
+command passes `guarded-surface-lock`, `bash-safety`, and `production-action-guard`.
+
+It is doubly reachable because `git config` is on the read-only allowlist in
+`guarded-surface-lib.mjs` (it does not alter working-tree content, which is true and beside the
+point) and because the same setting is what the 2026-08-31 `hooksPath` work manipulates
+legitimately — see `scripts/install-git-hooks.mjs`, which sets it by design.
+
+**Why it is not patched here.** Adding `git config core.hooksPath` to a denylist treats the symptom
+and invites the next spelling. Four review rounds on PR #530 each surfaced a new channel — `stdin`,
+Codex's `write_stdin.chars`, PowerShell backtick escapes, and now this — which is the signature of
+a blocklist rather than a boundary (see `pin-the-region-dont-enumerate-the-cheats`). Enumerating
+verbs is what reopened it each time.
+
+**What actually holds:** GitHub branch protection plus required CI. A locally-disabled hook cannot
+land anything on `main`, because the same checks run server-side on the PR. Local hooks are a fast
+feedback loop, not the enforcement boundary — and should be described that way.
+
+**If it is worth closing anyway**, the shape is a check that runs where the agent cannot reach it
+(a CI assertion that `core.hooksPath` resolves to the tracked `.husky` on the runner), not another
+command-text rule. Tracked as a finding, deliberately unfixed, needs an owner decision.
+
 ## OPEN 2026-08-26 — the quote-version trust chain is whole-body hash-pinned in THREE files; any re-emission must update every pin site in the same change
 
 **Apply-order dependency with the PR #361 successor:** the merged-but-unapplied
