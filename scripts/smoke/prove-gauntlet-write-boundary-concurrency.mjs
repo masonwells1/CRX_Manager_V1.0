@@ -49,6 +49,25 @@ const INTENT_MIGRATION = path.join(
   'migrations',
   '20260831233000_bind_section9_replays_to_intent.sql',
 );
+const CYCLE_MIGRATION = path.join(
+  ROOT,
+  'supabase',
+  'migrations',
+  '20260831212415_guard_cycle_count_completion_revision.sql',
+);
+const CYCLE_SMOKE = path.join(
+  ROOT,
+  'scripts',
+  'smoke',
+  'smoke-cycle-count-concurrency-guards.sql',
+);
+const SECTION9_INVARIANT = path.join(
+  ROOT,
+  'scripts',
+  'db-invariant-sweeps',
+  'predicates',
+  'section9-po-ap-controls.sql',
+);
 const CUTOVER_MIGRATIONS = [
   {
     file: RECEIVING_MIGRATION,
@@ -285,11 +304,16 @@ CREATE TABLE public.vendors (
 );
 CREATE TABLE public.purchase_orders (
   id uuid PRIMARY KEY,
+  vendor text NOT NULL DEFAULT 'Proof Vendor',
+  status text NOT NULL DEFAULT 'submitted',
   total_cost_cents bigint NOT NULL DEFAULT 10000
 );
 CREATE TABLE public.purchase_order_items (
   id uuid PRIMARY KEY,
-  purchase_order_id uuid NOT NULL REFERENCES public.purchase_orders(id)
+  purchase_order_id uuid NOT NULL REFERENCES public.purchase_orders(id),
+  product_id uuid,
+  quantity_ordered numeric NOT NULL DEFAULT 0,
+  quantity_received numeric NOT NULL DEFAULT 0
 );
 CREATE TABLE public.receiving_records (
   id uuid PRIMARY KEY,
@@ -304,7 +328,9 @@ CREATE TABLE public.vendor_bills (
   purchase_order_id uuid NOT NULL REFERENCES public.purchase_orders(id),
   status text NOT NULL DEFAULT 'unpaid',
   deleted_at timestamptz,
-  total_cents bigint NOT NULL DEFAULT 10000
+  total_cents bigint NOT NULL DEFAULT 10000,
+  balance_cents bigint NOT NULL DEFAULT 10000,
+  bill_date date NOT NULL DEFAULT CURRENT_DATE
 );
 GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON public.vendor_bills TO authenticated;
 CREATE TABLE public.activity_feed (
@@ -331,7 +357,8 @@ CREATE TABLE public.idempotency_keys (
 CREATE TABLE public.profiles (
   id uuid PRIMARY KEY,
   role text NOT NULL,
-  is_active boolean NOT NULL DEFAULT true
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE public.notifications (
   user_id uuid,
@@ -347,14 +374,49 @@ LANGUAGE sql STABLE AS $$ SELECT true $$;
 CREATE FUNCTION public.is_sales_rep() RETURNS boolean
 LANGUAGE sql STABLE AS $$ SELECT true $$;
 CREATE FUNCTION public.check_idempotency_intent(text, text, uuid, text)
-RETURNS jsonb LANGUAGE sql AS $$ SELECT NULL::jsonb $$;
+RETURNS jsonb LANGUAGE sql AS $$
+  SELECT CASE
+    WHEN k.idempotency_key IS NULL THEN NULL
+    ELSE jsonb_build_object('result', k.result)
+  END
+  FROM (SELECT $1 AS requested_key) request
+  LEFT JOIN public.idempotency_keys k
+    ON k.idempotency_key = request.requested_key AND k.operation = $2
+$$;
+CREATE FUNCTION public.check_idempotency(text, text)
+RETURNS jsonb LANGUAGE sql AS $$
+  SELECT result FROM public.idempotency_keys
+   WHERE idempotency_key = $1 AND operation = $2
+$$;
 CREATE FUNCTION public.save_idempotency(text, text, jsonb)
-RETURNS void LANGUAGE plpgsql AS $$ BEGIN RETURN; END; $$;
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO public.idempotency_keys(idempotency_key, operation, result)
+  VALUES ($1, $2, $3)
+  ON CONFLICT (idempotency_key, operation) DO NOTHING;
+END;
+$$;
 
 CREATE FUNCTION public.receive_po_items(jsonb, uuid, text DEFAULT NULL, boolean DEFAULT false)
 RETURNS jsonb LANGUAGE sql AS $$ SELECT '{}'::jsonb $$;
-CREATE FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text DEFAULT NULL)
-RETURNS jsonb LANGUAGE sql AS $$ SELECT '{}'::jsonb $$;
+CREATE FUNCTION public.update_vendor_bill(
+  p_bill_id uuid,
+  p_subtotal_cents bigint,
+  p_adjustment_cents bigint,
+  p_bill_date date,
+  p_due_date date,
+  p_notes text,
+  p_idempotency_key text DEFAULT NULL
+)
+RETURNS jsonb LANGUAGE plpgsql AS $function$
+DECLARE v_bill public.vendor_bills%ROWTYPE;
+BEGIN
+  SELECT * INTO v_bill FROM public.vendor_bills WHERE id = p_bill_id FOR UPDATE;
+  PERFORM public.check_period_open(v_bill.bill_date);
+  PERFORM public.check_period_open(p_bill_date);
+  RETURN '{}'::jsonb;
+END;
+$function$;
 CREATE FUNCTION public.record_vendor_payment(
   uuid, bigint, date DEFAULT CURRENT_DATE, text DEFAULT NULL,
   text DEFAULT NULL, text DEFAULT NULL, text DEFAULT NULL
@@ -385,8 +447,11 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'VENDOR_NOT_FOUND'; END IF;
   IF p_purchase_order_id IS NOT NULL THEN
     PERFORM 1 FROM public.purchase_orders
-     WHERE id = p_purchase_order_id FOR UPDATE;
+     WHERE id = p_purchase_order_id
+       AND status IN ('submitted', 'partially_received', 'fully_received')
+     FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'PO_NOT_FOUND'; END IF;
+    -- PO_NOT_BILLABLE submitted partially_received fully_received
   END IF;
   INSERT INTO public.vendor_bills(vendor_id, purchase_order_id, total_cents)
   VALUES (p_vendor_id, p_purchase_order_id, p_subtotal_cents + COALESCE(p_adjustment_cents, 0))
@@ -458,27 +523,80 @@ CREATE FUNCTION public.reverse_receiving_record(
 RETURNS jsonb LANGUAGE sql AS $$ SELECT '{}'::jsonb $$;
 
 CREATE TABLE public.cycle_counts (
-  id uuid PRIMARY KEY,
-  status text NOT NULL DEFAULT 'in_progress',
-  item_revision bigint NOT NULL DEFAULT 0
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  count_number text NOT NULL DEFAULT 'PROOF',
+  warehouse text NOT NULL DEFAULT 'Main Warehouse',
+  initiated_by uuid NOT NULL DEFAULT '11111111-1111-1111-1111-111111111111',
+  status text NOT NULL DEFAULT 'in_progress'
+);
+CREATE TABLE public.products (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_name text NOT NULL
+);
+CREATE TABLE public.inventory (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id uuid NOT NULL REFERENCES public.products(id),
+  location text NOT NULL,
+  quantity_available numeric NOT NULL DEFAULT 0,
+  quantity_on_order numeric NOT NULL DEFAULT 0
 );
 CREATE TABLE public.cycle_count_items (
-  id uuid PRIMARY KEY,
-  cycle_count_id uuid NOT NULL REFERENCES public.cycle_counts(id) ON DELETE CASCADE
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  cycle_count_id uuid NOT NULL REFERENCES public.cycle_counts(id) ON DELETE CASCADE,
+  product_id uuid REFERENCES public.products(id),
+  inventory_id uuid REFERENCES public.inventory(id),
+  expected_qty numeric NOT NULL DEFAULT 0,
+  counted_qty numeric,
+  variance numeric,
+  variance_pct numeric,
+  is_counted boolean NOT NULL DEFAULT false,
+  counted_by uuid,
+  counted_at timestamptz,
+  notes text
 );
 
-CREATE FUNCTION public.bump_cycle_count_item_revision()
-RETURNS trigger LANGUAGE plpgsql AS $function$
+CREATE FUNCTION public.update_cycle_count_item(uuid, numeric DEFAULT NULL, text DEFAULT NULL, uuid DEFAULT NULL, text DEFAULT NULL)
+RETURNS jsonb LANGUAGE sql AS $$ SELECT '{}'::jsonb $$;
+
+CREATE FUNCTION public._complete_cycle_count_impl(p_count_id uuid, p_actor uuid, p_key text)
+RETURNS void LANGUAGE plpgsql AS $function$
 BEGIN
-  RETURN COALESCE(NEW, OLD);
+  UPDATE public.inventory i
+     SET quantity_available = i.quantity_available + cci.variance
+    FROM public.cycle_count_items cci
+   WHERE cci.cycle_count_id = p_count_id
+     AND cci.inventory_id = i.id;
+  UPDATE public.cycle_counts SET status = 'completed' WHERE id = p_count_id;
+  PERFORM public.save_idempotency(p_key, 'complete_cycle_count', '{}'::jsonb);
 END;
 $function$;
-CREATE TRIGGER trg_bump_cycle_count_item_revision
-AFTER INSERT OR UPDATE OR DELETE ON public.cycle_count_items
-FOR EACH ROW EXECUTE FUNCTION public.bump_cycle_count_item_revision();
 
-CREATE FUNCTION public.complete_cycle_count(uuid, uuid DEFAULT NULL, text DEFAULT NULL, bigint DEFAULT NULL)
+CREATE FUNCTION public.complete_cycle_count(uuid, uuid DEFAULT NULL, text DEFAULT NULL)
 RETURNS void LANGUAGE plpgsql AS $$ BEGIN RETURN; END; $$;
+
+CREATE FUNCTION public.reverse_completed_cycle_count(
+  p_count_id uuid, p_actor uuid DEFAULT NULL, p_key text DEFAULT NULL
+)
+RETURNS void LANGUAGE plpgsql AS $function$
+DECLARE v_existing jsonb;
+BEGIN
+  v_existing := public.check_idempotency(p_key, 'reverse_completed_cycle_count');
+  IF v_existing IS NOT NULL THEN RETURN; END IF;
+  PERFORM 1
+    FROM public.inventory i
+    JOIN public.cycle_count_items cci ON cci.inventory_id = i.id
+   WHERE cci.cycle_count_id = p_count_id
+   ORDER BY i.id
+   FOR UPDATE OF i;
+  UPDATE public.inventory i
+     SET quantity_available = i.quantity_available - cci.variance
+    FROM public.cycle_count_items cci
+   WHERE cci.cycle_count_id = p_count_id
+     AND cci.inventory_id = i.id;
+  UPDATE public.cycle_counts SET status = 'cancelled' WHERE id = p_count_id;
+  PERFORM public.save_idempotency(p_key, 'reverse_completed_cycle_count', '{}'::jsonb);
+END;
+$function$;
 
 CREATE FUNCTION public.proof_complete_cycle_count(p_count_id uuid, p_expected_revision bigint)
 RETURNS void LANGUAGE plpgsql AS $function$
@@ -499,6 +617,7 @@ BEGIN
 END;
 $function$;
 `);
+  sql(`BEGIN;\n${readFileSync(CYCLE_MIGRATION, 'utf8')}\nCOMMIT;`);
   // The governed CRX apply path supplies one outer transaction per migration.
   // Mirror that contract here so table locks last across the whole file without
   // putting a dangerous runner-committing COMMIT inside the migration itself.
@@ -516,6 +635,26 @@ $function$;
   );
   assert.ok(receivingWriteBoundary, 'receiving-record write-boundary revoke missing');
   sql(receivingWriteBoundary[0]);
+
+  // Install the exact current AP-aging definition from the receiving candidate.
+  // Its PL/pgSQL body is catalog-checked by the invariant and is not executed by
+  // this fixture, so unrelated reporting columns need not be duplicated here.
+  const agingStart = receivingSource.indexOf('CREATE FUNCTION public.get_ap_aging(');
+  const agingEnd = receivingSource.indexOf('$function$;', agingStart);
+  assert.ok(agingStart >= 0 && agingEnd > agingStart, 'get_ap_aging definition missing');
+  sql(receivingSource.slice(agingStart, agingEnd + '$function$;'.length));
+}
+
+function proveCanonicalArtifacts() {
+  const smoke = sql(readFileSync(CYCLE_SMOKE, 'utf8'), { allowFailure: true });
+  expectFailure(smoke, /SMOKE_PASS_ROLLBACK/, 'registered cycle-count rollback smoke');
+
+  const predicate = readFileSync(SECTION9_INVARIANT, 'utf8').trim().replace(/;$/, '');
+  const violations = scalar(`
+    SELECT COALESCE(string_agg(violation_key || ': ' || reason, E'\\n' ORDER BY violation_key), '')
+    FROM (${predicate}) AS section9_violations;
+  `);
+  assert.equal(violations, '', `Section 9 PO/AP invariant returned violations:\n${violations}`);
 }
 
 function proveIntentCutoverGuards() {
@@ -1020,6 +1159,7 @@ try {
   await proveCompletionFirstRejectsLateInsert();
   await proveCompletionCannotMissReparentedItem();
   proveCycleCountCascadeDelete();
+  proveCanonicalArtifacts();
   console.log('GAUNTLET_WRITE_BOUNDARY_CONCURRENCY_PASS');
 } finally {
   if (CONTAINER.startsWith(PREFIX)) {

@@ -19,14 +19,35 @@ WITH expected_on_order AS (
   GROUP BY poi.product_id
 ),
 ap_functions AS (
-  SELECT p.proname, p.prosrc
+  SELECT p.oid, p.proname, p.prosrc
   FROM pg_proc p
   WHERE p.pronamespace = 'public'::regnamespace
-    AND p.proname IN (
-      'create_vendor_bill',
-      'get_ap_aging',
-      'update_vendor_bill'
+    AND p.oid IN (
+      to_regprocedure('public.create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text,boolean,text)'),
+      to_regprocedure('public._section9_create_vendor_bill_cumulative_impl(uuid,uuid,text,date,date,text,bigint,bigint,text,text)'),
+      to_regprocedure('public.get_ap_aging(date)'),
+      to_regprocedure('public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text,boolean,text)'),
+      to_regprocedure('public._section9_update_vendor_bill_intent_impl_20260831(uuid,bigint,bigint,date,date,text,text)')
     )
+),
+ap_controls AS (
+  SELECT
+    MAX(prosrc) FILTER (
+      WHERE oid = to_regprocedure('public.create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text,boolean,text)')
+    ) AS create_wrapper,
+    MAX(prosrc) FILTER (
+      WHERE oid = to_regprocedure('public._section9_create_vendor_bill_cumulative_impl(uuid,uuid,text,date,date,text,bigint,bigint,text,text)')
+    ) AS create_impl,
+    MAX(prosrc) FILTER (
+      WHERE oid = to_regprocedure('public.get_ap_aging(date)')
+    ) AS ap_aging,
+    MAX(prosrc) FILTER (
+      WHERE oid = to_regprocedure('public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text,boolean,text)')
+    ) AS update_wrapper,
+    MAX(prosrc) FILTER (
+      WHERE oid = to_regprocedure('public._section9_update_vendor_bill_intent_impl_20260831(uuid,bigint,bigint,date,date,text,text)')
+    ) AS update_impl
+  FROM ap_functions
 )
 SELECT
   'inventory:on-order:' || COALESCE(i.product_id, e.product_id)::text
@@ -70,6 +91,20 @@ WHERE EXISTS (
 UNION ALL
 
 SELECT
+  'vendor_bills:browser-mutation-privilege' AS violation_key,
+  'anon/authenticated retains direct vendor-bill mutation privilege' AS reason
+WHERE has_table_privilege('authenticated', 'public.vendor_bills', 'INSERT')
+   OR has_table_privilege('authenticated', 'public.vendor_bills', 'UPDATE')
+   OR has_table_privilege('authenticated', 'public.vendor_bills', 'DELETE')
+   OR has_table_privilege('authenticated', 'public.vendor_bills', 'TRUNCATE')
+   OR has_table_privilege('anon', 'public.vendor_bills', 'INSERT')
+   OR has_table_privilege('anon', 'public.vendor_bills', 'UPDATE')
+   OR has_table_privilege('anon', 'public.vendor_bills', 'DELETE')
+   OR has_table_privilege('anon', 'public.vendor_bills', 'TRUNCATE')
+
+UNION ALL
+
+SELECT
   'vendor_bills:deleted-vendor:' || vb.id::text AS violation_key,
   'active vendor bill references a soft-deleted vendor' AS reason
 FROM public.vendor_bills vb
@@ -92,48 +127,44 @@ WHERE vb.deleted_at IS NULL
 UNION ALL
 
 SELECT
-  'create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text)'
+  'create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text,boolean,text)'
     AS violation_key,
-  'create_vendor_bill lacks PO lock/status serialization' AS reason
-WHERE NOT EXISTS (
-  SELECT 1
-  FROM ap_functions
-  WHERE proname = 'create_vendor_bill'
-    AND prosrc ~
-      'FROM public\.vendors[[:space:]]+WHERE id = p_vendor_id[[:space:]]+AND deleted_at IS NULL[[:space:]]+FOR UPDATE'
-    AND prosrc LIKE '%FROM public.purchase_orders%FOR UPDATE%'
-    AND prosrc LIKE '%PO_NOT_BILLABLE%'
-    AND prosrc LIKE '%submitted%partially_received%fully_received%'
-)
+  'create_vendor_bill public wrapper/private implementation chain lacks vendor/PO lock and status serialization' AS reason
+FROM ap_controls
+WHERE create_wrapper IS NULL
+   OR create_impl IS NULL
+   OR create_wrapper NOT LIKE '%_section9_create_vendor_bill_cumulative_impl%'
+   OR create_wrapper !~
+      'FROM public\.vendors v[[:space:]]+WHERE v\.id = p_vendor_id[[:space:]]+AND v\.deleted_at IS NULL[[:space:]]+FOR UPDATE'
+   OR create_wrapper NOT LIKE '%FROM public.purchase_orders po%FOR UPDATE%'
+   OR create_impl NOT LIKE '%PO_NOT_BILLABLE%'
+   OR create_impl NOT LIKE '%submitted%partially_received%fully_received%'
 
 UNION ALL
 
 SELECT
   'get_ap_aging(date)' AS violation_key,
   'get_ap_aging does not fail closed for unsupported historical dates' AS reason
-WHERE NOT EXISTS (
-  SELECT 1
-  FROM ap_functions
-  WHERE proname = 'get_ap_aging'
-    AND prosrc LIKE '%p_as_of_date IS DISTINCT FROM%'
-    AND prosrc LIKE '%clock_timestamp() AT TIME ZONE ''America/Chicago''%'
-    AND prosrc LIKE '%HISTORICAL_AP_UNAVAILABLE%'
-    AND prosrc LIKE '%vb.bill_date <= p_as_of_date%'
-)
+FROM ap_controls
+WHERE ap_aging IS NULL
+   OR ap_aging NOT LIKE '%p_as_of_date IS DISTINCT FROM%'
+   OR ap_aging NOT LIKE '%transaction_timestamp() AT TIME ZONE ''America/Chicago''%'
+   OR ap_aging NOT LIKE '%HISTORICAL_AP_UNAVAILABLE%'
+   OR ap_aging NOT LIKE '%vb.bill_date <= p_as_of_date%'
 
 UNION ALL
 
 SELECT
-  'update_vendor_bill(uuid,bigint,bigint,date,date,text,text)'
+  'update_vendor_bill(uuid,bigint,bigint,date,date,text,text,boolean,text)'
     AS violation_key,
-  'update_vendor_bill does not lock before checking old and new periods' AS reason
-WHERE NOT EXISTS (
-  SELECT 1
-  FROM ap_functions
-  WHERE proname = 'update_vendor_bill'
-    AND strpos(prosrc, 'FOR UPDATE') > 0
-    AND strpos(prosrc, 'check_period_open(v_bill.bill_date)')
-        > strpos(prosrc, 'FOR UPDATE')
-    AND strpos(prosrc, 'check_period_open(p_bill_date)')
-        > strpos(prosrc, 'FOR UPDATE')
-);
+  'update_vendor_bill public wrapper/private implementation chain does not lock before checking old and new periods' AS reason
+FROM ap_controls
+WHERE update_wrapper IS NULL
+   OR update_impl IS NULL
+   OR update_wrapper NOT LIKE '%_section9_update_vendor_bill_intent_impl_20260831%'
+   OR strpos(update_wrapper, 'FOR UPDATE') = 0
+   OR strpos(update_impl, 'FOR UPDATE') = 0
+   OR strpos(update_impl, 'check_period_open(v_bill.bill_date)')
+        <= strpos(update_impl, 'FOR UPDATE')
+   OR strpos(update_impl, 'check_period_open(p_bill_date)')
+        <= strpos(update_impl, 'FOR UPDATE');

@@ -126,8 +126,24 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
 
     expect(registry).toContain('smoke-section9-po-ap-high-remediation.sql');
     expect(sweep).toContain('vendors:browser-mutation-privilege');
+    expect(sweep).toContain('vendor_bills:browser-mutation-privilege');
     expect(sweep).toContain('vendor_bills:deleted-vendor:');
     expect(sweep).toContain('vendor_bills:invalid-po:');
+    expect(sweep).toContain(
+      'public.create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text,boolean,text)',
+    );
+    expect(sweep).toContain(
+      'public._section9_create_vendor_bill_cumulative_impl(uuid,uuid,text,date,date,text,bigint,bigint,text,text)',
+    );
+    expect(sweep).toContain(
+      'public.update_vendor_bill(uuid,bigint,bigint,date,date,text,text,boolean,text)',
+    );
+    expect(sweep).toContain(
+      'public._section9_update_vendor_bill_intent_impl_20260831(uuid,bigint,bigint,date,date,text,text)',
+    );
+    expect(sweep).toContain(
+      "transaction_timestamp() AT TIME ZONE ''America/Chicago''",
+    );
     expect(sweep).toMatch(
       /FULL JOIN \(\s*SELECT product_id, quantity_on_order\s*FROM public\.inventory\s*WHERE location = 'Main Warehouse'\s*\) i/,
     );
@@ -139,6 +155,16 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
     );
     expect(concurrency).toContain("'--network', 'none'");
     expect(concurrency).toContain('SQL exited before marker');
+
+    const cycleCountSmoke = source(
+      'scripts',
+      'smoke',
+      'smoke-cycle-count-concurrency-guards.sql',
+    );
+    expect(cycleCountSmoke).toContain(
+      "'public.complete_cycle_count(uuid,uuid,text,bigint)'::regprocedure",
+    );
+    expect(cycleCountSmoke).toContain('v_item_revision');
 
     const areas = source('scripts', 'test-areas.json');
     const lifecycle = areas.slice(
