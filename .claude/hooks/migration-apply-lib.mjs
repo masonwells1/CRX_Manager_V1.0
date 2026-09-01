@@ -193,11 +193,45 @@ export function evaluateMigrationApply({
   // about a migration; reading it from any other checkout would let a flag Mason
   // never armed here change the rule-set.
   const hookCwd = cwd || process.cwd();
-  const listWorktrees = gitWorktreeList || (() => execFileSync(
+  const rawListWorktrees = gitWorktreeList || (() => execFileSync(
     "git",
     ["worktree", "list", "--porcelain"],
     { cwd: projectDir, encoding: "utf8", timeout: GIT_CALL_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"] },
   ));
+  // ONE listing, shared by both consumers, and its failure is REMEMBERED
+  // (Codex P1, PR #502). `git worktree list` was previously invoked twice —
+  // once for the proof-dir lookup below, once for the pending-queue root. The
+  // first call succeeding while the second transiently failed made
+  // resolveSessionWorktree() return null, which silently fell back to the
+  // PRIMARY checkout: the guard then accepted the reviewer proof from the
+  // active worktree while scanning a different tree for the queue, so an older
+  // migration present only in the session worktree was invisible and the apply
+  // was allowed to strand it. Codex reproduced that exact
+  // first-call-success/second-call-failure sequence and got `allow`.
+  //
+  // Memoising collapses the race — there is now only one call to disagree with
+  // itself — and `worktreeListError` records a failure so the queue scan can
+  // REFUSE rather than guess. resolveSessionWorktree() swallows its own errors
+  // and returns null, so the caller cannot tell "lookup failed" from "no
+  // worktree matched"; this flag is what restores that distinction without
+  // touching the blob-pinned shared library.
+  let worktreeListError = null;
+  let worktreeListing;
+  let worktreeListed = false;
+  const listWorktrees = () => {
+    if (worktreeListed) {
+      if (worktreeListError) throw worktreeListError;
+      return worktreeListing;
+    }
+    worktreeListed = true;
+    try {
+      worktreeListing = rawListWorktrees();
+      return worktreeListing;
+    } catch (err) {
+      worktreeListError = err;
+      throw err;
+    }
+  };
   const proofDirs = sessionProofDirs(projectDir, hookCwd, listWorktrees);
 
   // ORDERING PREFLIGHT (2026-08-08). Refuse a migration that is OLDER than one
@@ -381,9 +415,24 @@ export function evaluateMigrationApply({
       // them, so this is the normal case, not the edge.
       //
       // Resolution reuses codex-push-lib's validated lookup rather than a second
-      // copy: an unrecognised cwd yields null and falls back to projectDir, which is
-      // the old behaviour and fails closed.
-      const queueRoot = resolveSessionWorktree(projectDir, hookCwd, listWorktrees) || projectDir;
+      // copy. That lookup returns null for two DIFFERENT reasons — the listing
+      // failed, or it succeeded and no worktree contained the cwd — and only the
+      // second makes projectDir the right answer. Falling back on both was a
+      // fail-OPEN, not the "fails closed" an earlier revision of this comment
+      // claimed: see the memoised listWorktrees above. So the listing failure is
+      // checked explicitly and refuses; a clean listing with no match still
+      // legitimately means the primary checkout.
+      const resolvedQueueRoot = resolveSessionWorktree(projectDir, hookCwd, listWorktrees);
+      if (worktreeListError) {
+        return block(
+          `MIGRATION PENDING-SET GUARD: could not determine which checkout holds the migration ` +
+          `queue — \`git worktree list\` failed (${worktreeListError?.message || worktreeListError}). ` +
+          `The session may be running in a linked worktree whose migrations this guard cannot see, ` +
+          `so whether an OLDER migration is still waiting is UNKNOWN. Refusing rather than scanning ` +
+          `the primary checkout and stepping over a queue that lives somewhere else.\n\n` +
+          `Retry once \`git worktree list --porcelain\` succeeds in ${projectDir}.`);
+      }
+      const queueRoot = resolvedQueueRoot || projectDir;
       const gitOut = (args) => execFileSync("git", args, {
         cwd: queueRoot,
         encoding: "utf8",

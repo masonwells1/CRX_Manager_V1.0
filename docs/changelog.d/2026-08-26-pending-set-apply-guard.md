@@ -81,10 +81,33 @@ Mutation-tested, not merely observed passing: removing the slug fallback, lettin
 marker unlock the guard, and turning an abstention into a silent pass each turn the suite red,
 and the incident sequence is reproduced end-to-end through the real gate in both
 `migration-pending-lib.test.mjs` (41 assertions) and `migration-apply-lib.test.mjs`
-(123 → 144 from this change alone; the suite totals 159 — 155 after merging `main`, which
-added its own cases, plus 4 for the fetch-instruction directory below). The two subprocess
-fixtures now build a real `origin/main` with a GIT_*-scrubbed env rather than stubbing the
-lookup, so the second door's git path is genuinely exercised.
+(123 → 144 from this change alone; the suite totals 161 — 155 after merging `main`, which
+added its own cases, plus 4 for the fetch-instruction directory and 2 for the failed-lookup
+refusal below). The two subprocess fixtures now build a real `origin/main` with a
+GIT_*-scrubbed env rather than stubbing the lookup, so the second door's git path is
+genuinely exercised.
+
+**A failed worktree lookup must refuse, not fall back** (Codex P1). `git worktree list` was
+invoked twice — once for the proof directories, once for the pending-queue root — so the
+FIRST call could succeed while the SECOND transiently failed. `resolveSessionWorktree()`
+swallows its own errors and returns `null`, which is indistinguishable from "no worktree
+matched", so the queue scan silently fell back to the PRIMARY checkout. The guard then
+accepted the reviewer proof from the active worktree while scanning a different tree for the
+queue: an older migration living only in the session worktree was invisible, and the apply
+returned `allow` and stranded it — the exact failure this guard exists to prevent, reached
+through the guard's own fallback. Codex reproduced the sequence.
+
+The comment above that fallback claimed it "fails closed". It did not, and that is the part
+worth remembering: **a guard whose comment asserts a safety property the code does not have is
+worse than one with no comment**, because the next reader stops checking. Three guards drifted
+this way in two sessions on 2026-08-31, and every drift overclaimed.
+
+The listing is now memoised, so there is only one call and the two consumers cannot disagree —
+the race is closed structurally rather than patched at one call site — and a listing failure is
+recorded so the queue scan REFUSES. A clean listing that matches nothing still legitimately
+means the primary checkout, which is the distinction the old code could not express. Fixed
+without touching the blob-pinned shared library. Mutation-proven: disabling the check returns
+`allow` on a failed listing, reproducing Codex's reported symptom exactly.
 
 **The refusal must name the directory it measured** (CodeRabbit). Freshness is read from
 `queueRoot` — the session's linked worktree when one resolves — but both fetch-age refusals,

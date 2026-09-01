@@ -298,6 +298,34 @@ denies(
     }
   }
 
+  // A FAILED worktree lookup must REFUSE, not fall back (Codex P1, PR #502).
+  // resolveSessionWorktree() returns null both when the listing failed and when
+  // it succeeded with no match, and only the second makes projectDir correct.
+  // `git worktree list` used to be invoked twice — once for the proof dirs, once
+  // for the queue root — so the FIRST call could succeed (accepting the reviewer
+  // proof from the active worktree) while the SECOND transiently failed, silently
+  // scanning the primary checkout for the queue. An older migration living only
+  // in the session worktree was then invisible and the apply returned `allow`,
+  // stranding it. Codex reproduced that sequence; the comment above the fallback
+  // had claimed it "fails closed".
+  {
+    const root = fixture();
+    const boom = () => { throw new Error("git worktree list timed out"); };
+    denies(evaluate(root, { cwd: root, gitWorktreeList: boom }),
+      "could not determine which checkout holds the migration queue",
+      "a failed worktree listing refuses instead of scanning the primary checkout");
+
+    // The listing is now memoised, so the two consumers cannot disagree: the
+    // first-succeeds/second-fails sequence is unreachable because there is only
+    // ever one call. Counting proves the race is closed structurally rather than
+    // patched at one call site.
+    let calls = 0;
+    const countingList = () => { calls += 1; return ""; };
+    evaluate(root, { cwd: root, gitWorktreeList: countingList });
+    ok(calls === 1,
+      `git worktree list is invoked exactly once per evaluation (was ${calls}) — the two consumers share one result`);
+  }
+
   // ── THE ACTIVE CHECKOUT IS PART OF THE QUEUE (Codex P1, PR #502) ──────────
   // ship.md Step 5 applies a migration while it is still uncommitted and
   // unmerged. An origin/main-only listing cannot see an older SIBLING authored in
