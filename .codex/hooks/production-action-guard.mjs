@@ -445,10 +445,24 @@ function ghMergeRequest(command) {
   const valueFlags = new Set(["--repo", "-R", "--match-head-commit", "--subject", "--body"]);
   let selector = "";
   let repo = "";
+  let admin = false;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (word.startsWith("--repo=")) {
       repo = word.slice("--repo=".length);
+      continue;
+    }
+    // `--admin` merges with administrator privileges, skipping main's required
+    // review. Mason turned "Include administrators" OFF on 2026-09-01 so HE can
+    // clear a stuck review by hand; that bypass travels with the same admin
+    // token Codex runs on, so the gate refuses the flag. `--admin=false` asks
+    // for no bypass and stands down.
+    if (word.toLowerCase() === "--admin") {
+      admin = true;
+      continue;
+    }
+    if (word.toLowerCase().startsWith("--admin=")) {
+      admin = !/^(?:false|0|no)$/i.test(word.slice("--admin=".length));
       continue;
     }
     if (valueFlags.has(word)) {
@@ -459,7 +473,7 @@ function ghMergeRequest(command) {
     }
     if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
   }
-  return { selector, repo };
+  return { selector, repo, admin };
 }
 
 function ghApiMergeRequest(command) {
@@ -561,7 +575,7 @@ function resolvePullRequest({ request, repoDir, runGh }) {
   // baseRefOid is GitHub's CURRENT tip of the base branch — the commit the merge
   // will actually land on. Without it the gate falls back to local origin/main,
   // which can be stale (Codex P1, 2026-07-25).
-  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,statusCheckRollup,autoMergeRequest");
+  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest");
   if (request.repo) args.push("--repo", request.repo);
   const data = JSON.parse(runGh(args, repoDir));
   // baseRefOid is required only for main-bound merges; gatePullRequestMerge
@@ -569,6 +583,23 @@ function resolvePullRequest({ request, repoDir, runGh }) {
   // needlessly failed closed.
   if (!data?.baseRefName || !data?.headRefOid) throw new Error("GitHub did not return baseRefName and headRefOid");
   return data;
+}
+
+// GitHub's own review verdict, from `gh pr view --json reviewDecision`. Until
+// 2026-09-01 nothing could merge into main without an approval, so a CLEAN
+// mergeStateStatus stood in for "somebody approved this". Mason's manual
+// override — branch protection's "Include administrators" turned OFF so he can
+// clear a stuck review by hand — removed that floor for anyone with admin
+// rights, which is the token Codex runs on. So the approval is read directly.
+//
+// APPROVED is head-bound only because main's protection sets
+// dismiss_stale_reviews AND require_last_push_approval (verified live
+// 2026-09-01): a new commit dismisses every approval, so APPROVED cannot be
+// describing an older head. If stale-review dismissal is ever turned off, this
+// check must be joined by one that an APPROVED review's commit_id equals
+// headRefOid. Mirrors pullRequestApproved() in .claude/hooks/codex-push-lib.mjs.
+export function pullRequestApproved(pullRequest) {
+  return String(pullRequest?.reviewDecision || "").toUpperCase() === "APPROVED";
 }
 
 export function pullRequestChecksGreen(pullRequest) {
@@ -606,6 +637,14 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     return denied(
       "CODEX PRODUCTION GATE: GitHub did not report this pull request's current base commit (baseRefOid), " +
       "so the merge cannot be bound to the base it will actually land on and is denied (fail closed)."
+    );
+  }
+  if (!pullRequestApproved(pullRequest)) {
+    return denied(
+      `CODEX PRODUCTION GATE: GitHub reports reviewDecision=${String(pullRequest.reviewDecision || "").toUpperCase() || "<none>"} — ` +
+      "this pull request has no current approval and main requires one. Since 2026-09-01 the administrator " +
+      "override that could skip the review is Mason's to use by hand, not an agent's. Get a real approval " +
+      "(`@coderabbitai review`, fix its findings, merge once it approves), or hand the PR to Mason and say why."
     );
   }
   if (!pullRequestChecksGreen(pullRequest)) {
@@ -761,6 +800,16 @@ export function evaluateProductionAction({
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     if (ghRequest?.unsupportedGraphql) {
       return denied("CODEX PRODUCTION GATE: GraphQL mergePullRequest mutations are denied because the guard cannot safely resolve and verify their PR head/checks. Use `gh pr merge <number>` instead.");
+    }
+    if (ghRequest?.admin) {
+      // Denied before the PR is resolved: there is no base branch and no diff
+      // for which an agent asking GitHub to skip the review is the right move.
+      return denied(
+        "CODEX PRODUCTION GATE: `--admin` merges with administrator privileges, skipping main's required " +
+        "review. That override exists for Mason to use by hand on the PR page — an agent may never use it, " +
+        "whatever the diff or the deadline. Get a real approval instead, or hand the PR to Mason and say " +
+        "why it is stuck."
+      );
     }
     if (ghRequest) {
       const result = gatePullRequestMerge({

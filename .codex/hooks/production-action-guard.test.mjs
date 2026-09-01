@@ -513,6 +513,7 @@ try {
     baseRefOid: risky.base,
     headRefName: "feature/test",
     headRefOid: risky.sha,
+    reviewDecision: "APPROVED",
     mergeStateStatus: "CLEAN",
     statusCheckRollup: greenChecks,
   };
@@ -594,6 +595,68 @@ try {
     repoDir: risky.repo,
     runGh: () => featurePrJson,
   }).blocked, false, "gh PR merge to a non-production base is allowed");
+
+  // ── Mason's manual review override is his alone (2026-09-01) ──────────────
+  // "Include administrators" is OFF on main's branch protection so Mason can
+  // hand-merge a PR whose review is stuck. The bypass rides on admin rights,
+  // which is exactly what Codex's own token carries — so the flag is refused
+  // before the PR is even resolved (note: no runGh stub is supplied below).
+  const adminMerge = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash --admin" },
+    repoDir: risky.repo,
+    nowMs: now,
+  });
+  assert.equal(adminMerge.blocked, true, "--admin merge is denied without resolving the PR");
+  assert.match(
+    String(adminMerge.reason || adminMerge.message || JSON.stringify(adminMerge)),
+    /--admin/,
+    "--admin denial names the flag",
+  );
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --admin=false --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, false, "--admin=false asks for no bypass and stands down");
+  // Before this change an unapproved PR could not reach a merge at all, so the
+  // CLEAN mergeStateStatus check stood in for "somebody approved it". With the
+  // override live that inference is gone, and the verdict is read directly.
+  const unapproved = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "REVIEW_REQUIRED" }),
+  });
+  assert.equal(unapproved.blocked, true, "a PR with no current approval is denied");
+  assert.match(
+    String(unapproved.reason || unapproved.message || JSON.stringify(unapproved)),
+    /reviewDecision=REVIEW_REQUIRED/,
+    "the approval denial reports GitHub's actual verdict",
+  );
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
+  }).blocked, true, "CHANGES_REQUESTED is not an approval");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: undefined }),
+  }).blocked, true, "a PR view with no reviewDecision fails closed");
+  assert.equal(evaluateProductionAction({
+    toolName: "mcp__github__merge_pull_request",
+    toolInput: { owner: "crop", repo: "crx", pull_number: 123 },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "REVIEW_REQUIRED" }),
+  }).blocked, true, "the MCP merge route needs the approval too");
   assert.equal(evaluateProductionAction({
     toolName: "mcp__github__merge_pull_request",
     toolInput: { owner: "crop", repo: "crx", pull_number: 123 },
@@ -827,6 +890,7 @@ try {
       baseRefOid,
       headRefName: "feature/test",
       headRefOid: stale.sha,
+      reviewDecision: "APPROVED",
       mergeStateStatus: "CLEAN",
       statusCheckRollup: greenChecks,
     });
@@ -885,6 +949,7 @@ try {
         baseRefOid: githubBase,
         headRefName: "feature/test",
         headRefOid: updatedHead,
+        reviewDecision: "APPROVED",
         mergeStateStatus: "CLEAN",
         statusCheckRollup: greenChecks,
       }),
@@ -913,6 +978,7 @@ try {
       baseRefName: "main",
       headRefName: "feature/test",
       headRefOid: stale.sha,
+      reviewDecision: "APPROVED",
       mergeStateStatus: "CLEAN",
       statusCheckRollup: greenChecks,
     }));
@@ -955,6 +1021,7 @@ try {
         baseRefOid: githubBase,
         headRefName: "feature/test",
         headRefOid: updatedHead,
+        reviewDecision: "APPROVED",
         mergeStateStatus: "CLEAN",
         statusCheckRollup: greenChecks,
       }),

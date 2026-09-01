@@ -11,6 +11,7 @@ import {
   ghMergeRequest,
   mcpMergeRequest,
   proofSearchDirs,
+  pullRequestApproved,
   pullRequestChecksGreen,
 } from "./codex-push-lib.mjs";
 
@@ -20,17 +21,39 @@ function ok(v, m) { assert.ok(v, m); pass++; }
 function eq(a, b, m) { assert.deepEqual(a, b, m); pass++; }
 
 // ── ghMergeRequest ───────────────────────────────────────────────────────────
-eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false }, "plain merge parses");
-eq(ghMergeRequest("gh pr merge --squash --auto 7"), { selector: "7", repo: "", auto: true }, "--auto detected");
-eq(ghMergeRequest("gh -R masonwells1/CRX_Manager_V1.0 pr merge 9"), { selector: "9", repo: "masonwells1/CRX_Manager_V1.0", auto: false }, "global -R between gh and pr");
-eq(ghMergeRequest("gh pr merge --repo=o/r"), { selector: "", repo: "o/r", auto: false }, "repo= form, selectorless (current branch)");
+eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false, admin: false }, "plain merge parses");
+eq(ghMergeRequest("gh pr merge --squash --auto 7"), { selector: "7", repo: "", auto: true, admin: false }, "--auto detected");
+eq(ghMergeRequest("gh -R masonwells1/CRX_Manager_V1.0 pr merge 9"), { selector: "9", repo: "masonwells1/CRX_Manager_V1.0", auto: false, admin: false }, "global -R between gh and pr");
+eq(ghMergeRequest("gh pr merge --repo=o/r"), { selector: "", repo: "o/r", auto: false, admin: false }, "repo= form, selectorless (current branch)");
 ok(ghMergeRequest("gh pr merge") !== null, "selectorless merge still gated");
 eq(ghMergeRequest("gh pr merge 5 --disable-auto"), null, "--disable-auto stands down (cancels, does not land)");
 eq(ghMergeRequest("gh pr view merge-notes"), null, "merge-notes is not the word merge");
 ok(ghMergeRequest("gh pr view merge") !== null, "exact-word over-match routes read through gate (fails safe)");
 eq(ghMergeRequest("git merge main"), null, "git merge is not a gh merge");
-eq(ghMergeRequest("echo gh pr merge docs"), { selector: "docs", repo: "", auto: false }, "gh token anywhere still matches (fails safe)");
+eq(ghMergeRequest("echo gh pr merge docs"), { selector: "docs", repo: "", auto: false, admin: false }, "gh token anywhere still matches (fails safe)");
 eq(ghMergeRequest("npm run build"), null, "unrelated command ignored");
+
+// ── --admin (Mason's manual review override, 2026-09-01) ─────────────────────
+// "Include administrators" is OFF on main so Mason can hand-merge a stuck PR.
+// The bypass rides on admin rights, so every agent session inherits it; the
+// gate refuses the flag in every spelling gh accepts.
+ok(ghMergeRequest("gh pr merge 42 --admin")?.admin === true, "--admin detected");
+ok(ghMergeRequest("gh pr merge 42 --admin --squash")?.admin === true, "--admin before other flags detected");
+ok(ghMergeRequest("gh pr merge --squash 42 --admin")?.admin === true, "--admin after the selector detected");
+ok(ghMergeRequest("gh pr merge 42 --ADMIN")?.admin === true, "--ADMIN is the same flag");
+ok(ghMergeRequest("gh pr merge 42 --admin=true")?.admin === true, "--admin=true detected");
+ok(ghMergeRequest("gh pr merge 42 --admin=false")?.admin === false, "--admin=false asks for no bypass and stands down");
+ok(ghMergeRequest("gh pr merge 42 --squash")?.admin === false, "an ordinary merge is not an admin merge");
+eq(ghMergeRequest("gh pr merge 42 --admin"), { selector: "42", repo: "", auto: false, admin: true }, "--admin does not eat the selector");
+
+// ── pullRequestApproved ──────────────────────────────────────────────────────
+ok(pullRequestApproved({ reviewDecision: "APPROVED" }), "APPROVED passes");
+ok(pullRequestApproved({ reviewDecision: "approved" }), "case-insensitive");
+ok(!pullRequestApproved({ reviewDecision: "REVIEW_REQUIRED" }), "REVIEW_REQUIRED fails");
+ok(!pullRequestApproved({ reviewDecision: "CHANGES_REQUESTED" }), "CHANGES_REQUESTED fails");
+ok(!pullRequestApproved({ reviewDecision: null }), "null verdict fails closed");
+ok(!pullRequestApproved({}), "missing field fails closed — a PR view that never asked for it is not an approval");
+ok(!pullRequestApproved(undefined), "undefined PR fails closed");
 
 // ── ghApiMergeRequest ────────────────────────────────────────────────────────
 eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge"), { selector: "12", repo: "o/r", auto: false }, "REST merge endpoint parses");
@@ -88,6 +111,17 @@ ok(r.status === 0 && r.decision === null, "merge-suffixed word boundary respecte
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 5 --squash; curl -X PUT https://api.github.com/repos/o/r/pulls/9/merge" } });
 ok(r.decision?.permissionDecision === "deny", "raw REST merge after a gh merge in the same chain still denied");
 ok(/raw GitHub REST merge/.test(r.decision?.permissionDecisionReason || "") || /fail closed/.test(r.decision?.permissionDecisionReason || ""), "chain deny cites the REST rule or fails closed on PR resolution");
+
+// The --admin deny lands BEFORE the PR is resolved, so it needs no gh and no
+// network — that is deliberate: an agent must never reach GitHub with a request
+// to skip the review, whatever the PR turns out to be.
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 42 --squash --admin" } });
+ok(r.decision?.permissionDecision === "deny", "--admin merge denied without resolving the PR");
+ok(/--admin/.test(r.decision?.permissionDecisionReason || ""), "--admin deny names the flag");
+ok(/Mason/.test(r.decision?.permissionDecisionReason || ""), "--admin deny says whose override it is");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 5 --squash; gh pr merge 9 --admin" } });
+ok(r.decision?.permissionDecision === "deny", "--admin later in a chain is still denied");
 
 r = runHook({ tool_name: "mcp__Desktop_Commander__read_file", tool_input: { path: "x" } });
 ok(r.status === 0 && r.decision === null, "unrelated MCP tool passes through");

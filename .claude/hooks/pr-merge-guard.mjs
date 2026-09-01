@@ -35,6 +35,7 @@ import {
   mcpMergeRequest,
   proofSearchDirs,
   proofValid,
+  pullRequestApproved,
   pullRequestChecksGreen,
   riskyFiles,
 } from "./codex-push-lib.mjs";
@@ -81,6 +82,22 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
 }
 if (requests.length === 0) passthrough();
 
+// ── the administrator override is Mason's, never an agent's ─────────────────
+// On 2026-09-01 Mason turned "Include administrators" OFF on main's branch
+// protection so he can hand-merge a PR whose review is stuck (CodeRabbit down,
+// rate-limited, or wedged). That bypass is granted by admin rights, not by a
+// separate credential — so every agent session, running on his token, inherits
+// it. Denied here, before the PR is even resolved: there is no base branch and
+// no diff for which an agent asking GitHub to skip review is the right move.
+if (requests.some((request) => request?.admin)) {
+  deny(
+    "PR MERGE GATE: `--admin` merges with administrator privileges, skipping main's required review. " +
+    "That override exists for Mason to use by hand on the PR page — an agent may never use it, whatever " +
+    "the diff or the deadline. Get a real approval instead (post `@coderabbitai review`, fix what it " +
+    "finds, and merge once it approves this head), or hand the PR to Mason and say why it is stuck."
+  );
+}
+
 // ── resolve the PR (fail closed) ─────────────────────────────────────────────
 const projectDir = path.resolve(
   payload?.cwd || payload?.tool_input?.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd(),
@@ -116,7 +133,7 @@ function gateRequest(request) {
     // merge actually lands on. The proof must be bound to THAT, not to the local
     // origin/main, which can be stale (Codex round-6: a proof reviewed against an
     // old local base validated while GitHub merged onto newer main content).
-    viewArgs.push("--json", "baseRefName,baseRefOid,headRefOid,mergeStateStatus,statusCheckRollup,autoMergeRequest");
+    viewArgs.push("--json", "baseRefName,baseRefOid,headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest");
     if (request.repo) viewArgs.push("--repo", request.repo);
     pr = JSON.parse(gh(viewArgs));
     if (!pr?.baseRefName || !pr?.headRefOid || !pr?.baseRefOid) {
@@ -131,6 +148,23 @@ function gateRequest(request) {
     deny(`PR MERGE GATE: merges into protected branch "${base}" are always blocked.`);
   }
   if (base !== "main") return; // ordinary feature-branch merges are not production landings
+
+  // ── a real, current approval ───────────────────────────────────────────────
+  // Until 2026-09-01 this was implicit: GitHub itself refused an unapproved
+  // merge, so reaching the code below meant an approval existed. Mason's manual
+  // override (branch protection's "Include administrators" turned OFF) removed
+  // that floor for anyone holding admin rights, which is every agent session on
+  // his token. So the approval is now read from GitHub's own verdict.
+  // `--auto` is exempt because GitHub holds an auto-merge until every
+  // requirement is satisfied and auto-merge never uses the admin bypass.
+  if (!request.auto && !pullRequestApproved(pr)) {
+    deny(
+      `PR MERGE GATE: GitHub reports reviewDecision=${String(pr.reviewDecision || "").toUpperCase() || "<none>"} ` +
+      "— this pull request has no current approval, and main requires one. The administrator override that " +
+      "could skip it is Mason's to use by hand, not an agent's. Post `@coderabbitai review`, fix every real " +
+      "finding, and merge only after it approves; if the review is stuck, hand the PR to Mason and say so."
+    );
+  }
 
   // ── green-pipeline requirement ─────────────────────────────────────────────
   // `--auto` defers the merge to GitHub, which itself enforces the required

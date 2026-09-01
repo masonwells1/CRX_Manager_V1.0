@@ -2024,10 +2024,21 @@ export function ghMergeRequest(command) {
   let selector = "";
   let repo = "";
   let auto = false;
+  let admin = false;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (word.startsWith("--repo=")) { repo = word.slice("--repo=".length); continue; }
     if (word.toLowerCase() === "--auto" || word.toLowerCase().startsWith("--auto=")) { auto = true; continue; }
+    // `--admin` merges with administrator privileges, skipping main's required
+    // review. Mason turned "Include administrators" OFF on 2026-09-01 so HE can
+    // clear a stuck review by hand; that override travels with the same token
+    // every agent session holds, so the merge gates refuse the flag outright.
+    // An explicit `--admin=false` asks for no bypass and stands down.
+    if (word.toLowerCase() === "--admin") { admin = true; continue; }
+    if (word.toLowerCase().startsWith("--admin=")) {
+      admin = !/^(?:false|0|no)$/i.test(word.slice("--admin=".length));
+      continue;
+    }
     if (valueFlags.has(word)) {
       const value = words[index + 1] || "";
       if (word === "--repo" || word === "-R") repo = value;
@@ -2036,7 +2047,7 @@ export function ghMergeRequest(command) {
     }
     if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
   }
-  return { selector, repo, auto };
+  return { selector, repo, auto, admin };
 }
 
 // `gh api -X PUT repos/o/r/pulls/N/merge`, plus the GraphQL mergePullRequest
@@ -2099,6 +2110,24 @@ export function pullRequestChecksGreen(pullRequest) {
     }
     return false;
   });
+}
+
+// GitHub's own review verdict for a pull request, from
+// `gh pr view --json reviewDecision`. Until 2026-09-01 nothing could merge into
+// main without an approval, so the CLEAN-mergeStateStatus check above stood in
+// for "somebody approved this". Turning "Include administrators" OFF on main's
+// branch protection gave Mason a manual override — and that override travels
+// with the same admin token every agent session already holds. The merge gates
+// therefore read the approval directly instead of inferring it from mergeState.
+//
+// APPROVED is head-bound only because main's protection sets
+// dismiss_stale_reviews AND require_last_push_approval (both verified live on
+// 2026-09-01): GitHub dismisses every approval when a new commit is pushed, so
+// APPROVED cannot be describing an older head. If stale-review dismissal is
+// ever turned off, this is no longer sufficient alone and the gates must also
+// check that an APPROVED review's commit_id equals headRefOid.
+export function pullRequestApproved(pullRequest) {
+  return String(pullRequest?.reviewDecision || "").toUpperCase() === "APPROVED";
 }
 
 export { RISKY_PATH_RES, RISKY_CONTENT_RE };

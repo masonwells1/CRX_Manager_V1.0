@@ -105,12 +105,19 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // keeps main's blob. The risky producer-path anchor this transform verifies is
   // unchanged, so the transform is still identity and input == output. Output
   // taken from the producer test's printed candidate, not hand-computed.
-  codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
-  pushLib: "ccc813f3241750f5feee81e3e03a7a91e10055fb",
+  // Both re-pinned 2026-09-01 (manual review override): Mason turned "Include
+  // administrators" OFF on main's branch protection, so both merge gates gained
+  // an `--admin` refusal and an explicit reviewDecision===APPROVED requirement.
+  // Neither guard's risky-producer-path anchor nor its protected-harness list
+  // changed, so both transforms behave exactly as before. Inputs verified with
+  // `tr -d '\r' | git hash-object --stdin` against this working tree; outputs
+  // taken from the producer test's printed candidate, not hand-computed.
+  codexGuard: "8094452dad2c5135ba71c5054ee66a03d12d127b",
+  pushLib: "d67f8ebcf7503e8022b56cb17f42aafa1eb19a0c",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
-  pushLib: "ccc813f3241750f5feee81e3e03a7a91e10055fb",
+  codexGuard: "b04ea7419f391c8a424bbe9b26fee9fa6cb60c48",
+  pushLib: "d67f8ebcf7503e8022b56cb17f42aafa1eb19a0c",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
