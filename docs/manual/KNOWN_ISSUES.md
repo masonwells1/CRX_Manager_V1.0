@@ -210,6 +210,76 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-09-01 — F06: a reloaded chemical line goes stale when the acreage changes, and it is a BILLING number
+
+**Plain English:** open a saved job, change the acres, and a chemical line keeps the quantity it
+was saved with. A line saved as **1.5 pt/ac over 100 acres** (quantity 150) still reads **150 pt at
+200 acres** when it should read 300. The rate on screen and the quantity on screen no longer agree,
+and the quantity is what bills.
+
+**Why it happens.** `JobDetail.tsx` tracks which field the operator last typed in — the rate or the
+total — in a UI-only field called `driver`. It is **never written to the database**. A line loaded
+from `job_chemicals` therefore comes back with no driver, and `recomputeChemRowForAcres`
+(`src/lib/chemCalculator.ts:75`) deliberately leaves a driverless row exactly as saved.
+
+**This is deliberate, not an oversight, and the reasoning is sound.** An earlier pass tried to
+recover the lost provenance by testing whether `quantity == rate × acres`. That test cannot work:
+`applyChemEdit` back-solves the rate whenever the operator types a quantity, so a hand-entered total
+satisfies the same equality by construction. Acting on it would silently rewrite an operator's typed
+chemical amount every time the acreage changed. **Under-billing is bad; silently rewriting a typed
+chemical quantity is worse**, so the code takes the safe side. Do not reintroduce a heuristic here —
+`chemCalculator.ts:91-96` records this as reverted-and-unsound.
+
+**The real fix needs a migration:** persist `driver` on `job_chemicals` so a reloaded line knows
+which field is authoritative. Until then this is a live billing-accuracy gap that an operator can
+hit without any warning.
+
+**Evidence (verified 2026-09-01 against `main` at `85266c9a`):**
+- `src/pages/JobDetail.tsx:1765-1777` — an explicit "F06 IS STILL OPEN, DELIBERATELY" block stating
+  the same 1.5 pt/ac → 150 pt at 200 acres example verbatim.
+- `src/lib/chemCalculator.ts:71-72, 88` — the driverless branch returns the row unchanged.
+- `src/lib/chemCalculator.test.ts:723-727` — a **passing test asserts the stale behaviour**:
+  `recomputeChemRowForAcres(reloaded, 200).quantity` is `'150'`. Any fix must update that test.
+- **Documentation defect found alongside it:** `src/pages/JobDetail.tsx:252` claims
+  "undefined = untouched (a loaded line follows its rate if it has one)". That is **wrong** and
+  contradicts both the code and the F06 block 1,500 lines below in the same file. Corrected in the
+  same change as this entry.
+
+**Was tracked nowhere.** Before this entry F06 lived only in
+`docs/audits/2026-08-20-codex-verdict-dryoz-guard.md` under a "Still open" heading, and in source
+comments. Surfaced by the 2026-08-31 documentation sweep (#529).
+
+---
+
+## OPEN 2026-09-01 — H5: the integrity panel offers "Create draft invoice" on orders it cannot invoice, then shows a raw error code
+
+**Plain English:** in the admin integrity cleanup panel, every unbilled completed delivery gets a
+"Create draft invoice" button. On an order that needs **split billing**, the button cannot work —
+but it is offered anyway, and pressing it shows the operator a raw database error code rather than
+an explanation.
+
+**Where.** `src/components/integrity/IntegrityCleanupPanel.tsx:684-689` renders the button
+unconditionally for every row in `unbilled`. The handler at line 398 calls
+`create_invoice_for_unbilled_delivery`, and its catch block at line 416 surfaces the raw message:
+`toast('error', err instanceof Error ? err.message : 'Backfill failed')`. The RPC and its
+`ORDER_NEEDS_SPLIT_BILLING` guard are both defined in
+`supabase/migrations/20260718202607_backfill_invoice_guard_durable_split_allocations.sql`.
+
+**Severity is cosmetic-plus.** No wrong data is written — the guard does its job and the operation
+is correctly refused. The harm is that an admin is invited into an action that cannot succeed and is
+then given a code instead of a reason. `ORDER_RESTORE_NOT_SUPPORTED` reaches the operator the same
+way.
+
+**Two candidate fixes:** hide or disable the button for orders the guard will refuse, or map the
+known error codes to plain-English messages in the catch block. The second is smaller and helps
+every other refusal path too.
+
+**Verified 2026-09-01 against `main` at `85266c9a`. Was tracked nowhere** — H5 lived only in
+`docs/handoffs/2026-07-18-gauntlet-2-6-leftover.md`, a file headed "completed/superseded". Surfaced
+by the 2026-08-31 documentation sweep (#529).
+
+---
+
 ## OPEN 2026-08-26 — the quote-version trust chain is whole-body hash-pinned in THREE files; any re-emission must update every pin site in the same change
 
 **Apply-order dependency with the PR #361 successor:** the merged-but-unapplied
