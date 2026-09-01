@@ -21,10 +21,18 @@ quantity against rate × current acreage and raises `CHEM_QUANTITY_NOT_DERIVED` 
 within a tolerance far tighter than a real acreage change. The stale quantity cannot reach an
 invoice through `save_job`.
 
-The real harm is a **blocked save** — refusing one line rolls back the whole job — plus a **margin**
-residual on cost-only lines, which the money refusals skip by design (line 760 continues past any
-line with zero `price_per_unit_cents`). That residual is pre-existing and already recorded in the
-migration's own comment.
+The real harm is a **blocked save** — refusing one line rolls back the whole job.
+
+**A third Codex finding then corrected the correction.** The second draft claimed a margin residual
+on cost-only lines, reading line 760's price gate as a general exemption. It is not: that `CONTINUE`
+sits inside `IF v_qty = 0 THEN` at line 758, so it exempts only zero-quantity lines. A stale
+reloaded quantity is non-zero by definition and is refused whether or not the line is priced. The
+only skip open to a non-zero line requires both cost and price to be zero. **F06 has no margin
+residual at all** — it is purely a blocked save.
+
+That is three rounds on the same entry, each narrowing it. Worth stating plainly: the first draft
+would have sent someone to write a migration for a hole the server already closes, and the second
+would have left a phantom margin exposure in the canonical issues file.
 
 **This changes the remediation, which is why the correction mattered.** The first draft prescribed a
 migration to persist `driver`. The server-side guard already exists, so the fix is UI-side:
@@ -74,8 +82,10 @@ the real behaviour and point at both authorities.
 - `src/lib/chemCalculator.test.ts:723-727` asserts `'150'` at both 200 and 50 acres.
 - `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql:1157-1164`
   — the `CHEM_QUANTITY_NOT_DERIVED` guard and its tolerance
-  `GREATEST(0.0001, LEAST(0.00005 × acres, 0.1))`, raised before any write; line 760 continues past
-  any line with zero `price_per_unit_cents`, which is why the residual is margin and not billing.
+  `GREATEST(0.0001, LEAST(0.00005 × acres, 0.1))`, raised before any write.
+- The same file, `:758-760` — the price gate is nested inside `IF v_qty = 0 THEN`, so it exempts
+  only zero-quantity lines. A non-zero stale quantity is refused priced or not; the sole skip for a
+  non-zero line requires both `cost_per_unit_cents` and `price_per_unit_cents` to be zero.
 - `src/components/integrity/IntegrityCleanupPanel.tsx:684-689` renders the button unconditionally;
   line 416 surfaces `err.message` raw.
 - `supabase/migrations/20260718202607_backfill_invoice_guard_durable_split_allocations.sql` defines

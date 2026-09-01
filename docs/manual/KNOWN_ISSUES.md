@@ -230,16 +230,23 @@ correct the quantity."* The guard is in the applied migration
 write**, with a tolerance of `GREATEST(0.0001, LEAST(0.00005 × acres, 0.1))` — far below the gap a
 real acreage change opens. **A stale priced quantity cannot reach an invoice through `save_job`.**
 
-**So the real harm is twofold, and neither is a wrong invoice:**
+**So the real harm is a blocked save, and nothing else.** Refusing one line rolls back the *entire*
+job save. The operator changed the acreage, did nothing else wrong, and cannot save. The server
+message is good and names the remedy, but the UI let them reach a state the database will not
+accept.
 
-1. **A blocked save with a confusing cause.** Refusing one line rolls back the *entire* job save.
-   The operator changed the acreage, did nothing else wrong, and cannot save. The server message is
-   good and names the remedy, but the UI let them get into the state in the first place.
-2. **A margin residual on cost-only lines.** The money refusals key on PRICE —
-   `CONTINUE WHEN COALESCE(NULLIF(v_chem->>'price_per_unit_cents',''), 0) = 0` at line 760 skips
-   unpriced lines entirely. A cost-only line can therefore carry a stale quantity and misstate
-   margin. That is a pre-existing, deliberately accepted residual recorded in the migration's own
-   comment, not a new finding here.
+**There is no margin residual in this shape, and an earlier draft of this entry wrongly claimed
+there was.** The price gate
+(`CONTINUE WHEN COALESCE(NULLIF(v_chem->>'price_per_unit_cents',''), 0) = 0`, line 760) sits
+**inside `IF v_qty = 0 THEN`** at line 758, so it exempts only zero-quantity lines. A stale reloaded
+quantity is non-zero by definition, so it falls through to the unconditional comparison and is
+refused **whether or not the line is priced**. The only skip available to a non-zero line requires
+both `cost_per_unit_cents` and `price_per_unit_cents` to be zero — a line with nothing at stake at
+all. Caught by Codex on PR #538, correcting a correction.
+
+The migration's separate, deliberately accepted residuals — `customer_supplied`, a line with neither
+cost nor price, and no usable rate or acreage — all describe **zero-quantity** shapes and do not
+cover F06.
 
 **The fix is UI-side, not a migration.** Reconcile the line on load or on acreage change so the
 operator never reaches the refused state — or, at minimum, surface the refusal early on screen the
