@@ -49,24 +49,30 @@ source change and it is a comment.
 
 ### The review history, kept because the lesson is reusable
 
-Codex raised **twelve** findings on PR #538, CodeRabbit one more. They do not collapse into a single
-failure class, and an earlier draft of this very paragraph claimed they did — which Codex then
-flagged as its twelfth finding. Counted from the threads rather than from memory:
+Codex and CodeRabbit raised findings over many rounds on PR #538. **This section deliberately states
+no total.** It is itself part of the diff under review, so any round that corrects it adds a finding
+and falsifies whatever number is printed here — twice already. That is the same self-reference trap
+as the branch inventory in #529, where the fix was to name the exclusion rather than chase a figure
+that recedes as you approach it. The classes below are what transfer; the arithmetic does not.
 
-- **Six** were the same mistake: restating the accept/refuse control flow of a 1,700-line migration
-  in prose and getting the boundary wrong in a new direction each time. That class is why the
-  paraphrase is now omitted outright instead of corrected a seventh time.
-- **Three** were substantive defects in the entries — H5's second affected surface, that surface
-  swallowing the refusal reason, and a summary sentence that contradicted the paragraph beneath it.
-- **One** was lost edit provenance: the F06 example assumed the rate was authoritative, when the
-  saved row cannot say which field the operator typed.
-- **One** was arithmetic: the direction of the margin error depends on whether acreage rose or fell,
-  so it can be misstated either way rather than always understated.
-- **One was later overturned.** An early round established that the split-billing guard's message
-  reaches the operator; a later round showed that holds only for `DeliveryDetail`. Each round was
-  right about what it examined, but the pair cannot both stand — so "every finding was correct" is
-  itself false.
-- CodeRabbit's single finding was a severity label: "cosmetic" understated H5.
+- **The largest class by far** was one mistake repeated: restating the accept/refuse control flow of
+  a 1,700-line migration in prose and getting the boundary wrong in a new direction each time. That
+  class is why the paraphrase is now omitted outright instead of corrected once more.
+- **Substantive defects in the entries** — H5's second affected surface, that surface swallowing the
+  refusal reason, and a summary sentence that contradicted the paragraph beneath it.
+- **Lost edit provenance** — the F06 example assumed the rate was authoritative, when the saved row
+  cannot say which field the operator typed.
+- **Arithmetic** — the direction of the margin error depends on whether acreage rose or fell, so it
+  can be misstated either way rather than always understated.
+- **One was simply wrong.** An early round examined `IntegrityCleanupPanel`'s handler and concluded
+  its `err instanceof Error` branch would surface the guard's message. It does not: a later round
+  checked the PostgREST 2.112.4 path and found the thrown value is a plain object, so that branch is
+  never taken. Acting on the first finding briefly made the entry worse — it recorded the message as
+  reaching the operator when on that surface it does not. No blanket "every finding was correct"
+  claim belongs in this section, and it no longer makes one.
+- **CodeRabbit's** finding was a severity label: "cosmetic" understated H5.
+- **Rounds spent on this section itself**, correcting summaries of the review that were tidier than
+  the review actually was. That is what the no-total rule above is for.
 
 Both entries were therefore **trimmed at Mason's direction** to the defect, the call sites, and a
 pointer to the authoritative code — the exemption taxonomy is deliberately not paraphrased. The
@@ -78,9 +84,10 @@ operative rules:
   surface was missed.
 - **When a reviewer reports a claim, grep the claim**, not the cited line. Several rounds were spent
   fixing a statement in one file while an identical one survived in another.
-- **Do not compress a review history into one failure class.** Tidying twelve findings into "nine of
-  the same mistake" was itself wrong, and cost a round to correct. If a summary of the review is
-  worth writing, count it off the threads.
+- **Do not compress a review history into one failure class**, and **do not total a review you are
+  still inside.** Both were tried here and both drew findings: first "nine of the same mistake" when
+  three were other things, then a count that the correcting round immediately invalidated. Describe
+  the classes; leave the arithmetic to whoever reads the threads afterwards.
 
 ### Proof observed
 
