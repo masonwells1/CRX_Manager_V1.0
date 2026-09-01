@@ -70,9 +70,18 @@ that is running**. The active `.claude/hooks/actor-binding-check.mjs` is 213 lin
 trigger (PR #449's hardened rewrite is the ~3,000-line version referenced above), so today these forms are
 not caught at write time at all. Do not credit the running guard with them until #449 lands.
 
+Note on the tool path, which is wider than any residual listed above: the guard is registered under the
+matcher `"Write|Edit"` in **both** `.claude/settings.json` and `.codex/hooks.json`, so a migration created
+through Bash or PowerShell — `cat`, `tee`, a redirect, a generator script — is never presented to it, and
+`bash-safety.mjs` blocks only *modification* of an existing file under `supabase/migrations/`, not
+*creation* of a new one. Ordinary SQL bypasses the guard on tool choice alone. This is not a residual of the
+analysis; it is the analysis never running. The post-apply sweeps are unaffected — they read the live
+catalog and do not care which tool wrote the file. Any claim that this guard covers "every ordinary
+spelling" must be scoped to hooked `Write`/`Edit` calls.
+
 Note on cross-routine delegation: a `SECURITY DEFINER` wrapper that accepts an actor parameter and
 delegates the write to a helper is allowed at write time — the guard only proceeds when the routine's own
-body holds a literal `INSERT INTO` / `UPDATE ` / `DELETE FROM` — and it is **not** covered by the sweeps
+body holds a literal `INSERT INTO` / `UPDATE` (matched with a trailing space) / `DELETE FROM` — and it is **not** covered by the sweeps
 either, because the wrapper carries neither predicate's cue in its own `prosrc` and a private helper fails
 the `has_function_privilege('authenticated', ...)` candidacy test. There is no fail-closed callable rule in
 the running hook; that belongs to parked PR #449.

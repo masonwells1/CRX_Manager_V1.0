@@ -126,6 +126,33 @@ Three findings from the previous round were re-listed against this head by line-
 verified as already fixed in the current head before being set aside — the anchors moved, the claims did not
 survive.
 
+### Third review round — the widest gap was the one nobody had looked for
+
+Codex found something none of the previous rounds, and none of the three hardening passes on PR #449,
+had raised: **the guard is registered for `Write` and `Edit` only.** Verified in both manifests —
+`.claude/settings.json` and `.codex/hooks.json` each register `actor-binding-check.mjs` under the matcher
+`"Write\|Edit"` — and `bash-safety.mjs` blocks only *modification* of an existing file under
+`supabase/migrations/`, not *creation* of a new one. A migration written with `cat`, `tee`, a shell
+redirect, or a generator script is therefore never presented to the guard at all.
+
+That makes it categorically different from every other row in the gap table. The others describe SQL the
+guard reads and mis-judges; this one describes SQL it never sees, and it needs no lexical trick — perfectly
+ordinary SQL bypasses the check on tool choice alone. Nineteen laundering channels were closed across two
+adversarial rounds while the file could be written by a different tool the whole time. It is recorded as
+row 6 and appended rather than inserted, so the existing row numbers the control mapping cites stay valid.
+
+This is the sharpest possible illustration of the cap itself, and of the standing lesson that a PreToolUse
+hook is a speed bump rather than a boundary: a guard's coverage is bounded by its *matcher* before any
+question of how well it parses SQL. Every claim about this hook is now scoped to hooked `Write`/`Edit`
+calls in all three documents that make one.
+
+Also in this round: `markdownlint` MD038 on a `` `UPDATE ` `` code span (CodeRabbit, minor). Both instances
+were fixed, not just the one cited — the same sweep discipline. Two markdown defects introduced by that
+very fix were caught before commit by checking rendered structure rather than trusting the edit: an
+unescaped `|` inside a table cell had silently split the new row into three cells, and a stray `**` had left
+a bold marker unclosed. Bold-marker parity was compared against `origin/main` before concluding anything —
+`DECISION_LOG.md` is odd on main too, so that imbalance is pre-existing and not from this change.
+
 ### Reconciled the applied-live state everywhere, not just here
 
 Recording the two Section 9 migrations as applied left `docs/manual/CURRENT_STATE.md` and

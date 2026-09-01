@@ -251,9 +251,11 @@ straight into `financial_audit_log` with no binding check (Gauntlet Section 1 HI
 `20260617171500`).
 
 `.claude/hooks/actor-binding-check.mjs` is the **write-time** half of that defence — it inspects a migration
-before it is written, so a forgery is refused rather than detected after it ships. The sweep predicates
-(`predicates/actor-forgery.sql`, `-fin-audit.sql`) are the **post-apply** half and run against the live
-catalog.
+before it is written, so a forgery is refused rather than detected after it ships. **Scope that claim
+precisely: it inspects `Write` and `Edit` tool calls only.** Both manifests register it under the matcher
+`"Write|Edit"` (`.claude/settings.json`, `.codex/hooks.json`), so a migration authored any other way is
+never presented to it (row 6). The sweep predicates (`predicates/actor-forgery.sql`, `-fin-audit.sql`) are
+the **post-apply** half, run against the live catalog, and are indifferent to how the file was written.
 
 **Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. The
 **active** hook is the unchanged 213-line guard: it catches ordinary spellings *of a whole-function write*
@@ -271,8 +273,9 @@ spelling" would overstate even the active guard.
 | Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit — and **the live sweep predicates use the SAME name pattern, so this gap is shared, not compensated.** The post-apply sweep does NOT catch this one. Closing it needs real dataflow over write targets, and would have to change the hook and both predicates together. |
 | Re-binding after a passing check (`p_performed_by := p_target_id;`), `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | **Not covered at write time, and not covered by the sweeps either.** The incidental `hasMutation` trigger that would catch `EXECUTE`/`INSERT` lives in **parked PR #449, not in the running hook** (213 lines, no such logic) — do not credit the active guard with it. The sweeps miss them for their own reasons: both predicates select only where `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that passes a binding check and *then* re-assigns the parameter is excluded outright; and a temp-table round trip matches neither the `coalesce`/`auth.uid`/role proximity test in `actor-forgery.sql` nor the same-statement `financial_audit_log … <param>` test in `-fin-audit.sql`. |
 | An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function | The hook analyses `tool_input.content \|\| tool_input.new_string` — the fragment alone. It does **not** reconstruct the full post-edit file the way `sql-safety.mjs`, `idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. With no function header, parameter list or `SECURITY DEFINER` attribute in the analysed text, the guard finds no candidate and allows. This is the *normal* editing path; the hook's own Edit-coverage test passes a whole function as `new_string`, so it does not exercise it. The sweeps do still see the applied routine. |
-| Cross-routine / cross-migration helpers | **Not covered — and there is no "fail-closed callable rule" in the running hook.** The analysis is intra-routine and single-file, and the active guard only considers a routine whose own body contains a literal `INSERT INTO` / `UPDATE ` / `DELETE FROM`. A `SECURITY DEFINER` wrapper that accepts `p_performed_by` and delegates the write to a helper therefore has no literal DML in its body and is allowed — confirmed by running the real hook, which returned `allow`. Neither sweep predicate follows the helper call either. Any fail-closed callable handling belongs to **parked PR #449**; do not rely on it. |
+| Cross-routine / cross-migration helpers | **Not covered — and there is no "fail-closed callable rule" in the running hook.** The analysis is intra-routine and single-file, and the active guard only considers a routine whose own body contains a literal `INSERT INTO` / `UPDATE` (matched with a trailing space) / `DELETE FROM`. A `SECURITY DEFINER` wrapper that accepts `p_performed_by` and delegates the write to a helper therefore has no literal DML in its body and is allowed — confirmed by running the real hook, which returned `allow`. Neither sweep predicate follows the helper call either. Any fail-closed callable handling belongs to **parked PR #449**; do not rely on it. |
 | Novel lexical spellings | The known-unknown. Three rounds each found a *new category*; the tool pattern-matches text, and PostgreSQL's grammar has more spellings than anyone will enumerate. |
+| **A migration written by any tool other than `Write`/`Edit`** — `cat`/`tee`/redirect from Bash or PowerShell, or a generator script | **The guard never runs at all.** Both manifests register it under the matcher `"Write\|Edit"` only, and `bash-safety.mjs` blocks *modifying* an existing file under `supabase/migrations/` while permitting **creation** of a new one. Perfectly ordinary SQL with a forgeable actor therefore bypasses the guard on tool choice alone — no lexical trick required. This is the widest gap in this table and it is orthogonal to every other row: they describe SQL the guard mis-reads, this one describes SQL it never sees. The post-apply sweeps do still see the applied routine. |
 
 **The finding that settled the cap.** PostgreSQL needs no whitespace before a quoted identifier, so
 `CREATE OR REPLACE FUNCTION"public"."f"(` is valid SQL that the guard **never matched** — the security check
@@ -281,9 +284,10 @@ three careful passes.
 
 **What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
 
-- **For the incremental-Edit and novel-lexical gaps** (rows 3 and 5 above): the post-apply sweep
-  predicates against the live catalog, the exact-SHA `gpt-5.6-sol` proof on migration diffs, and the
-  CodeRabbit final review. Such a routine has no binding check, so it carries no `ACTOR_MISMATCH` token and
+- **For the incremental-Edit, novel-lexical and non-`Write`/`Edit` tool-path gaps** (rows 3, 5 and 6
+  above): the post-apply sweep predicates against the live catalog, the exact-SHA `gpt-5.6-sol` proof on
+  migration diffs, and the CodeRabbit final review. The sweeps read the live catalog, so they are
+  indifferent to which tool wrote the file — row 6 evades the hook, not them. Such a routine has no binding check, so it carries no `ACTOR_MISMATCH` token and
   the predicates do consider it — exploiting one means writing deliberately obfuscated SQL into a migration
   and clearing all three. The limit worth stating: the predicates fire on their own sinks (COALESCE/`auth.uid()`/role
   proximity, or a same-statement `financial_audit_log` write), so a bypass routing the parameter to some
