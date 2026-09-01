@@ -253,8 +253,8 @@ accept. **Unpriced cost-bearing lines can instead be saved with a stale number**
 them.** The money refusals key on PRICE, so an **unpriced, cost-bearing** line has several accepted
 paths — the migration's own comments call these accepted residuals and note that such a line's
 "cost can still misstate margin". A stale reloaded quantity on such a line can therefore be saved,
-understating margin rather than being refused. Billing is not affected: nothing unpriced can
-over-charge.
+misstating margin rather than being refused — in which direction depends on whether the acreage
+rose or fell. Billing is not affected: nothing unpriced can over-charge.
 
 > **Deliberate omission — read the function, not this paragraph.** Earlier revisions tried to
 > enumerate the exact accept/refuse partition. **Five consecutive Codex findings on PR #538
@@ -271,7 +271,7 @@ over-charge.
 
 None of this changes what F06 *is*. The defect is the lost provenance; its common symptom is the
 blocked save, and on unpriced cost-bearing lines it can instead be saved with a stale number that
-understates margin. The exemption boundary matters only to someone auditing what the guard lets
+misstates margin. The exemption boundary matters only to someone auditing what the guard lets
 past, and that person should be reading the guard.
 
 **The fix is UI-side, not a migration.** Reconcile the line on load or on acreage change so the

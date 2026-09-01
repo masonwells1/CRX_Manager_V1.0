@@ -38,18 +38,21 @@ it sits inside `IF v_qty = 0 THEN`. The third draft over-corrected to "no residu
 reasoning that a stale quantity is non-zero *by definition*. That is false exactly when the job had
 **no acreage at save time**: a cost-only line then persists quantity 0, the driverless recompute
 leaves the 0 after acreage rises, and the zero-price exemption lets it save with zero derived cost.
-That understates margin, and it is the one genuine residual.
+That misstates margin — one accepted shape among several, as later findings showed.
 
-A **seventh** finding then corrected the fix to the correction: "zero quantity" is not the dividing
-line either, because the `customer_supplied` and no-cost-no-price exemptions sit under a *blank
-unit* branch (lines 784-787) and accept non-zero rows too.
+Findings **seven through eleven** then corrected the fix to the correction, repeatedly: "zero
+quantity" is not the dividing line (the `customer_supplied` and no-cost-no-price exemptions sit
+under a *blank unit* branch at 784-787 and accept non-zero rows); "financially harmless" is not
+either (an unverifiable-quantity branch accepts a cost-bearing line whose cost can still misstate
+margin); and "understates" assigns a direction that actually depends on whether the acreage rose or
+fell.
 
-**So the entry stopped enumerating the taxonomy.** Four consecutive findings corrected the same
-paragraph in four different directions, each correction right. That is evidence the enumeration does
-not survive restatement, not an invitation to a fifth attempt. The entry now names the single
-accepted case where a number is understated — a cost-only line saved at zero acreage — states that
-every other accepted shape is financially harmless by the guard's own design, and directs anyone who
-needs the exact boundary to read the function's control flow rather than any prose summary,
+**So the entry stopped enumerating the taxonomy.** Five consecutive findings corrected the same
+paragraph in five different directions, each correction right. That is evidence the enumeration does
+not survive restatement, not an invitation to a sixth attempt. The entry now makes **no claim** about
+which accepted shapes are harmless, says only that unpriced cost-bearing lines have accepted paths
+where a stale number can misstate margin, and directs anyone who needs the exact boundary to read
+the function's control flow rather than any prose summary,
 **including the entry's own**.
 
 The durable lesson is not the scope. It is that a 1,700-line guard's accept/refuse set does not
@@ -114,11 +117,12 @@ the real behaviour and point at both authorities.
 - `supabase/migrations/20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql:1157-1164`
   — the `CHEM_QUANTITY_NOT_DERIVED` guard and its tolerance
   `GREATEST(0.0001, LEAST(0.00005 × acres, 0.1))`, raised before any write.
-- The same file, `:758-760` — the price gate is nested inside `IF v_qty = 0 THEN`, so it exempts
-  only zero-quantity lines. A non-zero stale quantity is refused priced or not; the sole skip for a
-  non-zero line requires both `cost_per_unit_cents` and `price_per_unit_cents` to be zero.
-- `src/components/integrity/IntegrityCleanupPanel.tsx:684-689` renders the button unconditionally;
-  line 416 surfaces `err.message` raw.
+- The same file — the money refusals key on PRICE, so unpriced cost-bearing lines have several
+  accepted paths. **This entry deliberately does not enumerate them**, for the reason given above;
+  the authoritative set is the function's control flow. An earlier draft of this bullet asserted
+  "refused priced or not" and a "sole skip", both of which the guard contradicts.
+- `src/components/integrity/IntegrityCleanupPanel.tsx:684-689` and
+  `src/pages/DeliveryDetail.tsx:1628-1636` each render the button unconditionally.
 - `supabase/migrations/20260718202607_backfill_invoice_guard_durable_split_allocations.sql` defines
   both `create_invoice_for_unbilled_delivery` and its `ORDER_NEEDS_SPLIT_BILLING` guard.
 - `npm run check:docs`, `npm run typecheck` and `npm run lint` pass.
