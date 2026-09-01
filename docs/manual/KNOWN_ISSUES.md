@@ -210,12 +210,42 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-09-01 — F06: a reloaded chemical line goes stale when the acreage changes, and it is a BILLING number
+## OPEN 2026-09-01 — F06: a reloaded chemical line goes stale when the acreage changes, and the SAVE IS THEN REFUSED
+
+**Severity corrected on 2026-09-01 by Codex review of PR #538, before this entry ever landed.** The
+first draft of this entry called it a silent billing gap. **It is not** — the database refuses the
+save. The corrected characterisation is below; the mistake is recorded because prescribing a
+migration for an already-guarded path would have misdirected the fix.
 
 **Plain English:** open a saved job, change the acres, and a chemical line keeps the quantity it
 was saved with. A line saved as **1.5 pt/ac over 100 acres** (quantity 150) still reads **150 pt at
-200 acres** when it should read 300. The rate on screen and the quantity on screen no longer agree,
-and the quantity is what bills.
+200 acres** when it should read 300. The rate on screen and the quantity on screen no longer agree.
+
+**What actually happens when you save.** For a **priced** line, `save_job` refuses the whole job
+save with `CHEM_QUANTITY_NOT_DERIVED` and a plain-English message: *"…is quoted at 1.5 per acre over
+200 acres, which is 300, but the line carries a quantity of 150. The amount billed comes from the
+quantity, so these must agree. Re-enter the rate per acre and let the total fill itself in, or
+correct the quantity."* The guard is in the applied migration
+`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals.sql`, raised **before any
+write**, with a tolerance of `GREATEST(0.0001, LEAST(0.00005 × acres, 0.1))` — far below the gap a
+real acreage change opens. **A stale priced quantity cannot reach an invoice through `save_job`.**
+
+**So the real harm is twofold, and neither is a wrong invoice:**
+
+1. **A blocked save with a confusing cause.** Refusing one line rolls back the *entire* job save.
+   The operator changed the acreage, did nothing else wrong, and cannot save. The server message is
+   good and names the remedy, but the UI let them get into the state in the first place.
+2. **A margin residual on cost-only lines.** The money refusals key on PRICE —
+   `CONTINUE WHEN COALESCE(NULLIF(v_chem->>'price_per_unit_cents',''), 0) = 0` at line 760 skips
+   unpriced lines entirely. A cost-only line can therefore carry a stale quantity and misstate
+   margin. That is a pre-existing, deliberately accepted residual recorded in the migration's own
+   comment, not a new finding here.
+
+**The fix is UI-side, not a migration.** Reconcile the line on load or on acreage change so the
+operator never reaches the refused state — or, at minimum, surface the refusal early on screen the
+way `chemRowDefects` already does for the unit refusals. Persisting `driver` on `job_chemicals`
+would still be the cleanest way to know which field is authoritative, but it is **not** required to
+close a billing hole, because the server already closes it.
 
 **Why it happens.** `JobDetail.tsx` tracks which field the operator last typed in — the rate or the
 total — in a UI-only field called `driver`. It is **never written to the database**. A line loaded
@@ -226,13 +256,15 @@ from `job_chemicals` therefore comes back with no driver, and `recomputeChemRowF
 recover the lost provenance by testing whether `quantity == rate × acres`. That test cannot work:
 `applyChemEdit` back-solves the rate whenever the operator types a quantity, so a hand-entered total
 satisfies the same equality by construction. Acting on it would silently rewrite an operator's typed
-chemical amount every time the acreage changed. **Under-billing is bad; silently rewriting a typed
-chemical quantity is worse**, so the code takes the safe side. Do not reintroduce a heuristic here —
-`chemCalculator.ts:91-96` records this as reverted-and-unsound.
+chemical amount every time the acreage changed. **Silently rewriting an operator's typed chemical
+quantity is worse than leaving a line the server will refuse**, so the code takes the safe side. Do
+not reintroduce a heuristic here — `chemCalculator.ts:91-96` records this as reverted-and-unsound.
 
-**The real fix needs a migration:** persist `driver` on `job_chemicals` so a reloaded line knows
-which field is authoritative. Until then this is a live billing-accuracy gap that an operator can
-hit without any warning.
+**Note the source comment overstates the stake.** `JobDetail.tsx:1773-1774` justifies the choice
+with "Under-billing is bad; silently rewriting an operator's typed chemical amount is worse."
+Given `CHEM_QUANTITY_NOT_DERIVED`, the priced line does not under-bill — it fails to save. The
+*decision* still stands on its own merits; only its stated stake is out of date, and that comment
+predates the 2026-08-20 guard.
 
 **Evidence (verified 2026-09-01 against `main` at `85266c9a`):**
 - `src/pages/JobDetail.tsx:1765-1777` — an explicit "F06 IS STILL OPEN, DELIBERATELY" block stating
