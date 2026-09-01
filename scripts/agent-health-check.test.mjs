@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,9 +14,11 @@ import {
   checkBranchStaleness,
   checkCodexHookPortability,
   checkFilesPresent,
+  checkGitHooksInstalled,
   compareSyncedFiles,
   summarizeChecks,
 } from "./agent-health-check.mjs";
+import { clearWorktreeOverride } from "./install-git-hooks.mjs";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "crx-agent-health-"));
 
@@ -171,6 +174,218 @@ try {
   assert.equal(checkClaudeAuth(() => ({ ok: true, stdout: JSON.stringify({ loggedIn: false, claudeAiOauth: {} }), stderr: "" })).status, "WARN");
   assert.equal(checkClaudeAuth(() => ({ ok: true, stdout: "not json", stderr: "" })).status, "WARN");
   assert.equal(checkClaudeAuth(() => ({ ok: false, stdout: "", stderr: "unknown command 'auth'" })).status, "WARN");
+
+  // checkGitHooksInstalled — exercised against a real throwaway repo, because the
+  // whole failure mode is that git silently runs nothing when core.hooksPath
+  // resolves to a directory that is not there. Each FAIL branch is asserted, not
+  // just the happy path: on 2026-08-31 fourteen live worktrees were in one of
+  // these states, all reporting perfectly normal `git commit` output.
+  const hooksRepo = mkdtempSync(path.join(os.tmpdir(), "crx-hooks-"));
+  try {
+    const git = (...args) => execFileSync("git", ["-C", hooksRepo, ...args], { stdio: "ignore" });
+    git("init");
+    // Unset → git falls back to .git/hooks, where this repo installs nothing.
+    assert.equal(checkGitHooksInstalled(hooksRepo).status, "FAIL");
+
+    // The exact regression: husky's generated, gitignored .husky/_ is absent in
+    // any worktree that never ran `npm install`.
+    // writeFileSync creates 0644, which is itself a FAIL on POSIX — the hooks have
+    // to be made executable or every assertion below would be measuring the wrong
+    // branch on Linux CI while passing on Windows.
+    const writeHook = (dir, name) => {
+      const file = path.join(dir, name);
+      writeFileSync(file, "#!/usr/bin/env sh\n");
+      chmodSync(file, 0o755);
+    };
+    mkdirSync(path.join(hooksRepo, ".husky"), { recursive: true });
+    writeHook(path.join(hooksRepo, ".husky"), "pre-commit");
+    writeHook(path.join(hooksRepo, ".husky"), "pre-push");
+    git("config", "core.hooksPath", ".husky/_");
+    const missingUnderscore = checkGitHooksInstalled(hooksRepo);
+    assert.equal(missingUnderscore.status, "FAIL");
+    // Rejected as "not the tracked .husky" before the missing-hooks branch is even
+    // reached — .husky/_ fails the allowlist on its own. The missing-hooks message is
+    // covered by the partial-install case below, where the path IS .husky.
+    assert.match(missingUnderscore.note, /tracked \.husky/);
+
+    // The tracked directory is the correct target and needs no husky runtime.
+    git("config", "core.hooksPath", ".husky");
+    assert.equal(checkGitHooksInstalled(hooksRepo).status, "PASS");
+
+    // Partial installs still FAIL — pre-push carries typecheck/build.
+    rmSync(path.join(hooksRepo, ".husky/pre-push"));
+    const partial = checkGitHooksInstalled(hooksRepo);
+    assert.equal(partial.status, "FAIL");
+    assert.match(partial.note, /pre-push/);
+    writeHook(path.join(hooksRepo, ".husky"), "pre-push");
+
+    // Present but not executable is skipped by git just as silently on POSIX.
+    // Windows has no executable bit, so that platform must never report it.
+    assert.equal(checkGitHooksInstalled(hooksRepo, "win32").status, "PASS", "win32 does not inspect the executable bit");
+    if (process.platform !== "win32") {
+      chmodSync(path.join(hooksRepo, ".husky/pre-commit"), 0o644);
+      const notExecutable = checkGitHooksInstalled(hooksRepo, "linux");
+      assert.equal(notExecutable.status, "FAIL");
+      assert.match(notExecutable.note, /non-executable/);
+      chmodSync(path.join(hooksRepo, ".husky/pre-commit"), 0o755);
+    }
+
+    // An absolute path into another checkout resolves to real hook files, so an
+    // existence-only check would PASS it while the guards that ran belonged to a
+    // different branch. Six live worktrees pointed at an abandoned Codex checkout.
+    git("config", "core.hooksPath", path.join(hooksRepo, ".husky"));
+    assert.equal(checkGitHooksInstalled(hooksRepo).status, "PASS", "own worktree by absolute path is still this worktree");
+    const foreign = mkdtempSync(path.join(os.tmpdir(), "crx-foreign-hooks-"));
+    try {
+      mkdirSync(path.join(foreign, ".husky"), { recursive: true });
+      writeHook(path.join(foreign, ".husky"), "pre-commit");
+      writeHook(path.join(foreign, ".husky"), "pre-push");
+      git("config", "core.hooksPath", path.join(foreign, ".husky"));
+      const outside = checkGitHooksInstalled(hooksRepo);
+      assert.equal(outside.status, "FAIL");
+      assert.match(outside.note, /tracked \.husky/);
+
+      // Any other in-worktree directory holding two executable hooks would pass a
+      // containment test while git bypassed the tracked .husky entirely.
+      mkdirSync(path.join(hooksRepo, ".other-hooks"), { recursive: true });
+      writeHook(path.join(hooksRepo, ".other-hooks"), "pre-commit");
+      writeHook(path.join(hooksRepo, ".other-hooks"), "pre-push");
+      git("config", "core.hooksPath", ".other-hooks");
+      const otherDir = checkGitHooksInstalled(hooksRepo);
+      assert.equal(otherDir.status, "FAIL", "only the tracked .husky is accepted");
+      assert.match(otherDir.note, /tracked \.husky/);
+
+      // `.husky` itself replaced by a link into another checkout. Canonicalizing BOTH
+      // sides would make this compare equal, so it pins the asymmetry in the check:
+      // the expected path keeps `.husky` literal, the configured one is resolved.
+      // Junctions need no privilege on Windows; if the link cannot be made, skip
+      // rather than assert a false pass.
+      const linkedRepo = mkdtempSync(path.join(os.tmpdir(), "crx-linked-husky-"));
+      try {
+        execFileSync("git", ["-C", linkedRepo, "init"], { stdio: "ignore" });
+        let linked = true;
+        try {
+          symlinkSync(path.join(foreign, ".husky"), path.join(linkedRepo, ".husky"), "junction");
+        } catch {
+          linked = false;
+        }
+        if (linked) {
+          execFileSync("git", ["-C", linkedRepo, "config", "core.hooksPath", ".husky"], { stdio: "ignore" });
+          const viaLink = checkGitHooksInstalled(linkedRepo);
+          assert.equal(viaLink.status, "FAIL", "a .husky linked into another checkout is not this worktree's .husky");
+          assert.match(viaLink.note, /tracked \.husky/);
+        }
+      } finally {
+        rmSync(linkedRepo, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(foreign, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(hooksRepo, { recursive: true, force: true });
+  }
+
+  // Regression check against THIS repository's own tracked hooks, not a fixture.
+  // The fixtures above chmod their hooks to 0755, which is exactly what masked the
+  // real condition: .husky/pre-commit and .husky/pre-push were committed 100644
+  // while .husky/commit-msg was 100755, so pointing core.hooksPath at the tracked
+  // directory would have made POSIX skip both silently — the bug this work exists
+  // to remove, reintroduced. Windows cannot observe it; the index mode can, on any
+  // platform, which is why this asserts the mode git records rather than the mode
+  // the filesystem reports.
+  const repoRoot = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
+  const trackedHooks = execFileSync(
+    "git",
+    ["-C", repoRoot, "ls-files", "--stage", ".husky/pre-commit", ".husky/pre-push", ".husky/commit-msg"],
+    { encoding: "utf8" },
+  ).trim();
+  const trackedLines = trackedHooks.split(/\r?\n/).filter(Boolean);
+  assert.equal(trackedLines.length, 3, `expected three tracked hooks, got: ${trackedHooks}`);
+  for (const line of trackedLines) {
+    assert.match(line, /^100755 /, `tracked hook is not executable in the index — git skips it on POSIX: ${line}`);
+  }
+
+  // scripts/install-git-hooks.mjs — the `prepare` script. A per-worktree
+  // core.hooksPath OUTRANKS the shared local value, so writing the shared value
+  // alone leaves a stale foreign override effective and `npm install` reports
+  // success while repairing nothing. Exercised against a real repository with a
+  // real linked worktree, because that precedence is the whole point.
+  const installRepo = mkdtempSync(path.join(os.tmpdir(), "crx-install-hooks-"));
+  const installWorktree = mkdtempSync(path.join(os.tmpdir(), "crx-install-wt-"));
+  try {
+    const g = (dir, ...args) => execFileSync("git", ["-C", dir, ...args], { stdio: "ignore" });
+    const effective = (dir) =>
+      execFileSync("git", ["-C", dir, "config", "--get", "core.hooksPath"], { encoding: "utf8" }).trim();
+
+    g(installRepo, "init");
+    g(installRepo, "config", "user.email", "hooks-test@example.invalid");
+    g(installRepo, "config", "user.name", "Hooks Test");
+    mkdirSync(path.join(installRepo, ".husky"), { recursive: true });
+    for (const hook of ["pre-commit", "pre-push"]) {
+      const file = path.join(installRepo, ".husky", hook);
+      writeFileSync(file, "#!/usr/bin/env sh\n");
+      chmodSync(file, 0o755);
+    }
+    g(installRepo, "add", "-A");
+    g(installRepo, "commit", "-m", "init");
+    // rmdir first: git worktree add refuses an existing non-empty path, and mkdtemp
+    // has already created it.
+    rmSync(installWorktree, { recursive: true, force: true });
+    g(installRepo, "worktree", "add", "--detach", installWorktree);
+
+    // The exact state CodeRabbit reproduced: worktree-scoped override winning.
+    g(installWorktree, "config", "extensions.worktreeConfig", "true");
+    g(installWorktree, "config", "--worktree", "core.hooksPath", path.join(installRepo, "..", "elsewhere"));
+    assert.notEqual(effective(installWorktree), ".husky", "precondition: the override is in effect");
+
+    execFileSync(process.execPath, [path.join(repoRoot, "scripts", "install-git-hooks.mjs")], {
+      cwd: installWorktree,
+      stdio: "ignore",
+    });
+    assert.equal(effective(installWorktree), ".husky", "prepare must clear the worktree override, not just set the shared value");
+    assert.equal(checkGitHooksInstalled(installWorktree).status, "PASS");
+
+    // Linked worktrees live UNDER the main checkout in this repository
+    // (.claude/worktrees/<name>), so an absolute path into one is CONTAINED by the
+    // root. A containment test passes it while git runs that other branch's guards.
+    const nested = path.join(installRepo, "nested-worktree");
+    g(installRepo, "worktree", "add", "--detach", nested);
+    try {
+      g(installRepo, "config", "core.hooksPath", path.join(nested, ".husky"));
+      const viaNested = checkGitHooksInstalled(installRepo);
+      assert.equal(viaNested.status, "FAIL", "a nested worktree's .husky is another checkout's hooks");
+      assert.match(viaNested.note, /tracked \.husky/);
+    } finally {
+      execFileSync("git", ["-C", installRepo, "worktree", "remove", "--force", nested], { stdio: "ignore" });
+      g(installRepo, "config", "core.hooksPath", ".husky");
+    }
+  } finally {
+    try {
+      execFileSync("git", ["-C", installRepo, "worktree", "remove", "--force", installWorktree], { stdio: "ignore" });
+    } catch {
+      /* best effort — the directory removal below is what matters */
+    }
+    rmSync(installWorktree, { recursive: true, force: true });
+    rmSync(installRepo, { recursive: true, force: true });
+  }
+
+  // clearWorktreeOverride must distinguish "there was nothing to clear" from a real
+  // failure. Swallowing the second leaves a foreign override winning over the shared
+  // value while the install reports success — the silent state this work removes.
+  assert.equal(clearWorktreeOverride(() => ({ status: 0, stderr: "" })).cleared, true);
+  // 5 = the key is not set in this scope. Normal.
+  assert.equal(clearWorktreeOverride(() => ({ status: 5, stderr: "" })).cleared, true);
+  // No per-worktree scope exists at all. Also normal.
+  assert.equal(
+    clearWorktreeOverride(() => ({ status: 128, stderr: "fatal: --worktree can only be used with extensions.worktreeConfig" })).cleared,
+    true,
+  );
+  const lockFailure = clearWorktreeOverride(() => ({ status: 255, stderr: "error: could not lock config file" }));
+  assert.equal(lockFailure.cleared, false, "a real git failure must not be swallowed");
+  assert.match(lockFailure.reason, /could not lock config file/);
+  const spawnFailure = clearWorktreeOverride(() => ({ error: new Error("spawn git ENOENT") }));
+  assert.equal(spawnFailure.cleared, false);
+  assert.match(spawnFailure.reason, /ENOENT/);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
