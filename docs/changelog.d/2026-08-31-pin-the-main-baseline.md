@@ -29,8 +29,10 @@ pushes at all. The clearest case: both `dependabot/github_actions/*` branches bu
 version inside the two deleted workflow files, so what was a modification of a file `main` had has
 become the addition of a file that `main` lacks.
 
-The report now states the baseline OID in its own section and tells the reader to confirm
-`git rev-parse origin/main` before acting on any count. The migration classifications and the two
+The report now states the baseline OID in its own section and tells the reader to confirm it with
+`git ls-remote origin refs/heads/main` — the server, not a bare `git rev-parse origin/main`, which
+reads the local remote-tracking ref and returns a stale OID in an unfetched checkout — before
+acting on any count. The migration classifications and the two
 mechanically-safe branches were unaffected, so the headline findings stand: 12 branches carrying
 migrations absent from `main`, 4 modifying an existing migration, 14 distinct, 2 safe to delete.
 

@@ -17,8 +17,8 @@ So the sentence is now written as a **floor**: at least four moves, and assume m
 report whose honesty depends on a decaying number is worse than one that says plainly which way
 it decays and hands the reader the re-verification step instead. The pinned baseline
 (`67e6da9d`) is unchanged and remains the correct design: every figure is stated relative to a
-named commit, and the reader re-checks `git rev-parse origin/main` and the PR state at the moment
-of deletion.
+named commit, and the reader re-checks `git ls-remote origin refs/heads/main` — the server, not a
+local remote-tracking ref — and the PR state at the moment of deletion.
 
 Two older entries carried the same decaying counts and now point forward rather than contradict:
 `2026-08-31-baseline-moved-a-third-time.md` (three moves) and
@@ -40,7 +40,11 @@ waiting.
 
 ### Proof observed
 
-- `git rev-parse origin/main` → `3ff8dbb1243e34d6da561efb55c61c56e8d1d2f2`.
+- `git fetch origin main`, then the local scan ref `git rev-parse origin/main` →
+  `3ff8dbb1243e34d6da561efb55c61c56e8d1d2f2`. Recorded as the local ref *after* an explicit fetch;
+  the reader's own re-check must ask the server with `git ls-remote origin refs/heads/main`. Before
+  that fetch the same command still returned `67e6da9d` while the server had moved — a live
+  instance of the stale read this entry warns about.
 - `git rev-list --left-right --count origin/main...HEAD` → `0 33`: the branch is not behind.
 - `git diff c5539905 HEAD` over every file this PR authored is empty — the merge changed none of
   them.

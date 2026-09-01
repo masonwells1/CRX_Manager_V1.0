@@ -18,6 +18,7 @@ the header no longer undercounts the corrections in the document it heads.
 
 ### Proof observed
 
-- `grep -rn "became" docs/` — the only remaining hits are unrelated and grammatical.
+- `grep -rn "became" docs/` — the remaining hits are unrelated and grammatical, plus this entry's
+  own quotation of the historical typo, which is expected. No uncorrected claim remains.
 - The inventory header reads "Revised three times" and lists Round 1, Round 2 and Round 3.
 - `npm run check:docs` passes.

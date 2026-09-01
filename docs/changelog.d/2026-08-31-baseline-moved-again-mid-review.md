@@ -29,8 +29,10 @@ than as a property of the measure, because nothing in the method guarantees it.
 
 ### Proof observed
 
-- `git rev-parse origin/main` → `4436aded119d1437e43499ee90f394e5092be03f`; the report's pinned
-  baseline now names that commit.
+- Local scan ref after fetching, `git rev-parse origin/main` →
+  `4436aded119d1437e43499ee90f394e5092be03f`; the report's pinned baseline now names that commit.
+  This is the ref the scan actually ran against; a reader re-checking the baseline must ask the
+  server with `git ls-remote origin refs/heads/main` instead.
 - Re-scan of all 63 branches against the new baseline: `newMig=12 modMig=4 safe=3`, up from `safe=2`.
 - `dependabot/npm_and_yarn/minor-and-patch-7fe11a6bea` moved from the open-PR set to the merged set
   and appears in the "nothing unique" list; PR #520 is the merge commit `4436aded` on `main`.

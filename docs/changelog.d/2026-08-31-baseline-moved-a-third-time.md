@@ -41,8 +41,10 @@ freshly-generated table.
 
 ### Proof observed
 
-- `git rev-parse origin/main` → `67e6da9d9ab409b65d5bbfd319de69b8783322e8`; the report's pinned
-  baseline names that commit.
+- Local scan ref after fetching, `git rev-parse origin/main` →
+  `67e6da9d9ab409b65d5bbfd319de69b8783322e8`; the report's pinned baseline names that commit. This
+  is the ref the scan actually ran against; a reader re-checking the baseline must ask the server
+  with `git ls-remote origin refs/heads/main` instead.
 - Re-scan of all 63 branches: `newMig=12 modMig=4 safe=3` — unchanged from the previous baseline.
 - `claude/crx-manager-cleanup-5da404` moved from the open-PR set to the merged set; it retains
   `uniqueModified=2`, so it is not in the mechanically-safe list.
