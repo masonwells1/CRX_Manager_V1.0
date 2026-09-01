@@ -421,6 +421,21 @@ for (const command of [
   // An unrecognized head is a writer by construction — the whole point of the
   // allowlist. No new verb has to be enumerated for this to hold.
   "someNewTool --overwrite .husky/pre-push",
+  // SECOND gpt-5.6-sol round. Each of these wears a read-only head and still
+  // writes a NAMED file; each was probe-confirmed ALLOW before this fix. This is
+  // not the documented hidden-indirection residual — the target is right there in
+  // the command text.
+  "node -e require('fs').writeFileSync('.husky/pre-push','')",
+  "node --eval require('fs').writeFileSync('.husky/pre-push','')",
+  "sed -n w .husky/pre-push /dev/null",
+  "sort -o .husky/pre-push /dev/null",
+  "find . -name x -fprintf .husky/pre-push %p",
+  "awk -v p=.husky/pre-push END{print>p}",
+  // `..` traversal through an existing sibling directory resolves onto the real
+  // hook. Same round, HIGH, and a re-opened bypass the deleted lock had closed.
+  "cp /tmp/evil .claude/commands/../hooks/review-proof-guard.mjs",
+  "tee .claude/commands/../hooks/sql-safety.mjs",
+  "cp /tmp/evil .github/ISSUE_TEMPLATE/../workflows/ci.yml",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.equal(result.status, 0, `hook should exit 0: ${command}`);
@@ -440,7 +455,15 @@ for (const command of [
   // `-am` must not read as the `am` subcommand — this is why GIT_OVERWRITE_RE
   // requires whitespace immediately before the verb.
   "git commit -am wired .husky/pre-push",
-  "sed -n 1,5p .husky/pre-push",
+  // `-C <dir>` takes a SEPARATE value. A naive flag-skipper reads the directory
+  // as the subcommand and fails closed on an ordinary stage — which this rule
+  // actually did, blocking `git -C <worktree> add .claude/hooks/...`.
+  "git -C /repo add .claude/hooks/review-proof-guard.mjs",
+  "git -c core.pager=cat log .husky/pre-push",
+  "git --git-dir /repo/.git diff .husky/pre-push",
+  // `node <script>` stays allowed — it is how these very suites run. Only the
+  // inline-code flags are refused (asserted in the deny block above).
+  "node .claude/hooks/review-proof-guard.test.mjs",
   "node scripts/agent-health-check.mjs .husky",
   "find .github/workflows -name *.yml",
   "Get-Content .husky/pre-push",
@@ -472,6 +495,10 @@ for (const payload of [
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/hooks/sql-safety.mjs" } },
   { tool_name: "mcp__filesystem__edit_file", tool_input: { path: ".codex/hooks.json" } },
   { tool_name: "apply_patch", tool_input: { patch: "*** Begin Patch\n*** Update File: .github/workflows/ci.yml\n" } },
+  // Traversal through the path field — the MCP half of the same HIGH.
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/commands/../hooks/review-proof-guard.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".github/ISSUE_TEMPLATE/../workflows/ci.yml" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude\\commands\\..\\hooks\\sql-safety.mjs" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);

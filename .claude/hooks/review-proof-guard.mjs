@@ -427,13 +427,18 @@ if (shellTool) {
     "cat", "head", "tail", "less", "more", "bat", "nl", "od", "xxd", "strings",
     "grep", "egrep", "fgrep", "rg", "ag", "ack",
     "wc", "ls", "dir", "stat", "file", "du", "tree", "realpath", "readlink", "basename", "dirname",
-    "diff", "cmp", "comm", "sort", "uniq", "cut", "tr", "jq", "yq", "column",
+    "diff", "cmp", "comm", "uniq", "cut", "tr", "jq", "yq", "column",
     "md5sum", "sha1sum", "sha256sum", "cksum",
     "which", "type", "command", "pwd", "test", "true", "false", "echo", "printf", "date",
-    // Runners EXECUTE a script rather than editing one. Their arguments are still
-    // scanned by every other rule in this file.
+    // ABSENT ON PURPOSE — a second gpt-5.6-sol round proved each of these writes a
+    // named file while wearing a read-only head, with hook probes returning ALLOW:
+    //   sed  → `sed -n 'w .husky/pre-push' /dev/null`   (the `w` command writes)
+    //   awk  → `awk -v p=.husky/pre-push '… > p'`       (redirect inside the script)
+    //   sort → `sort -o .husky/pre-push /dev/null`      (`-o` writes in place)
+    // Reading these files never needs them; cat/head/grep/git show all work, and
+    // over-refusing an exotic read is the correct side to err on.
     "node", "npm", "npx", "pnpm", "yarn", "gh",
-    "git", "sed", "awk", "find",
+    "git", "find",
     // PowerShell read verbs. Its WRITE verbs (Set-Content, Copy-Item, Out-File,
     // Add-Content, Move-Item, Remove-Item) are absent on purpose.
     "get-content", "gc", "select-string", "sls", "get-childitem", "gci", "get-item", "measure-object",
@@ -461,30 +466,90 @@ if (shellTool) {
   ]);
   const enforcementSegments = (cmd) =>
     String(cmd ?? "").split(/(?:\|\||&&|[;\r\n|&])+/).map((s) => s.trim()).filter(Boolean);
+  // Resolve git's real subcommand past the global flags THAT TAKE A SEPARATE
+  // VALUE. A naive `git(?:\s+-\S+)*\s+(\w+)` reads `git -C <dir> add …` as
+  // subcommand `<dir>`, finds it unknown, and fails closed on an ordinary
+  // `git add` — which is exactly how this rule first broke a real command. Skip
+  // the flag AND its value, then take the first bare token.
+  const GIT_VALUE_FLAGS = /^(?:-[cC]|--git-dir|--work-tree|--namespace|--exec-path|--config-env|--super-prefix)$/;
+  const gitSubcommandOf = (segment) => {
+    const tokens = String(segment).match(/(?:"[^"]*"|'[^']*'|\S)+/g) || [];
+    let i = tokens.findIndex((t) => /^(?:.*[/\\])?git(?:\.exe)?$/i.test(t.replace(/["']/g, "")));
+    if (i < 0) return null;
+    for (i += 1; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (GIT_VALUE_FLAGS.test(token)) { i += 1; continue; }   // flag + its value
+      if (token.startsWith("-")) continue;                      // valueless flag
+      return token.replace(/["']/g, "").toLowerCase();
+    }
+    return null;
+  };
   const enforcementSegmentIsReadOnly = (segment) => {
     const raw = (String(segment).trim().match(/^([\w.:\\/-]+)/) || [])[1];
     if (!raw) return false;
     const head = raw.replace(/^.*[/\\]/, "").toLowerCase();
     if (!ENFORCEMENT_READ_ONLY_HEADS.has(head)) return false;
-    // In-place editors wearing a read-only head.
-    if ((head === "sed" || head === "awk") && /(?:^|\s)-[a-z]*i/i.test(segment)) return false;
-    if (head === "find" && /(?:^|\s)-(?:delete|exec|execdir|ok|okdir|fprint|fls)\b/i.test(segment)) return false;
+    // A runner EXECUTES a script; an INLINE-CODE runner is an arbitrary writer
+    // wearing the runner's name. `node -e "…writeFileSync('.husky/pre-push'…)"`
+    // was probe-confirmed ALLOW in the second review round. Denying the eval
+    // flags keeps `node .claude/hooks/x.test.mjs` — how this suite is actually
+    // run — working. A script FILE that writes is the documented residual: no
+    // command-text rule can see inside it.
+    if (["node", "npm", "npx", "pnpm", "yarn"].includes(head) &&
+        /(?:^|\s)(?:-e|-p|--eval|--print|--input-type)\b/i.test(segment)) return false;
+    // `-fprintf` writes a named file; the old `fprint\b` missed it because the
+    // trailing `f` is a word character.
+    if (head === "find" && /(?:^|\s)-(?:delete|exec|execdir|ok|okdir|fls|fprint\w*)\b/i.test(segment)) return false;
     if (head === "git") {
-      const sub = (segment.match(/\bgit\b(?:\s+-[^\s]+)*\s+([\w-]+)/i) || [])[1];
-      if (!sub || !ENFORCEMENT_READ_ONLY_GIT.has(sub.toLowerCase())) return false;
+      const sub = gitSubcommandOf(segment);
+      if (!sub || !ENFORCEMENT_READ_ONLY_GIT.has(sub)) return false;
     }
     return true;
   };
+  // `..` TRAVERSAL. Second review round, HIGH: separators were normalized but dot
+  // segments never resolved, so `.claude/commands/../hooks/review-proof-guard.mjs`
+  // reaches the real hook while the matcher sees an unguarded path — through BOTH
+  // the shell and the path-field channel. The lock this rule replaced resolved
+  // traversal for exactly this reason, and not porting it re-opened a bypass its
+  // own history had already classified HIGH. A leading `..` that escapes the root
+  // is KEPT, never dropped: discarding it would fabricate a different path.
+  const resolveDotSegments = (p) => {
+    if (!p.includes("./") && !p.endsWith("/.") && !p.endsWith("/..")) return p;
+    const isAbsolute = p.startsWith("/");
+    const drive = /^([a-zA-Z]:)(\/.*)?$/.exec(p);
+    const body = drive ? (drive[2] || "") : p;
+    const out = [];
+    for (const seg of body.split("/")) {
+      if (seg === "" || seg === ".") continue;
+      if (seg === "..") {
+        if (out.length && out[out.length - 1] !== "..") out.pop();
+        else if (!isAbsolute && !drive) out.push("..");
+        continue;
+      }
+      out.push(seg);
+    }
+    const joined = out.join("/");
+    if (drive) return `${drive[1]}/${joined}`;
+    return isAbsolute ? `/${joined}` : joined;
+  };
+  const namesEnforcementSurface = (text) => {
+    const flat = String(text ?? "").replace(/\\/g, "/");
+    if (ENFORCEMENT_SURFACE_RE.test(flat)) return true;
+    return flat
+      .split(/[\s"'=:;&|()<>]+/)
+      .filter(Boolean)
+      .some((token) => ENFORCEMENT_SURFACE_RE.test(`/${resolveDotSegments(token)}`));
+  };
   const redirectTargetsEnforcementSurface = (v) => {
     for (const m of v.matchAll(/>>?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
-      if (ENFORCEMENT_SURFACE_RE.test(m[1].replace(/["']/g, ""))) return true;
+      if (namesEnforcementSurface(m[1].replace(/["']/g, ""))) return true;
     }
     return false;
   };
   if (destructiveViews.some((v) =>
     redirectTargetsEnforcementSurface(v) ||
     enforcementSegments(v).some((seg) =>
-      ENFORCEMENT_SURFACE_RE.test(seg) && !enforcementSegmentIsReadOnly(seg)))) {
+      namesEnforcementSurface(seg) && !enforcementSegmentIsReadOnly(seg)))) {
     deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write, which the `ask` tier in .claude/settings.json gates.");
   }
 }
@@ -501,10 +566,32 @@ if (shellTool) {
 // writes to these paths are ungated there. Recorded, not hidden; closing it needs
 // a boundary outside this repository, which is branch protection.
 if (!/^(?:write|edit|notebookedit|multiedit)$/i.test(toolName)) {
+  // Dot segments are resolved here too. Second review round, HIGH: an MCP write to
+  // `.claude/commands/../hooks/review-proof-guard.mjs` was probe-confirmed ALLOW —
+  // the intermediate directory exists, so the filesystem lands on the real hook.
+  const resolvePathCandidate = (value) => {
+    const p = String(value).replace(/\\/g, "/").replace(/\/+$/, "");
+    if (!p.includes("./") && !p.endsWith("/.") && !p.endsWith("/..")) return p;
+    const isAbsolute = p.startsWith("/");
+    const drive = /^([a-zA-Z]:)(\/.*)?$/.exec(p);
+    const out = [];
+    for (const seg of (drive ? (drive[2] || "") : p).split("/")) {
+      if (seg === "" || seg === ".") continue;
+      if (seg === "..") {
+        if (out.length && out[out.length - 1] !== "..") out.pop();
+        else if (!isAbsolute && !drive) out.push("..");
+        continue;
+      }
+      out.push(seg);
+    }
+    const joined = out.join("/");
+    if (drive) return `${drive[1]}/${joined}`;
+    return isAbsolute ? `/${joined}` : joined;
+  };
   const enforcementPathHit = pathCandidates.some((candidate) => {
     if (candidate == null) return false;
-    const norm = String(candidate).replace(/\\/g, "/").replace(/\/+$/, "");
-    return /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex\/(?:hooks|config\.toml)|\.claude\/(?:hooks|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml)(?![\w-])/i.test(`/${norm}`);
+    return /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex\/(?:hooks|config\.toml)|\.claude\/(?:hooks|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml)(?![\w-])/i
+      .test(`/${resolvePathCandidate(candidate)}`);
   });
   if (enforcementPathHit) {
     deny("REVIEW PROOF GUARD: this tool would write to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml through a path field. These decide whether the commit, push, CI, and review gates run at all. Use Edit/Write for a deliberate change, which the `ask` tier in .claude/settings.json gates.");
