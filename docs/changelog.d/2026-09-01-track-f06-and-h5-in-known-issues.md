@@ -49,10 +49,24 @@ source change and it is a comment.
 
 ### The review history, kept because the lesson is reusable
 
-Codex raised **twelve** findings on PR #538. All were correct. Three were substantive — the second
-affected surface in H5, that same surface swallowing the refusal reason, and a summary sentence that
-contradicted the paragraph beneath it. **The other nine were all the same failure**: restating the accept/refuse control flow of a 1,700-line
-migration in prose, and getting the boundary wrong in a new direction each time.
+Codex raised **twelve** findings on PR #538, CodeRabbit one more. They do not collapse into a single
+failure class, and an earlier draft of this very paragraph claimed they did — which Codex then
+flagged as its twelfth finding. Counted from the threads rather than from memory:
+
+- **Six** were the same mistake: restating the accept/refuse control flow of a 1,700-line migration
+  in prose and getting the boundary wrong in a new direction each time. That class is why the
+  paraphrase is now omitted outright instead of corrected a seventh time.
+- **Three** were substantive defects in the entries — H5's second affected surface, that surface
+  swallowing the refusal reason, and a summary sentence that contradicted the paragraph beneath it.
+- **One** was lost edit provenance: the F06 example assumed the rate was authoritative, when the
+  saved row cannot say which field the operator typed.
+- **One** was arithmetic: the direction of the margin error depends on whether acreage rose or fell,
+  so it can be misstated either way rather than always understated.
+- **One was later overturned.** An early round established that the split-billing guard's message
+  reaches the operator; a later round showed that holds only for `DeliveryDetail`. Each round was
+  right about what it examined, but the pair cannot both stand — so "every finding was correct" is
+  itself false.
+- CodeRabbit's single finding was a severity label: "cosmetic" understated H5.
 
 Both entries were therefore **trimmed at Mason's direction** to the defect, the call sites, and a
 pointer to the authoritative code — the exemption taxonomy is deliberately not paraphrased. The
@@ -64,6 +78,9 @@ operative rules:
   surface was missed.
 - **When a reviewer reports a claim, grep the claim**, not the cited line. Several rounds were spent
   fixing a statement in one file while an identical one survived in another.
+- **Do not compress a review history into one failure class.** Tidying twelve findings into "nine of
+  the same mistake" was itself wrong, and cost a round to correct. If a summary of the review is
+  worth writing, count it off the threads.
 
 ### Proof observed
 
