@@ -404,25 +404,110 @@ if (shellTool) {
   // deleting the lock would quietly drop `git checkout <rev> -- .claude/hooks/x`
   // — a silent guard rewrite — from the protected set.
   const ENFORCEMENT_SURFACE_RE =
-    /(?:^|[\s"'=:/\\(])(?:\.husky|\.github[/\\]workflows|\.codex[/\\]hooks|\.claude[/\\]hooks|\.coderabbit\.ya?ml)(?![\w-])/i;
-  // Overwrite verbs that carry their content from git history or a patch file
-  // rather than from the command text, so no redirect and no rm/mv appears.
-  // `git apply` / `patch` name their destinations INSIDE a file this scan cannot
-  // read — the documented "git subcommands bypass destination guards" class.
-  // The leading `\s` matters: it keeps `git commit -am "…"` from matching `am`.
-  const GIT_OVERWRITE_RE = /\bgit\b[^;&|\r\n]*\s(?:checkout|restore|apply|am|rm|mv)\b/i;
-  const PATCH_RE = /(?:^|[\s;&|(])patch(?![\w.-])/i;
+    /(?:^|[\s"'=:/\\(])(?:\.husky|\.github[/\\]workflows|\.codex[/\\](?:hooks|config\.toml)|\.claude[/\\](?:hooks|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml)(?![\w-])/i;
+  // FAIL-CLOSED READ-ONLY ALLOWLIST — deliberately NOT a destructive-verb list.
+  //
+  // The first cut of this rule (2026-09-01, same day) reused the `.claude`
+  // state-dir approach above and enumerated WRITERS. An exact-SHA `gpt-5.6-sol`
+  // review returned HIGH with parser-confirmed bypasses: `cp … .husky/pre-push`,
+  // `tee .husky/pre-push`, `sed -i … .husky/pre-push`, `Set-Content
+  // .codex/hooks.json`, `Copy-Item … .claude/hooks/…`, and `echo x >|
+  // .husky/pre-push` were all allowed. That is the blocklist failure mode: it
+  // reopens every time someone learns a new verb. The lock this rule replaced had
+  // the shape right, and losing it in the port was a real regression.
+  //
+  // So: a segment that NAMES one of these paths must have a recognized read-only
+  // head, or it is denied. `tee`, `cp`, `mv`, `rm`, `install`, `dd`, `truncate`,
+  // `perl`, `python`, `Set-Content`, `Copy-Item`, and anything invented later are
+  // refused without appearing anywhere in this file.
+  //
+  // The `.claude/session-state` rule above keeps its own verb list unchanged —
+  // rewriting that one is a separate, riskier change than this addition.
+  const ENFORCEMENT_READ_ONLY_HEADS = new Set([
+    "cat", "head", "tail", "less", "more", "bat", "nl", "od", "xxd", "strings",
+    "grep", "egrep", "fgrep", "rg", "ag", "ack",
+    "wc", "ls", "dir", "stat", "file", "du", "tree", "realpath", "readlink", "basename", "dirname",
+    "diff", "cmp", "comm", "sort", "uniq", "cut", "tr", "jq", "yq", "column",
+    "md5sum", "sha1sum", "sha256sum", "cksum",
+    "which", "type", "command", "pwd", "test", "true", "false", "echo", "printf", "date",
+    // Runners EXECUTE a script rather than editing one. Their arguments are still
+    // scanned by every other rule in this file.
+    "node", "npm", "npx", "pnpm", "yarn", "gh",
+    "git", "sed", "awk", "find",
+    // PowerShell read verbs. Its WRITE verbs (Set-Content, Copy-Item, Out-File,
+    // Add-Content, Move-Item, Remove-Item) are absent on purpose.
+    "get-content", "gc", "select-string", "sls", "get-childitem", "gci", "get-item", "measure-object",
+    // Changing INTO one of these directories writes nothing, and `cd .claude/hooks
+    // && node review-proof-guard.test.mjs` is how this very suite is run. @unproven
+    // — residual, stated rather than hidden: Bash cwd persists across calls, so a
+    // `cd` here followed by a LATER call using a bare filename never names the
+    // path and is not seen by this rule. The `.claude/session-state` rule above
+    // closes its own version of that with a hookCwd check; the same check here
+    // would deny running a hook's tests from inside the hooks directory, which is
+    // routine. Branch protection remains the boundary.
+    "cd", "pushd", "popd", "set-location", "sl", "push-location", "pop-location", "chdir",
+  ]);
+  // Git subcommands that cannot rewrite working-tree content. `checkout`,
+  // `restore`, `apply`, `am`, `rm`, `mv`, `clean`, `stash`, `reset`, `revert`,
+  // `cherry-pick`, and `rebase` are all absent, so they deny by omission — the
+  // "git subcommands bypass destination guards" class, closed by shape.
+  const ENFORCEMENT_READ_ONLY_GIT = new Set([
+    "diff", "show", "log", "status", "ls-files", "ls-tree", "cat-file", "blame", "grep",
+    "rev-parse", "rev-list", "merge-base", "cherry", "describe", "shortlog", "name-rev",
+    "remote", "branch", "tag", "fetch", "ls-remote", "reflog", "check-ignore", "var",
+    "config", "help", "version", "count-objects", "verify-commit", "symbolic-ref",
+    // Staging/committing record content; they do not alter it.
+    "add", "commit", "push", "worktree",
+  ]);
+  const enforcementSegments = (cmd) =>
+    String(cmd ?? "").split(/(?:\|\||&&|[;\r\n|&])+/).map((s) => s.trim()).filter(Boolean);
+  const enforcementSegmentIsReadOnly = (segment) => {
+    const raw = (String(segment).trim().match(/^([\w.:\\/-]+)/) || [])[1];
+    if (!raw) return false;
+    const head = raw.replace(/^.*[/\\]/, "").toLowerCase();
+    if (!ENFORCEMENT_READ_ONLY_HEADS.has(head)) return false;
+    // In-place editors wearing a read-only head.
+    if ((head === "sed" || head === "awk") && /(?:^|\s)-[a-z]*i/i.test(segment)) return false;
+    if (head === "find" && /(?:^|\s)-(?:delete|exec|execdir|ok|okdir|fprint|fls)\b/i.test(segment)) return false;
+    if (head === "git") {
+      const sub = (segment.match(/\bgit\b(?:\s+-[^\s]+)*\s+([\w-]+)/i) || [])[1];
+      if (!sub || !ENFORCEMENT_READ_ONLY_GIT.has(sub.toLowerCase())) return false;
+    }
+    return true;
+  };
   const redirectTargetsEnforcementSurface = (v) => {
     for (const m of v.matchAll(/>>?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
       if (ENFORCEMENT_SURFACE_RE.test(m[1].replace(/["']/g, ""))) return true;
     }
     return false;
   };
-  const overwritesEnforcementSurface = (v) =>
-    hitsDestructiveVerb(v) || GIT_OVERWRITE_RE.test(v) || PATCH_RE.test(v);
   if (destructiveViews.some((v) =>
-    (overwritesEnforcementSurface(v) && ENFORCEMENT_SURFACE_RE.test(v)) || redirectTargetsEnforcementSurface(v))) {
-    deny("REVIEW PROOF GUARD: destructive or overwriting shell commands touching .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is allowed. Changing one is a deliberate edit through Edit/Write, which the `ask` tier in .claude/settings.json gates.");
+    redirectTargetsEnforcementSurface(v) ||
+    enforcementSegments(v).some((seg) =>
+      ENFORCEMENT_SURFACE_RE.test(seg) && !enforcementSegmentIsReadOnly(seg)))) {
+    deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write, which the `ask` tier in .claude/settings.json gates.");
+  }
+}
+
+// Mutating tools that carry their target in a PATH FIELD rather than a shell
+// command — MCP filesystem writers, move/copy tools, patch destinations. Codex
+// (2026-09-01, HIGH) listed these alongside the shell bypasses. Native `Write`/
+// `Edit` are deliberately NOT denied here: they are the only way a hook file can
+// ever be legitimately changed, there is no unlock any more, and denying them
+// would permanently strand hook maintenance the way the deleted lock did twice
+// in one session. They are gated by the `ask` tier instead. @unproven — that tier
+// is mode-dependent: under `dontAsk` it is a real denial, but a session in
+// bypass-permissions mode honours neither it nor any allow/deny rule, so native
+// writes to these paths are ungated there. Recorded, not hidden; closing it needs
+// a boundary outside this repository, which is branch protection.
+if (!/^(?:write|edit|notebookedit|multiedit)$/i.test(toolName)) {
+  const enforcementPathHit = pathCandidates.some((candidate) => {
+    if (candidate == null) return false;
+    const norm = String(candidate).replace(/\\/g, "/").replace(/\/+$/, "");
+    return /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex\/(?:hooks|config\.toml)|\.claude\/(?:hooks|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml)(?![\w-])/i.test(`/${norm}`);
+  });
+  if (enforcementPathHit) {
+    deny("REVIEW PROOF GUARD: this tool would write to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml through a path field. These decide whether the commit, push, CI, and review gates run at all. Use Edit/Write for a deliberate change, which the `ask` tier in .claude/settings.json gates.");
   }
 }
 if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {

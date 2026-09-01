@@ -262,7 +262,16 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm a*.log" } }).st
 assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/hooks/review-proof-guard.mjs", content: "// edit" } }).stdout, "");
 assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/settings.json", content: "{}" } }).stdout, "");
 assert.equal(run({ tool_name: "Edit", tool_input: { file_path: ".claude/hooks/stop-wrap.mjs" } }).stdout, "");
-assert.equal(run({ tool_name: "mcp__filesystem__move_file", tool_input: { source: ".claude/hooks/a.mjs", destination: ".claude/hooks/b.mjs" } }).stdout, "");
+// DELIBERATELY REVERSED 2026-09-01. This line used to assert that an MCP move of
+// a hook file was ALLOWED — true when `guarded-surface-lock` existed to catch it.
+// With the lock deleted, that is exactly the "silently rewrite a guard, then run
+// the operation it gated" route, so a path-field tool aimed at a hook file now
+// denies. Native Write/Edit stay allowed (asserted just above and below) because
+// there is no unlock any more and they are the only way to maintain a hook.
+assert.match(
+  run({ tool_name: "mcp__filesystem__move_file", tool_input: { source: ".claude/hooks/a.mjs", destination: ".claude/hooks/b.mjs" } }).stdout,
+  /"permissionDecision":"deny"/,
+);
 
 // Ack valve (stop-wrap-ack.json): the ONE session-state basename stop-wrap.mjs
 // tells the agent to write to acknowledge loose ends — must be ALLOWED again
@@ -393,6 +402,25 @@ for (const command of [
   "patch -p1 .husky/pre-commit < /tmp/x.diff",
   "git rm .github/workflows/ci.yml",
   "git -C /repo checkout main -- .husky/pre-push",
+  // Every bypass the gpt-5.6-sol review confirmed against the FIRST cut of this
+  // rule, which enumerated destructive verbs instead of allowlisting read-only
+  // heads. Each one was parser-confirmed ALLOWED then; each must deny now. If a
+  // future edit turns this back into a verb blocklist, these go red.
+  "cp /tmp/evil .husky/pre-push",
+  "tee .husky/pre-push",
+  "sed -i s/exit/return/ .husky/pre-push",
+  "Set-Content .codex/hooks.json",
+  "Copy-Item /tmp/x .claude/hooks/sql-safety.mjs",
+  "echo x >| .husky/pre-push",
+  "Out-File -FilePath .husky/pre-push",
+  "Add-Content .coderabbit.yaml",
+  "install -m 755 /tmp/x .husky/pre-push",
+  "dd if=/tmp/x of=.husky/pre-push",
+  "python -c open('.husky/pre-push','w')",
+  "perl -i -pe s/a/b/ .husky/pre-push",
+  // An unrecognized head is a writer by construction — the whole point of the
+  // allowlist. No new verb has to be enumerated for this to hold.
+  "someNewTool --overwrite .husky/pre-push",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.equal(result.status, 0, `hook should exit 0: ${command}`);
@@ -412,6 +440,11 @@ for (const command of [
   // `-am` must not read as the `am` subcommand — this is why GIT_OVERWRITE_RE
   // requires whitespace immediately before the verb.
   "git commit -am wired .husky/pre-push",
+  "sed -n 1,5p .husky/pre-push",
+  "node scripts/agent-health-check.mjs .husky",
+  "find .github/workflows -name *.yml",
+  "Get-Content .husky/pre-push",
+  "Select-String typecheck .husky/pre-push",
   // A redirect that READS one of these and writes somewhere harmless is not a
   // write INTO the surface; the old lock got this wrong and blocked diagnostics.
   "cat .husky/pre-push > /tmp/out.txt",
@@ -430,6 +463,31 @@ for (const command of [
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.equal(result.status, 0, `hook should exit 0: ${command}`);
   assert.equal(result.stdout, "", `must allow near-miss: ${command}`);
+}
+
+// Path-field writers (MCP filesystem tools, move/copy tools, patch destinations)
+// must deny too — Codex listed these alongside the shell bypasses.
+for (const payload of [
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".husky/pre-push" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/hooks/sql-safety.mjs" } },
+  { tool_name: "mcp__filesystem__edit_file", tool_input: { path: ".codex/hooks.json" } },
+  { tool_name: "apply_patch", tool_input: { patch: "*** Begin Patch\n*** Update File: .github/workflows/ci.yml\n" } },
+]) {
+  const result = run(payload);
+  assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `path-field writer must deny: ${payload.tool_name}`);
+}
+
+// Native Write/Edit are deliberately NOT denied here — there is no unlock any
+// more, so denying them would permanently strand hook maintenance. The `ask` tier
+// gates them instead. Pinned so the exemption stays a recorded choice.
+for (const payload of [
+  { tool_name: "Write", tool_input: { file_path: ".claude/hooks/sql-safety.mjs", content: "x" } },
+  { tool_name: "Edit", tool_input: { file_path: ".husky/pre-push" } },
+]) {
+  const result = run(payload);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "", `native editor stays with the ask tier: ${payload.tool_name}`);
 }
 
 // KNOWN OVER-BLOCK, pinned deliberately rather than papered over. A dotted
