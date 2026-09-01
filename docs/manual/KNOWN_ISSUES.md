@@ -213,6 +213,50 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-31 — a command-to-skill migrator wrote 24 corrupted `source-command-*` adapters into six worktrees
+
+**Identified 2026-09-01.** Twenty-four untracked directories named
+`.agents/skills/source-command-<name>/SKILL.md` appeared in six worktrees under
+`C:/CRX_Manager/.claude/worktrees/*` at 19:46:47 on 2026-08-31. Two sessions independently ruled
+themselves out. The generator is now known from the artifacts' own front matter:
+
+```yaml
+name: "source-command-ship"
+description: "Migrated source command `ship`"
+```
+
+A **command-to-skill migrator** — not `sync-agent-workflows.mjs`, which cannot emit that prefix
+(all 37 tracked adapters are unprefixed) and which REJECTS all 24 via `--check` as "not generated
+from .claude".
+
+**The part that matters: the content is corrupted, not merely duplicated.** The migrator applied a
+case-insensitive `claude` → `Codex` substitution to the instruction TEXT, not just to names. 13 of
+the 24 files now instruct an agent to run paths that do not exist:
+
+```
+.Codex/hooks/autopilot-arm.mjs        (real: .claude/hooks/autopilot-arm.mjs)
+.Codex/hooks/loop-guard.mjs
+.Codex/hooks/migration-ordering-lib.mjs
+.Codex/hooks/session-size-sentinel.mjs
+```
+
+So these are not harmless duplicates. `source-command-ship` carries the whole `/ship` autonomy
+boundary — migration gates, edge-function gates, the landing policy — with its arming command
+pointing at a path that cannot exist. An agent that loaded this skill and tried to follow it would
+fail to arm autopilot, and would be reading a mangled copy of the safety contract.
+
+**They also predate the 19:46:47 appearance.** `git log --all -S "source-command-"` finds them in
+stash `bcaa4527` (`stash@{1}`, "crx-main-checkout-cleanup-20260831"), captured as untracked files on
+`main` at **10:26:25 the same morning** — nine hours earlier. So the migrator has run at least
+twice, and a cleanup session already swept one batch into a stash.
+
+**Status:** quarantined (NOT deleted) out of
+`.claude/worktrees/permission-grants-claude-codex-9f7108` to the session scratchpad; still present
+in the other five worktrees. **Do not run `sync-agent-workflows.mjs --write` as a cleanup** — it
+would mutate tracked files repo-wide in an unreviewed change and destroy the evidence. Deleting the
+24 untracked duplicates is the candidate fix, as its own reviewed change, once someone identifies
+what invokes the migrator and stops it running again.
+
 ## OPEN 2026-08-31 — `git config core.hooksPath` disables EVERY husky gate in one allowlisted command
 
 Found by exact-SHA `gpt-5.6-sol` review during PR #530 (round 4, HIGH). **This is independent of
