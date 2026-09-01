@@ -57,6 +57,30 @@ guard's strength** — that swap was attempted and reverted for exactly this rea
 assertions and had been observed blocking its own author when finding 3 was found. Self-written
 tests encode the author's model of the threat.
 
+## Lessons-to-checks disposition
+
+Findings 1–7 each have an executable check: 206 assertions in
+`.claude/hooks/guarded-surface-lib.test.mjs`, one per exploit shape, plus end-to-end hook spawns.
+
+**Finding 8 has no executable check and cannot have one at this layer**, which is the finding
+itself: the bypass is code running outside the tool-call channel the guard inspects, so no assertion
+inside that guard can observe it. The compensating control is not a test — it is keeping the `ask`
+tier, which is enforced by the permission layer rather than by this hook.
+
+**One ratchet IS owed and is not yet written**, because the file is locked: a test asserting that the
+guard's own refusal text does not claim properties the guard lacks. `lockedReason()` still emits
+"an agent shell cannot run it", which finding 8 disproved. That overclaim is the same defect class
+the merge-queue session independently hit on #502 — a guard whose comment asserted "fails closed"
+while Codex reproduced an `allow`, on the live-migration path. Three instances in one day across
+three different guards makes this worth a standing check:
+
+> For each guard, assert its user-facing refusal text and header comment do not assert a safety
+> property the test suite has not demonstrated.
+
+That check would have caught my overclaim before Mason ever read it, and would have caught #502's.
+It is the highest-value item in this handoff and belongs in the same unlock window as the
+`lockedReason()` correction.
+
 ## What remains
 
 1. **CodeRabbit** shows `CHANGES_REQUESTED` against an older commit and needs a fresh review at the
