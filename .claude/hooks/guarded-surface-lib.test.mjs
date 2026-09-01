@@ -160,6 +160,49 @@ for (const cmd of [
 }
 
 // ---------------------------------------------------------------------------
+// 5b. The three bypasses Codex found in round 2. Each was a real HIGH.
+// ---------------------------------------------------------------------------
+
+// (1) Forging the unlock record. `Write` is blanket-allowed and the hook trusts
+// this file, so if the path is not guarded an agent simply writes itself an
+// unlock, then rewrites a production guard. The TTY prompt is no defense.
+assert.ok(guardedSurfacePath(".claude/session-state/guard-unlock.json"), "the unlock RECORD must be guarded, not just the script");
+pass++;
+for (const payload of [
+  { file_path: ".claude/session-state/guard-unlock.json" },
+  { path: ".claude/session-state/guard-unlock.json" },
+  { command: 'echo {"kind":"guarded-surface-unlock"} > .claude/session-state/guard-unlock.json' },
+]) {
+  denies(judge(payload, { toolName: "Write" }), `forged unlock via ${Object.keys(payload)[0]}`);
+}
+
+// (2) Mixed case. CRX runs on a case-INSENSITIVE Windows filesystem, so these
+// spellings edit the real files while a case-sensitive matcher returns allow.
+for (const p of [
+  ".CLAUDE/hooks/sql-safety.mjs",
+  ".Claude/Hooks/money-safety.mjs",
+  ".HUSKY/pre-push",
+  "Package.json",
+  ".CLAUDE/settings.json",
+  "SCRIPTS/verify-deps.mjs",
+]) {
+  assert.ok(guardedSurfacePath(p), `mixed-case path must still be guarded: ${p}`);
+  denies(judge({ file_path: p }, { toolName: "Write" }), `mixed-case write: ${p}`);
+  pass++;
+}
+denies(judge({ command: "echo x > .CLAUDE/hooks/sql-safety.mjs" }), "mixed-case shell redirect");
+
+// (3) A lone `&` separates commands exactly like `;`, but only `&&` was split,
+// so the read-only head of the FIRST command vouched for a writer after it.
+for (const cmd of [
+  "cat .claude/settings.json & rm .claude/hooks/sql-safety.mjs",
+  "ls & cp /tmp/evil.mjs .claude/hooks/bash-safety.mjs",
+  "grep -n x .husky/pre-push & sed -i s/a/b/ .husky/pre-push",
+]) {
+  denies(judge({ command: cmd }), `lone-& compound: ${cmd}`);
+}
+
+// ---------------------------------------------------------------------------
 // 6. Reads stay allowed — agents inspect guards constantly during normal work
 // ---------------------------------------------------------------------------
 for (const cmd of [

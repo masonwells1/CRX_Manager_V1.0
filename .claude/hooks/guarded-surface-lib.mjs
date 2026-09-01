@@ -67,6 +67,15 @@ export const GUARDED_SURFACE_RES = [
   // rewrites guard-unlock.mjs to always return "unlocked" and the whole
   // mechanism is decorative.
   /(?:^|\/)scripts\/guard-unlock\.mjs$/,
+  // The unlock RECORD itself. Codex round 2, HIGH: the hook trusts an
+  // unauthenticated JSON file, `Write` is blanket-allowed, and this path was not
+  // guarded — so an agent could forge a fresh-looking unlock, then rewrite a
+  // production guard and run the already-auto-allowed SQL/migration/push. The
+  // TTY prompt is no defense against writing the file directly. Guarding the
+  // path costs the legitimate flow nothing: guard-unlock.mjs writes it with
+  // node's fs from inside the process, which is not a tool call and never
+  // reaches this hook.
+  /(?:^|\/)\.claude\/session-state\/guard-unlock\.json$/,
 ];
 
 // Bare names that must be recognized even when a glob hides the rest of the
@@ -74,8 +83,14 @@ export const GUARDED_SURFACE_RES = [
 // review-proof-guard.mjs.
 const GUARDED_GLOB_TARGETS = [".claude", ".codex", ".husky", ".github", "hooks", "workflows", "package.json", "package-lock.json"];
 
+// Lowercased on purpose. Codex round 2, HIGH: the guarded regexes are
+// case-sensitive, and CRX runs on a case-INSENSITIVE Windows filesystem — so
+// writing `.CLAUDE/hooks/sql-safety.mjs` edits the real `.claude/hooks/sql-safety.mjs`
+// while a case-sensitive matcher returns allow. Every guarded literal in this
+// file is lowercase, so folding the input closes that whole class rather than
+// enumerating spellings.
 export function normalizePath(value) {
-  return String(value ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+  return String(value ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
 /** True when a literal path points at a guarded enforcement surface. */
@@ -138,7 +153,8 @@ export function decodeAnsiCQuotes(text) {
 /** Does this command text reference a guarded surface at all (any view)? */
 export function commandMentionsGuardedSurface(cmd) {
   return shellCommandViews(cmd).some((view) => {
-    const norm = view.replace(/\\/g, "/");
+    // Lowercased for the same Windows case-insensitivity reason as normalizePath.
+    const norm = view.replace(/\\/g, "/").toLowerCase();
     if (GUARDED_SURFACE_RES.some((re) => re.test(norm))) return true;
     // Segment/glob pass: catches `.clau*/hooks/x` and a bare guarded directory.
     const segs = norm.split(/[\s"'=:;&|(){}<>]+/).filter(Boolean);
@@ -197,9 +213,14 @@ function firstWord(text) {
 }
 
 /** Split a command into segments on shell separators, so each is judged alone. */
+// Splits on a LONE `&` too. Codex round 2, HIGH: `&` backgrounds a command and
+// separates it from the next one exactly like `;`, but the old pattern matched
+// only `&&`. So `cat .claude/settings.json & <writer> .claude/hooks/x` stayed a
+// single segment whose head was the read-only `cat`, and the whole command was
+// allowed. Also splits on `\r` so CRLF command text segments correctly.
 export function shellSegments(cmd) {
   return String(cmd ?? "")
-    .split(/(?:\|\||&&|[;\n|])+/)
+    .split(/(?:\|\||&&|[;\r\n|&])+/)
     .map((s) => s.trim())
     .filter(Boolean);
 }
