@@ -1,11 +1,149 @@
 # Decision Log
 
-Last verified: 2026-08-28
+Last verified: 2026-08-31
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-08-31 — `core.hooksPath` points at the tracked `.husky`, never husky's generated `.husky/_`
+
+**Source:** Mason's in-chat approval on 2026-08-31 ("ok fix it") after the harness review found the
+commit and push guards were not running in fourteen of forty-four registered worktrees.
+
+**Decision.** The repository-wide `core.hooksPath` is the tracked `.husky` directory. Per-worktree
+overrides are not used. `package.json`'s `prepare` script sets that value instead of invoking
+`husky`, which re-set the broken one on every `npm install`.
+
+**Why.** husky writes `core.hooksPath=.husky/_`, and `.husky/_` is generated during `npm install`
+and gitignored. A worktree created without an install in it therefore resolved the setting to a
+directory that was not there — and **git skips a missing hook silently**, so `git commit` and
+`git push` looked entirely normal while running no guard. Eight worktrees were in that state and
+six more carried hand-set absolute overrides aimed at other checkouts, including an abandoned one,
+so those ran a different branch's guard code. A relative value resolves against each worktree's own
+root, which is also the correct semantics: a branch that edits a guard is tested by the guard it
+edited. The tracked hooks are plain shell and never sourced husky, so no husky runtime is needed.
+
+**Proof.** Reproduced in a throwaway worktree created the ordinary way: `git hook run pre-commit`
+reported `cannot find a hook named pre-commit` before the change and ran the ledger and containment
+guards over 2,892 paths after it. Fleet re-scanned: 44 of 44 worktrees resolve to a real
+`pre-commit`. `npm run prepare` verified to repair a deliberately broken value.
+
+**Caught by the gate, not by the author.** The first candidate pointed `core.hooksPath` at `.husky`
+while `.husky/pre-commit` and `.husky/pre-push` were committed `100644` — only `commit-msg` carried
+`100755`. Git silently ignores a non-executable hook on POSIX, so that change would have removed
+every commit and push guard on Linux and macOS: the exact bug it set out to fix, inverted, and
+invisible from Windows where there is no executable bit. `gpt-5.6-sol` found it from the tree
+manifest. Both hooks are now committed `100755`, and `agent-health-check.test.mjs` asserts the mode
+git records for the repository's own hooks — the fixtures chmod theirs, which is precisely what hid
+the real condition.
+
+**Round 3, and the reason the check is an allowlist.** CodeRabbit's second pass showed containment
+was the wrong shape entirely: linked worktrees live UNDER the main checkout
+(`.claude/worktrees/<name>`), so an absolute `core.hooksPath` into another worktree's `.husky` is
+*contained* by the root and passed — while git ran that other branch's guards. Any in-worktree
+directory holding two executable files passed for the same reason. The check now requires the
+configured path to resolve to **exactly this worktree's own `.husky`**; everything else fails closed,
+so an unanticipated spelling is a false alarm rather than a hole — the
+`pin-the-region-don't-enumerate-the-cheats` shape. The expected path canonicalizes the root but keeps
+`.husky` literal, because canonicalizing both sides would make a `.husky` that is *itself* a link
+into another checkout compare equal to itself. Also: `install-git-hooks.mjs` no longer swallows every
+error from clearing the worktree override — only "nothing to clear" (exit 5) and "no worktree scope
+exists" are silent; a real failure warns, because a surviving override outranks the shared value.
+
+**Two more found by CodeRabbit, both real.** (1) A per-worktree `core.hooksPath` **outranks** the
+shared local value, so a `prepare` that only wrote the shared value left a stale foreign override
+effective — `npm install` would report success while repairing nothing. `prepare` is now
+`scripts/install-git-hooks.mjs`, which clears the worktree scope first, then sets the shared value;
+proven by pointing this worktree at the abandoned PR #432 checkout and watching `npm run prepare`
+clear it. (2) Containment was checked lexically, but git executes the **target** of a symlink, so a
+`.husky` linked into another checkout passed as in-worktree. Paths are now canonicalized with
+`realpathSync` before the containment test, and both the directory and each hook are checked.
+
+**Operative rule.** Any file under `.husky/` that git is meant to execute is committed `100755`
+(`git update-index --chmod=+x`), never `100644`. Never point `core.hooksPath` at a generated or
+ignored directory, and never set it per-worktree. `npm run agent-health` reports `Git hooks installed` and fails when the path is
+unset, missing `pre-commit`/`pre-push`, resolving outside the worktree, or — on POSIX — holding a
+hook without the executable bit, which git skips just as silently. That check is the tripwire, not
+this entry. This supersedes the 2026-08-25 incident entry below, which repointed one
+worktree to `.husky/_` — the right target, wrongly identified.
+
+**Knock-on.** The parked `core.hooksPath` hole in `EXECUTABLE_TRANSPORT_KEYS`
+(`KNOWN_ISSUES.md`, "Third instance") gets easier, not harder: the legitimate value is now a
+committed, tracked path rather than a gitignored generated one, which is a cleaner approved value
+for the closed-allowlist shape that entry needs. Still parked; nothing was changed there.
+
+## 2026-08-31 — Model Tuning guidance covers the whole Claude 5 family
+
+**Source:** Mason's in-chat request on 2026-08-31 to tune both CLAUDE.md files for effectiveness;
+Codex PR #528 review finding that this log still scoped the tuning decision to Opus 5.
+
+**Decision.** The `CLAUDE.md` Model Tuning section added by the 2026-07-25 entry applies to the
+whole Claude 5 family — Opus 5 and Fable 5 — not only Opus 5. The 2026-07-25 calibration
+(`<tone_preference>`, deliverable-length rule, subagent budget, self-verification carve-out,
+uncapped review prompts with the settled overnight-sweep exception, and the effort ladder) carries
+over to Fable 5 unchanged. The carry-over is provisional — the 2026-07-25 review measured Opus 5
+only — but binding until a newer harness review supersedes it.
+
+**Operative rule.** A Fable 5 session follows the Model Tuning rules exactly as an Opus 5 session
+would; do not treat the section as Opus-only or relitigate its scope. Every settled exception and
+the pending effort sweep from the 2026-07-25 entry remain in force. This supersedes only the
+model-scope wording of the 2026-07-25 entry; its substance is unchanged.
+
+## 2026-08-31 — retire the production migration approval gate; the worktree guard carve-out stays closed
+
+**Source:** Mason's in-chat decision on 2026-08-31 after a harness review he requested ("we were
+overbuilt and it killed productivity"), cross-checked by two adversarial Opus passes and a
+`gpt-5.6-sol` high-effort plan review (verdict PROCEED WITH CHANGES).
+
+**Decision.** Delete PR #514's production-migration automation — both workflows, the batch builder and
+its test, the review verifier, the review lib, the environment assertion, and `production-main-freeze.mjs`
+— plus the unconditional `ci.yml` step that invoked the deleted test. Keep the runbook with a RETIRED
+banner, and keep #514's general migration-apply content binding and SQL parser hardening.
+
+**Also decided (same conversation): the global ledger-order trigger is REJECTED, not deferred.**
+`20260827223000_enforce_global_migration_ledger_order.sql` was never applied and is now parked at
+`scripts/.staging-migrations/…​.sql.REJECTED`, outside `supabase/migrations/`, with its standalone
+prover deleted. It is `ENABLE ALWAYS` on every `BEFORE INSERT`, and the live ledger holds **89 rows**
+whose effective stamp is at or below the running maximum of earlier-versioned rows — so a `COPY`-based
+disaster-recovery restore would abort partway through, discovered only when a restore is actually
+needed. It also drops the `-- ordering-guard: intentional-replay <reason>` escape hatch that
+`.claude/hooks/migration-ordering-lib.mjs` honours, and rejects all 626 legacy slug-only ledger names.
+The client-side preflight already enforces forward-only ordering, keeps an escape hatch, and cannot
+brick a restore. Reconsider only with a tested replay/restore escape hatch, a successful
+disposable-restore proof with the trigger installed, and evidence of a real cross-client ordering
+failure the preflight cannot prevent.
+
+**Why.** The gate could never run: the `production-database` environment was never created, both
+workflows had zero runs, the mandatory boundary canary was never performed, and `auditedDdlAdmission()`
+admitted only `COMMENT ON`. Measured, PR #512 removed ~2,788 lines and PR #514 added ~2,696 back three
+days later, so the "simplification" netted about 92 lines. #514 also did not satisfy the 2026-08-27
+rule below (no named reproducible recurrence, no measured false-positive budget, nothing removed);
+the review found it had been read as applying only to hooks, not to a GitHub workflow.
+
+**What this forbids/implies.** The 2026-08-27 consolidation rule binds regardless of *where* a new
+control lives — hook, workflow, script, or migration. "It is not a hook" is not an exemption. A control
+that has never executed is not a safe first increment; it is abandoned scaffolding, and keeping unused
+executable code because it was expensive to write is the overbuild pattern itself.
+
+**Explicitly NOT changed, and still settled: do not attempt the `.claude/worktrees` guard carve-out.**
+`review-proof-guard.mjs` denies most ordinary commands run inside a `.claude/worktrees/*` worktree
+(measured 2026-08-31: 0 of 10 ordinary commands allowed). Claude Code hardcodes that worktree location,
+so relocation is not available for tool-created worktrees. The text-stripping fix remains DO-NOT-ATTEMPT
+per `KNOWN_ISSUES.md` — re-derived independently on 2026-08-31 and tested against the pinned cases
+before implementation: **it opened 10 of 17**, including `rm -rf .claude/worktrees/wt-a/` → `rm -rf` and
+`find .claude/worktrees/wt-a/. -delete` → `find . -delete`. A purpose-built 32/32-green attack suite did
+not contain the pinned cases and would have shown green — the documented failure mode exactly. Seed any
+future guard work from the guard's own `.test.mjs` pinned cases. **Workaround, use this:** never name the
+worktree path in a destructive shell command; rely on the session cwd and relative paths.
+
+**Deferred, not abandoned.** `bash-safety-lib.mjs`'s interpreter/stdin opacity block (denies `xargs`
+pipes, `node -e`, `bash -c`, `python3 -c`, heredocs, and `node -v`, all reporting a misleading
+"maintenance producer" message) is the larger remaining productivity cost. Evidence says it is
+ineffective — it blocks *reading* the file it protects while `node runner.mjs` / `npm run x` / `make x`
+execute it freely. It is coupled to the blob-pinned maintenance producer, so it is the next
+harness-focused task after this one, not a backlog item.
 
 ## 2026-08-28 — CodeRabbit reviews only frozen release candidates
 
@@ -445,7 +583,10 @@ local state, both invisible to every file-watching guard because neither is a fi
 - `core.hooksPath` in one worktree's config pointed at a **separate checkout outside this
   repository** (`<other-repo-root>/.husky`), so a commit there would have run that repository's
   pre-commit hooks instead of this one's. One worktree of ~37 was affected. **Repointed to
-  `<repo-root>/.husky/_`.**
+  `<repo-root>/.husky/_`.** *(Superseded 2026-08-31 — see below. `.husky/_` was the wrong target:
+  it is generated by `npm install` and gitignored, so in a worktree that never ran an install it
+  does not exist and git runs no hook at all, silently. The repository-wide value is now the
+  tracked `.husky`.)*
 
 This is the PR #432 threat class — hook trust bound to the wrong repository, and a subvertible
 certifying gate — arriving live through a route none of its five splits covered. It reinforces
@@ -459,7 +600,10 @@ is required, because a repository or user setting `status.showUntrackedFiles=no`
 enumerate every configured hook path with
 `git config --show-origin --show-scope --get-all core.hooksPath` and confirm the effective value
 from `git config --get core.hooksPath`. Treat any value resolving outside this repository as a
-stop-and-report. Checking `config.worktree` alone is insufficient — `core.hooksPath` also takes
+stop-and-report, **and any value that resolves to a directory without `pre-commit` and `pre-push`
+in it as the same class of finding** — a missing hook is skipped in silence, so absent guards and
+foreign guards look identical from the command line. `npm run agent-health` now reports this as
+`Git hooks installed`. Checking `config.worktree` alone is insufficient — `core.hooksPath` also takes
 system, global and local scope, and precedence decides which one wins. (Verified 2026-08-25: a
 single worktree carried two configured values, at `local` and `worktree` scope, so a
 worktree-only inspection sees one of them.)

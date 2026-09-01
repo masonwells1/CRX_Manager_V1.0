@@ -935,7 +935,8 @@ assert.ok(
 // DELIBERATELY absent from EXECUTABLE_TRANSPORT_KEYS. See KNOWN_ISSUES.md,
 // "Third instance — the executable-config classifier misses core.hooksPath"
 // (2026-08-05): a naive addition denies every push in THIS repository, because
-// husky legitimately sets core.hooksPath=.husky/_ here. This is not a test
+// this repo legitimately sets core.hooksPath itself — `.husky` since 2026-08-31,
+// `.husky/_` before that (DECISION_LOG 2026-08-31). This is not a test
 // that the gap is safe — it is a tripwire so any future change to the key
 // list forces a deliberate look at that KNOWN_ISSUES entry rather than
 // silently closing or silently leaving open a real bypass.
