@@ -463,6 +463,7 @@ export interface InvoiceItemCheckRow {
   order_id: string;
   product_id: string;
   quantity: number;
+  invoice_type: string;
 }
 
 export function checkDeliveryInvoiceQuantityParity(
@@ -480,6 +481,9 @@ export function checkDeliveryInvoiceQuantityParity(
   // Sum invoiced quantity per order+product
   const invoicedByKey = new Map<string, number>();
   for (const ii of invoiceItems) {
+    // Return credits now carry negative invoice_items for revenue/COGS reporting.
+    // They are not additional billing against delivered quantity.
+    if (ii.invoice_type === 'credit_memo') continue;
     if (!ii.order_id || !ii.product_id) continue;
     const key = `${ii.order_id}::${ii.product_id}`;
     invoicedByKey.set(key, (invoicedByKey.get(key) ?? 0) + ii.quantity);
@@ -844,7 +848,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
         .select('delivery_id, product_id, quantity_delivered, deliveries(order_id)'),
       supabase
         .from('invoice_items')
-        .select('product_id, quantity, invoices(order_id)'),
+        .select('product_id, quantity, invoices(order_id, invoice_type)'),
     ]);
 
     if (deliveryItemsRes.error) throw new Error(`Delivery items query failed: ${deliveryItemsRes.error.message}`);
@@ -856,6 +860,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     }));
     const invoiceItems = (invoiceItemsRes.data ?? []).map((r: Record<string, unknown>) => ({
       order_id: (r.invoices as Record<string, unknown>)?.order_id as string,
+      invoice_type: (r.invoices as Record<string, unknown>)?.invoice_type as string,
       product_id: r.product_id as string,
       quantity: r.quantity as number,
     }));

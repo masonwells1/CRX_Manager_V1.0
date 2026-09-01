@@ -7,7 +7,7 @@ import path from "node:path";
 
 let payload;
 try {
-  payload = JSON.parse(readFileSync(0, "utf8"));
+  payload = globalThis.__CRX_ROUTED_HOOK_PAYLOAD ?? JSON.parse(readFileSync(0, "utf8"));
 } catch {
   process.exit(0);
 }

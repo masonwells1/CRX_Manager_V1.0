@@ -17,13 +17,13 @@ export const CLAUDE_ONLY_HOOKS = new Set([
   // guards.
   "codex-push-guard.mjs",
   "pr-merge-guard.mjs",
-  // Autopilot (the armed hands-free-run concept) is a Claude-session mechanism;
-  // Codex has no autopilot flag, so these are Claude-only.
-  "autopilot-intent-reminder.mjs",
+  // Autopilot enforcement (the armed hands-free-run concept) is a Claude-session
+  // mechanism; prompt-router.mjs keeps its intent reminder Claude-only internally.
   "unattended-autopilot.mjs",
   // Worktree lifecycle: Claude manages .claude/worktrees/; Codex worktrees live
-  // elsewhere and are never swept, so the cleanup and its liveness heartbeat are
-  // Claude-only.
+  // elsewhere and are never swept, so cleanup and its liveness heartbeat are
+  // Claude-only. posttool-router.mjs also owns the PostToolUse heartbeat dispatch;
+  // the direct manifest reference below remains for Claude SessionStart.
   "worktree-cleanup.mjs",
   "session-heartbeat.mjs",
   // SessionStart context injection (post-compact money/RLS re-anchor + session

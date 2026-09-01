@@ -202,7 +202,7 @@ draft -> submitted -> partially_received -> fully_received -> cancelled
 ### Quick Receive (shortcut)
 - 3-step wizard: select vendor + products -> auto-match to oldest open POs -> confirm
 - Uses `match_quick_receive_items()` RPC to automatically allocate items to the right POs
-- Source: `src/pages/QuickReceive.tsx`
+- Source: `src/components/receiving/QuickReceivePanel.tsx`
 
 ### Key RPCs
 - `receive_po_items()` — per-item condition/lot/notes/storage, creates receiving_records

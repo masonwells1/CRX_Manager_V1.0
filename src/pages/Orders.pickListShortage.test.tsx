@@ -16,6 +16,7 @@
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { buildPaginatedQueryChain as buildChain } from '../test-utils/supabaseChain';
 import { MemoryRouter } from 'react-router-dom';
 import type { PickListData } from '../lib/orderPickListPdf';
 
@@ -35,21 +36,6 @@ const { mockFrom, mockToast, mockDownloadPickList, selectedOrder, tables } = vi.
   },
   tables: { data: {} as Record<string, unknown[]> },
 }));
-
-type QueryResult = { data: unknown; error: { message: string } | null };
-type QueryChain = Record<string, ReturnType<typeof vi.fn>> & PromiseLike<QueryResult>;
-
-function buildChain(result: QueryResult): QueryChain {
-  const self: Record<string, unknown> = {};
-  for (const method of [
-    'select', 'update', 'eq', 'gte', 'lte', 'is', 'in', 'not', 'order', 'limit',
-  ]) {
-    self[method] = vi.fn(() => self);
-  }
-  const promise = Promise.resolve(result);
-  self.then = promise.then.bind(promise);
-  return self as QueryChain;
-}
 
 vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom },

@@ -1,5 +1,49 @@
 # CRX Manager V1.0 — Development Changelog
 
+## 2026-08-26 — the hold latch matches only what Mason typed
+
+Two sessions could not talk to each other. A coordinator session sent a peer a
+`<cross-session-message>` about a PR escalation path — "stand down … no need to stop the
+other lane" — and the PEER's hold latched as though Mason had ordered a halt. The peer quoted
+the phrasing back; the COORDINATOR's hold latched on the same words. It then escalated to the
+point where naming the guard was enough, because `stop-wrap.mjs` contains "stop" between word
+boundaries. Net cost: multiple round-trips spent inventing substitute vocabulary ("the brake",
+"frozen/released") just to discuss the hook, and one session sitting idle with finished work
+because no message could reach it safely.
+
+Root cause: trigger-word matching read the ENTIRE inbound prompt. Envelope blocks are DATA —
+another agent's words — and a quoted span is Mason REPORTING a phrase, not issuing it. This is
+the 2026-07-04 / 2026-08-16 false-positive class again, but it could not be fixed by adding
+`cross-session-message` to `MACHINE_TAG_NAMES`: that gate is all-or-nothing, so a message where
+Mason typed "pause" AND carried a peer block would have stopped latching — the one direction
+that must never weaken.
+
+`prompt-source-lib.mjs` gains `authoredByMason(prompt)`, which removes the not-Mason spans —
+`<cross-session-message>` blocks (closed or truncated), every `MACHINE_TAG_NAMES` envelope,
+fenced code blocks, inline code spans, and markdown blockquote lines — and `hold-latch-prompt.mjs`
+matches on the remainder instead of the raw prompt. A prompt with nothing left neither latches
+NOR clears: a sibling session must not be able to release a hold Mason set, so the latch is
+his in both directions. `HOLD_RE` also stops counting stop/pause that sits inside an identifier
+(`stop-wrap.mjs`, `stop-verify.mjs`, "non-stop"); "/" is deliberately excluded from that rule so
+"does stop/pause still work?" keeps matching, and a trailing "." only reads as an extension when
+a letter or digit follows, so "please stop." is untouched.
+
+**No trigger vocabulary was removed and no latch behavior softened** — the change narrows the
+INPUT the matcher reads. `prompt-hooks.test.mjs` pins all five cases both as predicate
+assertions and as end-to-end runs of the real hook process against the verbatim incident
+payloads, checking `hold.json` on disk: Mason typing "stop" latches; a peer block does not; a
+blockquoted report does not; naming `stop-wrap.mjs` does not; and Mason's "pause" in the same
+message as a peer block still latches. A peer message is also proven not to clear a latched
+hold while Mason's own next message still does, and a source assertion pins that the hook keeps
+calling `authoredByMason(payload?.prompt)` so a future edit can't silently revert it to the raw
+prompt. Mutation-tested in both directions: restoring the raw-prompt match fails the peer-block
+case, and deleting the identifier lookarounds fails the filename case.
+
+Both hold-latch hooks were already wired on the Codex side through the portable adapter and
+still are — `scripts/agent-manifest-parity.mjs` passes, no asymmetry declared. `stop-wrap.mjs`
+was inspected and is NOT involved: it is the Stop hook that lists uncommitted work and does no
+prompt phrase matching.
+
 ## 2026-08-26 — sql-safety and status-enum-check also judge the real post-edit file
 
 Follow-up closing the gap the "Migration guards judge the real post-edit file on CRLF

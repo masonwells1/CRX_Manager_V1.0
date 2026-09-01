@@ -6,6 +6,7 @@ import { useToast } from '../ui/Toast';
 import Button from '../ui/Button';
 import ConfirmModal from '../ui/ConfirmModal';
 import { Sentry } from '../../lib/sentry';
+import { activeInvoiceCoversDelivery, fetchActiveInvoiceCoveragePages } from '../../lib/deliveryInvoiceCoverage';
 
 interface NegativeInvRow {
   id: string;
@@ -112,6 +113,7 @@ export default function IntegrityCleanupPanel() {
   const [negatives, setNegatives] = useState<NegativeInvRow[]>([]);
   const [overReceived, setOverReceived] = useState<OverReceivedRow[]>([]);
   const [unbilled, setUnbilled] = useState<UnbilledDeliveryRow[]>([]);
+  const [invoiceCoverageFailed, setInvoiceCoverageFailed] = useState(false);
   const [manufactured, setManufactured] = useState<ManufacturedRow[]>([]);
   const [alerts, setAlerts] = useState<IntegrityAlertRow[]>([]);
   const [resolveBusy, setResolveBusy] = useState<Record<string, boolean>>({});
@@ -124,6 +126,7 @@ export default function IntegrityCleanupPanel() {
 
   const fetchAll = useCallback(async () => {
     setRefreshing(true);
+    setInvoiceCoverageFailed(false);
     try {
       // F3 fix: Promise.allSettled instead of Promise.all so a single query
       // failure (e.g. the manufactured_at_delivery query erroring during the
@@ -271,35 +274,42 @@ export default function IntegrityCleanupPanel() {
         const orderIds = allCompleted.map((d) => d.order_id);
         if (orderIds.length > 0) {
           // U2 #34: bill-tracking is per-DELIVERY, not per-order. A delivery is "billed"
-          // only if an active invoice is tied to THIS delivery, or an order-level invoice
+          // only if an active non-credit invoice is tied to THIS delivery, or an order-level invoice
           // (delivery_id IS NULL) covers the whole order. An invoice tied to a DIFFERENT
           // delivery on the same order must NOT hide this delivery — mirrors the
           // complete_delivery auto-invoice guard.
-          const { data: invoiceRows } = await supabase
-            .from('invoices')
-            .select('order_id, delivery_id')
-            .in('order_id', orderIds)
-            .not('status', 'in', '("voided","cancelled")');
-          const invRows = (invoiceRows || []) as { order_id: string; delivery_id: string | null }[];
-          const billedDeliveryIds = new Set(invRows.filter((i) => i.delivery_id).map((i) => i.delivery_id as string));
-          const orderLevelBilledOrderIds = new Set(invRows.filter((i) => !i.delivery_id).map((i) => i.order_id));
-          const filtered = allCompleted.filter((d) => !billedDeliveryIds.has(d.id) && !orderLevelBilledOrderIds.has(d.order_id));
-          setUnbilled(
-            filtered.map((d) => {
-              const c = Array.isArray(d.customer) ? d.customer[0] : d.customer;
-              return {
-                id: d.id,
-                delivery_number: d.delivery_number,
-                order_id: d.order_id,
-                customer_name: c?.farm_name || 'Unknown',
-                completed_at: d.completed_at,
-                item_count: d.items?.length || 0,
-              };
-            }),
-          );
+          const { data: invoiceRows, error: invoiceCoverageError } = await fetchActiveInvoiceCoveragePages(orderIds);
+          if (invoiceCoverageError) {
+            Sentry.captureException(invoiceCoverageError);
+            toast('error', 'Failed to verify invoice coverage. Unbilled delivery results are hidden; refresh to try again.');
+            setInvoiceCoverageFailed(true);
+            setUnbilled([]);
+          } else {
+            const invRows = invoiceRows || [];
+            const filtered = allCompleted.filter((d) => !invRows.some((invoice) =>
+              activeInvoiceCoversDelivery(invoice, d.id, d.order_id)
+            ));
+            setUnbilled(
+              filtered.map((d) => {
+                const c = Array.isArray(d.customer) ? d.customer[0] : d.customer;
+                return {
+                  id: d.id,
+                  delivery_number: d.delivery_number,
+                  order_id: d.order_id,
+                  customer_name: c?.farm_name || 'Unknown',
+                  completed_at: d.completed_at,
+                  item_count: d.items?.length || 0,
+                };
+              }),
+            );
+          }
         } else {
           setUnbilled([]);
         }
+      } else {
+        if (unbilledRes.error) Sentry.captureException(unbilledRes.error);
+        setInvoiceCoverageFailed(true);
+        setUnbilled([]);
       }
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
@@ -645,7 +655,9 @@ export default function IntegrityCleanupPanel() {
           row's button creates a draft invoice from the delivered quantities — same logic
           new completions use today.
         </p>
-        {unbilled.length === 0 ? (
+        {invoiceCoverageFailed ? (
+          <p className="text-sm text-amber-700 ml-7">Could not verify invoice coverage — refresh to try again.</p>
+        ) : unbilled.length === 0 ? (
           <p className="text-sm text-gray-500 ml-7">No unbilled completed deliveries.</p>
         ) : (
           <div className="rounded-lg border border-blue-200 bg-blue-50 overflow-hidden">

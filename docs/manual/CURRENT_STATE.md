@@ -1,29 +1,23 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-08-26 ~21:30 UTC for the migration ledger only** — read-only re-read
-after the `20260826150000` apply: **977 ledger rows**, `max(version)` `20260826205935`, and
-current live effective ordering name high-water **`20260826150000`**
-(`20260826150000_fix_save_job_comment_refusal_count`, history row 893, **applied live
-2026-08-26 20:59:35 UTC**). That apply superseded the earlier reading this header carried
-(976 rows / high-water `20260820120000`, taken while row 893 was still a candidate) — kept
-below for provenance, per this file's convention. Superseded text follows: re-read read-only
-on 2026-08-26 while landing the COMMENT-only candidate `20260826150000` (history row
-893, then NOT applied): still **976 ledger rows**, `max(version)` `20260825142708`, newest name
-`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals` — every figure unchanged
-from the 2026-08-25 reading below. Original stamp text follows — a read-only
-re-read. **The live ledger has 976 rows**, `max(version)` `20260825142708`, and current live
-effective ordering high-water `20260820120000` (name
-`20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`).
+**Last verified: 2026-08-27 11:43:53 UTC for the migration ledger and schema shape.** A durable
+read-only capture records **978 ledger rows**. The matching live-introspection registry records
+`migrations_high_water` **`20260827113443`**, with
+`20260826220000_quote_version_restore_trust_boundary` as the latest applied authored name; the
+current effective ordering name high-water is therefore **`20260826220000`**. The same registry
+records `quote_versions.restore_trusted_at`, so the quote-version trust migration is **applied
+live** and its schema marker exists. This evidence does not include a fresh post-apply read of the
+five routine bodies or their grants; the 2026-08-26 pre-apply fingerprint paragraph is superseded,
+not promoted into post-apply proof.
 
-**Also read live 2026-08-26, for the pending `20260826220000_quote_version_restore_trust_boundary`
-(PR #401; renumbered from `20260825190000` by PR #499 after the `20260826150000` COMMENT-only
-apply at 20:59:35 UTC moved the ledger name high-water past the old stamp — 977 rows now, see
-history entry 892 for the causal record):** `quote_versions.restore_trusted_at` is **absent** (the migration is unapplied), the
-table holds **3 rows across 2 quotes**, and all five routines of the quote-version trust chain
-(`create_quote_version`, `restore_quote_version`, `_create_quote_version_owner_impl`,
-`_restore_quote_version_owner_impl`, `_restore_quote_version_below_cost_impl_20260810`) have
-exactly **one overload each** with live normalized-body fingerprints matching the migration's
-precondition pins — so its preconditions hold and its blast radius is unchanged.
+The prior header readings are retained as provenance: 977 rows / `20260826205935` / authored
+high-water `20260826150000` after the COMMENT-only apply, and before that 976 rows /
+`20260825142708` / authored high-water `20260820120000`. They are historical and must not be used
+as the current ordering boundary.
+
+The PR #361 return-credit function/schema surface was also re-read from a fresh live schema dump on
+2026-08-27. That separate read supports its candidate preconditions; it does not replace the newer
+978-row ledger/schema capture above.
 
 All four migrations of the draw-down chain are applied live: the cutover barrier (ledger version
 `20260824185408`) and, later on 2026-08-24 with Mason's explicit in-chat approval, the tier split
@@ -38,9 +32,10 @@ draw-down rollout closed. Its full apply record — approval, proofs, postflight
 history row 891 and the `KNOWN_ISSUES.md` entry, both landed by PR #475 from the session that ran
 it. This document states only the ledger fact and defers to those.
 
-**The schema registry matches live.** `.claude/schema-registry.json` records `migrations_high_water`
-`20260825142708`, refreshed after the `save_job` apply. (It was briefly one migration behind, at the
-`20260825034622` draw-down boundary; PR #475 closed that gap.)
+**Live schema evidence is newer than this branch's tracked registry.** The live-introspection
+registry generated 2026-08-27 records `migrations_high_water` `20260827113443` and the trust-marker
+column. This branch's `.claude/schema-registry.json` remains at `20260825142708`; its refresh belongs
+to a separate active product-data worktree and is intentionally not copied into this change.
 
 **Booking draws are RESUMED** — Mason released the pause in chat on 2026-08-25. The decision, the
 evidence it rests on, and what was explicitly *not* proven are recorded in
@@ -63,14 +58,71 @@ parked, written-but-not-applied, or awaiting approval is **superseded by the led
 it applied live on 2026-08-25. Those older lines are left in place as provenance and were not
 individually rewritten in this pass.
 
-**Section 9 candidate refresh, 2026-08-26 UTC.** Live `get_ap_aging(date)` remains the four-column
-bill-date implementation and live `get_ap_dashboard_summary(text)` remains the rolling 30-day
-implementation, confirming that the two Section 9 remediation migrations are not live. Their
-cutover preflight currently sees zero active unbound Section 9 idempotency receipts. The unchanged
-SQL bodies are now stamped `20260826221000` and `20260826222000`, immediately after the pending
-`20260826220000` quote-trust prerequisite, so their release order is forward of the live
-`20260826150000` name high-water. This was a limited read-only catalog check; it does not restamp
-unrelated operational claims below.
+**OWNER DECISION 2026-08-31 — DEFERRED, DO NOT APPLY NOW.** Keep the six-file return-credit chain
+`20260827041000` through `20260827041500` unapplied until Mason explicitly reopens its production
+rollout in a future conversation. The source files remain unchanged under `supabase/migrations/`;
+their presence in the repository is not authorization to apply them. A future rollout must rerun
+the then-current safety gates. If a newer migration has overtaken these timestamps, restamp all six
+above the current high-water, update every pinned chain reference/hash, and re-review the restamped
+artifacts before pushing/applying them in order. The rejected `20260827223000` ledger-order trigger
+is not part of this deferred queue.
+
+**PR #361 return-credit candidate — not applied.** The candidate migrations
+`20260827041000_align_recognized_invoice_report_statuses` and
+`20260827041100_rebuild_return_credit_cogs_reversal`, plus the follow-up
+`20260827041200_exclude_return_credits_from_delivery_invoice_gate` and the delivery-surface alignment
+`20260827041300_align_return_credit_delivery_surfaces`, plus the order-level alignment
+`20260827041400_align_return_credit_order_invoice_gates`, and the generated-invoice lineage/cutover finish
+`20260827041500_preserve_generated_invoice_lineage_and_finish_cutover`, are absent from the live ledger. Production has
+zero credited returns, zero returns linked to credit invoices, and zero recognized return-credit
+memos, so the defect is real but latent. Current live return-credit issuance still creates a
+header-only credit, while the P&L and monthly reports use different recognized invoice-status sets.
+The first candidate aligns invoice-basis P&L, monthly, and customer year-end reporting on
+`posted`/`overdue`/`paid` and restricts year-end customer financial data to admins or the assigned
+sales rep, including through the batch wrapper.
+
+The second candidate writes immutable credit cost-lot lines, bounds reversal to COGS previously
+recognized from the source sale, serializes source/credit lifecycle changes, and protects normal
+void, batch-void, and unapply cleanup. Per Mason's 2026-08-26 decision, an issued return credit uses
+the season for the current America/Chicago business date so prior customer year-end summaries never restate. A late return can therefore
+show negative product usage in the current season when the original purchase belongs to an earlier
+season; that is the accepted simplicity tradeoff. A 2026-08-27 read-only production check found one
+open restock row, exactly the pinned legacy `15 ea` RMA that converts to `37.5 Gal`, and zero unhandled
+warehouse-unit mismatches. A fresh read-only live-schema clone in disposable PostgreSQL passed the
+paid/overdue/posted multi-cost chain, current-season boundary, fractional-cent allocation, concurrency
+and lifecycle mutants. The third candidate prevents the order-linked credit
+memo from suppressing either a later delivery's automatic draft invoice or the manual recovery path
+for a completed unbilled delivery. The fourth keeps the dashboard action queue and the void/cancel
+warning paths on that same active-sales-invoice definition and makes the complete-delivery gate ignore
+soft-deleted invoices. The fifth aligns both order-level invoice creators with that same active,
+non-deleted, non-credit definition. The sixth preserves immutable source-line IDs and historical cost
+when a generated invoice is edited, then removes the temporary cutover barrier only after postflight.
+The latest recorded disposable-schema run counted 56 load-bearing predicates and ended in
+`SMOKE_PASS_ROLLBACK` with zero residue,
+including an ordinary non-credit invoice hard-delete proof so the new trigger cannot silently cancel
+unrelated deletes and a real completion proof that preserves return-credit tote provenance.
+Apply all six files in order only through the repository's guarded migration runner or the Supabase
+migration operation, never through the ad-hoc SQL channel.
+The sixth file closes the former Invoice Detail lineage prerequisite in `KNOWN_ISSUES.md`; merge still
+does not activate any candidate migration, and live apply remains a separate explicit-approval gate.
+After an approved live apply, regenerate the schema registry and Supabase-derived type artifacts from
+live, then verify they contain nullable `invoice_items.return_credit_cogs_cents bigint` and
+`invoice_items.return_credit_source_item_id uuid` before closeout.
+
+**Section 9 candidate refresh, 2026-08-26 UTC; migration stamps re-checked live 2026-08-31.**
+Live `get_ap_aging(date)` remains the four-column bill-date implementation and live
+`get_ap_dashboard_summary(text)` remains the rolling 30-day implementation, confirming that the
+two Section 9 remediation migrations are not live. That routine reading and the cutover-preflight
+observation of zero active unbound Section 9 idempotency receipts are both the 2026-08-26 read and
+have not been repeated since. The unchanged SQL bodies are stamped `20260826221000` and
+`20260826222000`, immediately after `20260826220000_quote_version_restore_trust_boundary`.
+**That prerequisite is no longer pending.** A read-only `list_migrations` on 2026-08-31 returned
+**978 ledger rows**, `max(version)` `20260827113443`, and current live effective ordering name
+high-water **`20260826220000`** — the quote-trust migration is applied live, and neither
+`20260826221000` nor `20260826222000` is present. Both Section 9 stamps therefore remain strictly
+forward of the live name high-water and need no restamp, but an unrelated sibling apply can
+overtake them at any time, so re-read the ledger immediately before any apply. This was a limited
+read-only catalog/ledger check; it does not restamp unrelated operational claims below.
 
 **Superseded 2026-08-22 header, kept for provenance — was last verified 2026-08-22 UTC for the ledger only** — a read-only re-read returning 971 rows, high-water `20260816174353`, 345 of 971 names timestamp-prefixed, every figure **unchanged** from the previous pass; that pass also read the four live `job_chemicals` rows while measuring the blast radius of parked migration `20260820120000` (history row 891), which is written and proven but **not applied**. The `quote_versions` write surface, the return-idempotency helper contract, and the section 2 counts were last read live **2026-08-19 UTC** and are carried forward on that reading, not re-verified since. **The live ledger has 971 rows.** Its highest `version` is `20260816174353`, carrying submitted migration name `20260813080000_lock_quote_versions_writes_to_rpc`, which is also the highest *timestamp-prefixed* `name` — so both orderings agree on the same row. (Only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is
 part of the stored ledger name); `docs/reference/migration-history.md` uses the 14-digit definition and this file now matches it. A plain `max(name)` returns the slug `year_end_summary`, so the ordering claim is about the prefixed subset.) That migration (**CRX-SEC-1**, history row 886) is the security fix that closes the client-writable path into `public.quote_versions`. Its apply *time* — 2026-08-16 17:43:53 UTC — is **read off the version stamp, not observed**: `supabase_migrations.schema_migrations` has no timestamp column (`version, statements, name, created_by, idempotency_key, rollback`), so the clock time is inference from Supabase's version-assignment convention, while the *fact* of the apply is the ledger row itself. Five documents were stale about it, in three different ways, and only **two** of them called it unapplied outright: history row 886 (`LOCAL CANDIDATE — NOT APPLIED`) and the RLS matrix in `docs/reference/database-schema.md` (`LOCAL ONLY pending apply`). The matrix in `docs/workflows/RLS_SECURITY_GUIDE.md` was stale a third way — it described the pre-fix write model with no pending marker at all, so nothing in it said "unapplied" to notice. This document and `KNOWN_ISSUES.md` were stale by omission, carrying no entry for the fix at all behind a ledger high-water nine applies out of date. (Each of those five statements is checkable against `origin/main` at `699f5c61`.) They were **not** found together, which is the point. A doc pass on 2026-08-18 found three (this document, `KNOWN_ISSUES.md`, history row 886); adversarial review then found a fourth (**the RLS Policy Matrix in `docs/reference/database-schema.md`**); CodeRabbit then found a fifth (**the matrix in `docs/workflows/RLS_SECURITY_GUIDE.md`**). Each pass corrected what it was pointed at and missed the next one, which is why the whole of both matrices was eventually reconciled in one sweep rather than row by row. All five are corrected in PR #420; this paragraph corrects this document. Post-apply live proof: `quote_versions` carries exactly one policy, `qversions_select`, and `has_table_privilege` for `authenticated` returns INSERT/UPDATE/DELETE **false**, SELECT true. Stated precisely, because an earlier draft of this line said "`authenticated` holds SELECT only" and that is **wrong**: `pg_class.relacl` is `{postgres=arwdDxtm/postgres,anon=m/postgres,authenticated=rm/postgres,service_role=arwdDxtm/postgres,metabase_ro=r/postgres}`, so `authenticated` holds SELECT **plus MAINTAIN** and `anon` holds **MAINTAIN** (not nothing). MAINTAIN carries no read or write of rows — it permits VACUUM/ANALYZE/CLUSTER/REINDEX/LOCK — and the migration retains it deliberately, so the security conclusion is unchanged; the earlier wording was wrong because it was taken from `information_schema.role_table_grants`, which does not report MAINTAIN at all. `metabase_ro` also holds SELECT but has no policy and does not bypass RLS, so it reads zero rows. The migration immediately before it, `20260813070000_pin_return_idempotency_helper_contract` (ledger `20260813011751`), is assertion-only — it changes no table, function body or business row — and its contract still holds live: `check_idempotency_intent` has exactly one public overload, is `postgres`-owned `SECURITY DEFINER` on `search_path=public, pg_temp`, with no anon/authenticated/service_role EXECUTE. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, so the registry matches this ledger high-water and was **not** re-derived in this pass. The section 2 operational counts below were re-read live in this same session and are restamped. The date on them moved from 2026-08-18 to 2026-08-19 **without a second read**: it is the same moment relabelled from local time to UTC, which is the convention every stamp in this file uses and which section 2 was already using.
