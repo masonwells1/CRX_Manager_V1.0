@@ -98,8 +98,10 @@ reviewed source files remain unchanged under `supabase/migrations/`, but Mason i
 or requesting a production rollout in this session.
 **Why:** Preserve the reviewed repository artifacts while making the production boundary explicit.
 **What this forbids/implies:** Repository merge is not a database apply. A future rollout requires
-fresh authorization, the migration safety gates in force at that time, and a governed push/apply of
-all six files in order. The rejected `20260827223000` ledger-order trigger is not part of this queue.
+fresh authorization and the migration safety gates in force at that time. If a newer migration has
+overtaken this chain's timestamps, restamp all six above the current high-water, update every pinned
+chain reference/hash, and re-review the restamped artifacts before a governed push/apply in order.
+The rejected `20260827223000` ledger-order trigger is not part of this queue.
 
 ## 2026-08-31 — retire the production migration approval gate; the worktree guard carve-out stays closed
 

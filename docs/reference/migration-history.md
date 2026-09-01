@@ -33,9 +33,11 @@ greater than the live effective high-water.
 
 **Owner deferral — 2026-08-31 (applies to rows 894-899):** all six reviewed source files remain
 unchanged under `supabase/migrations/`, but they are not applied live and this repository change does
-not authorize an apply. They require a separately authorized future governed database push/application,
-in order, after rerunning the migration safety gates in force at that time. Mason deferred that
-production action for now.
+not authorize an apply. They require a separately authorized, governed database push/application in
+the future, in order, after rerunning the migration safety gates in force at that time. If any newer
+migration has overtaken these authored timestamps, restamp all six above the current high-water,
+update every pinned chain reference/hash, and re-review the restamped artifacts first. Mason deferred
+that production action for now.
 
 **Ordering dependency:** merged-but-unapplied migration
 `20260826220000_quote_version_restore_trust_boundary.sql` must apply before this six-file chain.

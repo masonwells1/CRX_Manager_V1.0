@@ -5,6 +5,8 @@ Recorded Mason's decision to leave the ordered six-file return-credit migration 
 unchanged under `supabase/migrations/` as repository candidates; merging this documentation does
 not apply them to production.
 
-A future production rollout must be separately authorized, rerun the migration safety gates in
-force at that time, and push/apply all six files in order through the governed migration channel.
+A future production rollout must be separately authorized and rerun the migration safety gates in
+force at that time. If a newer migration has overtaken this chain's timestamps, restamp all six
+files above the then-current high-water, update every pinned chain reference/hash, and re-review the
+restamped artifacts before pushing/applying all six in order through the governed migration channel.
 No live database write or migration apply was performed by this change.

@@ -62,8 +62,10 @@ individually rewritten in this pass.
 `20260827041000` through `20260827041500` unapplied until Mason explicitly reopens its production
 rollout in a future conversation. The source files remain unchanged under `supabase/migrations/`;
 their presence in the repository is not authorization to apply them. A future rollout must rerun
-the then-current safety gates and push/apply all six files in order through the governed migration
-channel. The rejected `20260827223000` ledger-order trigger is not part of this deferred queue.
+the then-current safety gates. If a newer migration has overtaken these timestamps, restamp all six
+above the current high-water, update every pinned chain reference/hash, and re-review the restamped
+artifacts before pushing/applying them in order. The rejected `20260827223000` ledger-order trigger
+is not part of this deferred queue.
 
 **PR #361 return-credit candidate — not applied.** The candidate migrations
 `20260827041000_align_recognized_invoice_report_statuses` and
