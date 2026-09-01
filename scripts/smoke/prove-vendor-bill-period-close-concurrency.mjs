@@ -6,8 +6,9 @@
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { waitForDatabaseReadiness } from './vendor-bill-period-close-readiness.mjs';
@@ -58,6 +59,14 @@ const SIBLING_SMOKES = [
 const ADMIN = '00000000-0000-0000-0000-0000000000a1';
 const KEY = 818181;
 const BARRIER_SECONDS = 8;
+const SECTION9_LOCK_TIMEOUT_HOLD_SECONDS = 12;
+const SECTION9_LEGACY_RECEIPT_PREDICATE = `
+ WHERE expires_at >= now()
+   AND operation IN (
+     'create_vendor_bill', 'update_vendor_bill', 'record_vendor_payment',
+     'void_vendor_payment', 'void_vendor_bill', 'receive_po_items'
+   )
+   AND (request_actor_id IS NULL OR request_fingerprint IS NULL)`;
 
 function run(args, { input, fail = false } = {}) {
   const r = spawnSync('docker', args, { cwd: ROOT, encoding: 'utf8', input, maxBuffer: 60 * 1024 * 1024 });
@@ -116,6 +125,28 @@ function jsonResult(r, label) {
   return JSON.parse(line);
 }
 function applyFile(name) { return sql(`BEGIN;\n\\i /tmp/${name}\nCOMMIT;`); }
+function copySql(local, remote) {
+  const staged = path.join(tmpdir(), `${NAME}-${remote}`);
+  let operationError;
+  let cleanupError;
+  try {
+    writeFileSync(staged, readFileSync(local, 'utf8').replaceAll('\r\n', '\n'), 'utf8');
+    run(['cp', staged, `${NAME}:/tmp/${remote}`]);
+  } catch (error) {
+    operationError = error;
+  } finally {
+    try {
+      unlinkSync(staged);
+    } catch (error) {
+      if (error.code !== 'ENOENT') cleanupError = error;
+    }
+  }
+  if (operationError) {
+    if (cleanupError) console.error(`Failed to clean staged SQL ${staged}:`, cleanupError);
+    throw operationError;
+  }
+  if (cleanupError) throw cleanupError;
+}
 function baselineArtifact(suffix) {
   const hits = Object.keys(BASELINE_MANIFEST.artifacts ?? {}).filter((name) => name.endsWith(suffix));
   assert.equal(hits.length, 1, `expected exactly one baseline artifact *${suffix}, found ${hits.join(', ') || 'none'}`);
@@ -181,7 +212,7 @@ assert.ok(
 function applyMigration(local, marker) {
   const name = path.basename(local);
   const remote = `${marker}_${name}`;
-  run(['cp', local, `${NAME}:/tmp/${remote}`]);
+  copySql(local, remote);
   const ownsTransaction = /^[ \t]*BEGIN[ \t]*;/mi.test(readFileSync(local, 'utf8'));
   if (ownsTransaction) sql(`\\i /tmp/${remote}`);
   else applyFile(remote);
@@ -191,11 +222,47 @@ function applyMigration(local, marker) {
 function expectValidationFailure(local, marker, expectedError) {
   const name = path.basename(local);
   const remote = `${marker}_${name}`;
-  run(['cp', local, `${NAME}:/tmp/${remote}`]);
+  copySql(local, remote);
   const result = sql(`BEGIN;\n\\i /tmp/${remote}\nCOMMIT;`, { fail: true });
   assert.notEqual(result.status, 0, `${marker}: validation migration unexpectedly succeeded`);
   assert.match(`${result.stdout}\n${result.stderr}`, new RegExp(expectedError), `${marker}: wrong validation failure`);
   console.log(`CANDIDATE_VALIDATION_MUTATION_REJECTED ${marker}`);
+}
+
+function restoreLiveCrLfCloseRemainder() {
+  const definingPath = path.join(
+    ROOT,
+    'supabase',
+    'migrations',
+    '20260721014858_20260721010000_govern_invoice_order_money_lifecycle.sql',
+  );
+  const source = readFileSync(definingPath, 'utf8').replace(/\r\n/g, '\n');
+  const needle = 'CREATE FUNCTION public._close_undelivered_order_remainder_20260718(';
+  assert.equal(source.split(needle).length - 1, 1, 'close-remainder definition is ambiguous');
+  const start = source.indexOf(needle);
+  const tag = /\$([A-Za-z_]*)\$/.exec(source.slice(start));
+  assert.ok(tag, 'close-remainder body has no dollar quote');
+  const bodyStart = start + tag.index + tag[0].length;
+  const bodyEnd = source.indexOf(tag[0], bodyStart);
+  assert.ok(bodyEnd > bodyStart, 'close-remainder body is unterminated');
+  const body = source.slice(bodyStart, bodyEnd).replace(/\n/g, '\r\n');
+  assert.equal(body.length, 15910, 'close-remainder live CRLF body length drifted');
+  assert.equal(
+    createHash('md5').update(body, 'utf8').digest('hex'),
+    'e2d4b46c47be7561a8829191c30dc0a7',
+    'close-remainder live CRLF body hash drifted',
+  );
+  sql(`
+CREATE OR REPLACE FUNCTION public._close_undelivered_order_remainder_20260718(
+  p_order_id uuid, p_actor uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $live_crlf_close$${body}$live_crlf_close$;
+`);
+  console.log('FULL_SCHEMA_LIVE_BODY_RESTORED _close_undelivered_order_remainder_20260718 crlf=true');
 }
 
 try {
@@ -212,19 +279,49 @@ try {
   adminSql('CREATE SCHEMA IF NOT EXISTS auth; CREATE TABLE IF NOT EXISTS auth.users(id uuid PRIMARY KEY);');
   run(['cp', baselineArtifact('_extensions.sql'), `${NAME}:/tmp/extensions.sql`]);
   run(['cp', baselineArtifact('_acl_lockdown.sql'), `${NAME}:/tmp/acl.sql`]);
+  run(['cp', baselineArtifact('_platform_overlay.sql'), `${NAME}:/tmp/platform.sql`]);
+  run(['cp', baselineArtifact('_migration_history.sql'), `${NAME}:/tmp/migration-history.sql`]);
   applyFile('extensions.sql');
   const decoded = spawnSync('node', ['scripts/decompress-schema-baseline.mjs'], { cwd: ROOT, maxBuffer: 60 * 1024 * 1024 });
   assert.equal(decoded.status, 0, decoded.stderr?.toString());
   run(psqlArgs(), { input: decoded.stdout });
+  adminSql(`
+CREATE SCHEMA IF NOT EXISTS storage;
+CREATE TABLE IF NOT EXISTS storage.buckets (
+  id text PRIMARY KEY, name text NOT NULL, public boolean NOT NULL DEFAULT false,
+  file_size_limit bigint, allowed_mime_types text[]
+);
+CREATE TABLE IF NOT EXISTS storage.objects (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text NOT NULL,
+  name text NOT NULL, owner_id text
+);
+CREATE OR REPLACE FUNCTION storage.foldername(name text)
+RETURNS text[] LANGUAGE sql IMMUTABLE
+AS $$ SELECT string_to_array(name, '/') $$;
+CREATE OR REPLACE FUNCTION storage.filename(name text)
+RETURNS text LANGUAGE sql IMMUTABLE
+AS $$ SELECT split_part(name, '/', array_length(string_to_array(name, '/'), 1)) $$;
+`);
   applyFile('acl.sql');
+  adminSql('\\i /tmp/platform.sql');
+  sql(`
+CREATE SCHEMA IF NOT EXISTS supabase_migrations;
+CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
+  version text PRIMARY KEY,
+  name text NOT NULL,
+  statements text[]
+);
+\\i /tmp/migration-history.sql
+`);
   for (const local of preCandidateMigrations) applyMigration(local, 'pre_candidate');
   console.log(`PRE_CANDIDATE_POST_BASELINE_REPLAY_PASS count=${preCandidateMigrations.length} baseline_high_water=${BASELINE_MANIFEST.migrations_high_water}`);
   // The concurrency contract is entirely in public/auth. The storage platform
   // overlay is intentionally not needed by these RPC paths on a networkless
   // disposable PostgreSQL image.
-  // Migration-ledger restoration is unrelated to function execution in this
-  // disposable proof and needs Supabase's platform schema, so omit it here.
-  sql(`${claims()} INSERT INTO auth.users(id) VALUES ('${ADMIN}'),('00000000-0000-0000-0000-0000000000a2') ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('${ADMIN}','period-proof@example.invalid','admin',true),('00000000-0000-0000-0000-0000000000a2','period-proof-applicator@example.invalid','applicator',true) ON CONFLICT (id) DO UPDATE SET is_active=true;`);
+  // The verified migration-ledger baseline is restored because later
+  // post-baseline migration preflights read its high-water mark. No platform
+  // mutation or network access is involved.
+  sql(`${claims()} INSERT INTO auth.users(id,email,raw_user_meta_data) VALUES ('${ADMIN}','period-proof@example.invalid','{"full_name":"Period Proof Admin","role":"admin"}'::jsonb) ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('${ADMIN}','period-proof@example.invalid','admin',true) ON CONFLICT (id) DO UPDATE SET role=EXCLUDED.role,is_active=true;`);
 
   const vendor = scalar(`INSERT INTO public.vendors(name) VALUES ('[PROOF] period vendor ${process.pid}') RETURNING id;`);
   const date = '2025-01-15', end = '2025-01-31', monthKey = 2025 * 12 + 1 - 1;
@@ -263,8 +360,114 @@ try {
 
     applyMigration(local, 'candidate');
   }
-  for (const local of postCandidateMigrations) applyMigration(local, 'post_candidate');
+  for (const local of postCandidateMigrations) {
+    if (path.basename(local) === '20260817120000_carry_allocated_line_cents_through_lifecycle.sql') {
+      restoreLiveCrLfCloseRemainder();
+    }
+    if (path.basename(local) === '20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard.sql') {
+      const timeoutRemote = `section9-lock-timeout-${path.basename(local)}`;
+      copySql(local, timeoutRemote);
+      const timeoutHolder = session(`
+BEGIN;
+SET application_name='section9-lock-timeout-holder';
+INSERT INTO public.idempotency_keys (idempotency_key, operation, result)
+VALUES ('section9-lock-timeout-held-receipt', 'record_vendor_payment', '{"payment_id":"00000000-0000-0000-0000-000000000098"}'::jsonb);
+SELECT 'SECTION9_LOCK_TIMEOUT_HOLDER_READY';
+SELECT pg_sleep(${SECTION9_LOCK_TIMEOUT_HOLD_SECONDS});
+COMMIT;
+`, 'SECTION9_LOCK_TIMEOUT_HOLDER_READY');
+      await timeoutHolder.ready;
+      const timeoutAttempt = session(`
+BEGIN;
+SET application_name='section9-lock-timeout-migration';
+SELECT 'SECTION9_LOCK_TIMEOUT_ATTEMPT_STARTED';
+\\i /tmp/${timeoutRemote}
+COMMIT;
+`, 'SECTION9_LOCK_TIMEOUT_ATTEMPT_STARTED');
+      await timeoutAttempt.ready;
+      const [timeoutHolderResult, timeoutAttemptResult] = await Promise.all([
+        timeoutHolder.done,
+        timeoutAttempt.done,
+      ]);
+      assert.equal(timeoutHolderResult.code, 0, timeoutHolderResult.err);
+      expectError(
+        timeoutAttemptResult,
+        'canceling statement due to lock timeout',
+        'Section 9 bounded cutover lock',
+      );
+      sql(`DELETE FROM public.idempotency_keys WHERE idempotency_key='section9-lock-timeout-held-receipt';`);
+      console.log('CANDIDATE_SECTION9_BOUNDED_CUTOVER_LOCK_TIMEOUT_PASS');
+
+      sql(`CREATE FUNCTION public.create_vendor_bill(p_decoy text) RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT '{}'::jsonb $$;`);
+      try {
+        expectValidationFailure(local, 'section9-intent-decoy-overload', 'SECTION9_UNEXPECTED_PUBLIC_OVERLOADS: create_vendor_bill');
+      } finally {
+        sql(`DROP FUNCTION IF EXISTS public.create_vendor_bill(text);`);
+      }
+      console.log('CANDIDATE_SECTION9_INTENT_DECOY_OVERLOAD_REJECTED_PASS');
+      sql(`DELETE FROM public.idempotency_keys${SECTION9_LEGACY_RECEIPT_PREDICATE};`);
+      const cutoverRemote = `section9-cutover-${path.basename(local)}`;
+      copySql(local, cutoverRemote);
+      const legacyWriter = session(`
+BEGIN;
+SET application_name='section9-legacy-receipt-writer';
+INSERT INTO public.idempotency_keys (idempotency_key, operation, result)
+VALUES ('section9-cutover-held-receipt', 'record_vendor_payment', '{"payment_id":"00000000-0000-0000-0000-000000000099"}'::jsonb);
+SELECT 'SECTION9_LEGACY_RECEIPT_HELD';
+SELECT pg_sleep(${BARRIER_SECONDS});
+COMMIT;
+`, 'SECTION9_LEGACY_RECEIPT_HELD');
+      await legacyWriter.ready;
+      const cutover = session(`
+BEGIN;
+SET application_name='section9-cutover-migration';
+SELECT 'SECTION9_CUTOVER_STARTED';
+\\i /tmp/${cutoverRemote}
+COMMIT;
+`, 'SECTION9_CUTOVER_STARTED');
+      await cutover.ready;
+      await waitForSessionLock('section9-cutover-migration', 'Section 9 cutover waiting for legacy receipt writer');
+      const [legacyWriterResult, cutoverResult] = await Promise.all([legacyWriter.done, cutover.done]);
+      assert.equal(legacyWriterResult.code, 0, legacyWriterResult.err);
+      expectError(cutoverResult, 'SECTION9_ACTIVE_LEGACY_IDEMPOTENCY_RECEIPTS', 'Section 9 drained cutover preflight');
+      console.log('CANDIDATE_SECTION9_CUTOVER_DRAINS_LEGACY_WRITER_PASS');
+      const legacyCount = Number(scalar(`
+SELECT count(*) FROM public.idempotency_keys${SECTION9_LEGACY_RECEIPT_PREDICATE};
+`));
+      assert.ok(legacyCount > 0, 'legacy-receipt mutation proof had no synthetic receipt to remove');
+      sql(`DELETE FROM public.idempotency_keys${SECTION9_LEGACY_RECEIPT_PREDICATE};`);
+      console.log(`CANDIDATE_ACTIVE_LEGACY_RECEIPT_GUARD_PASS removed_disposable=${legacyCount}`);
+    }
+    if (path.basename(local) === '20260826222000_correct_ap_aging_due_date_buckets.sql') {
+      sql(`CREATE FUNCTION public.get_ap_aging(p_decoy text) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT p_decoy $$;`);
+      try {
+        expectValidationFailure(local, 'section9-aging-decoy-overload', 'AP_AGING_UNEXPECTED_PUBLIC_OVERLOADS');
+      } finally {
+        sql(`DROP FUNCTION IF EXISTS public.get_ap_aging(text);`);
+      }
+      console.log('CANDIDATE_SECTION9_AGING_DECOY_OVERLOAD_REJECTED_PASS');
+    }
+    applyMigration(local, 'post_candidate');
+  }
   console.log(`FULL_POST_BASELINE_REPLAY_PASS count=${pendingMigrations.length} baseline_high_water=${BASELINE_MANIFEST.migrations_high_water}`);
+
+  // A request that resolved an old function body before cutover can resume
+  // afterwards. Its private implementation has no binding context, so the
+  // receipt trigger must reject the INSERT and roll back the payment itself.
+  const lateOldBodyBill = scalar(`${bill('section9-late-old-body-bill')}`);
+  const lateOldBody = sql(`${claims()}
+SELECT public._section9_record_vendor_payment_intent_impl_20260826(
+  '${lateOldBodyBill}'::uuid, 100, '${date}'::date, 'check', NULL, NULL,
+  'section9-late-old-body-payment'
+);`, { fail: true });
+  assert.notEqual(lateOldBody.status, 0, 'late old payment body unexpectedly succeeded');
+  assert.match(`${lateOldBody.stdout}\n${lateOldBody.stderr}`, /SECTION9_UNBOUND_IDEMPOTENCY_RECEIPT/);
+  assert.equal(scalar(`SELECT count(*) FROM public.vendor_payments WHERE vendor_bill_id='${lateOldBodyBill}'::uuid`), '0');
+  assert.equal(scalar(`SELECT paid_cents FROM public.vendor_bills WHERE id='${lateOldBodyBill}'::uuid`), '0');
+  assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='section9-late-old-body-payment'`), '0');
+  sql(`DELETE FROM public.vendor_bills WHERE id='${lateOldBodyBill}'::uuid; DELETE FROM public.idempotency_keys WHERE idempotency_key='section9-late-old-body-bill';`);
+  console.log('CANDIDATE_SECTION9_LATE_OLD_BODY_ROLLBACK_PASS');
+
   // The candidate must be visibly present before the registered business chains
   // and two-session schedules run.
   assert.equal(scalar(`SELECT count(*) FROM pg_constraint WHERE conrelid='public.accounting_periods'::regclass AND conname='accounting_periods_whole_calendar_month_check'`), '1');
@@ -304,6 +507,7 @@ try {
   assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='same-key-close' AND operation='close_accounting_period'`), '1');
   sql(`DROP TRIGGER proof_pause_period ON public.accounting_periods; DROP FUNCTION public._proof_pause_period(); DELETE FROM public.accounting_periods WHERE period_start='2025-01-01';`);
   console.log('CANDIDATE_CLOSE_SAME_KEY_SERIALIZATION_PASS');
+  sql(`${claims()} INSERT INTO auth.users(id,email,raw_user_meta_data) VALUES ('00000000-0000-0000-0000-0000000000a2','period-proof-applicator@example.invalid','{"full_name":"Period Proof Applicator","role":"applicator"}'::jsonb) ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-0000000000a2','period-proof-applicator@example.invalid','applicator',true) ON CONFLICT (id) DO UPDATE SET role=EXCLUDED.role,is_active=true;`);
   sql(`INSERT INTO public.products(product_name) VALUES ('[PROOF] sibling smoke product ${process.pid}');`);
   for (const sibling of SIBLING_SMOKES) {
     run(['cp', path.join(ROOT, 'scripts', 'smoke', sibling), `${NAME}:/tmp/${sibling}`]);

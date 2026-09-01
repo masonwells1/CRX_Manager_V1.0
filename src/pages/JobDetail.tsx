@@ -249,7 +249,10 @@ interface ChemRow {
   /** UI-only (NOT persisted): which field the user last drove — so an acreage
    *  change re-derives the OTHER field and never silently rewrites a
    *  hand-entered quantity (Codex P2). 'rate' = quantity follows; 'qty' = rate
-   *  follows; undefined = untouched (a loaded line follows its rate if it has one). */
+   *  follows; undefined = a RELOADED or untouched line, which an acreage change
+   *  leaves EXACTLY AS SAVED — it does NOT follow its rate. That is F06, still
+   *  open by design: see the block above setChemRows and
+   *  `recomputeChemRowForAcres` in src/lib/chemCalculator.ts. */
   driver?: 'rate' | 'qty';
 }
 

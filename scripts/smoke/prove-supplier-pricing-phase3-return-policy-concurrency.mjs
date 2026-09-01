@@ -81,7 +81,7 @@ const schemaArtifactGeneration=schemaArtifact.slice(0,14);
 if(schemaArtifactGeneration!==manifest.migrations_high_water) throw new Error(`baseline manifest is internally inconsistent: schema artifact ${schemaArtifact} is generation ${schemaArtifactGeneration} but migrations_high_water is ${manifest.migrations_high_water}. The post-baseline replay cannot determine what the dump is missing; regenerate supabase/baselines so both agree.`);
 const dumpSha=sha256(path.resolve(dump));
 if(dumpSha!==baselineDumpSha) throw new Error(`refusing to prove against an unbound schema dump: ${path.resolve(dump)} hashes to ${dumpSha}, but this baseline generation (${schemaArtifact}) requires ${baselineDumpSha}. Produce the accepted dump with \`node scripts/decompress-schema-baseline.mjs > public-schema.sql\`.`);
-const files={ extensions:resolveBaseline('_extensions.sql'), aclLockdown:resolveBaseline('_acl_lockdown.sql'), dump:path.resolve(dump), section9:resolveMigration('_section9_po_ap_high_remediation.sql'), stageA:resolveMigration('_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
+const files={ extensions:resolveBaseline('_extensions.sql'), aclLockdown:resolveBaseline('_acl_lockdown.sql'), migrationHistory:resolveBaseline('_migration_history.sql'), dump:path.resolve(dump), section9:resolveMigration('_section9_po_ap_high_remediation.sql'), stageA:resolveMigration('_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
 for(const [k,v] of Object.entries(files)) if(!existsSync(v)) throw new Error(`missing ${k}: ${v}`);
 // The baseline is a point-in-time snapshot, so every migration that landed after
 // its high-water is absent from the restored schema. Proving Phase 3 against that
@@ -142,6 +142,15 @@ try {
   for(const [k,v] of Object.entries(files)) file(v,`${k}.sql`);
   adminSql('CREATE SCHEMA IF NOT EXISTS auth; CREATE TABLE IF NOT EXISTS auth.users(id uuid PRIMARY KEY);');
   apply('extensions.sql'); apply('dump.sql');
+  sql(`
+CREATE SCHEMA IF NOT EXISTS supabase_migrations;
+CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
+  version text PRIMARY KEY,
+  name text NOT NULL,
+  statements text[]
+);
+\\i /tmp/migrationHistory.sql
+`);
   // The dump is hash-bound to the current baseline generation, which is at or
   // past both migrations' high-water, so both must already be in the restored
   // schema. Neither is re-applied here -- both are non-idempotent (CREATE TABLE
@@ -309,7 +318,7 @@ BEGIN
   ) s;
   v_expected :=
     'create_vendor_bill(p_vendor_id uuid, p_purchase_order_id uuid, p_bill_number text, p_bill_date date, p_due_date date, p_payment_terms text, p_subtotal_cents bigint, p_adjustment_cents bigint, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp returns=uuid lang=plpgsql execgrantees=authenticated,service_role owner=<trusted> anonexec=false'
-    ||';get_ap_aging(p_as_of_date date) secdef=true config=search_path=public, pg_temp returns=TABLE(vendor_id uuid, vendor_name text, current_amount bigint, days_31_60 bigint, days_61_90 bigint, over_90 bigint, total_outstanding bigint, bill_count integer) lang=plpgsql execgrantees=authenticated,service_role owner=<trusted> anonexec=false'
+    ||';get_ap_aging(p_as_of_date date) secdef=true config=search_path=public, pg_temp returns=TABLE(vendor_id uuid, vendor_name text, current_amount bigint, days_1_30 bigint, days_31_60 bigint, days_61_90 bigint, over_90 bigint, total_outstanding bigint, bill_count integer) lang=plpgsql execgrantees=authenticated,service_role owner=<trusted> anonexec=false'
     ||';update_vendor_bill(p_bill_id uuid, p_subtotal_cents bigint, p_adjustment_cents bigint, p_bill_date date, p_due_date date, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp returns=jsonb lang=plpgsql execgrantees=authenticated,service_role owner=<trusted> anonexec=false';
   IF coalesce(v_actual,'<none>') <> v_expected THEN
     RAISE EXCEPTION 'SECTION9_AP_ROUTINE_IDENTITY_DRIFTED: %', coalesce(v_actual,'<none>');

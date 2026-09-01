@@ -96,23 +96,27 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // keeps this branch's blob. Inputs verified against the merged working tree
   // with `git hash-object`; outputs taken from the producer test's printed
   // candidate, not hand-computed.
-  // pushLib re-pinned 2026-08-31 (migration source-provenance guard): the
-  // worktree-resolution half of sessionProofDirs was extracted into a new
-  // sessionCheckoutRoots export, and sessionProofDirs now maps its result onto
-  // .claude/session-state. The migration apply gate needs the checkout ROOTS to
-  // locate the repository migration file its SQL must come from, and a second
-  // copy of that resolution would drift — the looser copy becoming the way in.
-  // Behaviour is unchanged (codex-push-lib.test.mjs green; sessionProofDirs
-  // returns the identical set), and RISKY_PATH_RES, RISKY_CONTENT_RE and
-  // contentIsRisky are byte-for-byte untouched. The risky producer-path anchor
-  // this transform verifies is still present exactly once, so the transform is
-  // identity and input == output.
+  // pushLib re-pinned 2026-09-01 (merge of origin/main into PR #533). BOTH sides
+  // moved this file independently and neither pin survives: main's PR #502 extracted
+  // resolveSessionWorktree for the pending-queue root, while this branch extracted
+  // sessionCheckoutRoots for source provenance. The merge is neither blob — the
+  // reconciliation expresses BOTH helpers in terms of the single resolveSessionWorktree
+  // traversal, which is what each side's own comment demanded (a second copy would
+  // drift, and the looser copy becomes the way in).
+  //
+  // codexGuard is untouched by this PR and keeps main's blob. RISKY_PATH_RES,
+  // RISKY_CONTENT_RE and contentIsRisky are byte-for-byte untouched, and the risky
+  // producer-path anchor this transform verifies is still present exactly once, so
+  // the transform remains identity and input == output.
+  //
+  // Both pushLib values below are taken from the producer test's printed candidate,
+  // never hand-computed — that is the sanctioned re-pin procedure.
   codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
-  pushLib: "0ab5abbe7a52c7a46d9a1416b1a22c6195e50ba8",
+  pushLib: "002e434ef46150fe0225b39372d6696f49b7931f",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
-  pushLib: "0ab5abbe7a52c7a46d9a1416b1a22c6195e50ba8",
+  pushLib: "002e434ef46150fe0225b39372d6696f49b7931f",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

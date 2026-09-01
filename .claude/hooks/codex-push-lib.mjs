@@ -1922,21 +1922,26 @@ export function proofSearchDirs(root, listWorktrees) {
 // which is the pre-2026-07-29 behaviour: strictly safe, never laxer.
 //
 // `listWorktrees` is injected so this is testable without a real repo.
-//
-// It resolves the CHECKOUT ROOTS; sessionProofDirs() below maps them to
-// .claude/session-state. The split exists because the migration apply gate now
-// needs the roots themselves — to locate the repository migration file the
-// transmitted SQL must come from — and a second copy of this resolution would
-// drift, with the looser copy becoming the way in.
-export function sessionCheckoutRoots(root, hookCwd, listWorktrees) {
-  const roots = [path.resolve(root)];
+/**
+ * The checkout the session is actually working in, or null when that cannot be
+ * established from `git worktree list`.
+ *
+ * Extracted from sessionProofDirs (2026-08-27) because the migration pending-set
+ * preflight needs the same answer for a different question — which checkout's
+ * HEAD and working tree hold the migration queue. The harness pins
+ * CLAUDE_PROJECT_DIR to the PRIMARY checkout even when the session runs in a
+ * linked worktree, so anything that reads `projectDir` reads the wrong branch;
+ * that is the bug this resolution exists to avoid, and a second copy of it would
+ * drift. (Codex P1, PR #502.)
+ */
+export function resolveSessionWorktree(root, hookCwd, listWorktrees) {
   const cwd = String(hookCwd || "").trim();
-  if (!cwd) return roots;
+  if (!cwd) return null;
   let porcelain;
   try {
     porcelain = listWorktrees();
   } catch {
-    return roots;
+    return null;
   }
   // Windows paths differ in case between `git worktree list` and process.cwd(),
   // so compare on a normalised key; keep the ORIGINAL path for the return value.
@@ -1954,7 +1959,30 @@ export function sessionCheckoutRoots(root, hookCwd, listWorktrees) {
     const wt = path.resolve(match[1]);
     if (contains(key(wt), cwdKey) && (!best || wt.length > best.length)) best = wt;
   }
-  if (best) roots.push(best);
+  void root;
+  return best;
+}
+
+// The session-scoped checkout ROOTS: the primary, plus the worktree the session is
+// actually working in when that can be established. The migration apply gate needs
+// the roots themselves — to locate the repository migration file the transmitted SQL
+// must come from — while sessionProofDirs() needs their session-state directories.
+//
+// Both are expressed in terms of resolveSessionWorktree() rather than repeating its
+// traversal. Two independent refactors of this function landed at once (PR #502
+// extracted resolveSessionWorktree for the pending-queue root; PR #533 added the
+// roots list for source provenance), and each carried the same warning: a second
+// copy of this resolution would drift, and the looser copy becomes the way in. So
+// there is exactly one traversal, and these are both views of it.
+//
+// NOTE ON COST: each call here invokes `listWorktrees` once. Callers that ask for
+// both views — migration-apply-lib does — MUST pass a memoised listing, because a
+// hook killed mid-git-call emits nothing and a PreToolUse hook that emits nothing
+// does not deny. That memoisation lives at the call site, which owns the budget.
+export function sessionCheckoutRoots(root, hookCwd, listWorktrees) {
+  const roots = [path.resolve(root)];
+  const best = resolveSessionWorktree(root, hookCwd, listWorktrees);
+  if (best) roots.push(path.resolve(best));
   return [...new Set(roots)];
 }
 

@@ -127,7 +127,7 @@
     },
     "section9_po_ap_high_remediation": {
       "chain": "smoke-section9-po-ap-high-remediation.sql",
-      "description": "Section 9 PO/AP HIGH closeout: real save/submit/edit/alternate-location receive/reverse/cancel paths keep Main Warehouse on-order equal to authoritative open remainder; vendor and accounting-period browser mutation grants/policies are absent; cancelled-PO bill creation and billed-PO cancellation fail in the shared PO-first lock contract; AP aging serves current truth but fails closed for unsupported dates; a real close_accounting_period call makes update_vendor_bill, record_vendor_payment, void_vendor_payment, and void_vendor_bill reject closed-period history without side effects. Self-contained fixtures and terminal rollback. Companion isolated-PostgreSQL provers cover PO/AP and accounting-period concurrency in both winning orders.",
+      "description": "Section 9 PO/AP HIGH closeout: real save/submit/edit/alternate-location receive/reverse/cancel paths keep Main Warehouse on-order equal to authoritative open remainder; vendor and accounting-period browser mutation grants/policies are absent; cancelled-PO bill creation and billed-PO cancellation fail in the shared PO-first lock contract; AP and receiving mutations replay only the same actor plus exact payload; AP aging uses due-date Current/1-30/31-60/61-90/over-90 boundaries and fails closed for unsupported dates; Due This Month ends at Chicago calendar month-end; a real close_accounting_period call makes update_vendor_bill, record_vendor_payment, void_vendor_payment, and void_vendor_bill reject closed-period history without side effects. Self-contained fixtures and terminal rollback. Companion isolated-PostgreSQL provers cover PO/AP and accounting-period concurrency in both winning orders.",
       "covers": [
         "save_purchase_order",
         "submit_purchase_order",
@@ -136,6 +136,7 @@
         "cancel_purchase_order",
         "create_vendor_bill",
         "get_ap_aging",
+        "get_ap_dashboard_summary",
         "update_vendor_bill",
         "record_vendor_payment",
         "void_vendor_payment",
@@ -151,7 +152,9 @@
         "billing",
         "inventory",
         "lifecycle",
-        "security"
+        "security",
+        "idempotency",
+        "regression"
       ]
     },
     "money_lifecycle_idempotency_required": {

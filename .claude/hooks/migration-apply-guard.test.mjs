@@ -145,6 +145,36 @@ function writeMigrationFile(root, name, sql) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, `${name}.sql`), sql);
 }
+// The pending-set preflight (2026-08-26) asks the question the ordering check
+// never did: is an OLDER tracked migration still waiting? It reads the schema
+// baseline for its floor and origin/main for the tracked set, and refuses when it
+// cannot read either. Both are real files/refs — the hook is a subprocess, so
+// there is nothing to inject — and every fixture that expects to reach the proof
+// gate has to supply them. hermeticEnv() keeps `git init` off the real repository.
+function makePendingSetInputs(root) {
+  mkdirSync(path.join(root, "supabase", "baselines"), { recursive: true });
+  writeFileSync(
+    path.join(root, "supabase", "baselines", "manifest.json"),
+    JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }));
+  mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
+  writeFileSync(path.join(root, "supabase", "migrations", `${MIG}.sql`), BENIGN_SQL);
+  const git = (...args) => spawnSync("git", [
+    "-c", "user.name=fixture",
+    "-c", "user.email=fixture@example.invalid",
+    "-c", "commit.gpgsign=false",
+    "-c", "core.hooksPath=",
+    "-C", root, ...args,
+  ], { encoding: "utf8", env: hermeticEnv() });
+  git("init", "-q");
+  git("add", "-A");
+  git("commit", "-q", "-m", "fixture");
+  const ref = git("update-ref", "refs/remotes/origin/main", "HEAD");
+  ok(ref.status === 0, `fixture origin/main is created (git said: ${ref.stderr})`);
+  // The freshness gate reads FETCH_HEAD's mtime. `git init` never writes one, so
+  // without this the fixture looks like a checkout that has never fetched — which
+  // the guard correctly refuses. This stands in for a just-completed fetch.
+  writeFileSync(path.join(root, ".git", "FETCH_HEAD"), "fixture\n");
+}
 function armAutopilot(stateDir, hoursFromNow) {
   writeFileSync(path.join(stateDir, "AUTOPILOT.on"), JSON.stringify({
     expires: new Date(Date.now() + hoursFromNow * 3600_000).toISOString(),
@@ -155,6 +185,11 @@ function armAutopilot(stateDir, hoursFromNow) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-"));
   const stateDir = path.join(tmp, ".claude", "session-state");
   mkdirSync(stateDir, { recursive: true });
+  // Both: the pending-set inputs (baseline manifest + origin/main + FETCH_HEAD) and
+  // the migration file source provenance requires. makePendingSetInputs already
+  // writes the file, but the explicit call keeps the provenance precondition visible
+  // at the fixture site rather than depending on a side effect of the other helper.
+  makePendingSetInputs(tmp);
   writeMigrationFile(tmp, MIG, BENIGN_SQL);
   try {
     const call = (query, projectId = CRX_PROJECT) => ({
@@ -435,6 +470,11 @@ function armAutopilot(stateDir, hoursFromNow) {
 
     // The mirror: with the file present, every spelling reaches allow. Without
     // this, a hook that denied everything would satisfy the loop above.
+    //
+    // The pending-set inputs are created HERE rather than at the top of the fixture:
+    // makePendingSetInputs writes a migration file, which would have satisfied source
+    // provenance and gutted the deny loop above. Order matters, so it is explicit.
+    makePendingSetInputs(tmp);
     writeMigrationFile(tmp, MIG, PARKED);
     for (const tool_name of SPELLINGS) {
       const r = runHook({
@@ -474,8 +514,21 @@ function armAutopilot(stateDir, hoursFromNow) {
     git(["config", "user.email", "test@example.com"], primary);
     git(["config", "user.name", "test"], primary);
     writeFileSync(path.join(primary, "seed.txt"), "seed\n");
-    git(["add", "seed.txt"], primary);
+    // The pending-set preflight reads the schema baseline and origin/main from
+    // CLAUDE_PROJECT_DIR, which stays pinned to `primary` throughout. Seed both
+    // there, or it blocks before the proof-scoping behaviour under test is reached.
+    mkdirSync(path.join(primary, "supabase", "baselines"), { recursive: true });
+    writeFileSync(
+      path.join(primary, "supabase", "baselines", "manifest.json"),
+      JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }));
+    mkdirSync(path.join(primary, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(primary, "supabase", "migrations", `${MIG}.sql`), BENIGN_SQL);
+    git(["add", "-A"], primary);
     git(["commit", "-qm", "seed"], primary);
+    const originRef = git(["update-ref", "refs/remotes/origin/main", "HEAD"], primary);
+    ok(originRef.status === 0, `fixture origin/main is created (git said: ${originRef.stderr})`);
+    // Stands in for a just-completed fetch; see makePendingSetInputs.
+    writeFileSync(path.join(primary, ".git", "FETCH_HEAD"), "fixture\n");
     const added = git(["worktree", "add", "-q", "-b", "wt", linked], primary);
     // Asserted, never skipped. An `if (added.status === 0)` guard here would let
     // the whole worktree regression disappear silently the day `git worktree add`
@@ -551,12 +604,20 @@ function armAutopilot(stateDir, hoursFromNow) {
       "the queryHash mismatch is refused by the proof gate, not by provenance short-circuiting it");
     writeMigrationFile(linked, MIG, BENIGN_SQL);
 
+    // MIG must read as APPLIED before this sub-case, or the merged pending-set guard
+    // legitimately refuses first: applying a 2099-dated migration while a tracked
+    // 2026 one is still unapplied would strand it. That is correct behaviour, but it
+    // is not the rule under test here — the third distinct gate to shadow these
+    // assertions, which is why each pins its reason.
     const OTHER = "20990101000001_other_mig";
+    for (const s of [linkedState, path.join(primary, ".claude", "session-state")]) {
+      writeAppliedSnapshot(s, { applied: ["20260808150400_round_money_to_whole_cents", MIG] });
+    }
     writeMigrationFile(linked, OTHER, BENIGN_SQL);
     r = runHook(callFrom(linked, BENIGN_SQL, OTHER), primary);
     ok(isDeny(r), "the session's own worktree proof does NOT cover a different migration name");
     ok(r.stdout.includes("without subagent review proof"),
-      "the wrong-name case is refused by the proof gate, not by provenance short-circuiting it");
+      "the wrong-name case is refused by the proof gate, not by provenance or the pending-set guard");
 
     // AUTOPILOT.on is narrower still — pinned to the primary checkout even when
     // the session's proofs are read from its worktree. It is authorization state
