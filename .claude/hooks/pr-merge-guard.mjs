@@ -82,14 +82,23 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
       deny("PR MERGE GATE: GraphQL mergePullRequest mutations are denied because the guard cannot safely resolve and verify the PR's head/checks. Use `gh pr merge <number>` instead.");
     }
     const found = api || ghMergeRequest(segment);
-    if (found) { requests.push(found); continue; }
     // Raw REST merges outside gh — curl/wget/Invoke-RestMethod/node fetch — name
     // the same endpoint but carry auth/context the guard cannot resolve, so they
     // are denied outright rather than gated (Codex round-2: an authenticated
     // `curl -X PUT .../pulls/N/merge` bypassed the gate entirely).
-    if (/\/pulls\/[^\s/]+\/merge\b/i.test(segment)) {
+    //
+    // This scan must run even when a gh form ALSO matched this segment. A
+    // recognized outer `gh pr merge` used to reach `continue` first, so a raw
+    // merge hidden in a command substitution — `gh pr merge 1 --body "$(curl -X
+    // PUT .../pulls/9/merge)"` — was never inspected (Codex bot P1 on PR #541).
+    // Counting occurrences keeps the ONE endpoint a `gh api ... /merge` request
+    // legitimately names from denying its own gated route, while any additional
+    // mention is treated as a second, unresolvable merge.
+    const endpointMentions = segment.match(/\/pulls\/[^\s/]+\/merge\b/gi) || [];
+    if (endpointMentions.length > (api ? 1 : 0)) {
       deny("PR MERGE GATE: raw GitHub REST merge calls (curl/wget/Invoke-RestMethod/fetch against .../pulls/<n>/merge) are denied because the guard cannot resolve and verify the PR's base, head, and checks for them. Use `gh pr merge <number>` so the gate can verify the merge.");
     }
+    if (found) { requests.push(found); continue; }
   }
 }
 if (requests.length === 0) passthrough();

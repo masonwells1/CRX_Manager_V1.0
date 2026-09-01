@@ -2025,7 +2025,16 @@ export function ghMergeRequest(command) {
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (word.startsWith("--repo=")) { repo = word.slice("--repo=".length); continue; }
-    if (word.toLowerCase() === "--auto" || word.toLowerCase().startsWith("--auto=")) { auto = true; continue; }
+    // `--auto=false` asks gh NOT to auto-merge, so that command lands the PR
+    // immediately. Classifying it as auto exempted it from the green-pipeline
+    // check and (since 2026-09-01) the approval check too — an exemption that
+    // is only sound for a REAL auto-merge, which GitHub holds until every
+    // requirement is met (Codex bot P1 on PR #541).
+    if (word.toLowerCase() === "--auto") { auto = true; continue; }
+    if (word.toLowerCase().startsWith("--auto=")) {
+      auto = !/^(?:false|0|no)$/i.test(word.slice("--auto=".length));
+      continue;
+    }
     // `--admin` merges with administrator privileges, skipping main's required
     // review. Mason turned "Include administrators" OFF on 2026-09-01 so HE can
     // clear a stuck review by hand; that override travels with the same token

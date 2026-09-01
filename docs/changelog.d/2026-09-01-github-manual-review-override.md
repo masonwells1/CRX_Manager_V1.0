@@ -68,6 +68,13 @@ admin identity. The durable fix is a separate, non-admin credential for agents.
 That is an owner decision and is deliberately left open — see
 `docs/manual/KNOWN_ISSUES.md`.
 
+### 4. Two P1 bypasses in the candidate itself (Codex PR bot)
+
+The Codex PR bot then found two more ways past the gate this branch adds —
+`--auto=false` misclassified as an auto-merge, and a recognized outer
+`gh pr merge` shielding a raw merge hidden in a command substitution. Both are
+recorded in `2026-09-01-merge-gate-p1-bypasses.md`.
+
 ### Load-bearing dependency
 
 `reviewDecision === "APPROVED"` is bound to the current head **only because**

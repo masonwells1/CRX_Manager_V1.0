@@ -798,6 +798,34 @@ export function evaluateProductionAction({
   const commandSegments = command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
   for (const segment of commandSegments) {
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
+    // ── raw merge transports (Codex proof on PR #541, 2026-09-01) ───────────
+    // Every gh-shaped route below requires the `gh` binary in the command text.
+    // That was survivable while GitHub itself refused an unapproved merge — a
+    // raw REST call simply got a 405 — but Mason's admin override removed that
+    // backstop, so an agent holding his admin credential can now merge through
+    // any transport. Denied by DESTINATION rather than by tool: enumerating
+    // curl, wget, Invoke-RestMethod, and fetch is the losing half of that trade.
+    //
+    // Scanned BEFORE the gh routes dispatch, because a recognized outer
+    // `gh pr merge` used to reach `continue` first and shield a raw merge hidden
+    // in a command substitution (Codex bot P1 on PR #541). Counting occurrences
+    // keeps the ONE endpoint a `gh api ... /merge` request legitimately names
+    // from denying its own gated route.
+    const endpointMentions = segment.match(/\/pulls\/[^\s/]+\/merge\b/gi) || [];
+    if (endpointMentions.length > (ghApiMergeRequest(segment)?.selector ? 1 : 0)) {
+      return denied(
+        "CODEX PRODUCTION GATE: raw GitHub REST merge calls (curl/wget/Invoke-RestMethod/fetch against " +
+        ".../pulls/<n>/merge) are denied because the guard cannot resolve and verify the PR's base, head, " +
+        "and checks for them. Use `gh pr merge <number>` so the gate can verify the merge."
+      );
+    }
+    if (/\bmergePullRequest\b/i.test(segment)) {
+      return denied(
+        "CODEX PRODUCTION GATE: GraphQL mergePullRequest mutations are denied — whatever transport carries " +
+        "them — because the guard cannot resolve and verify the PR's base, head, and checks for them. " +
+        "Use `gh pr merge <number>` so the gate can verify the merge."
+      );
+    }
     if (ghRequest?.unsupportedGraphql) {
       return denied("CODEX PRODUCTION GATE: GraphQL mergePullRequest mutations are denied because the guard cannot safely resolve and verify their PR head/checks. Use `gh pr merge <number>` instead.");
     }
@@ -821,28 +849,6 @@ export function evaluateProductionAction({
       });
       if (result.blocked) return result;
       continue;
-    }
-    // ── raw merge transports (Codex proof on PR #541, 2026-09-01) ───────────
-    // Everything above requires the `gh` binary in the command text. That was
-    // survivable while GitHub itself refused an unapproved merge — a raw REST
-    // call simply got a 405 — but Mason's admin override removed that backstop,
-    // so an agent holding his admin credential can now merge through any
-    // transport. Denied by DESTINATION rather than by tool: enumerating curl,
-    // wget, Invoke-RestMethod, and fetch is the losing half of that trade. The
-    // Claude guard has denied raw REST since 2026-07-16; this side had not.
-    if (/\/pulls\/[^\s/]+\/merge\b/i.test(segment)) {
-      return denied(
-        "CODEX PRODUCTION GATE: raw GitHub REST merge calls (curl/wget/Invoke-RestMethod/fetch against " +
-        ".../pulls/<n>/merge) are denied because the guard cannot resolve and verify the PR's base, head, " +
-        "and checks for them. Use `gh pr merge <number>` so the gate can verify the merge."
-      );
-    }
-    if (/\bmergePullRequest\b/i.test(segment)) {
-      return denied(
-        "CODEX PRODUCTION GATE: GraphQL mergePullRequest mutations are denied — whatever transport carries " +
-        "them — because the guard cannot resolve and verify the PR's base, head, and checks for them. " +
-        "Use `gh pr merge <number>` so the gate can verify the merge."
-      );
     }
     if (ghApiMutates(segment)) {
       return denied("CODEX PRODUCTION GATE: unrecognized mutating `gh api` calls are blocked because they can bypass the reviewed branch/push workflow.");

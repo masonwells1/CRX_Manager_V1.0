@@ -679,6 +679,23 @@ try {
       nowMs: now,
     }).blocked, true, `raw merge transport denied: ${rawMerge.slice(0, 40)}`);
   }
+  // A recognized outer `gh pr merge` must not shield a raw merge hidden in a
+  // command substitution: the gh form is gated, hits `continue`, and the
+  // embedded curl would never be inspected (Codex bot P1 on PR #541).
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --body \"$(curl -X PUT https://api.github.com/repos/crop/crx/pulls/9/merge)\"" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "raw merge endpoint inside a gh merge's substitution is denied");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --body \"`curl -X PUT https://api.github.com/repos/crop/crx/pulls/9/merge`\"" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "backtick substitution carrying a raw merge is denied");
   // A gh-shaped merge still routes through the real gate rather than the raw
   // denial — otherwise the blanket rule would swallow the approved path.
   assert.equal(evaluateProductionAction({

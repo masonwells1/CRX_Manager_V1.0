@@ -46,6 +46,16 @@ ok(ghMergeRequest("gh pr merge 42 --admin=false")?.admin === false, "--admin=fal
 ok(ghMergeRequest("gh pr merge 42 --squash")?.admin === false, "an ordinary merge is not an admin merge");
 eq(ghMergeRequest("gh pr merge 42 --admin"), { selector: "42", repo: "", auto: false, admin: true }, "--admin does not eat the selector");
 
+// ── --auto=false is an IMMEDIATE merge (Codex bot P1 on PR #541) ─────────────
+// gh accepts `--auto=false` as "do not auto-merge", so that command lands the PR
+// right now. Treating every `--auto=` spelling as auto exempted it from BOTH the
+// approval check and the green-pipeline check — the exemption exists only
+// because GitHub itself holds a real auto-merge until requirements are met.
+ok(ghMergeRequest("gh pr merge 42 --auto=false")?.auto === false, "--auto=false is an immediate merge, not an auto-merge");
+ok(ghMergeRequest("gh pr merge 42 --auto=0")?.auto === false, "--auto=0 is an immediate merge");
+ok(ghMergeRequest("gh pr merge 42 --auto=true")?.auto === true, "--auto=true is still an auto-merge");
+ok(ghMergeRequest("gh pr merge 42 --auto")?.auto === true, "bare --auto is still an auto-merge");
+
 // ── pullRequestApproved ──────────────────────────────────────────────────────
 ok(pullRequestApproved({ reviewDecision: "APPROVED" }), "APPROVED passes");
 ok(pullRequestApproved({ reviewDecision: "approved" }), "case-insensitive");
@@ -114,6 +124,15 @@ ok(r.decision?.permissionDecision === "deny", "GraphQL merge mutation over curl 
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "Invoke-RestMethod -Uri https://api.github.com/graphql -Body '{\"query\":\"mutation{mergePullRequest(input:{}){id}}\"}'" } });
 ok(r.decision?.permissionDecision === "deny", "GraphQL merge mutation over Invoke-RestMethod denied");
+
+// A recognized outer `gh pr merge` must not shield a raw merge hidden in a
+// command substitution — the gh form is gated, reaches `continue`, and the
+// embedded curl would never be inspected (Codex bot P1 on PR #541).
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 1 --repo crop/dev --body \"$(curl -X PUT https://api.github.com/repos/crop/crx/pulls/9/merge)\"" } });
+ok(r.decision?.permissionDecision === "deny", "raw merge endpoint inside a gh merge's substitution is denied");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 1 --body \"`curl -X PUT https://api.github.com/repos/crop/crx/pulls/9/merge`\"" } });
+ok(r.decision?.permissionDecision === "deny", "backtick substitution carrying a raw merge is denied");
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "echo docs about /pulls/12/merges endpoint" } });
 ok(r.status === 0 && r.decision === null, "merge-suffixed word boundary respected (merges != merge)");

@@ -127,12 +127,19 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // transports, which this guard did not deny at all (the Claude side has since
   // 2026-07-16). Both are now denied by destination. pushLib is untouched by
   // that fix and keeps the blob above. Anchors unchanged; transform identity.
-  codexGuard: "3064f73f1916a0b558556d5a0dc4a2ecad3836de",
-  pushLib: "f87e232491487d7223b3e8f4453243a69b9120e7",
+  // Both re-pinned again 2026-09-01, same PR: the Codex PR bot found two P1
+  // bypasses in the candidate itself — `--auto=false` (an IMMEDIATE merge) was
+  // classified as an auto-merge and so skipped both the approval and green
+  // checks, and a recognized outer `gh pr merge` shielded a raw merge hidden in
+  // a command substitution. codexGuard now scans merge destinations before the
+  // gh routes dispatch; pushLib parses the `--auto` value. Anchors unchanged;
+  // transforms still identity for pushLib.
+  codexGuard: "d60b614fe366cb7654fe33fc35f1dc7f1169d03e",
+  pushLib: "87ace26f60093c93583c3d411d088617cfaeec6e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "2913c80e08dc4d6f480d9b5224147c43e5c982fd",
-  pushLib: "f87e232491487d7223b3e8f4453243a69b9120e7",
+  codexGuard: "2bdee7fea1cfdbf85f9e49f798b34900662d2738",
+  pushLib: "87ace26f60093c93583c3d411d088617cfaeec6e",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
