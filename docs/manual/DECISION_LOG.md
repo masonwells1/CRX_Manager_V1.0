@@ -7,6 +7,174 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-01 — Mason gets a manual review override on `main`; agents are locked out of it
+
+**Source:** Mason's in-chat request on 2026-09-01 ("add manual override as option in my github
+account to get around the has to have a review"), and his choice of the "override + agent lockout"
+option when the trade-off was put to him.
+
+**Decision.** Classic branch protection on `main` no longer enforces its rules for administrators
+(`enforce_admins: false`). Mason can therefore merge a pull request whose review is stuck, by hand,
+using GitHub's "Merge without waiting for requirements to be met (administrators only)" control on
+the PR page. The `protect-main` ruleset is unchanged and its bypass list stays empty, so the
+required `Vercel`, `Lint, Type Check, Test, Build`, and `SQL Migration Validation` checks still
+bind everyone. **The override skips the review, never the tests.** No other protection setting
+changed: one approval, stale approvals dismissed on every push, approval from someone other than
+the last pusher, branch up to date, no force-push, no deletion.
+
+**Why.** The review requirement lived entirely in classic protection — the ruleset requires zero
+approvals — so this was the one setting that could be relaxed to reach the review without touching
+the automated checks. Mason authors the PRs, and GitHub does not let an author approve their own,
+so when CodeRabbit is down, rate-limited, or wedged, nothing could approve and `main` became
+unmergeable with no manual escape.
+
+**The lockout is the load-bearing half.** The bypass is granted by admin rights on Mason's account,
+and every Claude and Codex session runs on that same token — so opening it for him opened it for
+them, which would have quietly reduced the whole CodeRabbit gate to advice. Both merge gates
+therefore hard-deny `gh pr merge --admin` (before the PR is even resolved) and verify
+`reviewDecision === "APPROVED"` directly, instead of inferring an approval from a CLEAN
+`mergeStateStatus` the way they safely could while nothing could bypass. **Operative rule: an agent
+may never use the override, for any diff or any deadline — a stuck review is handed to Mason with
+the reason.**
+
+**Caveat that must not be lost.** `reviewDecision === "APPROVED"` is bound to the current head only
+because stale-review dismissal and require-last-push-approval are on. If either is ever turned off,
+both gates must additionally verify that an APPROVED review's `commit_id` equals `headRefOid`.
+
+**What the lockout is, honestly.** It is an honest-mistake net, not a boundary. Because agents
+authenticate as Mason, the guards can only refuse the *commands* that would use the override — they
+cannot withhold the capability. Codex's exact-SHA proof on this PR made that concrete by finding the
+lockout bypassable through raw REST and GraphQL merge transports (denied by destination now, on both
+guards). Codex's third pass then demonstrated a bypass no command guard can reach at all: a command
+that builds the merge URL from separate strings.
+
+**Mason declined the durable fix (2026-09-01).** Giving agents a separate non-admin GitHub
+credential was put to him twice — at design time and again after that demonstration — and he chose
+both times to keep the setup simple and accept the residual. **Settled: do not re-open or implement
+the separate credential unless Mason asks.** The accepted mitigations are the guards, the required
+Vercel/CI/SQL checks the ruleset still enforces on everyone, and Vercel's one-click rollback.
+Detail in `docs/manual/KNOWN_ISSUES.md`.
+
+**Proof.** Live protection and ruleset state read with `gh api` before and after. Guard behavior
+covered by `.claude/hooks/pr-merge-guard.test.mjs` (66 assertions) and
+`.codex/hooks/production-action-guard.test.mjs`, mutation-tested where the blob pin allows;
+`npm run test:agent-workflows` green. Detail:
+`docs/changelog.d/2026-09-01-github-manual-review-override.md`.
+
+## 2026-09-01 — the write-time actor-binding guard is CAPPED as best-effort; do not fund another hardening round
+
+**Source:** Mason's in-chat decision on 2026-09-01 ("cap it"), after he asked for at least two more
+adversarial rounds on PR #449 and both rounds found real bypasses.
+
+**The decision.** `.claude/hooks/actor-binding-check.mjs` is a **speed bump, not a boundary**. It stays
+in place and stays maintained for ordinary spellings, but it is no longer treated as a control that
+can be driven to zero findings. Do not open a round 4 of pattern-by-pattern hardening. The load-bearing
+protections against actor forgery are, in order: the **post-apply sweep predicates**
+(`scripts/db-invariant-sweeps/predicates/actor-forgery.sql` and `-fin-audit.sql`, which run against the
+live catalog), the **exact-SHA Codex proof** on migration diffs, and the **CodeRabbit final review**.
+
+**Why — the evidence, not a preference.** Two independent agents ran two rounds on 2026-08-31/09-01 and
+closed **19 laundering channels**, each reproduced by running the real hook and each fix mutation-tested.
+Round 1 closed 12, then probed its own repair and found 4 more — one it had introduced with its own
+fix. Round 2 probed round 1's repair with 87 payloads and found 7 more across 4 previously-unseen root
+causes. The finding-count on the PR went from 10 open, through two rounds of genuine work, to **23 open**
+(16 of them dated 2026-09-01, i.e. new objections to the fixes themselves). It goes backwards while
+genuinely improving.
+
+**The root cause is a tool mismatch, and one finding proves it.** PostgreSQL needs no whitespace before a
+quoted identifier, so `CREATE OR REPLACE FUNCTION"public"."f"(` is valid SQL — and the guard never matched
+it, meaning a ~3,000-line security check **never ran on that routine at all**. That single lexical fact
+punched holes in **eight independent regexes written across three careful passes**. Nobody missed it eight
+times through inattention; a regex encodes a guess about tokenization, and when the guess is wrong in one
+place it is wrong everywhere. A second root cause is structural rather than lexical: the guard proves a
+**name**, and a PL/pgSQL parameter is an ordinary local, so `p_performed_by := p_target_id;` after a
+passing check re-forges the actor. Nine spellings of that were found.
+
+**Residual risk, stated plainly — and it is NOT uniform.** Three different residuals remain, with different
+compensating controls, and conflating them would overstate the defence:
+
+1. **Lexical bypasses** (the quoted-identifier gap and other novel spellings). These evade the *write-time*
+   hook only. Because such a routine carries no binding check at all, its source contains no `ACTOR_MISMATCH`
+   token, so the post-apply sweep predicates do still consider it — and they fire when the actor parameter is
+   COALESCEd, compared against `auth.uid()`, mentioned near role text, or written into `financial_audit_log`
+   within the same statement. The controls that ALWAYS apply here are the Codex proof and the CodeRabbit
+   review; the sweep is a **partial, conditional** third — it fires only on those specific sinks, so a
+   lexical bypass that routes the parameter to any other write target clears it without trying. Capping the
+   hook does not remove the Codex proof or the CodeRabbit review, but do not state the residual as
+   "an attacker must clear all three" — that is true only for the subset of shapes the predicates' sinks
+   happen to cover, and asserting it flatly is the same overclaim this entry exists to remove.
+2. **Re-binding and laundering bypasses** — `p_performed_by := p_target_id;` after a passing check,
+   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips. **The post-apply sweeps do NOT
+   cover these, and it is not a near miss.** Both predicates select only rows where
+   `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that performs a legitimate-looking binding check and *then*
+   re-assigns the parameter is excluded from both sweeps outright — the very presence of the check it
+   defeated is what hides it. A temp-table round trip evades them for a second, independent reason:
+   `actor-forgery.sql` requires the parameter to appear near `coalesce`/`auth.uid`/role text, and
+   `actor-forgery-fin-audit.sql` requires it to appear after `financial_audit_log` **before the next
+   semicolon**, so stashing the parameter in a temp table in one statement and inserting it into the audit
+   log in another satisfies neither. Only the Codex proof and the CodeRabbit review stand here.
+3. **The naming-scope gap** — actor-shaped parameters that do not match `^p_\w*by$|^p_actor|^p_user`, e.g.
+   `p_target_id` or `p_acting_user_id`. **The live sweep predicates share this exact name pattern, so the
+   sweep does NOT cover this path either.** Do not claim the sweep as the compensating control for it. The
+   only things standing here are the Codex proof and the CodeRabbit review on the migration diff. Closing it
+   needs real dataflow over write targets — analysis of which values reach an actor column — not another
+   pattern, and it would have to change the hook and both predicates together.
+
+Note on (2): the incidental write-time coverage of `EXECUTE … USING` / `INSERT … RETURNING … INTO` — an
+unconditional `hasMutation` trigger rather than modelled taint — lives in **parked PR #449, not in the hook
+that is running**. The active `.claude/hooks/actor-binding-check.mjs` is 213 lines and contains no such
+trigger (PR #449's hardened rewrite is the ~3,000-line version referenced above), so today these forms are
+not caught at write time at all. Do not credit the running guard with them until #449 lands.
+
+Note on the tool path, which is wider than any residual listed above: the guard is registered under the
+matcher `"Write|Edit"` in **both** `.claude/settings.json` and `.codex/hooks.json`, so a migration created
+through Bash or PowerShell — `cat`, `tee`, a redirect, a generator script — is never presented to it, and
+`bash-safety.mjs` blocks only *modification* of an existing file under `supabase/migrations/`, not
+*creation* of a new one. Ordinary SQL bypasses the guard on tool choice alone. This is not a residual of the
+analysis; it is the analysis never running. The post-apply sweeps are unaffected — they read the live
+catalog and do not care which tool wrote the file. Any claim that this guard covers "every ordinary
+spelling" must be scoped to hooked `Write`/`Edit` calls.
+
+Note on cross-routine delegation: a `SECURITY DEFINER` wrapper that accepts an actor parameter and
+delegates the write to a helper is allowed at write time — the guard only proceeds when the routine's own
+body holds a literal `INSERT INTO` / `UPDATE` (matched with a trailing space) / `DELETE FROM` — and it is **not** covered by the sweeps
+either, because the wrapper carries neither predicate's cue in its own `prosrc` and a private helper fails
+the `has_function_privilege('authenticated', ...)` candidacy test. There is no fail-closed callable rule in
+the running hook; that belongs to parked PR #449.
+
+Note on the write path itself: the hook reads `tool_input.content || tool_input.new_string` and analyses that
+fragment alone — it does **not** reconstruct the full post-edit file the way `sql-safety.mjs`,
+`idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. An ordinary
+incremental `Edit` that inserts an unsafe write *inside* an existing function therefore carries no function
+header, no parameter list and no `SECURITY DEFINER` attribute in the analysed text, so the guard finds no
+candidate and allows it. This is the normal editing path, not an exotic one; the hook's own Edit-coverage
+test passes a whole function as `new_string` and so does not exercise it.
+
+**If this is ever revisited, rebuild rather than re-harden.** The only approach that removes the whole
+category is parsing with PostgreSQL's own grammar (`libpg_query`), which eliminates "spellings" entirely and
+turns the re-binding hole into a real assignment-target check. That is a scoped project with a dependency
+and a rewrite — not another round. It does **not** solve the naming-scope limit, which needs real dataflow.
+
+**Operative rules.**
+- Do not open another pattern-hardening round on this guard; cite this entry and close the request.
+- Do not describe this guard as preventing actor forgery. It reduces it. Say so in any doc that mentions it.
+- Do not cite the post-apply sweeps as the compensating control for the re-binding, laundering or
+  naming-scope residuals. They cover the lexical residual only, and only at the sinks they key on.
+- Before starting related work, check for stranded parallel attempts — a third, unpushed regex attempt
+  (`codex/actor-binding-guard-recut-20260831`, local only, no PR) duplicated one of PR #449's fixes.
+- PR #449 itself is **parked, not abandoned**: it holds the 19 closed bypasses and is worth landing after
+  one clean review round on a fresh review budget. Landing it is an improvement to a capped control, not a
+  resumption of the hardening programme.
+
+**A generalisable lesson recorded here because it recurred seven times in ~24 hours.** Every one of those
+seven guard comments asserted a safety property its code did not have, and **every one overclaimed** — none
+understated. Three were in this file alone, including *"Non-mutating functions are never flagged"*, which a
+test in the same file already disproved. The ratchet worth building: **for each guard, assert that its
+refusal text and header comments do not claim a property the test suite has not demonstrated.** When the
+author of a guard cannot correctly state what it does, that is the system reporting that it exceeded the
+complexity a reader can hold.
+
+
 ## 2026-08-31 — `core.hooksPath` points at the tracked `.husky`, never husky's generated `.husky/_`
 
 **Source:** Mason's in-chat approval on 2026-08-31 ("ok fix it") after the harness review found the

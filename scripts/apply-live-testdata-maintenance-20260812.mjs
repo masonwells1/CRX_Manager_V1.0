@@ -111,12 +111,42 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   //
   // Both pushLib values below are taken from the producer test's printed candidate,
   // never hand-computed — that is the sanctioned re-pin procedure.
-  codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
-  pushLib: "002e434ef46150fe0225b39372d6696f49b7931f",
+  //
+  // Both re-pinned again 2026-09-01 (manual review override, merge of origin/main):
+  // Mason turned "Include administrators" OFF on main's branch protection, so both
+  // merge gates gained an `--admin` refusal and an explicit reviewDecision===APPROVED
+  // requirement. codexGuard moves because this branch edits it; pushLib moves because
+  // this branch's `--admin` parsing and pullRequestApproved() land on top of the
+  // reconciled resolveSessionWorktree above. Neither guard's risky-producer-path
+  // anchor nor its protected-harness list changed, so both transforms still behave
+  // exactly as before. Inputs verified with `tr -d '\r' | git hash-object --stdin`
+  // against the merged working tree; outputs taken from the producer test's printed
+  // candidate, not hand-computed.
+  // codexGuard re-pinned once more 2026-09-01, same PR: Codex's exact-SHA proof
+  // found the agent lockout bypassable through raw REST and GraphQL merge
+  // transports, which this guard did not deny at all (the Claude side has since
+  // 2026-07-16). Both are now denied by destination. pushLib is untouched by
+  // that fix and keeps the blob above. Anchors unchanged; transform identity.
+  // Both re-pinned again 2026-09-01, same PR: the Codex PR bot found two P1
+  // bypasses in the candidate itself — `--auto=false` (an IMMEDIATE merge) was
+  // classified as an auto-merge and so skipped both the approval and green
+  // checks, and a recognized outer `gh pr merge` shielded a raw merge hidden in
+  // a command substitution. codexGuard now scans merge destinations before the
+  // gh routes dispatch; pushLib parses the `--auto` value. Anchors unchanged;
+  // transforms still identity for pushLib.
+  // Both re-pinned again 2026-09-01, same PR, round 4: the Codex bot found that
+  // gh honours `--auto=f`/`--auto=F` (Go ParseBool) and that shell quote or
+  // backslash concatenation builds a flag gh sees but a raw-word comparison
+  // misses (`--ad""min`). Flag NAMES are now normalized before matching, only
+  // ParseBool TRUE spellings count as auto, and a merge segment carrying a
+  // command substitution is refused as unresolvable rather than gated. Anchors
+  // unchanged; the pushLib transform is still identity.
+  codexGuard: "1c921605467e613f820bc3413d5bff255296c4ec",
+  pushLib: "0bd618133ad64b813454c1e7a308f4b953c0a643",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
-  pushLib: "002e434ef46150fe0225b39372d6696f49b7931f",
+  codexGuard: "a9829ef4ae86d6c157c7409981fbf52a44ba7f0a",
+  pushLib: "0bd618133ad64b813454c1e7a308f4b953c0a643",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
