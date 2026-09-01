@@ -1,12 +1,20 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-27 11:43:53 UTC for migration-ledger and schema facts only.** A durable
-read-only capture records **978 ledger rows**. The matching live-introspection registry records
-`migrations_high_water` **`20260827113443`**, latest applied authored name
-`20260826220000_quote_version_restore_trust_boundary`, and effective ordering high-water
-**`20260826220000`**. It also records `quote_versions.restore_trusted_at`. The earlier 976- and
-977-row readings are superseded. This pass does not re-certify every issue narrative below or
-claim a fresh post-apply read of function bodies, grants, or operational counts.
+**Last verified: 2026-09-01 for migration-ledger facts.** A read-only capture records **980 ledger rows**
+and effective ordering high-water **`20260826222000`** (authored name
+`20260826222000_correct_ap_aging_due_date_buckets`). The two Section 9 AP migrations
+`20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
+`20260826222000_correct_ap_aging_due_date_buckets` were applied live on 2026-09-01 under Mason's explicit
+in-chat approval, through the full apply gate (ordering, destructive-content, reviewer proof and Codex
+gate) — verified post-apply against the live catalog: exactly one `get_ap_aging` overload, `days_1_30`
+present, buckets keyed on `due_date`, `SECURITY DEFINER` with `search_path=public, pg_temp` intact.
+The earlier 976-, 977- and 978-row readings are superseded, and so is the `max(version)` that came with
+them: the 978-row capture recorded `migrations_high_water` `20260827113443`, but after the two 2026-09-01
+applies the live `max(version)` is **`20260901045346`**. `20260827113443` is history, not the current
+maximum. The 978-row capture also recorded `quote_versions.restore_trusted_at`. Read ordering from the
+authored NAME, never from `version` — the two diverge, which is why searching the ledger by version stamp
+finds neither Section 9 migration even though both are applied. This pass does not re-certify every issue
+narrative below or claim a fresh post-apply read of function bodies, grants, or operational counts.
 The PR #361 function/schema surface was separately refreshed from a live schema dump on 2026-08-27;
 that evidence supports the six pending return-credit candidates without superseding the newer ledger
 capture above.
@@ -18,21 +26,25 @@ intent binding (`20260825034622`). See the rollout block at the top of
 `docs/reference/migration-history.md`. This pass re-read the ledger and updated the draw-down
 entries only; it does not re-certify unrelated issue narratives below.
 
-**Section 9 stamp: 2026-08-26 UTC, limited read-only remediation refresh; migration ordering
-re-checked live 2026-08-31.** Live catalog evidence from the 2026-08-26 read confirms the three
-Section 9 HIGH findings are still production risks until the pending migrations apply:
-`get_ap_aging(date)` still uses `bill_date` and has no `1-30` return column,
-`get_ap_dashboard_summary()` still uses a rolling 30-day due-this-month window, and the affected
-AP/receiving mutators are not yet wrapped by the new exact-intent contract. The cutover preflight
-found zero active unbound receipts across those six operations on that same 2026-08-26 read. The
-two unchanged SQL bodies are stamped `20260826221000` and `20260826222000`. The
-`20260826220000` quote-trust prerequisite they sit behind is **no longer pending** — a read-only
-`list_migrations` on 2026-08-31 returned 978 ledger rows, `max(version)` `20260827113443`, and
-effective ordering name high-water `20260826220000`, with neither Section 9 stamp present. Both
-therefore remain strictly forward of the live name high-water; re-read the ledger immediately
-before any apply. The superseded 977-row/`20260826150000` figures this paragraph previously
-carried are covered by the stamp above. No unrelated issue entry was re-read; its own dated
-evidence remains authoritative.
+**Section 9: RESOLVED — both migrations applied live 2026-09-01. Do not plan a rollout from this
+entry.** The pre-apply narrative that stood here is superseded in full and is summarised below only so
+the change of state is legible; nothing in it describes production any more.
+
+Post-apply catalog read, 2026-09-01: `get_ap_aging` has exactly **one** overload taking `p_as_of_date`
+and returns the five-bucket due-date contract (`current_amount`, `days_1_30`, `days_31_60`,
+`days_61_90`, `over_90`, plus `total_outstanding`/`bill_count`), `SECURITY DEFINER` with
+`search_path=public, pg_temp` intact; `get_ap_dashboard_summary` takes `p_idempotency_key` and its body
+keys on `due_date` rather than a rolling 30-day window. The ledger shows **980 rows** with
+`20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
+`20260826222000_correct_ap_aging_due_date_buckets` as the two newest entries.
+
+**Superseded (2026-08-26/08-31 state, retained for history only):** the three Section 9 HIGH findings
+were then live production risks — `get_ap_aging(date)` used `bill_date` with no `1-30` column,
+`get_ap_dashboard_summary()` used a rolling 30-day window, and the AP/receiving mutators were not yet
+wrapped by the exact-intent contract. That read also found zero active unbound receipts across those six
+operations, and recorded 978 ledger rows with ordering high-water `20260826220000`. **Those figures and
+the "re-read the ledger before any apply" instruction no longer apply — the apply has happened.** No
+unrelated issue entry was re-read; its own dated evidence remains authoritative.
 
 **OPEN — return credits do not reverse COGS until the PR 361 rebuild is applied.** Live
 `_issue_return_credit_impl` still creates only the credit-memo header and writes no
@@ -295,6 +307,89 @@ an unreviewed merge to `main`, and they are a command-text net: they catch every
 is invisible to them — Codex demonstrated exactly that. The accepted mitigations are the guards
 themselves, the required Vercel/CI/SQL checks (which the ruleset still enforces on everyone), and
 Vercel's one-click rollback if something unreviewed does land.
+
+## OPEN (CAPPED — WONTFIX by decision) 2026-09-01 — the write-time actor-binding guard is bypassable by design limits, not by defect
+
+**Plain English.** CRX records **who did what** — who received inventory, who recorded a vendor payment —
+and some of those entries land in the immutable financial audit log. A database routine running with
+elevated privileges that accepts a caller-supplied "who did this" value and writes it down unchecked lets
+any signed-in user attribute an action to somebody else. That is not hypothetical: it happened on
+2026-06-17, when `link_blend_ticket_to_order` / `unlink_blend_ticket_from_order` stamped `p_performed_by`
+straight into `financial_audit_log` with no binding check (Gauntlet Section 1 HIGH, fixed in migration
+`20260617171500`).
+
+`.claude/hooks/actor-binding-check.mjs` is the **write-time** half of that defence — it inspects a migration
+before it is written, so a forgery is refused rather than detected after it ships. **Scope that claim
+precisely: it inspects `Write` and `Edit` tool calls only.** Both manifests register it under the matcher
+`"Write|Edit"` (`.claude/settings.json`, `.codex/hooks.json`), so a migration authored any other way is
+never presented to it (row 6). The sweep predicates (`predicates/actor-forgery.sql`, `-fin-audit.sql`) are
+the **post-apply** half, run against the live catalog, and are indifferent to how the file was written.
+
+**Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. The
+**active** hook is the unchanged 213-line guard: it catches ordinary spellings *of a whole-function write*
+and nothing more. The **parked PR #449 rewrite** is materially stronger — 19 laundering channels closed over
+two rounds, each reproduced by running the hook and each fix mutation-tested — but **none of that is in the
+running hook**, and this PR does not change it. Do not credit the active guard with #449's fixes. It is
+**not** a boundary, and no document should describe it as preventing actor forgery. Note in particular that
+the ordinary *incremental* edit path is not covered at all (row 3 below), so "catches every ordinary
+spelling" would overstate even the active guard.
+
+**What it does NOT catch, stated so nobody re-derives it:**
+
+| Gap | Why it is open |
+|---|---|
+| Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit — and **the live sweep predicates use the SAME name pattern, so this gap is shared, not compensated.** The post-apply sweep does NOT catch this one. Closing it needs real dataflow over write targets, and would have to change the hook and both predicates together. |
+| Re-binding after a passing check (`p_performed_by := p_target_id;`), `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | **Not covered at write time, and not covered by the sweeps either.** The incidental `hasMutation` trigger that would catch `EXECUTE`/`INSERT` lives in **parked PR #449, not in the running hook** (213 lines, no such logic) — do not credit the active guard with it. The sweeps miss them for their own reasons: both predicates select only where `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that passes a binding check and *then* re-assigns the parameter is excluded outright; and a temp-table round trip matches neither the `coalesce`/`auth.uid`/role proximity test in `actor-forgery.sql` nor the same-statement `financial_audit_log … <param>` test in `-fin-audit.sql`. |
+| An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function | The hook analyses `tool_input.content \|\| tool_input.new_string` — the fragment alone. It does **not** reconstruct the full post-edit file the way `sql-safety.mjs`, `idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. With no function header, parameter list or `SECURITY DEFINER` attribute in the analysed text, the guard finds no candidate and allows. This is the *normal* editing path; the hook's own Edit-coverage test passes a whole function as `new_string`, so it does not exercise it. The sweeps do still see the applied routine. |
+| Cross-routine / cross-migration helpers | **Not covered — and there is no "fail-closed callable rule" in the running hook.** The analysis is intra-routine and single-file, and the active guard only considers a routine whose own body contains a literal `INSERT INTO` / `UPDATE` (matched with a trailing space) / `DELETE FROM`. A `SECURITY DEFINER` wrapper that accepts `p_performed_by` and delegates the write to a helper therefore has no literal DML in its body and is allowed — confirmed by running the real hook, which returned `allow`. Neither sweep predicate follows the helper call either. Any fail-closed callable handling belongs to **parked PR #449**; do not rely on it. |
+| Novel lexical spellings | The known-unknown. Three rounds each found a *new category*; the tool pattern-matches text, and PostgreSQL's grammar has more spellings than anyone will enumerate. |
+| **A migration written by any tool other than `Write`/`Edit`** — `cat`/`tee`/redirect from Bash or PowerShell, or a generator script | **The guard never runs at all.** Both manifests register it under the matcher `"Write\|Edit"` only, and `bash-safety.mjs` blocks *modifying* an existing file under `supabase/migrations/` while permitting **creation** of a new one. Perfectly ordinary SQL with a forgeable actor therefore bypasses the guard on tool choice alone — no lexical trick required. This is the widest gap in this table and it is orthogonal to every other row: they describe SQL the guard mis-reads, this one describes SQL it never sees. The post-apply sweeps do still see the applied routine. |
+
+**The finding that settled the cap.** PostgreSQL needs no whitespace before a quoted identifier, so
+`CREATE OR REPLACE FUNCTION"public"."f"(` is valid SQL that the guard **never matched** — the security check
+did not run on that routine at all. That one lexical fact defeated eight independent regexes written across
+three careful passes.
+
+**What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
+
+- **For the incremental-Edit, novel-lexical and non-`Write`/`Edit` tool-path gaps** (rows 3, 5 and 6
+  above): the exact-SHA `gpt-5.6-sol` proof on migration diffs and the CodeRabbit final review are the
+  controls that always apply. The post-apply sweep predicates are a **partial, conditional** control here,
+  not a third guaranteed one, and the condition must be stated rather than implied. They consider such a
+  routine at all only because it carries no `ACTOR_MISMATCH` token — but they then fire only on their own
+  sinks: the actor parameter near COALESCE/`auth.uid()`/role text, or a `financial_audit_log` write in the
+  same statement. **A bypass that writes the forgeable actor to any other target, with none of those cues,
+  clears both predicates without trying.** Do not describe any row here as requiring an attacker to clear
+  all three controls.
+
+  Two of these three rows need no cleverness at all, which is the point of the cap: an ordinary incremental
+  `Edit` (row 3) and an ordinary shell-written migration (row 6) each bypass the *hook* with completely
+  unremarkable SQL. "Deliberately obfuscated SQL" describes the novel-lexical row only, and even there it
+  describes what defeats the hook, not what defeats the sweeps.
+- **For cross-routine / cross-migration helpers** (row 4): **only the Codex proof and the CodeRabbit
+  review.** Neither predicate can see this path. `actor-forgery.sql` needs actor/`auth.uid`/role proximity
+  inside the *wrapper's own* `prosrc`, and `-fin-audit.sql` needs both the parameter and the
+  `financial_audit_log` sink in that same source — but the wrapper only hands the parameter to a helper, and
+  a private helper is not even a candidate, since both predicates require
+  `has_function_privilege('authenticated', ...)`. Do not count the sweep here.
+- **For the re-binding and laundering gaps** (row 2): **only the Codex proof and the CodeRabbit review.**
+  Both predicates are gated on `prosrc !~* 'ACTOR_MISMATCH'`, so a re-binding that follows a passing check is
+  excluded from the sweep by the presence of the check it defeated; and a temp-table round trip matches
+  neither predicate's sink test. Do not count the sweep here.
+- **For the naming-scope gap** (row 1): **only the Codex proof and the CodeRabbit review.** The sweep
+  predicates key on the same `^p_\w*by$|^p_actor|^p_user` pattern, so they share the blind spot rather than
+  covering it. Do not cite the sweep as the compensating control for a `p_target_id`-shaped parameter.
+
+**Do not.** Do not open another pattern-hardening round (cite the DECISION_LOG entry and close the request).
+Do not remove or weaken the hook — it is cheap and it catches the ordinary cases. If it is ever rebuilt, use
+PostgreSQL's own parser (`libpg_query`) rather than more regexes; that removes the lexical category entirely
+but still does not solve the naming-scope limit.
+
+**Related open work.** PR #449 is parked with the 19 closed bypasses and 23 open review findings; it is worth
+landing after one clean review round, as an improvement to a capped control rather than a resumed programme.
+A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-recut-20260831` (no PR) and
+duplicates one of #449's fixes — delete it rather than continuing it.
+
 
 ## OPEN 2026-09-01 — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
 
