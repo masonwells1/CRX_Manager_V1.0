@@ -41,5 +41,5 @@ Section 2 is next. Its 2026-08-05 refresh confirmed 2 HIGH historical-report def
 
 ## Visibility Notes
 
-- Full ledger and evidence: [2026-07-14-full-gauntlet-codex-only-remediation.md](2026-07-14-full-gauntlet-codex-only-remediation.md).
+- Full ledger and evidence: [2026-07-14-full-gauntlet-codex-only-remediation.md](../2026-07-14-full-gauntlet-codex-only-remediation.md).
 - No Claude review was used during the Codex-only gauntlet or Codex remediation phase. Direct Claude verification was performed afterward as Mason requested and returned `SHIP-WITH-FOLLOWUPS` with no BLOCKER/HIGH; all code findings and operational preflights are closed. The exact-commit Claude proof remains part of the post-apply pre-push gate.
