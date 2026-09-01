@@ -6,20 +6,25 @@
 //     node scripts/guard-unlock.mjs --status
 //     node scripts/guard-unlock.mjs --lock
 //
-// WHY A TTY IS REQUIRED
-// ---------------------
-// The lock exists because an agent that can edit a guard can disable it. That
-// reasoning applies to the unlock too: a switch an agent can flip is not a
-// switch. So this script refuses unless it is attached to a real interactive
-// terminal AND a human types the confirmation phrase. Claude's and Codex's
-// shells are non-interactive (no TTY on stdin), so neither can unlock the
-// surface no matter what it is asked to do — including by a prompt-injected
-// instruction hidden in a file it read.
+// WHY A TTY IS REQUIRED — AND WHAT IT IS AND IS NOT
+// -------------------------------------------------
+// The lock exists because an agent that can edit a guard can disable it, and the
+// same reasoning applies to the unlock. Requiring an interactive terminal plus a
+// typed phrase stops the ORDINARY agent path: a non-interactive tool shell fails
+// `isTTY` and cannot answer the prompt, so a prompt-injected "unlock the guards"
+// hidden in a file gets nowhere.
 //
-// This is deliberately NOT enforced by a permission rule. A permission rule
-// lives in settings.json, which an unlocked agent could edit; the TTY check
-// lives in the same file the lock protects, so disabling it requires an unlock,
-// which requires a TTY. That circularity is the point.
+// It is NOT a human-only gate, and must not be described as one (corrected
+// 2026-08-31 after an exact-SHA review): an agent able to allocate a PTY
+// satisfies `isTTY` and can supply stdin, and the phrase below is a literal in
+// this file, not a secret. Treat this as a deliberate speed bump.
+//
+// The real protection for these paths is layered, not this switch alone: the
+// `ask` entries in the permission manifest (a genuine denial for Edit/Write
+// under `dontAsk`), this lock for tool-call writes including Bash, and — the
+// only durable boundary — GitHub branch protection plus review. A guard that
+// inspects tool arguments cannot stop code that an agent writes and then runs,
+// because those writes happen inside that process with no tool call to inspect.
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";

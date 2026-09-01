@@ -32,13 +32,34 @@ findings, in order, and the third is the one that mattered:
    running in bypass-permissions mode honours neither — during PR #530 the authoring agent edited
    `.claude/settings.json` freely. A protection that evaporates in one mode is not a boundary.
 
-**Mason's decision, 2026-08-31: lock these files with a hook rather than describe them with a
-permission tier.** `.claude/hooks/guarded-surface-lock.mjs` (rule book in `guarded-surface-lib.mjs`)
-denies WRITES on every channel — Bash, native `Write`/`Edit`, MCP path fields, `apply_patch`
-destinations — and behaves identically in every permission mode, including bypass mode (verified:
-it blocked the authoring agent mid-task from editing `.claude/settings.json`, which is the
-self-protection property that makes it worth having). **Reads stay allowed**, which is why this is
-a lock and not a `review-proof-guard`-style deny-every-mention: agents inspect hooks constantly.
+**Mason's decision, 2026-08-31 (revised the same evening — read the correction below before
+citing this entry).** Add `.claude/hooks/guarded-surface-lock.mjs` (rule book in
+`guarded-surface-lib.mjs`), which denies WRITES on every channel — Bash, native `Write`/`Edit`, MCP
+path fields, `apply_patch` destinations — in every permission mode including bypass mode. **Reads
+stay allowed**, unlike `review-proof-guard.mjs`'s deny-every-mention, because agents inspect hooks
+constantly during normal work.
+
+**CORRECTION, same evening: this is a speed bump, NOT a boundary — and the `ask` entries stay.**
+The lock was first built to replace the `ask` tier, on the premise that it could not be
+circumvented. Three rounds of exact-SHA `gpt-5.6-sol` review dismantled that premise, and the
+decisive one was reproduced directly rather than accepted on the reviewer's word: with the surface
+**locked**, a five-line script writing through node's `fs` created a file inside `.claude/hooks/`
+and the hook never fired. It inspects the ARGUMENTS OF TOOL CALLS; code that an agent writes and
+then runs performs its writes inside its own process, where no tool call exists to inspect. The TTY
+unlock is no stronger — a reviewer with PTY allocation can satisfy `isTTY`, and the confirmation
+phrase is a literal in the source.
+
+This is the same residual gap `review-proof-guard.mjs` already documents about itself: a
+string-matching guard over tool commands stops named and accidental writes, not a determined agent
+that hides the target from the command text.
+
+**Operative consequence:** the `ask` entries for these paths REMAIN. Removing them in favour of the
+lock would have been a net weakening, because under `dontAsk` an `ask` rule is a real denial for
+`Edit`/`Write` while the lock is bypassable. The lock is kept as defense in depth — it closes the
+CodeRabbit Major finding that blanket `Bash` was never gated on these paths at all, which no `ask`
+rule ever covered. Do not describe it as a boundary, and do not remove the `ask` tier on its
+strength. The durable boundary remains GitHub branch protection plus review, exactly as for the
+proof guard.
 
 **Operative rules:**
 
@@ -47,9 +68,12 @@ a lock and not a `review-proof-guard`-style deny-every-mention: agents inspect h
   `package-lock.json`, `scripts/agent-manifest-parity.mjs`, `scripts/sync-agent-workflows.mjs`, and
   the lock's own `guarded-surface-lib.mjs` and `scripts/guard-unlock.mjs` — without which the lock
   would be decorative.
-- Changing any of them requires `node scripts/guard-unlock.mjs --minutes N`, which needs an
-  interactive TTY **and** a typed phrase, so no agent shell can run it. It auto-expires (4h cap),
-  reports `--status`, and closes early with `--lock`.
+- `node scripts/guard-unlock.mjs --minutes N` opens the lock for tool-call writes. It needs an
+  interactive TTY and a typed phrase, auto-expires (4h cap), reports `--status`, and closes early
+  with `--lock`. Treat it as a deliberate speed bump for the ordinary path, **not** proof that only
+  a human can open it: a PTY-capable agent can satisfy both conditions, and the phrase is a literal
+  in the source. Because the `ask` tier stays, this is not the only thing standing between an agent
+  and these files.
 - Shell read/write is split by a fail-closed allowlist of read-only command heads. An unlisted head
   is a writer, so new verbs are denied without being enumerated — a blocklist reopens every time
   someone learns one.
@@ -58,7 +82,12 @@ a lock and not a `review-proof-guard`-style deny-every-mention: agents inspect h
   prompting him remains unidentified — most likely individual hooks returning `ask`. Tracked as
   open; do not assume PR #530 addressed it.
 - Known cost, accepted: changing a guard, a CI workflow, or a dependency now needs a deliberate
-  unlock first.
+  unlock first, on top of the `ask` tier that already applied.
+- **Do not treat a passing lock test suite as proof the lock holds.** It carried 166 green
+  assertions, had been observed blocking its own author mid-task, and still had a fatal hole; the
+  next review round found three more, and the round after that three more again. Self-written tests
+  encode the author's model of the threat. Guard work gets an independent adversarial pass before
+  anyone relies on it.
 
 Source: PR #530, `docs/changelog.d/2026-08-31-guarded-surface-lock.md`, and the two superseded
 entries in `docs/changelog.d/` from the same day.

@@ -90,7 +90,39 @@ const GUARDED_GLOB_TARGETS = [".claude", ".codex", ".husky", ".github", "hooks",
 // file is lowercase, so folding the input closes that whole class rather than
 // enumerating spellings.
 export function normalizePath(value) {
-  return String(value ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const raw = String(value ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return resolveDotSegments(raw);
+}
+
+/**
+ * Collapse `.` and `..` segments. Codex round 3, HIGH: normalizePath changed
+ * slashes, case, and trailing separators but never resolved traversal, so
+ * `.claude/session-state/../hooks/sql-safety.mjs` reached the real guarded hook
+ * while the matcher saw an unguarded path. The same trick targets the unlock
+ * record. Resolving here fixes every caller at once — the file matcher, the
+ * directory matcher, and the redirect-target check all normalize through it.
+ *
+ * A leading `..` that would escape the root is KEPT, not dropped: discarding it
+ * would fabricate a path that resolves differently from the real one.
+ */
+export function resolveDotSegments(p) {
+  if (!p.includes("./") && !p.endsWith("/.") && !p.endsWith("/..")) return p;
+  const isAbsolute = p.startsWith("/");
+  const drive = /^([a-z]:)(\/.*)?$/.exec(p);
+  const body = drive ? (drive[2] || "") : p;
+  const out = [];
+  for (const seg of body.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (out.length && out[out.length - 1] !== "..") out.pop();
+      else if (!isAbsolute && !drive) out.push("..");
+      continue;
+    }
+    out.push(seg);
+  }
+  const joined = out.join("/");
+  if (drive) return `${drive[1]}/${joined}`;
+  return isAbsolute ? `/${joined}` : joined;
 }
 
 /** True when a literal path points at a guarded enforcement surface. */
@@ -365,7 +397,17 @@ export function evaluateGuardedSurface({ toolName, input = {}, unlock = null, no
     return { decision: "block", reason: lockedReason(String(hitPath)) };
   }
 
-  const command = input.command ?? input.cmd ?? null;
+  // `input` is the stdin channel of a shell-capable MCP runner
+  // (`interact_with_process`). Codex round 3, HIGH: only `command`/`cmd` were
+  // read, so process input that overwrote a guard was allowed outright. Any
+  // field that can carry shell text has to be judged as shell text; a runner
+  // that feeds a command through stdin is still running a command.
+  // Deliberately NOT `content`/`text`: those carry file BODIES, and judging a
+  // document that merely quotes a guarded path as if it were a shell command
+  // would deny ordinary writing (the proof guard skips Write's content for the
+  // same reason). `input`/`stdin` are process-input channels, so they are shell
+  // text by definition.
+  const command = input.command ?? input.cmd ?? input.input ?? input.stdin ?? null;
   if (command != null) {
     if (!commandTouchesGuardedSurface(command)) return allow;
     if (shellCommandIsReadOnly(command)) return allow;   // reading a guard is always fine

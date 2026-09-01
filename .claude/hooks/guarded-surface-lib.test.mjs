@@ -203,6 +203,51 @@ for (const cmd of [
 }
 
 // ---------------------------------------------------------------------------
+// 5c. Codex round 3. Two patchable bypasses (the third — that a script an agent
+// writes and runs bypasses the hook entirely — is NOT patchable here and is
+// recorded honestly instead; see DECISION_LOG 2026-08-31).
+// ---------------------------------------------------------------------------
+
+// (4) Path traversal. These resolve to real guarded files.
+for (const p of [
+  ".claude/session-state/../hooks/sql-safety.mjs",
+  ".claude/hooks/../hooks/money-safety.mjs",
+  "docs/../.claude/settings.json",
+  ".claude/./hooks/bash-safety.mjs",
+  ".claude/session-state/../../.claude/hooks/env-guard.mjs",
+  "scripts/../.husky/pre-push",
+  ".claude/hooks/../session-state/guard-unlock.json",   // traversal onto the unlock record
+]) {
+  assert.ok(guardedSurfacePath(p), `traversal must resolve to a guarded path: ${p}`);
+  denies(judge({ file_path: p }, { toolName: "Write" }), `traversal write: ${p}`);
+  pass++;
+}
+// Traversal must not over-reach: these genuinely are not guarded.
+for (const p of [
+  ".claude/hooks/../../src/lib/db.ts",
+  "docs/manual/../reference/gotchas.md",
+  "../sibling-repo/.claude/hooks/x.mjs",   // outside this repo root
+]) {
+  assert.ok(!guardedSurfacePath(p) || p.startsWith(".."), `traversal must not over-block: ${p}`);
+  pass++;
+}
+
+// (5) Process-input channel. A shell-capable MCP runner feeds its command
+// through stdin, which the evaluator did not read at all.
+for (const field of ["input", "stdin"]) {
+  denies(
+    judge({ [field]: "echo x > .claude/hooks/sql-safety.mjs" }, { toolName: "mcp__Desktop_Commander__interact_with_process" }),
+    `process-input channel via ${field}`,
+  );
+}
+// File CONTENT must stay unjudged as shell text, or writing documentation that
+// quotes a guarded path would be denied.
+allows(
+  judge({ file_path: "docs/reference/gotchas.md", content: "run: echo x > .claude/hooks/sql-safety.mjs" }, { toolName: "Write" }),
+  "prose quoting a guarded command is not itself a write to it",
+);
+
+// ---------------------------------------------------------------------------
 // 6. Reads stay allowed — agents inspect guards constantly during normal work
 // ---------------------------------------------------------------------------
 for (const cmd of [
