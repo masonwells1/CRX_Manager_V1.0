@@ -97,12 +97,20 @@ commit):
   (paste the body under a canonical name, leaving no trace on disk) and forces the loud
   one (a tracked, diffable, reviewable file move). It is the same class of residual as the
   proof self-attestation documented in `KNOWN_ISSUES` §4b.
-- **The rejected ledger-order migration is not yet parked on `main`.**
-  `20260827223000_enforce_global_migration_ledger_order.sql` is still in
-  `supabase/migrations/` on `origin/main`; the commit that moves it (`2198e43db`) is on the
-  unmerged branch `claude/harness-guardrail-review-bee189`. So this guard refuses it only
-  once that branch lands. That file was deliberately not touched here — it is another
-  session's in-flight work.
+- **The rejected ledger-order migration IS parked on `main`** at
+  `scripts/.staging-migrations/20260827223000_enforce_global_migration_ledger_order.sql.REJECTED`,
+  and is therefore refused by this guard — the outcome the guard exists for.
+
+  *Corrected 2026-08-31 (CodeRabbit, PR #533).* This bullet originally read "is not yet
+  parked on `main`", claiming the file was still armed in `supabase/migrations/` and that the
+  parking commit sat on an unmerged branch. **That was already false when written.** The
+  branch had landed as #525; because it was squash-merged, the source branch was deleted and
+  a `git log` glance read as unmerged. The claim was then repeated from earlier in the session
+  instead of being re-derived from `main`.
+  Kept as a labelled correction rather than a silent rewrite: the failure mode — trusting a
+  fact established earlier in a long session instead of re-reading the tree — is the useful
+  part, and the two mechanics that produce it (squash-merge hides that a branch landed;
+  a stale in-session fact outlives the state it described) are worth leaving visible.
 - The six pending return-credit migrations (`20260827041000`–`20260827041500`) are all in
   `supabase/migrations/` and are unaffected.
 - `.claude/hooks/codex-push-lib.mjs` is a blob-pinned protected input; extracting
