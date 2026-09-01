@@ -240,6 +240,41 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-09-01 — agents share Mason's admin identity, so the manual merge override can only be fenced off by command matching, never truly withheld
+
+**Found by:** the exact-SHA Codex proof on PR #541, which refused the candidate until the raw
+REST/GraphQL merge transports were denied on both guards.
+
+**The issue.** On 2026-09-01 Mason gained a manual review override on `main` (classic branch
+protection no longer enforces its rules for administrators — see the decision log). The bypass is
+granted by **admin rights on his account**, and every Claude and Codex session authenticates as that
+same account. There is therefore no mechanism that offers the override to Mason and withholds it
+from an agent; the guards can only refuse the *commands* that would use it.
+
+**What is in place.** Both merge gates deny `gh pr merge --admin` outright, verify
+`reviewDecision === "APPROVED"` directly rather than inferring it, and deny the
+`/pulls/<n>/merge` REST endpoint and the `mergePullRequest` GraphQL mutation by destination
+regardless of transport. That closes every route found so far, and it is an honest-mistake net —
+**not a security boundary.** A command shape nobody has thought of, or an indirection that never
+spells the destination in the command text, is outside what a command-text guard can catch. The
+same honest residual is already documented for the interpreter-argument rule in
+`.codex/hooks/production-action-guard.mjs`.
+
+**The durable fix, DECLINED by Mason on 2026-09-01.** Giving agents a separate, non-admin GitHub
+credential (a machine account or a fine-grained token without admin bypass) would let GitHub
+withhold the override from agents instead of a guard trying to. It was put to Mason twice — once
+when the override was designed, and again after the exact-SHA proof demonstrated a working bypass —
+and he declined both times, explicitly choosing to keep the setup simple and accept the residual
+risk. **This is a settled owner decision: do not re-open it or implement the separate credential
+unless Mason asks.** Record it here rather than re-litigating.
+
+**What that means in practice.** The merge guards are the only thing standing between an agent and
+an unreviewed merge to `main`, and they are a command-text net: they catch every route found so far
+(and six were found in one day), but a command that constructs the merge URL from separate strings
+is invisible to them — Codex demonstrated exactly that. The accepted mitigations are the guards
+themselves, the required Vercel/CI/SQL checks (which the ruleset still enforces on everyone), and
+Vercel's one-click rollback if something unreviewed does land.
+
 ## OPEN (CAPPED — WONTFIX by decision) 2026-09-01 — the write-time actor-binding guard is bypassable by design limits, not by defect
 
 **Plain English.** CRX records **who did what** — who received inventory, who recorded a vendor payment —
@@ -321,6 +356,7 @@ but still does not solve the naming-scope limit.
 landing after one clean review round, as an improvement to a capped control rather than a resumed programme.
 A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-recut-20260831` (no PR) and
 duplicates one of #449's fixes — delete it rather than continuing it.
+
 
 ## OPEN 2026-09-01 — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
 
