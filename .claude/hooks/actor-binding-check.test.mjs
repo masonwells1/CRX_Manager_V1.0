@@ -3245,4 +3245,134 @@ ok(!isDeny(r), "actor::pg_catalog.text is a pg_catalog conversion, not a callabl
 r = runHook(fn("BEGIN\n  RETURN to_jsonb(p_performed_by::uuid[]);\nEND;"));
 ok(isDeny(r), "a built-in cast does not excuse the surrounding helper call");
 
+// ── ROUND 2: PostgreSQL needs no whitespace before a quoted identifier ──────
+// Every `\s+` sitting between a keyword and an IDENTIFIER position was a hole,
+// not a separator. UPDATE"t", INTO"v", FOR"v", FUNCTION"f"( and ALTER
+// FUNCTION"f"( are all legal SQL that the reader used to skip entirely.
+const GUARD_LINE =
+  "  IF p_performed_by IS DISTINCT FROM auth.uid() THEN\n" +
+  "    RAISE EXCEPTION 'ACTOR_MISMATCH: p_performed_by must equal auth.uid()';\n" +
+  "  END IF;";
+
+r = runHook(
+  'CREATE OR REPLACE FUNCTION"public"."test_fn"(p_performed_by uuid) RETURNS jsonb ' +
+  "LANGUAGE plpgsql SECURITY DEFINER AS $f$\nBEGIN\n" +
+  "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;\n$f$;"
+);
+ok(isDeny(r), 'CREATE FUNCTION"name"( with no space after FUNCTION is still inspected');
+
+r = runHook(
+  'CREATE OR REPLACE PROCEDURE"public"."test_proc"(p_performed_by uuid) ' +
+  "LANGUAGE plpgsql SECURITY DEFINER AS $p$\nBEGIN\n" +
+  "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;\n$p$;"
+);
+ok(isDeny(r), 'CREATE PROCEDURE"name"( with no space after PROCEDURE is still inspected');
+
+r = runHook('ALTER FUNCTION"public"."other_fn"(uuid) SECURITY DEFINER;');
+ok(isDeny(r), 'ALTER FUNCTION"name"( elevating to SECURITY DEFINER is still inspected');
+
+// UPDATE was the one static mutation keyword whose target can abut it, because
+// INSERT/DELETE/MERGE all require a second keyword first. Combined with a
+// wrapper that keeps the actor away from any operator -- (SELECT actor) or
+// CASE ... THEN actor END -- it made the whole routine read as non-mutating.
+r = runHook(fn(
+  'BEGIN\n  UPDATE"financial_audit_log" SET actor_user_id = (SELECT p_performed_by) ' +
+  "WHERE id = 1;\nEND;"
+));
+ok(isDeny(r), 'UPDATE"table" behind a (SELECT actor) wrapper is still a mutation');
+r = runHook(fn(
+  'BEGIN\n  UPDATE"financial_audit_log" SET actor_user_id = ' +
+  "CASE WHEN true THEN p_performed_by END WHERE id = 1;\nEND;"
+));
+ok(isDeny(r), 'UPDATE"table" behind a CASE expression is still a mutation');
+r = runHook(fn(
+  "DECLARE v_x uuid;\nBEGIN\n  SELECT p_performed_by INTO v_x;\n" +
+  '  UPDATE"financial_audit_log" SET actor_user_id = (SELECT v_x) WHERE id = 1;\nEND;'
+));
+ok(isDeny(r), 'a local laundered into UPDATE"table" is still a mutation');
+
+// INTO"v" / INTO STRICT"v" / FOR"v" hid an overwrite of a trusted auth.uid()
+// local, which let a legacy guard compare the actor against a caller value.
+for (const [label, overwrite] of [
+  ['SELECT ... INTO"v_actor"', '  SELECT p_target_id INTO"v_actor";'],
+  ['SELECT ... INTO STRICT"v_actor"', '  SELECT p_target_id INTO STRICT"v_actor";'],
+  ['FOR"v_actor" IN ... LOOP', '  FOR"v_actor" IN SELECT p_target_id LOOP NULL; END LOOP;'],
+]) {
+  r = runHook(fn(
+    "DECLARE v_actor uuid;\nBEGIN\n  v_actor := auth.uid();\n" + overwrite + "\n" +
+    "  IF p_performed_by IS DISTINCT FROM v_actor THEN\n" +
+    "    RAISE EXCEPTION 'ACTOR_MISMATCH: x';\n  END IF;\n" +
+    "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;",
+    "p_performed_by uuid, p_target_id uuid"
+  ));
+  ok(isDeny(r), `${label} destroys the trusted auth.uid() binding and is BLOCKED`);
+}
+
+// ── ROUND 2: the refusal proves a NAME, and the name can be re-bound ────────
+// A PL/pgSQL parameter is an ordinary mutable local. A passing guard followed
+// by `p_performed_by := p_target_id;` stamps a value auth.uid() never approved
+// while the guard still reads as bound.
+for (const [label, rebind] of [
+  [":= assignment", "  p_performed_by := p_target_id;"],
+  ["= assignment", "  p_performed_by = p_target_id;"],
+  ["SELECT ... INTO the parameter", "  SELECT p_target_id INTO p_performed_by;"],
+  ["a FOR loop target", "  FOR p_performed_by IN SELECT p_target_id LOOP NULL; END LOOP;"],
+  ["a quoted target", '  "p_performed_by" := p_target_id;'],
+  ["a block-qualified target", "  test_fn.p_performed_by := p_target_id;"],
+  ["a nested block", "  BEGIN p_performed_by := p_target_id; END;"],
+]) {
+  r = runHook(fn(
+    "BEGIN\n" + GUARD_LINE + "\n" + rebind + "\n" +
+    "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;",
+    "p_performed_by uuid, p_target_id uuid"
+  ));
+  ok(isDeny(r), `a refusal followed by ${label} of the actor parameter is BLOCKED`);
+}
+// The rebinding rule must not deny the canonical shape it is protecting.
+r = runHook(fn("BEGIN\n" + GUARD_LINE + "\n" +
+  "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;"));
+ok(!isDeny(r), "the canonical direct-parameter refusal is still ALLOWED");
+
+// ── ROUND 2: operator resolution and file scope ────────────────────────────
+// `SET search_path TO 'evil', 'pg_catalog'` is the spelling every CRX migration
+// uses, and masking blanks string CONTENTS -- so the check that a user schema
+// precedes pg_catalog could never see the standard form.
+r = runHook(
+  "CREATE OR REPLACE FUNCTION public.test_fn(p_performed_by uuid) RETURNS jsonb " +
+  "LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'evil', 'pg_catalog' AS $f$\n" +
+  "BEGIN\n" + GUARD_LINE + "\n" +
+  "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;\n$f$;"
+);
+ok(isDeny(r), "a single-quoted user schema before 'pg_catalog' defeats the refusal proof");
+
+// Windows and macOS resolve paths case-insensitively, so these land in the very
+// same supabase/migrations/ directory.
+for (const scopePath of [
+  "supabase/migrations/20260901000000_x.SQL",
+  "Supabase/Migrations/20260901000000_x.sql",
+  "SUPABASE/MIGRATIONS/20260901000000_x.SQL",
+]) {
+  r = runHook(fn(MUTATION), scopePath);
+  ok(isDeny(r), `${scopePath} is the same migration directory and is still inspected`);
+}
+r = runHook(fn(MUTATION), "src/pages/Foo.tsx");
+ok(!isDeny(r), "case-insensitive scope matching does not widen the guard past migrations");
+
+// An edit shape this reader cannot reconstruct must not reconstruct to "".
+// The settings matcher `Write|Edit` is an unanchored regex, so a batched edit
+// payload reaches this hook with neither `content` nor `new_string`.
+{
+  const payload = {
+    tool_input: {
+      file_path: "supabase/migrations/20260901000000_x.sql",
+      edits: [{ old_string: "SELECT 1;", new_string: fn(MUTATION) }],
+    },
+  };
+  const res = spawnSync(process.execPath, [path.join(__dirname, "actor-binding-check.mjs")], {
+    input: JSON.stringify(payload), encoding: "utf8",
+  });
+  ok(res.stdout.includes('"permissionDecision":"deny"'),
+    "an unreconstructable edit payload for a migration fails CLOSED");
+}
+
 console.log(`actor-binding-check: ${pass} assertions passed`);

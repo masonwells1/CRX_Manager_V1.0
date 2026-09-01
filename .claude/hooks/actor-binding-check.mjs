@@ -42,9 +42,21 @@
 // migration's header comment.
 //
 // Conservative by design, in both directions:
-//   * SECURITY INVOKER functions are never flagged (RLS still applies to them).
-//   * A routine with NO reachable use of the actor is never flagged. "Mutates"
-//     is deliberately wider than INSERT/UPDATE/DELETE/MERGE, though: it also
+//   * A SECURITY INVOKER routine is never flagged FOR ACTOR BINDING (RLS still
+//     applies to it). That is not the same as "never flagged": the file-level
+//     checks below — unreadable/unparseable SQL, dynamic CREATE FUNCTION text
+//     the reader cannot see as one literal, an ALTER that renames the
+//     execute_sql_readonly or cron.job boundary, SQL handed to a callable not
+//     proven data-only — refuse the whole migration regardless of any
+//     routine's security mode, because they are about whether this reader can
+//     see the definition at all.
+//   * A routine whose body does not mutate at all is never flagged. It is NOT
+//     true that "a routine with no reachable use of the actor is never
+//     flagged": the mutation test scans the body text, not the actor's data
+//     flow, so a definer routine that declares an actor parameter and mutates
+//     ANY table — even one it never stamps the actor into — is flagged unless
+//     it proves the refusal or uses the exempt marker. "Mutates"
+//     is deliberately wider than INSERT/UPDATE/DELETE/MERGE, too: it also
 //     covers EXECUTE and any hand-off of the actor across a boundary this
 //     reader cannot see through — a call, an OPERATOR(...) or infix symbolic
 //     operator, or a cast to a user-defined type, since all of those can run
@@ -158,13 +170,27 @@ try {
 }
 
 const filePath = (payload?.tool_input?.file_path || "").replace(/\\/g, "/");
-if (!filePath || !filePath.endsWith(".sql") || !filePath.includes("supabase/migrations/")) {
+// Windows and macOS resolve paths case-insensitively, so `Supabase/Migrations/
+// x.SQL` writes the SAME file in the SAME directory as the canonical spelling.
+// Matching case-sensitively let a migration land in supabase/migrations/ with
+// the guard skipping it entirely, which is a scope hole rather than a style
+// preference. Compare case-insensitively; an out-of-scope path is still out of
+// scope under either casing.
+const scopePath = filePath.toLowerCase();
+if (!filePath || !scopePath.endsWith(".sql") || !scopePath.includes("supabase/migrations/")) {
   out("allow");
 }
 
 function proposedFileContent(toolInput, targetPath) {
   if (typeof toolInput?.content === "string") return { content: toolInput.content };
-  if (typeof toolInput?.new_string !== "string") return { content: "" };
+  // Anything else reaching this point is a write to a migration whose resulting
+  // bytes this reader cannot reconstruct — the settings matcher `Write|Edit` is
+  // an unanchored regex, so a batched or future edit shape (an `edits` array,
+  // say) arrives here with neither `content` nor `new_string`. Reconstructing
+  // it as "" would silently allow the whole file. Fail closed instead.
+  if (typeof toolInput?.new_string !== "string") {
+    return { error: "this tool payload carries no readable file content or single old/new string pair" };
+  }
   if (typeof toolInput?.old_string !== "string") return { content: toolInput.new_string };
 
   let current;
@@ -211,6 +237,23 @@ const SQL_IDENTIFIER_PATTERN =
   `(?:${SQL_UNICODE_IDENTIFIER_PATTERN}|"(?:[^"]|"")*"|[A-Za-z_][\\w$]*)`;
 const SQL_QUALIFIED_IDENTIFIER_PATTERN =
   `${SQL_IDENTIFIER_PATTERN}(?:\\s*\\.\\s*${SQL_IDENTIFIER_PATTERN})*`;
+// PostgreSQL's lexer needs NO whitespace between a keyword and a following
+// double-quoted identifier: UPDATE"audit_log", INTO"v_actor", FOR"v_row",
+// CREATE FUNCTION"public"."f"(...) and ALTER FUNCTION"public"."f"(...) are all
+// legal and mean exactly what their spaced spellings mean. Every plain `\s+`
+// sitting between a keyword and an IDENTIFIER position is therefore a hole
+// rather than a separator — the abutting spelling slips past the pattern
+// entirely and the construct becomes invisible to this reader. Use this gap for
+// every keyword->identifier boundary on a DENY path. (Only `"` can abut: an
+// unquoted name or U&"..." would fuse with the keyword into one identifier
+// token, so those spellings still require real whitespace.)
+const SQL_KEYWORD_IDENTIFIER_GAP = '(?:\\s+|\\s*(?="))';
+// The mirror hole, in the other direction: a keyword may abut the CLOSING quote
+// of a quoted identifier — ALTER TABLE"cron_job"RENAME TO x is legal — so a
+// plain `\s+` between an IDENTIFIER position and a following keyword is a hole
+// too. The lookbehind keeps this from splitting an unquoted identifier that
+// merely ends in the keyword's letters.
+const SQL_IDENTIFIER_KEYWORD_GAP = '(?:\\s+|(?<=")\\s*)';
 // INTO / FOR / FOREACH accept a comma-separated list of assignment targets, and
 // each target may be qualified by its block label. Reading the whole list (not
 // just the first name) is what lets the reader correlate output expressions
@@ -218,7 +261,7 @@ const SQL_QUALIFIED_IDENTIFIER_PATTERN =
 const SQL_ASSIGNMENT_TARGET_LIST_PATTERN =
   `${SQL_QUALIFIED_IDENTIFIER_PATTERN}(?:\\s*,\\s*${SQL_QUALIFIED_IDENTIFIER_PATTERN})*`;
 const routineHeadRe = new RegExp(
-  `CREATE\\s+(?:OR\\s+REPLACE\\s+)?(FUNCTION|PROCEDURE)\\s+` +
+  `CREATE\\s+(?:OR\\s+REPLACE\\s+)?(FUNCTION|PROCEDURE)${SQL_KEYWORD_IDENTIFIER_GAP}` +
     `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\(`,
   "gi"
 );
@@ -492,7 +535,11 @@ function hasSchemaBeforeExplicitPgCatalog(structuralSql, statementOnly = false) 
     // Routine attributes can follow the path without a semicolon (`...,
     // pg_catalog AS $body$`). Locate pg_catalog inside the captured value
     // instead of requiring the final list item to consume the whole suffix.
-    const catalog = /(?:^|,)\s*(?:"pg_catalog"|pg_catalog)(?=\s*(?:,|$|\b(?:AS|LANGUAGE|SECURITY|SET|RESET|CALLED|RETURNS|STRICT|IMMUTABLE|STABLE|VOLATILE|PARALLEL|COST|ROWS|SUPPORT)\b))/i
+    // `'pg_catalog'` (a single-quoted list item) is the spelling PostgreSQL's
+    // own \df output and nearly every CRX migration uses. Accept it alongside
+    // the bare and double-quoted forms; the caller must supply text in which
+    // string literals are still readable for this branch to fire.
+    const catalog = /(?:^|,)\s*(?:'pg_catalog'|"pg_catalog"|pg_catalog)(?=\s*(?:,|$|\b(?:AS|LANGUAGE|SECURITY|SET|RESET|CALLED|RETURNS|STRICT|IMMUTABLE|STABLE|VOLATILE|PARALLEL|COST|ROWS|SUPPORT)\b))/i
       .exec(match[1]);
     if (catalog && match[1].slice(0, catalog.index).trim() !== "") return true;
   }
@@ -507,8 +554,9 @@ function hasSchemaBeforeExplicitPgCatalog(structuralSql, statementOnly = false) 
  * type or operator. */
 function hasUnqualifiedUuidShadowRisk(...structuralSqlVariants) {
   const typeHead = new RegExp(
-    `\\bCREATE\\s+(?:DOMAIN|TYPE)\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?` +
-      `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})(?=\\s|$)`,
+    `\\bCREATE\\s+(?:DOMAIN|TYPE)${SQL_KEYWORD_IDENTIFIER_GAP}` +
+      `(?:IF\\s+NOT\\s+EXISTS${SQL_KEYWORD_IDENTIFIER_GAP})?` +
+      `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})(?![\\w$])`,
     "gi"
   );
   for (const structuralSql of structuralSqlVariants) {
@@ -629,16 +677,19 @@ function declaredPgCronJobViewAliases(sql, seedAliases = new Set(), includeTempo
   const structural = executableStructural ?? staticStructural;
   const viewHead = new RegExp(
     `\\bCREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:(TEMP(?:ORARY)?)\\s+)?` +
-    `(?:RECURSIVE\\s+)?VIEW\\s+(${SQL_QUALIFIED_IDENTIFIER_PATTERN})`,
+    `(?:RECURSIVE\\s+)?VIEW${SQL_KEYWORD_IDENTIFIER_GAP}(${SQL_QUALIFIED_IDENTIFIER_PATTERN})`,
     "i"
   );
   const relationSource = new RegExp(
-    `\\b(?:FROM|JOIN|TABLE)\\s+(?:ONLY\\s+)?(${SQL_QUALIFIED_IDENTIFIER_PATTERN})`,
+    `\\b(?:FROM|JOIN|TABLE)${SQL_KEYWORD_IDENTIFIER_GAP}` +
+      `(?:ONLY${SQL_KEYWORD_IDENTIFIER_GAP})?(${SQL_QUALIFIED_IDENTIFIER_PATTERN})`,
     "gi"
   );
   const renameHead = new RegExp(
-    `\\bALTER\\s+(?:VIEW|TABLE)\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?` +
-    `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s+RENAME\\s+TO\\s+(${SQL_IDENTIFIER_PATTERN})`,
+    `\\bALTER\\s+(?:VIEW|TABLE)${SQL_KEYWORD_IDENTIFIER_GAP}` +
+    `(?:IF\\s+EXISTS${SQL_KEYWORD_IDENTIFIER_GAP})?(?:ONLY${SQL_KEYWORD_IDENTIFIER_GAP})?` +
+    `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})${SQL_IDENTIFIER_KEYWORD_GAP}RENAME\\s+TO` +
+    `${SQL_KEYWORD_IDENTIFIER_GAP}(${SQL_IDENTIFIER_PATTERN})`,
     "i"
   );
   const declarations = [];
@@ -789,8 +840,11 @@ function pgCronCallSites(rawStmt, executableSql = false) {
       const open = match.index + relativeOpen;
       if (seen.has(open)) continue;
       // INSERT INTO/COPY cron.job (...) is a table column list, not a call.
-      if (/\b(?:INSERT\s+INTO|COPY)\s+(?:"cron"|cron)\s*\.\s*(?:"job"|job)\s*$/i
-        .test(callableSql.slice(0, open))) continue;
+      if (new RegExp(
+        `\\b(?:INSERT\\s+INTO|COPY)${SQL_KEYWORD_IDENTIFIER_GAP}` +
+          `(?:"cron"|cron)\\s*\\.\\s*(?:"job"|job)\\s*$`,
+        "i"
+      ).test(callableSql.slice(0, open))) continue;
       const parsed = readBalancedParens(callableSql, open);
       if (!parsed) {
         sites.push({ api: normalizedIdentifier(match[1]), args: null });
@@ -1010,7 +1064,7 @@ function tupleCommandAssignmentsAreDirect(rawStmt, callableSql) {
 function insertCommandValuesAreDirect(rawStmt, callableSql) {
   const jobTable = '(?:(?:"cron"|cron)\\s*\\.\\s*)?(?:"job"|job)';
   const heads = new RegExp(
-    `(?:^|[^\\w$.\"])(?:INSERT\\s+INTO)\\s+${jobTable}\\s*`,
+    `(?:^|[^\\w$.\"])(?:INSERT\\s+INTO)${SQL_KEYWORD_IDENTIFIER_GAP}${jobTable}\\s*`,
     "gi"
   );
   let found = false;
@@ -1126,9 +1180,13 @@ function pgCronCommandWriteSites(callableSql) {
   const suffix = '(?:\\s*\\*)?(?=\\s|\\(|$)';
   const patterns = [
     ["COPY", new RegExp(`${writeBoundary}COPY\\s+(?:ONLY\\s+)?${relation}${suffix}`, "gi")],
-    ["INSERT", new RegExp(`${writeBoundary}INSERT\\s+INTO\\s+${relation}${suffix}`, "gi")],
-    ["MERGE", new RegExp(`${writeBoundary}MERGE\\s+INTO\\s+${relation}${suffix}`, "gi")],
-    ["UPDATE", new RegExp(`${writeBoundary}UPDATE\\s+(?:ONLY\\s+)?${relation}${suffix}`, "gi")],
+    ["INSERT", new RegExp(
+      `${writeBoundary}INSERT\\s+INTO${SQL_KEYWORD_IDENTIFIER_GAP}${relation}${suffix}`, "gi")],
+    ["MERGE", new RegExp(
+      `${writeBoundary}MERGE\\s+INTO${SQL_KEYWORD_IDENTIFIER_GAP}${relation}${suffix}`, "gi")],
+    ["UPDATE", new RegExp(
+      `${writeBoundary}UPDATE${SQL_KEYWORD_IDENTIFIER_GAP}` +
+        `(?:ONLY${SQL_KEYWORD_IDENTIFIER_GAP})?${relation}${suffix}`, "gi")],
   ];
   const sites = [];
   for (const [kind, pattern] of patterns) {
@@ -1276,7 +1334,8 @@ function inExecuteStatement(out, text, afterIdx) {
 }
 
 const CREATE_ROUTINE_HEAD_RE = new RegExp(
-  `CREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:FUNCTION|PROCEDURE)\\s+${SQL_QUALIFIED_IDENTIFIER_PATTERN}\\s*\\(`,
+  `CREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:FUNCTION|PROCEDURE)${SQL_KEYWORD_IDENTIFIER_GAP}` +
+    `${SQL_QUALIFIED_IDENTIFIER_PATTERN}\\s*\\(`,
   "i"
 );
 
@@ -1401,9 +1460,12 @@ function stableAuthUidBindings(structuralBody, beforeIndex, allowUnqualifiedUuid
         `${optionalBlockQualifier}${ref}\\s*=(?!=)`,
       "i"
     );
-    const intoRe = new RegExp(`\\bINTO\\s+(?:STRICT\\s+)?${ref}(?![\\w$])`, "i");
+    const intoRe = new RegExp(
+      `\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?${ref}(?![\\w$])`,
+      "i"
+    );
     const loopTargetRe = new RegExp(
-      `\\b(?:FOR|FOREACH)\\b\\s+[^;]*?${ref}[^;]*?\\bIN\\b`,
+      `\\b(?:FOR|FOREACH)\\b${SQL_KEYWORD_IDENTIFIER_GAP}[^;]*?${ref}[^;]*?\\bIN\\b`,
       "i"
     );
     // GET DIAGNOSTICS and GET STACKED DIAGNOSTICS assign their status items
@@ -1428,11 +1490,11 @@ function stableAuthUidBindings(structuralBody, beforeIndex, allowUnqualifiedUuid
       "i"
     );
     const opaqueUnicodeIntoRe = new RegExp(
-      `\\bINTO\\s+(?:STRICT\\s+)?${opaqueUnicodeTarget}`,
+      `\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?${opaqueUnicodeTarget}`,
       "i"
     );
     const opaqueUnicodeLoopTargetRe = new RegExp(
-      `\\b(?:FOR|FOREACH)\\b\\s+${opaqueUnicodeTarget}[^;]*?\\bIN\\b`,
+      `\\b(?:FOR|FOREACH)\\b${SQL_KEYWORD_IDENTIFIER_GAP}${opaqueUnicodeTarget}[^;]*?\\bIN\\b`,
       "i"
     );
     const opaqueUnicodeDiagnosticsTargetRe = new RegExp(
@@ -1545,8 +1607,11 @@ function hasRecognizedMutationBefore(structuralBody, beforeIndex, actorReference
   // quoted keyword-like names must not impersonate control-flow syntax here.
   const controlPrefix = blankQuotedControlIdentifiers(prefix);
   if (controlPrefix === null) return true;
-  return /\b(?:INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE\b|EXECUTE\b|CALL\b|PERFORM\b|RETURN\b|EXIT\b|CONTINUE\b)/i
-    .test(controlPrefix);
+  return new RegExp(
+    `\\b(?:INSERT\\s+INTO|UPDATE${SQL_KEYWORD_IDENTIFIER_GAP}|DELETE\\s+FROM|MERGE\\s+INTO|` +
+      `TRUNCATE\\b|EXECUTE\\b|CALL\\b|PERFORM\\b|RETURN\\b|EXIT\\b|CONTINUE\\b)`,
+    "i"
+  ).test(controlPrefix);
 }
 
 function hasExactLegacyMismatchCondition(condition, actorParam, identityBindings) {
@@ -1596,6 +1661,47 @@ function hasActorMismatchRaiseException(rawAction, structuralAction, actorParam)
   return false;
 }
 
+/** The refusal proof is about a NAME, but a PL/pgSQL parameter is an ordinary
+ * mutable local: `p_performed_by := p_target_id;` after a passing guard makes
+ * every downstream stamp of that name carry a value auth.uid() never approved.
+ * The guard would still read as "bound" while the routine forges attribution.
+ * So a recognized refusal only establishes identity when the actor name is
+ * never re-bound anywhere in the routine. These are the same overwrite shapes
+ * stableAuthUidBindings() refuses for a trusted auth.uid() local, applied in
+ * the opposite direction: assignment (:= and PL/pgSQL's `=` spelling),
+ * SELECT/FETCH ... INTO, a FOR/FOREACH loop target, and GET [STACKED]
+ * DIAGNOSTICS. A routine that genuinely needs to reassign its actor parameter
+ * uses the file-level exempt marker and a manual review. */
+function hasActorReferenceRebinding(structuralBody, actorReferences) {
+  const blockQualifier = `(?:${SQL_IDENTIFIER_PATTERN}\\s*\\.\\s*)?`;
+  for (const reference of actorReferences) {
+    const ref = actorReferencePattern(reference);
+    const rebindings = [
+      new RegExp(
+        `(?:^|[;\\n]|\\bDECLARE\\b|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b|\\bLOOP\\b)\\s*` +
+          `${blockQualifier}${ref}(?:\\s+[^;\\n:=]+?)?\\s*(?::=|=(?!=))`,
+        "i"
+      ),
+      new RegExp(
+        `\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?` +
+          `${blockQualifier}${ref}(?![\\w$])`,
+        "i"
+      ),
+      new RegExp(
+        `\\b(?:FOR|FOREACH)\\b${SQL_KEYWORD_IDENTIFIER_GAP}[^;]*?${ref}[^;]*?\\bIN\\b`,
+        "i"
+      ),
+      new RegExp(
+        `\\bGET\\s+(?:(?:CURRENT|STACKED)\\s+)?DIAGNOSTICS\\b[^;]*?` +
+          `${blockQualifier}${ref}\\s*(?::=|=(?!=))`,
+        "i"
+      ),
+    ];
+    if (rebindings.some((rebinding) => rebinding.test(structuralBody))) return true;
+  }
+  return false;
+}
+
 /** Each forgeable actor parameter needs its own unconditional, reviewable
  * auth.uid()-identity refusal. A bare ACTOR_MISMATCH token is not sufficient:
  * one parameter can be guarded while a second parameter is written downstream.
@@ -1622,6 +1728,8 @@ function hasEnforcedActorRefusal(
   // Only an outer handler can catch the top-level actor refusal. Nested handlers
   // are scoped to their own blocks and cannot bypass the already-run guard.
   if (hasOuterExceptionHandler(controlBody)) return false;
+  // A refusal that guards a name the routine later re-binds proves nothing.
+  if (hasActorReferenceRebinding(structuralBody, actorReferences)) return false;
   const ifRe = /\bIF\b[\s\S]*?\bTHEN\b[\s\S]*?\bEND\s+IF\b/gi;
   let block;
   while ((block = ifRe.exec(controlBody)) !== null) {
@@ -2085,25 +2193,27 @@ function intoAssignmentSites(structuralBody) {
   // own `INTO <table>` cannot match: this requires SELECT/RETURNING first and
   // never crosses a statement terminator.
   const postList = new RegExp(
-    `\\b(?:SELECT|RETURNING)\\b([^;]*?)\\bINTO\\s+(?:STRICT\\s+)?` +
-      `(${SQL_ASSIGNMENT_TARGET_LIST_PATTERN})`,
+    `\\b(?:SELECT|RETURNING)\\b([^;]*?)\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}` +
+      `(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?(${SQL_ASSIGNMENT_TARGET_LIST_PATTERN})`,
     "gi"
   );
   // `SELECT INTO [STRICT] <targets> <exprs>` — PostgreSQL's older spelling,
   // where the target list precedes the output expressions.
   const preList = new RegExp(
-    `\\bSELECT\\s+INTO\\s+(?:STRICT\\s+)?(${SQL_ASSIGNMENT_TARGET_LIST_PATTERN})\\s+([^;]*)`,
+    `\\bSELECT\\s+INTO${SQL_KEYWORD_IDENTIFIER_GAP}(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?` +
+      `(${SQL_ASSIGNMENT_TARGET_LIST_PATTERN})\\s+([^;]*)`,
     "gi"
   );
   const fetchInto = new RegExp(
-    `\\bFETCH\\b[^;]*?\\bINTO\\s+(?:STRICT\\s+)?(${SQL_ASSIGNMENT_TARGET_LIST_PATTERN})`,
+    `\\bFETCH\\b[^;]*?\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}` +
+      `(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?(${SQL_ASSIGNMENT_TARGET_LIST_PATTERN})`,
     "gi"
   );
   // FOR/FOREACH bind their loop variables from the iterator expression. The
   // row is not positionally correlatable with the target list, so any
   // actor-bearing iterator taints every loop variable.
   const loopTargets = new RegExp(
-    `\\b(?:FOR|FOREACH)\\s+(${SQL_ASSIGNMENT_TARGET_LIST_PATTERN})\\s+` +
+    `\\b(?:FOR|FOREACH)${SQL_KEYWORD_IDENTIFIER_GAP}(${SQL_ASSIGNMENT_TARGET_LIST_PATTERN})\\s+` +
       `(?:SLICE\\s+\\d+\\s+)?\\bIN\\b([^;]*?)\\bLOOP\\b`,
     "gi"
   );
@@ -2149,8 +2259,11 @@ function hasOpaqueUnicodeActorLaundering(structuralBody, actorParams) {
         `${target}(?:\\s+[^;\\n:=]+?)?\\s*(?::=|=(?!=))`,
       "i"
     ),
-    new RegExp(`\\bINTO\\s+(?:STRICT\\s+)?${target}`, "i"),
-    new RegExp(`\\b(?:FOR|FOREACH)\\b\\s+${target}[^;]*?\\bIN\\b`, "i"),
+    new RegExp(
+      `\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?${target}`,
+      "i"
+    ),
+    new RegExp(`\\b(?:FOR|FOREACH)\\b${SQL_KEYWORD_IDENTIFIER_GAP}${target}[^;]*?\\bIN\\b`, "i"),
     new RegExp(
       `\\bGET\\s+(?:(?:CURRENT|STACKED)\\s+)?DIAGNOSTICS\\b[^;]*?${target}\\s*(?::=|=(?!=))`,
       "i"
@@ -2197,7 +2310,7 @@ function actorForwardingReferences(structuralBody, actorParams) {
           "gi"
         ),
         new RegExp(
-          `(?:^|[;\\n])\\s*(${SQL_IDENTIFIER_PATTERN})\\s+ALIAS\\s+FOR\\s+(?:${sourceRef})`,
+          `(?:^|[;\\n])\\s*(${SQL_IDENTIFIER_PATTERN})\\s+ALIAS\\s+FOR${SQL_KEYWORD_IDENTIFIER_GAP}(?:${sourceRef})`,
           "gi"
         ),
         // A cursor carries the actor from where it is defined to wherever it is
@@ -2211,7 +2324,8 @@ function actorForwardingReferences(structuralBody, actorParams) {
           "gi"
         ),
         new RegExp(
-          `\\bOPEN\\s+(${SQL_IDENTIFIER_PATTERN})\\s+(?:(?:NO\\s+)?SCROLL\\s+)?FOR\\b[^;]*(?:${sourceRef})`,
+          `\\bOPEN${SQL_KEYWORD_IDENTIFIER_GAP}(${SQL_IDENTIFIER_PATTERN})\\s*` +
+            `(?:(?:NO\\s+)?SCROLL\\s+)?FOR\\b[^;]*(?:${sourceRef})`,
           "gi"
         ),
       ];
@@ -2299,12 +2413,14 @@ function hasExecuteSqlReadonlyIdentityChange(rawSql) {
   const executor = '(?:"execute_sql_readonly"|execute_sql_readonly)';
   const identityAction = '(?:RENAME\\s+TO|SET\\s+SCHEMA)';
   const exact = new RegExp(
-    `\\bALTER\\s+(?:FUNCTION|ROUTINE)\\s+(?:IF\\s+EXISTS\\s+)?` +
+    `\\bALTER\\s+(?:FUNCTION|ROUTINE)${SQL_KEYWORD_IDENTIFIER_GAP}` +
+    `(?:IF\\s+EXISTS${SQL_KEYWORD_IDENTIFIER_GAP})?` +
     `${schema}${executor}\\s*\\([^;]*\\)\\s*${identityAction}`,
     "i"
   );
   const opaqueUnicode = new RegExp(
-    `\\bALTER\\s+(?:FUNCTION|ROUTINE)\\s+(?:IF\\s+EXISTS\\s+)?` +
+    `\\bALTER\\s+(?:FUNCTION|ROUTINE)${SQL_KEYWORD_IDENTIFIER_GAP}` +
+    `(?:IF\\s+EXISTS${SQL_KEYWORD_IDENTIFIER_GAP})?` +
     `(?:${SQL_QUALIFIED_IDENTIFIER_PATTERN})?${unicodeIdentifier}` +
     `(?:\\s*\\.\\s*${SQL_IDENTIFIER_PATTERN})?\\s*\\([^;]*\\)\\s*${identityAction}`,
     "i"
@@ -2321,8 +2437,10 @@ function hasPgCronJobIdentityChange(rawSql) {
   const callableSql = maskSqlForCallNames(String(rawSql || ""), true);
   if (callableSql === null) return false;
   const alterSchema = new RegExp(
-    `\\bALTER\\s+SCHEMA\\s+(?:IF\\s+EXISTS\\s+)?` +
-      `(${SQL_IDENTIFIER_PATTERN})\\s+RENAME\\s+TO\\s+(${SQL_IDENTIFIER_PATTERN})`,
+    `\\bALTER\\s+SCHEMA${SQL_KEYWORD_IDENTIFIER_GAP}` +
+      `(?:IF\\s+EXISTS${SQL_KEYWORD_IDENTIFIER_GAP})?` +
+      `(${SQL_IDENTIFIER_PATTERN})${SQL_IDENTIFIER_KEYWORD_GAP}RENAME\\s+TO` +
+      `${SQL_KEYWORD_IDENTIFIER_GAP}(${SQL_IDENTIFIER_PATTERN})`,
     "gi"
   );
   let schemaMatch;
@@ -2335,8 +2453,9 @@ function hasPgCronJobIdentityChange(rawSql) {
     if (from === null || to === null || from === "cron" || to === "cron") return true;
   }
   const alterTable = new RegExp(
-    `\\bALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?` +
-      `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})(?:\\s*\\*)?\\s+`,
+    `\\bALTER\\s+TABLE${SQL_KEYWORD_IDENTIFIER_GAP}` +
+      `(?:IF\\s+EXISTS${SQL_KEYWORD_IDENTIFIER_GAP})?(?:ONLY${SQL_KEYWORD_IDENTIFIER_GAP})?` +
+      `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})(?:\\s*\\*)?${SQL_IDENTIFIER_KEYWORD_GAP}`,
     "gi"
   );
   let match;
@@ -2533,6 +2652,12 @@ function readAttrsAndBody(text, fromIdx) {
           return {
             attrs: text.slice(fromIdx, i) + " " +
               text.slice(bodyEnd + tag.length, statementEnd),
+            // Exact source ranges of the same two attribute regions. The mask
+            // blanks string CONTENTS, so `SET search_path TO 'evil',
+            // 'pg_catalog'` reads as empty quotes there and the operator-
+            // resolution check cannot see which schema comes first. The caller
+            // re-slices these ranges out of the real source for that check.
+            attrsRanges: [[fromIdx, i], [bodyEnd + tag.length, statementEnd]],
             bodyStart,
             bodyEnd,
           };
@@ -2561,7 +2686,8 @@ function readAttrsAndBody(text, fromIdx) {
 function alteredRoutineSecurityModes(structuralSql) {
   const altered = [];
   const head = new RegExp(
-    `\\bALTER\\s+(?:FUNCTION|PROCEDURE|ROUTINE)\\s+(?:IF\\s+EXISTS\\s+)?` +
+    `\\bALTER\\s+(?:FUNCTION|PROCEDURE|ROUTINE)${SQL_KEYWORD_IDENTIFIER_GAP}` +
+      `(?:IF\\s+EXISTS${SQL_KEYWORD_IDENTIFIER_GAP})?` +
       `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\(`,
     "gi"
   );
@@ -2965,8 +3091,12 @@ try {
       commentBlankedBody,
       commentBlankedForwardingReferences
     );
-    const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(maskedBody) ||
-      /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(commentBlankedBody) ||
+    const staticMutationRe = new RegExp(
+      `\\b(?:INSERT\\s+INTO|UPDATE${SQL_KEYWORD_IDENTIFIER_GAP}|DELETE\\s+FROM|MERGE\\s+INTO)`,
+      "i"
+    );
+    const hasMutation = staticMutationRe.test(maskedBody) ||
+      staticMutationRe.test(commentBlankedBody) ||
       /\bEXECUTE\b/i.test(maskedBody) ||
       actorForwardedInvocation.test(maskedBody) ||
       actorForwardedInvocation.test(commentBlankedBody) ||
@@ -2981,7 +3111,11 @@ try {
     // runtime search_path. Explicitly putting a user schema before pg_catalog
     // lets a same-signature user operator lie even when both operands spell
     // pg_catalog.uuid, so that order cannot establish caller identity.
-    const trustedUuidOperatorResolution = !hasSchemaBeforeExplicitPgCatalog(attrs);
+    const rawAttrs = (rest.attrsRanges || [])
+      .map(([from, to]) => blankComments(content.slice(from, to)))
+      .join(" ");
+    const trustedUuidOperatorResolution = !hasSchemaBeforeExplicitPgCatalog(attrs) &&
+      !hasSchemaBeforeExplicitPgCatalog(rawAttrs);
     const hasRecognizedActorRefusal = actorDescriptors.every(({ name, references, trustedUuid }) =>
       hasEnforcedActorRefusal(
         body,
