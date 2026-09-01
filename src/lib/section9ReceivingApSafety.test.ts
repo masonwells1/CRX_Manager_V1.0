@@ -66,7 +66,16 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
     expect(deletePhotos).toBeGreaterThan(audit);
     expect(deleteRecord).toBeGreaterThan(deletePhotos);
     expect(migration).toContain("'receiving_record', to_jsonb(v_rec), 'photos', v_photos");
-    expect(migration).toContain('REVOKE TRUNCATE ON TABLE public.receiving_photos FROM authenticated');
+    expect(migration).toContain('REVOKE TRUNCATE ON TABLE public.receiving_photos');
+    expect(migration).toContain('FROM PUBLIC, anon, authenticated');
+    expect(migration).toContain(
+      'REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.receiving_records',
+    );
+    for (const privilege of ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) {
+      expect(migration).toContain(
+        `has_table_privilege('authenticated', 'public.receiving_records', '${privilege}')`,
+      );
+    }
     expect(migration).toContain(')) NOT VALID;');
     expect(migration).toContain('VALIDATE CONSTRAINT financial_audit_log_entity_type_check');
     expect(migration).toContain('VALIDATE CONSTRAINT financial_audit_log_operation_type_check');
@@ -104,9 +113,9 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
       'v_po_total <= 0 OR v_cumulative_total * 100 > v_po_total * 105',
     );
     expect(cumulativeBillMigration).toContain(
-      'REVOKE INSERT, UPDATE, DELETE ON TABLE public.vendor_bills',
+      'REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.vendor_bills',
     );
-    for (const privilege of ['INSERT', 'UPDATE', 'DELETE']) {
+    for (const privilege of ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) {
       expect(cumulativeBillMigration).toContain(
         `has_table_privilege('authenticated', 'public.vendor_bills', '${privilege}')`,
       );

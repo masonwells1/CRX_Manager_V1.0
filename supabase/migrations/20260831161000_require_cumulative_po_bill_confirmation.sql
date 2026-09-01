@@ -206,7 +206,7 @@ GRANT EXECUTE ON FUNCTION public.create_vendor_bill(
 -- Vendor-bill money and PO controls are authoritative in SECURITY DEFINER
 -- RPCs. Keep browser roles read-only on the table so PostgREST cannot bypass
 -- cumulative-billing confirmation, period locks, audit rows, or idempotency.
-REVOKE INSERT, UPDATE, DELETE ON TABLE public.vendor_bills
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.vendor_bills
 FROM PUBLIC, anon, authenticated;
 
 DO $verify$
@@ -247,6 +247,7 @@ BEGIN
        THEN has_table_privilege('authenticated', 'public.vendor_bills', 'INSERT')
          OR has_table_privilege('authenticated', 'public.vendor_bills', 'UPDATE')
          OR has_table_privilege('authenticated', 'public.vendor_bills', 'DELETE')
+         OR has_table_privilege('authenticated', 'public.vendor_bills', 'TRUNCATE')
        ELSE false
      END) THEN
     RAISE EXCEPTION 'authenticated retains direct vendor_bills write privilege';

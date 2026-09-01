@@ -294,9 +294,16 @@ REVOKE ALL ON FUNCTION public.reverse_receiving_record(uuid, text, uuid, text)
 GRANT EXECUTE ON FUNCTION public.reverse_receiving_record(uuid, text, uuid, text)
   TO authenticated, service_role;
 
+-- Receipt mutation is authoritative in the governed RPCs. Browser roles may
+-- read receipt rows, but direct PostgREST writes would bypass inventory, PO,
+-- period, vendor-bill, audit, evidence-preservation, and idempotency controls.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.receiving_records
+FROM PUBLIC, anon, authenticated;
+
 -- Browser users may delete an individual governed photo under RLS, but may not
 -- bypass row policies by truncating the entire evidence table.
-REVOKE TRUNCATE ON TABLE public.receiving_photos FROM authenticated;
+REVOKE TRUNCATE ON TABLE public.receiving_photos
+FROM PUBLIC, anon, authenticated;
 
 DROP FUNCTION public.get_ap_aging(date);
 CREATE FUNCTION public.get_ap_aging(
@@ -415,6 +422,12 @@ BEGIN
   END IF;
   IF has_table_privilege('authenticated', 'public.receiving_photos', 'TRUNCATE') THEN
     RAISE EXCEPTION 'authenticated receiving_photos TRUNCATE grant remains';
+  END IF;
+  IF has_table_privilege('authenticated', 'public.receiving_records', 'INSERT')
+     OR has_table_privilege('authenticated', 'public.receiving_records', 'UPDATE')
+     OR has_table_privilege('authenticated', 'public.receiving_records', 'DELETE')
+     OR has_table_privilege('authenticated', 'public.receiving_records', 'TRUNCATE') THEN
+    RAISE EXCEPTION 'authenticated receiving_records direct write grant remains';
   END IF;
 END;
 $verify$;

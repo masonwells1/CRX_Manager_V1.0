@@ -37,6 +37,12 @@ const BILL_MIGRATION = path.join(
   'migrations',
   '20260831161000_require_cumulative_po_bill_confirmation.sql',
 );
+const RECEIVING_MIGRATION = path.join(
+  ROOT,
+  'supabase',
+  'migrations',
+  '20260831160000_harden_receiving_reversal_and_ap_reporting.sql',
+);
 const INTENT_MIGRATION = path.join(
   ROOT,
   'supabase',
@@ -45,7 +51,7 @@ const INTENT_MIGRATION = path.join(
 );
 const CUTOVER_MIGRATIONS = [
   {
-    file: path.join(ROOT, 'supabase', 'migrations', '20260831160000_harden_receiving_reversal_and_ap_reporting.sql'),
+    file: RECEIVING_MIGRATION,
     tag: 'section9_reversal_cutover',
     operations: ['reverse_receiving_record'],
     error: /SECTION9_INTENT_CUTOVER_BLOCKED/,
@@ -291,6 +297,7 @@ CREATE TABLE public.receiving_records (
   po_item_id uuid NOT NULL REFERENCES public.purchase_order_items(id),
   received_at timestamptz NOT NULL
 );
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON public.receiving_records TO authenticated;
 CREATE TABLE public.vendor_bills (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   vendor_id uuid NOT NULL REFERENCES public.vendors(id),
@@ -299,7 +306,7 @@ CREATE TABLE public.vendor_bills (
   deleted_at timestamptz,
   total_cents bigint NOT NULL DEFAULT 10000
 );
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.vendor_bills TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON public.vendor_bills TO authenticated;
 CREATE TABLE public.activity_feed (
   event_type text,
   description text,
@@ -498,6 +505,17 @@ $function$;
   sql(`BEGIN;\n${readFileSync(BILL_MIGRATION, 'utf8')}\nCOMMIT;`);
   sql(`BEGIN;\n${readFileSync(INTENT_MIGRATION, 'utf8')}\nCOMMIT;`);
   sql(`BEGIN;\n${readFileSync(MIGRATION, 'utf8')}\nCOMMIT;`);
+
+  // The full receiving migration depends on the live AP/reporting schema that
+  // this focused concurrency fixture intentionally does not duplicate. Apply
+  // its exact checked-in table-authority statement so the runtime privilege
+  // proof cannot pass against a hand-written approximation.
+  const receivingSource = readFileSync(RECEIVING_MIGRATION, 'utf8').replace(/\r\n/g, '\n');
+  const receivingWriteBoundary = receivingSource.match(
+    /REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public\.receiving_records\s+FROM PUBLIC, anon, authenticated;/,
+  );
+  assert.ok(receivingWriteBoundary, 'receiving-record write-boundary revoke missing');
+  sql(receivingWriteBoundary[0]);
 }
 
 function proveIntentCutoverGuards() {
@@ -564,6 +582,12 @@ UPDATE public.vendor_bills SET total_cents = total_cents + 1 WHERE false;
 `, { allowFailure: true });
   expectFailure(deniedUpdate, /permission denied for table vendor_bills/, 'direct vendor-bill update');
 
+  const deniedTruncate = sql(`
+SET ROLE authenticated;
+TRUNCATE public.vendor_bills;
+`, { allowFailure: true });
+  expectFailure(deniedTruncate, /permission denied for table vendor_bills/, 'direct vendor-bill truncate');
+
   const actor = '11111111-1111-1111-1111-111111111111';
   const vendor = '00000000-0000-0000-0000-000000000621';
   const po = '00000000-0000-0000-0000-000000000622';
@@ -599,6 +623,29 @@ SELECT public.update_vendor_bill(
     /PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED/,
     'zero-total PO bill update without confirmation',
   );
+}
+
+function proveReceivingWriteBoundary() {
+  for (const [operation, statement] of [
+    ['insert', `INSERT INTO public.receiving_records (
+      id, purchase_order_id, po_item_id, received_at
+    ) VALUES (
+      '00000000-0000-0000-0000-000000000631',
+      '00000000-0000-0000-0000-000000000632',
+      '00000000-0000-0000-0000-000000000633',
+      now()
+    )`],
+    ['update', 'UPDATE public.receiving_records SET received_at = received_at WHERE false'],
+    ['delete', 'DELETE FROM public.receiving_records WHERE false'],
+    ['truncate', 'TRUNCATE public.receiving_records'],
+  ]) {
+    const denied = sql(`SET ROLE authenticated;\n${statement};`, { allowFailure: true });
+    expectFailure(
+      denied,
+      /permission denied for table receiving_records/,
+      `direct receiving-record ${operation}`,
+    );
+  }
 }
 
 function seedReceiving(po, poItem, receipt, vendor) {
@@ -960,6 +1007,7 @@ try {
   installSchema();
   proveIntentCutoverGuards();
   proveVendorBillWriteBoundary();
+  proveReceivingWriteBoundary();
   await proveBillFirstBlocksReversal();
   await proveReversalFirstSerializesBill();
   await proveCloseFirstBlocksReversal();

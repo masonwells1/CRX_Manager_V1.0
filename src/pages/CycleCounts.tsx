@@ -13,6 +13,10 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import {
+  resolveCycleCountWriteIntent,
+  type CycleCountWriteIntent,
+} from '../lib/cycleCountWriteIntent';
 import { logActivity } from '../lib/activityLogger';
 import HelpTip from '../components/ui/HelpTip';
 import type { CycleCount, CycleCountItem } from '../types';
@@ -87,6 +91,8 @@ export default function CycleCounts() {
   const itemWriteQueuesRef = useRef(new Map<string, Promise<void>>());
   const pendingItemWritesRef = useRef(new Set<Promise<void>>());
   const failedItemWritesRef = useRef(new Set<string>());
+  const itemWriteIntentsRef = useRef(new Map<string, CycleCountWriteIntent>());
+  const itemWriteSequenceRef = useRef(0);
   const completionInFlightRef = useRef(false);
 
   const isAdmin = role === 'admin';
@@ -279,10 +285,18 @@ export default function CycleCounts() {
     const variancePct = countedQty !== null && item.expected_qty !== 0
       ? Math.round(((variance || 0) / item.expected_qty) * 100 * 100) / 100
       : null;
-    // Retain one key for this exact item+quantity intent until the server
-    // confirms success. A timeout retry reuses it; an edited quantity gets a
-    // different scope and cannot replay the prior save.
-    const intentScope = JSON.stringify([itemId, countedQty, null]);
+    // Retain one key for an uncertain same-value retry, but advance the local
+    // sequence whenever the requested value changes. This makes A -> B -> A
+    // three distinct intents instead of replaying the first A after B.
+    const resolvedIntent = resolveCycleCountWriteIntent(
+      itemId,
+      countedQty,
+      itemWriteIntentsRef.current.get(itemId),
+      itemWriteSequenceRef.current,
+    );
+    itemWriteSequenceRef.current = resolvedIntent.nextSequence;
+    itemWriteIntentsRef.current.set(itemId, resolvedIntent.intent);
+    const intentScope = resolvedIntent.intent.scope;
     const idempotencyKey = updateCycleCountItemIdem.getKeyFor(intentScope);
 
     const previous = itemWriteQueuesRef.current.get(itemId) ?? Promise.resolve();
@@ -302,6 +316,9 @@ export default function CycleCounts() {
       }
       const result = assertRpcResult<{ item_revision: number }>(data, 'update_cycle_count_item');
       updateCycleCountItemIdem.resetKeyFor(intentScope);
+      if (itemWriteIntentsRef.current.get(itemId)?.scope === intentScope) {
+        itemWriteIntentsRef.current.delete(itemId);
+      }
       failedItemWritesRef.current.delete(itemId);
       setActiveCount((previousCount) =>
         previousCount && previousCount.id === item.cycle_count_id
