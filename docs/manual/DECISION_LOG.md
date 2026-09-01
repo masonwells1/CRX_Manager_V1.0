@@ -7,6 +7,49 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-01 — the guarded surface is NARROWED to hook/registration files; whether the lock survives at all is an open owner decision
+
+**Amends the 2026-08-31 entry below.** That entry's "operative rules" list a guarded set including
+`package.json`, `package-lock.json`, `scripts/(check|validate|verify)-*`, and the proof/review
+runners. Those are **no longer guarded**. The rest of that entry — especially the CORRECTION that
+this is a speed bump and that the `ask` tier stays — is unchanged and still governs.
+
+**What was removed, and why.** Each dropped path was reachable a second way (`npm pkg set`, a
+swapped dependency, a rewritten validator), so guarding the *file* was never a boundary — it was a
+speed bump layered on a speed bump. Meanwhile they are the files ordinary work touches most, and the
+cost was concrete: `npm install` died, and a `package.json` merge conflict could not be resolved at
+all, because git's `>>>>>>>` markers parse as a shell redirect *into* the guarded file. The `ask`
+tier still gates native `Edit`/`Write` on `package.json`. What remains guarded is the set with no
+second path: hook files, hook registration and the permission manifests, `.husky/`, CI workflows,
+`.coderabbit.yaml`, and the lock's own unlock switch and unlock record.
+
+**Also fixed:** reading a guarded file through `Read`/`Glob`/`Grep`/`NotebookRead` is now allowed
+outright (`READ_ONLY_TOOL_NAMES`). The path scan had been judging any tool carrying a `file_path`,
+so a plain `Read` of a hook was denied by a guard whose own refusal text promised that reading was
+always fine. The refusal text also claimed "an agent shell cannot run" the unlock; that was
+disproved on 2026-08-31 and now reads as friction, not a boundary.
+
+**The finding that reframes the whole thing.** The lock **fails open** on a `SyntaxError` in its own
+rule book — the static `import` precedes the `try`/`catch`, so the process dies before `deny()`
+exists, emits nothing, and a PreToolUse hook that emits no decision is not a denial. Reproduced in
+isolation: exit 1, empty stdout. It fails *closed* on a runtime error, which is worse in a different
+way — it denies **every** tool call in the session, including the ones needed to repair it, and
+recovery took a shell command from Mason outside the agent. That happened twice in fifteen minutes
+during ordinary two-step edits. Full detail in `KNOWN_ISSUES.md` (2026-09-01).
+
+So the lock is strictest when healthy and silently inert when its rule book is malformed — which is
+the state tampering produces. Routing the load-time case into the `try` via dynamic `import()` only
+converts it into the lockout case.
+
+**OPEN — needs Mason's decision. Recommendation on the table: delete the lock.** Its only coverage
+the `ask` tier never had is shell/MCP writes to enforcement paths. But `review-proof-guard.mjs`
+already denies destructive shell writes anywhere under `.claude/` — verified live on 2026-09-01,
+where `echo test > .claude/hooks/zz-live-probe.tmp` was refused by the *proof guard*, not by this
+lock. The genuine residual is therefore only `.husky/`, `.github/workflows/`, `.codex/hooks/`, and
+`.coderabbit.yaml`, which could be added to an existing guard's deny list in a few lines — with no
+unlock ceremony, no self-protecting rule book, no fail-open surface, and no way to brick a session.
+Until Mason rules, the lock stays as narrowed and the `ask` tier remains the real gate.
+
 ## 2026-08-31 — control files are LOCKED by a hook, superseding the 2026-08-25 `ask` tier
 
 **Supersedes item 3 of the 2026-08-25 entry below** ("Control-file edits move to the `ask` tier").

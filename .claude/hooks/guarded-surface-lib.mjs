@@ -48,21 +48,16 @@ export const GUARDED_SURFACE_RES = [
   // CI enforcement and the review gate's configuration.
   /(?:^|\/)\.github\/workflows\/./,
   /(?:^|\/)\.coderabbit\.ya?ml$/,
-  // package.json defines the `typecheck`/`build`/test scripts the husky hooks
-  // invoke; redefining one to `exit 0` neuters the pre-push gate without
-  // touching a hook file. The lockfile rides along because a swapped dependency
-  // is another way to change what those scripts do.
-  /(?:^|\/)package\.json$/,
-  /(?:^|\/)package-lock\.json$/,
-  // Validators the gates call.
-  /(?:^|\/)scripts\/(?:check|validate|verify)-[^/]*$/,
-  // Proof generation, ledger surgery, and the review runners: these MINT or
-  // REMOVE the evidence other gates trust.
-  /(?:^|\/)scripts\/write-codex-push-proof\.mjs$/,
-  /(?:^|\/)scripts\/remove-applied-ledger-entry\.mjs$/,
-  /(?:^|\/)scripts\/run-claude-review\.mjs$/,
-  /(?:^|\/)scripts\/agent-manifest-parity\.mjs$/,
-  /(?:^|\/)scripts\/sync-agent-workflows\.mjs$/,
+  // NOT GUARDED, deliberately (narrowed 2026-09-01, Mason's call): package.json,
+  // package-lock.json, `scripts/(check|validate|verify)-*`, and the proof/review
+  // runners. Every one of them is reachable a second way — `npm pkg set`, a
+  // swapped dependency, a rewritten validator — so guarding the FILE was never a
+  // boundary, only a speed bump on top of a speed bump. Meanwhile they are the
+  // files ordinary work touches most, and guarding them cost real breakage: a
+  // `package.json` merge conflict could not be resolved (git's `>>>>>>>` markers
+  // read as a shell redirect INTO the guarded file), and every `npm install`
+  // died. The `ask` tier in .claude/settings.json still gates native Edit/Write
+  // on package.json, which is where those edits actually come from.
   // Self-protection: the lock's own unlock switch. Without this line an agent
   // rewrites guard-unlock.mjs to always return "unlocked" and the whole
   // mechanism is decorative.
@@ -81,7 +76,7 @@ export const GUARDED_SURFACE_RES = [
 // Bare names that must be recognized even when a glob hides the rest of the
 // path (`.clau*/hooks/x`, `.hus*/pre-push`). Mirrors the proven approach in
 // review-proof-guard.mjs.
-const GUARDED_GLOB_TARGETS = [".claude", ".codex", ".husky", ".github", "hooks", "workflows", "package.json", "package-lock.json"];
+const GUARDED_GLOB_TARGETS = [".claude", ".codex", ".husky", ".github", "hooks", "workflows"];
 
 // Lowercased on purpose. Codex round 2, HIGH: the guarded regexes are
 // case-sensitive, and CRX runs on a case-INSENSITIVE Windows filesystem — so
@@ -230,15 +225,6 @@ const READ_ONLY_GIT_SUBCOMMANDS = new Set([
   "add", "commit", "push", "worktree",
 ]);
 
-// npm/pnpm/yarn subcommands that rewrite package.json or the lockfile WITHOUT
-// ever naming them, so the path-mention scan cannot see them. `ci` is absent
-// from this list on purpose: it installs from the existing lockfile and is
-// needed routinely (a fresh worktree cannot run its own tests without it).
-const PACKAGE_MUTATING_SUBCOMMANDS = new Set([
-  "install", "i", "add", "remove", "rm", "uninstall", "un", "update", "up", "upgrade",
-  "dedupe", "prune", "link", "pkg", "audit",
-]);
-
 function firstWord(text) {
   const m = String(text ?? "").trim().match(/^([\w.\/-]+)/);
   return m ? m[1].replace(/^.*\//, "").toLowerCase() : "";
@@ -271,26 +257,24 @@ export function redirectTargetsGuardedSurface(cmd) {
 }
 
 /**
- * Some commands rewrite a guarded file WITHOUT naming it: `npm install left-pad`
- * edits package.json and package-lock.json, and `npm pkg set scripts.typecheck=…`
- * rewrites the very script the pre-push gate runs. The path-mention scan cannot
- * see these, so they are recognized by shape instead.
+ * Patch application rewrites a guarded file WITHOUT naming it: the destinations
+ * live INSIDE a patch file this scan cannot read, so `git apply disable-guards.patch`
+ * can rewrite a hook while the command text mentions no guarded path at all.
+ * This is the documented "git subcommands bypass destination guards" class, so
+ * it fails closed on the whole verb.
+ *
+ * The npm branch that used to live here is gone with package.json (see the
+ * GUARDED_SURFACE_RES note): `npm install` no longer touches a guarded file.
  */
 export function commandImplicitlyMutatesGuarded(cmd) {
   return shellSegments(cmd).some((segment) => {
     const head = firstWord(segment);
-    // Patch application carries its destinations INSIDE a file this scan cannot
-    // read, so `git apply disable-guards.patch` rewrites a hook while naming no
-    // guarded path at all. This is the documented "git subcommands bypass
-    // destination guards" class; fail closed on the whole verb.
     if (head === "patch") return true;
     if (head === "git") {
       const gitSub = (segment.match(/\bgit\b(?:\s+-[^\s]+)*\s+([\w-]+)/i) || [])[1];
       if (gitSub && ["apply", "am"].includes(gitSub.toLowerCase())) return true;
     }
-    if (!["npm", "pnpm", "yarn", "npx"].includes(head)) return false;
-    const sub = (segment.match(/^\s*\S+\s+([\w-]+)/) || [])[1];
-    return sub ? PACKAGE_MUTATING_SUBCOMMANDS.has(sub.toLowerCase()) : false;
+    return false;
   });
 }
 
@@ -383,6 +367,14 @@ export function evaluateGuardedSurface({ toolName, input = {}, unlock = null, no
   const allow = { decision: "allow" };
   const unlocked = unlockValid(unlock, nowMs);
 
+  // Tools that cannot write. The refusal text promises "reading these files is
+  // always allowed", but the path scan below judges ANY tool carrying a
+  // `file_path`, so a plain `Read` of a hook was denied — the guard contradicting
+  // its own message (Codex, LOW). An explicit short name list, not a shape
+  // heuristic: a tool that both reads and writes must never land here, and these
+  // are the only built-ins that are read-only by definition.
+  if (READ_ONLY_TOOL_NAMES.has(String(toolName ?? "").toLowerCase())) return allow;
+
   const pathCandidates = [
     input.file_path, input.filePath, input.path, input.target,
     input.source, input.destination, input.notebook_path,
@@ -424,8 +416,16 @@ export function lockedReason(what) {
     "It is LOCKED, not prompt-gated, because live SQL, live migrations, and pushes are auto-allowed:",
     "weakening a guard first would let the next call through silently.",
     "",
-    "Reading these files is always allowed. To CHANGE one, Mason unlocks it himself from a real terminal:",
+    "Reading these files is always allowed. To CHANGE one, ask Mason to unlock the surface:",
     "    node scripts/guard-unlock.mjs --minutes 30",
-    "That command requires an interactive terminal and a typed phrase, so an agent shell cannot run it.",
+    "It wants an interactive terminal and a typed phrase, which an agent's non-interactive",
+    "shell does not have. That is friction, NOT a boundary — this lock is a speed bump, and",
+    "the real gate is the `ask` tier in .claude/settings.json. @speed-bump",
   ].join("\n");
 }
+/**
+ * Built-in tools that cannot write. See the note in evaluateGuardedSurface.
+ * An explicit short name list, never a shape heuristic: a tool that both reads
+ * and writes must not land here.
+ */
+export const READ_ONLY_TOOL_NAMES = new Set(["read", "glob", "grep", "notebookread"]);

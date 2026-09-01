@@ -306,6 +306,40 @@ feedback loop, not the enforcement boundary — and should be described that way
 (a CI assertion that `core.hooksPath` resolves to the tracked `.husky` on the runner), not another
 command-text rule. Tracked as a finding, deliberately unfixed, needs an owner decision.
 
+## OPEN 2026-09-01 — `guarded-surface-lock` fails OPEN on a syntax error in its own rule book, and its header claims the opposite
+
+`.claude/hooks/guarded-surface-lock.mjs` opens with "FAIL-CLOSED POSTURE: if the rule book throws,
+this hook denies rather than falling open." That is true for a **runtime** error and false for a
+**load-time** one, and the difference is not academic — both were hit live on 2026-09-01 while
+narrowing the rule book.
+
+- **Runtime error** (a reference to an undefined identifier, i.e. a half-finished edit): the throw
+  happens inside `evaluateGuardedSurface`, the `try`/`catch` on lines 51–61 catches it, and the hook
+  denies. Observed twice. Because the hook is registered under `matcher: "*"`, this denies **every
+  tool call in the session**, including the ones needed to repair the file. Total self-lockout;
+  recovery required Mason to run a shell command outside the agent.
+- **Load-time error** (a duplicate `export const`, an unbalanced brace — any `SyntaxError`): the
+  static `import` on line 19 is evaluated *before* the `try`/`catch` on line 51 and before `deny()`
+  on line 24 exists. Node aborts the process. **Nothing is written to stdout**, and a PreToolUse hook
+  that emits no decision is not a denial — so the lock is silently inert.
+
+Reproduced in isolation rather than asserted: a structural clone of the hook (static import at top,
+sole `try`/`catch` around the evaluate call) importing a rule book whose only defect is
+`export const X` declared twice exits **1 with empty stdout** — the `catch` never runs. The same
+condition was live in this worktree for several minutes and tool calls flowed normally throughout.
+
+**Why this matters more than an ordinary bug.** The failure is oriented the wrong way. The lock is
+strictest exactly when it is healthy, and switches itself off exactly when its rule book is
+malformed — which is the state tampering produces. A guard whose disabled state is indistinguishable
+from its working state, from the agent's side, is not evidence of anything.
+
+**Not patched here, deliberately.** Moving line 19 to a dynamic `import()` inside the `try` converts
+the load-time case into the runtime case — which is the *lockout* case, and that one already bricked
+the session twice in fifteen minutes. Fixing one failure mode by routing everything into the other
+is not an improvement. This is an argument about whether the lock should exist, and that is an owner
+decision: see the 2026-09-01 entry in `DECISION_LOG.md`. Reading a guarded file is now allowed
+outright (`READ_ONLY_TOOL_NAMES`), so the lockout blast radius is smaller than it was, but not zero.
+
 ## OPEN 2026-08-26 — the quote-version trust chain is whole-body hash-pinned in THREE files; any re-emission must update every pin site in the same change
 
 **Apply-order dependency with the PR #361 successor:** the merged-but-unapplied

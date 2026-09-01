@@ -60,14 +60,6 @@ for (const p of [
   ".husky/pre-commit",
   ".github/workflows/ci.yml",
   ".coderabbit.yaml",
-  "package.json",
-  "package-lock.json",
-  "scripts/check-ledger-update.mjs",
-  "scripts/validate-sql.mjs",
-  "scripts/verify-deps.mjs",
-  "scripts/write-codex-push-proof.mjs",
-  "scripts/remove-applied-ledger-entry.mjs",
-  "scripts/run-claude-review.mjs",
   "scripts/guard-unlock.mjs",
   "C:/CRX_Manager/.claude/hooks/bash-safety.mjs",
 ]) {
@@ -78,6 +70,40 @@ for (const p of [
 
 // Self-protection is the load-bearing case: without it the lock is decorative.
 assert.ok(guardedSurfacePath("scripts/guard-unlock.mjs"), "the unlock switch must protect itself");
+
+// The 2026-09-01 narrowing, pinned so it cannot silently re-widen. These paths
+// were guarded and deliberately are not any more: each is reachable a second way
+// (so guarding the file was never a boundary), each is touched by ordinary work,
+// and guarding them broke real flows — a `package.json` merge conflict could not
+// be resolved because git's `>>>>>>>` markers parse as a redirect INTO the file.
+// Native Edit/Write on package.json is still gated by the `ask` tier.
+for (const p of [
+  "package.json",
+  "package-lock.json",
+  "scripts/check-ledger-update.mjs",
+  "scripts/validate-sql.mjs",
+  "scripts/verify-deps.mjs",
+  "scripts/write-codex-push-proof.mjs",
+  "scripts/remove-applied-ledger-entry.mjs",
+  "scripts/run-claude-review.mjs",
+  "scripts/agent-manifest-parity.mjs",
+  "scripts/sync-agent-workflows.mjs",
+]) {
+  assert.ok(!guardedSurfacePath(p), `narrowed out, must NOT be guarded: ${p}`);
+  allows(judge({ file_path: p }, { toolName: "Write" }), `Write to narrowed-out ${p}`);
+  pass++;
+}
+
+// Reading a guarded file is promised in the refusal text, so the read-only
+// built-ins must actually be allowed to do it. This was a live contradiction:
+// the path scan judged any tool carrying `file_path`, so a plain `Read` of a
+// hook was denied by a guard whose own message said reading was always fine.
+for (const tool of ["Read", "Glob", "Grep", "NotebookRead"]) {
+  allows(judge({ file_path: ".claude/hooks/bash-safety.mjs" }, { toolName: tool }), `${tool} of a guarded file`);
+  pass++;
+}
+// …but a tool that WRITES is not excused by having a similar-looking name.
+denies(judge({ file_path: ".claude/hooks/bash-safety.mjs" }, { toolName: "Write" }), "Write is not read-only");
 assert.ok(guardedSurfacePath(".claude/hooks/guarded-surface-lib.mjs"), "the rule book must protect itself");
 pass += 2;
 
@@ -137,11 +163,6 @@ for (const cmd of [
   "git apply /tmp/disable-guards.patch",
   "git rm .claude/hooks/sql-safety.mjs",
   "git mv .husky/pre-push .husky/pre-push.bak",
-  // package.json rewritten without ever naming it
-  "npm pkg set scripts.typecheck=\"exit 0\"",
-  "npm install some-package",
-  "npm uninstall vitest",
-  "yarn add left-pad",
 ]) {
   denies(judge({ command: cmd }), `shell write: ${cmd}`);
 }
@@ -182,9 +203,8 @@ for (const p of [
   ".CLAUDE/hooks/sql-safety.mjs",
   ".Claude/Hooks/money-safety.mjs",
   ".HUSKY/pre-push",
-  "Package.json",
   ".CLAUDE/settings.json",
-  "SCRIPTS/verify-deps.mjs",
+  "SCRIPTS/guard-unlock.mjs",
 ]) {
   assert.ok(guardedSurfacePath(p), `mixed-case path must still be guarded: ${p}`);
   denies(judge({ file_path: p }, { toolName: "Write" }), `mixed-case write: ${p}`);
@@ -367,7 +387,6 @@ for (const payload of [
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: ".claude/hooks", destination: "/tmp/x" } },
   { tool_name: "Bash", tool_input: { command: "echo x > .claude/hooks/sql-safety.mjs" } },
   { tool_name: "Bash", tool_input: { command: "git checkout main -- .husky/pre-push" } },
-  { tool_name: "Bash", tool_input: { command: 'npm pkg set scripts.typecheck="exit 0"' } },
   { tool_name: "PowerShell", tool_input: { command: "Remove-Item .claude/hooks/env-guard.mjs" } },
 ]) {
   const expected = evaluateGuardedSurface({
