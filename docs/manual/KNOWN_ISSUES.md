@@ -228,6 +228,31 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-09-01 — agents share Mason's admin identity, so the manual merge override can only be fenced off by command matching, never truly withheld
+
+**Found by:** the exact-SHA Codex proof on PR #541, which refused the candidate until the raw
+REST/GraphQL merge transports were denied on both guards.
+
+**The issue.** On 2026-09-01 Mason gained a manual review override on `main` (classic branch
+protection no longer enforces its rules for administrators — see the decision log). The bypass is
+granted by **admin rights on his account**, and every Claude and Codex session authenticates as that
+same account. There is therefore no mechanism that offers the override to Mason and withholds it
+from an agent; the guards can only refuse the *commands* that would use it.
+
+**What is in place.** Both merge gates deny `gh pr merge --admin` outright, verify
+`reviewDecision === "APPROVED"` directly rather than inferring it, and deny the
+`/pulls/<n>/merge` REST endpoint and the `mergePullRequest` GraphQL mutation by destination
+regardless of transport. That closes every route found so far, and it is an honest-mistake net —
+**not a security boundary.** A command shape nobody has thought of, or an indirection that never
+spells the destination in the command text, is outside what a command-text guard can catch. The
+same honest residual is already documented for the interpreter-argument rule in
+`.codex/hooks/production-action-guard.mjs`.
+
+**The durable fix, not yet decided.** Give agents a separate, non-admin GitHub credential (a
+machine account or a fine-grained token without admin bypass), so the override is withheld by
+GitHub rather than by string matching. This is an owner decision — it affects how every agent
+authenticates, and it is not something to change unasked. Raised with Mason 2026-09-01; open.
+
 ## OPEN 2026-09-01 — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
 
 **Plain English.** Open a saved job, change the acres, and a chemical line keeps both numbers it was

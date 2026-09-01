@@ -122,11 +122,16 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // exactly as before. Inputs verified with `tr -d '\r' | git hash-object --stdin`
   // against the merged working tree; outputs taken from the producer test's printed
   // candidate, not hand-computed.
-  codexGuard: "8094452dad2c5135ba71c5054ee66a03d12d127b",
+  // codexGuard re-pinned once more 2026-09-01, same PR: Codex's exact-SHA proof
+  // found the agent lockout bypassable through raw REST and GraphQL merge
+  // transports, which this guard did not deny at all (the Claude side has since
+  // 2026-07-16). Both are now denied by destination. pushLib is untouched by
+  // that fix and keeps the blob above. Anchors unchanged; transform identity.
+  codexGuard: "3064f73f1916a0b558556d5a0dc4a2ecad3836de",
   pushLib: "f87e232491487d7223b3e8f4453243a69b9120e7",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "b04ea7419f391c8a424bbe9b26fee9fa6cb60c48",
+  codexGuard: "2913c80e08dc4d6f480d9b5224147c43e5c982fd",
   pushLib: "f87e232491487d7223b3e8f4453243a69b9120e7",
 };
 

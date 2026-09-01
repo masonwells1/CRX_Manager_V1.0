@@ -104,6 +104,17 @@ ok(r.decision?.permissionDecision === "deny", "raw curl REST merge denied (Codex
 r = runHook({ tool_name: "Bash", tool_input: { command: "Invoke-RestMethod -Method Put -Uri https://api.github.com/repos/o/r/pulls/12/merge" } });
 ok(r.decision?.permissionDecision === "deny", "PowerShell REST merge denied");
 
+// The GraphQL deny above only fired for `gh api graphql`. The mutation is now
+// denied by NAME, whatever transport carries it — Codex's proof on PR #541
+// found the Codex guard missing raw REST entirely, and neither guard covered
+// GraphQL over curl. Denying the destination beats enumerating the tools that
+// can reach it.
+r = runHook({ tool_name: "Bash", tool_input: { command: "curl https://api.github.com/graphql -d '{\"query\":\"mutation{mergePullRequest(input:{pullRequestId:\\\"PR_1\\\"}){clientMutationId}}\"}'" } });
+ok(r.decision?.permissionDecision === "deny", "GraphQL merge mutation over curl denied");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "Invoke-RestMethod -Uri https://api.github.com/graphql -Body '{\"query\":\"mutation{mergePullRequest(input:{}){id}}\"}'" } });
+ok(r.decision?.permissionDecision === "deny", "GraphQL merge mutation over Invoke-RestMethod denied");
+
 r = runHook({ tool_name: "Bash", tool_input: { command: "echo docs about /pulls/12/merges endpoint" } });
 ok(r.status === 0 && r.decision === null, "merge-suffixed word boundary respected (merges != merge)");
 

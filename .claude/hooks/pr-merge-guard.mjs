@@ -65,7 +65,19 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
   requests.push(mcpMergeRequest(toolInput));
 } else if (typeof toolInput.command === "string" && toolInput.command) {
   for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/)) {
+    // The mergePullRequest mutation is denied by NAME, whatever transport
+    // carries it — `gh api graphql`, curl, Invoke-RestMethod, a fetch in a node
+    // one-liner. Until 2026-09-01 only the `gh api graphql` spelling was caught
+    // (below), which was survivable because GitHub itself refused an unapproved
+    // merge and a raw call just got a 405. Mason's admin override removed that
+    // backstop, and Codex's proof on PR #541 found the transport gap on both
+    // guards. Naming the destination beats enumerating the tools that reach it.
+    if (/\bmergePullRequest\b/i.test(segment)) {
+      deny("PR MERGE GATE: GraphQL mergePullRequest mutations are denied — whatever transport carries them — because the guard cannot resolve and verify the PR's base, head, and checks for them. Use `gh pr merge <number>` so the gate can verify the merge.");
+    }
     const api = ghApiMergeRequest(segment);
+    // Subsumed by the name check above; kept as the backstop if that check is
+    // ever narrowed.
     if (api?.unsupportedGraphql) {
       deny("PR MERGE GATE: GraphQL mergePullRequest mutations are denied because the guard cannot safely resolve and verify the PR's head/checks. Use `gh pr merge <number>` instead.");
     }

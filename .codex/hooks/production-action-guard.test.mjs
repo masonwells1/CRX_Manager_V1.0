@@ -657,6 +657,37 @@ try {
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "REVIEW_REQUIRED" }),
   }).blocked, true, "the MCP merge route needs the approval too");
+
+  // ── raw merge transports (Codex proof on PR #541, 2026-09-01) ─────────────
+  // The gh-shaped routes above were the whole gate, which was survivable while
+  // GitHub itself refused an unapproved merge: a raw REST call simply got a 405.
+  // Mason's admin override removed that backstop — an agent holding his admin
+  // credential can now merge through any transport — so the endpoint and the
+  // mutation are denied by DESTINATION, whatever tool names them. The Claude
+  // guard has denied raw REST since 2026-07-16; the Codex guard had not, and
+  // GraphQL-over-curl was uncovered on both sides.
+  for (const rawMerge of [
+    "curl -X PUT -H 'Authorization: token x' https://api.github.com/repos/crop/crx/pulls/123/merge",
+    "Invoke-RestMethod -Method Put -Uri https://api.github.com/repos/crop/crx/pulls/123/merge",
+    "wget --method=PUT https://api.github.com/repos/crop/crx/pulls/123/merge",
+    "curl https://api.github.com/graphql -d '{\"query\":\"mutation{mergePullRequest(input:{pullRequestId:\\\"PR_1\\\"}){clientMutationId}}\"}'",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: rawMerge },
+      repoDir: risky.repo,
+      nowMs: now,
+    }).blocked, true, `raw merge transport denied: ${rawMerge.slice(0, 40)}`);
+  }
+  // A gh-shaped merge still routes through the real gate rather than the raw
+  // denial — otherwise the blanket rule would swallow the approved path.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, false, "an ordinary gh merge is not caught by the raw-transport rule");
   assert.equal(evaluateProductionAction({
     toolName: "mcp__github__merge_pull_request",
     toolInput: { owner: "crop", repo: "crx", pull_number: 123 },

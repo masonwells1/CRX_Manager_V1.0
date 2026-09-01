@@ -41,6 +41,13 @@ the reason.**
 because stale-review dismissal and require-last-push-approval are on. If either is ever turned off,
 both gates must additionally verify that an APPROVED review's `commit_id` equals `headRefOid`.
 
+**What the lockout is, honestly.** It is an honest-mistake net, not a boundary. Because agents
+authenticate as Mason, the guards can only refuse the *commands* that would use the override — they
+cannot withhold the capability. Codex's exact-SHA proof on this PR made that concrete by finding the
+lockout bypassable through raw REST and GraphQL merge transports (denied by destination now, on both
+guards). The durable fix — a separate non-admin credential for agents — is an owner decision and is
+tracked as open in `docs/manual/KNOWN_ISSUES.md`.
+
 **Proof.** Live protection and ruleset state read with `gh api` before and after. Guard behavior
 covered by `.claude/hooks/pr-merge-guard.test.mjs` (66 assertions) and
 `.codex/hooks/production-action-guard.test.mjs`, mutation-tested where the blob pin allows;

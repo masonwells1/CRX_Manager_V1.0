@@ -45,6 +45,29 @@ Two changes close that:
   exempt on the Claude side: GitHub holds an auto-merge until every requirement
   is met, and auto-merge never uses the admin bypass.
 
+### 3. Raw merge transports, denied by destination (Codex proof finding)
+
+The exact-SHA Codex review of this branch found the lockout bypassable: both
+guards only recognised merges that named the `gh` binary. The Codex guard did
+not deny raw REST merge calls at all, and **neither** guard caught the
+`mergePullRequest` GraphQL mutation carried over curl or Invoke-RestMethod.
+
+That gap predates this change and was survivable while it existed, because
+GitHub itself refused an unapproved merge — a raw REST call just got a 405. The
+override removes that backstop, so the same latent gap became a live hole: an
+agent holding Mason's admin credential could merge through any transport.
+
+Both guards now deny by **destination** — the `/pulls/<n>/merge` endpoint and
+the `mergePullRequest` mutation, whatever tool names them — rather than by
+enumerating curl, wget, Invoke-RestMethod, and fetch. Verified red-before /
+green-after: the new assertions fail against the pre-fix guards.
+
+**Codex's broader point stands and is not closed by this fix:** command-string
+matching cannot truly distinguish Mason from an agent while both use the same
+admin identity. The durable fix is a separate, non-admin credential for agents.
+That is an owner decision and is deliberately left open — see
+`docs/manual/KNOWN_ISSUES.md`.
+
 ### Load-bearing dependency
 
 `reviewDecision === "APPROVED"` is bound to the current head **only because**
