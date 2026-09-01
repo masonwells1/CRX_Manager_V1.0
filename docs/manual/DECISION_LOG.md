@@ -36,25 +36,47 @@ place it is wrong everywhere. A second root cause is structural rather than lexi
 **name**, and a PL/pgSQL parameter is an ordinary local, so `p_performed_by := p_target_id;` after a
 passing check re-forges the actor. Nine spellings of that were found.
 
-**Residual risk, stated plainly — and it is NOT uniform.** Two different residuals remain, with different
+**Residual risk, stated plainly — and it is NOT uniform.** Three different residuals remain, with different
 compensating controls, and conflating them would overstate the defence:
 
-1. **Lexical and re-binding bypasses** (the quoted-identifier gap, parameter re-assignment after a passing
-   check, `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips). These evade the
-   *write-time* hook only. The post-apply sweep predicates still see the routine in the live catalog, so
-   exploiting one of these also requires clearing the Codex proof, the CodeRabbit review, **and** the sweep.
-   The guard was the fourth line of defence here; capping it does not remove the first three.
-2. **The naming-scope gap** — actor-shaped parameters that do not match `^p_\w*by$|^p_actor|^p_user`, e.g.
+1. **Lexical bypasses** (the quoted-identifier gap and other novel spellings). These evade the *write-time*
+   hook only. Because such a routine carries no binding check at all, its source contains no `ACTOR_MISMATCH`
+   token, so the post-apply sweep predicates do still consider it — and they fire when the actor parameter is
+   COALESCEd, compared against `auth.uid()`, mentioned near role text, or written into `financial_audit_log`
+   within the same statement. For a bypass of that shape, exploiting it also requires clearing the Codex
+   proof, the CodeRabbit review, **and** the sweep; the guard was the fourth line of defence, and capping it
+   does not remove the first three. State the limit with it: the predicates key on those specific sinks, so a
+   lexical bypass that routes the parameter to some other write target is outside them too.
+2. **Re-binding and laundering bypasses** — `p_performed_by := p_target_id;` after a passing check,
+   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips. **The post-apply sweeps do NOT
+   cover these, and it is not a near miss.** Both predicates select only rows where
+   `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that performs a legitimate-looking binding check and *then*
+   re-assigns the parameter is excluded from both sweeps outright — the very presence of the check it
+   defeated is what hides it. A temp-table round trip evades them for a second, independent reason:
+   `actor-forgery.sql` requires the parameter to appear near `coalesce`/`auth.uid`/role text, and
+   `actor-forgery-fin-audit.sql` requires it to appear after `financial_audit_log` **before the next
+   semicolon**, so stashing the parameter in a temp table in one statement and inserting it into the audit
+   log in another satisfies neither. Only the Codex proof and the CodeRabbit review stand here.
+3. **The naming-scope gap** — actor-shaped parameters that do not match `^p_\w*by$|^p_actor|^p_user`, e.g.
    `p_target_id` or `p_acting_user_id`. **The live sweep predicates share this exact name pattern, so the
    sweep does NOT cover this path either.** Do not claim the sweep as the compensating control for it. The
    only things standing here are the Codex proof and the CodeRabbit review on the migration diff. Closing it
    needs real dataflow over write targets — analysis of which values reach an actor column — not another
    pattern, and it would have to change the hook and both predicates together.
 
-Note on (1): `EXECUTE … USING` / `INSERT … RETURNING … INTO` / temp-table round trips are currently caught at
-write time only *incidentally*, because `EXECUTE`/`INSERT` unconditionally set `hasMutation` rather than
-because taint is modelled. If that trigger is ever narrowed, all three open immediately at write time —
-though the sweep would still see them post-apply.
+Note on (2): the incidental write-time coverage of `EXECUTE … USING` / `INSERT … RETURNING … INTO` — an
+unconditional `hasMutation` trigger rather than modelled taint — lives in **parked PR #449, not in the hook
+that is running**. The active `.claude/hooks/actor-binding-check.mjs` is 213 lines and contains no such
+trigger (PR #449's hardened rewrite is the ~3,000-line version referenced above), so today these forms are
+not caught at write time at all. Do not credit the running guard with them until #449 lands.
+
+Note on the write path itself: the hook reads `tool_input.content || tool_input.new_string` and analyses that
+fragment alone — it does **not** reconstruct the full post-edit file the way `sql-safety.mjs`,
+`idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. An ordinary
+incremental `Edit` that inserts an unsafe write *inside* an existing function therefore carries no function
+header, no parameter list and no `SECURITY DEFINER` attribute in the analysed text, so the guard finds no
+candidate and allows it. This is the normal editing path, not an exotic one; the hook's own Edit-coverage
+test passes a whole function as `new_string` and so does not exercise it.
 
 **If this is ever revisited, rebuild rather than re-harden.** The only approach that removes the whole
 category is parsing with PostgreSQL's own grammar (`libpg_query`), which eliminates "spellings" entirely and
@@ -64,6 +86,8 @@ and a rewrite — not another round. It does **not** solve the naming-scope limi
 **Operative rules.**
 - Do not open another pattern-hardening round on this guard; cite this entry and close the request.
 - Do not describe this guard as preventing actor forgery. It reduces it. Say so in any doc that mentions it.
+- Do not cite the post-apply sweeps as the compensating control for the re-binding, laundering or
+  naming-scope residuals. They cover the lexical residual only, and only at the sinks they key on.
 - Before starting related work, check for stranded parallel attempts — a third, unpushed regex attempt
   (`codex/actor-binding-guard-recut-20260831`, local only, no PR) duplicated one of PR #449's fixes.
 - PR #449 itself is **parked, not abandoned**: it holds the 19 closed bypasses and is worth landing after

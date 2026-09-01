@@ -60,6 +60,60 @@ programme. A third, unpushed regex attempt exists locally at `codex/actor-bindin
 rebuilt, use PostgreSQL's own grammar (`libpg_query`) rather than more patterns — that removes the lexical
 category entirely, though it still does not solve the naming-scope limit.
 
+### Review round — the cap was itself overclaiming
+
+Four live review findings, all the same defect the entry exists to fix: the first draft credited the
+post-apply sweep predicates with catching residuals they do not catch. Every claim below was verified
+against `scripts/db-invariant-sweeps/predicates/actor-forgery.sql`, `-fin-audit.sql`, and the running
+`.claude/hooks/actor-binding-check.mjs` before editing.
+
+1. **Re-binding is invisible to the sweeps, not merely to the hook.** Both predicates select only where
+   `prosrc !~* 'ACTOR_MISMATCH'`. A routine that performs a legitimate-looking binding check and then runs
+   `p_performed_by := p_target_id;` is therefore excluded from both sweeps *by the presence of the check it
+   defeated*. The draft listed re-binding among the residuals the sweep compensates for. It does not.
+2. **Temp-table laundering evades both predicates for a second, independent reason.** `actor-forgery.sql`
+   requires the actor parameter near `coalesce`/`auth.uid`/role text; `-fin-audit.sql` requires it after
+   `financial_audit_log` *before the next semicolon*. Stashing the parameter in a temp table in one
+   statement and inserting it into the audit log in another satisfies neither sink test.
+3. **The `hasMutation` trigger is not in the running hook.** The active guard is **213 lines** and contains
+   no `hasMutation` logic; that trigger — and the incidental `EXECUTE … USING` / `INSERT … RETURNING … INTO`
+   coverage attributed to it — exists only in **parked PR #449**, whose hardened rewrite is the ~3,000-line
+   version (3,172 lines) the entry refers to elsewhere. Three documents credited the *active* guard with
+   *parked* behavior, which is precisely the failure this change was written to stop.
+4. **The ordinary incremental-`Edit` path is not covered at all.** The hook reads
+   `tool_input.content || tool_input.new_string` and analyses that fragment alone; unlike `sql-safety.mjs`,
+   `idempotency-body-check.mjs` and `status-enum-check.mjs`, it does not reconstruct the full post-edit file
+   via `edit-splice-lib.mjs`. An `Edit` inserting an unsafe write *inside* an existing function presents no
+   function header, no parameter list and no `SECURITY DEFINER` attribute, so the guard finds no candidate
+   and allows. The hook's own Edit-coverage test passes a whole function as `new_string`, so it never
+   exercises the normal editing path. Added as a gap row; the claim "catches every ordinary spelling" was
+   withdrawn, because this *is* the ordinary path.
+
+The residual list is now three items rather than two — lexical, re-binding/laundering, naming-scope — with
+the compensating controls stated per item instead of collectively.
+
+### Reconciled the applied-live state everywhere, not just here
+
+Recording the two Section 9 migrations as applied left `docs/manual/CURRENT_STATE.md` and
+`docs/reference/migration-history.md` (rows 901, 902) still saying **PENDING — NOT APPLIED LIVE**, while
+`KNOWN_ISSUES.md` itself says the source documents win on disagreement. A rollout session reading the
+canonical pair would have planned against the wrong production state.
+
+Re-verified read-only on 2026-09-01 before editing, rather than copying this PR's own prose:
+
+- `list_migrations` → **980 rows**, with `20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard`
+  and `20260826222000_correct_ap_aging_due_date_buckets` as the two newest entries. Searching by `version`
+  finds neither: the ledger's version column carries the apply-time stamp (`max(version)` `20260901045346`),
+  so ordering must be read from the authored NAME.
+- Live catalog → `get_ap_aging` has exactly one overload taking `p_as_of_date` and returning the five-bucket
+  due-date contract (`current_amount`, `days_1_30`, `days_31_60`, `days_61_90`, `over_90`,
+  `total_outstanding`, `bill_count`), `SECURITY DEFINER`, `search_path=public, pg_temp`;
+  `get_ap_dashboard_summary` takes `p_idempotency_key` and keys on `due_date`. The prior claim that both
+  "remain" the four-column bill-date and rolling-30-day implementations is false as of the apply.
+
+Dated changelog and audit-handoff files that describe the pre-apply state were left alone — they are
+point-in-time records, not current-state documents.
+
 ### Proof observed
 
 - Live ledger re-read at cap time: 980 rows, ordering high-water `20260826222000`.
@@ -68,3 +122,7 @@ category entirely, though it still does not solve the naming-scope limit.
 - PR #449 finding census via the GraphQL `reviewThreads` query filtered on
   `isResolved==false AND isOutdated==false`: 23 live, of which 16 created 2026-09-01.
 - `npm run check:docs` passes.
+- Review-round verification (2026-09-01): `grep -c hasMutation .claude/hooks/actor-binding-check.mjs` → 0
+  and `wc -l` → 213, against 3,172 lines on PR #449's head `7a38e9eb`; `actor-binding-check.mjs:111` reads
+  `payload?.tool_input?.content || payload?.tool_input?.new_string` with no `edit-splice-lib` import; both
+  sweep predicates carry `WHERE prosrc !~* 'ACTOR_MISMATCH'`.

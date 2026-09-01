@@ -249,16 +249,19 @@ before it is written, so a forgery is refused rather than detected after it ship
 catalog.
 
 **Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. It catches
-every ordinary spelling and is materially stronger after PR #449's two rounds (19 laundering channels
-closed, each reproduced by running the hook and each fix mutation-tested). It is **not** a boundary, and no
-document should describe it as preventing actor forgery.
+ordinary spellings *of a whole-function write*, and is materially stronger after PR #449's two rounds (19
+laundering channels closed, each reproduced by running the hook and each fix mutation-tested) — though those
+rounds are parked with that PR and are **not** in the running hook. It is **not** a boundary, and no document
+should describe it as preventing actor forgery. Note in particular that the ordinary *incremental* edit path
+is not covered at all (row 3 below), so "catches every ordinary spelling" would overstate it.
 
 **What it does NOT catch, stated so nobody re-derives it:**
 
 | Gap | Why it is open |
 |---|---|
-| Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit — and **the live sweep predicates use the SAME name pattern, so this gap is shared, not compensated.** Unlike every other row here, the post-apply sweep does NOT catch this one. Closing it needs real dataflow over write targets, and would have to change the hook and both predicates together. |
-| `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | Covered only *incidentally* — `EXECUTE`/`INSERT` unconditionally set `hasMutation`, so taint is never modelled. **If that trigger is ever narrowed, all three open immediately.** |
+| Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit — and **the live sweep predicates use the SAME name pattern, so this gap is shared, not compensated.** The post-apply sweep does NOT catch this one. Closing it needs real dataflow over write targets, and would have to change the hook and both predicates together. |
+| Re-binding after a passing check (`p_performed_by := p_target_id;`), `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | **Not covered at write time, and not covered by the sweeps either.** The incidental `hasMutation` trigger that would catch `EXECUTE`/`INSERT` lives in **parked PR #449, not in the running hook** (213 lines, no such logic) — do not credit the active guard with it. The sweeps miss them for their own reasons: both predicates select only where `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that passes a binding check and *then* re-assigns the parameter is excluded outright; and a temp-table round trip matches neither the `coalesce`/`auth.uid`/role proximity test in `actor-forgery.sql` nor the same-statement `financial_audit_log … <param>` test in `-fin-audit.sql`. |
+| An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function | The hook analyses `tool_input.content \|\| tool_input.new_string` — the fragment alone. It does **not** reconstruct the full post-edit file the way `sql-safety.mjs`, `idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. With no function header, parameter list or `SECURITY DEFINER` attribute in the analysed text, the guard finds no candidate and allows. This is the *normal* editing path; the hook's own Edit-coverage test passes a whole function as `new_string`, so it does not exercise it. The sweeps do still see the applied routine. |
 | Cross-routine / cross-migration helpers | The analysis is intra-routine and single-file; helpers are handled by the fail-closed callable rule, not by understanding. This is also why the false-positive rate on read-only routines is what it is. |
 | Novel lexical spellings | The known-unknown. Three rounds each found a *new category*; the tool pattern-matches text, and PostgreSQL's grammar has more spellings than anyone will enumerate. |
 
@@ -269,9 +272,17 @@ three careful passes.
 
 **What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
 
-- **For the lexical and re-binding gaps** (rows 2–4 above): the post-apply sweep predicates against the live
-  catalog, the exact-SHA `gpt-5.6-sol` proof on migration diffs, and the CodeRabbit final review. Exploiting
-  one means writing deliberately obfuscated SQL into a migration and clearing all three.
+- **For the incremental-Edit, cross-routine and novel-lexical gaps** (rows 3, 4 and 5 above): the post-apply sweep
+  predicates against the live catalog, the exact-SHA `gpt-5.6-sol` proof on migration diffs, and the
+  CodeRabbit final review. Such a routine has no binding check, so it carries no `ACTOR_MISMATCH` token and
+  the predicates do consider it — exploiting one means writing deliberately obfuscated SQL into a migration
+  and clearing all three. The limit worth stating: the predicates fire on their own sinks (COALESCE/`auth.uid()`/role
+  proximity, or a same-statement `financial_audit_log` write), so a bypass routing the parameter to some
+  other write target is outside them as well.
+- **For the re-binding and laundering gaps** (row 2): **only the Codex proof and the CodeRabbit review.**
+  Both predicates are gated on `prosrc !~* 'ACTOR_MISMATCH'`, so a re-binding that follows a passing check is
+  excluded from the sweep by the presence of the check it defeated; and a temp-table round trip matches
+  neither predicate's sink test. Do not count the sweep here.
 - **For the naming-scope gap** (row 1): **only the Codex proof and the CodeRabbit review.** The sweep
   predicates key on the same `^p_\w*by$|^p_actor|^p_user` pattern, so they share the blind spot rather than
   covering it. Do not cite the sweep as the compensating control for a `p_target_id`-shaped parameter.
