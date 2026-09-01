@@ -249,11 +249,19 @@ if (!CANONICAL_MIGRATION_NAME.test(migName) || stampCount !== 1) {
   // files", and every permitted location is equally approved: `ok: true` already
   // guarantees the content matched a permitted file, and each candidate lives in a
   // session-scoped checkout the proof lookup already trusts.
+  // `approved` is EXACTLY the resolver's validated list — never a re-derived set of
+  // candidate paths. The previous version rebuilt it from `source.dirs`, which
+  // includes roots the resolver never validated; CodeRabbit showed a same-named
+  // symlink to an external file in a second checkout would then resolve to the same
+  // target and be accepted, even though the resolver itself rejects it as
+  // `escapes-dir`. Deciding the authorized set anywhere other than where the
+  // validation happens is what made this line wrong in both directions at once.
   const real = (p) => { try { return realpathSync(p); } catch { return p; } };
   const key = (p) => (process.platform === "win32" ? real(p).toLowerCase() : real(p));
   const realPassed = real(absFile);
-  const candidates = (source.dirs || []).map((d) => path.join(d, `${migName}.sql`));
-  const approved = candidates.length ? candidates : [source.file];
+  const approved = Array.isArray(source.files) && source.files.length
+    ? source.files
+    : [source.file];
   const samePath = approved.some((c) => key(c) === key(absFile));
   const realApproved = real(source.file);
   if (!samePath) {

@@ -733,6 +733,81 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     }
   }
 
+  // THE VALIDATED LIST IS THE AUTHORIZED SET. resolveMigrationSource() must return
+  // every file that passed root-anchor + direct-child + content, and NOTHING else —
+  // callers must never re-derive candidates from `dirs`.
+  //
+  // Codex and CodeRabbit each found one direction of this on the same line: too
+  // STRICT (the primary's copy shadowed the worktree's own valid file) and too LOOSE
+  // (a re-derived candidate list admitted a root the resolver rejects as
+  // escapes-dir). Both cases are asserted here, because fixing either direction
+  // alone silently reopens the other.
+  {
+    // Two permitted checkouts, same migration name. The first holds the real file;
+    // the second holds a link to an OUTSIDE file with identical bytes — the resolver
+    // must return only the first.
+    const primary = fixture({ migrationFile: SQL });
+    const second = fixture({ migrationFile: null });
+    mkdirSync(path.join(second, "supabase", "migrations"), { recursive: true });
+    const outside = mkdtempSync(path.join(os.tmpdir(), "crx-ext-"));
+    roots.push(outside);
+    const external = path.join(outside, `${MIG}.sql`);
+    writeFileSync(external, SQL, "utf8"); // IDENTICAL content — content binding cannot catch this
+    const escapePath = path.join(second, "supabase", "migrations", `${MIG}.sql`);
+    let linked = false;
+    try { symlinkSync(external, escapePath, "file"); linked = true; } catch { linked = false; }
+
+    const bothRoots = () => `worktree ${primary}\n\nworktree ${second}\n`;
+    const res = resolveMigrationSource({
+      name: MIG, query: SQL, projectDir: primary, cwd: second, gitWorktreeList: bothRoots,
+    });
+    ok(res.ok === true, "the real file in a permitted checkout still resolves");
+    ok(Array.isArray(res.files), "resolveMigrationSource returns a validated file list");
+    ok(res.files.every((f) => f !== escapePath),
+      "the validated list never contains a path the resolver itself rejects as escapes-dir");
+    if (linked) {
+      ok(res.files.length === 1,
+        `only the validated file is authorized (got ${res.files.length}: ${res.files.join(", ")})`);
+    } else {
+      console.log("  SKIP escape-link half of the validated-list case — cannot create a file symlink here");
+    }
+  }
+
+  // The same invariant WITHOUT needing a symlink, so it actually runs on Windows:
+  // a candidate that EXISTS at the permitted path but fails validation (here, on
+  // content) must not appear in the authorized set. A caller that re-derived
+  // candidates from `dirs` would authorize it; one that uses the validated list
+  // cannot. This is the platform-independent guard on the loose direction, since the
+  // escape-link half above skips without elevation.
+  {
+    const primary = fixture({ migrationFile: SQL });
+    const second = fixture({ migrationFile: null });
+    mkdirSync(path.join(second, "supabase", "migrations"), { recursive: true });
+    const decoy = path.join(second, "supabase", "migrations", `${MIG}.sql`);
+    writeFileSync(decoy, "SELECT 'not the reviewed migration';\n", "utf8");
+    const bothRoots = () => `worktree ${primary}\n\nworktree ${second}\n`;
+    const res = resolveMigrationSource({
+      name: MIG, query: SQL, projectDir: primary, cwd: second, gitWorktreeList: bothRoots,
+    });
+    ok(res.ok === true, "the validated file still resolves when a decoy shares its name elsewhere");
+    ok(res.files.length === 1 && res.files[0] !== decoy,
+      `a same-named file that fails content validation is NOT authorized (got ${res.files.join(", ") || "none"})`);
+  }
+
+  // …and both permitted copies ARE authorized when both genuinely validate. This is
+  // the too-strict direction Codex found: the primary's copy must not shadow the
+  // session worktree's own identical file.
+  {
+    const primary = fixture({ migrationFile: SQL });
+    const second = fixture({ migrationFile: SQL });
+    const bothRoots = () => `worktree ${primary}\n\nworktree ${second}\n`;
+    const res = resolveMigrationSource({
+      name: MIG, query: SQL, projectDir: primary, cwd: second, gitWorktreeList: bothRoots,
+    });
+    ok(res.files.length === 2,
+      `both validated copies are authorized, so neither checkout shadows the other (got ${res.files.length})`);
+  }
+
   // …and the mirror that keeps the fix honest: a checkout reached THROUGH a
   // junction must still pass. Anchoring at the root is what absorbs that, and
   // without this case a rule that simply refused every resolved path would satisfy

@@ -165,6 +165,7 @@ export function resolveMigrationSource({
 
   const want = lfNormalize(query);
   const searched = [];
+  const validated = [];
   let sawName = false;
   let escaped = false;
   for (const root of roots) {
@@ -217,13 +218,30 @@ export function resolveMigrationSource({
     if (pathKey(path.dirname(realFile)) !== pathKey(realDir)) { escaped = true; continue; }
     let content;
     try { content = readFileSync(realFile, "utf8"); } catch { continue; }
-    if (lfNormalize(content) === want) return { ok: true, file, dirs };
+    // COLLECT every validated file; do NOT stop at the first.
+    //
+    // Returning on the first match made the caller's identity check unsound in BOTH
+    // directions, and the two reviewers found one direction each on the same line:
+    //   * Codex (P2): too STRICT — with the migration present in the primary checkout
+    //     and in the session's worktree, `file` named the primary, so applying the
+    //     worktree's own file was refused. Reproduced at exit code 2.
+    //   * CodeRabbit (minor): too LOOSE — the caller compensated by comparing against
+    //     every `dirs` candidate, including roots this loop never validated. A
+    //     same-named symlink to an external file in a second checkout then resolved to
+    //     the same target and was accepted, though this very loop would have rejected
+    //     it as `escapes-dir`.
+    // Both are the same defect: the authorized SET was being decided somewhere other
+    // than where the validation happens. Returning the validated list settles
+    // strictness and looseness in one place, under one rule.
+    if (lfNormalize(content) === want) validated.push(file);
   }
+  if (validated.length) return { ok: true, file: validated[0], files: validated, dirs };
   return {
     ok: false,
     code: escaped ? "escapes-dir" : sawName ? "content-differs" : "not-found",
     stem,
     dirs,
+    files: [],
     searched,
   };
 }
