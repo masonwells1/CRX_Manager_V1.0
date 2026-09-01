@@ -20,6 +20,7 @@ describe('gauntlet caller-side safety guards', () => {
     expect(page).toContain('await Promise.all([...pendingItemWritesRef.current])');
     expect(page).toMatch(/waitForAuthoritativeCountItems[\s\S]*refreshCountItems/);
     expect(page).toContain('disabled={preparingCompletion || completing}');
+    expect(page).toContain('onConfirm={() => { void executeComplete(); }}');
   });
 
   it('keeps bulk field-import RPC intents stable per imported row and refuses re-entry', () => {
@@ -29,6 +30,8 @@ describe('gauntlet caller-side safety guards', () => {
     expect(component).toContain('saveFieldIdem.getKeyFor(intentScope)');
     expect(component).toContain('setBoundaryIdem.getKeyFor(intentScope)');
     expect(component).toContain('setOverrideAcresIdem.getKeyFor(intentScope)');
+    expect(component).toContain('if (uploadInFlightRef.current) return;');
+    expect(component).toContain('closeDisabled={uploading}');
   });
 
   it('binds duplicate recipes and negative-inventory reconciliation to a row-specific retry intent', () => {
@@ -44,7 +47,9 @@ describe('gauntlet caller-side safety guards', () => {
     const triggers = source('src/lib/notificationTriggers.ts');
     const detail = source('src/pages/PurchaseOrderDetail.tsx');
     const quickReceive = source('src/components/receiving/QuickReceivePanel.tsx');
-    expect(triggers).toContain('damaged-receiving:${poId}:${[...receiptIntentIds].sort().join(\':\')}');
+    expect(triggers).toContain("JSON.stringify([...receiptIntentIds].sort())");
+    expect(triggers).toContain('damaged-receiving:${poId}:${receiptIntentDigest}');
+    expect(triggers).toContain("globalThis.crypto.subtle.digest(\n    'SHA-256'");
     const migration = source('supabase/migrations/20260831233000_bind_section9_replays_to_intent.sql');
     expect(migration).toContain("'items_summary', p_items_summary");
     expect(migration).toContain("'actor_id', v_actor");
@@ -63,5 +68,7 @@ describe('gauntlet caller-side safety guards', () => {
     expect(crawl).toContain("intentionalRedirectTo: '/integrity'");
     expect(crawl).toContain("status = 'intentional-redirect'");
     expect(crawl).toContain("r.status !== 'intentional-redirect'");
+    expect(crawl.indexOf("status = 'network-errors'"))
+      .toBeLessThan(crawl.indexOf("status = 'intentional-redirect'"));
   });
 });

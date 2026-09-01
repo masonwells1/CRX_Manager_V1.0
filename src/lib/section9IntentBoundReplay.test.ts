@@ -98,6 +98,18 @@ describe('Section 9 actor-and-intent replay binding', () => {
     expect(migration.trimEnd()).not.toMatch(/COMMIT;$/);
   });
 
+  it('keeps every RPC rename block valid PL/pgSQL', () => {
+    for (const tag of [
+      'rename_section9_receiving',
+      'rename_section9_update_bill',
+      'rename_section9_payment',
+      'rename_section9_void_bill',
+    ]) {
+      expect(migration).toContain(`END;\n$${tag}$;`);
+      expect(migration).not.toContain(`END\n$${tag}$;`);
+    }
+  });
+
   it('enforces and audits cumulative PO billing on bill edits', () => {
     expect(migration).toContain('vb.id <> p_bill_id');
     expect(migration).toContain('v_cumulative_total_cents * 100 > v_po_total_cents * 105');
@@ -118,20 +130,28 @@ describe('Section 9 actor-and-intent replay binding', () => {
     const purchaseOrder = source('src', 'pages', 'PurchaseOrderDetail.tsx');
     const quickReceive = source('src', 'components', 'receiving', 'QuickReceivePanel.tsx');
     const receivingHub = source('src', 'components', 'receiving', 'ReceivingHubPanel.tsx');
+    const inventoryPage = source('src', 'pages', 'InventoryPage.tsx');
 
-    for (const page of [vendorBill, purchaseOrder, quickReceive, receivingHub]) {
+    for (const page of [vendorBill, purchaseOrder, quickReceive, receivingHub, inventoryPage]) {
       expect(page).toContain('getIdempotencyBindingRejection');
     }
     expect(purchaseOrder).toContain('receiveIdem.resetKey()');
     expect(purchaseOrder).toContain('reverseIdem.resetKey()');
     expect(quickReceive).toContain('receiveIdem.resetKey()');
     expect(receivingHub).toContain('receiveIdem.resetKey()');
+    expect(inventoryPage).toContain(
+      'if (getIdempotencyBindingRejection(error)) receivePoIdem.resetKey();',
+    );
     expect(vendorBill).toContain('paymentIdem.resetKey();');
     expect(vendorBill).toContain('editIdem.resetKey();');
     expect(vendorBill).toContain('voidIdem.resetKey();');
     expect(newVendorBill).toContain('getIdempotencyBindingRejection(err)');
     expect(newVendorBill).toContain('createBillIdem.resetKey();');
     expect(newVendorBill).toContain('this bill was not submitted');
+    const assertedCreate = newVendorBill.indexOf("assertRpcResult(data, 'create_vendor_bill')");
+    const retiredCreate = newVendorBill.indexOf('createBillIdem.resetKey();', assertedCreate);
+    expect(assertedCreate).toBeGreaterThan(-1);
+    expect(retiredCreate).toBeGreaterThan(assertedCreate);
   });
 
   it('binds damaged-receipt notification replay to actor and exact message intent', () => {

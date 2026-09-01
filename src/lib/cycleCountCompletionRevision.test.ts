@@ -12,6 +12,10 @@ const page = readFileSync(
   join(process.cwd(), 'src', 'pages', 'CycleCounts.tsx'),
   'utf8',
 ).replace(/\r\n/g, '\n');
+const sharedTypes = readFileSync(
+  join(process.cwd(), 'src', 'types', 'index.ts'),
+  'utf8',
+).replace(/\r\n/g, '\n');
 
 function assertCriticalCycleGuards(candidate: string): void {
   const completionStart = candidate.indexOf('CREATE FUNCTION public.complete_cycle_count');
@@ -32,30 +36,45 @@ function assertCriticalCycleGuards(candidate: string): void {
   }
 }
 
+function expectBefore(candidate: string, earlier: string, later: string): void {
+  const earlierIndex = candidate.indexOf(earlier);
+  const laterIndex = candidate.indexOf(later);
+  expect(earlierIndex, `missing earlier marker: ${earlier}`).toBeGreaterThan(-1);
+  expect(laterIndex, `missing later marker: ${later}`).toBeGreaterThan(-1);
+  expect(earlierIndex).toBeLessThan(laterIndex);
+}
+
 describe('cycle count completion revision contract', () => {
   it('records every item mutation in an authoritative parent revision', () => {
     expect(code).toContain('ADD COLUMN item_revision bigint NOT NULL DEFAULT 0');
     expect(code).toContain('CREATE TRIGGER trg_bump_cycle_count_item_revision');
     expect(code).toMatch(/AFTER INSERT OR UPDATE OR DELETE ON public\.cycle_count_items/);
     expect(code).toContain('SET item_revision = item_revision + 1');
+    expect(code).toMatch(
+      /IF TG_OP = 'DELETE' THEN\s+RETURN OLD;\s+END IF;\s+RAISE EXCEPTION 'CYCLE_COUNT_NOT_FOUND'/,
+    );
   });
 
   it('locks an item before its parent, while completion locks items, parent, then inventory', () => {
     const updateStart = code.indexOf('CREATE OR REPLACE FUNCTION public.update_cycle_count_item');
     const updateEnd = code.indexOf('ALTER FUNCTION public.complete_cycle_count', updateStart);
     const update = code.slice(updateStart, updateEnd);
-    expect(update.indexOf('WHERE id = p_item_id\n   FOR UPDATE;'))
-      .toBeLessThan(update.indexOf('WHERE id = v_item.cycle_count_id\n   FOR UPDATE;'));
+    expectBefore(
+      update,
+      'WHERE id = p_item_id\n   FOR UPDATE;',
+      'WHERE id = v_item.cycle_count_id\n   FOR UPDATE;',
+    );
 
     const completionStart = code.indexOf('CREATE FUNCTION public.complete_cycle_count');
     const completion = code.slice(completionStart);
-    expect(completion.indexOf('FROM public.cycle_count_items'))
-      .toBeLessThan(completion.indexOf('FROM public.cycle_counts'));
+    expectBefore(completion, 'FROM public.cycle_count_items', 'FROM public.cycle_counts');
     expect(completion).toContain('ORDER BY id\n   FOR UPDATE;');
-    expect(completion.indexOf('FROM public.cycle_counts'))
-      .toBeLessThan(completion.indexOf('FROM public.inventory i'));
-    expect(completion.indexOf('FROM public.inventory i'))
-      .toBeLessThan(completion.indexOf('PERFORM public._complete_cycle_count_impl'));
+    expectBefore(completion, 'FROM public.cycle_counts', 'FROM public.inventory i');
+    expectBefore(
+      completion,
+      'FROM public.inventory i',
+      'PERFORM public._complete_cycle_count_impl',
+    );
     expect(completion).toContain('FOR UPDATE OF i;');
   });
 
@@ -92,8 +111,14 @@ describe('cycle count completion revision contract', () => {
     expect(code).toContain("'_expected_item_revision', p_expected_item_revision");
     expect(page).toContain(".select('item_revision, status')");
     expect(page).toContain('p_expected_item_revision: snapshot.itemRevision');
-    expect(page.indexOf(".select('item_revision, status')"))
-      .toBeLessThan(page.indexOf('const items = await refreshCountItems(activeCount.id)'));
+    expect(page).toContain("typeof countState.item_revision !== 'number'");
+    expect(page).toContain('onConfirm={() => { void executeComplete(); }}');
+    expect(sharedTypes).toMatch(/item_revision\?: number;/);
+    expectBefore(
+      page,
+      ".select('item_revision, status')",
+      'const items = await refreshCountItems(activeCount.id)',
+    );
   });
 
   it('keeps one public overload and exposes the revision to item-save callers', () => {

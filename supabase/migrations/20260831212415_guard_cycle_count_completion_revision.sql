@@ -79,6 +79,11 @@ BEGIN
      SET item_revision = item_revision + 1
    WHERE id = v_cycle_count_id;
   IF NOT FOUND THEN
+    -- ON DELETE CASCADE can remove the parent before the child trigger runs.
+    -- That parent deletion is authoritative and needs no revision bump.
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
     RAISE EXCEPTION 'CYCLE_COUNT_NOT_FOUND';
   END IF;
   IF TG_OP = 'DELETE' THEN

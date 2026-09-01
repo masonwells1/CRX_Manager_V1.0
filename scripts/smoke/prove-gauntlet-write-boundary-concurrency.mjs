@@ -7,7 +7,8 @@
  *   - receiving reversal vs. supplier-cost application;
  *   - vendor-bill creation vs. supplier-cost application;
  *   - cycle-count completion vs. item insertion;
- *   - cycle-count completion vs. attempted item re-parenting.
+ *   - cycle-count completion vs. attempted item re-parenting;
+ *   - parent cycle-count deletion cascading through guarded child rows.
  *
  * The disposable functions contain only the reviewed locking/status slice.
  * Source assertions bind that slice to the checked-in forward migration.
@@ -36,6 +37,12 @@ const BILL_MIGRATION = path.join(
   'migrations',
   '20260831161000_require_cumulative_po_bill_confirmation.sql',
 );
+const INTENT_MIGRATION = path.join(
+  ROOT,
+  'supabase',
+  'migrations',
+  '20260831233000_bind_section9_replays_to_intent.sql',
+);
 const CUTOVER_MIGRATIONS = [
   {
     file: path.join(ROOT, 'supabase', 'migrations', '20260831160000_harden_receiving_reversal_and_ap_reporting.sql'),
@@ -56,7 +63,7 @@ const CUTOVER_MIGRATIONS = [
     error: /CYCLE_COUNT_INTENT_CUTOVER_BLOCKED/,
   },
   {
-    file: path.join(ROOT, 'supabase', 'migrations', '20260831233000_bind_section9_replays_to_intent.sql'),
+    file: INTENT_MIGRATION,
     tag: 'section9_intent_cutover',
     operations: [
       'receive_po_items',
@@ -292,6 +299,7 @@ CREATE TABLE public.vendor_bills (
   deleted_at timestamptz,
   total_cents bigint NOT NULL DEFAULT 10000
 );
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.vendor_bills TO authenticated;
 CREATE TABLE public.activity_feed (
   event_type text,
   description text,
@@ -313,11 +321,42 @@ CREATE TABLE public.idempotency_keys (
   expires_at timestamptz DEFAULT now() + interval '24 hours',
   PRIMARY KEY (idempotency_key, operation)
 );
+CREATE TABLE public.profiles (
+  id uuid PRIMARY KEY,
+  role text NOT NULL,
+  is_active boolean NOT NULL DEFAULT true
+);
+CREATE TABLE public.notifications (
+  user_id uuid,
+  title text,
+  message text,
+  notification_type text,
+  related_entity_type text,
+  related_entity_id uuid
+);
 
 CREATE FUNCTION public.is_admin() RETURNS boolean
 LANGUAGE sql STABLE AS $$ SELECT true $$;
+CREATE FUNCTION public.is_sales_rep() RETURNS boolean
+LANGUAGE sql STABLE AS $$ SELECT true $$;
 CREATE FUNCTION public.check_idempotency_intent(text, text, uuid, text)
 RETURNS jsonb LANGUAGE sql AS $$ SELECT NULL::jsonb $$;
+CREATE FUNCTION public.save_idempotency(text, text, jsonb)
+RETURNS void LANGUAGE plpgsql AS $$ BEGIN RETURN; END; $$;
+
+CREATE FUNCTION public.receive_po_items(jsonb, uuid, text DEFAULT NULL, boolean DEFAULT false)
+RETURNS jsonb LANGUAGE sql AS $$ SELECT '{}'::jsonb $$;
+CREATE FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text DEFAULT NULL)
+RETURNS jsonb LANGUAGE sql AS $$ SELECT '{}'::jsonb $$;
+CREATE FUNCTION public.record_vendor_payment(
+  uuid, bigint, date DEFAULT CURRENT_DATE, text DEFAULT NULL,
+  text DEFAULT NULL, text DEFAULT NULL, text DEFAULT NULL
+)
+RETURNS uuid LANGUAGE sql AS $$ SELECT gen_random_uuid() $$;
+CREATE FUNCTION public.void_vendor_bill(uuid, text DEFAULT NULL, text DEFAULT NULL)
+RETURNS void LANGUAGE plpgsql AS $$ BEGIN RETURN; END; $$;
+CREATE FUNCTION public.notify_damaged_receiving(text, text, uuid, text DEFAULT NULL)
+RETURNS void LANGUAGE plpgsql AS $$ BEGIN RETURN; END; $$;
 
 CREATE FUNCTION public.create_vendor_bill(
   p_vendor_id uuid,
@@ -418,7 +457,7 @@ CREATE TABLE public.cycle_counts (
 );
 CREATE TABLE public.cycle_count_items (
   id uuid PRIMARY KEY,
-  cycle_count_id uuid NOT NULL REFERENCES public.cycle_counts(id)
+  cycle_count_id uuid NOT NULL REFERENCES public.cycle_counts(id) ON DELETE CASCADE
 );
 
 CREATE FUNCTION public.bump_cycle_count_item_revision()
@@ -432,7 +471,7 @@ AFTER INSERT OR UPDATE OR DELETE ON public.cycle_count_items
 FOR EACH ROW EXECUTE FUNCTION public.bump_cycle_count_item_revision();
 
 CREATE FUNCTION public.complete_cycle_count(uuid, uuid DEFAULT NULL, text DEFAULT NULL, bigint DEFAULT NULL)
-RETURNS void LANGUAGE sql AS $$ SELECT $$;
+RETURNS void LANGUAGE plpgsql AS $$ BEGIN RETURN; END; $$;
 
 CREATE FUNCTION public.proof_complete_cycle_count(p_count_id uuid, p_expected_revision bigint)
 RETURNS void LANGUAGE plpgsql AS $function$
@@ -457,6 +496,7 @@ $function$;
   // Mirror that contract here so table locks last across the whole file without
   // putting a dangerous runner-committing COMMIT inside the migration itself.
   sql(`BEGIN;\n${readFileSync(BILL_MIGRATION, 'utf8')}\nCOMMIT;`);
+  sql(`BEGIN;\n${readFileSync(INTENT_MIGRATION, 'utf8')}\nCOMMIT;`);
   sql(`BEGIN;\n${readFileSync(MIGRATION, 'utf8')}\nCOMMIT;`);
 }
 
@@ -465,7 +505,7 @@ function proveIntentCutoverGuards() {
   for (const guardSpec of CUTOVER_MIGRATIONS) {
     const guard = cutoverGuard(guardSpec);
     for (const operation of guardSpec.operations) {
-      const result = operation === 'complete_cycle_count' ? '{}' : '{}';
+      const result = '{}';
       sql(`
 TRUNCATE public.idempotency_keys;
 INSERT INTO public.idempotency_keys (
@@ -503,6 +543,62 @@ INSERT INTO public.idempotency_keys (
     assert.equal(sql(guard).status, 0, `${representative} bound receipt blocked cutover`);
   }
   sql('TRUNCATE public.idempotency_keys;');
+}
+
+function proveVendorBillWriteBoundary() {
+  const deniedInsert = sql(`
+SET ROLE authenticated;
+INSERT INTO public.vendor_bills (id, vendor_id, purchase_order_id, total_cents)
+VALUES (
+  '00000000-0000-0000-0000-000000000610',
+  '00000000-0000-0000-0000-000000000611',
+  '00000000-0000-0000-0000-000000000612',
+  100
+);
+`, { allowFailure: true });
+  expectFailure(deniedInsert, /permission denied for table vendor_bills/, 'direct vendor-bill insert');
+
+  const deniedUpdate = sql(`
+SET ROLE authenticated;
+UPDATE public.vendor_bills SET total_cents = total_cents + 1 WHERE false;
+`, { allowFailure: true });
+  expectFailure(deniedUpdate, /permission denied for table vendor_bills/, 'direct vendor-bill update');
+
+  const actor = '11111111-1111-1111-1111-111111111111';
+  const vendor = '00000000-0000-0000-0000-000000000621';
+  const po = '00000000-0000-0000-0000-000000000622';
+  const bill = '00000000-0000-0000-0000-000000000623';
+  sql(`
+INSERT INTO public.profiles(id, role, is_active) VALUES ('${actor}', 'admin', true);
+INSERT INTO public.vendors(id, name) VALUES ('${vendor}', 'Zero PO vendor');
+INSERT INTO public.purchase_orders(id, total_cost_cents) VALUES ('${po}', 0);
+INSERT INTO public.vendor_bills(id, vendor_id, purchase_order_id, total_cents)
+VALUES ('${bill}', '${vendor}', '${po}', 100);
+`);
+
+  const createWithoutConfirmation = sql(`
+SELECT public.create_vendor_bill(
+  '${vendor}', '${po}', 'ZERO-PO', CURRENT_DATE, CURRENT_DATE, NULL,
+  100, 0, NULL, 'zero-po-create', false, NULL
+);
+`, { allowFailure: true });
+  expectFailure(
+    createWithoutConfirmation,
+    /PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED/,
+    'zero-total PO bill creation without confirmation',
+  );
+
+  const updateWithoutConfirmation = sql(`
+SELECT public.update_vendor_bill(
+  '${bill}', 100, 0, CURRENT_DATE, CURRENT_DATE, NULL,
+  'zero-po-update', false, NULL
+);
+`, { allowFailure: true });
+  expectFailure(
+    updateWithoutConfirmation,
+    /PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED/,
+    'zero-total PO bill update without confirmation',
+  );
 }
 
 function seedReceiving(po, poItem, receipt, vendor) {
@@ -846,11 +942,24 @@ UPDATE public.cycle_count_items
   assert.equal(scalar(`SELECT item_revision FROM public.cycle_counts WHERE id='${destinationCount}'`), '0');
 }
 
+function proveCycleCountCascadeDelete() {
+  const count = '00000000-0000-0000-0000-000000000405';
+  const item = '00000000-0000-0000-0000-000000000504';
+  sql(`
+INSERT INTO public.cycle_counts(id) VALUES ('${count}');
+INSERT INTO public.cycle_count_items(id, cycle_count_id) VALUES ('${item}', '${count}');
+DELETE FROM public.cycle_counts WHERE id='${count}';
+`);
+  assert.equal(scalar(`SELECT count(*) FROM public.cycle_counts WHERE id='${count}'`), '0');
+  assert.equal(scalar(`SELECT count(*) FROM public.cycle_count_items WHERE id='${item}'`), '0');
+}
+
 try {
   assertCheckedInMarkers();
   prepareContainer();
   installSchema();
   proveIntentCutoverGuards();
+  proveVendorBillWriteBoundary();
   await proveBillFirstBlocksReversal();
   await proveReversalFirstSerializesBill();
   await proveCloseFirstBlocksReversal();
@@ -862,6 +971,7 @@ try {
   await proveInsertFirstMakesCompletionStale();
   await proveCompletionFirstRejectsLateInsert();
   await proveCompletionCannotMissReparentedItem();
+  proveCycleCountCascadeDelete();
   console.log('GAUNTLET_WRITE_BOUNDARY_CONCURRENCY_PASS');
 } finally {
   if (CONTAINER.startsWith(PREFIX)) {

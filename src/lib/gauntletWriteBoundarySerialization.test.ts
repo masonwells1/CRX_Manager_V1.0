@@ -75,6 +75,9 @@ function assertCycleItemBoundary(candidate: string): void {
       'NEW.cycle_count_id IS DISTINCT FROM OLD.cycle_count_id',
     )
     || !body.includes("RAISE EXCEPTION 'CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN'")
+    || !body.match(
+      /IF TG_OP = 'DELETE' THEN\s+RETURN OLD;\s+END IF;\s+RAISE EXCEPTION 'CYCLE_COUNT_NOT_FOUND'/,
+    )
   ) {
     throw new Error('cycle-count item serialization boundary missing');
   }
@@ -91,6 +94,8 @@ describe('gauntlet write-boundary serialization follow-up', () => {
     expect(() => assertCycleItemBoundary(code)).not.toThrow();
     expect(code).toContain('DROP TRIGGER trg_bump_cycle_count_item_revision');
     expect(code).toContain("IF TG_OP = 'DELETE' THEN");
+    expect(code).toContain("EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')");
+    expect(code).toContain("EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')");
   });
 
   it('detects removal or reordering of each load-bearing guard', () => {

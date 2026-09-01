@@ -32,7 +32,9 @@ ALTER TABLE public.financial_audit_log
     'write_off','finance_charge','credit_memo','return','allocation_set','void','batch',
     'commission_payment','cycle_count','blend_ticket','vendor_bill','vendor_payment',
     'purchase_order','accounting_period','quote','receiving_record'
-  ]::text[]));
+  ]::text[])) NOT VALID;
+ALTER TABLE public.financial_audit_log
+  VALIDATE CONSTRAINT financial_audit_log_entity_type_check;
 
 ALTER TABLE public.financial_audit_log
   DROP CONSTRAINT financial_audit_log_operation_type_check;
@@ -54,7 +56,9 @@ ALTER TABLE public.financial_audit_log
     'batch_payment','period_reopened','quote_status_reverted','blend_ticket_approval_reversed',
     'cycle_count_completed','vendor_bill_created','vendor_bill_voided','vendor_bill_updated',
     'vendor_payment_recorded','vendor_payment_voided','rup_sales_voided','receiving_reversed'
-  ]::text[]));
+  ]::text[])) NOT VALID;
+ALTER TABLE public.financial_audit_log
+  VALIDATE CONSTRAINT financial_audit_log_operation_type_check;
 
 CREATE OR REPLACE FUNCTION public._section9_reverse_receiving_record_serialized(
   p_record_id uuid,
@@ -296,7 +300,7 @@ REVOKE TRUNCATE ON TABLE public.receiving_photos FROM authenticated;
 
 DROP FUNCTION public.get_ap_aging(date);
 CREATE FUNCTION public.get_ap_aging(
-  p_as_of_date date DEFAULT ((clock_timestamp() AT TIME ZONE 'America/Chicago')::date)
+  p_as_of_date date DEFAULT ((transaction_timestamp() AT TIME ZONE 'America/Chicago')::date)
 )
 RETURNS TABLE(
   vendor_id uuid,
@@ -315,7 +319,7 @@ SET search_path = public, pg_temp
 AS $function$
 BEGIN
   PERFORM public.require_admin();
-  IF p_as_of_date IS DISTINCT FROM ((clock_timestamp() AT TIME ZONE 'America/Chicago')::date) THEN
+  IF p_as_of_date IS DISTINCT FROM ((transaction_timestamp() AT TIME ZONE 'America/Chicago')::date) THEN
     RAISE EXCEPTION
       'HISTORICAL_AP_UNAVAILABLE: exact AP history is unavailable before durable bill-state history exists';
   END IF;

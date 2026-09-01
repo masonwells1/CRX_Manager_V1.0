@@ -199,18 +199,18 @@ async function crawlRoute(page: Page, role: Role, route: CrawlRoute): Promise<vo
   let status: RouteResult['status'];
   if (!allowed) {
     status = redirected ? 'guard-ok' : 'guard-leak';
-  } else if (route.intentionalRedirectTo === finalPath) {
-    status = 'intentional-redirect';
-  } else if (redirected) {
-    // Codex P2: an ALLOWED route that redirects away never rendered — a broken/missing route
-    // or an auth/profile-guard regression. Don't let it fall through to 'ok'.
-    status = 'unexpected-redirect';
   } else if (crashed) {
     status = 'crashed';
   } else if (pageErrors.length > 0 || consoleErrors.length > 0) {
     status = 'console-errors';
   } else if (failedResponses.length > 0) {
     status = 'network-errors';
+  } else if (route.intentionalRedirectTo === finalPath) {
+    status = 'intentional-redirect';
+  } else if (redirected) {
+    // Codex P2: an ALLOWED route that redirects away never rendered — a broken/missing route
+    // or an auth/profile-guard regression. Don't let it fall through to 'ok'.
+    status = 'unexpected-redirect';
   } else {
     status = 'ok';
   }

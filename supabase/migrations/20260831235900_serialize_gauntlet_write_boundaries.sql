@@ -186,7 +186,15 @@ BEGIN
     FROM public.cycle_counts cc
    WHERE cc.id = v_cycle_count_id
    FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'CYCLE_COUNT_NOT_FOUND'; END IF;
+  IF NOT FOUND THEN
+    -- A parent DELETE can cascade after the parent row is no longer visible to
+    -- this child trigger. The cascade itself is authoritative; standalone
+    -- child writes still require a live parent below.
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
+    RAISE EXCEPTION 'CYCLE_COUNT_NOT_FOUND';
+  END IF;
   IF v_status IS DISTINCT FROM 'in_progress' THEN
     RAISE EXCEPTION 'CYCLE_COUNT_NOT_IN_PROGRESS';
   END IF;
@@ -266,15 +274,27 @@ BEGIN
     RAISE EXCEPTION 'POSTCOND: cycle-count item serialization contract drifted';
   END IF;
 
-  IF has_function_privilege(
-       'anon', 'public.reverse_receiving_record(uuid,text,uuid,text)', 'EXECUTE'
-     )
-     OR NOT has_function_privilege(
-       'authenticated', 'public.reverse_receiving_record(uuid,text,uuid,text)', 'EXECUTE'
-     )
-     OR has_function_privilege(
-       'authenticated', 'public.bump_cycle_count_item_revision()', 'EXECUTE'
-     ) THEN
+  IF (CASE
+        WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')
+        THEN has_function_privilege(
+          'anon', 'public.reverse_receiving_record(uuid,text,uuid,text)', 'EXECUTE'
+        )
+        ELSE false
+      END)
+     OR NOT (CASE
+       WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')
+       THEN has_function_privilege(
+         'authenticated', 'public.reverse_receiving_record(uuid,text,uuid,text)', 'EXECUTE'
+       )
+       ELSE false
+     END)
+     OR (CASE
+       WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')
+       THEN has_function_privilege(
+         'authenticated', 'public.bump_cycle_count_item_revision()', 'EXECUTE'
+       )
+       ELSE false
+     END) THEN
     RAISE EXCEPTION 'POSTCOND: write-boundary execute grants drifted';
   END IF;
 END;

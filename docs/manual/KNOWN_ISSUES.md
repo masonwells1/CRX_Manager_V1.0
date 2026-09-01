@@ -2647,7 +2647,7 @@ Two deliberate departures from the `20260803010917` reference pattern, both docu
 
 Mutation-tested (guard broken → test red → restored): the fingerprint comparison, the actor comparison, the legacy-receipt bridge, the frontend refusal branch, and the frontend key reset.
 
-**Both Codex reviews returned DO NOT SHIP on 2026-08-09 (sol and terra, independently). Every confirmed finding is fixed on this branch as of 2026-08-10; the branch is still not live and still needs a clean re-review plus Mason's explicit OK before the migration is applied.** What the reviews caught, and what changed:
+**Historical 2026-08-09 review record.** Both Codex reviews returned DO NOT SHIP (sol and terra, independently). At that time the branch was not live and still needed a clean re-review plus Mason's explicit approval. Every confirmed finding was fixed by 2026-08-10; PR #378 subsequently merged and the migration was applied and verified live on 2026-08-11 as recorded above. What the reviews caught, and what changed:
 
 - **A dead key trapped the operator.** `IDEMPOTENCY_RESULT_INVALID` and `IDEMPOTENCY_RECEIPT_MISSING` were not classified, so the UI left an unusable key in place and every retry failed the same way forever. They are now a third refusal kind, `'receipt'`, with their own wording, and the key is retired like the other two.
 - **The UI asserted something the database cannot prove.** On a pre-migration receipt the database knows only that the key is spent, not that the earlier request differed. The warning no longer claims a different payment was involved.

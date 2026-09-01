@@ -141,7 +141,8 @@ BEGIN
       AND vb.status <> 'voided';
 
     v_cumulative_total := v_active_billed_total + v_candidate_total;
-    IF v_po_total > 0 AND v_cumulative_total * 100 > v_po_total * 105 THEN
+    IF v_cumulative_total > 0
+       AND (v_po_total <= 0 OR v_cumulative_total * 100 > v_po_total * 105) THEN
       IF COALESCE(p_confirm_po_overage, false) IS NOT TRUE THEN
         RAISE EXCEPTION 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED'
           USING ERRCODE = '22023',
@@ -184,7 +185,7 @@ BEGIN
       event_type, description, performed_by, related_entity_type, related_entity_id
     ) VALUES (
       'po_cumulative_billing_overage_confirmed',
-      'Vendor bill ' || v_bill_id::text || ' raised cumulative active billing above 105%: ' || v_reason,
+      'Vendor bill ' || v_bill_id::text || ' exceeded the cumulative PO billing threshold: ' || v_reason,
       v_actor,
       'purchase_order',
       p_purchase_order_id
@@ -202,6 +203,12 @@ GRANT EXECUTE ON FUNCTION public.create_vendor_bill(
   uuid, uuid, text, date, date, text, bigint, bigint, text, text, boolean, text
 ) TO authenticated, service_role;
 
+-- Vendor-bill money and PO controls are authoritative in SECURITY DEFINER
+-- RPCs. Keep browser roles read-only on the table so PostgREST cannot bypass
+-- cumulative-billing confirmation, period locks, audit rows, or idempotency.
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.vendor_bills
+FROM PUBLIC, anon, authenticated;
+
 DO $verify$
 DECLARE
   v_count integer;
@@ -211,16 +218,38 @@ BEGIN
   WHERE pronamespace = 'public'::regnamespace AND proname = 'create_vendor_bill';
   IF v_count <> 1 THEN RAISE EXCEPTION 'create_vendor_bill overload count = %', v_count; END IF;
 
-  IF has_function_privilege(
-    'anon',
-    'public.create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text,boolean,text)',
-    'EXECUTE'
-  ) THEN RAISE EXCEPTION 'anonymous create_vendor_bill execution remains'; END IF;
+  IF (CASE
+       WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')
+       THEN has_function_privilege(
+         'anon',
+         'public.create_vendor_bill(uuid,uuid,text,date,date,text,bigint,bigint,text,text,boolean,text)',
+         'EXECUTE'
+       )
+       ELSE false
+     END) THEN
+    RAISE EXCEPTION 'anonymous create_vendor_bill execution remains';
+  END IF;
 
-  IF has_function_privilege(
-    'authenticated',
-    'public._section9_create_vendor_bill_cumulative_impl(uuid,uuid,text,date,date,text,bigint,bigint,text,text)',
-    'EXECUTE'
-  ) THEN RAISE EXCEPTION 'unguarded create_vendor_bill implementation is browser-executable'; END IF;
+  IF (CASE
+       WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')
+       THEN has_function_privilege(
+         'authenticated',
+         'public._section9_create_vendor_bill_cumulative_impl(uuid,uuid,text,date,date,text,bigint,bigint,text,text)',
+         'EXECUTE'
+       )
+       ELSE false
+     END) THEN
+    RAISE EXCEPTION 'unguarded create_vendor_bill implementation is browser-executable';
+  END IF;
+
+  IF (CASE
+       WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')
+       THEN has_table_privilege('authenticated', 'public.vendor_bills', 'INSERT')
+         OR has_table_privilege('authenticated', 'public.vendor_bills', 'UPDATE')
+         OR has_table_privilege('authenticated', 'public.vendor_bills', 'DELETE')
+       ELSE false
+     END) THEN
+    RAISE EXCEPTION 'authenticated retains direct vendor_bills write privilege';
+  END IF;
 END;
 $verify$;

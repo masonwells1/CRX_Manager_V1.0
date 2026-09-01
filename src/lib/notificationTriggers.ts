@@ -18,6 +18,16 @@ import { Sentry } from './sentry';
 import { createNotification, notifyAdmins } from './activityLogger';
 import { localToday, formatLocalDate, parseLocalDate } from './dateUtils';
 
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0')
+  ).join('');
+}
+
 /**
  * Log a notification failure to the failed_notifications table.
  * This replaces silent console.error swallowing with persistent tracking.
@@ -411,6 +421,9 @@ export async function notifyDamagedReceiving(
   if (receiptIntentIds.length === 0) return;
 
   try {
+    const receiptIntentDigest = await sha256Hex(
+      JSON.stringify([...receiptIntentIds].sort()),
+    );
     const summary = damagedItems
       .map((i) => `${i.productName} (${i.quantity} — ${i.condition})`)
       .join(', ');
@@ -425,7 +438,7 @@ export async function notifyDamagedReceiving(
       // The receive RPC returns immutable receiving-record IDs. Binding the
       // notification to that set makes a lost-response retry replay safely
       // instead of emitting a second damaged-receipt alert.
-      p_idempotency_key: `damaged-receiving:${poId}:${[...receiptIntentIds].sort().join(':')}`,
+      p_idempotency_key: `damaged-receiving:${poId}:${receiptIntentDigest}`,
     }).throwOnError();
   } catch (err) {
     await logNotificationFailure('damaged_receiving', err, 'purchase_order', poId, {

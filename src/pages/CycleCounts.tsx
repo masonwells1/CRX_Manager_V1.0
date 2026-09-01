@@ -359,6 +359,10 @@ export default function CycleCounts() {
       toast('error', 'This cycle count is no longer in progress. Refresh before continuing.');
       return null;
     }
+    if (typeof countState.item_revision !== 'number') {
+      toast('error', 'Cycle count revision protection is not available. Refresh after the database update completes.');
+      return null;
+    }
 
     const items = await refreshCountItems(activeCount.id);
     if (!items) return null;
@@ -659,7 +663,7 @@ export default function CycleCounts() {
       <ConfirmModal
         open={completeConfirmOpen}
         onClose={() => setCompleteConfirmOpen(false)}
-        onConfirm={executeComplete}
+        onConfirm={() => { void executeComplete(); }}
         title="Complete with Uncounted Items"
         message={completeConfirmMsg || `Some products have not been counted yet. Complete anyway?`}
         confirmLabel="Complete Anyway"

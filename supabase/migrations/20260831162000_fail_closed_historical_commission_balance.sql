@@ -31,7 +31,7 @@ BEGIN
   SELECT
     cm.recipient_user_id,
     COALESCE(p.full_name, cm.recipient),
-    ROUND(SUM(cm.commission_amount)::numeric, 2),
+    ROUND(SUM(CASE WHEN cm.status <> 'cancelled' THEN cm.commission_amount ELSE 0 END)::numeric, 2),
     ROUND(SUM(CASE WHEN cm.status = 'paid' THEN cm.commission_amount ELSE 0 END)::numeric, 2),
     ROUND(SUM(CASE WHEN cm.status = 'pending' THEN cm.commission_amount ELSE 0 END)::numeric, 2),
     COUNT(*) FILTER (WHERE cm.status = 'pending'),

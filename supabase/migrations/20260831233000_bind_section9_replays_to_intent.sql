@@ -51,7 +51,7 @@ BEGIN
   END IF;
   ALTER FUNCTION public.receive_po_items(jsonb, uuid, text, boolean)
     RENAME TO _section9_receive_po_items_intent_impl_20260831;
-END
+END;
 $rename_section9_receiving$;
 
 DO $rename_section9_update_bill$
@@ -65,7 +65,7 @@ BEGIN
   END IF;
   ALTER FUNCTION public.update_vendor_bill(uuid, bigint, bigint, date, date, text, text)
     RENAME TO _section9_update_vendor_bill_intent_impl_20260831;
-END
+END;
 $rename_section9_update_bill$;
 
 DO $rename_section9_payment$
@@ -79,7 +79,7 @@ BEGIN
   END IF;
   ALTER FUNCTION public.record_vendor_payment(uuid, bigint, date, text, text, text, text)
     RENAME TO _section9_record_vendor_payment_intent_impl_20260831;
-END
+END;
 $rename_section9_payment$;
 
 DO $rename_section9_void_bill$
@@ -93,7 +93,7 @@ BEGIN
   END IF;
   ALTER FUNCTION public.void_vendor_bill(uuid, text, text)
     RENAME TO _section9_void_vendor_bill_intent_impl_20260831;
-END
+END;
 $rename_section9_void_bill$;
 
 REVOKE ALL ON FUNCTION public._section9_receive_po_items_intent_impl_20260831(jsonb, uuid, text, boolean) FROM PUBLIC, anon, authenticated, service_role;
@@ -240,8 +240,11 @@ BEGIN
       AND vb.status <> 'voided';
 
     v_cumulative_total_cents := v_other_active_billed_cents + v_new_total_cents;
-    IF v_po_total_cents > 0
-       AND v_cumulative_total_cents * 100 > v_po_total_cents * 105 THEN
+    IF v_cumulative_total_cents > 0
+       AND (
+         v_po_total_cents <= 0
+         OR v_cumulative_total_cents * 100 > v_po_total_cents * 105
+       ) THEN
       IF COALESCE(p_confirm_po_overage, false) IS NOT TRUE THEN
         RAISE EXCEPTION 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED'
           USING ERRCODE = '22023',
@@ -283,7 +286,7 @@ BEGIN
       event_type, description, performed_by, related_entity_type, related_entity_id
     ) VALUES (
       'po_cumulative_billing_overage_confirmed',
-      'Vendor bill ' || p_bill_id::text || ' edit raised cumulative active billing above 105%: ' || v_overage_reason,
+      'Vendor bill ' || p_bill_id::text || ' edit exceeded the cumulative PO billing threshold: ' || v_overage_reason,
       v_actor,
       'purchase_order',
       v_bill.purchase_order_id

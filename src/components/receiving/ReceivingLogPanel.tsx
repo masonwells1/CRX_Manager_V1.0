@@ -186,6 +186,7 @@ export default function ReceivingLogPanel() {
     await runCriticalAction({
       action: async () => {
         const ids = selectedRows.map((r) => r.id);
+        const completedScopes: string[] = [];
         // C5 fix: must call reverse_receiving_record() per item to undo inventory changes.
         // Direct .delete() bypasses the inventory rollback and leaves phantom stock.
         for (const id of ids) {
@@ -204,6 +205,12 @@ export default function ReceivingLogPanel() {
             throw new Error(`Failed to reverse record ${id}: ${error.message}`);
           }
           assertRpcResult(data, 'reverse_receiving_record');
+          completedScopes.push(intentScope);
+        }
+        // Retire only after the whole selection succeeds. If a later row
+        // fails, completed rows must retain their keys so the retry replays
+        // their stored result and can continue to the failed row.
+        for (const intentScope of completedScopes) {
           reverseRecIdem.resetKeyFor(intentScope);
         }
       },

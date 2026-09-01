@@ -16,6 +16,7 @@ import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
 import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
@@ -575,15 +576,20 @@ export default function InventoryPage() {
 
     await runCriticalAction({
       action: async () => {
-        const idemKey = receivePoIdem.getKey();
-        const { data, error } = await supabase.rpc('receive_po_items', {
-          p_items: [{ po_item_id: receivePOItemId, quantity: qty }],
-          p_performed_by: profile.id,
-          p_idempotency_key: idemKey,
-        });
-        if (error) throw error;
-        assertRpcResult(data, 'receive_po_items');
-        receivePoIdem.resetKey();
+        try {
+          const idemKey = receivePoIdem.getKey();
+          const { data, error } = await supabase.rpc('receive_po_items', {
+            p_items: [{ po_item_id: receivePOItemId, quantity: qty }],
+            p_performed_by: profile.id,
+            p_idempotency_key: idemKey,
+          });
+          if (error) throw error;
+          assertRpcResult(data, 'receive_po_items');
+          receivePoIdem.resetKey();
+        } catch (error) {
+          if (getIdempotencyBindingRejection(error)) receivePoIdem.resetKey();
+          throw error;
+        }
       },
       toast,
       successMessage: `Received ${qty} units`,

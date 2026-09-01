@@ -36,6 +36,11 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
     expect(panel).toContain('resetKeyFor(intentScope)');
     expect(panel).toContain('getIdempotencyBindingRejection(error)');
     expect(panel).toContain('JSON.stringify({ recordId: id, reason })');
+    expect(panel).toContain('const completedScopes: string[] = []');
+    const completedScope = panel.indexOf('completedScopes.push(intentScope)');
+    const batchRetirement = panel.indexOf('for (const intentScope of completedScopes)');
+    expect(completedScope).toBeGreaterThan(-1);
+    expect(batchRetirement).toBeGreaterThan(completedScope);
     expect(panel).not.toContain('const idemKey = reverseRecIdem.getKey();');
   });
 
@@ -62,6 +67,9 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
     expect(deleteRecord).toBeGreaterThan(deletePhotos);
     expect(migration).toContain("'receiving_record', to_jsonb(v_rec), 'photos', v_photos");
     expect(migration).toContain('REVOKE TRUNCATE ON TABLE public.receiving_photos FROM authenticated');
+    expect(migration).toContain(')) NOT VALID;');
+    expect(migration).toContain('VALIDATE CONSTRAINT financial_audit_log_entity_type_check');
+    expect(migration).toContain('VALIDATE CONSTRAINT financial_audit_log_operation_type_check');
   });
 
   it('ages AP from due date with a separate 1-30 bucket and calendar month', () => {
@@ -69,13 +77,18 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
     expect(migration).toContain('(p_as_of_date - vb.due_date) BETWEEN 1 AND 30');
     expect(migration).toContain('due_date BETWEEN v_today AND v_month_end');
     expect(migration).toContain('vp.payment_date BETWEEN date_trunc');
+    const agingStart = migration.indexOf('CREATE FUNCTION public.get_ap_aging(');
+    const agingEnd = migration.indexOf('CREATE OR REPLACE FUNCTION public.get_ap_dashboard_summary', agingStart);
+    expect(agingStart).toBeGreaterThan(-1);
+    expect(agingEnd).toBeGreaterThan(agingStart);
+    expect(migration.slice(agingStart, agingEnd)).not.toContain('clock_timestamp()');
 
     const page = source('src', 'pages', 'AccountsPayable.tsx');
     expect(page).toContain("key: 'days_1_30'");
     expect(page).toContain("header: '1-30 Days'");
   });
 
-  it('requires a logged reason above 105% cumulative PO billing', () => {
+  it('requires a logged reason above the cumulative PO billing threshold', () => {
     const vendorLock = cumulativeBillMigration.indexOf('FROM public.vendors v');
     const poLock = cumulativeBillMigration.indexOf('FROM public.purchase_orders po');
     expect(vendorLock).toBeGreaterThan(-1);
@@ -87,6 +100,17 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
     expect(cumulativeBillMigration).toContain(
       'v_cumulative_total * 100 > v_po_total * 105',
     );
+    expect(cumulativeBillMigration).toContain(
+      'v_po_total <= 0 OR v_cumulative_total * 100 > v_po_total * 105',
+    );
+    expect(cumulativeBillMigration).toContain(
+      'REVOKE INSERT, UPDATE, DELETE ON TABLE public.vendor_bills',
+    );
+    for (const privilege of ['INSERT', 'UPDATE', 'DELETE']) {
+      expect(cumulativeBillMigration).toContain(
+        `has_table_privilege('authenticated', 'public.vendor_bills', '${privilege}')`,
+      );
+    }
     expect(cumulativeBillMigration).toContain(
       'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED',
     );
@@ -112,6 +136,12 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
     expect(cumulativeBillMigration).toContain("'notes', p_notes");
     expect(cumulativeBillMigration).not.toContain(
       "'payment_terms', btrim(COALESCE(p_payment_terms, ''))",
+    );
+    expect(cumulativeBillMigration).toContain(
+      "EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')",
+    );
+    expect(cumulativeBillMigration).toContain(
+      "EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')",
     );
   });
 
@@ -142,6 +172,9 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
     );
     expect(commissionBalanceMigration).toContain(
       "transaction_timestamp() AT TIME ZONE 'America/Chicago'",
+    );
+    expect(commissionBalanceMigration).toContain(
+      "CASE WHEN cm.status <> 'cancelled' THEN cm.commission_amount ELSE 0 END",
     );
 
     const reports = source('src', 'pages', 'Reports.tsx');

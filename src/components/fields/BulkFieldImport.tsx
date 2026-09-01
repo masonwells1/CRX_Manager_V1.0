@@ -129,6 +129,11 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   };
 
   const handleClose = () => {
+    // The import pipeline is intentionally not cancellable once it starts:
+    // closing would let the old session mutate a newly opened dialog and call
+    // onSuccess for the wrong session. Keep every dismissal path disabled
+    // until the current upload has reached its terminal result screen.
+    if (uploadInFlightRef.current) return;
     // Reset all state
     setStep(1);
     setFiles([]);
@@ -608,7 +613,14 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   // ─── Render ─────────────────────────────────────────────────────────
 
   return (
-    <Modal open={open} onClose={handleClose} title="Import" accent="Fields" maxWidth="max-w-5xl">
+    <Modal
+      open={open}
+      onClose={handleClose}
+      closeDisabled={uploading}
+      title="Import"
+      accent="Fields"
+      maxWidth="max-w-5xl"
+    >
       <div className="space-y-4">
         {/* Step indicator */}
         <div className="flex items-center gap-1">
@@ -955,7 +967,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             )}
           </div>
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={handleClose}>
+            <Button variant="secondary" onClick={handleClose} disabled={uploading}>
               {step === 7 ? 'Close' : 'Cancel'}
             </Button>
             {step < 6 && (
