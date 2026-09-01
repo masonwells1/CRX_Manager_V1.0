@@ -27,15 +27,18 @@ document keeps only the raw observation — the four blobs appear in the output 
   unsound.
 
 Settling the question would need a genuinely root-complete reachability test plus a
-before/after measurement of volume free bytes — not a blob-size sum, and not the difference
+before-and-after measurement of volume free bytes — not a blob-size sum, and not the difference
 between two partial `rev-list` sets.
 
 **What did not change.** The verdict stands: the cleanup is still rejected, and never depended
-on the disk figure. The 316 MB of `.git/objects` garbage remains hard-linked to
-`C:\CRX_CodexClones\codex-split-389-c2-gitdb` and frees nothing; `git stash drop` remains
+on the disk figure. All but 538 bytes of the 316 MB of `.git/objects` garbage remains
+hard-linked to `C:\CRX_CodexClones\codex-split-389-c2-gitdb` and frees nothing, and that
+remaining 538-byte file is of unknown ownership; `git stash drop` remains
 positional and races concurrent sessions; and `gc` must not run while the fleet is active.
 
-**Proof observed.** Both `rev-list` sets were rebuilt and each blob id tested for membership,
+**Evidence reproduced.** Deliberately not headed "Proof observed" like other entries: the point
+here is that these checks establish nothing about reclaimability.
+Both `rev-list` sets were rebuilt and each blob id tested for membership,
 reproduced across separate sessions — that observation is real; only the conclusions drawn
 from it were not. An earlier control blob was discarded as contaminated: it was reachable from
 a real branch (`claude/main-checkout-snapshot-20260831`, which pins a different stash commit),

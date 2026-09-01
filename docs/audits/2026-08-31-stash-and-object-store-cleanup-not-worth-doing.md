@@ -7,7 +7,8 @@ Nothing was executed — no stash dropped, no `gc`/`prune` run, no object file d
 
 **Read this before proposing a stash or `.git/objects` cleanup again.** The obvious version
 of this idea looks like it reclaims ~316 MB from `.git/objects`. That part reclaims
-approximately zero — those files are hard-linked to a second Git database. **How much, if
+approximately zero — six of those seven files, carrying all but 538 bytes of that figure, are
+hard-linked to a second Git database, and the seventh is of unknown ownership. **How much, if
 anything, the stash stack would reclaim was never established** — three drafts of this
 document each claimed a different confident figure and all were wrong; see the reachability
 section below before trusting any number.
@@ -155,9 +156,10 @@ Why no conclusion is drawn from it:
   `stash@{26}` live in that ref's *reflog* — precisely the root class `--all` does not cover.
   Reasoning that treats `stash@{26}` as an ordinary ref — as earlier drafts did — is unsound.
 
-So: **whether dropping any stash entry would free disk here is unestablished.** Settling it
-needs a genuinely root-complete reachability test plus a before/after measurement of volume
-free bytes — not a blob-size sum, and not a difference between two partial `rev-list` sets.
+So: **whether dropping `stash@{26}` would free disk here is unestablished** — and the other 33
+entries in the stack were never assessed at all. Settling it needs a genuinely root-complete
+reachability test plus a before-and-after measurement of volume free bytes — not a blob-size
+sum, and not a difference between two partial `rev-list` sets.
 
 Separately, the external copies in `C:\Users\mason\Videos\Screen Recordings` show the videos
 are *recoverable* if the stash is ever discarded. That is a different question from whether
