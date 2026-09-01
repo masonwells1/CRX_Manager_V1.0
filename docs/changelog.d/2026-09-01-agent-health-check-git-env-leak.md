@@ -15,7 +15,7 @@ The test passes standalone and in CI, because neither sets `GIT_DIR` — only th
 destructive, so a green CI proved nothing. Worse, the symptom had changed. The August incident
 announced itself with `Command failed: git add ... status: 128`. This one surfaced as:
 
-```
+```text
 ❌ AGENT WORKFLOW CHECKS FAILED — commit blocked.
 AssertionError: 'FAIL' !== 'PASS'  at scripts/agent-health-check.test.mjs:213
 ```
