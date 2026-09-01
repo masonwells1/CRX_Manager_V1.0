@@ -136,6 +136,36 @@ function writeAppliedSnapshot(stateDir, { applied = ["20260808150400_round_money
     applied,
   }));
 }
+// The pending-set preflight (2026-08-26) asks the question the ordering check
+// never did: is an OLDER tracked migration still waiting? It reads the schema
+// baseline for its floor and origin/main for the tracked set, and refuses when it
+// cannot read either. Both are real files/refs — the hook is a subprocess, so
+// there is nothing to inject — and every fixture that expects to reach the proof
+// gate has to supply them. hermeticEnv() keeps `git init` off the real repository.
+function makePendingSetInputs(root) {
+  mkdirSync(path.join(root, "supabase", "baselines"), { recursive: true });
+  writeFileSync(
+    path.join(root, "supabase", "baselines", "manifest.json"),
+    JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }));
+  mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
+  writeFileSync(path.join(root, "supabase", "migrations", `${MIG}.sql`), BENIGN_SQL);
+  const git = (...args) => spawnSync("git", [
+    "-c", "user.name=fixture",
+    "-c", "user.email=fixture@example.invalid",
+    "-c", "commit.gpgsign=false",
+    "-c", "core.hooksPath=",
+    "-C", root, ...args,
+  ], { encoding: "utf8", env: hermeticEnv() });
+  git("init", "-q");
+  git("add", "-A");
+  git("commit", "-q", "-m", "fixture");
+  const ref = git("update-ref", "refs/remotes/origin/main", "HEAD");
+  ok(ref.status === 0, `fixture origin/main is created (git said: ${ref.stderr})`);
+  // The freshness gate reads FETCH_HEAD's mtime. `git init` never writes one, so
+  // without this the fixture looks like a checkout that has never fetched — which
+  // the guard correctly refuses. This stands in for a just-completed fetch.
+  writeFileSync(path.join(root, ".git", "FETCH_HEAD"), "fixture\n");
+}
 function armAutopilot(stateDir, hoursFromNow) {
   writeFileSync(path.join(stateDir, "AUTOPILOT.on"), JSON.stringify({
     expires: new Date(Date.now() + hoursFromNow * 3600_000).toISOString(),
@@ -146,6 +176,7 @@ function armAutopilot(stateDir, hoursFromNow) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-"));
   const stateDir = path.join(tmp, ".claude", "session-state");
   mkdirSync(stateDir, { recursive: true });
+  makePendingSetInputs(tmp);
   try {
     const call = (query, projectId = CRX_PROJECT) => ({
       tool_name: "mcp__supabase__apply_migration",
@@ -390,8 +421,21 @@ function armAutopilot(stateDir, hoursFromNow) {
     git(["config", "user.email", "test@example.com"], primary);
     git(["config", "user.name", "test"], primary);
     writeFileSync(path.join(primary, "seed.txt"), "seed\n");
-    git(["add", "seed.txt"], primary);
+    // The pending-set preflight reads the schema baseline and origin/main from
+    // CLAUDE_PROJECT_DIR, which stays pinned to `primary` throughout. Seed both
+    // there, or it blocks before the proof-scoping behaviour under test is reached.
+    mkdirSync(path.join(primary, "supabase", "baselines"), { recursive: true });
+    writeFileSync(
+      path.join(primary, "supabase", "baselines", "manifest.json"),
+      JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }));
+    mkdirSync(path.join(primary, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(primary, "supabase", "migrations", `${MIG}.sql`), BENIGN_SQL);
+    git(["add", "-A"], primary);
     git(["commit", "-qm", "seed"], primary);
+    const originRef = git(["update-ref", "refs/remotes/origin/main", "HEAD"], primary);
+    ok(originRef.status === 0, `fixture origin/main is created (git said: ${originRef.stderr})`);
+    // Stands in for a just-completed fetch; see makePendingSetInputs.
+    writeFileSync(path.join(primary, ".git", "FETCH_HEAD"), "fixture\n");
     const added = git(["worktree", "add", "-q", "-b", "wt", linked], primary);
     // Asserted, never skipped. An `if (added.status === 0)` guard here would let
     // the whole worktree regression disappear silently the day `git worktree add`
