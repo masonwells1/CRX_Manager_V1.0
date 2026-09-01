@@ -12,9 +12,17 @@ writes it unchecked lets any signed-in user attribute a write to somebody else �
 than detected after it ships.
 
 **What changed.** Nothing in the hook, on this branch. What changed is the claim made about it. It is now
-documented as a **speed bump, not a boundary**, with its gaps enumerated, and the load-bearing protections
-named in order: the post-apply sweep predicates against the live catalog, the exact-SHA `gpt-5.6-sol`
-proof on migration diffs, and the CodeRabbit final review.
+documented as a **speed bump, not a boundary**, with its gaps enumerated and the load-bearing protections
+named — but **not uniformly**, because they differ by residual. For the lexical and re-binding gaps the
+compensating controls are the post-apply sweep predicates against the live catalog, the exact-SHA
+`gpt-5.6-sol` proof, and the CodeRabbit review. For the **naming-scope gap** (`p_target_id`-shaped
+parameters) the sweep predicates key on the SAME name pattern, so they share the blind spot rather than
+covering it — only the Codex proof and the CodeRabbit review stand there.
+
+That distinction was itself a CodeRabbit finding on the first draft of this entry: the draft claimed the
+residual required clearing the sweep, which is false for the naming-scope path. Worth recording, because it
+is precisely the failure this change exists to document — a compensating control asserted rather than
+verified, in a document about asserting controls rather than verifying them.
 
 **Why capping is the right call, from evidence rather than fatigue.** Two independent agents closed **19
 laundering channels** across two rounds, each reproduced by running the real hook and each fix

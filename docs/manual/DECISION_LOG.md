@@ -36,14 +36,25 @@ place it is wrong everywhere. A second root cause is structural rather than lexi
 **name**, and a PL/pgSQL parameter is an ordinary local, so `p_performed_by := p_target_id;` after a
 passing check re-forges the actor. Nine spellings of that were found.
 
-**Residual risk, stated plainly.** To exploit what remains, a coding agent would have to write deliberately
-obfuscated SQL into a migration AND clear the Codex proof, the CodeRabbit review, and the post-apply sweep.
-The guard was always the fourth line of defence; capping it does not remove the first three. Explicitly out
-of scope by design: actor-shaped parameters that do not match the name pattern
-(`^p_\w*by$|^p_actor|^p_user`) — e.g. `p_target_id` — which the live sweep predicates share, and
-`EXECUTE … USING` / `INSERT … RETURNING … INTO` / temp-table round trips, which are currently covered only
-*incidentally* because `EXECUTE`/`INSERT` unconditionally set `hasMutation`. If that mutation trigger is
-ever narrowed, those three open immediately.
+**Residual risk, stated plainly — and it is NOT uniform.** Two different residuals remain, with different
+compensating controls, and conflating them would overstate the defence:
+
+1. **Lexical and re-binding bypasses** (the quoted-identifier gap, parameter re-assignment after a passing
+   check, `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips). These evade the
+   *write-time* hook only. The post-apply sweep predicates still see the routine in the live catalog, so
+   exploiting one of these also requires clearing the Codex proof, the CodeRabbit review, **and** the sweep.
+   The guard was the fourth line of defence here; capping it does not remove the first three.
+2. **The naming-scope gap** — actor-shaped parameters that do not match `^p_\w*by$|^p_actor|^p_user`, e.g.
+   `p_target_id` or `p_acting_user_id`. **The live sweep predicates share this exact name pattern, so the
+   sweep does NOT cover this path either.** Do not claim the sweep as the compensating control for it. The
+   only things standing here are the Codex proof and the CodeRabbit review on the migration diff. Closing it
+   needs real dataflow over write targets — analysis of which values reach an actor column — not another
+   pattern, and it would have to change the hook and both predicates together.
+
+Note on (1): `EXECUTE … USING` / `INSERT … RETURNING … INTO` / temp-table round trips are currently caught at
+write time only *incidentally*, because `EXECUTE`/`INSERT` unconditionally set `hasMutation` rather than
+because taint is modelled. If that trigger is ever narrowed, all three open immediately at write time —
+though the sweep would still see them post-apply.
 
 **If this is ever revisited, rebuild rather than re-harden.** The only approach that removes the whole
 category is parsing with PostgreSQL's own grammar (`libpg_query`), which eliminates "spellings" entirely and

@@ -257,7 +257,7 @@ document should describe it as preventing actor forgery.
 
 | Gap | Why it is open |
 |---|---|
-| Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit, shared with the live sweep predicates. Closing it needs real dataflow over write targets, not another pattern. |
+| Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit — and **the live sweep predicates use the SAME name pattern, so this gap is shared, not compensated.** Unlike every other row here, the post-apply sweep does NOT catch this one. Closing it needs real dataflow over write targets, and would have to change the hook and both predicates together. |
 | `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | Covered only *incidentally* — `EXECUTE`/`INSERT` unconditionally set `hasMutation`, so taint is never modelled. **If that trigger is ever narrowed, all three open immediately.** |
 | Cross-routine / cross-migration helpers | The analysis is intra-routine and single-file; helpers are handled by the fail-closed callable rule, not by understanding. This is also why the false-positive rate on read-only routines is what it is. |
 | Novel lexical spellings | The known-unknown. Three rounds each found a *new category*; the tool pattern-matches text, and PostgreSQL's grammar has more spellings than anyone will enumerate. |
@@ -267,10 +267,14 @@ document should describe it as preventing actor forgery.
 did not run on that routine at all. That one lexical fact defeated eight independent regexes written across
 three careful passes.
 
-**What actually protects this path** (do not treat the hook as load-bearing): the post-apply sweep
-predicates against the live catalog, the exact-SHA `gpt-5.6-sol` proof on migration diffs, and the
-CodeRabbit final review. To exploit the residual, a coding agent would have to write deliberately obfuscated
-SQL into a migration and clear all three.
+**What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
+
+- **For the lexical and re-binding gaps** (rows 2–4 above): the post-apply sweep predicates against the live
+  catalog, the exact-SHA `gpt-5.6-sol` proof on migration diffs, and the CodeRabbit final review. Exploiting
+  one means writing deliberately obfuscated SQL into a migration and clearing all three.
+- **For the naming-scope gap** (row 1): **only the Codex proof and the CodeRabbit review.** The sweep
+  predicates key on the same `^p_\w*by$|^p_actor|^p_user` pattern, so they share the blind spot rather than
+  covering it. Do not cite the sweep as the compensating control for a `p_target_id`-shaped parameter.
 
 **Do not.** Do not open another pattern-hardening round (cite the DECISION_LOG entry and close the request).
 Do not remove or weaken the hook — it is cheap and it catches the ordinary cases. If it is ever rebuilt, use
