@@ -1,3 +1,4 @@
+-- STATUS: PARKED - NOT APPLIED
 -- Bind the remaining Section 9 AP/PO replay receipts to actor + exact intent.
 --
 -- The mature implementations below still own every inventory, PO, AP, money,

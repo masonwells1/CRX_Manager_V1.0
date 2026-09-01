@@ -1,3 +1,4 @@
+-- STATUS: PARKED - NOT APPLIED
 -- Gauntlet Section 9: prevent cumulative PO-linked bills from silently
 -- exceeding 105% of the purchase-order total.
 

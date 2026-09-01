@@ -1,3 +1,4 @@
+-- STATUS: PARKED - NOT APPLIED
 -- Gauntlet Section 9: receiving reversal safety and accurate AP calendar reporting.
 --
 -- This migration is intentionally post-high-water and additive. It binds each
