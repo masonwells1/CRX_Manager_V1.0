@@ -4,6 +4,19 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
+**Live-ledger capture — 2026-09-01, after the six-file return-credit COGS chain. THIS IS THE CURRENT
+BOUNDARY.** A read-only read on project `rhyzpcqhnizqbxphqdkr` records **986 ledger rows** (978
+distinct names — the difference is duplicate names, confirmed by `count(distinct name)`, not
+truncation), with `20260827041500_preserve_generated_invoice_lineage_and_finish_cutover` as the
+newest applied authored name; the current effective ordering high-water is therefore
+**`20260827041500`**, and live `max(version)` is **`20260901184530`**. All six chain migrations
+(`20260827041000`–`20260827041500`) applied in order that day; per-migration versions and the B7
+reconciliation are recorded in the APPLIED LIVE block further down and in rows 894–899.
+
+**Superseded 2026-09-01 (earlier same day) header, kept for provenance** — its **980-row** /
+`20260826222000` figures were captured before the return-credit chain applied and must not be used
+as the current ordering boundary:
+
 **Live-ledger capture — 2026-09-01, after the two Section 9 AP applies.** A read-only
 `list_migrations` on project `rhyzpcqhnizqbxphqdkr` records **980 ledger rows**, with
 `20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
