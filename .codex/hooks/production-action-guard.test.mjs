@@ -696,6 +696,31 @@ try {
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, true, "backtick substitution carrying a raw merge is denied");
+  // A substitution can equally carry a second gh merge whose flags the parser
+  // never sees; the inner one runs FIRST (Codex bot P1 on PR #541).
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --body \"$(gh pr merge 456 --ad\"\"min)\"" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "a nested gh merge inside a substitution is denied");
+  // Quote and backslash concatenation build a flag gh honours but a raw-word
+  // comparison misses.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --ad\"\"min --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "quote-concatenated --admin is still the admin bypass");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 \"--admin\" --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "fully quoted --admin is still the admin bypass");
   // A gh-shaped merge still routes through the real gate rather than the raw
   // denial — otherwise the blanket rule would swallow the approved path.
   assert.equal(evaluateProductionAction({

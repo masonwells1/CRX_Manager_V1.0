@@ -98,6 +98,21 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     if (endpointMentions.length > (api ? 1 : 0)) {
       deny("PR MERGE GATE: raw GitHub REST merge calls (curl/wget/Invoke-RestMethod/fetch against .../pulls/<n>/merge) are denied because the guard cannot resolve and verify the PR's base, head, and checks for them. Use `gh pr merge <number>` so the gate can verify the merge.");
     }
+    // A merge segment carrying a command substitution is unresolvable, so it is
+    // refused rather than gated. Counting endpoints above closed the RAW-call
+    // shape, but the substitution can equally hold a second `gh pr merge` —
+    // `gh pr merge 1 --body "$(gh pr merge 2 --admin)"` runs the INNER merge
+    // first, while the parser records only the outer request and never sees the
+    // inner flag (Codex bot P1 on PR #541). This is the same stance the Codex
+    // guard already takes on interpreter arguments: when part of a command is
+    // shell-expanded, what it will actually do is not statically knowable.
+    if (found && /\$\(|`|\$\{/.test(segment)) {
+      deny(
+        "PR MERGE GATE: this merge command contains a command substitution, so what it will actually " +
+        "run is not statically knowable — a substitution can carry a second merge, or flags the parser " +
+        "never sees. Run the merge as its own plain command, with the PR number and flags spelled out."
+      );
+    }
     if (found) { requests.push(found); continue; }
   }
 }

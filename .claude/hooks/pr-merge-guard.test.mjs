@@ -55,6 +55,23 @@ ok(ghMergeRequest("gh pr merge 42 --auto=false")?.auto === false, "--auto=false 
 ok(ghMergeRequest("gh pr merge 42 --auto=0")?.auto === false, "--auto=0 is an immediate merge");
 ok(ghMergeRequest("gh pr merge 42 --auto=true")?.auto === true, "--auto=true is still an auto-merge");
 ok(ghMergeRequest("gh pr merge 42 --auto")?.auto === true, "bare --auto is still an auto-merge");
+// Go's ParseBool — which gh uses — accepts `f`/`F` as false and `t`/`T` as true.
+// Listing the FALSE spellings missed `--auto=f` entirely, so only the TRUE
+// spellings count as auto and everything else takes the full checks.
+ok(ghMergeRequest("gh pr merge 42 --auto=f")?.auto === false, "--auto=f is ParseBool false, not an auto-merge");
+ok(ghMergeRequest("gh pr merge 42 --auto=F")?.auto === false, "--auto=F is ParseBool false");
+ok(ghMergeRequest("gh pr merge 42 --auto=t")?.auto === true, "--auto=t is ParseBool true");
+ok(ghMergeRequest("gh pr merge 42 --auto=T")?.auto === true, "--auto=T is ParseBool true");
+ok(ghMergeRequest("gh pr merge 42 --auto=1")?.auto === true, "--auto=1 is ParseBool true");
+ok(ghMergeRequest("gh pr merge 42 --auto=banana")?.auto === false, "a value gh rejects takes the full checks");
+
+// Shell quote/backslash concatenation builds a flag gh honours but a raw-word
+// comparison misses: `--ad""min` reaches gh as `--admin`.
+ok(ghMergeRequest('gh pr merge 42 --ad""min')?.admin === true, "quote-concatenated --admin detected");
+ok(ghMergeRequest("gh pr merge 42 --ad''min")?.admin === true, "single-quote-concatenated --admin detected");
+ok(ghMergeRequest('gh pr merge 42 "--admin"')?.admin === true, "fully quoted --admin detected");
+ok(ghMergeRequest("gh pr merge 42 --ad\\min")?.admin === true, "backslash-escaped --admin detected");
+ok(ghMergeRequest('gh pr merge 42 --au""to')?.auto === true, "quote-concatenated --auto still parses as auto");
 
 // ── pullRequestApproved ──────────────────────────────────────────────────────
 ok(pullRequestApproved({ reviewDecision: "APPROVED" }), "APPROVED passes");
@@ -133,6 +150,21 @@ ok(r.decision?.permissionDecision === "deny", "raw merge endpoint inside a gh me
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 1 --body \"`curl -X PUT https://api.github.com/repos/crop/crx/pulls/9/merge`\"" } });
 ok(r.decision?.permissionDecision === "deny", "backtick substitution carrying a raw merge is denied");
+
+// A substitution can equally carry a second gh merge, whose flags the parser
+// never sees — the inner one runs FIRST (Codex bot P1 on PR #541).
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 1 --repo crop/dev --body \"$(gh pr merge 2 --ad\"\"min)\"" } });
+ok(r.decision?.permissionDecision === "deny", "a nested gh merge inside a substitution is denied");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 1 --body \"${SNEAKY}\"" } });
+ok(r.decision?.permissionDecision === "deny", "a merge carrying ${...} expansion is unresolvable and denied");
+
+// The substitution rule must stand down for an ordinary merge: this one still
+// denies (the fixture PR cannot be resolved, which fails closed by design), but
+// it must reach the RESOLUTION failure rather than being refused as unresolvable
+// command text.
+r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 1 --repo crop/dev --body plain-text" } });
+ok(!/command substitution/.test(r.decision?.permissionDecisionReason || ""), "a merge with no substitution is not refused by the substitution rule");
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "echo docs about /pulls/12/merges endpoint" } });
 ok(r.status === 0 && r.decision === null, "merge-suffixed word boundary respected (merges != merge)");

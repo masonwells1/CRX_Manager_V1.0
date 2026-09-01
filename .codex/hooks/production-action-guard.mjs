@@ -442,36 +442,45 @@ function ghMergeRequest(command) {
   if (prIndex === -1) return null;
   const mergeIndex = words.findIndex((word, index) => index > prIndex && word.toLowerCase() === "merge");
   if (mergeIndex === -1) return null;
-  const valueFlags = new Set(["--repo", "-R", "--match-head-commit", "--subject", "--body"]);
+  // Lowercase: membership is tested against the normalized flag name below.
+  const valueFlags = new Set(["--repo", "-r", "--match-head-commit", "--subject", "--body"]);
   let selector = "";
   let repo = "";
   let admin = false;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
-    if (word.startsWith("--repo=")) {
-      repo = word.slice("--repo=".length);
+    // Flag NAMES are matched with quotes and backslashes removed: the shell
+    // concatenates `--ad""min` and `--ad\min` into `--admin` before gh sees
+    // them, so comparing the raw word misses a flag gh honours (Codex bot P1 on
+    // PR #541). Values keep their original case; only the name is lowercased.
+    const stripped = word.replace(/["'\\]/g, "");
+    const lower = stripped.toLowerCase();
+    if (lower.startsWith("--repo=")) {
+      repo = stripped.slice("--repo=".length);
       continue;
     }
     // `--admin` merges with administrator privileges, skipping main's required
     // review. Mason turned "Include administrators" OFF on 2026-09-01 so HE can
     // clear a stuck review by hand; that bypass travels with the same admin
-    // token Codex runs on, so the gate refuses the flag. `--admin=false` asks
-    // for no bypass and stands down.
-    if (word.toLowerCase() === "--admin") {
+    // token Codex runs on, so the gate refuses the flag. Only an explicit
+    // ParseBool FALSE stands down — an unparseable value is treated as a bypass
+    // request and denied, which costs nothing because gh rejects it too.
+    if (lower === "--admin") {
       admin = true;
       continue;
     }
-    if (word.toLowerCase().startsWith("--admin=")) {
-      admin = !/^(?:false|0|no)$/i.test(word.slice("--admin=".length));
+    if (lower.startsWith("--admin=")) {
+      const value = lower.slice("--admin=".length);
+      admin = !(value === "0" || value === "f" || value === "false");
       continue;
     }
-    if (valueFlags.has(word)) {
+    if (valueFlags.has(lower)) {
       const value = words[index + 1] || "";
-      if (word === "--repo" || word === "-R") repo = value;
+      if (lower === "--repo" || lower === "-r") repo = value;
       index += 1;
       continue;
     }
-    if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
+    if (index > mergeIndex && !stripped.startsWith("-") && !selector) selector = stripped;
   }
   return { selector, repo, admin };
 }
@@ -824,6 +833,19 @@ export function evaluateProductionAction({
         "CODEX PRODUCTION GATE: GraphQL mergePullRequest mutations are denied — whatever transport carries " +
         "them — because the guard cannot resolve and verify the PR's base, head, and checks for them. " +
         "Use `gh pr merge <number>` so the gate can verify the merge."
+      );
+    }
+    // A merge segment carrying a command substitution is unresolvable, so it is
+    // refused rather than gated: the substitution can hold a second
+    // `gh pr merge` — `gh pr merge 1 --body "$(gh pr merge 2 --admin)"` runs the
+    // INNER merge first while the parser records only the outer request (Codex
+    // bot P1 on PR #541). Same stance this guard already takes on interpreter
+    // arguments: a shell-expanded command is not statically knowable.
+    if (ghRequest && /\$\(|`|\$\{/.test(segment)) {
+      return denied(
+        "CODEX PRODUCTION GATE: this merge command contains a command substitution, so what it will " +
+        "actually run is not statically knowable — a substitution can carry a second merge, or flags the " +
+        "parser never sees. Run the merge as its own plain command, with the PR number and flags spelled out."
       );
     }
     if (ghRequest?.unsupportedGraphql) {

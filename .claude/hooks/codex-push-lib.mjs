@@ -2017,41 +2017,59 @@ export function ghMergeRequest(command) {
   // `--disable-auto` cancels a pending auto-merge — it does not land anything,
   // so the gate stands down for it.
   if (words.some((word) => word.toLowerCase() === "--disable-auto")) return null;
-  const valueFlags = new Set(["--repo", "-R", "--match-head-commit", "--subject", "--body", "-t", "-b"]);
+  // Lowercase: membership is tested against the normalized flag name below.
+  const valueFlags = new Set(["--repo", "-r", "--match-head-commit", "--subject", "--body", "-t", "-b"]);
   let selector = "";
   let repo = "";
   let auto = false;
   let admin = false;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
-    if (word.startsWith("--repo=")) { repo = word.slice("--repo=".length); continue; }
+    // Flag NAMES are matched with quotes and backslashes removed: the shell
+    // concatenates `--ad""min` and `--ad\min` into `--admin` before gh ever sees
+    // them, so a parser that compares the raw word misses the flag while gh
+    // honours it (Codex bot P1 on PR #541). Values keep their original case —
+    // only the name is lowercased.
+    const stripped = word.replace(/["'\\]/g, "");
+    const lower = stripped.toLowerCase();
+    if (lower.startsWith("--repo=")) { repo = stripped.slice("--repo=".length); continue; }
     // `--auto=false` asks gh NOT to auto-merge, so that command lands the PR
     // immediately. Classifying it as auto exempted it from the green-pipeline
-    // check and (since 2026-09-01) the approval check too — an exemption that
-    // is only sound for a REAL auto-merge, which GitHub holds until every
+    // check and (since 2026-09-01) the approval check too — an exemption that is
+    // only sound for a REAL auto-merge, which GitHub holds until every
     // requirement is met (Codex bot P1 on PR #541).
-    if (word.toLowerCase() === "--auto") { auto = true; continue; }
-    if (word.toLowerCase().startsWith("--auto=")) {
-      auto = !/^(?:false|0|no)$/i.test(word.slice("--auto=".length));
+    //
+    // Only Go's ParseBool TRUE spellings count as auto (`1`, `t`, `true`, in any
+    // case). Everything else — `f`, `F`, `0`, `false`, and values gh rejects
+    // outright — falls through to auto:false, which costs nothing but the full
+    // checks. Listing the FALSE spellings was the losing direction: `--auto=f`
+    // is valid Go and was missed (Codex bot, second finding on the same line).
+    if (lower === "--auto") { auto = true; continue; }
+    if (lower.startsWith("--auto=")) {
+      const value = lower.slice("--auto=".length);
+      auto = value === "1" || value === "t" || value === "true";
       continue;
     }
     // `--admin` merges with administrator privileges, skipping main's required
     // review. Mason turned "Include administrators" OFF on 2026-09-01 so HE can
     // clear a stuck review by hand; that override travels with the same token
     // every agent session holds, so the merge gates refuse the flag outright.
-    // An explicit `--admin=false` asks for no bypass and stands down.
-    if (word.toLowerCase() === "--admin") { admin = true; continue; }
-    if (word.toLowerCase().startsWith("--admin=")) {
-      admin = !/^(?:false|0|no)$/i.test(word.slice("--admin=".length));
+    // Only an explicit ParseBool FALSE stands down — an unparseable value is
+    // treated as a bypass request and denied, which costs nothing because gh
+    // rejects it too.
+    if (lower === "--admin") { admin = true; continue; }
+    if (lower.startsWith("--admin=")) {
+      const value = lower.slice("--admin=".length);
+      admin = !(value === "0" || value === "f" || value === "false");
       continue;
     }
-    if (valueFlags.has(word)) {
+    if (valueFlags.has(lower)) {
       const value = words[index + 1] || "";
-      if (word === "--repo" || word === "-R") repo = value;
+      if (lower === "--repo" || lower === "-r") repo = value;
       index += 1;
       continue;
     }
-    if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
+    if (index > mergeIndex && !stripped.startsWith("-") && !selector) selector = stripped;
   }
   return { selector, repo, auto, admin };
 }

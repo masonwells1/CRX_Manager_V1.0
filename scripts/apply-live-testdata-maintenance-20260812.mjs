@@ -134,12 +134,19 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // a command substitution. codexGuard now scans merge destinations before the
   // gh routes dispatch; pushLib parses the `--auto` value. Anchors unchanged;
   // transforms still identity for pushLib.
-  codexGuard: "d60b614fe366cb7654fe33fc35f1dc7f1169d03e",
-  pushLib: "87ace26f60093c93583c3d411d088617cfaeec6e",
+  // Both re-pinned again 2026-09-01, same PR, round 4: the Codex bot found that
+  // gh honours `--auto=f`/`--auto=F` (Go ParseBool) and that shell quote or
+  // backslash concatenation builds a flag gh sees but a raw-word comparison
+  // misses (`--ad""min`). Flag NAMES are now normalized before matching, only
+  // ParseBool TRUE spellings count as auto, and a merge segment carrying a
+  // command substitution is refused as unresolvable rather than gated. Anchors
+  // unchanged; the pushLib transform is still identity.
+  codexGuard: "1c921605467e613f820bc3413d5bff255296c4ec",
+  pushLib: "0bd618133ad64b813454c1e7a308f4b953c0a643",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "2bdee7fea1cfdbf85f9e49f798b34900662d2738",
-  pushLib: "87ace26f60093c93583c3d411d088617cfaeec6e",
+  codexGuard: "a9829ef4ae86d6c157c7409981fbf52a44ba7f0a",
+  pushLib: "0bd618133ad64b813454c1e7a308f4b953c0a643",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
