@@ -3183,6 +3183,15 @@ const LAUNDER_CASES = [
   // The assigned expression runs to the ';', not to the end of the line.
   ["an assignment whose expression continues onto later lines",
    "DECLARE v_id uuid;\nBEGIN\n  v_id := CASE\n    WHEN true THEN p_performed_by\n    ELSE NULL\n  END;\n  PERFORM public.record_actor(v_id);\nEND;"],
+  // The loop's iterator never names the actor -- the cursor definition does.
+  ["a bound cursor consumed by FOR ... IN <cursor> LOOP",
+   "DECLARE c CURSOR FOR SELECT p_performed_by; v_row record;\nBEGIN\n  FOR v_row IN c LOOP\n    PERFORM public.record_actor(v_row);\n  END LOOP;\nEND;"],
+  ["a cursor opened with OPEN ... FOR then consumed",
+   "DECLARE c refcursor; v_id uuid;\nBEGIN\n  OPEN c FOR SELECT p_performed_by;\n  FETCH c INTO v_id;\n  PERFORM public.record_actor(c);\nEND;"],
+  // DECLARE on the same line as the first declaration used to be captured as
+  // the target, leaving the real local untainted.
+  ["a same-line DECLARE ... DEFAULT initialiser",
+   "DECLARE v_id uuid := p_performed_by;\nBEGIN\n  PERFORM public.record_actor(v_id);\nEND;"],
 ];
 for (const [label, body] of LAUNDER_CASES) {
   r = runHook(fn(body));
@@ -3203,6 +3212,26 @@ r = runHook(fn(
   "  PERFORM public.record_count(v_dummy);\nEND;"
 ));
 ok(!isDeny(r), "a multi-column INTO taints only the positionally matching target");
+
+// U&"..." targets are deliberately opaque to this reader, so they can never
+// enter the taint set. stableAuthUidBindings() already treats a U& write as
+// destroying trust; the propagation direction has to fail closed the same way.
+r = runHook(fn(
+  'DECLARE U&"\\0076_id" uuid;\nBEGIN\n  SELECT p_performed_by INTO U&"\\0076_id";\n' +
+  '  PERFORM public.record_actor(U&"\\0076_id");\nEND;'
+));
+ok(isDeny(r), "an actor written into a Unicode-escaped opaque target is BLOCKED");
+r = runHook(fn(
+  'DECLARE U&"\\0076_id" uuid;\nBEGIN\n' +
+  '  FOREACH U&"\\0076_id" IN ARRAY ARRAY[p_performed_by] LOOP\n' +
+  '    PERFORM public.record_actor(U&"\\0076_id");\n  END LOOP;\nEND;'
+));
+ok(isDeny(r), "a Unicode-escaped loop variable cannot hide an actor either");
+r = runHook(fn(
+  'DECLARE U&"\\0076_x" text;\nBEGIN\n  U&"\\0076_x" := \'unrelated\';\n' +
+  '  RETURN to_jsonb(U&"\\0076_x");\nEND;'
+));
+ok(!isDeny(r), "an opaque target in a statement with no actor reference stays allowed");
 
 // ── casts are callable boundaries when the target type is user-defined ──────
 r = runHook(fn("BEGIN\n  RETURN CAST(p_performed_by AS public.actor_token);\nEND;"));

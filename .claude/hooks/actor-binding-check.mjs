@@ -2134,6 +2134,36 @@ function intoAssignmentSites(structuralBody) {
   return sites;
 }
 
+/** PostgreSQL decodes U&"..." before resolving a PL/pgSQL variable, and this
+ * reader deliberately treats that spelling as opaque — normalizedQualifiedIdentifier
+ * returns null for it, so such a target can never enter the taint set and every
+ * later use of it is invisible. stableAuthUidBindings() already treats a U&
+ * write as destroying a trusted binding; this is the same rule in the
+ * propagation direction. A statement that writes an opaque target and mentions
+ * a tainted actor cannot be proven not to launder it, so it fails closed. */
+function hasOpaqueUnicodeActorLaundering(structuralBody, actorParams) {
+  const target = `(?:${SQL_IDENTIFIER_PATTERN}\\s*\\.\\s*)?${SQL_UNICODE_IDENTIFIER_PATTERN}`;
+  const writes = [
+    new RegExp(
+      `(?:^|[;\\n]|\\bDECLARE\\b|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b|\\bLOOP\\b)\\s*` +
+        `${target}(?:\\s+[^;\\n:=]+?)?\\s*(?::=|=(?!=))`,
+      "i"
+    ),
+    new RegExp(`\\bINTO\\s+(?:STRICT\\s+)?${target}`, "i"),
+    new RegExp(`\\b(?:FOR|FOREACH)\\b\\s+${target}[^;]*?\\bIN\\b`, "i"),
+    new RegExp(
+      `\\bGET\\s+(?:(?:CURRENT|STACKED)\\s+)?DIAGNOSTICS\\b[^;]*?${target}\\s*(?::=|=(?!=))`,
+      "i"
+    ),
+  ];
+  const actorRes = actorParams.map((p) => new RegExp(actorReferencePattern(p), "i"));
+  for (const statement of structuralBody.split(";")) {
+    if (!writes.some((write) => write.test(statement))) continue;
+    if (actorRes.some((actor) => actor.test(statement))) return true;
+  }
+  return false;
+}
+
 /** Carry direct actor taint through the ordinary PL/pgSQL local-binding forms
  * that wrappers use before invoking helpers. The analysis is deliberately
  * monotonic: once a local receives an unbound actor in the routine, a later
@@ -2159,13 +2189,29 @@ function actorForwardingReferences(structuralBody, actorParams) {
             `(?::=|=(?!=))\\s*[^;]*(?:${sourceRef})`,
           "gi"
         ),
+        // `DECLARE` may sit on the same line as the first declaration, in which
+        // case it is what the target group captures unless it is consumed here.
         new RegExp(
-          `(?:^|[;\\n])\\s*(${SQL_IDENTIFIER_PATTERN})\\s+(?:CONSTANT\\s+)?[^;\\n:=]+?` +
+          `(?:^|[;\\n])\\s*(?:DECLARE\\s+)?(${SQL_IDENTIFIER_PATTERN})\\s+(?:CONSTANT\\s+)?[^;\\n:=]+?` +
             `(?::=|DEFAULT)\\s*[^;]*(?:${sourceRef})`,
           "gi"
         ),
         new RegExp(
           `(?:^|[;\\n])\\s*(${SQL_IDENTIFIER_PATTERN})\\s+ALIAS\\s+FOR\\s+(?:${sourceRef})`,
+          "gi"
+        ),
+        // A cursor carries the actor from where it is defined to wherever it is
+        // consumed. Taint the cursor NAME so `FOR v_row IN c LOOP` -- whose
+        // iterator never mentions the actor -- picks it up through the loop
+        // rule. FETCH is already unconditional; this covers the bound-cursor
+        // FOR loop and OPEN ... FOR.
+        new RegExp(
+          `(?:^|[;\\n])\\s*(?:DECLARE\\s+)?(${SQL_IDENTIFIER_PATTERN})\\s+(?:(?:NO\\s+)?SCROLL\\s+)?CURSOR\\b` +
+            `\\s*(?:\\([^;)]*\\))?\\s*(?:IS|FOR)\\b[^;]*(?:${sourceRef})`,
+          "gi"
+        ),
+        new RegExp(
+          `\\bOPEN\\s+(${SQL_IDENTIFIER_PATTERN})\\s+(?:(?:NO\\s+)?SCROLL\\s+)?FOR\\b[^;]*(?:${sourceRef})`,
           "gi"
         ),
       ];
@@ -2912,6 +2958,13 @@ try {
       commentBlankedBody,
       commentBlankedForwardingReferences
     );
+    const actorLaunderedIntoOpaqueTarget = hasOpaqueUnicodeActorLaundering(
+      maskedBody,
+      maskedForwardingReferences
+    ) || hasOpaqueUnicodeActorLaundering(
+      commentBlankedBody,
+      commentBlankedForwardingReferences
+    );
     const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(maskedBody) ||
       /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(commentBlankedBody) ||
       /\bEXECUTE\b/i.test(maskedBody) ||
@@ -2920,7 +2973,8 @@ try {
       actorForwardedCallable ||
       actorForwardedOperator ||
       actorForwardedSymbolicOperator ||
-      actorForwardedUserCast;
+      actorForwardedUserCast ||
+      actorLaunderedIntoOpaqueTarget;
     if (!hasMutation) continue;
 
     // IS DISTINCT FROM resolves its equality operator through the routine's
