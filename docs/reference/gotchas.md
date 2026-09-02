@@ -311,12 +311,23 @@ gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews,comments
 ```
 
 Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means no
-CodeRabbit review was submitted. Say so rather than treating green as clean. Since 2026-08-28,
-GitHub requires a current formal approval, so a misleading green CodeRabbit status cannot unlock
-the merge by itself: the missing approval keeps the PR blocked. Keep the candidate frozen and
-green, then re-request the failed final review with exactly `@coderabbitai review`; on #411 that
-turned the failure into a real 6-finding review. Never merge from the check row alone — confirm an
-`APPROVED` CodeRabbit review whose commit matches the PR head.
+CodeRabbit review was submitted. Say so rather than treating green as clean. This matters more
+since 2026-09-02, not less: Mason removed the required approving review from `main`, so a
+misleading green CodeRabbit status is no longer backstopped by a missing approval keeping the PR
+blocked. Nothing but this check stands between "CodeRabbit never actually ran" and a merge. Since
+2026-08-30 the normal trigger
+is the `ready-for-coderabbit` label, and `coderabbit-review-requested` deliberately prevents an
+accidental duplicate. If CodeRabbit itself confirms a delivery failure or rate limit on the same
+frozen head, deliberately remove `coderabbit-review-requested`, **wait for the resulting reset run to
+finish**, and only then reapply `ready-for-coderabbit`; that is a paid retry, not the normal path.
+The wait is load-bearing rather than politeness: removing the marker fires an asynchronous
+`unlabeled` run that clears **both** labels, so a ready label reapplied while that run is still
+queued is cleared by it and nothing is posted. Confirm both labels are gone before relabelling. Never merge from the ordinary check row alone —
+confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
+`CHANGES_REQUESTED` verdict. An approving review is not required (removed 2026-09-02); when one
+*does* exist, require the hidden marker SHA, that authenticated `APPROVED` review's `commit_id`, and
+the live PR head to match. The generic Actions-authored marker is dedupe evidence, not an
+independent trust identity.
 
 ---
 
