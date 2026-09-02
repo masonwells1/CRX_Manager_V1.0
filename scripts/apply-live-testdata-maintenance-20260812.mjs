@@ -141,12 +141,18 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // ParseBool TRUE spellings count as auto, and a merge segment carrying a
   // command substitution is refused as unresolvable rather than gated. Anchors
   // unchanged; the pushLib transform is still identity.
-  codexGuard: "1c921605467e613f820bc3413d5bff255296c4ec",
-  pushLib: "0bd618133ad64b813454c1e7a308f4b953c0a643",
+  // Both re-pinned 2026-09-02: pullRequestApproved() in each file now requires an
+  // APPROVED review bound to headRefOid, not a bare reviewDecision. main's
+  // protection set dismiss_stale_reviews:false (verified live that day; it was
+  // true on 2026-09-01), which is the documented trigger for exactly this change
+  // — without it an approval of commit A clears a merge of commit D. Anchors
+  // unchanged; the pushLib transform is still identity.
+  codexGuard: "259937ba4c4c99f12572e1df35bd7b2041664fd2",
+  pushLib: "96dc7678e17371c85ce63f27296ed8e816a0534c",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "a9829ef4ae86d6c157c7409981fbf52a44ba7f0a",
-  pushLib: "0bd618133ad64b813454c1e7a308f4b953c0a643",
+  codexGuard: "ed6287a98c89e8024bca2c6d3e1a98106b3d15c0",
+  pushLib: "96dc7678e17371c85ce63f27296ed8e816a0534c",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

@@ -74,13 +74,96 @@ ok(ghMergeRequest("gh pr merge 42 --ad\\min")?.admin === true, "backslash-escape
 ok(ghMergeRequest('gh pr merge 42 --au""to')?.auto === true, "quote-concatenated --auto still parses as auto");
 
 // ── pullRequestApproved ──────────────────────────────────────────────────────
-ok(pullRequestApproved({ reviewDecision: "APPROVED" }), "APPROVED passes");
-ok(pullRequestApproved({ reviewDecision: "approved" }), "case-insensitive");
+// An APPROVED verdict is necessary but NOT sufficient. main's protection set
+// dismiss_stale_reviews:false as of 2026-09-02 (verified live), so an approval
+// granted on an older commit survives every later push while reviewDecision
+// keeps reporting APPROVED. The gate therefore also requires an APPROVED review
+// bound to the exact head being merged.
+const HEAD_OID = "fe037e421aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const OLD_OID = "d7dfac94f0000000000000000000000000000000";
+const approvedAt = (oid) => ({ state: "APPROVED", commit: { oid } });
+
+ok(
+  pullRequestApproved({ reviewDecision: "APPROVED", headRefOid: HEAD_OID, reviews: [approvedAt(HEAD_OID)] }),
+  "APPROVED bound to the current head passes",
+);
+ok(
+  pullRequestApproved({ reviewDecision: "approved", headRefOid: HEAD_OID, reviews: [approvedAt(HEAD_OID)] }),
+  "case-insensitive verdict still passes when head-bound",
+);
+
+// ── THE CANARY: the exact shape dismiss_stale_reviews:false now permits ───────
+// GitHub reports APPROVED, but the only approval describes a commit that is no
+// longer the head. Merging this lands code nobody reviewed. Before this fix the
+// gate returned true here.
+ok(
+  !pullRequestApproved({ reviewDecision: "APPROVED", headRefOid: HEAD_OID, reviews: [approvedAt(OLD_OID)] }),
+  "MUST DENY: APPROVED review pinned to a superseded commit is not an approval of this head",
+);
+ok(
+  !pullRequestApproved({ reviewDecision: "APPROVED", headRefOid: HEAD_OID, reviews: [] }),
+  "MUST DENY: APPROVED verdict with no reviews at all fails closed",
+);
+ok(
+  !pullRequestApproved({ reviewDecision: "APPROVED", headRefOid: HEAD_OID }),
+  "MUST DENY: reviews never fetched fails closed — cannot verify is not verified",
+);
+ok(
+  !pullRequestApproved({ reviewDecision: "APPROVED", headRefOid: HEAD_OID, reviews: "APPROVED" }),
+  "MUST DENY: non-array reviews fails closed rather than being truthy",
+);
+ok(
+  !pullRequestApproved({ reviewDecision: "APPROVED", headRefOid: "", reviews: [approvedAt(HEAD_OID)] }),
+  "MUST DENY: no head oid to bind against fails closed",
+);
+// `gh pr view --json latestReviews` returns commit.oid:"" on EVERY entry, so a
+// caller that fetched that field must not end up comparing "" to "" and
+// crediting an unbound approval.
+ok(
+  !pullRequestApproved({ reviewDecision: "APPROVED", headRefOid: "", reviews: [approvedAt("")] }),
+  "MUST DENY: empty-vs-empty oid is not a match (the latestReviews trap)",
+);
+ok(
+  !pullRequestApproved({ reviewDecision: "APPROVED", headRefOid: HEAD_OID, reviews: [approvedAt("")] }),
+  "MUST DENY: APPROVED review carrying an empty commit oid is not head-bound",
+);
+ok(
+  !pullRequestApproved({ reviewDecision: "APPROVED", headRefOid: HEAD_OID, reviews: [{ state: "COMMENTED", commit: { oid: HEAD_OID } }] }),
+  "MUST DENY: a COMMENTED review at the head is not an approval",
+);
+ok(
+  !pullRequestApproved({ reviewDecision: "CHANGES_REQUESTED", headRefOid: HEAD_OID, reviews: [approvedAt(HEAD_OID)] }),
+  "MUST DENY: aggregate CHANGES_REQUESTED supersedes an earlier head-bound approval",
+);
+// The REST shape uses commit_id rather than commit.oid; both must bind.
+ok(
+  pullRequestApproved({ reviewDecision: "APPROVED", headRefOid: HEAD_OID, reviews: [{ state: "APPROVED", commit_id: HEAD_OID }] }),
+  "REST-shaped commit_id binds too",
+);
+ok(
+  pullRequestApproved({ reviewDecision: "APPROVED", headRefOid: HEAD_OID, reviews: [approvedAt(OLD_OID), approvedAt(HEAD_OID)] }),
+  "a superseded approval does not poison a current one",
+);
+
 ok(!pullRequestApproved({ reviewDecision: "REVIEW_REQUIRED" }), "REVIEW_REQUIRED fails");
 ok(!pullRequestApproved({ reviewDecision: "CHANGES_REQUESTED" }), "CHANGES_REQUESTED fails");
 ok(!pullRequestApproved({ reviewDecision: null }), "null verdict fails closed");
 ok(!pullRequestApproved({}), "missing field fails closed — a PR view that never asked for it is not an approval");
 ok(!pullRequestApproved(undefined), "undefined PR fails closed");
+
+// The gate is only as good as the data it asks GitHub for. If the --json field
+// list stops requesting `reviews`, the head binding can never be satisfied and
+// EVERY merge fails closed with a mystery denial — a self-inflicted outage
+// rather than a security hole, but still a break. Pin the contract both ways.
+const mergeGuardSource = readFileSync(path.join(__dirname, "pr-merge-guard.mjs"), "utf8");
+ok(
+  /--json",\s*"[^"]*\breviews\b[^"]*"/.test(mergeGuardSource),
+  "pr-merge-guard requests `reviews` in its --json field list",
+);
+ok(
+  /--json",\s*"[^"]*\bheadRefOid\b[^"]*"/.test(mergeGuardSource),
+  "pr-merge-guard requests `headRefOid` — the oid every approval is bound against",
+);
 
 // ── ghApiMergeRequest ────────────────────────────────────────────────────────
 eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge"), { selector: "12", repo: "o/r", auto: false }, "REST merge endpoint parses");

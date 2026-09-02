@@ -584,7 +584,7 @@ function resolvePullRequest({ request, repoDir, runGh }) {
   // baseRefOid is GitHub's CURRENT tip of the base branch — the commit the merge
   // will actually land on. Without it the gate falls back to local origin/main,
   // which can be stale (Codex P1, 2026-07-25).
-  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest");
+  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,reviewDecision,reviews,statusCheckRollup,autoMergeRequest");
   if (request.repo) args.push("--repo", request.repo);
   const data = JSON.parse(runGh(args, repoDir));
   // baseRefOid is required only for main-bound merges; gatePullRequestMerge
@@ -601,14 +601,43 @@ function resolvePullRequest({ request, repoDir, runGh }) {
 // clear a stuck review by hand — removed that floor for anyone with admin
 // rights, which is the token Codex runs on. So the approval is read directly.
 //
-// APPROVED is head-bound only because main's protection sets
-// dismiss_stale_reviews AND require_last_push_approval (verified live
-// 2026-09-01): a new commit dismisses every approval, so APPROVED cannot be
-// describing an older head. If stale-review dismissal is ever turned off, this
-// check must be joined by one that an APPROVED review's commit_id equals
-// headRefOid. Mirrors pullRequestApproved() in .claude/hooks/codex-push-lib.mjs.
+// `reviewDecision` alone was head-bound ONLY while main's protection set
+// dismiss_stale_reviews. Verified live 2026-09-02 that it no longer does:
+//   GET .../branches/main/protection/required_pull_request_reviews
+//   -> {"dismiss_stale_reviews":false,"require_last_push_approval":false,
+//       "required_approving_review_count":1}
+// Both were true on 2026-09-01, so this changed within a day. With dismissal
+// off, an approval granted on commit A survives commits B, C, D while
+// reviewDecision keeps reporting APPROVED, and the bare check would clear a
+// merge of D on the strength of a review of A.
+//
+// The gate no longer depends on that remote toggle: it requires an APPROVED
+// review whose own commit oid IS the head being merged. Both conditions are
+// required — reviewDecision carries GitHub's aggregate (a later
+// CHANGES_REQUESTED supersedes an earlier approval and only the aggregate knows
+// it), the per-review binding carries "this head, specifically".
+//
+// Fails closed on no head oid, absent/non-array reviews, no APPROVED review,
+// and an APPROVED review with an EMPTY commit oid — `gh pr view --json
+// latestReviews` returns `"commit":{"oid":""}` on every entry, so only
+// `--json reviews` populates it.
+// Mirrors pullRequestApproved() in .claude/hooks/codex-push-lib.mjs.
+export function approvedReviewMatchesHead(pullRequest) {
+  const head = String(pullRequest?.headRefOid || "").trim();
+  if (!head) return false;
+  const reviews = pullRequest?.reviews;
+  if (!Array.isArray(reviews) || reviews.length === 0) return false;
+  return reviews.some((review) => {
+    if (String(review?.state || "").toUpperCase() !== "APPROVED") return false;
+    // `commit.oid` is the gh JSON shape; `commit_id` is the REST shape.
+    const oid = String(review?.commit?.oid || review?.commit_id || "").trim();
+    return oid !== "" && oid === head;
+  });
+}
+
 export function pullRequestApproved(pullRequest) {
-  return String(pullRequest?.reviewDecision || "").toUpperCase() === "APPROVED";
+  if (String(pullRequest?.reviewDecision || "").toUpperCase() !== "APPROVED") return false;
+  return approvedReviewMatchesHead(pullRequest);
 }
 
 export function pullRequestChecksGreen(pullRequest) {

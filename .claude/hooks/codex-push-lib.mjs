@@ -2144,14 +2144,46 @@ export function pullRequestChecksGreen(pullRequest) {
 // with the same admin token every agent session already holds. The merge gates
 // therefore read the approval directly instead of inferring it from mergeState.
 //
-// APPROVED is head-bound only because main's protection sets
-// dismiss_stale_reviews AND require_last_push_approval (both verified live on
-// 2026-09-01): GitHub dismisses every approval when a new commit is pushed, so
-// APPROVED cannot be describing an older head. If stale-review dismissal is
-// ever turned off, this is no longer sufficient alone and the gates must also
-// check that an APPROVED review's commit_id equals headRefOid.
+// `reviewDecision` alone was head-bound ONLY while main's protection set
+// dismiss_stale_reviews, which dismisses every approval on a new commit. That
+// condition no longer holds: verified live 2026-09-02,
+//   GET .../branches/main/protection/required_pull_request_reviews
+//   -> {"dismiss_stale_reviews":false,"require_last_push_approval":false,
+//       "required_approving_review_count":1}
+// (both were true on 2026-09-01, so this changed within a day). With dismissal
+// off, an approval granted on commit A survives commits B, C, D while
+// reviewDecision keeps reporting APPROVED — so the bare check would clear a
+// merge of D on the strength of a review of A.
+//
+// The gate no longer depends on that remote toggle at all. It requires an
+// APPROVED review whose own commit oid IS the head being merged, so it holds
+// whether or not dismissal is ever restored. Both conditions are required:
+// reviewDecision carries GitHub's aggregate (a later CHANGES_REQUESTED from
+// another reviewer supersedes an earlier approval, and only the aggregate knows
+// that), while the per-review commit binding carries "this head, specifically".
+//
+// Fails closed on every uncertainty: no head oid, absent or non-array reviews,
+// no APPROVED review, and — deliberately — an APPROVED review carrying an EMPTY
+// commit oid. That last case is not hypothetical: `gh pr view --json
+// latestReviews` returns `"commit":{"oid":""}` for every entry, so a caller that
+// fetched the wrong field would otherwise compare "" against "" somewhere and
+// credit an unbound approval. Only `--json reviews` populates the oid.
+export function approvedReviewMatchesHead(pullRequest) {
+  const head = String(pullRequest?.headRefOid || "").trim();
+  if (!head) return false;
+  const reviews = pullRequest?.reviews;
+  if (!Array.isArray(reviews) || reviews.length === 0) return false;
+  return reviews.some((review) => {
+    if (String(review?.state || "").toUpperCase() !== "APPROVED") return false;
+    // `commit.oid` is the gh JSON shape; `commit_id` is the REST shape.
+    const oid = String(review?.commit?.oid || review?.commit_id || "").trim();
+    return oid !== "" && oid === head;
+  });
+}
+
 export function pullRequestApproved(pullRequest) {
-  return String(pullRequest?.reviewDecision || "").toUpperCase() === "APPROVED";
+  if (String(pullRequest?.reviewDecision || "").toUpperCase() !== "APPROVED") return false;
+  return approvedReviewMatchesHead(pullRequest);
 }
 
 export { RISKY_PATH_RES, RISKY_CONTENT_RE };

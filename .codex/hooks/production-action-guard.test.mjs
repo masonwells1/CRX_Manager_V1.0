@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -514,6 +514,10 @@ try {
     headRefName: "feature/test",
     headRefOid: risky.sha,
     reviewDecision: "APPROVED",
+    // An APPROVED verdict alone stopped being sufficient on 2026-09-02: main's
+    // protection set dismiss_stale_reviews:false, so an approval survives later
+    // pushes. The gate now also requires an APPROVED review bound to THIS head.
+    reviews: [{ state: "APPROVED", commit: { oid: risky.sha } }],
     mergeStateStatus: "CLEAN",
     statusCheckRollup: greenChecks,
   };
@@ -657,6 +661,53 @@ try {
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "REVIEW_REQUIRED" }),
   }).blocked, true, "the MCP merge route needs the approval too");
+
+  // ── THE CANARY: APPROVED, but the approval describes an older commit ───────
+  // main's protection set dismiss_stale_reviews:false on 2026-09-02 (verified
+  // live; it was true on 2026-09-01). With dismissal off an approval granted on
+  // commit A survives pushes B, C, D while reviewDecision keeps saying APPROVED
+  // — so a bare verdict check clears a merge of code nobody reviewed. Every
+  // route below must refuse it.
+  const staleApproval = { ...mainPr, reviews: [{ state: "APPROVED", commit: { oid: "0".repeat(40) } }] };
+  const staleMerge = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify(staleApproval),
+  });
+  assert.equal(staleMerge.blocked, true, "MUST DENY: an APPROVED review pinned to a superseded commit is not an approval of this head");
+  assert.equal(evaluateProductionAction({
+    toolName: "mcp__github__merge_pull_request",
+    toolInput: { owner: "crop", repo: "crx", pull_number: 123 },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify(staleApproval),
+  }).blocked, true, "MUST DENY: the MCP merge route refuses a superseded approval too");
+  // Not fetching `reviews` at all is "cannot verify", which is not "verified".
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviews: undefined }),
+  }).blocked, true, "MUST DENY: an APPROVED PR whose reviews were never fetched fails closed");
+  // `gh pr view --json latestReviews` returns commit.oid:"" on every entry — an
+  // empty oid must never be credited as a match.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviews: [{ state: "APPROVED", commit: { oid: "" } }] }),
+  }).blocked, true, "MUST DENY: an APPROVED review with an empty commit oid is not head-bound");
+  // The guard is only as good as the fields it asks for: if the --json list
+  // stops requesting `reviews`, every merge fails closed with a mystery denial.
+  const codexGuardSource = readFileSync(new URL("./production-action-guard.mjs", import.meta.url), "utf8");
+  assert.ok(
+    /--json",\s*"[^"]*\breviews\b[^"]*"/.test(codexGuardSource),
+    "production-action-guard requests `reviews` in its --json field list",
+  );
 
   // ── raw merge transports (Codex proof on PR #541, 2026-09-01) ─────────────
   // The gh-shaped routes above were the whole gate, which was survivable while
@@ -964,6 +1015,10 @@ try {
       headRefName: "feature/test",
       headRefOid: stale.sha,
       reviewDecision: "APPROVED",
+      // Head-bound so this case still reaches the BASE check it is about. Without
+      // it the approval gate denies first and the assertion below would pass on
+      // the wrong reason — an earlier gate silently disarming a later test.
+      reviews: [{ state: "APPROVED", commit: { oid: stale.sha } }],
       mergeStateStatus: "CLEAN",
       statusCheckRollup: greenChecks,
     });
@@ -1023,6 +1078,9 @@ try {
         headRefName: "feature/test",
         headRefOid: updatedHead,
         reviewDecision: "APPROVED",
+        // Bound to the updated head, so this positive case proves the BASE logic
+        // clears rather than passing for want of an approval check.
+        reviews: [{ state: "APPROVED", commit: { oid: updatedHead } }],
         mergeStateStatus: "CLEAN",
         statusCheckRollup: greenChecks,
       }),
@@ -1095,6 +1153,9 @@ try {
         headRefName: "feature/test",
         headRefOid: updatedHead,
         reviewDecision: "APPROVED",
+        // Head-bound so the denial under test is the PROOF-base one, not the
+        // approval gate firing earlier and changing the reason.
+        reviews: [{ state: "APPROVED", commit: { oid: updatedHead } }],
         mergeStateStatus: "CLEAN",
         statusCheckRollup: greenChecks,
       }),
