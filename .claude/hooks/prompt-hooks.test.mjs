@@ -253,21 +253,38 @@ rmSync(hbProj, { recursive: true, force: true });
   //    hook-router.test.mjs pins the first of these end to end. Deleting the
   //    replacement pattern instead of narrowing it turns this block red, which
   //    is what stops "drop the word" being implemented as "drop the coverage".
+  //    The last three are CodeRabbit's P2 on PR #565: an earlier fixed follower
+  //    whitelist silently dropped these, and a dropped latch is not harmless —
+  //    an unattended run stalls for permission later, which is the complaint the
+  //    whole subsystem exists to answer.
   for (const adverbial of [
     "run this overnight",
     "keep going overnight, ill check in the morning",
     "run it overnight and dont ask me",
     "work on this overnight please",
+    "run this overnight without asking me again",
+    "work overnight for me",
+    "keep working overnight through the morning",
   ]) {
     ok(latches(adverbial).latched, `adverbial overnight is a real request: "${adverbial}"`);
   }
 
   // 4. ...while `overnight` modifying a noun is naming a thing, and must not
   //    freeze. These are the shapes that appear in questions about the feature.
+  //
+  //    `investigate the overnight: flag behavior` is CodeRabbit's Major on the
+  //    same line: a colon was read as a phrase terminator when it was in fact
+  //    introducing a noun. The determiner rule is what catches it, and the last
+  //    case (nothing before the word at all) is what the determiner rule alone
+  //    would miss — between them the two halves are load-bearing in both
+  //    directions, which is why neither may be "simplified" away.
   for (const naming of [
     "why does the overnight flag keep firing",
     "explain the overnight handshake to me",
     "run the overnight bug hunt report past me first",
+    "investigate the overnight: flag behavior",
+    "drop the word overnight from the freeze list",
+    "overnight flag is broken again",
   ]) {
     ok(!latches(naming).latched, `overnight as a noun modifier must not freeze: "${naming}"`);
   }

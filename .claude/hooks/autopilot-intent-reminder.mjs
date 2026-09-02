@@ -69,23 +69,46 @@ if (!triggers.some((re) => re.test(prompt))) emit();
 //
 // It is REPLACED below rather than deleted, because "run this overnight" is a
 // real hands-free request and latching it is a property worth keeping. The split
-// is grammatical, not a list of banned phrasings: `overnight` freezes only when
-// it ENDS its phrase, which is the adverbial use ("run this overnight"; "keep
-// going overnight, I'll check in the morning"). When another word follows, it is
-// modifying a noun — naming a thing rather than asking for one ("the overnight
-// flag", "the overnight bug hunt", "the word overnight from the list").
+// is grammatical, not a list of banned phrasings: adverbial `overnight` says WHEN
+// the work happens and is a request; attributive `overnight` modifies a noun and
+// is naming a thing ("the overnight flag", "the overnight bug hunt", "the word
+// overnight from the list").
 //
-// The lookahead's continuation set errs toward MISSING a real request, never
-// toward freezing on a mention, because the two failures are not symmetric: a
-// miss degrades to the arm-autopilot reminder that `triggers` still injects,
-// while a false freeze can only be escaped by arming autopilot. Pinned in
-// prompt-hooks.test.mjs and hook-router.test.mjs.
+// TWO independent signals, because CodeRabbit found a real hole on each side of a
+// single one (PR #565). Both must agree before the session is frozen:
+//
+//   NOT-NAMED  — no determiner or quoting word immediately before it. This is
+//                what makes "the word overnight FROM the list" safe even though
+//                `from` is a perfectly good adverbial preposition, and it is the
+//                closed half of the rule: English determiners are a fixed set,
+//                nouns are not.
+//   ADVERBIAL  — it ends the phrase, or the next word starts a new clause rather
+//                than continuing a noun phrase. This is what makes a leading
+//                "overnight flag is broken" safe, where nothing precedes it.
+//
+// Neither alone is enough. A single lookahead let `investigate the overnight:
+// flag behavior` through, because `:` was read as a terminator when it was in
+// fact introducing a noun. A single lookbehind lets `overnight flag is broken`
+// through when the sentence opens with it. Each rule covers the other's gap,
+// which is also why the follower set can afford to be generous: over-matching
+// there is caught by the determiner rule.
+//
+// Where they still disagree, prefer MISSING a real request over freezing on a
+// mention — a miss degrades to the arm-autopilot reminder that `triggers` still
+// injects, while a false freeze can only be escaped by arming autopilot. Pinned
+// in prompt-hooks.test.mjs and hook-router.test.mjs.
+//
+// `this`/`that` are deliberately NOT determiners here: "run this overnight" is
+// the canonical request, and hook-router.test.mjs:53 pins it.
+const OVERNIGHT_REQUEST =
+  /(?<!\b(?:the|an?|its|their|our|your|any|each|every|word|term|about)\s+)\bovernight\b(?=\s*$|\s*[.!?]|\s*[,;:]?\s+(?:and|so|then|but|plus|also|too|while|if|unless|after|before|until|till|til|through|throughout|into|in|on|at|to|from|for|with|without|please|ok|okay|tonight|i|im|ill|ive|i'm|i'll|i've|we|you|my)\b)/;
+
 const strong = [
   /going\s+to\s+bed/,
   /hands.?free/,
   /run\s+(it|this)\s+(all\s+)?night/,
   /while\s+i('?m| am)\s+(asleep|sleeping|away|gone)/,
-  /\bovernight\b(?=\s*$|\s*[.,;:!?]|\s+(?:and|so|then|while|if|please|ok|okay|too|tonight|til|till|until)\b)/,
+  OVERNIGHT_REQUEST,
 ];
 if (strong.some((re) => re.test(prompt))) {
   try {

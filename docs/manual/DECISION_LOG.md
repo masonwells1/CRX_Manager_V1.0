@@ -34,13 +34,26 @@ governed state".
 
 **Operative rule.** A pattern is admitted to `strong` only if it is a phrase Mason can be USING but
 not NAMING — first-person, imperative, or (for `overnight`) grammatically adverbial, so it cannot
-occur in a question about autopilot. Split by grammar, never by a list of banned phrasings, and when
-the two directions conflict prefer MISSING a real request: a miss degrades to the arm-autopilot
-reminder `triggers` still injects, while a false freeze can only be escaped by arming autopilot. Do
-not restore a bare `/overnight/`, and do not "simplify" the lookahead away — `prompt-hooks.test.mjs`
-pins all three halves (the two verbatim freezing prompts must not latch; four real hands-free
-requests and four adverbial `overnight` requests must; three noun-modifier mentions must not), and
-`hook-router.test.mjs:53` independently pins "run this overnight".
+occur in a question about autopilot. Split by grammar, never by a list of banned phrasings.
+
+The `overnight` test needs **two** signals and CodeRabbit proved on PR #565 that one is not enough:
+a lone lookahead let `investigate the overnight: flag behavior` through (a colon read as a
+terminator when it introduced a noun), while tightening that lookahead dropped real requests like
+`work overnight for me`. So it now requires NOT-NAMED (no determiner or quoting word immediately
+before — the closed half, since determiners are a fixed set and nouns are not) AND ADVERBIAL (ends
+the phrase, or the next word opens a clause). Each covers the other's gap, which is why the follower
+set can afford to be generous. `this`/`that` are deliberately not determiners here.
+
+Where the two disagree, prefer MISSING a real request: a miss degrades to the arm-autopilot reminder
+`triggers` still injects, while a false freeze can only be escaped by arming autopilot. But a miss
+is not free either — an unattended run then stalls for permission later, which is the original
+complaint — so do not narrow it further without re-running the end-to-end proof.
+
+Do not restore a bare `/overnight/`, and do not "simplify" either half away. `prompt-hooks.test.mjs`
+pins every direction (the two verbatim freezing prompts and six noun-modifier mentions must not
+latch; four hands-free phrasings and seven adverbial `overnight` requests must),
+`hook-router.test.mjs:53` independently pins "run this overnight", and each half has a mutation that
+reddens a case the other half cannot catch.
 
 ## 2026-09-02 — The required review on `main` is removed; CI becomes the merge gate
 
