@@ -690,6 +690,22 @@ ineffective — it blocks *reading* the file it protects while `node runner.mjs`
 execute it freely. It is coupled to the blob-pinned maintenance producer, so it is the next
 harness-focused task after this one, not a backlog item.
 
+## 2026-08-30 — A default-branch label gate posts the final CodeRabbit command once
+
+**Decision:** After the frozen candidate is current, green, and separately reviewed, the landing
+owner applies `ready-for-coderabbit`; a default-branch workflow validates that exact PR head and
+posts exactly `@coderabbitai review` once with a hidden SHA marker. The generic Actions-authored
+marker prevents duplicate requests but is not a separate security identity. Before merge, its SHA,
+CodeRabbit's authenticated approval `commit_id`, and the live PR head must be identical.
+**Why:** Manual comment posting was easy to forget or repeat, while automatic PR/push reviews spent
+the shared budget before changes were deployable.
+**What this forbids/implies:** Do not post the normal command by hand. New commits and reopened/draft
+state, base drift, close/reopen, auto-merge changes, or requested-marker removal reset both labels;
+a failed gate posts nothing, and duplicate events cannot post a second request. Manual re-arming is reserved for a confirmed
+automation or CodeRabbit delivery failure.
+The two introducing PRs are one-time bootstrap exceptions because `pull_request_target` runs only
+workflow code already on `main`; they receive one manual command after their heads are frozen/green.
+
 ## 2026-08-28 — CodeRabbit reviews only frozen release candidates
 
 **Source:** Mason's in-chat decision on 2026-08-28 after the shared CodeRabbit budget was consumed
