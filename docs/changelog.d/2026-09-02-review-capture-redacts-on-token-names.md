@@ -37,9 +37,16 @@ sets it can never produce a readable proof — and the failure looks like an
 unparseable verdict rather than a redaction, so the natural response is to re-run
 the review and burn the cost again.
 
-The same clause also matches `password|secret|api_key|access_token` followed by
-`:` or `=`, which ordinary prose and YAML keys hit easily (`permissions:` blocks,
-a sentence like "secret: never commit one").
+The same clause also fires on the words *password*, *secret*, *api key* and
+*access token* whenever a colon or equals sign and any non-space character
+follow — which ordinary prose and YAML keys hit easily. Writing one of those
+words immediately before a colon and a value is enough, with no credential
+anywhere in sight.
+
+This entry proved that the hard way: an earlier draft used a short illustrative
+example of exactly that shape, and it redacted the very review that was meant to
+read this file. The example has been described rather than quoted, because
+quoting it re-breaks the tool.
 
 ### Workaround in place
 
