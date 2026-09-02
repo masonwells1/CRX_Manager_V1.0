@@ -1,0 +1,62 @@
+## 2026-09-01 — 14 no-PR branches deleted, all recoverable from tags
+
+Remote branch count 58 → 44. Every deleted tip is preserved by a real tag on `origin` under
+`archive/2026-09-01/*`; `docs/audits/2026-09-01-no-pr-branch-restore-ledger.md` records each OID and
+the two-line restore command.
+
+Disposition reasoning is in `docs/audits/2026-09-01-no-pr-branch-disposition-plan.md`, which went
+through two `gpt-5.6-sol` review rounds. Round 1 returned NOT SAFE TO EXECUTE AS WRITTEN with 28
+findings; round 2 withdrew all four findings the plan had refuted, concurred with every disposition
+row, and raised three new issues — one of them a defect introduced by the corrections themselves.
+
+### Verified immediately before deleting, not carried forward from the survey
+
+- All 14 tips unchanged against the 2026-08-31 inventory (PR #529).
+- **A fresh all-states lookup across 400 PRs: none of the 14 has ever had a pull request.** This is
+  its own check because a branch can acquire an open PR without a single commit being pushed to it.
+- None checked out in a registered worktree — and, separately, local branch refs were compared to
+  their remotes, because orphaned worktree folders are invisible to `git worktree list`. That found
+  one unpushed local commit on `codex/fleet-scan-parked-state`; it is recorded in the ledger and is
+  not affected by deleting a remote ref.
+- The live migration ledger was re-queried in the same session as the deletion. It confirms the Wave
+  A set, the draw-down owner migration, and the Section 1 migration are all absent from
+  `supabase_migrations.schema_migrations`, and that only the `20260826220000` successor is applied.
+
+### The two rows worth naming
+
+`claude/restrict-draw-down-owner` was deleted because it is **contradicted by an owner decision**
+(`docs/manual/DECISION_LOG.md:1556`, 2026-08-16, "Any rep"), not merely superseded. Its owner-gate
+predicate would reverse a settled call. The check that cleared it was semantic rather than a string
+match: the live `draw_down_quote` chain has exactly one overload per function, correct ACLs, and **no
+`created_by` or assignment predicate anywhere**. Every other protection that migration carried —
+`AUTH_REQUIRED`, `ACTOR_MISMATCH`, `INSUFFICIENT_ROLE`, the soft-delete exclusion, `BOOKING_CLOSED` —
+was confirmed live first, because the decision entry says removing the owner gate removes *only* the
+owner gate.
+
+`claude/rescue-unique-docs-20260807` and `claude/zealous-agnesi-aa7423` were deleted only after their
+eleven unique documents landed in PR #542. Preserve first, delete second.
+
+### The force-with-lease plan did not survive contact
+
+The reviewed plan specified `git push --force-with-lease=<ref>:<oid> origin :<branch>` as an atomic
+compare-and-swap delete. **The repository's own guards refuse it** — the `.claude/settings.json` deny
+list blocks that command form and the Codex production-action guard refuses force-pushes. An owner's
+verbal approval does not override a deny rule, and the correct response is not to find a spelling
+that gets past it.
+
+What ran instead: per branch, serially, read the current tip with `git ls-remote`, compare it to the
+ledger, and delete through the GitHub ref API only on an exact match. That is a branch deletion
+rather than a history rewrite. It is **not atomic** — there is a sub-second window between check and
+delete — and the ledger says so rather than claiming compare-and-swap. The residual risk is accepted
+because all 14 tags were pushed and verified on `origin` **before** any deletion, so a branch that
+moved inside that window is still recoverable.
+
+Verified after the sweep: zero of the 14 remain, and the tags still resolve on `origin`.
+
+### Still standing, deliberately
+
+`claude/offline-review-stale-snapshot` is checked out at `C:\crx-wt\ledger-gitdir` and is held until
+that lane is handed off. `claude/pr364-guard-commits-local-20260831` is protected while a separate
+session works PR #364; its "stranded commits" finding was **withdrawn** — `main` is strictly stronger
+on that guard and re-applying them would regress it — but the branch has never been enumerated for
+incidental value. The 27 branches whose PRs closed or merged were not adjudicated in this pass.
