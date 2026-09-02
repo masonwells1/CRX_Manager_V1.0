@@ -220,6 +220,7 @@ function makeHarness({
   eventPullRequest = pullRequest(),
   workflowRunFailure = false,
   review = undefined,
+  removeLabelFailures = [],
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -334,6 +335,11 @@ function makeHarness({
         },
         listEventsForTimeline: async () => ({ data: timeline }),
         removeLabel: async ({ name }) => {
+          if (removeLabelFailures.includes(name)) {
+            const error = new Error(`label removal rejected for ${name}`);
+            error.status = 500;
+            throw error;
+          }
           if (!liveLabels.delete(name)) {
             const error = new Error('label missing');
             error.status = 404;
@@ -1406,6 +1412,35 @@ test('an unexpected initial API failure clears the ready label for a deliberate 
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
   assert.match(harness.failures[0], /gate failed unexpectedly/);
+});
+
+test('a failed marker removal never strands the ready label during recovery', async () => {
+  const harness = makeHarness({
+    pullFailuresAt: [1],
+    removeLabelFailures: [REQUESTED_LABEL],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  // The ready label MUST come off even though the marker removal threw first:
+  // it is already attached, so no further `labeled` event can retrigger the gate.
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.match(harness.failures[0], /gate failed unexpectedly/);
+  assert.match(harness.failures[0], /label cleanup failed/);
+  assert.match(harness.failures[0], new RegExp(REQUESTED_LABEL));
+});
+
+test('a failed ready-label removal during recovery is reported, not thrown', async () => {
+  const harness = makeHarness({
+    pullFailuresAt: [1],
+    removeLabelFailures: [READY_LABEL],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(READY_LABEL), true);
+  assert.match(harness.failures[0], /label cleanup failed/);
+  assert.match(harness.failures[0], /remove the labels by hand/);
 });
 
 test('unexpected recovery never mistakes a pre-existing exact-head command for this attempt', async () => {

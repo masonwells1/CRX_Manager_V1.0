@@ -140,8 +140,9 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    new SHA, and apply the ready label for one follow-up review. Never use `@coderabbitai resume`, and reserve
    `@coderabbitai full review` for a deliberately justified complete reread. GitHub requires one
    current formal approval and dismisses it after a new commit. Before merge, verify live `main`
-   protection still requires a current branch, current approval with stale-review dismissal,
-   last-push approval, and administrators. Require the marker SHA, authenticated CodeRabbit approval
+   protection still requires a current branch, current approval with stale-review dismissal, and
+   last-push approval; administrators are deliberately exempt since 2026-09-01 and no agent may act
+   on that exemption. Require the marker SHA, authenticated CodeRabbit approval
    `commit_id`, and final `headRefOid` to match; recheck every reported check and auto-merge OFF.
    Ordinary green CodeRabbit or generic Actions status rows are insufficient. A separate exact-SHA
    `gpt-5.6-sol` high-effort proof remains the additional hard gate for risky money/RLS/migration

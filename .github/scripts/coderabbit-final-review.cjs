@@ -208,6 +208,22 @@ async function removeLabelIfPresent(github, owner, repo, issueNumber, label) {
   }
 }
 
+// Recovery cleanup must never let one failed removal strand another label. Leaving
+// READY_LABEL attached wedges the gate: the label is already present, so no further
+// `labeled` event can fire and the run cannot be retried. Attempt every removal
+// independently and hand the failures back so the caller can report them.
+async function removeLabelsIndependently(github, owner, repo, issueNumber, labels) {
+  const failures = [];
+  for (const label of labels) {
+    try {
+      await removeLabelIfPresent(github, owner, repo, issueNumber, label);
+    } catch (error) {
+      failures.push(`${label} (${error && error.message ? error.message : String(error)})`);
+    }
+  }
+  return failures;
+}
+
 async function resetLabels({ github, owner, repo, pullNumber, core, reason }) {
   await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
   await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
@@ -1330,21 +1346,31 @@ async function run(args) {
     }
 
     if (commandCommentExists) {
-      await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+      const recoveredCleanupFailures = await removeLabelsIndependently(
+        github, owner, repo, pullNumber, [READY_LABEL],
+      );
       core.warning(`Recovered an exact review command after an unexpected gate failure: ${unexpectedError.message}`);
+      if (recoveredCleanupFailures.length > 0) {
+        core.warning(`Could not clear workflow labels after recovery: ${recoveredCleanupFailures.join('; ')}`);
+      }
       return {
         status: 'requested', headSha, recovered: true,
       };
     }
 
-    if (verificationSucceeded) {
-      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
-    }
-    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    const labelsToClear = verificationSucceeded
+      ? [REQUESTED_LABEL, READY_LABEL]
+      : [READY_LABEL];
+    const cleanupFailures = await removeLabelsIndependently(
+      github, owner, repo, pullNumber, labelsToClear,
+    );
     const markerNote = verificationSucceeded
       ? 'workflow labels were cleared for a deliberate retry'
       : 'the requested marker was preserved until a retry can verify whether a command landed';
-    core.setFailed(`CodeRabbit final review gate failed unexpectedly (${unexpectedError.message}); ${markerNote}`);
+    const cleanupNote = cleanupFailures.length > 0
+      ? `; workflow label cleanup failed for ${cleanupFailures.join('; ')} — remove the labels by hand before relabelling`
+      : '';
+    core.setFailed(`CodeRabbit final review gate failed unexpectedly (${unexpectedError.message}); ${markerNote}${cleanupNote}`);
     return { status: 'blocked', reason: unexpectedError.message };
   }
 }
