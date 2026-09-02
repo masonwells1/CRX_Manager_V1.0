@@ -121,12 +121,28 @@ const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|work
 // reintroduce a command allowance here without re-reading that review history.
 // overnight-intent-clear.test.mjs holds the deny message to this contract.
 
+// The arm command is the ONE command allowance, and it is anchored to a complete,
+// standalone invocation. A bare `/autopilot-arm\.mjs/` substring test let the
+// allowance ride on a chained command — `npm run build && node
+// .claude/hooks/autopilot-arm.mjs --hours 8` returned allow-through, so the BUILD
+// ran during the pause and the arm was merely along for the ride (CodeRabbit,
+// PR #548). Anchored start-to-end with no shell metacharacters admitted, so a
+// prefix, a suffix, or a chain cannot ride it. Only the two documented forms —
+// `--hours <n>` and `--off` — and the bare invocation are accepted; either path
+// separator is allowed because PowerShell spells it with a backslash.
+const ARM_CMD_RE =
+  /^\s*node\s+(?:\.[\\/])?\.claude[\\/]hooks[\\/]autopilot-arm\.mjs(?:\s+--hours\s+\d{1,4}|\s+--off)?\s*$/;
+
+export function isSanctionedArmCommand(command) {
+  return ARM_CMD_RE.test(String(command ?? ""));
+}
+
 export function overnightGateDecision(toolName, toolInput) {
   const name = String(toolName || "");
   if (INTENT_ALLOW_TOOL_RE.test(name)) return "allow-through";
   const input = toolInput || {};
   const cmd = typeof input.command === "string" ? input.command : "";
-  if (cmd && /autopilot-arm\.mjs/.test(cmd)) return "allow-through";
+  if (/^(Bash|PowerShell)$/i.test(name) && isSanctionedArmCommand(cmd)) return "allow-through";
   if (/^(Bash|PowerShell)$/i.test(name)) {
     // Read-only leading token AND no write redirect: `cat > file` / `echo .. >> f`
     // / `... | tee f` still mutate files (Codex 2026-07-05) — those wait for the arm.

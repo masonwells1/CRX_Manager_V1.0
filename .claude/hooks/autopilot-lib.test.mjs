@@ -55,6 +55,18 @@ eq(overnightGateDecision("Bash", { command: "git add -A && git commit -m x" }), 
 eq(overnightGateDecision("mcp__supabase__execute_sql", { query: "SELECT 1" }), "allow-through", "sql passes even before arm (Mason 2026-07-10)");
 eq(overnightGateDecision("mcp__x__deploy_edge_function", {}), "deny-until-armed", "deploy still blocked until armed");
 eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }), "allow-through", "arm command passes");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --off" }), "allow-through", "disarm command passes");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs" }), "allow-through", "bare arm invocation passes");
+eq(overnightGateDecision("PowerShell", { command: "node .claude\\hooks\\autopilot-arm.mjs --hours 8" }), "allow-through", "Windows path separator passes");
+// CodeRabbit (PR #548): a bare substring test let the arm allowance ride on a
+// chained command, so the OTHER half ran during the pause. Anchored now.
+eq(overnightGateDecision("Bash", { command: "npm run build && node .claude/hooks/autopilot-arm.mjs --hours 8" }), "deny-until-armed", "PROVEN BYPASS: a build BEFORE the arm command must not ride it");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8 && npm run build" }), "deny-until-armed", "a build AFTER the arm command must not ride it");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8; rm -rf src" }), "deny-until-armed", "a semicolon-chained command must not ride it");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8 | tee x" }), "deny-until-armed", "a pipe must not ride it");
+eq(overnightGateDecision("Bash", { command: "echo autopilot-arm.mjs > x.txt" }), "deny-until-armed", "merely naming the arm script does not unlock");
+eq(overnightGateDecision("Bash", { command: "node attacker/autopilot-arm.mjs --hours 8" }), "deny-until-armed", "a planted same-basename arm script does not unlock");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8 --sneaky" }), "deny-until-armed", "an unknown extra flag is not the documented form");
 // There is deliberately NO shell escape from the latch (Mason, 2026-09-01).
 //
 // This assertion used to say "allow-through" and passed for months while the real

@@ -27,7 +27,7 @@ status. Nothing is scored until the hook has actually run to completion.
 Replaced a real registered hook (`.claude/hooks/hold-latch-guard.mjs`) with a stub that exits 3,
 then re-ran the suite. It went **red**:
 
-```
+```text
 FAIL every shell command the deny message advertises survives the real chain
      hook hold-latch-guard.mjs exited 3 — a crashed hook must not read as "allowed"
 ```

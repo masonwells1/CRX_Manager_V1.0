@@ -162,8 +162,15 @@ check("the deny message states the two remedies that actually work", () => {
 check("every shell command the deny message advertises survives the real chain", () => {
   armLatch();
   // Pull `node ...` invocations out of the message and prove each one is runnable.
-  const commands = [...denyMessage.matchAll(/\bnode\s+[^\s,;)]+(?:\s+--[\w-]+(?:\s+\S+)?)*/g)]
-    .map((m) => m[0].replace(/[.,]$/, ""));
+  // Stop at a closing paren: the message names the arm command inside a
+  // parenthetical, and `)` is not part of the command.
+  const commands = [...denyMessage.matchAll(/\bnode\s+[^\s,;()]+(?:\s+--[\w-]+(?:\s+[^\s,;()]+)?)*/g)]
+    .map((m) => m[0].replace(/[.,]+$/, ""))
+    // The message writes `--hours N` as a documentation placeholder. Fill it with a
+    // real value before checking: the contract is that the advertised command runs
+    // once the operator substitutes the obvious argument, not that the literal
+    // letter N is accepted by the guard (it must not be).
+    .map((c) => c.replace(/--hours\s+N\b/, "--hours 8"));
   assert.ok(commands.length > 0, "expected the message to advertise at least the arm command");
   for (const command of commands) {
     const denied = denialsFor(command);
