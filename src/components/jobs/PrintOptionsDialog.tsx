@@ -4,7 +4,7 @@ import { ClipboardList, Printer, Save } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
-import { checkMutationResult, supabase } from '../../lib/db';
+import { sanitizeError, checkMutationResult, supabase } from '../../lib/db';
 import {
   APPLICATOR_PRINT_OPTIONS_KEY,
   DEFAULT_APPLICATOR_PRINT_OPTIONS,
@@ -98,7 +98,7 @@ export default function PrintOptionsDialog({ open, onClose, onPrint }: PrintOpti
       checkMutationResult(result, 'Save applicator print options');
       toast('success', 'Applicator print defaults saved');
     } catch (error) {
-      toast('error', error instanceof Error ? error.message : 'Unable to save applicator print defaults');
+      toast('error', sanitizeError(error));
     } finally {
       setSavingDefault(false);
     }

@@ -108,6 +108,49 @@ describe('sanitizeError', () => {
     )).toBe('You do not have permission to perform this action');
   });
 
+  // REGRESSION GUARD. Until 2026-09-02 the permission pattern required QUOTED
+  // identifiers, but PostgreSQL emits them unquoted — so every real permission
+  // error passed through this function and showed the operator the table name.
+  // The two quoted cases above are the form this test file invented; the cases
+  // below are the form the database actually produces, and the rest of the repo's
+  // fixtures (criticalAction.test.ts, applicatorSheetPrintData.test.ts,
+  // previousApplications.test.ts) already used them. Do not "simplify" these back
+  // into the quoted-only pattern.
+  it('sanitizes permission denied errors with UNQUOTED identifiers (real Postgres form)', () => {
+    for (const raw of [
+      'permission denied for table orders',
+      'permission denied for table job_field_shares',
+      'permission denied for schema public',
+      'permission denied for sequence invoices_id_seq',
+      'permission denied for function save_job',
+      'permission denied for materialized view mv_inventory_rollup',
+    ]) {
+      expect(sanitizeError(raw)).toBe('You do not have permission to perform this action');
+      expect(sanitizeError(raw)).not.toContain('orders');
+      expect(sanitizeError(raw)).not.toContain('job_field_shares');
+    }
+  });
+
+  it('sanitizes PostgREST schema-cache misses that name the missing object', () => {
+    expect(sanitizeError(
+      'Could not find the function public.save_job(p_job_payload, p_performed_by) in the schema cache'
+    )).toBe('An internal error occurred. Please try again.');
+
+    expect(sanitizeError(
+      "Could not find a relationship between 'orders' and 'order_items' in the schema cache"
+    )).toBe('An internal error occurred. Please try again.');
+  });
+
+  // The redaction above is deliberately scoped to Postgres's structural
+  // `permission denied for <object>` form. A hand-written RAISE EXCEPTION that
+  // happens to use the words "permission denied" still reaches the operator,
+  // because those are written to be read.
+  it('still passes through a hand-written permission refusal that names no object', () => {
+    expect(sanitizeError(
+      'Permission denied to edit this order — ask the assigned rep.'
+    )).toBe('Permission denied to edit this order — ask the assigned rep.');
+  });
+
   it('sanitizes generic schema identifier leaks', () => {
     expect(sanitizeError(
       'column "secret_column" is ambiguous'
