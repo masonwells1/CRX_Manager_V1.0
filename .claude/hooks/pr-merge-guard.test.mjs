@@ -260,6 +260,24 @@ ok(
   /function\s+listWorktreesFromProjectDir\b[\s\S]{0,600}?["'`]worktree["'`][\s\S]{0,200}?--porcelain/.test(guardSource),
   "listWorktreesFromProjectDir actually shells out to `git worktree list --porcelain`",
 );
+
+// ── the objection check must never be exempt for --auto (Codex High, PR #559) ─
+// Every other gate in this gateRequest() exempts auto-merge, because GitHub holds
+// a queued auto-merge until its own requirements are met. The requirement that
+// used to cover THIS one was main's required review — and the 2026-09-02 change
+// removed it. With no required review GitHub will complete a queued auto-merge on
+// a PR carrying CHANGES_REQUESTED, so re-adding an auto exemption here reopens a
+// hole created by the same commit that removed the server-side floor. Pinned at
+// the source level because gateRequest() is not exported and the live path needs
+// a real `gh`; the behavioural twin is wired on the Codex side, which injects gh.
+ok(
+  /if\s*\(\s*pullRequestReviewBlocked\(\s*pr\s*\)\s*\)/.test(guardSource),
+  "the CHANGES_REQUESTED denial is reached unconditionally",
+);
+ok(
+  !/request\.auto[^\n]*pullRequestReviewBlocked/.test(guardSource),
+  "the CHANGES_REQUESTED denial is NOT gated on request.auto - --auto must never merge over an objection",
+);
 ok(!/const\s+stateDir\s*=\s*path\.join\(/.test(guardSource), "the single-directory proof scan that made PR #252 unmergeable has not returned");
 
 console.log(`pr-merge-guard: ${pass} assertions passed`);
