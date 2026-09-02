@@ -329,6 +329,9 @@ jobs:
           esac
           echo "CI route: docs_only=$DOCS_ONLY full_ci=$FULL_CI reason=$ROUTE_REASON changed_count=$CHANGED_COUNT event_route=$EVENT_ROUTE prior_full_proof=$PRIOR_FULL_PROOF"
 
+      - name: CodeRabbit final-review gate regression tests
+        run: node .github/scripts/coderabbit-final-review.test.cjs
+
       - name: Cache node_modules
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         uses: actions/cache@v6
