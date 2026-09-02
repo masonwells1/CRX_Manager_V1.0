@@ -44,3 +44,19 @@ the code does not have — worse than not having them at all. They remain reacha
 
 This is the second such pass; PR #542 landed eleven documents on 2026-09-01 under the same contract.
 Both came out of the branch inventory in `docs/audits/2026-09-01-closed-pr-branch-disposition-plan.md`.
+
+### Lessons-to-checks ratchet — why no executable check ships here
+
+The pre-commit ratchet flags this change because
+`docs/audits/2026-08-24-claude-to-codex-pr432-ci-handoff.md` names BLOCKER/HIGH findings with no
+sibling predicate, hook, or test. That is the correct trigger and the correct answer is an
+exemption, not a check:
+
+**Nothing was closed by this change.** It moves existing documents from unmerged branches onto
+`main` byte-for-byte. The findings those documents describe belong to PR #432, which
+`docs/manual/DECISION_LOG.md` (2026-08-25) closed unmerged with the agent-self-protection work
+**deliberately frozen** — they were not fixed, and writing a test asserting they are fixed would be
+false. Their status is unchanged by this landing; only their location changed.
+
+Writing a check here would encode a claim the repository does not support. If that frozen work is
+ever resumed, the ratchet applies to *that* change, where a real check can assert a real fix.
