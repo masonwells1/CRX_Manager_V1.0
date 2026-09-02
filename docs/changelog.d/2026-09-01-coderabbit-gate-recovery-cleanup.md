@@ -25,6 +25,17 @@ fails with the raw `label removal rejected for ready-for-coderabbit` error. Reve
 
 Reported by Codex on PR #516 as a P2. It was correct.
 
+### An ambiguous comment post skipped revalidation (Codex P2)
+
+When `createComment` errored *after* GitHub had actually accepted the command, the recovery branch
+returned `requested` immediately — skipping the post-comment head/base/auto-merge/check snapshot the
+confirmed path runs. A change racing that ambiguous post therefore left the command standing and
+spent a CodeRabbit review on an unfrozen candidate: the exact failure this gate exists to prevent.
+
+A recovered command is a **posted** command, so it now falls through to the same revalidation, and the
+raced comment is deleted like any other. The `recovered` flag is preserved on the success return.
+Regression test added and mutation-proved: restoring the early return turns it red.
+
 ### Two stale claims about administrator enforcement
 
 This branch froze on 2026-08-30. On 2026-09-01 Mason took the manual review override, which set

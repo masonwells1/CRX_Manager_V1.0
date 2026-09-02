@@ -1632,6 +1632,25 @@ test('a head change while the command is posted deletes the raced comment and cl
   assert.match(harness.failures[0], /changed while the review command was being posted/);
 });
 
+// Regression: the ambiguous-recovery branch used to return `requested` straight
+// away, skipping the post-comment revalidation the confirmed path runs. A head
+// change racing the ambiguous post therefore left the command standing and spent
+// a CodeRabbit review on an unfrozen candidate. A recovered command is a POSTED
+// command and earns the same revalidation.
+test('an ambiguous recovery still revalidates and deletes a command left on a raced head', async () => {
+  const harness = makeHarness({
+    commentFailure: 'ambiguous',
+    pulls: [pullRequest(), pullRequest(), pullRequest(), pullRequest({ head: NEXT_HEAD })],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.failures[0], /changed while the review command was being posted/);
+});
+
 test('a definite comment failure clears both labels so the pull request cannot be stranded', async () => {
   const harness = makeHarness({ commentFailure: 'definite' });
   const result = await execute(harness);

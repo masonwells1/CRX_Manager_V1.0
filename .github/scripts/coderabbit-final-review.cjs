@@ -839,6 +839,7 @@ async function runGate({ github, context, core, config, attemptState }) {
   }
 
   let createdComment;
+  let recoveredCommand = false;
   try {
     const commentResponse = await github.rest.issues.createComment({
       owner,
@@ -848,35 +849,39 @@ async function runGate({ github, context, core, config, attemptState }) {
     });
     createdComment = commentResponse.data;
   } catch (commentError) {
-    let commandCommentExists = false;
+    let recoveredComment = null;
     try {
       const comments = await github.paginate(
         github.rest.issues.listComments,
         { owner, repo, issue_number: pullNumber, per_page: 100 },
       );
-      commandCommentExists = comments.some((comment) => (
+      recoveredComment = comments.find((comment) => (
         !preexistingCommentIds.has(comment.id)
         && isActionsReviewComment(comment, expectedHeadSha)
-      ));
+      )) || null;
     } catch (verificationError) {
       core.warning(`Could not verify the failed comment request: ${verificationError.message}`);
     }
 
-    if (commandCommentExists) {
-      await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
-      core.warning('GitHub reported a comment error, but the exact command comment exists; preserving the requested marker.');
-      return { status: 'requested', headSha: expectedHeadSha, recovered: true };
+    if (!recoveredComment) {
+      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+      return blockCandidate({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        reason: `GitHub did not confirm the review comment (${commentError.message}); the requested marker was cleared for a deliberate retry`,
+      });
     }
 
-    await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
-    return blockCandidate({
-      github,
-      owner,
-      repo,
-      pullNumber,
-      core,
-      reason: `GitHub did not confirm the review comment (${commentError.message}); the requested marker was cleared for a deliberate retry`,
-    });
+    // A recovered command is a POSTED command; it earns exactly the same
+    // post-comment revalidation as one GitHub confirmed. Returning here used to
+    // skip it, so a head/base/auto-merge/check change racing the ambiguous post
+    // left the command standing and spent a review on an unfrozen candidate.
+    core.warning('GitHub reported a comment error, but the exact command comment exists; revalidating the candidate before crediting it.');
+    createdComment = recoveredComment;
+    recoveredCommand = true;
   }
 
   let postCommentPullRequest;
@@ -950,7 +955,9 @@ async function runGate({ github, context, core, config, attemptState }) {
   }
   await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
   core.notice(`Requested one CodeRabbit review for frozen head ${expectedHeadSha}.`);
-  return { status: 'requested', headSha: expectedHeadSha };
+  return recoveredCommand
+    ? { status: 'requested', headSha: expectedHeadSha, recovered: true }
+    : { status: 'requested', headSha: expectedHeadSha };
 }
 
 async function blockCodeRabbitAuthorizationAndReset({
