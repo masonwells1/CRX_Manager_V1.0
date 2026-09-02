@@ -2,9 +2,18 @@
 
 **Status: EXECUTED 2026-09-01, with Mason's explicit approval. All 14 tags are on `origin`; all 14
 branches are deleted. Every branch below is recoverable from its tag — see "Restoring a branch",
-and read the race note there before assuming a tag captured the final tip.**
+and read both the race note and the tag-validation step there before assuming a tag holds the
+commit you expect.**
 
 Remote branch count went from 58 to **44**.
+
+> **The pre-deletion gate was not met.** Codex's round-2 review required this ledger to be **landed
+> before any deletion**, not merely drafted. That is not what happened: the 14 branches were tagged
+> and deleted first, and this document was written and landed afterwards. For the interval between
+> the deletions and this file reaching `main`, the only record of which tag belonged to which branch
+> lived in one session's working tree. Nothing was lost, and the tags were pushed and verified on
+> `origin` before any branch was removed — but the sequencing gate itself was missed, and this
+> change closes the documentation gap after the fact rather than demonstrating that the gate worked.
 
 ## How the deletion was actually performed — read this before repeating it
 
@@ -15,17 +24,19 @@ production-action guard refuses force-pushes. Mason's verbal approval does not a
 override a deny rule. **Do not go looking for a spelling that gets past it.** `--force-with-lease`
 is the **rejected plan**, recorded here only so the next person does not re-propose it.
 
-What ran instead, per branch and serially — the comparison is enforced in the shell, not left to a
-comment:
+What ran instead, per branch and serially. Both the read and the delete are bound to the **same
+canonical repository** — reading through `git ls-remote origin` would let a differently-configured
+`origin` validate one repository's branch while the API deletes another's:
 
 ```bash
+repo="masonwells1/CRX_Manager_V1.0"
 expected="<ledger-oid-for-this-branch>"
-cur=$(git ls-remote origin "refs/heads/<branch>" | cut -f1)
+cur=$(gh api "repos/$repo/git/ref/heads/<branch>" --jq .object.sha)
 if [ "$cur" != "$expected" ]; then
   printf 'tip moved (%s != %s); aborting\n' "$cur" "$expected" >&2
   exit 1
 fi
-gh api -X DELETE "repos/masonwells1/CRX_Manager_V1.0/git/refs/heads/<branch>"
+gh api -X DELETE "repos/$repo/git/refs/heads/<branch>"
 ```
 
 This is a branch deletion rather than a history rewrite, which is why the ref API is the honest
@@ -59,20 +70,28 @@ This is the safety net for the deletion sweep proposed in
 a **real tag on `origin`**, because a SHA written in Markdown keeps nothing alive once the last ref
 is gone.
 
-Codex's round-2 review required this ledger to be **landed before any deletion**, not merely drafted.
-That is why it exists as its own change.
-
 ## Restoring a branch
 
-Recovery is **local by default.** These two commands inspect or resume the work without touching
-`origin`:
+Recovery is **local by default** — these steps inspect or resume the work without touching `origin`.
+
+**Validate the tag against the OID recorded in this ledger before trusting it.** `git fetch` will
+not overwrite a local tag that already exists and points somewhere else (Git 2.20 and later reject
+non-fast-forward tag updates unless forced), so a stale local tag of the same name can silently
+restore the wrong commit. These tags are never rewritten, but that is a convention, not something
+Git enforces, so check rather than assume:
 
 ```bash
-git fetch origin --tags
-git switch -c <branch-name> refs/tags/<tag-name>
-```
+repo="masonwells1/CRX_Manager_V1.0"
+expected="<Tip OID from the table below>"
+remote=$(gh api "repos/$repo/git/ref/tags/<tag-name>" --jq .object.sha)
+[ "$remote" = "$expected" ] || { printf 'remote tag %s != ledger %s\n' "$remote" "$expected" >&2; exit 1; }
 
-The tag is an ordinary object on `origin`; nothing about the deletion is one-way while it exists.
+git fetch origin --force "refs/tags/<tag-name>:refs/tags/<tag-name>"
+local=$(git rev-parse "refs/tags/<tag-name>^{commit}")
+[ "$local" = "$expected" ] || { printf 'local tag %s != ledger %s\n' "$local" "$expected" >&2; exit 1; }
+
+git switch -c <branch-name> "refs/tags/<tag-name>"
+```
 
 **Republishing the branch is a separate, gated step.** Every branch in this ledger was deleted
 because it was superseded, contradicted by an owner decision, or broken, so recreating it on
@@ -85,7 +104,7 @@ git push -u origin <branch-name>
 
 ## The 14 branches
 
-Every row was re-verified on 2026-09-01 immediately before this ledger was written:
+Every row was re-verified on 2026-09-01 immediately before deletion:
 
 - **Tip unchanged** — all 14 match the OIDs recorded in the 2026-08-31 inventory (PR #529).
 - **No pull request, ever** — a fresh all-states lookup across 400 PRs returned zero rows for all 14.
@@ -94,7 +113,7 @@ Every row was re-verified on 2026-09-01 immediately before this ledger was writt
 - **Live database re-queried this session** — the migration ledger lookup behind rows 1–4 was re-run,
   not carried forward from the earlier snapshot.
 
-| # | Branch | Tip OID | Last commit | Proposed tag | Why it goes |
+| # | Branch | Tip OID | Last commit | Tag | Why it goes |
 |---|---|---|---|---|---|
 | 1 | `claude/restrict-draw-down-owner` | `13e4c7b14f38f31dc550e09f55ebe111fbf1cbc0` | 2026-08-14 | `archive/2026-09-01/restrict-draw-down-owner` | Contradicted by owner decision `DECISION_LOG.md:1556` |
 | 2 | `claude/pr401-proof` | `9b2d86a5401af8e869b6f8bd10cd3d4a433eb458` | 2026-08-25 | `archive/2026-09-01/pr401-proof` | Superseded by `20260826220000`, applied live |
@@ -127,7 +146,7 @@ removes a ref **by name** and nothing compares it to the OID that was tagged. A 
 between the final read and the delete loses its new commit despite the tag — the exact failure the
 tag exists to prevent.
 
-The executed procedure above narrows that window to the gap between two calls and aborts on any
+The executed procedure above narrows that window to the gap between two API calls and aborts on any
 mismatch it can see, but it does not eliminate the window. That is stated plainly rather than
 described as compare-and-swap, which it is not. Per branch, serially: read the tip → tag that exact
 OID → verify the remote tag's OID → confirm the ledger row → fresh PR and worktree check → compare
