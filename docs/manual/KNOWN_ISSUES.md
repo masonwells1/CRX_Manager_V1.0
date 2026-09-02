@@ -242,6 +242,39 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-09-01 — three migration-apply protections live only on a closed PR's branch, not on `main`
+
+**Found by:** the disposition of PR #364, which was closed as superseded on 2026-09-01 with Mason's
+in-session approval. Full scope: `docs/audits/2026-09-01-pr364-guard-extraction-scope.md`.
+
+**The issue.** PR #364's headline deliverable had already shipped — its migration
+`20260810025159_backfill_stale_line_profit.sql` is byte-identical on `main` (blob
+`f4f97722be903f431d1f4f30cebfe14c8d2ab3ca`, applied live 2026-08-09) — and `main` independently
+rebuilt the same guard file across #483, #514, #502, and #533. A `gpt-5.6-sol` high-effort review
+confirmed `main` is now **strictly stronger** than the branch on every protection the branch's three
+unmerged guard commits introduced, so `2e23711c9`, `1692978f2`, and `286a38d2a` are superseded and
+must **not** be re-applied — doing so would be a regression.
+
+**What is genuinely missing from `main`.** The same review corrected an earlier claim in that
+session that event-trigger handling was the branch's only surviving value. Three protections have no
+equivalent on `main`:
+
+1. **Apply-time one-shot replay enforcement.** `main` consults `one-shot-migrations.json` only when
+   `scripts/list-post-baseline-migrations.mjs` generates a replay plan. Nothing enforces it at the
+   live apply door, and nothing detects a renamed or disguised repeat of a one-time data repair.
+2. **Fresh, project-bound live evidence.** `main` accepts a per-checkout snapshot up to 24 hours old
+   that does not record which project it was captured from.
+3. **Event-trigger and transitive fanout protection.** `main` has no operational event-trigger
+   coverage. Six enabled event triggers exist on production (verified read-only 2026-09-01:
+   `pgrst_ddl_watch`, `pgrst_drop_watch`, `issue_pg_net_access`, `issue_pg_cron_access`,
+   `issue_pg_graphql_access`, `issue_graphql_placeholder`).
+
+**Where the code is.** Branch `claude/pr364-guard-commits-local-20260831`, tip
+`57d27e79105b62ee9887d59bdd1f2f58ed3c0e2d`. **Do not delete that branch** — it is the only remaining
+home for these three. Extraction onto current `main` is roughly 8 files and +9,250 lines, dominated
+by `.claude/hooks/apply-time-dml-lib.mjs` (2,612 lines); it is scoped but **not approved to build**.
+Do not bring the `patrol` system across — `main` removed it deliberately in #512.
+
 ## OPEN 2026-09-01 — agents share Mason's admin identity, so the manual merge override can only be fenced off by command matching, never truly withheld
 
 **Found by:** the exact-SHA Codex proof on PR #541, which refused the candidate until the raw
