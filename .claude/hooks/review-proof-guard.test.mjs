@@ -487,6 +487,22 @@ for (const command of [
   "PATH=/tmp:$PATH; cat .husky/pre-push",
   "export PATH=/tmp:$PATH; cat .claude/hooks/sql-safety.mjs",
   "NODE_OPTIONS=--require=/tmp/evil.js node .claude/hooks/sql-safety.mjs",
+  // The validation and PROOF-MINTING scripts, restored to the guarded set on
+  // 2026-09-01 to close CodeRabbit's outstanding finding on this PR, which named
+  // "validation/proof scripts" explicitly. `write-codex-push-proof.mjs` mints the
+  // Codex approval proof, `run-claude-review.mjs` the Claude one, and
+  // `remove-applied-ledger-entry.mjs` clears the C3 uncontained-apply alarm — a
+  // shell write to any of them lets the thing being certified rewrite its own
+  // certifier. CI runs the BRANCH's copies of the check/validate/verify scripts,
+  // so a rewritten validator passes CI too.
+  "cp /tmp/evil scripts/write-codex-push-proof.mjs",
+  "echo x > scripts/run-claude-review.mjs",
+  "tee scripts/remove-applied-ledger-entry.mjs",
+  "cp /tmp/evil scripts/check-ledger-update.mjs",
+  "echo x > scripts/validate-sql.mjs",
+  "cp /tmp/evil scripts/verify-deps.mjs",
+  "rm -f scripts/agent-manifest-parity.mjs",
+  "cp /tmp/evil scripts/sync-agent-workflows.mjs",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.equal(result.status, 0, `hook should exit 0: ${command}`);
@@ -519,6 +535,15 @@ for (const command of [
   "git log --oneline -5 .husky/pre-push",
   "grep -o typecheck .husky/pre-push",
   "grep -rn --color .github/workflows",
+  // RUNNING a guarded script is not editing it, and this is how CI and the
+  // maintenance commands invoke them. Must stay allowed.
+  "node scripts/verify-deps.mjs",
+  "node scripts/agent-manifest-parity.mjs",
+  "node scripts/check-doc-drift.mjs",
+  "git add scripts/write-codex-push-proof.mjs",
+  "cat scripts/validate-sql.mjs",
+  // npm SCRIPT names that merely resemble a guarded path are not that path.
+  "npm run verify-deps",
   // `node <script>` stays allowed — it is how these very suites run. Only the
   // inline-code flags are refused (asserted in the deny block above).
   "node .claude/hooks/review-proof-guard.test.mjs",
