@@ -355,6 +355,21 @@ BEGIN
 END;
 $body$;
 
+-- PL/pgSQL accepts a plain equals sign as the assignment operator too, and the
+-- write-time hook already treats that spelling as a rebinding. A sweep matching
+-- only the walrus form would leave the cheaper spelling open.
+CREATE FUNCTION public.actor_equals_rebound_param_forward(p_actor_source uuid, p_target_id uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  p_actor_source = p_target_id;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
 -- Stash-then-rebind: the caller value is copied to a local, the parameter is
 -- overwritten with auth.uid() so the canonical refusal can never fire, and the
 -- STASHED value is what reaches the sinks. The refusal is textually perfect.
@@ -521,6 +536,7 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     'actor_out_before_positional',
     'actor_local_pre_refusal_forward',
     'actor_rebound_param_forward',
+    'actor_equals_rebound_param_forward',
     'actor_stash_then_rebind_forward',
     'actor_unbound_local_refusal_forward',
     'actor_custom_local_refusal_forward',

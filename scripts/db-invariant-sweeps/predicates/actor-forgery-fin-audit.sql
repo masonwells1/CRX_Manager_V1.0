@@ -150,9 +150,12 @@ WITH RECURSIVE cand AS (
          -- STATEMENT position because named-argument syntax is lexically
          -- identical to assignment (live batch_cancel_deliveries is that shape
          -- and is correctly bound).
+         -- `:?=` because PL/pgSQL accepts both `:=` and plain `=` as the
+         -- assignment operator. Statement pinning is what makes accepting `=`
+         -- safe. Mirror of actor-forgery.sql.
          executable_src ~* (
            '(?:;|\mBEGIN\M|\mTHEN\M|\mELSE\M|\mLOOP\M|\mDECLARE\M|^)\s*(?:<<[^>]*>>\s*)?'
-           || '\m' || argname_pattern || '\M\s*(?:\[[^\]]*\])?\s*:='
+           || '\m' || argname_pattern || '\M\s*(?:\[[^\]]*\])?\s*:?='
          ) AS has_actor_rebinding
   FROM lexed
 ), analyzed AS (

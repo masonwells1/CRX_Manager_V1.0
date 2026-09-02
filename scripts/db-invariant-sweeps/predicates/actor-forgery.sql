@@ -144,9 +144,16 @@ WITH RECURSIVE cand AS (
          -- batch_cancel_deliveries is exactly that shape and binds its actor
          -- correctly. A named argument is always preceded by `(` or `,`; an
          -- assignment statement follows a terminator or a block opener.
+         -- `:?=` because PL/pgSQL accepts BOTH `:=` and plain `=` as the
+         -- assignment operator; the write-time hook already treats the `=`
+         -- spelling as a rebinding, and a sweep that matched only `:=` would
+         -- have left the cheaper spelling open. Statement pinning is what makes
+         -- accepting `=` safe: a bare `=` at statement position is an
+         -- assignment, whereas the comparison `IF p_x = y THEN` is preceded by
+         -- `IF`, and the named-argument `f(p_x => v)` by `(` or `,`.
          executable_src ~* (
            '(?:;|\mBEGIN\M|\mTHEN\M|\mELSE\M|\mLOOP\M|\mDECLARE\M|^)\s*(?:<<[^>]*>>\s*)?'
-           || '\m' || argname_pattern || '\M\s*(?:\[[^\]]*\])?\s*:='
+           || '\m' || argname_pattern || '\M\s*(?:\[[^\]]*\])?\s*:?='
          ) AS has_actor_rebinding
   FROM lexed
 ), analyzed AS (
