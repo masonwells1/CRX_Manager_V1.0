@@ -1208,11 +1208,23 @@ async function runReviewAuthorization({ github, context, core, config }) {
     return { status: 'ignored', reason: 'pull_request_review.non_coderabbit.no_gate_state' };
   }
 
-  const pullRequest = (await github.rest.pulls.get({
+  // Poll for a resolved mergeability, exactly as the label path does. An
+  // unpolled snapshot can catch GitHub mid-recalculation with `mergeable: null`
+  // / `mergeable_state: 'unknown'`, which validateAuthorizationState reports as
+  // a blocker — and on THIS path a blocker deletes the posted command and both
+  // labels. A transient null would therefore destroy a valid exact-head approval
+  // and force a second paid review. The two paths must agree about what a live
+  // snapshot is.
+  const pullRequest = await getPullRequestWithResolvedMergeability({
+    github,
     owner,
     repo,
-    pull_number: pullNumber,
-  })).data;
+    pullNumber,
+    attempts: config.mergeabilityPollAttempts ?? DEFAULT_MERGEABILITY_POLL_ATTEMPTS,
+    pollMs: config.mergeabilityPollMs ?? DEFAULT_MERGEABILITY_POLL_MS,
+    settle: config.settle
+      || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))),
+  });
   const headSha = pullRequest.head.sha;
   const labels = pullRequestLabelNames(pullRequest);
   const reasons = [];

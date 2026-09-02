@@ -135,8 +135,9 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    The generic Actions-authored marker is dedupe evidence, not merge authorization. If it fails, it removes
    the ready label and posts nothing; correct the named blocker and relabel. Read the resulting
    review and fix every real issue; nitpicks may be dismissed with a one-line reason. If a fix or
-   base update creates a new commit, the workflow clears both state labels and deletes any command
-   already posted for the superseded head; restart required checks,
+   base update creates a new commit, the workflow clears both state labels and deletes the
+   already-posted command whether or not the head moved (Actions-authored canonical commands only);
+   restart required checks,
    rerun the exact-HEAD Codex proof when the corrected diff is Codex-worthy, freeze and record the
    new SHA, and apply the ready label for one follow-up review. Never use `@coderabbitai resume`, and reserve
    `@coderabbitai full review` for a deliberately justified complete reread. GitHub requires one

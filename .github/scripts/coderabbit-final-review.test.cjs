@@ -676,6 +676,42 @@ test('a metadata edit with no workflow state is ignored', async () => {
   assert.deepEqual(harness.comments, []);
 });
 
+// Regression: the approval path took a BARE pulls.get while the label path
+// polled for resolved mergeability. Catching GitHub mid-recalculation
+// (mergeable: null / 'unknown') made validateAuthorizationState report a
+// blocker, and on this path a blocker DELETES the posted command and both
+// labels — destroying a valid exact-head approval and forcing a second paid
+// review. Both paths must agree about what a live snapshot is.
+test('a transient unknown mergeability does not destroy an exact-head approval', async () => {
+  const pending = pullRequest({
+    labels: [REQUESTED_LABEL],
+    mergeable: null,
+    mergeableState: 'unknown',
+  });
+  const resolved = pullRequest({ labels: [REQUESTED_LABEL] });
+  const harness = makeHarness({
+    eventName: 'pull_request_review',
+    action: 'submitted',
+    pulls: [pending, resolved, resolved, resolved],
+    eventPullRequest: resolved,
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      user: { login: 'github-actions[bot]' },
+    }],
+    review: {
+      state: 'approved',
+      commit_id: HEAD,
+      user: { login: 'coderabbitai[bot]' },
+    },
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'authorized', 'a transient unknown state must not reset the approval');
+  assert.equal(harness.comments.length, 1, 'the posted command must survive the transient state');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true, 'the marker must survive');
+});
+
 test('an exact CodeRabbit approval authorizes only the gate-recorded live head', async () => {
   const current = pullRequest({ labels: [REQUESTED_LABEL] });
   const harness = makeHarness({
