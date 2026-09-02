@@ -33,11 +33,18 @@ function buildDeferredChain(): { chain: Record<string, unknown>; resolve: (resul
   return { chain, resolve };
 }
 
-vi.mock('../lib/db', () => ({
+vi.mock('../lib/db', async () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((value) => value),
-  sanitizeError: vi.fn((error: Error) => error.message),
+  // The REAL sanitizeError, never a stub. The previous stub was typed
+  // `(error: Error) => error.message`, which misrepresents the null, string and
+  // plain-object inputs the real function exists to survive -- postgrest-js only
+  // constructs a real Error under `.throwOnError()`, so a failing rpc resolves a
+  // plain object here.
+  sanitizeError: (await vi.importActual<typeof import('../lib/errorSanitizer')>(
+    '../lib/errorSanitizer',
+  )).sanitizeError,
 }));
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'actor-1' }, role: 'admin' }),
