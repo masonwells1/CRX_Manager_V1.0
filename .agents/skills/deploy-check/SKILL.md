@@ -12,8 +12,9 @@ environment safety, and production readiness.
 `protect-main` ruleset, so **direct pushes to `main` are impossible for everyone** — Claude,
 Codex, and Mason alike. The landing path is:
 
-**push a branch → open a PR → finish required checks → freeze the candidate → post
-`@coderabbitai review` → read and resolve that final review → merge with
+**push a branch → open a PR → finish required checks → freeze the candidate →
+apply `ready-for-coderabbit` → let the default-branch workflow post `@coderabbitai review` once →
+read and resolve that final review → merge with
 `--match-head-commit <reviewed-head-sha>`.** The **merge** is what deploys production via Vercel's
 git integration; Vercel's one-click rollback is the accepted safety net.
 
@@ -127,16 +128,27 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 2. Open a PR.
 3. Finish implementation, bring the branch up to date, and wait for required checks;
    **Vercel is a required check**.
-4. Freeze the candidate after the separate Codex review is clean, record its head SHA, then post
-   exactly **`@coderabbitai review`**. Read the resulting review and fix every real issue; nitpicks
-   may be dismissed with a one-line reason. If a fix or base update creates a new commit, restart
-   required checks, rerun the exact-HEAD Codex proof when the corrected diff is Codex-worthy,
-   freeze and record the new SHA, and request one follow-up review. Never use `@coderabbitai resume`, and reserve
-   `@coderabbitai full review` for a deliberately justified complete reread. GitHub requires one
-   current formal approval and dismisses it after a new commit. Before merge, verify live `main`
-   protection still requires current approval with stale-review dismissal and confirm an
-   `APPROVED` CodeRabbit review has `commit_id` equal to the final `headRefOid`; a green status row
-   is insufficient. A separate exact-SHA
+4. Freeze the candidate after the separate Codex review is clean, record its head SHA, then apply
+   **`ready-for-coderabbit`**. The default-branch workflow rechecks the exact head,
+   draft/conflict/auto-merge state, actor permission, required checks, and every reported
+   non-CodeRabbit check before posting exactly `@coderabbitai review` once with a hidden SHA marker.
+   The generic Actions-authored marker is dedupe evidence, not merge authorization. If it fails, it removes
+   the ready label and posts nothing; correct the named blocker and relabel. Read the resulting
+   review and fix every real issue; nitpicks may be dismissed with a one-line reason. If a fix or
+   base update creates a new commit, the workflow clears both state labels and deletes the
+   already-posted command whether or not the head moved (Actions-authored canonical commands only);
+   restart required checks,
+   rerun the exact-HEAD Codex proof when the corrected diff is Codex-worthy, freeze and record the
+   new SHA, and apply the ready label for one follow-up review. Never use `@coderabbitai resume`, and reserve
+   `@coderabbitai full review` for a deliberately justified complete reread. An approving GitHub
+   review is **NOT** required to merge: Mason removed `required_pull_request_reviews` from `main`
+   on 2026-09-02, so CI is the merge gate. A `CHANGES_REQUESTED` verdict still blocks, and both
+   agent merge gates refuse to merge over one. Before merge, verify live `main` protection still
+   requires a current branch and every required check green; `enforce_admins` is off and no agent
+   may act on that exemption. Confirm CodeRabbit actually reviewed the frozen candidate, and when
+   it HAS approved, require the marker SHA, that authenticated approval's `commit_id`, and the
+   final `headRefOid` to match; recheck every reported check and auto-merge OFF.
+   Ordinary green CodeRabbit or generic Actions status rows are insufficient. A separate exact-SHA
    `gpt-5.6-sol` high-effort proof remains the additional hard gate for risky money/RLS/migration
    diffs — both run, neither replaces the other.
 5. Merge. **The merge is the deploy.**
@@ -153,5 +165,5 @@ If blocked: List every issue that needs fixing first.
 - NEVER merge with unapplied migrations pending without surfacing them (warn — Mason decides the ordering)
 - NEVER attempt to push directly to `main`; the ruleset blocks it and the attempt is a bug in the plan
 - NEVER trigger CodeRabbit while implementation or Codex review is still changing the branch
-- NEVER merge without a CodeRabbit approval bound to the current candidate commit
+- NEVER merge over a `CHANGES_REQUESTED` verdict; an approving CodeRabbit review is not required (removed 2026-09-02), but when one exists it must be bound to the current candidate commit
 - Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the regular push-to-`main` path is covered by the standing authorization. Live migration applies need his in-chat OK in an interactive session — the one exception is a pre-authorized armed hands-free run passing migration-apply-guard's full proof + Codex gate (destructive migrations: never autonomous)
